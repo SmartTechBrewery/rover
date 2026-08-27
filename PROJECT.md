@@ -201,15 +201,64 @@ Warto nazwać wprost, bo milczenie czyta się jako „sprawdzone".
 
 ---
 
-## 9. Stan prac
+## 9. Stan prac i backlog
+
+### 9.1 Zrobione
 
 - [x] Ustalenie zakresu czasowników i modelu działania
-- [x] Weryfikacja receptur adb na API 37
+- [x] Weryfikacja receptur adb na API 37 (§6)
 - [x] `PROJECT.md`, `.gitignore`
-- [x] Reguły dla agentów: `CLAUDE.md` → `ai/RULES.md`, `ai/CODING_STANDARDS.md`, `ai/ARCHITECTURE.md`, `ai/TESTING.md`
-- [ ] Szkielet projektu Node.js
-- [ ] Demon: śledzenie urządzeń przez adb, lease'y, wygasanie
-- [ ] Rdzeń: interfejs urządzenia + backend Android
-- [ ] CLI
-- [ ] Serwer MCP
-- [ ] Hooki projektowe (D13)
+- [x] Reguły dla agentów: `CLAUDE.md` → `ai/RULES.md`, plus `ai/CODING_STANDARDS.md`, `ai/ARCHITECTURE.md`, `ai/TESTING.md`
+- [x] Board (`ai/RULES.md` §5) i skille `/write-issue`, `/solve-issue`
+
+### 9.2 Jak z tego backlogu robić issues
+
+**Jeden wiersz tabeli poniżej to jedno issue.** Zakłada się `/write-issue` — to on pisze
+specyfikację, dobiera etykiety, wstawia kartę do kolumny Backlog i zapisuje relacje **Blocked by**.
+Wiersz nie jest specyfikacją; ustala cztery rzeczy, których nie chcemy negocjować od nowa przy
+każdym issue: **rezultat**, **granicę zakresu**, **zależności** i **rozmiar**.
+
+Trzy reguły przy zakładaniu tych issues:
+
+1. **Zakładaj je w kolejności z tabeli** i od razu zapisuj `Blocked by`, bo prawie każde ma realny
+   warunek wstępny. Kolejność w kolumnie Backlog ma odzwierciedlać tę tabelę.
+2. **Kryterium ukończenia z kolumny „Rezultat" wchodzi do issue jako kryterium akceptacji**,
+   dosłownie. Jest tak sformułowane, żeby dało się je sprawdzić, a nie tylko uznać.
+3. **Nie rozbijaj wiersza na podzadania na etapie zakładania.** Jeśli w trakcie pracy okaże się za
+   duży, dzieli go implementujący — wtedy wiadomo, gdzie przebiega szew.
+
+### 9.3 Backlog w kolejności zależności
+
+| # | Zadanie | Rezultat — kryterium ukończenia | Zależy od | Size |
+|---|---|---|---|---|
+| R1 | Szkielet Node.js | `package.json`, `tsconfig.json` + `tsconfig.typecheck.json`, `biome.json`, `vitest.config.ts`, `lefthook.yml`, commitlint, skrypty `lint` / `typecheck` / `test:unit` / `test:device` / `verify`. **`npm run verify` przechodzi na pustym drzewie.** Konfiguracja kopiowana z `../swarm`, nie wymyślana | — | S |
+| R2 | Interfejs urządzenia, manifest zdolności, rejestr | Manifest jest schematem Zod; rejestr przyjmuje backend przez jeden import w barrelu. **Żaden plik poza `src/backends/` nie zawiera nazwy platformy.** Bez żadnego backendu | R1 | M |
+| R3 | Suita conformance backendów | Jeden przebieg na **zarejestrowany** manifest. Wykrywa stub czytając źródło metody; deklarowana zdolność bez dispatchu = porażka; jawny opt-out (`false`) przechodzi. Bramka musi istnieć **przed** pierwszym backendem (`ai/TESTING.md`) | R2 | M |
+| R4 | Parsery wyjścia adb + fixture'y z prawdziwego urządzenia | `adb devices -l`, `wm size`, `wm density`, `getprop`, XML z `uiautomator`. Fixture'y w `tests/fixtures/` z API i modelem w nazwie pliku. **Żaden parser nie wnioskuje niczego z kształtu seriala** | R1 | M |
+| R5 | Backend Android: enumeracja, `device_info`, cykl życia | Pierwszy zarejestrowany manifest — `index.ts` ląduje w fazie, która usuwa ostatni stub, nie wcześniej. Raportuje gęstość i wyliczoną szerokość w dp (D14) | R2, R3, R4 | L |
+| R6 | Demon: proces, gniazdo, autostart, IPC | Autostart przy pierwszym wywołaniu (D5). **Dwa równoległe wywołania CLI dają jeden demon** — przegrany bindu łączy się do zwycięzcy, nie do pliku blokady. Każdy komunikat parsowany schematem, nigdy rzutowany | R1 | M |
+| R7 | Inwentarz urządzeń w demonie | Strumień `adb track-devices` plus **ponowna weryfikacja przy każdym przyznaniu** (D6). Urządzenie, które zniknęło w trakcie lease'u, jest nazwanym błędem, nie wyjątkiem od reguły | R5, R6 | M |
+| R8 | Lease'y | Przyznanie per urządzenie (D7), właściciel jawnym stringiem (D16), TTL 20 min **odnawiany aktywnością**, nie heartbeatem (D8). **Test z pięcioma równoległymi klientami wyłania dokładnie jednego zwycięzcę** — poprzednik przepuścił czterech | R7 | L |
+| R9 | Przywracanie stanu | Zatrzymanie aplikacji, tryb samolotowy wyłączony, wifi z powrotem, hook projektu. **Test dowodzi, że teardown uruchamia się także na ścieżce wygaśnięcia**, nie tylko przy `release` (D9) | R8 | M |
+| R10 | CLI: `list`, `acquire`, `release`, `status` | Czytelne dla człowieka i skryptowalne. To jest interfejs, którym debuguje się wszystko powyżej (D4) | R8 | S |
+| R11 | Fundament warstwy czasowników | Rozwiązywanie celu ze **świeżego** odczytu wewnątrz czasownika, czekanie na warunek z timeoutem, zwracanie stanu po akcji (D12). **W repo nie ma ani jednego `sleep`** — egzekwowane regułą lintera albo testem. Timeout mówi, na co czekał i co zastał zamiast tego | R5, R8 | L |
+| R12 | Czasowniki wejścia | `tap`, `long_press`, `swipe`, `scroll`, `type_text`, `press_key`. `long_press` przez przeciągnięcie w miejscu — **nie** `keyevent --longpress` (§6). `type_text` ukrywa escapowanie spacji | R11 | M |
+| R13 | Czasowniki odczytu | `screenshot`, `read_screen`, `device_info`. `read_screen` działa przy zablokowanym przechwytywaniu ekranu i **jest zadeklarowaną zdolnością, nie metodą obowiązkową** (§5) | R11 | M |
+| R14 | `record_video` + cięcie na klatki | Nagranie musi dobiec do końca przed pobraniem — plik pobrany wcześniej nie ma atomu `moov` i jest nie do odczytania | R13 | S |
+| R15 | Czasowniki aplikacji | `install_app`, `launch_app`, `stop_app`, `clear_app_data`, `read_logs`, `pull_file`, `push_file`. `read_logs` ma wykryć awarię, której zrzut ekranu nie pokaże | R11 | M |
+| R16 | Czasowniki środowiska | `set_airplane_mode`, `set_wifi` przez `cmd connectivity` i `cmd wifi` — **nie** przez `svc`, którego już nie ma (§6). Obie ścieżki bez roota | R11 | S |
+| R17 | Hooki projektowe (D13) | Schemat Zod: komenda instalacji, usługi pomocnicze, teardown. **Rdzeń nie zna nazwy żadnej aplikacji**, a domyślna wartość, która ją wymienia, jest błędem | R9 | M |
+| R18 | Alokacja portów usług pomocniczych per slot | Bez wyścigu, z odzyskiwaniem po osieroconym slocie. Warunek pracy równoległej przy więcej niż dwóch urządzeniach | R17 | S |
+| R19 | Serwer MCP | Czasowniki jako narzędzia, schematy Zod jako ich deklaracje. **Brak zdolności to głośny, czytelny dla agenta błąd** nazywający zdolność i urządzenie (D11) — nigdy cicha degradacja. Zero logiki czasowników w tej warstwie | R12, R13, R15, R16 | L |
+| R20 | `README.md` — szybki start | Plik istnieje od założenia repo i opisuje kształt projektu; brakuje w nim tego, czego nie dało się napisać przed kodem: jak uruchomić demona, wziąć urządzenie i podpiąć serwer MCP, z działającymi komendami | R10, R19 | XS |
+
+### 9.4 Poza backlogiem — świadomie
+
+- **Backend iOS.** Zbudowany jest tylko szew (§5). Zanim powstanie issue, trzeba rozstrzygnąć
+  zależność od `idb` albo WebDriverAgent i pogodzić się z tym, że `read_screen` może nie mieć tam
+  odpowiednika w ogóle.
+- **Integracja ze Swarmem (D16).** Nic do zbudowania teraz; R6 i R8 mają tylko nie zamknąć drogi —
+  stan demona odpytywalny spoza MCP i lease z jawnym właścicielem.
+- **Kolumna `Planning` na boardzie.** Swarm mapuje taki status w konfiguracji projektu, a nasz
+  board go nie ma (`ai/RULES.md` §5). Do rozstrzygnięcia przy onboardingu rovera do Swarma: dodać
+  kolumnę albo wyłączyć tę fazę. Nie dodawać kolumny, której nikt na razie nie używa.

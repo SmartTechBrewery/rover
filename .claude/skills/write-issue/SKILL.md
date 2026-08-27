@@ -16,8 +16,11 @@ drifts from it. §5 describes the board this skill writes to.
 
 1. Derive the problem, desired outcome, scope, evidence, and acceptance criteria from the
    conversation. If the user supplied issue text directly, treat it as the primary source.
-2. **Check `PROJECT.md` §9 first** — it is the running backlog, and most planned work is already
-   named there. Then search for duplicates:
+2. **Check `PROJECT.md` §9.3 first** — the twenty-row backlog in dependency order. Most planned
+   work is already a row there, and a row fixes four things the issue must not renegotiate: the
+   outcome, the scope boundary, the dependencies and the size. If the request matches a row, you
+   are transferring it, not authoring it: carry the "Rezultat" column into the issue verbatim as
+   an acceptance criterion, and record the `Zależy od` column as native **Blocked by** (§3). Then search for duplicates:
    ```bash
    gh issue list --repo SmartTechBrewery/rover --state all --search "<keywords>" \
      --json number,title,state
