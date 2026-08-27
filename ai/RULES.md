@@ -102,7 +102,14 @@ mkdir -p .agents/skills
 ln -s ../../.claude/skills/<name> .agents/skills/<name>
 ```
 
-Do this as part of creating the skill, not as a follow-up. **Skills are not committed** — both directories are gitignored; they are personal tooling, not shared artifacts.
+Do this as part of creating the skill, not as a follow-up. A skill is not done until the `.agents/skills` symlink exists and the same skill is available to all three agents.
+
+**Skills are committed here — a deliberate departure from Swarm**, where both directories are gitignored as personal tooling. Rover's skills are not personal: they carry the board's field and option ids, the label vocabulary, the review checklist and the worktree rules, and Rover's work is delegated to agents that run in **fresh worktrees and on other machines**. An uncommitted skill is invisible to every one of them, which turns a shared procedure into something only the machine that authored it can follow.
+
+Two obligations follow from committing them:
+
+- **No secrets, ever.** Skills are now public repository content. They may name accounts, hosts and ids; never a token, and never anything that would not survive being read by someone outside the project.
+- **A skill that drifts is a bug like any other.** When a change moves a board id, renames a verb, or alters the verification commands, update the skills in the same change — the same rule §1 applies to `PROJECT.md`.
 
 ---
 
