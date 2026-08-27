@@ -78,6 +78,9 @@ którego się nie napisało. To najgorszy tryb porażki, jaki ta klasa narzędzi
 | D13 | **Wszystko specyficzne dla projektu to hooki w konfiguracji** | Komenda instalacji, start usług pomocniczych, sprzątanie, ścieżki do renderów. Rdzeń nie zna nazwy żadnej aplikacji | 2026-08-27 |
 | D14 | **Każdy wynik nazywa urządzenie i jego gęstość** | Dwa emulatory o różnej gęstości dają różne — i oba poprawne — pomiary tego samego elementu. Bez nazwania urządzenia dwa raporty są sprzeczne i nie wiadomo, który kłamie | 2026-08-27 |
 
+| D15 | **Architektura wzorowana na projekcie Swarm (`../swarm`)** | Swarm to działający kod w Node.js prowadzony przez tego samego autora, ze sprawdzonym zestawem konwencji (TypeScript strict/ESM, Biome, Vitest, Zod jako źródło prawdy, rejestr providerów). Providery Swarma to tutaj backendy urządzeń — ten sam kształt modułu. Wymyślanie własnych konwencji nie kupiłoby nic | 2026-08-27 |
+| D16 | **Rover i Swarm będą zintegrowane; przygotowanie zaczyna się teraz** | Swarm ma docelowo pokazywać, że dany przebieg trzyma urządzenie rovera. Nic nie trzeba budować od razu, ale dwie rzeczy muszą być tak zaprojektowane od początku: stan demona odpytywalny przez coś, co nie jest agentem, oraz lease z jawnym właścicielem, w który Swarm wstawi identyfikator swojego przebiegu | 2026-08-27 |
+
 ---
 
 ## 4. Zestaw czasowników
@@ -203,6 +206,7 @@ Warto nazwać wprost, bo milczenie czyta się jako „sprawdzone".
 - [x] Ustalenie zakresu czasowników i modelu działania
 - [x] Weryfikacja receptur adb na API 37
 - [x] `PROJECT.md`, `.gitignore`
+- [x] Reguły dla agentów: `CLAUDE.md` → `ai/RULES.md`, `ai/CODING_STANDARDS.md`, `ai/ARCHITECTURE.md`, `ai/TESTING.md`
 - [ ] Szkielet projektu Node.js
 - [ ] Demon: śledzenie urządzeń przez adb, lease'y, wygasanie
 - [ ] Rdzeń: interfejs urządzenia + backend Android

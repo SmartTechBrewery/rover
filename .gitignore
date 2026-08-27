@@ -44,3 +44,9 @@ artifacts/
 .idea/
 .vscode/
 *.swp
+
+# ── Skille agentów (ai/RULES.md §4) ────────────────────────────────────────
+# Osobiste narzędzia, nie artefakty projektu. Katalog .agents/skills to
+# symlinki do .claude/skills — jedna kopia do utrzymania, żadna nie w repo.
+.claude/skills/
+.agents/skills/
