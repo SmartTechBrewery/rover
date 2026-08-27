@@ -86,7 +86,9 @@ The predecessor *asked* callers, in a comment, to restore state before releasing
 
   If a commit ever resolves to `jkwiecien@solvd.com` (the global default), the local override is missing or was reset — restore it before committing.
 
-- **Repo**: `SmartTechBrewery/rover`.
+- **Repo**: `SmartTechBrewery/rover`. The remote is `git@gh-personal:SmartTechBrewery/rover.git`, **not** `git@github.com:…`.
+
+  `gh auth switch` governs the API only; `git push` goes over SSH and picks its key from `~/.ssh/config`, where plain `github.com` is pinned to the work identity. Pushing through it fails with `Permission to SmartTechBrewery/rover.git denied to jacek-solvd` — an authorization error that looks like a missing repository, on an account you thought you had switched away from. `gh-personal` is the alias carrying the personal key. If a clone or a new remote is ever added with the plain host, rewrite it.
 - **Conventional commits**, enforced by commitlint on `commit-msg`. Subject imperative and lowercase, 100 characters max, body explaining *why*.
 
 ---
