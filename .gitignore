@@ -1,0 +1,46 @@
+# ── macOS ──────────────────────────────────────────────────────────────────
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+.Spotlight-V100
+.Trashes
+.DocumentRevisions-V100
+.fseventsd
+.TemporaryItems
+.VolumeIcon.icns
+.com.apple.timemachine.donotpresent
+Icon?
+
+# ── Node ───────────────────────────────────────────────────────────────────
+node_modules/
+npm-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+.npm/
+dist/
+build/
+coverage/
+*.tsbuildinfo
+
+# ── Środowisko ─────────────────────────────────────────────────────────────
+.env
+.env.*
+!.env.example
+
+# ── Stan runtime demona ────────────────────────────────────────────────────
+# Lease'y, gniazdo, PID i logi demona są stanem jednej maszyny, nie kodem.
+.rover/
+*.sock
+*.pid
+
+# ── Artefakty przebiegów ───────────────────────────────────────────────────
+# Zrzuty ekranu, nagrania, zrzuty hierarchii — dowody z konkretnego przebiegu,
+# nie źródło. Trzymane poza repo, żeby historia nie puchła od PNG-ów.
+artifacts/
+*.mp4
+
+# ── Edytory ────────────────────────────────────────────────────────────────
+.idea/
+.vscode/
+*.swp
