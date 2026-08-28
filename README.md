@@ -38,7 +38,9 @@ one agent screenshots the other's build.
 
 ## Working on this repo
 
-Read `ai/RULES.md` in full first. Issues are filed with `/write-issue` and implemented with
+Read `ai/RULES.md` in full first. `npm install` sets up the toolchain and installs the git hooks;
+`npm run verify` (lint, typecheck, unit tests) is the one command that says whether the tree is
+healthy. Issues are filed with `/write-issue` and implemented with
 `/solve-issue`; both are committed under `.claude/skills/`. Work is also delegated to
 [Swarm](https://github.com/SmartTechBrewery/swarm), which is why every issue carries the `swarm`
 label.

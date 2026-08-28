@@ -1,0 +1,38 @@
+{
+	"name": "rover",
+	"version": "0.1.0",
+	"private": true,
+	"description": "Hands and eyes on a real mobile device for coding agents, and a way to share devices between them",
+	"type": "module",
+	"scripts": {
+		"lint": "biome check .",
+		"lint:fix": "biome check --write .",
+		"typecheck": "tsc --noEmit -p tsconfig.typecheck.json",
+		"test": "npm run test:unit",
+		"test:unit": "vitest run --project unit",
+		"test:device": "vitest run --project device",
+		"verify": "npm run lint && npm run typecheck && npm run test:unit",
+		"prepare": "lefthook install"
+	},
+	"keywords": [
+		"android",
+		"adb",
+		"mcp",
+		"agents",
+		"devices"
+	],
+	"author": "Jacek Kwiecien",
+	"engines": {
+		"node": ">=22.0.0"
+	},
+	"devDependencies": {
+		"@biomejs/biome": "2.4.10",
+		"@commitlint/cli": "^20.1.0",
+		"@commitlint/config-conventional": "^20.0.0",
+		"@types/node": "^22.10.2",
+		"lefthook": "^1.10.10",
+		"tsx": "^4.19.2",
+		"typescript": "^5.7.2",
+		"vitest": "^3.2.4"
+	}
+}
