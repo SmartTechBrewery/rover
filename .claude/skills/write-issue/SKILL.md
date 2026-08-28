@@ -19,8 +19,8 @@ drifts from it. §5 describes the board this skill writes to.
 2. **Check `PROJECT.md` §9.3 first** — the backlog in dependency order (row numbers are identities, not positions: R21–R24 sit mid-table). Most planned
    work is already a row there, and a row fixes four things the issue must not renegotiate: the
    outcome, the scope boundary, the dependencies and the size. If the request matches a row, you
-   are transferring it, not authoring it: carry the "Rezultat" column into the issue verbatim as
-   an acceptance criterion, and record the `Zależy od` column as native **Blocked by** (§3). Then search for duplicates:
+   are transferring it, not authoring it: carry the "Outcome" column into the issue verbatim as
+   an acceptance criterion, and record the `Depends on` column as native **Blocked by** (§3). Then search for duplicates:
    ```bash
    gh issue list --repo SmartTechBrewery/rover --state all --search "<keywords>" \
      --json number,title,state
