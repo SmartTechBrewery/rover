@@ -6,11 +6,11 @@ System prompt and working conventions for AI agents in this repository — the *
 
 ## 1. What this project is
 
-**Rover** gives a coding agent hands and eyes on a real mobile device, and shares those devices between agents working in parallel. It is a **daemon** (one per machine — owns devices, grants leases, restores state), a **core library** (the device abstraction and the verbs), a **CLI**, and an **MCP server** (one per agent — exposes the verbs). Android over `adb` is what is built; iOS is a seam, not an implementation (§2).
+**Rover** gives a coding agent hands and eyes on a real mobile device, and shares those devices between agents working in parallel — **including agents on other machines**. It is a **daemon** (one per machine with devices, reachable over the network — owns devices, grants leases, restores state, and runs the verbs), a **core library** (the device abstraction and the verbs), a **CLI**, and an **MCP server** (one per agent). The CLI and the MCP server are **clients** of a host, local or remote. Android over `adb` is what is built; iOS is a seam, not an implementation (§2).
 
 It is **not** a test framework. Nothing asserts, nothing goes red on its own, nothing is a CI gate. Rover moves the device and reports what is on it; judging whether that is correct is the agent's job.
 
-**Read `PROJECT.md` before writing code.** It carries the fourteen decisions this design rests on, with the reasoning behind each, plus adb recipes verified against a real device. When a rule here is underspecified, the decision table there is the tie-breaker.
+**Read `PROJECT.md` before writing code.** It carries the twenty decisions this design rests on, with the reasoning behind each, plus adb recipes verified against a real device. When a rule here is underspecified, the decision table there is the tie-breaker.
 
 **Keep `PROJECT.md` and `README.md` current.** If a change makes either inaccurate — a renamed verb, a changed lease rule, a decision reversed — update it in the same change. A reversed decision is edited **in place with its reason rewritten**, not deleted: the record of what was considered and rejected is most of that document's value.
 
@@ -23,6 +23,8 @@ What transfers: the TypeScript/ESM/Biome/Vitest/Lefthook stack, Zod-as-source-of
 What does not: anything about webhooks, PM boards, worktrees, Postgres or the agent-CLI harness. Rover has no cloud half and no database.
 
 ### Rover and Swarm will be integrated
+
+The two tools point in opposite directions and that is the useful part: Swarm pushes work out to workers on many machines, while Rover stands still and lends devices to whoever connects (`PROJECT.md` D17). A Swarm worker on one machine borrowing a device from a Rover host on another is the shape both sides are being built for.
 
 Swarm will eventually surface that a run is using a Rover device — which device, held how long, by which phase. Nothing needs building for that yet, but two obligations start now:
 
@@ -49,6 +51,19 @@ Rover's whole value proposition is one set of verbs across platforms (`PROJECT.m
 - **No verb named after a platform.** `tap`, not `tap_android`. This was considered and rejected in D10; the reasoning is in `PROJECT.md` and does not need relitigating.
 - **A missing ability is a declared capability, not a missing method.** Backends are genuinely asymmetric — iOS has no cheap equivalent of `read_screen`, and a physical Android phone cannot fake a fingerprint. A backend declares what it can do; a verb without backing **fails loudly**, naming the capability and the device. Never degrade silently, and never return a plausible-looking empty result where the honest answer is "this device cannot do that".
 - **Adding a backend must not require editing shared code** — only its own folder plus one import line in the barrel.
+
+### The host owns the device; the client only asks
+
+Rover lends hardware to agents that are not on the machine holding it (`PROJECT.md` D17), and the
+whole arrangement rests on three rules:
+
+- **A device belongs to exactly one host** — the one it is attached to (D18). Never take a device
+  reached through `adb connect` into the inventory. Two hosts believing they each own the same
+  emulator is the two-agents-one-device failure again, harder to spot because both report success.
+- **Verbs run on the host, never in the client** (D19). No `adb` in a CLI or MCP process. Artifacts
+  come back as bytes, and any path returned to the agent must exist on the agent's machine.
+- **The token authenticates, the owner string attributes** (D20). Never derive a lease owner from
+  whoever authenticated, and never let a token reach a log or a report.
 
 ### The daemon is a cache; adb is the truth
 
