@@ -97,6 +97,7 @@ one owning host (D18), and the verbs execute **where the device is** (D19).
 | D18 | **A device belongs to exactly one host — the one it is attached to** | `adb connect B:5555` makes an emulator on machine B visible in `adb devices` on A, and it is tempting because it "almost works". Then two hosts each consider that device theirs and free, and both grant a lease on it — precisely the failure mode D3 and D7 exist for, only harder to spot, because both sides see green. A client asks the host that owns the device; it never stakes a claim through adb over TCP | 2026-08-27 |
 | D19 | **The verbs execute on the host; the adapters are clients** | The alternative — the client gets a serial and calls adb itself — requires adb reachable over the network, which D18 forbids, and it strands the project hooks and helper services (D13, port allocation) on the far side of the network from the device they exist to serve. The core stays a library; only which process loads it changes. The consequence to keep in mind in every verb that returns a file: artifacts come back as bytes, and a path handed to the agent must exist **on the agent's machine** | 2026-08-27 |
 | D20 | **The host token authenticates; the lease owner attributes. Two different fields** | Anything listening on a network lets strangers in, so a host needs a shared secret. It is tempting to derive the owner from whoever authenticated — and then either the token lands in reports and logs, or the attribution cannot be overridden, and Swarm is supposed to put its run identity there (D16). The token says "you may take devices from here"; the owner says "`pr-127-review` is holding this" | 2026-08-27 |
+| D21 | **Rover never starts an emulator or connects a physical device — that is the host operator's job** | The host only ever reports what `adb devices` already shows on its own machine (D6). Bringing hardware online — booting an emulator, plugging in a phone — is physical, local work done by whoever operates that machine; it is never a verb the daemon executes and never something a remote client can trigger. Rover's job starts once the device is already there | 2026-08-28 |
 
 ---
 
@@ -201,7 +202,8 @@ Authentication by host token.
 device farms, a host catalogue, hosts registering with one another, and anything resembling a
 dashboard — a client gets its host list from configuration and that is all. Comparison against
 design renders — Rover supplies screenshots and measurements; judging them against the design is
-the agent's job.
+the agent's job. **Starting emulators and connecting physical devices** — that belongs to whoever
+operates the host machine, not to Rover (D21).
 
 ---
 
