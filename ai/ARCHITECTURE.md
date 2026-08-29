@@ -10,7 +10,7 @@ What is actually built, and where the seams run. `PROJECT.md` carries the decisi
 |---|---|---|---|
 | **Daemon — the device host** (`src/daemon/`) | one per machine **with devices**, reachable over the network | long-running | Device inventory, leases, port allocation, state restoration, **and executing the verbs** |
 | **IPC surface** (`src/ipc/`) | library, loaded by the daemon and by every client | per connection | The wire schemas, NDJSON framing, request dispatch and response correlation — the protocol itself |
-| **Core** (`src/core/`, `src/backends/`) | library | — | The device interface, the backends, the verbs |
+| **Core** (`src/core/`, `src/backends/`, `src/verbs/`) | library | — | The device interface, the backends, the verbs |
 | **CLI** (`src/cli/`) | per invocation | seconds | Human and script entry point — a **client** of a host, local or remote |
 | **MCP server** (`src/mcp/`) | one per agent | agent session | Exposes the verbs as tools — also a **client** of a host |
 
@@ -125,6 +125,36 @@ Verbs live above the backends and below the adapters, and this is where determin
 - **Target resolution happens inside the verb**, from a screen captured during that call. A coordinate is a fallback, never the primary address of an element.
 - **Waiting is polling on a condition with a timeout.** There is no sleep in this codebase — the vocabulary is `waitForCondition` in `src/core/wait.ts`, the one module allowed to construct a delay, and `tests/unit/no-sleep.test.ts` is the gate that keeps it the only one. A timeout reports what it was waiting for and what was on screen instead.
 - **Every verb returns post-state**, so the agent never infers success from the absence of an error.
+
+### The spine every verb is built on
+
+`src/verbs/` is where those rules are enforced once rather than once per verb. A verb hands
+`performAction()` what it needs, what it is aimed at and what it does, and gets a result back:
+
+- **`VerbContext`** — the serial, the backend and its capability manifest — is constructed by the
+  caller that already resolved the device (R21's daemon handler). The verb layer never looks a
+  device up. `capabilityMethod()` is the only way it reaches a capability-gated method, so the
+  manifest is consulted before every dispatch (D11); a capability declared with no method behind it
+  is a wiring bug and says so, distinctly from a device that honestly opted out.
+- **`resolveTarget()` takes a target and nothing else** — no screen, no element list, no
+  previously-read state — which is what makes the fresh read structural instead of a rule. A miss is
+  `null`; `requireTarget()` is the loud version and names what was on screen instead. Two matches
+  are `AmbiguousTargetError` naming every candidate, because a silent first match is right half the
+  time, and the remedy in that message is the one that target kind can actually take. A
+  `by: 'point'` target stays the documented fallback (`PROJECT.md` §4), marked in the result as
+  **not** having come from a screen. **Every** resolved point is range-checked against the device,
+  however it was arrived at: an element the screen read reported is not evidence that it is
+  reachable, since a node clipped out of its scrolling container comes back with inverted bounds
+  (`PROJECT.md` §6) whose midpoint is arithmetic rather than a place. That is
+  `UnaddressableElementError`, distinct from "not found" because the element *was* found.
+- **`ActionResult`** names the verb, the device (as `DeviceInfo`, so D14's density travels with the
+  measurement), the resolved target and the state after the action. A backend with input but no
+  screen reading answers an explicit `unavailable` after-state naming the capability that would have
+  answered — never an empty element list, which reads as a blank screen. A read that was declared,
+  attempted and rejected is the separate `failed` branch: once the action has run, an exception in
+  its place would leave the agent unable to tell whether it landed, which is exactly what D12(c)
+  rules out. Every shape is a Zod schema of plain data, because the host executes the verb and the
+  agent reads the result somewhere else (D19).
 
 ---
 

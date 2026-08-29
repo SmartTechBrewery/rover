@@ -223,7 +223,9 @@ capturing `tests/fixtures/adb/`:
   its bottom, so `bottom - top` is -14. `parseUiHierarchy` reports that subtraction as it stands
   rather than clamping it to zero, because every target resolution downstream is addressed through
   this rectangle and a clamped one is a rectangle the device never described. Whether a node is on
-  screen is the caller's question, and the sign is the evidence it needs to answer.
+  screen is the caller's question, and the sign is the evidence it needs to answer. `src/verbs/`
+  is that caller and now answers it: a matched element whose rectangle has no interior, or whose
+  centre is off the device, is an `UnaddressableElementError` rather than a point to act on.
 
 Checked on the same API 37 emulator (`sdk_gphone16k_arm64`) with `adb` 37.0.1, 2026-08-29, while
 building the app-control primitives (#37). Every one of the four verbs reports at least one failure

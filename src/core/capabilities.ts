@@ -53,6 +53,19 @@ export type Capabilities = z.infer<typeof CapabilitiesSchema>;
 export type CapabilityId = keyof Capabilities;
 
 /**
+ * The same vocabulary as a schema, for a result that has to *name* a capability on the
+ * wire — a verb answering "the state after this action could not be read, and here is the
+ * capability that would have read it" (D11, `src/verbs/result.ts`).
+ *
+ * Derived from {@link CapabilitiesSchema}'s own keys rather than restated as a literal
+ * list, for the reason {@link CapabilityId} is: a second list is a list that drifts, and
+ * this one would drift into an error message naming a capability that no longer exists.
+ */
+export const CapabilityIdSchema = z.enum(
+	Object.keys(CapabilitiesSchema.shape) as [CapabilityId, ...CapabilityId[]],
+);
+
+/**
  * A backend's declaration of itself: who it is and what it can do.
  *
  * `platform` is branded on parse, so a backend author writes a plain string literal in
