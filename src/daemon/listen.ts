@@ -30,6 +30,7 @@ import { createDeviceRestorer, type DeviceRestorer } from './restore.js';
 import { attemptConnect } from './socket-connect.js';
 import { assertValidSocketPath } from './socket-path.js';
 import { handleStatus } from './status.js';
+import { createVerbHandlers } from './verb-handlers.js';
 
 /**
  * How long the stale-socket probe waits for a connection before giving up. A daemon that
@@ -112,7 +113,11 @@ export interface DaemonAlreadyRunning {
 
 export type StartResult = RunningDaemon | DaemonAlreadyRunning;
 
-/** The method table the daemon serves. Four rows today; a row per verb as R21 lands. */
+/**
+ * The method table the daemon serves — status, the device list, the two lease operations and
+ * the verbs, on one surface (D19). A new verb family is one more spread, or one more entry in
+ * `./verb-handlers.ts`; nothing about the connection lifecycle changes to carry it.
+ */
 export function createDaemonHandlers(
 	inventory: DeviceInventory,
 	leases: LeaseStore,
@@ -122,6 +127,7 @@ export function createDaemonHandlers(
 		status: handleStatus,
 		...createListDevicesHandler(inventory, leases),
 		...createLeaseHandlers(inventory, leases, restorer),
+		...createVerbHandlers(inventory, leases),
 	};
 }
 

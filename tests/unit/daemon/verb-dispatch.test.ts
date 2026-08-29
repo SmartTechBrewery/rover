@@ -1,0 +1,415 @@
+/**
+ * Verb calls end to end: a registered backend, a real daemon on a temp socket, and one
+ * client asking over the real framing — the shape R21 is about.
+ *
+ * **Every call in this file goes over the same `IpcClient` that took the lease**, on the
+ * same connection and the same envelope. That is the criterion, not an incidental
+ * convenience: verb calls travel on the surface the lease operations already use (R6, D19),
+ * so there is deliberately no second client, no second protocol and no second socket
+ * anywhere below.
+ *
+ * The client never touches a device. Every assertion about what happened to the hardware is
+ * an assertion about a mock the **daemon** in this process called, which is the other half
+ * of the same claim; `tests/unit/no-backend-in-a-client.test.ts` holds the static half.
+ *
+ * The daemon suite's real-socket exception applies (ai/TESTING.md) — never
+ * `~/.rover/rover.sock`, and every daemon closed through its own handle in `afterEach`.
+ *
+ * Nothing here sleeps. Where a test needs a wait to have actually taken time it asks a verb
+ * to poll to its own deadline, which is the wait vocabulary doing what it is for; everywhere
+ * else `timeoutMs: 0` makes a wait exactly one screen read (`src/core/wait.ts`).
+ */
+
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import {
+	_resetDeviceBackendRegistryForTesting,
+	registerDeviceBackend,
+} from '@/backends/registry.js';
+import type { Capabilities } from '@/core/capabilities.js';
+import type { Device, DeviceBackend, DeviceWatch, DeviceWatcher } from '@/core/device.js';
+import { type LeaseId, parseDeviceSerial, parseLeaseId } from '@/core/ids.js';
+import { type RunningDaemon, startDaemon } from '@/daemon/listen.js';
+import type { IpcClient } from '@/ipc/client.js';
+import { IpcRequestError } from '@/ipc/protocol.js';
+import {
+	connectWithoutStarting,
+	createTempSocket,
+	removeTempSocket,
+	type TempSocket,
+} from '../../helpers/daemon-socket.js';
+import {
+	createMockCapabilities,
+	createMockDevice,
+	createMockDeviceBackend,
+	createMockDeviceInfo,
+	createMockScreenElement,
+} from '../../helpers/factories.js';
+
+const SERIAL = parseDeviceSerial('attached-1');
+const attached = createMockDevice({ serial: SERIAL });
+const save = createMockScreenElement({ id: 'save', text: 'Save' });
+
+/** Waiting on a target nothing on these screens matches. */
+const ABSENT = { by: 'text', text: 'Nothing here' } as const;
+
+let temp: TempSocket;
+const running: RunningDaemon[] = [];
+const clients: IpcClient[] = [];
+
+interface HostOptions {
+	readonly describeDevice?: DeviceBackend['describeDevice'];
+	readonly readScreen?: DeviceBackend['readScreen'];
+	readonly deviceInfo?: DeviceBackend['deviceInfo'];
+	readonly capabilities?: Partial<Capabilities>;
+	readonly leaseTtlMs?: number;
+}
+
+/** The screen reads the daemon performed, so a test can prove the host did the work. */
+let reads: number;
+
+/**
+ * A daemon on a temp socket with one ready device behind one registered backend.
+ *
+ * `describeDevice` defaults to answering about whatever serial it was asked, because the
+ * factory's own default ignores it — which would quietly make every call land on one device.
+ */
+async function serve(options: HostOptions = {}): Promise<void> {
+	reads = 0;
+	const watchDevices = vi.fn<DeviceBackend['watchDevices']>((watcher: DeviceWatcher) => {
+		watcher.onDevices([attached]);
+		return { stop: vi.fn<DeviceWatch['stop']>(async () => {}) };
+	});
+
+	registerDeviceBackend({
+		manifest: {
+			platform: 'test-platform',
+			label: 'Test',
+			capabilities: createMockCapabilities(options.capabilities ?? {}),
+		},
+		backend: createMockDeviceBackend({
+			watchDevices,
+			describeDevice:
+				options.describeDevice ??
+				(async (serial): Promise<Device | null> => createMockDevice({ serial })),
+			readScreen:
+				options.readScreen ??
+				(async () => {
+					reads += 1;
+					return [save];
+				}),
+			deviceInfo: options.deviceInfo ?? (async (serial) => createMockDeviceInfo({ serial })),
+		}),
+	});
+
+	temp = await createTempSocket();
+	const result = await startDaemon({
+		socketPath: temp.socketPath,
+		...(options.leaseTtlMs === undefined ? {} : { leaseTtlMs: options.leaseTtlMs }),
+	});
+	if (!result.started) {
+		throw new Error('Another daemon holds the temp socket — the test cannot proceed');
+	}
+	running.push(result);
+}
+
+async function connect(): Promise<IpcClient> {
+	const client = await connectWithoutStarting(temp.socketPath);
+	if (!client) {
+		throw new Error('Nothing is serving the temp socket');
+	}
+	clients.push(client);
+	return client;
+}
+
+/** A held lease on the one device, taken over the same client the verbs then use. */
+async function acquire(client: IpcClient): Promise<LeaseId> {
+	const outcome = await client.request('acquire_device', {
+		serial: SERIAL,
+		owner: 'issue-21',
+		project: 'rover',
+	});
+	if (outcome.outcome !== 'granted') {
+		throw new Error(`The test needs a lease and was refused: ${outcome.message}`);
+	}
+	return outcome.lease.leaseId;
+}
+
+/** The one device's holder as `list_devices` reports it, or a failed test. */
+async function holderOn(client: IpcClient) {
+	const { devices } = await client.request('list_devices', {});
+	const holder = devices.find((device) => device.serial === SERIAL)?.heldBy;
+	if (!holder) {
+		throw new Error('The device is not listed as held');
+	}
+	return holder;
+}
+
+afterEach(async () => {
+	await Promise.all(clients.splice(0).map((client) => client.close()));
+	await Promise.all(running.splice(0).map((daemon) => daemon.close()));
+	_resetDeviceBackendRegistryForTesting();
+	if (temp) {
+		await removeTempSocket(temp);
+	}
+});
+
+describe('the daemon runs the verb against its own device', () => {
+	it('answers a verb call on the same connection that took the lease', async () => {
+		await serve();
+		const client = await connect();
+		const leaseId = await acquire(client);
+
+		const answer = await client.request('wait_for', {
+			leaseId,
+			target: { by: 'text', text: 'Save' },
+			timeoutMs: 0,
+		});
+
+		expect(answer).toMatchObject({
+			outcome: 'ok',
+			result: { verb: 'wait_for', target: { source: 'screen', element: { id: 'save' } } },
+		});
+		// The screen was read in *this* process, by the daemon — the client asked and nothing
+		// else. That is the execution model this row exists to establish (D19).
+		expect(reads).toBeGreaterThan(0);
+	});
+
+	it('names the device the lease is on, without the caller sending a serial', async () => {
+		await serve();
+		const client = await connect();
+		const leaseId = await acquire(client);
+
+		const answer = await client.request('wait_until_gone', {
+			leaseId,
+			target: ABSENT,
+			timeoutMs: 0,
+		});
+
+		// The serial is derived from the lease on the host: the credential is the only handle a
+		// verb call carries (D20), so a holder of one device cannot address another.
+		expect(answer).toMatchObject({ outcome: 'ok', result: { device: { serial: SERIAL } } });
+	});
+
+	it('renews the lease when the call arrives (D8)', async () => {
+		const ttlMs = 5_000;
+		await serve({ leaseTtlMs: ttlMs, readScreen: async () => [] });
+		const client = await connect();
+		const startedAtMs = Date.now();
+		const leaseId = await acquire(client);
+
+		// A verb that polls to its own deadline, so real time passes without anything sleeping:
+		// what ends this call is the timeout it was given, and the timeout is the point.
+		await client.request('wait_for', {
+			leaseId,
+			target: ABSENT,
+			timeoutMs: 300,
+			pollIntervalMs: 25,
+		});
+		// The second call is the renewal being observed. It arrives well after the acquire, so a
+		// store that only set the expiry once would show the elapsed time gone from the lease.
+		await client.request('wait_until_gone', { leaseId, target: ABSENT, timeoutMs: 0 });
+
+		const elapsedMs = Date.now() - startedAtMs;
+		const { expiresInMs } = await holderOn(client);
+		expect(elapsedMs).toBeGreaterThanOrEqual(300);
+		expect(expiresInMs).toBeGreaterThan(ttlMs - 200);
+	});
+});
+
+describe('a call that cannot reach a verb is refused, as data', () => {
+	it('refuses a lease id the store does not know, and resolves rather than rejecting', async () => {
+		await serve();
+		const client = await connect();
+
+		const answer = await client.request('wait_for', {
+			leaseId: parseLeaseId('never-granted'),
+			target: { by: 'text', text: 'Save' },
+			timeoutMs: 0,
+		});
+
+		expect(answer).toMatchObject({ outcome: 'refused', reason: 'no-lease' });
+		// One reason with no sub-reasons, so the message has to carry all three possibilities
+		// and the way out of them.
+		expect(answer).toMatchObject({ message: expect.stringContaining('Acquire the device again') });
+		expect(reads).toBe(0);
+	});
+
+	it('refuses a lease that was released, without touching the device', async () => {
+		await serve();
+		const client = await connect();
+		const leaseId = await acquire(client);
+		await client.request('release_device', { leaseId });
+
+		const answer = await client.request('wait_for', {
+			leaseId,
+			target: { by: 'text', text: 'Save' },
+			timeoutMs: 0,
+		});
+
+		expect(answer).toMatchObject({ outcome: 'refused', reason: 'no-lease' });
+		expect(reads).toBe(0);
+	});
+
+	it('refuses when the device vanished mid-lease (D6)', async () => {
+		let attachedNow = true;
+		await serve({
+			describeDevice: async (serial): Promise<Device | null> =>
+				attachedNow ? createMockDevice({ serial }) : null,
+		});
+		const client = await connect();
+		const leaseId = await acquire(client);
+		attachedNow = false;
+
+		const answer = await client.request('wait_for', {
+			leaseId,
+			target: { by: 'text', text: 'Save' },
+			timeoutMs: 0,
+		});
+
+		expect(answer).toMatchObject({ outcome: 'refused', reason: 'gone' });
+	});
+
+	it('refuses a device that is only reachable over a network transport (D18)', async () => {
+		let local = true;
+		await serve({
+			describeDevice: async (serial): Promise<Device> =>
+				createMockDevice({ serial, attachment: local ? 'this-host' : 'another-host' }),
+		});
+		const client = await connect();
+		const leaseId = await acquire(client);
+		local = false;
+
+		const answer = await client.request('wait_for', {
+			leaseId,
+			target: { by: 'text', text: 'Save' },
+			timeoutMs: 0,
+		});
+
+		expect(answer).toMatchObject({ outcome: 'refused', reason: 'not-attached' });
+	});
+
+	it('refuses a device that is no longer in a state a verb could run against', async () => {
+		let ready = true;
+		await serve({
+			describeDevice: async (serial): Promise<Device> =>
+				createMockDevice({ serial, state: ready ? 'ready' : 'offline' }),
+		});
+		const client = await connect();
+		const leaseId = await acquire(client);
+		ready = false;
+
+		const answer = await client.request('wait_for', {
+			leaseId,
+			target: { by: 'text', text: 'Save' },
+			timeoutMs: 0,
+		});
+
+		expect(answer).toMatchObject({ outcome: 'refused', reason: 'not-ready' });
+	});
+});
+
+describe('a verb that ran and answered no is a failure, not a broken host', () => {
+	it('names the capability, the device and the backend when the device cannot answer (D11)', async () => {
+		await serve({ capabilities: { canReadScreen: false } });
+		const client = await connect();
+		const leaseId = await acquire(client);
+
+		const answer = await client.request('wait_for', {
+			leaseId,
+			target: { by: 'text', text: 'Save' },
+			timeoutMs: 0,
+		});
+
+		expect(answer).toMatchObject({
+			outcome: 'failed',
+			failure: {
+				kind: 'missing-capability',
+				capability: 'canReadScreen',
+				serial: SERIAL,
+				platform: 'test-platform',
+				backendLabel: 'Test',
+			},
+		});
+	});
+
+	it('carries a wait that timed out back as data, with what was on screen instead', async () => {
+		await serve({ readScreen: async () => [save] });
+		const client = await connect();
+		const leaseId = await acquire(client);
+
+		// `timeoutMs: 0` is exactly one screen read: the wait vocabulary probes before any
+		// delay, so this proves a timeout without a test waiting on a duration.
+		const answer = await client.request('wait_until_gone', {
+			leaseId,
+			target: { by: 'text', text: 'Save' },
+			timeoutMs: 0,
+		});
+
+		expect(answer).toMatchObject({
+			outcome: 'failed',
+			failure: { kind: 'wait-timeout', polls: 1, timeoutMs: 0 },
+		});
+		if (answer.outcome !== 'failed' || answer.failure.kind !== 'wait-timeout') {
+			throw new Error('the assertion above should have caught this');
+		}
+		expect(answer.failure.waitedFor).toContain('Save');
+		expect(answer.failure.found).toContain('Save');
+	});
+
+	it('leaves a genuine host failure as internal_error', async () => {
+		await serve({
+			deviceInfo: async () => {
+				throw new Error('the host broke');
+			},
+		});
+		const client = await connect();
+		const leaseId = await acquire(client);
+
+		// Not a verb answering "no" — nothing about the device explains it, so dressing it up as
+		// one would send the agent looking in the wrong place.
+		const thrown = await client
+			.request('wait_for', { leaseId, target: { by: 'text', text: 'Save' }, timeoutMs: 0 })
+			.catch((error: unknown) => error);
+
+		expect(thrown).toBeInstanceOf(IpcRequestError);
+		expect((thrown as IpcRequestError).code).toBe('internal_error');
+	});
+});
+
+describe('the boundary parses what the type already forbids', () => {
+	it('refuses an index on wait_until_gone rather than dropping it', async () => {
+		await serve();
+		const client = await connect();
+		const leaseId = await acquire(client);
+
+		const thrown = await client
+			.request('wait_until_gone', {
+				// The type says no and so does the schema: an index is a slot in the match list, so
+				// "index 2 is gone" would be reported for a row still plainly on the screen.
+				// @ts-expect-error — the point of the test is what a client that ignored the type gets.
+				target: { by: 'text', text: 'Save', index: 0 },
+				leaseId,
+			})
+			.catch((error: unknown) => error);
+
+		expect(thrown).toBeInstanceOf(IpcRequestError);
+		expect((thrown as IpcRequestError).code).toBe('invalid_params');
+	});
+
+	it('refuses a wait longer than a lease could outlive', async () => {
+		await serve();
+		const client = await connect();
+		const leaseId = await acquire(client);
+
+		const thrown = await client
+			.request('wait_for', {
+				leaseId,
+				target: { by: 'text', text: 'Save' },
+				timeoutMs: 60 * 60_000,
+			})
+			.catch((error: unknown) => error);
+
+		expect(thrown).toBeInstanceOf(IpcRequestError);
+		expect((thrown as IpcRequestError).code).toBe('invalid_params');
+	});
+});

@@ -20,9 +20,11 @@ import { createDeviceRestorer } from '@/daemon/restore.js';
  * all this suite is for, and it is why it is short.
  *
  * Unlike its siblings this one imports the backend barrel and builds the daemon's own objects
- * rather than a backend class, so it is closer to the exemption's end than the rest of
- * `tests/device/` (ai/TESTING.md, "The exemption"): what is still missing is a *running*
- * daemon on a socket — `src/daemon/main.ts` does not import the barrel — not a lease.
+ * rather than a backend class, so it takes a lease — just not from a daemon on a socket
+ * (ai/TESTING.md, "The exemption"). That is now a choice rather than a gap: `src/daemon/main.ts`
+ * imports the barrel and `./verb-dispatch.test.ts` does go over a socket, but what this suite
+ * asserts is the store's end hook firing on both paths, which is a layer below the protocol and
+ * would only be obscured by putting one in front of it.
  *
  * **What this deliberately does not cover, so silence is not read as "checked":**
  *

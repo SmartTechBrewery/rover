@@ -7,9 +7,9 @@
  * into nowhere, or an empty result where the honest answer is that the screen no longer
  * holds what was named (ai/RULES.md §2).
  *
- * **Every field is plain data on purpose**, for the reason `WaitTimeoutError` states: R21
- * moves verb execution onto the host, so these are serialized and sent back over a socket
- * that may be a network one (D19). A `ScreenElement` is itself plain data, which is why
+ * **Every field is plain data on purpose**, for the reason `WaitTimeoutError` states: verb
+ * execution happens on the host, so these are serialized and sent back over a socket that may
+ * be a network one (D19). `./failure.ts` is where each of them becomes a parseable answer. A `ScreenElement` is itself plain data, which is why
  * the candidates can travel whole rather than as a formatted string.
  */
 

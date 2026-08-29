@@ -56,7 +56,8 @@ export const DEFAULT_WAIT_TIMEOUT_MS = 5_000;
 
 /**
  * How long to wait and how often to look — plain data, so both verbs stay callable across
- * the boundary that will carry them (D19, R21).
+ * the boundary that carries them (D19); `src/ipc/verb-methods.ts` puts the first two on the
+ * wire and bounds them.
  *
  * `now` and `delay` are the seams `waitForCondition` declares, passed straight through and
  * injected only by tests: no test in this suite may wait on a real duration to prove

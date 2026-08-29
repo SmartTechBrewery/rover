@@ -1,12 +1,16 @@
 import type { Duplex } from 'node:stream';
 import { describe, expect, it, vi } from 'vitest';
-import { parseDeviceSerial } from '@/core/ids.js';
+import { parseDeviceSerial, parseLeaseId } from '@/core/ids.js';
 import { createIpcClient } from '@/ipc/client.js';
 import { encodeFrame, FrameDecoder, MAX_FRAME_BYTES } from '@/ipc/framing.js';
 import { IPC_METHODS, type IpcHandlers, type StatusResult } from '@/ipc/methods.js';
 import { IpcRequestError, PROTOCOL_VERSION, ResponseSchema } from '@/ipc/protocol.js';
 import { createIpcServer } from '@/ipc/server.js';
 import { createDuplexPair } from '../../helpers/duplex-pair.js';
+import { createMockDeviceInfo, createMockScreenElement } from '../../helpers/factories.js';
+
+/** One element, so a verb result carried over the wire has something real in it. */
+const save = createMockScreenElement({ id: 'save', text: 'Save' });
 
 /**
  * A complete handler table — complete because {@link IpcHandlers} is a complete mapped
@@ -27,6 +31,18 @@ function statusHandlers(overrides: Partial<IpcHandlers> = {}): IpcHandlers {
 			heldBy: null,
 		}),
 		release_device: () => ({ released: false }),
+		// The verb rows, for the same reason and with the same cheapest real answer: these
+		// suites are about the surface, and a refusal is what a host with no device says.
+		wait_for: () => ({
+			outcome: 'refused',
+			reason: 'no-lease',
+			message: 'no lease store in these tests',
+		}),
+		wait_until_gone: () => ({
+			outcome: 'refused',
+			reason: 'no-lease',
+			message: 'no lease store in these tests',
+		}),
 		...overrides,
 	};
 }
@@ -103,6 +119,64 @@ describe('request/response over a duplex pair', () => {
 			outcome: 'refused',
 			reason: 'held',
 			heldBy: { owner: 'issue-112', expiresInMs: 60_000 },
+		});
+	});
+
+	it('carries a verb result over the same surface as a lease call', async () => {
+		const { client } = connect(
+			statusHandlers({
+				wait_for: () => ({
+					outcome: 'ok',
+					result: {
+						verb: 'wait_for',
+						device: createMockDeviceInfo(),
+						target: { source: 'screen', point: { x: 60, y: 40 }, element: save },
+						after: { kind: 'screen', elements: [save] },
+					},
+				}),
+			}),
+		);
+
+		// The same client, the same framing and the same envelope that carried the lease call
+		// above — which is the criterion this row is about, not the contents of the answer.
+		await expect(
+			client.request('wait_for', {
+				leaseId: parseLeaseId('lease-1'),
+				target: { by: 'text', text: 'Save' },
+			}),
+		).resolves.toMatchObject({
+			outcome: 'ok',
+			result: { verb: 'wait_for', after: { kind: 'screen' } },
+		});
+	});
+
+	it('carries a verb failure, discriminant and all, as a result rather than an error', async () => {
+		const { client } = connect(
+			statusHandlers({
+				wait_until_gone: () => ({
+					outcome: 'failed',
+					failure: {
+						kind: 'wait-timeout',
+						waitedFor: "text containing 'Saving…' to go away",
+						found: "1 element: 'Saving…' [spinner] at 0,0 10×10 still on a screen of 3",
+						timeoutMs: 5_000,
+						polls: 21,
+						message: 'Timed out after 5000ms',
+					},
+				}),
+			}),
+		);
+
+		// A verb that answered "no" is data. It has to survive both parses — the server's on
+		// the way out and the client's on the way in — as a result, not as a rejection.
+		await expect(
+			client.request('wait_until_gone', {
+				leaseId: parseLeaseId('lease-1'),
+				target: { by: 'text', text: 'Saving…' },
+			}),
+		).resolves.toMatchObject({
+			outcome: 'failed',
+			failure: { kind: 'wait-timeout', polls: 21 },
 		});
 	});
 

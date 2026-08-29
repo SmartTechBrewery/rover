@@ -11,7 +11,10 @@
 
 import { describe, expect, it, vi } from 'vitest';
 import type { DeviceBackend } from '@/core/device.js';
+import { WaitTimeoutError } from '@/core/errors.js';
+import { VerbCallResultSchema } from '@/ipc/verb-methods.js';
 import { capabilityMethod, type VerbContext } from '@/verbs/context.js';
+import { toVerbFailure } from '@/verbs/failure.js';
 import { performAction } from '@/verbs/perform.js';
 import {
 	type ActionResult,
@@ -169,5 +172,46 @@ describe('the verb layer speaks only in plain data', () => {
 		expect(unserializableParts({ path: '/tmp/rover/shot.png' })).toEqual([
 			"$.path: a host-local path ('/tmp/rover/shot.png')",
 		]);
+	});
+});
+
+/**
+ * The same walk over the shape that actually crosses the socket (R21).
+ *
+ * `ActionResult` being plain data is necessary and not sufficient: what a client receives is
+ * a `VerbCallResult`, and a host-local path or a byte buffer smuggled into a *failure* — the
+ * branch nobody looks at twice — would cross the same boundary and fail the same way.
+ */
+describe('a verb call answers in plain data too', () => {
+	it('round-trips the ok branch and re-parses it equal', async () => {
+		const answer = { outcome: 'ok', result: await fakeTapResult(contextShowingSave()) } as const;
+
+		expect(VerbCallResultSchema.parse(roundTrip(answer))).toEqual(answer);
+		expect(unserializableParts(answer)).toEqual([]);
+	});
+
+	it('round-trips the failed branch and re-parses it equal', () => {
+		const failure = toVerbFailure(
+			new WaitTimeoutError("text containing 'Save'", 'an empty screen', 5_000, 21),
+		);
+		const answer = { outcome: 'failed', failure } as const;
+
+		expect(VerbCallResultSchema.parse(roundTrip(answer))).toEqual(answer);
+		expect(unserializableParts(answer)).toEqual([]);
+	});
+
+	it('round-trips the refused branch and re-parses it equal', () => {
+		const answer = {
+			outcome: 'refused',
+			reason: 'no-lease',
+			message: 'That lease id is not live on this host',
+		} as const;
+
+		expect(VerbCallResultSchema.parse(roundTrip(answer))).toEqual(answer);
+		expect(unserializableParts(answer)).toEqual([]);
+	});
+
+	it('rejects an answer whose outcome nobody produces', () => {
+		expect(() => VerbCallResultSchema.parse({ outcome: 'maybe', result: null })).toThrow();
 	});
 });

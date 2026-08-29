@@ -97,9 +97,17 @@ after a whole timeout. Both answer with the same `ActionResult` as every other a
 verbs — `tap`, `type_text`, `screenshot`, `read_screen` — are their own issues; the suite still
 drives the spine itself with a fake action.
 
-One gap is worth stating plainly: `src/daemon/main.ts` does not yet import the backend barrel, so
-a daemon started with `npm run daemon` runs with an empty registry and answers an empty device
-list. That wiring is its own issue. The backlog is twenty issues in dependency order — see
+**The daemon loads the core and runs the verbs**, and a client only asks (D19). `wait_for` and
+`wait_until_gone` are callable over the same connection as `acquire_device` — the same envelope,
+the same framing, one method table — and a verb call carries the lease id rather than a serial,
+because the lease id is the credential and the host derives the device from it. A verb that fails
+comes back as an *answer* naming what happened — the element was not there, the wait timed out, the
+device cannot read its screen — and never as a broken host; only the host actually breaking is an
+`internal_error`. There is no `adb` in a client process, and
+`tests/unit/no-backend-in-a-client.test.ts` walks the import graph from every client entrypoint to
+say so rather than asking politely. Against a real device today both waits answer
+`missing-capability`: `read_screen` is its own issue, and the manifest says so rather than
+pretending. The backlog is twenty issues in dependency order — see
 [`PROJECT.md`](PROJECT.md) §9.3.
 
 ```bash

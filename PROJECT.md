@@ -107,7 +107,7 @@ lends what is physically attached to it (D18).
 
 ## 4. The verb set
 
-Working names. All of them take a device handle.
+Working names. All of them take a device handle, and over the wire that handle is the **lease id** — the credential (D20), from which the host derives the serial. A verb call naming a serial beside it would be either redundant or a way for the holder of one device to drive another (D19, R21).
 
 ### Devices and leases
 
