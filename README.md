@@ -29,7 +29,9 @@ and never inspects. The lease runs on a 20-minute TTL **renewed by activity rath
 heartbeat**, so an agent that pauses to think keeps its device and one that died lets go on its
 own. A busy device is a refusal that names who holds it and for how much longer, never an error,
 and never the holder's lease id; `release_device` hands it back. Five clients asking at once get
-exactly one winner.
+exactly one winner. `list_devices` names each device's holder the same way — the owner, project and
+test name, and how much longer they have, or nothing at all for a free device — and never the lease
+id, which is what ends a lease and belongs only to whoever was granted it.
 
 **The daemon restores the device itself** (D9) — on `release_device` and on expiry alike, from the
 one place a lease is observed to end. It stops the project's applications, turns airplane mode off,

@@ -24,6 +24,7 @@ import { createIpcServer } from '../ipc/server.js';
 import { createDeviceInventory, type DeviceInventory } from './inventory.js';
 import { createLeaseHandlers } from './lease-handlers.js';
 import { createLeaseStore, type LeaseStore } from './leases.js';
+import { createListDevicesHandler } from './list-devices.js';
 import { createDeviceRestorer, type DeviceRestorer } from './restore.js';
 import { attemptConnect } from './socket-connect.js';
 import { assertValidSocketPath } from './socket-path.js';
@@ -118,12 +119,7 @@ export function createDaemonHandlers(
 ): IpcHandlers {
 	return {
 		status: handleStatus,
-		// The cached view, deliberately: `list_devices` is a question about what the host has
-		// seen, and answering it by re-enumerating every device on every call would put a
-		// process launch per backend behind a call a client may make in a loop. The one place
-		// that must not read a cache is the grant (D6), and that is
-		// `DeviceInventory.verifyForGrant`, not this.
-		list_devices: () => inventory.snapshot(),
+		...createListDevicesHandler(inventory, leases),
 		...createLeaseHandlers(inventory, leases, restorer),
 	};
 }

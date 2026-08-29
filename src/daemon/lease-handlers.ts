@@ -36,12 +36,12 @@ import type {
 	AcquireDeviceResult,
 	AcquireRefusalReason,
 	IpcHandlers,
-	LeaseHolder,
 	ReleaseDeviceParams,
 	ReleaseDeviceResult,
 } from '../ipc/methods.js';
 import type { DeviceInventory } from './inventory.js';
-import type { Lease, LeaseStore } from './leases.js';
+import { toLeaseHolder } from './lease-holder.js';
+import type { LeaseStore } from './leases.js';
 import type { DeviceRestorer } from './restore.js';
 
 export type LeaseHandlers = Pick<IpcHandlers, 'acquire_device' | 'release_device'>;
@@ -51,15 +51,6 @@ export function createLeaseHandlers(
 	leases: LeaseStore,
 	restorer: DeviceRestorer,
 ): LeaseHandlers {
-	/** The public view of a holder — {@link LeaseHolder} carries no lease id, deliberately. */
-	const holderOf = (lease: Lease): LeaseHolder => ({
-		serial: lease.serial,
-		owner: lease.owner,
-		project: lease.project,
-		testName: lease.testName,
-		expiresInMs: leases.remainingMs(lease),
-	});
-
 	return {
 		async acquire_device(params: AcquireDeviceParams): Promise<AcquireDeviceResult> {
 			// The first await. The inventory is a cache and the platform is the truth, so the
@@ -119,7 +110,7 @@ export function createLeaseHandlers(
 					message:
 						`Device '${device.serial}' is held by '${outcome.heldBy.owner}' for another ` +
 						`${leases.remainingMs(outcome.heldBy)}ms`,
-					heldBy: holderOf(outcome.heldBy),
+					heldBy: toLeaseHolder(outcome.heldBy, leases),
 				};
 			}
 
