@@ -21,6 +21,7 @@ import {
 } from '@/backends/registry.js';
 import type { DeviceBackend } from '@/core/device.js';
 import { parseDeviceSerial } from '@/core/ids.js';
+import { type Observation, pause, waitForCondition } from '@/core/wait.js';
 import { type RunningDaemon, startDaemon } from '@/daemon/listen.js';
 import type { IpcClient } from '@/ipc/client.js';
 import {
@@ -130,14 +131,13 @@ async function connect(): Promise<IpcClient> {
 
 /** Polls on the condition with a deadline, never a wait instead of a check (ai/RULES.md §2). */
 async function until(what: string, met: () => Promise<boolean> | boolean): Promise<void> {
-	const deadline = Date.now() + CONDITION_TIMEOUT_MS;
-	while (Date.now() < deadline) {
-		if (await met()) {
-			return;
-		}
-		await new Promise((resolve) => setTimeout(resolve, CONDITION_POLL_MS));
-	}
-	throw new Error(`Timed out waiting for ${what}`);
+	await waitForCondition({
+		what,
+		timeoutMs: CONDITION_TIMEOUT_MS,
+		pollIntervalMs: CONDITION_POLL_MS,
+		probe: async (): Promise<Observation<void>> =>
+			(await met()) ? { met: true, value: undefined } : { met: false, found: 'it still unmet' },
+	});
 }
 
 /**
@@ -149,7 +149,7 @@ async function until(what: string, met: () => Promise<boolean> | boolean): Promi
 async function drainEventLoop(): Promise<void> {
 	for (let turn = 0; turn < LOOP_DRAIN_TURNS; turn += 1) {
 		await new Promise((resolve) => setImmediate(resolve));
-		await new Promise((resolve) => setTimeout(resolve, 0));
+		await pause(0);
 	}
 }
 

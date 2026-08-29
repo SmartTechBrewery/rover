@@ -45,6 +45,13 @@ applications a project owns and what its hook does arrive through an injected re
 per-project configuration that fills it is its own issue (`PROJECT.md` §9.3, R17), so today that
 resolver answers nothing and only the two network steps have work to do.
 
+**Waiting is a condition, never a duration.** `src/core/wait.ts` is the one module in the
+repository allowed to construct a delay: `waitForCondition` polls a probe until it reports the
+condition met or the deadline passes, and a probe that reports *unmet* is required by its own type
+to say what it found instead — so a timeout names both halves (`PROJECT.md` D12). That the rule
+holds everywhere is not a convention but a test: `tests/unit/no-sleep.test.ts` scans `src/` and
+`tests/` for every shape of sleep, and only three files are exempt.
+
 One gap is worth stating plainly: `src/daemon/main.ts` does not yet import the backend barrel, so
 a daemon started with `npm run daemon` runs with an empty registry and answers an empty device
 list. That wiring is its own issue. The backlog is twenty issues in dependency order — see

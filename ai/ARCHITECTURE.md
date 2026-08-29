@@ -123,7 +123,7 @@ request ──▶ match against a re-verified inventory
 Verbs live above the backends and below the adapters, and this is where determinism is enforced (D12) — not in the agent's discipline:
 
 - **Target resolution happens inside the verb**, from a screen captured during that call. A coordinate is a fallback, never the primary address of an element.
-- **Waiting is polling on a condition with a timeout.** There is no sleep in this codebase. A timeout reports what it waited for and what was on screen instead.
+- **Waiting is polling on a condition with a timeout.** There is no sleep in this codebase — the vocabulary is `waitForCondition` in `src/core/wait.ts`, the one module allowed to construct a delay, and `tests/unit/no-sleep.test.ts` is the gate that keeps it the only one. A timeout reports what it was waiting for and what was on screen instead.
 - **Every verb returns post-state**, so the agent never infers success from the absence of an error.
 
 ---

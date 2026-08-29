@@ -65,6 +65,16 @@ The checks themselves live in `tests/helpers/backend-conformance.ts` and return 
 
 **A backend under construction registers nothing.** Build it phase by phase with tests constructing the class directly, and land its `index.ts` in the phase that removes the last stub. Registering a stub-bearing manifest early fails this suite and forces an exemption that disables the gate for the backend already passing it.
 
+## The no-sleep gate
+
+`tests/unit/no-sleep.test.ts` — the executable half of ai/RULES.md §2, rule 2: **there is not a single sleep in this repository.** It walks every `.ts` file under `src/` and `tests/` and runs the checks in `tests/helpers/no-sleep-scan.ts`, which return violation strings rather than asserting, so the same checks serve the walk and the harness. `tests/unit/no-sleep-harness.test.ts` runs them over synthetic sources — one deliberate violation per rule, plus a passing sample for every timer shape the repo legitimately uses — so the gate is proved rather than vacuously green, exactly as `conformance-harness.test.ts` does for backend conformance.
+
+What is forbidden: a timer handed a bare resolver (`new Promise(resolve => setTimeout(resolve, ms))`), `node:timers/promises` and `scheduler.wait`, a local `sleep(`/`delay(` helper, `Atomics.wait(`, and a shell `sleep <n>` inside a string. What is **not**: a deadline timer whose callback does work (`setTimeout(() => reject(…), ms)`), `setInterval`, `socket.setTimeout`, `setImmediate` — those are the opposite of a sleep, and a gate that flagged them would be silenced rather than fixed.
+
+**Comments are stripped before matching**, because this repo's comments must stay free to *discuss* sleeping — several of them do, and they are the most valuable lines in their files. The strip is a heuristic (it does not track regex literals), so like the conformance source scan this is **a floor rather than a proof**.
+
+Exactly three files are exempt, and the gate asserts that list is exactly three: `src/core/wait.ts` (the wait vocabulary — the delay has to exist somewhere), `tests/helpers/no-sleep-scan.ts` (it names the patterns it looks for) and `tests/unit/no-sleep-harness.test.ts` (its fixtures are the violations). A fourth entry means somebody exempted their own file instead of fixing it. A further test asserts `src/core/wait.ts` still *contains* a delay, so its exemption cannot outlive the reason for it — a stale allowlist entry is the failure mode a scan gate dies of.
+
 ## What the automated tests cannot cover
 
 Worth stating so nobody reads a green suite as more than it is. Whether a tap landed on the intended button, whether a screenshot shows the right screen, whether a wait condition matches what a human means by "the list has loaded" — none of that is reachable from a mocked `adb`. Device tests reach some of it; the rest is why Rover exists rather than being the thing Rover verifies.

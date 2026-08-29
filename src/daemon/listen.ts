@@ -19,6 +19,7 @@
 import { mkdir, open, rm, stat } from 'node:fs/promises';
 import { createServer, type Server, type Socket } from 'node:net';
 import { dirname } from 'node:path';
+import { pause } from '../core/wait.js';
 import type { IpcHandlers } from '../ipc/methods.js';
 import { createIpcServer } from '../ipc/server.js';
 import { createDeviceInventory, type DeviceInventory } from './inventory.js';
@@ -559,13 +560,6 @@ async function discardAbandonedLock(lockPath: string): Promise<void> {
 	if (Date.now() - heldSince > RECLAIM_LOCK_STALE_MS) {
 		await rm(lockPath, { force: true });
 	}
-}
-
-/** The gap between polls above. Never a wait *instead* of a check (ai/RULES.md §2, D12). */
-function pause(ms: number): Promise<void> {
-	return new Promise((resolve) => {
-		setTimeout(resolve, ms);
-	});
 }
 
 /**
