@@ -198,9 +198,11 @@ partly dead here.
 **In scope:** Android over adb — emulators and physical devices in debug mode treated alike. A
 device pool, leases, state restoration. The verbs from §4. CLI and MCP. A host reachable over the
 network: an agent on machine A borrows a device from machine B, where Rover runs (D17–D20).
-Authentication by host token.
+Authentication by host token. **A CI gate that runs `npm run verify`** — lint, typecheck, unit
+tests — on every pull request (R26); no device tests, since a CI runner has no Android device.
 
-**Out of scope for now:** iOS (the seam only, see §5). Automated tests with assertions. CI. Cloud
+**Out of scope for now:** iOS (the seam only, see §5). Automated tests with assertions — CI runs
+the existing unit-test suite, it does not add device-driven assertions of its own. Cloud
 device farms, a host catalogue, hosts registering with one another, and anything resembling a
 dashboard — a client gets its host list from configuration and that is all. Comparison against
 design renders — Rover supplies screenshots and measurements; judging them against the design is
@@ -259,6 +261,7 @@ Four rules when filing these issues:
 | # | Task | Outcome — completion criterion | Depends on | Size |
 |---|---|---|---|---|
 | R1 | Node.js skeleton | `package.json`, `tsconfig.json` + `tsconfig.typecheck.json`, `biome.json`, `vitest.config.ts`, `lefthook.yml`, commitlint, the `lint` / `typecheck` / `test:unit` / `test:device` / `verify` scripts. **`npm run verify` passes on an empty tree.** The configuration is copied from `../swarm`, not invented | — | S |
+| R26 | CI: a `verify` workflow on every pull request | A GitHub Actions workflow copied from `../swarm`'s `.github/workflows/verify.yml` and trimmed to this repo's shape (no `dashboard/` subproject to install): checkout, Node 22 via `actions/setup-node` with npm caching, `npm ci`, `npm run verify`. Triggered on `pull_request`; a `concurrency` group cancels a superseded run; `permissions: contents: read`. **No device test runs in CI** — `test:device` needs a real Android device, which no CI runner has, and `npm run verify` already excludes it | R1 | S |
 | R2 | Device interface, capability manifest, registry | The manifest is a Zod schema; the registry accepts a backend through one import in the barrel. **No file outside `src/backends/` contains a platform name.** With no backend at all | R1 | M |
 | R3 | Backend conformance suite | One run per **registered** manifest. Detects a stub by reading the method's source; a declared capability with no dispatch = failure; an explicit opt-out (`false`) passes. The gate must exist **before** the first backend (`ai/TESTING.md`) | R2 | M |
 | R4 | adb output parsers + fixtures from a real device | `adb devices -l`, `wm size`, `wm density`, `getprop`, the `uiautomator` XML. Fixtures in `tests/fixtures/`, with the API level and model in the filename. **No parser infers anything from the shape of a serial** | R1 | M |
