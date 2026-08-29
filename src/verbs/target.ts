@@ -67,6 +67,23 @@ export type Target = z.infer<typeof TargetSchema>;
  */
 export type ScreenTarget = Exclude<Target, { by: 'point' }>;
 
+/**
+ * The targets an *absence* can be asked about — a screen target that names no position.
+ *
+ * `index` picks one match out of several so that a verb has one element to act on, and
+ * that question does not survive being asked of a disappearance: an index is a position in
+ * the current match list, never an identity, so it renumbers as soon as any sibling leaves.
+ * Waiting for `index: 2` of three matching rows to go away would report success the moment
+ * *any* one of the three went — the survivors renumber, slot 2 empties, and the row the
+ * caller named is still on the screen. That is the false green this layer exists to
+ * prevent, so `wait_until_gone` neither honours an index nor drops one: the question is
+ * simply not one it can be asked. Same instinct as {@link ScreenTarget} excluding a point —
+ * made a type error rather than a runtime surprise (`./wait-for.ts`).
+ */
+export type AbsenceTarget =
+	| Extract<ScreenTarget, { by: 'element' }>
+	| (Extract<ScreenTarget, { by: 'text' }> & { index?: never });
+
 /** The target in the words the error messages use. */
 export function describeTarget(target: Target): string {
 	switch (target.by) {

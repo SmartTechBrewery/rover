@@ -16,6 +16,15 @@
  * on a fresh read match this target* — and splitting them would leave two copies of the
  * screen summariser that answers "and what was there instead" when neither succeeds.
  *
+ * Where they part is a text target's `index`, and the asymmetry is deliberate rather than
+ * an oversight. {@link waitFor} honours it, because it has to hand back one element to act
+ * on and that is the field that says which. {@link waitUntilGone} will not accept one at
+ * all — its parameter is an {@link AbsenceTarget}, which is `ScreenTarget` minus a position
+ * — because an index is a slot in the current match list rather than an identity, and a
+ * slot empties as soon as *any* sibling leaves: "index 2 is gone" would be reported for a
+ * row still plainly on the screen. Neither verb is given a field it then drops, so a
+ * timeout message can never name a constraint the wait did not apply.
+ *
  * Neither is a general condition wait. `src/core/wait.ts` holds that vocabulary, and a
  * condition that is not about the screen — an app reaching the foreground, a line in a log
  * — is added there as its own verb when something actually needs one (ai/RULES.md §2),
@@ -27,7 +36,13 @@ import { type Observation, waitForCondition } from '../core/wait.js';
 import type { VerbContext } from './context.js';
 import { describeElement, describeScreen, UnaddressableElementError } from './errors.js';
 import { type ActionResult, type ResolvedTarget, resultAfterAction } from './result.js';
-import { describeTarget, findOnScreen, resolveOnScreen, type ScreenTarget } from './target.js';
+import {
+	type AbsenceTarget,
+	describeTarget,
+	findOnScreen,
+	resolveOnScreen,
+	type ScreenTarget,
+} from './target.js';
 
 /**
  * How long a wait runs when the caller does not say.
@@ -113,18 +128,26 @@ export async function waitFor(
  *
  * Presence is a match, not a resolution: an element matched twice is still there twice, so
  * this asks {@link findOnScreen} rather than the resolver, and neither an ambiguity nor a
- * midpoint that cannot be tapped stands between a caller and the answer it asked for.
+ * midpoint that cannot be tapped stands between a caller and the answer it asked for. For
+ * the same reason it takes an {@link AbsenceTarget} and not a `ScreenTarget`: choosing one
+ * match out of several is the step this verb does not take, so the field that chooses is
+ * one it cannot be handed.
  */
 export async function waitUntilGone(
 	context: VerbContext,
-	target: ScreenTarget,
+	target: AbsenceTarget,
 	options: WaitVerbOptions = {},
 ): Promise<ActionResult> {
 	await pollScreen<null>(context, options, `${describeTarget(target)} to go away`, async () => {
 		const { matches, screen } = await findOnScreen(context, target);
+		// The matches, not the screen: these are the elements that kept the condition false,
+		// and `describeScreen` excerpts in read order — so summarising the whole screen would
+		// name the first few things read and leave the one that blocked the wait out of the
+		// message entirely whenever it is not near the top. The screen's size still goes in,
+		// because "1 of 21" and "1 of 1" are different situations to be stuck in.
 		return matches.length === 0
 			? { met: true, value: null }
-			: { met: false, found: describeScreen(screen) };
+			: { met: false, found: `${describeScreen(matches)} still on a screen of ${screen.length}` };
 	});
 
 	// A null target, because there is deliberately nothing left to name: what this verb

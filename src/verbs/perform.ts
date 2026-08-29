@@ -1,5 +1,12 @@
 /**
- * The spine every verb is built on — the one place D12's three rules meet.
+ * The spine every verb that *acts on* a resolved target is built on — the one place D12's
+ * three rules meet.
+ *
+ * The waits are the deliberate exception, and the only one: `waitFor` and `waitUntilGone`
+ * (`./wait-for.ts`) reach {@link resultAfterAction} directly, because a spine that resolves
+ * the target before running the action would resolve it before the wait had happened. They
+ * share this module's answer shape rather than its order (`ai/ARCHITECTURE.md`, "The verb
+ * layer").
  *
  * A verb hands {@link performAction} what it needs, what it is aimed at and what it does;
  * the order below is not the verb author's to choose:

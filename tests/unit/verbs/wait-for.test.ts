@@ -236,8 +236,14 @@ describe('waitUntilGone', () => {
 		expect(result.after).toEqual({ kind: 'screen', elements: [save] });
 	});
 
-	it('times out while the element is still there, and says which screen it was still on', async () => {
-		const context = contextShowing([spinner, save]);
+	it('names the elements that blocked it, not whatever the screen read happened to list first', async () => {
+		// More than `describeScreen`'s excerpt limit, with the blocker last: summarising the
+		// whole screen would excerpt the rows in read order and never mention 'Loading…' at
+		// all, which is a timeout that does not say what it timed out on.
+		const rows = Array.from({ length: 20 }, (_, at) =>
+			createMockScreenElement({ id: `row-${at}`, text: `Row ${at}` }),
+		);
+		const context = contextShowing([...rows, spinner]);
 
 		const thrown = await waitUntilGone(
 			context,
@@ -249,8 +255,32 @@ describe('waitUntilGone', () => {
 		).catch((error: unknown) => error);
 
 		expect(thrown).toBeInstanceOf(WaitTimeoutError);
-		expect((thrown as WaitTimeoutError).waitedFor).toBe("text containing 'Loading…' to go away");
-		expect((thrown as WaitTimeoutError).found).toContain("'Loading…'");
+		const timeout = thrown as WaitTimeoutError;
+		expect(timeout.waitedFor).toBe("text containing 'Loading…' to go away");
+		expect(timeout.found).toContain("'Loading…'");
+		// The one match, and the size of the screen it is still on — not an excerpt of rows.
+		expect(timeout.found).toContain('1 element');
+		expect(timeout.found).toContain('still on a screen of 21');
+		expect(timeout.found).not.toContain('Row 0');
+	});
+
+	it('cannot be asked about a text index, and does not read one as gone when a sibling goes', async () => {
+		const rows = ['a', 'b', 'c'].map((id) => createMockScreenElement({ id, text: 'Row' }));
+		// The first row leaves; the row index 2 named is still plainly on the screen. Slots
+		// renumber, elements do not, which is why the field that names a slot is a type error
+		// here rather than one this verb accepts and silently drops (`AbsenceTarget`).
+		const context = contextShowing(rows, rows.slice(1));
+
+		const thrown = await waitUntilGone(
+			context,
+			// @ts-expect-error — an indexed text target is not an AbsenceTarget.
+			{ by: 'text', text: 'Row', index: 2 },
+			{ ...fakeClock(), timeoutMs: 1_000 },
+		).catch((error: unknown) => error);
+
+		expect(thrown).toBeInstanceOf(WaitTimeoutError);
+		// Still waiting on the matches themselves, never on "is slot 2 empty".
+		expect((thrown as WaitTimeoutError).found).toContain('2 elements');
 	});
 
 	it('treats two matching elements as still there twice, not as an ambiguous request', async () => {

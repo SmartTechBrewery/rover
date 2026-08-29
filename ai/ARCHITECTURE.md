@@ -156,8 +156,13 @@ Verbs live above the backends and below the adapters, and this is where determin
   **and can be acted on**, reading a clipped element as *not yet* rather than as a failure, since a
   screen still moving is what a wait is for; an ambiguous target is not, and propagates. Presence
   for `wait_until_gone` is a match rather than a resolution: an element matched twice is still there
-  twice, not an under-specified request. Both take a `ScreenTarget` — a `by: 'point'` target has no
-  presence a screen read can confirm or deny, so it is not a question these can be asked.
+  twice, not an under-specified request; its timeout reports those matches rather than the screen
+  they sit in, because they are what kept the condition false. Both take a `ScreenTarget` — a
+  `by: 'point'` target has no presence a screen read can confirm or deny, so it is not a question
+  these can be asked — and `wait_until_gone` narrows that again to an `AbsenceTarget`, `ScreenTarget`
+  without a text target's `index`: an index is a slot in the match list, not an identity, so it
+  empties as soon as any sibling goes and would report a row as gone while it is still on screen.
+  Both refusals are types rather than runtime checks, so neither verb is handed a field it drops.
 - **`ActionResult`** names the verb, the device (as `DeviceInfo`, so D14's density travels with the
   measurement), the resolved target and the state after the action. A backend with input but no
   screen reading answers an explicit `unavailable` after-state naming the capability that would have

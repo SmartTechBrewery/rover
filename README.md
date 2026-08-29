@@ -57,8 +57,9 @@ test behind it rather than only a convention: `tests/unit/no-sleep.test.ts` scan
 are exempt from the scan. It is a floor, not a proof — a determined re-implementation gets
 through, and reading the wait vocabulary is still how you learn what a wait here looks like.
 
-**The verb layer has a spine, and the two waits standing on it.** `src/verbs/` is the layer above the
-backends where determinism stops being a rule and becomes a signature (D12): `resolveTarget()` takes
+**The verb layer has a spine, and the two waits standing beside it.** `src/verbs/` is the layer
+above the backends where determinism stops being a rule and becomes a signature (D12):
+`resolveTarget()` takes
 a target and *nothing else* — no screen, no element list, no state read a turn ago — so a target can
 only ever be resolved from a screen captured inside that call. Two elements matching one text target
 is a loud error naming every candidate rather than a first match that is right half the time; nothing
@@ -76,16 +77,21 @@ that leaves the agent guessing whether it landed. Every argument and every
 result is a Zod schema of plain data, because the host runs the verb and the agent reads the answer
 somewhere else (D19).
 
-**`wait_for` and `wait_until_gone` are the first verbs on that spine** — the vocabulary that
-replaces `sleep` rather than the rule that forbids it. Both poll to a timeout, and **every poll
+**`wait_for` and `wait_until_gone` stand beside that spine rather than on it** — the vocabulary
+that replaces `sleep` rather than the rule that forbids it. They share its answer shape
+(`resultAfterAction`) but not its order, because `performAction()` resolves the target *before* it
+acts, and for a wait the resolution **is** the work. Both poll to a timeout, and **every poll
 reads the screen again**: a wait over one cached read is the stale-coordinate failure with a timer
 attached, re-grown inside the verbs meant to remove it. `wait_for` waits until the target is there
 *and* somewhere it can be acted on, so an element still clipped out of its scrolling container is
 *not yet* rather than a failure — a screen still moving is what a wait is for — while a target two
 elements match is refused outright, because more polling cannot specify an under-specified request.
 `wait_until_gone` asks the mirror question, and asks it of matches rather than of a resolution: an
-element matched twice is still there twice. A timeout names what was waited for and summarises what
-was on screen instead, bounded so a two-hundred-element screen is a message and not a wall, and a
+element matched twice is still there twice — and for the same reason it will not take a text
+target's `index`, since an index names a slot in the match list rather than an element, and a slot
+empties the moment any sibling leaves. A timeout names what was waited for and what stood in its
+way — the screen for `wait_for`, which missed on all of it, the matches that are still there for
+`wait_until_gone` — bounded so a two-hundred-element screen is a message and not a wall, and a
 backend that does not declare `canReadScreen` is told so by name before the first poll rather than
 after a whole timeout. Both answer with the same `ActionResult` as every other action. The remaining
 verbs — `tap`, `type_text`, `screenshot`, `read_screen` — are their own issues; the suite still
