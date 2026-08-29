@@ -18,7 +18,12 @@ import {
 	type CapabilityManifest,
 	CapabilityManifestSchema,
 } from '@/core/capabilities.js';
-import { type Device, type DeviceBackend, DeviceSchema } from '@/core/device.js';
+import {
+	type Device,
+	type DeviceBackend,
+	DeviceSchema,
+	ScreenElementSchema,
+} from '@/core/device.js';
 
 export function createMockCapabilities(overrides: Partial<Capabilities> = {}): Capabilities {
 	return {
@@ -70,6 +75,80 @@ export function createMockDeviceBackend(overrides: Partial<DeviceBackend> = {}):
 		pressKey: vi.fn<NonNullable<DeviceBackend['pressKey']>>(async () => {}),
 		setAirplaneMode: vi.fn<NonNullable<DeviceBackend['setAirplaneMode']>>(async () => {}),
 		setWifiEnabled: vi.fn<NonNullable<DeviceBackend['setWifiEnabled']>>(async () => {}),
+		...overrides,
+	};
+}
+
+/**
+ * The same surface as {@link createMockDeviceBackend}, built from plain async functions
+ * with real bodies — the fixture the conformance harness
+ * (`tests/helpers/backend-conformance.ts`) can actually read.
+ *
+ * A mock-built backend is invisible to every scan in that harness: `String(vi.fn(…))`
+ * returns Vitest's wrapper source rather than the implementation, so a suite that used
+ * {@link createMockDeviceBackend} as its "conforming" fixture would be proving nothing.
+ * For the same reason no body here may be empty or return a bare empty literal — that is
+ * precisely what the harness flags as a silent stub (ai/RULES.md §2).
+ */
+export function createConformingDeviceBackend(
+	overrides: Partial<DeviceBackend> = {},
+): DeviceBackend {
+	const performed: string[] = [];
+
+	return {
+		async listDevices() {
+			performed.push('listDevices');
+			return [createMockDevice()];
+		},
+		async describeDevice(serial) {
+			performed.push(`describeDevice ${serial}`);
+			return createMockDevice({ serial });
+		},
+		async installApp(serial, packagePath) {
+			performed.push(`installApp ${serial} ${packagePath}`);
+		},
+		async launchApp(serial, appId) {
+			performed.push(`launchApp ${serial} ${appId}`);
+		},
+		async stopApp(serial, appId) {
+			performed.push(`stopApp ${serial} ${appId}`);
+		},
+		async clearAppData(serial, appId) {
+			performed.push(`clearAppData ${serial} ${appId}`);
+		},
+		async screenshot(serial) {
+			performed.push(`screenshot ${serial}`);
+			return new Uint8Array([1, 2, 3]);
+		},
+		async readScreen(serial) {
+			performed.push(`readScreen ${serial}`);
+			return [
+				ScreenElementSchema.parse({
+					id: `${serial}-root`,
+					text: 'Root',
+					label: null,
+					bounds: { x: 0, y: 0, width: 100, height: 200 },
+				}),
+			];
+		},
+		async tap(serial, at) {
+			performed.push(`tap ${serial} ${at.x},${at.y}`);
+		},
+		async swipe(serial, from, to, durationMs) {
+			performed.push(`swipe ${serial} ${from.x},${from.y} ${to.x},${to.y} ${durationMs}`);
+		},
+		async typeText(serial, text) {
+			performed.push(`typeText ${serial} ${text}`);
+		},
+		async pressKey(serial, key) {
+			performed.push(`pressKey ${serial} ${key}`);
+		},
+		async setAirplaneMode(serial, enabled) {
+			performed.push(`setAirplaneMode ${serial} ${enabled}`);
+		},
+		async setWifiEnabled(serial, enabled) {
+			performed.push(`setWifiEnabled ${serial} ${enabled}`);
+		},
 		...overrides,
 	};
 }

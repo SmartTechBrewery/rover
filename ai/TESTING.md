@@ -25,12 +25,15 @@ Factory functions (`createMockDevice()`, `createMockLease()`, `createMockCapabil
 
 ## Backend conformance
 
-One suite run per **registered** backend manifest, mirroring Swarm's provider-conformance suites — asserting the shape shared code reads, not behaviour:
+`tests/unit/backends/conformance.test.ts` — one suite run per **registered** backend manifest, driven by `listDeviceBackends()` rather than a hand-kept list, mirroring Swarm's provider-conformance suites. It asserts the shape shared code reads, not behaviour:
 
-- unique platform id; every required interface method present;
-- **no method is a stub** — a registered-but-unbuilt backend answers `not implemented yet`, which is a function of the right shape and passes every other assertion, so the suite reads each method's own source for that sentinel;
+- unique platform id; every required interface method present; every capability flag a boolean;
 - every capability the manifest declares is one the backend actually dispatches on — a declared-but-unanswered capability otherwise surfaces as a runtime failure at the worst moment, in front of an agent that was told it was available;
-- **a declared opt-out is not a stub.** A backend that honestly reports `canReadScreen: false` is complete, not unfinished. The suite asserts the flag is a boolean and the method carries no sentinel; it does not demand every capability be present.
+- **no method is a stub** — a registered-but-unbuilt backend answers `not implemented yet`, which is a function of the right shape and passes every other assertion, so the suite reads each method's own source for that sentinel;
+- **and no method is a *silent* stub** — the same source scan rejects a body that does nothing or returns a bare empty value (`[]`, `{}`, `null`, empty bytes), which is the plausible-looking empty result ai/RULES.md §2 forbids and the one a sentinel scan alone never sees. It reads only the method's own body, so it is a floor rather than a proof;
+- **a declared opt-out is not a stub.** A backend that honestly reports `canReadScreen: false` is complete, not unfinished. The suite asserts the flag is a boolean and that any method present carries no sentinel; it does not demand every capability be present.
+
+The checks themselves live in `tests/helpers/backend-conformance.ts` and return violation strings rather than asserting, because the gate **ships before the first backend** (PROJECT.md §9.3, R3 ahead of R5) and its loop over the registry therefore has nothing to run over yet. `tests/unit/backends/conformance-harness.test.ts` runs them against synthetic backends — one deliberate violation per rule — so the gate is proved rather than vacuously green. Build a fixture for it with `createConformingDeviceBackend()`: a `vi.fn()` stringifies to the runner's wrapper, so a mock-built backend is invisible to every scan (and is reported as unreadable for exactly that reason).
 
 **A backend under construction registers nothing.** Build it phase by phase with tests constructing the class directly, and land its `index.ts` in the phase that removes the last stub. Registering a stub-bearing manifest early fails this suite and forces an exemption that disables the gate for the backend already passing it.
 

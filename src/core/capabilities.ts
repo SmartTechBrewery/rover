@@ -80,7 +80,7 @@ export type CapabilityManifestInput = z.input<typeof CapabilityManifestSchema>;
  * {@link CAPABILITY_METHODS} against this makes "a declared capability is never a
  * required method" a compile-time fact rather than a review comment.
  */
-type CapabilityGatedMethod = {
+export type CapabilityGatedMethod = {
 	[Key in keyof DeviceBackend]-?: undefined extends DeviceBackend[Key] ? Key : never;
 }[keyof DeviceBackend];
 
@@ -91,12 +91,18 @@ type CapabilityGatedMethod = {
  * the backend actually dispatches" without hardcoding the mapping in the test — a
  * declared-but-unanswered capability otherwise surfaces at the worst moment, in front of
  * an agent that was told it was available (ai/TESTING.md "Backend conformance").
+ *
+ * `as const satisfies` rather than a type annotation: the annotation alone widens each
+ * tuple back to `CapabilityGatedMethod[]`, which erases the very thing the conformance
+ * suite reads it for — that the union of these lists covers every gated method, so an
+ * optional method named by no capability (one the verb layer could never reach, and the
+ * suite would never scan) is a compile error rather than a quiet omission.
  */
-export const CAPABILITY_METHODS: Record<CapabilityId, readonly CapabilityGatedMethod[]> = {
+export const CAPABILITY_METHODS = {
 	canReadScreen: ['readScreen'],
 	canInput: ['tap', 'swipe', 'typeText', 'pressKey'],
 	canControlNetwork: ['setAirplaneMode', 'setWifiEnabled'],
-};
+} as const satisfies Record<CapabilityId, readonly CapabilityGatedMethod[]>;
 
 /** Non-throwing query — what the verb layer asks before dispatching. */
 export function supportsCapability(
