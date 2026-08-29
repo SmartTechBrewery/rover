@@ -43,11 +43,17 @@ macOS, captured **2026-08-29**. `SERIAL` is `emulator-5554`. The enumeration, `w
 | `am-force-stop.daemon-start.stderr.api37-sdk-gphone16k-arm64.txt` | `adb kill-server; adb -s $SERIAL wait-for-device shell am force-stop com.android.settings 2> f` | sdk_gphone16k_arm64 | 37 | 2026-08-29 |
 | `pm-clear-success.api37-sdk-gphone16k-arm64.txt` | `adb -s $SERIAL shell pm clear com.android.traceur` (stdout) | sdk_gphone16k_arm64 | 37 | 2026-08-29 |
 | `track-devices-l.connect-disconnect.api37-sdk-gphone16k-arm64.txt` | `adb track-devices -l > f`, then `adb connect localhost:5555` and `adb disconnect localhost:5555` | sdk_gphone16k_arm64 | 37 | 2026-08-29 |
+| `cmd-connectivity-airplane-mode.bad-argument.api37-sdk-gphone16k-arm64.txt` | `adb -s $SERIAL shell cmd connectivity airplane-mode nonsense > f 2>&1` | sdk_gphone16k_arm64 | 37 | 2026-08-29 |
+| `cmd-wifi-set-wifi-enabled.bad-argument.api37-sdk-gphone16k-arm64.txt` | `adb -s $SERIAL shell cmd wifi set-wifi-enabled nonsense > f 2>&1` | sdk_gphone16k_arm64 | 37 | 2026-08-29 |
 
 Both `wm` overrides were reset with `wm size reset` / `wm density reset` immediately after the
 capture. The `track-devices` capture leaves the host as it found it the same way: the second entry
 it creates is removed by the `adb disconnect` that is part of the recipe, confirmed with
 `adb devices -l` afterwards.
+
+The two network captures come from a session that toggled the emulator's radios repeatedly, and it
+ended the way it found them: `settings get global airplane_mode_on` → `0`, `settings get global
+wifi_on` → `1`, `cmd wifi status` → `Wifi is enabled`.
 
 The hierarchy dump is **Settings → Display & touch**, unscrolled, reached with `adb shell am start
 -a android.settings.DISPLAY_SETTINGS`. It was chosen over the Settings home page because it is the
@@ -97,6 +103,26 @@ re-capturing — a fixture nobody can re-create is a fixture nobody can extend.
 - **`pm clear` was captured against `com.android.traceur`**, a package with no user data worth
   keeping, because the success path of that command destroys whatever it is pointed at. The failure
   path (`Failed`, stderr, exit 1) comes from `com.rover.nope`, which no device has.
+- **The two network recipes have no success fixture, because their success is zero bytes.** `cmd
+  connectivity airplane-mode enable|disable` and `cmd wifi set-wifi-enabled enabled|disabled` print
+  nothing on either stream and exit 0 — repeating one that is already the case included. Committing
+  two empty files would read as a mistake, so what is committed is the refusals, and
+  `parsers/network.test.ts` takes its "silent, with adb's banner on stderr" case from the
+  `am-force-stop.daemon-start.stderr` capture already here: that banner is written by the adb
+  *client* before it dispatches any subcommand, so it is not per-verb output and a byte-identical
+  copy under a network name would be a second thing to keep in sync (the capture was taken and
+  compared — it is identical).
+- **Both network refusals land on stdout with an empty stderr, at exit 255** — the opposite stream
+  from `am start`'s, which is why nothing here may assume one stream carries the reason. They are
+  merged captures (`> f 2>&1`) for the app-control fixtures' reason, and because stderr contributed
+  nothing the file is byte-identical to a stdout-only capture. `cmd connectivity airplane-mode`
+  answers a bad argument with the connectivity service's **entire help text**, which is why the
+  fixture is 943 bytes of something that looks nothing like an error; `cmd wifi set-wifi-enabled`
+  answers with one `Invalid args for set-wifi-enabled: java.lang.IllegalArgumentException: …` line.
+- **The two commands take different words for the same boolean.** `airplane-mode` wants
+  `enable`/`disable`, `set-wifi-enabled` wants `enabled`/`disabled`; `set-wifi-enabled true` is the
+  refusal that was captured under a different argument to prove it. Crossing the two vocabularies is
+  loud rather than silent, and the argv pinning in `backend.test.ts` is what keeps it that way.
 
 - **The `track-devices` capture is raw bytes, not text**, and has to be read as a `Buffer`: its
   framing is four hex digits of payload **byte** length, so a fixture decoded before it reaches the

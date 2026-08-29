@@ -939,3 +939,179 @@ describe('screenshot', () => {
 		await expect(backend.screenshot(SERIAL)).rejects.toThrow("device 'emulator-5554' not found");
 	});
 });
+
+/**
+ * The environment pair behind `canControlNetwork`. `tests/device/android/network.test.ts`
+ * is the half that proves a real device accepts these two recipes at all; what is proved
+ * here is the join, and above all the **argv**.
+ *
+ * That emphasis is the point of this block. The two commands take different words for the
+ * same boolean — `airplane-mode` wants `enable`/`disable`, `set-wifi-enabled` wants
+ * `enabled`/`disabled` — and there is no shared vocabulary to derive one from the other.
+ * Crossing them is caught on a device (exit 255, PROJECT.md §6) but not by any type, so
+ * all four literals are pinned here rather than left to the device suite to find.
+ */
+const AIRPLANE_BAD_ARGUMENT = fixture(
+	'cmd-connectivity-airplane-mode.bad-argument.api37-sdk-gphone16k-arm64.txt',
+);
+const WIFI_BAD_ARGUMENT = fixture(
+	'cmd-wifi-set-wifi-enabled.bad-argument.api37-sdk-gphone16k-arm64.txt',
+);
+const DAEMON_BANNER = fixture('am-force-stop.daemon-start.stderr.api37-sdk-gphone16k-arm64.txt');
+
+describe('setAirplaneMode', () => {
+	it('enables through the pinned runner, and takes silence for success', async () => {
+		answers({ 'shell cmd connectivity airplane-mode enable': '' });
+
+		await backend.setAirplaneMode(SERIAL, true);
+
+		expect(runAdb).not.toHaveBeenCalled();
+		expect(runAdbOnDevice.mock.calls[0][0]).toBe(SERIAL);
+		expect(runAdbOnDevice.mock.calls[0][1]).toEqual([
+			'shell',
+			'cmd',
+			'connectivity',
+			'airplane-mode',
+			'enable',
+		]);
+	});
+
+	it('disables with the other word of the same pair', async () => {
+		answers({ 'shell cmd connectivity airplane-mode disable': '' });
+
+		await backend.setAirplaneMode(SERIAL, false);
+
+		expect(runAdbOnDevice.mock.calls[0][1]).toEqual([
+			'shell',
+			'cmd',
+			'connectivity',
+			'airplane-mode',
+			'disable',
+		]);
+	});
+
+	// The serial reaches adb through the pin and never through the command line — an
+	// unpinned call lands on whichever device adb picks, which here means taking someone
+	// else's device off the network.
+	it('never puts the serial in the argv', async () => {
+		answers({ 'shell cmd connectivity airplane-mode enable': '' });
+
+		await backend.setAirplaneMode(SERIAL, true);
+
+		expect(runAdbOnDevice.mock.calls[0][1]).not.toContain('emulator-5554');
+	});
+
+	// The captured refusal: the connectivity service's entire help text, on stdout, with
+	// nothing error-shaped in it.
+	it('throws when the device answered with anything, naming the command and the device', async () => {
+		answers({ 'shell cmd connectivity airplane-mode enable': AIRPLANE_BAD_ARGUMENT });
+
+		const failure = backend.setAirplaneMode(SERIAL, true);
+
+		await expect(failure).rejects.toThrow(/cmd connectivity airplane-mode enable/);
+		await expect(failure).rejects.toThrow(/emulator-5554/);
+	});
+
+	// The banner is adb's client talking, on a call that worked — see `stopApp` above, and
+	// this is the verb R9 restores state with, so a false rejection here is a lease that
+	// cannot be released cleanly.
+	it('is not fooled by the daemon banner adb writes to stderr on the way through', async () => {
+		answers({
+			'shell cmd connectivity airplane-mode disable': { stdout: '', stderr: DAEMON_BANNER },
+		});
+
+		await expect(backend.setAirplaneMode(SERIAL, false)).resolves.toBeUndefined();
+	});
+});
+
+describe('setWifiEnabled', () => {
+	it('enables through the pinned runner, and takes silence for success', async () => {
+		answers({ 'shell cmd wifi set-wifi-enabled enabled': '' });
+
+		await backend.setWifiEnabled(SERIAL, true);
+
+		expect(runAdb).not.toHaveBeenCalled();
+		expect(runAdbOnDevice.mock.calls[0][0]).toBe(SERIAL);
+		expect(runAdbOnDevice.mock.calls[0][1]).toEqual([
+			'shell',
+			'cmd',
+			'wifi',
+			'set-wifi-enabled',
+			'enabled',
+		]);
+	});
+
+	// `disabled`, not `disable` — the argument §6 had never vouched for before #9, and the
+	// one this file exists to keep from drifting into its neighbour's vocabulary.
+	it('disables with the other word of the same pair', async () => {
+		answers({ 'shell cmd wifi set-wifi-enabled disabled': '' });
+
+		await backend.setWifiEnabled(SERIAL, false);
+
+		expect(runAdbOnDevice.mock.calls[0][1]).toEqual([
+			'shell',
+			'cmd',
+			'wifi',
+			'set-wifi-enabled',
+			'disabled',
+		]);
+	});
+
+	it('never puts the serial in the argv', async () => {
+		answers({ 'shell cmd wifi set-wifi-enabled disabled': '' });
+
+		await backend.setWifiEnabled(SERIAL, false);
+
+		expect(runAdbOnDevice.mock.calls[0][1]).not.toContain('emulator-5554');
+	});
+
+	it('throws when the device answered with anything, naming the command and the device', async () => {
+		answers({ 'shell cmd wifi set-wifi-enabled enabled': WIFI_BAD_ARGUMENT });
+
+		const failure = backend.setWifiEnabled(SERIAL, true);
+
+		await expect(failure).rejects.toThrow(/cmd wifi set-wifi-enabled enabled/);
+		await expect(failure).rejects.toThrow(/IllegalArgumentException/);
+	});
+
+	it('is not fooled by the daemon banner adb writes to stderr on the way through', async () => {
+		answers({ 'shell cmd wifi set-wifi-enabled enabled': { stdout: '', stderr: DAEMON_BANNER } });
+
+		await expect(backend.setWifiEnabled(SERIAL, true)).resolves.toBeUndefined();
+	});
+});
+
+/**
+ * The counterpart of "no app verb swallows a failure", for the two verbs a *restoration*
+ * runs (D9). A teardown that reported success on a device it never touched is the exact
+ * self-deception the daemon owning restoration exists to end, so both halves are asserted:
+ * a refusal adb exited 0 on, and the failure the runner itself raises.
+ */
+describe('no environment verb swallows a failure', () => {
+	const REFUSALS: ReadonlyArray<[string, AdbResult, () => Promise<void>]> = [
+		[
+			'setAirplaneMode',
+			{ stdout: AIRPLANE_BAD_ARGUMENT, stderr: '' },
+			() => backend.setAirplaneMode(SERIAL, true),
+		],
+		[
+			'setWifiEnabled',
+			{ stdout: WIFI_BAD_ARGUMENT, stderr: '' },
+			() => backend.setWifiEnabled(SERIAL, false),
+		],
+	];
+
+	it.each(REFUSALS)('%s rejects rather than resolving', async (_name, reply, call) => {
+		runAdbOnDevice.mockResolvedValue(reply);
+
+		await expect(call()).rejects.toThrow();
+	});
+
+	it.each(
+		REFUSALS,
+	)('%s lets a failed run surface as the runner reported it', async (_name, _reply, call) => {
+		runAdbOnDevice.mockRejectedValue(new Error("device 'emulator-5554' not found"));
+
+		await expect(call()).rejects.toThrow("device 'emulator-5554' not found");
+	});
+});
