@@ -57,6 +57,21 @@ test behind it rather than only a convention: `tests/unit/no-sleep.test.ts` scan
 are exempt from the scan. It is a floor, not a proof — a determined re-implementation gets
 through, and reading the wait vocabulary is still how you learn what a wait here looks like.
 
+**The verb layer has a spine, and no verbs on it yet.** `src/verbs/` is the layer above the
+backends where determinism stops being a rule and becomes a signature (D12): `resolveTarget()` takes
+a target and *nothing else* — no screen, no element list, no state read a turn ago — so a target can
+only ever be resolved from a screen captured inside that call. Two elements matching one text target
+is a loud error naming every candidate rather than a first match that is right half the time; nothing
+matching names what was on screen instead; and a coordinate stays available as the documented
+fallback, range-checked against the device and marked in the result as not having come from a screen.
+`performAction()` is where the three rules meet: it consults the capability manifest **before** it
+touches the device, resolves fresh, acts, and then reads the state after the action — and a device
+that cannot read its screen answers an explicit "unavailable, and here is the capability that would
+have answered" rather than an empty list that reads as a blank screen. Every argument and every
+result is a Zod schema of plain data, because the host runs the verb and the agent reads the answer
+somewhere else (D19). The concrete verbs — `tap`, `type_text`, `screenshot`, `read_screen` — are
+their own issues; today the suite drives the spine with a fake action.
+
 One gap is worth stating plainly: `src/daemon/main.ts` does not yet import the backend barrel, so
 a daemon started with `npm run daemon` runs with an empty registry and answers an empty device
 list. That wiring is its own issue. The backlog is twenty issues in dependency order — see
