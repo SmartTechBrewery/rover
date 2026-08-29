@@ -35,6 +35,22 @@ export const DeviceStateSchema = z.enum(['ready', 'unauthorized', 'offline']);
 export type DeviceState = z.infer<typeof DeviceStateSchema>;
 
 /**
+ * Which host a device belongs to.
+ *
+ * A device belongs to exactly one host — the one it is physically attached to (D18) — and
+ * this is the field that says whether that host is this one. A host can *see* devices
+ * attached to another machine: every platform this targets has a network transport, and a
+ * host that reached one over it sees an entry indistinguishable from a local device in
+ * everything but this flag. Two hosts each treating that entry as theirs to lend is the
+ * two-agents-one-device failure with both sides reporting success.
+ *
+ * The backend classifies, because only it knows how its platform addresses a device; what
+ * shared code does about the answer is shared code's decision.
+ */
+export const DeviceAttachmentSchema = z.enum(['this-host', 'another-host']);
+export type DeviceAttachment = z.infer<typeof DeviceAttachmentSchema>;
+
+/**
  * One device as the host sees it.
  *
  * Deliberately minimal: screen size, density and OS version are what `device_info`
@@ -47,6 +63,8 @@ export const DeviceSchema = z.object({
 	platform: z.string().transform(parsePlatformId),
 	model: z.string().nullable(),
 	state: DeviceStateSchema,
+	/** Whose device this is (D18) — a snapshot that cannot say is not admissible to an inventory. */
+	attachment: DeviceAttachmentSchema,
 });
 export type Device = z.infer<typeof DeviceSchema>;
 
@@ -143,6 +161,42 @@ export const DeviceKeySchema = z.enum(['back', 'home', 'recents', 'wake']);
 export type DeviceKey = z.infer<typeof DeviceKeySchema>;
 
 /**
+ * What a {@link DeviceBackend.watchDevices} caller is told, as the set it watches changes.
+ *
+ * Neither method may throw. Both are called from inside the backend's own read path,
+ * where there is nothing above them to catch — a listener with its own failures handles
+ * them itself.
+ */
+export interface DeviceWatcher {
+	/**
+	 * The **full** current set: once on subscription, and again on every change. Never a
+	 * delta, so a caller that missed one call is still correct after the next.
+	 */
+	onDevices(devices: Device[]): void;
+
+	/**
+	 * The backend lost its view of the platform's device set — what the caller last saw is
+	 * no longer known to be current.
+	 *
+	 * This is not "no devices are attached", and the distinction is the whole reason the
+	 * method exists: a lost view delivered as an empty set reads as every device having
+	 * gone away, which for an inventory means releasing devices that never moved. The
+	 * backend re-establishes the view on its own; the next {@link onDevices} supersedes
+	 * this and needs no request from the caller.
+	 */
+	onInterrupted(reason: string): void;
+}
+
+/** The handle {@link DeviceBackend.watchDevices} answers with. */
+export interface DeviceWatch {
+	/**
+	 * Stop watching. No listener method is called after this resolves, and calling it a
+	 * second time is a no-op rather than an error.
+	 */
+	stop(): Promise<void>;
+}
+
+/**
  * One backend's implementation of the device contract.
  *
  * Stateless, and every method takes the serial it acts on: a backend serves every
@@ -158,6 +212,27 @@ export interface DeviceBackend {
 
 	/** Every device of this backend's platform currently attached to this host. */
 	listDevices(): Promise<Device[]>;
+
+	/**
+	 * Watch the device set, calling `watcher` with the full set now and on every change.
+	 *
+	 * Required rather than capability-gated, for the same reason enumeration is: keeping
+	 * one device off two agents is what this host exists to do, and a backend that cannot
+	 * say when its device set changed leaves the host holding a snapshot it has no way to
+	 * know is stale. A capability would make that opt-out look like a design choice.
+	 *
+	 * **Nothing here assumes a subscription.** One platform's enumeration is a stream and
+	 * another's is a poll (ai/ARCHITECTURE.md); a backend on the second kind implements
+	 * this by polling internally and calling {@link DeviceWatcher.onDevices} when the set
+	 * differs. The obligation is "tell me when it changes", not "hand me a pipe".
+	 *
+	 * Synchronous, and never rejects: whether the underlying view could be established is
+	 * reported through the listener, because a view that succeeds now and drops a minute
+	 * later has to be reported *somehow* and one path for both is the only one a caller
+	 * can be relied on to handle. A backend that can never establish it says so through
+	 * {@link DeviceWatcher.onInterrupted} and keeps trying.
+	 */
+	watchDevices(watcher: DeviceWatcher): DeviceWatch;
 
 	/**
 	 * The current state of one device, or `null` when it is no longer attached

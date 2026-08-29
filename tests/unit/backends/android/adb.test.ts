@@ -1,14 +1,18 @@
 import type { ExecFileException } from 'node:child_process';
+import { EventEmitter } from 'node:events';
+import { PassThrough } from 'node:stream';
 import { describe, expect, it, vi } from 'vitest';
 import {
 	ADB_BINARY_MAX_BUFFER_BYTES,
 	ADB_MAX_BUFFER_BYTES,
+	ADB_STREAM_STDERR_TAIL_CHARS,
 	AdbCommandError,
 	DEFAULT_ADB_TIMEOUT_MS,
 	describeBytes,
 	runAdb,
 	runAdbBinaryOnDevice,
 	runAdbOnDevice,
+	streamAdb,
 } from '@/backends/android/adb.js';
 import { parseDeviceSerial } from '@/core/ids.js';
 
@@ -33,11 +37,15 @@ type ExecFileCall = [
 	callback: ExecFileCallback,
 ];
 
-const { execFileMock } = vi.hoisted(() => ({
+const { execFileMock, spawnMock } = vi.hoisted(() => ({
 	execFileMock: vi.fn<(...call: ExecFileCall) => void>(),
+	// `spawn` is a named import of the module under test, so the factory has to answer it
+	// even for the suites that never touch it — an ESM named import that resolves to
+	// nothing fails the whole file, not the one call.
+	spawnMock: vi.fn(),
 }));
 
-vi.mock('node:child_process', () => ({ execFile: execFileMock }));
+vi.mock('node:child_process', () => ({ execFile: execFileMock, spawn: spawnMock }));
 
 const SERIAL = parseDeviceSerial('device-under-test');
 
@@ -279,5 +287,197 @@ describe('describeBytes', () => {
 	// A capture that never arrived is its own diagnosis, and `0 bytes, starting ` is not it.
 	it('says so plainly when nothing came back at all', () => {
 		expect(describeBytes(Buffer.alloc(0))).toBe('(empty)');
+	});
+});
+
+/**
+ * A stand-in for the child process: real streams, so the encoding and the chunking are the
+ * ones Node would produce, and an emitter for the lifecycle events the runner listens to.
+ */
+class FakeChild extends EventEmitter {
+	readonly stdout = new PassThrough();
+	readonly stderr = new PassThrough();
+	readonly kill = vi.fn((): boolean => {
+		// A killed child still goes through `close` — the runner must not resolve `stop()`
+		// on the kill call itself.
+		queueMicrotask(() => this.emit('close', null, 'SIGTERM'));
+		return true;
+	});
+}
+
+function spawns(): FakeChild {
+	const child = new FakeChild();
+	spawnMock.mockReturnValue(child);
+	return child;
+}
+
+/** Lets every pending stream event land before the assertions read what arrived. */
+async function settled(): Promise<void> {
+	await new Promise((resolve) => setImmediate(resolve));
+}
+
+describe('streamAdb', () => {
+	it('spawns adb with the arguments it was given, and never inherits stdin', () => {
+		spawns();
+
+		streamAdb(['track-devices', '-l'], { onStdout: vi.fn(), onEnd: vi.fn() });
+
+		expect(spawnMock.mock.calls[0]?.[0]).toBe('adb');
+		expect(spawnMock.mock.calls[0]?.[1]).toEqual(['track-devices', '-l']);
+		expect(spawnMock.mock.calls[0]?.[2]).toEqual({ stdio: ['ignore', 'pipe', 'pipe'] });
+	});
+
+	// Bytes, in order, undecoded: the framing counts bytes and a chunk boundary can fall
+	// inside a character.
+	it('hands stdout back as the chunks it arrived in', async () => {
+		const child = spawns();
+		const onStdout = vi.fn();
+		streamAdb(['track-devices'], { onStdout, onEnd: vi.fn() });
+
+		child.stdout.write(Buffer.from('0074emu'));
+		child.stdout.write(Buffer.from('lator-5554'));
+		await settled();
+
+		expect(onStdout.mock.calls.map(([chunk]) => (chunk as Buffer).toString())).toEqual([
+			'0074emu',
+			'lator-5554',
+		]);
+		expect(Buffer.isBuffer(onStdout.mock.calls[0]?.[0])).toBe(true);
+	});
+
+	/**
+	 * Exit 0 is an end like any other: on adb 37.0.1 a tracker whose server is killed exits
+	 * 0 with an empty stderr (PROJECT.md §6). Reporting that as anything but an end is how
+	 * a host goes blind and believes it is watching.
+	 */
+	it('reports a clean exit as an end, naming the command and the code', async () => {
+		const child = spawns();
+		const onEnd = vi.fn();
+		streamAdb(['track-devices', '-l'], { onStdout: vi.fn(), onEnd });
+
+		child.emit('close', 0, null);
+		await settled();
+
+		expect(onEnd).toHaveBeenCalledTimes(1);
+		expect(onEnd.mock.calls[0]?.[0]).toContain('adb track-devices -l');
+		expect(onEnd.mock.calls[0]?.[0]).toContain('ended with exit 0');
+	});
+
+	it('names the signal when the run was killed rather than exited', async () => {
+		const child = spawns();
+		const onEnd = vi.fn();
+		streamAdb(['track-devices'], { onStdout: vi.fn(), onEnd });
+
+		child.emit('close', null, 'SIGKILL');
+		await settled();
+
+		expect(onEnd.mock.calls[0]?.[0]).toContain('was killed by SIGKILL');
+	});
+
+	// adb absent from PATH never reaches `close` with a code — its own message is the only
+	// thing that says what happened.
+	it('reports a run that never started, with the reason node gave', async () => {
+		const child = spawns();
+		const onEnd = vi.fn();
+		streamAdb(['track-devices'], { onStdout: vi.fn(), onEnd });
+
+		child.emit('error', new Error('spawn adb ENOENT'));
+		await settled();
+
+		expect(onEnd).toHaveBeenCalledTimes(1);
+		expect(onEnd.mock.calls[0]?.[0]).toContain('failed to run: spawn adb ENOENT');
+	});
+
+	it('ends exactly once when the run both errors and closes', async () => {
+		const child = spawns();
+		const onEnd = vi.fn();
+		streamAdb(['track-devices'], { onStdout: vi.fn(), onEnd });
+
+		child.emit('error', new Error('spawn adb ENOENT'));
+		child.emit('close', null, null);
+		await settled();
+
+		expect(onEnd).toHaveBeenCalledTimes(1);
+	});
+
+	// The banner arrives on the tracker's stderr on the **success** path (PROJECT.md §6),
+	// so stderr is context for the end reason and never a failure on its own.
+	it('carries the stderr tail in the end reason', async () => {
+		const child = spawns();
+		const onEnd = vi.fn();
+		streamAdb(['track-devices'], { onStdout: vi.fn(), onEnd });
+
+		child.stderr.write('* daemon not running; starting now at tcp:5037\n');
+		await settled();
+		child.emit('close', 0, null);
+		await settled();
+
+		expect(onEnd.mock.calls[0]?.[0]).toContain('* daemon not running');
+	});
+
+	// It runs for as long as the host does, so what it keeps has to be bounded.
+	it('keeps only the tail of a long-running stderr, and keeps the last of it', async () => {
+		const child = spawns();
+		const onEnd = vi.fn();
+		streamAdb(['track-devices'], { onStdout: vi.fn(), onEnd });
+
+		child.stderr.write('x'.repeat(ADB_STREAM_STDERR_TAIL_CHARS * 2));
+		child.stderr.write('the last thing adb said');
+		await settled();
+		child.emit('close', 0, null);
+		await settled();
+
+		const reason = onEnd.mock.calls[0]?.[0] as string;
+		expect(reason).toContain('the last thing adb said');
+		expect(reason.length).toBeLessThan(ADB_STREAM_STDERR_TAIL_CHARS * 2);
+	});
+
+	it('says so plainly when the run ended having printed nothing', async () => {
+		const child = spawns();
+		const onEnd = vi.fn();
+		streamAdb(['track-devices'], { onStdout: vi.fn(), onEnd });
+
+		child.emit('close', 0, null);
+		await settled();
+
+		expect(onEnd.mock.calls[0]?.[0]).toContain('stderr: (empty)');
+	});
+
+	it('kills the child on stop, and resolves once it is gone', async () => {
+		const child = spawns();
+		const stream = streamAdb(['track-devices'], { onStdout: vi.fn(), onEnd: vi.fn() });
+
+		await stream.stop();
+
+		expect(child.kill).toHaveBeenCalledTimes(1);
+	});
+
+	// The contract's promise: no handler call after `stop()`. A caller that restarted on an
+	// end reason it asked for would otherwise be handed one it can no longer act on.
+	it('calls no handler after stop', async () => {
+		const child = spawns();
+		const onStdout = vi.fn();
+		const onEnd = vi.fn();
+		const stream = streamAdb(['track-devices'], { onStdout, onEnd });
+
+		await stream.stop();
+		child.stdout.write(Buffer.from('0000'));
+		child.emit('close', 0, null);
+		await settled();
+
+		expect(onStdout).not.toHaveBeenCalled();
+		expect(onEnd).not.toHaveBeenCalled();
+	});
+
+	it('is a no-op when stopped twice, or after the run already ended', async () => {
+		const child = spawns();
+		const stream = streamAdb(['track-devices'], { onStdout: vi.fn(), onEnd: vi.fn() });
+
+		child.emit('close', 0, null);
+		await settled();
+		await stream.stop();
+		await stream.stop();
+
+		expect(child.kill).not.toHaveBeenCalled();
 	});
 });

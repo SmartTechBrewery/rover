@@ -358,6 +358,56 @@ the daemon's unix socket transport (R6), 2026-08-29:
   the re-bind. The lock is not the election — `listen()` still is — and it is discarded on age, so
   a process killed while holding it cannot make the path unreclaimable the way a PID file would.
 
+Checked on the same API 37 emulator (`sdk_gphone16k_arm64`) with `adb` 37.0.1-15733141 while
+building the device-change stream (#7), 2026-08-29. The verified recipe for watching the attached
+set is `adb track-devices -l`, and every trap below cost something to find:
+
+- **`adb track-devices` is undocumented: it appears nowhere in `adb --help`** (and there is no
+  `adb help-all` on this build) — and
+  it is the recipe: it streams the device list for as long as it runs, so nothing has to poll. `-l`
+  gives exactly the `adb devices -l` long format **minus the `List of devices attached` header**.
+- **Its framing is four lowercase hex digits of payload byte length, then the payload**, with no
+  separator before the next frame's digits:
+
+  ```
+  0074emulator-5554          device product:… model:… device:… transport_id:1\n
+  ```
+
+  `0x74` is 116, which is that line **including its trailing newline** — the length covers the
+  payload and nothing else. The prefix width is also the bound on a frame: 65535 bytes, so a
+  decoder needs no cap of its own.
+- **Every change re-emits the whole list, never a delta.** Captured across an
+  `adb connect localhost:5555` / `adb disconnect` cycle (the fixture behind
+  `parsers/track.test.ts`), seven frames arrived, each one a complete list — including the
+  intermediate `offline` and `authorizing` states of the entry that was still negotiating.
+- **When the adb server dies, the tracker exits 0** with an empty stderr. Verified by tracking
+  against a server on a spare port and killing it: `adb -P 5039 track-devices -l` ended `EXIT=0`.
+  So a clean end of stream is **not** "no devices attached" — it is "the source of truth went
+  away", and delivering it as an empty list tells an inventory that every device vanished at the
+  moment the host lost the ability to know anything. It is also why a tracker must be restarted on
+  a bounded backoff: `adb kill-server` is routine on a developer's machine, and without a restart
+  the host goes permanently blind after it.
+- **The `* daemon not running; starting now at tcp:5040` / `* daemon started successfully` banner
+  arrives on the tracker's own stderr, on the success path** — the same trap this section already
+  records for `adb devices`. Non-empty stderr is not a failure; it is context for whatever the run
+  eventually does.
+- **The serial is the only thing that distinguishes a `connect`ed device from a local one.** With
+  `adb connect localhost:5555` pointed at the already-attached `emulator-5554`:
+
+  | Query | `emulator-5554` | `localhost:5555` |
+  |---|---|---|
+  | `adb devices -l` tail | `product:sdk_gphone16k_arm64 model:… device:emu64a16k` | **identical** |
+  | `track-devices --proto-text` `connection_type` | `SOCKET` | `SOCKET` |
+  | `adb get-devpath` | `unknown` | `unknown` |
+  | `adb get-state` | `device` | `device` |
+
+  Two entries, one physical device, and nothing but the serial telling them apart — D18's failure
+  mode reproduced in miniature on one machine. So classifying which host a device belongs to reads
+  the serial (`src/backends/android/attachment.ts`), which is the **one** deliberate exception to
+  "never infer anything from a serial": transport is not a fact about the device, it is a fact
+  about how this host reached it, and `adb connect HOST[:PORT]` writes that address into the serial
+  itself.
+
 ---
 
 ## 7. Scope
