@@ -54,16 +54,18 @@ is rarely the machine the agent sits on, and hardware is the most expensive and 
 resource in this arrangement. A tool that lends only locally lends to one person.
 
 The relationship to Swarm is **inverted**. Swarm pushes work out to workers standing on many
-machines; Rover stands still and lends devices to whoever asks. Three things follow that would
-otherwise be mere convenience: the host is addressable over the network (D17), a device has exactly
-one owning host (D18), and the verbs execute **where the device is** (D19).
+machines; Rover stands still and lends devices to whoever asks. Two things follow that would
+otherwise be mere convenience: the host is addressable over the network (D17), and the verbs execute
+**where the device is** (D19). A third holds even though there is exactly one host: it only ever
+lends what is physically attached to it (D18).
 
 ### The flow
 
 1. The agent's client connects to a host — the local socket, or a configured remote host.
 2. The agent asks for a device with certain properties (platform, optionally a specific model).
 3. The host checks adb for what is free, grants a **lease**, and returns a device handle along with
-   the list of what may be done on it. The handle names the host, not just the serial (D18).
+   the list of what may be done on it. The handle is the device serial — there is exactly one host,
+   so nothing else needs naming (D18).
 4. The agent calls verbs, passing that handle. The host executes them; the client receives the
    result and the artifacts. Every call pushes the lease expiry out.
 5. The agent releases the device. The host restores its original state.
@@ -94,8 +96,8 @@ one owning host (D18), and the verbs execute **where the device is** (D19).
 | D15 | **The architecture is modelled on Swarm (`../swarm`)** | Swarm is working Node.js code by the same author, with a proven set of conventions (TypeScript strict/ESM, Biome, Vitest, Zod as the source of truth, a provider registry). Swarm's providers are device backends here — the same module shape. Inventing our own conventions would buy nothing | 2026-08-27 |
 | D16 | **Rover and Swarm will be integrated; the preparation starts now** | Swarm will eventually show that a given run is holding a Rover device. Nothing needs building immediately, but two things must be designed for from the start: daemon state queryable by something that is not an agent, and a lease with an explicit owner that Swarm will fill with its own run identity | 2026-08-27 |
 | D17 | **The device host is reachable over the network; the agent need not stand on it** | The machine with the hardware is rarely the agent's machine, and hardware is the most expensive and least divisible resource here. A tool that lends only locally serves one person and leaves the phones idle most of the day. The local socket stays the default, zero-config path; the network listener is **a second transport of the same surface**, not a second implementation — otherwise one of the two starts drifting in the week it is written | 2026-08-27 |
-| D18 | **A device belongs to exactly one host — the one it is attached to** | `adb connect B:5555` makes an emulator on machine B visible in `adb devices` on A, and it is tempting because it "almost works". Then two hosts each consider that device theirs and free, and both grant a lease on it — precisely the failure mode D3 and D7 exist for, only harder to spot, because both sides see green. A client asks the host that owns the device; it never stakes a claim through adb over TCP | 2026-08-27 |
-| D19 | **The verbs execute on the host; the adapters are clients** | The alternative — the client gets a serial and calls adb itself — requires adb reachable over the network, which D18 forbids, and it strands the project hooks and helper services (D13, port allocation) on the far side of the network from the device they exist to serve. The core stays a library; only which process loads it changes. The consequence to keep in mind in every verb that returns a file: artifacts come back as bytes, and a path handed to the agent must exist **on the agent's machine** | 2026-08-27 |
+| D18 | **Only devices physically attached to the host are ever leased** | `adb connect host:5555` makes some other machine's emulator visible in `adb devices` here, and it is tempting because it "almost works" — but that device is not this machine's hardware, may vanish without warning, and belongs to whatever process put it there. The host refuses it before it ever reaches a lease. **Revised 2026-08-29:** the original wording ("a device belongs to exactly one host") assumed Rover would run as more than one host and guarded against two of them fighting over the same `adb connect`-visible device. The deployment this is built for has exactly one host, so that scenario cannot occur — but the guard itself stays, for its own reason: physical attachment, not host ownership, is what makes a device safe to lease. **Multi-host addressing (R23) is dropped from the backlog entirely** as a consequence (§9.4) | 2026-08-27, revised 2026-08-29 |
+| D19 | **The verbs execute on the host; the adapters are clients** | The alternative — the client gets a serial and calls adb itself — requires adb reachable over the network, exposing exactly the surface D17's authenticated listener exists to gate instead, and it strands the project hooks and helper services (D13, port allocation) on the far side of the network from the device they exist to serve. The core stays a library; only which process loads it changes. The consequence to keep in mind in every verb that returns a file: artifacts come back as bytes, and a path handed to the agent must exist **on the agent's machine** | 2026-08-27 |
 | D20 | **The host token authenticates; the lease owner attributes. Two different fields** | Anything listening on a network lets strangers in, so a host needs a shared secret. It is tempting to derive the owner from whoever authenticated — and then either the token lands in reports and logs, or the attribution cannot be overridden, and Swarm is supposed to put its run identity there (D16). The token says "you may take devices from here"; the owner says "`pr-127-review` is holding this" | 2026-08-27 |
 | D21 | **Rover never starts an emulator or connects a physical device — that is the host operator's job** | The host only ever reports what `adb devices` already shows on its own machine (D6). Bringing hardware online — booting an emulator, plugging in a phone — is physical, local work done by whoever operates that machine; it is never a verb the daemon executes and never something a remote client can trigger. Rover's job starts once the device is already there | 2026-08-28 |
 | D22 | **A lease carries two more explicit, caller-supplied strings: `project` and `test_name`** | `owner` (D16) alone does not give an artifact a findable home: two projects can reuse the same owner string, and "before/after" comparisons need a way to group runs by what they were checking. `project` names which registered project a lease belongs to; `test_name` names the scenario being run and is **deliberately not required to be unique** — running "home screen before changes" and "home screen after changes" as two separate leases with the same-shaped name is the point, not an error case. Both are opaque strings the core never inspects, parses or defaults from context, exactly like `owner` (D20) | 2026-08-29 |
@@ -402,8 +404,9 @@ set is `adb track-devices -l`, and every trap below cost something to find:
   | `adb get-state` | `device` | `device` |
 
   Two entries, one physical device, and nothing but the serial telling them apart — D18's failure
-  mode reproduced in miniature on one machine. So classifying which host a device belongs to reads
-  the serial (`src/backends/android/attachment.ts`), which is the **one** deliberate exception to
+  mode reproduced in miniature on one machine. So classifying whether a device is physically
+  attached here, or only reachable through a network transport, reads the serial
+  (`src/backends/android/attachment.ts`), which is the **one** deliberate exception to
   "never infer anything from a serial": transport is not a fact about the device, it is a fact
   about how this host reached it, and `adb connect HOST[:PORT]` writes that address into the serial
   itself.
@@ -420,8 +423,9 @@ tests — on every pull request (R26); no device tests, since a CI runner has no
 
 **Out of scope for now:** iOS (the seam only, see §5). Automated tests with assertions — CI runs
 the existing unit-test suite, it does not add device-driven assertions of its own. Cloud
-device farms, a host catalogue, hosts registering with one another, and anything resembling a
-dashboard — a client gets its host list from configuration and that is all. Comparison against
+device farms, **more than one Rover host in a single deployment** (D18, revised 2026-08-29; §9.4),
+a host catalogue, hosts registering with one another, and anything resembling a dashboard — a
+client is configured with the address of its one host and that is all. Comparison against
 design renders — Rover supplies screenshots and measurements; judging them against the design is
 the agent's job. **Starting emulators and connecting physical devices** — that belongs to whoever
 operates the host machine, not to Rover (D21).
@@ -469,7 +473,8 @@ Four rules when filing these issues:
    criterion**, verbatim. It is worded so that it can be checked, not merely declared.
 3. **A row number is an identity, not a position.** R21–R24 arrived after the first twenty were
    filed (remote hosts, D17–D20) and sit where the dependency order puts them, not at the end of
-   the table. The Backlog column mirrors the order of the rows, not their numbering.
+   the table. The Backlog column mirrors the order of the rows, not their numbering. **R23 was
+   later dropped entirely** (D18, revised 2026-08-29; §9.4) — its number is retired, not reused.
 4. **Do not split a row into subtasks at filing time.** If it turns out too large during the work,
    whoever implements it splits it — and then it is clear where the seam runs.
 
@@ -484,25 +489,24 @@ Four rules when filing these issues:
 | R4 | adb output parsers + fixtures from a real device | `adb devices -l`, `wm size`, `wm density`, `getprop`, the `uiautomator` XML. Fixtures in `tests/fixtures/`, with the API level and model in the filename. **No parser infers anything from the shape of a serial** | R1 | M |
 | R5 | Android backend: enumeration, `device_info`, lifecycle | The first registered manifest — `index.ts` lands in the change that removes the last stub, not earlier. Reports density and the computed width in dp (D14) | R2, R3, R4 | L |
 | R6 | Daemon: process, socket, autostart, IPC | Autostart on the first call (D5). **Two concurrent CLI invocations produce one daemon** — whoever loses the bind connects to the winner, not to a lock file. Every message parsed by a schema, never cast. **The IPC surface is transport-agnostic from day one** (D17) — the network listener from R22 is to be an added transport, not a rewrite | R1 | M |
-| R7 | Device inventory in the daemon | The `adb track-devices` stream plus **re-verification at every grant** (D6). A device that disappeared mid-lease is a named error, not an exception to the rule. **The host does not take into inventory a device attached through `adb connect` to somebody else's host** (D18) — the refusal is loud and names the reason | R5, R6 | M |
-| R8 | Leases | Granted per device (D7), the owner an explicit string (D16), a 20-minute TTL **renewed by activity**, not by a heartbeat (D8). **A test with five concurrent clients yields exactly one winner** — the predecessor let four through. Only the host that owns the device grants the lease, and the handle names the host (D18). The lease additionally carries `project` and an optional `test_name` (D22) — two more explicit, caller-supplied strings, never inspected or defaulted by the core | R7 | L |
+| R7 | Device inventory in the daemon | The `adb track-devices` stream plus **re-verification at every grant** (D6). A device that disappeared mid-lease is a named error, not an exception to the rule. **The host does not take into inventory a device reached through `adb connect` rather than physically attached** (D18) — the refusal is loud and names the reason | R5, R6 | M |
+| R8 | Leases | Granted per device (D7), the owner an explicit string (D16), a 20-minute TTL **renewed by activity**, not by a heartbeat (D8). **A test with five concurrent clients yields exactly one winner** — the predecessor let four through. Only devices physically attached to the host are ever granted a lease (D18). The lease additionally carries `project` and an optional `test_name` (D22) — two more explicit, caller-supplied strings, never inspected or defaulted by the core | R7 | L |
 | R9 | State restoration | Stop the app, airplane mode off, wifi back on, the project hook. **A test proves the teardown runs on the expiry path too**, not only on `release` (D9) | R8 | M |
 | R10 | CLI: `list`, `acquire`, `release`, `status` | Readable by a human and scriptable. This is the interface everything above is debugged through (D4). The host is named by a flag; no flag means the local host | R8 | S |
 | R11 | Verb layer foundation | Target resolution from a **fresh** read inside the verb, waiting on a condition with a timeout, returning the state after the action (D12). **There is not a single `sleep` in the repo** — enforced by a lint rule or a test. A timeout says what it waited for and what it found instead. A verb's result is serializable — the host will execute it, not the client (D19, R21) | R5, R8 | L |
 | R21 | Host-side verb execution | The daemon loads the core; the CLI and MCP call verbs over the same surface as leases (D19). **No adb in a client process** — checkable by a test. This row stands ahead of the verb families deliberately: changing the execution model after they are written is a rewrite of six files instead of one | R11 | L |
 | R22 | Host network listener and authentication | TCP with TLS alongside the local socket, **the same surface, a second transport** (D17). The host token authenticates, the owner string attributes — **two separate fields, and a test proves the token never becomes the owner nor reaches a log** (D20). A refusal does not reveal what the host has attached | R21 | L |
-| R23 | Multi-host addressing and the client-side registry | A handle is host + serial, never a bare serial (D18). The client reads its host list from configuration; `list` merges them into one view and **says plainly which host did not answer**, instead of showing a shorter list. No catalogue and no hosts registering with one another (§7) | R22, R10 | M |
 | R12 | Input verbs | `tap`, `long_press`, `swipe`, `scroll`, `type_text`, `press_key`. `long_press` as a drag in place — **not** `keyevent --longpress` (§6). `type_text` hides the escaping of spaces | R21 | M |
 | R13 | Read verbs | `screenshot`, `read_screen`, `device_info`. `read_screen` works with screen capture blocked and **is a declared capability, not a required method** (§5) | R21 | M |
 | R14 | `record_video` + slicing into frames | The recording must finish before it is pulled — a file pulled earlier has no `moov` atom and cannot be read at all | R13 | S |
 | R15 | App verbs | `install_app`, `launch_app`, `stop_app`, `clear_app_data`, `read_logs`, `pull_file`, `push_file`. `read_logs` is to catch a failure a screenshot will not show | R21 | M |
 | R16 | Environment verbs | `set_airplane_mode`, `set_wifi` through `cmd connectivity` and `cmd wifi` — **not** through `svc`, which is gone (§6). Both paths without root | R21 | S |
-| R24 | Artifact transfer across the machine boundary | Screenshots, recordings and pulled files come back as bytes; **a path returned to the agent exists on the agent's machine** (D19). In the other direction: `install_app` and `push_file` send a file to the host. The recording from R14 finishes on the host before the transfer, not during it. The size limit is explicit and named, and does not announce itself as a truncated file | R23, R13, R14, R15 | M |
+| R24 | Artifact transfer across the machine boundary | Screenshots, recordings and pulled files come back as bytes; **a path returned to the agent exists on the agent's machine** (D19). In the other direction: `install_app` and `push_file` send a file to the host. The recording from R14 finishes on the host before the transfer, not during it. The size limit is explicit and named, and does not announce itself as a truncated file | R13, R14, R15 | M |
 | R25 | Durable artifact archive on the host | Every verb that produces a screenshot, a recording, or a log pull additionally writes it into `<project>/<test_name>/<lease-id>/<device-serial>/…` on the host (D23, §10), alongside a `device_info.json` snapshot per lease-device pair (D14). **An absent `test_name` falls back to a single fixed directory name**, so the tree shape never varies. **The archive path is never the one returned to the agent** — R24's bytes-over-the-wire contract is unchanged by this row. Retention (a TTL or size cap, and who prunes) is explicitly out of scope here — see §9.4 | R8, R13, R14, R15, R24 | M |
 | R17 | Project hooks (D13) | A Zod schema: the install command, helper services, teardown. **The core knows no application's name**, and a default value that mentions one is a bug. The schema also carries the `project` identifier consumed by R25's archive (D22), so it is set once per project instead of retyped by every caller | R9 | M |
 | R18 | Per-slot helper service port allocation | No race, with recovery after an orphaned slot. The precondition for parallel work with more than two devices | R17 | S |
-| R19 | MCP server | Verbs as tools, Zod schemas as their declarations. **A missing capability is a loud, agent-readable error** naming the capability and the device (D11) — never a silent degradation. Zero verb logic in this layer. Pointing at a remote host is server configuration, not a tool parameter — the agent does not know where the hardware sits | R12, R13, R15, R16, R23 | L |
-| R20 | `README.md` — quick start | The file has existed since the repo was created and describes the shape of the project; what it lacks is what could not be written before the code: how to start the daemon, take a device and wire up the MCP server, with commands that work. Separately: how to expose a host on the network and how to connect to somebody else's | R10, R19, R24 | S |
+| R19 | MCP server | Verbs as tools, Zod schemas as their declarations. **A missing capability is a loud, agent-readable error** naming the capability and the device (D11) — never a silent degradation. Zero verb logic in this layer. Pointing at a remote host is server configuration, not a tool parameter — the agent does not know where the hardware sits | R12, R13, R15, R16 | L |
+| R20 | `README.md` — quick start | The file has existed since the repo was created and describes the shape of the project; what it lacks is what could not be written before the code: how to start the daemon, take a device and wire up the MCP server, with commands that work. Separately: how to expose the host on the network and how to connect to it remotely | R10, R19, R24 | S |
 
 ### 9.4 Outside the backlog — deliberately
 
@@ -518,6 +522,13 @@ Four rules when filing these issues:
   prune — a human operator by cron, or the daemon itself — are all undecided. R25 builds the
   archive with no pruning; a follow-up row is filed once the shape of R25 has actually been used
   and it is clear what fills a disk first.
+- **Multi-host addressing (R23), dropped.** The deployment this is built for has exactly one
+  machine with hardware, so a device handle stays a bare serial and a client never aggregates more
+  than one host (D18, revised 2026-08-29). If devices ever end up spread across more than one
+  machine, R23's shape — host+serial handles, a client-side host registry that aggregates several
+  hosts and names any that did not answer — is the row to revive. Nothing in D17 (the one host
+  reachable over the network) or D19 (verbs execute on the host) needs to change for that; it is
+  simply not being built against a need that does not exist yet.
 
 ---
 

@@ -32,17 +32,18 @@ Two agents working in parallel have two separate MCP servers, which cannot see e
 
 Rover is the machine that owns the hardware, and agents connect **to** it from wherever they run
 (`PROJECT.md` D17). The relationship to Swarm is inverted: Swarm pushes work out to workers on many
-machines; Rover stands still and lends devices to whoever asks. Three invariants follow, and all
-three are load-bearing:
+machines; Rover stands still and lends devices to whoever asks. The invariants below follow, and
+all of them are load-bearing:
 
-- **A device belongs to exactly one host** — the machine it is physically attached to (D18). `adb
-  connect` makes another host's emulator appear in the local `adb devices`, at which point two
-  daemons both believe it is theirs and free, and both grant a lease on it. That is D3's failure
-  mode wearing a disguise, and both sides see green while it happens.
+- **Only what is physically attached to the host is ever leased** (D18, revised 2026-08-29). `adb
+  connect` can make some other machine's emulator appear in the local `adb devices`; leasing it out
+  anyway hands out hardware this host does not actually control, which can vanish or belong to an
+  unrelated process without warning. The host refuses it before it ever reaches a lease.
 - **Verbs execute on the host** (D19). The core is still a library; the daemon is simply the
   process that loads it. A client that received a serial and ran `adb` itself would need adb
-  reachable over the network — which D18 forbids — and would strand the project hooks and helper
-  services on the far side of the network from the device they exist to serve.
+  reachable over the network — exactly the exposure D17's authenticated listener exists to gate
+  instead — and would strand the project hooks and helper services on the far side of the network
+  from the device they exist to serve.
 - **Artifacts cross a machine boundary.** Screenshots, recordings and pulled files come back as
   bytes; a path handed to the agent must exist **on the agent's machine**. A verb that returns a
   host-local path is a bug even when it works on a local host.
@@ -110,7 +111,8 @@ request ──▶ match against a re-verified inventory
 - **The TTL is refreshed by activity, not by a heartbeat** (D8). An agent pauses to think for minutes at a time, so a fixed budget is wrong in both directions; a dead agent issues no more calls and expires on its own.
 - **Restoration runs on release *and* on expiry** (D9): stop the app, airplane mode off, wifi on, then the project's teardown hook. A teardown that only runs on the happy path is not a teardown.
 - **A lease carries an owner string** — `issue-112`, `pr-127-review`, and later a Swarm run identity (`ai/RULES.md` §1). Never derive it from a process id, and never from whoever authenticated (D20).
-- **Only the owning host grants a lease**, and the handle names the host as well as the serial (D18).
+- **Only a device physically attached to the host is ever granted a lease** (D18); the handle is
+  the device serial — there is exactly one host, so nothing else needs naming.
 - **A dropped connection is not a special case.** It is an absence of further calls, and the TTL already covers that.
 - **Inventory is re-verified at grant time** (D6): the daemon is a cache and `adb` is the truth. A device that disappeared mid-lease is an ordinary case with its own error, not an exception path.
 

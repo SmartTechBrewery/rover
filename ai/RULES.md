@@ -57,9 +57,9 @@ Rover's whole value proposition is one set of verbs across platforms (`PROJECT.m
 Rover lends hardware to agents that are not on the machine holding it (`PROJECT.md` D17), and the
 whole arrangement rests on three rules:
 
-- **A device belongs to exactly one host** — the one it is attached to (D18). Never take a device
-  reached through `adb connect` into the inventory. Two hosts believing they each own the same
-  emulator is the two-agents-one-device failure again, harder to spot because both report success.
+- **Only what is physically attached to the host is ever leased** (D18). Never take a device
+  reached through `adb connect` into the inventory — it is not this machine's hardware, and
+  treating it as if it were is the two-agents-one-device failure wearing a disguise.
 - **Verbs run on the host, never in the client** (D19). No `adb` in a CLI or MCP process. Artifacts
   come back as bytes, and any path returned to the agent must exist on the agent's machine.
 - **The token authenticates, the owner string attributes** (D20). Never derive a lease owner from
