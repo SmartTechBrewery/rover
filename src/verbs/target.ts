@@ -5,13 +5,19 @@
  * previously-read state, so there is nowhere for a caller to pass a coordinate worked out
  * a turn ago — "never trust a remembered coordinate" is structural here rather than a
  * convention a verb author has to keep. The one address that cannot be re-derived is a
- * caller-supplied point, which stays available as PROJECT.md §4's documented fallback, is
- * range-checked against the device, and is marked in the result as not having come from a
- * screen.
+ * caller-supplied point, which stays available as PROJECT.md §4's documented fallback and
+ * is marked in the result as not having come from a screen.
+ *
+ * **Every** point this module hands back is checked against the device's screen, whichever
+ * way it was arrived at. An element the screen read reported is not evidence that the
+ * element is *reachable*: a row scrolled out of its container comes back with bounds whose
+ * second corner precedes its first (PROJECT.md §6), and the midpoint of that rectangle is
+ * arithmetic rather than a place. Checking only the caller's coordinate would make the
+ * screen-resolved path the less safe of the two, which is backwards.
  */
 
 import { z } from 'zod';
-import { type Point, PointSchema, type ScreenElement } from '../core/device.js';
+import { type Point, PointSchema, type ScreenElement, type ScreenInfo } from '../core/device.js';
 import { ElementIdSchema } from '../core/ids.js';
 import { capabilityMethod, type VerbContext } from './context.js';
 import {
@@ -19,6 +25,7 @@ import {
 	describeScreen,
 	OffScreenPointError,
 	TargetNotFoundError,
+	UnaddressableElementError,
 } from './errors.js';
 import type { ResolvedTarget } from './result.js';
 
@@ -63,12 +70,30 @@ function describeTarget(target: Target): string {
 	}
 }
 
-/** The centre of an element — the point a verb acts on when it was named, not measured. */
+/**
+ * The centre of an element — the point a verb acts on when it was named, not measured.
+ *
+ * Pure arithmetic, and deliberately unguarded: whether that midpoint is somewhere a verb
+ * may act is {@link requireAddressable}'s question, asked once with the device's screen in
+ * hand. Splitting the two keeps the geometry testable on its own.
+ */
 export function centreOf(element: ScreenElement): Point {
 	return {
 		x: element.bounds.x + element.bounds.width / 2,
 		y: element.bounds.y + element.bounds.height / 2,
 	};
+}
+
+/** Whether a point is somewhere on the device, in the one space bounds and points share. */
+function isOnScreen(at: Point, screen: ScreenInfo): boolean {
+	return (
+		Number.isFinite(at.x) &&
+		Number.isFinite(at.y) &&
+		at.x >= 0 &&
+		at.y >= 0 &&
+		at.x < screen.widthDp &&
+		at.y < screen.heightDp
+	);
 }
 
 /**
@@ -79,8 +104,11 @@ export function centreOf(element: ScreenElement): Point {
  * miss is its ordinary answer. Use {@link requireTarget} where a miss is a failure; it is
  * the one that can still name what was on screen instead.
  *
- * Ambiguity and an off-screen point *do* throw: neither is a lookup miss. One is a target
- * that under-specifies what it wants and the other is arithmetic that cannot be acted on.
+ * Ambiguity, an off-screen point and an element that cannot be acted on *do* throw: none
+ * of them is a lookup miss. One is a target that under-specifies what it wants, one is
+ * arithmetic that cannot be acted on, and the third is an element that was found and is
+ * still not somewhere a verb can touch — reporting that as "not found" while listing it
+ * among what was on screen instead would send the caller looking for the wrong thing.
  */
 export async function resolveTarget(
 	context: VerbContext,
@@ -98,22 +126,28 @@ export async function resolveTarget(
  * different screen from the one the target missed.
  */
 export async function requireTarget(context: VerbContext, target: Target): Promise<ResolvedTarget> {
-	const { resolved, screen } = await resolveOnFreshScreen(context, target);
-	if (resolved === null) {
+	const resolution = await resolveOnFreshScreen(context, target);
+	if (resolution.resolved === null) {
 		throw new TargetNotFoundError(
 			context.serial,
 			describeTarget(target),
-			screen === null ? 'nothing readable' : describeScreen(screen),
+			describeScreen(resolution.screen),
 		);
 	}
-	return resolved;
+	return resolution.resolved;
 }
 
-/** A resolution and the screen it was resolved against — `null` when none was read. */
-interface Resolution {
-	readonly resolved: ResolvedTarget | null;
-	readonly screen: readonly ScreenElement[] | null;
-}
+/**
+ * A resolution and the screen it was resolved against.
+ *
+ * A union rather than two nullable fields, because the pairing is not free: `screen` is
+ * null only on the `by: 'point'` branch, and that branch either resolves or throws. So a
+ * miss always carries the screen it missed on, and {@link requireTarget} can say what was
+ * there instead without a defensive branch for a state that cannot occur.
+ */
+type Resolution =
+	| { readonly resolved: ResolvedTarget; readonly screen: readonly ScreenElement[] | null }
+	| { readonly resolved: null; readonly screen: readonly ScreenElement[] };
 
 async function resolveOnFreshScreen(context: VerbContext, target: Target): Promise<Resolution> {
 	if (target.by === 'point') {
@@ -121,18 +155,59 @@ async function resolveOnFreshScreen(context: VerbContext, target: Target): Promi
 	}
 
 	const readScreen = capabilityMethod(context, 'canReadScreen', 'readScreen');
-	const screen = await readScreen(context.serial);
+	const elements = await readScreen(context.serial);
 	const candidates =
 		target.by === 'text'
-			? screen.filter((element) => matchesText(element, target.text, target.exact === true))
-			: screen.filter((element) => element.id === target.id);
+			? elements.filter((element) => matchesText(element, target.text, target.exact === true))
+			: elements.filter((element) => element.id === target.id);
 	const chosen = choose(context, target, candidates);
+	if (chosen === null) {
+		return { resolved: null, screen: elements };
+	}
 
-	return {
-		resolved:
-			chosen === null ? null : { source: 'screen', point: centreOf(chosen), element: chosen },
-		screen,
-	};
+	// Only once something matched: a miss is the ordinary answer for a caller polling for
+	// an element, and making it cost a `deviceInfo` — several device queries on a real
+	// backend — would be paying for a check with nothing to check.
+	const point = centreOf(chosen);
+	const { screen } = await context.backend.deviceInfo(context.serial);
+	requireAddressable(context, target, chosen, point, screen);
+
+	return { resolved: { source: 'screen', point, element: chosen }, screen: elements };
+}
+
+/**
+ * The check that makes a screen-resolved point no more trusted than a caller-supplied one.
+ *
+ * Order matters: a degenerate rectangle is reported as degenerate rather than as
+ * off-screen, because a clipped node's midpoint can easily land back on the screen — the
+ * captured `[96,2798][399,2784]` in PROJECT.md §6 centres on a perfectly plausible-looking
+ * coordinate — and "it is outside your screen" would then be a false explanation of a real
+ * failure.
+ */
+function requireAddressable(
+	context: VerbContext,
+	target: Target,
+	element: ScreenElement,
+	point: Point,
+	screen: ScreenInfo,
+): void {
+	const reason =
+		element.bounds.width <= 0 || element.bounds.height <= 0
+			? 'clipped'
+			: isOnScreen(point, screen)
+				? null
+				: 'off-screen';
+	if (reason !== null) {
+		throw new UnaddressableElementError(
+			context.serial,
+			describeTarget(target),
+			element,
+			point,
+			screen.widthDp,
+			screen.heightDp,
+			reason,
+		);
+	}
 }
 
 /**
@@ -146,14 +221,7 @@ async function resolveOnFreshScreen(context: VerbContext, target: Target): Promi
  */
 async function resolvePoint(context: VerbContext, at: Point): Promise<ResolvedTarget> {
 	const { screen } = await context.backend.deviceInfo(context.serial);
-	const inside =
-		Number.isFinite(at.x) &&
-		Number.isFinite(at.y) &&
-		at.x >= 0 &&
-		at.y >= 0 &&
-		at.x < screen.widthDp &&
-		at.y < screen.heightDp;
-	if (!inside) {
+	if (!isOnScreen(at, screen)) {
 		throw new OffScreenPointError(context.serial, at.x, at.y, screen.widthDp, screen.heightDp);
 	}
 	return { source: 'caller-point', point: at, element: null };
@@ -180,7 +248,28 @@ function choose(
 		return candidates[index] ?? null;
 	}
 	if (candidates.length > 1) {
-		throw new AmbiguousTargetError(context.serial, describeTarget(target), candidates);
+		throw new AmbiguousTargetError(
+			context.serial,
+			describeTarget(target),
+			candidates,
+			remedyFor(target),
+		);
 	}
 	return candidates[0] ?? null;
+}
+
+/**
+ * The way out of an ambiguity, in the words that target kind can act on.
+ *
+ * `index` only exists on a text target (`TargetSchema` above), so offering it for an
+ * element target would name a field a strict parse rejects — advice the caller cannot
+ * take. Two elements sharing one id is not an under-specified target at all; it is the
+ * backend contradicting the uniqueness `ElementId` implies, and the honest advice is to
+ * address the element some other way.
+ */
+function remedyFor(target: Target): string {
+	return target.by === 'element'
+		? 'two elements sharing one id is a backend bug, not an ambiguous request — ' +
+				're-target by text or by point until it is fixed'
+		: 'name one with an explicit index rather than letting the first win';
 }

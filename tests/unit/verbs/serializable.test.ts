@@ -136,6 +136,27 @@ describe('the verb layer speaks only in plain data', () => {
 		expect(AfterStateSchema.parse(roundTrip(after))).toEqual(after);
 	});
 
+	it('round-trips the failed after-state, which is the branch a read that rejected answers', async () => {
+		let reads = 0;
+		const context = createMockVerbContext({
+			backend: createMockDeviceBackend({
+				readScreen: vi.fn<NonNullable<DeviceBackend['readScreen']>>(async () => {
+					reads += 1;
+					if (reads > 1) {
+						throw new Error('device offline');
+					}
+					return [save];
+				}),
+			}),
+		});
+
+		const result = await fakeTapResult(context);
+
+		expect(result.after.kind).toBe('failed');
+		expect(ActionResultSchema.parse(roundTrip(result))).toEqual(result);
+		expect(unserializableParts(result)).toEqual([]);
+	});
+
 	it('rejects an after-state naming a capability that does not exist', () => {
 		expect(() =>
 			AfterStateSchema.parse({ kind: 'unavailable', capability: 'canTeleport', message: 'no' }),

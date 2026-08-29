@@ -48,19 +48,29 @@ export const ResolvedTargetSchema = z
 export type ResolvedTarget = z.infer<typeof ResolvedTargetSchema>;
 
 /**
- * The screen after the action — or an honest statement that this device cannot say.
+ * The screen after the action — or an honest statement of why it could not be read.
  *
- * The `unavailable` branch is the whole point of the union. A backend with input but no
- * screen reading still has to answer D12(c), and the two candidate answers are an empty
- * element list or the truth. An empty list is indistinguishable from a blank screen and
- * would be read as one, which is the plausible-looking empty result ai/RULES.md §2
- * forbids; this branch names the capability that would have answered instead.
+ * The two non-`screen` branches are the whole point of the union, and they are kept apart
+ * because the caller's next move differs. A backend with input but no screen reading still
+ * has to answer D12(c), and the two candidate answers are an empty element list or the
+ * truth; an empty list is indistinguishable from a blank screen and would be read as one,
+ * which is the plausible-looking empty result ai/RULES.md §2 forbids. So `unavailable`
+ * names the capability that would have answered — this device will never answer, stop
+ * asking. `failed` is the read that was declared, attempted and rejected: worth retrying,
+ * and a different thing to be told.
  */
 export const AfterStateSchema = z.discriminatedUnion('kind', [
 	z.object({ kind: z.literal('screen'), elements: z.array(ScreenElementSchema) }).strict(),
 	z
 		.object({
 			kind: z.literal('unavailable'),
+			capability: CapabilityIdSchema,
+			message: z.string().min(1),
+		})
+		.strict(),
+	z
+		.object({
+			kind: z.literal('failed'),
 			capability: CapabilityIdSchema,
 			message: z.string().min(1),
 		})
@@ -85,6 +95,15 @@ export const ActionResultSchema = z
 	.strict();
 export type ActionResult = z.infer<typeof ActionResultSchema>;
 
+/** Why a `failed` after-state happened — the action ran, the read did not. */
+function screenReadFailed(serial: DeviceSerial, error: unknown): string {
+	const reason = error instanceof Error ? error.message : String(error);
+	return (
+		`The action ran on device '${serial}', but reading the screen afterwards failed: ` +
+		`${reason} — what is on screen now is unknown, not unchanged`
+	);
+}
+
 /** Why an `unavailable` after-state happened, in the same words `MissingCapabilityError` uses. */
 function cannotReadScreen(serial: DeviceSerial, manifest: CapabilityManifest): string {
 	return (
@@ -99,6 +118,15 @@ function cannotReadScreen(serial: DeviceSerial, manifest: CapabilityManifest): s
  * Called by `performAction` (`./perform.ts`) once the action has returned, and never
  * before it: a post-state captured early is a pre-state wearing the wrong label, and it
  * would be believed.
+ *
+ * **Never throws**, and that is the point rather than defensive habit. By the time this
+ * runs the action has already happened, so a rejection escaping here would replace the one
+ * answer D12(c) promises — *this is what the screen looks like now* — with an exception
+ * that leaves the agent unable to tell whether the action landed. A read that failed is
+ * still an answer about the screen; it is the `failed` branch, carrying the reason. That
+ * includes a manifest promising `canReadScreen` over a backend that has no `readScreen`:
+ * it is a wiring bug and its message says so, but once the action has run there is nowhere
+ * better to put it than the answer the caller is waiting for.
  */
 export async function captureAfterState(context: VerbContext): Promise<AfterState> {
 	if (!supportsCapability(context.manifest, 'canReadScreen')) {
@@ -109,6 +137,14 @@ export async function captureAfterState(context: VerbContext): Promise<AfterStat
 		};
 	}
 
-	const readScreen = capabilityMethod(context, 'canReadScreen', 'readScreen');
-	return { kind: 'screen', elements: await readScreen(context.serial) };
+	try {
+		const readScreen = capabilityMethod(context, 'canReadScreen', 'readScreen');
+		return { kind: 'screen', elements: await readScreen(context.serial) };
+	} catch (error) {
+		return {
+			kind: 'failed',
+			capability: 'canReadScreen',
+			message: screenReadFailed(context.serial, error),
+		};
+	}
 }

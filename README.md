@@ -63,11 +63,16 @@ a target and *nothing else* — no screen, no element list, no state read a turn
 only ever be resolved from a screen captured inside that call. Two elements matching one text target
 is a loud error naming every candidate rather than a first match that is right half the time; nothing
 matching names what was on screen instead; and a coordinate stays available as the documented
-fallback, range-checked against the device and marked in the result as not having come from a screen.
+fallback, marked in the result as not having come from a screen. Every resolved point is
+range-checked against the device, whichever way it was arrived at — an element scrolled out of its
+container comes back with a rectangle whose corners are inverted, and the midpoint of that is
+arithmetic rather than a place to tap, so it is refused by name instead.
 `performAction()` is where the three rules meet: it consults the capability manifest **before** it
 touches the device, resolves fresh, acts, and then reads the state after the action — and a device
 that cannot read its screen answers an explicit "unavailable, and here is the capability that would
-have answered" rather than an empty list that reads as a blank screen. Every argument and every
+have answered" rather than an empty list that reads as a blank screen, while a read that was
+attempted and failed says *that*, because an exception after the action has run is the one answer
+that leaves the agent guessing whether it landed. Every argument and every
 result is a Zod schema of plain data, because the host runs the verb and the agent reads the answer
 somewhere else (D19). The concrete verbs — `tap`, `type_text`, `screenshot`, `read_screen` — are
 their own issues; today the suite drives the spine with a fake action.

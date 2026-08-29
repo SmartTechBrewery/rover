@@ -64,7 +64,18 @@ export async function performAction(
 
 	await options.act(target);
 
+	// Past this line the action has happened, so the after-state is captured rather than
+	// risked: `captureAfterState` answers a `failed` branch instead of throwing, because an
+	// exception here would take the whole result with it and leave the agent unable to tell
+	// whether the action landed — the one thing D12(c) exists to rule out.
 	const after = await captureAfterState(context);
+
+	// `deviceInfo` is read again, after the action, and is deliberately *not* the value
+	// target resolution used: an action can rotate the device, and a result pairing
+	// post-action elements with pre-action screen dimensions describes a coordinate space
+	// that never existed. It is also the one call here that may throw, and rightly — D14
+	// makes the device half of a result mandatory, so a device that can no longer say what
+	// it is has nothing left to report an action about.
 	const device = await context.backend.deviceInfo(context.serial);
 
 	return ActionResultSchema.parse({ verb: options.verb, device, target, after });

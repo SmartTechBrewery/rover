@@ -12,7 +12,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { DeviceBackend } from '@/core/device.js';
 import { MissingCapabilityError } from '@/core/errors.js';
 import { capabilityMethod, type VerbContext } from '@/verbs/context.js';
-import { TargetNotFoundError } from '@/verbs/errors.js';
+import { TargetNotFoundError, UnaddressableElementError } from '@/verbs/errors.js';
 import { performAction } from '@/verbs/perform.js';
 import type { ResolvedTarget } from '@/verbs/result.js';
 import {
@@ -71,7 +71,10 @@ describe('performAction', () => {
 			act: tapAction(context),
 		});
 
-		expect(calls).toEqual(['readScreen', 'tap', 'readScreen', 'deviceInfo']);
+		// `deviceInfo` before the tap is the screen the resolved point is range-checked
+		// against; the one after is the device the result names (D14), read again because an
+		// action can rotate it.
+		expect(calls).toEqual(['readScreen', 'deviceInfo', 'tap', 'readScreen', 'deviceInfo']);
 	});
 
 	it('names the device and its density in the result (D14)', async () => {
@@ -171,6 +174,63 @@ describe('performAction', () => {
 		expect(act).not.toHaveBeenCalled();
 	});
 
+	it('never dispatches at an element that cannot be acted on', async () => {
+		// The captured inverted bounds from PROJECT.md §6 — a row scrolled out of its list.
+		const context = recordingContext(
+			[],
+			[
+				createMockScreenElement({
+					id: 'row',
+					text: 'Save',
+					bounds: { x: 96, y: 2798, width: 303, height: -14 },
+				}),
+			],
+		);
+		const act = vi.fn(async () => {});
+
+		const thrown = await performAction(context, {
+			verb: 'fake_tap',
+			requires: ['canInput'],
+			target: { by: 'text', text: 'Save' },
+			act,
+		}).catch((error: unknown) => error);
+
+		expect(thrown).toBeInstanceOf(UnaddressableElementError);
+		expect(act).not.toHaveBeenCalled();
+		expect(context.backend.tap).not.toHaveBeenCalled();
+	});
+
+	it('answers a failed after-state when the read after the action rejects, not an exception', async () => {
+		let reads = 0;
+		const context = createMockVerbContext({
+			backend: createMockDeviceBackend({
+				readScreen: vi.fn<NonNullable<DeviceBackend['readScreen']>>(async () => {
+					reads += 1;
+					if (reads > 1) {
+						throw new Error('device offline');
+					}
+					return [save];
+				}),
+			}),
+		});
+
+		const result = await performAction(context, {
+			verb: 'fake_tap',
+			requires: ['canInput'],
+			target: { by: 'text', text: 'Save' },
+			act: tapAction(context),
+		});
+
+		// The action already ran. Throwing here would leave the agent unable to tell whether
+		// it landed, which is the one thing D12(c) exists to rule out.
+		expect(result.after).toEqual({
+			kind: 'failed',
+			capability: 'canReadScreen',
+			message: expect.stringContaining('device offline'),
+		});
+		expect(result.target?.element?.id).toBe('save');
+	});
+
 	it('runs a verb that addresses no element, and says so with a null target', async () => {
 		const calls: string[] = [];
 		const context = recordingContext(calls);
@@ -184,7 +244,8 @@ describe('performAction', () => {
 
 		expect(act).toHaveBeenCalledWith(null);
 		expect(result.target).toBeNull();
-		// One read, and it is the state after — nothing was resolved.
+		// One read, and it is the state after — nothing was resolved, so nothing needed
+		// checking against the screen's dimensions either.
 		expect(calls).toEqual(['readScreen', 'deviceInfo']);
 	});
 });

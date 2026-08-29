@@ -1,5 +1,5 @@
 /**
- * Verb-layer error types — the three ways a target fails to become one point.
+ * Verb-layer error types — the four ways a target fails to become one point.
  *
  * Device-layer errors (a missing capability, a device that vanished) stay in
  * `src/core/errors.ts`; these are about what the caller asked for, and every one of them
@@ -13,7 +13,7 @@
  * the candidates can travel whole rather than as a formatted string.
  */
 
-import type { ScreenElement } from '../core/device.js';
+import type { Point, ScreenElement } from '../core/device.js';
 import type { DeviceSerial } from '../core/ids.js';
 
 /** How many elements an excerpt names before it says how many more there were. */
@@ -68,26 +68,35 @@ export class TargetNotFoundError extends Error {
  * Thrown when more than one element matched, naming **every** candidate.
  *
  * Two identical labels are exactly the false green the verb layer exists to prevent: a
- * silent first match taps one of them, reports success, and is right half the time. An
- * explicit `index` on the target is how a caller chooses deliberately, and the message
- * says so because being told what is wrong without being told the way out is half an
- * error.
+ * silent first match taps one of them, reports success, and is right half the time. Being
+ * told what is wrong without being told the way out is half an error, so the way out is
+ * part of the message — and it is passed **in** rather than written here, because it is not
+ * the same way out for every target. Only a text target has an `index` to disambiguate
+ * with; two elements sharing one id is the backend contradicting itself, and advising an
+ * `index` there would name a field `TargetSchema` rejects.
  */
 export class AmbiguousTargetError extends Error {
 	readonly serial: DeviceSerial;
 	readonly lookedFor: string;
 	readonly candidates: readonly ScreenElement[];
+	readonly remedy: string;
 
-	constructor(serial: DeviceSerial, lookedFor: string, candidates: readonly ScreenElement[]) {
+	constructor(
+		serial: DeviceSerial,
+		lookedFor: string,
+		candidates: readonly ScreenElement[],
+		remedy: string,
+	) {
 		super(
 			`${candidates.length} elements on device '${serial}' match ${lookedFor}: ` +
 				`${candidates.map((candidate, at) => `[${at}] ${describeElement(candidate)}`).join('; ')} ` +
-				'— name one with an explicit index rather than letting the first win',
+				`— ${remedy}`,
 		);
 		this.name = 'AmbiguousTargetError';
 		this.serial = serial;
 		this.lookedFor = lookedFor;
 		this.candidates = candidates;
+		this.remedy = remedy;
 	}
 }
 
@@ -120,5 +129,66 @@ export class OffScreenPointError extends Error {
 		this.y = y;
 		this.widthDp = widthDp;
 		this.heightDp = heightDp;
+	}
+}
+
+/** Why the element a target named has no point on it that can be acted on. */
+export type UnaddressableReason = 'clipped' | 'off-screen';
+
+/**
+ * Thrown when the element a target matched cannot be turned into a point to act on.
+ *
+ * Two shapes of the same failure, kept in one error because the caller's next move is the
+ * same for both — bring the element into view and target it again:
+ *
+ * - `clipped` — the rectangle has no interior. A node scrolled past the edge of its
+ *   container reports bounds whose second corner is *before* the first, so the width or
+ *   the height comes back negative or zero (`PROJECT.md` §6, where the hierarchy parser
+ *   that subtracts those corners deliberately hands the question on to this layer). Its
+ *   midpoint is arithmetic, not a location.
+ * - `off-screen` — the rectangle is well-formed but its centre is not on the device.
+ *
+ * Distinct from {@link OffScreenPointError} because the two name different culprits: that
+ * one is the caller's arithmetic, this one is an element the screen read really did
+ * report. Distinct from {@link TargetNotFoundError} because the element *was* found —
+ * saying "not found" while listing it among what was on screen instead is the confusing
+ * half-truth, not the honest answer.
+ */
+export class UnaddressableElementError extends Error {
+	readonly serial: DeviceSerial;
+	readonly lookedFor: string;
+	readonly element: ScreenElement;
+	readonly point: Point;
+	readonly widthDp: number;
+	readonly heightDp: number;
+	readonly reason: UnaddressableReason;
+
+	constructor(
+		serial: DeviceSerial,
+		lookedFor: string,
+		element: ScreenElement,
+		point: Point,
+		widthDp: number,
+		heightDp: number,
+		reason: UnaddressableReason,
+	) {
+		const why =
+			reason === 'clipped'
+				? 'its bounds have no interior — a node clipped out of its scrolling container ' +
+					'reports a negative or zero size, so its midpoint is not a place on the screen'
+				: `its centre (${point.x}, ${point.y}) is outside the device's ${widthDp}×${heightDp} screen`;
+		super(
+			`${describeElement(element)} on device '${serial}' matches ${lookedFor} but cannot be ` +
+				`acted on: ${why}. Bring it into view — by scrolling, or by dismissing whatever ` +
+				'covers it — and target it again',
+		);
+		this.name = 'UnaddressableElementError';
+		this.serial = serial;
+		this.lookedFor = lookedFor;
+		this.element = element;
+		this.point = point;
+		this.widthDp = widthDp;
+		this.heightDp = heightDp;
+		this.reason = reason;
 	}
 }

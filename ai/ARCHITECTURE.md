@@ -140,14 +140,21 @@ Verbs live above the backends and below the adapters, and this is where determin
   previously-read state — which is what makes the fresh read structural instead of a rule. A miss is
   `null`; `requireTarget()` is the loud version and names what was on screen instead. Two matches
   are `AmbiguousTargetError` naming every candidate, because a silent first match is right half the
-  time. A `by: 'point'` target stays the documented fallback (`PROJECT.md` §4): range-checked
-  against the device, and marked in the result as **not** having come from a screen.
+  time, and the remedy in that message is the one that target kind can actually take. A
+  `by: 'point'` target stays the documented fallback (`PROJECT.md` §4), marked in the result as
+  **not** having come from a screen. **Every** resolved point is range-checked against the device,
+  however it was arrived at: an element the screen read reported is not evidence that it is
+  reachable, since a node clipped out of its scrolling container comes back with inverted bounds
+  (`PROJECT.md` §6) whose midpoint is arithmetic rather than a place. That is
+  `UnaddressableElementError`, distinct from "not found" because the element *was* found.
 - **`ActionResult`** names the verb, the device (as `DeviceInfo`, so D14's density travels with the
   measurement), the resolved target and the state after the action. A backend with input but no
   screen reading answers an explicit `unavailable` after-state naming the capability that would have
-  answered — never an empty element list, which reads as a blank screen. Every shape is a Zod schema
-  of plain data, because the host executes the verb and the agent reads the result somewhere else
-  (D19).
+  answered — never an empty element list, which reads as a blank screen. A read that was declared,
+  attempted and rejected is the separate `failed` branch: once the action has run, an exception in
+  its place would leave the agent unable to tell whether it landed, which is exactly what D12(c)
+  rules out. Every shape is a Zod schema of plain data, because the host executes the verb and the
+  agent reads the result somewhere else (D19).
 
 ---
 

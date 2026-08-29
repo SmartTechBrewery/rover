@@ -3,7 +3,8 @@
  *
  * The headline one is the first: **every resolution reads the screen again.** The rest are
  * the cases where a resolver that "mostly works" is worse than one that refuses — two
- * matches, a stale element id, and a coordinate that is not on the device at all.
+ * matches, a stale element id, a coordinate that is not on the device at all, and an
+ * element the screen read really did report whose rectangle is nowhere a verb can act.
  */
 
 import { describe, expect, it, vi } from 'vitest';
@@ -11,7 +12,12 @@ import type { DeviceBackend, ScreenElement } from '@/core/device.js';
 import { MissingCapabilityError } from '@/core/errors.js';
 import { parseElementId } from '@/core/ids.js';
 import type { VerbContext } from '@/verbs/context.js';
-import { AmbiguousTargetError, OffScreenPointError, TargetNotFoundError } from '@/verbs/errors.js';
+import {
+	AmbiguousTargetError,
+	OffScreenPointError,
+	TargetNotFoundError,
+	UnaddressableElementError,
+} from '@/verbs/errors.js';
 import { centreOf, requireTarget, resolveTarget } from '@/verbs/target.js';
 import {
 	createMockCapabilities,
@@ -102,6 +108,23 @@ describe('resolveTarget', () => {
 		expect(error.message).toContain('index');
 	});
 
+	it('offers a remedy the target kind can actually take, never an index on an element id', async () => {
+		const twin = createMockScreenElement({ id: 'save', text: 'Save', label: 'Save again' });
+		const context = contextShowing([save, twin]);
+
+		const thrown = await resolveTarget(context, {
+			by: 'element',
+			id: parseElementId('save'),
+		}).catch((error: unknown) => error);
+
+		expect(thrown).toBeInstanceOf(AmbiguousTargetError);
+		const error = thrown as AmbiguousTargetError;
+		// `index` exists only on a text target, so advising it here would name a field
+		// `TargetSchema` rejects — the honest answer is that the backend contradicted itself.
+		expect(error.message).not.toContain('index');
+		expect(error.remedy).toContain('backend bug');
+	});
+
 	it('lets an explicit index disambiguate deliberately', async () => {
 		const twin = createMockScreenElement({ id: 'save-2', text: 'Save' });
 		const context = contextShowing([save, twin]);
@@ -148,6 +171,84 @@ describe('resolveTarget', () => {
 		await expect(resolveTarget(context, { by: 'text', text: 'Save' })).rejects.toThrow(
 			MissingCapabilityError,
 		);
+	});
+});
+
+describe('resolveTarget, on an element that cannot be acted on', () => {
+	it('refuses a node clipped out of its container, rather than midpointing inverted bounds', async () => {
+		// The real capture from PROJECT.md §6, API 37: bounds="[96,2798][399,2784]" — a row
+		// scrolled past the bottom of its list, whose second corner precedes its first.
+		const clipped = createMockScreenElement({
+			id: 'row',
+			text: 'Scrolled away',
+			bounds: { x: 96, y: 2798, width: 303, height: -14 },
+		});
+		const context = contextShowing([clipped]);
+
+		const thrown = await resolveTarget(context, { by: 'text', text: 'Scrolled away' }).catch(
+			(error: unknown) => error,
+		);
+
+		expect(thrown).toBeInstanceOf(UnaddressableElementError);
+		const error = thrown as UnaddressableElementError;
+		expect(error.reason).toBe('clipped');
+		expect(error.element.id).toBe('row');
+		expect(error.message).toContain('303×-14');
+	});
+
+	it('refuses a zero-height element, which has a midpoint and no interior', async () => {
+		const collapsed = createMockScreenElement({
+			id: 'collapsed',
+			text: 'Save',
+			bounds: { x: 10, y: 20, width: 100, height: 0 },
+		});
+		const context = contextShowing([collapsed]);
+
+		const thrown = await resolveTarget(context, { by: 'text', text: 'Save' }).catch(
+			(error: unknown) => error,
+		);
+
+		expect((thrown as UnaddressableElementError).reason).toBe('clipped');
+	});
+
+	it.each([
+		['past the right edge', { x: 340, y: 100, width: 100, height: 40 }],
+		['past the bottom edge', { x: 10, y: 790, width: 100, height: 40 }],
+		['above the top edge', { x: 10, y: -60, width: 100, height: 40 }],
+	])('refuses an element whose centre is %s of the 360×800 screen, as a point there already is', async (_name, bounds) => {
+		const offScreen = createMockScreenElement({ id: 'off', text: 'Save', bounds });
+		const context = contextShowing([offScreen]);
+
+		const thrown = await resolveTarget(context, { by: 'text', text: 'Save' }).catch(
+			(error: unknown) => error,
+		);
+
+		expect(thrown).toBeInstanceOf(UnaddressableElementError);
+		expect((thrown as UnaddressableElementError).reason).toBe('off-screen');
+		expect((thrown as UnaddressableElementError).message).toContain('360×800');
+	});
+
+	it('says the element was found, not that it was missing — it is in the screen read', async () => {
+		const clipped = createMockScreenElement({
+			id: 'row',
+			text: 'Save',
+			bounds: { x: 96, y: 2798, width: 303, height: -14 },
+		});
+		const context = contextShowing([clipped]);
+
+		const thrown = await requireTarget(context, { by: 'text', text: 'Save' }).catch(
+			(error: unknown) => error,
+		);
+
+		expect(thrown).not.toBeInstanceOf(TargetNotFoundError);
+		expect(thrown).toBeInstanceOf(UnaddressableElementError);
+	});
+
+	it('costs no deviceInfo call when nothing matched, so polling stays cheap', async () => {
+		const context = contextShowing([save]);
+
+		expect(await resolveTarget(context, { by: 'text', text: 'Delete' })).toBeNull();
+		expect(context.backend.deviceInfo).not.toHaveBeenCalled();
 	});
 });
 
