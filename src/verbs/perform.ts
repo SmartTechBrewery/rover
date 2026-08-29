@@ -1,5 +1,12 @@
 /**
- * The spine every verb is built on — the one place D12's three rules meet.
+ * The spine every verb that *acts on* a resolved target is built on — the one place D12's
+ * three rules meet.
+ *
+ * The waits are the deliberate exception, and the only one: `waitFor` and `waitUntilGone`
+ * (`./wait-for.ts`) reach {@link resultAfterAction} directly, because a spine that resolves
+ * the target before running the action would resolve it before the wait had happened. They
+ * share this module's answer shape rather than its order (`ai/ARCHITECTURE.md`, "The verb
+ * layer").
  *
  * A verb hands {@link performAction} what it needs, what it is aimed at and what it does;
  * the order below is not the verb author's to choose:
@@ -20,7 +27,7 @@
 import { type CapabilityId, requireCapability } from '../core/capabilities.js';
 import type { VerbContext } from './context.js';
 import type { ResolvedTarget } from './result.js';
-import { type ActionResult, ActionResultSchema, captureAfterState } from './result.js';
+import { type ActionResult, resultAfterAction } from './result.js';
 import { requireTarget, type Target } from './target.js';
 
 export interface PerformActionOptions {
@@ -64,19 +71,5 @@ export async function performAction(
 
 	await options.act(target);
 
-	// Past this line the action has happened, so the after-state is captured rather than
-	// risked: `captureAfterState` answers a `failed` branch instead of throwing, because an
-	// exception here would take the whole result with it and leave the agent unable to tell
-	// whether the action landed — the one thing D12(c) exists to rule out.
-	const after = await captureAfterState(context);
-
-	// `deviceInfo` is read again, after the action, and is deliberately *not* the value
-	// target resolution used: an action can rotate the device, and a result pairing
-	// post-action elements with pre-action screen dimensions describes a coordinate space
-	// that never existed. It is also the one call here that may throw, and rightly — D14
-	// makes the device half of a result mandatory, so a device that can no longer say what
-	// it is has nothing left to report an action about.
-	const device = await context.backend.deviceInfo(context.serial);
-
-	return ActionResultSchema.parse({ verb: options.verb, device, target, after });
+	return resultAfterAction(context, options.verb, target);
 }

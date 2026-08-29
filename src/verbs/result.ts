@@ -95,6 +95,38 @@ export const ActionResultSchema = z
 	.strict();
 export type ActionResult = z.infer<typeof ActionResultSchema>;
 
+/**
+ * The answer every verb ends with: what it did, on which device, to what, and what the
+ * screen looks like now (D12(c), D14).
+ *
+ * One function rather than a shape each verb assembles, because "every action answers the
+ * same way" is only true while there is one place deciding what the same way is. Called by
+ * `performAction` (`./perform.ts`) and directly by the waits (`./wait-for.ts`), which
+ * cannot go through the spine: their work *is* the resolution, and a spine that resolves
+ * the target before running the action would resolve it before the wait had happened.
+ */
+export async function resultAfterAction(
+	context: VerbContext,
+	verb: string,
+	target: ResolvedTarget | null,
+): Promise<ActionResult> {
+	// Past this line the action has happened, so the after-state is captured rather than
+	// risked: `captureAfterState` below answers a `failed` branch instead of throwing,
+	// because an exception here would take the whole result with it and leave the agent
+	// unable to tell whether the action landed — the one thing D12(c) exists to rule out.
+	const after = await captureAfterState(context);
+
+	// `deviceInfo` is read again, after the action, and is deliberately *not* the value
+	// target resolution used: an action can rotate the device, and a result pairing
+	// post-action elements with pre-action screen dimensions describes a coordinate space
+	// that never existed. It is also the one call here that may throw, and rightly — D14
+	// makes the device half of a result mandatory, so a device that can no longer say what
+	// it is has nothing left to report an action about.
+	const device = await context.backend.deviceInfo(context.serial);
+
+	return ActionResultSchema.parse({ verb, device, target, after });
+}
+
 /** Why a `failed` after-state happened — the action ran, the read did not. */
 function screenReadFailed(serial: DeviceSerial, error: unknown): string {
 	const reason = error instanceof Error ? error.message : String(error);
@@ -115,9 +147,9 @@ function cannotReadScreen(serial: DeviceSerial, manifest: CapabilityManifest): s
 /**
  * Read the screen **after** an action has been performed.
  *
- * Called by `performAction` (`./perform.ts`) once the action has returned, and never
- * before it: a post-state captured early is a pre-state wearing the wrong label, and it
- * would be believed.
+ * Called by {@link resultAfterAction} once the action has returned, and never before it: a
+ * post-state captured early is a pre-state wearing the wrong label, and it would be
+ * believed.
  *
  * **Never throws**, and that is the point rather than defensive habit. By the time this
  * runs the action has already happened, so a rejection escaping here would replace the one
