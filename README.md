@@ -15,10 +15,32 @@ agent's job.
 
 Design and rules are settled. The toolchain and the device-backend contract — the device
 interface, the Zod capability manifest and the registry a backend joins through one import — are
-in place; **no backend is registered yet**. The daemon's IPC message surface has landed too —
-the schemas, the framing and a transport-independent server and client — but **no daemon process
-yet**: it binds to any duplex stream and nothing has bound it to a socket. The backlog is twenty
-issues in dependency order — see [`PROJECT.md`](PROJECT.md) §9.3.
+in place; **no backend is registered yet**. The daemon runs: it binds a unix socket, serves the
+schema-checked IPC surface over it, and **starts itself on the first call**, with two concurrent
+callers producing exactly one daemon. It owns no devices yet — `status` is the only method it
+answers. The backlog is twenty issues in dependency order — see [`PROJECT.md`](PROJECT.md) §9.3.
+
+```bash
+npm run daemon:status   # start the daemon if it is not running, print its state as JSON
+npm run daemon          # run it in the foreground instead, to watch it start
+```
+
+Stopping the daemon is `kill <pid>` on the pid `daemon:status` printed; it unlinks its socket on
+the way out, and the next call brings a new one up.
+
+## Configuration
+
+Host-level settings come from the environment. Every row here mirrors a Zod schema, which is the
+source of truth for what a valid value is (`ai/RULES.md` §7) — the daemon and the CLI both fail at
+startup, naming the variable and the reason, rather than binding something surprising.
+
+| Variable | Default | Value |
+|---|---|---|
+| `ROVER_SOCKET_PATH` | `~/.rover/rover.sock` | Absolute path of the unix socket the local daemon binds and a local client connects to. **Empty counts as unset** — an exported-but-blank variable is what a shell leaves behind, and reading it as a real setting would point the daemon at the current directory. At most **103 bytes of UTF-8**: a unix socket address is a fixed-size struct (104 bytes on macOS, 108 on Linux, NUL included), and over the cap `bind` truncates or answers `EINVAL` instead of naming the length, so a longer path is rejected at startup with the byte count and the path. |
+
+While a daemon is coming up over a socket a crashed one left behind, a `<socket>.reclaim` lock file
+may briefly appear beside it. It is removed by whoever took it, and any left behind by a killed
+process is discarded on age by the next start.
 
 ## Where things are
 
