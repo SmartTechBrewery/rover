@@ -24,7 +24,7 @@ import {
 	registerDeviceBackend,
 } from '@/backends/registry.js';
 import type { Capabilities } from '@/core/capabilities.js';
-import type { Device, DeviceBackend } from '@/core/device.js';
+import type { Device, DeviceBackend, DeviceInfo } from '@/core/device.js';
 import { type DeviceSerial, parsePlatformId } from '@/core/ids.js';
 import {
 	checkDeclaredCapabilitiesDispatch,
@@ -41,6 +41,7 @@ import {
 	createMockCapabilityManifest,
 	createMockDevice,
 	createMockDeviceBackend,
+	createMockDeviceInfo,
 } from '../../helpers/factories.js';
 
 function registeredBackend(
@@ -74,6 +75,9 @@ class OptedOutBackend implements DeviceBackend {
 	}
 	async describeDevice(serial: DeviceSerial): Promise<Device | null> {
 		return createMockDevice({ serial });
+	}
+	async deviceInfo(serial: DeviceSerial): Promise<DeviceInfo> {
+		return createMockDeviceInfo({ serial });
 	}
 	async installApp(serial: DeviceSerial, packagePath: string): Promise<void> {
 		this.record(`installApp ${serial} ${packagePath}`);
@@ -288,7 +292,7 @@ describe('checkNoStubbedMethods', () => {
 	it('reports every method of a fully mocked backend', () => {
 		const entry = registeredBackend(createMockDeviceBackend());
 
-		expect(checkNoStubbedMethods(entry)).toHaveLength(14);
+		expect(checkNoStubbedMethods(entry)).toHaveLength(15);
 	});
 });
 

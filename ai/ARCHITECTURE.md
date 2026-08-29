@@ -72,7 +72,7 @@ This is the **local** host only. A remote host is a long-running service its ope
 
 ## The device abstraction
 
-One interface, several backends, registered through a manifest (`ai/CODING_STANDARDS.md`, "Module shape for a device backend"). The interface covers: enumeration, lifecycle, install, app control, screen capture, hierarchy read, input, and environment (network state).
+One interface, several backends, registered through a manifest (`ai/CODING_STANDARDS.md`, "Module shape for a device backend"). The interface covers: enumeration, lifecycle, device facts (screen size, density, the derived dp scale and the OS version), install, app control, screen capture, hierarchy read, input, and environment (network state).
 
 ### Capabilities, not a lowest common denominator
 

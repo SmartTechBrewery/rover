@@ -16,7 +16,14 @@ import { describe, expect, it } from 'vitest';
  *
  * Mirrors `tests/unit/ipc/transport-independence.test.ts`, which gates D17 the same way.
  */
-const ALLOWED_TO_SPAWN = ['daemon/connect.ts'];
+const ALLOWED_TO_SPAWN = [
+	// A backend driving the device bridge is the other legitimate reason to hold a child
+	// process, and it starts no daemon: it runs one command and waits for it. Kept as an
+	// explicit file list rather than a directory exemption so this stays a tripwire —
+	// a second backend file reaching for a process has to be added here deliberately.
+	'backends/android/adb.ts',
+	'daemon/connect.ts',
+];
 
 const SRC_ROOT = fileURLToPath(new URL('../../../src', import.meta.url));
 
