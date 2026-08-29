@@ -13,7 +13,11 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { findSleepViolations, stripComments } from '../helpers/no-sleep-scan.js';
+import {
+	findSleepViolations,
+	NO_SLEEP_PAUSE_CALLERS,
+	stripComments,
+} from '../helpers/no-sleep-scan.js';
 
 /** One deliberate violation each, with the rule id the scan must report it under. */
 const FORBIDDEN: ReadonlyArray<readonly [name: string, ruleId: string, source: string]> = [
@@ -46,6 +50,11 @@ const FORBIDDEN: ReadonlyArray<readonly [name: string, ruleId: string, source: s
 		'a shell sleep inside a string',
 		'shell-sleep',
 		"function go() {\n\treturn execSync('sleep 5');\n}\n",
+	],
+	[
+		'a pause from a file that is not on the allowlist',
+		'unlisted-pause',
+		"import { pause } from '@/core/wait.js';\n\nasync function go() {\n\tawait pause(500);\n}\n",
 	],
 ];
 
@@ -107,6 +116,22 @@ describe('the no-sleep scan catches what it claims to', () => {
 describe('the no-sleep scan leaves the permitted shapes alone', () => {
 	it.each(PERMITTED)('allows %s', (_name, source) => {
 		expect(findSleepViolations('sample.ts', source)).toEqual([]);
+	});
+
+	it.each(NO_SLEEP_PAUSE_CALLERS)('allows a pause in %s, which says why it needs one', (file) => {
+		expect(findSleepViolations(file, 'await pause(50);\n')).toEqual([]);
+	});
+
+	it('allows a pause on the allowlist without allowing that file a real sleep', () => {
+		// The exemption is per rule, not per file — that is the whole difference between this
+		// list and `NO_SLEEP_EXEMPT_FILES`, and a file-wide skip would silently undo the gate
+		// for five files.
+		const violations = findSleepViolations(
+			NO_SLEEP_PAUSE_CALLERS[0],
+			'await pause(50);\nawait new Promise((resolve) => setTimeout(resolve, 50));\n',
+		);
+
+		expect(violations).toEqual([expect.stringContaining('[promisified-timer]')]);
 	});
 });
 

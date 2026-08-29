@@ -2,7 +2,11 @@ import { readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { findSleepViolations, NO_SLEEP_EXEMPT_FILES } from '../helpers/no-sleep-scan.js';
+import {
+	findSleepViolations,
+	NO_SLEEP_EXEMPT_FILES,
+	NO_SLEEP_PAUSE_CALLERS,
+} from '../helpers/no-sleep-scan.js';
 
 /**
  * The headline acceptance criterion of D12(b), as an executable gate: **there is not a
@@ -65,5 +69,21 @@ describe('nothing in this repository sleeps', () => {
 		// A stale allowlist entry is the failure mode a scan gate dies of: the exemption has to
 		// keep being needed, or it is protecting a file that no longer earns it.
 		expect(findSleepViolations('src/core/wait.ts', read('src/core/wait.ts'))).not.toEqual([]);
+	});
+
+	it('lets exactly five files call pause, so a sixth has to argue for itself', () => {
+		expect([...NO_SLEEP_PAUSE_CALLERS]).toEqual([
+			'src/daemon/connect.ts',
+			'src/daemon/listen.ts',
+			'tests/helpers/daemon-socket.ts',
+			'tests/unit/daemon/restore-lifecycle.test.ts',
+			'tests/unit/core/wait.test.ts',
+		]);
+	});
+
+	it.each(NO_SLEEP_PAUSE_CALLERS)('%s still calls pause, so its entry outlives nothing', (file) => {
+		// Same staleness check as the one above: a caller that stopped needing a gap should lose
+		// its entry rather than leave the gate blind to the next pause added to that file.
+		expect(read(file)).toMatch(/(?<![.\w$])pause\s*\(/);
 	});
 });

@@ -10,7 +10,8 @@
  * **This scan is a floor, not a proof.** Comments are stripped before matching (below) and
  * the patterns are regexes over source text, so a determined re-implementation gets
  * through. What it does catch is the shape this repository keeps re-growing: a promisified
- * timer awaited *instead of* a check (ai/RULES.md §2, D12(b)).
+ * timer awaited *instead of* a check (ai/RULES.md §2, D12(b)) — including a call to
+ * `src/core/wait.ts`'s own `pause` from a file that has not said why it needs one.
  */
 
 /**
@@ -26,10 +27,35 @@ export const NO_SLEEP_EXEMPT_FILES: readonly string[] = [
 	'tests/unit/no-sleep-harness.test.ts',
 ];
 
+/**
+ * The files that may call `pause`, and why each one is a gap *between* two checks.
+ *
+ * `pause` is the one identifier in the repository that is literally a delay, so leaving it
+ * unscanned would mean the gate never looks at the very thing it exists to bound. It cannot
+ * be forbidden outright — three hand-rolled poll loops legitimately need a gap, and their
+ * shapes (a loop that returns `undefined` on timeout, a drain that re-arms its own deadline)
+ * are not `waitForCondition` calls. So the check is an allowlist, asserted to be exactly this
+ * list by the gate, which turns "I need to sleep here" into an edit somebody has to defend.
+ */
+export const NO_SLEEP_PAUSE_CALLERS: readonly string[] = [
+	// The autostart retry gap, between two connect attempts.
+	'src/daemon/connect.ts',
+	// The reclaim-lock poll gap, between two attempts to create the lock.
+	'src/daemon/listen.ts',
+	// The drain gap, between two sweeps for a daemon that reappeared.
+	'tests/helpers/daemon-socket.ts',
+	// `pause(0)` as an event-loop yield, not a duration.
+	'tests/unit/daemon/restore-lifecycle.test.ts',
+	// Exercises `pause` itself.
+	'tests/unit/core/wait.test.ts',
+];
+
 interface SleepRule {
 	readonly id: string;
 	readonly pattern: RegExp;
 	readonly why: string;
+	/** Repo-relative paths this rule does not apply to. Defaults to none. */
+	readonly allowedIn?: readonly string[];
 }
 
 /**
@@ -72,6 +98,12 @@ const RULES: readonly SleepRule[] = [
 		pattern: /(?<![.\w$-])sleep\s+[\d.]/g,
 		why: 'a sleep that left the process is still a sleep; wait on what the command changes',
 	},
+	{
+		id: 'unlisted-pause',
+		pattern: /(?<![.\w$])pause\s*\(/g,
+		why: "src/core/wait.ts's own delay is a gap between two checks, never a wait instead of one; if this file needs one, say why in NO_SLEEP_PAUSE_CALLERS",
+		allowedIn: NO_SLEEP_PAUSE_CALLERS,
+	},
 ];
 
 /**
@@ -85,6 +117,9 @@ export function findSleepViolations(relativePath: string, source: string): strin
 	const violations: string[] = [];
 
 	for (const rule of RULES) {
+		if (rule.allowedIn?.includes(relativePath)) {
+			continue;
+		}
 		rule.pattern.lastIndex = 0;
 		for (const match of stripped.matchAll(rule.pattern)) {
 			const line = lineOf(stripped, match.index);

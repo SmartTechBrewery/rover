@@ -129,17 +129,6 @@ async function connect(): Promise<IpcClient> {
 	return client;
 }
 
-/** Polls on the condition with a deadline, never a wait instead of a check (ai/RULES.md §2). */
-async function until(what: string, met: () => Promise<boolean> | boolean): Promise<void> {
-	await waitForCondition({
-		what,
-		timeoutMs: CONDITION_TIMEOUT_MS,
-		pollIntervalMs: CONDITION_POLL_MS,
-		probe: async (): Promise<Observation<void>> =>
-			(await met()) ? { met: true, value: undefined } : { met: false, found: 'it still unmet' },
-	});
-}
-
 /**
  * Yield until everything already scheduled has run — timers, I/O callbacks and the microtasks
  * they queue, repeatedly, because each turn can schedule the next. Not a wait on a duration:
@@ -212,10 +201,20 @@ describe('shutting the daemon down mid-restoration', () => {
 		// bookkeeping is a couple of filesystem calls. Draining the loop is what makes that
 		// "already finished" rather than "probably by now": nothing but the held restoration is
 		// left to run, so a `close()` that was not waiting for it would have resolved.
-		await until('the daemon to stop answering', async () => {
-			const probe = await connectWithoutStarting(temp.socketPath);
-			await probe?.close();
-			return probe === null;
+		// Inline rather than behind a generic `until(what, met)`: a boolean-returning helper has
+		// nothing left to say on the unmet branch, and `found` is the half of a timeout that
+		// tells you what to look at next (src/core/wait.ts).
+		await waitForCondition({
+			what: 'the daemon to stop answering on the temp socket',
+			timeoutMs: CONDITION_TIMEOUT_MS,
+			pollIntervalMs: CONDITION_POLL_MS,
+			probe: async (): Promise<Observation<void>> => {
+				const probe = await connectWithoutStarting(temp.socketPath);
+				await probe?.close();
+				return probe === null
+					? { met: true, value: undefined }
+					: { met: false, found: 'it still accepting connections' };
+			},
 		});
 		await drainEventLoop();
 		// A restoration has no second chance: leases die with the host (D6), so a successor
