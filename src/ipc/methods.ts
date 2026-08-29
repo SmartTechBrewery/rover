@@ -48,6 +48,51 @@ export const ListDevicesParamsSchema = z.object({}).strict();
 export type ListDevicesParams = z.infer<typeof ListDevicesParamsSchema>;
 
 /**
+ * What a caller who is *not* the holder is told about a lease — deliberately
+ * {@link GrantedLeaseSchema} minus `leaseId`. It is what a refusal names and what a listed
+ * device names, because both are readable by anyone who can reach the host.
+ *
+ * Anyone may ask for a busy device, so anything in this shape is public to strangers. The
+ * lease id ends the lease, so including it would let whoever was refused release the holder
+ * and take the device. The owner, project and test name are here because "held by
+ * `pr-127-review` for another eleven minutes" is what makes a refusal actionable.
+ */
+export const LeaseHolderSchema = z
+	.object({
+		serial: DeviceSerialSchema,
+		owner: z.string(),
+		project: z.string(),
+		testName: z.string().nullable(),
+		expiresInMs: z.number().int().nonnegative(),
+	})
+	.strict();
+export type LeaseHolder = z.infer<typeof LeaseHolderSchema>;
+
+/**
+ * One device as a client sees it in a list: what the host knows about the hardware, plus who
+ * is holding it — `heldBy: null` for a free device, never an absent key, because `undefined`
+ * does not survive JSON and would make "free" something every client has to special-case.
+ *
+ * `.extend()` rather than a restatement, for the reason recorded on
+ * {@link ListDevicesResultSchema} below: the shape a backend produces and the shape a client
+ * reads stay one schema parsed twice.
+ *
+ * A list reply is public to whoever can reach the host, exactly like a refusal — so it
+ * carries the holder's attribution and never the lease id (D20). Including the id would let
+ * anyone who can list devices end somebody else's lease. {@link LeaseHolderSchema} is
+ * `.strict()` and the server parses every handler's return value against it, so a leaked
+ * `leaseId` is `invalid_result` on the host rather than a credential on the wire.
+ *
+ * {@link LeaseHolder} repeats the `serial` the device already carries; that is the price of
+ * reusing the one holder schema instead of forking a near-copy, and it costs a client
+ * nothing.
+ */
+export const ListedDeviceSchema = DeviceSchema.extend({
+	heldBy: LeaseHolderSchema.nullable(),
+});
+export type ListedDevice = z.infer<typeof ListedDeviceSchema>;
+
+/**
  * `DeviceSchema` is imported rather than restated, so the shape a backend produces and the
  * shape a client reads are one schema parsed twice — once on the way out of the handler,
  * once on the way into the client — instead of two that drift.
@@ -60,7 +105,7 @@ export type ListDevicesParams = z.infer<typeof ListDevicesParamsSchema>;
  */
 export const ListDevicesResultSchema = z
 	.object({
-		devices: z.array(DeviceSchema),
+		devices: z.array(ListedDeviceSchema),
 		/**
 		 * The list is **not known to be current** — the host's view was interrupted, has not
 		 * arrived yet, or is not running. Treat it as "the last thing seen", never as "what is
@@ -123,26 +168,6 @@ export const GrantedLeaseSchema = z
 	})
 	.strict();
 export type GrantedLease = z.infer<typeof GrantedLeaseSchema>;
-
-/**
- * What a **refused** caller is told about the holder — deliberately
- * {@link GrantedLeaseSchema} minus `leaseId`.
- *
- * Anyone may ask for a busy device, so anything in this shape is public to strangers. The
- * lease id ends the lease, so including it would let whoever was refused release the holder
- * and take the device. The owner, project and test name are here because "held by
- * `pr-127-review` for another eleven minutes" is what makes a refusal actionable.
- */
-export const LeaseHolderSchema = z
-	.object({
-		serial: DeviceSerialSchema,
-		owner: z.string(),
-		project: z.string(),
-		testName: z.string().nullable(),
-		expiresInMs: z.number().int().nonnegative(),
-	})
-	.strict();
-export type LeaseHolder = z.infer<typeof LeaseHolderSchema>;
 
 /** Why a device was not granted. Each is a different next move for the caller. */
 export const AcquireRefusalReasonSchema = z.enum([
