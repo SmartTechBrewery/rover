@@ -40,6 +40,7 @@ export type RequiredBackendMethod = {
 export const REQUIRED_BACKEND_METHODS = [
 	'listDevices',
 	'describeDevice',
+	'deviceInfo',
 	'installApp',
 	'launchApp',
 	'stopApp',

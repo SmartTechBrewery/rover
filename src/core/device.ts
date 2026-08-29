@@ -44,6 +44,63 @@ export const DeviceSchema = z.object({
 });
 export type Device = z.infer<typeof DeviceSchema>;
 
+/**
+ * The screen facts of one device, as the device itself reports them.
+ *
+ * Physical pixels and dp are both here because they answer different questions and
+ * neither is recoverable from the other without the scale: a rectangle read off the
+ * screen is in pixels, a design spec is in dp. `densityScale` is the one number that
+ * converts between them, and it comes from the density the device reports — never from
+ * the width of a captured image, which is off by a few percent and so reads as a pile of
+ * small imperfections rather than as an arithmetic error (PROJECT.md §6).
+ *
+ * The dp values are exact quotients, deliberately unrounded: rounding is a presentation
+ * decision, and a backend that rounds leaves no way to ask what the device actually said.
+ */
+export const ScreenInfoSchema = z
+	.object({
+		/** Width in physical pixels, as currently rendered. */
+		widthPx: z.number().int().positive(),
+		/** Height in physical pixels, as currently rendered. */
+		heightPx: z.number().int().positive(),
+		/** Dots per inch, as the device reports it. */
+		density: z.number().int().positive(),
+		/** Physical pixels per density-independent pixel. */
+		densityScale: z.number().positive(),
+		/** `widthPx / densityScale`. */
+		widthDp: z.number().positive(),
+		/** `heightPx / densityScale`. */
+		heightDp: z.number().positive(),
+	})
+	.strict();
+export type ScreenInfo = z.infer<typeof ScreenInfoSchema>;
+
+/**
+ * Everything `device_info` answers about one device (PROJECT.md §4).
+ *
+ * Separate from {@link DeviceSchema} because these facts cost a query per device, which
+ * is too expensive to pay on every enumeration. It repeats `serial`, `platform` and
+ * `model` rather than pointing at a `Device`: D14 makes "names the device and its
+ * density" a property of the *result*, and a measurement that travels without the device
+ * it was taken on is the contradiction D14 exists to prevent.
+ *
+ * `osVersion` and `osApiLevel` are nullable — a device that answered hundreds of other
+ * facts but not that one has still answered (ai/CODING_STANDARDS.md "Error handling").
+ */
+export const DeviceInfoSchema = z
+	.object({
+		serial: z.string().transform(parseDeviceSerial),
+		platform: z.string().transform(parsePlatformId),
+		model: z.string().nullable(),
+		screen: ScreenInfoSchema,
+		/** The user-facing OS version string. */
+		osVersion: z.string().nullable(),
+		/** The OS API level, where the platform has one. */
+		osApiLevel: z.number().int().positive().nullable(),
+	})
+	.strict();
+export type DeviceInfo = z.infer<typeof DeviceInfoSchema>;
+
 /** A point in device-independent screen coordinates. */
 export const PointSchema = z.object({
 	x: z.number(),
@@ -106,6 +163,17 @@ export interface DeviceBackend {
 	 * usable. That is exactly the question D6's re-verification asks at every lease grant.
 	 */
 	describeDevice(serial: DeviceSerial): Promise<Device | null>;
+
+	/**
+	 * The screen and OS facts of one device — what `device_info` answers.
+	 *
+	 * Required rather than capability-gated: D14 makes naming the device and its density a
+	 * property of *every* result, so a backend that cannot answer this cannot satisfy D14
+	 * at all. Throws when the device is gone, rather than answering `null` — `null` here is
+	 * the lookup miss {@link describeDevice} reports, and reusing it would make "no such
+	 * device" indistinguishable from "the query failed".
+	 */
+	deviceInfo(serial: DeviceSerial): Promise<DeviceInfo>;
 
 	/** Install an application package from a path on the **host** (D19). */
 	installApp(serial: DeviceSerial, packagePath: string): Promise<void>;

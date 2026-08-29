@@ -21,6 +21,8 @@ import {
 import {
 	type Device,
 	type DeviceBackend,
+	type DeviceInfo,
+	DeviceInfoSchema,
 	DeviceSchema,
 	ScreenElementSchema,
 } from '@/core/device.js';
@@ -44,6 +46,30 @@ export function createMockDevice(overrides: Partial<Device> = {}): Device {
 	});
 }
 
+/**
+ * The `device_info` answer for a device with a 3× density — the scale a dp value is
+ * only ever derived from (D14). `widthDp`/`heightDp` are the exact quotients the
+ * contract asks for, not rounded ones.
+ */
+export function createMockDeviceInfo(overrides: Partial<DeviceInfo> = {}): DeviceInfo {
+	return DeviceInfoSchema.parse({
+		serial: 'test-serial-1',
+		platform: 'test-platform',
+		model: 'Test Model',
+		screen: {
+			widthPx: 1080,
+			heightPx: 2400,
+			density: 480,
+			densityScale: 3,
+			widthDp: 360,
+			heightDp: 800,
+		},
+		osVersion: '1.0',
+		osApiLevel: 1,
+		...overrides,
+	});
+}
+
 export function createMockCapabilityManifest(
 	overrides: Partial<CapabilityManifest> = {},
 ): CapabilityManifest {
@@ -63,6 +89,7 @@ export function createMockDeviceBackend(overrides: Partial<DeviceBackend> = {}):
 	return {
 		listDevices: vi.fn<DeviceBackend['listDevices']>(async () => [createMockDevice()]),
 		describeDevice: vi.fn<DeviceBackend['describeDevice']>(async () => createMockDevice()),
+		deviceInfo: vi.fn<DeviceBackend['deviceInfo']>(async () => createMockDeviceInfo()),
 		installApp: vi.fn<DeviceBackend['installApp']>(async () => {}),
 		launchApp: vi.fn<DeviceBackend['launchApp']>(async () => {}),
 		stopApp: vi.fn<DeviceBackend['stopApp']>(async () => {}),
@@ -103,6 +130,10 @@ export function createConformingDeviceBackend(
 		async describeDevice(serial) {
 			performed.push(`describeDevice ${serial}`);
 			return createMockDevice({ serial });
+		},
+		async deviceInfo(serial) {
+			performed.push(`deviceInfo ${serial}`);
+			return createMockDeviceInfo({ serial });
 		},
 		async installApp(serial, packagePath) {
 			performed.push(`installApp ${serial} ${packagePath}`);
