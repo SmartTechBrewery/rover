@@ -223,6 +223,28 @@ capturing `tests/fixtures/adb/`:
   this rectangle and a clamped one is a rectangle the device never described. Whether a node is on
   screen is the caller's question, and the sign is the evidence it needs to answer.
 
+Not device findings, but the same kind of trap — observed on macOS 25.6 / Node 25.2 while building
+the daemon's unix socket transport (R6), 2026-08-29:
+
+- **A unix socket path is capped at 103 bytes** (`sun_path` is 104 bytes on macOS, 108 on Linux,
+  NUL included). Over the cap, `bind` does not report the length — it truncates or answers
+  `EINVAL`, and the daemon appears to start on an address nobody can find. `resolveSocketPath`
+  rejects it up front, naming the limit and the path.
+- **Connecting to a plain file sitting at a socket path answers `ENOTSOCK`, not `ECONNREFUSED`.**
+  The stale-socket recovery treats *any* probe failure as "nothing is serving here" for exactly
+  this reason: a list of error codes is a list to get wrong on the next platform.
+- **`net.Server` has no `closeAllConnections()`** — that one is `http.Server`'s. Without it,
+  `server.close()` resolves only when the last connection ends, so a daemon asked to shut down with
+  one idle client attached never exits. The daemon tracks its live sockets and destroys them.
+- **`import.meta.resolve` is absent under a transform.** It works under `tsx`, and Vitest's SSR
+  transform replaces `import.meta` with a shim that has no `resolve`, so autostart falls back to the
+  bare `tsx/esm` specifier resolved from the child's cwd. Propagating `process.execArgv` is not a
+  substitute: a Vitest worker's `execArgv` does not carry the loader.
+- **Killing a daemon can hand the socket to one that was still starting.** Several concurrent
+  first calls spawn several daemons; the losers exit when they find the path bound, but one still
+  starting when the winner is killed finds the path free and binds it. That is correct behaviour —
+  and it means a test that starts daemons has to drain the path, not stop one process and assume.
+
 ---
 
 ## 7. Scope

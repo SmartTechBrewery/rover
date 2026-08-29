@@ -15,10 +15,19 @@ agent's job.
 
 Design and rules are settled. The toolchain and the device-backend contract — the device
 interface, the Zod capability manifest and the registry a backend joins through one import — are
-in place; **no backend is registered yet**. The daemon's IPC message surface has landed too —
-the schemas, the framing and a transport-independent server and client — but **no daemon process
-yet**: it binds to any duplex stream and nothing has bound it to a socket. The backlog is twenty
-issues in dependency order — see [`PROJECT.md`](PROJECT.md) §9.3.
+in place; **no backend is registered yet**. The daemon runs: it binds a unix socket, serves the
+schema-checked IPC surface over it, and **starts itself on the first call**, with two concurrent
+callers producing exactly one daemon. It owns no devices yet — `status` is the only method it
+answers. The backlog is twenty issues in dependency order — see [`PROJECT.md`](PROJECT.md) §9.3.
+
+```bash
+npm run daemon:status   # start the daemon if it is not running, print its state as JSON
+npm run daemon          # run it in the foreground instead, to watch it start
+```
+
+The socket is `~/.rover/rover.sock`, or `ROVER_SOCKET_PATH` when that is set. Stopping the daemon
+is `kill <pid>` on the pid `daemon:status` printed; it unlinks its socket on the way out, and the
+next call brings a new one up.
 
 ## Where things are
 

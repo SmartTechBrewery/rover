@@ -1,0 +1,158 @@
+/**
+ * Temp-directory sockets and daemon-process cleanup for `tests/unit/daemon/`.
+ *
+ * These tests run against a **real** unix socket and, for autostart, real child processes
+ * (ai/TESTING.md "The daemon suite is the exception"), so every one of them has to leave
+ * the machine as it found it: no socket file in `~/.rover/`, no daemon still listening
+ * after the run. That is what this module is for.
+ */
+
+import { mkdtemp, rm } from 'node:fs/promises';
+import { createConnection } from 'node:net';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { createIpcClient, type IpcClient } from '@/ipc/client.js';
+
+/** Long enough for a killed process to be reaped, short enough to fail a stuck test. */
+const PROCESS_EXIT_TIMEOUT_MS = 5_000;
+const PROCESS_POLL_INTERVAL_MS = 25;
+
+/**
+ * How long the path has to stay unserved before {@link stopDaemonAt} calls it drained.
+ *
+ * Comfortably above the measured ~350 ms a spawned daemon takes to bind on this hardware,
+ * because that latency is exactly what the drain is racing — see the note there.
+ */
+const DRAIN_QUIET_MS = 1_000;
+const DRAIN_TIMEOUT_MS = 20_000;
+
+export interface TempSocket {
+	/** The temp directory holding the socket. Removed by {@link removeTempSocket}. */
+	readonly dir: string;
+	readonly socketPath: string;
+}
+
+/**
+ * A socket path nobody else uses. Never `~/.rover/rover.sock`: a test that bound the real
+ * default would take the developer's own daemon down mid-run.
+ */
+export async function createTempSocket(): Promise<TempSocket> {
+	const dir = await mkdtemp(join(tmpdir(), 'rover-'));
+	return { dir, socketPath: join(dir, 'rover.sock') };
+}
+
+export async function removeTempSocket(temp: TempSocket): Promise<void> {
+	await rm(temp.dir, { recursive: true, force: true });
+}
+
+/**
+ * Connect to a daemon **without** autostarting one, resolving `null` when nothing answers.
+ *
+ * `connectToLocalDaemon` deliberately starts a daemon when it finds none, which is exactly
+ * wrong for a cleanup step and for the assertions that care whether a daemon is already
+ * there.
+ */
+export function connectWithoutStarting(socketPath: string): Promise<IpcClient | null> {
+	return new Promise((resolve) => {
+		const socket = createConnection(socketPath);
+		socket.once('connect', () => resolve(createIpcClient(socket)));
+		socket.once('error', () => {
+			socket.destroy();
+			socket.on('error', () => {});
+			resolve(null);
+		});
+	});
+}
+
+/**
+ * Leave `socketPath` unserved: stop whatever daemon is on it, and keep stopping until the
+ * path has stayed quiet for {@link DRAIN_QUIET_MS}.
+ *
+ * **Stopping once is not enough, and that is not a bug in the daemon.** A test that fires
+ * three concurrent clients spawns three daemons; two normally find the winner already bound
+ * and exit. But one that is still starting up when the test kills the winner finds the path
+ * free and binds it — which is exactly what a daemon should do, and leaves a stray process
+ * behind once the test's temp directory is gone. Draining is the test's job.
+ */
+export async function stopDaemonAt(socketPath: string): Promise<void> {
+	const deadline = Date.now() + DRAIN_TIMEOUT_MS;
+	let lastStopped = Date.now();
+
+	while (Date.now() < deadline) {
+		if (await stopOneDaemonAt(socketPath)) {
+			lastStopped = Date.now();
+		} else if (Date.now() - lastStopped >= DRAIN_QUIET_MS) {
+			return;
+		}
+		await pause(PROCESS_POLL_INTERVAL_MS);
+	}
+
+	throw new Error(`Daemons kept reappearing on '${socketPath}' for ${DRAIN_TIMEOUT_MS}ms`);
+}
+
+/**
+ * Terminate the one daemon serving `socketPath`, if any. Resolves to whether there was one.
+ *
+ * The `status` result's `pid` is what makes this possible at all — a test that spawns a
+ * detached daemon never holds its `ChildProcess`, so the protocol is the only handle on it.
+ */
+async function stopOneDaemonAt(socketPath: string): Promise<boolean> {
+	const client = await connectWithoutStarting(socketPath);
+	if (!client) {
+		return false;
+	}
+
+	let pid: number | undefined;
+	try {
+		pid = (await client.request('status', {})).pid;
+	} finally {
+		await client.close();
+	}
+
+	// An in-process daemon (`startDaemon` called from the test itself) is this very process;
+	// its own suite closes it, and signalling it would take the test runner down.
+	if (pid === undefined || pid === process.pid) {
+		return false;
+	}
+	await stopProcess(pid);
+	return true;
+}
+
+/** `SIGTERM`, then wait for the process to disappear rather than assuming it did. */
+export async function stopProcess(pid: number, signal: NodeJS.Signals = 'SIGTERM'): Promise<void> {
+	try {
+		process.kill(pid, signal);
+	} catch {
+		return;
+	}
+	await waitForExit(pid);
+}
+
+/** Polls on the condition with a deadline — the process being gone (ai/RULES.md §2). */
+export async function waitForExit(pid: number): Promise<void> {
+	const deadline = Date.now() + PROCESS_EXIT_TIMEOUT_MS;
+	while (Date.now() < deadline) {
+		if (!isRunning(pid)) {
+			return;
+		}
+		await pause(PROCESS_POLL_INTERVAL_MS);
+	}
+	throw new Error(`Process ${pid} was still running ${PROCESS_EXIT_TIMEOUT_MS}ms after the signal`);
+}
+
+/** The gap between polls above. Never a wait *instead* of a check (ai/RULES.md §2, D12). */
+function pause(ms: number): Promise<void> {
+	return new Promise((resolve) => {
+		setTimeout(resolve, ms);
+	});
+}
+
+export function isRunning(pid: number): boolean {
+	try {
+		// Signal 0 checks for the process without touching it.
+		process.kill(pid, 0);
+		return true;
+	} catch {
+		return false;
+	}
+}
