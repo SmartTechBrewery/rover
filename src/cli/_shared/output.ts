@@ -18,6 +18,17 @@
 
 import type { LeaseHolder } from '../../ipc/methods.js';
 
+/**
+ * How `rover` is actually typed today.
+ *
+ * `package.json` has no `bin` entry — the published entry point is `PROJECT.md` R20's to
+ * settle — so a bare `rover release <id>` is `command not found` in every checkout that
+ * exists. Anything meant to be **pasted** is rendered through this; the usage texts keep
+ * saying `rover <command>` and the dispatcher's usage says once what it stands for. When
+ * R20 lands, this constant becomes `'rover'` and nothing else moves.
+ */
+export const INVOCATION = 'npm run rover --';
+
 export function info(message: string): void {
 	console.log(message);
 }

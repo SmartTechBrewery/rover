@@ -13,8 +13,9 @@ import type { AcquireDeviceResult, GrantedLease } from '../../ipc/methods.js';
 import {
 	expectPositionals,
 	GLOBAL_OPTIONS,
+	optionalAttribution,
 	parseCommandArgs,
-	requireOption,
+	requireAttribution,
 } from '../_shared/flags.js';
 import { connectToHost, resolveHost } from '../_shared/host.js';
 import * as out from '../_shared/output.js';
@@ -49,7 +50,7 @@ export function renderGrant(lease: GrantedLease): string {
 			`(${out.formatAttribution(lease.project, lease.testName)}).`,
 		// Labelled by what it does rather than as a receipt: it is the credential, and the only
 		// thing that can end this lease.
-		`Release it with: rover release ${lease.leaseId}`,
+		`Release it with: ${out.INVOCATION} release ${lease.leaseId}`,
 		`Expires in ${out.formatDuration(lease.expiresInMs)} unless activity renews it.`,
 	].join('\n');
 }
@@ -69,18 +70,19 @@ export async function run(argv: string[]): Promise<number> {
 		return 0;
 	}
 	const [serial] = expectPositionals('acquire', positionals, ['<serial>']);
-	const owner = requireOption(
+	const owner = requireAttribution(
 		'acquire',
 		'owner',
 		values.owner,
 		'it attributes the lease and is never derived from your environment',
 	);
-	const project = requireOption(
+	const project = requireAttribution(
 		'acquire',
 		'project',
 		values.project,
 		'a lease names the project it belongs to, and that is yours to state',
 	);
+	const testName = optionalAttribution('acquire', 'test-name', values['test-name']);
 	const host = resolveHost(values.host);
 
 	const client = await connectToHost(host);
@@ -89,7 +91,7 @@ export async function run(argv: string[]): Promise<number> {
 			serial: parseDeviceSerial(serial ?? ''),
 			owner,
 			project,
-			testName: values['test-name'],
+			testName,
 		});
 
 		if (values.json === true) {

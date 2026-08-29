@@ -111,7 +111,9 @@ describe('a grant and a refusal', () => {
 		});
 
 		expect(rendered).toContain("Acquired 'held-1' for 'issue-112'");
-		expect(rendered).toContain('Release it with: rover release lease-1');
+		// The one line meant to be pasted, so it is rendered with the invocation that works
+		// today — `package.json` has no `bin` entry until PROJECT.md R20 settles one.
+		expect(rendered).toContain('Release it with: npm run rover -- release lease-1');
 		expect(rendered).toContain('Expires in 19m');
 	});
 

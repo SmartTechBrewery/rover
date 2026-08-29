@@ -12,6 +12,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { LOCAL_HOST, resolveHost } from '@/cli/_shared/host.js';
 import { EXIT_OK, EXIT_USAGE, run } from '@/cli/index.js';
+import { ATTRIBUTION_MAX_LENGTH, AttributionStringSchema } from '@/ipc/methods.js';
 import {
 	connectWithoutStarting,
 	createTempSocket,
@@ -65,6 +66,24 @@ describe('rover, before it talks to anything', () => {
 		// Both on stderr: stdout stays empty so a caller reading it never sees usage text
 		// where a result belongs.
 		expect(errored.join('\n')).toContain("Unknown command 'tap'");
+		expect(errored.join('\n')).toContain('Usage: rover <command> [options]');
+		expect(logged).toEqual([]);
+	});
+
+	// An object literal inherits these from Object.prototype, so a dispatch table built as one
+	// hands every one of them back as a truthy value — past the unknown-command guard and into
+	// `handler.run`, where the TypeError surfaces as exit 1: "the operation did not succeed",
+	// for a word that was never a command.
+	it.each([
+		'toString',
+		'valueOf',
+		'constructor',
+		'hasOwnProperty',
+		'__proto__',
+	])("exits 2 with usage for '%s', an inherited key and not a command", async (inherited) => {
+		expect(await run([inherited])).toBe(EXIT_USAGE);
+
+		expect(errored.join('\n')).toContain(`Unknown command '${inherited}'`);
 		expect(errored.join('\n')).toContain('Usage: rover <command> [options]');
 		expect(logged).toEqual([]);
 	});
@@ -136,6 +155,55 @@ describe('rover acquire, on its required attribution', () => {
 		);
 
 		expect(errored.join('\n')).toContain('--owner is required');
+	});
+
+	// The optional attribution string has to fail the same way the required pair does. Left to
+	// the host it is a round trip that comes back naming `testName` — a key the caller never
+	// typed — at exit 1, the code reserved for a refused acquire or an unreachable host.
+	it('exits 2 for a --test-name given with no value, without reaching a host', async () => {
+		expect(
+			await run([
+				'acquire',
+				'serial-1',
+				'--owner',
+				'issue-112',
+				'--project',
+				'rover',
+				'--test-name',
+				'',
+			]),
+		).toBe(EXIT_USAGE);
+
+		expect(errored.join('\n')).toContain('--test-name was given with no value');
+		expect(errored.join('\n')).toContain('Usage: rover acquire');
+	});
+
+	it.each([
+		'owner',
+		'project',
+		'test-name',
+	])('exits 2 for a --%s past the length the host accepts, naming the flag as typed', async (flag) => {
+		const argv = ['acquire', 'serial-1', '--owner', 'issue-112', '--project', 'rover'];
+		const tooLong = 'x'.repeat(ATTRIBUTION_MAX_LENGTH + 1);
+		const at = argv.indexOf(`--${flag}`);
+		if (at === -1) {
+			argv.push(`--${flag}`, tooLong);
+		} else {
+			argv[at + 1] = tooLong;
+		}
+
+		expect(await run(argv)).toBe(EXIT_USAGE);
+
+		// The flag as the caller spelled it, not the request key it maps to.
+		expect(errored.join('\n')).toContain(`--${flag} is ${tooLong.length} characters`);
+		expect(errored.join('\n')).not.toContain('testName');
+	});
+
+	it('takes its ceiling from the host schema rather than restating it', () => {
+		// One bound, in one place. A CLI carrying its own copy would start refusing values the
+		// host accepts — or waving through ones it does not — the moment the schema moves.
+		expect(() => AttributionStringSchema.parse('x'.repeat(ATTRIBUTION_MAX_LENGTH))).not.toThrow();
+		expect(() => AttributionStringSchema.parse('x'.repeat(ATTRIBUTION_MAX_LENGTH + 1))).toThrow();
 	});
 });
 

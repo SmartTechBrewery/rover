@@ -13,6 +13,8 @@
  * `run(argv): Promise<number>`, where the number is the process exit code.
  */
 
+import { realpathSync } from 'node:fs';
+import { pathToFileURL } from 'node:url';
 import { UsageError } from './_shared/flags.js';
 import * as out from './_shared/output.js';
 import * as acquire from './commands/acquire.js';
@@ -26,7 +28,21 @@ interface Command {
 	run(argv: string[]): Promise<number>;
 }
 
-const COMMANDS: Record<string, Command> = { list, acquire, release, status };
+/**
+ * Null-prototype, so a lookup answers only what was put in it.
+ *
+ * An object literal inherits `toString`, `valueOf`, `constructor` and `__proto__` from
+ * `Object.prototype`, and every one of them is a truthy value that walks straight past the
+ * `!handler` guard below and into `handler.run(...)` — turning "unknown command" (exit 2,
+ * with the usage text) into an internal TypeError at exit 1, which this CLI defines as a
+ * refused operation. Any table added under `src/cli/` is built this way for the same reason.
+ */
+const COMMANDS: Record<string, Command | undefined> = Object.assign(Object.create(null), {
+	list,
+	acquire,
+	release,
+	status,
+});
 
 /** Success. */
 export const EXIT_OK = 0;
@@ -39,6 +55,9 @@ export function usage(): string {
 	return `rover — one device at a time, shared between whoever is working
 
 Usage: rover <command> [options]
+
+There is no \`bin/\` launcher yet (PROJECT.md R20), so \`rover\` below stands for
+\`${out.INVOCATION}\` — \`rover status\` is typed \`${out.INVOCATION} status\`.
 
 Commands:
   list                     What is attached to the host, what is free, and who holds it
@@ -56,8 +75,8 @@ Exit codes:
   0   success
   1   the operation did not succeed — a refused acquire, a release that found no live
       lease, an unreachable host, or a request the host rejected
-  2   usage error — unknown command, unknown flag, a missing required option, or a
-      --host nothing can reach yet
+  2   usage error — unknown command, unknown flag, a missing required option, an
+      attribution string longer than the host accepts, or a --host nothing can reach yet
 
 The daemon starts itself on the first call, so nothing here needs starting by hand.
 Set ROVER_SOCKET_PATH to point at a socket other than ~/.rover/rover.sock.`;
@@ -99,9 +118,26 @@ export async function run(argv: string[]): Promise<number> {
 	}
 }
 
+/**
+ * `process.argv[1]` as the URL Node would have given this module had it been the entry.
+ *
+ * Two normalisations, and skipping either one makes the whole CLI a silent no-op that exits
+ * 0: `import.meta.url` is a URL, so it percent-encodes a space (`/My Projects/` arrives as
+ * `/My%20Projects/`), and Node resolves the ESM entry through `realpath`, so a checkout
+ * reached by a symlink is compared against its real location. `argv[1]` is neither — it is
+ * the raw path as typed. `null` when the path cannot be resolved, which is not this module.
+ */
+export function entryUrl(argvPath: string): string | null {
+	try {
+		return pathToFileURL(realpathSync(argvPath)).href;
+	} catch {
+		return null;
+	}
+}
+
 // Entrypoint guard: self-run only when invoked directly, never when a test imports `run`.
 // `process.exitCode` rather than `process.exit()`, so a document written to a pipe is
 // flushed instead of truncated at whatever byte the exit landed on.
-if (process.argv[1] && import.meta.url === `file://${process.argv[1]}`) {
+if (process.argv[1] && import.meta.url === entryUrl(process.argv[1])) {
 	process.exitCode = await run(process.argv.slice(2));
 }

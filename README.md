@@ -79,7 +79,8 @@ to settle.
 
 Exit codes: `0` success; `1` the operation did not succeed (a refused `acquire`, a `release` that
 found no live lease, an unreachable host, a request the host rejected); `2` usage error (unknown
-command or flag, a missing `--owner`/`--project`, a `--host` nothing can reach yet). A `release`
+command or flag, a missing `--owner`/`--project`, an attribution string past the 256 characters
+the host accepts, a `--host` nothing can reach yet). A `release`
 that found nothing exits `1` on purpose — the host cannot tell "no such id" from "already gone",
 and exiting `0` would let a mistyped lease id read as success.
 

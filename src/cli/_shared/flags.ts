@@ -8,6 +8,7 @@
  */
 
 import { type ParseArgsOptionsConfig, parseArgs } from 'node:util';
+import { ATTRIBUTION_MAX_LENGTH } from '../../ipc/methods.js';
 
 /**
  * The caller asked wrong — an unknown flag, a missing required option, an unsupported
@@ -90,4 +91,58 @@ export function requireOption(
 		throw new UsageError(`rover ${command}: --${name} is required — ${why}`);
 	}
 	return value;
+}
+
+/**
+ * The shape of an attribution string, checked here rather than at the host.
+ *
+ * The bound is the host's — {@link ATTRIBUTION_MAX_LENGTH}, imported rather than restated,
+ * so the two cannot drift. What the CLI adds is *where the failure lands*: the host answers
+ * a bad value with Zod's own words naming `testName`, a key the caller never typed, over a
+ * round trip that exits 1 — the code this CLI reserves for a refused acquire or an
+ * unreachable host. A caller reading only the exit code could not then tell a mistyped flag
+ * from a busy device. Rejecting it here makes every bad attribution value one thing: exit 2,
+ * naming the flag as it was spelled, with the command's own usage under it.
+ */
+function boundAttribution(command: string, name: string, value: string): string {
+	if (value.length > ATTRIBUTION_MAX_LENGTH) {
+		throw new UsageError(
+			`rover ${command}: --${name} is ${value.length} characters — an attribution string is ` +
+				`stored and echoed back by the host, never read, so it is capped at ` +
+				`${ATTRIBUTION_MAX_LENGTH}.`,
+		);
+	}
+	return value;
+}
+
+/** A required attribution string: present ({@link requireOption}) and within the bound. */
+export function requireAttribution(
+	command: string,
+	name: string,
+	value: string | undefined,
+	why: string,
+): string {
+	return boundAttribution(command, name, requireOption(command, name, value, why));
+}
+
+/**
+ * An optional attribution string. Absent is fine; present-but-blank is not — a flag typed
+ * with nothing after it is a mistake, and omitting it is how you say there is nothing to
+ * name.
+ */
+export function optionalAttribution(
+	command: string,
+	name: string,
+	value: string | undefined,
+): string | undefined {
+	if (value === undefined) {
+		return undefined;
+	}
+	if (value.trim().length === 0) {
+		throw new UsageError(
+			`rover ${command}: --${name} was given with no value — omit the flag rather than ` +
+				`passing an empty one.`,
+		);
+	}
+	return boundAttribution(command, name, value);
 }
