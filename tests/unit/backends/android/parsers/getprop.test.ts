@@ -17,7 +17,18 @@ describe('parseGetprop', () => {
 		expect(props.apiLevel).toBe(37);
 		expect(props.model).toBe('sdk_gphone16k_arm64');
 		expect(props.manufacturer).toBe('Google');
-		expect(props.release).toBe('17');
+		expect(props.androidRelease).toBe('17');
+	});
+
+	it('returns exactly the agreed shape', () => {
+		expect(Object.keys(parseGetprop(GETPROP)).sort()).toEqual([
+			'all',
+			'androidRelease',
+			'apiLevel',
+			'isEmulator',
+			'manufacturer',
+			'model',
+		]);
 	});
 
 	it('collects every property line', () => {
@@ -33,10 +44,35 @@ describe('parseGetprop', () => {
 		expect(all['debug.tracing.device_state']).toBe('0:DEFAULT');
 	});
 
+	// The key stops at the *first* `]` and the value at the last one on the line, so a
+	// value is free to carry `]` of its own. Pinned here rather than left to the regex's
+	// own comment.
+	it('ends the key at the first bracket and the value at the last', () => {
+		expect(parseGetprop('[test.key]: [left]right: text]\n').all).toEqual({
+			'test.key': 'left]right: text',
+		});
+	});
+
+	// `getprop` prints embedded newlines raw; this one really is four lines on the device.
+	it('keeps a value that spans several lines', () => {
+		expect(parseGetprop(GETPROP).all['persist.sys.boot.reason.history']).toBe(
+			[
+				'reboot,1787981883',
+				'reboot,1783163973',
+				'reboot,1783150305',
+				'reboot,factory_reset,1781115638',
+			].join('\n'),
+		);
+	});
+
+	it('drops an unclosed value instead of swallowing the properties after it', () => {
+		expect(parseGetprop('[a]: [oops\n[b]: [ok]\n').all).toEqual({ b: 'ok' });
+	});
+
 	it('returns null rather than throwing for a property the device does not have', () => {
 		const props = parseGetprop('[ro.product.model]: [Pixel 9]\n');
 		expect(props.apiLevel).toBeNull();
-		expect(props.release).toBeNull();
+		expect(props.androidRelease).toBeNull();
 		expect(props.manufacturer).toBeNull();
 		expect(props.model).toBe('Pixel 9');
 	});
