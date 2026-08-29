@@ -132,10 +132,11 @@ Verbs live above the backends and below the adapters, and this is where determin
 `performAction()` what it needs, what it is aimed at and what it does, and gets a result back:
 
 - **`VerbContext`** — the serial, the backend and its capability manifest — is constructed by the
-  caller that already resolved the device (R21's daemon handler). The verb layer never looks a
-  device up. `capabilityMethod()` is the only way it reaches a capability-gated method, so the
-  manifest is consulted before every dispatch (D11); a capability declared with no method behind it
-  is a wiring bug and says so, distinctly from a device that honestly opted out.
+  caller that already resolved the device: `src/daemon/verb-handlers.ts`, which is the only place
+  in the tree that builds one in production. The verb layer never looks a device up.
+  `capabilityMethod()` is the only way it reaches a capability-gated method, so the manifest is
+  consulted before every dispatch (D11); a capability declared with no method behind it is a wiring
+  bug and says so, distinctly from a device that honestly opted out.
 - **`resolveTarget()` takes a target and nothing else** — no screen, no element list, no
   previously-read state — which is what makes the fresh read structural instead of a rule. A miss is
   `null`; `requireTarget()` is the loud version and names what was on screen instead. Two matches
@@ -171,6 +172,41 @@ Verbs live above the backends and below the adapters, and this is where determin
   its place would leave the agent unable to tell whether it landed, which is exactly what D12(c)
   rules out. Every shape is a Zod schema of plain data, because the host executes the verb and the
   agent reads the result somewhere else (D19).
+
+### Where a verb call comes from
+
+The daemon loads the core and executes the verbs; the CLI and the MCP server are clients that ask
+over the same surface as leases (D19, R21). `src/daemon/main.ts` — the entrypoint, and not the
+module that binds the socket — imports the backend barrel, so the process holding the hardware is
+the process with a registry.
+
+- **A verb call carries the lease id, not a serial.** The lease id is the credential (D20) and the
+  host derives the device from it, so the holder of one device cannot address another.
+- **The lease is renewed when the call arrives**, before any await (D8). Renewing on completion
+  instead would let a long verb's own lease expire while it runs, and an expiry mid-verb fires
+  restoration on a device the verb is actively driving. `MAX_VERB_TIMEOUT_MS` caps a wait far below
+  the TTL so that is unreachable rather than merely unlikely.
+- **The device is re-verified per call, never read from the snapshot** (D6) — the same
+  `verifyForGrant` a grant uses, which is what separates "the device went away" from a stale cache
+  entry.
+- **The answer has three branches, all data** (`src/ipc/verb-methods.ts`). `ok` carries the
+  `ActionResult`. `failed` carries a `VerbFailure` — the verb-layer errors as a parseable union
+  (`src/verbs/failure.ts`), each branch carrying both the error's own message and its structured
+  fields, so a client can print one line or branch on a `kind`. `refused` means no verb ran at all:
+  `no-lease`, `gone`, `not-attached`, `not-ready`. Anything outside those three throws and arrives
+  as `internal_error`, which keeps that code meaning "the host broke".
+- **A verb never outlives the lease that authorised it.** A release the server did not wait for, or
+  an expiry the sweep observes, can land while a verb is still polling the device. So the whole call
+  is registered with `src/daemon/verb-traffic.ts` for as long as it runs: the lease's end revokes the
+  backend that call was handed, its next device call throws, and the answer is `refused` /
+  `no-lease`. Revocation cannot stop a round trip already issued, so there is a second half — the
+  restoration a lease's end starts waits for those calls to unwind first, and `acquire_device`
+  inherits that wait through `DeviceRestorer.settle`. Without both, the host itself becomes the
+  second driver of a device it has already lent to somebody else.
+- **A shared preamble, one row per verb.** `createVerbHandlers` does the renew / register /
+  re-verify / resolve work once, so each further verb family is one `IPC_METHODS` row and one
+  `runVerb` call rather than another copy of it — and inherits the rule above by construction rather
+  than by remembering it. That is why this row landed before the verb families.
 
 ---
 

@@ -30,28 +30,37 @@ import {
 import type { ResolvedTarget } from './result.js';
 
 /**
- * What a verb is pointed at.
+ * The three kinds of target, each named so the narrowed unions below compose from the same
+ * members instead of restating them. A restated text target is a second place `exact` can
+ * be misspelled and a second place an `index` bound can drift.
  *
  * `.strict()` on every member, so `{ by: 'text', txt: 'Save' }` is a loud parse failure
  * rather than a target that matches everything on screen.
  */
+const TextTargetSchema = z
+	.object({
+		by: z.literal('text'),
+		text: z.string().min(1),
+		/** Whole-string equality instead of the default substring match. */
+		exact: z.boolean().optional(),
+		/**
+		 * Which match to take when several are expected. Deliberate disambiguation — its
+		 * absence is what makes two matches an {@link AmbiguousTargetError} rather than a
+		 * silent first-match.
+		 */
+		index: z.number().int().nonnegative().optional(),
+	})
+	.strict();
+
+const ElementTargetSchema = z.object({ by: z.literal('element'), id: ElementIdSchema }).strict();
+
+const PointTargetSchema = z.object({ by: z.literal('point'), at: PointSchema }).strict();
+
+/** What a verb is pointed at. */
 export const TargetSchema = z.discriminatedUnion('by', [
-	z
-		.object({
-			by: z.literal('text'),
-			text: z.string().min(1),
-			/** Whole-string equality instead of the default substring match. */
-			exact: z.boolean().optional(),
-			/**
-			 * Which match to take when several are expected. Deliberate disambiguation — its
-			 * absence is what makes two matches an {@link AmbiguousTargetError} rather than a
-			 * silent first-match.
-			 */
-			index: z.number().int().nonnegative().optional(),
-		})
-		.strict(),
-	z.object({ by: z.literal('element'), id: ElementIdSchema }).strict(),
-	z.object({ by: z.literal('point'), at: PointSchema }).strict(),
+	TextTargetSchema,
+	ElementTargetSchema,
+	PointTargetSchema,
 ]);
 export type Target = z.infer<typeof TargetSchema>;
 
@@ -66,6 +75,20 @@ export type Target = z.infer<typeof TargetSchema>;
  * question that cannot be answered is one nobody can ask.
  */
 export type ScreenTarget = Exclude<Target, { by: 'point' }>;
+
+/**
+ * {@link ScreenTarget} at runtime — the parse a target goes through when it arrives from
+ * somewhere else rather than from a call site the compiler has already checked (R21).
+ *
+ * The type stays the vocabulary; this is the same union of the same members, so a caller
+ * that narrowed by hand and a caller that parsed cannot disagree about what a screen target
+ * is. `tests/unit/verbs/target.test.ts` asserts the inferred type is assignable to the type
+ * above, which is what stops the pair drifting into two vocabularies.
+ */
+export const ScreenTargetSchema = z.discriminatedUnion('by', [
+	TextTargetSchema,
+	ElementTargetSchema,
+]);
 
 /**
  * The targets an *absence* can be asked about — a screen target that names no position.
@@ -83,6 +106,21 @@ export type ScreenTarget = Exclude<Target, { by: 'point' }>;
 export type AbsenceTarget =
 	| Extract<ScreenTarget, { by: 'element' }>
 	| (Extract<ScreenTarget, { by: 'text' }> & { index?: never });
+
+/**
+ * {@link AbsenceTarget} at runtime, and the boundary where the paragraph above stops being
+ * advice.
+ *
+ * `.omit({ index: true })` over a strict member is what makes an `index` arriving from
+ * outside a **refusal** rather than a field quietly dropped: a caller that sent one asked a
+ * question this verb cannot answer, and answering the question it did not ask is the false
+ * green the type exists to prevent. Dropping it would produce exactly the reply the caller
+ * would have got had it never named an index at all — indistinguishable from success.
+ */
+export const AbsenceTargetSchema = z.discriminatedUnion('by', [
+	TextTargetSchema.omit({ index: true }).strict(),
+	ElementTargetSchema,
+]);
 
 /** The target in the words the error messages use. */
 export function describeTarget(target: Target): string {

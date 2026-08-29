@@ -18,7 +18,15 @@ import {
 	TargetNotFoundError,
 	UnaddressableElementError,
 } from '@/verbs/errors.js';
-import { centreOf, requireTarget, resolveTarget } from '@/verbs/target.js';
+import {
+	type AbsenceTarget,
+	AbsenceTargetSchema,
+	centreOf,
+	requireTarget,
+	resolveTarget,
+	type ScreenTarget,
+	ScreenTargetSchema,
+} from '@/verbs/target.js';
 import {
 	createMockCapabilities,
 	createMockCapabilityManifest,
@@ -342,5 +350,47 @@ describe('requireTarget', () => {
 			point: centreOf(save),
 			element: save,
 		});
+	});
+});
+
+/**
+ * The runtime halves of the two narrowed target types (R21).
+ *
+ * The type assertions matter as much as the parses: the schemas exist so a target can arrive
+ * from somewhere the compiler cannot see, and the moment their inferred types stop being
+ * assignable to the hand-written ones there are two vocabularies for a screen target rather
+ * than one.
+ */
+describe('the narrowed target schemas', () => {
+	it('infers types assignable to the ones the verb signatures use', () => {
+		const screen: ScreenTarget = ScreenTargetSchema.parse({ by: 'text', text: 'Save' });
+		const absence: AbsenceTarget = AbsenceTargetSchema.parse({ by: 'element', id: 'save' });
+
+		expect(screen).toEqual({ by: 'text', text: 'Save' });
+		expect(absence).toEqual({ by: 'element', id: 'save' });
+	});
+
+	it('accepts an index on a screen target, because wait_for has to pick one match', () => {
+		expect(ScreenTargetSchema.parse({ by: 'text', text: 'Save', index: 2 })).toEqual({
+			by: 'text',
+			text: 'Save',
+			index: 2,
+		});
+	});
+
+	it('refuses an index on an absence target rather than dropping it', () => {
+		// Dropping it would answer the question the caller did not ask — "has any match gone" —
+		// with the same shape as success, which is the false green the type prevents in code.
+		expect(() => AbsenceTargetSchema.parse({ by: 'text', text: 'Save', index: 2 })).toThrow();
+	});
+
+	it('refuses a point target, which no screen read can confirm or deny', () => {
+		expect(() => ScreenTargetSchema.parse({ by: 'point', at: { x: 1, y: 2 } })).toThrow();
+		expect(() => AbsenceTargetSchema.parse({ by: 'point', at: { x: 1, y: 2 } })).toThrow();
+	});
+
+	it('refuses an unknown field, exactly as the full target union does', () => {
+		expect(() => ScreenTargetSchema.parse({ by: 'text', text: 'Save', exactly: true })).toThrow();
+		expect(() => AbsenceTargetSchema.parse({ by: 'element', id: 'save', index: 0 })).toThrow();
 	});
 });

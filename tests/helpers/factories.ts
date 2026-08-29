@@ -268,7 +268,7 @@ export function createMockRegistration(
  * verb layer consults before it dispatches anything.
  *
  * A plain value here for the same reason it is one in production: the caller constructs it
- * (R21's daemon handler will), and the verb layer never resolves a device itself.
+ * (`src/daemon/verb-handlers.ts` does), and the verb layer never resolves a device itself.
  */
 export function createMockVerbContext(overrides: Partial<VerbContext> = {}): VerbContext {
 	return {

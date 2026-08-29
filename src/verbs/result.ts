@@ -1,9 +1,9 @@
 /**
  * What a verb answers with — and the capture of the state after the action (D12(c), D14).
  *
- * Every shape here is a Zod schema of **plain data**, because a verb result is executed on
- * the host and read on the agent's machine (D19, R21): no live handle, no stream, and no
- * host-local path survives that trip. `tests/unit/verbs/serializable.test.ts` holds the
+ * Every shape here is a Zod schema of **plain data**, because a verb runs on the host and its
+ * result is read on the agent's machine (D19): no live handle, no stream, and no host-local
+ * path survives that trip. `tests/unit/verbs/serializable.test.ts` holds the
  * line by round-tripping each of them through JSON.
  *
  * `DeviceInfoSchema` is reused rather than restated. It already carries the serial, the

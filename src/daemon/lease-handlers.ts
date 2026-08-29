@@ -46,6 +46,15 @@ import type { DeviceRestorer } from './restore.js';
 
 export type LeaseHandlers = Pick<IpcHandlers, 'acquire_device' | 'release_device'>;
 
+/**
+ * The two ways re-verifying a device answers "no".
+ *
+ * Narrower than either refusal vocabulary on purpose, so it is assignable to both: a grant
+ * can also be refused because somebody holds the device, and a verb call because nobody
+ * does, but neither of those is something the inventory can say.
+ */
+export type InventoryRefusalReason = Extract<AcquireRefusalReason, 'gone' | 'not-attached'>;
+
 export function createLeaseHandlers(
 	inventory: DeviceInventory,
 	leases: LeaseStore,
@@ -140,8 +149,14 @@ export function createLeaseHandlers(
 	};
 }
 
-/** Which refusal an inventory error is, or `null` for one that is genuinely a host failure. */
-function refusalReasonFor(error: unknown): AcquireRefusalReason | null {
+/**
+ * Which refusal an inventory error is, or `null` for one that is genuinely a host failure.
+ *
+ * Exported for `./verb-handlers.ts`, which re-verifies the same device against the same
+ * inventory and owes the caller the same two answers. Two copies of this mapping would be
+ * two places a third inventory error has to be remembered.
+ */
+export function refusalReasonFor(error: unknown): InventoryRefusalReason | null {
 	if (error instanceof ForeignDeviceError) {
 		return 'not-attached';
 	}

@@ -1,8 +1,8 @@
 /**
  * What a verb is handed, and how it reaches a capability-gated backend method.
  *
- * A {@link VerbContext} is a plain value its **caller** constructs — the daemon handler
- * that already resolved the device and holds the lease (D19, R21). The verb layer never
+ * A {@link VerbContext} is a plain value its **caller** constructs — `src/daemon/verb-handlers.ts`,
+ * which has already resolved the device the lease names (D19). The verb layer never
  * looks a device up, never consults an inventory and never knows that leases exist
  * (ai/ARCHITECTURE.md, "The core owns everything about *a* device and nothing about
  * *which* device").
