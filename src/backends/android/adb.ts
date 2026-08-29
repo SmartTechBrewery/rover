@@ -134,6 +134,34 @@ export function quoteStream(stream: string): string {
 }
 
 /**
+ * One argument of a device-side `adb shell` command, quoted for the shell **on the
+ * device**.
+ *
+ * `adb shell am start -n <component>` does not reach the device as an argv: adb joins its
+ * arguments with single spaces and hands the resulting string to the device's `sh`, so
+ * every metacharacter in them is that shell's to interpret. `execFile` protects the
+ * *host* shell and nothing else. Two things measured on API 37 / adb 37.0.1 (PROJECT.md
+ * §6) are what this exists for:
+ *
+ * - `am start -n com.android.settings/.Settings$MyDeviceInfoActivity` launched plain
+ *   `.Settings` and reported success — `$MyDeviceInfoActivity` expanded to nothing on the
+ *   device, and inner-class activities are the common case on Android, not an edge one.
+ * - `am force-stop 'com.rover.nope;echo INJECTED'` printed `INJECTED`: a second command,
+ *   run on the device, under the lease that authorised the first.
+ *
+ * Single quotes, and a value carrying one is refused rather than escaped — everything
+ * quoted here is a shape that has already been checked (`parseAppId`, the component
+ * pattern in `./parsers/app-control.js`), so a `'` reaching this point is a bug in that
+ * check and not something to paper over.
+ */
+export function shellArg(value: string): string {
+	if (value.includes("'")) {
+		throw new Error(`Cannot pass '${value}' to a device shell: it contains a single quote`);
+	}
+	return `'${value}'`;
+}
+
+/**
  * Run `adb <args>` and hand back both streams.
  *
  * Throws {@link AdbCommandError} on a non-zero exit, a timeout, or a failure to start.

@@ -18,7 +18,13 @@
  */
 
 import { z } from 'zod';
-import { type DeviceSerial, parseDeviceSerial, parseElementId, parsePlatformId } from './ids.js';
+import {
+	type AppId,
+	type DeviceSerial,
+	parseDeviceSerial,
+	parseElementId,
+	parsePlatformId,
+} from './ids.js';
 
 /**
  * What a device attached to this host can currently do. Neutral vocabulary, not any
@@ -178,11 +184,21 @@ export interface DeviceBackend {
 	/** Install an application package from a path on the **host** (D19). */
 	installApp(serial: DeviceSerial, packagePath: string): Promise<void>;
 
-	launchApp(serial: DeviceSerial, appId: string): Promise<void>;
+	/**
+	 * The three app verbs take a parsed {@link AppId}, not a string.
+	 *
+	 * Not only to keep it apart from a serial. A backend generally cannot address an app
+	 * without relaying this value into a command line the *device* interprets, and an
+	 * unchecked one stops being an argument there and becomes a second command — run on
+	 * hardware lent out for these verbs, with effects that outlive the lease. Branding the
+	 * parameter is what forces every caller through `parseAppId` before any backend sees
+	 * the value, rather than leaving each of them to be the only check.
+	 */
+	launchApp(serial: DeviceSerial, appId: AppId): Promise<void>;
 
-	stopApp(serial: DeviceSerial, appId: string): Promise<void>;
+	stopApp(serial: DeviceSerial, appId: AppId): Promise<void>;
 
-	clearAppData(serial: DeviceSerial, appId: string): Promise<void>;
+	clearAppData(serial: DeviceSerial, appId: AppId): Promise<void>;
 
 	/**
 	 * Capture the screen as image bytes.

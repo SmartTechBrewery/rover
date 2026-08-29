@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { AndroidDeviceBackend } from '@/backends/android/backend.js';
 import type { Device } from '@/core/device.js';
+import { parseAppId } from '@/core/ids.js';
 
 /**
  * The app lifecycle primitives against a real attached device. Skips rather than fails
@@ -10,13 +11,18 @@ import type { Device } from '@/core/device.js';
  *
  * - `installApp` has no case here at all. There is no APK in this repository and adding a
  *   binary to carry one is not this change's job, so the recipe was verified by hand
- *   instead — a minimal signed APK built in `/tmp`, installed onto an API 37 emulator,
- *   both the `Success` path and `Failure [INSTALL_FAILED_TEST_ONLY: …]`. The captured
- *   output of both is what `tests/unit/backends/android/backend.test.ts` asserts against.
+ *   instead — an APK installed onto an API 37 emulator, both the `Success` path and
+ *   `Failure [INSTALL_FAILED_TEST_ONLY: …]`. The captured output lives in
+ *   `tests/fixtures/adb/` and is what `parsers/app-control.test.ts` asserts against.
  * - `clearAppData` is exercised only on its **failure** path. Its success destroys an
  *   application's data, and there is no package on an arbitrary device whose data is safe
- *   for a test suite to destroy. The success path was verified by hand against a throwaway
- *   package (`com.rover.probe`) installed for that purpose on the same emulator.
+ *   for a test suite to destroy. The success path was verified by hand against a package
+ *   with nothing to lose (`com.android.traceur`) on the same emulator, and its answer is
+ *   the `pm-clear-success` fixture.
+ *
+ * Every app id below is a parsed {@link parseAppId}, which is not a formality: an id
+ * reaches the device inside a string its own `sh` reads, so the parse is what stops one
+ * from being two commands there.
  *
  * `com.android.settings` is what the rest drives, because it is present on every Android
  * device and launching and stopping it changes nothing a person would miss. Like
@@ -26,10 +32,10 @@ import type { Device } from '@/core/device.js';
 const backend = new AndroidDeviceBackend();
 
 /** Present on every Android build, and safe to open and close under someone else's eyes. */
-const SETTINGS = 'com.android.settings';
+const SETTINGS = parseAppId('com.android.settings');
 
 /** A package no device has. Both halves matter: it is not installed, and it never will be. */
-const ABSENT = 'com.rover.no.such.package';
+const ABSENT = parseAppId('com.rover.no.such.package');
 
 async function firstUsableDevice(): Promise<Device> {
 	const ready = (await backend.listDevices()).filter((device) => device.state === 'ready');

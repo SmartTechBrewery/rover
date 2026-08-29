@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it, vi } from 'vitest';
 import { type AdbResult, INSTALL_ADB_TIMEOUT_MS } from '@/backends/android/adb.js';
 import { AndroidDeviceBackend } from '@/backends/android/backend.js';
-import { parseDeviceSerial } from '@/core/ids.js';
+import { type AppId, InvalidIdError, parseAppId, parseDeviceSerial } from '@/core/ids.js';
 
 /**
  * The backend driven off the **captured** adb output of `tests/fixtures/adb/`, with only
@@ -37,6 +37,8 @@ const DENSITY_OVERRIDE = fixture('wm-density.override.api37-sdk-gphone16k-arm64.
 const GETPROP = fixture('getprop.api37-sdk-gphone16k-arm64.txt');
 
 const SERIAL = parseDeviceSerial('emulator-5554');
+const SETTINGS = parseAppId('com.android.settings');
+const ABSENT = parseAppId('com.rover.nope');
 const backend = new AndroidDeviceBackend();
 
 function enumerates(stdout: string, stderr = ''): void {
@@ -220,18 +222,20 @@ describe('deviceInfo', () => {
 });
 
 /**
- * The app lifecycle primitives, driven off output **captured verbatim from a real
- * device** — an API 37 emulator (`sdk_gphone16k_arm64`) with adb 37.0.1, 2026-08-29. Same
- * rule as `tests/fixtures/adb/` (ai/TESTING.md "Fixtures come off a real device"); inline
- * rather than in a file because each is one to four short lines and every one of them is
- * only meaningful next to the assertion it explains.
+ * The app lifecycle primitives. What the *wording* of each answer means is
+ * `parsers/app-control.test.ts`'s, pinned there against `tests/fixtures/adb/`; what is
+ * asserted here is the join — the argv, the pin to one device, the timeout, and that no
+ * verb resolves on an answer that said it failed.
+ *
+ * Every app id and every component reaches the device **quoted**, because `adb shell`
+ * joins its arguments into one string for the device's own `sh` (PROJECT.md §6). That is
+ * why the argv below carries the quotes: they are the assertion, not noise.
  */
-const RESOLVED_SETTINGS =
-	'priority=0 preferredOrder=0 match=0x108000 specificIndex=-1 isDefault=true\n' +
-	'com.android.settings/.Settings\n';
-const NO_ACTIVITY = 'No activity found\n';
-const RESOLVE_SETTINGS = 'shell cmd package resolve-activity --brief com.android.settings';
-const START_SETTINGS = 'shell am start -n com.android.settings/.Settings';
+const RESOLVED_SETTINGS = fixture('resolve-activity.api37-sdk-gphone16k-arm64.txt');
+const NO_ACTIVITY = fixture('resolve-activity.none.api37-sdk-gphone16k-arm64.txt');
+const AM_START = fixture('am-start.api37-sdk-gphone16k-arm64.txt');
+const RESOLVE_SETTINGS = "shell cmd package resolve-activity --brief 'com.android.settings'";
+const START_SETTINGS = "shell am start -n 'com.android.settings/.Settings'";
 
 describe('installApp', () => {
 	// The whole point of `runAdbOnDevice`: an unpinned install lands on whichever device
@@ -312,9 +316,9 @@ describe('installApp', () => {
 
 describe('launchApp', () => {
 	it('resolves the component on the device, then starts it — both calls pinned', async () => {
-		answers({ [RESOLVE_SETTINGS]: RESOLVED_SETTINGS, [START_SETTINGS]: 'Starting: Intent { }\n' });
+		answers({ [RESOLVE_SETTINGS]: RESOLVED_SETTINGS, [START_SETTINGS]: AM_START });
 
-		await backend.launchApp(SERIAL, 'com.android.settings');
+		await backend.launchApp(SERIAL, SETTINGS);
 
 		expect(runAdb).not.toHaveBeenCalled();
 		expect(runAdbOnDevice.mock.calls.map((call) => call[0])).toEqual([SERIAL, SERIAL]);
@@ -327,16 +331,16 @@ describe('launchApp', () => {
 	// `--brief` is not brief: it prints a `priority=… ` header above the answer, so a
 	// parser reading the first line hands `priority=0 …` to `am start -n`.
 	it('reads the component past the header line resolve-activity prints above it', async () => {
-		answers({ [RESOLVE_SETTINGS]: RESOLVED_SETTINGS, [START_SETTINGS]: 'Starting: Intent { }\n' });
+		answers({ [RESOLVE_SETTINGS]: RESOLVED_SETTINGS, [START_SETTINGS]: AM_START });
 
-		await backend.launchApp(SERIAL, 'com.android.settings');
+		await backend.launchApp(SERIAL, SETTINGS);
 
 		expect(runAdbOnDevice.mock.calls[1][1]).toEqual([
 			'shell',
 			'am',
 			'start',
 			'-n',
-			'com.android.settings/.Settings',
+			"'com.android.settings/.Settings'",
 		]);
 	});
 
@@ -346,9 +350,9 @@ describe('launchApp', () => {
 	 * the failure has to name the app id — nothing downstream can work out which it was.
 	 */
 	it('throws, naming the app, when nothing launchable resolves', async () => {
-		answers({ 'shell cmd package resolve-activity --brief com.rover.nope': NO_ACTIVITY });
+		answers({ "shell cmd package resolve-activity --brief 'com.rover.nope'": NO_ACTIVITY });
 
-		const failure = backend.launchApp(SERIAL, 'com.rover.nope');
+		const failure = backend.launchApp(SERIAL, ABSENT);
 
 		await expect(failure).rejects.toThrow(/com\.rover\.nope/);
 		await expect(failure).rejects.toThrow(/No activity found/);
@@ -360,13 +364,10 @@ describe('launchApp', () => {
 	it('treats the already-top-most warning as a launch that happened', async () => {
 		answers({
 			[RESOLVE_SETTINGS]: RESOLVED_SETTINGS,
-			[START_SETTINGS]:
-				'Starting: Intent { cmp=com.android.settings/.Settings }\n' +
-				'Warning: Activity not started, intent has been delivered to currently ' +
-				'running top-most instance.\n',
+			[START_SETTINGS]: fixture('am-start.top-most.api37-sdk-gphone16k-arm64.txt'),
 		});
 
-		await expect(backend.launchApp(SERIAL, 'com.android.settings')).resolves.toBeUndefined();
+		await expect(backend.launchApp(SERIAL, SETTINGS)).resolves.toBeUndefined();
 	});
 
 	// `Starting: Intent …` is printed *before* anything can have gone wrong, so it is not
@@ -379,7 +380,7 @@ describe('launchApp', () => {
 				'Error: Activity class {com.android.settings/.Settings} does not exist.\n',
 		});
 
-		await expect(backend.launchApp(SERIAL, 'com.android.settings')).rejects.toThrow(
+		await expect(backend.launchApp(SERIAL, SETTINGS)).rejects.toThrow(
 			/Activity class .* does not exist/,
 		);
 	});
@@ -396,16 +397,14 @@ describe('launchApp', () => {
 			},
 		});
 
-		await expect(backend.launchApp(SERIAL, 'com.android.settings')).rejects.toThrow(
-			/Permission Denial/,
-		);
+		await expect(backend.launchApp(SERIAL, SETTINGS)).rejects.toThrow(/Permission Denial/);
 	});
 
 	// Silence from `am start` is not success either: nothing was dispatched.
 	it('throws when am start said nothing at all', async () => {
 		answers({ [RESOLVE_SETTINGS]: RESOLVED_SETTINGS, [START_SETTINGS]: '' });
 
-		await expect(backend.launchApp(SERIAL, 'com.android.settings')).rejects.toThrow(
+		await expect(backend.launchApp(SERIAL, SETTINGS)).rejects.toThrow(
 			/am start -n com\.android\.settings\/\.Settings/,
 		);
 	});
@@ -415,9 +414,9 @@ describe('stopApp', () => {
 	// A force-stop that worked prints zero bytes on both streams, so silence is the only
 	// success wording there is.
 	it('force-stops through the pinned runner, and takes silence for success', async () => {
-		answers({ 'shell am force-stop com.android.settings': '' });
+		answers({ "shell am force-stop 'com.android.settings'": '' });
 
-		await backend.stopApp(SERIAL, 'com.android.settings');
+		await backend.stopApp(SERIAL, SETTINGS);
 
 		expect(runAdb).not.toHaveBeenCalled();
 		expect(runAdbOnDevice.mock.calls[0][0]).toBe(SERIAL);
@@ -425,13 +424,13 @@ describe('stopApp', () => {
 			'shell',
 			'am',
 			'force-stop',
-			'com.android.settings',
+			"'com.android.settings'",
 		]);
 	});
 
 	it('throws when force-stop said anything at all, on either stream', async () => {
 		answers({
-			'shell am force-stop com.android.settings': {
+			"shell am force-stop 'com.android.settings'": {
 				stdout: '',
 				stderr:
 					"\nException occurred while executing 'force-stop':\n" +
@@ -439,17 +438,43 @@ describe('stopApp', () => {
 			},
 		});
 
-		await expect(backend.stopApp(SERIAL, 'com.android.settings')).rejects.toThrow(
-			/IllegalArgumentException/,
-		);
+		await expect(backend.stopApp(SERIAL, SETTINGS)).rejects.toThrow(/IllegalArgumentException/);
+	});
+
+	/**
+	 * The captured banner, on a force-stop that worked and exited 0 — adb's own client
+	 * writes it to stderr before the subcommand runs, on the first call after a server
+	 * restart. Reading it as a device failure is a false rejection nobody can reproduce on
+	 * demand, on the verb R9 restores state with.
+	 */
+	it('is not fooled by the daemon banner adb writes to stderr on the way through', async () => {
+		answers({
+			"shell am force-stop 'com.android.settings'": {
+				stdout: '',
+				stderr: fixture('am-force-stop.daemon-start.stderr.api37-sdk-gphone16k-arm64.txt'),
+			},
+		});
+
+		await expect(backend.stopApp(SERIAL, SETTINGS)).resolves.toBeUndefined();
+	});
+
+	// The stdout half of the same rule — force-stop has nothing to say there either.
+	it('throws when something came back on stdout', async () => {
+		answers({ "shell am force-stop 'com.android.settings'": 'INJECTED\n' });
+
+		await expect(backend.stopApp(SERIAL, SETTINGS)).rejects.toThrow(/INJECTED/);
 	});
 });
 
 describe('clearAppData', () => {
 	it('clears through the pinned runner', async () => {
-		answers({ 'shell pm clear com.android.settings': 'Success\n' });
+		answers({
+			"shell pm clear 'com.android.settings'": fixture(
+				'pm-clear-success.api37-sdk-gphone16k-arm64.txt',
+			),
+		});
 
-		await backend.clearAppData(SERIAL, 'com.android.settings');
+		await backend.clearAppData(SERIAL, SETTINGS);
 
 		expect(runAdb).not.toHaveBeenCalled();
 		expect(runAdbOnDevice.mock.calls[0][0]).toBe(SERIAL);
@@ -457,17 +482,17 @@ describe('clearAppData', () => {
 			'shell',
 			'pm',
 			'clear',
-			'com.android.settings',
+			"'com.android.settings'",
 		]);
 	});
 
 	// The one-word failure, on the stream API 37 puts it on…
 	it('throws on the bare Failed adb answers with', async () => {
 		answers({
-			'shell pm clear com.rover.nope': { stdout: '', stderr: 'Failed\n' },
+			"shell pm clear 'com.rover.nope'": { stdout: '', stderr: 'Failed\n' },
 		});
 
-		const failure = backend.clearAppData(SERIAL, 'com.rover.nope');
+		const failure = backend.clearAppData(SERIAL, ABSENT);
 
 		await expect(failure).rejects.toThrow(/pm clear com\.rover\.nope/);
 		await expect(failure).rejects.toThrow(/Failed/);
@@ -475,9 +500,65 @@ describe('clearAppData', () => {
 
 	// …and on the one every guide of the era shows it on, exit 0 and all.
 	it('throws when Failed came back on stdout with exit 0', async () => {
-		answers({ 'shell pm clear com.rover.nope': 'Failed\n' });
+		answers({ "shell pm clear 'com.rover.nope'": 'Failed\n' });
 
-		await expect(backend.clearAppData(SERIAL, 'com.rover.nope')).rejects.toThrow(/Failed/);
+		await expect(backend.clearAppData(SERIAL, ABSENT)).rejects.toThrow(/Failed/);
+	});
+});
+
+/**
+ * The seam that made the app id worth branding. `adb shell a b c` is not an argv on the
+ * device: adb joins the arguments with spaces and hands the string to the device's own
+ * `sh`, so `execFile` protects the host and nothing else. All three shapes below were run
+ * against emulator-5554 (API 37, adb 37.0.1) before the guard existed —
+ * `am force-stop 'com.rover.nope;echo INJECTED'` printed `INJECTED` and exited 0, and
+ * `pm clear 'com.rover.nope; echo Success'` answered `Success` on stdout with `Failed` on
+ * stderr and exit 0: a clear that never happened, reported as done.
+ *
+ * The brand makes that a compile error, so these cases have to cast past it — which is
+ * exactly the caller this re-check exists for: a cast, or a payload deserialized without
+ * its schema.
+ */
+describe('an app id can never become a second command on the device', () => {
+	const FORGED = 'com.rover.nope; echo Success' as AppId;
+
+	const VERBS: ReadonlyArray<[string, (appId: AppId) => Promise<void>]> = [
+		['launchApp', (appId) => backend.launchApp(SERIAL, appId)],
+		['stopApp', (appId) => backend.stopApp(SERIAL, appId)],
+		['clearAppData', (appId) => backend.clearAppData(SERIAL, appId)],
+	];
+
+	it.each(VERBS)('%s refuses one before adb is reached at all', async (_name, call) => {
+		answers({});
+
+		await expect(call(FORGED)).rejects.toThrow(InvalidIdError);
+		expect(runAdbOnDevice).not.toHaveBeenCalled();
+		expect(runAdb).not.toHaveBeenCalled();
+	});
+
+	// The reply that injection bought on the device: `echo` wrote `Success` to stdout, the
+	// shell exited with the status of the *last* command, and `pm clear` had failed. With
+	// the app id unable to carry a `;`, the reply is unreachable — the guard is upstream of
+	// the output check, which is why it is the guard and not a smarter parser.
+	it('cannot be handed the forged Success that shape produced', async () => {
+		answers({});
+
+		await expect(backend.clearAppData(SERIAL, FORGED)).rejects.toThrow(/AppId/);
+	});
+
+	// The component is device output going back into a device-side command line, and the
+	// same rules apply to it — but `$` is legitimate there (`.Settings$WifiSettings…`), so
+	// it is quoted rather than rejected. Unquoted, this component launched plain
+	// `.Settings` and reported success.
+	it('quotes the component so the device shell cannot expand an inner-class name', async () => {
+		const inner = 'com.android.settings/.Settings$MyDeviceInfoActivity';
+		answers({
+			[RESOLVE_SETTINGS]: `priority=0 isDefault=true\n${inner}\n`,
+			[`shell am start -n '${inner}'`]: AM_START,
+		});
+
+		await expect(backend.launchApp(SERIAL, SETTINGS)).resolves.toBeUndefined();
+		expect(runAdbOnDevice.mock.calls[1][1].at(-1)).toBe(`'${inner}'`);
 	});
 });
 
@@ -493,20 +574,16 @@ describe('no app verb swallows a failure', () => {
 			{ stdout: 'Performing Streamed Install\n', stderr: 'Failure [INSTALL_FAILED_OLDER_SDK]\n' },
 			() => backend.installApp(SERIAL, '/tmp/probe.apk'),
 		],
-		[
-			'launchApp',
-			{ stdout: NO_ACTIVITY, stderr: '' },
-			() => backend.launchApp(SERIAL, 'com.rover.nope'),
-		],
+		['launchApp', { stdout: NO_ACTIVITY, stderr: '' }, () => backend.launchApp(SERIAL, ABSENT)],
 		[
 			'stopApp',
 			{ stdout: '', stderr: 'Error: bad argument\n' },
-			() => backend.stopApp(SERIAL, 'com.rover.nope'),
+			() => backend.stopApp(SERIAL, ABSENT),
 		],
 		[
 			'clearAppData',
 			{ stdout: '', stderr: 'Failed\n' },
-			() => backend.clearAppData(SERIAL, 'com.rover.nope'),
+			() => backend.clearAppData(SERIAL, ABSENT),
 		],
 	];
 

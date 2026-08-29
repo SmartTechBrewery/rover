@@ -11,7 +11,9 @@
  *
  * Everything that touches the device goes through `./adb.js`, and everything that reads
  * its output goes through `./parsers/`. This file is the join between them and holds no
- * text-shaped knowledge of its own.
+ * text-shaped knowledge of its own — the wording every app verb asserts on lives in
+ * `./parsers/app-control.js`, pinned against captures, and every value that enters a
+ * device-side command line is quoted by `./adb.js`'s `shellArg`.
  */
 
 import {
@@ -22,15 +24,22 @@ import {
 	DeviceSchema,
 	type DeviceState,
 } from '../../core/device.js';
-import { type DeviceSerial, unwrap } from '../../core/ids.js';
+import { type AppId, type DeviceSerial, parseAppId, unwrap } from '../../core/ids.js';
 import {
 	type AdbResult,
 	INSTALL_ADB_TIMEOUT_MS,
 	quoteStream,
 	runAdb,
 	runAdbOnDevice,
+	shellArg,
 } from './adb.js';
 import { ANDROID_PLATFORM_ID } from './capabilities.js';
+import {
+	isSilent,
+	parseResolvedActivity,
+	saysSuccess,
+	startedActivity,
+} from './parsers/app-control.js';
 import { type AdbDevice, isUsable, parseAdbDevices } from './parsers/devices.js';
 import { parseGetprop } from './parsers/getprop.js';
 import { parseWmDensity, parseWmSize } from './parsers/wm.js';
@@ -84,43 +93,18 @@ function unparseable(command: string, result: AdbResult, cause: unknown): Error 
 }
 
 /**
- * The word `adb install` and `pm clear` both print, on a line of their own, when the work
- * was actually done. Matched as a whole line rather than against the trimmed stream: a
- * successful `adb install` on adb 37.0.1 prints four lines, of which this is the third
- * (PROJECT.md §6).
- */
-const SUCCESS_LINE = 'Success';
-
-/** `am start` names the intent it dispatched before anything can have gone wrong with it. */
-const START_DISPATCHED = 'Starting: Intent';
-
-/**
- * How `am` announces a refusal — with a line, never with an exit code it can be trusted on.
+ * The app id as it goes into a device-side command line.
  *
- * `Warning: Activity not started, …` is deliberately absent: it means the app was already
- * the top-most instance, which is a launch that succeeded. `Error type 3` and `Error: …`
- * are the two `am` prints for a component it will not start, and a shell command that
- * threw prints `Exception occurred while executing 'start':` above a Java stack trace
- * whose head line is the exception class (PROJECT.md §6).
+ * Two guards, because they fail at different times. {@link AppId} is the compile-time one
+ * — a caller cannot reach these verbs without having parsed the string — and a cast, an
+ * IPC payload deserialized without its schema or a backend called from JavaScript defeats
+ * it silently. Re-parsing here is the runtime one, at the last point before the value
+ * becomes part of a command the *device's* shell will read; `shellArg` then makes it one
+ * word regardless. Cheap, and this is the seam where being wrong costs someone else's
+ * device (PROJECT.md §6).
  */
-const AM_REFUSAL = /^(?:Error\b|Exception occurred\b|java\.[\w.]+(?:Exception|Error)\b)/;
-
-/** A `<package>/<class>` component name, the only shape `am start -n` accepts. */
-const COMPONENT = /^[^\s/]+\/\S+$/;
-
-/**
- * The meaningful lines of one captured stream.
- *
- * The `\r` is why this trims rather than splits alone: nothing on an API 37 emulator over
- * the v2 shell protocol carries one, but a device that falls back to a pty-backed shell
- * ends every line `\r\n`, and an equality test against `Success` is exactly the assertion
- * that would then silently stop matching.
- */
-function outputLines(stream: string): string[] {
-	return stream
-		.split('\n')
-		.map((line) => line.trim())
-		.filter((line) => line.length > 0);
+function appArg(appId: AppId): string {
+	return shellArg(unwrap(parseAppId(appId)));
 }
 
 /**
@@ -225,18 +209,19 @@ export class AndroidDeviceBackend
 	 * two-call dance the caller has to get right, and the caller asked for this package to
 	 * be on the device.
 	 *
-	 * The success test is a `Success` **line**, not the trimmed stream and not an empty
-	 * stderr — adb 37.0.1 wraps it in `Serving…`, `Performing Incremental Install` and
-	 * `Install command complete in N ms`, and writes `All files should be loaded. Notifying
-	 * the device.` to stderr on the way through (PROJECT.md §6). Either shortcut would
-	 * reject a install that worked.
+	 * `packagePath` is not quoted for a device shell the way the app ids below are, and does
+	 * not need to be: `adb install` is an adb subcommand that reads the file on the host,
+	 * so its argument stays an argv entry and never reaches a shell on either machine.
+	 * Whether the success wording is there is `./parsers/app-control.js`'s question — the
+	 * short version is that neither `stdout.trim() === 'Success'` nor an empty stderr
+	 * survives what a real install prints (PROJECT.md §6).
 	 */
 	async installApp(serial: DeviceSerial, packagePath: string): Promise<void> {
 		const result = await runAdbOnDevice(serial, ['install', '-r', packagePath], {
 			timeoutMs: INSTALL_ADB_TIMEOUT_MS,
 		});
 
-		if (!outputLines(result.stdout).includes(SUCCESS_LINE)) {
+		if (!saysSuccess(result.stdout)) {
 			throw refused(`adb install -r '${packagePath}'`, serial, result);
 		}
 	}
@@ -251,71 +236,72 @@ export class AndroidDeviceBackend
 	 * buries both in its own argument echo. Resolving first means the failure names the
 	 * app id, and the start names the component it actually dispatched.
 	 */
-	async launchApp(serial: DeviceSerial, appId: string): Promise<void> {
+	async launchApp(serial: DeviceSerial, appId: AppId): Promise<void> {
 		const component = await this.resolveLaunchComponent(serial, appId);
-		const result = await runAdbOnDevice(serial, ['shell', 'am', 'start', '-n', component]);
+		const result = await runAdbOnDevice(serial, [
+			'shell',
+			'am',
+			'start',
+			'-n',
+			shellArg(component),
+		]);
 
-		const dispatched = outputLines(result.stdout).some((line) => line.startsWith(START_DISPATCHED));
-		const refusal = [...outputLines(result.stdout), ...outputLines(result.stderr)].some((line) =>
-			AM_REFUSAL.test(line),
-		);
-		if (!dispatched || refusal) throw refused(`am start -n ${component}`, serial, result);
+		if (!startedActivity(result)) throw refused(`am start -n ${component}`, serial, result);
 	}
 
 	/**
 	 * `am force-stop <appId>`.
 	 *
 	 * **This is the one verb here with no success wording to assert**, so silence is the
-	 * assertion: on API 37 a force-stop that worked prints zero bytes on both streams, and
-	 * anything printed at all is therefore something going wrong. The cost is stated rather
-	 * than papered over — an app id no package has is *also* zero bytes and exit 0, so this
-	 * cannot tell "stopped it" from "there was nothing by that name" (PROJECT.md §6).
+	 * assertion: on API 37 a force-stop that worked prints nothing on either stream, and
+	 * anything the device said is therefore something going wrong. "Silence" is
+	 * {@link isSilent}'s definition and not an empty stderr — adb's own
+	 * `* daemon started successfully` lands there on the first call after a server restart,
+	 * on a force-stop that worked. The cost of the rule is stated rather than papered over:
+	 * an app id no package has is *also* silent and exit 0, so this cannot tell "stopped it"
+	 * from "there was nothing by that name" (PROJECT.md §6).
 	 * Answering whether the app is really gone is the verb layer's post-state (#11), which
 	 * reads the device rather than adb's opinion of it.
 	 */
-	async stopApp(serial: DeviceSerial, appId: string): Promise<void> {
-		const result = await runAdbOnDevice(serial, ['shell', 'am', 'force-stop', appId]);
+	async stopApp(serial: DeviceSerial, appId: AppId): Promise<void> {
+		const result = await runAdbOnDevice(serial, ['shell', 'am', 'force-stop', appArg(appId)]);
 
-		if (outputLines(result.stdout).length > 0 || outputLines(result.stderr).length > 0) {
-			throw refused(`am force-stop ${appId}`, serial, result);
-		}
+		if (!isSilent(result)) throw refused(`am force-stop ${unwrap(appId)}`, serial, result);
 	}
 
-	/** `pm clear <appId>` — `Success` on stdout, or the `Failed` this refuses to swallow. */
-	async clearAppData(serial: DeviceSerial, appId: string): Promise<void> {
-		const result = await runAdbOnDevice(serial, ['shell', 'pm', 'clear', appId]);
+	/** `pm clear <appId>` — the `Success` line, or the `Failed` this refuses to swallow. */
+	async clearAppData(serial: DeviceSerial, appId: AppId): Promise<void> {
+		const result = await runAdbOnDevice(serial, ['shell', 'pm', 'clear', appArg(appId)]);
 
-		if (!outputLines(result.stdout).includes(SUCCESS_LINE)) {
-			throw refused(`pm clear ${appId}`, serial, result);
+		if (!saysSuccess(result.stdout)) {
+			throw refused(`pm clear ${unwrap(appId)}`, serial, result);
 		}
 	}
 
 	/**
 	 * The `<package>/<class>` component to launch an app id by, asked of the device.
 	 *
-	 * `cmd package resolve-activity --brief` prints a `priority=… isDefault=true` header
-	 * line above its answer, so the answer is the **last** line — and it answers
-	 * `No activity found` on stdout with exit 0 both for a package that is not installed
-	 * and for one that is installed but has nothing launchable (PROJECT.md §6). Neither is
-	 * a component, which is why the shape is checked rather than the wording: the day that
-	 * sentence changes, an unlaunchable app must still fail here rather than be handed to
-	 * `am start -n` as a component name.
+	 * Reading the answer out of what `--brief` prints is
+	 * {@link parseResolvedActivity}'s; what belongs here is the failure, because a `null`
+	 * from it covers both "no such package" and "nothing launchable in it" — adb answers
+	 * the two identically, on stdout, exit 0 (PROJECT.md §6) — and only this side knows the
+	 * app id and the device to name.
 	 */
-	private async resolveLaunchComponent(serial: DeviceSerial, appId: string): Promise<string> {
+	private async resolveLaunchComponent(serial: DeviceSerial, appId: AppId): Promise<string> {
 		const result = await runAdbOnDevice(serial, [
 			'shell',
 			'cmd',
 			'package',
 			'resolve-activity',
 			'--brief',
-			appId,
+			appArg(appId),
 		]);
 
-		const answer = outputLines(result.stdout).at(-1) ?? '';
-		if (!COMPONENT.test(answer)) {
-			throw refused(`resolving a launchable activity of '${appId}'`, serial, result);
+		const component = parseResolvedActivity(result.stdout);
+		if (component === null) {
+			throw refused(`resolving a launchable activity of '${unwrap(appId)}'`, serial, result);
 		}
 
-		return answer;
+		return component;
 	}
 }

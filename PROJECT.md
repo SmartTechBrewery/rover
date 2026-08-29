@@ -268,6 +268,43 @@ in a way its exit code does not:
   a package that is not installed) — one word, no package name, nothing else. The error a caller
   sees has to add the app id and the device itself, because adb's own message identifies neither.
 
+Re-checked on the same emulator with `adb` 37.0.1 while responding to the review of #40, 2026-08-29.
+All four are about the *argument* side of the same discipline — what goes **into** an adb command
+rather than what comes out of one:
+
+- **`adb shell a b c` is not an argv on the device.** adb joins the arguments with single spaces
+  and hands the resulting string to the device's own `sh`, so every metacharacter in them is that
+  shell's. `execFile` protects the host shell and nothing else. Measured:
+  `adb -s $S shell am force-stop 'com.rover.nope;echo INJECTED'` printed `INJECTED` and exited 0,
+  and `adb -s $S shell pm clear 'com.rover.nope; echo Success'` came back with `Success` on stdout,
+  `Failed` on stderr and **exit 0** — a clear that never happened, reported as done, through the
+  same output check that exists to catch exactly that. So an app id is parsed to a shape before it
+  is used (`parseAppId`) and quoted at the call site (`shellArg`), not one or the other.
+- **An unquoted `$` in a component silently launches the wrong activity.**
+  `am start -n com.android.settings/.Settings$MyDeviceInfoActivity` started plain `.Settings` and
+  exited 0 — the device's shell expanded `$MyDeviceInfoActivity` to nothing — while
+  `am start -n 'com.android.settings/.Settings$MyDeviceInfoActivity'` started the activity asked
+  for. Inner-class activities are the common case, not an exotic one: `cmd package query-activities`
+  lists forty of them under Settings alone. A component is device output on its way back into a
+  device-side command line, and it is quoted for the same reason an app id is.
+- **The `* daemon …` banner reaches every verb, not just the device list.** It is written by the
+  adb *client* before it dispatches any subcommand, so it lands on the stderr of whatever ran
+  first after a server restart. Captured on a `force-stop` that worked:
+  `adb kill-server; adb -s $S wait-for-device shell am force-stop com.android.settings` exits 0 with
+  an empty stdout and `* daemon not running …` / `* daemon started successfully` on stderr. Any
+  "this stream must be empty" assertion is defeated by it intermittently and unreproducibly, which
+  is why the filter is one shared predicate rather than a rule each verb re-derives. (On this
+  emulator a plain `-s $S` command in the same position exits 1 with `adb: device offline` instead,
+  which the runner already turns into a failure — the silent shape needs the device to be reachable
+  the moment the server comes up.)
+- **A successful `adb install -r` prints two lines here, not the four §6 recorded above.**
+  `Performing Streamed Install` / `Success`, empty stderr — adb picked the streamed path rather
+  than the incremental one for this APK. Both captures are in `tests/fixtures/adb/`, and both
+  defeat `stdout.trim() === 'Success'`, which is the point: the number of lines around the word is
+  not a fact worth depending on. `install -r` of a debug build also fails with
+  `INSTALL_FAILED_TEST_ONLY: … Did you forget to add -t?` (exit 1) — the flag is not one the
+  primitive passes, so a test-only APK is a caller's problem to know about.
+
 Not device findings, but the same kind of trap — observed on macOS 25.6 / Node 25.2 while building
 the daemon's unix socket transport (R6), 2026-08-29:
 
