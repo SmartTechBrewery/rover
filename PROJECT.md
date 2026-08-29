@@ -1,7 +1,7 @@
 # PROJECT.md — Rover
 
 > A living document. Updated as the tool is being built.
-> Last updated: 2026-08-28
+> Last updated: 2026-08-29
 
 ---
 
@@ -98,6 +98,8 @@ one owning host (D18), and the verbs execute **where the device is** (D19).
 | D19 | **The verbs execute on the host; the adapters are clients** | The alternative — the client gets a serial and calls adb itself — requires adb reachable over the network, which D18 forbids, and it strands the project hooks and helper services (D13, port allocation) on the far side of the network from the device they exist to serve. The core stays a library; only which process loads it changes. The consequence to keep in mind in every verb that returns a file: artifacts come back as bytes, and a path handed to the agent must exist **on the agent's machine** | 2026-08-27 |
 | D20 | **The host token authenticates; the lease owner attributes. Two different fields** | Anything listening on a network lets strangers in, so a host needs a shared secret. It is tempting to derive the owner from whoever authenticated — and then either the token lands in reports and logs, or the attribution cannot be overridden, and Swarm is supposed to put its run identity there (D16). The token says "you may take devices from here"; the owner says "`pr-127-review` is holding this" | 2026-08-27 |
 | D21 | **Rover never starts an emulator or connects a physical device — that is the host operator's job** | The host only ever reports what `adb devices` already shows on its own machine (D6). Bringing hardware online — booting an emulator, plugging in a phone — is physical, local work done by whoever operates that machine; it is never a verb the daemon executes and never something a remote client can trigger. Rover's job starts once the device is already there | 2026-08-28 |
+| D22 | **A lease carries two more explicit, caller-supplied strings: `project` and `test_name`** | `owner` (D16) alone does not give an artifact a findable home: two projects can reuse the same owner string, and "before/after" comparisons need a way to group runs by what they were checking. `project` names which registered project a lease belongs to; `test_name` names the scenario being run and is **deliberately not required to be unique** — running "home screen before changes" and "home screen after changes" as two separate leases with the same-shaped name is the point, not an error case. Both are opaque strings the core never inspects, parses or defaults from context, exactly like `owner` (D20) | 2026-08-29 |
+| D23 | **The host durably archives every artifact-producing verb's output, additive to D19's bytes-over-the-wire return** | A screenshot handed to the agent once during a session answers "does it work right now"; it cannot answer "does it still look the way it did before the refactor" unless a copy survives on disk to diff against later. The archive (§10) is a second effect of the same verb call — it changes nothing about what the client receives, and a path into the archive is never a path handed to the agent. D19 keeps holding: artifacts still cross the machine boundary as bytes | 2026-08-29 |
 
 ---
 
@@ -110,7 +112,7 @@ Working names. All of them take a device handle.
 | Verb | What it does |
 |---|---|
 | `list_devices` | What is attached, what is free, whose is what |
-| `acquire_device` | Takes a device exclusively; returns a handle and the capability list |
+| `acquire_device` | Takes a device exclusively; returns a handle and the capability list. Also takes `project` and an optional `test_name` — caller-supplied attribution strings that name the destination in the artifact archive, not application logic (D22, §10) |
 | `release_device` | Hands it back and restores the original state |
 
 ### Input
@@ -263,7 +265,7 @@ Four rules when filing these issues:
 | R5 | Android backend: enumeration, `device_info`, lifecycle | The first registered manifest — `index.ts` lands in the change that removes the last stub, not earlier. Reports density and the computed width in dp (D14) | R2, R3, R4 | L |
 | R6 | Daemon: process, socket, autostart, IPC | Autostart on the first call (D5). **Two concurrent CLI invocations produce one daemon** — whoever loses the bind connects to the winner, not to a lock file. Every message parsed by a schema, never cast. **The IPC surface is transport-agnostic from day one** (D17) — the network listener from R22 is to be an added transport, not a rewrite | R1 | M |
 | R7 | Device inventory in the daemon | The `adb track-devices` stream plus **re-verification at every grant** (D6). A device that disappeared mid-lease is a named error, not an exception to the rule. **The host does not take into inventory a device attached through `adb connect` to somebody else's host** (D18) — the refusal is loud and names the reason | R5, R6 | M |
-| R8 | Leases | Granted per device (D7), the owner an explicit string (D16), a 20-minute TTL **renewed by activity**, not by a heartbeat (D8). **A test with five concurrent clients yields exactly one winner** — the predecessor let four through. Only the host that owns the device grants the lease, and the handle names the host (D18) | R7 | L |
+| R8 | Leases | Granted per device (D7), the owner an explicit string (D16), a 20-minute TTL **renewed by activity**, not by a heartbeat (D8). **A test with five concurrent clients yields exactly one winner** — the predecessor let four through. Only the host that owns the device grants the lease, and the handle names the host (D18). The lease additionally carries `project` and an optional `test_name` (D22) — two more explicit, caller-supplied strings, never inspected or defaulted by the core | R7 | L |
 | R9 | State restoration | Stop the app, airplane mode off, wifi back on, the project hook. **A test proves the teardown runs on the expiry path too**, not only on `release` (D9) | R8 | M |
 | R10 | CLI: `list`, `acquire`, `release`, `status` | Readable by a human and scriptable. This is the interface everything above is debugged through (D4). The host is named by a flag; no flag means the local host | R8 | S |
 | R11 | Verb layer foundation | Target resolution from a **fresh** read inside the verb, waiting on a condition with a timeout, returning the state after the action (D12). **There is not a single `sleep` in the repo** — enforced by a lint rule or a test. A timeout says what it waited for and what it found instead. A verb's result is serializable — the host will execute it, not the client (D19, R21) | R5, R8 | L |
@@ -276,7 +278,8 @@ Four rules when filing these issues:
 | R15 | App verbs | `install_app`, `launch_app`, `stop_app`, `clear_app_data`, `read_logs`, `pull_file`, `push_file`. `read_logs` is to catch a failure a screenshot will not show | R21 | M |
 | R16 | Environment verbs | `set_airplane_mode`, `set_wifi` through `cmd connectivity` and `cmd wifi` — **not** through `svc`, which is gone (§6). Both paths without root | R21 | S |
 | R24 | Artifact transfer across the machine boundary | Screenshots, recordings and pulled files come back as bytes; **a path returned to the agent exists on the agent's machine** (D19). In the other direction: `install_app` and `push_file` send a file to the host. The recording from R14 finishes on the host before the transfer, not during it. The size limit is explicit and named, and does not announce itself as a truncated file | R23, R13, R14, R15 | M |
-| R17 | Project hooks (D13) | A Zod schema: the install command, helper services, teardown. **The core knows no application's name**, and a default value that mentions one is a bug | R9 | M |
+| R25 | Durable artifact archive on the host | Every verb that produces a screenshot, a recording, or a log pull additionally writes it into `<project>/<test_name>/<lease-id>/<device-serial>/…` on the host (D23, §10), alongside a `device_info.json` snapshot per lease-device pair (D14). **An absent `test_name` falls back to a single fixed directory name**, so the tree shape never varies. **The archive path is never the one returned to the agent** — R24's bytes-over-the-wire contract is unchanged by this row. Retention (a TTL or size cap, and who prunes) is explicitly out of scope here — see §9.4 | R8, R13, R14, R15, R24 | M |
+| R17 | Project hooks (D13) | A Zod schema: the install command, helper services, teardown. **The core knows no application's name**, and a default value that mentions one is a bug. The schema also carries the `project` identifier consumed by R25's archive (D22), so it is set once per project instead of retyped by every caller | R9 | M |
 | R18 | Per-slot helper service port allocation | No race, with recovery after an orphaned slot. The precondition for parallel work with more than two devices | R17 | S |
 | R19 | MCP server | Verbs as tools, Zod schemas as their declarations. **A missing capability is a loud, agent-readable error** naming the capability and the device (D11) — never a silent degradation. Zero verb logic in this layer. Pointing at a remote host is server configuration, not a tool parameter — the agent does not know where the hardware sits | R12, R13, R15, R16, R23 | L |
 | R20 | `README.md` — quick start | The file has existed since the repo was created and describes the shape of the project; what it lacks is what could not be written before the code: how to start the daemon, take a device and wire up the MCP server, with commands that work. Separately: how to expose a host on the network and how to connect to somebody else's | R10, R19, R24 | S |
@@ -291,3 +294,49 @@ Four rules when filing these issues:
 - **A `Planning` column on the board.** Swarm maps such a status in its project configuration and
   our board does not have one (`ai/RULES.md` §5). To be settled when onboarding Rover into Swarm:
   add the column or configure that phase away. Do not add a column nobody uses in the meantime.
+- **Retention policy for the artifact archive (§10, D23).** A TTL, a size cap, and who runs the
+  prune — a human operator by cron, or the daemon itself — are all undecided. R25 builds the
+  archive with no pruning; a follow-up row is filed once the shape of R25 has actually been used
+  and it is clear what fills a disk first.
+
+---
+
+## 10. Artifact retention on the host
+
+Every verb that produces a screenshot, a recording, or a log pull writes into a fixed directory
+tree on the host, **in addition to** returning bytes to the client (D19, D23) — this is a second,
+host-local effect of the same call, never a substitute for it and never a path handed to the agent.
+
+```
+<rover-data-dir>/artifacts/
+  <project>/
+    <test_name-or-"unlabeled">/
+      <lease-id>/                    # <timestamp>-<owner>-<hash>, generated by the daemon
+        <device-serial>/
+          device_info.json           # size, density, dp scale, OS version — a static copy of D14
+          screenshots/
+            001_<verb>.png
+          recordings/
+            001.mp4
+            001_frames/
+              0001.png
+          logs/
+            001_read_logs.txt
+```
+
+- **`project` and `test_name` are opaque, caller-supplied strings** (D22) — the core never parses,
+  validates their content, or derives one from the other. `project` is the top-level partition, so
+  two projects reusing the same `owner` or `test_name` never collide.
+- **`test_name` is deliberately not unique.** Two leases can carry the same name at two different
+  points in time — exactly the shape a before/after refactor comparison needs: list the directory
+  and the two most recent runs are the two sides of the diff.
+- **An absent `test_name` falls back to one fixed directory name** (`unlabeled`), so the tree shape
+  never branches on whether the field was supplied.
+- **`lease-id` needs no project or test name baked into it** — both are already the enclosing
+  directories. It stays `<timestamp>-<owner>-<hash>`: chronological within its folder, and
+  self-disambiguating without repeating information the path already carries.
+- **The archive path is never the one returned to the agent** (D19, R24 unchanged). A client asking
+  "what does the archive look like" is a different question from "what did this verb call return",
+  and the two are never conflated.
+- **Retention is undecided** (§9.4) — without one, this grows without bound on machines that
+  usually have the least disk to spare.

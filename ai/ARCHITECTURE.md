@@ -123,4 +123,4 @@ Everything application-specific is a hook in the project's configuration file (D
 
 ## Not built, deliberately
 
-No database — the daemon's state is per-host, ephemeral and re-derivable. No cloud half. No CI gate. No device farm, no host catalogue and no registration of hosts with one another: a client learns about hosts from its own configuration and nowhere else (`PROJECT.md` §7). No comparison against design renders: Rover supplies screenshots and measurements; judging them is the agent's job.
+No database — the daemon's *operational* state (inventory, leases, ports) is per-host, ephemeral and re-derivable. The artifact archive (`PROJECT.md` §10, D23) is a deliberate exception: files on disk, not daemon state, and nothing the daemon needs to survive a restart to keep working. No cloud half. No CI gate. No device farm, no host catalogue and no registration of hosts with one another: a client learns about hosts from its own configuration and nowhere else (`PROJECT.md` §7). No comparison against design renders: Rover supplies screenshots and measurements; judging them is the agent's job.
