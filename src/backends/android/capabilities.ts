@@ -7,13 +7,16 @@
  * forces an exemption that disables the conformance gate for the backends already passing
  * it.
  *
- * Every capability is still declared `false`, and that is not the manifest lagging behind
- * the platform: the flags describe what the class in `./backend.ts` answers *today*. Each
- * one flips in the change that lands the methods behind it — `canReadScreen` in #13,
- * `canInput` in #12, `canControlNetwork` in #16 — so the manifest is honest at every
- * commit rather than aspirational. A capability declared before its methods exist is
- * exactly the "an agent is told a device can do something it cannot" failure D11 is for,
- * and an honest opt-out is a complete backend rather than an unfinished one.
+ * Each flag flips in the change that lands the methods behind it, so the manifest is
+ * honest at every commit rather than aspirational: `canControlNetwork` flipped here (#9)
+ * because state restoration needs `setAirplaneMode` and `setWifiEnabled` to be real before
+ * anything drives them, and `canReadScreen` (#13) and `canInput` (#12) are still declared
+ * `false` because their methods do not exist yet. R16 is the *verb* layer over what #9
+ * landed, not the primitives, so it is not what moves this flag.
+ *
+ * A capability declared before its methods exist is exactly the "an agent is told a device
+ * can do something it cannot" failure D11 is for, and an honest opt-out is a complete
+ * backend rather than an unfinished one.
  */
 
 import type { CapabilityManifestInput } from '../../core/capabilities.js';
@@ -27,6 +30,6 @@ export const androidCapabilityManifest: CapabilityManifestInput = {
 	capabilities: {
 		canReadScreen: false,
 		canInput: false,
-		canControlNetwork: false,
+		canControlNetwork: true,
 	},
 };

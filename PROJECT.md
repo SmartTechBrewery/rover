@@ -411,6 +411,51 @@ set is `adb track-devices -l`, and every trap below cost something to find:
   about how this host reached it, and `adb connect HOST[:PORT]` writes that address into the serial
   itself.
 
+Checked on the same API 37 emulator (`sdk_gphone16k_arm64`) with `adb` 37.0.1-15733141 while
+building the environment primitives (#9), 2026-08-29. §6 above vouched for the two recipes and
+recorded nothing about what they print — this is that half, and the last bullet is the one phase 2's
+step order depends on:
+
+- **`svc` still has no `wifi` and no `data`.** Re-confirmed on this build: `adb -s $S shell svc`
+  lists `power`, `usb`, `nfc`, `system-server` and nothing else. The recipes below are the
+  replacements, and both run without root.
+- **Both recipes are completely silent on success, and exit 0.** `cmd connectivity airplane-mode
+  enable|disable` and `cmd wifi set-wifi-enabled enabled|disabled` each printed **zero bytes on
+  both streams** — the same shape `am force-stop` has, so silence is the only assertable success
+  and anything printed is a failure. `set-wifi-enabled disabled`, the one argument §6 had never
+  vouched for, behaves exactly like its counterpart.
+- **Both are idempotent and equally silent about it.** Disabling airplane mode that is already off,
+  or asking twice for wifi the device already has, is zero bytes and exit 0 as well — so a
+  restoration routine may set the resting state unconditionally without a read first.
+- **Their two vocabularies do not match, and a wrong word is loud.** `airplane-mode` takes
+  `enable`/`disable`; `set-wifi-enabled` takes `enabled`/`disabled`. Crossing them is not a silent
+  no-op: `cmd wifi set-wifi-enabled true` answers `Invalid args for set-wifi-enabled:
+  java.lang.IllegalArgumentException: Expected 'enabled' or 'disabled' as next arg but got 'true'`,
+  and `cmd connectivity airplane-mode nonsense` prints the connectivity service's entire help text
+  — both **on stdout with an empty stderr**, exit 255. That is the opposite of `am start`, which
+  puts its refusals on stderr, and it is why the check reads both streams rather than picking one.
+- **Here, unlike the app verbs, the exit code is trustworthy too** — every refusal captured exited
+  255 while every success exited 0, so `runAdb` rejects a bad argument before any predicate sees it.
+  The predicate still refuses printed output: an exit code that happens to agree today is not a
+  reason to stop reading what the device said.
+- **`cmd connectivity airplane-mode` with no argument is a getter** — it answers `disabled` /
+  `enabled` on stdout, exit 0. `cmd wifi status` is the wifi counterpart, whose first line is
+  `Wifi is enabled` / `Wifi is disabled`. Noted rather than used: `DeviceBackend` has no
+  network-state getter, and adding one is not #9's job.
+- **Airplane mode moves wifi as a side effect, and the direction depends on state the device
+  remembers.** Both were observed on this one emulator within one session, with
+  `settings get global wifi_on` naming which: from `wifi_on=1` (on), `airplane-mode enable` gave
+  `wifi_on=3` and `Wifi is disabled` — but after wifi had once been switched on *while airplane
+  mode was on* (`wifi_on=2`, the Android 13+ "wifi stays on in airplane mode" override), the very
+  next `airplane-mode enable` left it at `wifi_on=2` and `Wifi is enabled`. `wifi_apm_state` reads
+  `null` throughout, so the remembered bit is not visible in `settings`. **Turning airplane mode
+  off never switches wifi on**: with wifi off and airplane mode on, `airplane-mode disable` left
+  `wifi_on=0` and `Wifi is disabled`. The reverse is not true — `set-wifi-enabled` never changed
+  `airplane_mode_on`, and `set-wifi-enabled enabled` is honoured while airplane mode is still on.
+  So a restoration routine (R9) must set **both** explicitly and set **wifi last**: the airplane
+  step can move wifi underneath it, in a direction no caller can predict, while the wifi step
+  cannot move airplane mode.
+
 ---
 
 ## 7. Scope
@@ -491,7 +536,7 @@ Four rules when filing these issues:
 | R6 | Daemon: process, socket, autostart, IPC | Autostart on the first call (D5). **Two concurrent CLI invocations produce one daemon** — whoever loses the bind connects to the winner, not to a lock file. Every message parsed by a schema, never cast. **The IPC surface is transport-agnostic from day one** (D17) — the network listener from R22 is to be an added transport, not a rewrite | R1 | M |
 | R7 | Device inventory in the daemon | The `adb track-devices` stream plus **re-verification at every grant** (D6). A device that disappeared mid-lease is a named error, not an exception to the rule. **The host does not take into inventory a device reached through `adb connect` rather than physically attached** (D18) — the refusal is loud and names the reason | R5, R6 | M |
 | R8 | Leases | Granted per device (D7), the owner an explicit string (D16), a 20-minute TTL **renewed by activity**, not by a heartbeat (D8). **A test with five concurrent clients yields exactly one winner** — the predecessor let four through. Only devices physically attached to the host are ever granted a lease (D18). The lease additionally carries `project` and an optional `test_name` (D22) — two more explicit, caller-supplied strings, never inspected or defaulted by the core | R7 | L |
-| R9 | State restoration | Stop the app, airplane mode off, wifi back on, the project hook. **A test proves the teardown runs on the expiry path too**, not only on `release` (D9) | R8 | M |
+| R9 | State restoration | Stop the app, airplane mode off, wifi back on, the project hook. **A test proves the teardown runs on the expiry path too**, not only on `release` (D9). Split in two: the backend's network primitives landed first (#9) so the routine has something real to drive, and §6 records why it must set both radios explicitly with **wifi last** | R8 | M |
 | R10 | CLI: `list`, `acquire`, `release`, `status` | Readable by a human and scriptable. This is the interface everything above is debugged through (D4). The host is named by a flag; no flag means the local host | R8 | S |
 | R11 | Verb layer foundation | Target resolution from a **fresh** read inside the verb, waiting on a condition with a timeout, returning the state after the action (D12). **There is not a single `sleep` in the repo** — enforced by a lint rule or a test. A timeout says what it waited for and what it found instead. A verb's result is serializable — the host will execute it, not the client (D19, R21) | R5, R8 | L |
 | R21 | Host-side verb execution | The daemon loads the core; the CLI and MCP call verbs over the same surface as leases (D19). **No adb in a client process** — checkable by a test. This row stands ahead of the verb families deliberately: changing the execution model after they are written is a rewrite of six files instead of one | R11 | L |
@@ -500,7 +545,7 @@ Four rules when filing these issues:
 | R13 | Read verbs | `screenshot`, `read_screen`, `device_info`. `read_screen` works with screen capture blocked and **is a declared capability, not a required method** (§5) | R21 | M |
 | R14 | `record_video` + slicing into frames | The recording must finish before it is pulled — a file pulled earlier has no `moov` atom and cannot be read at all | R13 | S |
 | R15 | App verbs | `install_app`, `launch_app`, `stop_app`, `clear_app_data`, `read_logs`, `pull_file`, `push_file`. `read_logs` is to catch a failure a screenshot will not show | R21 | M |
-| R16 | Environment verbs | `set_airplane_mode`, `set_wifi` through `cmd connectivity` and `cmd wifi` — **not** through `svc`, which is gone (§6). Both paths without root | R21 | S |
+| R16 | Environment verbs | `set_airplane_mode`, `set_wifi` through `cmd connectivity` and `cmd wifi` — **not** through `svc`, which is gone (§6). Both paths without root. The **primitives** landed with R9's first phase (#9) — `setAirplaneMode` / `setWifiEnabled` on the Android backend, behind `canControlNetwork` — so this row is the verb layer over them, not the recipes themselves | R21 | S |
 | R24 | Artifact transfer across the machine boundary | Screenshots, recordings and pulled files come back as bytes; **a path returned to the agent exists on the agent's machine** (D19). In the other direction: `install_app` and `push_file` send a file to the host. The recording from R14 finishes on the host before the transfer, not during it. The size limit is explicit and named, and does not announce itself as a truncated file | R13, R14, R15 | M |
 | R25 | Durable artifact archive on the host | Every verb that produces a screenshot, a recording, or a log pull additionally writes it into `<project>/<test_name>/<lease-id>/<device-serial>/…` on the host (D23, §10), alongside a `device_info.json` snapshot per lease-device pair (D14). **An absent `test_name` falls back to a single fixed directory name**, so the tree shape never varies. **The archive path is never the one returned to the agent** — R24's bytes-over-the-wire contract is unchanged by this row. Retention (a TTL or size cap, and who prunes) is explicitly out of scope here — see §9.4 | R8, R13, R14, R15, R24 | M |
 | R17 | Project hooks (D13) | A Zod schema: the install command, helper services, teardown. **The core knows no application's name**, and a default value that mentions one is a bug. The schema also carries the `project` identifier consumed by R25's archive (D22), so it is set once per project instead of retyped by every caller | R9 | M |

@@ -4,15 +4,19 @@
  * It answers every required method of the contract — enumeration, presence, the device
  * facts, the app lifecycle and the capture — with no stub, which is what lets it declare
  * `implements DeviceBackend` and what lets `./index.ts` register it (ai/TESTING.md, "A
- * backend under construction registers nothing"). The three capability-gated groups are a
- * declared opt-out in `./capabilities.ts` rather than an omission, and each flips in the
- * change that lands its methods.
+ * backend under construction registers nothing"), plus the environment pair behind
+ * `canControlNetwork`. The capability-gated groups that are still missing are a declared
+ * opt-out in `./capabilities.ts` rather than an omission, and each flips in the change
+ * that lands its methods.
  *
  * Everything that touches the device goes through `./adb.js`, and everything that reads
  * its output goes through `./parsers/`. This file is the join between them and holds no
- * text-shaped knowledge of its own — the wording every app verb asserts on lives in
- * `./parsers/app-control.js`, pinned against captures, and every value that enters a
- * device-side command line is quoted by `./adb.js`'s `shellArg`.
+ * text-shaped knowledge of its own — the wording each verb asserts on lives in
+ * `./parsers/app-control.js` and `./parsers/network.js`, pinned against captures, and
+ * every **caller-supplied** value that enters a device-side command line is quoted by
+ * `./adb.js`'s `shellArg`. The one exception is stated where it happens: the environment
+ * pair passes one of two literals this file owns, which no caller's string reaches. A new
+ * argument that is not such a literal takes `shellArg`.
  */
 
 import {
@@ -55,6 +59,7 @@ import {
 	parseAdbDevices,
 } from './parsers/devices.js';
 import { parseGetprop } from './parsers/getprop.js';
+import { acceptedNetworkChange } from './parsers/network.js';
 import { isPng } from './parsers/screencap.js';
 import { TrackFrameDecoder } from './parsers/track.js';
 import { parseWmDensity, parseWmSize } from './parsers/wm.js';
@@ -454,6 +459,69 @@ export class AndroidDeviceBackend implements DeviceBackend {
 		if (!isPng(result.stdout)) throw notAnImage(serial, result);
 
 		return result.stdout;
+	}
+
+	/**
+	 * `cmd connectivity airplane-mode enable|disable` — the first half of the environment
+	 * pair the daemon restores on release and on expiry (D9).
+	 *
+	 * **Not `svc`.** On API 37 `svc` has only `power`, `usb`, `nfc` and `system-server`, so
+	 * every guide showing `svc wifi disable` / `svc data disable` is out of date; this path
+	 * works without root (PROJECT.md §6, re-confirmed on adb 37.0.1).
+	 *
+	 * The two words are the platform's, not a rendering of the boolean: this command takes
+	 * `enable`/`disable` while {@link setWifiEnabled} next door takes `enabled`/`disabled`.
+	 * Neither is quoted with `shellArg`, and that asymmetry with every app verb above is
+	 * deliberate rather than an omission — the argument is one of two literals this file
+	 * owns and no caller's string reaches it, which is the property `shellArg` exists to
+	 * restore when one does.
+	 *
+	 * **This is not a wifi switch, in either direction.** Airplane mode moves wifi as a side
+	 * effect whose direction depends on state the device remembers, and turning it off never
+	 * switches wifi on (PROJECT.md §6) — so a caller restoring a device sets both explicitly
+	 * and sets wifi last.
+	 */
+	async setAirplaneMode(serial: DeviceSerial, enabled: boolean): Promise<void> {
+		const argument = enabled ? 'enable' : 'disable';
+		const result = await runAdbOnDevice(serial, [
+			'shell',
+			'cmd',
+			'connectivity',
+			'airplane-mode',
+			argument,
+		]);
+
+		if (!acceptedNetworkChange(result)) {
+			throw refused(`cmd connectivity airplane-mode ${argument}`, serial, result);
+		}
+	}
+
+	/**
+	 * `cmd wifi set-wifi-enabled enabled|disabled` — the other half, same era of dead
+	 * recipe, same absence of a success wording (see {@link acceptedNetworkChange}).
+	 *
+	 * `enabled`/`disabled`, **not** `enable`/`disable`: the two commands disagree about the
+	 * words for the same boolean, and nothing but a device says so — a crossed pair compiles,
+	 * reads correctly and is refused only once it gets there (exit 255, PROJECT.md §6). That
+	 * is why the argv of all four calls is pinned in
+	 * `tests/unit/backends/android/backend.test.ts`.
+	 *
+	 * Honoured while airplane mode is on, and does not change airplane mode itself
+	 * (PROJECT.md §6) — which is what makes it the safe last step of a restoration.
+	 */
+	async setWifiEnabled(serial: DeviceSerial, enabled: boolean): Promise<void> {
+		const argument = enabled ? 'enabled' : 'disabled';
+		const result = await runAdbOnDevice(serial, [
+			'shell',
+			'cmd',
+			'wifi',
+			'set-wifi-enabled',
+			argument,
+		]);
+
+		if (!acceptedNetworkChange(result)) {
+			throw refused(`cmd wifi set-wifi-enabled ${argument}`, serial, result);
+		}
 	}
 
 	/**

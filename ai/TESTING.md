@@ -9,9 +9,19 @@ Note the double meaning of "test" in this repo and keep it straight: Rover *perf
 **Vitest**, not Jest. Split into two projects:
 
 - **Unit tests** (`tests/unit/**/*.test.ts`) — mock every external call: `adb`, `simctl`, the filesystem, the socket. No real device, no real daemon. `vi.mock()` at the top of the file, before imports. One deliberate exception, below.
-- **Device tests** (`tests/device/**/*.test.ts`) — run against a **real attached device**, serially. They gate on `describe.skipIf(!process.env.ROVER_TEST_DEVICE)`, set by `tests/device/setup.ts` when it finds a usable device, so a machine with nothing attached **skips rather than fails**. Same pattern as Swarm's database gate.
+- **Device tests** (`tests/device/**/*.test.ts`) — run against a **real attached device**, serially. They gate on `describe.skipIf(!process.env.ROVER_TEST_DEVICE)`, set by `tests/device/setup.ts` when it finds a usable device, so a machine with nothing attached **skips rather than fails**. Same pattern as Swarm's database gate. A suite that changes the device's own network gates on `ROVER_TEST_LOCAL_DEVICE` instead — the same probe, narrowed to a device physically attached to this host, since one reached over a network transport cannot be taken off the network it is reached over (D18). Gate on what the suite may actually touch: a suite that runs where it may not touch anything fails where it should have skipped.
 
-Device tests take a lease like any other client. A device test that talks to `adb` directly, outside the lease, will eventually run on a device another agent is using, and that is precisely the failure this whole project exists to prevent.
+Device tests take a lease like any other client. A device test that talks to `adb` directly, outside the lease, will eventually run on a device another agent is using, and that is precisely the failure this whole project exists to prevent. One temporary exemption, below.
+
+### The exemption: `tests/device/` drives the backend directly, until a daemon can lend a device
+
+Every suite under `tests/device/` constructs the backend class and calls it, outside any lease. That is a departure from the rule above, and unlike the socket exception below it is **temporary** — it is a wiring gap, not a property of what the suites assert.
+
+- **What is exempt.** All of `tests/device/`, and only for the lease: every other rule here still binds them, and a suite that changes device state additionally restores it (see the network suite).
+- **Why.** `src/daemon/main.ts` does not import the backend barrel, so a running daemon has an empty registry and would refuse to lend a device that is plainly attached (README.md, "Where things are"). There is no lease for a device test to take today, so the choice is between this exemption and no device coverage at all.
+- **What ends it.** The barrel wired into the daemon, plus a helper under `tests/helpers/` that acquires and releases a lease around a suite. When both exist, convert every suite in one change and delete this section — the exemption expires with the gap, not with any particular issue being closed.
+
+Until then, say *this* in a suite header rather than "leases do not exist yet": leases do exist, and the reason a suite is not taking one has moved.
 
 ### The exception: `tests/unit/daemon/` uses a real socket and real child processes
 

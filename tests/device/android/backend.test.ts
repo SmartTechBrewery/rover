@@ -13,7 +13,8 @@ import { parseDeviceSerial } from '@/core/ids.js';
  * looking at. That matters more than usual right now, because of the next paragraph.
  *
  * ai/TESTING.md says a device test takes a lease like any other client, and this one does
- * not: leases do not exist yet (R8/#8). Until they do it drives the backend class
+ * not: leases exist since R8/#8, but the daemon registers no backend, so there is none to
+ * take (ai/TESTING.md, "The exemption"). Until that is wired it drives the backend class
  * directly, which is the honest description of what it does rather than a gap worth
  * papering over. Every assertion below is a property of whatever device is attached — no
  * model, size or API level is hardcoded, because the machine running this has a different

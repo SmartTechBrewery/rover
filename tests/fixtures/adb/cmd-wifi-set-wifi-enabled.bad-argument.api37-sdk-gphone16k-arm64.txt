@@ -1,0 +1,1 @@
+Invalid args for set-wifi-enabled: java.lang.IllegalArgumentException: Expected 'enabled' or 'disabled' as next arg but got 'nonsense'
