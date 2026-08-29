@@ -17,8 +17,10 @@ one: a parser has to keep working on the API levels already in use.
 
 ## Captures
 
-All from an Android Emulator AVD `Pixel_10_Pro` (`sdk_gphone16k_arm64`, API 37 / Android 17),
-`adb` 37.0.0-14910828 on macOS, captured **2026-08-29**. `SERIAL` is `emulator-5554`.
+All from an Android Emulator AVD `Pixel_10_Pro` (`sdk_gphone16k_arm64`, API 37 / Android 17) on
+macOS, captured **2026-08-29**. `SERIAL` is `emulator-5554`. The enumeration, `wm` and
+`uiautomator` rows were taken with `adb` 37.0.0-14910828; the app-control rows below them
+(`install-success` onwards) with `adb` 37.0.1-15733141, the version that host had by then.
 
 | Fixture | Command | Model | API | Captured |
 |---|---|---|---|---|
@@ -33,6 +35,13 @@ All from an Android Emulator AVD `Pixel_10_Pro` (`sdk_gphone16k_arm64`, API 37 /
 | `devices-l.daemon-failed.txt` | `adb kill-server; adb devices -l > f 2>&1`, racing a still-shutting-down daemon | — (none attached) | — | 2026-08-29 |
 | `devices-l.empty.txt` | `adb devices -l`, emulator shut down | — (none attached) | — | 2026-08-29 |
 | `uiautomator.api37-sdk-gphone16k-arm64.xml` | `adb -s $SERIAL shell uiautomator dump /sdcard/window_dump.xml` then `adb -s $SERIAL exec-out cat /sdcard/window_dump.xml` | sdk_gphone16k_arm64 | 37 | 2026-08-29 |
+| `install-success.api37-sdk-gphone16k-arm64.txt` | `adb -s $SERIAL install -r -t app.apk` (stdout) | sdk_gphone16k_arm64 | 37 | 2026-08-29 |
+| `resolve-activity.api37-sdk-gphone16k-arm64.txt` | `adb -s $SERIAL shell cmd package resolve-activity --brief com.android.settings` | sdk_gphone16k_arm64 | 37 | 2026-08-29 |
+| `resolve-activity.none.api37-sdk-gphone16k-arm64.txt` | the same for `com.rover.nope` | sdk_gphone16k_arm64 | 37 | 2026-08-29 |
+| `am-start.api37-sdk-gphone16k-arm64.txt` | `adb -s $SERIAL shell am start -n com.android.settings/.Settings` (stdout) | sdk_gphone16k_arm64 | 37 | 2026-08-29 |
+| `am-start.top-most.api37-sdk-gphone16k-arm64.txt` | the same again while it is on top, `> f 2>&1` | sdk_gphone16k_arm64 | 37 | 2026-08-29 |
+| `am-force-stop.daemon-start.stderr.api37-sdk-gphone16k-arm64.txt` | `adb kill-server; adb -s $SERIAL wait-for-device shell am force-stop com.android.settings 2> f` | sdk_gphone16k_arm64 | 37 | 2026-08-29 |
+| `pm-clear-success.api37-sdk-gphone16k-arm64.txt` | `adb -s $SERIAL shell pm clear com.android.traceur` (stdout) | sdk_gphone16k_arm64 | 37 | 2026-08-29 |
 
 Both `wm` overrides were reset with `wm size reset` / `wm density reset` immediately after the
 capture.
@@ -67,6 +76,25 @@ re-capturing — a fixture nobody can re-create is a fixture nobody can extend.
   `\n` → `\r\n` and corrupts the document. `uiautomator dump /dev/tty` is the other tempting
   shortcut and is also wrong — it interleaves adb's own `UI hierchary dumped to: …` line (adb's
   typo, not this file's) with the XML.
+- **The app-control captures are per-stream, and which stream matters.** `am-start.top-most` is a
+  **merged** capture because its `Warning: Activity not started, …` line comes back on stderr while
+  `Starting: Intent {…}` goes to stdout, and the point of the fixture is that both together are a
+  launch that succeeded. `am-force-stop.daemon-start.stderr` is a **stderr-only** capture whose
+  stdout was zero bytes — that pair *is* the finding: a force-stop that worked, exiting 0, with
+  adb's own banner on stderr. Anything asserting "this stream is empty" reads that as a device
+  failure.
+- **`adb install -r` printed two lines here, where the capture behind PROJECT.md §6 printed four.**
+  adb chose the streamed path rather than the incremental one, so `Performing Streamed Install` /
+  `Success` with an empty stderr. Both are real, and either one defeats `stdout.trim() ===
+  'Success'` — the assertion is a `Success` **line**.
+- **The install fixture was captured with `-t` added.** The only APK on the capture host is a
+  test-only debug build, which `install -r` alone refuses with `INSTALL_FAILED_TEST_ONLY` (exit 1);
+  the flag changes what adb agrees to install, not what a success prints. The primitive itself does
+  not pass `-t`. No APK is committed here — the fixture is adb's output, not the package.
+- **`pm clear` was captured against `com.android.traceur`**, a package with no user data worth
+  keeping, because the success path of that command destroys whatever it is pointed at. The failure
+  path (`Failed`, stderr, exit 1) comes from `com.rover.nope`, which no device has.
+
 - **The hierarchy XML has no trailing newline**, and every one of its 75 nodes carries all 19
   attributes — `index`, `text`, `resource-id`, `class`, `package`, `content-desc`, the ten booleans,
   `bounds`, `drawing-order` and `hint`. `parseUiHierarchy` maps all of those except

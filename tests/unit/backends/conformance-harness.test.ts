@@ -25,7 +25,7 @@ import {
 } from '@/backends/registry.js';
 import type { Capabilities } from '@/core/capabilities.js';
 import type { Device, DeviceBackend, DeviceInfo } from '@/core/device.js';
-import { type DeviceSerial, parsePlatformId } from '@/core/ids.js';
+import { type AppId, type DeviceSerial, parsePlatformId } from '@/core/ids.js';
 import {
 	checkDeclaredCapabilitiesDispatch,
 	checkManifestMetadata,
@@ -82,13 +82,13 @@ class OptedOutBackend implements DeviceBackend {
 	async installApp(serial: DeviceSerial, packagePath: string): Promise<void> {
 		this.record(`installApp ${serial} ${packagePath}`);
 	}
-	async launchApp(serial: DeviceSerial, appId: string): Promise<void> {
+	async launchApp(serial: DeviceSerial, appId: AppId): Promise<void> {
 		this.record(`launchApp ${serial} ${appId}`);
 	}
-	async stopApp(serial: DeviceSerial, appId: string): Promise<void> {
+	async stopApp(serial: DeviceSerial, appId: AppId): Promise<void> {
 		this.record(`stopApp ${serial} ${appId}`);
 	}
-	async clearAppData(serial: DeviceSerial, appId: string): Promise<void> {
+	async clearAppData(serial: DeviceSerial, appId: AppId): Promise<void> {
 		this.record(`clearAppData ${serial} ${appId}`);
 	}
 	async screenshot(serial: DeviceSerial): Promise<Uint8Array> {
