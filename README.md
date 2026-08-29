@@ -25,9 +25,22 @@ npm run daemon:status   # start the daemon if it is not running, print its state
 npm run daemon          # run it in the foreground instead, to watch it start
 ```
 
-The socket is `~/.rover/rover.sock`, or `ROVER_SOCKET_PATH` when that is set. Stopping the daemon
-is `kill <pid>` on the pid `daemon:status` printed; it unlinks its socket on the way out, and the
-next call brings a new one up.
+Stopping the daemon is `kill <pid>` on the pid `daemon:status` printed; it unlinks its socket on
+the way out, and the next call brings a new one up.
+
+## Configuration
+
+Host-level settings come from the environment. Every row here mirrors a Zod schema, which is the
+source of truth for what a valid value is (`ai/RULES.md` §7) — the daemon and the CLI both fail at
+startup, naming the variable and the reason, rather than binding something surprising.
+
+| Variable | Default | Value |
+|---|---|---|
+| `ROVER_SOCKET_PATH` | `~/.rover/rover.sock` | Absolute path of the unix socket the local daemon binds and a local client connects to. **Empty counts as unset** — an exported-but-blank variable is what a shell leaves behind, and reading it as a real setting would point the daemon at the current directory. At most **103 bytes of UTF-8**: a unix socket address is a fixed-size struct (104 bytes on macOS, 108 on Linux, NUL included), and over the cap `bind` truncates or answers `EINVAL` instead of naming the length, so a longer path is rejected at startup with the byte count and the path. |
+
+While a daemon is coming up over a socket a crashed one left behind, a `<socket>.reclaim` lock file
+may briefly appear beside it. It is removed by whoever took it, and any left behind by a killed
+process is discarded on age by the next start.
 
 ## Where things are
 

@@ -117,6 +117,32 @@ describe('connectToLocalDaemon', () => {
 		expect(replacement.pid).not.toBe(killed.pid);
 	});
 
+	it('starts one daemon when three concurrent clients meet a stale socket', {
+		timeout: TEST_TIMEOUT_MS,
+	}, async () => {
+		temp = await createTempSocket();
+		const first = await connect();
+		const killed = await first.request('status', {});
+		await first.close();
+
+		await stopProcess(killed.pid, 'SIGKILL');
+		expect(await exists(temp.socketPath)).toBe(true);
+
+		// Three separate processes now race to reclaim the same corpse — the interleaving in
+		// which an unserialized reclaimer can unlink the address of the daemon that just won.
+		// One pid across all three answers is the proof that never happened.
+		const clients = await Promise.all([connect(), connect(), connect()]);
+		const results = await Promise.all(clients.map((client) => client.request('status', {})));
+		await Promise.all(clients.map((client) => client.close()));
+
+		expect(new Set(results.map((result) => result.pid)).size).toBe(1);
+		expect(results[0].pid).not.toBe(killed.pid);
+		// The survivor is reachable through the path, not stranded behind an unlinked one.
+		const later = await connectWithoutStarting(temp.socketPath);
+		await expect(later?.request('status', {})).resolves.toMatchObject({ pid: results[0].pid });
+		await later?.close();
+	});
+
 	it('unlinks the socket when the daemon is asked to shut down', {
 		timeout: TEST_TIMEOUT_MS,
 	}, async () => {

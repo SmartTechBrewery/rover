@@ -244,6 +244,14 @@ the daemon's unix socket transport (R6), 2026-08-29:
   first calls spawn several daemons; the losers exit when they find the path bound, but one still
   starting when the winner is killed finds the path free and binds it. That is correct behaviour —
   and it means a test that starts daemons has to drain the path, not stop one process and assume.
+- **`unlink` takes the path, not the inode you decided was dead.** Stale-socket recovery stats the
+  path, probes it, stats it again and removes it — and two reclaimers after a crash can both reach
+  that last step, so the second one deletes the socket the first has just bound and strands a live
+  daemon on an unreachable inode. Comparing inodes narrows the window; it cannot close it, because
+  there is no compare-and-delete in the filesystem. The *unlink* is therefore serialized by a
+  short-lived `O_EXCL` lock file beside the socket (`<socket>.reclaim`), held across the unlink and
+  the re-bind. The lock is not the election — `listen()` still is — and it is discarded on age, so
+  a process killed while holding it cannot make the path unreclaimable the way a PID file would.
 
 ---
 

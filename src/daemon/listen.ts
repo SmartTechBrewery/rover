@@ -4,11 +4,19 @@
  * **The bind is the mutual exclusion.** Two invocations racing to start a daemon are not
  * arbitrated by a lock file or a PID file — both call `listen()` on the same path, the
  * kernel lets exactly one through, and the loser reports `{ started: false }` and connects
- * to the winner instead. A lock file would add a second piece of state that can go stale
- * independently of the socket, which is the failure mode `PROJECT.md` D6 is about.
+ * to the winner instead. A lock file *as the election* would add a second piece of state
+ * that can go stale independently of the socket, which is the failure mode `PROJECT.md` D6
+ * is about.
+ *
+ * **Removing a corpse is the one step the kernel does not arbitrate**, and it is the one
+ * step that can destroy a working daemon: `unlink` takes whatever is at the path, not the
+ * inode you decided was dead. So the *unlink* — and only the unlink — is serialized by the
+ * short-lived reclaim lock below. It never decides who becomes the daemon, it cannot strand
+ * one, and it is discarded on age rather than believed forever, so it is not the stale
+ * second source of truth D6 warns about.
  */
 
-import { mkdir, rm, stat } from 'node:fs/promises';
+import { mkdir, open, rm, stat } from 'node:fs/promises';
 import { createConnection, createServer, type Server, type Socket } from 'node:net';
 import { dirname } from 'node:path';
 import type { IpcHandlers } from '../ipc/methods.js';
@@ -64,20 +72,47 @@ export async function startDaemon({ socketPath }: StartDaemonOptions): Promise<S
 		throw first.error;
 	}
 
-	if (!(await reclaimStaleSocket(socketPath))) {
+	return reclaimAndRetry(socketPath);
+}
+
+/**
+ * The path was already occupied: work out whether what is there is a corpse, and re-bind.
+ *
+ * The reclaim lock is held across **both** the unlink and the retried `listen()`, which is
+ * what makes the pair safe. While we hold it nobody else may unlink, and the path can only
+ * be re-bound by someone who first unlinked it — so the socket we probed is still the
+ * socket we remove, and the window in which the path is free belongs to us.
+ *
+ * Failing to take the lock is not an error and not a reason to give up: we simply do not
+ * unlink. The holder either re-binds the path — this retry then loses honestly on
+ * `EADDRINUSE` — or leaves it free, and this retry takes it.
+ */
+async function reclaimAndRetry(socketPath: string): Promise<StartResult> {
+	// Cheap check before queueing for the lock: a daemon that is simply already running is
+	// the common loser, and it needs no reclamation at all.
+	if (await probeAnswers(socketPath)) {
 		return { started: false };
 	}
 
-	const second = await listenOnce(socketPath);
-	if (second.listening) {
-		return running(second, socketPath);
+	const lock = await acquireReclaimLock(socketPath);
+	try {
+		if (lock && !(await removeCorpse(socketPath))) {
+			return { started: false };
+		}
+
+		const second = await listenOnce(socketPath);
+		if (second.listening) {
+			return running(second, socketPath);
+		}
+		if (second.error.code !== 'EADDRINUSE') {
+			throw second.error;
+		}
+		// Somebody bound the path between our unlink and our retry. One retry is the whole
+		// budget: looping here would trade a lost race for a spin against a live daemon.
+		return { started: false };
+	} finally {
+		await lock?.release();
 	}
-	if (second.error.code !== 'EADDRINUSE') {
-		throw second.error;
-	}
-	// Somebody bound the path between our unlink and our retry. One retry is the whole
-	// budget: looping here would trade a lost race for a spin against a live daemon.
-	return { started: false };
 }
 
 function running(listening: ListenSucceeded, socketPath: string): RunningDaemon {
@@ -171,16 +206,19 @@ function listenOnce(socketPath: string): Promise<ListenSucceeded | ListenFailed>
 }
 
 /**
- * Decide whether the socket already at `socketPath` is a corpse we may remove.
+ * Unlink the socket at `socketPath` if it is a corpse. Answers whether the retry may go on.
  *
- * **The inode comparison is a heuristic, not the safety mechanism.** What guarantees at
- * most one daemon is the retried `listen()`: `bind()` is atomic in the kernel, so two
- * processes that both judge the socket stale, both unlink and both re-listen still produce
- * exactly one winner — the other gets a second `EADDRINUSE` and reports `{ started: false }`.
- * The inode check exists only to avoid *deleting* the address of a daemon that came up
- * while we were probing, which would strand it: alive, listening, and unreachable.
+ * **Only ever called under the reclaim lock**, and that is what makes it correct: the probe
+ * and the `rm` are separated by an await, and without the lock a second reclaimer could bind
+ * a live daemon into that gap and have its address deleted here — alive, listening, and
+ * unreachable.
+ *
+ * The inode re-check is defence in depth rather than the safety mechanism. Nothing inside
+ * this process can move the path while the lock is held; the check catches an *outside*
+ * hand — an operator clearing `~/.rover` by hand, a stray cleanup script — replacing the
+ * file mid-reclaim.
  */
-async function reclaimStaleSocket(socketPath: string): Promise<boolean> {
+async function removeCorpse(socketPath: string): Promise<boolean> {
 	const before = await inodeOf(socketPath);
 	if (before === undefined) {
 		// Gone between our failed bind and this stat. Nothing to reclaim and nothing to
@@ -197,13 +235,102 @@ async function reclaimStaleSocket(socketPath: string): Promise<boolean> {
 		return true;
 	}
 	if (after !== before) {
-		// A live daemon bound the path while we were probing the corpse. Unlinking now would
-		// delete a working daemon's address and leave it running but unreachable.
 		return false;
 	}
 
 	await rm(socketPath, { force: true });
 	return true;
+}
+
+/** The reclaim lock's address: the socket path plus a suffix, so it shares its directory. */
+export function reclaimLockPath(socketPath: string): string {
+	return `${socketPath}.reclaim`;
+}
+
+/**
+ * How long to queue for the reclaim lock before giving up and retrying the bind unarmed.
+ *
+ * The lock is held for one probe, one `unlink` and one `listen`, so this covers several
+ * reclaimers ahead of us. Giving up costs nothing but a lost race — the caller still gets a
+ * truthful `{ started: false }` or a daemon — so there is no reason to wait longer.
+ */
+const RECLAIM_LOCK_WAIT_MS = 2_000;
+
+/**
+ * How old a reclaim lock has to be before it is treated as abandoned rather than held.
+ *
+ * Comfortably beyond the ~600 ms a legitimate hold can take. Without this, one `SIGKILL`
+ * landing inside that window would leave a lock nobody will ever release and make the path
+ * permanently unreclaimable — a stale-state trap exactly like the PID file D6 rejects.
+ * Discarding on age is what keeps this lock from becoming one.
+ */
+const RECLAIM_LOCK_STALE_MS = 10_000;
+
+/** The gap between attempts on the lock. A poll on a condition with a deadline, not a sleep. */
+const RECLAIM_LOCK_POLL_MS = 20;
+
+interface ReclaimLock {
+	release(): Promise<void>;
+}
+
+/**
+ * Take the exclusive right to unlink `socketPath`, or resolve `undefined` if someone else
+ * has it. `open(…, 'wx')` is `O_CREAT | O_EXCL`: the kernel lets exactly one creator through,
+ * the same arbitration the bind itself relies on.
+ *
+ * Two processes that both find the *same* abandoned lock can both discard it and both
+ * proceed — that is the pre-existing unserialized behaviour, reachable only by killing a
+ * process inside a sub-millisecond window, and it is why the inode re-check in
+ * {@link removeCorpse} is kept rather than dropped.
+ */
+async function acquireReclaimLock(socketPath: string): Promise<ReclaimLock | undefined> {
+	const lockPath = reclaimLockPath(socketPath);
+	const deadline = Date.now() + RECLAIM_LOCK_WAIT_MS;
+
+	do {
+		if (await createExclusively(lockPath)) {
+			return { release: () => rm(lockPath, { force: true }) };
+		}
+		await discardAbandonedLock(lockPath);
+		await pause(RECLAIM_LOCK_POLL_MS);
+	} while (Date.now() < deadline);
+
+	return undefined;
+}
+
+/** Whether this call was the one that created `lockPath`. */
+async function createExclusively(lockPath: string): Promise<boolean> {
+	try {
+		await (await open(lockPath, 'wx')).close();
+		return true;
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code === 'EEXIST') {
+			return false;
+		}
+		// Anything else is the directory refusing us, which the caller has to see rather than
+		// have quietly downgraded into a lost race.
+		throw error;
+	}
+}
+
+async function discardAbandonedLock(lockPath: string): Promise<void> {
+	let heldSince: number;
+	try {
+		heldSince = (await stat(lockPath)).mtimeMs;
+	} catch {
+		// Released while we looked. The next attempt takes it.
+		return;
+	}
+	if (Date.now() - heldSince > RECLAIM_LOCK_STALE_MS) {
+		await rm(lockPath, { force: true });
+	}
+}
+
+/** The gap between polls above. Never a wait *instead* of a check (ai/RULES.md §2, D12). */
+function pause(ms: number): Promise<void> {
+	return new Promise((resolve) => {
+		setTimeout(resolve, ms);
+	});
 }
 
 /**

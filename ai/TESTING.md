@@ -24,7 +24,7 @@ Device tests take a lease like any other client. A device test that talks to `ad
 The cost is contained rather than accepted wholesale:
 
 - Every socket lives inside a per-test `mkdtemp(join(tmpdir(), 'rover-'))`, removed in `afterEach`. **No test ever binds `~/.rover/rover.sock`** — that path belongs to whoever is running the tests, and binding it would take their own daemon down mid-run.
-- Every daemon a test starts is stopped in `afterEach`, by pid. The `status` result's `pid` is what makes that possible: a detached child is never held as a `ChildProcess`, so the protocol is the only handle on it. `tests/helpers/daemon-socket.ts` carries the temp-socket and teardown helpers.
+- Every **detached child** daemon a test starts is stopped in `afterEach`, by pid. The `status` result's `pid` is what makes that possible: such a child is never held as a `ChildProcess`, so the protocol is the only handle on it. An **in-process** daemon — `startDaemon()` called from the test itself, as `bind-race.test.ts` does — is closed through its `RunningDaemon` handle instead, and `stopDaemonAt` deliberately declines to signal a pid equal to `process.pid`: killing it would take the test runner down with it. `tests/helpers/daemon-socket.ts` carries the temp-socket and teardown helpers.
 - The suite is still in the `unit` project — it needs no device and no hardware — but the autostart tests set an explicit `{ timeout: 30_000 }`, because starting a Node process costs far more than vitest's 5 s default allows.
 
 Everything above this exception still holds elsewhere: a test that wants a transport and not a daemon uses `tests/helpers/duplex-pair.ts`, which is how `tests/unit/ipc/` drives the message surface over no socket at all.

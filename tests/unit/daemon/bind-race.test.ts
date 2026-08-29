@@ -6,9 +6,14 @@
  * the filesystem cannot fail with `EADDRINUSE`, so it cannot prove the thing being claimed.
  */
 
-import { access, stat, writeFile } from 'node:fs/promises';
+import { access, rm, stat, utimes, writeFile } from 'node:fs/promises';
 import { afterEach, describe, expect, it } from 'vitest';
-import { type RunningDaemon, type StartResult, startDaemon } from '@/daemon/listen.js';
+import {
+	type RunningDaemon,
+	reclaimLockPath,
+	type StartResult,
+	startDaemon,
+} from '@/daemon/listen.js';
 import { PROTOCOL_VERSION } from '@/ipc/protocol.js';
 import {
 	connectWithoutStarting,
@@ -93,6 +98,64 @@ describe('startDaemon', () => {
 		expect(result.started).toBe(true);
 		expect((await stat(temp.socketPath, { bigint: true })).ino).not.toBe(staleInode);
 
+		const client = await connectWithoutStarting(temp.socketPath);
+		await expect(client?.request('status', {})).resolves.toMatchObject({ pid: process.pid });
+		await client?.close();
+	});
+
+	it("keeps exactly one winner when four starts race over a crashed daemon's socket", async () => {
+		temp = await createTempSocket();
+		await writeFile(temp.socketPath, '');
+
+		// The interleaving F1 is about: every one of these fails its first bind, judges the
+		// same corpse stale, and would — unserialized — be free to unlink whatever the winner
+		// had just bound there.
+		const results = await Promise.all(Array.from({ length: 4 }, () => start(temp.socketPath)));
+
+		expect(results.filter((result) => result.started)).toHaveLength(1);
+
+		// The winner is the daemon on the path, not a daemon stranded beside it: the path
+		// answers, and closing the winner is what takes it away.
+		const client = await connectWithoutStarting(temp.socketPath);
+		await expect(client?.request('status', {})).resolves.toMatchObject({ pid: process.pid });
+		await client?.close();
+
+		await Promise.all(running.splice(0).map((each) => each.close()));
+		expect(await exists(temp.socketPath)).toBe(false);
+	});
+
+	it('leaves the stale path alone while another reclaimer holds the lock', {
+		// The full lock wait plus a bind attempt, well past vitest's 5 s default.
+		timeout: 15_000,
+	}, async () => {
+		temp = await createTempSocket();
+		await writeFile(temp.socketPath, '');
+		const staleInode = (await stat(temp.socketPath, { bigint: true })).ino;
+		// Stand in for the reclaimer that is between its probe and its bind. Whatever it does
+		// with the path next, this start may not remove it.
+		await writeFile(reclaimLockPath(temp.socketPath), '');
+
+		const result = await start(temp.socketPath);
+
+		expect(result.started).toBe(false);
+		expect((await stat(temp.socketPath, { bigint: true })).ino).toBe(staleInode);
+		await rm(reclaimLockPath(temp.socketPath), { force: true });
+	});
+
+	it('reclaims through a lock whose owner died holding it', async () => {
+		temp = await createTempSocket();
+		await writeFile(temp.socketPath, '');
+		const lockPath = reclaimLockPath(temp.socketPath);
+		await writeFile(lockPath, '');
+		// A lock is held for one probe and one bind. A minute old is a process that was killed
+		// mid-reclaim, and believing it forever would make the path unreclaimable for good.
+		const longAgo = new Date(Date.now() - 60_000);
+		await utimes(lockPath, longAgo, longAgo);
+
+		const result = await start(temp.socketPath);
+
+		expect(result.started).toBe(true);
+		expect(await exists(lockPath)).toBe(false);
 		const client = await connectWithoutStarting(temp.socketPath);
 		await expect(client?.request('status', {})).resolves.toMatchObject({ pid: process.pid });
 		await client?.close();
