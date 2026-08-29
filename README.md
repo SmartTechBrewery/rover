@@ -13,8 +13,10 @@ agent's job.
 
 ## Status
 
-Design and rules are settled; the implementation has not started. The backlog is twenty issues in
-dependency order — see [`PROJECT.md`](PROJECT.md) §9.3.
+Design and rules are settled. The toolchain and the device-backend contract — the device
+interface, the Zod capability manifest and the registry a backend joins through one import — are
+in place; **no backend is registered yet**. The backlog is twenty issues in dependency order —
+see [`PROJECT.md`](PROJECT.md) §9.3.
 
 ## Where things are
 
