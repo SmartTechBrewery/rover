@@ -8,7 +8,7 @@ files exist to prevent. Two of the fixtures below already earned their keep: `wm
 line on the same stream as the device list.
 
 Each filename carries the subject, the API level and the model slug:
-`<subject>.api<sdk>-<model-slug>.txt`, where the slug is `ro.product.model` lowercased with every
+`<subject>.api<sdk>-<model-slug>.<ext>`, where the slug is `ro.product.model` lowercased with every
 run of non-alphanumerics collapsed to `-`. Captures that are not about one device (`devices-l.empty`,
 `devices-l.daemon-failed`) carry no API level, because there was none to record.
 
@@ -32,9 +32,18 @@ All from an Android Emulator AVD `Pixel_10_Pro` (`sdk_gphone16k_arm64`, API 37 /
 | `devices-l.offline.api37-sdk-gphone16k-arm64.txt` | `adb -s $SERIAL reboot` then poll `adb devices -l` | sdk_gphone16k_arm64 | 37 | 2026-08-29 |
 | `devices-l.daemon-failed.txt` | `adb kill-server; adb devices -l > f 2>&1`, racing a still-shutting-down daemon | — (none attached) | — | 2026-08-29 |
 | `devices-l.empty.txt` | `adb devices -l`, emulator shut down | — (none attached) | — | 2026-08-29 |
+| `uiautomator.api37-sdk-gphone16k-arm64.xml` | `adb -s $SERIAL shell uiautomator dump /sdcard/window_dump.xml` then `adb -s $SERIAL exec-out cat /sdcard/window_dump.xml` | sdk_gphone16k_arm64 | 37 | 2026-08-29 |
 
 Both `wm` overrides were reset with `wm size reset` / `wm density reset` immediately after the
 capture.
+
+The hierarchy dump is **Settings → Display & touch**, unscrolled, reached with `adb shell am start
+-a android.settings.DISPLAY_SETTINGS`. It was chosen over the Settings home page because it is the
+one screen carrying everything the parser has to handle at once: 75 nodes 13 deep, a non-empty
+`content-desc`, an entity-encoded `&` in both a `text` and a `content-desc`, two nested scrollable
+containers, a checkable `Switch` whose `checked` disagrees with its `checkable`, 38 single-child
+nodes, and a row clipped by the bottom of the scroll viewport. Navigate back to that screen before
+re-capturing — a fixture nobody can re-create is a fixture nobody can extend.
 
 ## What the capture showed
 
@@ -49,6 +58,21 @@ capture.
 - **`adb shell wm …` returned LF, not CRLF, on this build.** The parsers strip CRLF anyway — an
   `adb shell` that returns it is well documented — but no fixture here proves that path, so the
   CRLF assertions in `wm.test.ts` use inline input and say so.
+- **A node clipped by a scrolling container has inverted `bounds`.** The last visible row in the
+  hierarchy dump is `bounds="[96,2798][399,2784]"` — its top *below* its bottom, a height of -14.
+  `parseUiHierarchy` reports that subtraction as it stands rather than clamping it to zero: a
+  clamped rectangle is one the device never described, and this is the rectangle every target
+  resolution downstream is addressed through.
+- **The dump must be fetched with `exec-out`, not `adb shell cat`.** The shell path translates
+  `\n` → `\r\n` and corrupts the document. `uiautomator dump /dev/tty` is the other tempting
+  shortcut and is also wrong — it interleaves adb's own `UI hierchary dumped to: …` line (adb's
+  typo, not this file's) with the XML.
+- **The hierarchy XML has no trailing newline**, and every one of its 75 nodes carries all 19
+  attributes — `index`, `text`, `resource-id`, `class`, `package`, `content-desc`, the ten booleans,
+  `bounds`, `drawing-order` and `hint`. `parseUiHierarchy` maps all of those except
+  **`drawing-order` and `hint`, which it drops**; anything a newer API adds is dropped the same way.
+  A dropped attribute becomes visible when a fixture from a newer API level is captured, which is
+  the mechanism `ai/TESTING.md` already prescribes — so add the fixture first, then the field.
 
 ## Redactions
 
@@ -73,3 +97,7 @@ Nothing may be asserted about these until one exists — no test here claims any
   would be the same mistake as a hand-written fixture.
 - **A `goldfish` emulator.** Only `ro.hardware=ranchu` was observed, so only `ranchu` is encoded.
 - **More than one device in the list at once.**
+- **A hierarchy with `rotation` other than `0`**, and one from `uiautomator dump --compressed`.
+- **A hierarchy with more than one root `<node>`** — split screen, or a second display.
+  `parseUiHierarchy` refuses one rather than reading the first window and answering confidently
+  about a screen the caller is not looking at; supporting it needs a capture that has one.
