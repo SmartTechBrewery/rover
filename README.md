@@ -35,9 +35,12 @@ exactly one winner.
 one place a lease is observed to end. It stops the project's applications, turns airplane mode off,
 turns wifi back on (in that order: `PROJECT.md` §6 records why the wifi step has to be last) and
 runs the project's teardown hook. A caller is never asked to do any of it and cannot opt out; a
-step that fails is reported and the remaining steps still run; and a device is never handed to the
-next lessee while its restoration is still in flight. An unref'ed sweep is what notices a lease
-whose holder died — such an agent issues no further calls, so nothing else would ever ask. Which
+step that fails is reported and the remaining steps still run — including a project resolver that
+throws, which costs that project's own steps and never the device's; and a device is never handed
+to the next lessee while its restoration is still in flight. An unref'ed sweep is what notices a
+lease whose holder died — such an agent issues no further calls, so nothing else would ever ask —
+and shutting the daemon down sweeps once more and then waits, bounded, for whatever it still owes:
+leases die with the host, so a restoration abandoned there is one nothing will ever retry. Which
 applications a project owns and what its hook does arrive through an injected resolver — the
 per-project configuration that fills it is its own issue (`PROJECT.md` §9.3, R17), so today that
 resolver answers nothing and only the two network steps have work to do.

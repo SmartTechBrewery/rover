@@ -10,7 +10,9 @@
  * The handlers are driven directly rather than over a socket: what is asserted here is the
  * order of the work and who waits for whom, and a real unix socket adds nothing to that
  * (`acquire-device.test.ts` is where the wire itself is exercised). The clock is the same
- * mutable closure `leases.test.ts` uses — nothing in this file waits on real time.
+ * mutable closure `leases.test.ts` uses, so nothing here waits out a lease. The one real timer
+ * is the teardown hook's own bound, shortened to a few milliseconds through the restorer's
+ * seam — and even there the test waits on the restoration finishing, never on a duration.
  *
  * The backend records into one shared array rather than answering with mocks, because every
  * assertion here is about **order**: which step ran before which, and whether a grant landed
@@ -61,6 +63,8 @@ interface HarnessOptions {
 	readonly backend?: (performed: string[]) => Partial<DeviceBackend>;
 	/** Defaults to two apps and a hook; `null` is the R17-shaped "nobody described it". */
 	readonly project?: (performed: string[]) => ProjectRestoration | null;
+	/** Defaults to the restorer's own ten seconds, which no unit test can wait out. */
+	readonly teardownTimeoutMs?: number;
 }
 
 function createHarness(options: HarnessOptions = {}): Harness {
@@ -95,6 +99,9 @@ function createHarness(options: HarnessOptions = {}): Harness {
 						},
 					},
 		warn: (message) => warnings.push(message),
+		...(options.teardownTimeoutMs === undefined
+			? {}
+			: { teardownTimeoutMs: options.teardownTimeoutMs }),
 	});
 	const leases = createLeaseStore({
 		ttlMs: TTL_MS,
@@ -314,18 +321,40 @@ describe('a backend that cannot control the network', () => {
 });
 
 describe('the project seam R17 fills', () => {
-	it('does not reject a later grant when the resolver itself throws', async () => {
-		const harness = createHarness({
-			project: () => {
-				throw new Error('the project file is unreadable');
-			},
-		});
+	/** R17 will read a file per project, and a file can be missing or malformed. */
+	const unreadableProject = () => ({
+		project: () => {
+			throw new Error('the project file is unreadable');
+		},
+	});
+
+	it('still restores the device when the resolver itself throws', async () => {
+		const harness = createHarness(unreadableProject());
 		const leaseId = await harness.acquire('issue-112');
 		harness.handlers.release_device({ leaseId });
 
 		// `settle` is awaited inside `acquire_device`. A restoration that rejected would come
 		// back to the next caller as `internal_error` about a device that is perfectly fine.
 		await expect(harness.acquire('pr-127-review')).resolves.toBeTruthy();
+		// And the resolver costs its own steps only. One unreadable config file that skipped
+		// the radios would hand the next agent a phone in airplane mode, for every device that
+		// project ever leases, with nothing left to retry it.
+		expect(harness.performed).toEqual(['setAirplaneMode false', 'setWifiEnabled true']);
+		expect(harness.warnings).toHaveLength(1);
+		expect(harness.warnings[0]).toContain('the project file is unreadable');
+	});
+
+	it('still restores the device when the resolver throws on the expiry path', async () => {
+		const harness = createHarness(unreadableProject());
+		await harness.acquire('issue-112');
+
+		// The other of the two paths D9 names, and the one with no caller left to notice: the
+		// holder is gone, and the sweep is what observes it.
+		harness.at(1_000_000 + TTL_MS);
+		harness.leases.sweep();
+		await harness.settle();
+
+		expect(harness.performed).toEqual(['setAirplaneMode false', 'setWifiEnabled true']);
 		expect(harness.warnings).toHaveLength(1);
 		expect(harness.warnings[0]).toContain('the project file is unreadable');
 	});
@@ -341,6 +370,34 @@ describe('the project seam R17 fills', () => {
 		// hook that does not fire yet is not a hook that is broken.
 		expect(harness.performed).toEqual(['setAirplaneMode false', 'setWifiEnabled true']);
 		expect(harness.warnings).toEqual([]);
+	});
+});
+
+describe('a project teardown hook that never returns', () => {
+	it('stops waiting for it, says so, and still hands the device on', async () => {
+		const harness = createHarness({
+			// The restorer's real bound is ten seconds; this is the same seam `ttlMs` is.
+			teardownTimeoutMs: 5,
+			project: () => ({
+				apps: [APP],
+				// R17's hook waiting on a helper service that never exits. `settle` is awaited
+				// inside `acquire_device`, so an unbounded wait here would hang every later grant
+				// for this device — with no lease id issued and no TTL to expire it.
+				teardown: () => new Promise<void>(() => {}),
+			}),
+		});
+		const leaseId = await harness.acquire('issue-112');
+		harness.handlers.release_device({ leaseId });
+
+		await expect(harness.acquire('pr-127-review')).resolves.toBeTruthy();
+		expect(harness.performed).toEqual([
+			`stopApp ${APP}`,
+			'setAirplaneMode false',
+			'setWifiEnabled true',
+		]);
+		expect(harness.warnings).toHaveLength(1);
+		expect(harness.warnings[0]).toContain('the project teardown hook did not finish within');
+		expect(harness.warnings[0]).toContain(SERIAL);
 	});
 });
 

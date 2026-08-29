@@ -109,7 +109,7 @@ request ──▶ match against a re-verified inventory
 
 - **Per device, not per machine** (D7). The predecessor took the whole rig because it was a file.
 - **The TTL is refreshed by activity, not by a heartbeat** (D8). An agent pauses to think for minutes at a time, so a fixed budget is wrong in both directions; a dead agent issues no more calls and expires on its own.
-- **Restoration runs on release *and* on expiry** (D9): stop the app, airplane mode off, wifi on, then the project's teardown hook. A teardown that only runs on the happy path is not a teardown.
+- **Restoration runs on release *and* on expiry** (D9): stop the app, airplane mode off, wifi on, then the project's teardown hook. A teardown that only runs on the happy path is not a teardown. Every step is contained, including working out what the project owns, so one unreadable project description costs that project's steps rather than the device's. The teardown hook is foreign code and is bounded like the shutdown's other waits, because a grant queues behind it. `close()` sweeps once more and then waits out what is still owed, bounded: a lease dies with the host, so an abandoned restoration is never retried by anything.
 - **A lease carries an owner string** — `issue-112`, `pr-127-review`, and later a Swarm run identity (`ai/RULES.md` §1). Never derive it from a process id, and never from whoever authenticated (D20).
 - **Only a device physically attached to the host is ever granted a lease** (D18); the handle is
   the device serial — there is exactly one host, so nothing else needs naming.

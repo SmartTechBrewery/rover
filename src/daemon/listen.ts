@@ -62,14 +62,44 @@ const WATCH_STOP_TIMEOUT_MS = 5_000;
  */
 const LEASE_SWEEP_INTERVAL_MS = 30_000;
 
+/**
+ * How long `close()` waits for the restorations still in flight before shutting down anyway
+ * and saying so.
+ *
+ * Waiting at all is the point: a restoration has no second chance. A lease dies with the host
+ * (D6), so a successor daemon sees no expired holder and nothing ever re-fires the teardown —
+ * the device keeps whatever the last lessee left it with, permanently. `release_device`
+ * deliberately answers before the restoration finishes (`lease-handlers.ts`), so `rover
+ * release` followed straight away by killing the daemon lands inside exactly that window.
+ *
+ * Bounded for the same reason as {@link WATCH_STOP_TIMEOUT_MS}: every step below is a backend
+ * call carrying its own timeout and the project hook is bounded by the restorer, so this only
+ * has to outlast a device that is answering slowly, and a `close()` that never resolves would
+ * be the worse failure.
+ */
+const RESTORE_SETTLE_TIMEOUT_MS = 10_000;
+
 export interface StartDaemonOptions {
 	readonly socketPath: string;
+	/**
+	 * Defaults to {@link LEASE_SWEEP_INTERVAL_MS}. A test seam in the spirit of
+	 * `LeaseStoreOptions.ttlMs`, not a configuration surface: the interval is how *late* an
+	 * expiry may be observed and nothing else (see above), so there is nothing here for an
+	 * operator to tune. It exists so a socket-level test can prove that a dead holder's device
+	 * is restored with nobody asking, rather than by calling `sweep()` by hand.
+	 */
+	readonly sweepIntervalMs?: number;
+	/** Defaults to the lease store's own TTL (D8). The same test seam, for the same test. */
+	readonly leaseTtlMs?: number;
 }
 
 /** The daemon this process owns. Only the winner of the bind gets one. */
 export interface RunningDaemon {
 	readonly started: true;
-	/** Stops accepting, drops live connections and unlinks the socket. Safe to call twice. */
+	/**
+	 * Stops accepting, drops live connections, waits out the restorations still owed (bounded)
+	 * and unlinks the socket. Safe to call twice.
+	 */
 	close(): Promise<void>;
 }
 
@@ -128,18 +158,20 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartRes
 	// an expiry reach the restorer by the same path and a caller can neither ask for this nor
 	// opt out of it.
 	const leases = createLeaseStore({
+		...(options.leaseTtlMs === undefined ? {} : { ttlMs: options.leaseTtlMs }),
 		onLeaseEnded: (lease, reason) => restorer.restore(lease, reason),
 	});
+	const sweepIntervalMs = options.sweepIntervalMs ?? LEASE_SWEEP_INTERVAL_MS;
 
 	const first = await listenOnce(socketPath, inventory, leases, restorer);
 	if (first.listening) {
-		return running(first, socketPath, inventory, leases);
+		return running(first, socketPath, inventory, leases, restorer, sweepIntervalMs);
 	}
 	if (first.error.code !== 'EADDRINUSE') {
 		throw first.error;
 	}
 
-	return reclaimAndRetry(socketPath, inventory, leases, restorer);
+	return reclaimAndRetry(socketPath, inventory, leases, restorer, sweepIntervalMs);
 }
 
 /**
@@ -159,6 +191,7 @@ async function reclaimAndRetry(
 	inventory: DeviceInventory,
 	leases: LeaseStore,
 	restorer: DeviceRestorer,
+	sweepIntervalMs: number,
 ): Promise<StartResult> {
 	// Cheap check before queueing for the lock: a daemon that is simply already running is
 	// the common loser, and it needs no reclamation at all.
@@ -174,7 +207,7 @@ async function reclaimAndRetry(
 
 		const second = await listenOnce(socketPath, inventory, leases, restorer);
 		if (second.listening) {
-			return running(second, socketPath, inventory, leases);
+			return running(second, socketPath, inventory, leases, restorer, sweepIntervalMs);
 		}
 		if (second.error.code !== 'EADDRINUSE') {
 			throw second.error;
@@ -192,6 +225,8 @@ function running(
 	socketPath: string,
 	inventory: DeviceInventory,
 	leases: LeaseStore,
+	restorer: DeviceRestorer,
+	sweepIntervalMs: number,
 ): RunningDaemon {
 	// Captured while we hold the path, so `close()` can tell our own socket file from one a
 	// successor bound after us and only ever unlinks the former.
@@ -202,7 +237,7 @@ function running(
 	// inventory running and nothing to stop.
 	inventory.start();
 
-	const sweep = setInterval(() => leases.sweep(), LEASE_SWEEP_INTERVAL_MS);
+	const sweep = setInterval(() => leases.sweep(), sweepIntervalMs);
 	// Unreferenced, like every other timer here: this exists to notice an expiry while the
 	// daemon is serving, never to keep a process alive that is otherwise finished.
 	sweep.unref();
@@ -210,10 +245,21 @@ function running(
 	return {
 		started: true,
 		close(): Promise<void> {
-			closed ??= closeServer(listening, socketPath, ownInode, inventory, sweep);
+			closed ??= closeServer(listening, socketPath, ownInode, inventory, {
+				leases,
+				restorer,
+				sweep,
+			});
 			return closed;
 		},
 	};
+}
+
+/** What `close()` has to wind down besides the socket itself. */
+interface ShutdownWork {
+	readonly leases: LeaseStore;
+	readonly restorer: DeviceRestorer;
+	readonly sweep: NodeJS.Timeout;
 }
 
 async function closeServer(
@@ -221,11 +267,16 @@ async function closeServer(
 	socketPath: string,
 	ownInode: Promise<bigint | undefined>,
 	inventory: DeviceInventory,
-	sweep: NodeJS.Timeout,
+	{ leases, restorer, sweep }: ShutdownWork,
 ): Promise<void> {
-	// First, and unconditionally: a sweep firing during the shutdown would start a restoration
-	// nothing is left to wait for. A lease dies with the host by design (D6).
+	// First, and unconditionally: nothing below waits for a sweep that fires halfway through
+	// the shutdown, so the interval stops before anything else does.
 	clearInterval(sweep);
+	// Then one last look, on purpose. A lease that expired seconds ago has a device owed a
+	// restoration and no holder left to ask for it; if this process does not notice now,
+	// nothing ever will — leases die with the host (D6), so a successor sees no expired holder
+	// at all. Synchronous, and the restorations it starts are what `settleAll` below waits for.
+	leases.sweep();
 
 	// Started here, awaited at the end. Stopping the watches and refusing new connections are
 	// independent, and doing them in sequence would leave the socket accepting and dispatching
@@ -234,6 +285,11 @@ async function closeServer(
 	// `RunningDaemon.close()` resolving is a statement that the watches are gone, not merely
 	// that they were asked to go.
 	const stopped = stopWatches(inventory);
+	// Started here for the same reason and awaited beside it: the two are independent — a
+	// restoration drives a backend directly and needs no watch — and doing them in sequence
+	// would add one bound to the other for nothing. Snapshotted now, after the final sweep, so
+	// it covers every restoration this daemon ever owed.
+	const restored = settleRestorations(restorer);
 
 	await new Promise<void>((resolve) => {
 		// Set before `close()`, not after: a connection already past `accept()` in the kernel
@@ -253,6 +309,7 @@ async function closeServer(
 	});
 
 	await stopped;
+	await restored;
 
 	// Node unlinks the path itself on a clean close, so this is the crash-shaped case and a
 	// belt-and-braces guarantee that the address is free. Skipped when the inode changed:
@@ -276,21 +333,44 @@ async function closeServer(
  * that does neither.
  */
 async function stopWatches(inventory: DeviceInventory): Promise<void> {
+	if (await timesOut(inventory.stop(), WATCH_STOP_TIMEOUT_MS)) {
+		console.warn(
+			`The device watches did not stop within ${WATCH_STOP_TIMEOUT_MS}ms. Shutting down ` +
+				`anyway; something they started may still be running.`,
+		);
+	}
+}
+
+/**
+ * Wait out the restorations still in flight, bounded — see {@link RESTORE_SETTLE_TIMEOUT_MS}.
+ *
+ * `DeviceRestorer.settleAll` never rejects (a contained step is a warning, not a throw), so
+ * the only two outcomes are "everything owed was done" and "it was not, and here is that in
+ * writing". A device left half-restored is worth a line in the log, because no later run of
+ * anything will discover it.
+ */
+async function settleRestorations(restorer: DeviceRestorer): Promise<void> {
+	if (await timesOut(restorer.settleAll(), RESTORE_SETTLE_TIMEOUT_MS)) {
+		console.warn(
+			`Device restoration did not finish within ${RESTORE_SETTLE_TIMEOUT_MS}ms. Shutting ` +
+				`down anyway; a device may be left in the state its last lease put it in, and ` +
+				`nothing will retry it.`,
+		);
+	}
+}
+
+/** Whether `work` outlasted `limitMs`. The work itself is never cancelled — nothing here can. */
+async function timesOut(work: Promise<void>, limitMs: number): Promise<boolean> {
 	let timer: NodeJS.Timeout | undefined;
 	const expiry = new Promise<'timed-out'>((resolve) => {
-		timer = setTimeout(() => resolve('timed-out'), WATCH_STOP_TIMEOUT_MS);
+		timer = setTimeout(() => resolve('timed-out'), limitMs);
 		// Unreferenced: this timer exists to stop us waiting, never to keep a process alive that
 		// is otherwise finished.
 		timer.unref();
 	});
 
 	try {
-		if ((await Promise.race([inventory.stop(), expiry])) === 'timed-out') {
-			console.warn(
-				`The device watches did not stop within ${WATCH_STOP_TIMEOUT_MS}ms. Shutting down ` +
-					`anyway; something they started may still be running.`,
-			);
-		}
+		return (await Promise.race([work, expiry])) === 'timed-out';
 	} finally {
 		clearTimeout(timer);
 	}

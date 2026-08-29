@@ -16,7 +16,9 @@
  * appends to a per-serial promise chain and returns immediately — the lease has ended, and
  * the answer to the caller must not wait on hardware. {@link DeviceRestorer.settle} is the
  * other half: `acquire_device` awaits it, so a device is never handed to a new lessee while
- * the previous lessee's state is still being undone.
+ * the previous lessee's state is still being undone. {@link DeviceRestorer.settleAll} is the
+ * same wait for the shutdown path, where a restoration that is abandoned is never retried —
+ * a lease dies with the host (D6), so nothing afterwards is left to notice it was owed.
  *
  * **The step order is the finding, not a preference** (PROJECT.md §6, verified 2026-08-29):
  * the airplane-mode step can move wifi underneath it in a direction no caller can predict,
@@ -40,9 +42,30 @@ import type { Lease, LeaseEndReason } from './leases.js';
 export interface ProjectRestoration {
 	/** Stopped on the device, in the order given. Empty is a perfectly good answer. */
 	readonly apps: readonly AppId[];
-	/** The project's own teardown (D13) — helper services, temporary files, its own state. */
+	/**
+	 * The project's own teardown (D13) — helper services, temporary files, its own state.
+	 *
+	 * **It must bound itself, and it is bounded here anyway.** `acquire_device` awaits
+	 * {@link DeviceRestorer.settle} before granting, so a hook that waits forever on a helper
+	 * service that never exits would hang every later grant for that device with no lease id
+	 * and no TTL to fall back on — unlike a wedged lease, nothing would expire it. Every other
+	 * step is a backend call carrying its own timeout; this one is foreign code, so it gets
+	 * {@link TEARDOWN_TIMEOUT_MS} and a warning rather than the benefit of the doubt.
+	 */
 	readonly teardown?: () => Promise<void>;
 }
+
+/**
+ * How long the project's teardown hook may take before the restoration stops waiting for it
+ * and says so.
+ *
+ * The same trade the daemon's shutdown makes for the device watches: a leak reported out loud
+ * beats a wait that never ends (`listen.ts`, `WATCH_STOP_TIMEOUT_MS`). Generous enough that a
+ * hook stopping a helper service normally is never reported as a hang. The hook is not
+ * cancelled — nothing here can cancel it — so it may still be running when this returns; what
+ * the bound protects is the grant queued behind it.
+ */
+const TEARDOWN_TIMEOUT_MS = 10_000;
 
 /**
  * How the `project` string on a lease becomes something to tear down.
@@ -55,6 +78,14 @@ export interface ProjectRestoration {
  *
  * `null` for a project nobody has described, which is the ordinary case rather than a failure
  * (ai/CODING_STANDARDS.md "Error handling").
+ *
+ * **A throw is tolerated and degrades to `null`.** R17's resolver will read a file, and a file
+ * can be missing or malformed. That must cost the project's own steps and nothing else: the
+ * device is still put back — app steps aside, they are the part that needs the project — with
+ * a warning naming the project and the reason. A resolver whose throw skipped the airplane-mode
+ * and wifi steps would be one bad config file silently disabling restoration for every device
+ * that project ever leases, which is the "only runs on the happy path" failure D9 exists to
+ * remove.
  */
 export type ProjectResolver = (project: string) => ProjectRestoration | null;
 
@@ -69,6 +100,16 @@ export interface DeviceRestorer {
 	 * granting, so no lessee ever receives a device mid-restore.
 	 */
 	settle(serial: DeviceSerial): Promise<void>;
+	/**
+	 * Resolve once nothing is being restored on **any** device. The daemon's `close()` awaits
+	 * this, bounded: a restoration has no second chance, because a lease dies with the host
+	 * (D6) and after a restart there is no expired holder left for anything to notice.
+	 *
+	 * A snapshot of what is in flight when it is called, deliberately — a restoration queued
+	 * afterwards belongs to a lease that ended after the daemon was asked to stop, and waiting
+	 * for a set that can still grow is the unbounded shutdown wait `listen.ts` refuses.
+	 */
+	settleAll(): Promise<void>;
 }
 
 export interface DeviceRestorerOptions {
@@ -81,12 +122,19 @@ export interface DeviceRestorerOptions {
 	readonly resolveProject?: ProjectResolver;
 	/** Where every contained failure goes. Injected so a test can read it. */
 	readonly warn?: (message: string) => void;
+	/**
+	 * Defaults to {@link TEARDOWN_TIMEOUT_MS}. A test seam in the spirit of
+	 * `LeaseStoreOptions.ttlMs`, not a configuration surface — a real ten-second bound and a
+	 * unit test cannot both be in the same run.
+	 */
+	readonly teardownTimeoutMs?: number;
 }
 
 export function createDeviceRestorer(options: DeviceRestorerOptions): DeviceRestorer {
 	const { inventory } = options;
 	const resolveProject: ProjectResolver = options.resolveProject ?? (() => null);
 	const warn = options.warn ?? ((message: string) => console.warn(message));
+	const teardownTimeoutMs = options.teardownTimeoutMs ?? TEARDOWN_TIMEOUT_MS;
 
 	// One chain per device, holding the restoration currently in flight and everything queued
 	// behind it. Two restorations of one device cannot interleave, and `settle` has a single
@@ -139,10 +187,11 @@ export function createDeviceRestorer(options: DeviceRestorerOptions): DeviceRest
 	/**
 	 * The whole restoration, and the guarantee that it never rejects.
 	 *
-	 * Every step is already contained, so this catches only what sits between them — resolving
-	 * the project, most of all, which is R17's code and not this module's. It matters because
-	 * `settle` is awaited inside `acquire_device`: a chain that rejected would turn the next
-	 * grant into an `internal_error` about a device that is perfectly fine.
+	 * Every step is contained, and so is resolving the project, so nothing below is expected to
+	 * reach this catch — it is the backstop for the bookkeeping between the steps rather than
+	 * for any one of them. It matters because `settle` is awaited inside `acquire_device`: a
+	 * chain that rejected would turn the next grant into an `internal_error` about a device
+	 * that is perfectly fine.
 	 */
 	const run = async (lease: Lease, reason: LeaseEndReason): Promise<void> => {
 		try {
@@ -155,9 +204,28 @@ export function createDeviceRestorer(options: DeviceRestorerOptions): DeviceRest
 		}
 	};
 
+	/**
+	 * What the project asks to have undone, or `null` — for a project nobody has described,
+	 * and equally for a resolver that threw. Contained like every step is, and for the same
+	 * reason: this is R17's code, it will read a file, and a device left in airplane mode is
+	 * far too high a price for a config file that would not parse.
+	 */
+	const describeProject = (serial: DeviceSerial, project: string): ProjectRestoration | null => {
+		try {
+			return resolveProject(project);
+		} catch (error) {
+			warn(
+				`Restoring device '${serial}': working out what project '${project}' asks to have ` +
+					`undone failed — ${describe(error)}. Its apps and teardown hook are skipped; the ` +
+					`device's own restoration still ran.`,
+			);
+			return null;
+		}
+	};
+
 	const runSteps = async (lease: Lease, reason: LeaseEndReason): Promise<void> => {
 		const serial = lease.serial;
-		const project = resolveProject(lease.project);
+		const project = describeProject(serial, lease.project);
 		const registered = await resolveDevice(serial, reason);
 
 		if (registered && project) {
@@ -172,7 +240,43 @@ export function createDeviceRestorer(options: DeviceRestorerOptions): DeviceRest
 			// Runs even when the device could not be resolved: a project's teardown is the host's
 			// own cleanup (D13) — helper services, temporary files — and a device that vanished is
 			// the case where leaking those matters most.
-			await step(serial, 'the project teardown hook', project.teardown);
+			const teardown = project.teardown;
+			await step(serial, 'the project teardown hook', () => runTeardown(serial, teardown));
+		}
+	};
+
+	/**
+	 * The project's teardown hook, bounded. `step` contains a failure but not a duration, and
+	 * every other step is a backend call that carries its own timeout — this one is foreign
+	 * code reached through {@link ProjectRestoration.teardown}, and `settle` is awaited by
+	 * `acquire_device`, so a hook that never returns would hang every later grant on this
+	 * device with nothing left to expire it.
+	 *
+	 * The hook is not cancelled, because nothing here can cancel it; the bound is on the wait,
+	 * and the warning says so.
+	 */
+	const runTeardown = async (
+		serial: DeviceSerial,
+		teardown: () => Promise<void>,
+	): Promise<void> => {
+		let timer: NodeJS.Timeout | undefined;
+		const expiry = new Promise<'timed-out'>((resolve) => {
+			timer = setTimeout(() => resolve('timed-out'), teardownTimeoutMs);
+			// Unreferenced: this exists to stop us waiting, never to keep a process alive that is
+			// otherwise finished.
+			timer.unref();
+		});
+
+		try {
+			if ((await Promise.race([teardown(), expiry])) === 'timed-out') {
+				warn(
+					`Restoring device '${serial}': the project teardown hook did not finish within ` +
+						`${teardownTimeoutMs}ms. The device is being handed on anyway; whatever the ` +
+						`hook started may still be running.`,
+				);
+			}
+		} finally {
+			clearTimeout(timer);
 		}
 	};
 
@@ -219,6 +323,13 @@ export function createDeviceRestorer(options: DeviceRestorerOptions): DeviceRest
 
 		settle(serial: DeviceSerial): Promise<void> {
 			return chains.get(serial) ?? Promise.resolve();
+		},
+
+		async settleAll(): Promise<void> {
+			// Each entry is that device's tail, so this covers everything queued as well as
+			// everything in flight. Snapshotted before the await for the reason on the interface:
+			// awaiting a set that can still grow is an unbounded shutdown wait.
+			await Promise.all([...chains.values()]);
 		},
 	};
 }
