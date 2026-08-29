@@ -1,5 +1,6 @@
 import type { Duplex } from 'node:stream';
 import { describe, expect, it, vi } from 'vitest';
+import { parseDeviceSerial } from '@/core/ids.js';
 import { createIpcClient } from '@/ipc/client.js';
 import { encodeFrame, FrameDecoder, MAX_FRAME_BYTES } from '@/ipc/framing.js';
 import type { IpcHandlers, StatusResult } from '@/ipc/methods.js';
@@ -17,6 +18,15 @@ function statusHandlers(overrides: Partial<IpcHandlers> = {}): IpcHandlers {
 	return {
 		status: () => ({ protocolVersion: PROTOCOL_VERSION, pid: 4242, uptimeMs: 7 }),
 		list_devices: () => ({ devices: [], stale: false }),
+		// The lease rows exist so this table stays complete; the refusal is the cheapest
+		// answer that is still a real one, and one suite below sends it over the wire.
+		acquire_device: () => ({
+			outcome: 'refused',
+			reason: 'gone',
+			message: 'no device host in these tests',
+			heldBy: null,
+		}),
+		release_device: () => ({ released: false }),
 		...overrides,
 	};
 }
@@ -60,6 +70,39 @@ describe('request/response over a duplex pair', () => {
 			protocolVersion: PROTOCOL_VERSION,
 			pid: 4242,
 			uptimeMs: 7,
+		});
+	});
+
+	it('carries an acquire_device refusal, discriminant and all, over the wire', async () => {
+		const { client } = connect(
+			statusHandlers({
+				acquire_device: () => ({
+					outcome: 'refused',
+					reason: 'held',
+					message: "Device 'attached-1' is held by 'issue-112'",
+					heldBy: {
+						serial: parseDeviceSerial('attached-1'),
+						owner: 'issue-112',
+						project: 'rover',
+						testName: null,
+						expiresInMs: 60_000,
+					},
+				}),
+			}),
+		);
+
+		// A refusal is data, not an IPC error, so it has to survive both parses — the server's
+		// on the way out and the client's on the way in — as a result rather than a rejection.
+		await expect(
+			client.request('acquire_device', {
+				serial: parseDeviceSerial('attached-1'),
+				owner: 'pr-127-review',
+				project: 'rover',
+			}),
+		).resolves.toMatchObject({
+			outcome: 'refused',
+			reason: 'held',
+			heldBy: { owner: 'issue-112', expiresInMs: 60_000 },
 		});
 	});
 

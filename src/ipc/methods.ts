@@ -14,7 +14,9 @@
  */
 
 import { z } from 'zod';
+import { CapabilitiesSchema } from '../core/capabilities.js';
 import { DeviceSchema } from '../core/device.js';
+import { parseDeviceSerial, parseLeaseId } from '../core/ids.js';
 import { ProtocolVersionSchema } from './protocol.js';
 
 /** What one row of {@link IPC_METHODS} must provide. */
@@ -70,6 +72,142 @@ export const ListDevicesResultSchema = z
 export type ListDevicesResult = z.infer<typeof ListDevicesResultSchema>;
 
 /**
+ * The three caller-supplied attribution strings — `owner` (D16), `project` and `test_name`
+ * (D22) — share one schema because the host treats them identically: it stores them, echoes
+ * them back, and never reads their content. No `.trim()` (that would modify a caller's
+ * string), no default synthesized from a branch, a pull request or a process, and nothing
+ * anywhere branches on what they say.
+ *
+ * The upper bound is allocation hygiene of the kind `RequestIdSchema` and `MethodNameSchema`
+ * already apply, not validation: the host echoes these back in a refusal, so an unbounded
+ * one is a response it allocates and encodes on a peer's behalf. It looks at the length and
+ * never at the meaning.
+ */
+export const AttributionStringSchema = z.string().min(1).max(256);
+
+/**
+ * `.strict()` so a typo'd key is `invalid_params` rather than a lease granted with an
+ * attribution string silently missing — which the archive would only discover later, with
+ * the device already handed out.
+ *
+ * `testName` is optional and deliberately **not unique** (D22): the same named check run
+ * before and after a change is two leases carrying one name, which is the expected shape.
+ */
+export const AcquireDeviceParamsSchema = z
+	.object({
+		serial: z.string().min(1).transform(parseDeviceSerial),
+		/** Who this lease is for. Attribution only — it authorizes nothing (D20). */
+		owner: AttributionStringSchema,
+		project: AttributionStringSchema,
+		testName: AttributionStringSchema.optional(),
+	})
+	.strict();
+export type AcquireDeviceParams = z.infer<typeof AcquireDeviceParamsSchema>;
+
+/**
+ * What the winner of an acquire is handed. `leaseId` is the **credential**: it is the only
+ * thing that releases the lease, because the owner string attributes and never authorizes
+ * (D20).
+ *
+ * `expiresInMs` is a duration, not an instant, for the same reason `uptimeMs` is: the caller
+ * may be on another machine and shares no clock with the host (D17).
+ */
+export const GrantedLeaseSchema = z
+	.object({
+		leaseId: z.string().min(1).transform(parseLeaseId),
+		serial: z.string().min(1).transform(parseDeviceSerial),
+		owner: z.string(),
+		project: z.string(),
+		testName: z.string().nullable(),
+		expiresInMs: z.number().int().nonnegative(),
+	})
+	.strict();
+export type GrantedLease = z.infer<typeof GrantedLeaseSchema>;
+
+/**
+ * What a **refused** caller is told about the holder — deliberately
+ * {@link GrantedLeaseSchema} minus `leaseId`.
+ *
+ * Anyone may ask for a busy device, so anything in this shape is public to strangers. The
+ * lease id ends the lease, so including it would let whoever was refused release the holder
+ * and take the device. The owner, project and test name are here because "held by
+ * `pr-127-review` for another eleven minutes" is what makes a refusal actionable.
+ */
+export const LeaseHolderSchema = z
+	.object({
+		serial: z.string().min(1).transform(parseDeviceSerial),
+		owner: z.string(),
+		project: z.string(),
+		testName: z.string().nullable(),
+		expiresInMs: z.number().int().nonnegative(),
+	})
+	.strict();
+export type LeaseHolder = z.infer<typeof LeaseHolderSchema>;
+
+/** Why a device was not granted. Each is a different next move for the caller. */
+export const AcquireRefusalReasonSchema = z.enum([
+	/** Someone else holds it. `heldBy` says who, and for how much longer. */
+	'held',
+	/** The device is no longer attached to this host (D6) — re-verification found nothing. */
+	'gone',
+	/** Visible to the host but not physically attached to it, so never leased (D18). */
+	'not-attached',
+	/** Attached, but in a state no verb could run against — granting it would be a false yes. */
+	'not-ready',
+]);
+export type AcquireRefusalReason = z.infer<typeof AcquireRefusalReasonSchema>;
+
+/**
+ * Granted or refused, as **data**. A refusal is not an IPC error: `IpcErrorCodeSchema` is a
+ * closed vocabulary in which the nearest code is `internal_error` — "the host broke" — which
+ * is exactly the wrong thing to tell an agent whose device is simply busy
+ * (ai/CODING_STANDARDS.md "Error handling").
+ *
+ * Discriminated on a string field, the way `ResponseSchema` discriminates on `type`.
+ */
+export const AcquireDeviceResultSchema = z.discriminatedUnion('outcome', [
+	z
+		.object({
+			outcome: z.literal('granted'),
+			lease: GrantedLeaseSchema,
+			/** The device as re-verified at grant time, never as last cached (D6). */
+			device: DeviceSchema,
+			/**
+			 * What this device's backend declares it can do (PROJECT.md §4). The same schema the
+			 * manifest is parsed with, so a client reads one shape rather than a copy of it.
+			 */
+			capabilities: CapabilitiesSchema,
+		})
+		.strict(),
+	z
+		.object({
+			outcome: z.literal('refused'),
+			reason: AcquireRefusalReasonSchema,
+			message: z.string().min(1),
+			/** Non-null only for `'held'` — the other reasons have no holder to name. */
+			heldBy: LeaseHolderSchema.nullable(),
+		})
+		.strict(),
+]);
+export type AcquireDeviceResult = z.infer<typeof AcquireDeviceResultSchema>;
+
+/** The lease id and nothing else: it is the credential, and the owner string is not. */
+export const ReleaseDeviceParamsSchema = z
+	.object({ leaseId: z.string().min(1).transform(parseLeaseId) })
+	.strict();
+export type ReleaseDeviceParams = z.infer<typeof ReleaseDeviceParamsSchema>;
+
+/**
+ * Whether there was a live lease to end.
+ *
+ * No reason code, deliberately: an id that never existed, one released a moment ago and one
+ * whose lease expired and was dropped by an earlier read are indistinguishable to the store,
+ * and a distinction it cannot make reliably must not be modelled as though it could.
+ */
+export const ReleaseDeviceResultSchema = z.object({ released: z.boolean() }).strict();
+export type ReleaseDeviceResult = z.infer<typeof ReleaseDeviceResultSchema>;
+
+/**
  * `status` and `list_devices` exist in the *protocol* rather than in the MCP layer because
  * D16 requires daemon state to be answerable to something that is not an agent: whatever
  * Swarm asks, it asks here, the same way a local caller does. Nothing device-shaped may
@@ -81,6 +219,8 @@ export type ListDevicesResult = z.infer<typeof ListDevicesResultSchema>;
 export const IPC_METHODS = {
 	status: { params: StatusParamsSchema, result: StatusResultSchema },
 	list_devices: { params: ListDevicesParamsSchema, result: ListDevicesResultSchema },
+	acquire_device: { params: AcquireDeviceParamsSchema, result: AcquireDeviceResultSchema },
+	release_device: { params: ReleaseDeviceParamsSchema, result: ReleaseDeviceResultSchema },
 } as const satisfies Record<string, IpcMethodDefinition>;
 
 export type IpcMethodName = keyof typeof IPC_METHODS;

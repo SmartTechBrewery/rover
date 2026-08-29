@@ -37,6 +37,17 @@ export type DeviceSerial = string & { readonly __brand: 'DeviceSerial' };
  */
 export type PlatformId = string & { readonly __brand: 'PlatformId' };
 
+/**
+ * The handle a granted lease is held by — what a caller presents to release it, and what
+ * the artifact archive later names a directory after (PROJECT.md §10).
+ *
+ * Branded for the usual reason and for a second one: it is the **credential**. The owner
+ * string attributes a lease and never authorizes anything (D20), so this id is the only
+ * thing that ends a lease, and a serial passed where one of these belongs would otherwise
+ * compile and then end somebody else's.
+ */
+export type LeaseId = string & { readonly __brand: 'LeaseId' };
+
 /** A single element in a screen read — the stable handle a verb taps or waits on. */
 export type ElementId = string & { readonly __brand: 'ElementId' };
 
@@ -86,6 +97,11 @@ export function parsePlatformId(raw: string): PlatformId {
 	return requireNonEmpty(raw, 'PlatformId') as PlatformId;
 }
 
+/** Parse and brand a lease id. Throws `InvalidIdError` on empty/whitespace input. */
+export function parseLeaseId(raw: string): LeaseId {
+	return requireNonEmpty(raw, 'LeaseId') as LeaseId;
+}
+
 /** Parse and brand a screen element id. Throws `InvalidIdError` on empty/whitespace input. */
 export function parseElementId(raw: string): ElementId {
 	return requireNonEmpty(raw, 'ElementId') as ElementId;
@@ -119,6 +135,6 @@ export function parseAppId(raw: string): AppId {
 }
 
 /** Strip the brand for an outbound boundary — an argv entry, a log line, a wire payload. */
-export function unwrap(id: DeviceSerial | PlatformId | ElementId | AppId): string {
+export function unwrap(id: DeviceSerial | PlatformId | ElementId | AppId | LeaseId): string {
 	return id;
 }

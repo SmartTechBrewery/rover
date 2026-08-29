@@ -4,6 +4,7 @@ import {
 	parseAppId,
 	parseDeviceSerial,
 	parseElementId,
+	parseLeaseId,
 	parsePlatformId,
 	unwrap,
 } from '@/core/ids.js';
@@ -13,6 +14,7 @@ describe('id parsers', () => {
 		['parseDeviceSerial', parseDeviceSerial, 'DeviceSerial'],
 		['parsePlatformId', parsePlatformId, 'PlatformId'],
 		['parseElementId', parseElementId, 'ElementId'],
+		['parseLeaseId', parseLeaseId, 'LeaseId'],
 	] as const;
 
 	for (const [name, parse, kind] of parsers) {

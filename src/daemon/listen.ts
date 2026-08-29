@@ -22,6 +22,8 @@ import { dirname } from 'node:path';
 import type { IpcHandlers } from '../ipc/methods.js';
 import { createIpcServer } from '../ipc/server.js';
 import { createDeviceInventory, type DeviceInventory } from './inventory.js';
+import { createLeaseHandlers } from './lease-handlers.js';
+import { createLeaseStore, type LeaseStore } from './leases.js';
 import { attemptConnect } from './socket-connect.js';
 import { assertValidSocketPath } from './socket-path.js';
 import { handleStatus } from './status.js';
@@ -62,8 +64,8 @@ export interface DaemonAlreadyRunning {
 
 export type StartResult = RunningDaemon | DaemonAlreadyRunning;
 
-/** The method table the daemon serves. Two rows today; a row per verb as R21 lands. */
-export function createDaemonHandlers(inventory: DeviceInventory): IpcHandlers {
+/** The method table the daemon serves. Four rows today; a row per verb as R21 lands. */
+export function createDaemonHandlers(inventory: DeviceInventory, leases: LeaseStore): IpcHandlers {
 	return {
 		status: handleStatus,
 		// The cached view, deliberately: `list_devices` is a question about what the host has
@@ -72,6 +74,7 @@ export function createDaemonHandlers(inventory: DeviceInventory): IpcHandlers {
 		// that must not read a cache is the grant (D6), and that is
 		// `DeviceInventory.verifyForGrant`, not this.
 		list_devices: () => inventory.snapshot(),
+		...createLeaseHandlers(inventory, leases),
 	};
 }
 
@@ -92,8 +95,13 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartRes
 	// child processes — running with nobody holding a handle on them. Construction subscribes
 	// to nothing, so a loser that never starts it has spawned nothing to clean up.
 	const inventory = createDeviceInventory();
+	// Built here for the same reason and with the same lifecycle: one store per process,
+	// constructed once for both bind attempts. It starts nothing, so a loser leaves nothing
+	// behind, and a lease is host state that dies with the host by design (D6) — nothing
+	// about it is persisted or reclaimed from a predecessor.
+	const leases = createLeaseStore();
 
-	const first = await listenOnce(socketPath, inventory);
+	const first = await listenOnce(socketPath, inventory, leases);
 	if (first.listening) {
 		return running(first, socketPath, inventory);
 	}
@@ -101,7 +109,7 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartRes
 		throw first.error;
 	}
 
-	return reclaimAndRetry(socketPath, inventory);
+	return reclaimAndRetry(socketPath, inventory, leases);
 }
 
 /**
@@ -119,6 +127,7 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartRes
 async function reclaimAndRetry(
 	socketPath: string,
 	inventory: DeviceInventory,
+	leases: LeaseStore,
 ): Promise<StartResult> {
 	// Cheap check before queueing for the lock: a daemon that is simply already running is
 	// the common loser, and it needs no reclamation at all.
@@ -132,7 +141,7 @@ async function reclaimAndRetry(
 			return { started: false };
 		}
 
-		const second = await listenOnce(socketPath, inventory);
+		const second = await listenOnce(socketPath, inventory, leases);
 		if (second.listening) {
 			return running(second, socketPath, inventory);
 		}
@@ -271,8 +280,9 @@ interface ListenFailed {
 function listenOnce(
 	socketPath: string,
 	inventory: DeviceInventory,
+	leases: LeaseStore,
 ): Promise<ListenSucceeded | ListenFailed> {
-	const ipcServer = createIpcServer(createDaemonHandlers(inventory));
+	const ipcServer = createIpcServer(createDaemonHandlers(inventory, leases));
 	const connections = new Set<Socket>();
 	let closing = false;
 	const server = createServer((socket: Socket) => {

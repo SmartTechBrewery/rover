@@ -23,6 +23,15 @@ host — and answers `list_devices` alongside `status`. The inventory is a cache
 authority: a lease re-verifies its device against the backend at grant time (`PROJECT.md` D6),
 and `list_devices` says `stale` whenever the list is not known to be current.
 
+**Leases work.** `acquire_device` grants one device — not the whole machine — to an explicit
+caller-supplied `owner` string, alongside a `project` and an optional `test_name` the host stores
+and never inspects. The lease runs on a 20-minute TTL **renewed by activity rather than by a
+heartbeat**, so an agent that pauses to think keeps its device and one that died lets go on its
+own. A busy device is a refusal that names who holds it and for how much longer, never an error,
+and never the holder's lease id; `release_device` hands it back. Five clients asking at once get
+exactly one winner. Restoring device state on release and on expiry (D9) is the next row and is
+not built yet.
+
 One gap is worth stating plainly: `src/daemon/main.ts` does not yet import the backend barrel, so
 a daemon started with `npm run daemon` runs with an empty registry and answers an empty device
 list. That wiring is its own issue. The backlog is twenty issues in dependency order — see
