@@ -15,8 +15,10 @@ agent's job.
 
 Design and rules are settled. The toolchain and the device-backend contract — the device
 interface, the Zod capability manifest and the registry a backend joins through one import — are
-in place; **no backend is registered yet**. The backlog is twenty issues in dependency order —
-see [`PROJECT.md`](PROJECT.md) §9.3.
+in place; **no backend is registered yet**. The daemon's IPC message surface has landed too —
+the schemas, the framing and a transport-independent server and client — but **no daemon process
+yet**: it binds to any duplex stream and nothing has bound it to a socket. The backlog is twenty
+issues in dependency order — see [`PROJECT.md`](PROJECT.md) §9.3.
 
 ## Where things are
 
