@@ -20,11 +20,18 @@
  * client to ping. An agent that pauses for eleven minutes to think keeps its device, and an
  * agent that died five minutes ago loses it without anyone noticing the death.
  *
- * **Expiry is lazy and there is no timer.** Every read drops a record whose instant has
- * passed before answering, so "expired" is computed from the record rather than raced
- * against a `setTimeout` that can disagree with it — a second piece of state that can go
- * stale independently is exactly what D6 is about. R9's restoration hangs off
- * `resolveLive`, the one place a lease is observed to have ended.
+ * **Expiry is defined by the record, and the sweep only looks.** Every read drops a record
+ * whose instant has passed before answering, so "expired" is computed from `expiresAtMs`
+ * rather than raced against a `setTimeout` that can disagree with it — a second piece of
+ * state that can go stale independently is exactly what D6 is about. {@link LeaseStore.sweep}
+ * does not change that: it re-reads every record so an expiry is *observed* even when nobody
+ * asks, which is what the daemon's restoration (D9) needs and what a purely lazy store cannot
+ * give it. A sweep that never ran would only ever delay the observation, never alter it.
+ *
+ * **{@link LeaseStoreOptions.onLeaseEnded} fires from `forget`, the one place a lease ends.**
+ * `release` and the expiry branch of `resolveLive` both funnel through it, so "restoration runs
+ * on release and on expiry alike" (D9) holds by construction rather than by two call sites
+ * somebody has to remember.
  *
  * **{@link LeaseStore.acquire} is synchronous, and that is the whole of the exclusivity
  * guarantee.** The predecessor let four concurrent callers through because its check and
@@ -103,7 +110,21 @@ export interface LeaseStore {
 	 * than {@link Lease.expiresAtMs} (D17). Never negative.
 	 */
 	remainingMs(lease: Lease): number;
+	/**
+	 * Re-read every record, so a lease that expired is **observed** — and
+	 * {@link LeaseStoreOptions.onLeaseEnded} fired for it — without anyone having asked a
+	 * question about it. An agent that died mid-lease asks nothing further, and the device it
+	 * was holding would otherwise sit un-restored until the next caller happened along.
+	 *
+	 * Synchronous, and it decides nothing: expiry is still `expiresAtMs` on the record. The
+	 * daemon calls this on an interval; the interval's length changes when an expiry is
+	 * noticed, never whether it is one.
+	 */
+	sweep(): void;
 }
+
+/** Why a lease ended — the two paths D9 requires restoration on. */
+export type LeaseEndReason = 'released' | 'expired';
 
 export interface LeaseStoreOptions {
 	/** Defaults to {@link LEASE_TTL_MS}. Injected by tests, not a configuration surface. */
@@ -113,21 +134,50 @@ export interface LeaseStoreOptions {
 	 * twenty-minute TTL cannot both be in the same unit test.
 	 */
 	readonly now?: () => number;
+	/**
+	 * Called once for every lease that ends, whichever way it ended (D9). The daemon hangs
+	 * device restoration off this; nothing here reads the lease afterwards.
+	 *
+	 * **Synchronous, fire-and-forget, and never allowed to throw into this module.** It is
+	 * invoked from `forget`, which `resolveLive` reaches from inside
+	 * {@link LeaseStore.acquire} — and `acquire` being straight-line synchronous is the
+	 * entirety of R8's exclusivity guarantee. A callback that returned a promise would put an
+	 * `await` in the middle of it, and one that threw would abort a grant halfway through. So
+	 * the return value is `void` and the call is wrapped: a listener that throws is reported
+	 * through {@link LeaseStoreOptions.warn} and the lease still ends.
+	 */
+	readonly onLeaseEnded?: (lease: Lease, reason: LeaseEndReason) => void;
+	/** Where a throwing {@link onLeaseEnded} is reported. Injected so a test can read it. */
+	readonly warn?: (message: string) => void;
 }
 
 export function createLeaseStore(options: LeaseStoreOptions = {}): LeaseStore {
 	const ttlMs = options.ttlMs ?? LEASE_TTL_MS;
 	const now = options.now ?? Date.now;
+	const warn = options.warn ?? ((message: string) => console.warn(message));
 
 	// Two maps kept in step: the id is the credential a caller presents, the serial is the
 	// thing being made exclusive, and both are asked about on the hot path.
 	const byId = new Map<LeaseId, Lease>();
 	const bySerial = new Map<DeviceSerial, LeaseId>();
 
-	/** Drop the record if its instant has passed. The single place a lease is observed to end. */
-	const forget = (lease: Lease): void => {
+	/** Drop the record and say so. The single place a lease is observed to end (D9). */
+	const forget = (lease: Lease, reason: LeaseEndReason): void => {
 		byId.delete(lease.id);
 		bySerial.delete(lease.serial);
+		try {
+			options.onLeaseEnded?.(lease, reason);
+		} catch (error) {
+			// Swallowed on purpose, and it is not defensive habit: this runs inside `acquire`,
+			// which must reach its `set` calls without a foreign throw diverting it. A listener
+			// that failed is a device that may not have been restored — worth saying loudly, and
+			// not worth wedging a device for a full TTL over.
+			warn(
+				`A lease-ended listener threw for device '${lease.serial}' (${reason}): ` +
+					`${message(error)}. The lease ended regardless; whatever that listener does may ` +
+					`not have happened.`,
+			);
+		}
 	};
 
 	const resolveLive = (id: LeaseId): Lease | null => {
@@ -136,7 +186,7 @@ export function createLeaseStore(options: LeaseStoreOptions = {}): LeaseStore {
 			return null;
 		}
 		if (lease.expiresAtMs <= now()) {
-			forget(lease);
+			forget(lease, 'expired');
 			return null;
 		}
 		return lease;
@@ -191,7 +241,7 @@ export function createLeaseStore(options: LeaseStoreOptions = {}): LeaseStore {
 			if (!lease) {
 				return false;
 			}
-			forget(lease);
+			forget(lease, 'released');
 			return true;
 		},
 
@@ -202,5 +252,18 @@ export function createLeaseStore(options: LeaseStoreOptions = {}): LeaseStore {
 		remainingMs(lease: Lease): number {
 			return Math.max(0, lease.expiresAtMs - now());
 		},
+
+		sweep(): void {
+			// Over a snapshot, because resolving an expired record deletes it from the map being
+			// iterated. `resolveLive` rather than a bare instant comparison, so there is exactly
+			// one definition of "expired" in this module.
+			for (const id of [...byId.keys()]) {
+				resolveLive(id);
+			}
+		},
 	};
+}
+
+function message(error: unknown): string {
+	return error instanceof Error ? error.message : String(error);
 }

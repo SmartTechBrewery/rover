@@ -17,6 +17,8 @@ Device tests take a lease like any other client. A device test that talks to `ad
 
 Every suite under `tests/device/` constructs the backend class and calls it, outside any lease. That is a departure from the rule above, and unlike the socket exception below it is **temporary** — it is a wiring gap, not a property of what the suites assert.
 
+One suite is already half out of it: `tests/device/android/restoration.test.ts` imports the backend barrel and builds the daemon's own inventory, lease store and restorer, so it *does* take a lease — just not from a daemon on a socket, because `src/daemon/main.ts` still does not import the barrel. It is the shape the rest convert to when the gap closes, and it drives the backend class directly only to arrange and clean up.
+
 - **What is exempt.** All of `tests/device/`, and only for the lease: every other rule here still binds them, and a suite that changes device state additionally restores it (see the network suite).
 - **Why.** `src/daemon/main.ts` does not import the backend barrel, so a running daemon has an empty registry and would refuse to lend a device that is plainly attached (README.md, "Where things are"). There is no lease for a device test to take today, so the choice is between this exemption and no device coverage at all.
 - **What ends it.** The barrel wired into the daemon, plus a helper under `tests/helpers/` that acquires and releases a lease around a suite. When both exist, convert every suite in one change and delete this section — the exemption expires with the gap, not with any particular issue being closed.

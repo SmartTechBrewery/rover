@@ -9,26 +9,47 @@
 
 import { describe, expect, it } from 'vitest';
 import { type DeviceSerial, parseDeviceSerial, parseLeaseId } from '@/core/ids.js';
-import { createLeaseStore, LEASE_TTL_MS, type LeaseStore } from '@/daemon/leases.js';
+import {
+	createLeaseStore,
+	LEASE_TTL_MS,
+	type Lease,
+	type LeaseEndReason,
+	type LeaseStore,
+	type LeaseStoreOptions,
+} from '@/daemon/leases.js';
 import { createMockLease } from '../../helpers/factories.js';
 
 const deviceA = parseDeviceSerial('device-a');
 const deviceB = parseDeviceSerial('device-b');
 
 /** A store whose clock the test moves by hand. `at` is the current host-local instant. */
-function createClockedStore(ttlMs = LEASE_TTL_MS): {
+function createClockedStore(
+	ttlMs = LEASE_TTL_MS,
+	extras: Omit<LeaseStoreOptions, 'ttlMs' | 'now'> = {},
+): {
 	store: LeaseStore;
 	at: (instant: number) => void;
 	nowMs: () => number;
 } {
 	let nowMs = 1_000_000;
 	return {
-		store: createLeaseStore({ ttlMs, now: () => nowMs }),
+		store: createLeaseStore({ ttlMs, now: () => nowMs, ...extras }),
 		at: (instant: number) => {
 			nowMs = instant;
 		},
 		nowMs: () => nowMs,
 	};
+}
+
+/** A store that records every lease ending, plus whatever it had to warn about. */
+function createObservedStore(ttlMs = LEASE_TTL_MS) {
+	const ended: Array<{ lease: Lease; reason: LeaseEndReason }> = [];
+	const warnings: string[] = [];
+	const clocked = createClockedStore(ttlMs, {
+		onLeaseEnded: (lease, reason) => ended.push({ lease, reason }),
+		warn: (message) => warnings.push(message),
+	});
+	return { ...clocked, ended, warnings };
 }
 
 function request(serial: DeviceSerial, owner: string, testName: string | null = null) {
@@ -276,5 +297,101 @@ describe('use', () => {
 			project: 'rover',
 			testName: 'home screen',
 		});
+	});
+});
+
+/**
+ * The seam D9's restoration hangs off. What matters is not that a callback exists but that
+ * **both** ways a lease can end reach it — `forget` is one function, so a future path that
+ * ends a lease some third way is covered by construction rather than by whoever writes it
+ * remembering.
+ */
+describe('the end hook', () => {
+	it('fires once with released when a lease is handed back', () => {
+		const { store, ended } = createObservedStore();
+		const granted = store.acquire(request(deviceA, 'issue-112'));
+		if (!granted.granted) throw new Error('the first acquire must be granted');
+
+		store.release(granted.lease.id);
+
+		expect(ended).toHaveLength(1);
+		expect(ended[0]?.reason).toBe('released');
+		expect(ended[0]?.lease.id).toBe(granted.lease.id);
+
+		// The record is gone, so a second release has nothing to end and nothing to announce.
+		store.release(granted.lease.id);
+		expect(ended).toHaveLength(1);
+	});
+
+	it('fires once with expired when the instant passes, with nobody having released it', () => {
+		const { store, at, ended } = createObservedStore();
+		const granted = store.acquire(request(deviceA, 'issue-112'));
+		if (!granted.granted) throw new Error('the first acquire must be granted');
+
+		at(granted.lease.expiresAtMs);
+		store.sweep();
+
+		expect(ended).toEqual([{ lease: granted.lease, reason: 'expired' }]);
+
+		// Every later read finds nothing to forget, so the expiry is announced once however
+		// many times it is looked for.
+		store.sweep();
+		expect(store.holderOf(deviceA)).toBeNull();
+		expect(store.use(granted.lease.id)).toBeNull();
+		expect(ended).toHaveLength(1);
+	});
+
+	it('says nothing about a lease that is merely still running', () => {
+		const { store, at, ended } = createObservedStore();
+		const granted = store.acquire(request(deviceA, 'issue-112'));
+		if (!granted.granted) throw new Error('the first acquire must be granted');
+
+		at(granted.lease.expiresAtMs - 1);
+		store.sweep();
+
+		expect(ended).toEqual([]);
+		expect(store.holderOf(deviceA)?.owner).toBe('issue-112');
+	});
+
+	it('sweeps every device, not merely the first one it finds expired', () => {
+		const { store, at, ended } = createObservedStore();
+		store.acquire(request(deviceA, 'issue-112'));
+		store.acquire(request(deviceB, 'pr-127-review'));
+
+		at(1_000_000 + LEASE_TTL_MS);
+		store.sweep();
+
+		expect(ended.map((entry) => entry.lease.serial).sort()).toEqual([deviceA, deviceB]);
+	});
+
+	it('keeps acquire exclusive when the hook throws, and says what threw', () => {
+		const ended: LeaseEndReason[] = [];
+		const warnings: string[] = [];
+		let nowMs = 1_000_000;
+		const store = createLeaseStore({
+			ttlMs: LEASE_TTL_MS,
+			now: () => nowMs,
+			onLeaseEnded: (_lease, reason) => {
+				ended.push(reason);
+				throw new Error('the listener broke');
+			},
+			warn: (message) => warnings.push(message),
+		});
+		const granted = store.acquire(request(deviceA, 'issue-112'));
+		if (!granted.granted) throw new Error('the first acquire must be granted');
+		nowMs = granted.lease.expiresAtMs;
+
+		// The expiry is observed from inside `acquire`, so a throw that escaped the hook would
+		// abort the grant between resolving the holder and inserting the new record — which is
+		// the store's one guarantee (R8). Five callers, one winner, still.
+		const outcomes = ['a', 'b', 'c', 'd', 'e'].map((owner) =>
+			store.acquire(request(deviceA, owner)),
+		);
+
+		expect(outcomes.filter((outcome) => outcome.granted)).toHaveLength(1);
+		expect(ended).toEqual(['expired']);
+		expect(warnings).toHaveLength(1);
+		expect(warnings[0]).toContain('the listener broke');
+		expect(warnings[0]).toContain(deviceA);
 	});
 });
