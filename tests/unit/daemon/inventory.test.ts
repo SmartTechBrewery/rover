@@ -7,8 +7,8 @@
  * short-circuits on a cache hit would return exactly the right `Device` and still be the
  * bug the daemon exists to prevent.
  *
- * The other is D18: a device attached to another host never enters the inventory, and the
- * refusal is audible without being a flood.
+ * The other is D18: a device that is not physically attached to this host never enters the
+ * inventory, and the refusal is audible without being a flood.
  */
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -105,7 +105,7 @@ describe('createDeviceInventory admission', () => {
 		expect(inventory.snapshot().devices).toEqual([local]);
 	});
 
-	it("keeps this host's devices and refuses another host's", () => {
+	it('keeps the devices attached to this host and refuses the one that is not', () => {
 		const backend = createWatchableBackend('test-platform');
 		const { inventory } = inventoryOver([backend.registered]);
 		inventory.start();
@@ -128,7 +128,7 @@ describe('createDeviceInventory admission', () => {
 
 		expect(warn).toHaveBeenCalledTimes(1);
 		expect(warn.mock.calls[0]?.[0]).toContain('foreign-1');
-		expect(warn.mock.calls[0]?.[0]).toContain('another host');
+		expect(warn.mock.calls[0]?.[0]).toContain('not physically attached');
 	});
 
 	it("keeps one backend's devices when another backend reports its own set", () => {
@@ -230,7 +230,7 @@ describe('createDeviceInventory.verifyForGrant', () => {
 		const verified = await inventory.verifyForGrant(local.serial);
 
 		// This is D6. A cache hit is not an answer, because the device may have gone away,
-		// gone offline, or become another host's since the last frame.
+		// gone offline, or become unreachable except over the network since the last frame.
 		expect(backend.backend.describeDevice).toHaveBeenCalledTimes(1);
 		expect(backend.backend.describeDevice).toHaveBeenCalledWith(local.serial);
 		expect(verified).toEqual(local);
@@ -265,7 +265,7 @@ describe('createDeviceInventory.verifyForGrant', () => {
 		await expect(rejection).rejects.toThrow('local-1');
 	});
 
-	it('rejects with ForeignDeviceError when the backend now reports another host', async () => {
+	it('rejects with ForeignDeviceError when the backend now reports a device not attached here', async () => {
 		const backend = createWatchableBackend('test-platform', {
 			describeDevice: vi.fn<DeviceBackend['describeDevice']>(async () => foreign),
 		});

@@ -1,5 +1,5 @@
 /**
- * Which host a device belongs to, decided from the only thing adb offers.
+ * Whether a device is physically attached to this host, decided from the only thing adb offers.
  *
  * **This module is the one deliberate exception to "never read the shape of a serial"**
  * (ai/CODING_STANDARDS.md, and the header of `./parsers/devices.ts`, which stays free of
@@ -20,10 +20,10 @@
  * | `adb get-devpath` | `unknown` | `unknown` |
  * | `adb get-state` | `device` | `device` |
  *
- * Two entries, one physical device, and nothing but the serial telling them apart — D18's
- * failure mode reproduced in miniature on one machine. Getting this wrong in the
- * permissive direction is that failure at full size: two hosts each granting a lease on
- * one device, both reporting success.
+ * Two entries, one physical device, and nothing but the serial telling them apart — the
+ * case that makes this classification necessary rather than cosmetic. Getting it wrong in
+ * the permissive direction admits hardware this host does not control: a device that can
+ * vanish mid-lease, or that some other process is already driving.
  */
 
 import type { DeviceAttachment } from '../../core/device.js';
@@ -58,11 +58,11 @@ function isLoopback(host: string): boolean {
 }
 
 /**
- * Classify one serial as this host's device or another host's.
+ * Classify one serial as physically attached to this host, or reached over the network.
  *
- * A device reached over a network transport is attached to the machine at the far end and
- * is that machine's to lend (D18) — **unless** the address is loopback, which is this
- * machine by definition and is how a local device attached over TCP appears.
+ * A device reached over a network transport is somebody else's hardware, not this host's
+ * to lend (D18) — **unless** the address is loopback, which is this machine by definition
+ * and is how a local device attached over TCP appears.
  */
 export function attachmentOfSerial(serial: string): DeviceAttachment {
 	const host = NETWORK_SERIAL.exec(serial)?.groups?.host;

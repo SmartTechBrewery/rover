@@ -73,7 +73,7 @@ afterEach(async () => {
 });
 
 describe('list_devices over the socket', () => {
-	it("answers with this host's devices and leaves out another host's", async () => {
+	it('answers with the devices attached to this host and leaves out the one that is not', async () => {
 		registerFakeBackend();
 		temp = await createTempSocket();
 		await start();

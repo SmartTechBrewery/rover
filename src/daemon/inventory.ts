@@ -11,11 +11,11 @@
  * line: it is the primitive the lease layer calls at grant time, and it never reads what
  * is stored here.
  *
- * **A device attached to another host never enters it** (D18). Every platform this
- * targets has a network transport, so a device belonging to a different machine can show
- * up in this host's enumeration looking exactly like a local one. Admitting it would let
- * two hosts each lend the same hardware while both report success — the failure that is
- * hardest to spot precisely because nothing goes red.
+ * **A device that is not physically attached to this host never enters it** (D18). Every
+ * platform this targets has a network transport, so hardware belonging to another machine
+ * can show up in this host's enumeration looking exactly like a local one. Admitting it
+ * would put a device this host does not control into the pool it lends from — one that can
+ * vanish mid-lease, or already be in use by whatever process attached it.
  */
 
 import type { RegisteredDeviceBackend } from '../backends/manifest.js';
@@ -214,8 +214,8 @@ function markInterrupted(subscription: Subscription | undefined): void {
  * Whether a device may enter the inventory, warning once about each one that may not.
  *
  * The refusal is loud because a silent one is indistinguishable from the device not being
- * attached at all, and the operator's next move — go to the host it *is* attached to — is
- * only obvious once somebody says so (D18).
+ * attached at all, and an operator who can plainly see the device in their own tooling has
+ * no way to tell the two apart unless somebody says so (D18).
  */
 function admits(device: Device, warn: (message: string) => void, warned: Set<string>): boolean {
 	if (device.attachment === 'this-host') {
@@ -224,9 +224,9 @@ function admits(device: Device, warn: (message: string) => void, warned: Set<str
 	if (!warned.has(device.serial)) {
 		warned.add(device.serial);
 		warn(
-			`Device '${device.serial}' is attached to another host — not taking it into this ` +
-				`host's inventory, because a device belongs to exactly one host (D18). Ask the ` +
-				`host it is attached to for it.`,
+			`Device '${device.serial}' is not physically attached to this host — it is only ` +
+				`reachable over a network transport, so it is not taken into the inventory and ` +
+				`is never leased (D18).`,
 		);
 	}
 	return false;

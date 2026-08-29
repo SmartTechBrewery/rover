@@ -35,14 +35,13 @@ export const DeviceStateSchema = z.enum(['ready', 'unauthorized', 'offline']);
 export type DeviceState = z.infer<typeof DeviceStateSchema>;
 
 /**
- * Which host a device belongs to.
+ * Whether a device is physically attached to this host.
  *
- * A device belongs to exactly one host — the one it is physically attached to (D18) — and
- * this is the field that says whether that host is this one. A host can *see* devices
- * attached to another machine: every platform this targets has a network transport, and a
- * host that reached one over it sees an entry indistinguishable from a local device in
- * everything but this flag. Two hosts each treating that entry as theirs to lend is the
- * two-agents-one-device failure with both sides reporting success.
+ * A host can *see* devices it is not holding: every platform this targets has a network
+ * transport, and a device reached over one shows up in the enumeration indistinguishable
+ * from a local device in everything but this flag. It is not this machine's hardware — it
+ * can vanish without warning and may already belong to an unrelated process — so lending
+ * it out is a promise this host cannot keep (D18, revised 2026-08-29).
  *
  * The backend classifies, because only it knows how its platform addresses a device; what
  * shared code does about the answer is shared code's decision.
@@ -63,7 +62,10 @@ export const DeviceSchema = z.object({
 	platform: z.string().transform(parsePlatformId),
 	model: z.string().nullable(),
 	state: DeviceStateSchema,
-	/** Whose device this is (D18) — a snapshot that cannot say is not admissible to an inventory. */
+	/**
+	 * Whether this device is physically attached to this host (D18) — a snapshot that cannot
+	 * say is not admissible to an inventory.
+	 */
 	attachment: DeviceAttachmentSchema,
 });
 export type Device = z.infer<typeof DeviceSchema>;

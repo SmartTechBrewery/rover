@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { attachmentOfSerial } from '@/backends/android/attachment.js';
 
 /**
- * The classification that decides whether a device is this host's to lend (D18).
+ * The classification that decides whether a device is physically attached to this host (D18).
  *
  * The headline case is the one that was measured rather than reasoned about: on
  * adb 37.0.1 / API 37, `adb connect localhost:5555` pointed at the already-attached
@@ -30,7 +30,8 @@ describe('attachmentOfSerial', () => {
 	});
 
 	// The D18 case at full size: another machine's device, seen through a network
-	// transport. Taking one of these into an inventory is two hosts lending one device.
+	// transport. Taking one of these into an inventory lends out hardware this host does not
+	// control.
 	it.each([
 		['a LAN address', '192.168.1.5:5555'],
 		['a routable address', '10.0.0.7:5037'],

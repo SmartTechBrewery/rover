@@ -220,9 +220,9 @@ describe('watchDevices', () => {
 		]);
 	});
 
-	// The frame the capture exists for: one physical device, two entries, both this host's
-	// because the second was reached over loopback.
-	it('says which host each device of a multi-device snapshot belongs to', () => {
+	// The frame the capture exists for: one physical device, two entries, both physically
+	// attached here, the second reached over loopback.
+	it('classifies every device of a multi-device snapshot as attached to this host', () => {
 		const listener = watcher();
 		backend.watchDevices(listener);
 

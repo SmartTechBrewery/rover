@@ -107,8 +107,9 @@ re-capturing — a fixture nobody can re-create is a fixture nobody can extend.
   model, confirmed on the capture host before committing.
 - **The same capture is the only fixture here with more than one device in a list**, and the only
   one carrying the `authorizing` state — both of which were listed below as shapes with no fixture,
-  and are not any more. It is also the D18 case in miniature: two entries, one physical emulator,
-  distinguishable only by the serial.
+  and are not any more. It is also the attachment case in miniature (D18): two entries, one
+  physical emulator, distinguishable only by the serial — which is why the classification reads
+  the serial at all.
 
 - **The hierarchy XML has no trailing newline**, and every one of its 75 nodes carries all 19
   attributes — `index`, `text`, `resource-id`, `class`, `package`, `content-desc`, the ten booleans,
@@ -139,7 +140,7 @@ Nothing may be asserted about these until one exists — no test here claims any
   open string and not an enum — the full token list is longer than what is pinned here, and writing
   it from memory would be the same mistake as a hand-written fixture.
 - **A `goldfish` emulator.** Only `ro.hardware=ranchu` was observed, so only `ranchu` is encoded.
-- **A device attached through another machine's address.** The `track-devices` capture has
+- **A device reachable only through another machine's address.** The `track-devices` capture has
   `localhost:5555`, which is a network transport to *this* host; producing a genuine
   `another-host` entry needs a second machine, so the `another-host` cases in
   `attachment.test.ts` and `backend.test.ts` are synthetic and say so.
