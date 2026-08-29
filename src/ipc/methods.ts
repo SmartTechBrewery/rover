@@ -14,6 +14,7 @@
  */
 
 import { z } from 'zod';
+import { DeviceSchema } from '../core/device.js';
 import { ProtocolVersionSchema } from './protocol.js';
 
 /** What one row of {@link IPC_METHODS} must provide. */
@@ -40,13 +41,46 @@ export const StatusResultSchema = z
 	.strict();
 export type StatusResult = z.infer<typeof StatusResultSchema>;
 
+/** `.strict()` for the same reason as {@link StatusParamsSchema}: this method takes nothing. */
+export const ListDevicesParamsSchema = z.object({}).strict();
+export type ListDevicesParams = z.infer<typeof ListDevicesParamsSchema>;
+
 /**
- * `status` exists in the *protocol* rather than in the MCP layer because D16 requires
- * daemon state to be answerable to something that is not an agent: whatever Swarm asks,
- * it asks here.
+ * `DeviceSchema` is imported rather than restated, so the shape a backend produces and the
+ * shape a client reads are one schema parsed twice — once on the way out of the handler,
+ * once on the way into the client — instead of two that drift.
+ *
+ * `stale` earns its place next to the list: a view of the devices presented as current
+ * when the host is not in a position to know is exactly the stale-state failure D6 is
+ * about, and no client can infer it from the list itself — a host that has gone blind, a
+ * host that has not heard yet and a host with nothing attached all answer with an empty
+ * array.
+ */
+export const ListDevicesResultSchema = z
+	.object({
+		devices: z.array(DeviceSchema),
+		/**
+		 * The list is **not known to be current** — the host's view was interrupted, has not
+		 * arrived yet, or is not running. Treat it as "the last thing seen", never as "what is
+		 * attached"; an empty list with this set means *no view*, not *no devices*.
+		 */
+		stale: z.boolean(),
+	})
+	.strict();
+export type ListDevicesResult = z.infer<typeof ListDevicesResultSchema>;
+
+/**
+ * `status` and `list_devices` exist in the *protocol* rather than in the MCP layer because
+ * D16 requires daemon state to be answerable to something that is not an agent: whatever
+ * Swarm asks, it asks here, the same way a local caller does. Nothing device-shaped may
+ * exist only in a local path.
+ *
+ * The names follow the verb table in PROJECT.md §4 (`list_devices`), not a camelCase
+ * variant of it.
  */
 export const IPC_METHODS = {
 	status: { params: StatusParamsSchema, result: StatusResultSchema },
+	list_devices: { params: ListDevicesParamsSchema, result: ListDevicesResultSchema },
 } as const satisfies Record<string, IpcMethodDefinition>;
 
 export type IpcMethodName = keyof typeof IPC_METHODS;
