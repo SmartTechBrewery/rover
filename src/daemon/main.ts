@@ -18,15 +18,17 @@ async function main(): Promise<void> {
 	}
 
 	let shuttingDown = false;
-	const shutdown = () => {
+	const shutdown = async (): Promise<void> => {
 		if (shuttingDown) {
 			return;
 		}
 		shuttingDown = true;
-		daemon.close().then(
-			() => process.exit(0),
-			() => process.exit(1),
-		);
+		try {
+			await daemon.close();
+			process.exit(0);
+		} catch {
+			process.exit(1);
+		}
 	};
 
 	process.on('SIGINT', shutdown);

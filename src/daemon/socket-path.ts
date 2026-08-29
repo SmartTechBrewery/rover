@@ -13,6 +13,7 @@
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { z } from 'zod';
+import { describeIssues } from '../ipc/protocol.js';
 
 /** Environment variable naming the socket, for tests and for a non-default install. */
 export const SOCKET_PATH_ENV_VAR = 'ROVER_SOCKET_PATH';
@@ -45,6 +46,20 @@ export function defaultSocketPath(): string {
 }
 
 /**
+ * The one place a socket path is checked against {@link SocketPathSchema}, so a path
+ * supplied directly to `connectToLocalDaemon`/`startDaemon` (bypassing `resolveSocketPath`,
+ * e.g. from a future CLI flag) gets the same over-the-address-limit diagnosis as the
+ * default path does, instead of a bare `EINVAL` at `bind`.
+ */
+export function assertValidSocketPath(candidate: string): string {
+	const parsed = SocketPathSchema.safeParse(candidate);
+	if (!parsed.success) {
+		throw new Error(describeIssues(parsed.error));
+	}
+	return parsed.data;
+}
+
+/**
  * Resolve the socket the daemon binds and a local client connects to.
  *
  * An empty value counts as unset, matching Swarm's `optionalEnv`: an exported-but-blank
@@ -55,10 +70,5 @@ export function resolveSocketPath(env: NodeJS.ProcessEnv = process.env): string 
 	const configured = env[SOCKET_PATH_ENV_VAR];
 	const candidate =
 		configured === undefined || configured === '' ? defaultSocketPath() : configured;
-
-	const parsed = SocketPathSchema.safeParse(candidate);
-	if (!parsed.success) {
-		throw new Error(parsed.error.issues.map((issue) => issue.message).join('; '));
-	}
-	return parsed.data;
+	return assertValidSocketPath(candidate);
 }

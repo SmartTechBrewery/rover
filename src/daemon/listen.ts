@@ -17,10 +17,12 @@
  */
 
 import { mkdir, open, rm, stat } from 'node:fs/promises';
-import { createConnection, createServer, type Server, type Socket } from 'node:net';
+import { createServer, type Server, type Socket } from 'node:net';
 import { dirname } from 'node:path';
 import type { IpcHandlers } from '../ipc/methods.js';
 import { createIpcServer } from '../ipc/server.js';
+import { attemptConnect } from './socket-connect.js';
+import { assertValidSocketPath } from './socket-path.js';
 import { handleStatus } from './status.js';
 
 /**
@@ -61,7 +63,8 @@ export function createDaemonHandlers(): IpcHandlers {
  * other failure (`EACCES` on the directory, a path over the address limit) throws: it is
  * a misconfiguration the caller has to see, not a race it should quietly lose.
  */
-export async function startDaemon({ socketPath }: StartDaemonOptions): Promise<StartResult> {
+export async function startDaemon(options: StartDaemonOptions): Promise<StartResult> {
+	const socketPath = assertValidSocketPath(options.socketPath);
 	await mkdir(dirname(socketPath), { recursive: true });
 
 	const first = await listenOnce(socketPath);
@@ -131,11 +134,18 @@ function running(listening: ListenSucceeded, socketPath: string): RunningDaemon 
 }
 
 async function closeServer(
-	{ server, connections }: ListenSucceeded,
+	{ server, connections, startClosing }: ListenSucceeded,
 	socketPath: string,
 	ownInode: Promise<bigint | undefined>,
 ): Promise<void> {
 	await new Promise<void>((resolve) => {
+		// Set before `close()`, not after: a connection already past `accept()` in the kernel
+		// can still reach this server's `'connection'` handler for a moment after `close()` is
+		// called, and one added to `connections` after this loop already ran would never be
+		// destroyed and would hold `close()`'s callback (and the socket file) open forever.
+		// `startClosing()` makes that handler destroy such a connection on arrival instead of
+		// tracking it.
+		startClosing();
 		server.close(() => resolve());
 		// `close()` only stops accepting; it resolves when the last connection ends, which a
 		// client holding an idle connection never does. A daemon asked to shut down has to
@@ -165,6 +175,8 @@ interface ListenSucceeded {
 	 * is holding an idle connection open.
 	 */
 	readonly connections: ReadonlySet<Socket>;
+	/** Switches the connection handler from tracking new sockets to destroying them on arrival. */
+	readonly startClosing: () => void;
 }
 
 interface ListenFailed {
@@ -180,11 +192,19 @@ interface ListenFailed {
 function listenOnce(socketPath: string): Promise<ListenSucceeded | ListenFailed> {
 	const ipcServer = createIpcServer(createDaemonHandlers());
 	const connections = new Set<Socket>();
+	let closing = false;
 	const server = createServer((socket: Socket) => {
+		if (closing) {
+			socket.destroy();
+			return;
+		}
 		connections.add(socket);
 		socket.on('close', () => connections.delete(socket));
 		ipcServer.handleConnection(socket);
 	});
+	const startClosing = () => {
+		closing = true;
+	};
 
 	return new Promise((resolve) => {
 		const onError = (error: NodeJS.ErrnoException) => {
@@ -196,7 +216,7 @@ function listenOnce(socketPath: string): Promise<ListenSucceeded | ListenFailed>
 			// Past the bind, a socket error is one client's transport failing. Swallowing it is
 			// what keeps a single broken connection from taking the whole daemon down.
 			server.on('error', () => {});
-			resolve({ listening: true, server, connections });
+			resolve({ listening: true, server, connections, startClosing });
 		};
 
 		server.once('error', onError);
@@ -340,26 +360,17 @@ function pause(ms: number): Promise<void> {
  * answers `ECONNREFUSED`, and a plain file sitting on the path answers `ENOTSOCK` on
  * macOS 25.6 — different codes for the same conclusion, and enumerating them would just
  * be a list to get wrong on the next platform.
+ *
+ * A bound socket answers from the kernel's accept queue — no application code has to run
+ * for `connect` to fire — so hitting the timeout is not a slow-but-live daemon; it is the
+ * same "nothing is serving here" conclusion by a third route, reached because a corpse
+ * produces no event at all rather than an error. Treating it as "answered" would leave a
+ * corpse un-reclaimed for a full `startTimeoutMs` at the caller instead of the ~500ms this
+ * probe budgets for it.
  */
-function probeAnswers(socketPath: string): Promise<boolean> {
-	return new Promise((resolve) => {
-		const socket = createConnection(socketPath);
-		let settled = false;
-		const settle = (answered: boolean) => {
-			if (settled) {
-				return;
-			}
-			settled = true;
-			socket.destroy();
-			resolve(answered);
-		};
-
-		socket.setTimeout(PROBE_TIMEOUT_MS, () => settle(true));
-		socket.once('connect', () => settle(true));
-		// `on`, not `once`: the `destroy()` above can raise a second error, and an 'error'
-		// event with no listener is what turns a probe into a crashed process.
-		socket.on('error', () => settle(false));
-	});
+async function probeAnswers(socketPath: string): Promise<boolean> {
+	const attempt = await attemptConnect(socketPath, PROBE_TIMEOUT_MS);
+	return attempt.outcome === 'connected';
 }
 
 async function inodeOf(socketPath: string): Promise<bigint | undefined> {

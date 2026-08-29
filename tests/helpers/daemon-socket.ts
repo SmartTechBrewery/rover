@@ -8,9 +8,9 @@
  */
 
 import { mkdtemp, rm } from 'node:fs/promises';
-import { createConnection } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { attemptConnect } from '@/daemon/socket-connect.js';
 import { createIpcClient, type IpcClient } from '@/ipc/client.js';
 
 /** Long enough for a killed process to be reaped, short enough to fail a stuck test. */
@@ -52,16 +52,9 @@ export async function removeTempSocket(temp: TempSocket): Promise<void> {
  * wrong for a cleanup step and for the assertions that care whether a daemon is already
  * there.
  */
-export function connectWithoutStarting(socketPath: string): Promise<IpcClient | null> {
-	return new Promise((resolve) => {
-		const socket = createConnection(socketPath);
-		socket.once('connect', () => resolve(createIpcClient(socket)));
-		socket.once('error', () => {
-			socket.destroy();
-			socket.on('error', () => {});
-			resolve(null);
-		});
-	});
+export async function connectWithoutStarting(socketPath: string): Promise<IpcClient | null> {
+	const attempt = await attemptConnect(socketPath);
+	return attempt.outcome === 'connected' ? createIpcClient(attempt.socket) : null;
 }
 
 /**
@@ -102,20 +95,27 @@ async function stopOneDaemonAt(socketPath: string): Promise<boolean> {
 		return false;
 	}
 
-	let pid: number | undefined;
 	try {
-		pid = (await client.request('status', {})).pid;
+		let pid: number | undefined;
+		try {
+			pid = (await client.request('status', {})).pid;
+		} catch {
+			// The daemon we just connected to went away before it answered — a sibling
+			// cleanup killed it, or it exited on its own. There was something there, so the
+			// caller should keep draining rather than treat this as "nothing to stop".
+			return true;
+		}
+
+		// An in-process daemon (`startDaemon` called from the test itself) is this very
+		// process; its own suite closes it, and signalling it would take the test runner down.
+		if (pid === undefined || pid === process.pid) {
+			return false;
+		}
+		await stopProcess(pid);
+		return true;
 	} finally {
 		await client.close();
 	}
-
-	// An in-process daemon (`startDaemon` called from the test itself) is this very process;
-	// its own suite closes it, and signalling it would take the test runner down.
-	if (pid === undefined || pid === process.pid) {
-		return false;
-	}
-	await stopProcess(pid);
-	return true;
 }
 
 /** `SIGTERM`, then wait for the process to disappear rather than assuming it did. */

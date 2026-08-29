@@ -13,11 +13,12 @@
  */
 
 import { spawn } from 'node:child_process';
-import { createConnection, type Socket } from 'node:net';
+import type { Socket } from 'node:net';
 import { extname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createIpcClient, type IpcClient } from '../ipc/client.js';
-import { resolveSocketPath, SOCKET_PATH_ENV_VAR } from './socket-path.js';
+import { attemptConnect } from './socket-connect.js';
+import { assertValidSocketPath, resolveSocketPath, SOCKET_PATH_ENV_VAR } from './socket-path.js';
 
 /**
  * How long to keep re-checking for a daemon after spawning one. Generous because the child
@@ -52,7 +53,10 @@ export interface ConnectToLocalDaemonOptions {
 export async function connectToLocalDaemon(
 	options: ConnectToLocalDaemonOptions = {},
 ): Promise<IpcClient> {
-	const socketPath = options.socketPath ?? resolveSocketPath();
+	const socketPath =
+		options.socketPath === undefined
+			? resolveSocketPath()
+			: assertValidSocketPath(options.socketPath);
 	const startTimeoutMs = options.startTimeoutMs ?? DEFAULT_START_TIMEOUT_MS;
 
 	const existing = await tryConnect(socketPath);
@@ -82,12 +86,19 @@ export async function connectToLocalDaemon(
 /**
  * "Nothing is listening" is the only failure autostart may answer.
  *
+ * `ENOENT` and `ECONNREFUSED` are a stale unix socket or nothing at the path at all.
+ * `ENOTSOCK` is the same conclusion by another route: a plain file left on the path — the
+ * exact corpse a crashed daemon can leave, and what `startDaemon`'s own reclaim logic
+ * already treats as absent (`listen.ts`'s `probeAnswers`) — answers this code, not
+ * `ECONNREFUSED`, so a client that did not also treat it as absent would refuse to spawn a
+ * replacement that `startDaemon` would otherwise happily reclaim the path for.
+ *
  * `EACCES` and `EPERM` mean a daemon may well be there and this user may not talk to it —
  * spawning a second one would not fix that and would leave a stray process behind. The
  * path and the code are both in the message because they are the whole diagnosis.
  */
 function requireAbsentDaemon(error: NodeJS.ErrnoException, socketPath: string): void {
-	if (error.code === 'ENOENT' || error.code === 'ECONNREFUSED') {
+	if (error.code === 'ENOENT' || error.code === 'ECONNREFUSED' || error.code === 'ENOTSOCK') {
 		return;
 	}
 	throw new Error(
@@ -106,26 +117,11 @@ interface ConnectFailed {
 	readonly error: NodeJS.ErrnoException;
 }
 
-function tryConnect(socketPath: string): Promise<ConnectSucceeded | ConnectFailed> {
-	return new Promise((resolve) => {
-		const socket = createConnection(socketPath);
-
-		const onConnect = () => {
-			socket.removeListener('error', onError);
-			resolve({ connected: true, socket });
-		};
-		const onError = (error: NodeJS.ErrnoException) => {
-			socket.removeListener('connect', onConnect);
-			socket.destroy();
-			// The socket is dead and nobody owns it yet; keep swallowing so a late error from
-			// `destroy()` cannot reach Node's unhandled-'error' crash.
-			socket.on('error', () => {});
-			resolve({ connected: false, error });
-		};
-
-		socket.once('connect', onConnect);
-		socket.once('error', onError);
-	});
+async function tryConnect(socketPath: string): Promise<ConnectSucceeded | ConnectFailed> {
+	const attempt = await attemptConnect(socketPath);
+	return attempt.outcome === 'connected'
+		? { connected: true, socket: attempt.socket }
+		: { connected: false, error: attempt.error };
 }
 
 function nextAttempt(): Promise<void> {
