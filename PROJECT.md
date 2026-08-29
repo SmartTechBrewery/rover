@@ -205,6 +205,23 @@ capturing `tests/fixtures/adb/`:
 - **`wm size` and `wm density` print an `Override …` line only once one is set**, and `wm size
   reset` / `wm density reset` remove it. The override, not the physical value, is what the device
   renders at — so it is the one a coordinate and the dp scale belong to.
+- **The verified view-hierarchy dump recipe is two commands, and the second must be `exec-out`:**
+
+  ```bash
+  adb -s "$SERIAL" shell uiautomator dump /sdcard/window_dump.xml
+  adb -s "$SERIAL" exec-out cat /sdcard/window_dump.xml > window_dump.xml
+  adb -s "$SERIAL" shell rm /sdcard/window_dump.xml
+  ```
+
+  `adb shell cat` translates `\n` → `\r\n` and corrupts the XML. `uiautomator dump /dev/tty` is the
+  other shortcut every guide shows and is also wrong: it interleaves adb's own
+  `UI hierchary dumped to: …` line (adb's typo, not this document's) with the document.
+- **A node clipped by a scrolling container comes back with inverted `bounds`.** The last visible
+  row of the Settings → Display & touch dump is `bounds="[96,2798][399,2784]"` — its top *below*
+  its bottom, so `bottom - top` is -14. `parseUiHierarchy` reports that subtraction as it stands
+  rather than clamping it to zero, because every target resolution downstream is addressed through
+  this rectangle and a clamped one is a rectangle the device never described. Whether a node is on
+  screen is the caller's question, and the sign is the evidence it needs to answer.
 
 ---
 
