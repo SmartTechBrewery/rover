@@ -21,6 +21,7 @@ import { createServer, type Server, type Socket } from 'node:net';
 import { dirname } from 'node:path';
 import type { IpcHandlers } from '../ipc/methods.js';
 import { createIpcServer } from '../ipc/server.js';
+import { createDeviceInventory, type DeviceInventory } from './inventory.js';
 import { attemptConnect } from './socket-connect.js';
 import { assertValidSocketPath } from './socket-path.js';
 import { handleStatus } from './status.js';
@@ -51,9 +52,17 @@ export interface DaemonAlreadyRunning {
 
 export type StartResult = RunningDaemon | DaemonAlreadyRunning;
 
-/** The method table the daemon serves. One row today; a row per verb as R21 lands. */
-export function createDaemonHandlers(): IpcHandlers {
-	return { status: handleStatus };
+/** The method table the daemon serves. Two rows today; a row per verb as R21 lands. */
+export function createDaemonHandlers(inventory: DeviceInventory): IpcHandlers {
+	return {
+		status: handleStatus,
+		// The cached view, deliberately: `list_devices` is a question about what the host has
+		// seen, and answering it by re-enumerating every device on every call would put a
+		// process launch per backend behind a call a client may make in a loop. The one place
+		// that must not read a cache is the grant (D6), and that is
+		// `DeviceInventory.verifyForGrant`, not this.
+		list_devices: () => inventory.snapshot(),
+	};
 }
 
 /**
@@ -67,15 +76,22 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartRes
 	const socketPath = assertValidSocketPath(options.socketPath);
 	await mkdir(dirname(socketPath), { recursive: true });
 
-	const first = await listenOnce(socketPath);
+	// Constructed once, here, and started only by the winner of the bind. `listenOnce` runs up
+	// to twice (this call and `reclaimAndRetry`'s), so building the inventory in there would
+	// build two; starting one per attempt would leave the losing attempt's watches — and their
+	// child processes — running with nobody holding a handle on them. Construction subscribes
+	// to nothing, so a loser that never starts it has spawned nothing to clean up.
+	const inventory = createDeviceInventory();
+
+	const first = await listenOnce(socketPath, inventory);
 	if (first.listening) {
-		return running(first, socketPath);
+		return running(first, socketPath, inventory);
 	}
 	if (first.error.code !== 'EADDRINUSE') {
 		throw first.error;
 	}
 
-	return reclaimAndRetry(socketPath);
+	return reclaimAndRetry(socketPath, inventory);
 }
 
 /**
@@ -90,7 +106,10 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartRes
  * unlink. The holder either re-binds the path — this retry then loses honestly on
  * `EADDRINUSE` — or leaves it free, and this retry takes it.
  */
-async function reclaimAndRetry(socketPath: string): Promise<StartResult> {
+async function reclaimAndRetry(
+	socketPath: string,
+	inventory: DeviceInventory,
+): Promise<StartResult> {
 	// Cheap check before queueing for the lock: a daemon that is simply already running is
 	// the common loser, and it needs no reclamation at all.
 	if (await probeAnswers(socketPath)) {
@@ -103,9 +122,9 @@ async function reclaimAndRetry(socketPath: string): Promise<StartResult> {
 			return { started: false };
 		}
 
-		const second = await listenOnce(socketPath);
+		const second = await listenOnce(socketPath, inventory);
 		if (second.listening) {
-			return running(second, socketPath);
+			return running(second, socketPath, inventory);
 		}
 		if (second.error.code !== 'EADDRINUSE') {
 			throw second.error;
@@ -118,16 +137,24 @@ async function reclaimAndRetry(socketPath: string): Promise<StartResult> {
 	}
 }
 
-function running(listening: ListenSucceeded, socketPath: string): RunningDaemon {
+function running(
+	listening: ListenSucceeded,
+	socketPath: string,
+	inventory: DeviceInventory,
+): RunningDaemon {
 	// Captured while we hold the path, so `close()` can tell our own socket file from one a
 	// successor bound after us and only ever unlinks the former.
 	const ownInode = boundInodeOf(listening.server);
 	let closed: Promise<void> | undefined;
 
+	// Only ever reached by the winner of the bind — a `{ started: false }` caller has no
+	// inventory running and nothing to stop.
+	inventory.start();
+
 	return {
 		started: true,
 		close(): Promise<void> {
-			closed ??= closeServer(listening, socketPath, ownInode);
+			closed ??= closeServer(listening, socketPath, ownInode, inventory);
 			return closed;
 		},
 	};
@@ -137,7 +164,12 @@ async function closeServer(
 	{ server, connections, startClosing }: ListenSucceeded,
 	socketPath: string,
 	ownInode: Promise<bigint | undefined>,
+	inventory: DeviceInventory,
 ): Promise<void> {
+	// Before the socket teardown, so `RunningDaemon.close()` resolving means the watches — and
+	// whatever they spawned — are gone, not merely asked to go.
+	await inventory.stop();
+
 	await new Promise<void>((resolve) => {
 		// Set before `close()`, not after: a connection already past `accept()` in the kernel
 		// can still reach this server's `'connection'` handler for a moment after `close()` is
@@ -189,8 +221,11 @@ interface ListenFailed {
  * no handle to close, and re-`listen()`ing the same object is the shape that produces
  * `ERR_SERVER_NOT_RUNNING` from the cleanup rather than a second honest attempt.
  */
-function listenOnce(socketPath: string): Promise<ListenSucceeded | ListenFailed> {
-	const ipcServer = createIpcServer(createDaemonHandlers());
+function listenOnce(
+	socketPath: string,
+	inventory: DeviceInventory,
+): Promise<ListenSucceeded | ListenFailed> {
+	const ipcServer = createIpcServer(createDaemonHandlers(inventory));
 	const connections = new Set<Socket>();
 	let closing = false;
 	const server = createServer((socket: Socket) => {

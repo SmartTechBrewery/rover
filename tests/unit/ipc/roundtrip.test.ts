@@ -7,9 +7,16 @@ import { IpcRequestError, PROTOCOL_VERSION, ResponseSchema } from '@/ipc/protoco
 import { createIpcServer } from '@/ipc/server.js';
 import { createDuplexPair } from '../../helpers/duplex-pair.js';
 
+/**
+ * A complete handler table — complete because {@link IpcHandlers} is a complete mapped
+ * type over `IPC_METHODS`, so a row added without a handler is a compile error here too.
+ * These suites drive the message surface rather than any one method; the bodies are the
+ * least interesting thing in the file.
+ */
 function statusHandlers(overrides: Partial<IpcHandlers> = {}): IpcHandlers {
 	return {
 		status: () => ({ protocolVersion: PROTOCOL_VERSION, pid: 4242, uptimeMs: 7 }),
+		list_devices: () => ({ devices: [], stale: false }),
 		...overrides,
 	};
 }
