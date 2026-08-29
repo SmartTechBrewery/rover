@@ -58,7 +58,8 @@ export const STUB_SENTINEL = /\bnot\s+implemented\b/i;
 
 /**
  * A body that answers with nothing at all, or with an empty value of the method's own
- * return type. Matched against the body with its whitespace collapsed.
+ * return type. Matched against the body with its whitespace collapsed and any parens
+ * around the returned value removed ({@link unwrapReturnedValue}).
  */
 const EMPTY_ANSWER =
 	/^(?:return(?:\s*(?:\[\s*\]|\{\s*\}|null|undefined|''|""|``|0|false|new\s+Uint8Array\s*\(\s*\)))?\s*;?)?$/;
@@ -106,7 +107,46 @@ export function isStubSource(source: string): boolean {
  */
 export function isEmptyAnswerSource(source: string): boolean {
 	const body = methodBody(stripComments(source)).replace(/\s+/g, ' ').trim();
-	return EMPTY_ANSWER.test(body);
+	return EMPTY_ANSWER.test(unwrapReturnedValue(body));
+}
+
+/**
+ * The same body with parentheses around the returned value removed, because they change
+ * nothing about the answer. Not a nicety: `async () => ({})` *has* to carry them for the
+ * object literal to parse at all, so without this the emptiest possible concise arrow is
+ * the one shape the scan cannot see.
+ */
+function unwrapReturnedValue(body: string): string {
+	const returned = /^return\b\s*([\s\S]*?)\s*;?$/.exec(body);
+	if (returned === null) return body;
+
+	const value = stripWrappingParens(returned[1]);
+	return value === '' ? 'return;' : `return ${value};`;
+}
+
+/** Drops paren pairs that wrap the whole expression, leaving `(a) + (b)` intact. */
+function stripWrappingParens(expression: string): string {
+	let value = expression.trim();
+	while (value.startsWith('(') && wrapsWholeExpression(value)) {
+		value = value.slice(1, -1).trim();
+	}
+	return value;
+}
+
+/** Whether the leading `(` of an expression is closed only by its final character. */
+function wrapsWholeExpression(expression: string): boolean {
+	let depth = 0;
+
+	for (let index = 0; index < expression.length; index += 1) {
+		const character = expression[index];
+		if (character === '(') depth += 1;
+		else if (character === ')') {
+			depth -= 1;
+			if (depth === 0) return index === expression.length - 1;
+		}
+	}
+
+	return false;
 }
 
 /**

@@ -216,6 +216,20 @@ describe('checkNoStubbedMethods', () => {
 		expect(checkNoStubbedMethods(entry)).toEqual([expect.stringContaining('empty result')]);
 	});
 
+	// The one empty answer that *cannot* drop its parentheses: a concise arrow body
+	// returning an object literal needs them to parse. Written end to end rather than
+	// against `isEmptyAnswerSource` alone because this is the form that survives the
+	// transform Vitest reads the source through.
+	it('reports a method that answers with an empty object behind parentheses', () => {
+		const entry = registeredBackend(
+			createConformingDeviceBackend({
+				describeDevice: async () => ({}) as unknown as Device,
+			}),
+		);
+
+		expect(checkNoStubbedMethods(entry)).toEqual([expect.stringContaining('describeDevice')]);
+	});
+
 	it('reports a method that answers with empty bytes', () => {
 		const entry = registeredBackend(
 			createConformingDeviceBackend({ screenshot: async () => new Uint8Array() }),
@@ -285,6 +299,11 @@ describe('isEmptyAnswerSource', () => {
 		['a method returning null', 'async describeDevice(serial) { return null; }'],
 		['an empty body', 'async stopApp(serial, appId) {}'],
 		['a body that is only a comment', 'async stopApp() { /* TODO */ }'],
+		['a concise arrow returning a parenthesized empty list', 'async () => ([])'],
+		['a concise arrow returning a parenthesized empty object', 'async () => ({})'],
+		['a block body returning a parenthesized empty list', 'async readScreen() { return ([]); }'],
+		['a parenthesized empty byte array', 'async screenshot() { return (new Uint8Array()); }'],
+		['redundantly nested parentheses', 'async readScreen() { return ((([]))); }'],
 	])('flags %s', (_name, source) => {
 		expect(isEmptyAnswerSource(source)).toBe(true);
 	});
@@ -294,6 +313,10 @@ describe('isEmptyAnswerSource', () => {
 		['a non-empty literal', 'async screenshot() { return new Uint8Array([1]); }'],
 		['a loud failure', "async tap() { throw new MissingCapabilityError('canInput'); }"],
 		['a delegated call', 'async listDevices() { return this.enumerate(); }'],
+		['a parenthesized await', 'async listDevices() { return (await this.enumerate()); }'],
+		// Guards the paren stripping itself: these parens do not wrap the whole
+		// expression, so dropping them would leave a fragment that reads as empty.
+		['parens around each half of a sum', 'async count() { return ([].length) + (this.n); }'],
 	])('leaves %s alone', (_name, source) => {
 		expect(isEmptyAnswerSource(source)).toBe(false);
 	});
