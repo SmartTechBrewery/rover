@@ -1,0 +1,75 @@
+# adb output fixtures
+
+Every parser under `src/backends/android/parsers/` is pinned against output **captured from a
+real device**, never written by hand (`ai/TESTING.md`). A hand-written fixture encodes what someone
+believes adb prints, so the parser passes and the device disagrees — which is the exact bug these
+files exist to prevent. Two of the fixtures below already earned their keep: `wm density` reports
+`480` on a device whose `wm size` is `1280x2856`, and the daemon-failure capture prints an `error:`
+line on the same stream as the device list.
+
+Each filename carries the subject, the API level and the model slug:
+`<subject>.api<sdk>-<model-slug>.txt`, where the slug is `ro.product.model` lowercased with every
+run of non-alphanumerics collapsed to `-`. Captures that are not about one device (`devices-l.empty`,
+`devices-l.daemon-failed`) carry no API level, because there was none to record.
+
+Re-capture rather than hand-edit when a format changes, and add the new fixture **beside** the old
+one: a parser has to keep working on the API levels already in use.
+
+## Captures
+
+All from an Android Emulator AVD `Pixel_10_Pro` (`sdk_gphone16k_arm64`, API 37 / Android 17),
+`adb` 37.0.0-14910828 on macOS, captured **2026-08-29**. `SERIAL` is `emulator-5554`.
+
+| Fixture | Command | Model | API | Captured |
+|---|---|---|---|---|
+| `getprop.api37-sdk-gphone16k-arm64.txt` | `adb -s $SERIAL shell getprop` | sdk_gphone16k_arm64 | 37 | 2026-08-29 |
+| `devices-l.api37-sdk-gphone16k-arm64.txt` | `adb devices -l` | sdk_gphone16k_arm64 | 37 | 2026-08-29 |
+| `wm-size.api37-sdk-gphone16k-arm64.txt` | `adb -s $SERIAL shell wm size` | sdk_gphone16k_arm64 | 37 | 2026-08-29 |
+| `wm-density.api37-sdk-gphone16k-arm64.txt` | `adb -s $SERIAL shell wm density` | sdk_gphone16k_arm64 | 37 | 2026-08-29 |
+| `wm-size.override.api37-sdk-gphone16k-arm64.txt` | `adb -s $SERIAL shell wm size 720x1600` then `wm size` | sdk_gphone16k_arm64 | 37 | 2026-08-29 |
+| `wm-density.override.api37-sdk-gphone16k-arm64.txt` | `adb -s $SERIAL shell wm density 320` then `wm density` | sdk_gphone16k_arm64 | 37 | 2026-08-29 |
+| `devices-l.daemon-start.api37-sdk-gphone16k-arm64.txt` | `adb kill-server; adb devices -l > f 2>&1` | sdk_gphone16k_arm64 | 37 | 2026-08-29 |
+| `devices-l.offline.api37-sdk-gphone16k-arm64.txt` | `adb -s $SERIAL reboot` then poll `adb devices -l` | sdk_gphone16k_arm64 | 37 | 2026-08-29 |
+| `devices-l.daemon-failed.txt` | `adb kill-server; adb devices -l > f 2>&1`, racing a still-shutting-down daemon | — (none attached) | — | 2026-08-29 |
+| `devices-l.empty.txt` | `adb devices -l`, emulator shut down | — (none attached) | — | 2026-08-29 |
+
+Both `wm` overrides were reset with `wm size reset` / `wm density reset` immediately after the
+capture.
+
+## What the capture showed
+
+- **The `* daemon …` banner goes to stderr, not stdout**, on `adb` 37.0.0. So the daemon-start and
+  daemon-failure fixtures are **merged-stream** captures (`> f 2>&1`) — that is the situation the
+  banner-skipping is actually for, and the fixture reflects it honestly rather than pretending the
+  lines arrive on stdout.
+- **A failing daemon prints an `error:` line above the device list.** `error: cannot connect to
+  daemon at tcp:5037: Connection refused` parses as a device with the serial `error:` under any
+  scheme that skips known prefixes, so `parseAdbDevices` anchors on the `List of devices attached`
+  header and treats everything above it as preamble.
+- **`adb shell wm …` returned LF, not CRLF, on this build.** The parsers strip CRLF anyway — an
+  `adb shell` that returns it is well documented — but no fixture here proves that path, so the
+  CRLF assertions in `wm.test.ts` use inline input and say so.
+
+## Redactions
+
+- `ro.boot.qemu.adb.pubkey` in the `getprop` fixture holds the **host's** adb public key and the
+  username it was generated under. This repository is public, so the value was replaced with
+  `<redacted: host adb public key, see README.md>` — the only edit made to any fixture here. The
+  emulator's own `ro.serialno` / `ro.boot.serialno` (`EMULATOR36X6X11X0`) are throwaway and are
+  kept verbatim.
+
+## Shapes with no fixture yet
+
+Nothing may be asserted about these until one exists — no test here claims anything about them.
+
+- **A physical device.** Everything above is an emulator, chosen deliberately: a phone's
+  `ro.serialno` is not throwaway and this repository is public. So `isEmulatorFromProps` has no
+  captured negative case; `getprop.test.ts` builds one by deleting the markers from this same real
+  dump, and says so in a comment.
+- **Any API level other than 37.** `getprop` key names in particular have moved between releases.
+- **`unauthorized`, `authorizing`, `no permissions (…)`, `bootloader`, `recovery`, `sideload`.**
+  Only `device` and `offline` were captured, which is why `AdbDevice.state` is an open string and
+  not an enum — the full token list is longer than what is pinned here, and writing it from memory
+  would be the same mistake as a hand-written fixture.
+- **A `goldfish` emulator.** Only `ro.hardware=ranchu` was observed, so only `ranchu` is encoded.
+- **More than one device in the list at once.**

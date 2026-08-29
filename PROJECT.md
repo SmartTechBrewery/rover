@@ -191,6 +191,21 @@ partly dead here.
   system then hands back a black buffer with no error in the log. The check: a screenshot of the
   system home screen. The view hierarchy remains readable in that case.
 
+Checked on an API 37 emulator (`sdk_gphone16k_arm64`) with `adb` 37.0.0, 2026-08-29, while
+capturing `tests/fixtures/adb/`:
+
+- **`ro.kernel.qemu` is still `1` on API 37.** It is widely described as removed, and it is not —
+  alongside `ro.boot.qemu=1`, `ro.hardware=ranchu` and `ro.build.characteristics=emulator`. Any of
+  the four identifies an emulator; none of them is the serial or the model, which is the point.
+- **`adb`'s `* daemon not running; starting now …` banner goes to stderr, not stdout.** It only
+  reaches a device-list parser when the caller merges the two streams — but a daemon that then
+  *fails* to start prints `error: cannot connect to daemon at tcp:5037 …` on the same stream, above
+  the `List of devices attached` header. Parse the device list anchored on that header: a parser
+  that merely skips known prefixes reads the error line as a device with the serial `error:`.
+- **`wm size` and `wm density` print an `Override …` line only once one is set**, and `wm size
+  reset` / `wm density reset` remove it. The override, not the physical value, is what the device
+  renders at — so it is the one a coordinate and the dp scale belong to.
+
 ---
 
 ## 7. Scope
