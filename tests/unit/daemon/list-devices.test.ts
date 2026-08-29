@@ -18,6 +18,7 @@ import {
 } from '@/backends/registry.js';
 import type { Device, DeviceBackend, DeviceWatch, DeviceWatcher } from '@/core/device.js';
 import { parseDeviceSerial } from '@/core/ids.js';
+import { waitForCondition } from '@/core/wait.js';
 import { LEASE_TTL_MS } from '@/daemon/leases.js';
 import { type RunningDaemon, startDaemon } from '@/daemon/listen.js';
 import type { IpcClient } from '@/ipc/client.js';
@@ -96,18 +97,6 @@ function listed(result: ListDevicesResult) {
 		throw new Error(`'${attached.serial}' is missing from the list`);
 	}
 	return device;
-}
-
-/** Polls on the condition with a deadline, never a wait instead of a check (ai/RULES.md §2). */
-async function until(what: string, met: () => Promise<boolean> | boolean): Promise<void> {
-	const deadline = Date.now() + CONDITION_TIMEOUT_MS;
-	while (Date.now() < deadline) {
-		if (await met()) {
-			return;
-		}
-		await new Promise((resolve) => setTimeout(resolve, CONDITION_POLL_MS));
-	}
-	throw new Error(`Timed out waiting for ${what}`);
 }
 
 afterEach(async () => {
@@ -290,8 +279,16 @@ describe('who holds what, in a list reply', () => {
 		// Polled on the condition, never slept on: the expiry is observed by the read itself —
 		// every read of the store drops a record whose instant has passed — so this asks again
 		// until the answer changes rather than assuming when it will.
-		await until('the expired lease to stop being listed as a holder', async () => {
-			return listed(await client.request('list_devices', {})).heldBy === null;
+		await waitForCondition({
+			what: 'the expired lease to stop being listed as a holder',
+			timeoutMs: CONDITION_TIMEOUT_MS,
+			pollIntervalMs: CONDITION_POLL_MS,
+			probe: async () => {
+				const heldBy = listed(await client.request('list_devices', {})).heldBy;
+				return heldBy === null
+					? { met: true, value: undefined }
+					: { met: false, found: 'still held' };
+			},
 		});
 	});
 });

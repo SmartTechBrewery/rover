@@ -16,6 +16,7 @@ import { spawn } from 'node:child_process';
 import type { Socket } from 'node:net';
 import { extname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { pause } from '../core/wait.js';
 import { createIpcClient, type IpcClient } from '../ipc/client.js';
 import { attemptConnect } from './socket-connect.js';
 import { assertValidSocketPath, resolveSocketPath, SOCKET_PATH_ENV_VAR } from './socket-path.js';
@@ -69,7 +70,7 @@ export async function connectToLocalDaemon(
 
 	const deadline = Date.now() + startTimeoutMs;
 	while (Date.now() < deadline) {
-		await nextAttempt();
+		await pause(RETRY_INTERVAL_MS);
 		const attempt = await tryConnect(socketPath);
 		if (attempt.connected) {
 			return createIpcClient(attempt.socket);
@@ -122,12 +123,6 @@ async function tryConnect(socketPath: string): Promise<ConnectSucceeded | Connec
 	return attempt.outcome === 'connected'
 		? { connected: true, socket: attempt.socket }
 		: { connected: false, error: attempt.error };
-}
-
-function nextAttempt(): Promise<void> {
-	return new Promise((resolve) => {
-		setTimeout(resolve, RETRY_INTERVAL_MS);
-	});
 }
 
 /**

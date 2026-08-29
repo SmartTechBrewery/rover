@@ -93,3 +93,37 @@ export class ForeignDeviceError extends Error {
 		this.serial = serial;
 	}
 }
+
+/**
+ * Thrown when a wait's condition was still unmet at its deadline.
+ *
+ * `waitedFor` and `found` are the two halves ai/CODING_STANDARDS.md "Error handling"
+ * demands: *a verb that timed out reports what it was waiting for and what was on screen
+ * instead*. A bare "timeout" makes the agent guess, and it will guess wrong. `polls` is
+ * here because "checked once" and "checked two hundred times" are different diagnoses of
+ * the same elapsed time — the first says the poll interval swallowed the wait.
+ *
+ * **Every field is plain data on purpose.** R21 moves verb execution onto the host, so
+ * this error is serialized and sent back over a socket that may be a network one (D19).
+ * Hanging a device handle, a stream or a host-local path off it would produce a value
+ * that cannot cross that boundary, and the failure would surface only once the client is
+ * on another machine.
+ */
+export class WaitTimeoutError extends Error {
+	readonly waitedFor: string;
+	readonly found: string;
+	readonly timeoutMs: number;
+	readonly polls: number;
+
+	constructor(waitedFor: string, found: string, timeoutMs: number, polls: number) {
+		super(
+			`Timed out after ${timeoutMs}ms waiting for ${waitedFor} — found ${found} instead ` +
+				`(${polls} checks)`,
+		);
+		this.name = 'WaitTimeoutError';
+		this.waitedFor = waitedFor;
+		this.found = found;
+		this.timeoutMs = timeoutMs;
+		this.polls = polls;
+	}
+}
