@@ -24,6 +24,7 @@ import { createIpcServer } from '../ipc/server.js';
 import { createDeviceInventory, type DeviceInventory } from './inventory.js';
 import { createLeaseHandlers } from './lease-handlers.js';
 import { createLeaseStore, type LeaseStore } from './leases.js';
+import { createDeviceRestorer, type DeviceRestorer } from './restore.js';
 import { attemptConnect } from './socket-connect.js';
 import { assertValidSocketPath } from './socket-path.js';
 import { handleStatus } from './status.js';
@@ -46,6 +47,21 @@ const PROBE_TIMEOUT_MS = 500;
  */
 const WATCH_STOP_TIMEOUT_MS = 5_000;
 
+/**
+ * How often the daemon looks for a lease that has expired.
+ *
+ * It **observes** expiry rather than defining it: a lease is expired when its `expiresAtMs`
+ * has passed, whether or not this interval has come round, and every read of the store already
+ * drops such a record. What the sweep buys is that a device whose holder died — and so asks no
+ * further questions — is restored (D9) rather than waiting for the next caller who happens to
+ * name it. So this number is how long a restoration may be *late* by, and nothing else; there
+ * is no second piece of state for it to disagree with (D6).
+ *
+ * Not a `sleep`: a poll on a condition with a deadline, like the reclaim lock's below
+ * (ai/RULES.md §2, D12).
+ */
+const LEASE_SWEEP_INTERVAL_MS = 30_000;
+
 export interface StartDaemonOptions {
 	readonly socketPath: string;
 }
@@ -65,7 +81,11 @@ export interface DaemonAlreadyRunning {
 export type StartResult = RunningDaemon | DaemonAlreadyRunning;
 
 /** The method table the daemon serves. Four rows today; a row per verb as R21 lands. */
-export function createDaemonHandlers(inventory: DeviceInventory, leases: LeaseStore): IpcHandlers {
+export function createDaemonHandlers(
+	inventory: DeviceInventory,
+	leases: LeaseStore,
+	restorer: DeviceRestorer,
+): IpcHandlers {
 	return {
 		status: handleStatus,
 		// The cached view, deliberately: `list_devices` is a question about what the host has
@@ -74,7 +94,7 @@ export function createDaemonHandlers(inventory: DeviceInventory, leases: LeaseSt
 		// that must not read a cache is the grant (D6), and that is
 		// `DeviceInventory.verifyForGrant`, not this.
 		list_devices: () => inventory.snapshot(),
-		...createLeaseHandlers(inventory, leases),
+		...createLeaseHandlers(inventory, leases, restorer),
 	};
 }
 
@@ -95,21 +115,31 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartRes
 	// child processes — running with nobody holding a handle on them. Construction subscribes
 	// to nothing, so a loser that never starts it has spawned nothing to clean up.
 	const inventory = createDeviceInventory();
+	// Constructed before the store, because the store's end hook calls into it. It starts
+	// nothing either: a restoration only ever begins when a lease ends, and a process that
+	// never granted one has nothing to undo.
+	const restorer = createDeviceRestorer({ inventory });
 	// Built here for the same reason and with the same lifecycle: one store per process,
 	// constructed once for both bind attempts. It starts nothing, so a loser leaves nothing
 	// behind, and a lease is host state that dies with the host by design (D6) — nothing
 	// about it is persisted or reclaimed from a predecessor.
-	const leases = createLeaseStore();
+	//
+	// The hook is where D9 is wired: `forget` is the one place a lease ends, so a release and
+	// an expiry reach the restorer by the same path and a caller can neither ask for this nor
+	// opt out of it.
+	const leases = createLeaseStore({
+		onLeaseEnded: (lease, reason) => restorer.restore(lease, reason),
+	});
 
-	const first = await listenOnce(socketPath, inventory, leases);
+	const first = await listenOnce(socketPath, inventory, leases, restorer);
 	if (first.listening) {
-		return running(first, socketPath, inventory);
+		return running(first, socketPath, inventory, leases);
 	}
 	if (first.error.code !== 'EADDRINUSE') {
 		throw first.error;
 	}
 
-	return reclaimAndRetry(socketPath, inventory, leases);
+	return reclaimAndRetry(socketPath, inventory, leases, restorer);
 }
 
 /**
@@ -128,6 +158,7 @@ async function reclaimAndRetry(
 	socketPath: string,
 	inventory: DeviceInventory,
 	leases: LeaseStore,
+	restorer: DeviceRestorer,
 ): Promise<StartResult> {
 	// Cheap check before queueing for the lock: a daemon that is simply already running is
 	// the common loser, and it needs no reclamation at all.
@@ -141,9 +172,9 @@ async function reclaimAndRetry(
 			return { started: false };
 		}
 
-		const second = await listenOnce(socketPath, inventory, leases);
+		const second = await listenOnce(socketPath, inventory, leases, restorer);
 		if (second.listening) {
-			return running(second, socketPath, inventory);
+			return running(second, socketPath, inventory, leases);
 		}
 		if (second.error.code !== 'EADDRINUSE') {
 			throw second.error;
@@ -160,6 +191,7 @@ function running(
 	listening: ListenSucceeded,
 	socketPath: string,
 	inventory: DeviceInventory,
+	leases: LeaseStore,
 ): RunningDaemon {
 	// Captured while we hold the path, so `close()` can tell our own socket file from one a
 	// successor bound after us and only ever unlinks the former.
@@ -170,10 +202,15 @@ function running(
 	// inventory running and nothing to stop.
 	inventory.start();
 
+	const sweep = setInterval(() => leases.sweep(), LEASE_SWEEP_INTERVAL_MS);
+	// Unreferenced, like every other timer here: this exists to notice an expiry while the
+	// daemon is serving, never to keep a process alive that is otherwise finished.
+	sweep.unref();
+
 	return {
 		started: true,
 		close(): Promise<void> {
-			closed ??= closeServer(listening, socketPath, ownInode, inventory);
+			closed ??= closeServer(listening, socketPath, ownInode, inventory, sweep);
 			return closed;
 		},
 	};
@@ -184,7 +221,12 @@ async function closeServer(
 	socketPath: string,
 	ownInode: Promise<bigint | undefined>,
 	inventory: DeviceInventory,
+	sweep: NodeJS.Timeout,
 ): Promise<void> {
+	// First, and unconditionally: a sweep firing during the shutdown would start a restoration
+	// nothing is left to wait for. A lease dies with the host by design (D6).
+	clearInterval(sweep);
+
 	// Started here, awaited at the end. Stopping the watches and refusing new connections are
 	// independent, and doing them in sequence would leave the socket accepting and dispatching
 	// for as long as a child takes to die — a window in which `list_devices` is answered by an
@@ -281,8 +323,9 @@ function listenOnce(
 	socketPath: string,
 	inventory: DeviceInventory,
 	leases: LeaseStore,
+	restorer: DeviceRestorer,
 ): Promise<ListenSucceeded | ListenFailed> {
-	const ipcServer = createIpcServer(createDaemonHandlers(inventory, leases));
+	const ipcServer = createIpcServer(createDaemonHandlers(inventory, leases, restorer));
 	const connections = new Set<Socket>();
 	let closing = false;
 	const server = createServer((socket: Socket) => {

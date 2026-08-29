@@ -6,8 +6,16 @@
  * two concurrent grants for one device cannot interleave *inside* it; what would let four
  * callers through instead is an `await` placed between the moment a handler decides the
  * device is free and the moment it takes it. So every awaited step happens first — the
- * re-verification, and nothing else — and everything from there to the insert is straight-line
- * synchronous code.
+ * re-verification, then waiting out any restoration still running on the device — and
+ * everything from there to the insert is straight-line synchronous code. Adding an await
+ * below that point is the defect this file is arranged to prevent; adding one above it is
+ * free.
+ *
+ * **A grant waits for the previous lessee's state to be undone** (D9). An expired holder is
+ * observed here before the wait, because observing it is what starts its restoration — the
+ * lease store fires its end hook from the one place a lease ends, and nothing else in this
+ * process is watching that device between the moment the holder's TTL passes and the moment
+ * somebody asks about it.
  *
  * A second ordering rule holds for the same reason in reverse: **nothing that can throw may
  * run after a successful acquire.** A throw becomes `internal_error`, the caller never learns
@@ -34,10 +42,15 @@ import type {
 } from '../ipc/methods.js';
 import type { DeviceInventory } from './inventory.js';
 import type { Lease, LeaseStore } from './leases.js';
+import type { DeviceRestorer } from './restore.js';
 
 export type LeaseHandlers = Pick<IpcHandlers, 'acquire_device' | 'release_device'>;
 
-export function createLeaseHandlers(inventory: DeviceInventory, leases: LeaseStore): LeaseHandlers {
+export function createLeaseHandlers(
+	inventory: DeviceInventory,
+	leases: LeaseStore,
+	restorer: DeviceRestorer,
+): LeaseHandlers {
 	/** The public view of a holder — {@link LeaseHolder} carries no lease id, deliberately. */
 	const holderOf = (lease: Lease): LeaseHolder => ({
 		serial: lease.serial,
@@ -49,8 +62,8 @@ export function createLeaseHandlers(inventory: DeviceInventory, leases: LeaseSto
 
 	return {
 		async acquire_device(params: AcquireDeviceParams): Promise<AcquireDeviceResult> {
-			// The one await, and it is first. The inventory is a cache and the platform is the
-			// truth, so the grant re-verifies rather than reading what was last seen (D6).
+			// The first await. The inventory is a cache and the platform is the truth, so the
+			// grant re-verifies rather than reading what was last seen (D6).
 			let device: Device;
 			try {
 				device = await inventory.verifyForGrant(params.serial);
@@ -75,6 +88,15 @@ export function createLeaseHandlers(inventory: DeviceInventory, leases: LeaseSto
 					heldBy: null,
 				};
 			}
+
+			// A question, asked for its side effect: `holderOf` drops a record whose instant has
+			// passed, and dropping it is what fires the store's end hook and starts the
+			// restoration this then waits on. A live holder is left alone — the acquire below
+			// refuses it with the answer a caller can act on.
+			leases.holderOf(device.serial);
+			// The second and last await, and it is still before the decide-and-insert. Resolves
+			// immediately when nothing is being restored on this device, which is the common case.
+			await restorer.settle(device.serial);
 
 			// Resolved before the acquire, never after: this throws for an unregistered platform,
 			// and a throw past the insert would wedge the device for the whole TTL.
@@ -117,8 +139,11 @@ export function createLeaseHandlers(inventory: DeviceInventory, leases: LeaseSto
 		},
 
 		release_device(params: ReleaseDeviceParams): ReleaseDeviceResult {
-			// R9 hangs state restoration off this call and off expiry alike (D9); today releasing
-			// only frees the device.
+			// Restoration is started by the store's end hook, not from here, and this deliberately
+			// does not wait for it: the answer to `release_device` is "the lease is over", which is
+			// true the moment the record is gone. What happens to the device next is the daemon's
+			// business, and a caller that had to await it could also decline to (D9). The next
+			// `acquire_device` on this serial is what waits.
 			return { released: leases.release(params.leaseId) };
 		},
 	};
