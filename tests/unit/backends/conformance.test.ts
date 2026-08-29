@@ -11,8 +11,10 @@
  *
  * Which is also why the checks themselves live in `tests/helpers/backend-conformance.ts`
  * and are proved out against synthetic backends in `conformance-harness.test.ts`: the
- * registry is empty today, so the loop below has nothing to run over, and assertions
- * written inline here would be green and meaningless until R5.
+ * registry was empty when this gate was written, so assertions inline here would have been
+ * green and meaningless until R5. **R5 has landed** — the loop below now runs over a real
+ * manifest, and the harness suite stays because a gate whose only subject is the code it
+ * gates cannot tell a passing backend from a check that stopped checking.
  */
 
 import { describe, expect, it } from 'vitest';
@@ -43,12 +45,20 @@ describe('device backend conformance', () => {
 	/**
 	 * A tripwire, not the driver: the per-manifest suites below are driven by
 	 * `listDeviceBackends()`, so a new backend inherits every assertion with no edit
-	 * here. This one line exists so the phase that lands the first backend has to
-	 * acknowledge the gate deliberately — like `barrel.test.ts`'s twin assertion, its
-	 * failure is the signal that a backend joined, not a regression.
+	 * here. This one line exists so the phase that lands a backend has to acknowledge the
+	 * gate deliberately — like `barrel.test.ts`'s twin assertion, its failure is the signal
+	 * that a backend joined, not a regression. It read `[]` until #38 registered the first
+	 * one, which is also what stopped every suite below being a loop over nothing.
 	 */
 	it('runs over every registered manifest', () => {
-		expect(registered.map((entry) => entry.manifest.platform)).toEqual([]);
+		expect(registered.map((entry) => entry.manifest.platform)).toEqual(['android']);
+	});
+
+	// The gate is only worth reading if it has a subject. Asserted separately from the list
+	// above so a future edit that empties the registry cannot quietly turn every
+	// per-manifest suite back into a no-op that still reports green.
+	it('has at least one manifest to gate', () => {
+		expect(registered.length).toBeGreaterThan(0);
 	});
 
 	it('lists every required contract method', () => {
