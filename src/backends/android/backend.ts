@@ -13,7 +13,10 @@
  * its output goes through `./parsers/`. This file is the join between them and holds no
  * text-shaped knowledge of its own — the wording each verb asserts on lives in
  * `./parsers/app-control.js` and `./parsers/network.js`, pinned against captures, and
- * every value that enters a device-side command line is quoted by `./adb.js`'s `shellArg`.
+ * every **caller-supplied** value that enters a device-side command line is quoted by
+ * `./adb.js`'s `shellArg`. The one exception is stated where it happens: the environment
+ * pair passes one of two literals this file owns, which no caller's string reaches. A new
+ * argument that is not such a literal takes `shellArg`.
  */
 
 import {

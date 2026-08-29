@@ -10,7 +10,8 @@ import type { Device } from '@/core/device.js';
  * **Read-only**, like `./backend.test.ts`: it captures the screen as it finds it, launches
  * nothing and changes no setting, so it is safe against a device someone else is looking
  * at. It drives the backend class directly rather than through a lease for the same reason
- * that file does — leases do not exist yet (R8/#8).
+ * that file does — the daemon registers no backend, so there is none to take
+ * (ai/TESTING.md, "The exemption").
  *
  * This is the suite that proves the recipe, because nothing about `exec-out screencap -p`
  * is checkable against a mock: what a mocked runner cannot tell you is whether the device

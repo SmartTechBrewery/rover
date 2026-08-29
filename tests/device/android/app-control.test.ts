@@ -27,7 +27,8 @@ import { parseAppId } from '@/core/ids.js';
  * `com.android.settings` is what the rest drives, because it is present on every Android
  * device and launching and stopping it changes nothing a person would miss. Like
  * `./backend.test.ts` this drives the backend class directly rather than through a lease —
- * leases do not exist yet (R8/#8) — and hardcodes no model, size or API level.
+ * the daemon registers no backend, so there is none to take (ai/TESTING.md, "The
+ * exemption") — and hardcodes no model, size or API level.
  */
 const backend = new AndroidDeviceBackend();
 

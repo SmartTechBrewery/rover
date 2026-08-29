@@ -4,7 +4,9 @@ import type { Device } from '@/core/device.js';
 
 /**
  * The environment primitives against a real attached device. Skips rather than fails when
- * there is none (`tests/device/setup.ts`, ai/TESTING.md).
+ * there is none (`tests/device/setup.ts`, ai/TESTING.md) — and, unlike its siblings, skips
+ * just as quietly when the only device attached is reached over a network transport, which
+ * is what `ROVER_TEST_LOCAL_DEVICE` answers and this suite gates on.
  *
  * This is the suite that proves the recipes, because nothing about `cmd connectivity
  * airplane-mode` or `cmd wifi set-wifi-enabled` is checkable against a mock: `svc wifi
@@ -31,8 +33,8 @@ import type { Device } from '@/core/device.js';
  * `setWifiEnabled(serial, false)`, and D18 says such a device is never leased anyway — and
  * it restores the resting state in `afterEach` unconditionally, including after a failed
  * assertion. Like `./backend.test.ts` it drives the backend class directly rather than
- * through a lease, which R8 has since made possible; converting all four device suites at
- * once is its own change.
+ * through a lease: R8 landed, but the daemon registers no backend, so there is no lease to
+ * take yet (ai/TESTING.md, "The exemption", which also records what ends it).
  */
 const backend = new AndroidDeviceBackend();
 
@@ -40,12 +42,22 @@ const backend = new AndroidDeviceBackend();
  * Ready **and physically attached**, which is stricter than the sibling suites' filter and
  * has to be: every other device suite only reads or launches, while this one can take the
  * device off the network it is being reached over.
+ *
+ * A host with no such device never gets here — `ROVER_TEST_LOCAL_DEVICE` asks the same
+ * question of `adb devices` before the `describe` runs. Reaching the assertion below means
+ * the device went away mid-run, so the message says which filter rejected it rather than
+ * comparing two numbers.
  */
 async function firstLocalDevice(): Promise<Device> {
 	const usable = (await backend.listDevices()).filter(
 		(device) => device.state === 'ready' && device.attachment === 'this-host',
 	);
-	expect(usable.length).toBeGreaterThan(0);
+	expect(
+		usable.length,
+		"no device is both state 'ready' and attachment 'this-host' — this suite may only " +
+			'touch a device physically attached to this host (D18), and the gate found one when ' +
+			'the run started',
+	).toBeGreaterThan(0);
 	return usable[0] as Device;
 }
 
@@ -57,54 +69,57 @@ async function restore(device: Device): Promise<void> {
 	await backend.setWifiEnabled(device.serial, true);
 }
 
-describe.skipIf(!process.env.ROVER_TEST_DEVICE)('network control against a real device', () => {
-	afterEach(async () => {
-		await restore(await firstLocalDevice());
-	});
+describe.skipIf(!process.env.ROVER_TEST_LOCAL_DEVICE)(
+	'network control against a real device',
+	() => {
+		afterEach(async () => {
+			await restore(await firstLocalDevice());
+		});
 
-	it('turns airplane mode on and off again', async () => {
-		const device = await firstLocalDevice();
+		it('turns airplane mode on and off again', async () => {
+			const device = await firstLocalDevice();
 
-		await expect(backend.setAirplaneMode(device.serial, true)).resolves.toBeUndefined();
-		await expect(backend.setAirplaneMode(device.serial, false)).resolves.toBeUndefined();
-	});
+			await expect(backend.setAirplaneMode(device.serial, true)).resolves.toBeUndefined();
+			await expect(backend.setAirplaneMode(device.serial, false)).resolves.toBeUndefined();
+		});
 
-	// `disabled` is the argument PROJECT.md §6 had never vouched for before #9 — the other
-	// three were recorded as working and this one was assumed to match. It does.
-	it('turns wifi off and on again', async () => {
-		const device = await firstLocalDevice();
+		// `disabled` is the argument PROJECT.md §6 had never vouched for before #9 — the other
+		// three were recorded as working and this one was assumed to match. It does.
+		it('turns wifi off and on again', async () => {
+			const device = await firstLocalDevice();
 
-		await expect(backend.setWifiEnabled(device.serial, false)).resolves.toBeUndefined();
-		await expect(backend.setWifiEnabled(device.serial, true)).resolves.toBeUndefined();
-	});
+			await expect(backend.setWifiEnabled(device.serial, false)).resolves.toBeUndefined();
+			await expect(backend.setWifiEnabled(device.serial, true)).resolves.toBeUndefined();
+		});
 
-	/**
-	 * Asking for the state the device is already in. A restoration routine sets the resting
-	 * state without reading it first (there is nothing to read it with), so every call it
-	 * makes is potentially this one — and a primitive that refused a no-op would fail every
-	 * release of a device nobody had touched.
-	 */
-	it('accepts being asked for a state the device is already in', async () => {
-		const device = await firstLocalDevice();
+		/**
+		 * Asking for the state the device is already in. A restoration routine sets the resting
+		 * state without reading it first (there is nothing to read it with), so every call it
+		 * makes is potentially this one — and a primitive that refused a no-op would fail every
+		 * release of a device nobody had touched.
+		 */
+		it('accepts being asked for a state the device is already in', async () => {
+			const device = await firstLocalDevice();
 
-		await backend.setAirplaneMode(device.serial, false);
-		await expect(backend.setAirplaneMode(device.serial, false)).resolves.toBeUndefined();
-		await backend.setWifiEnabled(device.serial, true);
-		await expect(backend.setWifiEnabled(device.serial, true)).resolves.toBeUndefined();
-	});
+			await backend.setAirplaneMode(device.serial, false);
+			await expect(backend.setAirplaneMode(device.serial, false)).resolves.toBeUndefined();
+			await backend.setWifiEnabled(device.serial, true);
+			await expect(backend.setWifiEnabled(device.serial, true)).resolves.toBeUndefined();
+		});
 
-	/**
-	 * The order R9's restoration will run in, end to end from the state a lease could leave
-	 * behind: airplane mode on and wifi off. Wifi is enabled **while airplane mode is still
-	 * on** in the first half, which is the interaction §6 records as honoured — if the
-	 * platform ever reverts it, this is what goes red.
-	 */
-	it('restores a device left with airplane mode on and wifi off', async () => {
-		const device = await firstLocalDevice();
+		/**
+		 * The order R9's restoration will run in, end to end from the state a lease could leave
+		 * behind: airplane mode on and wifi off. Wifi is enabled **while airplane mode is still
+		 * on** in the first half, which is the interaction §6 records as honoured — if the
+		 * platform ever reverts it, this is what goes red.
+		 */
+		it('restores a device left with airplane mode on and wifi off', async () => {
+			const device = await firstLocalDevice();
 
-		await backend.setAirplaneMode(device.serial, true);
-		await backend.setWifiEnabled(device.serial, false);
+			await backend.setAirplaneMode(device.serial, true);
+			await backend.setWifiEnabled(device.serial, false);
 
-		await expect(restore(device)).resolves.toBeUndefined();
-	});
-});
+			await expect(restore(device)).resolves.toBeUndefined();
+		});
+	},
+);
