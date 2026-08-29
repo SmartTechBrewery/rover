@@ -91,12 +91,16 @@ describe('startDaemon', () => {
 		// A file sitting on the path is what a killed daemon leaves: `bind` refuses with
 		// EADDRINUSE, and nothing is listening behind it.
 		await writeFile(temp.socketPath, '');
-		const staleInode = (await stat(temp.socketPath, { bigint: true })).ino;
+		expect((await stat(temp.socketPath)).isSocket()).toBe(false);
 
 		const result = await start(temp.socketPath);
 
 		expect(result.started).toBe(true);
-		expect((await stat(temp.socketPath, { bigint: true })).ino).not.toBe(staleInode);
+		// Not an inode comparison: a freed inode can be reused for the very next file created
+		// in the same directory, which some filesystems do deterministically for an
+		// unlink-then-create this close together. What actually proves the reclaim is that the
+		// stale regular file is gone and a socket is bound in its place.
+		expect((await stat(temp.socketPath)).isSocket()).toBe(true);
 
 		const client = await connectWithoutStarting(temp.socketPath);
 		await expect(client?.request('status', {})).resolves.toMatchObject({ pid: process.pid });
