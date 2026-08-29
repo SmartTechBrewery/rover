@@ -22,11 +22,14 @@ import {
 	DeviceInfoSchema,
 	DeviceSchema,
 	type DeviceState,
+	type DeviceWatch,
+	type DeviceWatcher,
 } from '../../core/device.js';
 import { type AppId, type DeviceSerial, parseAppId, unwrap } from '../../core/ids.js';
 import {
 	type AdbBinaryResult,
 	type AdbResult,
+	type AdbStream,
 	describeBytes,
 	INSTALL_ADB_TIMEOUT_MS,
 	quoteStream,
@@ -35,7 +38,9 @@ import {
 	runAdbOnDevice,
 	SCREENSHOT_ADB_TIMEOUT_MS,
 	shellArg,
+	streamAdb,
 } from './adb.js';
+import { attachmentOfSerial } from './attachment.js';
 import { ANDROID_PLATFORM_ID } from './capabilities.js';
 import {
 	isSilent,
@@ -43,13 +48,41 @@ import {
 	saysSuccess,
 	startedActivity,
 } from './parsers/app-control.js';
-import { type AdbDevice, isUsable, parseAdbDevices } from './parsers/devices.js';
+import {
+	type AdbDevice,
+	isUsable,
+	parseAdbDeviceLines,
+	parseAdbDevices,
+} from './parsers/devices.js';
 import { parseGetprop } from './parsers/getprop.js';
 import { isPng } from './parsers/screencap.js';
+import { TrackFrameDecoder } from './parsers/track.js';
 import { parseWmDensity, parseWmSize } from './parsers/wm.js';
 
 /** The state token adb prints for a device whose authorisation was refused or not granted. */
 const UNAUTHORIZED_STATE = 'unauthorized';
+
+/**
+ * The tracker's argv. `-l` because the long format is what carries `model:`, and the
+ * watched snapshots have to be the same `Device` shape the enumeration answers with —
+ * otherwise a device gains and loses its model depending on which path saw it.
+ */
+const TRACK_DEVICES_ARGV = ['track-devices', '-l'] as const;
+
+/**
+ * How long to wait before restarting a tracker that ended, and the ceiling that wait grows
+ * to. Doubling, and reset by the first frame a new tracker delivers.
+ *
+ * Mandatory rather than nice: on adb 37.0.1 a tracker whose server dies exits 0
+ * (PROJECT.md §6), and `adb kill-server` is something a developer on the host machine does
+ * routinely — without a restart the host would go permanently blind after it. Bounded
+ * because the other reason a tracker ends immediately is that adb is not on `PATH` at all,
+ * and retrying that every 250 ms forever is a busy loop with a process spawn in it.
+ *
+ * Constants, not configuration (ai/RULES.md §7): nothing about them is a host's choice.
+ */
+const TRACK_RESTART_MIN_DELAY_MS = 250;
+const TRACK_RESTART_MAX_DELAY_MS = 5_000;
 
 /**
  * Map one enumerated entry onto the neutral vocabulary.
@@ -77,6 +110,9 @@ function toDevice(entry: AdbDevice): Device {
 		platform: ANDROID_PLATFORM_ID,
 		model: entry.properties.model ?? null,
 		state: toDeviceState(entry),
+		// The serial is the only discriminator adb offers — see `./attachment.js` for what
+		// was measured before accepting that.
+		attachment: attachmentOfSerial(entry.serial),
 	});
 }
 
@@ -88,8 +124,12 @@ function toDevice(entry: AdbDevice): Device {
  * (PROJECT.md §6). Exit code 0 means `./adb.js` had nothing to complain about, so this is
  * the only place that context can be added.
  */
+function message(cause: unknown): string {
+	return cause instanceof Error ? cause.message : String(cause);
+}
+
 function unparseable(command: string, result: AdbResult, cause: unknown): Error {
-	const reason = cause instanceof Error ? cause.message : String(cause);
+	const reason = message(cause);
 	const stderr = result.stderr.trimEnd();
 	return new Error(`${command}: ${reason}${stderr.length === 0 ? '' : `\nstderr: ${stderr}`}`, {
 		cause,
@@ -164,6 +204,100 @@ export class AndroidDeviceBackend implements DeviceBackend {
 		} catch (cause) {
 			throw unparseable('adb devices -l', result, cause);
 		}
+	}
+
+	/**
+	 * Watch the attached set with `adb track-devices -l`, restarting the tracker whenever it
+	 * ends.
+	 *
+	 * The tracker re-emits the **whole** list on every change rather than a delta (verified
+	 * on adb 37.0.1, 2026-08-29 — PROJECT.md §6), which is exactly what the contract asks
+	 * for, so each decoded frame becomes one `onDevices` and nothing here accumulates state
+	 * between frames.
+	 *
+	 * **An end of stream is never an empty device list.** Only a decoded frame produces
+	 * `onDevices`; an end — including the exit 0 a tracker gives when its adb server is
+	 * killed — produces `onInterrupted` and a scheduled restart. Delivering the end as `[]`
+	 * would tell an inventory that every device had gone away at the moment it lost the
+	 * ability to know anything at all.
+	 *
+	 * A payload that will not parse is treated the same way: reported through
+	 * `onInterrupted` and the tracker restarted, never thrown. There is nothing above a
+	 * stdout handler to catch a throw from it.
+	 */
+	watchDevices(watcher: DeviceWatcher): DeviceWatch {
+		let stopped = false;
+		let current: AdbStream | null = null;
+		let restart: NodeJS.Timeout | null = null;
+		let backoffMs = TRACK_RESTART_MIN_DELAY_MS;
+
+		const scheduleRestart = (): void => {
+			const delayMs = backoffMs;
+			backoffMs = Math.min(backoffMs * 2, TRACK_RESTART_MAX_DELAY_MS);
+			restart = setTimeout(() => {
+				restart = null;
+				if (!stopped) start();
+			}, delayMs);
+		};
+
+		const start = (): void => {
+			const decoder = new TrackFrameDecoder();
+			// Per attempt, so a chunk arriving from the tracker that just ended cannot end the
+			// one that replaced it.
+			let over = false;
+
+			const end = (reason: string): void => {
+				if (over || stopped) return;
+				over = true;
+				current = null;
+				// A parse failure ends a tracker that is still running; an `onEnd` ends one that
+				// already stopped, where this resolves at once. Not awaited: the caller of this
+				// path is a stdout handler, and the restart is scheduled either way.
+				void handle?.stop();
+				watcher.onInterrupted(reason);
+				scheduleRestart();
+			};
+
+			const handle: AdbStream | undefined = streamAdb([...TRACK_DEVICES_ARGV], {
+				onStdout(chunk) {
+					if (over || stopped) return;
+
+					let snapshots: Device[][];
+					try {
+						snapshots = decoder
+							.push(chunk)
+							.map((payload) => parseAdbDeviceLines(payload).map(toDevice));
+					} catch (cause) {
+						end(`adb ${TRACK_DEVICES_ARGV.join(' ')}: ${message(cause)}`);
+						return;
+					}
+
+					// A frame is the only evidence the view is healthy again, so it is what resets
+					// the backoff — an adb that starts and dies in a loop keeps backing off.
+					if (snapshots.length > 0) backoffMs = TRACK_RESTART_MIN_DELAY_MS;
+					for (const devices of snapshots) watcher.onDevices(devices);
+				},
+				onEnd(reason) {
+					end(reason);
+				},
+			});
+			current = handle;
+		};
+
+		start();
+
+		return {
+			async stop(): Promise<void> {
+				stopped = true;
+				if (restart !== null) {
+					clearTimeout(restart);
+					restart = null;
+				}
+				const handle = current;
+				current = null;
+				await handle?.stop();
+			},
+		};
 	}
 
 	/**

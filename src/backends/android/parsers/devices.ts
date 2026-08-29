@@ -99,9 +99,29 @@ export function parseAdbDevices(stdout: string): AdbDevice[] {
 		);
 	}
 
+	return parseAdbDeviceLines(lines.slice(headerIndex + 1).join('\n'));
+}
+
+/**
+ * The same device lines, with no header to anchor on — one entry per non-empty line.
+ *
+ * Its own entry point rather than a flag on {@link parseAdbDevices}, because the two are
+ * reading different things. Command output is a whole stream with a preamble that can
+ * carry anything, which is why that one refuses to guess without the header. This reads
+ * the payload of a `track-devices` frame, where the length prefix is the delimiter, there
+ * is no preamble at all — adb's banner and its `error:` line go to stderr — and a frame
+ * either arrives whole or does not arrive. The payload is exactly the `-l` long format
+ * with the `List of devices attached` header removed (verified on adb 37.0.1, 2026-08-29).
+ *
+ * An empty payload is a real answer here and returns `[]`: the tracker's way of saying
+ * nothing is attached. That the *stream* ended is a different fact entirely, and it is
+ * never expressed as bytes (PROJECT.md §6).
+ */
+export function parseAdbDeviceLines(text: string): AdbDevice[] {
 	const devices: AdbDevice[] = [];
 
-	for (const line of lines.slice(headerIndex + 1)) {
+	for (const raw of text.split('\n')) {
+		const line = raw.replace(/\r$/, '').trim();
 		if (line.length === 0) continue;
 
 		const [serial = '', ...tail] = line.split(/\s+/);

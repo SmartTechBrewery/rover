@@ -11,7 +11,7 @@
  * a configuration option (ai/RULES.md §7) and nothing needs one yet.
  */
 
-import { type ExecFileException, execFile } from 'node:child_process';
+import { type ExecFileException, execFile, spawn } from 'node:child_process';
 import { type DeviceSerial, unwrap } from '../../core/ids.js';
 
 /** The program name, looked up on `PATH`. */
@@ -50,6 +50,16 @@ export const INSTALL_ADB_TIMEOUT_MS = 5 * 60_000;
  * a wedged `adb` holding a lease forever, not to bound a slow but healthy capture.
  */
 export const SCREENSHOT_ADB_TIMEOUT_MS = 30_000;
+
+/**
+ * How much of a long-lived run's stderr is kept for its end reason.
+ *
+ * Bounded because {@link streamAdb} runs for as long as the host does, and an adb that
+ * chats on stderr for a week would otherwise be a slow leak. The tail rather than the head:
+ * whatever adb said last is what explains the end, while the first thing it said is the
+ * `* daemon started successfully` banner it prints on the success path (PROJECT.md §6).
+ */
+export const ADB_STREAM_STDERR_TAIL_CHARS = 4096;
 
 /**
  * `adb shell getprop` returned ~23 KB on an API 37 emulator, and Node's default
@@ -300,4 +310,102 @@ export async function runAdbBinaryOnDevice(
 			},
 		);
 	});
+}
+
+/** Handlers of a long-lived run. Both are called at most as documented on each. */
+export interface AdbStreamHandlers {
+	/** Raw stdout bytes, in order. Never decoded here — the framing may not be text. */
+	onStdout(chunk: Buffer): void;
+	/**
+	 * The run ended, for any reason at all, or never started. Called **exactly once**, and
+	 * never after {@link AdbStream.stop}. `reason` is a message ready to be shown to a
+	 * caller: the argv, how it ended, and the stderr tail.
+	 */
+	onEnd(reason: string): void;
+}
+
+/** The handle {@link streamAdb} answers with. */
+export interface AdbStream {
+	/**
+	 * Kill the run and resolve once it is gone. No handler is called after `stop()` is
+	 * called, and calling it twice is a no-op.
+	 */
+	stop(): Promise<void>;
+}
+
+/**
+ * Run `adb <args>` and hand its stdout back in chunks for as long as it lives.
+ *
+ * `spawn`, not `execFile`, and it shares nothing with {@link runAdb}: a query is a buffer
+ * and an exit code, this is a process whose output only means anything while it is
+ * arriving.
+ *
+ * **Deliberately without a timeout**, which every other invocation here has
+ * (ai/CODING_STANDARDS.md). A timeout exists so a hung `adb` cannot wedge a lease; this
+ * invocation is *supposed* to stay open, so a timeout would guarantee the failure instead
+ * of preventing it. What bounds it instead is that nothing downstream may treat its output
+ * as authoritative — every grant re-verifies with a bounded call (D6).
+ *
+ * **`exit 0` is an end like any other.** On adb 37.0.1 a tracker whose server is killed
+ * exits 0 with an empty stderr (PROJECT.md §6), so there is no "clean end" worth reporting
+ * differently: whatever the code, the view is gone.
+ *
+ * Ends on `close` rather than on `exit`, because `exit` can fire while stdout still holds
+ * bytes: a caller that restarts on the end reason would then take delivery of the old
+ * run's last chunk after the new one began.
+ */
+export function streamAdb(args: readonly string[], handlers: AdbStreamHandlers): AdbStream {
+	const argv = [...args];
+	const child = spawn(ADB, argv, { stdio: ['ignore', 'pipe', 'pipe'] });
+
+	let stderrTail = '';
+	let ended = false;
+	/** Set by the first of `close`/`error`, and by `stop()`; suppresses every handler call. */
+	let finished = false;
+
+	const finish = (reason: string): void => {
+		if (finished) return;
+		finished = true;
+		handlers.onEnd(reason);
+	};
+
+	child.stdout?.on('data', (chunk: Buffer) => {
+		if (!finished) handlers.onStdout(chunk);
+	});
+	// Decoded by the stream itself, so a chunk boundary inside a multi-byte character
+	// cannot become a replacement character in the message a human reads.
+	child.stderr?.setEncoding('utf8');
+	child.stderr?.on('data', (chunk: string) => {
+		stderrTail = `${stderrTail}${chunk}`.slice(-ADB_STREAM_STDERR_TAIL_CHARS);
+	});
+	child.on('error', (error: Error) => {
+		ended = true;
+		// Nothing ran at all — `adb` absent from PATH is the common one.
+		finish(`${ADB} ${argv.join(' ')} failed to run: ${error.message}`);
+	});
+	child.on('close', (code: number | null, signal: NodeJS.Signals | null) => {
+		ended = true;
+		finish(
+			`${ADB} ${argv.join(' ')} ${streamOutcome(code, signal)}\nstderr: ${quoteStream(stderrTail)}`,
+		);
+	});
+
+	return {
+		async stop(): Promise<void> {
+			finished = true;
+			if (ended) return;
+
+			await new Promise<void>((resolve) => {
+				child.once('close', () => resolve());
+				child.once('error', () => resolve());
+				child.kill();
+			});
+		},
+	};
+}
+
+function streamOutcome(code: number | null, signal: NodeJS.Signals | null): string {
+	if (code !== null) return `ended with exit ${code}`;
+	if (signal !== null) return `was killed by ${signal}`;
+	return 'ended';
 }

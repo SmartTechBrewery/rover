@@ -1,11 +1,13 @@
 import { readFileSync } from 'node:fs';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
 	type AdbResult,
+	type AdbStreamHandlers,
 	INSTALL_ADB_TIMEOUT_MS,
 	SCREENSHOT_ADB_TIMEOUT_MS,
 } from '@/backends/android/adb.js';
 import { AndroidDeviceBackend } from '@/backends/android/backend.js';
+import type { Device, DeviceWatcher } from '@/core/device.js';
 import { type AppId, InvalidIdError, parseAppId, parseDeviceSerial } from '@/core/ids.js';
 
 /**
@@ -16,10 +18,11 @@ import { type AppId, InvalidIdError, parseAppId, parseDeviceSerial } from '@/cor
  */
 type Runner = typeof import('@/backends/android/adb.js');
 
-const { runAdb, runAdbOnDevice, runAdbBinaryOnDevice } = vi.hoisted(() => ({
+const { runAdb, runAdbOnDevice, runAdbBinaryOnDevice, streamAdb } = vi.hoisted(() => ({
 	runAdb: vi.fn<Runner['runAdb']>(),
 	runAdbOnDevice: vi.fn<Runner['runAdbOnDevice']>(),
 	runAdbBinaryOnDevice: vi.fn<Runner['runAdbBinaryOnDevice']>(),
+	streamAdb: vi.fn<Runner['streamAdb']>(),
 }));
 
 vi.mock('@/backends/android/adb.js', async (importOriginal) => ({
@@ -27,12 +30,19 @@ vi.mock('@/backends/android/adb.js', async (importOriginal) => ({
 	runAdb,
 	runAdbOnDevice,
 	runAdbBinaryOnDevice,
+	streamAdb,
 }));
 
 const fixture = (name: string): string =>
 	readFileSync(new URL(`../../../fixtures/adb/${name}`, import.meta.url), 'utf8');
 
 const DEVICES = fixture('devices-l.api37-sdk-gphone16k-arm64.txt');
+const TRACK = readFileSync(
+	new URL(
+		'../../../fixtures/adb/track-devices-l.connect-disconnect.api37-sdk-gphone16k-arm64.txt',
+		import.meta.url,
+	),
+);
 const OFFLINE = fixture('devices-l.offline.api37-sdk-gphone16k-arm64.txt');
 const EMPTY = fixture('devices-l.empty.txt');
 const DAEMON_FAILED = fixture('devices-l.daemon-failed.txt');
@@ -80,6 +90,7 @@ describe('listDevices', () => {
 				platform: 'android',
 				model: 'sdk_gphone16k_arm64',
 				state: 'ready',
+				attachment: 'this-host',
 			},
 		]);
 		expect(runAdb.mock.calls[0][0]).toEqual(['devices', '-l']);
@@ -96,6 +107,7 @@ describe('listDevices', () => {
 				platform: 'android',
 				model: 'sdk_gphone16k_arm64',
 				state: 'offline',
+				attachment: 'this-host',
 			},
 		]);
 	});
@@ -141,6 +153,236 @@ describe('listDevices', () => {
 	});
 });
 
+/**
+ * `watchDevices`, driven by the **captured** bytes of a real `adb track-devices -l` run
+ * with only the process replaced. What it proves is the join: the argv, one snapshot per
+ * frame, and — the part that matters most — that an end of stream never reaches a listener
+ * as an empty device list (PROJECT.md §6).
+ *
+ * The D18 case is covered here and in `attachment.test.ts` off the same capture rather
+ * than by a device test: `adb connect` mutates the host's adb state, and a suite that did
+ * it would race every other one on the machine.
+ */
+describe('watchDevices', () => {
+	/** The handlers the backend passed to the runner, per tracker it started. */
+	let trackers: AdbStreamHandlers[];
+	let stops: Array<ReturnType<typeof vi.fn>>;
+
+	function watcher(): DeviceWatcher & {
+		onDevices: ReturnType<typeof vi.fn>;
+		onInterrupted: ReturnType<typeof vi.fn>;
+	} {
+		return { onDevices: vi.fn(), onInterrupted: vi.fn() };
+	}
+
+	/** The snapshots a listener was handed, in order. */
+	const snapshots = (listener: { onDevices: ReturnType<typeof vi.fn> }): Device[][] =>
+		listener.onDevices.mock.calls.map(([devices]) => devices as Device[]);
+
+	beforeEach(() => {
+		vi.useFakeTimers();
+		trackers = [];
+		stops = [];
+		streamAdb.mockImplementation((_args, handlers) => {
+			trackers.push(handlers);
+			const stop = vi.fn(async () => {});
+			stops.push(stop);
+			return { stop };
+		});
+	});
+
+	afterEach(() => {
+		vi.useRealTimers();
+	});
+
+	it('watches with the long format, and starts as soon as it is asked to', () => {
+		backend.watchDevices(watcher());
+
+		expect(streamAdb).toHaveBeenCalledTimes(1);
+		expect(streamAdb.mock.calls[0]?.[0]).toEqual(['track-devices', '-l']);
+	});
+
+	it('delivers one full snapshot per frame, mapped onto the neutral vocabulary', () => {
+		const listener = watcher();
+		backend.watchDevices(listener);
+
+		trackers[0]?.onStdout(TRACK);
+
+		expect(snapshots(listener)).toHaveLength(7);
+		expect(snapshots(listener)[0]).toEqual([
+			{
+				serial: 'emulator-5554',
+				platform: 'android',
+				model: 'sdk_gphone16k_arm64',
+				state: 'ready',
+				attachment: 'this-host',
+			},
+		]);
+	});
+
+	// The frame the capture exists for: one physical device, two entries, both this host's
+	// because the second was reached over loopback.
+	it('says which host each device of a multi-device snapshot belongs to', () => {
+		const listener = watcher();
+		backend.watchDevices(listener);
+
+		trackers[0]?.onStdout(TRACK);
+		const both = snapshots(listener).find((devices) => devices.length === 2) ?? [];
+
+		expect(both.map((device) => device.serial)).toEqual(['emulator-5554', 'localhost:5555']);
+		expect(both.every((device) => device.attachment === 'this-host')).toBe(true);
+	});
+
+	/**
+	 * Synthetic, deliberately: no capture on the writing host had a device attached through
+	 * another machine's address, and taking one would have meant reaching a second machine
+	 * (tests/fixtures/adb/README.md). The framing is the captured format; only the address
+	 * is invented.
+	 */
+	it('reports a device reached over a network transport as another host’s', () => {
+		const listener = watcher();
+		backend.watchDevices(listener);
+
+		trackers[0]?.onStdout(frame('192.168.1.9:5555         device transport_id:4\n'));
+
+		expect(snapshots(listener)[0]?.[0]?.attachment).toBe('another-host');
+	});
+
+	it('reassembles a snapshot split across chunks, and delivers it once', () => {
+		const listener = watcher();
+		backend.watchDevices(listener);
+
+		trackers[0]?.onStdout(TRACK.subarray(0, 30));
+		expect(listener.onDevices).not.toHaveBeenCalled();
+
+		trackers[0]?.onStdout(TRACK.subarray(30, 4 + 0x74));
+		expect(listener.onDevices).toHaveBeenCalledTimes(1);
+	});
+
+	/**
+	 * The trap this whole design is shaped around: on adb 37.0.1 the tracker exits **0**
+	 * when its server dies (PROJECT.md §6). Delivered as an empty snapshot, that reads as
+	 * every device having gone away at the exact moment the host lost the ability to know.
+	 */
+	it('reports an end of stream as an interruption and never as an empty list', () => {
+		const listener = watcher();
+		backend.watchDevices(listener);
+
+		trackers[0]?.onStdout(TRACK);
+		listener.onDevices.mockClear();
+		trackers[0]?.onEnd('adb track-devices -l ended with exit 0');
+
+		expect(listener.onInterrupted).toHaveBeenCalledWith('adb track-devices -l ended with exit 0');
+		expect(listener.onDevices).not.toHaveBeenCalled();
+	});
+
+	it('restarts the tracker after a bounded wait', () => {
+		backend.watchDevices(watcher());
+
+		trackers[0]?.onEnd('ended');
+		expect(streamAdb).toHaveBeenCalledTimes(1);
+
+		vi.advanceTimersByTime(250);
+		expect(streamAdb).toHaveBeenCalledTimes(2);
+	});
+
+	// adb missing from PATH ends a tracker as fast as it can be started; a fixed delay
+	// there is a busy loop with a process spawn in it.
+	it('backs off, up to a ceiling, while every restart keeps failing', () => {
+		backend.watchDevices(watcher());
+
+		for (const delay of [250, 500, 1000, 2000, 4000, 5000, 5000]) {
+			trackers.at(-1)?.onEnd('ended');
+			vi.advanceTimersByTime(delay - 1);
+			const started = streamAdb.mock.calls.length;
+			vi.advanceTimersByTime(1);
+			expect(streamAdb.mock.calls.length).toBe(started + 1);
+		}
+	});
+
+	it('goes back to the short wait once a tracker delivered a snapshot', () => {
+		backend.watchDevices(watcher());
+
+		trackers[0]?.onEnd('ended');
+		vi.advanceTimersByTime(250);
+		trackers[1]?.onEnd('ended');
+		vi.advanceTimersByTime(500);
+		// The third tracker works, so the fourth restart is a first failure again.
+		trackers[2]?.onStdout(TRACK);
+		trackers[2]?.onEnd('ended');
+
+		vi.advanceTimersByTime(250);
+		expect(streamAdb).toHaveBeenCalledTimes(4);
+	});
+
+	/**
+	 * A payload that will not parse is reported and the tracker restarted, never thrown:
+	 * this runs inside a stdout handler, where there is nothing above it to catch.
+	 */
+	it('treats an unparseable stream as a lost view rather than throwing', () => {
+		const listener = watcher();
+		backend.watchDevices(listener);
+
+		expect(() => trackers[0]?.onStdout(Buffer.from('not-a-frame'))).not.toThrow();
+		expect(listener.onInterrupted.mock.calls[0]?.[0]).toMatch(/track-devices/);
+		expect(listener.onDevices).not.toHaveBeenCalled();
+
+		// The tracker that lost its framing is stopped rather than left running: it can only
+		// produce more of the same.
+		expect(stops[0]).toHaveBeenCalled();
+		vi.advanceTimersByTime(250);
+		expect(streamAdb).toHaveBeenCalledTimes(2);
+	});
+
+	it('starts a fresh decoder per tracker, so a partial frame cannot cross a restart', () => {
+		const listener = watcher();
+		backend.watchDevices(listener);
+
+		trackers[0]?.onStdout(TRACK.subarray(0, 30));
+		trackers[0]?.onEnd('ended');
+		vi.advanceTimersByTime(250);
+		trackers[1]?.onStdout(TRACK.subarray(0, 4 + 0x74));
+
+		expect(snapshots(listener)).toHaveLength(1);
+	});
+
+	it('stops the tracker and never restarts it again once stopped', async () => {
+		const listener = watcher();
+		const watch = backend.watchDevices(listener);
+
+		await watch.stop();
+
+		expect(stops[0]).toHaveBeenCalledTimes(1);
+		trackers[0]?.onEnd('ended');
+		vi.advanceTimersByTime(60_000);
+		expect(streamAdb).toHaveBeenCalledTimes(1);
+		expect(listener.onInterrupted).not.toHaveBeenCalled();
+	});
+
+	it('cancels a restart that was already scheduled', async () => {
+		const watch = backend.watchDevices(watcher());
+
+		trackers[0]?.onEnd('ended');
+		await watch.stop();
+		vi.advanceTimersByTime(60_000);
+
+		expect(streamAdb).toHaveBeenCalledTimes(1);
+	});
+
+	it('can be stopped twice', async () => {
+		const watch = backend.watchDevices(watcher());
+
+		await watch.stop();
+		await expect(watch.stop()).resolves.toBeUndefined();
+	});
+});
+
+/** One synthetic frame, in the captured format: the length prefix counts bytes. */
+function frame(payload: string): Buffer {
+	const length = Buffer.byteLength(payload).toString(16).padStart(4, '0');
+	return Buffer.from(`${length}${payload}`, 'utf8');
+}
+
 describe('describeDevice', () => {
 	it('answers with the device when it is still attached', async () => {
 		enumerates(DEVICES);
@@ -150,6 +392,7 @@ describe('describeDevice', () => {
 			platform: 'android',
 			model: 'sdk_gphone16k_arm64',
 			state: 'ready',
+			attachment: 'this-host',
 		});
 	});
 

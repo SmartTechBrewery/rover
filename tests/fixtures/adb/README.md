@@ -42,9 +42,12 @@ macOS, captured **2026-08-29**. `SERIAL` is `emulator-5554`. The enumeration, `w
 | `am-start.top-most.api37-sdk-gphone16k-arm64.txt` | the same again while it is on top, `> f 2>&1` | sdk_gphone16k_arm64 | 37 | 2026-08-29 |
 | `am-force-stop.daemon-start.stderr.api37-sdk-gphone16k-arm64.txt` | `adb kill-server; adb -s $SERIAL wait-for-device shell am force-stop com.android.settings 2> f` | sdk_gphone16k_arm64 | 37 | 2026-08-29 |
 | `pm-clear-success.api37-sdk-gphone16k-arm64.txt` | `adb -s $SERIAL shell pm clear com.android.traceur` (stdout) | sdk_gphone16k_arm64 | 37 | 2026-08-29 |
+| `track-devices-l.connect-disconnect.api37-sdk-gphone16k-arm64.txt` | `adb track-devices -l > f`, then `adb connect localhost:5555` and `adb disconnect localhost:5555` | sdk_gphone16k_arm64 | 37 | 2026-08-29 |
 
 Both `wm` overrides were reset with `wm size reset` / `wm density reset` immediately after the
-capture.
+capture. The `track-devices` capture leaves the host as it found it the same way: the second entry
+it creates is removed by the `adb disconnect` that is part of the recipe, confirmed with
+`adb devices -l` afterwards.
 
 The hierarchy dump is **Settings → Display & touch**, unscrolled, reached with `adb shell am start
 -a android.settings.DISPLAY_SETTINGS`. It was chosen over the Settings home page because it is the
@@ -95,6 +98,18 @@ re-capturing — a fixture nobody can re-create is a fixture nobody can extend.
   keeping, because the success path of that command destroys whatever it is pointed at. The failure
   path (`Failed`, stderr, exit 1) comes from `com.rover.nope`, which no device has.
 
+- **The `track-devices` capture is raw bytes, not text**, and has to be read as a `Buffer`: its
+  framing is four hex digits of payload **byte** length, so a fixture decoded before it reaches the
+  decoder would prove the one thing that decoder exists to get right. It carries seven frames — the
+  starting list, four while the connected entry negotiated (`offline`, `authorizing`, `offline`),
+  the one where both entries are `device`, and the two that end back at one device. Nothing needed
+  redacting: it contains only `emulator-5554`, `localhost:5555` and the emulator's own product and
+  model, confirmed on the capture host before committing.
+- **The same capture is the only fixture here with more than one device in a list**, and the only
+  one carrying the `authorizing` state — both of which were listed below as shapes with no fixture,
+  and are not any more. It is also the D18 case in miniature: two entries, one physical emulator,
+  distinguishable only by the serial.
+
 - **The hierarchy XML has no trailing newline**, and every one of its 75 nodes carries all 19
   attributes — `index`, `text`, `resource-id`, `class`, `package`, `content-desc`, the ten booleans,
   `bounds`, `drawing-order` and `hint`. `parseUiHierarchy` maps all of those except
@@ -119,12 +134,18 @@ Nothing may be asserted about these until one exists — no test here claims any
   captured negative case; `getprop.test.ts` builds one by deleting the markers from this same real
   dump, and says so in a comment.
 - **Any API level other than 37.** `getprop` key names in particular have moved between releases.
-- **`unauthorized`, `authorizing`, `no permissions (…)`, `bootloader`, `recovery`, `sideload`.**
-  Only `device` and `offline` were captured, which is why `AdbDevice.state` is an open string and
-  not an enum — the full token list is longer than what is pinned here, and writing it from memory
-  would be the same mistake as a hand-written fixture.
+- **`unauthorized`, `no permissions (…)`, `bootloader`, `recovery`, `sideload`.**
+  Only `device`, `offline` and `authorizing` were captured, which is why `AdbDevice.state` is an
+  open string and not an enum — the full token list is longer than what is pinned here, and writing
+  it from memory would be the same mistake as a hand-written fixture.
 - **A `goldfish` emulator.** Only `ro.hardware=ranchu` was observed, so only `ranchu` is encoded.
-- **More than one device in the list at once.**
+- **A device attached through another machine's address.** The `track-devices` capture has
+  `localhost:5555`, which is a network transport to *this* host; producing a genuine
+  `another-host` entry needs a second machine, so the `another-host` cases in
+  `attachment.test.ts` and `backend.test.ts` are synthetic and say so.
+- **An empty device list in a frame.** A second adb server on a spare port still discovers the
+  running emulator, so no capture had one; `track.test.ts` drives the `0000` frame from an inline
+  string and says so.
 - **A hierarchy with `rotation` other than `0`**, and one from `uiautomator dump --compressed`.
 - **A hierarchy with more than one root `<node>`** — split screen, or a second display.
   `parseUiHierarchy` refuses one rather than reading the first window and answering confidently

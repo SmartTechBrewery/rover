@@ -24,6 +24,8 @@ import {
 	type DeviceInfo,
 	DeviceInfoSchema,
 	DeviceSchema,
+	type DeviceWatch,
+	type DeviceWatcher,
 	ScreenElementSchema,
 } from '@/core/device.js';
 
@@ -42,6 +44,7 @@ export function createMockDevice(overrides: Partial<Device> = {}): Device {
 		platform: 'test-platform',
 		model: 'Test Model',
 		state: 'ready',
+		attachment: 'this-host',
 		...overrides,
 	});
 }
@@ -88,6 +91,10 @@ export function createMockCapabilityManifest(
 export function createMockDeviceBackend(overrides: Partial<DeviceBackend> = {}): DeviceBackend {
 	return {
 		listDevices: vi.fn<DeviceBackend['listDevices']>(async () => [createMockDevice()]),
+		watchDevices: vi.fn<DeviceBackend['watchDevices']>((watcher) => {
+			watcher.onDevices([createMockDevice()]);
+			return { stop: vi.fn<DeviceWatch['stop']>(async () => {}) };
+		}),
 		describeDevice: vi.fn<DeviceBackend['describeDevice']>(async () => createMockDevice()),
 		deviceInfo: vi.fn<DeviceBackend['deviceInfo']>(async () => createMockDeviceInfo()),
 		installApp: vi.fn<DeviceBackend['installApp']>(async () => {}),
@@ -126,6 +133,19 @@ export function createConformingDeviceBackend(
 		async listDevices() {
 			performed.push('listDevices');
 			return [createMockDevice()];
+		},
+		// A real body, and one that delivers the first snapshot the contract promises: an
+		// empty one — or a bare `{}` for a handle — is exactly what `isEmptyAnswerSource`
+		// flags, and rightly, since it is what a backend that never implemented this looks
+		// like.
+		watchDevices(watcher: DeviceWatcher): DeviceWatch {
+			performed.push('watchDevices');
+			watcher.onDevices([createMockDevice()]);
+			return {
+				async stop() {
+					performed.push('stopWatch');
+				},
+			};
 		},
 		async describeDevice(serial) {
 			performed.push(`describeDevice ${serial}`);
