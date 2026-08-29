@@ -9,9 +9,20 @@ What is actually built, and where the seams run. `PROJECT.md` carries the decisi
 | Component | Instances | Lifetime | Owns |
 |---|---|---|---|
 | **Daemon — the device host** (`src/daemon/`) | one per machine **with devices**, reachable over the network | long-running | Device inventory, leases, port allocation, state restoration, **and executing the verbs** |
+| **IPC surface** (`src/ipc/`) | library, loaded by the daemon and by every client | per connection | The wire schemas, NDJSON framing, request dispatch and response correlation — the protocol itself |
 | **Core** (`src/core/`, `src/backends/`) | library | — | The device interface, the backends, the verbs |
 | **CLI** (`src/cli/`) | per invocation | seconds | Human and script entry point — a **client** of a host, local or remote |
 | **MCP server** (`src/mcp/`) | one per agent | agent session | Exposes the verbs as tools — also a **client** of a host |
+
+### Where the transport seam runs
+
+`src/ipc/` is the protocol and nothing else. It binds to a Node `Duplex` and to no other
+type (`PROJECT.md` D17): no socket path, no peer uid, no hostname, nothing that assumes the
+client shares a filesystem, a user or a clock with the host. A transport — the local socket
+first, TLS for a remote host later (D22) — is a **separate module that consumes this one**,
+handing it an already-connected stream. That is what makes a network listener an added
+transport rather than a rewrite, and it is checkable by reading the imports: the unit tests
+drive the whole surface over an in-memory stream pair that is not a socket at all.
 
 ### Why the daemon exists at all
 
@@ -53,7 +64,7 @@ The dependency runs the other way (`PROJECT.md` D4): core → CLI, and MCP as a 
 
 ### Auto-start
 
-The daemon starts on first use, the way `adb` forks its own server on 5037 (`PROJECT.md` D5). Startup races are expected — two CLI invocations at once — and are resolved by the socket, not by a lock file: whoever loses the bind connects to the winner.
+The daemon starts on first use, the way `adb` forks its own server on 5037 (`PROJECT.md` D5). Startup races are expected — two CLI invocations at once — and are resolved by the socket, not by a lock file: whoever loses the bind connects to the winner. What that socket carries is `src/ipc/` above: the transport hands each accepted connection to the IPC server as a `Duplex` and knows nothing else about the protocol.
 
 This is the **local** host only. A remote host is a long-running service its operator starts; a client never starts one across the network, and a connection refused there is an error to report, not a cue to spawn anything.
 

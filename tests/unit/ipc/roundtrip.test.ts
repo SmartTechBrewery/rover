@@ -1,7 +1,7 @@
 import type { Duplex } from 'node:stream';
 import { describe, expect, it, vi } from 'vitest';
 import { createIpcClient } from '@/ipc/client.js';
-import { encodeFrame, FrameDecoder } from '@/ipc/framing.js';
+import { encodeFrame, FrameDecoder, MAX_FRAME_BYTES } from '@/ipc/framing.js';
 import type { IpcHandlers, StatusResult } from '@/ipc/methods.js';
 import { IpcRequestError, PROTOCOL_VERSION, ResponseSchema } from '@/ipc/protocol.js';
 import { createIpcServer } from '@/ipc/server.js';
@@ -31,6 +31,10 @@ function collectResponses(stream: Duplex) {
 			frames.push(ResponseSchema.parse(JSON.parse(frame)));
 		}
 	});
+	// A peer that destroys its side surfaces on this one as an error — `ECONNRESET` on a
+	// socket, `ABORT_ERR` on the in-memory pair. There is nothing a reader can do about it,
+	// and `createIpcClient` swallows it the same way; without this it is an unhandled 'error'.
+	stream.on('error', () => {});
 
 	return {
 		frames,
@@ -205,6 +209,76 @@ describe('a client that is not this one', () => {
 			error: { code: 'malformed_frame' },
 		});
 		await expect(ended).resolves.toBeUndefined();
+	});
+
+	/**
+	 * `end()` on its own closes only the writable half, which would leave the server reading
+	 * — and running handlers — for a peer it has already refused. Once the method table
+	 * carries `acquire_device` and `tap`, that is a lease granted to nobody and a real device
+	 * moved for a client the host has given up on, with every reply written into a stream
+	 * that drops it.
+	 */
+	it('stops reading after a refusal, so no later frame reaches a handler', async () => {
+		const [clientSide, serverSide] = createDuplexPair();
+		const status = vi.fn(
+			(): StatusResult => ({ protocolVersion: PROTOCOL_VERSION, pid: 1, uptimeMs: 0 }),
+		);
+		createIpcServer(statusHandlers({ status })).handleConnection(serverSide);
+		const responses = collectResponses(clientSide);
+
+		clientSide.write('this is not json\n');
+		expect(await responses.next(0)).toMatchObject({ id: null, error: { code: 'malformed_frame' } });
+
+		clientSide.write(
+			encodeFrame({ protocolVersion: PROTOCOL_VERSION, id: 'after', method: 'status', params: {} }),
+		);
+		await vi.waitFor(() => expect(serverSide.destroyed).toBe(true));
+
+		expect(status).not.toHaveBeenCalled();
+		expect(responses.frames).toHaveLength(1);
+	});
+
+	/**
+	 * The frame cap is the surface's only denial-of-service guard, and it has to hold at the
+	 * connection, not just inside the decoder: a peer that opens a frame and never closes it
+	 * must be cut off rather than answered and left reading.
+	 */
+	it('refuses and destroys a connection that opens a frame past the cap', async () => {
+		const [clientSide, serverSide] = createDuplexPair();
+		createIpcServer(statusHandlers()).handleConnection(serverSide);
+		const responses = collectResponses(clientSide);
+
+		clientSide.write('x'.repeat(MAX_FRAME_BYTES + 1));
+
+		expect(await responses.next(0)).toMatchObject({
+			type: 'error',
+			id: null,
+			error: { code: 'malformed_frame' },
+		});
+		await vi.waitFor(() => expect(serverSide.destroyed).toBe(true));
+	});
+
+	it('gets a null-id malformed_frame for a method name past the envelope cap', async () => {
+		const [clientSide, serverSide] = createDuplexPair();
+		createIpcServer(statusHandlers()).handleConnection(serverSide);
+		const responses = collectResponses(clientSide);
+
+		// Bounded at the envelope rather than echoed back: an unbounded name is a response the
+		// host allocates, encodes and writes on the peer's behalf.
+		clientSide.write(
+			encodeFrame({
+				protocolVersion: PROTOCOL_VERSION,
+				id: 'e',
+				method: 'z'.repeat(129),
+				params: {},
+			}),
+		);
+
+		expect(await responses.next(0)).toMatchObject({
+			type: 'error',
+			id: null,
+			error: { code: 'malformed_frame' },
+		});
 	});
 
 	it('cannot smuggle an extra envelope field past the parser', async () => {

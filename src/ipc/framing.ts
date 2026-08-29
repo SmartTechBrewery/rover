@@ -46,6 +46,13 @@ export function encodeFrame(value: unknown): string {
  */
 export class FrameDecoder {
 	private buffered = '';
+	/**
+	 * Terminal once set. A stream whose framing has already run past the cap cannot be
+	 * resynchronised — there is no way to tell where the next frame was meant to begin — so
+	 * the decoder drops what it held and refuses every later chunk instead of quietly
+	 * accumulating one the caller will never be able to use.
+	 */
+	private failure: FrameTooLargeError | undefined;
 	private readonly maxBytes: number;
 	/**
 	 * A chunk boundary can fall in the middle of a multi-byte character, and
@@ -64,30 +71,57 @@ export class FrameDecoder {
 	 * message, and rejecting one would make a keepalive newline a protocol violation.
 	 *
 	 * Throws {@link FrameTooLargeError} for a frame over the cap — completed or still
-	 * accumulating. The caller answers with `malformed_frame` and closes the connection;
-	 * there is no way to resynchronise on a stream whose framing is already unbounded.
+	 * accumulating — and stays failed afterwards. The caller answers with
+	 * `malformed_frame` and destroys the connection.
+	 *
+	 * The cap is checked **before** the buffer grows, never after. Measuring a partial the
+	 * decoder has already concatenated would make the cap a report rather than a bound: a
+	 * peer that keeps writing past a throw the caller swallowed would still be growing the
+	 * host's heap by the full input, which is the exact thing the cap exists to stop.
 	 */
 	push(chunk: string | Buffer): string[] {
-		this.buffered += typeof chunk === 'string' ? chunk : this.utf8.write(chunk);
+		if (this.failure) {
+			throw this.failure;
+		}
 
-		const parts = this.buffered.split('\n');
-		this.buffered = parts.pop() ?? '';
-		this.requireWithinLimit(this.buffered);
+		const incoming = typeof chunk === 'string' ? chunk : this.utf8.write(chunk);
+
+		if (!incoming.includes('\n')) {
+			// No frame can complete, so the whole chunk would extend the open one. Nothing is
+			// retained unless it fits.
+			this.requireWithinLimit(byteLength(this.buffered) + byteLength(incoming));
+			this.buffered += incoming;
+			return [];
+		}
+
+		// At least one frame closes here, so `buffered` is about to be consumed rather than
+		// extended, and every remaining check is bounded by a chunk the caller already holds.
+		const parts = (this.buffered + incoming).split('\n');
+		const trailing = parts.pop() ?? '';
 
 		const frames: string[] = [];
 		for (const part of parts) {
-			this.requireWithinLimit(part);
+			this.requireWithinLimit(byteLength(part));
 			if (part.trim().length > 0) {
 				frames.push(part);
 			}
 		}
+		this.requireWithinLimit(byteLength(trailing));
+
+		this.buffered = trailing;
 		return frames;
 	}
 
-	private requireWithinLimit(frame: string): void {
-		const bytes = Buffer.byteLength(frame, 'utf8');
-		if (bytes > this.maxBytes) {
-			throw new FrameTooLargeError(bytes, this.maxBytes);
+	private requireWithinLimit(bytes: number): void {
+		if (bytes <= this.maxBytes) {
+			return;
 		}
+		this.buffered = '';
+		this.failure = new FrameTooLargeError(bytes, this.maxBytes);
+		throw this.failure;
 	}
+}
+
+function byteLength(text: string): number {
+	return Buffer.byteLength(text, 'utf8');
 }

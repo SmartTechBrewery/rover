@@ -29,6 +29,11 @@ describe('request envelope', () => {
 		['an empty id', { protocolVersion: 1, id: '', method: 'status', params: {} }],
 		['a non-string method', { protocolVersion: 1, id: 'a', method: 7, params: {} }],
 		['an empty method', { protocolVersion: 1, id: 'a', method: '', params: {} }],
+		[
+			'a method past the length bound',
+			{ protocolVersion: 1, id: 'a', method: 'z'.repeat(129), params: {} },
+		],
+		['an id past the length bound', { protocolVersion: 1, id: 'a'.repeat(129), method: 'status' }],
 		['a missing version', { id: 'a', method: 'status', params: {} }],
 	])('rejects %s', (_label, frame) => {
 		expect(RequestEnvelopeSchema.safeParse(frame).success).toBe(false);

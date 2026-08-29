@@ -1,6 +1,17 @@
 import { describe, expect, it } from 'vitest';
 import { encodeFrame, FrameDecoder, FrameTooLargeError, MAX_FRAME_BYTES } from '@/ipc/framing.js';
 
+/** Runs `act` exactly once and hands back the {@link FrameTooLargeError} it must throw. */
+function throwFrom(act: () => unknown): FrameTooLargeError {
+	try {
+		act();
+	} catch (error) {
+		expect(error).toBeInstanceOf(FrameTooLargeError);
+		return error as FrameTooLargeError;
+	}
+	throw new Error('expected the push to throw FrameTooLargeError');
+}
+
 describe('encodeFrame', () => {
 	it('appends exactly one newline', () => {
 		expect(encodeFrame({ a: 1 })).toBe('{"a":1}\n');
@@ -68,6 +79,40 @@ describe('FrameDecoder', () => {
 		// The reason the cap exists: a peer that opens a frame and never closes it must not
 		// be able to grow the host's buffer without bound.
 		expect(() => decoder.push('y'.repeat(20))).toThrow(FrameTooLargeError);
+	});
+
+	/**
+	 * The cap has to be a *bound*, not a report. A caller that swallows the throw and keeps
+	 * reading — which is exactly what a stream's `data` listener does — must not be able to
+	 * grow the decoder by the full input while every push dutifully throws.
+	 */
+	it('does not keep buffering once the cap is exceeded', () => {
+		const decoder = new FrameDecoder(16);
+
+		const first = throwFrom(() => decoder.push('y'.repeat(20)));
+		const second = throwFrom(() => decoder.push('y'.repeat(20)));
+
+		// 40 here would mean the second chunk was appended to the first before being measured.
+		expect(first.observedBytes).toBe(20);
+		expect(second.observedBytes).toBe(20);
+	});
+
+	it('stays failed, so a later well-formed frame is refused rather than decoded', () => {
+		const decoder = new FrameDecoder(16);
+
+		// The oversized frame was *completed*, so resuming here would look reasonable — but a
+		// stream that already ran past the cap gives no evidence that this newline is a frame
+		// boundary rather than one inside whatever the peer was really sending.
+		expect(() => decoder.push(`${'y'.repeat(20)}\n`)).toThrow(FrameTooLargeError);
+		expect(() => decoder.push('{"a":1}\n')).toThrow(FrameTooLargeError);
+	});
+
+	it('accepts a chunk of many small frames whose total exceeds the cap', () => {
+		// The cap bounds one frame, not one chunk: a batch of legitimate frames arriving
+		// together must not be mistaken for an unterminated one.
+		const decoder = new FrameDecoder(16);
+
+		expect(decoder.push('{"a":1}\n{"a":2}\n{"a":3}\n')).toEqual(['{"a":1}', '{"a":2}', '{"a":3}']);
 	});
 
 	it('defaults to a cap far above any legitimate frame', () => {

@@ -34,6 +34,17 @@ export const RequestIdSchema = z.string().min(1).max(128);
 export type RequestId = z.infer<typeof RequestIdSchema>;
 
 /**
+ * Bounded for the same reason as {@link RequestIdSchema}: it is an opaque string a peer
+ * chooses, and the server echoes it back in `No such method: '…'`. Unbounded, a method
+ * name just under the frame cap would have the host allocate and encode a response of
+ * roughly the same size — and JSON escaping can push that response past the cap, so one
+ * request costs an outsized allocation on both ends. 128 characters is far above any
+ * method this table will ever carry, and an over-long one is `malformed_frame` at the
+ * envelope rather than something the host formats and writes back.
+ */
+export const MethodNameSchema = z.string().min(1).max(128);
+
+/**
  * The error vocabulary. An agent has to be able to tell "you asked wrong" from "the host
  * broke" — those call for opposite responses — so the code is part of the contract
  * rather than something to recover from a message string.
@@ -85,7 +96,7 @@ export type IpcError = z.infer<typeof IpcErrorSchema>;
 export const RequestEnvelopeSchema = z.object({
 	protocolVersion: z.number().int(),
 	id: RequestIdSchema,
-	method: z.string().min(1),
+	method: MethodNameSchema,
 	params: z.unknown(),
 });
 export type RequestEnvelope = z.infer<typeof RequestEnvelopeSchema>;
@@ -134,8 +145,10 @@ export class IpcRequestError extends Error {
 
 /**
  * Renders a Zod failure as one line for an error response. A caller on another machine
- * has no stack and no schema, so the *path* is the whole diagnosis: `params.serial:
- * Required` tells it what to fix, where a bare "invalid input" starts a support thread.
+ * has no stack and no schema, so the *path* is the whole diagnosis: `serial: Required`
+ * tells it what to fix, where a bare "invalid input" starts a support thread. The path is
+ * rooted at the value being parsed — the server parses `params` against the method's own
+ * schema — so it names the field, with no `params.` prefix in front of it.
  */
 export function describeIssues(error: z.ZodError): string {
 	return error.issues

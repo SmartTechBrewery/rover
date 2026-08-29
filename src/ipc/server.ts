@@ -13,6 +13,13 @@
  * byte from one client is a worse failure than one that answers "no": everything below
  * becomes an error *response*, and only a frame whose id could not be recovered closes
  * the connection.
+ *
+ * **A refusal ends the connection in both directions.** `end()` alone would close only the
+ * writable half, leaving the server reading — and dispatching — frames from a peer it has
+ * already declared untrustworthy, with every reply dropped into a stream that no longer
+ * accepts writes. Verbs with side effects (a lease granted, a device tapped) would run for
+ * nobody. So a refusal writes its `id: null` error as the final frame, stops decoding, and
+ * destroys the stream once that frame has flushed.
  */
 
 import type { Duplex } from 'node:stream';
@@ -53,19 +60,35 @@ export function createIpcServer(handlers: IpcHandlers): IpcServer {
 
 function serveConnection(handlers: IpcHandlers, stream: Duplex): void {
 	const decoder = new FrameDecoder();
+	let refused = false;
 
 	const write = (response: Response): void => {
+		// A dispatch already in flight when the refusal landed finds the stream gone. Its
+		// reply is dropped on purpose: the connection is over, and there is nobody to tell.
 		if (stream.writable) {
 			stream.write(encodeFrame(response));
 		}
 	};
 
 	const refuseConnection = (code: IpcErrorCode, message: string): void => {
-		write(errorResponse(null, code, message));
-		stream.end();
+		if (refused) {
+			return;
+		}
+		refused = true;
+
+		const frame = encodeFrame(errorResponse(null, code, message));
+		if (stream.writable) {
+			stream.end(frame, () => stream.destroy());
+			return;
+		}
+		stream.destroy();
 	};
 
 	stream.on('data', (chunk: Buffer | string) => {
+		if (refused) {
+			return;
+		}
+
 		let frames: string[];
 		try {
 			frames = decoder.push(chunk);

@@ -123,6 +123,10 @@ export function createIpcClient(stream: Duplex): IpcClient {
 			frames = decoder.push(chunk);
 		} catch (error) {
 			failAll('malformed_frame', error instanceof Error ? error.message : String(error));
+			// A decoder that has failed cannot resynchronise, so continuing to read would only
+			// let the host keep feeding bytes nothing will ever decode. Destroying stops the
+			// flow at the transport, not just the decode attempt.
+			stream.destroy();
 			return;
 		}
 		for (const frame of frames) {
