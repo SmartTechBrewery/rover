@@ -34,6 +34,16 @@ import { handleStatus } from './status.js';
  */
 const PROBE_TIMEOUT_MS = 500;
 
+/**
+ * How long `close()` waits for the device watches to stop before giving up on them and
+ * saying so. Nothing below that call is bounded — a watch stops by signalling a child and
+ * waiting for it to exit — and an unbounded wait on the shutdown path is the worse failure
+ * of the two: a daemon whose `close()` never resolves neither dies nor stops serving, which
+ * is exactly the stale-host state D6 is about. Generous enough that a child exiting normally
+ * is never reported as a leak.
+ */
+const WATCH_STOP_TIMEOUT_MS = 5_000;
+
 export interface StartDaemonOptions {
 	readonly socketPath: string;
 }
@@ -166,9 +176,13 @@ async function closeServer(
 	ownInode: Promise<bigint | undefined>,
 	inventory: DeviceInventory,
 ): Promise<void> {
-	// Before the socket teardown, so `RunningDaemon.close()` resolving means the watches — and
-	// whatever they spawned — are gone, not merely asked to go.
-	await inventory.stop();
+	// Started here, awaited at the end. Stopping the watches and refusing new connections are
+	// independent, and doing them in sequence would leave the socket accepting and dispatching
+	// for as long as a child takes to die — a window in which `list_devices` is answered by an
+	// inventory that has already dropped its subscriptions. Awaiting it below still means
+	// `RunningDaemon.close()` resolving is a statement that the watches are gone, not merely
+	// that they were asked to go.
+	const stopped = stopWatches(inventory);
 
 	await new Promise<void>((resolve) => {
 		// Set before `close()`, not after: a connection already past `accept()` in the kernel
@@ -187,6 +201,8 @@ async function closeServer(
 		}
 	});
 
+	await stopped;
+
 	// Node unlinks the path itself on a clean close, so this is the crash-shaped case and a
 	// belt-and-braces guarantee that the address is free. Skipped when the inode changed:
 	// the file there is then a successor's socket, not ours.
@@ -196,6 +212,37 @@ async function closeServer(
 		return;
 	}
 	await rm(socketPath, { force: true });
+}
+
+/**
+ * Stop the device watches, bounded.
+ *
+ * `DeviceInventory.stop()` never rejects, but it is not bounded either: it awaits each
+ * backend's watch, and a backend typically stops one by signalling a child process and
+ * waiting for it to exit. A child that ignores the signal would hold this promise — and so
+ * `RunningDaemon.close()`, and so `main.ts`'s exit — open forever. The timeout is a leak
+ * reported out loud in exchange for a daemon that actually goes away; the alternative is one
+ * that does neither.
+ */
+async function stopWatches(inventory: DeviceInventory): Promise<void> {
+	let timer: NodeJS.Timeout | undefined;
+	const expiry = new Promise<'timed-out'>((resolve) => {
+		timer = setTimeout(() => resolve('timed-out'), WATCH_STOP_TIMEOUT_MS);
+		// Unreferenced: this timer exists to stop us waiting, never to keep a process alive that
+		// is otherwise finished.
+		timer.unref();
+	});
+
+	try {
+		if ((await Promise.race([inventory.stop(), expiry])) === 'timed-out') {
+			console.warn(
+				`The device watches did not stop within ${WATCH_STOP_TIMEOUT_MS}ms. Shutting down ` +
+					`anyway; something they started may still be running.`,
+			);
+		}
+	} finally {
+		clearTimeout(timer);
+	}
 }
 
 interface ListenSucceeded {

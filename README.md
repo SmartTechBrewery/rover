@@ -15,10 +15,18 @@ agent's job.
 
 Design and rules are settled. The toolchain and the device-backend contract — the device
 interface, the Zod capability manifest and the registry a backend joins through one import — are
-in place; **no backend is registered yet**. The daemon runs: it binds a unix socket, serves the
-schema-checked IPC surface over it, and **starts itself on the first call**, with two concurrent
-callers producing exactly one daemon. It owns no devices yet — `status` is the only method it
-answers. The backlog is twenty issues in dependency order — see [`PROJECT.md`](PROJECT.md) §9.3.
+in place, and the Android backend is registered. The daemon runs: it binds a unix socket, serves
+the schema-checked IPC surface over it, and **starts itself on the first call**, with two
+concurrent callers producing exactly one daemon. It now holds a **device inventory** — one entry
+per device, fed by each registered backend's change stream, refusing anything attached to another
+host — and answers `list_devices` alongside `status`. The inventory is a cache and never the
+authority: a lease re-verifies its device against the backend at grant time (`PROJECT.md` D6),
+and `list_devices` says `stale` whenever the list is not known to be current.
+
+One gap is worth stating plainly: `src/daemon/main.ts` does not yet import the backend barrel, so
+a daemon started with `npm run daemon` runs with an empty registry and answers an empty device
+list. That wiring is its own issue. The backlog is twenty issues in dependency order — see
+[`PROJECT.md`](PROJECT.md) §9.3.
 
 ```bash
 npm run daemon:status   # start the daemon if it is not running, print its state as JSON

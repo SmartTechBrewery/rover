@@ -28,9 +28,16 @@ import type { DeviceSerial } from '../core/ids.js';
 export interface DeviceSnapshot {
 	readonly devices: Device[];
 	/**
-	 * A backend's view of its device set was interrupted and has not been re-established.
-	 * Not "no devices": the devices below are what was last seen, and they are still the
-	 * best answer available — they are simply no longer known to be current.
+	 * The list below is **not known to be current**. Three things set it, and a client that
+	 * cares only needs to know the one thing they have in common: a backend's view was
+	 * interrupted and has not been re-established; a backend has been subscribed to but has
+	 * not delivered its first set yet; or the inventory is not running at all (never started,
+	 * or already stopped).
+	 *
+	 * Not "no devices": the devices below are what was last seen, and they are still the best
+	 * answer available. An *empty* list with this set is the important case — it says the host
+	 * has no view, which a client cannot tell from a host with genuinely nothing attached
+	 * unless somebody says so.
 	 */
 	readonly stale: boolean;
 }
@@ -52,9 +59,12 @@ export interface DeviceInventory {
 
 export interface DeviceInventoryOptions {
 	/**
-	 * The backends to watch. Defaults to the registry, read at each use rather than
-	 * captured at construction, so a backend whose module loads after the daemon is
-	 * constructed is still seen (ai/RULES.md §2 — adding a backend edits no shared code).
+	 * The backends to watch. Defaults to the registry rather than a named backend, so adding
+	 * one edits no shared code (ai/RULES.md §2). The registry is re-read on every
+	 * {@link DeviceInventory.verifyForGrant} and read **once** by {@link DeviceInventory.start},
+	 * so a backend has to be registered before the daemon binds to be watched — which the
+	 * intended wiring gives for free, the barrel being a top-level import evaluated before
+	 * `startDaemon` runs. Nothing here re-scans for a backend that registers later.
 	 */
 	readonly backends?: readonly RegisteredDeviceBackend[];
 	/** Where the D18 refusal goes. Injected so a test can read it. */
@@ -72,6 +82,13 @@ interface Subscription {
 	 */
 	watch?: DeviceWatch;
 	devices: Device[];
+	/**
+	 * A frame has arrived at least once. Distinct from `interrupted: false`: between
+	 * `watchDevices` returning and the backend's first `onDevices`, this host has no view of
+	 * that platform at all, and reporting that window as a live empty list would assert
+	 * "nothing is attached" about devices nobody has looked at yet.
+	 */
+	live: boolean;
 	interrupted: boolean;
 }
 
@@ -96,6 +113,7 @@ export function createDeviceInventory(options: DeviceInventoryOptions = {}): Dev
 			return;
 		}
 		subscription.devices = devices.filter((device) => admits(device, warn, warnedSerials));
+		subscription.live = true;
 		subscription.interrupted = false;
 	};
 
@@ -107,7 +125,7 @@ export function createDeviceInventory(options: DeviceInventoryOptions = {}): Dev
 			watching = true;
 			for (const { manifest, backend } of resolveBackends()) {
 				const platform = manifest.platform;
-				const subscription: Subscription = { devices: [], interrupted: false };
+				const subscription: Subscription = { devices: [], live: false, interrupted: false };
 				subscriptions.set(platform, subscription);
 				subscription.watch = backend.watchDevices({
 					onDevices: (devices) => admit(platform, devices),
@@ -148,11 +166,19 @@ export function createDeviceInventory(options: DeviceInventoryOptions = {}): Dev
 
 		snapshot(): DeviceSnapshot {
 			const devices: Device[] = [];
-			let stale = false;
+			// Not watching is itself a reason the view is not current, and it covers both ends of
+			// the lifecycle: before `start()`, and from the first line of `stop()` — which clears
+			// the subscriptions while the socket is still being served — until the process goes.
+			// Reading the cleared map as "zero backends, nothing interrupted" would answer the
+			// whole shutdown window with an authoritative empty list.
+			let stale = !watching;
 			for (const subscription of subscriptions.values()) {
 				devices.push(...subscription.devices);
-				stale ||= subscription.interrupted;
+				// A backend that has never delivered a frame is as unknown as one that was cut off.
+				stale ||= !subscription.live || subscription.interrupted;
 			}
+			// A *running* inventory over an empty registry is the one honest empty answer: there is
+			// no backend to have a view, so there is nothing this host has failed to hear.
 			return { devices, stale };
 		},
 

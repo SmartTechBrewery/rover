@@ -138,8 +138,10 @@ describe('list_devices over the socket', () => {
 
 		const client = await connectWithoutStarting(temp.socketPath);
 
-		// Empty and *not* stale: nothing was interrupted, this host simply has nothing to
-		// report. The two are different answers and the flag is what keeps them apart.
+		// Empty and *not* stale — the one honest empty answer: the inventory is running and
+		// there is no backend to have a view, so nothing has been interrupted and nothing is
+		// still unheard. A host that has gone blind answers the same list with `stale: true`,
+		// and the flag is the only thing that keeps the two apart.
 		await expect(client?.request('list_devices', {})).resolves.toEqual({
 			devices: [],
 			stale: false,

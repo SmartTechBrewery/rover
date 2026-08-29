@@ -51,14 +51,19 @@ export type ListDevicesParams = z.infer<typeof ListDevicesParamsSchema>;
  * once on the way into the client — instead of two that drift.
  *
  * `stale` earns its place next to the list: a view of the devices presented as current
- * when the source of it went away is exactly the stale-state failure D6 is about, and no
- * client can infer it from the list itself — a host that has gone blind and a host with
- * nothing attached both answer with an empty array.
+ * when the host is not in a position to know is exactly the stale-state failure D6 is
+ * about, and no client can infer it from the list itself — a host that has gone blind, a
+ * host that has not heard yet and a host with nothing attached all answer with an empty
+ * array.
  */
 export const ListDevicesResultSchema = z
 	.object({
 		devices: z.array(DeviceSchema),
-		/** The host's view of its devices was interrupted and has not been re-established. */
+		/**
+		 * The list is **not known to be current** — the host's view was interrupted, has not
+		 * arrived yet, or is not running. Treat it as "the last thing seen", never as "what is
+		 * attached"; an empty list with this set means *no view*, not *no devices*.
+		 */
 		stale: z.boolean(),
 	})
 	.strict();

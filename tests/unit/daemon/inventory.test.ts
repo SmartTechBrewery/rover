@@ -149,6 +149,36 @@ describe('createDeviceInventory admission', () => {
 });
 
 describe('createDeviceInventory staleness', () => {
+	it('reports the view as stale until the first snapshot arrives', () => {
+		const backend = createWatchableBackend('test-platform');
+		const { inventory } = inventoryOver([backend.registered]);
+
+		inventory.start();
+
+		// Subscribed but not yet told anything. An empty list presented as current here would
+		// say "no devices attached" about a platform nobody has heard from — the exact answer
+		// `stale` exists to keep apart from a genuinely empty host.
+		expect(inventory.snapshot()).toEqual({ devices: [], stale: true });
+
+		backend.deliver([local]);
+
+		expect(inventory.snapshot()).toEqual({ devices: [local], stale: false });
+	});
+
+	it('reports the view as stale once it has been stopped', async () => {
+		const backend = createWatchableBackend('test-platform');
+		const { inventory } = inventoryOver([backend.registered]);
+		inventory.start();
+		backend.deliver([local]);
+
+		await inventory.stop();
+
+		// `stop()` drops the subscriptions while the socket is still being served, so the map
+		// reading as "zero backends, nothing interrupted" would answer the whole shutdown
+		// window with an authoritative empty list.
+		expect(inventory.snapshot()).toEqual({ devices: [], stale: true });
+	});
+
 	it('keeps the last devices and says the view is stale when it is interrupted', () => {
 		const backend = createWatchableBackend('test-platform');
 		const { inventory } = inventoryOver([backend.registered]);
@@ -301,11 +331,13 @@ describe('createDeviceInventory lifecycle', () => {
 		expect(backend.backend.watchDevices).toHaveBeenCalledTimes(1);
 	});
 
-	it('subscribes to nothing until it is started', () => {
+	it('subscribes to nothing until it is started, and has no view until it does', () => {
 		const backend = createWatchableBackend('test-platform');
 		const { inventory } = inventoryOver([backend.registered]);
 
 		expect(backend.backend.watchDevices).not.toHaveBeenCalled();
-		expect(inventory.snapshot()).toEqual({ devices: [], stale: false });
+		// Stale rather than empty-and-current: an inventory that was never started has not
+		// failed to find devices, it has not looked.
+		expect(inventory.snapshot()).toEqual({ devices: [], stale: true });
 	});
 });
