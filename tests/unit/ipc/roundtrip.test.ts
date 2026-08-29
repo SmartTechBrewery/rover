@@ -239,6 +239,36 @@ describe('a client that is not this one', () => {
 	});
 
 	/**
+	 * The peer chooses the chunking, so it can always put the garbage and the verb it wants
+	 * executed in one write. If the refusal only stopped the *next* chunk, batching
+	 * `garbage\n` ahead of `acquire_device` would be enough to get it run on a connection the
+	 * host has already given up on, with the reply discarded.
+	 */
+	it('refuses without dispatching the frames batched behind the garbage in one write', async () => {
+		const [clientSide, serverSide] = createDuplexPair();
+		const status = vi.fn(
+			(): StatusResult => ({ protocolVersion: PROTOCOL_VERSION, pid: 1, uptimeMs: 0 }),
+		);
+		createIpcServer(statusHandlers({ status })).handleConnection(serverSide);
+		const responses = collectResponses(clientSide);
+
+		clientSide.write(
+			`this is not json\n${encodeFrame({
+				protocolVersion: PROTOCOL_VERSION,
+				id: 'behind',
+				method: 'status',
+				params: {},
+			})}`,
+		);
+
+		expect(await responses.next(0)).toMatchObject({ id: null, error: { code: 'malformed_frame' } });
+		await vi.waitFor(() => expect(serverSide.destroyed).toBe(true));
+
+		expect(status).not.toHaveBeenCalled();
+		expect(responses.frames).toHaveLength(1);
+	});
+
+	/**
 	 * The frame cap is the surface's only denial-of-service guard, and it has to hold at the
 	 * connection, not just inside the decoder: a peer that opens a frame and never closes it
 	 * must be cut off rather than answered and left reading.

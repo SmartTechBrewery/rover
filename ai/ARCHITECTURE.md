@@ -19,8 +19,8 @@ What is actually built, and where the seams run. `PROJECT.md` carries the decisi
 `src/ipc/` is the protocol and nothing else. It binds to a Node `Duplex` and to no other
 type (`PROJECT.md` D17): no socket path, no peer uid, no hostname, nothing that assumes the
 client shares a filesystem, a user or a clock with the host. A transport — the local socket
-first, TLS for a remote host later (D22) — is a **separate module that consumes this one**,
-handing it an already-connected stream. That is what makes a network listener an added
+first, TLS for a remote host later (D17, R22) — is a **separate module that consumes this
+one**, handing it an already-connected stream. That is what makes a network listener an added
 transport rather than a rewrite, and it is checkable by reading the imports: the unit tests
 drive the whole surface over an in-memory stream pair that is not a socket at all.
 

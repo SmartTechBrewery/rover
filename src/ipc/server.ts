@@ -14,12 +14,13 @@
  * becomes an error *response*, and only a frame whose id could not be recovered closes
  * the connection.
  *
- * **A refusal ends the connection in both directions.** `end()` alone would close only the
- * writable half, leaving the server reading — and dispatching — frames from a peer it has
- * already declared untrustworthy, with every reply dropped into a stream that no longer
- * accepts writes. Verbs with side effects (a lease granted, a device tapped) would run for
- * nobody. So a refusal writes its `id: null` error as the final frame, stops decoding, and
- * destroys the stream once that frame has flushed.
+ * **No frame is dispatched after a refusal**, however the peer chunked its writes. `end()`
+ * alone would close only the writable half, leaving the server reading — and dispatching —
+ * frames from a peer it has already declared untrustworthy, with every reply dropped into a
+ * stream that no longer accepts writes. Verbs with side effects (a lease granted, a device
+ * tapped) would run for nobody. So a refusal writes its `id: null` error as the final frame,
+ * abandons the frames already decoded from the chunk it landed in, ignores every later
+ * chunk, and destroys the stream once that frame has flushed.
  */
 
 import type { Duplex } from 'node:stream';
@@ -98,6 +99,14 @@ function serveConnection(handlers: IpcHandlers, stream: Duplex): void {
 		}
 
 		for (const frame of frames) {
+			// A refusal raised by an earlier frame has to stop this chunk too, not just the
+			// next one: the peer picks the chunking, so it can always put the garbage and the
+			// verb it wants executed in one write. `dispatchFrame` reaches `refuseConnection`
+			// before its first await, so the flag is already set when the loop comes back here.
+			if (refused) {
+				break;
+			}
+
 			// Deliberately not awaited: a verb can take seconds (R21), and holding the next
 			// frame behind it would make one slow call block every other request on the
 			// connection. Ids correlate the replies, so out-of-order completion is expected.
