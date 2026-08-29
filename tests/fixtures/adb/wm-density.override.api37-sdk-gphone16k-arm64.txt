@@ -1,0 +1,2 @@
+Physical density: 480
+Override density: 320
