@@ -1,18 +1,19 @@
 /**
  * What this backend declares it can do.
  *
- * **Nothing registers this manifest yet**, and that is deliberate: the backend is being
- * built phase by phase, and its `index.ts` lands in the change that removes the last stub
- * (PROJECT.md §9.3 row R5, ai/TESTING.md "A backend under construction registers
- * nothing"). Registering a manifest whose methods are half-written is what forces an
- * exemption that disables the conformance gate for the backends already passing it.
+ * `./index.ts` registers it, which it could only do once every required method of the
+ * contract was real (PROJECT.md §9.3 row R5, ai/TESTING.md "A backend under construction
+ * registers nothing"): registering a manifest whose methods are half-written is what
+ * forces an exemption that disables the conformance gate for the backends already passing
+ * it.
  *
- * Every capability is declared `false` for the same reason: the flags describe what the
- * class in `./backend.ts` answers *today*, not what the platform is capable of. Each one
- * flips in the change that lands the methods behind it — `canReadScreen` in #13,
+ * Every capability is still declared `false`, and that is not the manifest lagging behind
+ * the platform: the flags describe what the class in `./backend.ts` answers *today*. Each
+ * one flips in the change that lands the methods behind it — `canReadScreen` in #13,
  * `canInput` in #12, `canControlNetwork` in #16 — so the manifest is honest at every
  * commit rather than aspirational. A capability declared before its methods exist is
- * exactly the "an agent is told a device can do something it cannot" failure D11 is for.
+ * exactly the "an agent is told a device can do something it cannot" failure D11 is for,
+ * and an honest opt-out is a complete backend rather than an unfinished one.
  */
 
 import type { CapabilityManifestInput } from '../../core/capabilities.js';

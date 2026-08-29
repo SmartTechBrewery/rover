@@ -1,13 +1,12 @@
 /**
  * The device backend for this platform.
  *
- * Under construction: it answers enumeration, presence, the device facts and the app
- * lifecycle, and `screenshot` lands in the phase after this one. So it declares
- * `implements Pick<DeviceBackend, …>` rather than `implements DeviceBackend` — every
- * signature it does answer is checked against the shared contract from day one, while the
- * compiler is never satisfied with a stub standing in for a method nobody has written. A
- * stub written to satisfy `implements` is precisely what the conformance gate exists to
- * catch (ai/TESTING.md), and nothing registers this class until it is whole.
+ * It answers every required method of the contract — enumeration, presence, the device
+ * facts, the app lifecycle and the capture — with no stub, which is what lets it declare
+ * `implements DeviceBackend` and what lets `./index.ts` register it (ai/TESTING.md, "A
+ * backend under construction registers nothing"). The three capability-gated groups are a
+ * declared opt-out in `./capabilities.ts` rather than an omission, and each flips in the
+ * change that lands its methods.
  *
  * Everything that touches the device goes through `./adb.js`, and everything that reads
  * its output goes through `./parsers/`. This file is the join between them and holds no
@@ -26,11 +25,15 @@ import {
 } from '../../core/device.js';
 import { type AppId, type DeviceSerial, parseAppId, unwrap } from '../../core/ids.js';
 import {
+	type AdbBinaryResult,
 	type AdbResult,
+	describeBytes,
 	INSTALL_ADB_TIMEOUT_MS,
 	quoteStream,
 	runAdb,
+	runAdbBinaryOnDevice,
 	runAdbOnDevice,
+	SCREENSHOT_ADB_TIMEOUT_MS,
 	shellArg,
 } from './adb.js';
 import { ANDROID_PLATFORM_ID } from './capabilities.js';
@@ -42,6 +45,7 @@ import {
 } from './parsers/app-control.js';
 import { type AdbDevice, isUsable, parseAdbDevices } from './parsers/devices.js';
 import { parseGetprop } from './parsers/getprop.js';
+import { isPng } from './parsers/screencap.js';
 import { parseWmDensity, parseWmSize } from './parsers/wm.js';
 
 /** The state token adb prints for a device whose authorisation was refused or not granted. */
@@ -131,19 +135,27 @@ function refused(what: string, serial: DeviceSerial, result: AdbResult): Error {
 	);
 }
 
-export class AndroidDeviceBackend
-	implements
-		Pick<
-			DeviceBackend,
-			| 'listDevices'
-			| 'describeDevice'
-			| 'deviceInfo'
-			| 'installApp'
-			| 'launchApp'
-			| 'stopApp'
-			| 'clearAppData'
-		>
-{
+/**
+ * A capture that came back as something other than an image.
+ *
+ * Its own failure rather than {@link refused}'s, because there is no output to quote:
+ * what identifies a mangled stream is its length and its first bytes, and naming them is
+ * what tells "the device sent nothing" apart from "the bytes were decoded on the way here"
+ * without anyone having to reproduce it. Handing the payload back unchecked is the
+ * alternative, and it puts a corrupt image in front of an agent that will read it as the
+ * screen.
+ */
+function notAnImage(serial: DeviceSerial, result: AdbBinaryResult): Error {
+	return new Error(
+		[
+			`screencap on device '${unwrap(serial)}' did not return a PNG`,
+			`stdout: ${describeBytes(result.stdout)}`,
+			`stderr: ${quoteStream(result.stderr)}`,
+		].join('\n'),
+	);
+}
+
+export class AndroidDeviceBackend implements DeviceBackend {
 	async listDevices(): Promise<Device[]> {
 		const result = await runAdb(['devices', '-l']);
 
@@ -276,6 +288,38 @@ export class AndroidDeviceBackend
 		if (!saysSuccess(result.stdout)) {
 			throw refused(`pm clear ${unwrap(appId)}`, serial, result);
 		}
+	}
+
+	/**
+	 * `exec-out screencap -p` — the device's own PNG, as bytes (D19).
+	 *
+	 * **`exec-out`, never `shell`.** `adb shell` may put a pty between the device and this
+	 * process, and a pty translates `\n` to `\r\n`: every 0x0a in the image becomes two
+	 * bytes and the PNG is silently no longer a PNG. It is the same trap as the hierarchy
+	 * dump (PROJECT.md §6), and worse here, because it is conditional — with stdout
+	 * redirected on adb 37.0.1 the translation did **not** reproduce, so a `shell` capture
+	 * can work on the machine it was written on and corrupt every frame on the next one.
+	 * `exec-out` is the unconditional guarantee, and costs nothing.
+	 *
+	 * It is also the one read here that is not a query — 2.4 s on an emulator, measured —
+	 * so it carries {@link SCREENSHOT_ADB_TIMEOUT_MS} rather than the ten seconds the
+	 * device facts get.
+	 *
+	 * Bytes rather than a path on this host, because an artifact crosses the machine
+	 * boundary (D19); the archive of D23 is a separate effect and not this primitive's.
+	 * Whether the image is *black* is deliberately not asked: an app blocking screen capture
+	 * yields a valid all-black PNG (PROJECT.md §6), which is a true answer about the device
+	 * rather than a failed capture, and judging it belongs to whoever knows what was
+	 * supposed to be on screen.
+	 */
+	async screenshot(serial: DeviceSerial): Promise<Uint8Array> {
+		const result = await runAdbBinaryOnDevice(serial, ['exec-out', 'screencap', '-p'], {
+			timeoutMs: SCREENSHOT_ADB_TIMEOUT_MS,
+		});
+
+		if (!isPng(result.stdout)) throw notAnImage(serial, result);
+
+		return result.stdout;
 	}
 
 	/**

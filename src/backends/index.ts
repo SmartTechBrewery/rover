@@ -8,14 +8,17 @@
  * ai/CODING_STANDARDS.md "Module shape for a device backend"). Mirrors Swarm's
  * `src/integrations/entrypoint.ts` (D15).
  *
- * **There are deliberately no imports yet.** The device contract, the capability
- * manifest and the registry ship before any backend does, so the shape is settled before
- * the first implementation is written against it.
+ * The device contract, the capability manifest and the registry shipped before any
+ * backend did, so the shape was settled before the first implementation was written
+ * against it. The first import line below is what ended that: from it on, the conformance
+ * suite (`tests/unit/backends/conformance.test.ts`) has a manifest to run over.
  *
  * This file deliberately does **not** re-export the registry surface: a caller that
  * wants only a lookup must not pull every backend into its module graph. Import
  * `./registry.js` directly for that.
  */
+
+import './android/index.js';
 
 /**
  * Explicit no-op for call sites that want registration to be visible rather than relying

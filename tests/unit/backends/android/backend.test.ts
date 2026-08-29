@@ -1,6 +1,10 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it, vi } from 'vitest';
-import { type AdbResult, INSTALL_ADB_TIMEOUT_MS } from '@/backends/android/adb.js';
+import {
+	type AdbResult,
+	INSTALL_ADB_TIMEOUT_MS,
+	SCREENSHOT_ADB_TIMEOUT_MS,
+} from '@/backends/android/adb.js';
 import { AndroidDeviceBackend } from '@/backends/android/backend.js';
 import { type AppId, InvalidIdError, parseAppId, parseDeviceSerial } from '@/core/ids.js';
 
@@ -12,15 +16,17 @@ import { type AppId, InvalidIdError, parseAppId, parseDeviceSerial } from '@/cor
  */
 type Runner = typeof import('@/backends/android/adb.js');
 
-const { runAdb, runAdbOnDevice } = vi.hoisted(() => ({
+const { runAdb, runAdbOnDevice, runAdbBinaryOnDevice } = vi.hoisted(() => ({
 	runAdb: vi.fn<Runner['runAdb']>(),
 	runAdbOnDevice: vi.fn<Runner['runAdbOnDevice']>(),
+	runAdbBinaryOnDevice: vi.fn<Runner['runAdbBinaryOnDevice']>(),
 }));
 
 vi.mock('@/backends/android/adb.js', async (importOriginal) => ({
 	...(await importOriginal<Runner>()),
 	runAdb,
 	runAdbOnDevice,
+	runAdbBinaryOnDevice,
 }));
 
 const fixture = (name: string): string =>
@@ -591,5 +597,102 @@ describe('no app verb swallows a failure', () => {
 		runAdbOnDevice.mockResolvedValue(reply);
 
 		await expect(call()).rejects.toThrow();
+	});
+});
+
+/**
+ * The capture. There is no fixture for it — a PNG is not text and pinning one would
+ * pin the emulator that produced it, not the join — so what is asserted here is the argv,
+ * the pin, that the bytes arrive unaltered, and that a payload which is not an image is
+ * refused rather than handed on. `tests/device/android/screenshot.test.ts` is the half
+ * that proves a real device answers this recipe at all.
+ */
+const PNG_HEAD = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+const CAPTURE = Buffer.concat([
+	PNG_HEAD,
+	Buffer.from([0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52]),
+]);
+
+function captures(stdout: Buffer, stderr = ''): void {
+	runAdbBinaryOnDevice.mockResolvedValue({ stdout, stderr });
+}
+
+describe('screenshot', () => {
+	it('captures with exec-out, pinned to the device, and returns the bytes untouched', async () => {
+		captures(CAPTURE);
+
+		const bytes = await backend.screenshot(SERIAL);
+
+		expect(Buffer.from(bytes).equals(CAPTURE)).toBe(true);
+		expect(runAdbBinaryOnDevice.mock.calls[0][0]).toBe(SERIAL);
+		expect(runAdbBinaryOnDevice.mock.calls[0][1]).toEqual(['exec-out', 'screencap', '-p']);
+	});
+
+	// A capture measured 2.4 s on an emulator, against milliseconds for every other query
+	// here, so it gets its own budget rather than the ten seconds a query is given.
+	it('gives the capture its own timeout rather than the query budget', async () => {
+		captures(CAPTURE);
+
+		await backend.screenshot(SERIAL);
+
+		expect(runAdbBinaryOnDevice.mock.calls[0][2]).toEqual({
+			timeoutMs: SCREENSHOT_ADB_TIMEOUT_MS,
+		});
+	});
+
+	/**
+	 * The acceptance criterion, as an assertion about which runner was used: `adb shell`
+	 * may put a pty between the device and this process, and a pty translates every 0x0a in
+	 * the image into 0x0d 0x0a. Going through the text runner would also decode the result
+	 * as UTF-8, which loses the bytes outright.
+	 */
+	it('never captures through a runner that would decode or translate the stream', async () => {
+		captures(CAPTURE);
+
+		await backend.screenshot(SERIAL);
+
+		expect(runAdbOnDevice).not.toHaveBeenCalled();
+		expect(runAdb).not.toHaveBeenCalled();
+	});
+
+	// Exactly what a pty hands back, byte for byte: the 0x0a inside the signature became
+	// 0x0d 0x0a. Nothing downstream can tell that from a PNG without reading these bytes.
+	it('throws, naming the first bytes, when the stream was translated into text', async () => {
+		captures(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0d, 0x0a, 0x1a, 0x0d, 0x0a]));
+
+		const failure = backend.screenshot(SERIAL);
+
+		await expect(failure).rejects.toThrow(/did not return a PNG/);
+		await expect(failure).rejects.toThrow(/89 50 4e 47 0d 0d 0a 1a/);
+		await expect(failure).rejects.toThrow(/emulator-5554/);
+	});
+
+	// adb exits 0 having captured nothing more often than is comfortable, and an empty
+	// buffer handed on is an agent looking at a zero-byte image.
+	it('throws when the device answered with no bytes at all, quoting stderr', async () => {
+		captures(Buffer.alloc(0), 'capture failed\n');
+
+		const failure = backend.screenshot(SERIAL);
+
+		await expect(failure).rejects.toThrow(/stdout: \(empty\)/);
+		await expect(failure).rejects.toThrow(/capture failed/);
+	});
+
+	/**
+	 * The deliberate non-check (PROJECT.md §6): an app blocking screen capture yields a
+	 * valid, entirely black PNG. That is a true answer about the device, and this layer
+	 * returning it is what lets the caller — who knows what was meant to be on screen —
+	 * decide (#13 owns that check).
+	 */
+	it('returns a valid PNG without judging what it depicts', async () => {
+		captures(Buffer.concat([PNG_HEAD, Buffer.alloc(4096)]));
+
+		await expect(backend.screenshot(SERIAL)).resolves.toHaveLength(4104);
+	});
+
+	it('lets a failed run surface as the runner reported it', async () => {
+		runAdbBinaryOnDevice.mockRejectedValue(new Error("device 'emulator-5554' not found"));
+
+		await expect(backend.screenshot(SERIAL)).rejects.toThrow("device 'emulator-5554' not found");
 	});
 });

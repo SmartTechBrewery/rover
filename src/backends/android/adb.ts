@@ -38,6 +38,20 @@ export const DEFAULT_ADB_TIMEOUT_MS = 10_000;
 export const INSTALL_ADB_TIMEOUT_MS = 5 * 60_000;
 
 /**
+ * The other call that is not a query. A capture is an encode of the whole framebuffer on
+ * the device and a transfer of the result: three runs against an API 37 emulator on a
+ * fast host each took **2.4 s** for a 1080×2424 screen (PROJECT.md §6), which is two
+ * orders of magnitude above every other verb here and already a quarter of the default
+ * budget. A physical device with a taller panel, over USB, under load, is the case that
+ * would spend the rest of it — and a capture that times out reads to the caller as a
+ * broken device rather than as a budget set too low.
+ *
+ * Generous rather than tuned, for the same reason as the install above: it exists to stop
+ * a wedged `adb` holding a lease forever, not to bound a slow but healthy capture.
+ */
+export const SCREENSHOT_ADB_TIMEOUT_MS = 30_000;
+
+/**
  * `adb shell getprop` returned ~23 KB on an API 37 emulator, and Node's default
  * `maxBuffer` is 1 MB — close enough that a chattier device would truncate the answer
  * into an `ERR_CHILD_PROCESS_STDIO_MAXBUFFER` failure that reads like the device is
@@ -45,9 +59,32 @@ export const INSTALL_ADB_TIMEOUT_MS = 5 * 60_000;
  */
 export const ADB_MAX_BUFFER_BYTES = 8 * 1024 * 1024;
 
+/**
+ * The same headroom for a capture, which is not text and is an order of magnitude
+ * larger. A 1080×2424 screen came back as 1.3 MB of PNG from an API 37 emulator
+ * (PROJECT.md §6) — already past Node's 1 MB default, and a busier screen on a taller
+ * panel is several times that, because a PNG of real content compresses nothing like a
+ * PNG of a flat one. An overflow is not a graceful truncation either: the child is killed
+ * and the answer is lost, so the number is set well clear of the largest plausible frame
+ * rather than close to the measured one.
+ */
+export const ADB_BINARY_MAX_BUFFER_BYTES = 64 * 1024 * 1024;
+
 /** The two streams of a successful run, kept separate — see {@link AdbCommandError}. */
 export interface AdbResult {
 	readonly stdout: string;
+	readonly stderr: string;
+}
+
+/**
+ * The two streams of a successful **binary** run.
+ *
+ * `stdout` stays bytes all the way to the caller; `stderr` is decoded, because adb's own
+ * half of the conversation — the daemon banner, `device '…' not found` — is text on every
+ * call regardless of what the device sent back.
+ */
+export interface AdbBinaryResult {
+	readonly stdout: Buffer;
 	readonly stderr: string;
 }
 
@@ -134,6 +171,26 @@ export function quoteStream(stream: string): string {
 }
 
 /**
+ * A binary stream, rendered for a message a human will read.
+ *
+ * The counterpart of {@link quoteStream} for the runner below, and exported for the same
+ * reason: the failures adb reports *while exiting 0* are caught a layer up in
+ * `./backend.ts`, and the two messages get read side by side. Quoting the payload itself
+ * is not an option — it is megabytes and it is not text — so what is quoted is the two
+ * facts that identify it: how much came back, and what it starts with. The leading bytes
+ * are the useful half, because a capture that arrived as a text stream, an error page or
+ * nothing at all is told apart by exactly those.
+ */
+export function describeBytes(bytes: Buffer): string {
+	if (bytes.length === 0) return '(empty)';
+	const head = bytes
+		.subarray(0, 8)
+		.toString('hex')
+		.replace(/(..)(?=.)/g, '$1 ');
+	return `(${bytes.length} bytes, starting ${head})`;
+}
+
+/**
  * One argument of a device-side `adb shell` command, quoted for the shell **on the
  * device**.
  *
@@ -204,4 +261,43 @@ export async function runAdbOnDevice(
 	options: RunAdbOptions = {},
 ): Promise<AdbResult> {
 	return runAdb(['-s', unwrap(serial), ...args], options);
+}
+
+/**
+ * The binary counterpart of {@link runAdbOnDevice}: bytes out, never decoded.
+ *
+ * A separate function rather than an option on the text runner, so that no caller can
+ * decode a capture as UTF-8 by forgetting to pass a flag. That failure is silent — the
+ * replacement characters look like a corrupt device rather than a corrupt read — and it
+ * is unrecoverable, because the bytes are gone by the time anyone notices.
+ *
+ * Only pinned to a device: everything that produces bytes is a capture off one screen,
+ * and an unpinned one is a screenshot of somebody else's device (PROJECT.md §2).
+ */
+export async function runAdbBinaryOnDevice(
+	serial: DeviceSerial,
+	args: readonly string[],
+	options: RunAdbOptions = {},
+): Promise<AdbBinaryResult> {
+	const argv = ['-s', unwrap(serial), ...args];
+	const timeoutMs = options.timeoutMs ?? DEFAULT_ADB_TIMEOUT_MS;
+
+	return new Promise<AdbBinaryResult>((resolve, reject) => {
+		execFile(
+			ADB,
+			argv,
+			{ timeout: timeoutMs, maxBuffer: ADB_BINARY_MAX_BUFFER_BYTES, encoding: 'buffer' },
+			(error, stdout, stderr) => {
+				const message = stderr.toString('utf8');
+				if (error === null) {
+					resolve({ stdout, stderr: message });
+					return;
+				}
+				// The error carries a *description* of stdout rather than stdout: there is no
+				// text to quote, and pasting a megabyte of PNG into a message corrupts the
+				// terminal reading it.
+				reject(new AdbCommandError(argv, timeoutMs, error, describeBytes(stdout), message));
+			},
+		);
+	});
 }

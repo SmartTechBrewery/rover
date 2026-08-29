@@ -305,6 +305,29 @@ rather than what comes out of one:
   `INSTALL_FAILED_TEST_ONLY: … Did you forget to add -t?` (exit 1) — the flag is not one the
   primitive passes, so a test-only APK is a caller's problem to know about.
 
+Checked on the same API 37 emulator (`sdk_gphone16k_arm64`, 1080×2424) with `adb` 37.0.1 and
+`platform-tools` on macOS, 2026-08-29, while building `screenshot` (#38):
+
+- **The verified capture recipe is `adb -s "$SERIAL" exec-out screencap -p`**, and what comes back
+  is a PNG the device encoded — 1 331 469 bytes for that screen, `89 50 4e 47 0d 0a 1a 0a` /
+  `IHDR 1080×2424 RGBA`. Two consequences for the caller: it is **past Node's 1 MB default
+  `maxBuffer`** already, on a modest screen, and `execFile` answers an overflow by killing the
+  child, so a capture path that does not raise the limit loses the frame and reports it as a
+  process failure. And it costs **2.4 s** (three runs: 2.42, 2.39, 2.30) where every other query
+  here is milliseconds, which is a timeout worth setting deliberately rather than inheriting.
+- **`adb shell screencap -p` did *not* corrupt the stream on this adb** — byte-identical to the
+  `exec-out` capture, with stdout redirected to a file. Neither did `adb shell cat` of a hierarchy
+  dump, which §6 above records as corrupting. Both findings stand: the `\n` → `\r\n` translation
+  happens when adb allocates a pty, which it decides from the call rather than from the payload, so
+  it is **conditional on the adb version, the platform and whether stdin is a terminal**. That is
+  the worst possible shape for a bug — it works on the machine it was written on and corrupts every
+  frame on someone else's — and it is why the recipe stays `exec-out`, which never allocates one.
+  Cheap insurance, and the check that catches it if it is ever traded away is the PNG signature.
+- **A screenshot is the one verb whose output cannot be judged by looking at it**, so the assertion
+  that says the bytes are a picture of *this* device is the IHDR size against `wm size` — compared
+  as an unordered pair, because the capture follows the current rotation while `wm size` reports
+  the panel.
+
 Not device findings, but the same kind of trap — observed on macOS 25.6 / Node 25.2 while building
 the daemon's unix socket transport (R6), 2026-08-29:
 
