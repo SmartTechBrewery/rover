@@ -45,7 +45,7 @@ export const NO_SLEEP_PAUSE_CALLERS: readonly string[] = [
 	// The drain gap, between two sweeps for a daemon that reappeared.
 	'tests/helpers/daemon-socket.ts',
 	// `pause(0)` as an event-loop yield, not a duration.
-	'tests/unit/daemon/restore-lifecycle.test.ts',
+	'tests/helpers/timing.ts',
 	// Exercises `pause` itself.
 	'tests/unit/core/wait.test.ts',
 ];

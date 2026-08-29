@@ -63,11 +63,12 @@ lends what is physically attached to it (D18).
 
 1. The agent's client connects to a host — the local socket, or a configured remote host.
 2. The agent asks for a device with certain properties (platform, optionally a specific model).
-3. The host checks adb for what is free, grants a **lease**, and returns a device handle along with
-   the list of what may be done on it. The handle is the device serial — there is exactly one host,
-   so nothing else needs naming (D18).
-4. The agent calls verbs, passing that handle. The host executes them; the client receives the
-   result and the artifacts. Every call pushes the lease expiry out.
+3. The host checks adb for what is free, grants a **lease**, and returns the lease id along with
+   the device it is on and the list of what may be done on it.
+4. The agent calls verbs, passing that lease id — the credential (D20), and the only handle a verb
+   call carries; the host derives the serial from it, so the holder of one device cannot address
+   another. The host executes them; the client receives the result and the artifacts. Every call
+   pushes the lease expiry out.
 5. The agent releases the device. The host restores its original state.
 6. If the agent dies, loses the network, or simply never releases — the lease expires after 20
    minutes of inactivity and the host cleans up the same way. A dropped connection is not a

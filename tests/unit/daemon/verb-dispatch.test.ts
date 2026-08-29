@@ -44,6 +44,7 @@ import {
 	createMockDeviceInfo,
 	createMockScreenElement,
 } from '../../helpers/factories.js';
+import { createGate, drainEventLoop } from '../../helpers/timing.js';
 
 const SERIAL = parseDeviceSerial('attached-1');
 const attached = createMockDevice({ serial: SERIAL });
@@ -411,5 +412,84 @@ describe('the boundary parses what the type already forbids', () => {
 
 		expect(thrown).toBeInstanceOf(IpcRequestError);
 		expect((thrown as IpcRequestError).code).toBe('invalid_params');
+	});
+});
+
+describe('a verb never outlives the lease that authorised it', () => {
+	it('stops one whose lease was released, and answers the ex-holder rather than the device', async () => {
+		const read = createGate();
+		await serve({
+			readScreen: async () => {
+				reads += 1;
+				read.reach();
+				return [save];
+			},
+		});
+		const client = await connect();
+		const leaseId = await acquire(client);
+
+		// Not awaited, and that is the scenario: the server dispatches a frame without waiting
+		// for the verb, so the release below is answered while this is still polling.
+		const verb = client.request('wait_for', { leaseId, target: ABSENT, timeoutMs: 5_000 });
+		// Waited on the condition rather than on a duration: the verb is provably driving.
+		await read.reached;
+
+		await client.request('release_device', { leaseId });
+
+		const answer = await verb;
+		// The same refusal an unknown lease id gets — no verb result exists — with a message
+		// that says the call was stopped part-way rather than never started.
+		expect(answer).toMatchObject({ outcome: 'refused', reason: 'no-lease' });
+		expect(answer).toMatchObject({
+			message: expect.stringContaining('ended while this call was still running'),
+		});
+
+		// The point of the whole exercise: the reads stop. Everything scheduled has run, so a
+		// verb still polling would have polled again by now.
+		const readsWhenStopped = reads;
+		await drainEventLoop();
+		expect(reads).toBe(readsWhenStopped);
+	});
+
+	it('does not re-lend the device while the previous holder is still inside a device call', async () => {
+		const read = createGate();
+		const held = createGate();
+		await serve({
+			readScreen: async () => {
+				reads += 1;
+				read.reach();
+				// Suspends the verb *inside* a backend call, where nothing can revoke it: this is
+				// the half revocation cannot cover, and the half `settle` exists for.
+				await held.reached;
+				return [save];
+			},
+		});
+		const holder = await connect();
+		const leaseId = await acquire(holder);
+
+		const verb = holder.request('wait_for', { leaseId, target: ABSENT, timeoutMs: 5_000 });
+		await read.reached;
+		await holder.request('release_device', { leaseId });
+
+		// A second agent, on its own connection, asking for the device the first one just gave
+		// back — the sequence a caller reaches by simply retrying after a timeout.
+		const other = await connect();
+		let answered = false;
+		const grant = other
+			.request('acquire_device', { serial: SERIAL, owner: 'pr-127-review', project: 'rover' })
+			.then((outcome) => {
+				answered = true;
+				return outcome;
+			});
+
+		await drainEventLoop();
+		// Nothing else is left to run, so this is "the host has not answered", not "not yet".
+		expect(answered).toBe(false);
+
+		held.reach();
+		expect(await verb).toMatchObject({ outcome: 'refused', reason: 'no-lease' });
+		// And only then. The grant was queued behind the ex-holder's call, so the two agents
+		// never had the device at once (PROJECT.md §2).
+		expect(await grant).toMatchObject({ outcome: 'granted' });
 	});
 });

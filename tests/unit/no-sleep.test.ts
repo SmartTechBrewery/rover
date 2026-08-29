@@ -76,7 +76,7 @@ describe('nothing in this repository sleeps', () => {
 			'src/daemon/connect.ts',
 			'src/daemon/listen.ts',
 			'tests/helpers/daemon-socket.ts',
-			'tests/unit/daemon/restore-lifecycle.test.ts',
+			'tests/helpers/timing.ts',
 			'tests/unit/core/wait.test.ts',
 		]);
 	});

@@ -21,6 +21,16 @@
  * would surface as a backend exception — an `internal_error`, i.e. "the host broke", for
  * something that is an ordinary answer with a name.
  *
+ * **A verb never outlives the lease that authorised it.** Renewal on arrival keeps a lease
+ * from expiring *because* a verb is slow; it does nothing about a lease that ends for its
+ * own reasons — a `release_device` on the same connection, which the server dispatches
+ * without waiting for the verb to finish. So the whole call runs registered with
+ * `./verb-traffic.ts`, which revokes the backend the moment the lease ends: the next device
+ * call throws {@link LeaseEndedError}, this answers `refused` / `no-lease`, and the
+ * restoration that lease started waits for the call to unwind before touching the device.
+ * Every further verb family inherits that by being run through {@link runVerb} — there is
+ * nothing here for a verb author to remember, which is the point.
+ *
  * **None of `./lease-handlers.ts`'s await-ordering constraint applies here**, and that is
  * worth saying so nobody copies a rule that does not hold: nothing in this file takes
  * anything exclusive. The lease is already held, and holding it is what makes this call
@@ -33,6 +43,7 @@
  */
 
 import { requireDeviceBackend } from '../backends/registry.js';
+import type { Device } from '../core/device.js';
 import type { LeaseId } from '../core/ids.js';
 import type {
 	IpcHandlers,
@@ -46,34 +57,61 @@ import type { ActionResult } from '../verbs/result.js';
 import { type WaitVerbOptions, waitFor, waitUntilGone } from '../verbs/wait-for.js';
 import type { DeviceInventory } from './inventory.js';
 import { refusalReasonFor } from './lease-handlers.js';
-import type { LeaseStore } from './leases.js';
+import type { Lease, LeaseStore } from './leases.js';
+import { LeaseEndedError, type VerbCall, type VerbTraffic } from './verb-traffic.js';
 
 export type VerbHandlers = Pick<IpcHandlers, 'wait_for' | 'wait_until_gone'>;
 
-export function createVerbHandlers(inventory: DeviceInventory, leases: LeaseStore): VerbHandlers {
+/**
+ * What the preamble reached: a verb that can run, or the answer the call already has.
+ *
+ * Two shapes rather than a nullable context, so a refusal cannot be mistaken for "nothing
+ * went wrong" by whoever reads it next.
+ */
+type Prepared = { readonly context: VerbContext } | { readonly refusal: VerbCallResult };
+
+export function createVerbHandlers(
+	inventory: DeviceInventory,
+	leases: LeaseStore,
+	traffic: VerbTraffic,
+): VerbHandlers {
 	/**
-	 * The preamble every verb call shares: renew, re-verify, resolve the backend, run.
+	 * The preamble every verb call shares: renew, register, re-verify, resolve the backend, run.
 	 *
 	 * `run` is handed a context and nothing else, which is the verb layer's contract — it
 	 * never looks a device up and never learns that leases exist.
 	 */
-	async function runVerb(
+	function runVerb(
 		leaseId: LeaseId,
 		run: (context: VerbContext) => Promise<ActionResult>,
 	): Promise<VerbCallResult> {
 		// First, and before any await: this is the renewal (D8).
 		const lease = leases.use(leaseId);
 		if (!lease) {
-			return {
+			return Promise.resolve({
 				outcome: 'refused',
 				reason: 'no-lease',
 				message:
 					'That lease id is not live on this host — it was never granted, it was already ' +
 					'released, or it expired. Acquire the device again to get a new one.',
-			};
+			});
 		}
 
-		let device: Awaited<ReturnType<DeviceInventory['verifyForGrant']>>;
+		// Registered before the re-verification, because that is an await like any other: a call
+		// registered after it would leave a window in which the lease ends, finds nothing to
+		// revoke, and the verb starts driving a device the host has already handed on.
+		return traffic.run(lease, async (call) => {
+			const prepared = await prepare(lease, call);
+			return 'refusal' in prepared ? prepared.refusal : answer(prepared.context, run);
+		});
+	}
+
+	/**
+	 * Everything between a live lease and a running verb: the device as it is *now* (D6), the
+	 * backend that owns it, and the guard that ties the two to this call.
+	 */
+	async function prepare(lease: Lease, call: VerbCall): Promise<Prepared> {
+		let device: Device;
 		try {
 			device = await inventory.verifyForGrant(lease.serial);
 		} catch (error) {
@@ -81,16 +119,18 @@ export function createVerbHandlers(inventory: DeviceInventory, leases: LeaseStor
 			if (!reason) {
 				throw error;
 			}
-			return { outcome: 'refused', reason, message: messageOf(error) };
+			return { refusal: { outcome: 'refused', reason, message: messageOf(error) } };
 		}
 
 		if (device.state !== 'ready') {
 			return {
-				outcome: 'refused',
-				reason: 'not-ready',
-				message:
-					`Device '${device.serial}' is attached to this host but its state is ` +
-					`'${device.state}', so no verb could run on it`,
+				refusal: {
+					outcome: 'refused',
+					reason: 'not-ready',
+					message:
+						`Device '${device.serial}' is attached to this host but its state is ` +
+						`'${device.state}', so no verb could run on it`,
+				},
 			};
 		}
 
@@ -98,19 +138,9 @@ export function createVerbHandlers(inventory: DeviceInventory, leases: LeaseStor
 		// own enumeration, so a miss is the barrel missing an import line rather than anything
 		// the caller did (`src/backends/registry.ts`). That is a host failure and travels as one.
 		const { manifest, backend } = requireDeviceBackend(device.platform);
-		const context: VerbContext = { serial: device.serial, backend, manifest };
-
-		try {
-			return { outcome: 'ok', result: await run(context) };
-		} catch (error) {
-			const failure = toVerbFailure(error);
-			if (!failure) {
-				// Not something a verb answers with. It is the host breaking, and dressing it up as
-				// an answer about the device would send the agent looking in the wrong place.
-				throw error;
-			}
-			return { outcome: 'failed', failure };
-		}
+		// The one place the guard is applied. The verb receives a backend like any other, and it
+		// stops being able to reach the device the moment this lease ends.
+		return { context: { serial: device.serial, backend: call.guard(backend), manifest } };
 	}
 
 	return {
@@ -126,6 +156,37 @@ export function createVerbHandlers(inventory: DeviceInventory, leases: LeaseStor
 			);
 		},
 	};
+}
+
+/**
+ * Run the verb, and turn what comes back into one of the answers that mean it ran — or into
+ * the one refusal that can arrive after a verb has already started.
+ */
+async function answer(
+	context: VerbContext,
+	run: (context: VerbContext) => Promise<ActionResult>,
+): Promise<VerbCallResult> {
+	try {
+		return { outcome: 'ok', result: await run(context) };
+	} catch (error) {
+		if (error instanceof LeaseEndedError) {
+			// The verb was running and the device stopped being this call's to drive part-way
+			// through (`./verb-traffic.ts`). No verb result exists, so this is the same `no-lease`
+			// refusal an unknown id gets — with a message that says which of the two happened.
+			return {
+				outcome: 'refused',
+				reason: 'no-lease',
+				message: `${error.message}. Acquire the device again to get a new one.`,
+			};
+		}
+		const failure = toVerbFailure(error);
+		if (!failure) {
+			// Not something a verb answers with. It is the host breaking, and dressing it up as an
+			// answer about the device would send the agent looking in the wrong place.
+			throw error;
+		}
+		return { outcome: 'failed', failure };
+	}
 }
 
 /**

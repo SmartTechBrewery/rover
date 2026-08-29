@@ -195,9 +195,18 @@ the process with a registry.
   fields, so a client can print one line or branch on a `kind`. `refused` means no verb ran at all:
   `no-lease`, `gone`, `not-attached`, `not-ready`. Anything outside those three throws and arrives
   as `internal_error`, which keeps that code meaning "the host broke".
-- **A shared preamble, one row per verb.** `createVerbHandlers` does the renew / re-verify / resolve
-  work once, so each further verb family is one `IPC_METHODS` row and one `runVerb` call rather than
-  another copy of it. That is why this row landed before the verb families.
+- **A verb never outlives the lease that authorised it.** A release the server did not wait for, or
+  an expiry the sweep observes, can land while a verb is still polling the device. So the whole call
+  is registered with `src/daemon/verb-traffic.ts` for as long as it runs: the lease's end revokes the
+  backend that call was handed, its next device call throws, and the answer is `refused` /
+  `no-lease`. Revocation cannot stop a round trip already issued, so there is a second half — the
+  restoration a lease's end starts waits for those calls to unwind first, and `acquire_device`
+  inherits that wait through `DeviceRestorer.settle`. Without both, the host itself becomes the
+  second driver of a device it has already lent to somebody else.
+- **A shared preamble, one row per verb.** `createVerbHandlers` does the renew / register /
+  re-verify / resolve work once, so each further verb family is one `IPC_METHODS` row and one
+  `runVerb` call rather than another copy of it — and inherits the rule above by construction rather
+  than by remembering it. That is why this row landed before the verb families.
 
 ---
 

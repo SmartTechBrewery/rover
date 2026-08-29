@@ -31,6 +31,7 @@ import { attemptConnect } from './socket-connect.js';
 import { assertValidSocketPath } from './socket-path.js';
 import { handleStatus } from './status.js';
 import { createVerbHandlers } from './verb-handlers.js';
+import { createVerbTraffic, type VerbTraffic } from './verb-traffic.js';
 
 /**
  * How long the stale-socket probe waits for a connection before giving up. A daemon that
@@ -122,12 +123,13 @@ export function createDaemonHandlers(
 	inventory: DeviceInventory,
 	leases: LeaseStore,
 	restorer: DeviceRestorer,
+	traffic: VerbTraffic,
 ): IpcHandlers {
 	return {
 		status: handleStatus,
 		...createListDevicesHandler(inventory, leases),
 		...createLeaseHandlers(inventory, leases, restorer),
-		...createVerbHandlers(inventory, leases),
+		...createVerbHandlers(inventory, leases, traffic),
 	};
 }
 
@@ -148,10 +150,18 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartRes
 	// child processes — running with nobody holding a handle on them. Construction subscribes
 	// to nothing, so a loser that never starts it has spawned nothing to clean up.
 	const inventory = createDeviceInventory();
+	// The register of what is driving a device right now. Constructed before both of the
+	// below, because both consult it: a restoration waits for the ending lease's verbs, and
+	// the store's end hook revokes the device from them. It holds nothing until a verb call
+	// arrives, so a loser of the bind leaves nothing behind here either.
+	const traffic = createVerbTraffic();
 	// Constructed before the store, because the store's end hook calls into it. It starts
 	// nothing either: a restoration only ever begins when a lease ends, and a process that
 	// never granted one has nothing to undo.
-	const restorer = createDeviceRestorer({ inventory });
+	const restorer = createDeviceRestorer({
+		inventory,
+		settleTraffic: (serial) => traffic.settle(serial),
+	});
 	// Built here for the same reason and with the same lifecycle: one store per process,
 	// constructed once for both bind attempts. It starts nothing, so a loser leaves nothing
 	// behind, and a lease is host state that dies with the host by design (D6) — nothing
@@ -160,13 +170,22 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartRes
 	// The hook is where D9 is wired: `forget` is the one place a lease ends, so a release and
 	// an expiry reach the restorer by the same path and a caller can neither ask for this nor
 	// opt out of it.
+	//
+	// Both halves of a lease's end are here, in that order: the device is taken away from
+	// whatever verb is still running under this lease *first* — a release the server did not
+	// wait for is exactly how a verb outlives its lease — and the restoration is queued
+	// second, where it waits for those calls to unwind before undoing anything. Both are
+	// synchronous and neither throws, which is what this hook requires (`./leases.ts`).
 	const leases = createLeaseStore({
 		...(options.leaseTtlMs === undefined ? {} : { ttlMs: options.leaseTtlMs }),
-		onLeaseEnded: (lease, reason) => restorer.restore(lease, reason),
+		onLeaseEnded: (lease, reason) => {
+			traffic.stop(lease);
+			restorer.restore(lease, reason);
+		},
 	});
 	const sweepIntervalMs = options.sweepIntervalMs ?? LEASE_SWEEP_INTERVAL_MS;
 
-	const first = await listenOnce(socketPath, inventory, leases, restorer);
+	const first = await listenOnce(socketPath, inventory, leases, restorer, traffic);
 	if (first.listening) {
 		return running(first, socketPath, inventory, leases, restorer, sweepIntervalMs);
 	}
@@ -174,7 +193,7 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartRes
 		throw first.error;
 	}
 
-	return reclaimAndRetry(socketPath, inventory, leases, restorer, sweepIntervalMs);
+	return reclaimAndRetry(socketPath, inventory, leases, restorer, traffic, sweepIntervalMs);
 }
 
 /**
@@ -194,6 +213,7 @@ async function reclaimAndRetry(
 	inventory: DeviceInventory,
 	leases: LeaseStore,
 	restorer: DeviceRestorer,
+	traffic: VerbTraffic,
 	sweepIntervalMs: number,
 ): Promise<StartResult> {
 	// Cheap check before queueing for the lock: a daemon that is simply already running is
@@ -208,7 +228,7 @@ async function reclaimAndRetry(
 			return { started: false };
 		}
 
-		const second = await listenOnce(socketPath, inventory, leases, restorer);
+		const second = await listenOnce(socketPath, inventory, leases, restorer, traffic);
 		if (second.listening) {
 			return running(second, socketPath, inventory, leases, restorer, sweepIntervalMs);
 		}
@@ -407,8 +427,9 @@ function listenOnce(
 	inventory: DeviceInventory,
 	leases: LeaseStore,
 	restorer: DeviceRestorer,
+	traffic: VerbTraffic,
 ): Promise<ListenSucceeded | ListenFailed> {
-	const ipcServer = createIpcServer(createDaemonHandlers(inventory, leases, restorer));
+	const ipcServer = createIpcServer(createDaemonHandlers(inventory, leases, restorer, traffic));
 	const connections = new Set<Socket>();
 	let closing = false;
 	const server = createServer((socket: Socket) => {
