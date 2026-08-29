@@ -24,6 +24,20 @@ const ADB = 'adb';
 export const DEFAULT_ADB_TIMEOUT_MS = 10_000;
 
 /**
+ * The one call that is nothing like a query: `install` streams the whole package across
+ * the link and then waits for the platform to verify and optimise it, and neither half is
+ * bounded by anything this side controls. The 45 MB APK used to check the recipe crossed
+ * an emulator's loopback in 0.16 s; the same file over USB to a physical phone is two
+ * orders of magnitude slower before dexopt has started. So this is deliberately generous
+ * rather than tuned — it exists to stop a wedged `adb` holding a lease forever, not to
+ * bound a slow but healthy install.
+ *
+ * Named and passed at the call site rather than raised as the default: every other verb
+ * here is a query, and ten seconds is the right answer for those.
+ */
+export const INSTALL_ADB_TIMEOUT_MS = 5 * 60_000;
+
+/**
  * `adb shell getprop` returned ~23 KB on an API 37 emulator, and Node's default
  * `maxBuffer` is 1 MB — close enough that a chattier device would truncate the answer
  * into an `ERR_CHILD_PROCESS_STDIO_MAXBUFFER` failure that reads like the device is
@@ -76,8 +90,8 @@ export class AdbCommandError extends Error {
 		super(
 			[
 				`${ADB} ${argv.join(' ')} ${outcome({ error, exitCode, signal, timedOut, timeoutMs })}`,
-				`stdout: ${quote(stdout)}`,
-				`stderr: ${quote(stderr)}`,
+				`stdout: ${quoteStream(stdout)}`,
+				`stderr: ${quoteStream(stderr)}`,
 			].join('\n'),
 		);
 
@@ -106,7 +120,15 @@ function outcome(failure: {
 	return `failed to run: ${failure.error.message}`;
 }
 
-function quote(stream: string): string {
+/**
+ * One captured stream, ready to be read inside an error message.
+ *
+ * Exported because {@link AdbCommandError} is not the only failure worth quoting: the
+ * failures adb reports *while exiting 0* are caught a layer up in `./backend.ts`, and the
+ * two messages get read side by side. One definition so they never disagree about what an
+ * empty stream looks like.
+ */
+export function quoteStream(stream: string): string {
 	const text = stream.trimEnd();
 	return text.length === 0 ? '(empty)' : text;
 }

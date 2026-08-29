@@ -223,6 +223,51 @@ capturing `tests/fixtures/adb/`:
   this rectangle and a clamped one is a rectangle the device never described. Whether a node is on
   screen is the caller's question, and the sign is the evidence it needs to answer.
 
+Checked on the same API 37 emulator (`sdk_gphone16k_arm64`) with `adb` 37.0.1, 2026-08-29, while
+building the app-control primitives (#37). Every one of the four verbs reports at least one failure
+in a way its exit code does not:
+
+- **`adb install` does not print `Success` on its own.** A successful `adb -s $S install -r <apk>`
+  prints four lines — `Serving...`, `Performing Incremental Install`, `Success`,
+  `Install command complete in 49 ms` — and writes `All files should be loaded. Notifying the
+  device.` **to stderr on the success path**. So `stdout.trim() === 'Success'` rejects an install
+  that worked, and so does "stderr must be empty". The assertion is a `Success` *line*.
+- **`adb install` failures are `Failure [INSTALL_…]` on stderr** on this adb, with exit 1 —
+  `INSTALL_PARSE_FAILED_NOT_APK` for a file that is not an APK, `INSTALL_FAILED_TEST_ONLY` for a
+  debug build without `-t`, `INSTALL_FAILED_UPDATE_INCOMPATIBLE` for a signature mismatch. The
+  exit-0-with-`Failure`-on-stdout shape every guide of the era describes was not reproduced here,
+  which is exactly why the check reads the output rather than the exit code: the two shapes cost
+  the same to handle and only one of them is silent.
+- **`cmd package resolve-activity --brief <pkg>` is not brief.** It prints
+  `priority=0 preferredOrder=0 match=0x108000 specificIndex=-1 isDefault=true` *above* the
+  component, so the answer is the **last** line. It answers `No activity found` on stdout with
+  **exit 0** both for a package that is not installed and for one that is installed with nothing
+  launchable — indistinguishable, and neither is a component name. Adding
+  `-c android.intent.category.LAUNCHER` changed the answer for none of the six packages tried, and
+  no package resolved to `android/…ResolverActivity` instead of failing.
+- **`am start -n <component>` prints `Starting: Intent {…}` before anything can have gone wrong**,
+  so that line alone is not evidence of a launch. A component that does not exist adds
+  `Error type 3` / `Error: Activity class {…} does not exist.` — on **stderr**, exit 1 — and one
+  that is not exported adds a `java.lang.SecurityException: Permission Denial` stack trace under
+  `Exception occurred while executing 'start':`, exit 255. `Warning: Activity not started, intent
+  has been delivered to currently running top-most instance.` is the opposite: the app was already
+  on top, which is a launch that succeeded.
+- **`monkey -p <pkg> -c android.intent.category.LAUNCHER 1` is the worse recipe, measured.** It
+  answers a package with no launchable activity and a package that is not installed with the *same*
+  `** No activities found to run, monkey aborted.` line, never names the component it started, and
+  echoes its own argv on both streams around the answer. `resolve-activity` then `am start -n` is
+  two calls and tells you which of the two went wrong.
+- **`am force-stop` has no success wording at all — and no failure wording either.** A force-stop
+  that worked prints **zero bytes** on both streams and exits 0; `am force-stop
+  com.rover.no.such.package` prints zero bytes on both streams and exits 0 as well. So this verb
+  cannot distinguish "stopped it" from "there was nothing by that name", and a typo in an app id is
+  a silent no-op at the primitive layer. Silence is the only assertable success; anything printed
+  is a failure (a missing argument is `IllegalArgumentException`, exit 255). Whether the app is
+  really gone is the verb layer's post-state to answer by reading the device (D12, #11).
+- **`pm clear` says `Success` on stdout, and refuses with a bare `Failed` on stderr** (exit 1, for
+  a package that is not installed) — one word, no package name, nothing else. The error a caller
+  sees has to add the app id and the device itself, because adb's own message identifies neither.
+
 Not device findings, but the same kind of trap — observed on macOS 25.6 / Node 25.2 while building
 the daemon's unix socket transport (R6), 2026-08-29:
 
