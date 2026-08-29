@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import {
+	AppIdSchema,
+	DeviceSerialSchema,
+	ElementIdSchema,
 	InvalidIdError,
+	LeaseIdSchema,
+	PlatformIdSchema,
 	parseAppId,
 	parseDeviceSerial,
 	parseElementId,
@@ -77,5 +82,66 @@ describe('parseAppId', () => {
 			expect((error as InvalidIdError).kind).toBe('AppId');
 			expect((error as InvalidIdError).attempted).toBe(raw);
 		}
+	});
+});
+
+/**
+ * The schema forms exist because the parsers throw and Zod does not catch that: an exception
+ * from inside a `.transform()` escapes `safeParse` entirely, so a schema built as
+ * `z.string().transform(parseDeviceSerial)` turns bad input into a thrown error at whatever
+ * boundary was relying on `safeParse` to return one instead. These assert the property that
+ * matters — the schemas *return* a failure, and never raise.
+ */
+describe('branded-id schemas', () => {
+	const schemas = [
+		['DeviceSerialSchema', DeviceSerialSchema],
+		['PlatformIdSchema', PlatformIdSchema],
+		['ElementIdSchema', ElementIdSchema],
+		['LeaseIdSchema', LeaseIdSchema],
+	] as const;
+
+	for (const [name, schema] of schemas) {
+		describe(name, () => {
+			it('brands a non-empty string without altering it', () => {
+				const parsed = schema.safeParse('  abc-123  ');
+				expect(parsed.success && unwrap(parsed.data)).toBe('  abc-123  ');
+			});
+
+			it.each([
+				['empty', ''],
+				['a single space', ' '],
+				['a tab', '\t'],
+				['a newline', '\n'],
+				['several spaces', '   '],
+			])('safeParses %s to a failure instead of throwing', (_case, raw) => {
+				expect(() => schema.safeParse(raw)).not.toThrow();
+				expect(schema.safeParse(raw).success).toBe(false);
+			});
+
+			it('safeParses a non-string to a failure', () => {
+				expect(schema.safeParse(42).success).toBe(false);
+			});
+		});
+	}
+
+	describe('AppIdSchema', () => {
+		it('accepts the reverse-DNS shape', () => {
+			const parsed = AppIdSchema.safeParse('com.example.app');
+			expect(parsed.success && unwrap(parsed.data)).toBe('com.example.app');
+		});
+
+		// Not merely non-blank: this schema has to reject everything `parseAppId` rejects,
+		// which is what keeps an injected second command out of a device's shell.
+		it.each([
+			'',
+			'   ',
+			'settings',
+			'com.a; echo Success',
+			'com.a$(id)',
+			'com.a\nreboot',
+		])('safeParses %j to a failure instead of throwing', (raw) => {
+			expect(() => AppIdSchema.safeParse(raw)).not.toThrow();
+			expect(AppIdSchema.safeParse(raw).success).toBe(false);
+		});
 	});
 });

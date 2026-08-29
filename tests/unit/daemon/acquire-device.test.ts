@@ -340,4 +340,32 @@ describe('the params gate', () => {
 
 		await expect(rejection).rejects.toMatchObject({ code: 'invalid_params' });
 	});
+
+	/**
+	 * A whitespace-only id is the gap `.min(1)` does not close, and the branded-id parsers
+	 * *throw* on one. Zod lets an exception raised inside a `.transform()` escape
+	 * `safeParse`, so before `DeviceSerialSchema`/`LeaseIdSchema` refined ahead of the
+	 * transform, one such frame from any client rejected an unawaited `dispatchFrame` and
+	 * took the whole daemon down with it — every other client's leases included.
+	 *
+	 * So each case asserts two things: the frame is refused as `invalid_params`, and the
+	 * daemon is still there afterwards to refuse the next one.
+	 */
+	it.each([
+		['acquire_device', { serial: ' ', owner: 'issue-112', project: 'rover' }],
+		['acquire_device', { serial: '\t', owner: 'issue-112', project: 'rover' }],
+		['release_device', { leaseId: ' ' }],
+	])('refuses %s with a whitespace-only id and stays alive', async (method, params) => {
+		await serveReadyDevice();
+		const client = await connect();
+
+		const rejection = client.request(method as never, params as never);
+
+		await expect(rejection).rejects.toBeInstanceOf(IpcRequestError);
+		await expect(rejection).rejects.toMatchObject({ code: 'invalid_params' });
+
+		// A fresh connection, because a dead daemon would also have dropped the first one.
+		const survivor = await connect();
+		await expect(survivor.request('status', {})).resolves.toMatchObject({ pid: process.pid });
+	});
 });

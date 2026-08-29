@@ -20,6 +20,8 @@
  *   argv.push(unwrap(serial));
  */
 
+import { z } from 'zod';
+
 /**
  * The identifier a host uses to address one attached device. Opaque: never parse it
  * to infer platform, model or anything else — those come from queries
@@ -138,3 +140,51 @@ export function parseAppId(raw: string): AppId {
 export function unwrap(id: DeviceSerial | PlatformId | ElementId | AppId | LeaseId): string {
 	return id;
 }
+
+/**
+ * The **schema** form of each parser, for use anywhere a branded id arrives inside a Zod
+ * shape rather than as a bare argument.
+ *
+ * These exist because `z.string().transform(parseDeviceSerial)` is a trap: an exception
+ * thrown inside a `.transform()` is not converted into a `ZodError` — it propagates
+ * straight out of `safeParse`, past every caller written on the promise that `safeParse`
+ * reports failure rather than raising it. On the IPC request path that turned one
+ * whitespace-only `serial` into an unhandled rejection and a dead daemon.
+ *
+ * So the shape is checked by a `.refine()` *before* the transform runs, and the transform
+ * is then only ever handed input its parser cannot reject. Use these in schemas; use the
+ * `parse*` functions for a value that is not already inside one. Neither trims: a serial is
+ * opaque (see {@link DeviceSerial}) and silently rewriting one would address a different
+ * device than the caller named.
+ */
+function brandedIdSchema<Branded extends string>(
+	kind: string,
+	parse: (raw: string) => Branded,
+	isValid: (raw: string) => boolean = (raw) => raw.trim().length > 0,
+	expected = 'a non-empty, non-whitespace string',
+) {
+	return z
+		.string()
+		.refine(isValid, { message: `Invalid ${kind}: expected ${expected}` })
+		.transform(parse);
+}
+
+/** Non-throwing schema form of {@link parseDeviceSerial}. */
+export const DeviceSerialSchema = brandedIdSchema('DeviceSerial', parseDeviceSerial);
+
+/** Non-throwing schema form of {@link parsePlatformId}. */
+export const PlatformIdSchema = brandedIdSchema('PlatformId', parsePlatformId);
+
+/** Non-throwing schema form of {@link parseLeaseId}. */
+export const LeaseIdSchema = brandedIdSchema('LeaseId', parseLeaseId);
+
+/** Non-throwing schema form of {@link parseElementId}. */
+export const ElementIdSchema = brandedIdSchema('ElementId', parseElementId);
+
+/** Non-throwing schema form of {@link parseAppId} — the reverse-DNS shape, not merely non-blank. */
+export const AppIdSchema = brandedIdSchema(
+	'AppId',
+	parseAppId,
+	(raw) => APP_ID.test(raw),
+	'two or more dot-separated segments, each starting with a letter (e.g. com.example.app)',
+);

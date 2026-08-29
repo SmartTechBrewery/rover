@@ -19,6 +19,14 @@ Rover has four boundaries and every one of them gets a Zod schema, with the Type
 3. **Project configuration** (the hooks of D13).
 4. **Backend capability manifests.**
 
+**A branded id inside a schema uses the `*Schema` form from `src/core/ids.ts`, never
+`.transform(parseX)`.** Zod does not convert an exception thrown inside a `.transform()` into a
+`ZodError` — it propagates straight out of `safeParse`, past a caller that had every reason to
+expect a returned failure. On the IPC request path that made one whitespace-only `serial` an
+unhandled rejection and a dead daemon. `DeviceSerialSchema`, `LeaseIdSchema` and their siblings
+refine before they transform, so the parser is only ever handed input it cannot reject; the
+`parse*` functions stay for values that are not already inside a schema.
+
 ## Parsing external tool output
 
 `adb`, `simctl` and friends are external programs with unstable output, and this is where the sloppiest code in this class of tool lives.

@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { parseDeviceSerial } from '@/core/ids.js';
 import { createIpcClient } from '@/ipc/client.js';
 import { encodeFrame, FrameDecoder, MAX_FRAME_BYTES } from '@/ipc/framing.js';
-import type { IpcHandlers, StatusResult } from '@/ipc/methods.js';
+import { IPC_METHODS, type IpcHandlers, type StatusResult } from '@/ipc/methods.js';
 import { IpcRequestError, PROTOCOL_VERSION, ResponseSchema } from '@/ipc/protocol.js';
 import { createIpcServer } from '@/ipc/server.js';
 import { createDuplexPair } from '../../helpers/duplex-pair.js';
@@ -420,5 +420,70 @@ describe('a host that is not this one', () => {
 		});
 
 		await expect(client.request('status', {})).rejects.toMatchObject({ code: 'invalid_result' });
+	});
+});
+
+/**
+ * The server's own promise is that it never throws out of a connection, and `safeParse` is
+ * only as safe as the schema behind it: Zod lets an exception raised inside a `.transform()`
+ * propagate straight out, past a caller that has every reason to expect a returned failure.
+ * An unawaited `dispatchFrame` rejecting that way is process death, not a bad response.
+ *
+ * These stub the schema rather than send a bad id on purpose — the guard has to hold for any
+ * schema anyone adds later, not just for the two branded-id fields that first exposed it.
+ */
+describe('a schema that throws instead of returning an issue', () => {
+	it('answers invalid_params rather than rejecting the dispatch', async () => {
+		vi.spyOn(IPC_METHODS.status.params, 'safeParse').mockImplementation(() => {
+			throw new Error('schema exploded');
+		});
+		const { client } = connect();
+
+		await expect(client.request('status', {})).rejects.toMatchObject({
+			code: 'invalid_params',
+			message: 'schema exploded',
+		});
+		expect(IPC_METHODS.status.params.safeParse).toHaveBeenCalled();
+		vi.restoreAllMocks();
+	});
+
+	it('fails the client’s request rather than throwing inside its data listener', async () => {
+		// The mirror image of the server case: the client parses results in the stream's
+		// `data` handler, where a throw is an uncaught exception in the CLI or MCP process.
+		vi.spyOn(IPC_METHODS.status.result, 'safeParse').mockImplementation(() => {
+			throw new Error('client-side schema exploded');
+		});
+		const [clientSide, serverSide] = createDuplexPair();
+		const requests = new FrameDecoder();
+		serverSide.on('data', (chunk: Buffer) => {
+			for (const frame of requests.push(chunk)) {
+				const { id } = JSON.parse(frame) as { id: string };
+				serverSide.write(
+					encodeFrame({
+						type: 'result',
+						protocolVersion: PROTOCOL_VERSION,
+						id,
+						result: { protocolVersion: PROTOCOL_VERSION, pid: 1, uptimeMs: 0 },
+					}),
+				);
+			}
+		});
+
+		await expect(createIpcClient(clientSide).request('status', {})).rejects.toMatchObject({
+			code: 'invalid_result',
+		});
+		vi.restoreAllMocks();
+	});
+
+	it('answers invalid_result when it is the result schema that throws', async () => {
+		vi.spyOn(IPC_METHODS.status.result, 'safeParse').mockImplementation(() => {
+			throw new Error('result schema exploded');
+		});
+		const { client } = connect();
+
+		await expect(client.request('status', {})).rejects.toMatchObject({
+			code: 'invalid_result',
+		});
+		vi.restoreAllMocks();
 	});
 });

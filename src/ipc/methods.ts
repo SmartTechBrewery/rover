@@ -16,7 +16,7 @@
 import { z } from 'zod';
 import { CapabilitiesSchema } from '../core/capabilities.js';
 import { DeviceSchema } from '../core/device.js';
-import { parseDeviceSerial, parseLeaseId } from '../core/ids.js';
+import { DeviceSerialSchema, LeaseIdSchema } from '../core/ids.js';
 import { ProtocolVersionSchema } from './protocol.js';
 
 /** What one row of {@link IPC_METHODS} must provide. */
@@ -95,7 +95,7 @@ export const AttributionStringSchema = z.string().min(1).max(256);
  */
 export const AcquireDeviceParamsSchema = z
 	.object({
-		serial: z.string().min(1).transform(parseDeviceSerial),
+		serial: DeviceSerialSchema,
 		/** Who this lease is for. Attribution only — it authorizes nothing (D20). */
 		owner: AttributionStringSchema,
 		project: AttributionStringSchema,
@@ -114,8 +114,8 @@ export type AcquireDeviceParams = z.infer<typeof AcquireDeviceParamsSchema>;
  */
 export const GrantedLeaseSchema = z
 	.object({
-		leaseId: z.string().min(1).transform(parseLeaseId),
-		serial: z.string().min(1).transform(parseDeviceSerial),
+		leaseId: LeaseIdSchema,
+		serial: DeviceSerialSchema,
 		owner: z.string(),
 		project: z.string(),
 		testName: z.string().nullable(),
@@ -135,7 +135,7 @@ export type GrantedLease = z.infer<typeof GrantedLeaseSchema>;
  */
 export const LeaseHolderSchema = z
 	.object({
-		serial: z.string().min(1).transform(parseDeviceSerial),
+		serial: DeviceSerialSchema,
 		owner: z.string(),
 		project: z.string(),
 		testName: z.string().nullable(),
@@ -192,9 +192,7 @@ export const AcquireDeviceResultSchema = z.discriminatedUnion('outcome', [
 export type AcquireDeviceResult = z.infer<typeof AcquireDeviceResultSchema>;
 
 /** The lease id and nothing else: it is the credential, and the owner string is not. */
-export const ReleaseDeviceParamsSchema = z
-	.object({ leaseId: z.string().min(1).transform(parseLeaseId) })
-	.strict();
+export const ReleaseDeviceParamsSchema = z.object({ leaseId: LeaseIdSchema }).strict();
 export type ReleaseDeviceParams = z.infer<typeof ReleaseDeviceParamsSchema>;
 
 /**
