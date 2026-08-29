@@ -57,7 +57,7 @@ test behind it rather than only a convention: `tests/unit/no-sleep.test.ts` scan
 are exempt from the scan. It is a floor, not a proof — a determined re-implementation gets
 through, and reading the wait vocabulary is still how you learn what a wait here looks like.
 
-**The verb layer has a spine, and no verbs on it yet.** `src/verbs/` is the layer above the
+**The verb layer has a spine, and the two waits standing on it.** `src/verbs/` is the layer above the
 backends where determinism stops being a rule and becomes a signature (D12): `resolveTarget()` takes
 a target and *nothing else* — no screen, no element list, no state read a turn ago — so a target can
 only ever be resolved from a screen captured inside that call. Two elements matching one text target
@@ -74,8 +74,22 @@ have answered" rather than an empty list that reads as a blank screen, while a r
 attempted and failed says *that*, because an exception after the action has run is the one answer
 that leaves the agent guessing whether it landed. Every argument and every
 result is a Zod schema of plain data, because the host runs the verb and the agent reads the answer
-somewhere else (D19). The concrete verbs — `tap`, `type_text`, `screenshot`, `read_screen` — are
-their own issues; today the suite drives the spine with a fake action.
+somewhere else (D19).
+
+**`wait_for` and `wait_until_gone` are the first verbs on that spine** — the vocabulary that
+replaces `sleep` rather than the rule that forbids it. Both poll to a timeout, and **every poll
+reads the screen again**: a wait over one cached read is the stale-coordinate failure with a timer
+attached, re-grown inside the verbs meant to remove it. `wait_for` waits until the target is there
+*and* somewhere it can be acted on, so an element still clipped out of its scrolling container is
+*not yet* rather than a failure — a screen still moving is what a wait is for — while a target two
+elements match is refused outright, because more polling cannot specify an under-specified request.
+`wait_until_gone` asks the mirror question, and asks it of matches rather than of a resolution: an
+element matched twice is still there twice. A timeout names what was waited for and summarises what
+was on screen instead, bounded so a two-hundred-element screen is a message and not a wall, and a
+backend that does not declare `canReadScreen` is told so by name before the first poll rather than
+after a whole timeout. Both answer with the same `ActionResult` as every other action. The remaining
+verbs — `tap`, `type_text`, `screenshot`, `read_screen` — are their own issues; the suite still
+drives the spine itself with a fake action.
 
 One gap is worth stating plainly: `src/daemon/main.ts` does not yet import the backend barrel, so
 a daemon started with `npm run daemon` runs with an empty registry and answers an empty device

@@ -123,7 +123,7 @@ request ──▶ match against a re-verified inventory
 Verbs live above the backends and below the adapters, and this is where determinism is enforced (D12) — not in the agent's discipline:
 
 - **Target resolution happens inside the verb**, from a screen captured during that call. A coordinate is a fallback, never the primary address of an element.
-- **Waiting is polling on a condition with a timeout.** There is no sleep in this codebase — the vocabulary is `waitForCondition` in `src/core/wait.ts`, the one module allowed to construct a delay, and `tests/unit/no-sleep.test.ts` is the gate that keeps it the only one. A timeout reports what it was waiting for and what was on screen instead.
+- **Waiting is polling on a condition with a timeout.** There is no sleep in this codebase — the vocabulary is `waitForCondition` in `src/core/wait.ts`, the one module allowed to construct a delay, and `tests/unit/no-sleep.test.ts` is the gate that keeps it the only one. A timeout reports what it was waiting for and what was on screen instead. `wait_for` and `wait_until_gone` (`src/verbs/wait-for.ts`) are what an agent actually calls.
 - **Every verb returns post-state**, so the agent never infers success from the absence of an error.
 
 ### The spine every verb is built on
@@ -147,6 +147,17 @@ Verbs live above the backends and below the adapters, and this is where determin
   reachable, since a node clipped out of its scrolling container comes back with inverted bounds
   (`PROJECT.md` §6) whose midpoint is arithmetic rather than a place. That is
   `UnaddressableElementError`, distinct from "not found" because the element *was* found.
+- **`waitFor()` and `waitUntilGone()`** are the wait vocabulary as verbs, and the reason they are
+  not built on `performAction()` is that their work *is* the resolution: a spine that resolves the
+  target before running the action would resolve it before the wait had happened. Every poll is a
+  new screen read — a wait over one cached read is the stale-coordinate failure with a timer on it —
+  and the capability check comes before the first poll, so a backend that cannot read its screen is
+  told so by name rather than after a whole timeout. `wait_for` waits until the target is there
+  **and can be acted on**, reading a clipped element as *not yet* rather than as a failure, since a
+  screen still moving is what a wait is for; an ambiguous target is not, and propagates. Presence
+  for `wait_until_gone` is a match rather than a resolution: an element matched twice is still there
+  twice, not an under-specified request. Both take a `ScreenTarget` — a `by: 'point'` target has no
+  presence a screen read can confirm or deny, so it is not a question these can be asked.
 - **`ActionResult`** names the verb, the device (as `DeviceInfo`, so D14's density travels with the
   measurement), the resolved target and the state after the action. A backend with input but no
   screen reading answers an explicit `unavailable` after-state naming the capability that would have

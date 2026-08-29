@@ -55,8 +55,20 @@ export const TargetSchema = z.discriminatedUnion('by', [
 ]);
 export type Target = z.infer<typeof TargetSchema>;
 
+/**
+ * The targets a screen read can answer for — every kind but a caller-supplied point.
+ *
+ * A coordinate is the one address with no screen behind it, so a verb whose question *is*
+ * about the screen's contents — is this there yet, has it gone away (`./wait-for.ts`) —
+ * cannot be asked it: waiting for a point would resolve without ever waiting, and waiting
+ * for one to disappear could never resolve at all. Making that a type rather than a
+ * runtime check is the same instinct as {@link resolveTarget} taking no screen: the
+ * question that cannot be answered is one nobody can ask.
+ */
+export type ScreenTarget = Exclude<Target, { by: 'point' }>;
+
 /** The target in the words the error messages use. */
-function describeTarget(target: Target): string {
+export function describeTarget(target: Target): string {
 	switch (target.by) {
 		case 'text': {
 			const how = target.exact === true ? 'exactly' : 'containing';
@@ -138,41 +150,88 @@ export async function requireTarget(context: VerbContext, target: Target): Promi
 }
 
 /**
- * A resolution and the screen it was resolved against.
+ * What matched, and the whole screen it was matched against.
  *
- * A union rather than two nullable fields, because the pairing is not free: `screen` is
- * null only on the `by: 'point'` branch, and that branch either resolves or throws. So a
- * miss always carries the screen it missed on, and {@link requireTarget} can say what was
- * there instead without a defensive branch for a state that cannot occur.
+ * `matches` is deliberately every candidate rather than one: a caller asking *whether* the
+ * target is on screen — `waitUntilGone` in `./wait-for.ts` — is not under-specifying
+ * anything when two elements match, it is being told the thing is still there twice. Only
+ * a caller that has to act on one of them has an ambiguity to resolve, which is why
+ * choosing is {@link resolveOnScreen}'s step and not this one.
  */
-type Resolution =
-	| { readonly resolved: ResolvedTarget; readonly screen: readonly ScreenElement[] | null }
-	| { readonly resolved: null; readonly screen: readonly ScreenElement[] };
+export interface ScreenMatches {
+	readonly matches: readonly ScreenElement[];
+	readonly screen: readonly ScreenElement[];
+}
 
-async function resolveOnFreshScreen(context: VerbContext, target: Target): Promise<Resolution> {
-	if (target.by === 'point') {
-		return { resolved: await resolvePoint(context, target.at), screen: null };
-	}
-
+/**
+ * Everything on a screen read taken **now** that matches `target`.
+ *
+ * The read is inside this call for the reason the whole module is: a match found against a
+ * screen someone else read is a claim about a screen that may no longer exist.
+ */
+export async function findOnScreen(
+	context: VerbContext,
+	target: ScreenTarget,
+): Promise<ScreenMatches> {
 	const readScreen = capabilityMethod(context, 'canReadScreen', 'readScreen');
 	const elements = await readScreen(context.serial);
-	const candidates =
+	const matches =
 		target.by === 'text'
 			? elements.filter((element) => matchesText(element, target.text, target.exact === true))
 			: elements.filter((element) => element.id === target.id);
-	const chosen = choose(context, target, candidates);
+	return { matches, screen: elements };
+}
+
+/**
+ * A resolution and the screen it was resolved against.
+ *
+ * A union rather than two nullable fields, because the pairing is not free: a miss always
+ * carries the screen it missed on, so a caller can say what was there instead without a
+ * defensive branch for a state that cannot occur.
+ */
+export type ScreenResolution =
+	| { readonly resolved: ResolvedTarget; readonly screen: readonly ScreenElement[] }
+	| { readonly resolved: null; readonly screen: readonly ScreenElement[] };
+
+/**
+ * The same union plus the one branch that has no screen behind it: `by: 'point'`, which
+ * either resolves or throws and never reports a miss.
+ */
+type Resolution = ScreenResolution | { readonly resolved: ResolvedTarget; readonly screen: null };
+
+/**
+ * {@link resolveTarget} for the targets a screen answers for, handing back the screen too.
+ *
+ * Exported for the waits (`./wait-for.ts`), which need both halves from **one** read: the
+ * resolution to answer with, and the screen it missed on to say what was there instead.
+ * Reading the screen a second time to describe it would describe a different screen from
+ * the one the target missed.
+ */
+export async function resolveOnScreen(
+	context: VerbContext,
+	target: ScreenTarget,
+): Promise<ScreenResolution> {
+	const { matches, screen } = await findOnScreen(context, target);
+	const chosen = choose(context, target, matches);
 	if (chosen === null) {
-		return { resolved: null, screen: elements };
+		return { resolved: null, screen };
 	}
 
 	// Only once something matched: a miss is the ordinary answer for a caller polling for
 	// an element, and making it cost a `deviceInfo` — several device queries on a real
 	// backend — would be paying for a check with nothing to check.
 	const point = centreOf(chosen);
-	const { screen } = await context.backend.deviceInfo(context.serial);
-	requireAddressable(context, target, chosen, point, screen);
+	const { screen: dimensions } = await context.backend.deviceInfo(context.serial);
+	requireAddressable(context, target, chosen, point, dimensions);
 
-	return { resolved: { source: 'screen', point, element: chosen }, screen: elements };
+	return { resolved: { source: 'screen', point, element: chosen }, screen };
+}
+
+async function resolveOnFreshScreen(context: VerbContext, target: Target): Promise<Resolution> {
+	if (target.by === 'point') {
+		return { resolved: await resolvePoint(context, target.at), screen: null };
+	}
+	return resolveOnScreen(context, target);
 }
 
 /**
