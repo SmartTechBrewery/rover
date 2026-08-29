@@ -4,7 +4,7 @@
  * "This device cannot do that" and "this broke" call for opposite responses from an
  * agent, so a missing capability is its own type rather than a generic `Error`
  * (ai/CODING_STANDARDS.md "Error handling", D11). The same test admits the two below:
- * "the device went away" and "the device is not this host's to lend" are each an answer
+ * "the device went away" and "the device is not attached to this host" are each an answer
  * a caller acts on differently, and neither is a bug. Everything else in this layer
  * throws plain `Error` for a programmer or validation bug, and returns `null` for
  * not-found.
@@ -72,23 +72,22 @@ export class DeviceVanishedError extends Error {
 }
 
 /**
- * Thrown when a device is visible to this host but attached to another one.
+ * Thrown when a device is visible to this host but not physically attached to it.
  *
- * A device belongs to exactly one host — the one it is attached to (D18) — and every
- * platform this targets has a network transport that makes another machine's device
- * appear here, indistinguishable from a local one in everything but
- * `Device.attachment`. Treating such an entry as this host's to lend is the
- * two-agents-one-device failure in its worst form: two hosts each grant a lease on the
- * same hardware and both report success. So it never enters the inventory, and asking
- * for it by name gets this rather than silence.
+ * Every platform this targets has a network transport, so hardware that is not this
+ * machine's can be reached over one and show up here, indistinguishable from a local
+ * device in everything but `Device.attachment`. Leasing one out hands an agent a device
+ * this host does not control: it can vanish without warning, and whatever process put it
+ * there is still using it (D18, revised 2026-08-29). So it never enters the inventory,
+ * and asking for it by name gets this rather than silence.
  */
 export class ForeignDeviceError extends Error {
 	readonly serial: DeviceSerial;
 
 	constructor(serial: DeviceSerial) {
 		super(
-			`Device '${serial}' is attached to another host, so it is that host's to lend (D18) — ` +
-				`ask the host it is attached to, not this one`,
+			`Device '${serial}' is not physically attached to this host — it is only reachable ` +
+				`over a network transport, so this host never leases it (D18)`,
 		);
 		this.name = 'ForeignDeviceError';
 		this.serial = serial;

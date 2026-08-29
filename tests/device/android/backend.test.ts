@@ -85,8 +85,8 @@ describe.skipIf(!process.env.ROVER_TEST_DEVICE)('the backend against a real devi
 			});
 
 			expect(snapshot.find((entry) => entry.serial === device.serial)).toEqual(device);
-			// This device is attached to this machine, which is what makes it this host's to
-			// lend (D18).
+			// This device is physically attached to this machine, which is what makes it
+			// leasable at all (D18).
 			expect(device.attachment).toBe('this-host');
 		} finally {
 			await watch?.stop();
