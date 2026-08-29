@@ -74,7 +74,7 @@ The daemon introduces a failure mode the old lease file did not have: its own st
 Three rules make a verb deterministic (`PROJECT.md` D12), and all three live in the verb, not in the agent's discipline:
 
 1. Targets resolve from a **freshly captured** screen inside the verb. A coordinate passed in from a previous turn is the single most common source of a false green in this class of tool.
-2. Waiting is **on a condition, with a timeout**. No `sleep`, anywhere, for any reason. If you are tempted, the condition you actually want is missing from the wait vocabulary — add it.
+2. Waiting is **on a condition, with a timeout**. No `sleep`, anywhere, for any reason. If you are tempted, the condition you actually want is missing from the wait vocabulary — add it. The vocabulary is `src/core/wait.ts`, the only module allowed to construct a delay, and `tests/unit/no-sleep.test.ts` enforces that over `src/` and `tests/` alike (`ai/TESTING.md`, "The no-sleep gate").
 3. Every action returns the state after itself, so the agent never has to guess whether it landed.
 
 ### Restoring state is the daemon's job, not the caller's

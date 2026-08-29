@@ -11,6 +11,7 @@
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { type Observation, pause, waitForCondition } from '@/core/wait.js';
 import { attemptConnect } from '@/daemon/socket-connect.js';
 import { createIpcClient, type IpcClient } from '@/ipc/client.js';
 
@@ -129,22 +130,19 @@ export async function stopProcess(pid: number, signal: NodeJS.Signals = 'SIGTERM
 	await waitForExit(pid);
 }
 
-/** Polls on the condition with a deadline — the process being gone (ai/RULES.md §2). */
+/**
+ * Polls on the condition with a deadline — the process being gone (ai/RULES.md §2).
+ *
+ * Throws `WaitTimeoutError` naming the pid and that it was still running, which is the
+ * whole diagnosis of a signal that did not take.
+ */
 export async function waitForExit(pid: number): Promise<void> {
-	const deadline = Date.now() + PROCESS_EXIT_TIMEOUT_MS;
-	while (Date.now() < deadline) {
-		if (!isRunning(pid)) {
-			return;
-		}
-		await pause(PROCESS_POLL_INTERVAL_MS);
-	}
-	throw new Error(`Process ${pid} was still running ${PROCESS_EXIT_TIMEOUT_MS}ms after the signal`);
-}
-
-/** The gap between polls above. Never a wait *instead* of a check (ai/RULES.md §2, D12). */
-function pause(ms: number): Promise<void> {
-	return new Promise((resolve) => {
-		setTimeout(resolve, ms);
+	await waitForCondition({
+		what: `process ${pid} to exit`,
+		timeoutMs: PROCESS_EXIT_TIMEOUT_MS,
+		pollIntervalMs: PROCESS_POLL_INTERVAL_MS,
+		probe: (): Observation<void> =>
+			isRunning(pid) ? { met: false, found: 'it still running' } : { met: true, value: undefined },
 	});
 }
 

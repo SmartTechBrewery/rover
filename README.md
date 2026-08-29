@@ -57,6 +57,16 @@ view to be current, rather than quietly printing a short list. `acquire` require
 by `--host`; no flag means the local one, and `local` is the only value reachable until the network
 listener lands (`PROJECT.md` R22), so anything else fails loudly instead of hanging.
 
+**Waiting is a condition, never a duration.** `src/core/wait.ts` is the one module in the
+repository allowed to construct a delay: `waitForCondition` polls a probe until it reports the
+condition met or the deadline passes, and a probe that reports *unmet* is required by its own type
+to say what it found instead — so a timeout names both halves (`PROJECT.md` D12). The rule has a
+test behind it rather than only a convention: `tests/unit/no-sleep.test.ts` scans `src/` and
+`tests/` for every promisified-timer shape a sleep is spelled with, and for a call to
+`waitForCondition`'s own poll gap from a file that has not said why it needs one. Only three files
+are exempt from the scan. It is a floor, not a proof — a determined re-implementation gets
+through, and reading the wait vocabulary is still how you learn what a wait here looks like.
+
 One gap is worth stating plainly: `src/daemon/main.ts` does not yet import the backend barrel, so
 a daemon started with `npm run daemon` runs with an empty registry and answers an empty device
 list — `rover list` against it prints "no devices are attached" on a machine with a phone plugged
