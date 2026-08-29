@@ -67,10 +67,57 @@ test behind it rather than only a convention: `tests/unit/no-sleep.test.ts` scan
 are exempt from the scan. It is a floor, not a proof — a determined re-implementation gets
 through, and reading the wait vocabulary is still how you learn what a wait here looks like.
 
-One gap is worth stating plainly: `src/daemon/main.ts` does not yet import the backend barrel, so
-a daemon started with `npm run daemon` runs with an empty registry and answers an empty device
-list — `rover list` against it prints "no devices are attached" on a machine with a phone plugged
-in. That wiring is its own issue. The backlog is twenty issues in dependency order — see
+**The verb layer has a spine, and the two waits standing beside it.** `src/verbs/` is the layer
+above the backends where determinism stops being a rule and becomes a signature (D12):
+`resolveTarget()` takes
+a target and *nothing else* — no screen, no element list, no state read a turn ago — so a target can
+only ever be resolved from a screen captured inside that call. Two elements matching one text target
+is a loud error naming every candidate rather than a first match that is right half the time; nothing
+matching names what was on screen instead; and a coordinate stays available as the documented
+fallback, marked in the result as not having come from a screen. Every resolved point is
+range-checked against the device, whichever way it was arrived at — an element scrolled out of its
+container comes back with a rectangle whose corners are inverted, and the midpoint of that is
+arithmetic rather than a place to tap, so it is refused by name instead.
+`performAction()` is where the three rules meet: it consults the capability manifest **before** it
+touches the device, resolves fresh, acts, and then reads the state after the action — and a device
+that cannot read its screen answers an explicit "unavailable, and here is the capability that would
+have answered" rather than an empty list that reads as a blank screen, while a read that was
+attempted and failed says *that*, because an exception after the action has run is the one answer
+that leaves the agent guessing whether it landed. Every argument and every
+result is a Zod schema of plain data, because the host runs the verb and the agent reads the answer
+somewhere else (D19).
+
+**`wait_for` and `wait_until_gone` stand beside that spine rather than on it** — the vocabulary
+that replaces `sleep` rather than the rule that forbids it. They share its answer shape
+(`resultAfterAction`) but not its order, because `performAction()` resolves the target *before* it
+acts, and for a wait the resolution **is** the work. Both poll to a timeout, and **every poll
+reads the screen again**: a wait over one cached read is the stale-coordinate failure with a timer
+attached, re-grown inside the verbs meant to remove it. `wait_for` waits until the target is there
+*and* somewhere it can be acted on, so an element still clipped out of its scrolling container is
+*not yet* rather than a failure — a screen still moving is what a wait is for — while a target two
+elements match is refused outright, because more polling cannot specify an under-specified request.
+`wait_until_gone` asks the mirror question, and asks it of matches rather than of a resolution: an
+element matched twice is still there twice — and for the same reason it will not take a text
+target's `index`, since an index names a slot in the match list rather than an element, and a slot
+empties the moment any sibling leaves. A timeout names what was waited for and what stood in its
+way — the screen for `wait_for`, which missed on all of it, the matches that are still there for
+`wait_until_gone` — bounded so a two-hundred-element screen is a message and not a wall, and a
+backend that does not declare `canReadScreen` is told so by name before the first poll rather than
+after a whole timeout. Both answer with the same `ActionResult` as every other action. The remaining
+verbs — `tap`, `type_text`, `screenshot`, `read_screen` — are their own issues; the suite still
+drives the spine itself with a fake action.
+
+**The daemon loads the core and runs the verbs**, and a client only asks (D19). `wait_for` and
+`wait_until_gone` are callable over the same connection as `acquire_device` — the same envelope,
+the same framing, one method table — and a verb call carries the lease id rather than a serial,
+because the lease id is the credential and the host derives the device from it. A verb that fails
+comes back as an *answer* naming what happened — the element was not there, the wait timed out, the
+device cannot read its screen — and never as a broken host; only the host actually breaking is an
+`internal_error`. There is no `adb` in a client process, and
+`tests/unit/no-backend-in-a-client.test.ts` walks the import graph from every client entrypoint to
+say so rather than asking politely. Against a real device today both waits answer
+`missing-capability`: `read_screen` is its own issue, and the manifest says so rather than
+pretending. The backlog is twenty issues in dependency order — see
 [`PROJECT.md`](PROJECT.md) §9.3.
 
 ```bash

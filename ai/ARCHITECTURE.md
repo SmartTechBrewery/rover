@@ -10,7 +10,7 @@ What is actually built, and where the seams run. `PROJECT.md` carries the decisi
 |---|---|---|---|
 | **Daemon — the device host** (`src/daemon/`) | one per machine **with devices**, reachable over the network | long-running | Device inventory, leases, port allocation, state restoration, **and executing the verbs** |
 | **IPC surface** (`src/ipc/`) | library, loaded by the daemon and by every client | per connection | The wire schemas, NDJSON framing, request dispatch and response correlation — the protocol itself |
-| **Core** (`src/core/`, `src/backends/`) | library | — | The device interface, the backends, the verbs |
+| **Core** (`src/core/`, `src/backends/`, `src/verbs/`) | library | — | The device interface, the backends, the verbs |
 | **CLI** (`src/cli/`) | per invocation | seconds | Human and script entry point — a **client** of a host, local or remote |
 | **MCP server** (`src/mcp/`) | one per agent | agent session | Exposes the verbs as tools — also a **client** of a host |
 
@@ -123,8 +123,90 @@ request ──▶ match against a re-verified inventory
 Verbs live above the backends and below the adapters, and this is where determinism is enforced (D12) — not in the agent's discipline:
 
 - **Target resolution happens inside the verb**, from a screen captured during that call. A coordinate is a fallback, never the primary address of an element.
-- **Waiting is polling on a condition with a timeout.** There is no sleep in this codebase — the vocabulary is `waitForCondition` in `src/core/wait.ts`, the one module allowed to construct a delay, and `tests/unit/no-sleep.test.ts` is the gate that keeps it the only one. A timeout reports what it was waiting for and what was on screen instead.
+- **Waiting is polling on a condition with a timeout.** There is no sleep in this codebase — the vocabulary is `waitForCondition` in `src/core/wait.ts`, the one module allowed to construct a delay, and `tests/unit/no-sleep.test.ts` is the gate that keeps it the only one. A timeout reports what it was waiting for and what was on screen instead. `wait_for` and `wait_until_gone` (`src/verbs/wait-for.ts`) are what an agent actually calls.
 - **Every verb returns post-state**, so the agent never infers success from the absence of an error.
+
+### The spine every verb is built on
+
+`src/verbs/` is where those rules are enforced once rather than once per verb. A verb hands
+`performAction()` what it needs, what it is aimed at and what it does, and gets a result back:
+
+- **`VerbContext`** — the serial, the backend and its capability manifest — is constructed by the
+  caller that already resolved the device: `src/daemon/verb-handlers.ts`, which is the only place
+  in the tree that builds one in production. The verb layer never looks a device up.
+  `capabilityMethod()` is the only way it reaches a capability-gated method, so the manifest is
+  consulted before every dispatch (D11); a capability declared with no method behind it is a wiring
+  bug and says so, distinctly from a device that honestly opted out.
+- **`resolveTarget()` takes a target and nothing else** — no screen, no element list, no
+  previously-read state — which is what makes the fresh read structural instead of a rule. A miss is
+  `null`; `requireTarget()` is the loud version and names what was on screen instead. Two matches
+  are `AmbiguousTargetError` naming every candidate, because a silent first match is right half the
+  time, and the remedy in that message is the one that target kind can actually take. A
+  `by: 'point'` target stays the documented fallback (`PROJECT.md` §4), marked in the result as
+  **not** having come from a screen. **Every** resolved point is range-checked against the device,
+  however it was arrived at: an element the screen read reported is not evidence that it is
+  reachable, since a node clipped out of its scrolling container comes back with inverted bounds
+  (`PROJECT.md` §6) whose midpoint is arithmetic rather than a place. That is
+  `UnaddressableElementError`, distinct from "not found" because the element *was* found.
+- **`waitFor()` and `waitUntilGone()`** are the wait vocabulary as verbs, and the reason they are
+  not built on `performAction()` is that their work *is* the resolution: a spine that resolves the
+  target before running the action would resolve it before the wait had happened. Every poll is a
+  new screen read — a wait over one cached read is the stale-coordinate failure with a timer on it —
+  and the capability check comes before the first poll, so a backend that cannot read its screen is
+  told so by name rather than after a whole timeout. `wait_for` waits until the target is there
+  **and can be acted on**, reading a clipped element as *not yet* rather than as a failure, since a
+  screen still moving is what a wait is for; an ambiguous target is not, and propagates. Presence
+  for `wait_until_gone` is a match rather than a resolution: an element matched twice is still there
+  twice, not an under-specified request; its timeout reports those matches rather than the screen
+  they sit in, because they are what kept the condition false. Both take a `ScreenTarget` — a
+  `by: 'point'` target has no presence a screen read can confirm or deny, so it is not a question
+  these can be asked — and `wait_until_gone` narrows that again to an `AbsenceTarget`, `ScreenTarget`
+  without a text target's `index`: an index is a slot in the match list, not an identity, so it
+  empties as soon as any sibling goes and would report a row as gone while it is still on screen.
+  Both refusals are types rather than runtime checks, so neither verb is handed a field it drops.
+- **`ActionResult`** names the verb, the device (as `DeviceInfo`, so D14's density travels with the
+  measurement), the resolved target and the state after the action. A backend with input but no
+  screen reading answers an explicit `unavailable` after-state naming the capability that would have
+  answered — never an empty element list, which reads as a blank screen. A read that was declared,
+  attempted and rejected is the separate `failed` branch: once the action has run, an exception in
+  its place would leave the agent unable to tell whether it landed, which is exactly what D12(c)
+  rules out. Every shape is a Zod schema of plain data, because the host executes the verb and the
+  agent reads the result somewhere else (D19).
+
+### Where a verb call comes from
+
+The daemon loads the core and executes the verbs; the CLI and the MCP server are clients that ask
+over the same surface as leases (D19, R21). `src/daemon/main.ts` — the entrypoint, and not the
+module that binds the socket — imports the backend barrel, so the process holding the hardware is
+the process with a registry.
+
+- **A verb call carries the lease id, not a serial.** The lease id is the credential (D20) and the
+  host derives the device from it, so the holder of one device cannot address another.
+- **The lease is renewed when the call arrives**, before any await (D8). Renewing on completion
+  instead would let a long verb's own lease expire while it runs, and an expiry mid-verb fires
+  restoration on a device the verb is actively driving. `MAX_VERB_TIMEOUT_MS` caps a wait far below
+  the TTL so that is unreachable rather than merely unlikely.
+- **The device is re-verified per call, never read from the snapshot** (D6) — the same
+  `verifyForGrant` a grant uses, which is what separates "the device went away" from a stale cache
+  entry.
+- **The answer has three branches, all data** (`src/ipc/verb-methods.ts`). `ok` carries the
+  `ActionResult`. `failed` carries a `VerbFailure` — the verb-layer errors as a parseable union
+  (`src/verbs/failure.ts`), each branch carrying both the error's own message and its structured
+  fields, so a client can print one line or branch on a `kind`. `refused` means no verb ran at all:
+  `no-lease`, `gone`, `not-attached`, `not-ready`. Anything outside those three throws and arrives
+  as `internal_error`, which keeps that code meaning "the host broke".
+- **A verb never outlives the lease that authorised it.** A release the server did not wait for, or
+  an expiry the sweep observes, can land while a verb is still polling the device. So the whole call
+  is registered with `src/daemon/verb-traffic.ts` for as long as it runs: the lease's end revokes the
+  backend that call was handed, its next device call throws, and the answer is `refused` /
+  `no-lease`. Revocation cannot stop a round trip already issued, so there is a second half — the
+  restoration a lease's end starts waits for those calls to unwind first, and `acquire_device`
+  inherits that wait through `DeviceRestorer.settle`. Without both, the host itself becomes the
+  second driver of a device it has already lent to somebody else.
+- **A shared preamble, one row per verb.** `createVerbHandlers` does the renew / register /
+  re-verify / resolve work once, so each further verb family is one `IPC_METHODS` row and one
+  `runVerb` call rather than another copy of it — and inherits the rule above by construction rather
+  than by remembering it. That is why this row landed before the verb families.
 
 ---
 

@@ -6,11 +6,15 @@
  * never cast" true on the response path too: the server parses `params` before calling a
  * handler and parses the handler's return value before writing it.
  *
- * The surface carries **verb calls**, not just lease operations (PROJECT.md R6). Adding
- * `acquire_device`, `tap` or `read_screen` later is a row here plus its handler — the
- * envelope, the framing, the server and the client do not change. {@link IpcHandlers} is a
- * complete mapped type over this table's keys, so adding a row without a handler is a
- * compile error rather than an `unknown_method` an agent discovers at runtime.
+ * The surface carries **verb calls**, not just lease operations (PROJECT.md R6, D19) — the
+ * two waits below are on it, and adding `tap` or `read_screen` is a row here plus its
+ * handler. The envelope, the framing, the server and the client do not change.
+ * {@link IpcHandlers} is a complete mapped type over this table's keys, so adding a row
+ * without a handler is a compile error rather than an `unknown_method` an agent discovers at
+ * runtime.
+ *
+ * The verb rows' schemas live in `./verb-methods.ts` and are re-exported below; the **table**
+ * stays single, because a second table is a second place a method can exist.
  */
 
 import { z } from 'zod';
@@ -18,6 +22,23 @@ import { CapabilitiesSchema } from '../core/capabilities.js';
 import { DeviceSchema } from '../core/device.js';
 import { DeviceSerialSchema, LeaseIdSchema } from '../core/ids.js';
 import { ProtocolVersionSchema } from './protocol.js';
+import {
+	VerbCallResultSchema,
+	WaitForParamsSchema,
+	WaitUntilGoneParamsSchema,
+} from './verb-methods.js';
+
+export {
+	MAX_VERB_TIMEOUT_MS,
+	type VerbCallResult,
+	VerbCallResultSchema,
+	type VerbRefusalReason,
+	VerbRefusalReasonSchema,
+	type WaitForParams,
+	WaitForParamsSchema,
+	type WaitUntilGoneParams,
+	WaitUntilGoneParamsSchema,
+} from './verb-methods.js';
 
 /** What one row of {@link IPC_METHODS} must provide. */
 export interface IpcMethodDefinition {
@@ -239,12 +260,17 @@ export type ReleaseDeviceResult = z.infer<typeof ReleaseDeviceResultSchema>;
  *
  * The names follow the verb table in PROJECT.md §4 (`list_devices`), not a camelCase
  * variant of it.
+ *
+ * The two verb rows are the ones that exist today; each further verb family is one more row
+ * beside them and one more entry in `src/daemon/verb-handlers.ts`.
  */
 export const IPC_METHODS = {
 	status: { params: StatusParamsSchema, result: StatusResultSchema },
 	list_devices: { params: ListDevicesParamsSchema, result: ListDevicesResultSchema },
 	acquire_device: { params: AcquireDeviceParamsSchema, result: AcquireDeviceResultSchema },
 	release_device: { params: ReleaseDeviceParamsSchema, result: ReleaseDeviceResultSchema },
+	wait_for: { params: WaitForParamsSchema, result: VerbCallResultSchema },
+	wait_until_gone: { params: WaitUntilGoneParamsSchema, result: VerbCallResultSchema },
 } as const satisfies Record<string, IpcMethodDefinition>;
 
 export type IpcMethodName = keyof typeof IPC_METHODS;

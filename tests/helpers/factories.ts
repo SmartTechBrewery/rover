@@ -26,10 +26,12 @@ import {
 	DeviceSchema,
 	type DeviceWatch,
 	type DeviceWatcher,
+	type ScreenElement,
 	ScreenElementSchema,
 } from '@/core/device.js';
 import { parseDeviceSerial, parseLeaseId } from '@/core/ids.js';
 import { LEASE_TTL_MS, type Lease } from '@/daemon/leases.js';
+import type { VerbContext } from '@/verbs/context.js';
 
 export function createMockCapabilities(overrides: Partial<Capabilities> = {}): Capabilities {
 	return {
@@ -91,6 +93,27 @@ export function createMockDeviceInfo(overrides: Partial<DeviceInfo> = {}): Devic
 		},
 		osVersion: '1.0',
 		osApiLevel: 1,
+		...overrides,
+	});
+}
+
+/**
+ * One element of a screen read. `text` and `label` stay separate — an element carrying one
+ * and not the other is the case a target resolver has to get right, so a factory that
+ * filled both by default would hide it.
+ *
+ * `id` is taken as a plain string and branded on the way through, because a screen fixture
+ * names several elements at once and `parseElementId` around each of them would be all a
+ * reader saw.
+ */
+export function createMockScreenElement(
+	overrides: Partial<Omit<ScreenElement, 'id'>> & { readonly id?: string } = {},
+): ScreenElement {
+	return ScreenElementSchema.parse({
+		id: 'test-element-1',
+		text: 'Save',
+		label: null,
+		bounds: { x: 10, y: 20, width: 100, height: 40 },
 		...overrides,
 	});
 }
@@ -236,6 +259,22 @@ export function createMockRegistration(
 			capabilities: createMockCapabilities(),
 		},
 		backend: createMockDeviceBackend(),
+		...overrides,
+	};
+}
+
+/**
+ * What a verb is handed — the device, the backend that can act on it, and the manifest the
+ * verb layer consults before it dispatches anything.
+ *
+ * A plain value here for the same reason it is one in production: the caller constructs it
+ * (`src/daemon/verb-handlers.ts` does), and the verb layer never resolves a device itself.
+ */
+export function createMockVerbContext(overrides: Partial<VerbContext> = {}): VerbContext {
+	return {
+		serial: parseDeviceSerial('test-serial-1'),
+		backend: createMockDeviceBackend(),
+		manifest: createMockCapabilityManifest(),
 		...overrides,
 	};
 }

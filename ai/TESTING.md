@@ -13,17 +13,17 @@ Note the double meaning of "test" in this repo and keep it straight: Rover *perf
 
 Device tests take a lease like any other client. A device test that talks to `adb` directly, outside the lease, will eventually run on a device another agent is using, and that is precisely the failure this whole project exists to prevent. One temporary exemption, below.
 
-### The exemption: `tests/device/` drives the backend directly, until a daemon can lend a device
+### The exemption: four `tests/device/` suites still drive the backend directly
 
-Every suite under `tests/device/` constructs the backend class and calls it, outside any lease. That is a departure from the rule above, and unlike the socket exception below it is **temporary** — it is a wiring gap, not a property of what the suites assert.
+Four suites under `tests/device/` construct the backend class and call it, outside any lease. That is a departure from the rule above, and unlike the socket exception below it is **temporary** — it is a wiring gap, not a property of what the suites assert.
 
-One suite is already half out of it: `tests/device/android/restoration.test.ts` imports the backend barrel and builds the daemon's own inventory, lease store and restorer, so it *does* take a lease — just not from a daemon on a socket, because `src/daemon/main.ts` still does not import the barrel. It is the shape the rest convert to when the gap closes, and it drives the backend class directly only to arrange and clean up.
+**Half of that gap is now closed.** `src/daemon/main.ts` imports the backend barrel (R21), so a daemon on a socket has a registry, lends devices and runs the verbs. `tests/device/android/verb-dispatch.test.ts` is the first suite to take its lease from one, and it is the shape the rest convert to: start a daemon on a temp socket, `list_devices`, `acquire_device`, call the verb, `release_device` in `afterEach`. `tests/device/android/restoration.test.ts` is a step behind it — it takes a lease, but from the daemon's objects rather than from a daemon on a socket, because what it asserts is the store's end hook rather than the protocol.
 
-- **What is exempt.** All of `tests/device/`, and only for the lease: every other rule here still binds them, and a suite that changes device state additionally restores it (see the network suite).
-- **Why.** `src/daemon/main.ts` does not import the backend barrel, so a running daemon has an empty registry and would refuse to lend a device that is plainly attached (README.md, "Where things are"). There is no lease for a device test to take today, so the choice is between this exemption and no device coverage at all.
-- **What ends it.** The barrel wired into the daemon, plus a helper under `tests/helpers/` that acquires and releases a lease around a suite. When both exist, convert every suite in one change and delete this section — the exemption expires with the gap, not with any particular issue being closed.
+- **What is exempt.** `app-control`, `backend`, `network` and `screenshot`, and only for the lease: every other rule here still binds them, and a suite that changes device state additionally restores it (see the network suite).
+- **Why.** Nothing about the daemon now; only that four suites have not been converted, and each conversion is a real edit to how the suite arranges its device rather than a mechanical one.
+- **What ends it.** A helper under `tests/helpers/` that acquires and releases a lease around a suite — the boilerplate `verb-dispatch.test.ts` currently writes by hand — and then those four suites converted onto it. When that lands, delete this section; the exemption expires with the gap, not with any particular issue being closed.
 
-Until then, say *this* in a suite header rather than "leases do not exist yet": leases do exist, and the reason a suite is not taking one has moved.
+Until then, say *this* in a suite header rather than "leases do not exist yet": leases do exist, a daemon will lend one, and the reason a suite is not taking one is that it has not been converted.
 
 ### The exception: `tests/unit/daemon/` and `tests/unit/cli/` use a real socket and real child processes
 
@@ -77,6 +77,18 @@ What is forbidden: a timer handed a bare resolver (`new Promise(resolve => setTi
 Exactly three files are exempt, and the gate asserts that list is exactly three: `src/core/wait.ts` (the wait vocabulary — the delay has to exist somewhere), `tests/helpers/no-sleep-scan.ts` (it names the patterns it looks for) and `tests/unit/no-sleep-harness.test.ts` (its fixtures are the violations). A fourth entry means somebody exempted their own file instead of fixing it. A further test asserts `src/core/wait.ts` still *contains* a delay, so its exemption cannot outlive the reason for it — a stale allowlist entry is the failure mode a scan gate dies of.
 
 `pause` gets a second, narrower list for the same reason. It is the one identifier here that *is* a delay, so leaving it unscanned would mean the gate never looked at the very thing it exists to bound; but it cannot be forbidden outright, because three hand-rolled poll loops legitimately need a gap between two checks and their shapes are not `waitForCondition` calls. So `NO_SLEEP_PAUSE_CALLERS` names the five files that may call it and why — asserted to be exactly five, and each asserted to still call it. The exemption is **per rule, not per file**: a file on that list still fails every other check, unlike the three in `NO_SLEEP_EXEMPT_FILES`. Needing a sixth entry is the signal to ask whether the gap belongs in `waitForCondition` instead.
+
+## The no-backend-in-a-client gate
+
+`tests/unit/no-backend-in-a-client.test.ts` — the executable half of D19: **no client process can reach a device backend.** Rover is a device host and agents borrow from it across the network, so the process that runs the verbs is the one holding the hardware; a client that could drive a device directly is two hosts granting a lease on the same one, both reporting success.
+
+The gate is a static walk of the module graph, in the family of `no-platform-names.test.ts` and `remote-never-spawns.test.ts` — self-contained, no new dependency. It follows relative `from '…'` and bare `import '…'` specifiers inside `src/`, rewriting `.js` to `.ts`, from every entrypoint in `CLIENT_ENTRYPOINTS`, and asserts nothing reachable lives under `src/backends/`. A failure names the **path** through the graph, because "a client can reach a backend" without the edge that made it true is a bug report nobody can act on. A second assertion holds `BARREL_IMPORTERS` — the files that may import `src/backends/index.js` — to exactly `src/daemon/main.ts`, the one process that hosts devices.
+
+`CLIENT_ENTRYPOINTS` is one file today (`daemon/status-cli.ts`); `src/cli/` (R10) and `src/mcp/` (R19) are added to it in the change that creates them. An entrypoint absent from the list is a client nothing checks, so the list is asserted non-empty and every file on it asserted to exist — a rename must not silently empty the gate.
+
+The fourth test is the **positive control**: the walk from `daemon/main.ts` *does* reach `backends/`. Without it a walker that silently resolves nothing passes the first assertion by never looking at anything — the same trap `no-platform-names.test.ts` guards with its "scans something" test and `no-sleep-harness.test.ts` guards with fixtures.
+
+It pairs with the other two rather than replacing them: `no-platform-names.test.ts` says a client may not even name the tool, and this says it cannot reach the module that drives one. Note one intended consequence — `src/ipc/verb-methods.ts` imports schemas from `src/verbs/`, so every client has the verb layer in its graph. That is the same schema reuse the method table already does for `DeviceSchema`, and this gate is what keeps it from dragging a backend along.
 
 ## What the automated tests cannot cover
 

@@ -103,8 +103,9 @@ export class ForeignDeviceError extends Error {
  * here because "checked once" and "checked two hundred times" are different diagnoses of
  * the same elapsed time — the first says the poll interval swallowed the wait.
  *
- * **Every field is plain data on purpose.** R21 moves verb execution onto the host, so
- * this error is serialized and sent back over a socket that may be a network one (D19).
+ * **Every field is plain data on purpose.** Verb execution happens on the host, so this
+ * error is serialized and sent back over a socket that may be a network one (D19) — see
+ * `src/verbs/failure.ts`, which is where it becomes an answer a client can parse.
  * Hanging a device handle, a stream or a host-local path off it would produce a value
  * that cannot cross that boundary, and the failure would surface only once the client is
  * on another machine.

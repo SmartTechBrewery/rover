@@ -20,6 +20,11 @@
  * same wait for the shutdown path, where a restoration that is abandoned is never retried —
  * a lease dies with the host (D6), so nothing afterwards is left to notice it was owed.
  *
+ * **And it waits for the ending lease's verbs before it starts.** A teardown is device I/O
+ * like any other, so it queues behind whatever the lease that just ended still has in flight
+ * (`./verb-traffic.ts`, {@link DeviceRestorerOptions.settleTraffic}) rather than driving the
+ * device alongside it. `acquire_device` inherits that wait through {@link DeviceRestorer.settle}.
+ *
  * **The step order is the finding, not a preference** (PROJECT.md §6, verified 2026-08-29):
  * the airplane-mode step can move wifi underneath it in a direction no caller can predict,
  * while the wifi step never moves airplane mode. So both are set explicitly and **wifi is set
@@ -128,6 +133,19 @@ export interface DeviceRestorerOptions {
 	 * unit test cannot both be in the same run.
 	 */
 	readonly teardownTimeoutMs?: number;
+	/**
+	 * Resolve once nothing else is still driving the device — the ending lease's verb calls
+	 * (`./verb-traffic.ts`, wired in `./listen.ts`).
+	 *
+	 * A restoration and a verb are two drivers of one device, and the verb is the one that was
+	 * there first: stopping an app underneath a wait would answer that wait about a screen the
+	 * teardown produced. The lease's end revokes the device from those calls before this is
+	 * ever awaited, so the wait is one backend call long, not a verb timeout long.
+	 *
+	 * Defaults to resolving immediately — a restorer wired without a verb surface has nothing
+	 * to wait for, and nothing else in this module knows what a verb is.
+	 */
+	readonly settleTraffic?: (serial: DeviceSerial) => Promise<void>;
 }
 
 export function createDeviceRestorer(options: DeviceRestorerOptions): DeviceRestorer {
@@ -135,6 +153,8 @@ export function createDeviceRestorer(options: DeviceRestorerOptions): DeviceRest
 	const resolveProject: ProjectResolver = options.resolveProject ?? (() => null);
 	const warn = options.warn ?? ((message: string) => console.warn(message));
 	const teardownTimeoutMs = options.teardownTimeoutMs ?? TEARDOWN_TIMEOUT_MS;
+	const settleTraffic: (serial: DeviceSerial) => Promise<void> =
+		options.settleTraffic ?? (() => Promise.resolve());
 
 	// One chain per device, holding the restoration currently in flight and everything queued
 	// behind it. Two restorations of one device cannot interleave, and `settle` has a single
@@ -225,6 +245,10 @@ export function createDeviceRestorer(options: DeviceRestorerOptions): DeviceRest
 
 	const runSteps = async (lease: Lease, reason: LeaseEndReason): Promise<void> => {
 		const serial = lease.serial;
+		// Before anything is undone: the lease that just ended may still have a verb unwinding
+		// against this device, and a teardown running beside it is the two-drivers failure with
+		// the host on both ends. See {@link DeviceRestorerOptions.settleTraffic}.
+		await settleTraffic(serial);
 		const project = describeProject(serial, lease.project);
 		const registered = await resolveDevice(serial, reason);
 

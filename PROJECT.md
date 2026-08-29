@@ -63,11 +63,12 @@ lends what is physically attached to it (D18).
 
 1. The agent's client connects to a host — the local socket, or a configured remote host.
 2. The agent asks for a device with certain properties (platform, optionally a specific model).
-3. The host checks adb for what is free, grants a **lease**, and returns a device handle along with
-   the list of what may be done on it. The handle is the device serial — there is exactly one host,
-   so nothing else needs naming (D18).
-4. The agent calls verbs, passing that handle. The host executes them; the client receives the
-   result and the artifacts. Every call pushes the lease expiry out.
+3. The host checks adb for what is free, grants a **lease**, and returns the lease id along with
+   the device it is on and the list of what may be done on it.
+4. The agent calls verbs, passing that lease id — the credential (D20), and the only handle a verb
+   call carries; the host derives the serial from it, so the holder of one device cannot address
+   another. The host executes them; the client receives the result and the artifacts. Every call
+   pushes the lease expiry out.
 5. The agent releases the device. The host restores its original state.
 6. If the agent dies, loses the network, or simply never releases — the lease expires after 20
    minutes of inactivity and the host cleans up the same way. A dropped connection is not a
@@ -107,7 +108,7 @@ lends what is physically attached to it (D18).
 
 ## 4. The verb set
 
-Working names. All of them take a device handle.
+Working names. All of them take a device handle, and over the wire that handle is the **lease id** — the credential (D20), from which the host derives the serial. A verb call naming a serial beside it would be either redundant or a way for the holder of one device to drive another (D19, R21).
 
 ### Devices and leases
 
@@ -223,7 +224,9 @@ capturing `tests/fixtures/adb/`:
   its bottom, so `bottom - top` is -14. `parseUiHierarchy` reports that subtraction as it stands
   rather than clamping it to zero, because every target resolution downstream is addressed through
   this rectangle and a clamped one is a rectangle the device never described. Whether a node is on
-  screen is the caller's question, and the sign is the evidence it needs to answer.
+  screen is the caller's question, and the sign is the evidence it needs to answer. `src/verbs/`
+  is that caller and now answers it: a matched element whose rectangle has no interior, or whose
+  centre is off the device, is an `UnaddressableElementError` rather than a point to act on.
 
 Checked on the same API 37 emulator (`sdk_gphone16k_arm64`) with `adb` 37.0.1, 2026-08-29, while
 building the app-control primitives (#37). Every one of the four verbs reports at least one failure

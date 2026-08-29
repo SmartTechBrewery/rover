@@ -1,7 +1,8 @@
 /**
- * The two halves of restoration (D9) that live in `startDaemon` rather than in the restorer:
- * the sweep interval that observes a dead holder when nobody is asking, and `close()` waiting
- * for what that observation started.
+ * The three halves of restoration (D9) that live in `startDaemon` rather than in the restorer:
+ * the sweep interval that observes a dead holder when nobody is asking, `close()` waiting for
+ * what that observation started, and a teardown queueing behind the verb the ending lease
+ * still has in flight.
  *
  * **Both need a real daemon.** `restoration.test.ts` drives the handlers directly and calls
  * `sweep()` by hand, which proves the restoration and nothing about the wiring that fires it —
@@ -21,7 +22,7 @@ import {
 } from '@/backends/registry.js';
 import type { DeviceBackend } from '@/core/device.js';
 import { parseDeviceSerial } from '@/core/ids.js';
-import { type Observation, pause, waitForCondition } from '@/core/wait.js';
+import { type Observation, waitForCondition } from '@/core/wait.js';
 import { type RunningDaemon, startDaemon } from '@/daemon/listen.js';
 import type { IpcClient } from '@/ipc/client.js';
 import {
@@ -31,6 +32,7 @@ import {
 	type TempSocket,
 } from '../../helpers/daemon-socket.js';
 import { createMockDevice, createMockDeviceBackend } from '../../helpers/factories.js';
+import { createGate, drainEventLoop } from '../../helpers/timing.js';
 
 const SERIAL = parseDeviceSerial('attached-1');
 const attached = createMockDevice({ serial: SERIAL });
@@ -43,29 +45,19 @@ const SHORT_SWEEP_MS = 5;
 const CONDITION_TIMEOUT_MS = 5_000;
 const CONDITION_POLL_MS = 5;
 
-/**
- * How many event-loop turns {@link drainEventLoop} gives the shutdown before concluding that
- * what is left is genuinely blocked. `close()`'s remaining work is a handful of filesystem
- * calls; this is an order of magnitude more turns than that needs.
- */
-const LOOP_DRAIN_TURNS = 50;
-
 let temp: TempSocket;
 const running: RunningDaemon[] = [];
 const clients: IpcClient[] = [];
 
-/** A promise the test resolves by hand, so nothing here waits on a duration. */
-function createGate(): { reached: Promise<void>; reach: () => void } {
-	let reach!: () => void;
-	const reached = new Promise<void>((resolve) => {
-		reach = resolve;
-	});
-	return { reached, reach };
-}
-
 interface Recorded {
-	/** Every restoration step the backend performed, in order. */
+	/**
+	 * Everything the backend was asked to do, in order — the restoration steps **and** the
+	 * screen reads, in one list, because the ordering between the two is what the last test
+	 * below is about.
+	 */
 	readonly performed: string[];
+	/** Resolves the first time a verb reads the screen, so a test knows one is driving. */
+	readonly read: Promise<void>;
 	/** Resolves when the airplane-mode step is entered, before `holdAirplaneMode` is awaited. */
 	readonly started: Promise<void>;
 	/** Resolves the first time the wifi step — the last one — runs. */
@@ -80,6 +72,7 @@ function registerRecordingBackend(holdAirplaneMode?: Promise<void>): Recorded {
 	const performed: string[] = [];
 	const airplane = createGate();
 	const wifi = createGate();
+	const read = createGate();
 
 	const overrides: Partial<DeviceBackend> = {
 		watchDevices: (watcher) => {
@@ -87,6 +80,11 @@ function registerRecordingBackend(holdAirplaneMode?: Promise<void>): Recorded {
 			return { stop: async () => {} };
 		},
 		describeDevice: async (serial) => createMockDevice({ serial }),
+		readScreen: async () => {
+			performed.push('readScreen');
+			read.reach();
+			return [];
+		},
 		setAirplaneMode: async (_serial, enabled) => {
 			airplane.reach();
 			await holdAirplaneMode;
@@ -107,7 +105,7 @@ function registerRecordingBackend(holdAirplaneMode?: Promise<void>): Recorded {
 		backend: createMockDeviceBackend(overrides),
 	});
 
-	return { performed, started: airplane.reached, restored: wifi.reached };
+	return { performed, read: read.reached, started: airplane.reached, restored: wifi.reached };
 }
 
 async function start(options: { sweepIntervalMs?: number; leaseTtlMs?: number } = {}) {
@@ -127,19 +125,6 @@ async function connect(): Promise<IpcClient> {
 	}
 	clients.push(client);
 	return client;
-}
-
-/**
- * Yield until everything already scheduled has run — timers, I/O callbacks and the microtasks
- * they queue, repeatedly, because each turn can schedule the next. Not a wait on a duration:
- * it is over when the loop has nothing of its own left to do, and what is still pending after
- * it is pending on something this test is holding.
- */
-async function drainEventLoop(): Promise<void> {
-	for (let turn = 0; turn < LOOP_DRAIN_TURNS; turn += 1) {
-		await new Promise((resolve) => setImmediate(resolve));
-		await pause(0);
-	}
 }
 
 afterEach(async () => {
@@ -228,5 +213,49 @@ describe('shutting the daemon down mid-restoration', () => {
 		// `close()` resolving is a statement that what the daemon owed the device was done, not
 		// merely that it was started.
 		expect(recorded.performed).toEqual(['setAirplaneMode false', 'setWifiEnabled true']);
+	});
+});
+
+describe('restoring a device the previous holder is still driving', () => {
+	it('does not begin the teardown until the verb in flight has stopped', async () => {
+		const recorded = registerRecordingBackend();
+		await start();
+		const client = await connect();
+
+		const granted = await client.request('acquire_device', {
+			serial: SERIAL,
+			owner: 'issue-21',
+			project: 'rover',
+		});
+		if (granted.outcome !== 'granted') throw new Error('expected a granted lease');
+		const { leaseId } = granted.lease;
+
+		// Fired and deliberately not awaited: the server dispatches a frame without waiting for
+		// the verb to answer, which is exactly how a release lands underneath a running one.
+		const verb = client.request('wait_for', {
+			leaseId,
+			target: { by: 'text', text: 'Nothing here' },
+			timeoutMs: CONDITION_TIMEOUT_MS,
+			pollIntervalMs: CONDITION_POLL_MS,
+		});
+		// Waited on the condition, not on a duration: the verb is provably reading the screen.
+		await recorded.read;
+
+		await client.request('release_device', { leaseId });
+
+		// The verb is stopped rather than allowed to finish against a device that is being torn
+		// down and handed on.
+		expect(await verb).toMatchObject({ outcome: 'refused', reason: 'no-lease' });
+		await recorded.restored;
+
+		// The whole claim, read off one ordered list: every screen read happened before the
+		// first teardown step, so the two never drove this device at the same time. A teardown
+		// running beside a wait would answer that wait about the screen the teardown produced.
+		const firstStep = recorded.performed.indexOf('setAirplaneMode false');
+		expect(firstStep).toBeGreaterThan(0);
+		expect(recorded.performed.slice(firstStep)).toEqual([
+			'setAirplaneMode false',
+			'setWifiEnabled true',
+		]);
 	});
 });
