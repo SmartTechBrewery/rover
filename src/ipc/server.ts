@@ -24,6 +24,7 @@
  */
 
 import type { Duplex } from 'node:stream';
+import type { SafeParseReturnType, TypeOf, ZodTypeAny } from 'zod';
 import { encodeFrame, FrameDecoder } from './framing.js';
 import {
 	IPC_METHODS,
@@ -110,7 +111,15 @@ function serveConnection(handlers: IpcHandlers, stream: Duplex): void {
 			// Deliberately not awaited: a verb can take seconds (R21), and holding the next
 			// frame behind it would make one slow call block every other request on the
 			// connection. Ids correlate the replies, so out-of-order completion is expected.
-			void dispatchFrame(handlers, frame, write, refuseConnection);
+			//
+			// The `.catch` is the last line of the module header's promise: an unawaited
+			// promise that rejects reaches Node's unhandled-rejection handler, which under the
+			// default `--unhandled-rejections=throw` kills the whole daemon — every other
+			// client's connection and every live lease with it. Nothing below is supposed to
+			// reject; this is what keeps "supposed to" from being load-bearing.
+			void dispatchFrame(handlers, frame, write, refuseConnection).catch((error: unknown) => {
+				refuseConnection('internal_error', messageOf(error));
+			});
 		}
 	});
 
@@ -171,9 +180,14 @@ async function invokeMethod<Method extends IpcMethodName>(
 ): Promise<Response> {
 	const definition: IpcMethodDefinition = IPC_METHODS[method];
 
-	const params = definition.params.safeParse(rawParams);
+	// `safeParse` is only safe as far as the schema is: Zod does not convert an exception
+	// thrown inside a `.transform()` into a `ZodError`, it lets it propagate straight out
+	// here. Schemas in `src/core/ids.ts` refine before they transform so they cannot do that
+	// — but the boundary that promises never to throw has to hold that promise itself rather
+	// than delegate it to every schema anyone adds later.
+	const params = safeParseGuarded(definition.params, rawParams);
 	if (!params.success) {
-		return errorResponse(id, 'invalid_params', describeIssues(params.error));
+		return errorResponse(id, 'invalid_params', params.message);
 	}
 
 	let returned: unknown;
@@ -186,16 +200,40 @@ async function invokeMethod<Method extends IpcMethodName>(
 	// The response path is parsed too, so "never cast" holds in both directions. A handler
 	// returning the wrong shape is a daemon bug, and it is caught here — at the boundary —
 	// instead of at the agent, which cannot tell a bad result from a bad device.
-	const result = definition.result.safeParse(returned);
+	const result = safeParseGuarded(definition.result, returned);
 	if (!result.success) {
 		return errorResponse(
 			id,
 			'invalid_result',
-			`Handler for '${method}' returned an invalid result: ${describeIssues(result.error)}`,
+			`Handler for '${method}' returned an invalid result: ${result.message}`,
 		);
 	}
 
 	return resultResponse(id, result.data);
+}
+
+type GuardedParse<Output> =
+	| { readonly success: true; readonly data: Output }
+	| { readonly success: false; readonly message: string };
+
+/**
+ * `schema.safeParse`, with the one case `safeParse` does not cover folded back in: a schema
+ * that *throws* rather than returning an issue. Both come back as a failure with a message,
+ * so a caller never has to decide which kind of bad input it is looking at.
+ */
+function safeParseGuarded<Schema extends ZodTypeAny>(
+	schema: Schema,
+	value: unknown,
+): GuardedParse<TypeOf<Schema>> {
+	let parsed: SafeParseReturnType<unknown, TypeOf<Schema>>;
+	try {
+		parsed = schema.safeParse(value);
+	} catch (error) {
+		return { success: false, message: messageOf(error) };
+	}
+	return parsed.success
+		? { success: true, data: parsed.data }
+		: { success: false, message: describeIssues(parsed.error) };
 }
 
 function resultResponse(id: RequestId, result: unknown): ResultResponse {

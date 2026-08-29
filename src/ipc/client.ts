@@ -168,7 +168,25 @@ export function createIpcClient(stream: Duplex): IpcClient {
 				const definition: IpcMethodDefinition = IPC_METHODS[method];
 				pending.set(id, {
 					deliver: (raw) => {
-						const result = definition.result.safeParse(raw);
+						// `deliver` runs inside the stream's `data` listener, where a throw is an
+						// uncaught exception in the client process rather than a failed request. Zod
+						// lets an exception raised inside a `.transform()` escape `safeParse`, so this
+						// try is what keeps a host answering with a bad id from killing the CLI or the
+						// MCP server instead of failing the one call.
+						let result: ReturnType<typeof definition.result.safeParse>;
+						try {
+							result = definition.result.safeParse(raw);
+						} catch (error) {
+							reject(
+								new IpcRequestError(
+									'invalid_result',
+									`Host returned an invalid result for '${method}': ${
+										error instanceof Error ? error.message : String(error)
+									}`,
+								),
+							);
+							return;
+						}
 						if (result.success) {
 							resolve(result.data);
 							return;

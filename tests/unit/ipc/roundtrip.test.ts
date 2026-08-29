@@ -1,8 +1,9 @@
 import type { Duplex } from 'node:stream';
 import { describe, expect, it, vi } from 'vitest';
+import { parseDeviceSerial } from '@/core/ids.js';
 import { createIpcClient } from '@/ipc/client.js';
 import { encodeFrame, FrameDecoder, MAX_FRAME_BYTES } from '@/ipc/framing.js';
-import type { IpcHandlers, StatusResult } from '@/ipc/methods.js';
+import { IPC_METHODS, type IpcHandlers, type StatusResult } from '@/ipc/methods.js';
 import { IpcRequestError, PROTOCOL_VERSION, ResponseSchema } from '@/ipc/protocol.js';
 import { createIpcServer } from '@/ipc/server.js';
 import { createDuplexPair } from '../../helpers/duplex-pair.js';
@@ -17,6 +18,15 @@ function statusHandlers(overrides: Partial<IpcHandlers> = {}): IpcHandlers {
 	return {
 		status: () => ({ protocolVersion: PROTOCOL_VERSION, pid: 4242, uptimeMs: 7 }),
 		list_devices: () => ({ devices: [], stale: false }),
+		// The lease rows exist so this table stays complete; the refusal is the cheapest
+		// answer that is still a real one, and one suite below sends it over the wire.
+		acquire_device: () => ({
+			outcome: 'refused',
+			reason: 'gone',
+			message: 'no device host in these tests',
+			heldBy: null,
+		}),
+		release_device: () => ({ released: false }),
 		...overrides,
 	};
 }
@@ -60,6 +70,39 @@ describe('request/response over a duplex pair', () => {
 			protocolVersion: PROTOCOL_VERSION,
 			pid: 4242,
 			uptimeMs: 7,
+		});
+	});
+
+	it('carries an acquire_device refusal, discriminant and all, over the wire', async () => {
+		const { client } = connect(
+			statusHandlers({
+				acquire_device: () => ({
+					outcome: 'refused',
+					reason: 'held',
+					message: "Device 'attached-1' is held by 'issue-112'",
+					heldBy: {
+						serial: parseDeviceSerial('attached-1'),
+						owner: 'issue-112',
+						project: 'rover',
+						testName: null,
+						expiresInMs: 60_000,
+					},
+				}),
+			}),
+		);
+
+		// A refusal is data, not an IPC error, so it has to survive both parses — the server's
+		// on the way out and the client's on the way in — as a result rather than a rejection.
+		await expect(
+			client.request('acquire_device', {
+				serial: parseDeviceSerial('attached-1'),
+				owner: 'pr-127-review',
+				project: 'rover',
+			}),
+		).resolves.toMatchObject({
+			outcome: 'refused',
+			reason: 'held',
+			heldBy: { owner: 'issue-112', expiresInMs: 60_000 },
 		});
 	});
 
@@ -377,5 +420,70 @@ describe('a host that is not this one', () => {
 		});
 
 		await expect(client.request('status', {})).rejects.toMatchObject({ code: 'invalid_result' });
+	});
+});
+
+/**
+ * The server's own promise is that it never throws out of a connection, and `safeParse` is
+ * only as safe as the schema behind it: Zod lets an exception raised inside a `.transform()`
+ * propagate straight out, past a caller that has every reason to expect a returned failure.
+ * An unawaited `dispatchFrame` rejecting that way is process death, not a bad response.
+ *
+ * These stub the schema rather than send a bad id on purpose — the guard has to hold for any
+ * schema anyone adds later, not just for the two branded-id fields that first exposed it.
+ */
+describe('a schema that throws instead of returning an issue', () => {
+	it('answers invalid_params rather than rejecting the dispatch', async () => {
+		vi.spyOn(IPC_METHODS.status.params, 'safeParse').mockImplementation(() => {
+			throw new Error('schema exploded');
+		});
+		const { client } = connect();
+
+		await expect(client.request('status', {})).rejects.toMatchObject({
+			code: 'invalid_params',
+			message: 'schema exploded',
+		});
+		expect(IPC_METHODS.status.params.safeParse).toHaveBeenCalled();
+		vi.restoreAllMocks();
+	});
+
+	it('fails the client’s request rather than throwing inside its data listener', async () => {
+		// The mirror image of the server case: the client parses results in the stream's
+		// `data` handler, where a throw is an uncaught exception in the CLI or MCP process.
+		vi.spyOn(IPC_METHODS.status.result, 'safeParse').mockImplementation(() => {
+			throw new Error('client-side schema exploded');
+		});
+		const [clientSide, serverSide] = createDuplexPair();
+		const requests = new FrameDecoder();
+		serverSide.on('data', (chunk: Buffer) => {
+			for (const frame of requests.push(chunk)) {
+				const { id } = JSON.parse(frame) as { id: string };
+				serverSide.write(
+					encodeFrame({
+						type: 'result',
+						protocolVersion: PROTOCOL_VERSION,
+						id,
+						result: { protocolVersion: PROTOCOL_VERSION, pid: 1, uptimeMs: 0 },
+					}),
+				);
+			}
+		});
+
+		await expect(createIpcClient(clientSide).request('status', {})).rejects.toMatchObject({
+			code: 'invalid_result',
+		});
+		vi.restoreAllMocks();
+	});
+
+	it('answers invalid_result when it is the result schema that throws', async () => {
+		vi.spyOn(IPC_METHODS.status.result, 'safeParse').mockImplementation(() => {
+			throw new Error('result schema exploded');
+		});
+		const { client } = connect();
+
+		await expect(client.request('status', {})).rejects.toMatchObject({
+			code: 'invalid_result',
+		});
+		vi.restoreAllMocks();
 	});
 });

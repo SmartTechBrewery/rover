@@ -21,9 +21,9 @@ import { z } from 'zod';
 import {
 	type AppId,
 	type DeviceSerial,
-	parseDeviceSerial,
-	parseElementId,
-	parsePlatformId,
+	DeviceSerialSchema,
+	ElementIdSchema,
+	PlatformIdSchema,
 } from './ids.js';
 
 /**
@@ -58,8 +58,8 @@ export type DeviceAttachment = z.infer<typeof DeviceAttachmentSchema>;
  * cannot be asked for one.
  */
 export const DeviceSchema = z.object({
-	serial: z.string().transform(parseDeviceSerial),
-	platform: z.string().transform(parsePlatformId),
+	serial: DeviceSerialSchema,
+	platform: PlatformIdSchema,
 	model: z.string().nullable(),
 	state: DeviceStateSchema,
 	/**
@@ -115,8 +115,8 @@ export type ScreenInfo = z.infer<typeof ScreenInfoSchema>;
  */
 export const DeviceInfoSchema = z
 	.object({
-		serial: z.string().transform(parseDeviceSerial),
-		platform: z.string().transform(parsePlatformId),
+		serial: DeviceSerialSchema,
+		platform: PlatformIdSchema,
 		model: z.string().nullable(),
 		screen: ScreenInfoSchema,
 		/** The user-facing OS version string. */
@@ -151,7 +151,7 @@ export type Rect = z.infer<typeof RectSchema>;
  * taps the wrong thing. Both are nullable: plenty of elements carry neither.
  */
 export const ScreenElementSchema = z.object({
-	id: z.string().transform(parseElementId),
+	id: ElementIdSchema,
 	text: z.string().nullable(),
 	label: z.string().nullable(),
 	bounds: RectSchema,

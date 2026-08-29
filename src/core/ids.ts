@@ -20,6 +20,8 @@
  *   argv.push(unwrap(serial));
  */
 
+import { z } from 'zod';
+
 /**
  * The identifier a host uses to address one attached device. Opaque: never parse it
  * to infer platform, model or anything else — those come from queries
@@ -36,6 +38,17 @@ export type DeviceSerial = string & { readonly __brand: 'DeviceSerial' };
  * ai/RULES.md §2 forbids.
  */
 export type PlatformId = string & { readonly __brand: 'PlatformId' };
+
+/**
+ * The handle a granted lease is held by — what a caller presents to release it, and what
+ * the artifact archive later names a directory after (PROJECT.md §10).
+ *
+ * Branded for the usual reason and for a second one: it is the **credential**. The owner
+ * string attributes a lease and never authorizes anything (D20), so this id is the only
+ * thing that ends a lease, and a serial passed where one of these belongs would otherwise
+ * compile and then end somebody else's.
+ */
+export type LeaseId = string & { readonly __brand: 'LeaseId' };
 
 /** A single element in a screen read — the stable handle a verb taps or waits on. */
 export type ElementId = string & { readonly __brand: 'ElementId' };
@@ -86,6 +99,11 @@ export function parsePlatformId(raw: string): PlatformId {
 	return requireNonEmpty(raw, 'PlatformId') as PlatformId;
 }
 
+/** Parse and brand a lease id. Throws `InvalidIdError` on empty/whitespace input. */
+export function parseLeaseId(raw: string): LeaseId {
+	return requireNonEmpty(raw, 'LeaseId') as LeaseId;
+}
+
 /** Parse and brand a screen element id. Throws `InvalidIdError` on empty/whitespace input. */
 export function parseElementId(raw: string): ElementId {
 	return requireNonEmpty(raw, 'ElementId') as ElementId;
@@ -119,6 +137,54 @@ export function parseAppId(raw: string): AppId {
 }
 
 /** Strip the brand for an outbound boundary — an argv entry, a log line, a wire payload. */
-export function unwrap(id: DeviceSerial | PlatformId | ElementId | AppId): string {
+export function unwrap(id: DeviceSerial | PlatformId | ElementId | AppId | LeaseId): string {
 	return id;
 }
+
+/**
+ * The **schema** form of each parser, for use anywhere a branded id arrives inside a Zod
+ * shape rather than as a bare argument.
+ *
+ * These exist because `z.string().transform(parseDeviceSerial)` is a trap: an exception
+ * thrown inside a `.transform()` is not converted into a `ZodError` — it propagates
+ * straight out of `safeParse`, past every caller written on the promise that `safeParse`
+ * reports failure rather than raising it. On the IPC request path that turned one
+ * whitespace-only `serial` into an unhandled rejection and a dead daemon.
+ *
+ * So the shape is checked by a `.refine()` *before* the transform runs, and the transform
+ * is then only ever handed input its parser cannot reject. Use these in schemas; use the
+ * `parse*` functions for a value that is not already inside one. Neither trims: a serial is
+ * opaque (see {@link DeviceSerial}) and silently rewriting one would address a different
+ * device than the caller named.
+ */
+function brandedIdSchema<Branded extends string>(
+	kind: string,
+	parse: (raw: string) => Branded,
+	isValid: (raw: string) => boolean = (raw) => raw.trim().length > 0,
+	expected = 'a non-empty, non-whitespace string',
+) {
+	return z
+		.string()
+		.refine(isValid, { message: `Invalid ${kind}: expected ${expected}` })
+		.transform(parse);
+}
+
+/** Non-throwing schema form of {@link parseDeviceSerial}. */
+export const DeviceSerialSchema = brandedIdSchema('DeviceSerial', parseDeviceSerial);
+
+/** Non-throwing schema form of {@link parsePlatformId}. */
+export const PlatformIdSchema = brandedIdSchema('PlatformId', parsePlatformId);
+
+/** Non-throwing schema form of {@link parseLeaseId}. */
+export const LeaseIdSchema = brandedIdSchema('LeaseId', parseLeaseId);
+
+/** Non-throwing schema form of {@link parseElementId}. */
+export const ElementIdSchema = brandedIdSchema('ElementId', parseElementId);
+
+/** Non-throwing schema form of {@link parseAppId} — the reverse-DNS shape, not merely non-blank. */
+export const AppIdSchema = brandedIdSchema(
+	'AppId',
+	parseAppId,
+	(raw) => APP_ID.test(raw),
+	'two or more dot-separated segments, each starting with a letter (e.g. com.example.app)',
+);

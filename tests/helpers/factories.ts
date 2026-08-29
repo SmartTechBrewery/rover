@@ -28,6 +28,8 @@ import {
 	type DeviceWatcher,
 	ScreenElementSchema,
 } from '@/core/device.js';
+import { parseDeviceSerial, parseLeaseId } from '@/core/ids.js';
+import { LEASE_TTL_MS, type Lease } from '@/daemon/leases.js';
 
 export function createMockCapabilities(overrides: Partial<Capabilities> = {}): Capabilities {
 	return {
@@ -47,6 +49,26 @@ export function createMockDevice(overrides: Partial<Device> = {}): Device {
 		attachment: 'this-host',
 		...overrides,
 	});
+}
+
+/**
+ * A lease record as the store holds it — an id, a serial and the three caller-supplied
+ * attribution strings (D16, D22).
+ *
+ * `expiresAtMs` is a host-local instant a full TTL out, because that is what the record
+ * carries; what crosses the wire is the remaining duration (D17). Note that this builds a
+ * record, it does not put one in a store — a test that needs a *held* device acquires it.
+ */
+export function createMockLease(overrides: Partial<Lease> = {}): Lease {
+	return {
+		id: parseLeaseId('test-lease-1'),
+		serial: parseDeviceSerial('test-serial-1'),
+		owner: 'issue-112',
+		project: 'test-project',
+		testName: null,
+		expiresAtMs: Date.now() + LEASE_TTL_MS,
+		...overrides,
+	};
 }
 
 /**
