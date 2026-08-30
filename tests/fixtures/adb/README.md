@@ -50,6 +50,8 @@ that host had by then. The three `input` rows were captured **2026-08-30** on a 
 | `input.unknown-command.api37-sdk-gphone16k-arm64.txt` | `adb -s $SERIAL shell input frobnicate 1 2 > f 2>&1` | sdk_gphone16k_arm64 | 37 | 2026-08-30 |
 | `input-tap.missing-argument.api37-sdk-gphone16k-arm64.txt` | `adb -s $SERIAL shell input tap > f 2>&1` | sdk_gphone16k_arm64 | 37 | 2026-08-30 |
 | `input-text.non-ascii.api37-sdk-gphone16k-arm64.txt` | `adb -s $SERIAL shell input text 'zażółć' > f 2>&1` | sdk_gphone16k_arm64 | 37 | 2026-08-30 |
+| `uiautomator-dump.api37-sdk-gphone16k-arm64.txt` | `adb -s $SERIAL shell uiautomator dump /sdcard/window_dump.xml > f 2>&1` | sdk_gphone16k_arm64 | 37 | 2026-08-30 |
+| `uiautomator-dump.unwritable-path.api37-sdk-gphone16k-arm64.txt` | `adb -s $SERIAL shell uiautomator dump /data/nope/window_dump.xml > f 2>&1` | sdk_gphone16k_arm64 | 37 | 2026-08-30 |
 
 Both `wm` overrides were reset with `wm size reset` / `wm density reset` immediately after the
 capture. The `track-devices` capture leaves the host as it found it the same way: the second entry
@@ -59,6 +61,24 @@ it creates is removed by the `adb disconnect` that is part of the recipe, confir
 The two network captures come from a session that toggled the emulator's radios repeatedly, and it
 ended the way it found them: `settings get global airplane_mode_on` → `0`, `settings get global
 wifi_on` → `1`, `cmd wifi status` → `Wifi is enabled`.
+
+The two `uiautomator-dump.…` captures are the dump command's **own** output, not the document —
+`../../../src/backends/android/parsers/uiautomator.ts` reads them, and the XML above is what
+`parsers/hierarchy.ts` reads. Both were taken with `> f 2>&1` because which stream adb uses is the
+thing being recorded: the confirmation `UI hierchary dumped to: <path>` (adb's typo, not ours)
+lands on **stdout**, and stderr was empty.
+
+The `unwritable-path` capture is there because of what it proves: `uiautomator dump` printed the
+same confirmation for `/data/nope/window_dump.xml`, exited 0, and wrote nothing —
+`ls /data/nope/window_dump.xml` afterwards is `No such file or directory`. The line is a claim
+about a path, not proof of a file, which is why the backend compares the path rather than treating
+the line's presence as success.
+
+**A dump that failed outright could not be reproduced on this emulator**, and no fixture is
+invented for one. The `ERROR: could not get idle state` shape is widely reported for a screen that
+is animating; three attempts to force it — a dump racing a fling, and five concurrent flings under
+one dump — each returned the ordinary confirmation on 2026-08-30. Capture one beside these if a
+device ever produces it.
 
 The hierarchy dump is **Settings → Display & touch**, unscrolled, reached with `adb shell am start
 -a android.settings.DISPLAY_SETTINGS`. It was chosen over the Settings home page because it is the

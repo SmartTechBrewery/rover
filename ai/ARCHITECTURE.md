@@ -23,13 +23,27 @@ that consumes this one**, handing it an already-connected stream. That is what m
 listener an added transport rather than a rewrite, and it is checkable by reading the imports:
 the unit tests drive the whole surface over an in-memory stream pair that is not a socket at all.
 
-**Both transports exist now**, and they share one `IpcServer` instance built in
-`src/daemon/listen.ts`:
+**Both transports exist now, and both halves of each.** The two listeners share one
+`IpcServer` instance built in `src/daemon/listen.ts`; the two clients share one
+`createIpcClient`:
 
-- `src/daemon/listen.ts` binds the local unix socket. It needs no token and no configuration.
-- `src/daemon/network-listen.ts` binds TCP+TLS when the operator opted in
-  (`src/daemon/network-config.ts`, `ROVER_LISTEN_PORT`). It is handed the same `IpcServer`, so
-  there is one method table and one dispatcher and nothing for the two to drift from.
+| | Host side | Client side |
+|---|---|---|
+| Local unix socket | `src/daemon/listen.ts` — no token, no configuration | `src/daemon/connect.ts` — **and autostart lives here** (D5) |
+| TCP + TLS | `src/daemon/network-listen.ts` — opt-in via `ROVER_LISTEN_PORT` | `src/daemon/network-connect.ts` — configured by `ROVER_HOST_ADDRESS` |
+
+Each pair is handed the same `IpcServer` or wrapped by the same `createIpcClient`, so there is
+one method table, one dispatcher, one set of schemas, and nothing for the four to drift from.
+`src/daemon/network-config.ts` carries both halves' configuration, and `ROVER_HOST_TOKEN` is
+deliberately one variable for both: a machine that hosts devices and also borrows one is
+holding one secret, not two.
+
+**Autostart is contained by that table rather than by discipline.** `network-connect.ts` does
+not import `node:child_process` and never may — a host reachable over a network is a service
+its operator runs, so a client that cannot reach one says so, naming the address, the port and
+the error code (D5). `tests/unit/daemon/remote-never-spawns.test.ts` is the executable form of
+that line, and `src/cli/_shared/host.ts` is the single place the two client halves are chosen
+between (`--host local | remote`).
 
 **The token gate sits in front of `handleConnection`, never inside it.** A request envelope is
 `{ protocolVersion, id, method, params }` and nothing else, so authentication cannot be a field
@@ -203,8 +217,8 @@ Verbs live above the backends and below the adapters, and this is where determin
   that pass **no target at all**. `PerformActionOptions.target` is optional for exactly this: a key
   press addresses no element, and neither does text going to whatever holds focus, so the
   `ActionResult`'s `target` is `null` — a fact about the verb, not a resolution that failed. Neither
-  therefore reads a screen to aim, which is what makes `press_key` provable end to end on hardware
-  before a backend can read its screen at all. There is no target *option* on `type_text` either: an
+  therefore reads a screen to aim, so neither can fail on a target a screen read would have had to
+  find first. There is no target *option* on `type_text` either: an
   agent composes `tap` with it, rather than keeping a second copy of the spine's resolution here.
   `pressKey` takes `DeviceKey` — the vocabulary in `src/core/device.ts`, shared with the backend and
   with the wire so all three refuse the same keys. `typeText` hands the caller's string to the
@@ -215,6 +229,32 @@ Verbs live above the backends and below the adapters, and this is where determin
   `unsupported-text` failure naming the offending characters as escapes, because the string is the
   caller's and the caller is who can change it. A plain `Error` there would arrive as
   `internal_error`, telling an agent the host broke over a string the agent chose.
+- **`launchApp()`, `stopApp()` and `clearAppData()`** (`src/verbs/app.ts`) are the same spine with
+  two things left out, and both omissions are the family's whole content. **`requires: []` is the
+  honest answer for a verb built only on required interface methods**: these three are declared on
+  `DeviceBackend` itself, so there is no capability to assert, and the list is required rather than
+  optional precisely so an author has to say that out loud instead of leaving it off. They reach
+  `context.backend` directly rather than through `capabilityMethod()`, which will not typecheck for
+  an ungated method — the type saying so is the design working, and adding a `canControlApps` flag
+  to "fix" it would be a capability that is always true. **And they pass no target at all**, because
+  an app id addresses a package rather than something on the screen: no screen is read before the
+  action and `ActionResult.target` is `null`, which is a fact about the verb rather than a
+  resolution that failed. `stop_app` cannot distinguish a stopped app from a package that was never
+  installed — the device answers the same either way (`PROJECT.md` §6) — so the after-state is what
+  settles that, and no probe here pretends to. One family-wide gap is recorded rather than hidden: a
+  device-level refusal, such as launching a package that is not installed, is still a rejected
+  promise out of the backend and so arrives as `internal_error`. That is true of every verb family
+  here and is filed as its own issue rather than fixed one family at a time.
+- **`readScreen()` and `deviceInfo()`** (`src/verbs/read.ts`) are the spine with the *middle* left
+  out: their action is empty, because a read verb's work is the capture `performAction()` already
+  performs for every verb — the screen for the after-state, the device for D14. Routing them
+  through the spine rather than around it costs one no-op call and is what keeps a read from
+  growing an answer shape of its own. `read_screen` declares `requires: ['canReadScreen']`, and
+  that declaration is the verb: without it the call would still answer, with the `unavailable`
+  after-state below, which is honest for a *tap* and wrong here — for a read the state is not
+  context around an action, it is the entire answer, so D11's loud failure has to come before
+  dispatch. `device_info` requires nothing (a required backend method, like the app family) and
+  answers with `result.device`. Neither passes a target, for the same reason the app verbs do not.
 - **`ActionResult`** names the verb, the device (as `DeviceInfo`, so D14's density travels with the
   measurement), the resolved target and the state after the action. A backend with input but no
   screen reading answers an explicit `unavailable` after-state naming the capability that would have
@@ -257,7 +297,10 @@ the process with a registry.
 - **A shared preamble, one row per verb.** `createVerbHandlers` does the renew / register /
   re-verify / resolve work once, so each further verb family is one `IPC_METHODS` row and one
   `runVerb` call rather than another copy of it — and inherits the rule above by construction rather
-  than by remembering it. That is why this row landed before the verb families.
+  than by remembering it. That is why this row landed before the verb families. The three app rows
+  are what that promise looks like cashed: they share one params schema between them, because the
+  three calls are identical, and a verb that later grows a field of its own forks it rather than
+  widening what every row would then advertise.
 
 ---
 

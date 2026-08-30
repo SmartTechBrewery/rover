@@ -46,9 +46,12 @@ import { requireDeviceBackend } from '../backends/registry.js';
 import type { Device } from '../core/device.js';
 import type { LeaseId } from '../core/ids.js';
 import type {
+	AppVerbParams,
+	DeviceInfoParams,
 	IpcHandlers,
 	LongPressParams,
 	PressKeyParams,
+	ReadScreenParams,
 	ScrollParams,
 	SwipeParams,
 	TapParams,
@@ -57,6 +60,7 @@ import type {
 	WaitForParams,
 	WaitUntilGoneParams,
 } from '../ipc/methods.js';
+import { clearAppData, launchApp, stopApp } from '../verbs/app.js';
 import type { VerbContext } from '../verbs/context.js';
 import { toVerbFailure } from '../verbs/failure.js';
 import {
@@ -69,6 +73,7 @@ import {
 	tap,
 	typeText,
 } from '../verbs/input.js';
+import { deviceInfo, readScreen } from '../verbs/read.js';
 import type { ActionResult } from '../verbs/result.js';
 import { type WaitVerbOptions, waitFor, waitUntilGone } from '../verbs/wait-for.js';
 import type { DeviceInventory } from './inventory.js';
@@ -86,6 +91,11 @@ export type VerbHandlers = Pick<
 	| 'scroll'
 	| 'type_text'
 	| 'press_key'
+	| 'read_screen'
+	| 'device_info'
+	| 'launch_app'
+	| 'stop_app'
+	| 'clear_app_data'
 >;
 
 /**
@@ -215,6 +225,33 @@ export function createVerbHandlers(
 
 		press_key(params: PressKeyParams): Promise<VerbCallResult> {
 			return runVerb(params.leaseId, (context) => pressKey(context, params.key));
+		},
+
+		// The two read rows. Their whole answer is the state the spine captures for every verb,
+		// so they take no arguments beyond the lease id and reach the verb layer with nothing
+		// else — `read_screen`'s `requires: ['canReadScreen']` is what makes a backend that
+		// cannot read one say so by name instead of answering with an empty screen (D11).
+		read_screen(params: ReadScreenParams): Promise<VerbCallResult> {
+			return runVerb(params.leaseId, (context) => readScreen(context));
+		},
+
+		device_info(params: DeviceInfoParams): Promise<VerbCallResult> {
+			return runVerb(params.leaseId, (context) => deviceInfo(context));
+		},
+
+		// The three app rows. They call the *verb* of that name and never `context.backend.*`,
+		// which reads identically and would skip the spine — no after-state, no device in the
+		// answer. The whole family is three lines each because the preamble above is shared.
+		launch_app(params: AppVerbParams): Promise<VerbCallResult> {
+			return runVerb(params.leaseId, (context) => launchApp(context, params.appId));
+		},
+
+		stop_app(params: AppVerbParams): Promise<VerbCallResult> {
+			return runVerb(params.leaseId, (context) => stopApp(context, params.appId));
+		},
+
+		clear_app_data(params: AppVerbParams): Promise<VerbCallResult> {
+			return runVerb(params.leaseId, (context) => clearAppData(context, params.appId));
 		},
 	};
 }

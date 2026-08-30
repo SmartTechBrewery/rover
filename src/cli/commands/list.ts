@@ -17,7 +17,8 @@ Usage: rover list [--host <name>] [--json]
 One row per attached device: serial, platform, model, state, and either 'free' or the
 owner holding it, the project and test name they gave, and how long they have left. A view
 the host cannot vouch for is called out on stderr in both modes; a host that cannot be
-reached is a failure naming the socket, never an empty list.`;
+reached is a failure naming it — the socket, or the address and port — never an empty
+list.`;
 
 const HEADINGS = ['SERIAL', 'PLATFORM', 'MODEL', 'STATE', 'HELD BY'] as const;
 

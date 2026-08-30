@@ -133,9 +133,9 @@ Working names. All of them take a device handle, and over the wire that handle i
 | Verb | Notes |
 |---|---|
 | `screenshot` | |
-| `read_screen` | Texts and element rectangles. **Works even when the app blocks screenshots** |
+| `read_screen` | Texts and element rectangles. **Works even when the app blocks screenshots**. Declares `canReadScreen` as a requirement, so a backend without it fails by name before anything is dispatched rather than answering with an empty screen (D11) |
 | `record_video` | A recording plus a slice into frames — for states that do not stand still |
-| `device_info` | Size, density, computed width in dp, OS version |
+| `device_info` | Size, density, computed width in dp, OS version. Needs no capability and addresses nothing on the screen — it answers with the `DeviceInfo` every result already carries (D14), asked for on its own |
 
 ### Waiting
 
@@ -147,7 +147,7 @@ Working names. All of them take a device handle, and over the wire that handle i
 
 | Verb | Notes |
 |---|---|
-| `install_app` / `launch_app` / `stop_app` / `clear_app_data` | |
+| `install_app` / `launch_app` / `stop_app` / `clear_app_data` | The last three address a **package**, so they resolve no target and need no capability — the backend methods behind them are required ones. `stop_app` cannot tell a stopped app from a package that was never installed (§6); the state after the action is what answers that |
 | `read_logs` | Catches a failure a screenshot will not show |
 | `set_airplane_mode` / `set_wifi` | See §6 — recipes that need no root |
 | `pull_file` / `push_file` | |
@@ -528,6 +528,63 @@ prints, what coordinate space it takes, and what `input text` does with a caller
   else would.
 - **`input text ''` is a legal no-op** — exit 0, nothing printed, nothing typed.
 
+Checked on the same API 37 emulator (`sdk_gphone16k_arm64`) with `adb` 37.0.0, **2026-08-30**,
+while building `readScreen` (#13 phase 1). The two-command recipe above is unchanged and still
+correct; what follows is what building on it measured.
+
+- **`uiautomator dump`'s confirmation goes to stdout, and stderr is empty.** Captured with
+  `> f 2>&1` and then again with the streams separated:
+  `UI hierchary dumped to: /sdcard/window_dump.xml\n` on stdout, zero bytes on stderr, exit 0.
+  Worth pinning rather than assuming, because this is the one family of commands where adb's
+  choice of stream is not predictable — `am start`, `pm clear` and `install` each put their real
+  failures on the stream nobody expects.
+- **That confirmation is a claim about a path, not proof of a file.**
+  `uiautomator dump /data/nope/window_dump.xml` printed exactly the same line, naming that path,
+  and **exited 0 having written nothing** — `ls /data/nope/window_dump.xml` afterwards is
+  `No such file or directory`. So a predicate that reads the line as "the dump succeeded" is
+  wrong; `parsers/uiautomator.ts` answers the *path* instead, and `readScreen` compares it to the
+  one it asked for. What that comparison buys is freshness: the dump path is a fixed literal and
+  can already hold a previous read's document, so a dump that produced nothing followed by a `cat`
+  that succeeds would hand back a screen from a minute ago, indistinguishable from the current one.
+- **`ERROR: could not get idle state` could not be reproduced here.** That widely-reported
+  failure needs a screen that will not settle; a dump racing a fling, and a dump under five
+  concurrent flings, each returned the ordinary confirmation. `readScreen`
+  reports the shape loudly through `refused(...)` if a device ever produces it, and deliberately
+  does **not** retry — a retry loop is a wait, and waiting belongs to `src/core/wait.ts` and the
+  wait verbs rather than inside a primitive. No fixture was invented for it
+  (`tests/fixtures/adb/README.md` says so).
+- **Two `uiautomator dump`s at once on one device get one of them killed — exit 137, both
+  streams empty.** Two `adb -s … shell uiautomator dump /sdcard/window_dump.xml` started
+  together: one printed the ordinary confirmation at exit 0 and the other exited **137** having
+  printed nothing at all on either stream (3 runs out of 3, 2026-08-30; which of the two loses is
+  not predictable). 137 is SIGKILL — the device kills the second instance rather than queueing
+  it — so the failure arrives as an `AdbCommandError` with no wording to read, not as a dump that
+  says something. The narrower window on the same shared path costs the same: one read's
+  `rm` landing between the other's dump and its `cat` leaves the `cat` with no file.
+  This is not an exotic case — the IPC server dispatches frames without awaiting them, so a
+  client holding one lease can have two verbs reading one device — and it is why
+  `AndroidDeviceBackend` queues its reads per serial rather than letting the device arbitrate.
+- **`read_screen` works while the app blocks screen capture — verified, and this is R13's own
+  acceptance criterion.** On the Settings PIN-entry screen
+  (`com.android.settings/…password.ChooseLockPassword`, reached with
+  `am start -a android.app.action.SET_NEW_PASSWORD` and two taps),
+  `exec-out screencap -p` came back a valid PNG of the full 1280×2856 panel with **every sampled
+  pixel at luminance 0** — 20 KB against 1.7 MB for the same panel on the launcher — while
+  `readScreen` on the same screen returned a full list of elements — `Set a PIN`, `CLEAR`, `NEXT`
+  and a `PIN area` label among them, each with its rectangle. That asymmetry is the whole reason the hierarchy
+  read is a first-class verb rather than a fallback for when a screenshot is inconvenient. The
+  device was left as it was found: three `KEYCODE_BACK`s out of the flow, no lock set
+  (`locksettings get-disabled` still `true`).
+- **Rotation is a known, unfixed asymmetry, and it is the hierarchy's turn to have it.** The dump's
+  bounds follow the **current surface** while `wm size` reports the **panel**, exactly as the
+  capture does (the `screencap` entry above, and `tests/device/android/screenshot.test.ts`). On a rotated device `ScreenInfo.widthDp` and the
+  root node's width are therefore each other's transpose, and `requireAddressable()` in
+  `src/verbs/target.ts` could reject an element that is plainly visible. Recorded rather than
+  fixed: the fix is a rotation-aware `ScreenInfo`, which is a row of its own.
+  `tests/device/android/backend.test.ts` compares the two as an unordered pair for this reason,
+  which still catches a missing px→dp conversion — the thing that assertion is for — without
+  pretending rotation is handled.
+
 Checked on the same emulator while landing the gesture verbs over those primitives (#60, phase 2
 of #12), 2026-08-30:
 
@@ -565,6 +622,17 @@ well behaved:
   `ERR_TLS_HANDSHAKE_TIMEOUT` on the server and then leaves the socket exactly where it was, so a
   server that merely swallows that event has a log line rather than a deadline. Destroying the
   `TLSSocket` the event carries takes the raw socket with it.
+
+Checked against Node 25.2 while building R22's client, 2026-08-30:
+
+- **`tls.connect({ servername })` throws when the value is an IP address.** Not a warning and not
+  a value quietly ignored — `ERR_INVALID_ARG_VALUE`, synchronously, before a packet is sent
+  ("Setting the TLS ServerName to an IP address is not permitted", RFC 6066). Setting
+  `servername` to whatever the caller configured as the host is the obvious thing to write and
+  breaks `ROVER_HOST_ADDRESS=10.0.0.4`, which is the *ordinary* way to name a host on a private
+  network — while passing every test written against `localhost`. Send SNI only when the address
+  is a name (`isIP(address) === 0`). Leaving it out costs nothing: Node still verifies the
+  certificate against `host`, IP SANs included, which is the check that matters.
 
 ---
 
@@ -652,9 +720,9 @@ Four rules when filing these issues:
 | R21 | Host-side verb execution | The daemon loads the core; the CLI and MCP call verbs over the same surface as leases (D19). **No adb in a client process** — checkable by a test. This row stands ahead of the verb families deliberately: changing the execution model after they are written is a rewrite of six files instead of one | R11 | L |
 | R22 | Host network listener and authentication | TCP with TLS alongside the local socket, **the same surface, a second transport** (D17). The host token authenticates, the owner string attributes — **two separate fields, and a test proves the token never becomes the owner nor reaches a log** (D20). A refusal does not reveal what the host has attached | R21 | L |
 | R12 | Input verbs | **Done** (#12, #60, #61). `tap`, `long_press`, `swipe`, `scroll`, `type_text`, `press_key`. `long_press` as a drag in place — **not** `keyevent --longpress` (§6) — held past the device's own `secure long_press_timeout`, which is configuration rather than a constant. `type_text` hides the device shell's quoting. Split the way R9 and R16 were, into three: the backend's four **primitives** landed first (#12 phase 1) — `tap` / `swipe` / `typeText` / `pressKey` behind `canInput`, with the dp→px conversion and the text limits §6 records — then the four **gesture verbs** over them (#60 phase 2), `tap` / `long_press` / `swipe` / `scroll`, each on the R11 spine with its own `IPC_METHODS` row; `type_text` and `press_key` closed it (#61), both on the spine with **no target**, and with the backend's text refusal given a wire shape of its own rather than left as `internal_error` | R21 | M |
-| R13 | Read verbs | `screenshot`, `read_screen`, `device_info`. `read_screen` works with screen capture blocked and **is a declared capability, not a required method** (§5) | R21 | M |
+| R13 | Read verbs | `screenshot`, `read_screen`, `device_info`. `read_screen` works with screen capture blocked and **is a declared capability, not a required method** (§5). Split the way R12 was, into three: the backend's **primitive** landed first (#13 phase 1) — `readScreen` behind `canReadScreen`, the two-command dump recipe of §6 mapped onto `ScreenElement[]` in dp — which is also what flipped the last `false` in the Android manifest and so turned on every path already written against it: after-states, targets by text, and both waits. Two of the three read **verbs** landed second (#67 phase 2) — `read_screen` and `device_info`, one module on the R11 spine with an empty action, because a read verb's work *is* the spine's own capture; `read_screen` carries `requires: ['canReadScreen']`, which is what turns a backend without the capability into a loud failure before dispatch instead of the softer `after: { kind: 'unavailable' }` an unrequired verb would answer, and `device_info` needs no capability because its answer is the `DeviceInfo` D14 puts on every result. `screenshot` is phase 3 on its own: it is the one read that cannot answer in that shape, because pixels are bytes rather than a state the result already carries (R24) | R21 | M |
 | R14 | `record_video` + slicing into frames | The recording must finish before it is pulled — a file pulled earlier has no `moov` atom and cannot be read at all | R13 | S |
-| R15 | App verbs | `install_app`, `launch_app`, `stop_app`, `clear_app_data`, `read_logs`, `pull_file`, `push_file`. `read_logs` is to catch a failure a screenshot will not show | R21 | M |
+| R15 | App verbs | `install_app`, `launch_app`, `stop_app`, `clear_app_data`, `read_logs`, `pull_file`, `push_file`. `read_logs` is to catch a failure a screenshot will not show. Split the way R12 was, into three: the **app-lifecycle verbs** landed first (#15 phase 1) — `launch_app` / `stop_app` / `clear_app_data`, each on the R11 spine over a backend primitive that already existed, sharing one `IPC_METHODS` params schema, with `requires: []` and no target because an app id addresses a package rather than something on the screen; `read_logs` is phase 2 and needs a backend method, a logcat parser and a payload-carrying result shape that none of the three above needed; `install_app`, `pull_file` and `push_file` are phase 3 and are a byte-transfer concern (R24) rather than an app-lifecycle one — `install_app` takes a file from the *client's* machine | R21 | M |
 | R16 | Environment verbs | `set_airplane_mode`, `set_wifi` through `cmd connectivity` and `cmd wifi` — **not** through `svc`, which is gone (§6). Both paths without root. The **primitives** landed with R9's first phase (#9) — `setAirplaneMode` / `setWifiEnabled` on the Android backend, behind `canControlNetwork` — so this row is the verb layer over them, not the recipes themselves | R21 | S |
 | R24 | Artifact transfer across the machine boundary | Screenshots, recordings and pulled files come back as bytes; **a path returned to the agent exists on the agent's machine** (D19). In the other direction: `install_app` and `push_file` send a file to the host. The recording from R14 finishes on the host before the transfer, not during it. The size limit is explicit and named, and does not announce itself as a truncated file | R13, R14, R15 | M |
 | R25 | Durable artifact archive on the host | Every verb that produces a screenshot, a recording, or a log pull additionally writes it into `<project>/<test_name>/<lease-id>/<device-serial>/…` on the host (D23, §10), alongside a `device_info.json` snapshot per lease-device pair (D14). **An absent `test_name` falls back to a single fixed directory name**, so the tree shape never varies. **The archive path is never the one returned to the agent** — R24's bytes-over-the-wire contract is unchanged by this row. Retention (a TTL or size cap, and who prunes) is explicitly out of scope here — see §9.4 | R8, R13, R14, R15, R24 | M |

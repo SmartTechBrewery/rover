@@ -23,8 +23,11 @@ import { DeviceSchema } from '../core/device.js';
 import { DeviceSerialSchema, LeaseIdSchema } from '../core/ids.js';
 import { ProtocolVersionSchema } from './protocol.js';
 import {
+	AppVerbParamsSchema,
+	DeviceInfoParamsSchema,
 	LongPressParamsSchema,
 	PressKeyParamsSchema,
+	ReadScreenParamsSchema,
 	ScrollParamsSchema,
 	SwipeParamsSchema,
 	TapParamsSchema,
@@ -35,11 +38,17 @@ import {
 } from './verb-methods.js';
 
 export {
+	type AppVerbParams,
+	AppVerbParamsSchema,
+	type DeviceInfoParams,
+	DeviceInfoParamsSchema,
 	type LongPressParams,
 	LongPressParamsSchema,
 	MAX_VERB_TIMEOUT_MS,
 	type PressKeyParams,
 	PressKeyParamsSchema,
+	type ReadScreenParams,
+	ReadScreenParamsSchema,
 	type ScrollParams,
 	ScrollParamsSchema,
 	type SwipeParams,
@@ -280,11 +289,15 @@ export type ReleaseDeviceResult = z.infer<typeof ReleaseDeviceResultSchema>;
  * The names follow the verb table in PROJECT.md §4 (`list_devices`), not a camelCase
  * variant of it.
  *
- * The verb rows are the two waits and the six input verbs; each further verb family is one
- * more row beside them and one more entry in `src/daemon/verb-handlers.ts`. They all answer
- * with `VerbCallResultSchema`, because "what happened on the device" is one shape whatever was
- * asked of it — including the two that address no element, whose answer carries a null
- * `target` rather than a shape of their own.
+ * The verb rows are the two waits, the six input verbs, the two read verbs and the three
+ * app-lifecycle verbs; each further verb family is one more row beside them and one more entry
+ * in `src/daemon/verb-handlers.ts`. They all answer with `VerbCallResultSchema`, because "what
+ * happened on the device" is one shape whatever was asked of it — which is why `read_screen`
+ * and `device_info` need no result schema of their own: what they answer is the state every
+ * other verb already reports, asked for on its own. The verbs that address no element at all —
+ * those two, `type_text` and `press_key` — answer with a null `target` rather than a shape of
+ * their own. The three app rows share one params schema too, because they take exactly the
+ * same call.
  */
 export const IPC_METHODS = {
 	status: { params: StatusParamsSchema, result: StatusResultSchema },
@@ -299,6 +312,11 @@ export const IPC_METHODS = {
 	scroll: { params: ScrollParamsSchema, result: VerbCallResultSchema },
 	type_text: { params: TypeTextParamsSchema, result: VerbCallResultSchema },
 	press_key: { params: PressKeyParamsSchema, result: VerbCallResultSchema },
+	read_screen: { params: ReadScreenParamsSchema, result: VerbCallResultSchema },
+	device_info: { params: DeviceInfoParamsSchema, result: VerbCallResultSchema },
+	launch_app: { params: AppVerbParamsSchema, result: VerbCallResultSchema },
+	stop_app: { params: AppVerbParamsSchema, result: VerbCallResultSchema },
+	clear_app_data: { params: AppVerbParamsSchema, result: VerbCallResultSchema },
 } as const satisfies Record<string, IpcMethodDefinition>;
 
 export type IpcMethodName = keyof typeof IPC_METHODS;
