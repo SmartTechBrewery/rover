@@ -27,6 +27,13 @@
  * (`../android/screen.ts`). The three read *verbs* over it landed separately (#67, #68),
  * and none of them is what moves this flag either.
  *
+ * `canRecordVideo` flips here (#14), on the same seam once more:
+ * `CAPABILITY_METHODS.canRecordVideo` names exactly one method, `recordVideo`, and this
+ * backend now answers it — `screenrecord` to a device-side scratch path, a wait on the
+ * recorder being gone, and the pull (`../android/backend.ts`). The `record_video` *verb*
+ * over it landed in the same change, and frame extraction is a separate phase; neither is
+ * what moves this flag.
+ *
  * **Every flag in this manifest is now `true`, so nothing here is a declared opt-out.**
  * That is a statement about this backend, not about the model: a capability declared
  * before its methods exist is exactly the "an agent is told a device can do something it
@@ -46,5 +53,6 @@ export const androidCapabilityManifest: CapabilityManifestInput = {
 		canReadScreen: true,
 		canInput: true,
 		canControlNetwork: true,
+		canRecordVideo: true,
 	},
 };

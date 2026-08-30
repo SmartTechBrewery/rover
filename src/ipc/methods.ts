@@ -30,6 +30,7 @@ import {
 	ReadLogsCallResultSchema,
 	ReadLogsParamsSchema,
 	ReadScreenParamsSchema,
+	RecordVideoParamsSchema,
 	ScreenshotParamsSchema,
 	ScrollParamsSchema,
 	SwipeParamsSchema,
@@ -57,6 +58,8 @@ export {
 	ReadLogsParamsSchema,
 	type ReadScreenParams,
 	ReadScreenParamsSchema,
+	type RecordVideoParams,
+	RecordVideoParamsSchema,
 	type ScreenshotParams,
 	ScreenshotParamsSchema,
 	type ScrollParams,
@@ -302,7 +305,7 @@ export type ReleaseDeviceResult = z.infer<typeof ReleaseDeviceResultSchema>;
  * variant of it.
  *
  * The verb rows are the two waits, the six input verbs, the three read verbs, the three
- * app-lifecycle verbs and the log read; each further verb family is one more row beside them
+ * app-lifecycle verbs, the log read and the screen recording; each further verb family is one more row beside them
  * and one more entry in `src/daemon/verb-handlers.ts`. All but one answer with
  * `VerbCallResultSchema`, because "what happened on the device" is one shape whatever was
  * asked of it — which is why none of the read rows needs a result schema of its own:
@@ -311,6 +314,9 @@ export type ReleaseDeviceResult = z.infer<typeof ReleaseDeviceResultSchema>;
  * in a second answer shape. The verbs that address no element at all — those two, `type_text`
  * and `press_key` — answer with a null `target` rather than a shape of their own. The three
  * app rows share one params schema too, because they take exactly the same call.
+ *
+ * `record_video` is on that same list: its recording rides on `ActionResult.artifact` the way
+ * `screenshot`'s capture does, so it needs no answer shape of its own either.
  *
  * `read_logs` is the exception that proves the rule: its answer is that same shape with the
  * log entries added, built by the same factory in `./verb-methods.ts`, so its refusals are
@@ -336,6 +342,7 @@ export const IPC_METHODS = {
 	stop_app: { params: AppVerbParamsSchema, result: VerbCallResultSchema },
 	clear_app_data: { params: AppVerbParamsSchema, result: VerbCallResultSchema },
 	read_logs: { params: ReadLogsParamsSchema, result: ReadLogsCallResultSchema },
+	record_video: { params: RecordVideoParamsSchema, result: VerbCallResultSchema },
 } as const satisfies Record<string, IpcMethodDefinition>;
 
 export type IpcMethodName = keyof typeof IPC_METHODS;

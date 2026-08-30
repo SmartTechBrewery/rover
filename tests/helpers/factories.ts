@@ -42,8 +42,29 @@ export function createMockCapabilities(overrides: Partial<Capabilities> = {}): C
 		canReadScreen: true,
 		canInput: true,
 		canControlNetwork: true,
+		canRecordVideo: true,
 		...overrides,
 	};
+}
+
+/**
+ * Bytes shaped like the smallest thing a recorder could hand back: an `ftyp` box, then a
+ * `moov` — the index a finished recording has and an unfinished one does not.
+ *
+ * Real box headers rather than three arbitrary bytes, because two things downstream read
+ * them: `mediaTypeOf` sniffs the `ftyp` at offset 4 to answer `video/mp4`, and the Android
+ * backend's `isFinishedRecording` looks for the `moov`. A fixture that carried neither would
+ * make every test over it agree with a verb that had stopped checking.
+ */
+export function createMockRecordingBytes(): Uint8Array {
+	const box = (type: string) => [
+		0,
+		0,
+		0,
+		8,
+		...[...type].map((character) => character.charCodeAt(0)),
+	];
+	return Uint8Array.from([...box('ftyp'), ...box('moov')]);
 }
 
 export function createMockDevice(overrides: Partial<Device> = {}): Device {
@@ -186,6 +207,9 @@ export function createMockDeviceBackend(overrides: Partial<DeviceBackend> = {}):
 		pressKey: vi.fn<NonNullable<DeviceBackend['pressKey']>>(async () => {}),
 		setAirplaneMode: vi.fn<NonNullable<DeviceBackend['setAirplaneMode']>>(async () => {}),
 		setWifiEnabled: vi.fn<NonNullable<DeviceBackend['setWifiEnabled']>>(async () => {}),
+		recordVideo: vi.fn<NonNullable<DeviceBackend['recordVideo']>>(async () =>
+			createMockRecordingBytes(),
+		),
 		...overrides,
 	};
 }
@@ -282,6 +306,13 @@ export function createConformingDeviceBackend(
 		},
 		async setWifiEnabled(serial, enabled) {
 			performed.push(`setWifiEnabled ${serial} ${enabled}`);
+		},
+		// A real body answering real bytes: an empty `Uint8Array` is what the harness flags as a
+		// silent stub, and it is also what a recording pulled off a device that never started
+		// looks like.
+		async recordVideo(serial, options) {
+			performed.push(`recordVideo ${serial} ${options.durationMs}`);
+			return createMockRecordingBytes();
 		},
 		...overrides,
 	};

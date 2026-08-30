@@ -138,7 +138,7 @@ Working names. All of them take a device handle, and over the wire that handle i
 |---|---|
 | `screenshot` | The captured image, **as bytes on the result rather than as a path** (D19) — base64, its media type and its byte length, so any file written is the client's own. Needs no capability; a capture over the named size bound is refused by name rather than returned cut short. **A black image is a true answer, not a failed capture** (§6): the check that separates a blocked capture from a broken device is a screenshot of the system home screen, and `read_screen` is the read that survives the block |
 | `read_screen` | Texts and element rectangles. **Works even when the app blocks screenshots**. Declares `canReadScreen` as a requirement, so a backend without it fails by name before anything is dispatched rather than answering with an empty screen (D11) |
-| `record_video` | A recording plus a slice into frames — for states that do not stand still |
+| `record_video` | A recording of the screen, **as bytes on the result rather than as a path** (D19) — base64, `video/mp4` and its byte length, exactly where `screenshot`'s capture rides. **The recording is provably finished before it is pulled**: the backend waits on a condition for the recorder to be gone, then pulls, then checks the container index on the bytes that actually arrived. A recording without that index was still being written when it was copied and is not a shorter video but a file no player will open, so it is refused as `unfinished-recording` naming the device and the byte length — never handed over, and never an `internal_error` (§6). Declares `canRecordVideo` as a requirement, so a backend without it fails by name before anything is dispatched rather than answering with a null artifact (D11). Duration is bounded by what **one answer** can carry (15 s; the default is 5 s), and going over the artifact bound is the same `artifact-too-large` refusal `screenshot` gives rather than a file cut short — a longer recording is R24's chunked transfer. **Slicing into frames is phase 2** and is not on this verb yet |
 | `device_info` | Size, density, computed width in dp, OS version. Needs no capability and addresses nothing on the screen — it answers with the `DeviceInfo` every result already carries (D14), asked for on its own |
 
 ### Waiting
@@ -700,6 +700,58 @@ Checked on the same API 37 emulator (`sdk_gphone16k_arm64`) with `adb` 37.0.0 wh
     acceptance test makes: a screenshot says at most that *an* app stopped, and only the log says
     which one and why.
 
+Checked on the same API 37 emulator (`sdk_gphone16k_arm64`, Android 17) with `adb`
+37.0.1-15733141 while landing `record_video` phase 1 (#14, R14), **2026-08-30**. `screenrecord`
+reports itself as **v1.4**:
+
+- **`screenrecord` writes its `moov` atom only when it exits, and a file pulled before then is
+  unreadable rather than short.** This is the whole reason the verb is shaped the way it is, and
+  both halves of it are committed as fixtures. A finished 3-second recording is `ftyp` (24 B),
+  `moov` (1620 B), `free` (1572 B), `mdat` (64-bit extended size) — note the index comes
+  **second**, before the payload. The *same recording* pulled while the encoder was still running
+  is `ftyp` (24 B), `free` (3192 B — the reserved gap the index will be written into) and an
+  `mdat` whose 64-bit size reads **4557430888798830399** over a 3232-byte file. Nothing but the
+  `moov` separates them: both start with a well-formed header, both are plausible file sizes, and
+  `screenrecord` exited 0 for each. Handing an agent the second one reads as a broken tool rather
+  than as a race, so `record_video` refuses it by name.
+- **`screenrecord` succeeds silently and refuses loudly.** Zero bytes on both streams at exit 0 on
+  the success path; `Unable to open '/data/nope/rover-recording.mp4': No such file or directory`
+  on **stderr** at exit **1** for an unwritable path. So there is no exiting-0 failure here — the
+  trap `parsers/app-control.ts` and `parsers/network.ts` exist for does not apply, and no refusal
+  predicate was written for a case no device produces.
+- **`pidof` exists at `/system/bin/pidof` on API 37** and is what makes the completion check a
+  condition rather than a sleep. `pidof screenrecord` prints one bare pid and a newline on stdout
+  while a recording is in flight, and **prints nothing while exiting 1** once it has gone. That
+  non-zero exit is the trap: `adb shell` propagates it and `src/backends/android/adb.ts` treats a
+  non-zero exit as a failure, so "no such process" — the answer the wait is looking for — would
+  arrive as a broken device. The recipe is `adb -s $SERIAL shell 'pidof screenrecord || true'`.
+- **The recorder was already gone by the time its adb client returned**, every time, on this
+  emulator. The wait is kept anyway and costs nothing when it is: `waitForCondition` probes before
+  any delay, so the ordinary case is one round trip and no wait at all. What it is really for is a
+  loaded device, a physical panel, and an adb client that was killed while the encoder ran on.
+- **`--time-limit` counts whole seconds and defaults to 180** on this build (`0` removes the limit
+  entirely). It is always passed, because it is what makes a recorder that outlived its adb client
+  self-terminate instead of running on under the next lease; a fractional duration is rounded
+  **up**, never down. `MAX_RECORDING_MS` (15 s) is far below every version's cap, so the
+  differences between API levels cannot bite.
+- **A recorder somebody else started on the same device makes the wait time out.** The probe asks
+  whether *any* `screenrecord` is running, because matching a particular one would mean matching a
+  pid this code never learned. That is a `wait-timeout` naming the pids that were there, rather
+  than a lease held until it expires — and no pull, because the file under it is one somebody else
+  is still writing.
+- **The pull is `exec-out cat`, never `shell cat`**, for the reason the hierarchy dump already
+  records above: `adb shell` may put a pty in the path and a pty translates every `0x0a` in a
+  binary payload, conditionally on version, platform and whether stdin is a terminal — so a
+  recording that survives on one machine is corrupt on the next.
+- **The scratch path is fixed (`/sdcard/rover-recording.mp4`) and made exclusive per device**, the
+  way `uiautomator`'s dump path is: two overlapping recordings would otherwise share one file and
+  corrupt both. It is removed **before** the recording as well as after, so a leftover from a run
+  that died before its cleanup can never be the file that is pulled.
+- **Encoded at 2 Mbps rather than `screenrecord`'s 20 Mbps default.** A 3-second recording of a
+  static home screen came to 62–64 KB; the rate is what ties `MAX_RECORDING_MS` to
+  `MAX_ARTIFACT_BYTES` — 15 s × 250 KB/s ≈ 3.6 MiB against a 4 MiB bound — and the relationship is
+  asserted in `tests/unit/backends/android/backend.test.ts` rather than left to drift.
+
 Checked against Node 25.2 while building R22's client, 2026-08-30:
 
 - **`tls.connect({ servername })` throws when the value is an IP address.** Not a warning and not
@@ -803,7 +855,7 @@ Four rules when filing these issues:
 | R28 | Network listener authenticates against the user store, retiring the single shared token | `network-listen.ts`'s greeting check stops comparing against one `ROVER_HOST_TOKEN` and instead hashes the presented token and looks it up in R27's store, **re-read at every connection attempt** — never cached for the daemon's lifetime (D6, D25). `ROVER_HOST_TOKEN` and the listener-side schema fields tied to it are removed, not kept as a parallel path. A revoked user is refused on their very next connection attempt, with the daemon already running — no restart. The client side (`network-connect.ts`) is unchanged in shape: a client still presents one opaque token in the greeting, and only what that token has to be — one issued by `rover users add`, not a fixed shared secret — changes | R27, R22 | M |
 | R12 | Input verbs | **Done** (#12, #60, #61). `tap`, `long_press`, `swipe`, `scroll`, `type_text`, `press_key`. `long_press` as a drag in place — **not** `keyevent --longpress` (§6) — held past the device's own `secure long_press_timeout`, which is configuration rather than a constant. `type_text` hides the device shell's quoting. Split the way R9 and R16 were, into three: the backend's four **primitives** landed first (#12 phase 1) — `tap` / `swipe` / `typeText` / `pressKey` behind `canInput`, with the dp→px conversion and the text limits §6 records — then the four **gesture verbs** over them (#60 phase 2), `tap` / `long_press` / `swipe` / `scroll`, each on the R11 spine with its own `IPC_METHODS` row; `type_text` and `press_key` closed it (#61), both on the spine with **no target**, and with the backend's text refusal given a wire shape of its own rather than left as `internal_error` | R21 | M |
 | R13 | Read verbs | `screenshot`, `read_screen`, `device_info`. `read_screen` works with screen capture blocked and **is a declared capability, not a required method** (§5). Split the way R12 was, into three: the backend's **primitive** landed first (#13 phase 1) — `readScreen` behind `canReadScreen`, the two-command dump recipe of §6 mapped onto `ScreenElement[]` in dp — which is also what flipped the last `false` in the Android manifest and so turned on every path already written against it: after-states, targets by text, and both waits. Two of the three read **verbs** landed second (#67 phase 2) — `read_screen` and `device_info`, one module on the R11 spine with an empty action, because a read verb's work *is* the spine's own capture; `read_screen` carries `requires: ['canReadScreen']`, which is what turns a backend without the capability into a loud failure before dispatch instead of the softer `after: { kind: 'unavailable' }` an unrequired verb would answer, and `device_info` needs no capability because its answer is the `DeviceInfo` D14 puts on every result. `screenshot` landed third (#68 phase 3): the one read that cannot answer in that shape, because pixels are bytes rather than a state the result already carries. It is on the same spine with `requires: []` — the backend method is required, not capability-gated — and what it adds is one nullable `artifact` on `ActionResult` carrying base64, a media type and a byte length, required-and-nullable because `undefined` does not survive JSON. `MAX_ARTIFACT_BYTES` (4 MiB) is derived from the 8 MiB frame cap with base64's inflation accounted for, and going over it is an `artifact-too-large` failure naming both numbers rather than a truncated image. R13's last acceptance criterion — a black screenshot stays distinguishable from a broken device — is documented on the verb and in README.md rather than asserted, because it takes a known screen: the check is a capture of the system home screen, and `read_screen` is the read that survives a capture block (§6). The transfer contract around the bytes is R24 and the durable archive is R25 | R21 | M |
-| R14 | `record_video` + slicing into frames | The recording must finish before it is pulled — a file pulled earlier has no `moov` atom and cannot be read at all | R13 | S |
+| R14 | `record_video` + slicing into frames | **Phase 1 done** (#14); frames are phase 2. The recording must finish before it is pulled — a file pulled earlier has no `moov` atom and cannot be read at all. Split the way R12 and R13 were, except that the primitive and the verb over it are **one phase** here: `recordVideo` is a method nothing but this verb would ever call, so landing it alone would ship a dead method and a capability flag declaring an ability no caller can reach. So phase 1 is the whole lifecycle — `canRecordVideo` as a declared capability rather than a required method (§5, D11), `recordVideo(serial, { durationMs })` answering with **bytes and never a host path** (D19), the `record_video` verb on the R11 spine with `requires: ['canRecordVideo']`, one `IPC_METHODS` row and one daemon handler, and the recording on the existing `ActionResult.artifact` so no second answer shape was needed. The Android half is §6's measured recipe: `screenrecord` to a fixed device-side scratch path made exclusive per device, completion detected by `waitForCondition` polling `pidof` until the recorder is gone — **a condition with a timeout, never a sleep** (D12(b)) — then `exec-out cat`, then a top-level MP4 box walk requiring `ftyp` first and a `moov` present, then `rm -f` in a `finally` that runs on the refusal paths too. A pull without a `moov` is an `unfinished-recording` verb failure naming the device and the byte length rather than an `internal_error`. `MAX_RECORDING_MS` (15 s) is derived from `MAX_ARTIFACT_BYTES` against the backend's 2 Mbps, and the relationship is asserted rather than left to drift; over the artifact bound is still `artifact-too-large`, never a truncated file. R24 (chunked transfer) and R25 (the durable archive) are unchanged by this phase | R13 | S |
 | R15 | App verbs | `install_app`, `launch_app`, `stop_app`, `clear_app_data`, `read_logs`, `pull_file`, `push_file`. `read_logs` is to catch a failure a screenshot will not show. Split the way R12 was, into three: the **app-lifecycle verbs** landed first (#15 phase 1) — `launch_app` / `stop_app` / `clear_app_data`, each on the R11 spine over a backend primitive that already existed, sharing one `IPC_METHODS` params schema, with `requires: []` and no target because an app id addresses a package rather than something on the screen; `read_logs` landed as phase 2 (#69) — a required `DeviceBackend.readLogs`, a log parser with captures of its own, and the first verb whose answer carries a payload beyond `ActionResult`, which is what factored `VerbCallResultSchema` into `verbCallResultOf()` and made `runVerb` generic for phase 3 to reuse; `install_app`, `pull_file` and `push_file` are phase 3 and are a byte-transfer concern (R24) rather than an app-lifecycle one — `install_app` takes a file from the *client's* machine | R21 | M |
 | R16 | Environment verbs | `set_airplane_mode`, `set_wifi` through `cmd connectivity` and `cmd wifi` — **not** through `svc`, which is gone (§6). Both paths without root. The **primitives** landed with R9's first phase (#9) — `setAirplaneMode` / `setWifiEnabled` on the Android backend, behind `canControlNetwork` — so this row is the verb layer over them, not the recipes themselves | R21 | S |
 | R24 | Artifact transfer across the machine boundary | Screenshots, recordings and pulled files come back as bytes; **a path returned to the agent exists on the agent's machine** (D19). In the other direction: `install_app` and `push_file` send a file to the host. The recording from R14 finishes on the host before the transfer, not during it. The size limit is explicit and named, and does not announce itself as a truncated file | R13, R14, R15 | M |

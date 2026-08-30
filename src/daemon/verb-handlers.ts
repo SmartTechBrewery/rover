@@ -59,6 +59,7 @@ import type {
 	ReadLogsCallResult,
 	ReadLogsParams,
 	ReadScreenParams,
+	RecordVideoParams,
 	ScreenshotParams,
 	ScrollParams,
 	SwipeParams,
@@ -85,6 +86,7 @@ import {
 } from '../verbs/input.js';
 import { type ReadLogsVerbOptions, readLogs } from '../verbs/logs.js';
 import { deviceInfo, readScreen, screenshot } from '../verbs/read.js';
+import { type RecordVideoVerbOptions, recordVideo } from '../verbs/record.js';
 import type { ActionResult } from '../verbs/result.js';
 import { type WaitVerbOptions, waitFor, waitUntilGone } from '../verbs/wait-for.js';
 import type { DeviceInventory } from './inventory.js';
@@ -109,6 +111,7 @@ export type VerbHandlers = Pick<
 	| 'stop_app'
 	| 'clear_app_data'
 	| 'read_logs'
+	| 'record_video'
 >;
 
 /**
@@ -278,6 +281,14 @@ export function createVerbHandlers(
 		read_logs(params: ReadLogsParams): Promise<ReadLogsCallResult> {
 			return runVerb(params.leaseId, (context) => readLogs(context, logOptions(params)));
 		},
+
+		// The recording row. Its answer is an ordinary `VerbCallResult` — the recording rides on
+		// `ActionResult.artifact` the way `screenshot`'s capture does — and its
+		// `requires: ['canRecordVideo']` is what makes a backend that cannot record say so by
+		// name instead of answering with a null artifact that reads like a success (D11).
+		record_video(params: RecordVideoParams): Promise<VerbCallResult> {
+			return runVerb(params.leaseId, (context) => recordVideo(context, recordOptions(params)));
+		},
 	};
 }
 
@@ -348,6 +359,16 @@ function gestureOptions(params: { readonly durationMs?: number }): GestureOption
  */
 function logOptions(params: { readonly maxEntries?: number }): ReadLogsVerbOptions {
 	return params.maxEntries === undefined ? {} : { maxEntries: params.maxEntries };
+}
+
+/**
+ * The one recording knob a call may carry, omitted rather than passed as `undefined` for the
+ * reason {@link waitOptions}, {@link gestureOptions} and {@link logOptions} omit theirs: the
+ * verb's own default is what a caller who said nothing asked for, and the host must not be
+ * the second place that number is decided.
+ */
+function recordOptions(params: { readonly durationMs?: number }): RecordVideoVerbOptions {
+	return params.durationMs === undefined ? {} : { durationMs: params.durationMs };
 }
 
 /** The error's own words: it already names the device and says what happened to it. */

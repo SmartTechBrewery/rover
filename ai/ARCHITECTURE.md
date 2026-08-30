@@ -116,6 +116,11 @@ Backends are genuinely asymmetric and flattening that is the design mistake to a
 - `simctl` cannot tap and cannot dump a hierarchy. Input and tree reads on iOS need `idb` or WebDriverAgent — a heavy dependency with its own lifecycle.
 - **Semantic screen reading may have no iOS equivalent at all.** On Android it is the one capability that survives an app blocking screen capture. That is why `read_screen` is **not a required method** of the interface but a declared capability the verb layer queries first.
 - A physical Android phone cannot be handed a synthetic fingerprint; an emulator can.
+- **Screen recording is another of them**, and it is why `recordVideo` is a declared capability
+  rather than a required method: an iOS *simulator* records with `simctl io recordVideo`, while a
+  physical iOS device has no cheap command-line equivalent at all. `record_video` declares
+  `requires: ['canRecordVideo']` for `read_screen`'s reason — the payload *is* the answer, so a
+  backend without it has to fail by name before dispatch rather than answer with no recording.
 - **A system log is not one of those asymmetries**, which is why `readLogs` is a *required* method and not a capability: every platform here keeps one, and a flag that is always `true` is noise (`src/core/capabilities.ts`). What differs is the wording inside an entry — that is what the neutral `LogEntry` shape and a backend's own parser absorb.
 
 So: each backend declares its manifest, the verb layer checks before dispatching, and an unbacked verb fails with an error naming the capability and the device. A conformance suite runs once per registered manifest — see `ai/TESTING.md`.
@@ -269,7 +274,9 @@ Verbs live above the backends and below the adapters, and this is where determin
 - **`ActionResult`** names the verb, the device (as `DeviceInfo`, so D14's density travels with the
   measurement), the resolved target and the state after the action. A backend with input but no
   screen reading answers an explicit `unavailable` after-state naming the capability that would have
-  answered — never an empty element list, which reads as a blank screen. A read that was declared,
+  answered — never an empty element list, which reads as a blank screen. `screenshot` and
+  `record_video` are the two verbs whose answer is not a state the result already carries, and both
+  hang their bytes off the same nullable `artifact` field rather than growing a shape each. A read that was declared,
   attempted and rejected is the separate `failed` branch: once the action has run, an exception in
   its place would leave the agent unable to tell whether it landed, which is exactly what D12(c)
   rules out. Every shape is a Zod schema of plain data, because the host executes the verb and the

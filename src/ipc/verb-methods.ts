@@ -25,6 +25,7 @@ import { AppIdSchema, LeaseIdSchema } from '../core/ids.js';
 import { VerbFailureSchema } from '../verbs/failure.js';
 import { ScrollDirectionSchema } from '../verbs/input.js';
 import { ReadLogsResultSchema } from '../verbs/logs.js';
+import { MAX_RECORDING_MS } from '../verbs/record.js';
 import { type ActionResult, ActionResultSchema } from '../verbs/result.js';
 import { AbsenceTargetSchema, ScreenTargetSchema, TargetSchema } from '../verbs/target.js';
 
@@ -262,6 +263,32 @@ export type DeviceInfoParams = z.infer<typeof DeviceInfoParamsSchema>;
  */
 export const ScreenshotParamsSchema = VerbCallBaseSchema.strict();
 export type ScreenshotParams = z.infer<typeof ScreenshotParamsSchema>;
+
+/**
+ * What a `record_video` call carries: the lease id and, optionally, how long to record for.
+ *
+ * `durationMs` is **absent rather than defaulted**, so the verb's own default
+ * (`src/verbs/record.ts`) applies to a caller who said nothing and there is no second number
+ * that can disagree with it — {@link ReadLogsParamsSchema}'s reasoning exactly.
+ *
+ * The upper bound is {@link MAX_RECORDING_MS}, imported rather than restated: it is a bound
+ * on what one answer can carry, and a copy of it here would be free to drift from the one
+ * the verb enforces.
+ *
+ * **No destination path and no format**, for the sentence {@link ScreenshotParamsSchema}
+ * already carries: the recording happens on the host and the answer is read on the caller's
+ * machine, so a path sent here either names nothing or names something on the wrong disk
+ * (D19). What comes back is `ActionResult.artifact` — the bytes, base64-encoded.
+ *
+ * **A caller asking for a long recording must also raise its own request timeout.**
+ * `IpcRequestOptions.timeoutMs` defaults to 30 s (`./client.ts`), and a call that spends
+ * fifteen of them recording before it begins transferring several megabytes can reach it.
+ * That is the bound at the caller's end, and this module already documents the pair.
+ */
+export const RecordVideoParamsSchema = VerbCallBaseSchema.extend({
+	durationMs: z.number().int().positive().max(MAX_RECORDING_MS).optional(),
+}).strict();
+export type RecordVideoParams = z.infer<typeof RecordVideoParamsSchema>;
 
 /**
  * Why a call never reached a verb at all.

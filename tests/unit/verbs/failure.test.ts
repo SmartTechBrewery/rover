@@ -12,6 +12,7 @@ import { describe, expect, it } from 'vitest';
 import {
 	DeviceVanishedError,
 	MissingCapabilityError,
+	UnfinishedRecordingError,
 	UnsupportedTextError,
 	WaitTimeoutError,
 } from '@/core/errors.js';
@@ -173,6 +174,24 @@ describe('a verb-layer error becomes a failure a client can branch on', () => {
 		expect(failure.message).toContain('U+0009');
 	});
 
+	/**
+	 * The branch that keeps a race from being reported as a broken host. The device exited 0
+	 * and the pull succeeded — what came off it was a file no player will open — so without
+	 * this branch an agent reads `internal_error` about a recording that merely got cut off
+	 * mid-write. The byte length travels because it is what separates "caught at the very
+	 * start" from "the writer was killed at the end".
+	 */
+	it('maps a recording pulled unfinished, carrying the device and the byte length', () => {
+		const error = new UnfinishedRecordingError(SERIAL, 3_232);
+
+		expect(failureOf(error)).toEqual({
+			kind: 'unfinished-recording',
+			serial: SERIAL,
+			byteLength: 3_232,
+			message: error.message,
+		});
+	});
+
 	it('maps a wait that timed out, with the polls that make the elapsed time diagnosable', () => {
 		const error = new WaitTimeoutError("text containing 'Save'", 'an empty screen', 5_000, 21);
 
@@ -230,6 +249,7 @@ describe('a failure survives the trip to the agent', () => {
 			),
 		],
 		['artifact-too-large', new ArtifactTooLargeError(SERIAL, 9_000_000, 4_194_304)],
+		['unfinished-recording', new UnfinishedRecordingError(SERIAL, 3_232)],
 	])('round-trips a %s failure through JSON and re-parses it equal', (_kind, error) => {
 		const failure = failureOf(error);
 

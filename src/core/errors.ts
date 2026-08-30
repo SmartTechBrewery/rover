@@ -3,10 +3,10 @@
  *
  * "This device cannot do that" and "this broke" call for opposite responses from an
  * agent, so a missing capability is its own type rather than a generic `Error`
- * (ai/CODING_STANDARDS.md "Error handling", D11). The same test admits the three below:
- * "the device went away", "the device is not attached to this host" and "this device
- * cannot type that string" are each an answer a caller acts on differently, and none of
- * them is a bug. Everything else in this layer throws plain `Error` for a programmer or
+ * (ai/CODING_STANDARDS.md "Error handling", D11). The same test admits the four below:
+ * "the device went away", "the device is not attached to this host", "this device cannot
+ * type that string" and "the recording came off the device unfinished" are each an answer
+ * a caller acts on differently, and none of them is a bug. Everything else in this layer throws plain `Error` for a programmer or
  * validation bug, and returns `null` for not-found.
  *
  * Imports from `./capabilities.js` are type-only on purpose: that module imports this
@@ -133,6 +133,49 @@ export class UnsupportedTextError extends Error {
 		this.serial = serial;
 		this.text = text;
 		this.unsupported = unsupported;
+	}
+}
+
+/**
+ * Thrown when a recording was pulled off a device without the container index that makes
+ * it playable — i.e. it was still being written.
+ *
+ * A near-twin of {@link UnsupportedTextError} in placement and in kind: the device did the
+ * thing, and what came back is not usable. It is here rather than in `src/verbs/errors.ts`
+ * because a backend raises it — this is a fact about what the device produced, not about
+ * what the caller asked for.
+ *
+ * **It exists to keep a race from reading as a tooling bug.** A recorder writes its index
+ * last, so a file copied while the encoder is still running is not a short video — it is a
+ * file no decoder will open at all (PROJECT.md §6 records what one looks like: the header,
+ * a reserved gap where the index belongs, and a payload box claiming a nonsense length).
+ * Without this class that arrives as `internal_error` — "the host broke" — for a device
+ * that merely got cut off mid-write, and an agent handed the bytes instead would report a
+ * corrupt download.
+ *
+ * `byteLength` travels because it is what separates the two shapes of this failure: a few
+ * kilobytes is a recording caught at its very beginning, while megabytes is one that ran
+ * and whose writer was killed at the end — the first says retry, the second says the
+ * duration or the finish budget is wrong.
+ *
+ * Every field is plain data, for the reason {@link WaitTimeoutError} states: `src/verbs/failure.ts`
+ * serializes it and a client on another machine reads it (D19).
+ */
+export class UnfinishedRecordingError extends Error {
+	readonly serial: DeviceSerial;
+	readonly byteLength: number;
+
+	constructor(serial: DeviceSerial, byteLength: number) {
+		super(
+			`The recording pulled from device '${serial}' is ${byteLength} bytes with no index ` +
+				'block, which means it was still being written when it was copied — a recorder ' +
+				'writes that block only when it exits, so these bytes are not a shorter video but ' +
+				'a file no player will open. Nothing is returned rather than something unreadable. ' +
+				'Ask again, and for a shorter recording if the device is busy',
+		);
+		this.name = 'UnfinishedRecordingError';
+		this.serial = serial;
+		this.byteLength = byteLength;
 	}
 }
 
