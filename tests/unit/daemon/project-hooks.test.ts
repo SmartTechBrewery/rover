@@ -53,9 +53,28 @@ describe('the schema is the source of truth for a hook file', () => {
 	it('needs nothing but the project, and defaults to knowing no application', () => {
 		const parsed = ProjectHooksSchema.parse({ project: PROJECT });
 
-		// The row's headline: no default anywhere names an application (D13).
+		// The row's headline: no default anywhere names an application (D13). An `install` that
+		// defaulted to anything would be this host guessing at what a project builds, which is
+		// exactly the plausible-looking default the rule rules out.
 		expect(parsed).toEqual({ project: PROJECT, apps: [] });
+		expect(parsed.install).toBeUndefined();
 		expect(parsed.teardown).toBeUndefined();
+	});
+
+	it('carries the install command a project declares, in the shape every hook has', () => {
+		const parsed = ProjectHooksSchema.parse({
+			project: PROJECT,
+			install: { command: 'bash', args: ['-lc', 'scripts/rover-install.sh'], cwd: '/srv/checkout' },
+		});
+
+		// The same `HookCommand` as the teardown, so there is one way to declare a program on
+		// this host — and the same defaults, so a file that says less runs no more.
+		expect(parsed.install).toEqual({
+			command: 'bash',
+			args: ['-lc', 'scripts/rover-install.sh'],
+			cwd: '/srv/checkout',
+			env: {},
+		});
 	});
 
 	it('carries the apps a lease drove and a teardown command', () => {
@@ -76,13 +95,19 @@ describe('the schema is the source of truth for a hook file', () => {
 	});
 
 	it('rejects a field it does not know, naming it', () => {
-		// `.strict()`, because the install command and the helper services are later phases of
-		// this row. Until they exist, a file carrying one is a typo rather than a file from the
-		// future.
-		const result = ProjectHooksSchema.safeParse({ project: PROJECT, install: { command: 'x' } });
+		// `.strict()`, because the helper services are a later phase of this row. Until they
+		// exist, a file carrying one is a typo rather than a file from the future.
+		const result = ProjectHooksSchema.safeParse({ project: PROJECT, services: [{ port: 8080 }] });
 
 		expect(result.success).toBe(false);
-		expect(JSON.stringify(result.error?.issues)).toContain('install');
+		expect(JSON.stringify(result.error?.issues)).toContain('services');
+	});
+
+	it('rejects an install command that names no program', () => {
+		expect(ProjectHooksSchema.safeParse({ project: PROJECT, install: {} }).success).toBe(false);
+		expect(
+			ProjectHooksSchema.safeParse({ project: PROJECT, install: { command: '' } }).success,
+		).toBe(false);
 	});
 
 	it('rejects an app that is not an application identifier', () => {

@@ -66,6 +66,16 @@ export class HookCommandFailedError extends Error {
 	readonly signal: NodeJS.Signals | null;
 	/** The last {@link HOOK_OUTPUT_TAIL_CHARS} characters the program wrote to stderr. */
 	readonly stderr: string;
+	/**
+	 * How the run ended, in the words that go in the message before the stderr tail — an exit,
+	 * a signal, or a program that never started.
+	 *
+	 * Kept as a field and not only as part of {@link Error.message} because a caller that turns
+	 * this into an answer for an agent needs it whole: an exit code alone cannot tell a command
+	 * killed at its budget from one that could not be started, and both arrive with no code at
+	 * all (`src/verbs/errors.ts`, `InstallHookFailedError`).
+	 */
+	readonly outcome: string;
 
 	constructor(options: {
 		project: string;
@@ -85,6 +95,7 @@ export class HookCommandFailedError extends Error {
 		this.exitCode = options.exitCode;
 		this.signal = options.signal;
 		this.stderr = options.stderr;
+		this.outcome = options.outcome;
 	}
 }
 

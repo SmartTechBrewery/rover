@@ -413,7 +413,7 @@ export const DevicePathSchema = z
 	);
 
 /**
- * `install_app` — the package, **from the caller's machine**, and nothing else.
+ * `install_app` — the package **from the caller's machine**, or nothing at all.
  *
  * No path, and that is the field this row exists without: the package is on the caller's
  * disk, the install happens on the host, and a path sent here would name a file on the
@@ -423,10 +423,25 @@ export const DevicePathSchema = z
  *
  * No app id either. The core knows no application's name and this row does not introduce
  * one: what gets installed is the package the caller sent, and which application that is is
- * a fact about the bytes. The project install hook that would name one is D13/R17.
+ * a fact about the bytes.
+ *
+ * **`packageBase64` is optional, and its absence is a request rather than an omission.** A
+ * call that carries bytes installs those bytes, exactly as it always has — unchanged wire,
+ * unchanged bound, unchanged result. A call that carries none asks the host to run *the
+ * lease's project's* own install command (D13/R17, `src/daemon/project-hooks.ts`), pinned to
+ * the leased device. One verb, because it is one operation (D10), and **the schema is what
+ * says which of the two arrived**: the field is either there or it is not, so the host branches
+ * on a fact rather than on a sentinel, and nothing has to invent a meaning for an empty
+ * payload. An empty string still means an empty package and is still legal
+ * ({@link Base64PayloadSchema}) — those are two different requests and the difference between
+ * them is exactly this field's presence.
+ *
+ * Nothing about the *transfer* changes here: {@link MAX_TRANSFER_BYTES} still bounds a call
+ * that carries bytes, at this boundary, before the host decodes anything. Lifting that is
+ * R24's row.
  */
 export const InstallAppParamsSchema = VerbCallBaseSchema.extend({
-	packageBase64: Base64PayloadSchema,
+	packageBase64: Base64PayloadSchema.optional(),
 }).strict();
 export type InstallAppParams = z.infer<typeof InstallAppParamsSchema>;
 

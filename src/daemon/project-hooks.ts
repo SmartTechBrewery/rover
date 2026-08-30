@@ -28,8 +28,9 @@
  * **A client may read a hook file too, for one field and nothing else.** Pointed at one by
  * {@link PROJECT_FILE_ENV_VAR}, `rover acquire` and the MCP server take the `project`
  * identifier out of it as the default for the string they would otherwise make somebody retype
- * on every call (D22). That is convenience and nothing more: the wire is unchanged, `apps` and
- * `teardown` are read by the host alone, and a client never runs anything a file declares.
+ * on every call (D22). That is convenience and nothing more: the wire is unchanged, `apps`,
+ * `install` and `teardown` are read by the host alone, and a client never runs anything a file
+ * declares.
  *
  * This module reads a file and parses it, and imports nothing that starts a process, so it stays
  * safe to import from anywhere — which is what the paragraph above depends on, and what
@@ -108,21 +109,36 @@ export type HookCommand = z.infer<typeof HookCommandSchema>;
  * A project's hook file, whole.
  *
  * **No default here names an application** (D13), and none ever may: `apps` defaults to the
- * empty list and `teardown` to absent, so a host that has never been told about a project does
- * nothing to one. `tests/unit/daemon/project-hooks.test.ts` asserts exactly that of the parsed
+ * empty list, `install` and `teardown` to absent, so a host that has never been told about a
+ * project does nothing to one and installs nothing for one. `tests/unit/daemon/project-hooks.test.ts` asserts exactly that of the parsed
  * minimal file, because the failure this rules out is a plausible-looking default rather than a
  * missing feature.
  *
- * `.strict()` for the reason every other schema in this tree carries it: the install command and
- * the helper services are later phases of this row, and until they exist a file carrying them is
- * a typo rather than a forward-compatible file. A field and its consumer land together
- * (ai/RULES.md §7).
+ * `.strict()` for the reason every other schema in this tree carries it: the helper services are
+ * a later phase of this row, and until they exist a file carrying them is a typo rather than a
+ * forward-compatible file. A field and its consumer land together (ai/RULES.md §7).
  */
 export const ProjectHooksSchema = z
 	.object({
 		project: ProjectIdentifierSchema,
 		/** Stopped on the device when a lease on this project ends. Empty is a good answer. */
 		apps: z.array(AppIdSchema).default([]),
+		/**
+		 * What installing *this project's* application means on this host — a build, a deploy
+		 * script, whatever the project already has (D13).
+		 *
+		 * **Optional, and absent by default**, which is the same rule `apps` and `teardown`
+		 * follow and is load-bearing rather than tidy: a default here would be the core naming
+		 * an application, and there is no command this host could guess that is not somebody's
+		 * project. A host that has never been told about a project runs nothing for one, and
+		 * `install_app` with no bytes says so **by name** rather than doing something plausible
+		 * (`src/verbs/errors.ts`, `install-hook-undeclared`).
+		 *
+		 * It is run by the verb a caller asks for and never at grant time, and — like every
+		 * hook here — with `ROVER_DEVICE_SERIAL` set to the leased device, so what it installs
+		 * lands where the lease says and never on a neighbour's device.
+		 */
+		install: HookCommandSchema.optional(),
 		/** Run on the host when a lease on this project ends — on release **and** on expiry (D9). */
 		teardown: HookCommandSchema.optional(),
 	})

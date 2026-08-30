@@ -10,6 +10,16 @@
  * is the caller of these verbs' business, not theirs — `src/daemon/verb-handlers.ts` writes
  * it, hands the path down, and removes it in a `finally`.
  *
+ * **`install_app` has a second shape, and it is the one that knows no application's name
+ * either.** A caller may send no bytes at all, and then the host runs what *the lease's
+ * project* declared installing to be — a build, a deploy script, whatever that project already
+ * has (D13/R17, `src/daemon/project-hooks.ts`). Both shapes are the same verb because they are
+ * one operation (D10): same name, same answer, same after-state. What differs is only where the
+ * thing to install came from, and the schema says which arrived
+ * (`InstallAppParamsSchema.packageBase64`). The command itself is never named here — this layer
+ * declares a {@link ProjectInstaller} and the daemon supplies one — because running it starts a
+ * process, and nothing under `src/verbs/` may (D19).
+ *
  * **They are the same spine as every other verb** (`./perform.ts`), with `requires: []` and
  * no target, for the reasons `./app.ts` records for the app family: `installApp`, `pushFile`
  * and `pullFile` are *required* methods of `DeviceBackend`, so there is no capability to
@@ -43,6 +53,7 @@
  */
 
 import { FileTooLargeError } from '../core/errors.js';
+import type { DeviceSerial } from '../core/ids.js';
 import type { VerbContext } from './context.js';
 import { ArtifactTooLargeError } from './errors.js';
 import { performAction } from './perform.js';
@@ -65,7 +76,9 @@ import {
  * the tool underneath pick.
  *
  * Nothing here knows what application this is, and nothing should: the core knows no
- * application's name (D13/R17), so what is installed is the package the caller supplied.
+ * application's name (D13/R17), so what is installed is the package the caller supplied. The
+ * other half of that sentence is {@link installProjectApp}, where the *project* says what
+ * installing means and this layer still never learns an application's name.
  */
 export async function installApp(context: VerbContext, packagePath: string): Promise<ActionResult> {
 	return performAction(context, {
@@ -73,6 +86,91 @@ export async function installApp(context: VerbContext, packagePath: string): Pro
 		requires: [],
 		act: async () => {
 			await context.backend.installApp(context.serial, packagePath);
+		},
+	});
+}
+
+/**
+ * How a project's own install runs — declared here, implemented on the host.
+ *
+ * **The verb layer names the shape and never the command**, exactly as `FrameExtractor`
+ * (`./record.ts`) names the slicing and never the decoder, and for the same mechanical reason:
+ * running what a hook file declares starts a process, and a process started anywhere under
+ * `src/verbs/` would put `node:child_process` in every client's module graph, since
+ * `src/ipc/verb-methods.ts` imports these schemas (D19,
+ * `tests/unit/daemon/remote-never-spawns.test.ts`). So the daemon supplies it
+ * (`src/daemon/project-install.ts`), exactly as it supplies `context.backend`.
+ *
+ * **It takes the serial rather than closing over one**, and that is the pinning made
+ * structural: what the implementation is handed is the device this verb is running against —
+ * which came from the lease and from nothing a caller sent — so it cannot pick its own. An
+ * install aimed at a neighbour's device is the worst failure this tool has and looks like
+ * success from both sides (PROJECT.md §2), so the serial travels down the same way the
+ * package path does rather than being resolved a second time further in.
+ *
+ * It is not a `Capabilities` flag for `FrameExtractor`'s reason: whether a project has
+ * declared an install is a fact about this **host's configuration**, not about the device, and
+ * capabilities describe what a backend can do (D11).
+ */
+export type ProjectInstaller = (serial: DeviceSerial) => Promise<void>;
+
+/**
+ * How long a project's install command may run before it is killed and the failure says so —
+ * five minutes.
+ *
+ * **A verb-layer bound rather than the runner's own**, for the reason
+ * `FRAME_EXTRACTION_TIMEOUT_MS` is one: the number has to be visible to the *client*, whose
+ * request timeout covers the whole call and has to be larger than every budget inside it, and a
+ * client cannot import a daemon module without putting a process spawn in its module graph
+ * (D19). So it lives here, beside the other numbers that say how long this verb can take.
+ *
+ * **Generous on purpose, because this is a build and not a teardown.** `HOOK_COMMAND_TIMEOUT_MS`
+ * (8 s, `src/daemon/hook-command.ts`) bounds a hook that stops a helper service while a grant
+ * queues behind it; nothing queues behind this one, and a real project's install compiles, links
+ * and pushes. Its two relationships are stated rather than discovered, and
+ * `tests/unit/verbs/files.test.ts` asserts both:
+ *
+ * - **Against the lease TTL (D8)**: `LEASE_TTL_MS` is twenty minutes and the lease is renewed
+ *   when the call *arrives*, so an install may not outlive it — a lease expiring under a running
+ *   install would fire restoration on a device the verb is still driving. Five minutes is a
+ *   quarter of the TTL, which leaves the same headroom `MAX_VERB_TIMEOUT_MS` was chosen for and
+ *   makes that unreachable rather than merely unlikely.
+ * - **Against the client's request timeout**: `DEFAULT_REQUEST_TIMEOUT_MS` is 30 s
+ *   (`src/ipc/client.ts`), so a caller asking for a project install **must** raise its own
+ *   `IpcRequestOptions.timeoutMs` past this, the way `rover record` already derives one from the
+ *   budgets inside its call. A caller that does not gets a timeout on its own end while the
+ *   build keeps running on the host — which is a hang reported at the wrong machine.
+ */
+export const INSTALL_HOOK_TIMEOUT_MS = 5 * 60_000;
+
+/**
+ * Install **this project's** application, by running what the project declared.
+ *
+ * The same verb name as {@link installApp} and the same spine, deliberately: bytes from the
+ * caller and a project's own install command are two ways to answer one request, and one
+ * operation gets one vocabulary (D10). So an agent reads back `verb: 'install_app'`, the state
+ * after the install and the device it happened on (D12(c), D14) whichever way it asked, and
+ * nothing in the answer is a path — what the command was is host-side configuration, and the
+ * only place it surfaces is a named failure (`./errors.ts`).
+ *
+ * Nothing here knows what application this is either, and that is the point of the seam rather
+ * than a gap in it: the host looks the lease's `project` up in that project's own hook file and
+ * runs what it finds, so the name lives in the operator's configuration and never in this tree
+ * (D13/R17).
+ *
+ * @throws ProjectNotRegisteredError when the lease's project has no hook file on this host.
+ * @throws InstallHookUndeclaredError when that file declares no `install` command.
+ * @throws InstallHookFailedError when the command ran and did not succeed.
+ */
+export async function installProjectApp(
+	context: VerbContext,
+	install: ProjectInstaller,
+): Promise<ActionResult> {
+	return performAction(context, {
+		verb: 'install_app',
+		requires: [],
+		act: async () => {
+			await install(context.serial);
 		},
 	});
 }

@@ -41,7 +41,10 @@ import {
 	FrameExtractionFailedError,
 	FrameExtractionUnavailableError,
 	FramesTooLargeError,
+	InstallHookFailedError,
+	InstallHookUndeclaredError,
 	OffScreenPointError,
+	ProjectNotRegisteredError,
 	TargetNotFoundError,
 	UnaddressableElementError,
 } from './errors.js';
@@ -240,6 +243,67 @@ export const VerbFailureSchema = z.discriminatedUnion('kind', [
 		})
 		.strict(),
 	/**
+	 * `install_app` was asked for the project's own install and this host has no hook file for
+	 * that project.
+	 *
+	 * The first of the three ways a project install can answer "no", and all three are here
+	 * rather than in `internal_error` for one reason: a host that has never been told about a
+	 * project is a fact about somebody's configuration, not a daemon that broke, and the caller
+	 * has two ways out — send the bytes, or have the project registered. `project` travels back
+	 * because it is the caller's own string, and no path does: where hook files live is the
+	 * host's own directory layout and names nothing on the machine reading this (D19).
+	 */
+	z
+		.object({
+			kind: z.literal('project-not-registered'),
+			serial: DeviceSerialSchema,
+			project: z.string().min(1),
+			message: z.string().min(1),
+		})
+		.strict(),
+	/**
+	 * The project is registered and its hook file declares no `install` command.
+	 *
+	 * Kept apart from the branch above because the two are fixed in different places — a file
+	 * that is not there, against a file that is there and says nothing about installing — and an
+	 * agent that cannot tell them apart retries the call that already failed. Its existence is
+	 * also what keeps `ok` from being reachable with nothing installed: there is no default
+	 * command, because a default here would be the core naming an application (D13).
+	 */
+	z
+		.object({
+			kind: z.literal('install-hook-undeclared'),
+			serial: DeviceSerialSchema,
+			project: z.string().min(1),
+			message: z.string().min(1),
+		})
+		.strict(),
+	/**
+	 * The project's install command ran and did not succeed — a build that failed, a program
+	 * that is not on this host, or one that outlived its budget.
+	 *
+	 * The exit code and the stderr tail travel together because "a non-zero exit is data"
+	 * (ai/CODING_STANDARDS.md) and neither half is worth much alone; `signal` separates a command
+	 * killed at its bound from one that exited on its own and from one that never started, since
+	 * all three read the same from a null exit code, and `outcome` is that distinction in words.
+	 * `command` is what the hook file named — the one piece of host-side configuration in this
+	 * union, and it is here because a failure that cannot say what failed leaves an operator
+	 * grepping their own hook files.
+	 */
+	z
+		.object({
+			kind: z.literal('install-hook-failed'),
+			serial: DeviceSerialSchema,
+			project: z.string().min(1),
+			command: z.string().min(1),
+			exitCode: z.number().int().nullable(),
+			signal: z.string().nullable(),
+			stderr: z.string(),
+			outcome: z.string().min(1),
+			message: z.string().min(1),
+		})
+		.strict(),
+	/**
 	 * The condition was still unmet at the deadline. Carries no serial: a wait is over a
 	 * condition rather than over a device, and the host names the device in the refusal's
 	 * message and in the call that asked for it.
@@ -376,6 +440,35 @@ export function toVerbFailure(error: unknown): VerbFailure | null {
 			frames: error.frames,
 			byteLength: error.byteLength,
 			maxBytes: error.maxBytes,
+			message: error.message,
+		};
+	}
+	if (error instanceof ProjectNotRegisteredError) {
+		return {
+			kind: 'project-not-registered',
+			serial: error.serial,
+			project: error.project,
+			message: error.message,
+		};
+	}
+	if (error instanceof InstallHookUndeclaredError) {
+		return {
+			kind: 'install-hook-undeclared',
+			serial: error.serial,
+			project: error.project,
+			message: error.message,
+		};
+	}
+	if (error instanceof InstallHookFailedError) {
+		return {
+			kind: 'install-hook-failed',
+			serial: error.serial,
+			project: error.project,
+			command: error.command,
+			exitCode: error.exitCode,
+			signal: error.signal,
+			stderr: error.stderr,
+			outcome: error.outcome,
 			message: error.message,
 		};
 	}

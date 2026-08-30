@@ -272,6 +272,23 @@ which is the case that would otherwise leave somebody's package on a machine tha
 hardware to the next agent. `install_app` carries no application id, because the core knows no
 application's name; what gets installed is the package the caller sent, pinned to the leased device.
 
+**`install_app` has a second shape: send no bytes, and the host runs the project's own install.**
+A call that omits `packageBase64` asks the host to run the `install` command declared in the hook
+file of *the project this lease was taken with* — a build, a deploy script, whatever that project
+already has (see "Project hooks" below). The command runs on the host with `ROVER_DEVICE_SERIAL`
+set to the leased device, so what it installs lands where the lease says and never on a
+neighbour's. It is a verb the caller asks for and never something that happens at grant time, and
+it is bounded at five minutes — generous enough for a real build, a quarter of the twenty-minute
+lease TTL so the lease cannot expire under it, and well past the client's own 30 s default request
+timeout, which a caller asking for one has to raise. The three ways it can go wrong are named
+answers rather than `internal_error`: `project-not-registered` (this host has no hook file for
+that project), `install-hook-undeclared` (it has one and it declares no `install`), and
+`install-hook-failed`, carrying the exit code, the signal if there was one and the tail of the
+command's own stderr. A call that *does* carry bytes is unchanged in every respect. **No client
+asks for this yet**: `rover install` still requires a local package and the MCP server exposes no
+transfer tool at all, so the project install is reachable over the IPC surface and nowhere else
+until those rows land.
+
 **`push_file` names the file to write, never a directory to put it in.** A push to a path that is
 already a directory is refused rather than transferred into, and that is a rule Rover states rather
 than a device answer it relays: the platforms' own transfer tools copy the file *inside* such a path
@@ -467,7 +484,7 @@ startup, naming the variable and the reason, rather than binding something surpr
 | `ROVER_SOCKET_PATH` | `~/.rover/rover.sock` | Absolute path of the unix socket the local daemon binds and a local client connects to. **Empty counts as unset** — an exported-but-blank variable is what a shell leaves behind, and reading it as a real setting would point the daemon at the current directory. At most **103 bytes of UTF-8**: a unix socket address is a fixed-size struct (104 bytes on macOS, 108 on Linux, NUL included), and over the cap `bind` truncates or answers `EINVAL` instead of naming the length, so a longer path is rejected at startup with the byte count and the path. |
 | `ROVER_USERS_PATH` | `~/.rover/users.json` | Absolute path of the host's own user store — one record per user: identifier, display name, the **hash** of that user's token, and when it was created. Never a token: `rover users add` and `rover users rotate` print the raw value once and store only its hash. **Empty counts as unset**, as it is for the socket. Read by `rover users`, which touches the file directly and never goes over the network (`PROJECT.md` D25), **and by the network listener**, which is the host's entire authentication surface: the token in a caller's greeting is hashed and looked up here, re-read at every connection attempt and never cached, so `revoke` and `rotate` take effect on the very next attempt with the daemon still running. |
 | `ROVER_ARTIFACTS_PATH` | `~/.rover/artifacts` | Root of the durable artifact archive: every `screenshot`, `record_video` and `read_logs` call additionally writes its output here, on the host, **in addition to** returning the bytes to the client (`PROJECT.md` D23, §10). **Empty counts as unset**, as it is for the socket. Read only by the daemon — a client never resolves it, and the archive path is never the one an agent is given. **Nothing prunes it**: retention is deliberately undecided (`PROJECT.md` §9.4), so this grows without bound until an operator removes what they no longer want. |
-| `ROVER_PROJECTS_PATH` | `~/.rover/projects` | Directory holding the **per-project hook files** — one `<project>.json` per project, selected by the `project` string a lease carries (`PROJECT.md` D13, and see below). **Empty counts as unset**, as it is for the socket. Read only by the daemon, on the machine the devices are attached to: a hook file names a program the host runs with the daemon's own privileges, and nothing about it is ever accepted over the wire. Files are **re-read every time a lease ends and never cached** (`PROJECT.md` D6), so editing one takes effect on the next lease with nothing restarted. A `project` string that is not a valid identifier — anything with a separator, a leading `-`, whitespace or over 64 characters — resolves to **no hooks at all**, because no path is ever built from it. |
+| `ROVER_PROJECTS_PATH` | `~/.rover/projects` | Directory holding the **per-project hook files** — one `<project>.json` per project, selected by the `project` string a lease carries (`PROJECT.md` D13, and see below). **Empty counts as unset**, as it is for the socket. Read only by the daemon, on the machine the devices are attached to: a hook file names a program the host runs with the daemon's own privileges, and nothing about it is ever accepted over the wire. Files are **re-read at every use and never cached** (`PROJECT.md` D6) — when a lease ends, and when an `install_app` carrying no package asks for the project's own install — so editing one takes effect on the very next call with nothing restarted. A `project` string that is not a valid identifier — anything with a separator, a leading `-`, whitespace or over 64 characters — resolves to **no hooks at all**, because no path is ever built from it. |
 | `ROVER_PROJECT_FILE` | unset — **no default project** | The opt-in switch on the *client* side, and the counterpart of `ROVER_PROJECTS_PATH` above: the path of **one** project hook file on the machine running the client, whose `project` identifier becomes the default for `rover acquire`'s `--project` and for the MCP `acquire_device` tool's `project` argument (`PROJECT.md` D22). Unset or empty and nothing is read, `--project` is required exactly as it was, and the tool still declares the argument — **empty counts as unset**, as it is for the socket. Given both, the flag or the argument wins. It is one explicit path and there is no search: nothing walks up from the working directory and no `.rover/` convention exists, so the file a client reads is the file you named. A path naming a file that is missing or will not parse is a **loud client-side failure naming it** — exit 2 from the CLI, and an MCP server that dies on stderr at startup rather than advertising a tool it cannot fill in — never a silent fallback to attributing the lease to nothing. Convenience only: nothing else in the file is read here, no client ever runs what one declares, and the wire is unchanged — `project` stays a required, opaque string the host stores and never interprets. `owner` is **never** defaulted from this or from anything else (`PROJECT.md` D16, D20). |
 | `ROVER_LISTEN_PORT` | unset — **no network listener** | The opt-in switch for the TCP+TLS listener that serves the same IPC surface as the local socket. Unset or empty and nothing binds, nothing else below is read, and the daemon is a purely local host. Set it and the next two become **required together**: a port with no TLS material would be a listener nobody could trust, so a missing one is a startup failure naming every variable still missing rather than a half-configured host. Who may connect is not a variable at all — it comes from the user store (`ROVER_USERS_PATH`), which always resolves, so a host with no users yet starts and refuses everyone. 1–65535. |
 | `ROVER_TLS_CERT` | — (required with the port) | Path to the PEM certificate (chain) the listener presents. |
@@ -499,6 +516,11 @@ after it, under `ROVER_PROJECTS_PATH`:
 {
   "project": "checkout-web",
   "apps": ["com.example.checkout", "com.example.checkout.helper"],
+  "install": {
+    "command": "bash",
+    "args": ["-lc", "scripts/rover-install.sh"],
+    "cwd": "/srv/checkout-web"
+  },
   "teardown": {
     "command": "bash",
     "args": ["-lc", "scripts/rover-teardown.sh"],
@@ -508,20 +530,35 @@ after it, under `ROVER_PROJECTS_PATH`:
 }
 ```
 
-Three fields, and only these three today. `project` is required and **must equal the file's own
+Four fields, and only these four today. `project` is required and **must equal the file's own
 name** — a mismatch is refused out loud when the lease ends, in a warning naming both, with that
 project's apps and teardown skipped while the device itself is still restored; a file copied from
 another project cannot quietly serve this one. `apps` is the list of applications a lease on this project drove;
 they are stopped on the device when the lease ends, in the order given, and an empty list is a
-perfectly good answer. `teardown` is one command the **host** runs when the lease ends: `command`
+perfectly good answer. `install` is one command the **host** runs when a caller asks for
+`install_app` **without sending a package** — what installing this project's application means
+here, which the core cannot know because it knows no application's name. `teardown` is one command
+the **host** runs when the lease ends. Both hooks have the same shape: `command`
 and `args` only — never a shell line, because nothing here is word-split or glob-expanded, so an
 operator who wants a shell makes the shell the program, as the example does. `cwd` and `env` are
-optional. The install command and helper services are named in D13 and are not in the file yet;
+optional, and so are both hooks: nothing is defaulted, because a default here would be Rover
+naming somebody's application. Helper services are named in D13 and are not in the file yet;
 adding a field before its consumer exists would be a row in this table describing something
 nothing reads.
 
-The hook runs when a lease on that project **ends by either path — a `rover release`, and an
-expiry with the agent that held the device long gone** (`PROJECT.md` D9). Its child gets
+The `install` hook runs only when a caller asks for it — never at grant time — and it gets
+`ROVER_PROJECT` and `ROVER_DEVICE_SERIAL` the way the teardown does, so what it builds is
+installed onto the device the lease names and never onto a neighbour's. It is bounded at **five
+minutes** rather than the teardown's eight seconds, because it is a build and not a stop: that is
+a quarter of the twenty-minute lease TTL, which a lease renewed at the start of the call cannot
+run out inside, and it is well past a client's own 30 s default request timeout — a caller asking
+for a project install has to raise that itself, or it will report a hang on its own machine while
+the build is still running on the host. A command that is missing, declares no `install`, or exits
+non-zero is a **named** answer to that call (`project-not-registered`, `install-hook-undeclared`,
+`install-hook-failed` with the exit code and a stderr tail), never a broken host.
+
+The **teardown** hook runs when a lease on that project **ends by either path — a `rover release`,
+and an expiry with the agent that held the device long gone** (`PROJECT.md` D9). Its child gets
 `ROVER_PROJECT` and `ROVER_DEVICE_SERIAL` in the environment, on top of the daemon's own and
 whatever `env` declares, so a teardown can name the device it is undoing. It is bounded: eight
 seconds, then the hook's own process is killed and the failure — the exit code and the tail of its
@@ -546,7 +583,8 @@ privileges:
 - **A lease's `project` string authorizes nothing** (`PROJECT.md` D20) — it attributes, and here
   it also *selects*. Any caller that can take a lease at all, over the local socket or over the
   TCP listener with any operator-issued token, can name any project registered on this host and
-  cause that project's teardown to run when the lease ends. That is the same trust already
+  cause that project's teardown to run when the lease ends — and, with one `install_app` carrying
+  no bytes, that project's install command to run while it is held. That is the same trust already
   extended to everyone in `ROVER_USERS_PATH`, but it is worth saying rather than inferring,
   because the natural mistake is a teardown written as though it only ever follows a lease that
   project's own team took — restarting a shared service, clearing shared state — which a mistyped
@@ -557,7 +595,7 @@ The one thing a **client** may do with a hook file is read the `project` out of 
 `ROVER_PROJECT_FILE` at one — the project's own copy in its repository will do; it need not be the
 host's — and `rover acquire` stops needing `--project`, as does the MCP `acquire_device` tool
 (`PROJECT.md` D22). That is a convenience about who types the string and nothing else: the client
-reads that one field, never `apps` or `teardown`, never runs anything the file declares, and the
+reads that one field, never `apps`, `install` or `teardown`, never runs anything the file declares, and the
 lease still carries `project` as the plain string it always was. A file that is named but missing
 or unparseable fails on the spot, naming it. `--owner` is untouched by all of this and is never
 derived from anything (D16, D20).

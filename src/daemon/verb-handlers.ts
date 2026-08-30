@@ -46,6 +46,14 @@
  * is exactly the one that would otherwise leave a caller's file on hardware lent out next to
  * somebody else.
  *
+ * **And it is where a lease's `project` becomes a command this host runs** (D13, R17). An
+ * `install_app` that carries no bytes asks for the project's own install, so the handler reads
+ * the `project` off the lease it already holds and hands `./project-install.ts` that string and
+ * the serial the preamble resolved — both from the lease, neither from the caller. The verb
+ * layer only ever sees a function to call (`ProjectInstaller`, `src/verbs/files.ts`), for
+ * `./frames.ts`'s reason: running what a hook file declares starts a process, and a spawn under
+ * `src/verbs/` would be a spawn in every client's module graph (D19).
+ *
  * **A call that produced bytes has a second effect: the archive** (D23, `./archive.ts`).
  * Every `ok` answer goes past `ArtifactArchive.record` on its way out, which writes the
  * screenshot, the recording or the log read into the host's own durable tree. It is
@@ -103,7 +111,7 @@ import { clearAppData, launchApp, stopApp } from '../verbs/app.js';
 import type { VerbContext } from '../verbs/context.js';
 import { setAirplaneMode, setWifi } from '../verbs/environment.js';
 import { toVerbFailure } from '../verbs/failure.js';
-import { installApp, pullFile, pushFile } from '../verbs/files.js';
+import { installApp, installProjectApp, pullFile, pushFile } from '../verbs/files.js';
 import {
 	type GestureOptions,
 	longPress,
@@ -123,6 +131,7 @@ import { extractFrames } from './frames.js';
 import type { DeviceInventory } from './inventory.js';
 import { refusalReasonFor } from './lease-handlers.js';
 import type { Lease, LeaseStore } from './leases.js';
+import type { ProjectInstall } from './project-install.js';
 import { LeaseEndedError, type VerbCall, type VerbTraffic } from './verb-traffic.js';
 
 export type VerbHandlers = Pick<
@@ -203,16 +212,21 @@ export function createVerbHandlers(
 	leases: LeaseStore,
 	traffic: VerbTraffic,
 	archive: ArtifactArchive,
+	installProject: ProjectInstall,
 ): VerbHandlers {
 	/**
 	 * The preamble every verb call shares: renew, register, re-verify, resolve the backend, run.
 	 *
-	 * `run` is handed a context and nothing else, which is the verb layer's contract — it
-	 * never looks a device up and never learns that leases exist.
+	 * `run` is handed a context and the lease that authorised it. The context is the whole of
+	 * what reaches the verb layer — a verb never looks a device up and never learns that leases
+	 * exist — and the lease is for the *handler* around it, which is a different layer: only
+	 * `install_app` reads it today, for the `project` it needs to find that project's own
+	 * install command, and it reads it off the lease already resolved above rather than looking
+	 * it up a second time, so the project and the device on one call cannot disagree.
 	 */
 	function runVerb<Result extends ArchivableResult>(
 		leaseId: LeaseId,
-		run: (context: VerbContext) => Promise<Result>,
+		run: (context: VerbContext, lease: Lease) => Promise<Result>,
 	): Promise<VerbCallResultOf<Result>> {
 		// First, and before any await: this is the renewal (D8).
 		const lease = leases.use(leaseId);
@@ -234,7 +248,7 @@ export function createVerbHandlers(
 			if ('refusal' in prepared) {
 				return prepared.refusal;
 			}
-			const answered = await answer(prepared.context, run);
+			const answered = await answer(prepared.context, lease, run);
 			if (answered.outcome === 'ok') {
 				// The second effect of the call (D23) — awaited rather than fired and forgotten,
 				// because the bytes are already in memory and bounded, the lease is still held, and
@@ -374,9 +388,18 @@ export function createVerbHandlers(
 		// `runVerb`'s callback rather than before it, so a call on a lease this host does not
 		// know is refused without a file ever being written — the refusal costs nothing, which
 		// is the same reason `screenshot` encodes inside its action rather than around it.
+		//
+		// `install_app` is the one row with two ways in, and the schema says which arrived
+		// (`src/ipc/verb-methods.ts`): bytes are the branch above, and no bytes is *the lease's
+		// project's* own install command, run on this host. The project comes off the lease and
+		// the serial out of the context the preamble built from it — both from the lease, neither
+		// from the caller — which is what pins the install to the leased device and keeps it off
+		// a neighbour's.
 		install_app(params: InstallAppParams): Promise<VerbCallResult> {
-			return runVerb(params.leaseId, (context) =>
-				withPayloadOnDisk(params.packageBase64, (hostPath) => installApp(context, hostPath)),
+			return runVerb(params.leaseId, (context, lease) =>
+				params.packageBase64 === undefined
+					? installProjectApp(context, (serial) => installProject(lease.project, serial))
+					: withPayloadOnDisk(params.packageBase64, (hostPath) => installApp(context, hostPath)),
 			);
 		},
 
@@ -425,10 +448,11 @@ export function createVerbHandlers(
  */
 async function answer<Result extends ArchivableResult>(
 	context: VerbContext,
-	run: (context: VerbContext) => Promise<Result>,
+	lease: Lease,
+	run: (context: VerbContext, lease: Lease) => Promise<Result>,
 ): Promise<VerbCallResultOf<Result>> {
 	try {
-		return { outcome: 'ok', result: await run(context) };
+		return { outcome: 'ok', result: await run(context, lease) };
 	} catch (error) {
 		if (error instanceof LeaseEndedError) {
 			// The verb was running and the device stopped being this call's to drive part-way

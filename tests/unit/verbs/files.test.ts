@@ -12,9 +12,17 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { DeviceBackend } from '@/core/device.js';
 import { FileTooLargeError } from '@/core/errors.js';
-import { MAX_TRANSFER_BYTES } from '@/ipc/verb-methods.js';
-import { ArtifactTooLargeError } from '@/verbs/errors.js';
-import { installApp, pullFile, pushFile } from '@/verbs/files.js';
+import { HOOK_COMMAND_TIMEOUT_MS } from '@/daemon/hook-command.js';
+import { LEASE_TTL_MS } from '@/daemon/leases.js';
+import { MAX_TRANSFER_BYTES, MAX_VERB_TIMEOUT_MS } from '@/ipc/verb-methods.js';
+import { ArtifactTooLargeError, ProjectNotRegisteredError } from '@/verbs/errors.js';
+import {
+	INSTALL_HOOK_TIMEOUT_MS,
+	installApp,
+	installProjectApp,
+	pullFile,
+	pushFile,
+} from '@/verbs/files.js';
 import { ActionResultSchema, MAX_ARTIFACT_BYTES } from '@/verbs/result.js';
 import {
 	createMockCapabilities,
@@ -132,6 +140,74 @@ describe('install_app', () => {
 			verb: 'install_app',
 			after: { kind: 'unavailable', capability: 'canReadScreen' },
 		});
+	});
+});
+
+/**
+ * The second way into the same verb: no bytes from the caller, and the host runs what *the
+ * project* declared installing to be (D13/R17). What is asserted here is that it is the same
+ * verb — same name, same spine, same after-state — and that the seam is handed the device the
+ * verb is running against rather than one of its own choosing.
+ */
+describe('install_app for the project’s own application', () => {
+	it('runs the project’s install and answers like every other verb', async () => {
+		const { context, calls } = recording();
+		const installed: string[] = [];
+
+		const result = await installProjectApp(context, async (serial) => {
+			calls.push('projectInstall');
+			installed.push(serial);
+		});
+
+		// The lease's device, handed down rather than resolved a second time further in: an
+		// install landing on a neighbour's device looks like success from both sides.
+		expect(installed).toEqual([context.serial]);
+		expect(result).toMatchObject({
+			verb: 'install_app',
+			target: null,
+			device: { serial: context.serial },
+			after: { kind: 'screen' },
+			artifact: null,
+		});
+		expect(() => ActionResultSchema.parse(result)).not.toThrow();
+		// One `performAction`, in the order D12(c) requires: the install, then the state after it.
+		expect(calls).toEqual(['projectInstall', 'readScreen', 'deviceInfo']);
+	});
+
+	it('never asks the backend to install anything of its own', async () => {
+		const { context, installs } = recording();
+
+		await installProjectApp(context, async () => {});
+
+		// The host ran the project's command; there were no caller bytes and so no package path.
+		// A backend call here would be this verb inventing a second install.
+		expect(installs).toEqual([]);
+	});
+
+	it('carries no host path in its answer, whatever the command was', async () => {
+		const { context } = recording();
+
+		const result = await installProjectApp(context, async () => {});
+
+		// The command, its arguments and where it ran are host-side configuration. The only
+		// place any of it surfaces is a named failure; an `ok` answer says what happened to the
+		// device and nothing about this machine (D19).
+		expect(JSON.stringify(result)).not.toContain('/tmp/');
+		expect(JSON.stringify(result)).not.toContain(HOST_PATH);
+	});
+
+	it('lets the three named failures out rather than swallowing them into a result', async () => {
+		const { context, calls } = recording();
+
+		const thrown = await installProjectApp(context, async (serial) => {
+			throw new ProjectNotRegisteredError(serial, 'checkout-web');
+		}).catch((error: unknown) => error);
+
+		// A refusal from the host's own configuration is an answer the agent acts on, and it
+		// must not arrive as an `ok` naming the device — which would report an install that
+		// never happened.
+		expect(thrown).toBeInstanceOf(ProjectNotRegisteredError);
+		expect(calls).toEqual([]);
 	});
 });
 
@@ -277,5 +353,30 @@ describe('the two byte bounds', () => {
 	 */
 	it('lets a pushed file come back the same way it went out', () => {
 		expect(MAX_TRANSFER_BYTES).toBeLessThanOrEqual(MAX_ARTIFACT_BYTES);
+	});
+});
+
+/**
+ * The install hook's bound, against the two numbers it has to sit under. Both are asserted
+ * rather than described, because a bound whose relationships live only in a comment is one the
+ * other numbers are free to drift away from — the reasoning `MAX_RECORDING_MS` and
+ * `HOOK_COMMAND_TIMEOUT_MS` are already asserted with.
+ */
+describe('how long a project install may take', () => {
+	it('cannot outlive the lease that authorised it (D8)', () => {
+		// The lease is renewed when the call *arrives*, so an install allowed to run longer than
+		// the TTL could have its own lease expire underneath it — and the sweep would then fire
+		// restoration on a device the install is still driving.
+		expect(INSTALL_HOOK_TIMEOUT_MS).toBeLessThan(LEASE_TTL_MS);
+	});
+
+	it('stays inside the bound every other long verb call is held to', () => {
+		expect(INSTALL_HOOK_TIMEOUT_MS).toBeLessThanOrEqual(MAX_VERB_TIMEOUT_MS);
+	});
+
+	it('is generous enough to be a build rather than a teardown', () => {
+		// The comparison that says what this number is for: a teardown's eight seconds bound a
+		// hook stopping a helper service, and a project's install compiles and pushes.
+		expect(INSTALL_HOOK_TIMEOUT_MS).toBeGreaterThan(HOOK_COMMAND_TIMEOUT_MS);
 	});
 });

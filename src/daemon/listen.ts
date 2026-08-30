@@ -36,6 +36,7 @@ import { createLeaseStore, type LeaseStore } from './leases.js';
 import { createListDevicesHandler } from './list-devices.js';
 import type { NetworkListenerConfig } from './network-config.js';
 import { type NetworkListener, startNetworkListener } from './network-listen.js';
+import { createProjectInstall, type ProjectInstall } from './project-install.js';
 import { createProjectResolver } from './project-resolver.js';
 import { createDeviceRestorer, type DeviceRestorer } from './restore.js';
 import { attemptConnect } from './socket-connect.js';
@@ -182,12 +183,13 @@ export function createDaemonHandlers(
 	restorer: DeviceRestorer,
 	traffic: VerbTraffic,
 	archive: ArtifactArchive,
+	installProject: ProjectInstall,
 ): IpcHandlers {
 	return {
 		status: handleStatus,
 		...createListDevicesHandler(inventory, leases),
 		...createLeaseHandlers(inventory, leases, restorer),
-		...createVerbHandlers(inventory, leases, traffic, archive),
+		...createVerbHandlers(inventory, leases, traffic, archive, installProject),
 	};
 }
 
@@ -257,7 +259,17 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartRes
 	// added transport rather than a second implementation of the surface (D17). It holds no
 	// resources of its own, so a loser of the bind leaves nothing behind here either.
 	const ipcServer = createIpcServer(
-		createDaemonHandlers(inventory, leases, restorer, traffic, archive),
+		createDaemonHandlers(
+			inventory,
+			leases,
+			restorer,
+			traffic,
+			archive,
+			// The second line that gives a seam something to resolve, beside the restorer's: a
+			// lease's `project` string becomes that project's *install* command, re-read on every
+			// call for the reason the teardown's is (D6).
+			createProjectInstall({ root: options.projectsRoot }),
+		),
 	);
 
 	const parts: DaemonParts = {
