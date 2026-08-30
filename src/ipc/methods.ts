@@ -25,6 +25,8 @@ import { ProtocolVersionSchema } from './protocol.js';
 import {
 	AppVerbParamsSchema,
 	LongPressParamsSchema,
+	ReadLogsCallResultSchema,
+	ReadLogsParamsSchema,
 	ScrollParamsSchema,
 	SwipeParamsSchema,
 	TapParamsSchema,
@@ -38,14 +40,21 @@ export {
 	AppVerbParamsSchema,
 	type LongPressParams,
 	LongPressParamsSchema,
+	MAX_LOG_ENTRIES,
 	MAX_VERB_TIMEOUT_MS,
+	type ReadLogsCallResult,
+	ReadLogsCallResultSchema,
+	type ReadLogsParams,
+	ReadLogsParamsSchema,
 	type ScrollParams,
 	ScrollParamsSchema,
 	type SwipeParams,
 	SwipeParamsSchema,
 	type TapParams,
 	TapParamsSchema,
+	type VerbCallRefusal,
 	type VerbCallResult,
+	type VerbCallResultOf,
 	VerbCallResultSchema,
 	type VerbRefusalReason,
 	VerbRefusalReasonSchema,
@@ -276,11 +285,15 @@ export type ReleaseDeviceResult = z.infer<typeof ReleaseDeviceResultSchema>;
  * The names follow the verb table in PROJECT.md §4 (`list_devices`), not a camelCase
  * variant of it.
  *
- * The verb rows are the two waits, the four gestures and the three app-lifecycle verbs; each
- * further verb family is one more row beside them and one more entry in
- * `src/daemon/verb-handlers.ts`. They all answer with `VerbCallResultSchema`, because "what
- * happened on the device" is one shape whatever was asked of it — and the three app rows
- * share one params schema too, because they take exactly the same call.
+ * The verb rows are the two waits, the four gestures, the three app-lifecycle verbs and the
+ * log read; each further verb family is one more row beside them and one more entry in
+ * `src/daemon/verb-handlers.ts`. All but one answer with `VerbCallResultSchema`, because
+ * "what happened on the device" is one shape whatever was asked of it — and the three app
+ * rows share one params schema too, because they take exactly the same call.
+ *
+ * `read_logs` is the exception that proves the rule: its answer is that same shape with the
+ * log entries added, built by the same factory in `./verb-methods.ts`, so its refusals are
+ * word for word every other verb's.
  */
 export const IPC_METHODS = {
 	status: { params: StatusParamsSchema, result: StatusResultSchema },
@@ -296,6 +309,7 @@ export const IPC_METHODS = {
 	launch_app: { params: AppVerbParamsSchema, result: VerbCallResultSchema },
 	stop_app: { params: AppVerbParamsSchema, result: VerbCallResultSchema },
 	clear_app_data: { params: AppVerbParamsSchema, result: VerbCallResultSchema },
+	read_logs: { params: ReadLogsParamsSchema, result: ReadLogsCallResultSchema },
 } as const satisfies Record<string, IpcMethodDefinition>;
 
 export type IpcMethodName = keyof typeof IPC_METHODS;

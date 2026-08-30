@@ -132,11 +132,23 @@ no backend method, no capability and no result shape — the whole family is one
 schema shared by all three, and three rows on the method table. `stop_app` cannot tell "stopped it"
 from "there was no such package", because the device is silent either way; the state after the
 action is what will answer that once `read_screen` lands, and there is deliberately no probe
-pretending otherwise in the meantime. The remaining verbs — `type_text`, `press_key`, `screenshot`,
-`read_screen`, `read_logs`, `install_app`, `pull_file`, `push_file` — are their own issues.
+pretending otherwise in the meantime.
+
+**`read_logs` is the verb that sees what a screenshot cannot** (`src/verbs/logs.ts`), and it is the
+first one whose answer carries a payload of its own: the device's log, parsed into neutral entries —
+a timestamp as the device printed it, a level, a tag, a process id and the line — on top of
+everything every other verb answers with. An app that crashed and vanished leaves a screen you
+cannot tell from someone pressing home, and the log is where the exception is; proved against a real
+device, where a crashed app is named in the read while nothing on the screen names it. The read is
+**bounded and never follows**: the caller says how many entries, the device's newest are the ones
+kept, and `truncated` says when there were more, because a short read that reads as a quiet device
+is worse than no read. Following a log would be a wait with no condition and a stream over IPC, and
+is deliberately not here. The remaining verbs — `type_text`, `press_key`, `screenshot`,
+`read_screen`, `install_app`, `pull_file`, `push_file` — are their own issues.
 
 **The daemon loads the core and runs the verbs**, and a client only asks (D19). The two waits, the
-four gestures and the three app verbs are callable over the same connection as `acquire_device` — the same envelope,
+four gestures, the three app verbs and the log read are callable over the same connection as
+`acquire_device` — the same envelope,
 the same framing, one method table — and a verb call carries the lease id rather than a serial,
 because the lease id is the credential and the host derives the device from it. A verb that fails
 comes back as an *answer* naming what happened — the element was not there, the wait timed out, the

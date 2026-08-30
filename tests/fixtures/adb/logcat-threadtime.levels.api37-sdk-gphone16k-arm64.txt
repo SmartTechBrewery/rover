@@ -1,0 +1,21 @@
+--------- beginning of main
+08-30 10:56:51.085  1026  1168 D SatelliteController: getCarrierRoamingNtnConnectType: config: null
+08-30 10:56:51.085  1026  1168 D TelephonyConfigUpdateInstallReceiver: getConfigParser: domain=satellite
+08-30 10:56:51.085  1026  1168 V SatelliteController: satelliteConfigParser is not ready
+08-30 10:56:51.085  1026  1168 D SatelliteController: getCarrierRoamingNtnConnectTypeViaConfigUpdater: return null (satelliteConfig is null)
+08-30 10:56:51.086  1026  1168 D SatelliteController: getCarrierRoamingNtnConnectType: Falling back to global carrier config connect type: 0
+08-30 10:56:51.086  1026  1168 D TelephonyConfigUpdateInstallReceiver: getConfigParser: domain=satellite
+08-30 10:56:51.086  1026  1168 V SatelliteController: satelliteConfigParser is not ready
+08-30 10:56:51.086  1026  1168 D SatelliteController: isSatelliteAttachSupportedViaConfigupdater: return null (satelliteConfig is null)
+08-30 10:56:51.150   472   570 W skia    : AGTM parsing failed flags.readFromStream(s) at 159
+08-30 10:56:51.849 14878 14878 I wpa_supplicant: wlan0: CTRL-EVENT-BEACON-LOSS 
+08-30 10:56:52.073   635   777 I HalDevMgr: bestIfaceCreationProposal is null, requestIface=STA, existingIface=[name=wlan0 type=STA]
+08-30 10:56:55.077   476   476 I adbd    : adbd service requested 'shell,v2,TERM=xterm-256color,raw:log -p v -t RoverFixture "verbose line"; log -p d -t RoverFixture "debug line"; log -p i -t RoverFixture "info line"; log -p w -t RoverFixture "warn line"; log -p e -t RoverFixture "error line"; log -p f -t RoverFixture "fatal line"'
+08-30 10:56:55.081   635   777 I HalDevMgr: bestIfaceCreationProposal is null, requestIface=STA, existingIface=[name=wlan0 type=STA]
+08-30 10:56:55.091 16711 16711 V RoverFixture: verbose line
+08-30 10:56:55.097 16712 16712 D RoverFixture: debug line
+08-30 10:56:55.104 16713 16713 I RoverFixture: info line
+08-30 10:56:55.111 16714 16714 W RoverFixture: warn line
+08-30 10:56:55.117 16715 16715 E RoverFixture: error line
+08-30 10:56:55.123 16716 16716 F RoverFixture: fatal line
+08-30 10:56:55.144   476   476 I adbd    : adbd service requested 'shell,v2,TERM=xterm-256color:export ANDROID_LOG_TAGS=''; exec logcat '-d' '-v' 'threadtime' '-t' '20' '-b' 'main' '-b' 'crash''

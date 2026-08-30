@@ -148,7 +148,7 @@ Working names. All of them take a device handle, and over the wire that handle i
 | Verb | Notes |
 |---|---|
 | `install_app` / `launch_app` / `stop_app` / `clear_app_data` | The last three address a **package**, so they resolve no target and need no capability — the backend methods behind them are required ones. `stop_app` cannot tell a stopped app from a package that was never installed (§6); the state after the action is what answers that |
-| `read_logs` | Catches a failure a screenshot will not show |
+| `read_logs` | Catches a failure a screenshot will not show. A **bounded** read — the most recent *n* entries, including the buffer the platform records crashes in, with a `truncated` flag so a short read is not read as a quiet device. No following: a tail that stays open is a wait with no condition and a stream over IPC |
 | `set_airplane_mode` / `set_wifi` | See §6 — recipes that need no root |
 | `pull_file` / `push_file` | |
 
@@ -158,7 +158,7 @@ Working names. All of them take a device handle, and over the wire that handle i
 
 iOS is not being built now, but the code has to accept it without a rewrite. The seam does **not**
 run along "adb versus simctl" — it runs along the device interface: enumeration, lifecycle,
-installation, app control, screenshot, hierarchy read, input.
+installation, app control, screenshot, hierarchy read, input, and the **system-log read**.
 
 Three things worth knowing now, so as not to design into a corner:
 
@@ -169,6 +169,11 @@ Three things worth knowing now, so as not to design into a corner:
   that survives a screenshot block. On iOS it may not be possible at all.
 - Hence D11: `read_screen` **is not a required method** of the interface. It is a declared
   capability the verb layer asks about before using it.
+- **A system log is not one of those divergences**, and `readLogs` is therefore a *required*
+  method rather than a capability: every platform this targets keeps one, and a flag that is
+  always `true` would be noise (`src/core/capabilities.ts`). What differs between platforms is
+  the wording inside an entry, which is what the neutral `LogEntry` shape and each backend's own
+  parser are for.
 
 ---
 
@@ -623,6 +628,63 @@ well behaved:
   server that merely swallows that event has a log line rather than a deadline. Destroying the
   `TLSSocket` the event carries takes the raw socket with it.
 
+Checked on the same API 37 emulator (`sdk_gphone16k_arm64`) with `adb` 37.0.0 while building
+`read_logs` (#69), **2026-08-30**:
+
+- **The verified log recipe is one bounded dump, and every flag earns its place:**
+
+  ```bash
+  adb -s "$SERIAL" logcat -d -v threadtime -t "$N" -b main -b crash
+  ```
+
+  `-d` dumps and exits — a follow never returns, and there is no sleep and no unbounded wait in
+  this repository. **Repeated `-b` works on this adb**; `-b main,crash` is not needed. `-b crash`
+  is what makes a crash reachable at all, and `-v threadtime` is the format carrying the
+  timestamp, the pid and the level letter on every line. Exit 0, **stderr empty**, and `-t 2000`
+  (2253 lines, 331 KB) came back in **36 ms** — this is a query, not a capture.
+- **`-t <n>` counts logcat *entries*, and an entry is not a line.** A Java crash is a **single**
+  entry whose message runs to fourteen lines, each of which `threadtime` prefixes in full:
+  `-t 2 -b crash` returned **29** lines. So a caller that thinks in lines has to bound the answer
+  on the host side; asking the device for `n` and trusting it to be `n` lines is wrong by an
+  order of magnitude exactly when a crash is in the read.
+- **An empty read is zero bytes** — not even a `--------- beginning of …` line (measured with a
+  tag filter nothing matched). That separator is printed once per buffer that has anything in it,
+  and it is the tool describing its own output rather than something the device said.
+- **`am crash <package>` works on API 37, and is asynchronous.** It exits 0 *before* the crash is
+  logged: the command returned at `10:54:26.759` and the entry landed at `10:54:26.945`. A test
+  that reads the log once, right after it, catches nothing — the read has to be a condition with
+  a deadline.
+- **A crashed app is logged at level `E`, never `F`.** `am crash` produces
+  `E AndroidRuntime: FATAL EXCEPTION: main`, `E AndroidRuntime: Process: <package>, PID: <pid>`
+  and `android.app.RemoteServiceException$CrashedByAdbException: shell-induced crash`. The `F`
+  letter belongs to a **native** abort — `F libc : Fatal signal 6 (SIGABRT)` and the `F DEBUG`
+  tombstone under it, both of which the crash buffer also carries. A check looking for a
+  fatal-*level* entry therefore misses every application crash on this platform.
+- **The main buffer is chatty enough to lose a crash within seconds.** Idle, 60 entries spanned
+  9 s; while an app was launching, 120 entries spanned **1 s** — so a crash twenty seconds old
+  was already off the end of a `-t 120` read. A read that has to catch a crash asks for
+  thousands, not hundreds, which is why `read_logs` takes the bound from the caller.
+- **`kill -6 <pid>` on an app process is refused for the shell user** (`Operation not
+  permitted`), so a native abort cannot be induced without `adb root`. The fatal-level fixture was
+  produced with `adb -s "$SERIAL" shell log -p f -t <tag> "<message>"` instead, which writes an
+  entry at any level the shell asks for — the same six letters logcat prints.
+- **What a crash leaves on the screen is not one thing, and it is not stable.** Both of these
+  followed `am crash` on the foreground app on the same device within minutes: the **launcher**,
+  with nothing on it about the crash at all (`mCurrentFocus=…NexusLauncherActivity`), and a
+  **transient dialog** reading `Settings keeps stopping` / `App info` / `Close app`, which shows
+  up after repeated crashes of the same package and clears itself again a few seconds later.
+  Two consequences, and the first cost a test run:
+  - **A crash dialog outlives the suite that raised it** and the next screen read takes it for
+    the app under test — `tests/device/android/backend.test.ts`'s "root element matches
+    `wm size`" failed at 196 dp against 427 because it was measuring a dialog. A suite that
+    crashes an app dismisses what the crash raised (`input keyevent KEYCODE_BACK`) before it
+    finishes.
+  - **A test may not assert that the screen says nothing about a crash** — that is flaky, and
+    when the dialog is up it is false. What holds either way is that the screen never names the
+    **package**, the **exception** or the **process**, which is the assertion `read_logs`'
+    acceptance test makes: a screenshot says at most that *an* app stopped, and only the log says
+    which one and why.
+
 ---
 
 ## 7. Scope
@@ -711,7 +773,7 @@ Four rules when filing these issues:
 | R12 | Input verbs | `tap`, `long_press`, `swipe`, `scroll`, `type_text`, `press_key`. `long_press` as a drag in place — **not** `keyevent --longpress` (§6) — held past the device's own `secure long_press_timeout`, which is configuration rather than a constant. `type_text` hides the device shell's quoting. Split the way R9 and R16 were, into three: the backend's four **primitives** landed first (#12 phase 1) — `tap` / `swipe` / `typeText` / `pressKey` behind `canInput`, with the dp→px conversion and the text limits §6 records — then the four **gesture verbs** over them (#60 phase 2), `tap` / `long_press` / `swipe` / `scroll`, each on the R11 spine with its own `IPC_METHODS` row; `type_text` and `press_key` are phase 3 and are what is left of this row | R21 | M |
 | R13 | Read verbs | `screenshot`, `read_screen`, `device_info`. `read_screen` works with screen capture blocked and **is a declared capability, not a required method** (§5). Split the way R12 was, into three: the backend's **primitive** landed first (#13 phase 1) — `readScreen` behind `canReadScreen`, the two-command dump recipe of §6 mapped onto `ScreenElement[]` in dp — which is also what flipped the last `false` in the Android manifest and so turned on every path already written against it: after-states, targets by text, and both waits. The three read **verbs** and their `IPC_METHODS` rows are phases 2 and 3 | R21 | M |
 | R14 | `record_video` + slicing into frames | The recording must finish before it is pulled — a file pulled earlier has no `moov` atom and cannot be read at all | R13 | S |
-| R15 | App verbs | `install_app`, `launch_app`, `stop_app`, `clear_app_data`, `read_logs`, `pull_file`, `push_file`. `read_logs` is to catch a failure a screenshot will not show. Split the way R12 was, into three: the **app-lifecycle verbs** landed first (#15 phase 1) — `launch_app` / `stop_app` / `clear_app_data`, each on the R11 spine over a backend primitive that already existed, sharing one `IPC_METHODS` params schema, with `requires: []` and no target because an app id addresses a package rather than something on the screen; `read_logs` is phase 2 and needs a backend method, a logcat parser and a payload-carrying result shape that none of the three above needed; `install_app`, `pull_file` and `push_file` are phase 3 and are a byte-transfer concern (R24) rather than an app-lifecycle one — `install_app` takes a file from the *client's* machine | R21 | M |
+| R15 | App verbs | `install_app`, `launch_app`, `stop_app`, `clear_app_data`, `read_logs`, `pull_file`, `push_file`. `read_logs` is to catch a failure a screenshot will not show. Split the way R12 was, into three: the **app-lifecycle verbs** landed first (#15 phase 1) — `launch_app` / `stop_app` / `clear_app_data`, each on the R11 spine over a backend primitive that already existed, sharing one `IPC_METHODS` params schema, with `requires: []` and no target because an app id addresses a package rather than something on the screen; `read_logs` landed as phase 2 (#69) — a required `DeviceBackend.readLogs`, a log parser with captures of its own, and the first verb whose answer carries a payload beyond `ActionResult`, which is what factored `VerbCallResultSchema` into `verbCallResultOf()` and made `runVerb` generic for phase 3 to reuse; `install_app`, `pull_file` and `push_file` are phase 3 and are a byte-transfer concern (R24) rather than an app-lifecycle one — `install_app` takes a file from the *client's* machine | R21 | M |
 | R16 | Environment verbs | `set_airplane_mode`, `set_wifi` through `cmd connectivity` and `cmd wifi` — **not** through `svc`, which is gone (§6). Both paths without root. The **primitives** landed with R9's first phase (#9) — `setAirplaneMode` / `setWifiEnabled` on the Android backend, behind `canControlNetwork` — so this row is the verb layer over them, not the recipes themselves | R21 | S |
 | R24 | Artifact transfer across the machine boundary | Screenshots, recordings and pulled files come back as bytes; **a path returned to the agent exists on the agent's machine** (D19). In the other direction: `install_app` and `push_file` send a file to the host. The recording from R14 finishes on the host before the transfer, not during it. The size limit is explicit and named, and does not announce itself as a truncated file | R13, R14, R15 | M |
 | R25 | Durable artifact archive on the host | Every verb that produces a screenshot, a recording, or a log pull additionally writes it into `<project>/<test_name>/<lease-id>/<device-serial>/…` on the host (D23, §10), alongside a `device_info.json` snapshot per lease-device pair (D14). **An absent `test_name` falls back to a single fixed directory name**, so the tree shape never varies. **The archive path is never the one returned to the agent** — R24's bytes-over-the-wire contract is unchanged by this row. Retention (a TTL or size cap, and who prunes) is explicitly out of scope here — see §9.4 | R8, R13, R14, R15, R24 | M |

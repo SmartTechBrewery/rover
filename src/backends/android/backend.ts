@@ -2,11 +2,11 @@
  * The device backend for this platform.
  *
  * It answers every required method of the contract — enumeration, presence, the device
- * facts, the app lifecycle and the capture — with no stub, which is what lets it declare
- * `implements DeviceBackend` and what lets `./index.ts` register it (ai/TESTING.md, "A
- * backend under construction registers nothing"), plus **every** capability-gated method:
- * the environment pair behind `canControlNetwork`, the four input primitives behind
- * `canInput`, and `readScreen` behind `canReadScreen` (#13). No flag in
+ * facts, the app lifecycle, the capture and the log read — with no stub, which is what
+ * lets it declare `implements DeviceBackend` and what lets `./index.ts` register it
+ * (ai/TESTING.md, "A backend under construction registers nothing"), plus **every**
+ * capability-gated method: the environment pair behind `canControlNetwork`, the four input
+ * primitives behind `canInput`, and `readScreen` behind `canReadScreen` (#13). No flag in
  * `./capabilities.ts` is a declared opt-out any more.
  *
  * Everything that touches the device goes through `./adb.js`, everything that reads its
@@ -14,7 +14,7 @@
  * arithmetic — `./input.js` on the way to the device, `./screen.js` on the way back. This
  * file is the join between them and holds no text-shaped knowledge of its own: the wording
  * each verb asserts on lives in `./parsers/app-control.js`, `./parsers/network.js`,
- * `./parsers/input.js` and `./parsers/uiautomator.js`, pinned
+ * `./parsers/input.js`, `./parsers/uiautomator.js` and `./parsers/logcat.js`, pinned
  * against captures, and every **caller-supplied** value that enters a device-side command
  * line is quoted by `./adb.js`. Which quoter is the one judgement call in this file:
  *
@@ -40,7 +40,9 @@ import {
 	type DeviceState,
 	type DeviceWatch,
 	type DeviceWatcher,
+	type LogRead,
 	type Point,
+	type ReadLogsOptions,
 	type ScreenElement,
 } from '../../core/device.js';
 import { type AppId, type DeviceSerial, parseAppId, unwrap } from '../../core/ids.js';
@@ -77,6 +79,7 @@ import {
 import { parseGetprop } from './parsers/getprop.js';
 import { parseUiHierarchy, type UiHierarchy } from './parsers/hierarchy.js';
 import { acceptedInput } from './parsers/input.js';
+import { parseLogcat } from './parsers/logcat.js';
 import { acceptedNetworkChange } from './parsers/network.js';
 import { isPng } from './parsers/screencap.js';
 import { TrackFrameDecoder } from './parsers/track.js';
@@ -502,6 +505,60 @@ export class AndroidDeviceBackend implements DeviceBackend {
 		if (!isPng(result.stdout)) throw notAnImage(serial, result);
 
 		return result.stdout;
+	}
+
+	/**
+	 * `logcat -d -v threadtime -t <n> -b main -b crash` — the device's log, bounded, over
+	 * in one call.
+	 *
+	 * Every flag is load-bearing, and all of them were run against API 37 / adb 37.0.0
+	 * before being written down (PROJECT.md §6):
+	 *
+	 * - **`-d`** dumps and exits. A follow never returns, and there is no sleep and no
+	 *   unbounded wait in this repository (ai/RULES.md §2). `-t` implies it; both are passed
+	 *   so the intent survives someone changing the bound.
+	 * - **`-b main -b crash`**, repeated rather than `-b main,crash` — this adb accepts the
+	 *   repetition, and the crash buffer is where a fatal exception lands. Without it a read
+	 *   after a crash shows ordinary chatter and nothing else, which is the failure this verb
+	 *   exists to prevent.
+	 * - **`-v threadtime`** is the one format carrying the timestamp, the pid and the level
+	 *   on every line, which is exactly {@link LogEntry}'s shape.
+	 *
+	 * **`-t` counts logcat *entries*, and an entry is not a line.** One Java crash is a
+	 * single entry whose message runs to fourteen lines, so `-t 2` on the crash buffer
+	 * returned twenty-eight lines here. The cap this method promises is on **entries as the
+	 * caller sees them** — one per line — so the request is `maxEntries + 1` and whatever
+	 * comes back is bounded on this side. The `+ 1` is what makes {@link LogRead.truncated}
+	 * honest in the ordinary single-line case: without it, a device holding exactly
+	 * `maxEntries` lines and one holding a thousand more answer identically.
+	 *
+	 * **The newest are the ones kept**, because a log read is asked *after* something
+	 * happened.
+	 *
+	 * `runAdbOnDevice`, never `runAdb`: an unpinned read is somebody else's device, and a
+	 * log from the wrong device is worse than no log, since nothing about it looks wrong.
+	 *
+	 * The default ten-second timeout: this is a query. Two thousand entries came back in
+	 * 36 ms on an emulator (PROJECT.md §6).
+	 */
+	async readLogs(serial: DeviceSerial, options: ReadLogsOptions): Promise<LogRead> {
+		const result = await runAdbOnDevice(serial, [
+			'logcat',
+			'-d',
+			'-v',
+			'threadtime',
+			'-t',
+			String(options.maxEntries + 1),
+			'-b',
+			'main',
+			'-b',
+			'crash',
+		]);
+
+		const entries = parseLogcat(result.stdout);
+		const truncated = entries.length > options.maxEntries;
+
+		return { entries: truncated ? entries.slice(-options.maxEntries) : entries, truncated };
 	}
 
 	/**
