@@ -2,11 +2,13 @@ import { afterEach, describe, expect, it } from 'vitest';
 // Side-effect import: exactly what `src/daemon/main.ts` now does. Without it the daemon this
 // suite starts would have an empty registry and lend nothing.
 import '@/backends/index.js';
-import { type DeviceSerial, type LeaseId, parseAppId } from '@/core/ids.js';
+import { runAdbOnDevice } from '@/backends/android/adb.js';
+import type { LogEntry } from '@/core/device.js';
+import { type DeviceSerial, type LeaseId, parseAppId, unwrap } from '@/core/ids.js';
 import { type Observation, waitForCondition } from '@/core/wait.js';
 import { type RunningDaemon, startDaemon } from '@/daemon/listen.js';
 import type { IpcClient } from '@/ipc/client.js';
-import type { ListedDevice } from '@/ipc/methods.js';
+import type { ListedDevice, ReadLogsCallResult } from '@/ipc/methods.js';
 import { IpcRequestError } from '@/ipc/protocol.js';
 import {
 	connectWithoutStarting,
@@ -39,6 +41,14 @@ import {
  * against each other over one lease — the root of the read against the panel `device_info`
  * describes — because on a device whose size nobody knows in advance that is the only
  * cross-check there is.
+ *
+ * **`screenshot` is on the wire since #68**, and it is the one verb whose answer crosses the
+ * boundary as bytes. What a device is needed to prove about it is that the payload is still
+ * an image after the capture, the base64 encoding and the framing — and that it is an image
+ * of *this* device, which is the IHDR size against the panel `device_info` reports
+ * (PROJECT.md §6). `tests/device/android/screenshot.test.ts` makes the same two checks one
+ * layer down, against the backend directly; what is new here is that the bytes came off a
+ * lease, over a socket, from the process that owns the hardware.
  *
  * **Only one point on the device is ever touched**, and it is {@link HARMLESS_POINT}. That
  * is the rule the whole suite is bounded by, and it is why every target below is either
@@ -104,9 +114,53 @@ const SETTINGS = parseAppId('com.android.settings');
 /** A package no device has. Both halves matter: it is not installed, and it never will be. */
 const ABSENT_PACKAGE = parseAppId('com.rover.no.such.package');
 
+/**
+ * PNG 1.2 §11.2.2: the IHDR chunk opens the file, width then height, big-endian.
+ *
+ * The same reader `tests/device/android/screenshot.test.ts` uses, and written out again for
+ * the reason that file's own copy exists: it is four lines, and a shared helper would put a
+ * knowledge of image formats in `tests/helpers/` that nothing else wants.
+ */
+function pngSize(bytes: Uint8Array): { width: number; height: number } {
+	const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+	return { width: view.getUint32(16), height: view.getUint32(20) };
+}
+
+/** The eight bytes every PNG starts with (PNG 1.2 §3.1). */
+const PNG_SIGNATURE = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
+
 /** How long to wait for the host's first view of its devices — a subscription, not a verb. */
 const INVENTORY_TIMEOUT_MS = 20_000;
 const INVENTORY_POLL_MS = 100;
+
+/**
+ * How long to wait for a crash to reach the device's log, and how much of the log to read
+ * while waiting.
+ *
+ * A crash landed a fraction of a second after `am crash` returned on the capture device, so
+ * the timeout is slack rather than an expectation. The bound is large because a device that
+ * has just launched an app writes hundreds of entries a second (PROJECT.md §6) — with the
+ * default two hundred, a crash can scroll off the end of the read before the next poll.
+ */
+const CRASH_TIMEOUT_MS = 30_000;
+const CRASH_POLL_MS = 500;
+const CRASH_LOG_ENTRIES = 2_000;
+
+/**
+ * What the device says a shell-induced crash was. Asserted **in the log and against the
+ * screen**: the log carries it, and no screen ever will — a crash dialog says an app stopped,
+ * never which exception ended it.
+ */
+const CRASH_EXCEPTION = 'CrashedByAdbException';
+
+/**
+ * The entry that says the app died. Matched on the **package** rather than on a wording,
+ * because the package is what the caller asked about; the level is asserted separately, so a
+ * platform that changes its phrasing fails loudly here rather than silently matching nothing.
+ */
+function namesTheCrash(entry: LogEntry): boolean {
+	return entry.level === 'error' && entry.message.includes(unwrap(SETTINGS));
+}
 
 let temp: TempSocket;
 const running: RunningDaemon[] = [];
@@ -509,6 +563,57 @@ describe.skipIf(!process.env.ROVER_TEST_DEVICE)('a daemon runs verbs on its own 
 	});
 
 	/**
+	 * The capture row against real hardware, and the one assertion that says the bytes are a
+	 * picture of **this** device rather than merely a well-formed file: the image's own IHDR
+	 * dimensions against the panel `device_info` reports, as an **unordered** pair, because
+	 * the capture follows the current rotation while the panel is reported unrotated
+	 * (PROJECT.md §6). Read-only — it captures the screen as it finds it and changes nothing.
+	 *
+	 * Nothing here judges the pixels. An application blocking screen capture yields a valid,
+	 * entirely black PNG that passes every check below, which is a true answer about the
+	 * device rather than a failed capture; the check that separates it from a broken device is
+	 * a capture of the system home screen, and it is documented on the verb rather than
+	 * asserted here, because this suite runs against whatever screen is in front of it.
+	 */
+	it('captures the real screen as bytes, at the size the device reports', async () => {
+		const client = await startHost();
+		const device = await freeDevice(client);
+		const leaseId = await lease(client, device.serial);
+
+		const shot = await client.request('screenshot', { leaseId });
+		const info = await client.request('device_info', { leaseId });
+
+		expect(shot).toMatchObject({
+			outcome: 'ok',
+			// A capture addresses nothing on the screen either — it *is* the screen (D12(a)).
+			result: { verb: 'screenshot', target: null, device: { serial: device.serial } },
+		});
+		if (shot.outcome !== 'ok' || info.outcome !== 'ok') {
+			throw new Error('the assertion above should have caught this');
+		}
+		const { artifact } = shot.result;
+		if (!artifact)
+			throw new Error(`the capture answered with no artifact: ${JSON.stringify(shot)}`);
+
+		// Bytes, and only bytes: three fields, none of them a path on the host (D19).
+		expect(Object.keys(artifact).sort()).toEqual(['base64', 'byteLength', 'mediaType']);
+		expect(artifact.mediaType).toBe('image/png');
+
+		const bytes = new Uint8Array(Buffer.from(artifact.base64, 'base64'));
+		expect(bytes.byteLength).toBe(artifact.byteLength);
+		// Still a PNG after the capture, the encoding and the framing — the check that catches
+		// a binary stream that came back translated or truncated.
+		expect([...bytes.slice(0, PNG_SIGNATURE.length)]).toEqual(PNG_SIGNATURE);
+		// A capture of a real screen is kilobytes at the very least; the floor is here for the
+		// shape a mangled stream takes when it happens to keep its header.
+		expect(bytes.byteLength).toBeGreaterThan(1024);
+
+		const { width, height } = pngSize(bytes);
+		const { screen } = info.result.device;
+		expect([width, height].sort()).toEqual([screen.widthPx, screen.heightPx].sort());
+	});
+
+	/**
 	 * The app rows against real hardware: a package really launched and really stopped, over a
 	 * lease, by the process that owns the device. Both halves run in one test so the suite
 	 * leaves the device as it found it.
@@ -578,6 +683,140 @@ describe.skipIf(!process.env.ROVER_TEST_DEVICE)('a daemon runs verbs on its own 
 		const answer = await client.request('stop_app', { leaseId, appId: ABSENT_PACKAGE });
 
 		expect(answer).toMatchObject({ outcome: 'ok', result: { verb: 'stop_app' } });
+	});
+
+	/**
+	 * **The acceptance criterion of #69, against real hardware: `read_logs` shows a crash the
+	 * screen cannot.**
+	 *
+	 * An app is launched over a lease, crashed, and two questions are asked of the *same*
+	 * answer — what the device logged, and what was on its screen. The log names the process
+	 * that died, the level it died at, when, and with which exception. The screen names none of
+	 * that, and the assertion below is exactly that gap.
+	 *
+	 * **What was on the screen, measured rather than assumed, because it is not one thing.**
+	 * Both of these were seen on the capture device (API 37) minutes apart:
+	 *
+	 * - the **launcher**, with nothing on it about the crash at all — indistinguishable from
+	 *   someone having pressed home;
+	 * - a transient system dialog reading `Settings keeps stopping` / `App info` /
+	 *   `Close app`, which appears after repeated crashes of the same package and clears
+	 *   itself again.
+	 *
+	 * So the test does **not** assert that the screen is silent — that would be flaky *and*
+	 * false in the second case. It asserts the thing that holds in both: the screen never names
+	 * the package, the exception or the process, so a screenshot cannot say *what* died or
+	 * *why*, while the log answers all three. That is the difference this verb exists for.
+	 *
+	 * **The crash is induced with `adb` rather than with a verb**, and that is deliberate:
+	 * crashing an app is a fault to be injected, not something Rover lends devices out to do,
+	 * so there is no verb for it and there should not be one. The call is pinned to the serial
+	 * the **lease** names and made while this test holds that lease, which is what keeps it
+	 * from being the outside-the-lease adb ai/TESTING.md warns about.
+	 *
+	 * `am crash <package>` was verified on this device and recorded in PROJECT.md §6, with the
+	 * two properties that shape this test: it is **asynchronous** — the command exits 0 before
+	 * the log line exists, so the read has to be a condition with a deadline rather than one
+	 * read — and the crash lands as an **error-level** entry rather than a fatal-level one, so
+	 * a test waiting for `fatal` would wait forever on a device that had already crashed.
+	 *
+	 * The read asks for a large bound because a device that has just launched an app writes
+	 * hundreds of entries a second (PROJECT.md §6): with the default two hundred, the crash can
+	 * be off the end of the read before the next poll.
+	 */
+	it('shows a crash in the log that the screen it answers with does not show', async () => {
+		const client = await startHost();
+		const device = await freeDevice(client);
+		const leaseId = await lease(client, device.serial);
+
+		const launched = await client.request('launch_app', { leaseId, appId: SETTINGS });
+		expect(launched).toMatchObject({ outcome: 'ok' });
+
+		await runAdbOnDevice(device.serial, ['shell', 'am', 'crash', unwrap(SETTINGS)]);
+
+		const crashed = await waitForCondition<ReadLogsCallResult>({
+			what: `the device to report '${SETTINGS}' crashing in its log`,
+			timeoutMs: CRASH_TIMEOUT_MS,
+			pollIntervalMs: CRASH_POLL_MS,
+			probe: async (): Promise<Observation<ReadLogsCallResult>> => {
+				const answer = await client.request('read_logs', {
+					leaseId,
+					maxEntries: CRASH_LOG_ENTRIES,
+				});
+				if (answer.outcome !== 'ok') {
+					return { met: false, found: `the host answered '${answer.outcome}'` };
+				}
+				const named = answer.result.logs.entries.some(namesTheCrash);
+				return named
+					? { met: true, value: answer }
+					: { met: false, found: `${answer.result.logs.entries.length} entries, none naming it` };
+			},
+		});
+		if (crashed.outcome !== 'ok') throw new Error('the wait should have caught this');
+
+		// What the log says: which process died, at what level, when, and with what.
+		const entry = crashed.result.logs.entries.find(namesTheCrash);
+		expect(entry).toMatchObject({ level: 'error' });
+		expect(entry?.timestamp.length).toBeGreaterThan(0);
+		expect(entry?.pid).not.toBeNull();
+		expect(crashed.result.logs.entries.map((logged) => logged.message)).toContainEqual(
+			expect.stringContaining(CRASH_EXCEPTION),
+		);
+
+		// And what the screen says: not that. Whether the device fell back to the launcher or
+		// raised its transient dialog, no element on it names the package, the exception or the
+		// process — so a screenshot of this moment says at most that *an* app stopped, and the
+		// log is the only thing that says which one and why.
+		expect(crashed.result.after.kind).toBe('screen');
+		if (crashed.result.after.kind !== 'screen') throw new Error('unreachable');
+		const onScreen = crashed.result.after.elements.flatMap((element) =>
+			[element.text, element.label].filter((text): text is string => text !== null),
+		);
+		expect(onScreen.length).toBeGreaterThan(0);
+		expect(onScreen.filter((text) => text.includes(unwrap(SETTINGS)))).toEqual([]);
+		expect(onScreen.filter((text) => text.includes(CRASH_EXCEPTION))).toEqual([]);
+		expect(onScreen.filter((text) => text.includes(String(entry?.pid)))).toEqual([]);
+
+		// Leave the device as this test found it. A crash can raise a dialog that outlives the
+		// suite by a good few seconds, and the next thing to read this screen would take it for
+		// the app under test — `tests/device/android/backend.test.ts` measuring the root
+		// element against `wm size` is exactly what that breaks. Back dismisses it; on a screen
+		// with no dialog it does nothing, which is why it is unconditional. Best effort, and
+		// nothing above depends on it.
+		await runAdbOnDevice(device.serial, ['shell', 'input', 'keyevent', 'KEYCODE_BACK']);
+	});
+
+	/**
+	 * The bound is the caller's, and a short read has to be distinguishable from a quiet
+	 * device — which is what `truncated` is for. A device that has been running long enough to
+	 * be worth reading has more than two entries in its log, so this asks for two and expects
+	 * to be told there were more.
+	 */
+	it('bounds the read to what was asked for, and says when there was more', async () => {
+		const client = await startHost();
+		const device = await freeDevice(client);
+		const leaseId = await lease(client, device.serial);
+
+		const answer = await client.request('read_logs', { leaseId, maxEntries: 2 });
+
+		expect(answer).toMatchObject({
+			outcome: 'ok',
+			result: {
+				verb: 'read_logs',
+				device: { serial: device.serial },
+				// A log read addresses no element, so nothing on the screen was resolved (D12(a)).
+				target: null,
+				logs: { truncated: true },
+			},
+		});
+		if (answer.outcome !== 'ok') throw new Error('the assertion above should have caught this');
+		expect(answer.result.logs.entries).toHaveLength(2);
+		// Real lines off the device, not empty shapes: each carries the device's own timestamp
+		// string (D17 — the host shares no clock with it) and the level it was written at.
+		for (const logged of answer.result.logs.entries) {
+			expect(logged.timestamp).toMatch(/\d/);
+			expect(logged.level.length).toBeGreaterThan(0);
+		}
 	});
 
 	it('refuses a verb call once the lease is over', async () => {

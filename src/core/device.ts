@@ -163,6 +163,73 @@ export const DeviceKeySchema = z.enum(['back', 'home', 'recents', 'wake']);
 export type DeviceKey = z.infer<typeof DeviceKeySchema>;
 
 /**
+ * How severe one log entry is, in neutral vocabulary — never a platform's own letter.
+ *
+ * Ordered least to most severe, and deliberately six values rather than the four a host
+ * language usually has: a system log's own vocabulary is what a backend maps *onto* this,
+ * and collapsing `verbose` into `debug` on the way through would throw away the
+ * distinction the device itself drew.
+ */
+export const LogLevelSchema = z.enum(['verbose', 'debug', 'info', 'warn', 'error', 'fatal']);
+export type LogLevel = z.infer<typeof LogLevelSchema>;
+
+/**
+ * One line of the device's own system log.
+ *
+ * `timestamp` stays the **string the device printed**, not an instant. The client shares
+ * no clock with the device (D17), and the field is the device's own record of when it
+ * said something rather than something the host is entitled to convert — one platform's
+ * log prints no year at all, so reconstructing an epoch out of it would be inventing data
+ * and then handing it over as if the device had said it.
+ *
+ * `pid` is nullable because a line the backend could not read a process out of is still a
+ * line the device printed, and dropping it would put a silent hole in the one verb whose
+ * job is to show what a screenshot cannot.
+ */
+export const LogEntrySchema = z
+	.object({
+		/** As the device reported it, verbatim. */
+		timestamp: z.string(),
+		level: LogLevelSchema,
+		/** The subsystem the device attributed the line to; empty when it named none. */
+		tag: z.string(),
+		pid: z.number().int().nonnegative().nullable(),
+		message: z.string(),
+	})
+	.strict();
+export type LogEntry = z.infer<typeof LogEntrySchema>;
+
+/**
+ * One bounded read of the device's log — oldest entry first, so the last one is the most
+ * recent thing the device said.
+ *
+ * `truncated` is what keeps a short read from reading as a quiet device: a log is a ring
+ * buffer somebody else is also writing to, and "here are two hundred lines" means
+ * something different when there were two hundred and one.
+ */
+export const LogReadSchema = z
+	.object({
+		entries: z.array(LogEntrySchema),
+		/** True when the device had more to give than `maxEntries` and the oldest were dropped. */
+		truncated: z.boolean(),
+	})
+	.strict();
+export type LogRead = z.infer<typeof LogReadSchema>;
+
+/**
+ * What bounds one {@link DeviceBackend.readLogs} call.
+ *
+ * `maxEntries` is required rather than optional, and this is not a schema: the default is
+ * the *verb's* (`src/verbs/logs.ts`), so a backend is never in the position of inventing
+ * one and no two backends can invent different ones. Nothing here crosses a boundary —
+ * what a caller sends is `ReadLogsParamsSchema` in `src/ipc/verb-methods.ts`.
+ */
+export interface ReadLogsOptions {
+	/** The most entries to answer with. The device's own newest are the ones kept. */
+	readonly maxEntries: number;
+}
+
+/**
  * What a {@link DeviceBackend.watchDevices} caller is told, as the set it watches changes.
  *
  * Neither method may throw. Both are called from inside the backend's own read path,
@@ -284,6 +351,25 @@ export interface DeviceBackend {
 	 * handed to a client is a bug even when the client happens to be local (D19).
 	 */
 	screenshot(serial: DeviceSerial): Promise<Uint8Array>;
+
+	/**
+	 * The most recent entries of the device's own system log, parsed into neutral shapes.
+	 *
+	 * **Required rather than capability-gated**, and that is a decision rather than an
+	 * oversight: `./capabilities.ts` says only genuinely divergent abilities get a flag and
+	 * that "a capability that is always `true` would be noise". A system log is not one of
+	 * the divergences — every platform this targets keeps one, and a backend that could not
+	 * read it could not report a crash that left nothing on the screen, which is the whole
+	 * reason this method exists.
+	 *
+	 * **A bounded read, never a follow.** A tail that stays open is a wait with no condition
+	 * (ai/RULES.md §2) and a stream over IPC (D19); this answers with what the device has
+	 * said so far and returns. Whether more was there is {@link LogRead.truncated}.
+	 *
+	 * Includes whatever buffer the platform records crashes in — a log read that shows
+	 * ordinary chatter and silently omits the fatal exception is worse than no log at all.
+	 */
+	readLogs(serial: DeviceSerial, options: ReadLogsOptions): Promise<LogRead>;
 
 	// --- Capability-gated: present only when the manifest declares the capability ---
 

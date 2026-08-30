@@ -9,15 +9,19 @@ import type { Device } from '@/core/device.js';
  *
  * **Read-only**, like `./backend.test.ts`: it captures the screen as it finds it, launches
  * nothing and changes no setting, so it is safe against a device someone else is looking
- * at. It drives the backend class directly rather than through a lease for the same reason
- * that file does — the daemon registers no backend, so there is none to take
- * (ai/TESTING.md, "The exemption").
+ * at. It drives the backend class directly rather than through a lease, and since #68 that
+ * is only because this suite has not been converted onto the helper the others are waiting
+ * for — the `screenshot` verb exists, a daemon will lend a device for it, and
+ * `./verb-dispatch.test.ts` captures through a lease (ai/TESTING.md, "The exemption").
  *
  * This is the suite that proves the recipe, because nothing about `exec-out screencap -p`
  * is checkable against a mock: what a mocked runner cannot tell you is whether the device
  * answers this argv at all, and whether the bytes that come back are still an image after
- * crossing the bridge. Nothing below hardcodes a size or a model — every assertion is a
- * property of whatever device is attached.
+ * crossing the bridge. That is a question about the primitive rather than about the verb,
+ * which is why it stays here rather than moving up: the verb suite asserts the payload
+ * after the encoding and the framing, and this one asserts what went into them. Nothing
+ * below hardcodes a size or a model — every assertion is a property of whatever device is
+ * attached.
  */
 const backend = new AndroidDeviceBackend();
 

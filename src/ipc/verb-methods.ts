@@ -24,7 +24,8 @@ import { DeviceKeySchema } from '../core/device.js';
 import { AppIdSchema, LeaseIdSchema } from '../core/ids.js';
 import { VerbFailureSchema } from '../verbs/failure.js';
 import { ScrollDirectionSchema } from '../verbs/input.js';
-import { ActionResultSchema } from '../verbs/result.js';
+import { ReadLogsResultSchema } from '../verbs/logs.js';
+import { type ActionResult, ActionResultSchema } from '../verbs/result.js';
 import { AbsenceTargetSchema, ScreenTargetSchema, TargetSchema } from '../verbs/target.js';
 
 /**
@@ -202,28 +203,65 @@ export const AppVerbParamsSchema = VerbCallBaseSchema.extend({
 export type AppVerbParams = z.infer<typeof AppVerbParamsSchema>;
 
 /**
- * What a `read_screen` call carries: the lease id, and nothing else.
+ * The most log entries one `read_logs` call may ask for.
  *
- * The one row where the *absence* of fields is the whole schema. It takes no target — a read
- * that waited for something would be `wait_for` — and deliberately does not extend
- * {@link WaitCallBaseSchema}, because it does not wait: it reads once and answers, so
- * advertising `timeoutMs` would offer a wait nobody performs. `.strict()` is what turns a
- * caller who sent one into `invalid_params` rather than a silently dropped key.
+ * A bound rather than a preference: the host reads this many entries out of a device,
+ * parses them and encodes them into one response, all on a peer's behalf, so an unbounded
+ * `maxEntries` is an allocation somebody else chose — the same reasoning
+ * `ATTRIBUTION_MAX_LENGTH` applies to a string it never reads. Two thousand entries came
+ * off a real device in 36 ms (2253 lines, 331 KB — PROJECT.md §6), so five thousand is
+ * still a query, and it is far more than a crash investigation needs.
+ *
+ * **This bound is on entries and cannot bound the answer**, which is why it is not the only
+ * one. An entry has no fixed size — logcat's own per-entry payload limit is about 4 KB, so
+ * this many entries is a few hundred kilobytes of ordinary chatter and over 20 MB of
+ * serialised HTTP bodies — while a response travels as one frame under `MAX_FRAME_BYTES`
+ * (`src/ipc/framing.ts`), enforced on the *receiving* side, where going over it is not a
+ * refusal the caller can read but a destroyed connection. The byte bound that actually
+ * holds is `MAX_LOG_BYTES` in `src/verbs/logs.ts`. The next payload-carrying verb
+ * (`pull_file`, R24) needs one too, and for the same reason: entries, elements and lines
+ * are all counts of things whose size the caller chooses.
  */
+export const MAX_LOG_ENTRIES = 5_000;
+
+/**
+ * The lease id and, optionally, how much of the log to read.
+ *
+ * `maxEntries` is **absent rather than defaulted** here, so the verb's own default
+ * (`src/verbs/logs.ts`) applies to a caller who said nothing and there is no second
+ * number that can disagree with it. `.strict()` keeps a `serial` out for the reason
+ * {@link AppVerbParamsSchema} records: the lease id is the credential and the host derives
+ * the device from it (D20).
+ *
+ * There is deliberately no `follow`, no `since` and no tag filter. A follow is a wait with
+ * no condition and a stream over IPC; the other two are real requests and would each be a
+ * row's worth of design rather than a flag smuggled in beside a bound.
+ */
+export const ReadLogsParamsSchema = VerbCallBaseSchema.extend({
+	maxEntries: z.number().int().positive().max(MAX_LOG_ENTRIES).optional(),
+}).strict();
+export type ReadLogsParams = z.infer<typeof ReadLogsParamsSchema>;
+
+/** What a `read_screen` call carries: the lease id, and nothing else. */
 export const ReadScreenParamsSchema = VerbCallBaseSchema.strict();
 export type ReadScreenParams = z.infer<typeof ReadScreenParamsSchema>;
 
-/**
- * What a `device_info` call carries — the same one field, for the same reasons.
- *
- * A separate schema rather than a second name for {@link ReadScreenParamsSchema}, unlike the
- * three app rows that genuinely share one: those three take the same *call* because they take
- * the same app id, whereas these two are identical only because both happen to take nothing.
- * A row's params schema is where that row's own arguments will land, and two verbs with
- * nothing in common but their current emptiness should not have to fork one apart later.
- */
+/** What a `device_info` call carries — the same one field, for the same reasons. */
 export const DeviceInfoParamsSchema = VerbCallBaseSchema.strict();
 export type DeviceInfoParams = z.infer<typeof DeviceInfoParamsSchema>;
+
+/**
+ * What a `screenshot` call carries — again the lease id alone, and again its own schema for
+ * the reason {@link DeviceInfoParamsSchema} gives.
+ *
+ * **No destination and no format.** A path would be the one field D19 rules out: the capture
+ * happens on the host and the answer is read on the caller's machine, so a path sent here
+ * either names nothing or names something on the wrong disk. What comes back is
+ * `ActionResult.artifact` — the bytes, base64-encoded — and where they end up is the
+ * client's own decision.
+ */
+export const ScreenshotParamsSchema = VerbCallBaseSchema.strict();
+export type ScreenshotParams = z.infer<typeof ScreenshotParamsSchema>;
 
 /**
  * Why a call never reached a verb at all.
@@ -260,21 +298,59 @@ export type VerbRefusalReason = z.infer<typeof VerbRefusalReasonSchema>;
  * out of the handler and arrives as `internal_error`, which keeps that code meaning what it
  * says.
  *
+ * A **factory** because one verb's answer now carries more than an `ActionResult`
+ * (`read_logs`, and `pull_file` after it), and only the `ok` branch differs: the failure
+ * and the refusal are the same two schemas whatever was asked, which is the point rather
+ * than an economy — an agent learns one refusal vocabulary, not one per verb family. The `ok`
+ * schema is always an `ActionResult` or an extension of one, so every verb's answer carries
+ * the device, the target and the after-state in the same places; each row is parsed with its
+ * own schema, because these are `.strict()` and an extension's extra field must be an error
+ * on the row that does not declare it rather than data quietly dropped.
+ *
  * `ActionResultSchema` is imported rather than restated, so the shape the verb layer
  * produces and the shape a client reads are one schema parsed twice.
  */
-export const VerbCallResultSchema = z.discriminatedUnion('outcome', [
-	/** The verb ran and answered. */
-	z.object({ outcome: z.literal('ok'), result: ActionResultSchema }).strict(),
-	/** The verb ran and the answer is no. */
-	z.object({ outcome: z.literal('failed'), failure: VerbFailureSchema }).strict(),
-	/** No verb ran: the lease or the device was not in a state to run one. */
-	z
-		.object({
-			outcome: z.literal('refused'),
-			reason: VerbRefusalReasonSchema,
-			message: z.string().min(1),
-		})
-		.strict(),
-]);
+function verbCallResultOf<Ok extends z.ZodTypeAny>(ok: Ok) {
+	return z.discriminatedUnion('outcome', [
+		/** The verb ran and answered. */
+		z.object({ outcome: z.literal('ok'), result: ok }).strict(),
+		/** The verb ran and the answer is no. */
+		z.object({ outcome: z.literal('failed'), failure: VerbFailureSchema }).strict(),
+		/** No verb ran: the lease or the device was not in a state to run one. */
+		z
+			.object({
+				outcome: z.literal('refused'),
+				reason: VerbRefusalReasonSchema,
+				message: z.string().min(1),
+			})
+			.strict(),
+	]);
+}
+
+/** What every verb whose answer is exactly an `ActionResult` replies with. */
+export const VerbCallResultSchema = verbCallResultOf(ActionResultSchema);
 export type VerbCallResult = z.infer<typeof VerbCallResultSchema>;
+
+/**
+ * `read_logs`, whose answer carries the log entries on top of the common shape
+ * (`src/verbs/logs.ts`).
+ */
+export const ReadLogsCallResultSchema = verbCallResultOf(ReadLogsResultSchema);
+export type ReadLogsCallResult = z.infer<typeof ReadLogsCallResultSchema>;
+
+/**
+ * The two answers that mean no verb result exists — the branches every row shares whatever
+ * it was asked for, taken off {@link VerbCallResult} rather than written out again.
+ */
+export type VerbCallRefusal = Exclude<VerbCallResult, { outcome: 'ok' }>;
+
+/**
+ * One verb call's answer, generic in what the `ok` branch carries — what the daemon's
+ * `runVerb` is typed on (`src/daemon/verb-handlers.ts`).
+ *
+ * The type-level statement of what the factory above does at runtime: only `ok` varies, so
+ * a refusal is one vocabulary whatever was asked.
+ */
+export type VerbCallResultOf<Result extends ActionResult> =
+	| { readonly outcome: 'ok'; readonly result: Result }
+	| VerbCallRefusal;

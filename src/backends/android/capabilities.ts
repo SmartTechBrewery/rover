@@ -24,8 +24,8 @@
  * `canReadScreen` flips here (#13), on that same seam and for that same reason:
  * `CAPABILITY_METHODS.canReadScreen` names exactly one method, `readScreen`, and this
  * backend now answers it — `uiautomator dump` mapped onto `ScreenElement[]` in dp
- * (`../android/screen.ts`). The three read *verbs* over it are later phases, and they are
- * not what moves this flag either.
+ * (`../android/screen.ts`). The three read *verbs* over it landed separately (#67, #68),
+ * and none of them is what moves this flag either.
  *
  * **Every flag in this manifest is now `true`, so nothing here is a declared opt-out.**
  * That is a statement about this backend, not about the model: a capability declared

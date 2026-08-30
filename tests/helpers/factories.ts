@@ -26,6 +26,10 @@ import {
 	DeviceSchema,
 	type DeviceWatch,
 	type DeviceWatcher,
+	type LogEntry,
+	LogEntrySchema,
+	type LogRead,
+	LogReadSchema,
 	type ScreenElement,
 	ScreenElementSchema,
 } from '@/core/device.js';
@@ -118,6 +122,33 @@ export function createMockScreenElement(
 	});
 }
 
+/**
+ * One line of a device log. The timestamp is the device's own **string** — there is no
+ * epoch here to convert, because the host shares no clock with the device (D17).
+ */
+export function createMockLogEntry(overrides: Partial<LogEntry> = {}): LogEntry {
+	return LogEntrySchema.parse({
+		timestamp: '01-02 03:04:05.678',
+		level: 'info',
+		tag: 'TestTag',
+		pid: 1234,
+		message: 'a line the device printed',
+		...overrides,
+	});
+}
+
+/**
+ * One bounded log read. `truncated: false` by default — a test about the *bound* says so
+ * explicitly, because that flag is the difference between a short read and a quiet device.
+ */
+export function createMockLogRead(overrides: Partial<LogRead> = {}): LogRead {
+	return LogReadSchema.parse({
+		entries: [createMockLogEntry()],
+		truncated: false,
+		...overrides,
+	});
+}
+
 export function createMockCapabilityManifest(
 	overrides: Partial<CapabilityManifest> = {},
 ): CapabilityManifest {
@@ -147,6 +178,7 @@ export function createMockDeviceBackend(overrides: Partial<DeviceBackend> = {}):
 		stopApp: vi.fn<DeviceBackend['stopApp']>(async () => {}),
 		clearAppData: vi.fn<DeviceBackend['clearAppData']>(async () => {}),
 		screenshot: vi.fn<DeviceBackend['screenshot']>(async () => new Uint8Array([1, 2, 3])),
+		readLogs: vi.fn<DeviceBackend['readLogs']>(async () => createMockLogRead()),
 		readScreen: vi.fn<NonNullable<DeviceBackend['readScreen']>>(async () => []),
 		tap: vi.fn<NonNullable<DeviceBackend['tap']>>(async () => {}),
 		swipe: vi.fn<NonNullable<DeviceBackend['swipe']>>(async () => {}),
@@ -215,6 +247,12 @@ export function createConformingDeviceBackend(
 		async screenshot(serial) {
 			performed.push(`screenshot ${serial}`);
 			return new Uint8Array([1, 2, 3]);
+		},
+		async readLogs(serial, options) {
+			performed.push(`readLogs ${serial} ${options.maxEntries}`);
+			return createMockLogRead({
+				entries: [createMockLogEntry({ message: `a line ${serial} printed` })],
+			});
 		},
 		async readScreen(serial) {
 			performed.push(`readScreen ${serial}`);

@@ -40,6 +40,8 @@ import { type RunningDaemon, startDaemon } from '@/daemon/listen.js';
 import type { IpcClient } from '@/ipc/client.js';
 import { IpcRequestError } from '@/ipc/protocol.js';
 import { LONG_PRESS_DURATION_MS } from '@/verbs/input.js';
+import { DEFAULT_MAX_LOG_ENTRIES } from '@/verbs/logs.js';
+import { MAX_ARTIFACT_BYTES } from '@/verbs/result.js';
 import {
 	connectWithoutStarting,
 	createTempSocket,
@@ -51,6 +53,8 @@ import {
 	createMockDevice,
 	createMockDeviceBackend,
 	createMockDeviceInfo,
+	createMockLogEntry,
+	createMockLogRead,
 	createMockScreenElement,
 } from '../../helpers/factories.js';
 import { createGate, drainEventLoop } from '../../helpers/timing.js';
@@ -58,6 +62,13 @@ import { createGate, drainEventLoop } from '../../helpers/timing.js';
 const SERIAL = parseDeviceSerial('attached-1');
 const attached = createMockDevice({ serial: SERIAL });
 const save = createMockScreenElement({ id: 'save', text: 'Save' });
+
+/** What the device said about an app that is no longer on the screen to be seen. */
+const crashed = createMockLogEntry({
+	level: 'error',
+	tag: 'CrashReporter',
+	message: 'FATAL: com.example.app died',
+});
 
 /** Waiting on a target nothing on these screens matches. */
 const ABSENT = { by: 'text', text: 'Nothing here' } as const;
@@ -69,12 +80,22 @@ const clients: IpcClient[] = [];
 interface HostOptions {
 	readonly describeDevice?: DeviceBackend['describeDevice'];
 	readonly launchApp?: DeviceBackend['launchApp'];
+	readonly readLogs?: DeviceBackend['readLogs'];
 	readonly readScreen?: DeviceBackend['readScreen'];
 	readonly deviceInfo?: DeviceBackend['deviceInfo'];
 	readonly typeText?: DeviceBackend['typeText'];
+	readonly capture?: Uint8Array;
 	readonly capabilities?: Partial<Capabilities>;
 	readonly leaseTtlMs?: number;
 }
+
+/**
+ * A capture the daemon's device answers with — a PNG signature and then bytes that are not
+ * all the same, so a payload that lost or reordered any of them fails the comparison.
+ */
+const CAPTURE = Uint8Array.from([
+	0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x01, 0xfe, 0xff, 0x7f, 0x80, 0x0a, 0x0d,
+]);
 
 /** The screen reads the daemon performed, so a test can prove the host did the work. */
 let reads: number;
@@ -99,6 +120,12 @@ let keys: string[];
 let appCalls: Array<{ method: string; serial: string; appId: string }>;
 
 /**
+ * The log reads the daemon's backend received — the serial off the lease, and the bound the
+ * verb decided on, which is the one number a client can leave entirely unsaid.
+ */
+let logReads: Array<{ serial: string; maxEntries: number }>;
+
+/**
  * A daemon on a temp socket with one ready device behind one registered backend.
  *
  * `describeDevice` defaults to answering about whatever serial it was asked, because the
@@ -111,6 +138,7 @@ async function serve(options: HostOptions = {}): Promise<void> {
 	typed = [];
 	keys = [];
 	appCalls = [];
+	logReads = [];
 	const watchDevices = vi.fn<DeviceBackend['watchDevices']>((watcher: DeviceWatcher) => {
 		watcher.onDevices([attached]);
 		return { stop: vi.fn<DeviceWatch['stop']>(async () => {}) };
@@ -134,6 +162,7 @@ async function serve(options: HostOptions = {}): Promise<void> {
 					return [save];
 				}),
 			deviceInfo: options.deviceInfo ?? (async (serial) => createMockDeviceInfo({ serial })),
+			screenshot: async () => options.capture ?? CAPTURE,
 			tap: async (_serial, at) => {
 				taps.push(at);
 			},
@@ -151,6 +180,12 @@ async function serve(options: HostOptions = {}): Promise<void> {
 			launchApp: options.launchApp ?? recordApp('launchApp'),
 			stopApp: recordApp('stopApp'),
 			clearAppData: recordApp('clearAppData'),
+			readLogs:
+				options.readLogs ??
+				(async (serial, { maxEntries }) => {
+					logReads.push({ serial, maxEntries });
+					return createMockLogRead({ entries: [crashed] });
+				}),
 		}),
 	});
 
@@ -627,11 +662,12 @@ describe('the app rows dispatch like the gestures', () => {
 });
 
 /**
- * The two read rows, which are the same claim again with the payload moved: a verb family is
- * a row and a handler (R6, D19). What is new is that these two **carry nothing but the lease
- * id** and answer with the state the spine captures for every verb — so the assertions here
- * are about what a client gets back and, for `read_screen`, about the answer it does *not*
- * get on a device that cannot read a screen.
+ * The three read rows, which are the same claim again with the payload moved: a verb family
+ * is a row and a handler (R6, D19). What is new is that all three **carry nothing but the
+ * lease id** — two of them answer with the state the spine captures for every verb, and the
+ * third answers with bytes — so the assertions here are about what a client gets back and,
+ * for `read_screen`, about the answer it does *not* get on a device that cannot read a
+ * screen.
  */
 describe('the read rows dispatch like the app rows', () => {
 	it('answers read_screen with the screen the host read, off one read', async () => {
@@ -712,9 +748,62 @@ describe('the read rows dispatch like the app rows', () => {
 		});
 	});
 
+	/**
+	 * The bytes over the real framing, which is the assertion this row cannot be made without
+	 * a socket: `JSON.stringify` turns a `Uint8Array` into an object of numeric keys, so a
+	 * result carrying raw bytes would pass every in-process test and arrive here as nonsense.
+	 * What the client decodes has to be what the daemon's device produced, byte for byte.
+	 */
+	it('answers screenshot with the bytes the host captured, intact after the round trip', async () => {
+		await serve();
+		const client = await connect();
+		const leaseId = await acquire(client);
+
+		const answer = await client.request('screenshot', { leaseId });
+
+		expect(answer).toMatchObject({
+			outcome: 'ok',
+			// No target, like the other two reads — and the device the *lease* names, which the
+			// client never sent (D20).
+			result: { verb: 'screenshot', target: null, device: { serial: SERIAL } },
+		});
+		if (answer.outcome !== 'ok') throw new Error('the assertion above should have caught this');
+		const { artifact } = answer.result;
+		if (!artifact) throw new Error('the screenshot answered with no artifact');
+		expect(artifact.mediaType).toBe('image/png');
+		expect(artifact.byteLength).toBe(CAPTURE.byteLength);
+		expect(new Uint8Array(Buffer.from(artifact.base64, 'base64'))).toEqual(CAPTURE);
+		// Three fields, and none of them a place on the host's disk to go and look (D19). The
+		// bytes are the delivery; where they end up is the client's own decision.
+		expect(Object.keys(artifact).sort()).toEqual(['base64', 'byteLength', 'mediaType']);
+	});
+
+	it('answers artifact-too-large as data rather than as a broken host', async () => {
+		await serve({ capture: new Uint8Array(MAX_ARTIFACT_BYTES + 1) });
+		const client = await connect();
+		const leaseId = await acquire(client);
+
+		const answer = await client.request('screenshot', { leaseId });
+
+		// A failure, not an `internal_error`: the device is fine and the screen is merely
+		// large, and those two call for opposite moves from an agent.
+		expect(answer).toMatchObject({
+			outcome: 'failed',
+			failure: {
+				kind: 'artifact-too-large',
+				serial: SERIAL,
+				byteLength: MAX_ARTIFACT_BYTES + 1,
+				maxBytes: MAX_ARTIFACT_BYTES,
+			},
+		});
+		// Refused where the capture happened, so no screen read was spent reaching it.
+		expect(reads).toBe(0);
+	});
+
 	it.each([
 		'read_screen',
 		'device_info',
+		'screenshot',
 	] as const)('refuses %s on a lease id the store does not know, without touching the device', async (method) => {
 		await serve();
 		const client = await connect();
@@ -763,6 +852,90 @@ describe('the read rows dispatch like the app rows', () => {
 
 		expect(thrown).toBeInstanceOf(IpcRequestError);
 		expect((thrown as IpcRequestError).code).toBe('invalid_params');
+	});
+});
+
+/**
+ * The log row, which is every claim the app rows make plus one more: **the answer carries a
+ * payload**. The daemon parses each handler's return value against that row's own schema
+ * before it writes it (`src/ipc/methods.ts`), so a `logs` field lost anywhere between the
+ * verb and the wire is `invalid_result` on the host rather than a client reading a result
+ * that looks fine and says nothing.
+ */
+describe('the log row carries a payload back over the same surface', () => {
+	it('read_logs reaches the backend for the serial the lease names, and answers with entries', async () => {
+		await serve();
+		const client = await connect();
+		const leaseId = await acquire(client);
+
+		const answer = await client.request('read_logs', { leaseId });
+
+		expect(answer).toMatchObject({
+			outcome: 'ok',
+			result: {
+				verb: 'read_logs',
+				// No target: a log read addresses no element (D12(a)).
+				target: null,
+				device: { serial: SERIAL },
+				logs: { entries: [crashed], truncated: false },
+			},
+		});
+		// The serial came off the lease on the host; the client sent a lease id and nothing else.
+		expect(logReads).toEqual([{ serial: SERIAL, maxEntries: DEFAULT_MAX_LOG_ENTRIES }]);
+		// And the screen read in the result is the after-state, not a read on the way in.
+		expect(reads).toBe(1);
+	});
+
+	it('passes a bound the caller did send, and never a default of its own', async () => {
+		await serve();
+		const client = await connect();
+		const leaseId = await acquire(client);
+
+		await client.request('read_logs', { leaseId, maxEntries: 5 });
+
+		expect(logReads).toEqual([{ serial: SERIAL, maxEntries: 5 }]);
+	});
+
+	it('says so when the device had more than the bound', async () => {
+		await serve({
+			readLogs: async () => createMockLogRead({ entries: [crashed], truncated: true }),
+		});
+		const client = await connect();
+		const leaseId = await acquire(client);
+
+		const answer = await client.request('read_logs', { leaseId });
+
+		expect(answer).toMatchObject({ outcome: 'ok', result: { logs: { truncated: true } } });
+	});
+
+	// Proof this row goes through `runVerb` rather than around it: the same refusal, in the
+	// same words, as every other verb — which is the whole point of the generic spine.
+	it('refuses a lease id the store does not know, without touching the device', async () => {
+		await serve();
+		const client = await connect();
+
+		const answer = await client.request('read_logs', { leaseId: parseLeaseId('never-granted') });
+
+		expect(answer).toMatchObject({ outcome: 'refused', reason: 'no-lease' });
+		expect(logReads).toEqual([]);
+	});
+
+	it('refuses a serial sent beside the lease id (D20)', async () => {
+		await serve();
+		const client = await connect();
+		const leaseId = await acquire(client);
+
+		const thrown = await client
+			.request('read_logs', {
+				leaseId,
+				// @ts-expect-error — the point of the test is what a client that ignored the type gets.
+				serial: 'another-device',
+			})
+			.catch((error: unknown) => error);
+
+		expect(thrown).toBeInstanceOf(IpcRequestError);
+		expect((thrown as IpcRequestError).code).toBe('invalid_params');
+		expect(logReads).toEqual([]);
 	});
 });
 

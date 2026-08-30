@@ -756,6 +756,103 @@ describe('clearAppData', () => {
 	});
 });
 
+describe('readLogs', () => {
+	const LOGCAT = fixture('logcat-threadtime.api37-sdk-gphone16k-arm64.txt');
+	const CRASH = fixture('logcat-threadtime.crash.api37-sdk-gphone16k-arm64.txt');
+
+	/** The recipe as run on the device, entry for entry (PROJECT.md §6). */
+	const argv = (entries: number): string[] => [
+		'logcat',
+		'-d',
+		'-v',
+		'threadtime',
+		'-t',
+		String(entries),
+		'-b',
+		'main',
+		'-b',
+		'crash',
+	];
+
+	/**
+	 * Every flag matters and each one is a different failure when it is missing: without
+	 * `-d` the call never returns, without `-b crash` a crash is invisible, and without the
+	 * pin the log comes off whichever device adb picked — which nothing about the answer
+	 * would show.
+	 */
+	it('reads through the pinned runner, bounded, with the crash buffer included', async () => {
+		answers({ [argv(11).join(' ')]: LOGCAT });
+
+		await backend.readLogs(SERIAL, { maxEntries: 10 });
+
+		expect(runAdb).not.toHaveBeenCalled();
+		expect(runAdbOnDevice.mock.calls[0][0]).toBe(SERIAL);
+		expect(runAdbOnDevice.mock.calls[0][1]).toEqual(argv(11));
+	});
+
+	/**
+	 * `-t` counts logcat entries and a caller counts lines, so the cap is enforced on this
+	 * side too: the capture holds sixty, the caller asked for ten, and the ten it gets are
+	 * the **newest** — a log is read after something happened, not before.
+	 */
+	it('answers at most what was asked for, newest last, and says it truncated', async () => {
+		answers({ [argv(11).join(' ')]: LOGCAT });
+
+		const read = await backend.readLogs(SERIAL, { maxEntries: 10 });
+
+		expect(read.entries).toHaveLength(10);
+		expect(read.truncated).toBe(true);
+		expect(read.entries.at(-1)?.tag).toBe('adbd');
+	});
+
+	// The device had less than the cap, so nothing was dropped and nothing is claimed.
+	it('does not claim truncation when the device had less than the bound', async () => {
+		answers({ [argv(1_001).join(' ')]: LOGCAT });
+
+		const read = await backend.readLogs(SERIAL, { maxEntries: 1_000 });
+
+		expect(read.entries).toHaveLength(60);
+		expect(read.truncated).toBe(false);
+	});
+
+	/**
+	 * The point of the whole verb: a crash the screen no longer shows comes back as data,
+	 * with the level and the tag a caller filters on.
+	 */
+	it('carries a real crash back as entries', async () => {
+		answers({ [argv(201).join(' ')]: CRASH });
+
+		const read = await backend.readLogs(SERIAL, { maxEntries: 200 });
+
+		expect(read.entries).toContainEqual(
+			expect.objectContaining({
+				level: 'error',
+				tag: 'AndroidRuntime',
+				message: 'FATAL EXCEPTION: main',
+			}),
+		);
+	});
+
+	// Zero bytes is what a device with nothing to say prints — measured on API 37 with a tag
+	// filter nothing matched. An empty read is an answer, not a failure.
+	it('answers an empty buffer with no entries rather than throwing', async () => {
+		answers({ [argv(201).join(' ')]: '' });
+
+		await expect(backend.readLogs(SERIAL, { maxEntries: 200 })).resolves.toEqual({
+			entries: [],
+			truncated: false,
+		});
+	});
+
+	it('lets a failed run surface as the runner reported it', async () => {
+		runAdbOnDevice.mockRejectedValue(new Error("device 'emulator-5554' not found"));
+
+		await expect(backend.readLogs(SERIAL, { maxEntries: 200 })).rejects.toThrow(
+			"device 'emulator-5554' not found",
+		);
+	});
+});
+
 /**
  * The seam that made the app id worth branding. `adb shell a b c` is not an argv on the
  * device: adb joins the arguments with spaces and hands the string to the device's own

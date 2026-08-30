@@ -18,6 +18,7 @@ import {
 import { parseDeviceSerial, parsePlatformId } from '@/core/ids.js';
 import {
 	AmbiguousTargetError,
+	ArtifactTooLargeError,
 	OffScreenPointError,
 	TargetNotFoundError,
 	UnaddressableElementError,
@@ -134,6 +135,25 @@ describe('a verb-layer error becomes a failure a client can branch on', () => {
 			message: error.message,
 		});
 	});
+	/**
+	 * The branch that keeps a large screen from being reported as a broken host.
+	 *
+	 * Without it this error is unmapped, `toVerbFailure` answers `null`, the handler rethrows
+	 * and an agent reads `internal_error` — "the host broke" — about a device that merely
+	 * showed it something big. Both numbers travel so the agent can tell which of the two it
+	 * is looking at.
+	 */
+	it('maps an artifact over the bound, carrying the size and the bound it was over', () => {
+		const error = new ArtifactTooLargeError(SERIAL, 9_000_000, 4_194_304);
+
+		expect(failureOf(error)).toEqual({
+			kind: 'artifact-too-large',
+			serial: SERIAL,
+			byteLength: 9_000_000,
+			maxBytes: 4_194_304,
+			message: error.message,
+		});
+	});
 
 	it('carries the offending characters as escapes, so an invisible one is still actionable', () => {
 		const error = new UnsupportedTextError(
@@ -209,6 +229,7 @@ describe('a failure survives the trip to the agent', () => {
 				'only ASCII',
 			),
 		],
+		['artifact-too-large', new ArtifactTooLargeError(SERIAL, 9_000_000, 4_194_304)],
 	])('round-trips a %s failure through JSON and re-parses it equal', (_kind, error) => {
 		const failure = failureOf(error);
 

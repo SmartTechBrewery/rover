@@ -1,7 +1,7 @@
 # PROJECT.md — Rover
 
 > A living document. Updated as the tool is being built.
-> Last updated: 2026-08-29
+> Last updated: 2026-08-30
 
 ---
 
@@ -67,8 +67,10 @@ lends what is physically attached to it (D18).
    the device it is on and the list of what may be done on it.
 4. The agent calls verbs, passing that lease id — the credential (D20), and the only handle a verb
    call carries; the host derives the serial from it, so the holder of one device cannot address
-   another. The host executes them; the client receives the result and the artifacts. Every call
-   pushes the lease expiry out.
+   another. The host executes them; the client receives the result and the artifacts, and — for
+   every verb that produces one — the host separately keeps its own copy in its durable archive
+   (D23, §10), on its own disk, regardless of what the client does with the copy it received. Every
+   call pushes the lease expiry out.
 5. The agent releases the device. The host restores its original state.
 6. If the agent dies, loses the network, or simply never releases — the lease expires after 20
    minutes of inactivity and the host cleans up the same way. A dropped connection is not a
@@ -103,6 +105,8 @@ lends what is physically attached to it (D18).
 | D21 | **Rover never starts an emulator or connects a physical device — that is the host operator's job** | The host only ever reports what `adb devices` already shows on its own machine (D6). Bringing hardware online — booting an emulator, plugging in a phone — is physical, local work done by whoever operates that machine; it is never a verb the daemon executes and never something a remote client can trigger. Rover's job starts once the device is already there | 2026-08-28 |
 | D22 | **A lease carries two more explicit, caller-supplied strings: `project` and `test_name`** | `owner` (D16) alone does not give an artifact a findable home: two projects can reuse the same owner string, and "before/after" comparisons need a way to group runs by what they were checking. `project` names which registered project a lease belongs to; `test_name` names the scenario being run and is **deliberately not required to be unique** — running "home screen before changes" and "home screen after changes" as two separate leases with the same-shaped name is the point, not an error case. Both are opaque strings the core never inspects, parses or defaults from context, exactly like `owner` (D20) | 2026-08-29 |
 | D23 | **The host durably archives every artifact-producing verb's output, additive to D19's bytes-over-the-wire return** | A screenshot handed to the agent once during a session answers "does it work right now"; it cannot answer "does it still look the way it did before the refactor" unless a copy survives on disk to diff against later. The archive (§10) is a second effect of the same verb call — it changes nothing about what the client receives, and a path into the archive is never a path handed to the agent. D19 keeps holding: artifacts still cross the machine boundary as bytes | 2026-08-29 |
+| D24 | **The artifact archive's tree shape is a deliberate, stable surface, built for a future read-only viewer, not just for a human `find`** | A screenshot returned once to whichever client asked for it (D19) cannot later answer "show me what changed" to anyone outside that one session — the archive (§10, D23) exists so it can. This decision is that the directory shape (`<project>/<test_name>/<lease-id>/<device-serial>/…`) is the contract a future web panel (`docs/WEB_PANEL.md`) would read directly off disk — no database, no rewrite of the tree the day that panel gets built. **This does not move the panel into scope now** (§7 still excludes a dashboard) — it only means the archive's shape is not free to casually change once R25 ships, because something will eventually depend on it | 2026-08-30 |
+| D25 | **Host authentication becomes named, revocable per-user credentials — one shared secret is retired, not kept as a second path** | `ROVER_HOST_TOKEN` (D20) is one static bearer secret for the whole host: everyone who holds it looks identical to the daemon, nobody can be individually cut off without rotating the secret and re-distributing it to everyone else, and there is no record of who actually holds it. That is fine for one operator bootstrapping a host alone and wrong the moment more than one person or system needs independent, revocable access — exactly what a web panel (`docs/WEB_PANEL.md` item 8) needs. Modeled on Swarm's own operator front door (`../swarm/src/cli/commands/users.ts`, `swarm users add/list/grant-admin/revoke-admin/set-password`): `rover users add/list/revoke/rotate <identifier>`, run **on the host machine itself**, never over the network — an operator tool, not a verb. Each user gets one opaque token, printed exactly once at creation or rotation and never again; only its hash is stored (dependency-free, `node:crypto` scrypt-style, mirroring `../swarm/src/identity/auth.ts`'s approach minus the password/session split a bearer token does not need), in `~/.rover/users.json` beside the already-established `~/.rover/rover.sock` (`src/daemon/socket-path.ts`). **D6 applies here too**: the file is the truth, re-read at every connection's auth check and never cached for the daemon's lifetime, so a revoke takes effect on the very next connection with no restart. D20 is otherwise unchanged: the token still only authenticates, the owner string still only attributes, and a user's identifier is never written into a lease's `owner` field automatically | 2026-08-30 |
 
 ---
 
@@ -132,7 +136,7 @@ Working names. All of them take a device handle, and over the wire that handle i
 
 | Verb | Notes |
 |---|---|
-| `screenshot` | |
+| `screenshot` | The captured image, **as bytes on the result rather than as a path** (D19) — base64, its media type and its byte length, so any file written is the client's own. Needs no capability; a capture over the named size bound is refused by name rather than returned cut short. **A black image is a true answer, not a failed capture** (§6): the check that separates a blocked capture from a broken device is a screenshot of the system home screen, and `read_screen` is the read that survives the block |
 | `read_screen` | Texts and element rectangles. **Works even when the app blocks screenshots**. Declares `canReadScreen` as a requirement, so a backend without it fails by name before anything is dispatched rather than answering with an empty screen (D11) |
 | `record_video` | A recording plus a slice into frames — for states that do not stand still |
 | `device_info` | Size, density, computed width in dp, OS version. Needs no capability and addresses nothing on the screen — it answers with the `DeviceInfo` every result already carries (D14), asked for on its own |
@@ -148,7 +152,7 @@ Working names. All of them take a device handle, and over the wire that handle i
 | Verb | Notes |
 |---|---|
 | `install_app` / `launch_app` / `stop_app` / `clear_app_data` | The last three address a **package**, so they resolve no target and need no capability — the backend methods behind them are required ones. `stop_app` cannot tell a stopped app from a package that was never installed (§6); the state after the action is what answers that |
-| `read_logs` | Catches a failure a screenshot will not show |
+| `read_logs` | Catches a failure a screenshot will not show. A **bounded** read — the most recent *n* entries, including the buffer the platform records crashes in, with a `truncated` flag so a short read is not read as a quiet device. No following: a tail that stays open is a wait with no condition and a stream over IPC |
 | `set_airplane_mode` / `set_wifi` | See §6 — recipes that need no root |
 | `pull_file` / `push_file` | |
 
@@ -158,7 +162,7 @@ Working names. All of them take a device handle, and over the wire that handle i
 
 iOS is not being built now, but the code has to accept it without a rewrite. The seam does **not**
 run along "adb versus simctl" — it runs along the device interface: enumeration, lifecycle,
-installation, app control, screenshot, hierarchy read, input.
+installation, app control, screenshot, hierarchy read, input, and the **system-log read**.
 
 Three things worth knowing now, so as not to design into a corner:
 
@@ -169,6 +173,11 @@ Three things worth knowing now, so as not to design into a corner:
   that survives a screenshot block. On iOS it may not be possible at all.
 - Hence D11: `read_screen` **is not a required method** of the interface. It is a declared
   capability the verb layer asks about before using it.
+- **A system log is not one of those divergences**, and `readLogs` is therefore a *required*
+  method rather than a capability: every platform this targets keeps one, and a flag that is
+  always `true` would be noise (`src/core/capabilities.ts`). What differs between platforms is
+  the wording inside an entry, which is what the neutral `LogEntry` shape and each backend's own
+  parser are for.
 
 ---
 
@@ -623,6 +632,74 @@ well behaved:
   server that merely swallows that event has a log line rather than a deadline. Destroying the
   `TLSSocket` the event carries takes the raw socket with it.
 
+Checked on the same API 37 emulator (`sdk_gphone16k_arm64`) with `adb` 37.0.0 while building
+`read_logs` (#69), **2026-08-30**:
+
+- **The verified log recipe is one bounded dump, and every flag earns its place:**
+
+  ```bash
+  adb -s "$SERIAL" logcat -d -v threadtime -t "$N" -b main -b crash
+  ```
+
+  `-d` dumps and exits — a follow never returns, and there is no sleep and no unbounded wait in
+  this repository. **Repeated `-b` works on this adb**; `-b main,crash` is not needed. `-b crash`
+  is what makes a crash reachable at all, and `-v threadtime` is the format carrying the
+  timestamp, the pid and the level letter on every line. Exit 0, **stderr empty**, and `-t 2000`
+  (2253 lines, 331 KB) came back in **36 ms** — this is a query, not a capture.
+- **`-t <n>` counts logcat *entries*, and an entry is not a line.** A Java crash is a **single**
+  entry whose message runs to fourteen lines, each of which `threadtime` prefixes in full:
+  `-t 2 -b crash` returned **29** lines. So a caller that thinks in lines has to bound the answer
+  on the host side; asking the device for `n` and trusting it to be `n` lines is wrong by an
+  order of magnitude exactly when a crash is in the read.
+- **An empty read is zero bytes** — not even a `--------- beginning of …` line (measured with a
+  tag filter nothing matched). That separator is printed once per buffer that has anything in it,
+  and it is the tool describing its own output rather than something the device said.
+- **`am crash <package>` works on API 37, and is asynchronous.** It exits 0 *before* the crash is
+  logged: the command returned at `10:54:26.759` and the entry landed at `10:54:26.945`. A test
+  that reads the log once, right after it, catches nothing — the read has to be a condition with
+  a deadline.
+- **A crashed app is logged at level `E`, never `F`.** `am crash` produces
+  `E AndroidRuntime: FATAL EXCEPTION: main`, `E AndroidRuntime: Process: <package>, PID: <pid>`
+  and `android.app.RemoteServiceException$CrashedByAdbException: shell-induced crash`. The `F`
+  letter belongs to a **native** abort — `F libc : Fatal signal 6 (SIGABRT)` and the `F DEBUG`
+  tombstone under it, both of which the crash buffer also carries. A check looking for a
+  fatal-*level* entry therefore misses every application crash on this platform.
+- **The main buffer is chatty enough to lose a crash within seconds.** Idle, 60 entries spanned
+  9 s; while an app was launching, 120 entries spanned **1 s** — so a crash twenty seconds old
+  was already off the end of a `-t 120` read. A read that has to catch a crash asks for
+  thousands, not hundreds, which is why `read_logs` takes the bound from the caller.
+- **An entry bound is not a byte bound, and only the byte bound protects the frame.** The
+  331 KB / 2253-line measurement above is ~147 bytes a line, so ordinary chatter is nowhere
+  near anything — but logcat's own per-entry payload limit is about 4 KB, and the trigger is
+  line *size*, not entry count. Measured in this checkout: 5000 entries whose message is 2 KB
+  (an HTTP body, a serialised JSON response — well under logcat's limit) encode to a
+  **10,440,123-byte** frame, over the 8 MiB `MAX_FRAME_BYTES`. That cap is enforced on the
+  **receiving** side, so the result is not a refusal the caller can read: `FrameDecoder`
+  throws, the client fails *every* in-flight request on that connection as `malformed_frame`
+  and destroys it — a protocol error blaming the host, on a call the params schema explicitly
+  allowed. Hence `MAX_LOG_BYTES` (`src/verbs/logs.ts`): a payload-carrying verb needs a bound
+  in **bytes**, and a count of things whose size the caller chooses is not one.
+- **`kill -6 <pid>` on an app process is refused for the shell user** (`Operation not
+  permitted`), so a native abort cannot be induced without `adb root`. The fatal-level fixture was
+  produced with `adb -s "$SERIAL" shell log -p f -t <tag> "<message>"` instead, which writes an
+  entry at any level the shell asks for — the same six letters logcat prints.
+- **What a crash leaves on the screen is not one thing, and it is not stable.** Both of these
+  followed `am crash` on the foreground app on the same device within minutes: the **launcher**,
+  with nothing on it about the crash at all (`mCurrentFocus=…NexusLauncherActivity`), and a
+  **transient dialog** reading `Settings keeps stopping` / `App info` / `Close app`, which shows
+  up after repeated crashes of the same package and clears itself again a few seconds later.
+  Two consequences, and the first cost a test run:
+  - **A crash dialog outlives the suite that raised it** and the next screen read takes it for
+    the app under test — `tests/device/android/backend.test.ts`'s "root element matches
+    `wm size`" failed at 196 dp against 427 because it was measuring a dialog. A suite that
+    crashes an app dismisses what the crash raised (`input keyevent KEYCODE_BACK`) before it
+    finishes.
+  - **A test may not assert that the screen says nothing about a crash** — that is flaky, and
+    when the dialog is up it is false. What holds either way is that the screen never names the
+    **package**, the **exception** or the **process**, which is the assertion `read_logs`'
+    acceptance test makes: a screenshot says at most that *an* app stopped, and only the log says
+    which one and why.
+
 Checked against Node 25.2 while building R22's client, 2026-08-30:
 
 - **`tls.connect({ servername })` throws when the value is an IP address.** Not a warning and not
@@ -648,7 +725,9 @@ tests — on every pull request (R26); no device tests, since a CI runner has no
 the existing unit-test suite, it does not add device-driven assertions of its own. Cloud
 device farms, **more than one Rover host in a single deployment** (D18, revised 2026-08-29; §9.4),
 a host catalogue, hosts registering with one another, and anything resembling a dashboard — a
-client is configured with the address of its one host and that is all. Comparison against
+client is configured with the address of its one host and that is all. (The artifact archive in
+§10 is deliberately shaped so a future read-only viewer could be built on it without a redesign,
+D24, `docs/WEB_PANEL.md` — that viewer itself is still not being built now.) Comparison against
 design renders — Rover supplies screenshots and measurements; judging them against the design is
 the agent's job. **Starting emulators and connecting physical devices** — that belongs to whoever
 operates the host machine, not to Rover (D21).
@@ -695,7 +774,8 @@ Four rules when filing these issues:
 2. **The completion criterion from the "Outcome" column goes into the issue as an acceptance
    criterion**, verbatim. It is worded so that it can be checked, not merely declared.
 3. **A row number is an identity, not a position.** R21–R24 arrived after the first twenty were
-   filed (remote hosts, D17–D20) and sit where the dependency order puts them, not at the end of
+   filed (remote hosts, D17–D20), R25 after that (the artifact archive, D23), and R27–R28 later
+   still (per-user auth, D25) — each sits where the dependency order puts them, not at the end of
    the table. The Backlog column mirrors the order of the rows, not their numbering. **R23 was
    later dropped entirely** (D18, revised 2026-08-29; §9.4) — its number is retired, not reused.
 4. **Do not split a row into subtasks at filing time.** If it turns out too large during the work,
@@ -719,10 +799,12 @@ Four rules when filing these issues:
 | R11 | Verb layer foundation | Target resolution from a **fresh** read inside the verb, waiting on a condition with a timeout, returning the state after the action (D12). **There is not a single `sleep` in the repo** — enforced by a lint rule or a test. A timeout says what it waited for and what it found instead. A verb's result is serializable — the host will execute it, not the client (D19, R21) | R5, R8 | L |
 | R21 | Host-side verb execution | The daemon loads the core; the CLI and MCP call verbs over the same surface as leases (D19). **No adb in a client process** — checkable by a test. This row stands ahead of the verb families deliberately: changing the execution model after they are written is a rewrite of six files instead of one | R11 | L |
 | R22 | Host network listener and authentication | TCP with TLS alongside the local socket, **the same surface, a second transport** (D17). The host token authenticates, the owner string attributes — **two separate fields, and a test proves the token never becomes the owner nor reaches a log** (D20). A refusal does not reveal what the host has attached | R21 | L |
+| R27 | Host user store + `rover users` CLI | A local, host-only credential store (`~/.rover/users.json`, one record per user: identifier, display name, token hash, created-at) and a `rover users add \| list \| revoke \| rotate <identifier>` command that manages it (D25). Dependency-free, `node:crypto`-only hashing. `add` and `rotate` print the raw token **exactly once**; it is never stored, logged, or printed again, and `list` never prints a token or its hash. **This command touches the file directly and never goes over the network or through the daemon** — it runs on the machine holding the instance, not for a remote caller | R10 | M |
+| R28 | Network listener authenticates against the user store, retiring the single shared token | `network-listen.ts`'s greeting check stops comparing against one `ROVER_HOST_TOKEN` and instead hashes the presented token and looks it up in R27's store, **re-read at every connection attempt** — never cached for the daemon's lifetime (D6, D25). `ROVER_HOST_TOKEN` and the listener-side schema fields tied to it are removed, not kept as a parallel path. A revoked user is refused on their very next connection attempt, with the daemon already running — no restart. The client side (`network-connect.ts`) is unchanged in shape: a client still presents one opaque token in the greeting, and only what that token has to be — one issued by `rover users add`, not a fixed shared secret — changes | R27, R22 | M |
 | R12 | Input verbs | **Done** (#12, #60, #61). `tap`, `long_press`, `swipe`, `scroll`, `type_text`, `press_key`. `long_press` as a drag in place — **not** `keyevent --longpress` (§6) — held past the device's own `secure long_press_timeout`, which is configuration rather than a constant. `type_text` hides the device shell's quoting. Split the way R9 and R16 were, into three: the backend's four **primitives** landed first (#12 phase 1) — `tap` / `swipe` / `typeText` / `pressKey` behind `canInput`, with the dp→px conversion and the text limits §6 records — then the four **gesture verbs** over them (#60 phase 2), `tap` / `long_press` / `swipe` / `scroll`, each on the R11 spine with its own `IPC_METHODS` row; `type_text` and `press_key` closed it (#61), both on the spine with **no target**, and with the backend's text refusal given a wire shape of its own rather than left as `internal_error` | R21 | M |
-| R13 | Read verbs | `screenshot`, `read_screen`, `device_info`. `read_screen` works with screen capture blocked and **is a declared capability, not a required method** (§5). Split the way R12 was, into three: the backend's **primitive** landed first (#13 phase 1) — `readScreen` behind `canReadScreen`, the two-command dump recipe of §6 mapped onto `ScreenElement[]` in dp — which is also what flipped the last `false` in the Android manifest and so turned on every path already written against it: after-states, targets by text, and both waits. Two of the three read **verbs** landed second (#67 phase 2) — `read_screen` and `device_info`, one module on the R11 spine with an empty action, because a read verb's work *is* the spine's own capture; `read_screen` carries `requires: ['canReadScreen']`, which is what turns a backend without the capability into a loud failure before dispatch instead of the softer `after: { kind: 'unavailable' }` an unrequired verb would answer, and `device_info` needs no capability because its answer is the `DeviceInfo` D14 puts on every result. `screenshot` is phase 3 on its own: it is the one read that cannot answer in that shape, because pixels are bytes rather than a state the result already carries (R24) | R21 | M |
+| R13 | Read verbs | `screenshot`, `read_screen`, `device_info`. `read_screen` works with screen capture blocked and **is a declared capability, not a required method** (§5). Split the way R12 was, into three: the backend's **primitive** landed first (#13 phase 1) — `readScreen` behind `canReadScreen`, the two-command dump recipe of §6 mapped onto `ScreenElement[]` in dp — which is also what flipped the last `false` in the Android manifest and so turned on every path already written against it: after-states, targets by text, and both waits. Two of the three read **verbs** landed second (#67 phase 2) — `read_screen` and `device_info`, one module on the R11 spine with an empty action, because a read verb's work *is* the spine's own capture; `read_screen` carries `requires: ['canReadScreen']`, which is what turns a backend without the capability into a loud failure before dispatch instead of the softer `after: { kind: 'unavailable' }` an unrequired verb would answer, and `device_info` needs no capability because its answer is the `DeviceInfo` D14 puts on every result. `screenshot` landed third (#68 phase 3): the one read that cannot answer in that shape, because pixels are bytes rather than a state the result already carries. It is on the same spine with `requires: []` — the backend method is required, not capability-gated — and what it adds is one nullable `artifact` on `ActionResult` carrying base64, a media type and a byte length, required-and-nullable because `undefined` does not survive JSON. `MAX_ARTIFACT_BYTES` (4 MiB) is derived from the 8 MiB frame cap with base64's inflation accounted for, and going over it is an `artifact-too-large` failure naming both numbers rather than a truncated image. R13's last acceptance criterion — a black screenshot stays distinguishable from a broken device — is documented on the verb and in README.md rather than asserted, because it takes a known screen: the check is a capture of the system home screen, and `read_screen` is the read that survives a capture block (§6). The transfer contract around the bytes is R24 and the durable archive is R25 | R21 | M |
 | R14 | `record_video` + slicing into frames | The recording must finish before it is pulled — a file pulled earlier has no `moov` atom and cannot be read at all | R13 | S |
-| R15 | App verbs | `install_app`, `launch_app`, `stop_app`, `clear_app_data`, `read_logs`, `pull_file`, `push_file`. `read_logs` is to catch a failure a screenshot will not show. Split the way R12 was, into three: the **app-lifecycle verbs** landed first (#15 phase 1) — `launch_app` / `stop_app` / `clear_app_data`, each on the R11 spine over a backend primitive that already existed, sharing one `IPC_METHODS` params schema, with `requires: []` and no target because an app id addresses a package rather than something on the screen; `read_logs` is phase 2 and needs a backend method, a logcat parser and a payload-carrying result shape that none of the three above needed; `install_app`, `pull_file` and `push_file` are phase 3 and are a byte-transfer concern (R24) rather than an app-lifecycle one — `install_app` takes a file from the *client's* machine | R21 | M |
+| R15 | App verbs | `install_app`, `launch_app`, `stop_app`, `clear_app_data`, `read_logs`, `pull_file`, `push_file`. `read_logs` is to catch a failure a screenshot will not show. Split the way R12 was, into three: the **app-lifecycle verbs** landed first (#15 phase 1) — `launch_app` / `stop_app` / `clear_app_data`, each on the R11 spine over a backend primitive that already existed, sharing one `IPC_METHODS` params schema, with `requires: []` and no target because an app id addresses a package rather than something on the screen; `read_logs` landed as phase 2 (#69) — a required `DeviceBackend.readLogs`, a log parser with captures of its own, and the first verb whose answer carries a payload beyond `ActionResult`, which is what factored `VerbCallResultSchema` into `verbCallResultOf()` and made `runVerb` generic for phase 3 to reuse; `install_app`, `pull_file` and `push_file` are phase 3 and are a byte-transfer concern (R24) rather than an app-lifecycle one — `install_app` takes a file from the *client's* machine | R21 | M |
 | R16 | Environment verbs | `set_airplane_mode`, `set_wifi` through `cmd connectivity` and `cmd wifi` — **not** through `svc`, which is gone (§6). Both paths without root. The **primitives** landed with R9's first phase (#9) — `setAirplaneMode` / `setWifiEnabled` on the Android backend, behind `canControlNetwork` — so this row is the verb layer over them, not the recipes themselves | R21 | S |
 | R24 | Artifact transfer across the machine boundary | Screenshots, recordings and pulled files come back as bytes; **a path returned to the agent exists on the agent's machine** (D19). In the other direction: `install_app` and `push_file` send a file to the host. The recording from R14 finishes on the host before the transfer, not during it. The size limit is explicit and named, and does not announce itself as a truncated file | R13, R14, R15 | M |
 | R25 | Durable artifact archive on the host | Every verb that produces a screenshot, a recording, or a log pull additionally writes it into `<project>/<test_name>/<lease-id>/<device-serial>/…` on the host (D23, §10), alongside a `device_info.json` snapshot per lease-device pair (D14). **An absent `test_name` falls back to a single fixed directory name**, so the tree shape never varies. **The archive path is never the one returned to the agent** — R24's bytes-over-the-wire contract is unchanged by this row. Retention (a TTL or size cap, and who prunes) is explicitly out of scope here — see §9.4 | R8, R13, R14, R15, R24 | M |
@@ -741,10 +823,13 @@ Four rules when filing these issues:
 - **A `Planning` column on the board.** Swarm maps such a status in its project configuration and
   our board does not have one (`ai/RULES.md` §5). To be settled when onboarding Rover into Swarm:
   add the column or configure that phase away. Do not add a column nobody uses in the meantime.
-- **Retention policy for the artifact archive (§10, D23).** A TTL, a size cap, and who runs the
-  prune — a human operator by cron, or the daemon itself — are all undecided. R25 builds the
-  archive with no pruning; a follow-up row is filed once the shape of R25 has actually been used
-  and it is clear what fills a disk first.
+- **Retention policy for the artifact archive (§10, D23, D24).** A TTL, a size cap, and who runs
+  the prune — a human operator by cron, or the daemon itself — are all still undecided. This can no
+  longer be left until disk pressure is actually observed: once a future web panel (`docs/WEB_PANEL.md`)
+  reads this archive directly, unbounded growth is a problem from the panel's first day, not
+  something to wait and see about. R25 still builds the archive with no pruning of its own — but
+  the follow-up retention row is filed **once R25 ships**, ahead of any panel work, not deferred
+  indefinitely.
 - **Multi-host addressing (R23), dropped.** The deployment this is built for has exactly one
   machine with hardware, so a device handle stays a bare serial and a client never aggregates more
   than one host (D18, revised 2026-08-29). If devices ever end up spread across more than one
@@ -752,6 +837,11 @@ Four rules when filing these issues:
   hosts and names any that did not answer — is the row to revive. Nothing in D17 (the one host
   reachable over the network) or D19 (verbs execute on the host) needs to change for that; it is
   simply not being built against a need that does not exist yet.
+- **The web panel.** Not scheduled, not sized, no issue filed — CLI and MCP are the whole interface
+  for now (§7). But the daemon and the archive (§10, D23, D24) are deliberately shaped so a
+  read-only panel can be added later without a redesign, so the functionality it will need is being
+  written down as it comes up, in `docs/WEB_PANEL.md`. Turning any one line of it into an actual
+  backlog row happens only when this section's other rows are far enough along to make room for it.
 
 ---
 
@@ -792,5 +882,11 @@ host-local effect of the same call, never a substitute for it and never a path h
 - **The archive path is never the one returned to the agent** (D19, R24 unchanged). A client asking
   "what does the archive look like" is a different question from "what did this verb call return",
   and the two are never conflated.
+- **The tree is deliberately walkable without an index** (D24). Listing a directory is the whole
+  query a future read-only viewer would run — no database, no separate catalogue kept in sync with
+  the files. The two most recent `<lease-id>` folders under one `test_name` are already the
+  before/after pair a diff view wants, which is the reason `test_name` is deliberately not unique
+  (above).
 - **Retention is undecided** (§9.4) — without one, this grows without bound on machines that
-  usually have the least disk to spare.
+  usually have the least disk to spare, and it stops being a someday problem the moment a panel is
+  reading this archive on a schedule (D24).

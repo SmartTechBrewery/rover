@@ -30,6 +30,8 @@ import type {
 	DeviceInfo,
 	DeviceWatch,
 	DeviceWatcher,
+	LogRead,
+	ReadLogsOptions,
 } from '@/core/device.js';
 import { type AppId, type DeviceSerial, parsePlatformId } from '@/core/ids.js';
 import {
@@ -48,6 +50,7 @@ import {
 	createMockDevice,
 	createMockDeviceBackend,
 	createMockDeviceInfo,
+	createMockLogEntry,
 } from '../../helpers/factories.js';
 
 function registeredBackend(
@@ -107,6 +110,13 @@ class OptedOutBackend implements DeviceBackend {
 	}
 	async screenshot(serial: DeviceSerial): Promise<Uint8Array> {
 		return screenshotOffDevice(serial);
+	}
+	async readLogs(serial: DeviceSerial, options: ReadLogsOptions): Promise<LogRead> {
+		this.record(`readLogs ${serial} ${options.maxEntries}`);
+		return {
+			entries: [createMockLogEntry({ message: `a line ${serial} printed` })],
+			truncated: false,
+		};
 	}
 
 	private record(action: string): void {
@@ -306,7 +316,7 @@ describe('checkNoStubbedMethods', () => {
 	it('reports every method of a fully mocked backend', () => {
 		const entry = registeredBackend(createMockDeviceBackend());
 
-		expect(checkNoStubbedMethods(entry)).toHaveLength(16);
+		expect(checkNoStubbedMethods(entry)).toHaveLength(17);
 	});
 });
 

@@ -156,6 +156,9 @@ function createRecordingBackend(
 		},
 		clearAppData: async () => {},
 		screenshot: async () => new Uint8Array(),
+		readLogs: async () => {
+			throw new Error('readLogs is not part of a restoration');
+		},
 		setAirplaneMode: async (_serial, enabled: boolean) => {
 			performed.push(`setAirplaneMode ${enabled}`);
 		},
