@@ -237,6 +237,7 @@ async function startHost(): Promise<IpcClient> {
 	const daemon = await startDaemon({
 		socketPath: temp.socketPath,
 		artifactsRoot: temp.artifactsRoot,
+		projectsRoot: temp.projectsRoot,
 	});
 	if (!daemon.started) {
 		throw new Error('Another daemon holds the temp socket — the test cannot proceed');

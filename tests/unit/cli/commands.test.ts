@@ -65,6 +65,7 @@ async function start(): Promise<void> {
 	const result = await startDaemon({
 		socketPath: temp.socketPath,
 		artifactsRoot: temp.artifactsRoot,
+		projectsRoot: temp.projectsRoot,
 	});
 	if (!result.started) {
 		throw new Error('Another daemon holds the temp socket — the test cannot proceed');

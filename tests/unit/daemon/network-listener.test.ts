@@ -156,6 +156,7 @@ async function startWithNetwork(
 	const result = await startDaemon({
 		socketPath: temp.socketPath,
 		artifactsRoot: temp.artifactsRoot,
+		projectsRoot: temp.projectsRoot,
 		network: networkConfig(overrides),
 	});
 	if (!result.started) {
@@ -738,6 +739,7 @@ describe('the listener is opt-in and dies with the daemon', () => {
 		const daemon = await startDaemon({
 			socketPath: temp.socketPath,
 			artifactsRoot: temp.artifactsRoot,
+			projectsRoot: temp.projectsRoot,
 		});
 		if (!daemon.started) {
 			throw new Error('Another daemon holds the temp socket — the test cannot proceed');

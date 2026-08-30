@@ -29,6 +29,14 @@ const ALLOWED_TO_SPAWN = [
 	// this list stays true of every client: `src/ipc/verb-methods.ts` imports the verb schemas,
 	// so a spawn under `src/verbs/` would be a spawn in a CLI's module graph.
 	'daemon/frames.ts',
+	// A project's own teardown hook (D13) is the operator's program, run on the host where the
+	// device is (D19) — a hook stranded on the client's machine could not stop the helper
+	// service it started. It starts no daemon either: it runs what one hook file declares and
+	// waits for it, bounded, with `shell: false`. It sits beside the frame extractor rather
+	// than in `daemon/restore.ts` because `daemon/lease-handlers.ts` imports that one, and
+	// beside `daemon/project-hooks.ts` rather than inside it because reading a hook file must
+	// stay importable from anywhere.
+	'daemon/hook-command.ts',
 ];
 
 const SRC_ROOT = fileURLToPath(new URL('../../../src', import.meta.url));

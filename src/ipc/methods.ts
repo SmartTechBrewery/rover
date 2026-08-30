@@ -201,10 +201,19 @@ export type ListDevicesResult = z.infer<typeof ListDevicesResultSchema>;
 
 /**
  * The three caller-supplied attribution strings — `owner` (D16), `project` and `test_name`
- * (D22) — share one schema because the host treats them identically: it stores them, echoes
- * them back, and never reads their content. No `.trim()` (that would modify a caller's
- * string), no default synthesized from a branch, a pull request or a process, and nothing
- * anywhere branches on what they say.
+ * (D22) — share one schema because the host validates them identically: it stores them, echoes
+ * them back, and never checks their content against a vocabulary. No `.trim()` (that would
+ * modify a caller's string), no default synthesized from a branch, a pull request or a process,
+ * and no value here is ever refused for what it says.
+ *
+ * **`project` is the one the host also *looks up*.** `owner` and `test_name` stay opaque, but
+ * when a lease ends the daemon resolves `project` to a hook file on the host and runs the
+ * teardown it declares (`src/daemon/project-hooks.ts`, D13) — so a daemon-side behaviour does
+ * depend on that string, and it is worth knowing before writing code that assumes otherwise.
+ * The wire contract is nevertheless unchanged, which is the distinction to hold on to: a
+ * lookup, not validation. A string that is not a hook-file identifier names no hook file, and
+ * is still stored and echoed back verbatim exactly like the other two. `project-hooks.ts`
+ * says the same thing from the other side of that seam.
  *
  * The upper bound is allocation hygiene of the kind `RequestIdSchema` and `MethodNameSchema`
  * already apply, not validation: the host echoes these back in a refusal, so an unbounded
@@ -227,6 +236,11 @@ export const AcquireDeviceParamsSchema = z
 		serial: DeviceSerialSchema,
 		/** Who this lease is for. Attribution only — it authorizes nothing (D20). */
 		owner: AttributionStringSchema,
+		/**
+		 * What this lease is for. Attribution, and the name the host looks up to find this
+		 * project's hook file (D13) — see {@link AttributionStringSchema}. It still authorizes
+		 * nothing: naming a project is not a claim to it.
+		 */
 		project: AttributionStringSchema,
 		testName: AttributionStringSchema.optional(),
 	})

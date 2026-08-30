@@ -36,6 +36,7 @@ import { createLeaseStore, type LeaseStore } from './leases.js';
 import { createListDevicesHandler } from './list-devices.js';
 import type { NetworkListenerConfig } from './network-config.js';
 import { type NetworkListener, startNetworkListener } from './network-listen.js';
+import { createProjectResolver } from './project-resolver.js';
 import { createDeviceRestorer, type DeviceRestorer } from './restore.js';
 import { attemptConnect } from './socket-connect.js';
 import { assertValidSocketPath } from './socket-path.js';
@@ -135,6 +136,16 @@ export interface StartDaemonOptions {
 	 * — or, with a default here, because nobody thought to override one.
 	 */
 	readonly artifactsRoot: string;
+	/**
+	 * Where the per-project hook files are (D13, `./project-hooks.ts`).
+	 *
+	 * **Required**, and resolved from the environment by `./main.ts`, for
+	 * {@link StartDaemonOptions.artifactsRoot}'s reason and rather more sharply: what a hook
+	 * file declares is a program the host runs with the daemon's own privileges, so a
+	 * `startDaemon()` in a unit test must not be able to reach the developer's own
+	 * `~/.rover/projects` and start running commands out of it.
+	 */
+	readonly projectsRoot: string;
 }
 
 /** The daemon this process owns. Only the winner of the bind gets one. */
@@ -207,6 +218,9 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartRes
 	// never granted one has nothing to undo.
 	const restorer = createDeviceRestorer({
 		inventory,
+		// The one line that gives the seam something to resolve: a lease's `project` string
+		// becomes that project's hook file, re-read every time a lease ends (D6).
+		resolveProject: createProjectResolver({ root: options.projectsRoot }),
 		settleTraffic: (serial) => traffic.settle(serial),
 	});
 	// Built before the store for the restorer's reason: the store's end hook calls into it. It

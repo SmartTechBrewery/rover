@@ -19,7 +19,10 @@
  * before the restoration it was supposed to wait for.
  */
 
-import { afterEach, describe, expect, it } from 'vitest';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
 	_resetDeviceBackendRegistryForTesting,
 	registerDeviceBackend,
@@ -30,7 +33,12 @@ import { type AppId, type LeaseId, parseAppId, parseDeviceSerial } from '@/core/
 import { createDeviceInventory } from '@/daemon/inventory.js';
 import { createLeaseHandlers, type LeaseHandlers } from '@/daemon/lease-handlers.js';
 import { createLeaseStore, type LeaseStore } from '@/daemon/leases.js';
-import { createDeviceRestorer, type ProjectRestoration } from '@/daemon/restore.js';
+import { createProjectResolver } from '@/daemon/project-resolver.js';
+import {
+	createDeviceRestorer,
+	type ProjectResolver,
+	type ProjectRestoration,
+} from '@/daemon/restore.js';
 import { createMockDevice } from '../../helpers/factories.js';
 
 const SERIAL = parseDeviceSerial('attached-1');
@@ -61,8 +69,15 @@ interface Harness {
 interface HarnessOptions {
 	readonly capabilities?: Partial<Capabilities>;
 	readonly backend?: (performed: string[]) => Partial<DeviceBackend>;
-	/** Defaults to two apps and a hook; `null` is the R17-shaped "nobody described it". */
+	/** Defaults to two apps and a hook; `null` is the "nobody has described it" answer. */
 	readonly project?: (performed: string[]) => ProjectRestoration | null;
+	/**
+	 * The real resolver over a real hook file, replacing the fake above outright. Used by the
+	 * end-to-end suite at the bottom, which is the one that proves the file reaches the device.
+	 */
+	readonly resolver?: ProjectResolver;
+	/** The `project` string every lease this harness grants carries. */
+	readonly projectName?: string;
 	/** Defaults to the restorer's own ten seconds, which no unit test can wait out. */
 	readonly teardownTimeoutMs?: number;
 }
@@ -90,15 +105,17 @@ function createHarness(options: HarnessOptions = {}): Harness {
 	const inventory = createDeviceInventory({ warn: (message) => warnings.push(message) });
 	const restorer = createDeviceRestorer({
 		inventory,
-		resolveProject: () =>
-			options.project
-				? options.project(performed)
-				: {
-						apps: [APP, OTHER_APP],
-						teardown: async () => {
-							performed.push('teardown');
-						},
-					},
+		resolveProject:
+			options.resolver ??
+			(async () =>
+				options.project
+					? options.project(performed)
+					: {
+							apps: [APP, OTHER_APP],
+							teardown: async () => {
+								performed.push('teardown');
+							},
+						}),
 		warn: (message) => warnings.push(message),
 		...(options.teardownTimeoutMs === undefined
 			? {}
@@ -124,7 +141,7 @@ function createHarness(options: HarnessOptions = {}): Harness {
 			const result = await this.handlers.acquire_device({
 				serial: SERIAL,
 				owner,
-				project: 'rover',
+				project: options.projectName ?? 'rover',
 			});
 			if (result.outcome !== 'granted') {
 				throw new Error(`the acquire must be granted, got '${result.message}'`);
@@ -330,8 +347,8 @@ describe('a backend that cannot control the network', () => {
 	});
 });
 
-describe('the project seam R17 fills', () => {
-	/** R17 will read a file per project, and a file can be missing or malformed. */
+describe('the project seam the hook file fills', () => {
+	/** The resolver reads a file per project, and a file can be missing or malformed. */
 	const unreadableProject = () => ({
 		project: () => {
 			throw new Error('the project file is unreadable');
@@ -376,8 +393,8 @@ describe('the project seam R17 fills', () => {
 		harness.handlers.release_device({ leaseId });
 		await harness.settle();
 
-		// No configuration source exists yet, so the app and hook steps have nothing to do. A
-		// hook that does not fire yet is not a hook that is broken.
+		// A project with no hook file leaves the app and hook steps with nothing to do. A hook
+		// that does not fire is not a hook that is broken.
 		expect(harness.performed).toEqual(['setAirplaneMode false', 'setWifiEnabled true']);
 		expect(harness.warnings).toEqual([]);
 	});
@@ -390,7 +407,7 @@ describe('a project teardown hook that never returns', () => {
 			teardownTimeoutMs: 5,
 			project: () => ({
 				apps: [APP],
-				// R17's hook waiting on a helper service that never exits. `settle` is awaited
+				// A hook waiting on a helper service that never exits. `settle` is awaited
 				// inside `acquire_device`, so an unbounded wait here would hang every later grant
 				// for this device — with no lease id issued and no TTL to expire it.
 				teardown: () => new Promise<void>(() => {}),
@@ -453,5 +470,263 @@ describe('a device is never granted mid-restore', () => {
 			'teardown',
 			'granted',
 		]);
+	});
+});
+
+/**
+ * The row's headline criterion, end to end: a **real hook file** on disk, read by the **real**
+ * resolver, driving a real teardown — on release and on expiry both (D9, R9).
+ *
+ * Everything above this point drives the seam through a fake, because what it asserts is order
+ * and containment. This suite asserts the other half: that what an operator writes in
+ * `~/.rover/projects/<project>.json` is what the daemon does when a lease on that project ends,
+ * by whichever of the two paths ends it.
+ */
+describe('a project hook file, on both paths a lease can end', () => {
+	const HOOK_PROJECT = 'checkout-web';
+	const CHECKOUT = parseAppId('com.example.checkout');
+	const HELPER = parseAppId('com.example.checkout.helper');
+
+	let root: string;
+	let marker: string;
+
+	beforeEach(async () => {
+		root = await mkdtemp(join(tmpdir(), 'rover-restoration-'));
+		marker = join(root, 'teardown-ran.txt');
+	});
+
+	afterEach(async () => {
+		await rm(root, { recursive: true, force: true });
+	});
+
+	/** Write `<root>/<HOOK_PROJECT>.json` verbatim, so a malformed file is writable too. */
+	async function writeHookFile(contents: string): Promise<void> {
+		await writeFile(join(root, `${HOOK_PROJECT}.json`), contents, 'utf8');
+	}
+
+	/** A hook file whose teardown is a real program that leaves proof it ran. */
+	async function writeWorkingHookFile(): Promise<void> {
+		await writeHookFile(
+			JSON.stringify({
+				project: HOOK_PROJECT,
+				apps: [CHECKOUT, HELPER],
+				teardown: {
+					command: process.execPath,
+					args: [
+						'-e',
+						"require('node:fs').writeFileSync(process.argv[1], process.env.ROVER_PROJECT + ' ' + process.env.ROVER_DEVICE_SERIAL)",
+						marker,
+					],
+				},
+			}),
+		);
+	}
+
+	function createFileBackedHarness(hookTimeoutMs?: number): Harness {
+		return createHarness({
+			projectName: HOOK_PROJECT,
+			resolver: createProjectResolver({
+				root,
+				...(hookTimeoutMs === undefined ? {} : { hookTimeoutMs }),
+			}),
+		});
+	}
+
+	it('stops the declared apps and runs the teardown on release', async () => {
+		await writeWorkingHookFile();
+		const harness = createFileBackedHarness();
+		const leaseId = await harness.acquire('issue-112');
+
+		harness.handlers.release_device({ leaseId });
+		await harness.settle();
+
+		expect(harness.performed).toEqual([
+			`stopApp ${CHECKOUT}`,
+			`stopApp ${HELPER}`,
+			'setAirplaneMode false',
+			'setWifiEnabled true',
+		]);
+		// The teardown ran as a real process, and it was told which project and which device —
+		// a hook that cannot name the device it is undoing is the wrong shape.
+		await expect(readFile(marker, 'utf8')).resolves.toBe(`${HOOK_PROJECT} ${SERIAL}`);
+		expect(harness.warnings).toEqual([]);
+	});
+
+	it('stops the declared apps and runs the teardown on expiry, with nobody left to ask', async () => {
+		await writeWorkingHookFile();
+		const harness = createFileBackedHarness();
+		await harness.acquire('issue-112');
+
+		// The path D9 exists for: the agent holding the device is gone and issues no further
+		// call. Nothing here ends the lease — the instant passes and the sweep notices.
+		harness.at(1_000_000 + TTL_MS);
+		harness.leases.sweep();
+		await harness.settle();
+
+		expect(harness.performed).toEqual([
+			`stopApp ${CHECKOUT}`,
+			`stopApp ${HELPER}`,
+			'setAirplaneMode false',
+			'setWifiEnabled true',
+		]);
+		await expect(readFile(marker, 'utf8')).resolves.toBe(`${HOOK_PROJECT} ${SERIAL}`);
+		expect(harness.warnings).toEqual([]);
+	});
+
+	it('takes an edit to the file on the very next lease, with nothing restarted', async () => {
+		await writeWorkingHookFile();
+		const harness = createFileBackedHarness();
+		harness.handlers.release_device({ leaseId: await harness.acquire('issue-112') });
+		await harness.settle();
+
+		await writeHookFile(JSON.stringify({ project: HOOK_PROJECT, apps: [CHECKOUT] }));
+		harness.performed.length = 0;
+		harness.handlers.release_device({ leaseId: await harness.acquire('pr-127-review') });
+		await harness.settle();
+
+		// D6: the file is re-read at every use and never cached, so the helper app is no longer
+		// stopped and no teardown runs — with the daemon still up.
+		expect(harness.performed).toEqual([
+			`stopApp ${CHECKOUT}`,
+			'setAirplaneMode false',
+			'setWifiEnabled true',
+		]);
+	});
+
+	it('restores the device and says nothing when the project has no hook file', async () => {
+		const harness = createFileBackedHarness();
+		const leaseId = await harness.acquire('issue-112');
+
+		harness.handlers.release_device({ leaseId });
+		await harness.settle();
+
+		// A project nobody has registered is the ordinary state of a host, not a failure — and
+		// no default anywhere names an application, so nothing is stopped.
+		expect(harness.performed).toEqual(['setAirplaneMode false', 'setWifiEnabled true']);
+		expect(harness.warnings).toEqual([]);
+	});
+
+	it('warns once and still restores the device when the file will not parse', async () => {
+		await writeHookFile('{ "project": "checkout-web", ');
+		const harness = createFileBackedHarness();
+		const leaseId = await harness.acquire('issue-112');
+
+		harness.handlers.release_device({ leaseId });
+		await harness.settle();
+
+		// One bad config file costs that project's own steps and nothing else. The alternative
+		// hands the next agent a phone left in airplane mode, for every device that project
+		// ever leases, with nothing left to retry it.
+		expect(harness.performed).toEqual(['setAirplaneMode false', 'setWifiEnabled true']);
+		expect(harness.warnings).toHaveLength(1);
+		expect(harness.warnings[0]).toContain(HOOK_PROJECT);
+		expect(harness.warnings[0]).toContain('is not valid JSON');
+	});
+
+	it('warns with the exit code when the teardown command fails, and carries on', async () => {
+		await writeHookFile(
+			JSON.stringify({
+				project: HOOK_PROJECT,
+				apps: [CHECKOUT],
+				teardown: {
+					command: process.execPath,
+					args: [
+						'-e',
+						"process.stderr.write('the helper service was already gone'); process.exit(3)",
+					],
+				},
+			}),
+		);
+		const harness = createFileBackedHarness();
+		const leaseId = await harness.acquire('issue-112');
+
+		harness.handlers.release_device({ leaseId });
+		await harness.settle();
+
+		// The teardown is last, so everything before it already ran; the failure is contained
+		// the way every other step's is, and the device is free for the next lessee.
+		expect(harness.performed).toEqual([
+			`stopApp ${CHECKOUT}`,
+			'setAirplaneMode false',
+			'setWifiEnabled true',
+		]);
+		expect(harness.warnings).toHaveLength(1);
+		expect(harness.warnings[0]).toContain('exited 3');
+		expect(harness.warnings[0]).toContain('the helper service was already gone');
+		await expect(harness.acquire('pr-127-review')).resolves.toBeTruthy();
+	});
+
+	it('does not wait on what a teardown left running after it exited', async () => {
+		const orphanPid = join(root, 'orphan.pid');
+		await writeHookFile(
+			JSON.stringify({
+				project: HOOK_PROJECT,
+				apps: [CHECKOUT],
+				teardown: {
+					command: process.execPath,
+					args: [
+						'-e',
+						"const orphan = require('node:child_process').spawn(process.execPath," +
+							"['-e','setTimeout(() => {}, 30_000)'],{ detached: true, stdio: 'inherit' });" +
+							'orphan.unref();' +
+							"require('node:fs').writeFileSync(process.argv[1], String(orphan.pid));" +
+							'process.exit(0)',
+						orphanPid,
+					],
+				},
+			}),
+		);
+		const harness = createFileBackedHarness();
+		const leaseId = await harness.acquire('issue-112');
+
+		harness.handlers.release_device({ leaseId });
+		await harness.settle();
+
+		try {
+			// The ordinary shape of a teardown: `nohup … &`, `docker compose up -d`, a helper
+			// restarted rather than only stopped. The hook exited 0 and it succeeded — so the
+			// restorer's ten seconds must not be spent, and nothing may be reported as a hang.
+			// This test cannot pass by waiting: the restorer's bound outlasts the suite's own.
+			expect(harness.warnings).toEqual([]);
+			expect(harness.performed).toEqual([
+				`stopApp ${CHECKOUT}`,
+				'setAirplaneMode false',
+				'setWifiEnabled true',
+			]);
+		} finally {
+			const pid = await readFile(orphanPid, 'utf8').catch(() => null);
+			if (pid !== null) {
+				try {
+					process.kill(Number(pid), 'SIGKILL');
+				} catch {
+					// Already gone, which is the outcome this wanted either way.
+				}
+			}
+		}
+	});
+
+	it('lets the hook run out its own budget before the restorer runs out of patience', async () => {
+		await writeHookFile(
+			JSON.stringify({
+				project: HOOK_PROJECT,
+				apps: [CHECKOUT],
+				teardown: { command: process.execPath, args: ['-e', 'setInterval(() => {}, 1000)'] },
+			}),
+		);
+		// The resolver's own seam, shortened the way `teardownTimeoutMs` is above. The restorer
+		// keeps its real ten seconds here deliberately: which of the two bounds fires is the
+		// thing under test, and it has to be the one that can actually end the process.
+		const harness = createFileBackedHarness(25);
+		const leaseId = await harness.acquire('issue-112');
+
+		harness.handlers.release_device({ leaseId });
+		await harness.settle();
+
+		expect(harness.warnings).toHaveLength(1);
+		expect(harness.warnings[0]).toContain('25ms budget');
+		// Not the restorer giving up: that bound is on the *wait* and leaves the program running
+		// against a device already handed on. A hook past its budget is a killed hook.
+		expect(harness.warnings[0]).not.toContain('did not finish within');
+		await expect(harness.acquire('pr-127-review')).resolves.toBeTruthy();
 	});
 });

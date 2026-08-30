@@ -70,29 +70,39 @@ export interface ProjectRestoration {
  * cancelled — nothing here can cancel it — so it may still be running when this returns; what
  * the bound protects is the grant queued behind it.
  */
-const TEARDOWN_TIMEOUT_MS = 10_000;
+export const TEARDOWN_TIMEOUT_MS = 10_000;
 
 /**
  * How the `project` string on a lease becomes something to tear down.
  *
- * **This is a seam, not a configuration surface.** No configuration source exists yet: the
- * per-project schema, the file format and the loader are R17 (PROJECT.md §9.3), which is
- * blocked on this row precisely so it has something to plug into. Until it lands the default
- * resolves nothing, so the app and hook steps have nothing to do and say nothing — a hook
- * that does not fire yet, not one that is broken.
+ * **This is a seam, not a configuration surface.** What fills it is `./project-resolver.ts`,
+ * over the per-project hook file of `./project-hooks.ts` (D13) — this module names the shape
+ * and knows nothing about where hooks come from, which is what keeps the file reader and the
+ * process runner out of a module `./lease-handlers.ts` imports. A restorer wired without one
+ * resolves nothing, so the app and hook steps have nothing to do and say nothing.
+ *
+ * **Asynchronous, because resolving reads a file** — re-read at every use and never cached
+ * (D6), so an edited hook file bites on the next lease that ends. Reading it synchronously
+ * would block the daemon's event loop, for every other connection, while one lease is torn
+ * down.
+ *
+ * **Given the serial** as well as the project, because a teardown that cannot name the device
+ * it is undoing is the wrong shape to hand a hook, and this module has the serial in hand.
  *
  * `null` for a project nobody has described, which is the ordinary case rather than a failure
  * (ai/CODING_STANDARDS.md "Error handling").
  *
- * **A throw is tolerated and degrades to `null`.** R17's resolver will read a file, and a file
- * can be missing or malformed. That must cost the project's own steps and nothing else: the
- * device is still put back — app steps aside, they are the part that needs the project — with
- * a warning naming the project and the reason. A resolver whose throw skipped the airplane-mode
- * and wifi steps would be one bad config file silently disabling restoration for every device
- * that project ever leases, which is the "only runs on the happy path" failure D9 exists to
- * remove.
+ * **A throw is tolerated and degrades to `null`.** The resolver reads a file, and a file can be
+ * malformed. That must cost the project's own steps and nothing else: the device is still put
+ * back — app steps aside, they are the part that needs the project — with a warning naming the
+ * project and the reason. A resolver whose throw skipped the airplane-mode and wifi steps would
+ * be one bad config file silently disabling restoration for every device that project ever
+ * leases, which is the "only runs on the happy path" failure D9 exists to remove.
  */
-export type ProjectResolver = (project: string) => ProjectRestoration | null;
+export type ProjectResolver = (
+	project: string,
+	serial: DeviceSerial,
+) => Promise<ProjectRestoration | null>;
 
 export interface DeviceRestorer {
 	/**
@@ -150,7 +160,7 @@ export interface DeviceRestorerOptions {
 
 export function createDeviceRestorer(options: DeviceRestorerOptions): DeviceRestorer {
 	const { inventory } = options;
-	const resolveProject: ProjectResolver = options.resolveProject ?? (() => null);
+	const resolveProject: ProjectResolver = options.resolveProject ?? (() => Promise.resolve(null));
 	const warn = options.warn ?? ((message: string) => console.warn(message));
 	const teardownTimeoutMs = options.teardownTimeoutMs ?? TEARDOWN_TIMEOUT_MS;
 	const settleTraffic: (serial: DeviceSerial) => Promise<void> =
@@ -227,12 +237,15 @@ export function createDeviceRestorer(options: DeviceRestorerOptions): DeviceRest
 	/**
 	 * What the project asks to have undone, or `null` — for a project nobody has described,
 	 * and equally for a resolver that threw. Contained like every step is, and for the same
-	 * reason: this is R17's code, it will read a file, and a device left in airplane mode is
-	 * far too high a price for a config file that would not parse.
+	 * reason: the resolver reads a file, and a device left in airplane mode is far too high a
+	 * price for a config file that would not parse.
 	 */
-	const describeProject = (serial: DeviceSerial, project: string): ProjectRestoration | null => {
+	const describeProject = async (
+		serial: DeviceSerial,
+		project: string,
+	): Promise<ProjectRestoration | null> => {
 		try {
-			return resolveProject(project);
+			return await resolveProject(project, serial);
 		} catch (error) {
 			warn(
 				`Restoring device '${serial}': working out what project '${project}' asks to have ` +
@@ -249,7 +262,7 @@ export function createDeviceRestorer(options: DeviceRestorerOptions): DeviceRest
 		// against this device, and a teardown running beside it is the two-drivers failure with
 		// the host on both ends. See {@link DeviceRestorerOptions.settleTraffic}.
 		await settleTraffic(serial);
-		const project = describeProject(serial, lease.project);
+		const project = await describeProject(serial, lease.project);
 		const registered = await resolveDevice(serial, reason);
 
 		if (registered && project) {
