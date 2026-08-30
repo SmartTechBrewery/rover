@@ -14,13 +14,30 @@
 
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
+import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import type { HostName } from '@/daemon/host.js';
 import { createRoverMcpServer } from '@/mcp/server.js';
 
-/** An MCP client connected to a Rover server configured for `host`. Close it in `afterEach`. */
-export async function connectMcpAgent(host: HostName = 'local'): Promise<Client> {
-	const server = createRoverMcpServer(host);
+/**
+ * An MCP client connected to a Rover server configured for `host`. Close it in `afterEach`.
+ *
+ * `defaultProject` is what `ROVER_PROJECT_FILE` resolves to at startup in a real server
+ * (`src/mcp/index.ts`), passed directly here for the reason `host` is: a suite says what the
+ * server was configured with rather than arranging an environment for it to read.
+ */
+export async function connectMcpAgent(
+	host: HostName = 'local',
+	defaultProject?: string,
+): Promise<Client> {
+	return connectMcpAgentTo(createRoverMcpServer(host, defaultProject));
+}
+
+/**
+ * The same client, over a server the suite built itself — what a test asserting the *startup*
+ * path uses, since `createConfiguredServer` is what turns an environment into one of these.
+ */
+export async function connectMcpAgentTo(server: McpServer): Promise<Client> {
 	const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
 	const client = new Client({ name: 'rover-test-agent', version: '0.0.0' });
 	await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);

@@ -21,10 +21,14 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
 	defaultProjectsRoot,
+	PROJECT_FILE_ENV_VAR,
 	PROJECTS_PATH_ENV_VAR,
 	ProjectHooksSchema,
 	projectHooksPath,
+	readConfiguredProject,
 	readProjectHooks,
+	readProjectHooksFile,
+	resolveProjectFile,
 	resolveProjectsRoot,
 } from '@/daemon/project-hooks.js';
 
@@ -181,6 +185,64 @@ describe('reading a project’s hooks', () => {
 		expect((failure as Error).message).toContain(join(root, `${PROJECT}.json`));
 		expect((failure as Error).message).toContain('apps');
 		expect((failure as Error).message).not.toContain('s3cr3t-not-an-app-id');
+	});
+});
+
+describe('the one file a client is pointed at', () => {
+	it('reads nothing at all when the variable is unset or exported blank', async () => {
+		// Today's behaviour, unchanged: no file, no default, `--project` still required. Blank
+		// counts as unset as it does everywhere else — it is what a shell leaves behind.
+		expect(resolveProjectFile({})).toBeUndefined();
+		expect(resolveProjectFile({ [PROJECT_FILE_ENV_VAR]: '' })).toBeUndefined();
+		await expect(readConfiguredProject({})).resolves.toBeUndefined();
+	});
+
+	it('takes the identifier out of the file the variable names', async () => {
+		await writeHookFile(PROJECT, JSON.stringify({ project: PROJECT, apps: [] }));
+		const path = join(root, `${PROJECT}.json`);
+
+		expect(resolveProjectFile({ [PROJECT_FILE_ENV_VAR]: path })).toBe(path);
+		await expect(readConfiguredProject({ [PROJECT_FILE_ENV_VAR]: path })).resolves.toEqual({
+			path,
+			project: PROJECT,
+		});
+	});
+
+	it('fails naming the path when the file is not there, rather than answering no default', async () => {
+		const path = join(root, 'nothing-here.json');
+
+		// The difference from a lookup under the root, and the whole reason this reader exists:
+		// a project nobody registered is the normal state of a host, but a *named* file that is
+		// not there is a mistake — and a client that quietly attributed a lease to nothing is
+		// what D20 and D22 exist to prevent.
+		await expect(readProjectHooksFile(path)).rejects.toThrow(path);
+		await expect(readConfiguredProject({ [PROJECT_FILE_ENV_VAR]: path })).rejects.toThrow(
+			PROJECT_FILE_ENV_VAR,
+		);
+	});
+
+	it('fails naming the path when the file will not parse', async () => {
+		await writeHookFile(PROJECT, '{ "project": "checkout-web", "env": "s3cr3t-token" ');
+		const path = join(root, `${PROJECT}.json`);
+
+		const failure = await readProjectHooksFile(path).catch((error: Error) => error);
+
+		expect((failure as Error).message).toContain(path);
+		expect((failure as Error).message).not.toContain('s3cr3t-token');
+	});
+
+	it('does not ask a named file to agree with its own name', async () => {
+		// The name check belongs to the lookup, which is the only caller with a second answer
+		// for the field to disagree with. Here the path was given outright, so the field is the
+		// only answer there is — and a project's file is free to be `.rover-project.json` in
+		// the repository it belongs to.
+		await writeHookFile('rover-project', JSON.stringify({ project: PROJECT }));
+		const path = join(root, 'rover-project.json');
+
+		await expect(readConfiguredProject({ [PROJECT_FILE_ENV_VAR]: path })).resolves.toEqual({
+			path,
+			project: PROJECT,
+		});
 	});
 });
 

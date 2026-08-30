@@ -32,8 +32,8 @@ interface AdvertisedTool {
 
 const clients: Client[] = [];
 
-async function advertisedTools(): Promise<AdvertisedTool[]> {
-	const server = createRoverMcpServer('local');
+async function advertisedTools(defaultProject?: string): Promise<AdvertisedTool[]> {
+	const server = createRoverMcpServer('local', defaultProject);
 	const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
 	const client = new Client({ name: 'rover-test-agent', version: '0.0.0' });
 	await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
@@ -91,6 +91,33 @@ describe('what tools/list advertises', () => {
 			// than silently ignored — and the advertised schema says so.
 			expect(tool?.inputSchema.additionalProperties).toBe(false);
 		}
+	});
+
+	it('still requires acquire_device’s project when no project hook file is configured', async () => {
+		const tools = await advertisedTools();
+
+		// The declaration is what the SDK validates a call against, so it has to tell an agent
+		// the truth about what it must supply: with nothing to default from, that is `project`.
+		const acquire = tools.find((tool) => tool.name === 'acquire_device');
+		expect(acquire?.inputSchema.required).toEqual(shapeOf('acquire_device').required);
+		expect(acquire?.inputSchema.required).toContain('project');
+	});
+
+	it('drops project from acquire_device’s required list when one is, and changes nothing else', async () => {
+		const tools = await advertisedTools('checkout-web');
+
+		const acquire = tools.find((tool) => tool.name === 'acquire_device');
+		const { keys, required } = shapeOf('acquire_device');
+		// Derived from `AcquireDeviceParamsSchema` rather than written out a second time: every
+		// property, every other required key and the `.strict()` refusal of a typo'd argument
+		// survive, and exactly one key moves.
+		expect(Object.keys(acquire?.inputSchema.properties ?? {})).toEqual(keys);
+		expect(acquire?.inputSchema.required).toEqual(required.filter((key) => key !== 'project'));
+		expect(acquire?.inputSchema.additionalProperties).toBe(false);
+		// And the agent is told there is a default and where it came from, rather than being
+		// left to infer it from an argument that is suddenly optional.
+		expect(acquire?.description).toContain('checkout-web');
+		expect(acquire?.description).toContain('ROVER_PROJECT_FILE');
 	});
 
 	it('takes no host parameter anywhere: where the hardware sits is configuration (D17)', async () => {

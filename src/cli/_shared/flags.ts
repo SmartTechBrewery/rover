@@ -75,11 +75,12 @@ export function expectPositionals(
 /**
  * A required option, with the reason it is required in the failure.
  *
- * There is deliberately no fallback anywhere below this: `--owner` and `--project` are
- * caller-supplied strings the host stores and never reads (D16, D20, D22), and a value
- * this CLI synthesized from an environment variable, a branch or a process id would
- * attribute a device to nobody in particular — the exact failure those decisions exist to
- * prevent.
+ * Nothing here ever *synthesizes* a value: `--owner` is a caller-supplied string the host
+ * stores and never reads (D16, D20), and one this CLI derived from a branch, a process id
+ * or whoever authenticated would attribute a device to nobody in particular — the exact
+ * failure those decisions exist to prevent. {@link attributionWithDefault} is not that: it
+ * takes a value a human wrote down once, in the project's own hook file, and nothing about
+ * it is inferred from context.
  */
 export function requireOption(
 	command: string,
@@ -123,6 +124,35 @@ export function requireAttribution(
 	why: string,
 ): string {
 	return boundAttribution(command, name, requireOption(command, name, value, why));
+}
+
+/**
+ * A required attribution string that a configured file may supply instead — **the flag
+ * first, then the file, then a usage error**, in one place so no command re-derives that
+ * order.
+ *
+ * Only `--project` has a `fallback` today, out of the hook file
+ * `ROVER_PROJECT_FILE` names (`src/daemon/project-hooks.ts`, D22). `--owner` deliberately
+ * never gets one.
+ *
+ * A flag typed with an empty value falls through to {@link requireAttribution} rather than
+ * to the file: `--project ''` is a mistake, and answering it with a value the caller did
+ * not type would hide the mistake behind a lease that looks fine. Nor is the fallback
+ * length-checked — it is a `ProjectIdentifierSchema` string, capped at 64 characters, well
+ * inside {@link ATTRIBUTION_MAX_LENGTH} — because a message naming `--project` for a value
+ * nobody typed would send its reader looking at their command line.
+ */
+export function attributionWithDefault(
+	command: string,
+	name: string,
+	value: string | undefined,
+	fallback: string | undefined,
+	why: string,
+): string {
+	if (value === undefined && fallback !== undefined) {
+		return fallback;
+	}
+	return requireAttribution(command, name, value, why);
 }
 
 /**

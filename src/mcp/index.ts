@@ -12,6 +12,12 @@
  * every variable still missing — rather than starting, advertising four tools and failing at
  * the agent's first call.
  *
+ * **So is the project a call defaults to** (`ROVER_PROJECT_FILE`, D22), and for both of that
+ * paragraph's reasons: a path naming no file fails on stderr before a tool is advertised, and
+ * `acquire_device`'s declaration has to say whether `project` may be left out *before* an agent
+ * reads it — the SDK validates a call against the declaration, so nothing a handler did later
+ * could make an omitted argument legal.
+ *
  * **stdout belongs to the protocol**, so every diagnostic goes to stderr and nothing under
  * `src/mcp/` may print through `src/cli/_shared/output.ts` (`./_shared/answer.ts`). That extends
  * past this tree: `npm run mcp` writes npm's own two-line banner to stdout ahead of the first
@@ -22,21 +28,28 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { entryUrl } from '../core/entrypoint.js';
+import { readConfiguredProject } from '../daemon/project-hooks.js';
 import { resolveConfiguredHost } from './_shared/host.js';
 import { createRoverMcpServer } from './server.js';
 
 /**
- * Build the server this process would serve, host configuration included.
+ * Build the server this process would serve, host and project configuration included.
  *
  * Exported separately from {@link main} so a test can assert what a given environment
- * produces without connecting a transport to this process's stdio.
+ * produces without connecting a transport to this process's stdio. Async because resolving
+ * the project default reads a file, and reading it here is what keeps a bad path a startup
+ * failure rather than a surprise at the agent's first `acquire_device`.
  */
-export function createConfiguredServer(env: NodeJS.ProcessEnv = process.env): McpServer {
-	return createRoverMcpServer(resolveConfiguredHost(env));
+export async function createConfiguredServer(
+	env: NodeJS.ProcessEnv = process.env,
+): Promise<McpServer> {
+	const host = resolveConfiguredHost(env);
+	return createRoverMcpServer(host, (await readConfiguredProject(env))?.project);
 }
 
 export async function main(): Promise<void> {
-	await createConfiguredServer().connect(new StdioServerTransport());
+	const server = await createConfiguredServer();
+	await server.connect(new StdioServerTransport());
 }
 
 // Entrypoint guard: self-run only when invoked directly, never when a test imports the

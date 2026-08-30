@@ -13,16 +13,28 @@
  * or turned into a second command by a metacharacter somebody forgot. An operator who wants a
  * shell asks for one explicitly, by making it the program.
  *
- * **The file's `project` must equal the file's own name.** A mismatch is a loud parse failure
- * naming both, which stops a file copied from another project from quietly serving this one and
- * keeps the field meaningful to everything that later reads it.
+ * **A file found under the root must have a `project` equal to its own name.** A mismatch is a
+ * loud failure naming both, which stops a file copied from another project from quietly serving
+ * this one and keeps the field meaningful to everything that later reads it. It is a property
+ * of the *lookup* — of {@link readProjectHooks}, which is the only caller that builds the path
+ * out of a name — and so it does not apply to a file somebody named outright
+ * ({@link readProjectHooksFile}), where there is no second answer for the field to disagree
+ * with.
  *
  * **It is re-read at every use and never cached** (D6) — exactly as the user store is re-read at
  * every connection attempt so that a `revoke` needs no restart. Editing a hook file takes effect
  * on the very next lease that ends.
  *
+ * **A client may read a hook file too, for one field and nothing else.** Pointed at one by
+ * {@link PROJECT_FILE_ENV_VAR}, `rover acquire` and the MCP server take the `project`
+ * identifier out of it as the default for the string they would otherwise make somebody retype
+ * on every call (D22). That is convenience and nothing more: the wire is unchanged, `apps` and
+ * `teardown` are read by the host alone, and a client never runs anything a file declares.
+ *
  * This module reads a file and parses it, and imports nothing that starts a process, so it stays
- * safe to import from anywhere; running what it describes is `./hook-command.ts`'s job alone.
+ * safe to import from anywhere — which is what the paragraph above depends on, and what
+ * `tests/unit/no-backend-in-a-client.test.ts` holds; running what it describes is
+ * `./hook-command.ts`'s job alone.
  */
 
 import { readFile } from 'node:fs/promises';
@@ -34,6 +46,23 @@ import { describeIssues } from '../ipc/protocol.js';
 
 /** Environment variable naming the directory hook files live in, for a non-default install. */
 export const PROJECTS_PATH_ENV_VAR = 'ROVER_PROJECTS_PATH';
+
+/**
+ * Environment variable naming **one** hook file, read by a *client* and by nothing else.
+ *
+ * The only thing in this module that is not host-side, and it changes nothing about the wire:
+ * `project` stays a required, opaque attribution string the core never inspects (D22). What it
+ * buys is that the string is stated once, in the project's own file, instead of retyped on
+ * every `acquire` — so a client pointed at a file may leave `--project` off, and the MCP
+ * `acquire_device` tool may leave the argument out. `owner` is never defaulted from this or
+ * from anything else (D16, D20): who a lease is for is the caller's to say, always.
+ *
+ * It names a file rather than a directory because a client has no `project` string to look one
+ * up with — that string is what it is trying to find. So there is no search, no walk up from
+ * `cwd` and no `.rover/` convention: one explicit path, and a path that names nothing is a
+ * mistake rather than a project nobody registered ({@link readProjectHooksFile}).
+ */
+export const PROJECT_FILE_ENV_VAR = 'ROVER_PROJECT_FILE';
 
 /**
  * The shape of a project identifier, following the reasoning `USER_IDENTIFIER`
@@ -118,6 +147,18 @@ export function resolveProjectsRoot(env: NodeJS.ProcessEnv = process.env): strin
 }
 
 /**
+ * The one hook file this client was pointed at, or `undefined` when nobody pointed it at one.
+ *
+ * An empty value counts as unset, exactly as it does for the projects root, the socket, the
+ * user store and the archive: an exported-but-blank variable is what a shell leaves behind,
+ * and reading it as a real setting would send a client looking for a file called `''`.
+ */
+export function resolveProjectFile(env: NodeJS.ProcessEnv = process.env): string | undefined {
+	const configured = env[PROJECT_FILE_ENV_VAR];
+	return configured === undefined || configured === '' ? undefined : configured;
+}
+
+/**
  * Where this project's hook file would be, or `null` when the string is not an identifier.
  *
  * The `null` is the traversal guard and the whole of it — see {@link PROJECT_IDENTIFIER}. A
@@ -152,7 +193,72 @@ export async function readProjectHooks(
 	if (path === null) {
 		return null;
 	}
+	const hooks = await readHookFileAt(path);
+	if (hooks !== null && hooks.project !== project) {
+		// A file copied from another project and edited nowhere else. Loud, because the quiet
+		// version of this is one project's teardown running against another project's lease.
+		// It belongs to the *lookup* rather than to the read: this is the only caller that has
+		// a name to disagree with, because it is the only one that built the path from one.
+		throw new Error(
+			`The project hook file at ${path} declares project '${hooks.project}', but it is ` +
+				`the hook file for '${project}'. Rename the file or fix the field so the two agree.`,
+		);
+	}
+	return hooks;
+}
 
+/**
+ * One **named** hook file, parsed — or a throw naming the path.
+ *
+ * The difference from {@link readProjectHooks} is the whole reason this exists, and it is the
+ * ENOENT case: there, a file that is not there means a project nobody registered, which is the
+ * normal state of a host; here, somebody named this file in {@link PROJECT_FILE_ENV_VAR}, so a
+ * path pointing at nothing is their mistake and answering "no default" would attribute a lease
+ * to nothing at all — the failure D20 and D22 exist to prevent.
+ *
+ * Nothing about the file's *name* is checked. The agreement between a file's `project` field
+ * and its own name is what a lookup under a root needs, and there is no lookup here: the path
+ * was given rather than built from a project string.
+ */
+export async function readProjectHooksFile(path: string): Promise<ProjectHooks> {
+	const hooks = await readHookFileAt(path);
+	if (hooks === null) {
+		throw new Error(
+			`There is no project hook file at ${path}, and ${PROJECT_FILE_ENV_VAR} names it. Create ` +
+				`the file, point the variable at one that exists, or unset it to go back to naming ` +
+				`the project on every call.`,
+		);
+	}
+	return hooks;
+}
+
+/** A client's default `project`, and the file it was read out of. */
+export interface ConfiguredProject {
+	readonly path: string;
+	readonly project: string;
+}
+
+/**
+ * The `project` a client defaults to, or `undefined` when no hook file is configured.
+ *
+ * The whole of the client side of {@link PROJECT_FILE_ENV_VAR}, in one place so the CLI and
+ * the MCP server cannot answer it differently. Unset or empty is `undefined` and today's
+ * behaviour; anything else is read, and a file that is missing or will not parse throws.
+ *
+ * The path travels with the identifier because a caller who never typed a project has to be
+ * told where the one on their lease came from.
+ */
+export async function readConfiguredProject(
+	env: NodeJS.ProcessEnv = process.env,
+): Promise<ConfiguredProject | undefined> {
+	const path = resolveProjectFile(env);
+	return path === undefined
+		? undefined
+		: { path, project: (await readProjectHooksFile(path)).project };
+}
+
+/** Read and parse one hook file, `null` for one that is not there. The shared half. */
+async function readHookFileAt(path: string): Promise<ProjectHooks | null> {
 	let raw: string;
 	try {
 		raw = await readFile(path, 'utf8');
@@ -182,14 +288,6 @@ export async function readProjectHooks(
 		// rejected — which is what keeps the sentence above true of this branch as well.
 		throw new Error(
 			`The project hook file at ${path} is not a valid hook file: ${describeIssues(result.error)}`,
-		);
-	}
-	if (result.data.project !== project) {
-		// A file copied from another project and edited nowhere else. Loud, because the quiet
-		// version of this is one project's teardown running against another project's lease.
-		throw new Error(
-			`The project hook file at ${path} declares project '${result.data.project}', but it is ` +
-				`the hook file for '${project}'. Rename the file or fix the field so the two agree.`,
 		);
 	}
 	return result.data;
