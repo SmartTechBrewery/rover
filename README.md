@@ -47,8 +47,8 @@ applications a project owns and what its hook does arrive through an injected re
 per-project configuration that fills it is its own issue (`PROJECT.md` §9.3, R17), so today that
 resolver answers nothing and only the two network steps have work to do.
 
-**There is a CLI** (D4) — `rover list`, `acquire`, `release`, `screenshot`, `record`, `status` and
-`users`, human-readable by default and one JSON document on stdout with `--json`, every diagnostic
+**There is a CLI** (D4) — `rover list`, `acquire`, `release`, `screenshot`, `record`, `pull`, `push`,
+`install`, `status` and `users`, human-readable by default and one JSON document on stdout with `--json`, every diagnostic
 on stderr. It holds no verb logic: each command parses flags, calls one IPC method, renders the
 answer and picks an exit code. `list` shows what is attached, what is free and who holds the rest —
 the owner, project and test name, and how much longer they have — and says out loud when the host
@@ -56,15 +56,21 @@ does not know its own view to be current, rather than quietly printing a short l
 requires an explicit `--owner` and `--project` and derives neither. `status` says which host
 answered. The host is named by `--host`: no flag means the local one, `remote` is the machine
 `ROVER_HOST_ADDRESS`, `ROVER_HOST_PORT` and `ROVER_HOST_TOKEN` name, and anything else fails loudly
-instead of hanging. `screenshot` and `record` are the two commands that bring bytes back: the verb
-runs on the host and the capture returns base64 rather than a path (D19), so `--out` is a path on
-**this** machine, it is required — there is no filename the CLI could invent that anything calling
-it could predict — and the path reported is `path.resolve` of what you passed. What decoded is
-checked against the byte length the host encoded before anything is written, so a capture the host
-refused, or one that did not survive the trip, exits 1 and leaves no file at `--out` at all rather
-than a short one. `rover record --duration-ms <n>` raises its own request timeout past the
-recording, so a long recording is never a hang. `users` is the one command that asks no host at
-all: it reads and writes this machine's own `~/.rover/users.json` directly, works whether or not a
+instead of hanging. `screenshot`, `record` and `pull` are the three commands that bring bytes back:
+the verb runs on the host and the answer returns base64 rather than a path (D19), so `--out` is a
+path on **this** machine, it is required — there is no filename the CLI could invent that anything
+calling it could predict — and the path reported is `path.resolve` of what you passed. What decoded
+is checked against the byte length the host encoded before anything is written, so a transfer the
+host refused, or one that did not survive the trip, exits 1 and leaves no file at `--out` at all
+rather than a short one. `rover record --duration-ms <n>` raises its own request timeout past the
+recording, so a long recording is never a hang. `push` and `install` are the two that go the other
+way: they read a file from **this** machine, so the path they name is yours and never the host's,
+and everything they can refuse they refuse **before connecting** — a source that is missing, is a
+directory, cannot be read, or is over the bytes one call may carry exits 2 with the command's own
+usage, naming the file, its real size and the limit. The size is read off `stat` rather than off a
+buffer, so an over-sized file is refused without ever being loaded, and the host is never asked at
+all: nothing partial can be sent because nothing is sent. `users` is the one command that asks no
+host at all: it reads and writes this machine's own `~/.rover/users.json` directly, works whether or not a
 daemon is running, and takes no `--host` (see "Managing host users" below).
 
 **Waiting is a condition, never a duration.** `src/core/wait.ts` is the one module in the
@@ -181,7 +187,7 @@ call carries the lease id and nothing else for the same reason — there is no d
 A capture too large for one answer is refused by name, `artifact-too-large` carrying both the size
 and the bound, rather than trimmed to fit: half a PNG still decodes to a picture, and an agent
 handed one reads a screen that is blank below a line as something the device did. Chunked transfer
-of anything bigger, and the durable copy the host keeps, are their own issues.
+of anything bigger is its own issue; the durable copy the host keeps is built and described below.
 
 **A black screenshot is a true answer about the device, not a failed capture.** An app can block
 screen capture, and the system then hands back a valid, entirely black image with nothing in any
@@ -301,6 +307,19 @@ is what a pull requires: a directory is a recursive copy whose reported size is 
 kilobytes, and a character device reports zero and then reads forever, so both are refused on what
 the device says the path *is* rather than bounded on what it says the path weighs.
 
+**Three commands drive that family from the client, and each one names the machine each path is
+on**: `rover pull <lease-id> <device-path> --out <path>` writes the device's file **here**, on the
+same two modules `screenshot` uses and with the same guarantee — a refusal or a transfer that did
+not survive the trip exits 1 and leaves no file at `--out` at all. `rover push <lease-id>
+<local-path> <device-path>` and `rover install <lease-id> <local-path>` read a file from **this**
+machine and send its bytes; `src/cli/_shared/upload.ts` is the one place that happens. Everything
+those two can refuse, they refuse before a connection exists — a missing file, a directory, one
+this process cannot read, and one over the byte cap, named with its real size and the limit — and
+the size comes off `stat` rather than off a buffer, so an over-sized file is refused without ever
+being loaded. The consequence is the one worth stating: when a source is refused, **the host is not
+asked at all**, so nothing partial can have been sent. Neither direction echoes the payload back —
+`--json` reports what the host answered and where the bytes went, never the bytes.
+
 **`set_airplane_mode` and `set_wifi` toggle the radios without root** (`src/verbs/environment.ts`),
 through the commands verified on a real device rather than the `svc wifi disable` every guide on the
 internet still shows — that one does not exist on the API level Rover was built against, and it
@@ -335,13 +354,15 @@ byte for byte, and `set_airplane_mode` and `set_wifi` move the device's real rad
 over a lease and without root — and, since the Android backend learned to read its own screen —
 a target addressed by text resolves against a hierarchy read inside the verb, both waits poll a
 real screen, and every action comes back carrying the elements that were on it afterwards. Two gaps
-are recorded rather than hidden. **`install_app` has not been run against a device by anyone yet**:
-there is no APK in this repository and adding a binary to carry one is not a change's job, so the
-verb is unverified on hardware — read that as a stated gap rather than as a check somebody
-completed. What is established is the half adb settles before the device is involved, which is the
-half `withInstallablePackage` exists for: `adb install -r` refuses a file whose name does not end
-`.apk` or `.apex`, and takes the same bytes once renamed. Everything else about it — the decode,
-the host temp file and its removal, the size refusal — is covered over a stub backend. And a
+are recorded rather than hidden. **`install_app` is now verified on hardware, and its automated
+coverage still is not**: a real 29-kilobyte APK was installed end to end through `rover install`
+and confirmed by the device reporting the package from `/data/app` afterwards (PROJECT.md §6). But
+there is no APK in this repository and adding a binary to carry one is not a change's job, so in
+the test suite the verb is exercised over a stub backend and nothing else — read that as the stated
+gap. What that stub covers is the decode, the host temp file and its removal, and the size refusal;
+what adb settles before the device is involved is the half `withInstallablePackage` exists for:
+`adb install -r` refuses a file whose name does not end `.apk` or `.apex`, and takes the same bytes
+once renamed. And a
 device-level refusal, such as launching a package that is not installed, still reaches the caller as
 `internal_error` rather than as an answer about the device — which is what a `pull_file` of a path
 the device does not have reports today. That is true of every verb family here, not just this one,
@@ -379,7 +400,10 @@ npm run rover -- status              # start the daemon if it is not running, re
 npm run rover -- list                # what is attached, what is free, who holds the rest
 npm run rover -- acquire <serial> --owner issue-112 --project rover
 npm run rover -- release <lease-id>
-npm run rover -- --help              # the four commands, the global flags and the exit codes
+npm run rover -- pull <lease-id> /sdcard/report.bin --out ./report.bin   # onto this machine
+npm run rover -- push <lease-id> ./fixture.bin /data/local/tmp/fixture.bin
+npm run rover -- install <lease-id> ./app.apk
+npm run rover -- --help              # every command, the global flags and the exit codes
 npm run daemon                       # run the daemon in the foreground instead, to watch it start
 ```
 

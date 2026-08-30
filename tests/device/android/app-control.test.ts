@@ -13,7 +13,10 @@ import { parseAppId } from '@/core/ids.js';
  *   binary to carry one is not this change's job, so the recipe was verified by hand
  *   instead — an APK installed onto an API 37 emulator, both the `Success` path and
  *   `Failure [INSTALL_FAILED_TEST_ONLY: …]`. The captured output lives in
- *   `tests/fixtures/adb/` and is what `parsers/app-control.test.ts` asserts against.
+ *   `tests/fixtures/adb/` and is what `parsers/app-control.test.ts` asserts against. The
+ *   `install_app` **verb** was verified by hand the same way when R24 phase 2 landed the
+ *   client command over it — `rover install` of a real APK, confirmed by the package moving
+ *   to `/data/app` (PROJECT.md §6) — and, for the same reason, still has no case here.
  * - `clearAppData` is exercised only on its **failure** path. Its success destroys an
  *   application's data, and there is no package on an arbitrary device whose data is safe
  *   for a test suite to destroy. The success path was verified by hand against a package

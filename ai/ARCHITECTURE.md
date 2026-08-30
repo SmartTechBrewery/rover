@@ -95,7 +95,15 @@ all of them are load-bearing:
   the `ok` branch**, so a refusal or a failed transfer leaves no file at the destination rather
   than a truncated one. Nothing in it branches on `--host`: a local host and a remote one arrive
   as the same field of the same schema, which is what makes the guarantee a property of the module
-  instead of of every command remembering it.
+  instead of of every command remembering it. The other direction has the mirror of it,
+  `src/cli/_shared/upload.ts` — the one place a client reads a local file for a host, behind
+  `rover push` and `rover install`. It resolves the path against **this** process, stats it, and
+  refuses a missing file, a directory, an unreadable one and one over `MAX_TRANSFER_BYTES` as a
+  usage error naming the file, its real size and the limit. **The size is read off `stat`, never
+  off the buffer**, and every check runs before `connectToHost`: an over-sized source is refused
+  without ever being loaded, and with the host not asked at all, so nothing partial can have been
+  sent. That mirrors what `src/verbs/files.ts` does on the host by handing `MAX_ARTIFACT_BYTES`
+  *down* to `pullFile` rather than checking on the way back.
 
 Authentication is the host's token; attribution is the lease's owner string. They are separate
 fields on purpose (D20) — collapsing them either leaks the token into reports or makes the owner
