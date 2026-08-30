@@ -354,6 +354,7 @@ startup, naming the variable and the reason, rather than binding something surpr
 |---|---|---|
 | `ROVER_SOCKET_PATH` | `~/.rover/rover.sock` | Absolute path of the unix socket the local daemon binds and a local client connects to. **Empty counts as unset** — an exported-but-blank variable is what a shell leaves behind, and reading it as a real setting would point the daemon at the current directory. At most **103 bytes of UTF-8**: a unix socket address is a fixed-size struct (104 bytes on macOS, 108 on Linux, NUL included), and over the cap `bind` truncates or answers `EINVAL` instead of naming the length, so a longer path is rejected at startup with the byte count and the path. |
 | `ROVER_USERS_PATH` | `~/.rover/users.json` | Absolute path of the host's own user store — one record per user: identifier, display name, the **hash** of that user's token, and when it was created. Never a token: `rover users add` and `rover users rotate` print the raw value once and store only its hash. **Empty counts as unset**, as it is for the socket. Read by `rover users`, which touches the file directly and never goes over the network (`PROJECT.md` D25), **and by the network listener**, which is the host's entire authentication surface: the token in a caller's greeting is hashed and looked up here, re-read at every connection attempt and never cached, so `revoke` and `rotate` take effect on the very next attempt with the daemon still running. |
+| `ROVER_ARTIFACTS_PATH` | `~/.rover/artifacts` | Root of the durable artifact archive: every `screenshot`, `record_video` and `read_logs` call additionally writes its output here, on the host, **in addition to** returning the bytes to the client (`PROJECT.md` D23, §10). **Empty counts as unset**, as it is for the socket. Read only by the daemon — a client never resolves it, and the archive path is never the one an agent is given. **Nothing prunes it**: retention is deliberately undecided (`PROJECT.md` §9.4), so this grows without bound until an operator removes what they no longer want. |
 | `ROVER_LISTEN_PORT` | unset — **no network listener** | The opt-in switch for the TCP+TLS listener that serves the same IPC surface as the local socket. Unset or empty and nothing binds, nothing else below is read, and the daemon is a purely local host. Set it and the next two become **required together**: a port with no TLS material would be a listener nobody could trust, so a missing one is a startup failure naming every variable still missing rather than a half-configured host. Who may connect is not a variable at all — it comes from the user store (`ROVER_USERS_PATH`), which always resolves, so a host with no users yet starts and refuses everyone. 1–65535. |
 | `ROVER_TLS_CERT` | — (required with the port) | Path to the PEM certificate (chain) the listener presents. |
 | `ROVER_TLS_KEY` | — (required with the port) | Path to the matching PEM private key. Unreadable material is a startup failure naming the variable and the path, not a TLS mystery on the first connection. |
@@ -366,6 +367,35 @@ startup, naming the variable and the reason, rather than binding something surpr
 While a daemon is coming up over a socket a crashed one left behind, a `<socket>.reclaim` lock file
 may briefly appear beside it. It is removed by whoever took it, and any left behind by a killed
 process is discarded on age by the next start.
+
+### The artifact archive
+
+A screenshot, a recording or a log read comes back to whoever asked as bytes — that is the whole
+contract, and it is unchanged. The host *additionally* keeps a copy of its own, filed so that two
+runs of the same named check, taken at two different points in time, sit next to each other:
+
+```
+~/.rover/artifacts/
+  <project>/
+    <test_name-or-"unlabeled">/
+      20260830T170501Z-issue-112-9f1c2ab4/   # one lease: when it started, who held it
+        <device-serial>/
+          device_info.json                   # size, density, dp scale, OS version
+          screenshots/001_screenshot.png
+          recordings/001.mp4
+          recordings/001_frames/0001.png
+          logs/001_read_logs.txt
+```
+
+`project` and `--test-name` are the two strings you set on `rover acquire`; both are opaque —
+nothing parses them — and an absent test name files under `unlabeled`, so the shape never varies.
+The test name is deliberately **not** unique: run "home screen" before a refactor and again after
+it, `ls` that directory, and the two most recent lease folders are the two sides of the diff.
+
+Two things worth knowing. The archive is never what a verb answers with — a path here means
+nothing on the machine the agent runs on, so you are handed the bytes and decide where they go.
+And **nothing prunes this tree**: retention is deliberately out of scope for now
+(`PROJECT.md` §9.4), so on a host that records video all day it is the directory to watch.
 
 ### Managing host users
 
@@ -468,7 +498,8 @@ folder per platform, `src/verbs/` the verb spine with the input verbs, the app v
 and the waits described above, `src/ipc/` the
 wire protocol and the transport-agnostic client and server, `src/daemon/` the socket and the
 inventory and the leases — plus the host-side tools the verbs are handed, such as the frame
-extractor — and `src/cli/` the `rover` command.
+extractor, and the durable artifact archive (`src/daemon/archive.ts`) — and `src/cli/` the `rover`
+command.
 
 ## Shape
 

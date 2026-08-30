@@ -32,15 +32,25 @@ export interface TempSocket {
 	/** The temp directory holding the socket. Removed by {@link removeTempSocket}. */
 	readonly dir: string;
 	readonly socketPath: string;
+	/**
+	 * Where a daemon started on this socket files its artifact archive.
+	 *
+	 * **Nothing pre-creates it**, so "this verb archived nothing" is assertable as "the
+	 * directory does not exist" rather than as "the directory is empty".
+	 */
+	readonly artifactsRoot: string;
 }
 
 /**
  * A socket path nobody else uses. Never `~/.rover/rover.sock`: a test that bound the real
  * default would take the developer's own daemon down mid-run.
+ *
+ * The archive root beside it follows the same rule and for the same reason: no test ever
+ * writes into `~/.rover/artifacts`, which is the developer's own durable tree.
  */
 export async function createTempSocket(): Promise<TempSocket> {
 	const dir = await mkdtemp(join(tmpdir(), 'rover-'));
-	return { dir, socketPath: join(dir, 'rover.sock') };
+	return { dir, socketPath: join(dir, 'rover.sock'), artifactsRoot: join(dir, 'artifacts') };
 }
 
 export async function removeTempSocket(temp: TempSocket): Promise<void> {

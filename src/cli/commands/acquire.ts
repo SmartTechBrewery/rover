@@ -31,6 +31,9 @@ Usage: rover acquire <serial> --owner <string> --project <string> [--test-name <
   --project      Which project the lease belongs to. Required, for the same reason.
   --test-name    What is being checked. Optional, and deliberately not unique.
 
+Both name directories in the host's artifact archive, so two runs of one test name sit
+side by side there; an absent --test-name files under 'unlabeled'.
+
 The grant's lease id is the credential — it is the only thing that releases the lease, so
 it is shown to whoever was granted it and to nobody else. A busy device is a refusal
 naming the holder, and exits 1.`;

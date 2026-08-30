@@ -78,7 +78,11 @@ function registerFakeBackend(devices: Device[] = [attached, elsewhere]) {
 }
 
 async function start(options: { leaseTtlMs?: number } = {}): Promise<RunningDaemon> {
-	const result = await startDaemon({ socketPath: temp.socketPath, ...options });
+	const result = await startDaemon({
+		socketPath: temp.socketPath,
+		artifactsRoot: temp.artifactsRoot,
+		...options,
+	});
 	if (!result.started) {
 		throw new Error('Another daemon holds the temp socket — the test cannot proceed');
 	}
@@ -161,8 +165,8 @@ describe('list_devices over the socket', () => {
 		temp = await createTempSocket();
 
 		const results = await Promise.all([
-			startDaemon({ socketPath: temp.socketPath }),
-			startDaemon({ socketPath: temp.socketPath }),
+			startDaemon({ socketPath: temp.socketPath, artifactsRoot: temp.artifactsRoot }),
+			startDaemon({ socketPath: temp.socketPath, artifactsRoot: temp.artifactsRoot }),
 		]);
 		for (const result of results) {
 			if (result.started) running.push(result);

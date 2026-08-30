@@ -115,7 +115,11 @@ function registerRecordingBackend(holdAirplaneMode?: Promise<void>): Recorded {
 
 async function start(options: { sweepIntervalMs?: number; leaseTtlMs?: number } = {}) {
 	temp = await createTempSocket();
-	const result = await startDaemon({ socketPath: temp.socketPath, ...options });
+	const result = await startDaemon({
+		socketPath: temp.socketPath,
+		artifactsRoot: temp.artifactsRoot,
+		...options,
+	});
 	if (!result.started) {
 		throw new Error('Another daemon holds the temp socket — the test cannot proceed');
 	}

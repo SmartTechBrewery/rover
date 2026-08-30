@@ -20,18 +20,27 @@
 // Side-effect import — see the header. Kept above the local imports and never re-ordered
 // into a type-only one: what this line does is run every backend's registration.
 import '../backends/index.js';
+import { resolveArtifactsRoot } from './archive-path.js';
 import { startDaemon } from './listen.js';
 import { resolveNetworkListener } from './network-config.js';
 import { resolveSocketPath } from './socket-path.js';
 
 async function main(): Promise<void> {
 	const socketPath = resolveSocketPath();
+	// The one place the archive root is read from the environment, for the socket path's
+	// reason: `startDaemon` never consults `process.env`, so an in-process daemon in a test
+	// cannot start writing into the developer's own `~/.rover/artifacts`.
+	const artifactsRoot = resolveArtifactsRoot();
 	// The one place the network listener is resolved from the environment. A missing token
 	// beside a set port throws here, `main().catch` below prints it and the process exits 1 —
 	// a misconfigured listener is a loud startup failure, never a host that quietly serves
 	// only the local socket while its operator believes otherwise.
 	const network = resolveNetworkListener();
-	const daemon = await startDaemon({ socketPath, ...(network ? { network } : {}) });
+	const daemon = await startDaemon({
+		socketPath,
+		artifactsRoot,
+		...(network ? { network } : {}),
+	});
 	if (!daemon.started) {
 		return;
 	}
