@@ -126,6 +126,13 @@ let appCalls: Array<{ method: string; serial: string; appId: string }>;
 let logReads: Array<{ serial: string; maxEntries: number }>;
 
 /**
+ * The radio calls the daemon's backend received, in order — which method, on which serial,
+ * and with the boolean the client sent. Two methods of identical signature is the family a
+ * crossed wire is invisible in, so these are recorded rather than inferred from an answer.
+ */
+let radioCalls: Array<{ method: string; serial: string; enabled: boolean }>;
+
+/**
  * A daemon on a temp socket with one ready device behind one registered backend.
  *
  * `describeDevice` defaults to answering about whatever serial it was asked, because the
@@ -139,6 +146,7 @@ async function serve(options: HostOptions = {}): Promise<void> {
 	keys = [];
 	appCalls = [];
 	logReads = [];
+	radioCalls = [];
 	const watchDevices = vi.fn<DeviceBackend['watchDevices']>((watcher: DeviceWatcher) => {
 		watcher.onDevices([attached]);
 		return { stop: vi.fn<DeviceWatch['stop']>(async () => {}) };
@@ -177,6 +185,8 @@ async function serve(options: HostOptions = {}): Promise<void> {
 			pressKey: async (_serial, key) => {
 				keys.push(key);
 			},
+			setAirplaneMode: recordRadio('setAirplaneMode'),
+			setWifiEnabled: recordRadio('setWifiEnabled'),
 			launchApp: options.launchApp ?? recordApp('launchApp'),
 			stopApp: recordApp('stopApp'),
 			clearAppData: recordApp('clearAppData'),
@@ -204,6 +214,13 @@ async function serve(options: HostOptions = {}): Promise<void> {
 function recordApp(method: string) {
 	return async (serial: DeviceSerial, appId: AppId): Promise<void> => {
 		appCalls.push({ method, serial, appId });
+	};
+}
+
+/** The same, for the two capability-gated radio methods. */
+function recordRadio(method: string) {
+	return async (serial: DeviceSerial, enabled: boolean): Promise<void> => {
+		radioCalls.push({ method, serial, enabled });
 	};
 }
 
@@ -939,6 +956,95 @@ describe('the log row carries a payload back over the same surface', () => {
 	});
 });
 
+/**
+ * The two environment rows, which are the app rows' claim with one addition: this is the
+ * first family on the wire whose `requires` names a **real capability**, so a backend that
+ * does not declare it has to refuse as data — `missing-capability` naming the capability,
+ * the device and the backend — rather than reach a method that is not there. What is
+ * otherwise new is the payload: a boolean, which has to arrive unaltered in both directions.
+ */
+describe('the environment rows dispatch like the app rows', () => {
+	it.each([
+		['set_airplane_mode', 'setAirplaneMode'],
+		['set_wifi', 'setWifiEnabled'],
+	] as const)('%s reaches %s on the device the lease names', async (method, backendMethod) => {
+		await serve();
+		const client = await connect();
+		const leaseId = await acquire(client);
+
+		const answer = await client.request(method, { leaseId, enabled: true });
+
+		expect(answer).toMatchObject({
+			outcome: 'ok',
+			// No target, because a radio is not something on the screen.
+			result: { verb: method, target: null, device: { serial: SERIAL } },
+		});
+		// The serial came off the lease on the host. The client sent a lease id and a boolean.
+		expect(radioCalls).toEqual([{ method: backendMethod, serial: SERIAL, enabled: true }]);
+		// And no screen was read to get there — the read in the result is the after-state, which
+		// is what "the verb returns the state after itself" means here (D12(c)).
+		expect(reads).toBe(1);
+	});
+
+	it.each([
+		['set_airplane_mode', 'setAirplaneMode'],
+		['set_wifi', 'setWifiEnabled'],
+	] as const)('%s carries `enabled: false` to the device as false', async (method, backendMethod) => {
+		await serve();
+		const client = await connect();
+		const leaseId = await acquire(client);
+
+		await client.request(method, { leaseId, enabled: false });
+
+		// The one payload this family has. A boolean flipped anywhere between the wire and the
+		// device is a toggle that answers `ok` and leaves the radio where it was.
+		expect(radioCalls).toEqual([{ method: backendMethod, serial: SERIAL, enabled: false }]);
+	});
+
+	it.each([
+		'set_airplane_mode',
+		'set_wifi',
+	] as const)('fails %s loudly on a backend that does not declare canControlNetwork (D11)', async (method) => {
+		await serve({ capabilities: { canControlNetwork: false } });
+		const client = await connect();
+		const leaseId = await acquire(client);
+
+		const answer = await client.request(method, { leaseId, enabled: true });
+
+		// D11 crossing the wire as data: named in full rather than an `ok` that moved nothing.
+		expect(answer).toMatchObject({
+			outcome: 'failed',
+			failure: {
+				kind: 'missing-capability',
+				capability: 'canControlNetwork',
+				serial: SERIAL,
+				platform: 'test-platform',
+				backendLabel: 'Test',
+			},
+		});
+		expect(radioCalls).toEqual([]);
+		// Refused before anything was dispatched, so no screen read was spent reaching it.
+		expect(reads).toBe(0);
+	});
+
+	it.each([
+		'set_airplane_mode',
+		'set_wifi',
+	] as const)('refuses %s on a lease id the store does not know, without touching the device', async (method) => {
+		await serve();
+		const client = await connect();
+
+		const answer = await client.request(method, {
+			leaseId: parseLeaseId('never-granted'),
+			enabled: false,
+		});
+
+		// Proof these go through `runVerb` rather than around it.
+		expect(answer).toMatchObject({ outcome: 'refused', reason: 'no-lease' });
+		expect(radioCalls).toEqual([]);
+	});
+});
+
 describe('a call that cannot reach a verb is refused, as data', () => {
 	it('refuses a lease id the store does not know, and resolves rather than rejecting', async () => {
 		await serve();
@@ -1156,6 +1262,65 @@ describe('the boundary parses what the type already forbids', () => {
 
 		expect(thrown).toBeInstanceOf(IpcRequestError);
 		expect((thrown as IpcRequestError).code).toBe('invalid_params');
+	});
+
+	it('refuses a set_wifi with no `enabled` at all', async () => {
+		await serve();
+		const client = await connect();
+		const leaseId = await acquire(client);
+
+		const thrown = await client
+			// An optional boolean would make "turn wifi off" and "say nothing" the same call, and
+			// leave the verb to invent a default nobody asked for.
+			// @ts-expect-error — the point of the test is what a client that ignored the type gets.
+			.request('set_wifi', { leaseId })
+			.catch((error: unknown) => error);
+
+		expect(thrown).toBeInstanceOf(IpcRequestError);
+		expect((thrown as IpcRequestError).code).toBe('invalid_params');
+		expect(radioCalls).toEqual([]);
+	});
+
+	it('refuses one of the device-side words in place of the boolean', async () => {
+		await serve();
+		const client = await connect();
+		const leaseId = await acquire(client);
+
+		const thrown = await client
+			.request('set_airplane_mode', {
+				leaseId,
+				// The two commands underneath disagree about the words for the same boolean
+				// (PROJECT.md §6), and a crossed pair is refused only once it reaches the device.
+				// A boolean on the wire is what keeps that argument the backend's alone.
+				// @ts-expect-error — the point of the test is what a client that ignored the type gets.
+				enabled: 'enable',
+			})
+			.catch((error: unknown) => error);
+
+		expect(thrown).toBeInstanceOf(IpcRequestError);
+		expect((thrown as IpcRequestError).code).toBe('invalid_params');
+		expect(radioCalls).toEqual([]);
+	});
+
+	it('refuses a serial sent beside the lease id on set_airplane_mode (D20)', async () => {
+		await serve();
+		const client = await connect();
+		const leaseId = await acquire(client);
+
+		const thrown = await client
+			.request('set_airplane_mode', {
+				leaseId,
+				enabled: true,
+				// A serial accepted here would let the holder of one lease take another device off
+				// the network.
+				// @ts-expect-error — the point of the test is what a client that ignored the type gets.
+				serial: 'another-device',
+			})
+			.catch((error: unknown) => error);
+
+		expect(thrown).toBeInstanceOf(IpcRequestError);
+		expect((thrown as IpcRequestError).code).toBe('invalid_params');
+		expect(radioCalls).toEqual([]);
 	});
 
 	it('refuses a wait longer than a lease could outlive', async () => {

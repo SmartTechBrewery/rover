@@ -195,13 +195,25 @@ kept, and `truncated` says when there were more, because a short read that reads
 is worse than no read. Following a log would be a wait with no condition and a stream over IPC, and
 is deliberately not here.
 
+**`set_airplane_mode` and `set_wifi` toggle the radios without root** (`src/verbs/environment.ts`),
+through the commands verified on a real device rather than the `svc wifi disable` every guide on the
+internet still shows — that one does not exist on the API level Rover was built against, and it
+fails in a way that looks like a permissions problem (PROJECT.md §6). Controlling the network is a
+declared capability rather than an assumption, and these two demand it the way `read_screen` demands
+its own: a device that cannot do it is told so by name, naming the capability and the device, rather
+than answering `ok` and moving nothing. Each returns the state after itself like every other verb —
+which is evidence the device was still there and answering, not a reading of the radio, because
+nothing in the device abstraction reads one back. They are also exactly the commands the daemon's own restoration runs when a lease
+ends, so there is one recipe per toggle rather than two that can drift, and the order matters for
+the reason the restoration records: airplane mode first, wifi last.
+
 The remaining verbs — `install_app`, `pull_file` and `push_file` — are their own issues.
 
 **The daemon loads the core and runs the verbs**, and a client only asks (D19). The two waits, the
-six input verbs, the three app verbs, the three read verbs and the log read are callable over the
-same connection as `acquire_device` — the same envelope, the same framing, one method table — and a
-verb call carries the lease id rather than a serial, because the lease id is the credential and the
-host derives the device from it. A verb that fails comes back as an *answer* naming what happened —
+six input verbs, the three app verbs, the three read verbs, the log read and the two environment
+verbs are callable over the same connection as `acquire_device` — the same envelope, the same
+framing, one method table — and a verb call carries the lease id rather than a serial, because the
+lease id is the credential and the host derives the device from it. A verb that fails comes back as an *answer* naming what happened —
 the element was not there, the wait timed out, the device cannot read its screen — and never as a
 broken host; only the host actually breaking is an `internal_error`. There is no `adb` in a client
 process, and `tests/unit/no-backend-in-a-client.test.ts` walks the import graph from every client
@@ -209,7 +221,8 @@ entrypoint to say so rather than asking politely. Against a real device today al
 hardware: a `tap` at a coordinate injects, `press_key` and `type_text` reach the device without aiming at
 anything, `launch_app` and `stop_app` reach the package, `read_screen` and `device_info` answer off
 the hardware, `screenshot` brings back a real PNG of the panel the device reports, `read_logs`
-brings back the device's own log — and, since the Android backend learned to read its own screen —
+brings back the device's own log, `set_airplane_mode` and `set_wifi` move the device's real radios
+over a lease and without root — and, since the Android backend learned to read its own screen —
 a target addressed by text resolves against a hierarchy read inside the verb, both waits poll a
 real screen, and every action comes back carrying the elements that were on it afterwards. One gap
 is recorded rather than hidden — a device-level refusal, such as launching a package that is not
