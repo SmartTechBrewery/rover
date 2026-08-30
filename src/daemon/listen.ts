@@ -92,6 +92,19 @@ const LEASE_SWEEP_INTERVAL_MS = 30_000;
  */
 const RESTORE_SETTLE_TIMEOUT_MS = 10_000;
 
+/**
+ * How long `close()` waits for the TLS listener to stop before shutting down anyway and saying
+ * so.
+ *
+ * Bounded for the same reason as {@link WATCH_STOP_TIMEOUT_MS}: `NetworkListener.close()` waits
+ * on `net.Server`'s connection count reaching zero, which is a count kept by Node over sockets
+ * this process does not fully control. A defect there — or a socket state nobody anticipated —
+ * may delay a shutdown, but it must never be able to prevent one, because a daemon whose
+ * `close()` never resolves neither dies nor stops serving (D6). Generous enough that dropping a
+ * handful of live TLS connections is never reported as a leak.
+ */
+const NETWORK_CLOSE_TIMEOUT_MS = 5_000;
+
 export interface StartDaemonOptions {
 	readonly socketPath: string;
 	/**
@@ -371,7 +384,7 @@ async function closeServer(
 	// stopping the watches are independent, and a peer holding an idle TLS connection would
 	// otherwise be waited on in sequence with them. `undefined` when this host never opened
 	// one — the local socket is the whole of it.
-	const networkClosed = network?.close();
+	const networkClosed = network === undefined ? undefined : closeNetworkListener(network);
 
 	await new Promise<void>((resolve) => {
 		// Set before `close()`, not after: a connection already past `accept()` in the kernel
@@ -438,6 +451,23 @@ async function settleRestorations(restorer: DeviceRestorer): Promise<void> {
 			`Device restoration did not finish within ${RESTORE_SETTLE_TIMEOUT_MS}ms. Shutting ` +
 				`down anyway; a device may be left in the state its last lease put it in, and ` +
 				`nothing will retry it.`,
+		);
+	}
+}
+
+/**
+ * Stop the TLS listener, bounded — see {@link NETWORK_CLOSE_TIMEOUT_MS}.
+ *
+ * `NetworkListener.close()` never rejects: it stops accepting, destroys every socket it tracks,
+ * and resolves when the server's last connection is gone. The bound is here because that last
+ * clause is Node's bookkeeping rather than ours, and the shutdown path is the one place where
+ * "waited too long" has to beat "waited forever".
+ */
+async function closeNetworkListener(network: NetworkListener): Promise<void> {
+	if (await timesOut(network.close(), NETWORK_CLOSE_TIMEOUT_MS)) {
+		console.warn(
+			`The network listener did not stop within ${NETWORK_CLOSE_TIMEOUT_MS}ms. Shutting down ` +
+				`anyway; the port may stay bound until this process exits.`,
 		);
 	}
 }

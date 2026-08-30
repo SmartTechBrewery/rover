@@ -13,7 +13,12 @@
  * handle in `afterEach`.
  */
 
-import { createServer as createNetServer, connect as netConnect, type Server } from 'node:net';
+import {
+	createServer as createNetServer,
+	connect as netConnect,
+	type Server,
+	type Socket,
+} from 'node:net';
 import type { TLSSocket } from 'node:tls';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import {
@@ -78,6 +83,7 @@ let temp: TempSocket;
 const running: RunningDaemon[] = [];
 const clients: IpcClient[] = [];
 const sockets: TLSSocket[] = [];
+const plainSockets: Socket[] = [];
 const occupied: Server[] = [];
 
 beforeAll(async () => {
@@ -216,9 +222,48 @@ function nothingListensOn(port: number): Promise<boolean> {
 	});
 }
 
+/**
+ * A plain TCP connection that never speaks TLS — a port scanner, a load balancer's health
+ * check, an `nc` left open. Tracked so a test that means to leave one open still cannot leak it.
+ */
+function plainConnect(port: number): Promise<Socket> {
+	return new Promise((resolve, reject) => {
+		const socket = netConnect({ port, host: '127.0.0.1' });
+		plainSockets.push(socket);
+		socket.on('error', () => {});
+		socket.once('connect', () => resolve(socket));
+		socket.once('close', () => reject(new Error('The connection closed before it was made')));
+	});
+}
+
+/** Resolves when `socket` is closed, or rejects once `limitMs` has passed without that. */
+function closesWithin(socket: Socket, limitMs: number): Promise<void> {
+	return withinDeadline(
+		new Promise<void>((resolve) => socket.once('close', () => resolve())),
+		limitMs,
+		'The socket was still open',
+	);
+}
+
+/** `work`, or a rejection naming `what` once `limitMs` has passed. */
+async function withinDeadline<T>(work: Promise<T>, limitMs: number, what: string): Promise<T> {
+	let timer: NodeJS.Timeout | undefined;
+	const expiry = new Promise<never>((_resolve, reject) => {
+		timer = setTimeout(() => reject(new Error(`${what} after ${limitMs}ms`)), limitMs);
+	});
+	try {
+		return await Promise.race([work, expiry]);
+	} finally {
+		clearTimeout(timer);
+	}
+}
+
 afterEach(async () => {
 	await Promise.all(clients.splice(0).map((client) => client.close()));
 	for (const socket of sockets.splice(0)) {
+		socket.destroy();
+	}
+	for (const socket of plainSockets.splice(0)) {
 		socket.destroy();
 	}
 	await Promise.all(running.splice(0).map((daemon) => daemon.close()));
@@ -443,6 +488,50 @@ describe('a refusal is not an oracle', () => {
 			await listener.close();
 		}
 	});
+
+	it('refuses a peer that dribbles its greeting, on a deadline it cannot rearm', async () => {
+		const listener = await startNetworkListener(
+			networkConfig(),
+			{ handleConnection: () => {} },
+			{ authTimeoutMs: SHORT_AUTH_TIMEOUT_MS },
+		);
+
+		try {
+			const socket = await rawTlsConnect(listener.port, certificate.certPem);
+			const refusal = readUntilClosed(socket);
+			// One byte at a time, faster than the deadline and never a newline. An *idle* deadline is
+			// rearmed by every arriving byte, so this peer would stay unauthenticated for as long
+			// as it cared to keep typing — the 4 KiB cap bounds the bytes, not the time. The
+			// interval is this peer's typing speed, not a wait on the host (ai/RULES.md §2).
+			const dribble = setInterval(() => socket.write('x'), SHORT_AUTH_TIMEOUT_MS / 2);
+			socket.once('close', () => clearInterval(dribble));
+
+			expect(
+				await withinDeadline(refusal, 5_000, 'The dribbling peer was still unauthenticated'),
+			).toBe(REFUSAL);
+		} finally {
+			await listener.close();
+		}
+	});
+
+	it('drops a peer that opens a socket and never starts the handshake', async () => {
+		const listener = await startNetworkListener(
+			networkConfig(),
+			{ handleConnection: () => {} },
+			{ authTimeoutMs: SHORT_AUTH_TIMEOUT_MS },
+		);
+
+		try {
+			const socket = await plainConnect(listener.port);
+			// No frame for this one, and deliberately so: there is no TLS session to write one
+			// into. What the deadline has to guarantee is that the socket goes away — and that it
+			// starts at accept, because `secureConnection` never fires for a peer like this.
+			await closesWithin(socket, 5_000);
+			expect(socket.bytesRead).toBe(0);
+		} finally {
+			await listener.close();
+		}
+	});
 });
 
 describe('nothing is dispatched before the greeting is accepted', () => {
@@ -516,8 +605,20 @@ describe('the listener is opt-in and dies with the daemon', () => {
 		const daemon = await startWithNetwork();
 		const port = portOf(daemon);
 
-		await Promise.all(running.splice(0).map((instance) => instance.close()));
-		await daemon.close();
+		// Both tracking paths held open at `close()` time: an authenticated TLS connection, which
+		// the listener sees through `secureConnection`, and a peer that never spoke TLS at all,
+		// which it only ever sees as a raw accepted socket. Untracked, the second one counts
+		// against `net.Server`'s connection count forever and `close()` never resolves.
+		const client = await overTls(daemon);
+		expect((await client.request('status', {})).protocolVersion).toBe(1);
+		await plainConnect(port);
+
+		await withinDeadline(
+			Promise.all(running.splice(0).map((instance) => instance.close())),
+			10_000,
+			'The daemon was still closing',
+		);
+		await withinDeadline(daemon.close(), 10_000, 'The second close was still pending');
 
 		expect(await nothingListensOn(port)).toBe(true);
 	});

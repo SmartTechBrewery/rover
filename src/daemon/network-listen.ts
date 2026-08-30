@@ -21,15 +21,17 @@
  * configuration at all.
  *
  * **Every pre-auth failure gets one byte-identical refusal.** Wrong token, no greeting, a
- * greeting that is not JSON, an unknown key, an oversize line, a handshake that times out —
- * all of them get {@link REFUSAL_FRAME} and a destroyed connection. Anything that varied with
- * the reason would be an oracle, and a refusal names no device, no count, no serial and no
+ * greeting that is not JSON, an unknown key, an oversize line, a greeting that never arrives in
+ * time — all of them get {@link REFUSAL_FRAME} and a destroyed connection. Anything that varied
+ * with the reason would be an oracle, and a refusal names no device, no count, no serial and no
  * pid: a stranger learns only that there is a Rover here that wants a token (D20). Nothing
  * about an attempt is logged either, because the only interesting thing to log about one is
- * the token that was tried.
+ * the token that was tried. A peer that never completes the TLS handshake is the one case with
+ * no frame at all — there is no session to write one into — and it is simply dropped.
  */
 
 import { readFile } from 'node:fs/promises';
+import type { Socket } from 'node:net';
 import { createServer, type TLSSocket } from 'node:tls';
 import { z } from 'zod';
 import { encodeFrame } from '../ipc/framing.js';
@@ -39,12 +41,14 @@ import { createTokenGate, type TokenGate } from './host-token.js';
 import { type NetworkListenerConfig, TLS_CERT_ENV_VAR, TLS_KEY_ENV_VAR } from './network-config.js';
 
 /**
- * How long a peer has, from the completed TLS handshake, to send its greeting.
+ * How long each half of authenticating gets: the TLS handshake, from the moment the TCP
+ * connection is accepted, and then the greeting, from the moment that handshake completes.
  *
- * A connection that says nothing has to be refused rather than parked: every one of them
- * holds a socket the host cannot reclaim, and a peer that has not authenticated has no claim
- * on one. `socket.setTimeout` is an idle deadline on a stream, not a sleep — it fires only if
- * nothing arrives (ai/RULES.md §2).
+ * A connection that says nothing has to be refused rather than parked: every one of them holds
+ * a socket the host cannot reclaim, and a peer that has not authenticated has no claim on one.
+ * Both deadlines are therefore **absolute** — armed once, never rearmed by arriving bytes — so
+ * the total time an unauthenticated peer can hold a socket is bounded at twice this whatever it
+ * sends and however it chunks it. Deadlines on a peer, not sleeps (ai/RULES.md §2).
  */
 const AUTH_TIMEOUT_MS = 5_000;
 
@@ -118,23 +122,57 @@ export async function startNetworkListener(
 
 	// Tracked by hand for the same reason `listenOnce` tracks its own: `tls.Server` has no
 	// `closeAllConnections()` either, so `close()` would wait forever on an idle peer.
+	//
+	// Tracked at the **TCP** layer and not only at the TLS one, because `secureConnection` fires
+	// only after a handshake: a peer that opens a socket and never sends a ClientHello would be in
+	// no set here while still counting against `net.Server`'s own connection count — and
+	// `server.close()`'s callback fires only when that count reaches zero. Tracking the raw socket
+	// is what makes this listener's shutdown discipline actually equivalent to the unix path's,
+	// rather than equivalent only for peers polite enough to speak TLS.
+	const accepted = new Set<Socket>();
 	const connections = new Set<TLSSocket>();
 	let closing = false;
 
-	const server = createServer({ cert, key }, (socket: TLSSocket) => {
+	const server = createServer(
+		{
+			cert,
+			key,
+			// The handshake half of the deadline, armed by Node at accept. Node's default is 120s,
+			// which is a long time to hold a socket open for a peer that has not said a word. A
+			// pre-handshake peer gets no refusal frame — there is no TLS session to write one into,
+			// and plaintext on a TLS port is not an answer — only a destroyed socket.
+			handshakeTimeout: authTimeoutMs,
+		},
+		(socket: TLSSocket) => {
+			if (closing) {
+				socket.destroy();
+				return;
+			}
+			connections.add(socket);
+			socket.on('close', () => connections.delete(socket));
+			gateConnection(socket, gate, ipcServer, authTimeoutMs);
+		},
+	);
+	server.on('connection', (socket: Socket) => {
 		if (closing) {
 			socket.destroy();
 			return;
 		}
-		connections.add(socket);
-		socket.on('close', () => connections.delete(socket));
-		gateConnection(socket, gate, ipcServer, authTimeoutMs);
+		accepted.add(socket);
+		socket.on('close', () => accepted.delete(socket));
 	});
-	// A peer that fails the TLS handshake — no client certificate the host asked for, an
-	// unsupported cipher, a probe from a port scanner — is one client's transport failing.
-	// Unlistened, it reaches the server's `'error'` handling; swallowed here, it is a
-	// non-event, which is what it is.
-	server.on('tlsClientError', () => {});
+	// A peer that fails the TLS handshake — an unsupported cipher, a probe from a port scanner,
+	// or one that let `handshakeTimeout` above expire without ever sending a ClientHello — is one
+	// client's transport failing. Unlistened, it reaches the server's `'error'` handling, so it is
+	// caught here and reported nowhere: it is a non-event, which is what it is.
+	//
+	// Destroyed rather than merely swallowed, because Node does not do it for us: a handshake
+	// timeout emits this event and then leaves the socket exactly where it was, which would make
+	// the deadline a log line rather than a deadline. Destroying the `TLSSocket` takes the raw
+	// socket with it. No frame is written — there is no TLS session to write one into.
+	server.on('tlsClientError', (_error: Error, socket: TLSSocket) => {
+		socket.destroy();
+	});
 
 	await bind(server, config);
 
@@ -152,6 +190,12 @@ export async function startNetworkListener(
 				// pending forever. A host asked to shut down has to actually go away.
 				for (const connection of connections) {
 					connection.destroy();
+				}
+				// And the raw sockets beside them — including any that never became a `TLSSocket`
+				// at all, which are precisely the ones `server.close()` would otherwise wait on
+				// forever.
+				for (const socket of accepted) {
+					socket.destroy();
 				}
 			});
 			return closed;
@@ -204,13 +248,15 @@ function gateConnection(
 	// Explicitly typed: a chunk off a socket is `Buffer<ArrayBufferLike>`, which the narrower
 	// type `Buffer.alloc` infers will not accept.
 	let buffered: Buffer = Buffer.alloc(0);
+	// Assigned below, once `refuse` exists to be its expiry.
+	let deadline: NodeJS.Timeout | undefined;
 
 	const refuse = (): void => {
 		if (settled) {
 			return;
 		}
 		settled = true;
-		socket.setTimeout(0);
+		clearTimeout(deadline);
 		socket.removeListener('data', onGreeting);
 		if (socket.writable) {
 			socket.end(REFUSAL_FRAME, () => socket.destroy());
@@ -235,9 +281,9 @@ function gateConnection(
 		}
 
 		settled = true;
-		// An authenticated connection has no idle deadline — a client may hold one open
-		// between verbs for as long as it likes.
-		socket.setTimeout(0);
+		// An authenticated connection has no deadline — a client may hold one open between verbs
+		// for as long as it likes.
+		clearTimeout(deadline);
 		socket.pause();
 		socket.removeListener('data', onGreeting);
 		if (greeting.remainder.length > 0) {
@@ -247,7 +293,15 @@ function gateConnection(
 		socket.resume();
 	}
 
-	socket.setTimeout(authTimeoutMs, refuse);
+	// One absolute window, and deliberately **not** `socket.setTimeout`: that is an *idle*
+	// deadline which every arriving byte rearms, so a peer writing one byte at a time would stay
+	// unauthenticated for `authTimeoutMs` per chunk — hours, at the greeting cap and the
+	// production five seconds. The invariant this module claims is that a peer which has not
+	// authenticated has no claim on a socket, and only an absolute window makes that true.
+	deadline = setTimeout(refuse, authTimeoutMs);
+	// Unreferenced: this timer exists to drop a socket, never to keep a process alive that is
+	// otherwise finished.
+	deadline.unref();
 	socket.on('data', onGreeting);
 }
 
