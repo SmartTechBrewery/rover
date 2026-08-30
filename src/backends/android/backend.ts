@@ -26,9 +26,9 @@
  *   an apostrophe in it is ordinary, so it is escaped rather than refused.
  * - **Neither, only for a literal this file owns** — the environment pair's two words, the
  *   four keycodes of `./input.js`'s `KEY_CODES`, {@link DUMP_PATH}, {@link RECORDING_PATH},
- *   and the numbers `tap`, `swipe` and `recordVideo` compute. No caller's string reaches any of them, which is the property
- *   `shellArg` exists to restore when one does. A new argument outside that list takes a
- *   quoter.
+ *   and the numbers `tap`, `swipe` and `recordVideo` compute. No caller's string reaches any
+ *   of them, which is the property `shellArg` exists to restore when one does. A new argument
+ *   outside that list takes a quoter.
  */
 
 import {
@@ -145,7 +145,10 @@ const RECORDING_PATH = '/sdcard/rover-recording.mp4';
  */
 export const RECORDING_BIT_RATE_BPS = 2_000_000;
 
-/** `screenrecord --time-limit` counts whole seconds — see {@link AndroidDeviceBackend.recordVideo}. */
+/**
+ * `screenrecord --time-limit` counts whole seconds — see
+ * {@link AndroidDeviceBackend.recordVideo}.
+ */
 const RECORDING_TIME_LIMIT_UNIT_MS = 1_000;
 
 /**
@@ -941,10 +944,15 @@ export class AndroidDeviceBackend implements DeviceBackend {
 	 * - **`rm -f` first**, so a leftover from a run that died before its own cleanup can never
 	 *   be the file that is pulled — the freshness guarantee {@link readScreen} buys with a
 	 *   confirmation line, bought here by removing the only file this method will ever read.
-	 * - **`--time-limit` is always passed.** It is what makes a recorder that outlived its adb
-	 *   client self-terminate rather than run on under the next lease. It counts **whole
-	 *   seconds** (`screenrecord v1.4`, default 180), so the conversion rounds **up**: a caller
-	 *   who asked for 2500 ms gets three seconds, never two — never less than was asked for.
+	 * - **`--time-limit` is always passed, and never as `0`.** It is what makes a recorder that
+	 *   outlived its adb client self-terminate rather than run on under the next lease — and
+	 *   `--time-limit 0` is documented by `screenrecord` itself as *removing* the limit, so a
+	 *   zero computed here would turn the kill switch off rather than record nothing. It counts
+	 *   **whole seconds** (`screenrecord v1.4`, default 180), so the conversion rounds **up**
+	 *   and then floors at one: a caller who asked for 2500 ms gets three seconds, never two —
+	 *   never less than was asked for — and a duration of zero or below, which the wire schema
+	 *   already refuses but an in-process caller can still pass, gets one second rather than an
+	 *   unbounded recorder on borrowed hardware.
 	 * - **The completion check is a condition with a timeout, never a sleep** (D12(b),
 	 *   ai/RULES.md §2). "The recorder is gone" is what actually wrote the index; "the duration
 	 *   plus a bit" is a guess that is wrong on a loaded device, in the direction that corrupts
@@ -982,8 +990,15 @@ export class AndroidDeviceBackend implements DeviceBackend {
 	 * owns, and the `--time-limit` argument is a number it computed.
 	 */
 	async recordVideo(serial: DeviceSerial, options: RecordVideoOptions): Promise<Uint8Array> {
-		// Whole seconds, rounded up: never record less than the caller asked for.
-		const timeLimitSeconds = Math.ceil(options.durationMs / RECORDING_TIME_LIMIT_UNIT_MS);
+		// Whole seconds, rounded up: never record less than the caller asked for. Floored at one
+		// because `--time-limit 0` means "no limit" — the one value that would defeat the guard.
+		const timeLimitSeconds = Math.max(
+			1,
+			Math.ceil(options.durationMs / RECORDING_TIME_LIMIT_UNIT_MS),
+		);
+		// The window the recorder will actually run for, which is the floored limit rather than
+		// what was asked: the adb client must outlive the command it is waiting on.
+		const timeLimitMs = timeLimitSeconds * RECORDING_TIME_LIMIT_UNIT_MS;
 
 		return this.exclusivelyOn(serial, async () => {
 			await this.removeRecording(serial);
@@ -1002,7 +1017,7 @@ export class AndroidDeviceBackend implements DeviceBackend {
 					],
 					// The capture window plus the budget for the encoder to close the file: this
 					// command does not return until both have happened.
-					{ timeoutMs: options.durationMs + RECORDING_FINISH_TIMEOUT_MS },
+					{ timeoutMs: timeLimitMs + RECORDING_FINISH_TIMEOUT_MS },
 				);
 
 				await waitForCondition({

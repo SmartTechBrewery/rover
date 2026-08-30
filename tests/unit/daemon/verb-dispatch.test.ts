@@ -1144,11 +1144,18 @@ describe('the recording row carries its payload on the artifact', () => {
 	});
 });
 
+/**
+ * The two environment rows, which are the app rows' claim with one addition: this is the
+ * first family on the wire whose `requires` names a **real capability**, so a backend that
+ * does not declare it has to refuse as data — `missing-capability` naming the capability,
+ * the device and the backend — rather than reach a method that is not there. What is
+ * otherwise new is the payload: a boolean, which has to arrive unaltered in both directions.
+ */
 describe('the environment rows dispatch like the app rows', () => {
 	it.each([
 		['set_airplane_mode', 'setAirplaneMode'],
 		['set_wifi', 'setWifiEnabled'],
-	] as const)('%s carries its boolean to %s on the device the lease names', async (method, backendMethod) => {
+	] as const)('%s reaches %s on the device the lease names', async (method, backendMethod) => {
 		await serve();
 		const client = await connect();
 		const leaseId = await acquire(client);
@@ -1157,47 +1164,61 @@ describe('the environment rows dispatch like the app rows', () => {
 
 		expect(answer).toMatchObject({
 			outcome: 'ok',
+			// No target, because a radio is not something on the screen.
 			result: { verb: method, target: null, device: { serial: SERIAL } },
 		});
+		// The serial came off the lease on the host. The client sent a lease id and a boolean.
 		expect(radioCalls).toEqual([{ method: backendMethod, serial: SERIAL, enabled: true }]);
+		// And no screen was read to get there — the read in the result is the after-state, which
+		// is what "the verb returns the state after itself" means here (D12(c)).
 		expect(reads).toBe(1);
 	});
 
 	it.each([
 		['set_airplane_mode', 'setAirplaneMode'],
 		['set_wifi', 'setWifiEnabled'],
-	] as const)('%s preserves false for %s', async (method, backendMethod) => {
+	] as const)('%s carries `enabled: false` to the device as false', async (method, backendMethod) => {
 		await serve();
 		const client = await connect();
 		const leaseId = await acquire(client);
 
 		await client.request(method, { leaseId, enabled: false });
 
+		// The one payload this family has. A boolean flipped anywhere between the wire and the
+		// device is a toggle that answers `ok` and leaves the radio where it was.
 		expect(radioCalls).toEqual([{ method: backendMethod, serial: SERIAL, enabled: false }]);
 	});
 
 	it.each([
 		'set_airplane_mode',
 		'set_wifi',
-	] as const)('fails %s loudly when the backend lacks canControlNetwork', async (method) => {
+	] as const)('fails %s loudly on a backend that does not declare canControlNetwork (D11)', async (method) => {
 		await serve({ capabilities: { canControlNetwork: false } });
 		const client = await connect();
 		const leaseId = await acquire(client);
 
 		const answer = await client.request(method, { leaseId, enabled: true });
 
+		// D11 crossing the wire as data: named in full rather than an `ok` that moved nothing.
 		expect(answer).toMatchObject({
 			outcome: 'failed',
-			failure: { kind: 'missing-capability', capability: 'canControlNetwork', serial: SERIAL },
+			failure: {
+				kind: 'missing-capability',
+				capability: 'canControlNetwork',
+				serial: SERIAL,
+				platform: 'test-platform',
+				backendLabel: 'Test',
+			},
 		});
 		expect(radioCalls).toEqual([]);
+		// Refused before anything was dispatched, so no screen read was spent reaching it.
 		expect(reads).toBe(0);
 	});
 
 	it.each([
 		'set_airplane_mode',
 		'set_wifi',
-	] as const)('refuses %s for an unknown lease without dispatching', async (method) => {
+	] as const)('refuses %s on a lease id the store does not know, without touching the device', async (method) => {
 		await serve();
 		const client = await connect();
 
@@ -1206,6 +1227,7 @@ describe('the environment rows dispatch like the app rows', () => {
 			enabled: false,
 		});
 
+		// Proof these go through `runVerb` rather than around it.
 		expect(answer).toMatchObject({ outcome: 'refused', reason: 'no-lease' });
 		expect(radioCalls).toEqual([]);
 	});

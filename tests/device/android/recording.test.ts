@@ -19,8 +19,12 @@ import type { Device } from '@/core/device.js';
  *
  * **Read-only with respect to the screen**: it records whatever is on the device, launches
  * nothing and changes no setting, so it is safe against a device someone else is looking at.
- * It drives the backend class directly, like `./screenshot.test.ts`, and for the same
- * reason; `./verb-dispatch.test.ts` records through a lease.
+ * **It drives the backend class directly, outside any lease** — the sixth suite on
+ * ai/TESTING.md's temporary exemption list, alongside `./screenshot.test.ts`. Leases do
+ * exist and a daemon will lend one; the only reason this suite does not take one is that
+ * the helper that acquires and releases a lease around a suite has not been written and
+ * this suite has not been converted onto it. `./verb-dispatch.test.ts` records through a
+ * lease, and that is where the wire-level claim lives.
  *
  * Nothing below hardcodes a size, a model or a byte count off one device — every assertion
  * is a property of whatever is attached.

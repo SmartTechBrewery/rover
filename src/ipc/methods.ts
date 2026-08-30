@@ -318,9 +318,6 @@ export type ReleaseDeviceResult = z.infer<typeof ReleaseDeviceResultSchema>;
  * radio is not something on the screen — answer with a null `target`. The three app rows
  * share one params schema, and the two environment rows share a lease id and boolean schema.
  *
- * `record_video` is on that same list: its recording rides on `ActionResult.artifact` the way
- * `screenshot`'s capture does, so it needs no answer shape of its own either.
- *
  * `read_logs` is the exception that proves the rule: its answer is that same shape with the
  * log entries added, built by the same factory in `./verb-methods.ts`, so its refusals are
  * word for word every other verb's.

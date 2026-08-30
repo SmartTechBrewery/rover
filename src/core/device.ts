@@ -246,6 +246,15 @@ export interface RecordVideoOptions {
 	 * How long to record for. A backend may round this **up** to its own granularity and
 	 * never down: a caller that asked for 2500 ms and got two seconds was quietly given
 	 * less than it asked for, with nothing in the answer to say so.
+	 *
+	 * **Must be positive, and a backend rounding up floors at its own granularity rather than
+	 * passing a zero on.** A recorder is typically given this duration as its own kill switch
+	 * — the thing that stops it when the process driving it is gone — and at least one such
+	 * tool reads a limit of zero as *no limit* (PROJECT.md §6). So the one value that looks
+	 * like "record nothing" is the one that leaves an unbounded recorder on hardware the next
+	 * lease gets. `RecordVideoParamsSchema` refuses it on the wire; an in-process caller of
+	 * the core library never crosses the wire, which is why the floor belongs in the mapping
+	 * as well.
 	 */
 	readonly durationMs: number;
 }

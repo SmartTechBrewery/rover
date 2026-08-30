@@ -22,6 +22,7 @@ import {
 	ReadLogsCallResultSchema,
 	ReadLogsParamsSchema,
 	ReadScreenParamsSchema,
+	RecordVideoParamsSchema,
 	ScreenshotParamsSchema,
 	ScrollParamsSchema,
 	SwipeParamsSchema,
@@ -460,6 +461,7 @@ describe('a verb call answers in plain data too', () => {
 		// One row for the three app verbs, because one schema serves all three.
 		['launch_app', AppVerbParamsSchema, { leaseId: 'lease-1', appId: 'com.android.settings' }],
 		['read_logs', ReadLogsParamsSchema, { leaseId: 'lease-1', maxEntries: 50 }],
+		['record_video', RecordVideoParamsSchema, { leaseId: 'lease-1', durationMs: 5_000 }],
 		// One row for both environment verbs, because one schema serves both — the call is a
 		// lease id and a boolean whichever radio is being asked about.
 		['set_wifi', EnvironmentVerbParamsSchema, { leaseId: 'lease-1', enabled: false }],

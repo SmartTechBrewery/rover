@@ -6,8 +6,8 @@
  * (ai/CODING_STANDARDS.md "Error handling", D11). The same test admits the four below:
  * "the device went away", "the device is not attached to this host", "this device cannot
  * type that string" and "the recording came off the device unfinished" are each an answer
- * a caller acts on differently, and none of them is a bug. Everything else in this layer throws plain `Error` for a programmer or
- * validation bug, and returns `null` for not-found.
+ * a caller acts on differently, and none of them is a bug. Everything else in this layer
+ * throws plain `Error` for a programmer or validation bug, and returns `null` for not-found.
  *
  * Imports from `./capabilities.js` are type-only on purpose: that module imports this
  * one for its value, so an erased edge is what keeps the pair free of a runtime cycle.

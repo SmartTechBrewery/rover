@@ -73,7 +73,13 @@ export const DEFAULT_RECORDING_MS = 5_000;
 export const MAX_RECORDING_MS = 15_000;
 
 export interface RecordVideoVerbOptions {
-	/** Defaults to {@link DEFAULT_RECORDING_MS}. Bounded by {@link MAX_RECORDING_MS} on the wire. */
+	/**
+	 * Defaults to {@link DEFAULT_RECORDING_MS}. Bounded by {@link MAX_RECORDING_MS} and held
+	 * positive on the wire (`RecordVideoParamsSchema`), the way `read_logs` bounds `maxEntries`
+	 * there rather than here. A duration the caller did send travels unaltered — including a
+	 * zero, which is why a backend floors it at its own granularity rather than passing it on
+	 * (`RecordVideoOptions` in `src/core/device.ts`).
+	 */
 	readonly durationMs?: number;
 }
 

@@ -169,6 +169,24 @@ describe('record_video', () => {
 		expect(durations).toEqual([1_234]);
 	});
 
+	/**
+	 * `??` and not `||`: a zero the caller actually sent travels **unaltered** rather than
+	 * being quietly replaced by the default, because a verb that substitutes a number the
+	 * caller did not ask for is the same class of lie as one that trims an artifact. Where
+	 * a zero is dangerous is in the mapping onto a backend's own granularity — Android reads
+	 * `--time-limit 0` as "no limit" — and that is floored there, in the one place that knows
+	 * the tool's meaning of it (`AndroidDeviceBackend.recordVideo`). The wire refuses it
+	 * outright a layer above (`RecordVideoParamsSchema`), the way `read_logs` bounds
+	 * `maxEntries`.
+	 */
+	it('passes a zero duration through unchanged rather than substituting its default', async () => {
+		const { durations, context } = recording();
+
+		await recordVideo(context, { durationMs: 0 });
+
+		expect(durations).toEqual([0]);
+	});
+
 	it('refuses a recording over the bound rather than answering with a trimmed one', async () => {
 		const oversized = new Uint8Array(MAX_ARTIFACT_BYTES + 1);
 		const { calls, context } = recording({ video: oversized });

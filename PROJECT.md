@@ -732,7 +732,11 @@ reports itself as **v1.4**:
 - **`--time-limit` counts whole seconds and defaults to 180** on this build (`0` removes the limit
   entirely). It is always passed, because it is what makes a recorder that outlived its adb client
   self-terminate instead of running on under the next lease; a fractional duration is rounded
-  **up**, never down. `MAX_RECORDING_MS` (15 s) is far below every version's cap, so the
+  **up**, never down, and then **floored at one second** — a computed `0` would hand
+  `screenrecord` the argument that turns the kill switch off, so the duration that looks like
+  "record nothing" is the one that leaves an unbounded recorder on borrowed hardware. The wire
+  refuses a non-positive duration, but the core library is also callable in process, so the floor
+  lives in the mapping. `MAX_RECORDING_MS` (15 s) is far below every version's cap, so the
   differences between API levels cannot bite.
 - **A recorder somebody else started on the same device makes the wait time out.** The probe asks
   whether *any* `screenrecord` is running, because matching a particular one would mean matching a

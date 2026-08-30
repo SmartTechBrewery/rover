@@ -1878,10 +1878,40 @@ describe('recordVideo', () => {
 		expect(recordingArgv()).toContainEqual(recordArgv(3));
 	});
 
+	/**
+	 * The rounding is floored as well as rounded up, because `screenrecord` reads
+	 * `--time-limit 0` as *removing* the limit: the one duration that looks like "record
+	 * nothing" is the one that would leave an unbounded recorder on the device, outliving
+	 * its adb client and the lease. `RecordVideoParamsSchema` refuses it on the wire, but an
+	 * in-process caller of the core library never crosses the wire — so the guard the
+	 * `--time-limit` argument exists to be has to hold in the mapping that computes it.
+	 */
+	it.each([0, -1_000])('floors a duration of %d ms at one second', async (durationMs) => {
+		records();
+
+		await backend.recordVideo(SERIAL, { durationMs });
+
+		expect(recordingArgv()).toContainEqual(recordArgv(1));
+		expect(recordingArgv()).not.toContainEqual(recordArgv(0));
+	});
+
 	it('gives the recording command the capture window plus the finish budget', async () => {
 		records();
 
 		await backend.recordVideo(SERIAL, { durationMs: 3_000 });
+
+		expect(runAdbOnDevice.mock.calls[1][2]).toEqual({
+			timeoutMs: 3_000 + RECORDING_FINISH_TIMEOUT_MS,
+		});
+	});
+
+	// The window is the limit that was *passed*, not the one that was asked for: the adb
+	// client has to outlive the command it is waiting on, and the command runs for the
+	// rounded-and-floored seconds.
+	it('budgets the recording command against the floored limit, not the raw duration', async () => {
+		records();
+
+		await backend.recordVideo(SERIAL, { durationMs: 2_500 });
 
 		expect(runAdbOnDevice.mock.calls[1][2]).toEqual({
 			timeoutMs: 3_000 + RECORDING_FINISH_TIMEOUT_MS,
