@@ -24,6 +24,12 @@ import { describe, expect, it } from 'vitest';
  * intended — a client parses an `ActionResult` with the schema the host produced it from —
  * and `src/verbs/` reaches `src/core/` only. The first assertion below is what keeps that
  * true, rather than this paragraph.
+ *
+ * That consequence is also why this walks for a **second** thing: a module that starts a
+ * process. Everything a verb might reach for outside `src/backends/` — a decoder for a
+ * recording, say — is invisible to the first assertion, and lands in every client's graph
+ * through the same edge. `tests/unit/daemon/remote-never-spawns.test.ts` names which files may
+ * spawn; only a walk can say none of them is reachable from a client.
  */
 
 /**
@@ -40,6 +46,9 @@ const BARREL_IMPORTERS = ['daemon/main.ts'];
 
 const SRC_ROOT = fileURLToPath(new URL('../../src', import.meta.url));
 const BARREL = 'backends/index.ts';
+
+/** The one spawning module a client is *meant* to reach: autostart lives there (D5). */
+const ALLOWED_TO_SPAWN_FROM_A_CLIENT = path.normalize('daemon/connect.ts');
 
 function sourceFiles(): string[] {
 	return readdirSync(SRC_ROOT, { withFileTypes: true, recursive: true })
@@ -102,9 +111,38 @@ function backendsReachedFrom(entry: string): string[] {
 		.map(([, via]) => `${entry} reaches ${via[via.length - 1]} via ${via.join(' → ')}`);
 }
 
+/**
+ * The same walk, for the other thing a client must not be able to do: start a process.
+ *
+ * `tests/unit/daemon/remote-never-spawns.test.ts` names the files that may spawn; this says
+ * none of them is *reachable* from a client, which is the half a file list cannot state. The
+ * two are not the same claim — every module here is outside `src/backends/`, so the first
+ * assertion in this suite passes over a client that has `node:child_process` in its graph. It
+ * is the walk that catches it, and what it catches is real: `src/ipc/verb-methods.ts` imports
+ * the verb schemas, so a decoder or a device tool run from anywhere under `src/verbs/` puts a
+ * spawn in every CLI.
+ *
+ * `daemon/connect.ts` is the one exception, and it is D5 itself: the local socket client
+ * starts a daemon when nothing answers, which is exactly what makes `rover` usable without
+ * starting anything by hand.
+ */
+function spawnersReachedFrom(entry: string): string[] {
+	return [...reachableFrom(entry)]
+		.filter(
+			([file]) =>
+				file !== ALLOWED_TO_SPAWN_FROM_A_CLIENT &&
+				readFileSync(path.join(SRC_ROOT, file), 'utf8').includes("'node:child_process'"),
+		)
+		.map(([, via]) => `${entry} reaches ${via[via.length - 1]} via ${via.join(' → ')}`);
+}
+
 describe('no client process can reach a device backend', () => {
 	it('finds nothing under src/backends/ in any client entrypoint’s module graph', () => {
 		expect(CLIENT_ENTRYPOINTS.flatMap(backendsReachedFrom)).toEqual([]);
+	});
+
+	it('finds no module that starts a process in a client’s graph either, bar autostart', () => {
+		expect(CLIENT_ENTRYPOINTS.flatMap(spawnersReachedFrom)).toEqual([]);
 	});
 
 	it('lets only the device host import the backend barrel', () => {
@@ -125,5 +163,6 @@ describe('no client process can reach a device backend', () => {
 		// first assertion by never looking at anything — the same trap `no-platform-names.test.ts`
 		// guards with its "scans something" test.
 		expect(backendsReachedFrom('daemon/main.ts').length).toBeGreaterThan(0);
+		expect(spawnersReachedFrom('daemon/main.ts').length).toBeGreaterThan(0);
 	});
 });

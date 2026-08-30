@@ -199,11 +199,29 @@ because that is what **one answer** can carry; a longer recording is chunked tra
 issue, and going over the bound is the same `artifact-too-large` refusal rather than a file cut
 short. A caller asking for a long one should raise its own request timeout, which defaults to 30 s.
 
-**What a recording is honest about: it samples motion.** It can tell you something moved and roughly
-when. It cannot tell you how the movement eased, whether a frame was dropped, or whether what a
-person would call jank happened — and reading any of that out of it anyway is exactly the
-plausible-looking wrong answer this whole design is against. Slicing a recording into frames is the
-second phase of this verb and is not here yet.
+**The same answer carries the frames sliced out of that recording.** They come back on
+`result.frames` — PNGs, in the order they were recorded, each with its media type and byte length,
+never a path — and they are cut out of the **finished** recording on the host, after the completion
+condition and the pull, so the device is touched once and never sampled while it is being recorded.
+They are scaled down on purpose: a frame is for reading *what changed*, and the full-resolution read
+of one moment is `screenshot`. The one knob is `framesPerSecond`, two by default.
+
+Extraction needs a video decoder, this project contains none, and writing one is out of the
+question — so the host drives `ffmpeg`, found on `PATH` the way `adb` is, with the recording written
+to its standard input and the images read back off its standard output. **No temporary file is ever
+written**, which is also why no path exists that could end up in an answer. That is a fact about the
+*host* rather than about the device, so it is not a device capability: a machine without `ffmpeg`
+refuses by name — `frame-extraction-unavailable`, naming the program and what to install — rather
+than answering with an empty list of frames, because an empty list would read as a screen on which
+nothing happened. The count, the width and the total size are all bounded and named, and frames that
+would not fit beside the recording in one message are refused whole, carrying both numbers, rather
+than returned as a shorter list: a frame list missing its middle reads as a recording in which
+nothing happened between two moments that are no longer next to each other.
+
+**What a recording is honest about: it samples motion, and the frames sample it again.** It can tell
+you something moved and roughly when. It cannot tell you how the movement eased, whether a frame was
+dropped, or whether what a person would call jank happened — and reading any of that out of it
+anyway is exactly the plausible-looking wrong answer this whole design is against.
 
 **`read_logs` is the verb that sees what a screenshot cannot** (`src/verbs/logs.ts`), and it is the
 first one whose answer carries a payload of its own: the device's log, parsed into neutral entries —
@@ -238,12 +256,15 @@ because the lease id is the credential and the host derives the device from it. 
 comes back as an *answer* naming what happened —
 the element was not there, the wait timed out, the device cannot read its screen — and never as a
 broken host; only the host actually breaking is an `internal_error`. There is no `adb` in a client
-process, and `tests/unit/no-backend-in-a-client.test.ts` walks the import graph from every client
-entrypoint to say so rather than asking politely. Against a real device today all of it runs on the
+process — and no `ffmpeg` either, nor anything else that starts a program:
+`tests/unit/no-backend-in-a-client.test.ts` walks the import graph from every client entrypoint and
+says so rather than asking politely, which is why the frame extractor lives beside the daemon and is
+handed to the verb rather than imported by it. Against a real device today all of it runs on the
 hardware: a `tap` at a coordinate injects, `press_key` and `type_text` reach the device without aiming at
 anything, `launch_app` and `stop_app` reach the package, `read_screen` and `device_info` answer off
 the hardware, `screenshot` brings back a real PNG of the panel the device reports, `record_video`
-brings back a recording that is provably finished before it leaves the device, `read_logs` brings
+brings back a recording that is provably finished before it leaves the device together with the
+frames sliced out of it on the host, `read_logs` brings
 back the device's own log, and `set_airplane_mode` and `set_wifi` move the device's real radios
 over a lease and without root — and, since the Android backend learned to read its own screen —
 a target addressed by text resolves against a hierarchy read inside the verb, both waits poll a
@@ -427,7 +448,8 @@ In the source tree: `src/core/` holds the device contract and the branded ids, `
 folder per platform, `src/verbs/` the verb spine with the input verbs, the app verbs, the read verbs
 and the waits described above, `src/ipc/` the
 wire protocol and the transport-agnostic client and server, `src/daemon/` the socket and the
-inventory and the leases, and `src/cli/` the `rover` command.
+inventory and the leases — plus the host-side tools the verbs are handed, such as the frame
+extractor — and `src/cli/` the `rover` command.
 
 ## Shape
 
@@ -443,7 +465,9 @@ one agent screenshots the other's build.
 
 Read `ai/RULES.md` in full first. `npm install` sets up the toolchain and installs the git hooks;
 `npm run verify` (lint, typecheck, unit tests) is the one command that says whether the tree is
-healthy. Issues are filed with `/write-issue` and implemented with
+healthy — it needs no device and no host tool. `npm run test:device` needs a device on `adb`, and
+the `record_video` cases additionally need `ffmpeg` on `PATH`; a host missing either **skips those
+suites loudly** rather than failing or passing in silence. Issues are filed with `/write-issue` and implemented with
 `/solve-issue`; both are committed under `.claude/skills/`. Work is also delegated to
 [Swarm](https://github.com/SmartTechBrewery/swarm), which is why every issue carries the `swarm`
 label.

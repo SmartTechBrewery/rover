@@ -48,7 +48,11 @@ import {
  * no mock can: that the recording was **finished** before it was pulled. A file copied while
  * the encoder is still writing has no index box and no player will open it, and it is
  * indistinguishable from a good one by length or exit code — so the assertion is the index,
- * over the bytes that came back through the socket.
+ * over the bytes that came back through the socket. Since #82 the same answer carries the
+ * **frames** sliced out of that recording on the host, so the case gates on
+ * `ROVER_TEST_FRAME_EXTRACTION` and the run says so loudly when the host has no decoder
+ * (`tests/device/setup.ts`): the verb answers with both or with neither, so there is no half
+ * of it left to check without one.
  *
  * **`screenshot` is on the wire since #68**, and it is the one verb whose answer crosses the
  * boundary as bytes. What a device is needed to prove about it is that the payload is still
@@ -646,43 +650,58 @@ describe.skipIf(!process.env.ROVER_TEST_DEVICE)('a daemon runs verbs on its own 
 	 * Read-only with respect to the screen: it records whatever is in front of it and touches
 	 * nothing, so it obeys this suite's one-point rule by never using the point at all.
 	 */
-	it('records the real screen as bytes that are finished by the time they arrive', async () => {
-		const client = await startHost();
-		const device = await freeDevice(client);
-		const leaseId = await lease(client, device.serial);
+	it.skipIf(!process.env.ROVER_TEST_FRAME_EXTRACTION)(
+		'records the real screen as bytes that are finished by the time they arrive',
+		async () => {
+			const client = await startHost();
+			const device = await freeDevice(client);
+			const leaseId = await lease(client, device.serial);
 
-		const recorded = await client.request(
-			'record_video',
-			{ leaseId, durationMs: RECORDING_MS },
-			// The client's own bound, raised past its 30 s default: this call spends the whole
-			// recording before it starts transferring anything (`src/ipc/verb-methods.ts`).
-			{ timeoutMs: RECORDING_REQUEST_TIMEOUT_MS },
-		);
+			const recorded = await client.request(
+				'record_video',
+				{ leaseId, durationMs: RECORDING_MS },
+				// The client's own bound, raised past its 30 s default: this call spends the whole
+				// recording before it starts transferring anything (`src/ipc/verb-methods.ts`).
+				{ timeoutMs: RECORDING_REQUEST_TIMEOUT_MS },
+			);
 
-		expect(recorded).toMatchObject({
-			outcome: 'ok',
-			// A recording addresses nothing on the screen either — it *is* the screen (D12(a)).
-			result: { verb: 'record_video', target: null, device: { serial: device.serial } },
-		});
-		if (recorded.outcome !== 'ok') {
-			throw new Error('the assertion above should have caught this');
-		}
-		const { artifact } = recorded.result;
-		if (!artifact)
-			throw new Error(`the recording answered with no artifact: ${JSON.stringify(recorded)}`);
+			expect(recorded).toMatchObject({
+				outcome: 'ok',
+				// A recording addresses nothing on the screen either — it *is* the screen (D12(a)).
+				result: { verb: 'record_video', target: null, device: { serial: device.serial } },
+			});
+			if (recorded.outcome !== 'ok') {
+				throw new Error('the assertion above should have caught this');
+			}
+			const { artifact } = recorded.result;
+			if (!artifact)
+				throw new Error(`the recording answered with no artifact: ${JSON.stringify(recorded)}`);
 
-		// Bytes, and only bytes: three fields, none of them a path on the host (D19).
-		expect(Object.keys(artifact).sort()).toEqual(['base64', 'byteLength', 'mediaType']);
-		expect(artifact.mediaType).toBe('video/mp4');
+			// Bytes, and only bytes: three fields, none of them a path on the host (D19).
+			expect(Object.keys(artifact).sort()).toEqual(['base64', 'byteLength', 'mediaType']);
+			expect(artifact.mediaType).toBe('video/mp4');
 
-		const bytes = new Uint8Array(Buffer.from(artifact.base64, 'base64'));
-		expect(bytes.byteLength).toBe(artifact.byteLength);
-		// The criterion: the index box is there, so the recorder had exited before the pull.
-		expect(isFinishedRecording(bytes)).toBe(true);
-		// A real encode of a real screen is kilobytes at the very least; the floor is here for
-		// the shape a mangled stream takes when it happens to keep its header.
-		expect(bytes.byteLength).toBeGreaterThan(4 * 1024);
-	}, 90_000);
+			const bytes = new Uint8Array(Buffer.from(artifact.base64, 'base64'));
+			expect(bytes.byteLength).toBe(artifact.byteLength);
+			// The criterion: the index box is there, so the recorder had exited before the pull.
+			expect(isFinishedRecording(bytes)).toBe(true);
+			// A real encode of a real screen is kilobytes at the very least; the floor is here for
+			// the shape a mangled stream takes when it happens to keep its header.
+			expect(bytes.byteLength).toBeGreaterThan(4 * 1024);
+
+			// And the frames sliced out of it on the host, beside the recording rather than instead
+			// of it (#82). Every one is an image, none of them names a place on this host's disk,
+			// and the list is never empty — an empty one would read as a screen on which nothing
+			// happened, which is a statement about the device this host would not have checked.
+			expect(recorded.result.frames.length).toBeGreaterThan(0);
+			for (const frame of recorded.result.frames) {
+				expect(Object.keys(frame).sort()).toEqual(['base64', 'byteLength', 'mediaType']);
+				expect(frame.mediaType).toBe('image/png');
+				expect(Buffer.from(frame.base64, 'base64').byteLength).toBe(frame.byteLength);
+			}
+		},
+		90_000,
+	);
 
 	/**
 	 * The app rows against real hardware: a package really launched and really stopped, over a
