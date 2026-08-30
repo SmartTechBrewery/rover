@@ -47,7 +47,7 @@ applications a project owns and what its hook does arrive through an injected re
 per-project configuration that fills it is its own issue (`PROJECT.md` §9.3, R17), so today that
 resolver answers nothing and only the two network steps have work to do.
 
-**There is a CLI** (D4) — `rover list`, `acquire`, `release` and `status`, human-readable by
+**There is a CLI** (D4) — `rover list`, `acquire`, `release`, `status` and `users`, human-readable by
 default and one JSON document on stdout with `--json`, every diagnostic on stderr. It holds no
 verb logic: each command parses flags, calls one IPC method, renders the answer and picks an exit
 code. `list` shows what is attached, what is free and who holds the rest — the owner, project and
@@ -56,6 +56,9 @@ view to be current, rather than quietly printing a short list. `acquire` require
 `--owner` and `--project` and derives neither. `status` says which host answered. The host is named
 by `--host`: no flag means the local one, `remote` is the machine `ROVER_HOST_ADDRESS`,
 `ROVER_HOST_PORT` and `ROVER_HOST_TOKEN` name, and anything else fails loudly instead of hanging.
+`users` is the one command that asks no host at all: it reads and writes this machine's own
+`~/.rover/users.json` directly, works whether or not a daemon is running, and takes no `--host`
+(see "Managing host users" below).
 
 **Waiting is a condition, never a duration.** `src/core/wait.ts` is the one module in the
 repository allowed to construct a delay: `waitForCondition` polls a probe until it reports the
@@ -259,6 +262,7 @@ startup, naming the variable and the reason, rather than binding something surpr
 | Variable | Default | Value |
 |---|---|---|
 | `ROVER_SOCKET_PATH` | `~/.rover/rover.sock` | Absolute path of the unix socket the local daemon binds and a local client connects to. **Empty counts as unset** — an exported-but-blank variable is what a shell leaves behind, and reading it as a real setting would point the daemon at the current directory. At most **103 bytes of UTF-8**: a unix socket address is a fixed-size struct (104 bytes on macOS, 108 on Linux, NUL included), and over the cap `bind` truncates or answers `EINVAL` instead of naming the length, so a longer path is rejected at startup with the byte count and the path. |
+| `ROVER_USERS_PATH` | `~/.rover/users.json` | Absolute path of the host's own user store — one record per user: identifier, display name, the **hash** of that user's token, and when it was created. Never a token: `rover users add` and `rover users rotate` print the raw value once and store only its hash. **Empty counts as unset**, as it is for the socket. Read only by `rover users`, which touches the file directly and never goes over the network (`PROJECT.md` D25); the daemon does not read it yet. |
 | `ROVER_LISTEN_PORT` | unset — **no network listener** | The opt-in switch for the TCP+TLS listener that serves the same IPC surface as the local socket. Unset or empty and nothing binds, nothing else below is read, and the daemon is a purely local host. Set it and the next three become **required together**: a port with no token would be a listener that lets strangers in, so a missing one is a startup failure naming every variable still missing rather than a half-configured host. 1–65535. |
 | `ROVER_HOST_TOKEN` | — (required with the port) | The shared secret every network caller presents. At least **32 characters**; it is a bearer secret on an open port, and length is the only thing that makes guessing hopeless. It is a **host-level** setting and belongs in the environment, never in a file the repository tracks. Deliberately **the same variable the client reads** (below), so a machine that is both holds one secret rather than two that drift apart. The token **authenticates and attributes nothing**: a lease's owner is a separate, caller-supplied string (`PROJECT.md` D20). |
 | `ROVER_TLS_CERT` | — (required with the port) | Path to the PEM certificate (chain) the listener presents. |
@@ -271,6 +275,31 @@ startup, naming the variable and the reason, rather than binding something surpr
 While a daemon is coming up over a socket a crashed one left behind, a `<socket>.reclaim` lock file
 may briefly appear beside it. It is removed by whoever took it, and any left behind by a killed
 process is discarded on age by the next start.
+
+### Managing host users
+
+`rover users` is the host's own credential file and the command that manages it (`PROJECT.md`
+D25). It runs **on the machine holding the devices**, against `~/.rover/users.json` directly — no
+network, no daemon, no `--host`, and it works with nothing running.
+
+```bash
+npm run rover -- users add alice --name "Alice Example"   # prints the token once
+npm run rover -- users list                               # identifier, name, created — never a token
+npm run rover -- users rotate alice                       # a fresh token; the old one stops working
+npm run rover -- users revoke alice                       # removes the record outright
+```
+
+The token is printed **exactly once**, by `add` and by `rotate`. Only its `scrypt` hash — a fresh
+random salt per record, `node:crypto` and no dependency — is written to the file, which is created
+mode `0600`; `list` never prints a token or a hash, and nothing can show a token again. An operator
+who loses one runs `rotate`, which is what makes that safe. A duplicate identifier is refused by
+name rather than overwritten, because an overwrite would silently revoke a credential somebody is
+holding.
+
+**The daemon does not read this store yet.** `ROVER_HOST_TOKEN` is still the one secret the network
+listener checks (`PROJECT.md` D20), so a token issued here does not yet let anyone in — per-user
+host authentication is the next row (`PROJECT.md` §9.3, R28). Creating users now is how a host is
+made ready for it, not a way to hand out access today.
 
 ### Exposing a host on the network
 

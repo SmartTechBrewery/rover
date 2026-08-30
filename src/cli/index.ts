@@ -21,6 +21,7 @@ import * as acquire from './commands/acquire.js';
 import * as list from './commands/list.js';
 import * as release from './commands/release.js';
 import * as status from './commands/status.js';
+import * as users from './commands/users.js';
 
 interface Command {
 	/** The command's own usage text, printed when it rejects an invocation. */
@@ -42,6 +43,7 @@ const COMMANDS: Record<string, Command | undefined> = Object.assign(Object.creat
 	acquire,
 	release,
 	status,
+	users,
 });
 
 /** Success. */
@@ -64,10 +66,15 @@ Commands:
   acquire <serial>         Take a lease on one device (--owner and --project required)
   release <lease-id>       Hand a lease back
   status                   Which host answered, its pid, uptime and protocol version
+  users <subcommand>       Who may use this host — add, list, rotate, revoke
+
+\`users\` is the one command that asks no host: it reads and writes this machine's own
+\`~/.rover/users.json\` directly, works with no daemon running, and takes no --host.
 
 Global options:
   --host <name>   Which host to ask: 'local' (the default) or 'remote', the machine
-                  ROVER_HOST_ADDRESS, ROVER_HOST_PORT and ROVER_HOST_TOKEN name
+                  ROVER_HOST_ADDRESS, ROVER_HOST_PORT and ROVER_HOST_TOKEN name.
+                  Not accepted by \`users\`, which asks no host at all
   --json          One JSON document on stdout, every diagnostic on stderr
   --help          This text, or a command's own when given after one
 
@@ -81,7 +88,8 @@ Exit codes:
 
 The local daemon starts itself on the first call, so nothing here needs starting by hand;
 a remote host is a service its operator runs and is never started from a client.
-Set ROVER_SOCKET_PATH to point at a socket other than ~/.rover/rover.sock, and
+Set ROVER_SOCKET_PATH to point at a socket other than ~/.rover/rover.sock,
+ROVER_USERS_PATH for a user store other than ~/.rover/users.json, and
 ROVER_HOST_ADDRESS, ROVER_HOST_PORT and ROVER_HOST_TOKEN (plus ROVER_HOST_CA for a
 certificate to trust) to reach a remote one.`;
 }
