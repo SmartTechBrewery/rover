@@ -46,6 +46,7 @@ import { requireDeviceBackend } from '../backends/registry.js';
 import type { Device } from '../core/device.js';
 import type { LeaseId } from '../core/ids.js';
 import type {
+	AppVerbParams,
 	IpcHandlers,
 	LongPressParams,
 	ScrollParams,
@@ -55,6 +56,7 @@ import type {
 	WaitForParams,
 	WaitUntilGoneParams,
 } from '../ipc/methods.js';
+import { clearAppData, launchApp, stopApp } from '../verbs/app.js';
 import type { VerbContext } from '../verbs/context.js';
 import { toVerbFailure } from '../verbs/failure.js';
 import {
@@ -74,7 +76,15 @@ import { LeaseEndedError, type VerbCall, type VerbTraffic } from './verb-traffic
 
 export type VerbHandlers = Pick<
 	IpcHandlers,
-	'wait_for' | 'wait_until_gone' | 'tap' | 'long_press' | 'swipe' | 'scroll'
+	| 'wait_for'
+	| 'wait_until_gone'
+	| 'tap'
+	| 'long_press'
+	| 'swipe'
+	| 'scroll'
+	| 'launch_app'
+	| 'stop_app'
+	| 'clear_app_data'
 >;
 
 /**
@@ -194,6 +204,21 @@ export function createVerbHandlers(
 					...(params.target === undefined ? {} : { target: params.target }),
 				} satisfies ScrollOptions),
 			);
+		},
+
+		// The three app rows. They call the *verb* of that name and never `context.backend.*`,
+		// which reads identically and would skip the spine — no after-state, no device in the
+		// answer. The whole family is three lines each because the preamble above is shared.
+		launch_app(params: AppVerbParams): Promise<VerbCallResult> {
+			return runVerb(params.leaseId, (context) => launchApp(context, params.appId));
+		},
+
+		stop_app(params: AppVerbParams): Promise<VerbCallResult> {
+			return runVerb(params.leaseId, (context) => stopApp(context, params.appId));
+		},
+
+		clear_app_data(params: AppVerbParams): Promise<VerbCallResult> {
+			return runVerb(params.leaseId, (context) => clearAppData(context, params.appId));
 		},
 	};
 }
