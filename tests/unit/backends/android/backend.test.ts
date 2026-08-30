@@ -69,6 +69,7 @@ const GETPROP = fixture('getprop.api37-sdk-gphone16k-arm64.txt');
 const STAT_FILE = fixture('stat.file.api37-sdk-gphone16k-arm64.txt');
 const STAT_EMPTY_FILE = fixture('stat.empty-file.api37-sdk-gphone16k-arm64.txt');
 const STAT_DIRECTORY = fixture('stat.directory.api37-sdk-gphone16k-arm64.txt');
+const STAT_CHARACTER_DEVICE = fixture('stat.character-device.api37-sdk-gphone16k-arm64.txt');
 
 const SERIAL = parseDeviceSerial('emulator-5554');
 const SETTINGS = parseAppId('com.android.settings');
@@ -768,6 +769,23 @@ describe('the file transfers', () => {
 		});
 
 		/**
+		 * The asymmetry with `pullFile`, pinned so it reads as a decision rather than as an
+		 * omission nobody noticed. A pull refuses every kind but a regular file, because on
+		 * the way out a non-regular source is a transfer with no bound. On the way in there is
+		 * nothing to bound: the caller named the exact destination it meant, the bytes are a
+		 * file this host already holds, and what `/dev/null` makes of them is the device's
+		 * answer. Only the directory case is refused, and only because a push into one lands
+		 * under a basename this host invented (PROJECT.md §6).
+		 */
+		it('relays a push to a destination the device calls something other than a file', async () => {
+			fakeAdb({ probe: STAT_CHARACTER_DEVICE });
+
+			await backend.pushFile(SERIAL, '/tmp/host/payload', '/dev/null');
+
+			expect(transfers()[0]).toEqual(['push', '/tmp/host/payload', '/dev/null']);
+		});
+
+		/**
 		 * The ordinary push is to a path that does not exist yet, and toybox answers that with
 		 * exit 1 — which `./adb.js` turns into an exception. A probe that let it through would
 		 * break every push there is.
@@ -980,6 +998,44 @@ describe('the file transfers', () => {
 			await expect(failure).rejects.toThrow(/'\/sdcard\/DCIM\/Camera' is a directory/);
 			await expect(failure).rejects.toThrow(/emulator-5554/);
 			expect(transfers()).toHaveLength(0);
+		});
+
+		/**
+		 * The same defect as the directory above, on the other shape whose reported size is not
+		 * an answer — and the one that looks harmless, because the number it reports is zero.
+		 * `stat -L -c '%s %F' /dev/urandom` is `0 character device` on API 37, so both bounds
+		 * pass: the device-side check compares 0 against the cap, and the staged check does not
+		 * run until `adb pull` has already returned. Measured, the pull put 769,196,032 bytes
+		 * onto this host in five seconds and would have run to the transfer timeout
+		 * (PROJECT.md §6). The daemon's temp filesystem is the host's own and every lease on
+		 * the machine is behind it (D6, D17), so this is refused on the kind, before anything
+		 * moves.
+		 */
+		it('refuses a source the device does not call a regular file, before anything moves', async () => {
+			fakeAdb({ probe: STAT_CHARACTER_DEVICE, pulls: CONTENT });
+
+			const failure = backend.pullFile(SERIAL, '/dev/urandom', ROOMY);
+
+			// The device's own `%F` word, not a phrase of this repository's: a caller that named
+			// `/dev/urandom` is told what the device says it actually is.
+			await expect(failure).rejects.toThrow(/'\/dev\/urandom' is a character device/);
+			await expect(failure).rejects.toThrow(/emulator-5554/);
+			expect(transfers()).toHaveLength(0);
+		});
+
+		/**
+		 * The refusal above is on what the probe *said*, never on the probe having run: a device
+		 * whose toybox words `%F` differently, or one where `stat` is not there at all, is left
+		 * exactly where it was before the probe existed. Degrading a pull that works today into
+		 * a refusal would be the worse failure of the two.
+		 */
+		it('pulls anyway when the probe could not answer at all', async () => {
+			const unanswered = new AdbCommandError(['stat'], 10_000, exitedWith({ code: 1 }), '', '');
+			fakeAdb({ probe: unanswered, pulls: CONTENT });
+
+			const bytes = await backend.pullFile(SERIAL, DEVICE_PATH, ROOMY);
+
+			expect(Buffer.from(bytes).equals(CONTENT)).toBe(true);
 		});
 
 		/**

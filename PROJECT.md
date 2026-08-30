@@ -743,6 +743,22 @@ the review of the transfer verbs (#70), **2026-08-30**:
   tree's. **So a size read without a kind beside it is not a bound**: it is why `pull_file`
   refuses a device path the probe calls a `directory` before the transfer starts, rather than
   bounding harder afterwards. There is nothing to bound afterwards; the bytes are already here.
+- **A character device stats as `0` and pulls without end** — the same hole as the directory,
+  on the other shape whose `%s` says nothing about a transfer. `stat -L -c '%s %F' /dev/urandom`
+  answers `0 character device` and exits 0, so a size bound compares 0 against the cap and
+  passes; `adb -s "$SERIAL" pull /dev/urandom` then wrote **769,196,032 bytes** onto this host
+  in the five seconds before it was killed, and would have gone on to the transfer timeout. A
+  fifo, a socket and a block device are all reported the same way — a `%F` phrase that is
+  neither `directory` nor `regular file`. **So the bound is only meaningful on a regular file**,
+  and that is what `pull_file` requires: the probe's `kind` names a regular file rather than
+  merely ruling out a directory, and anything else is refused before the transfer starts.
+  Capture: `tests/fixtures/adb/stat.character-device.*`.
+- **A push to a character device is left to the device, deliberately.** `push_file` refuses only
+  a directory, because the directory refusal exists to stop the *daemon's own temporary
+  basename* becoming device state under a name the caller never chose — nothing a push to
+  `/dev/null` does. There the caller named the exact path it meant, the bytes go where the
+  device says they go, and the size is the caller's own already-bounded upload. The asymmetry
+  with `pull_file` is stated in both contracts so it reads as a decision, not an omission.
 - **adb writes the *host* path into its own stdout and stderr, so masking the argv is not
   enough.** Measured for all three transfer failures: a refused push prints
   `<host path>: 1 file pushed, 0 skipped.` and then `adb: error: failed to copy '<host path>' to

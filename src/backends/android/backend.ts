@@ -417,6 +417,36 @@ function pulledDirectory(serial: DeviceSerial, devicePath: string): Error {
 }
 
 /**
+ * A pull whose source is neither a regular file nor a directory.
+ *
+ * The other half of {@link pulledDirectory}, and the same defect on the shape that looks
+ * harmless because its size is small. `%F` calls a character device, a fifo, a socket and a
+ * block device something other than `regular file`, and for every one of them `%s` says
+ * nothing about what a pull would fetch: `/dev/urandom` stats as **`0 character device`**,
+ * so the byte bound compares 0 against the cap and lets it through, and `adb pull` then
+ * writes until the transfer timeout — 769,196,032 bytes onto this host in five seconds on
+ * API 37 (PROJECT.md §6). The staged-size check downstream cannot help, because it does not
+ * run until that pull has returned: it bounds the daemon's heap, never its disk.
+ *
+ * So the refusal is on the *kind*, and it is stated positively — a pull needs a **regular
+ * file**, rather than "anything that is not a directory". The device's own `%F` phrase goes
+ * into the message, because the useful thing to tell a caller that named `/dev/urandom` is
+ * what the device says it actually is.
+ */
+function pulledNonRegularFile(
+	serial: DeviceSerial,
+	devicePath: string,
+	description: string,
+): Error {
+	return new Error(
+		`'${devicePath}' is a ${description} on device '${unwrap(serial)}', and a pull answers ` +
+			'with the bytes of one file — a path that is not a regular file has a size that says ' +
+			'nothing about how much it would transfer, so it is refused rather than bounded ' +
+			'afterwards. Name a regular file.',
+	);
+}
+
+/**
  * A pull that exited 0 and produced no file on this host.
  *
  * The **structural** counterpart of {@link refused}, and it is what this backend asserts on
@@ -852,6 +882,15 @@ export class AndroidDeviceBackend implements DeviceBackend {
 	 * resolved. So the check is a question put to the device first ({@link statOnDevice}),
 	 * and the contract it enforces is stated on `DeviceBackend.pushFile`.
 	 *
+	 * **Only a directory is refused, and the asymmetry with {@link pullFile} is deliberate.**
+	 * A push to a character device, a fifo or a socket is relayed, because the reason the
+	 * directory case is refused does not apply to it: there the daemon's own temporary
+	 * basename becomes device state under a name the caller never chose, while a push to
+	 * `/dev/null` writes exactly where the caller said, and the bytes are the caller's own
+	 * already-bounded upload rather than something this host has to hold. What the device
+	 * makes of them is the device's answer, and it comes back as one. The rule is stated on
+	 * `DeviceBackend.pushFile` so it binds every backend.
+	 *
 	 * **What this still does not assert, said out loud rather than left to be discovered:**
 	 * the wording of an exit-0 `push` failure. `./adb.js` throws on a non-zero exit, and
 	 * every other verb in this file additionally checks the *wording* of an exit-0 failure —
@@ -894,11 +933,15 @@ export class AndroidDeviceBackend implements DeviceBackend {
 	 * heap. The daemon holds every lease on this machine (D6, D17), so an allocation a peer
 	 * chose is not one tenant's mistake.
 	 *
-	 * **A source that is a directory is refused before either bound**, because for that one
-	 * shape a size is not an answer: `adb pull` copies the tree recursively while `stat`
-	 * reports the directory inode's own few kilobytes, so both bounds pass and the whole of
-	 * `/sdcard/DCIM` lands here first. It is the same probe `pushFile` asks and the same
-	 * rule stated on `DeviceBackend.pullFile`; see {@link pulledDirectory}.
+	 * **A source the probe does not call a regular file is refused before either bound**,
+	 * because for every other shape a size is not an answer. `adb pull` copies a directory's
+	 * tree recursively while `stat` reports the directory inode's own few kilobytes, so both
+	 * bounds pass and the whole of `/sdcard/DCIM` lands here first ({@link pulledDirectory});
+	 * a character device stats as `0` and pulls until the transfer timeout
+	 * ({@link pulledNonRegularFile}). The staged check below is not the spare for either one —
+	 * it does not run until `adb pull` has returned, so it bounds this daemon's heap and not
+	 * its disk. It is the same probe `pushFile` asks and the same rule stated on
+	 * `DeviceBackend.pullFile`.
 	 */
 	async pullFile(
 		serial: DeviceSerial,
@@ -907,12 +950,18 @@ export class AndroidDeviceBackend implements DeviceBackend {
 	): Promise<Uint8Array> {
 		// Asked of the device first, so a file that was never going to fit costs one `stat`
 		// rather than a full transfer onto this host's disk. Both halves of the probe's answer
-		// are acted on, and the *kind* has to come first: a directory's own size says nothing
-		// about the recursive copy `adb pull` would make of it, so the bound below would admit
-		// a tree of any depth ({@link pulledDirectory}).
+		// are acted on, and the *kind* has to come first: only a regular file's size predicts
+		// what a pull would fetch. A directory's own size says nothing about the recursive copy
+		// `adb pull` would make of it ({@link pulledDirectory}), and a character device reports
+		// zero while pulling without end ({@link pulledNonRegularFile}) — the bound below would
+		// admit either. A probe that answered `null` leaves the transfer where it was before
+		// the probe existed, which is what keeps a device wording `%F` differently working.
 		const onDevice = await this.statOnDevice(serial, devicePath);
 		if (onDevice?.kind === 'directory') {
 			throw pulledDirectory(serial, devicePath);
+		}
+		if (onDevice !== null && onDevice.kind !== 'regular-file') {
+			throw pulledNonRegularFile(serial, devicePath, onDevice.description);
 		}
 		if (onDevice !== null && onDevice.byteLength > options.maxBytes) {
 			throw new FileTooLargeError(serial, devicePath, onDevice.byteLength, options.maxBytes);

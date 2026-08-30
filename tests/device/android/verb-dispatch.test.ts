@@ -1084,6 +1084,32 @@ describe.skipIf(!process.env.ROVER_TEST_DEVICE)('a daemon runs verbs on its own 
 	});
 
 	/**
+	 * The same rule as the directory above, on the shape whose reported size lies quietly
+	 * rather than obviously. Every device has `/dev/urandom`, `stat` answers `0 character
+	 * device` for it, and a bound that trusted that number would compare zero against the cap
+	 * and let through a transfer that never ends — 769,196,032 bytes onto this host in five
+	 * seconds, measured on this emulator (PROJECT.md §6). Nothing has to be arranged for this
+	 * case and nothing has to be cleaned up after it; what it costs when the rule is missing
+	 * is the whole point, which is that it does not fail by returning something wrong, it
+	 * fails by filling the disk until the transfer times out.
+	 */
+	it('refuses to pull a path the device does not call a regular file', async () => {
+		const client = await startHost();
+		const device = await freeDevice(client);
+		const leaseId = await lease(client, device.serial);
+
+		const answer = await client
+			.request('pull_file', { leaseId, devicePath: '/dev/urandom' })
+			.catch((error: unknown) => error);
+
+		// A device-level refusal still arrives as `internal_error` (the repo-wide gap recorded
+		// above), so the assertion is on what it says: the device's own word for the path, and
+		// this backend's own rule rather than adb's account of a copy it made.
+		expect(String(answer)).toMatch(/'\/dev\/urandom' is a character device/);
+		expect(String(answer)).toMatch(/the bytes of one file/);
+	});
+
+	/**
 	 * A file the device does not have is a *device* answer, and today it reaches the caller as
 	 * `internal_error` — the same repo-wide gap `launch_app` records above, pinned rather than
 	 * papered over. What matters for this row is the half underneath: the backend asks whether

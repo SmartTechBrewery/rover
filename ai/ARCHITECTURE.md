@@ -331,14 +331,19 @@ Verbs live above the backends and below the adapters, and this is where determin
   already carries `maxEntries`), so a file too big to answer with is refused before it is staged on
   the host and read into the daemon's memory. A bound checked only on the way back would already
   have cost what it was for.
-- **Two things that layer does *not* relay, and states instead.** Neither transfer's `devicePath`
-  is a directory, in either direction, and both refusals are Rover's rule rather than a device
-  answer. For `pushFile` the platforms' own tools copy the file inside such a path under a
-  **host-side** basename and call that a success, so relaying it is how a caller gets `ok` about
-  bytes under a name this host invented (ai/RULES.md §2). For `pullFile` it is what keeps the cap
-  above meaningful: the transfer is *recursive* while the size a device reports for a directory is
-  the directory's own few kilobytes, so a backend bounding on that number alone would admit a
-  transfer of any size and only discover it once every byte was on the host. And no host path
+- **Two things that layer does *not* relay, and states instead.** A `devicePath` is never a
+  directory, in either direction, and both refusals are Rover's rule rather than a device answer.
+  For `pushFile` the platforms' own tools copy the file inside such a path under a **host-side**
+  basename and call that a success, so relaying it is how a caller gets `ok` about bytes under a
+  name this host invented (ai/RULES.md §2). For `pullFile` the rule is stronger — the source must
+  be a **regular file**, not merely not-a-directory — and that is what keeps the cap above
+  meaningful, because a regular file is the only shape whose reported size predicts the transfer.
+  A directory's copy is *recursive* while the size reported for it is the directory's own few
+  kilobytes; a character device reports **zero** and then reads until the transfer times out. A
+  backend bounding on the reported number alone would admit either and only discover it once every
+  byte was on the host, so the kind is refused before the transfer rather than the size after it.
+  The asymmetry is deliberate: inbound there is nothing to bound, the caller named the exact
+  destination, and what a device special file does with the bytes is the device's answer. And no host path
   reaches the caller in a *failure* either — the same D19 that keeps paths out of results keeps the
   daemon's own temporary file out of the message an `internal_error` carries, in the command it
   quotes *and* in the streams, since adb writes the path it was handed back into its own output.

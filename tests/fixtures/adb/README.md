@@ -62,6 +62,7 @@ reports itself as **v1.4**.
 | `stat.empty-file.api37-sdk-gphone16k-arm64.txt` | the same for a path created with `touch` | sdk_gphone16k_arm64 | 37 | 2026-08-30 |
 | `stat.directory.api37-sdk-gphone16k-arm64.txt` | the same for a path created with `mkdir` | sdk_gphone16k_arm64 | 37 | 2026-08-30 |
 | `stat.missing.api37-sdk-gphone16k-arm64.txt` | the same for a path no device has | sdk_gphone16k_arm64 | 37 | 2026-08-30 |
+| `stat.character-device.api37-sdk-gphone16k-arm64.txt` | the same for `/dev/urandom` | sdk_gphone16k_arm64 | 37 | 2026-08-30 |
 | `screenrecord.unwritable-path.api37-sdk-gphone16k-arm64.txt` | `adb -s $SERIAL shell screenrecord --bit-rate 2000000 --time-limit 1 /data/nope/rover-recording.mp4 > f 2>&1` | sdk_gphone16k_arm64 | 37 | 2026-08-30 |
 | `screenrecord-pidof.running.api37-sdk-gphone16k-arm64.txt` | `adb -s $SERIAL shell 'sleep 3; pidof screenrecord' > f 2>&1`, run beside a `screenrecord --time-limit 8` | sdk_gphone16k_arm64 | 37 | 2026-08-30 |
 | `screenrecord.finished.api37-sdk-gphone16k-arm64.mp4` | `adb -s $SERIAL shell screenrecord --bit-rate 2000000 --time-limit 3 /sdcard/rover-recording.mp4`, then `adb -s $SERIAL exec-out cat /sdcard/rover-recording.mp4` | sdk_gphone16k_arm64 | 37 | 2026-08-30 |
@@ -247,8 +248,8 @@ re-capturing — a fixture nobody can re-create is a fixture nobody can extend.
   telephony config, adbd echoing the command it was given — plus the crash of a system app and six
   lines this capture wrote itself. Checked for an address, a key or an account before committing.
 
-- **The four `stat` captures are what both file transfers ask the device before they move any
-  bytes**, and two of them are the reason the parser is pinned at all.
+- **The five `stat` captures are what both file transfers ask the device before they move any
+  bytes**, and three of them are the reason the parser is pinned at all.
   - **`%F` for an empty file is `regular empty file`, not `regular file`.** A predicate written
     from memory against `regular file` calls a zero-byte file something it is not, and an empty
     file is one this protocol already decided it moves (`Base64PayloadSchema`, "Zero bytes is
@@ -257,10 +258,16 @@ re-capturing — a fixture nobody can re-create is a fixture nobody can extend.
     empty stdout, so `runAdb` rejects before any parser sees it — and *that* is the ordinary case
     for a push, whose destination does not exist yet. It is committed as the evidence for why the
     probe treats a failed run as "nothing to add" rather than as a failure.
+  - **A character device answers `0 character device`, and exits 0.** That is the capture behind
+    `pull_file`'s second refusal: `%s` is zero for it while `adb pull /dev/urandom` writes until
+    something stops it — 769,196,032 bytes onto the host in five seconds here (PROJECT.md §6). So
+    the parser reports a *regular file* as its own kind rather than as "not a directory", and a
+    fifo, a socket and a block device fall on the same side of that line even though none of them
+    is captured: `pull_file` refuses everything the probe does not call a regular file.
   - **`-L` is load-bearing and is part of the recipe.** Without it, `stat` on a symlink reports the
     length of the link text and the word `symbolic link`: a link whose target was 11 bytes answered
     `33 symbolic link`. `push` and `pull` both follow the link, so the probe must too.
-  - The three parsed captures are stdout with an empty stderr; all four were taken with `> f 2>&1`
+  - The four parsed captures are stdout with an empty stderr; all five were taken with `> f 2>&1`
     for the app-control fixtures' reason, and the merge is only visible in the missing one.
 - **`adb push` has no fixture, and could not usefully have one.** Its success line names the
   **host** path it read (`/tmp/probe/payload: 1 file pushed, 0 skipped…`), never the remote path it
@@ -321,6 +328,10 @@ Nothing may be asserted about these until one exists — no test here claims any
   Only `device`, `offline` and `authorizing` were captured, which is why `AdbDevice.state` is an
   open string and not an enum — the full token list is longer than what is pinned here, and writing
   it from memory would be the same mistake as a hand-written fixture.
+- **A fifo, a socket or a block device on a device.** `/dev/urandom` is the one non-regular,
+  non-directory shape captured, and `pull_file`'s refusal is written against the *absence* of
+  `regular file` rather than against any list of the others — so nothing here claims to know what
+  `%F` calls them.
 - **A `goldfish` emulator.** Only `ro.hardware=ranchu` was observed, so only `ranchu` is encoded.
 - **A device reachable only through another machine's address.** The `track-devices` capture has
   `localhost:5555`, which is a network transport to *this* host; producing a genuine

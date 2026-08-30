@@ -18,7 +18,7 @@ describe('parseDeviceStat', () => {
 	it('reads the size and the kind of a regular file', () => {
 		expect(parseDeviceStat(fixture('stat.file.api37-sdk-gphone16k-arm64.txt'))).toEqual({
 			byteLength: 11,
-			kind: 'other',
+			kind: 'regular-file',
 			description: 'regular file',
 		});
 	});
@@ -27,17 +27,30 @@ describe('parseDeviceStat', () => {
 	it('reads an empty file as a file, not as something it has no word for', () => {
 		expect(parseDeviceStat(fixture('stat.empty-file.api37-sdk-gphone16k-arm64.txt'))).toEqual({
 			byteLength: 0,
-			kind: 'other',
+			kind: 'regular-file',
 			description: 'regular empty file',
 		});
 	});
 
-	it('reads a directory as one, which is the only distinction a caller acts on', () => {
+	it('reads a directory as one, which is what a push must not land inside', () => {
 		expect(parseDeviceStat(fixture('stat.directory.api37-sdk-gphone16k-arm64.txt'))).toEqual({
 			byteLength: 4096,
 			kind: 'directory',
 			description: 'directory',
 		});
+	});
+
+	/**
+	 * The capture behind `pull_file`'s second refusal, and the reason `kind` names a regular
+	 * file rather than merely ruling out a directory. `/dev/urandom` answers **`0 character
+	 * device`** and exits 0 (API 37, PROJECT.md §6): a bound that trusted `%s` would compare
+	 * zero against the cap and let a transfer through that never ends. Pinned to the fixture
+	 * rather than to a remembered `%F` phrase, because the phrase is the whole finding.
+	 */
+	it('reads a character device as neither a directory nor a regular file', () => {
+		expect(parseDeviceStat(fixture('stat.character-device.api37-sdk-gphone16k-arm64.txt'))).toEqual(
+			{ byteLength: 0, kind: 'other', description: 'character device' },
+		);
 	});
 
 	/**
