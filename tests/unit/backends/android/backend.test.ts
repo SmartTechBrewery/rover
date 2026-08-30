@@ -876,7 +876,14 @@ describe('the file transfers', () => {
 			const failure = backend.pullFile(SERIAL, '/data/local/tmp/nope', ROOMY);
 
 			await expect(failure).rejects.toThrow(/ENOENT/);
-			await expect(failure).rejects.not.toThrow(new RegExp(tmpdir().replaceAll('.', '\\.')));
+
+			// Asserted against the actual staged path, not a generic `tmpdir()` match: on a
+			// host whose `tmpdir()` is the bare `/tmp` (as on the Linux CI runner), that
+			// string is also a path segment of the device path above, and a substring check
+			// against it would fail on a message that never quoted a host path at all.
+			const staged = transfers()[0]?.[2];
+			if (staged === undefined) throw new Error('the pull named no destination');
+			await expect(failure).rejects.not.toThrow(new RegExp(staged.replaceAll('.', '\\.')));
 		});
 
 		it('removes the directory it staged into even when nothing arrived', async () => {
