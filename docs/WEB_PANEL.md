@@ -27,9 +27,11 @@ boundary, dependencies and a size.
    long until the lease expires on its own (`PROJECT.md` D8).
 7. **Force-release a stuck lease** — before its TTL naturally runs out, an operator action rather
    than something a client can do to another client's lease.
-8. **Host token management** — issuing and revoking the shared secret that authenticates a client
-   to the host (`PROJECT.md` D20). Kept separate from `owner`, exactly as the daemon already keeps
-   them separate.
+8. **Host user management** — issuing and revoking a named user's access to the host. No longer a
+   single shared secret to design around: `PROJECT.md` D25 already replaces `ROVER_HOST_TOKEN` with
+   named, revocable per-user credentials (`rover users add/list/revoke/rotate`, R27–R28) precisely
+   so a panel has individual accounts to manage instead of one secret everyone shares. Kept separate
+   from `owner`, exactly as the daemon already keeps them separate (D20).
 9. **Before/after diff view** — list the two most recent `<lease-id>` folders under one
    `test_name` and show them side by side. This is the reason `test_name` is deliberately not
    unique (`PROJECT.md` D22) — the panel does no work to find the pair, the archive's shape already
@@ -46,10 +48,13 @@ boundary, dependencies and a size.
 
 ## Deliberately not decided here
 
-- **Auth model beyond "modeled on Swarm's."** Same accounts, same session mechanism, or something
-  new — not settled.
-- **How the panel talks to the daemon.** Most likely as just another authenticated remote client
-  over the same network listener (`PROJECT.md` D17, D20) — not confirmed, and nothing here assumes
-  a second, panel-only API exists.
+- **Whether a user's access is all-or-nothing.** R27–R28 (D25) give every user the same bearer
+  credential with the same reach — device leases and (once it exists) the archive alike. A
+  read-only role, scoped to browsing the archive without ever acquiring a device, is a real
+  candidate once the panel actually needs one, but no such tiering exists yet and none is assumed.
+- **Whether the panel's own login is the same credential as R27's users, or a second layer on top
+  of it.** Most likely the same one — the panel would be just another authenticated remote client
+  over the existing network listener (`PROJECT.md` D17, D20, D25) — but not confirmed, and nothing
+  here assumes a second, panel-only API exists.
 - **Implementation.** Framework, hosting, anything about *how* — this file is what the panel needs
   to do, never how it is built.
