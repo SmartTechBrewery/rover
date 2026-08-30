@@ -26,9 +26,9 @@
  * **`stop_app` cannot tell "stopped it" from "there was no such package".** At least one
  * platform's stop command succeeds silently in both cases (PROJECT.md §5 and §6, and the
  * backend that drives it says so), so the verb answers `ok` for a package the device never
- * had. What settles it is the after-state, once `read_screen` (#13) lands; until then the
- * after-state is an honest `unavailable`, and there is deliberately no probe here pretending
- * otherwise.
+ * had. What settles it is the after-state: on a backend that reads its screen it is the screen
+ * itself, and on one that does not it is an honest `unavailable` naming `canReadScreen`. Either
+ * way there is deliberately no probe here pretending otherwise.
  *
  * A device-level refusal — `launch_app` on a package that is not installed — is still a
  * rejected promise out of the backend rather than a `VerbFailure`, so it reaches an agent as

@@ -1,16 +1,20 @@
 import { describe, expect, it } from 'vitest';
+import { runAdbOnDevice } from '@/backends/android/adb.js';
 import { AndroidDeviceBackend } from '@/backends/android/backend.js';
 import { DP_BASELINE_DPI } from '@/backends/android/parsers/wm.js';
-import type { Device, DeviceWatch } from '@/core/device.js';
-import { parseDeviceSerial } from '@/core/ids.js';
+import type { Device, DeviceWatch, ScreenElement } from '@/core/device.js';
+import { type DeviceSerial, parseDeviceSerial } from '@/core/ids.js';
 
 /**
  * The backend against a real attached device. Skips rather than fails when there is
  * none (`tests/device/setup.ts`, ai/TESTING.md).
  *
- * **Read-only.** It enumerates, describes and measures; it installs nothing, launches
- * nothing and changes no setting, so it is safe to run against a device someone else is
- * looking at. That matters more than usual right now, because of the next paragraph.
+ * **Read-only.** It enumerates, describes, measures and reads the screen; it installs
+ * nothing, launches nothing, taps nothing and changes no setting, so it is safe to run
+ * against a device someone else is looking at. The one thing it writes is the hierarchy
+ * dump `readScreen` asks the device for, which `readScreen` itself removes — and one of the
+ * assertions below is that it did. That matters more than usual right now, because of the
+ * next paragraph.
  *
  * ai/TESTING.md says a device test takes a lease like any other client, and this one does
  * not: leases exist since R8/#8, but the daemon registers no backend, so there is none to
@@ -109,5 +113,107 @@ describe.skipIf(!process.env.ROVER_TEST_DEVICE)('the backend against a real devi
 		expect(info.screen.widthDp).toBeCloseTo(info.screen.widthPx / info.screen.densityScale, 10);
 		expect(info.screen.heightDp).toBeCloseTo(info.screen.heightPx / info.screen.densityScale, 10);
 		expect(info.osVersion).toBeTruthy();
+	});
+});
+
+/**
+ * `readScreen` against whatever is in front of the device — the half a mocked adb cannot
+ * prove. `tests/unit/backends/android/backend.test.ts` pins the argv and the arithmetic
+ * against captures; this proves the two-command recipe works on hardware at all, that the
+ * numbers are in the space the rest of the system speaks, and that a read leaves nothing
+ * behind.
+ *
+ * Every assertion is a property of whatever screen happens to be showing. Nothing here
+ * names a control, because the machine running this has a different device on a different
+ * screen from the machine that wrote it.
+ */
+describe.skipIf(!process.env.ROVER_TEST_DEVICE)('reading the screen of a real device', () => {
+	/** Where the backend has the device write its dump — asserted to be gone afterwards. */
+	const DUMP_PATH = '/sdcard/window_dump.xml';
+
+	async function readsScreen(): Promise<{ serial: DeviceSerial; elements: ScreenElement[] }> {
+		const { serial } = await firstUsableDevice();
+		return { serial, elements: await backend.readScreen(serial) };
+	}
+
+	it('reads the screen as elements with an id no other element of the read has', async () => {
+		const { elements } = await readsScreen();
+
+		expect(elements.length).toBeGreaterThan(0);
+		expect(new Set(elements.map((element) => element.id)).size).toBe(elements.length);
+	});
+
+	// A screen every one of whose elements carries neither a text nor a label is a screen no
+	// verb could address by name, and would mean the two attributes were being dropped.
+	it('finds at least one element carrying a text or a label', async () => {
+		const { elements } = await readsScreen();
+
+		expect(elements.some((element) => element.text !== null || element.label !== null)).toBe(true);
+	});
+
+	/**
+	 * **The one assertion that catches a missing px→dp conversion**, which is otherwise
+	 * invisible: an unconverted hierarchy is a perfectly plausible list of rectangles that
+	 * happen to be three times too large, and every target resolved off it would be
+	 * range-checked against a screen it does not fit.
+	 *
+	 * The root's rectangle is compared to `deviceInfo().screen` as an **unordered** pair.
+	 * The dump's bounds follow the current surface while `wm size` reports the panel, so on a
+	 * rotated device the two are each other's transpose — the same asymmetry
+	 * `./screenshot.test.ts` already documents for the capture, recorded in PROJECT.md §6 and
+	 * deliberately not fixed here.
+	 */
+	it('reports bounds in the dp space deviceInfo describes, not in device pixels', async () => {
+		const { serial, elements } = await readsScreen();
+		const { screen } = await backend.deviceInfo(serial);
+
+		const root = elements[0].bounds;
+		const measured = [root.width, root.height].sort((a, b) => a - b);
+		const reported = [screen.widthDp, screen.heightDp].sort((a, b) => a - b);
+
+		expect(measured[0]).toBeCloseTo(reported[0], 6);
+		expect(measured[1]).toBeCloseTo(reported[1], 6);
+		// The claim sharpened: had the conversion been skipped, these would be the pixels.
+		expect(measured[1]).toBeLessThan(Math.max(screen.widthPx, screen.heightPx));
+	});
+
+	// A read that leaks its file on the device works exactly once in a form anyone notices;
+	// the second one is what shows a stale dump being served or a cleanup that never ran.
+	it('reads twice in a row, and leaves no dump behind on the device', async () => {
+		const { serial } = await firstUsableDevice();
+
+		const first = await backend.readScreen(serial);
+		const second = await backend.readScreen(serial);
+
+		expect(first.length).toBeGreaterThan(0);
+		expect(second.length).toBeGreaterThan(0);
+
+		const listing = await runAdbOnDevice(serial, ['shell', 'ls', '-a', '/sdcard/']);
+		expect(listing.stdout).not.toContain(DUMP_PATH.slice('/sdcard/'.length));
+	});
+
+	/**
+	 * The reason the reads are queued per device, against the hardware that punishes it: two
+	 * `uiautomator dump`s at once on one device get one of them killed — exit 137 with both
+	 * streams empty, measured 4 times out of 4 on API 37 (PROJECT.md §6) — and the narrower
+	 * window is one read's `rm` landing between the other's dump and its `cat`.
+	 *
+	 * Two verbs on one lease is not a misuse: the IPC server dispatches frames without
+	 * awaiting them, so a client that writes a wait and a tap without waiting for the first
+	 * reply has exactly this shape. Both resolving is the assertion.
+	 */
+	it('answers both of two reads started at the same time on one device', async () => {
+		const { serial } = await firstUsableDevice();
+
+		const [first, second] = await Promise.all([
+			backend.readScreen(serial),
+			backend.readScreen(serial),
+		]);
+
+		expect(first.length).toBeGreaterThan(0);
+		expect(second.length).toBeGreaterThan(0);
+
+		const listing = await runAdbOnDevice(serial, ['shell', 'ls', '-a', '/sdcard/']);
+		expect(listing.stdout).not.toContain(DUMP_PATH.slice('/sdcard/'.length));
 	});
 });

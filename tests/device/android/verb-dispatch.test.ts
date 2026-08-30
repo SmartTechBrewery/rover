@@ -28,20 +28,31 @@ import {
  * **This is the first suite in `tests/device/` that takes its lease from a running daemon**
  * (ai/TESTING.md, "The exemption"), which is the shape the others convert to.
  *
+ * **The screen read is real since #13**, and that is what the assertions below are built
+ * on: a wait that resolves off a read of the device in front of you, a wait that times out
+ * naming what was on screen instead, and a wait that resolves an element id taken off one
+ * read against the fresh read it takes itself. Where this suite used to assert
+ * `missing-capability`, it now asserts the thing the capability was standing in for.
+ *
+ * **Only one point on the device is ever touched**, and it is {@link HARMLESS_POINT}. That
+ * is the rule the whole suite is bounded by, and it is why every target below is either
+ * absent from the screen, resolved by a verb that touches nothing, or that one coordinate.
+ *
  * **What this deliberately does not cover, so silence is not read as "checked":**
  *
- * - **No real screen is read.** The backend honestly declares `canReadScreen: false` until
- *   `read_screen` lands (R13), so both waits and any target-by-text answer
- *   `missing-capability` — which is itself an assertion below, because a loud, structured
- *   refusal naming the real device and the real backend is exactly what D11 asks of a
- *   capability nothing backs. When that flag flips, this suite gains the assertions it cannot
- *   make today: a wait that resolves off a real read, a tap that lands on a named button, and
- *   a timeout naming what was on screen instead.
- * - **A point-addressed `tap` does run on the hardware**, and it is the one call here that
- *   reaches the device rather than being refused before it: the verb resolves the coordinate
- *   against the real screen size, converts it, and injects. What is *not* proved is what the
- *   tap did — nothing here can read the screen back — which is why the point below is one
- *   where a tap does nothing.
+ * - **No control is tapped by name, and no tap is addressed by an element id.** An element
+ *   target resolves to `centreOf(element)` rather than to the point the element was found
+ *   under, and on an arbitrary screen the elements covering the harmless corner are
+ *   full-screen containers whose centre is the middle of the panel — so a tap addressed that
+ *   way would activate whatever the device happens to be showing, on a suite that has no
+ *   verb to put it back afterwards (`press_key` has no IPC row yet). That dispatch is
+ *   covered over a stub in `tests/unit/verbs/input.test.ts` instead; what is proved here is
+ *   the half a device is needed for — that an id off a real read resolves against a real
+ *   read. Text matching is proved the same way, by waits that resolve a string taken off the
+ *   device's own screen without touching it.
+ * - **What a tap did is still not asserted.** The after-state now says what the screen looks
+ *   like, but the point tapped is chosen so that nothing changes, so the read is evidence
+ *   that the read works rather than evidence about the tap.
  * - **`clear_app_data` has no success case here**, for the reason
  *   `tests/device/android/app-control.test.ts` already records: a successful clear destroys an
  *   application's data, and there is no package on an arbitrary device whose data is safe for
@@ -51,10 +62,10 @@ import {
  *   plain tap without watching the device: the injection succeeds either way. Both were
  *   confirmed by hand against a real device, and the threshold a long press has to clear is
  *   recorded in PROJECT.md §6.
- * - What *is* proved against the hardware is everything either side of the screen read: the
- *   daemon lends this machine's own device over a socket, derives it from the lease id,
- *   re-verifies it through its backend on every call (D6), reaches the verb layer with a
- *   context built from it, and brings the answer back as data.
+ * - What *is* proved against the hardware is the whole path: the daemon lends this machine's
+ *   own device over a socket, derives it from the lease id, re-verifies it through its
+ *   backend on every call (D6), reaches the verb layer with a context built from it, reads
+ *   the real screen inside the verb, and brings the answer back as data.
  *
  * It changes no setting and touches no radio, so `ROVER_TEST_DEVICE` rather than the local-only
  * gate — a device reached over a network transport is a perfectly good subject for a tap. Its
@@ -171,32 +182,32 @@ describe.skipIf(!process.env.ROVER_TEST_DEVICE)('a daemon runs verbs on its own 
 		});
 
 		// The whole path in one assertion: socket, dispatch, a real device re-verified through its
-		// own backend, the registry lookup, the verb layer, and a structured answer back. It names
-		// the serial the *lease* is on, which the client never sent (D20).
+		// own backend, the registry lookup, the verb layer, a screen read off the hardware, and a
+		// structured answer back. It names the serial the *lease* is on, which the client never
+		// sent (D20).
 		expect(answer).toMatchObject({
-			outcome: 'failed',
-			failure: {
-				kind: 'missing-capability',
-				capability: 'canReadScreen',
-				serial: device.serial,
-				platform: device.platform,
-			},
+			outcome: 'ok',
+			result: { verb: 'wait_until_gone', device: { serial: device.serial } },
 		});
-		// A refusal an agent can act on, not an `internal_error`: `client.request` resolved.
-		if (answer.outcome !== 'failed' || answer.failure.kind !== 'missing-capability') {
-			throw new Error('the assertion above should have caught this');
-		}
-		expect(answer.failure.message).toContain(device.serial);
-		expect(answer.failure.backendLabel.length).toBeGreaterThan(0);
+		if (answer.outcome !== 'ok') throw new Error('the assertion above should have caught this');
+		// The condition was decided against a screen that was actually read — an `unavailable`
+		// after-state here would mean the wait had resolved off nothing.
+		expect(answer.result.after.kind).toBe('screen');
 	});
 
-	it('answers the other wait the same way, off the same connection', async () => {
+	/**
+	 * The second half of the read: a wait that cannot be met has to say **what was on screen
+	 * instead**, because the agent's next move depends on the difference between "not there
+	 * yet" and "on a screen you did not expect".
+	 *
+	 * Same client, same connection, same envelope as the `acquire_device` above — verb calls
+	 * travel on the surface the lease operations already use (R6, D19).
+	 */
+	it('times out naming what was on the screen instead of what it waited for', async () => {
 		const client = await startHost();
 		const device = await freeDevice(client);
 		const leaseId = await lease(client, device.serial);
 
-		// Same client, same connection, same envelope as the `acquire_device` above — verb calls
-		// travel on the surface the lease operations already use (R6, D19).
 		const answer = await client.request('wait_for', {
 			leaseId,
 			target: ABSENT,
@@ -204,7 +215,47 @@ describe.skipIf(!process.env.ROVER_TEST_DEVICE)('a daemon runs verbs on its own 
 			pollIntervalMs: 500,
 		});
 
-		expect(answer).toMatchObject({ outcome: 'failed', failure: { kind: 'missing-capability' } });
+		expect(answer).toMatchObject({ outcome: 'failed', failure: { kind: 'wait-timeout' } });
+		if (answer.outcome !== 'failed' || answer.failure.kind !== 'wait-timeout') {
+			throw new Error('the assertion above should have caught this');
+		}
+		expect(answer.failure.waitedFor).toContain(ABSENT.text);
+		// Not "nothing": the read happened, and the message describes the screen it happened on.
+		expect(answer.failure.found.length).toBeGreaterThan(0);
+		expect(answer.failure.polls).toBeGreaterThan(0);
+	});
+
+	/**
+	 * The other direction of a real read: a target the device *does* carry resolves.
+	 *
+	 * The string is taken off the screen this device is showing rather than hardcoded — the
+	 * machine running this has a different device on a different screen from the machine that
+	 * wrote it — and `wait_until_gone` is the verb that asks for it, because it answers
+	 * without touching anything.
+	 */
+	it('resolves a target by text against the screen the device is really showing', async () => {
+		const client = await startHost();
+		const device = await freeDevice(client);
+		const leaseId = await lease(client, device.serial);
+
+		const seen = await client.request('wait_until_gone', { leaseId, target: ABSENT, timeoutMs: 0 });
+		if (seen.outcome !== 'ok' || seen.result.after.kind !== 'screen') {
+			throw new Error(`the device could not report its screen: ${JSON.stringify(seen)}`);
+		}
+		const onScreen = seen.result.after.elements.find(
+			(element) => element.text !== null && element.text.trim().length > 0,
+		);
+		if (!onScreen?.text) throw new Error('no element on this screen carries any text');
+
+		const answer = await client.request('wait_until_gone', {
+			leaseId,
+			target: { by: 'text', text: onScreen.text },
+			timeoutMs: 0,
+		});
+
+		// It is still there, so waiting for it to go away times out — which is the assertion
+		// that the text matched something real rather than nothing.
+		expect(answer).toMatchObject({ outcome: 'failed', failure: { kind: 'wait-timeout' } });
 	});
 
 	it('taps a coordinate on the device the lease names', async () => {
@@ -226,25 +277,78 @@ describe.skipIf(!process.env.ROVER_TEST_DEVICE)('a daemon runs verbs on its own 
 				target: { source: 'caller-point', point: HARMLESS_POINT.at, element: null },
 			},
 		});
-		// This device cannot read its screen yet, so the honest post-state is the capability that
-		// would have answered — never an empty element list, which would read as a blank screen.
+		// D12(c): every action reports the state after itself, and since #13 that state is the
+		// device's real screen rather than the capability that would have answered.
+		if (answer.outcome !== 'ok') throw new Error('the assertion above should have caught this');
+		expect(answer.result.after.kind).toBe('screen');
+		if (answer.result.after.kind !== 'screen') throw new Error('unreachable');
+		expect(answer.result.after.elements.length).toBeGreaterThan(0);
+	});
+
+	/**
+	 * A target addressed by an **element id** taken off a real read, rather than by a
+	 * coordinate: an id one read of the device produced resolves against the *fresh* read the
+	 * verb takes inside itself, and the result names the element it resolved to.
+	 *
+	 * **`wait_for` and not `tap`, because an element target is not a point target.**
+	 * `resolveOnScreen` answers an element id with `centreOf(element)` — never the point the
+	 * element was found under — so tapping "the element under {@link HARMLESS_POINT}" injects
+	 * at that element's midpoint. On both the committed API 37 hierarchy and a live emulator,
+	 * every element covering the top-left corner is a full-screen container whose centre is
+	 * the middle of the panel, so such a tap lands on whatever control the device happens to
+	 * be showing there and this suite has no verb to put it back. A wait resolves the id
+	 * through exactly the same `resolveOnScreen` and touches nothing, which is what makes it
+	 * the verb that can prove this against a device someone else is looking at.
+	 *
+	 * The element is the root of the read: its id is the one that survives the screen moving
+	 * between the two reads, and identity is what is under test here rather than which node.
+	 */
+	it('resolves an element id it took off a read of the device', async () => {
+		const client = await startHost();
+		const device = await freeDevice(client);
+		const leaseId = await lease(client, device.serial);
+
+		const seen = await client.request('wait_until_gone', { leaseId, target: ABSENT, timeoutMs: 0 });
+		if (seen.outcome !== 'ok' || seen.result.after.kind !== 'screen') {
+			throw new Error(`the device could not report its screen: ${JSON.stringify(seen)}`);
+		}
+		// Addressable, which is what a wait waits for: a rectangle with an interior, so it has a
+		// midpoint the verb layer will accept.
+		const addressable = seen.result.after.elements.find(
+			({ bounds }) => bounds.width > 0 && bounds.height > 0,
+		);
+		if (!addressable) throw new Error('no element on this screen has an interior');
+
+		const answer = await client.request('wait_for', {
+			leaseId,
+			target: { by: 'element', id: addressable.id },
+			timeoutMs: 2_000,
+			pollIntervalMs: 500,
+		});
+
 		expect(answer).toMatchObject({
-			result: { after: { kind: 'unavailable', capability: 'canReadScreen' } },
+			outcome: 'ok',
+			// `screen`, not `caller-point`: the point was computed from an element the verb
+			// resolved on a screen it read itself (D12(a)).
+			result: {
+				verb: 'wait_for',
+				target: { source: 'screen', element: { id: addressable.id } },
+			},
 		});
 	});
 
-	it('refuses a tap by text until the device can read its own screen', async () => {
+	// The refusal is still the right answer for a target no screen carries — and now it is a
+	// miss rather than a missing capability, which is the difference this change makes.
+	it('reports a target no screen carries as not found, naming what was there instead', async () => {
 		const client = await startHost();
 		const device = await freeDevice(client);
 		const leaseId = await lease(client, device.serial);
 
 		const answer = await client.request('tap', { leaseId, target: ABSENT });
 
-		// D11 working rather than a gap: the target has to come off a screen read, the backend
-		// declares it cannot do one, and the refusal names the capability instead of guessing.
 		expect(answer).toMatchObject({
 			outcome: 'failed',
-			failure: { kind: 'missing-capability', capability: 'canReadScreen', serial: device.serial },
+			failure: { kind: 'target-not-found', serial: device.serial },
 		});
 	});
 
@@ -268,9 +372,10 @@ describe.skipIf(!process.env.ROVER_TEST_DEVICE)('a daemon runs verbs on its own 
 				// An app id addresses a package, so no screen was read to resolve anything and there
 				// is nothing on it to report — `null` is a fact about the verb (D12(a)).
 				target: null,
-				// This device cannot read its screen yet, so the honest post-state is the capability
-				// that would have answered — never an empty element list.
-				after: { kind: 'unavailable', capability: 'canReadScreen' },
+				// Since #13 the post-state is the device's real screen rather than the capability
+				// that would have answered — the read is what will eventually settle what a launch
+				// or a stop actually did.
+				after: { kind: 'screen' },
 			},
 		});
 
@@ -305,8 +410,9 @@ describe.skipIf(!process.env.ROVER_TEST_DEVICE)('a daemon runs verbs on its own 
 	/**
 	 * `am force-stop` prints nothing and exits 0 whether it stopped something or the package was
 	 * never there (PROJECT.md §6), so this answers `ok` — which is the honest report of what the
-	 * device said, not a claim that anything was stopped. What settles it is the after-state,
-	 * once `read_screen` (#13) lands.
+	 * device said, not a claim that anything was stopped. The after-state is a real screen since
+	 * #13, but reading a *difference* out of it is the `read_screen` verb's job rather than this
+	 * suite's, so nothing here asserts on it.
 	 */
 	it('cannot tell a stopped app from a package that was never there', async () => {
 		const client = await startHost();
