@@ -18,7 +18,8 @@ export const USAGE = `rover status — which host answered, its pid, uptime and 
 Usage: rover status [--host <name>] [--json]
 
 Starts the local daemon if none is running, so this is also the smallest check that it
-comes up at all.`;
+comes up at all. A remote host is a service its operator runs and is never started from
+here, so --host remote answers or fails, and never waits for something to come up.`;
 
 export function renderStatus(host: string, status: StatusResult): string {
 	return [

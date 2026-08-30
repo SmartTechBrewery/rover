@@ -623,6 +623,17 @@ well behaved:
   server that merely swallows that event has a log line rather than a deadline. Destroying the
   `TLSSocket` the event carries takes the raw socket with it.
 
+Checked against Node 25.2 while building R22's client, 2026-08-30:
+
+- **`tls.connect({ servername })` throws when the value is an IP address.** Not a warning and not
+  a value quietly ignored — `ERR_INVALID_ARG_VALUE`, synchronously, before a packet is sent
+  ("Setting the TLS ServerName to an IP address is not permitted", RFC 6066). Setting
+  `servername` to whatever the caller configured as the host is the obvious thing to write and
+  breaks `ROVER_HOST_ADDRESS=10.0.0.4`, which is the *ordinary* way to name a host on a private
+  network — while passing every test written against `localhost`. Send SNI only when the address
+  is a name (`isIP(address) === 0`). Leaving it out costs nothing: Node still verifies the
+  certificate against `host`, IP SANs included, which is the check that matters.
+
 ---
 
 ## 7. Scope
