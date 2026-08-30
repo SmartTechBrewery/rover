@@ -20,6 +20,7 @@
  */
 
 import { z } from 'zod';
+import { DeviceKeySchema } from '../core/device.js';
 import { AppIdSchema, LeaseIdSchema } from '../core/ids.js';
 import { VerbFailureSchema } from '../verbs/failure.js';
 import { ScrollDirectionSchema } from '../verbs/input.js';
@@ -50,6 +51,10 @@ export const MAX_VERB_TIMEOUT_MS = 5 * 60_000;
  * accepted `timeoutMs` would be offering a wait it does not perform — the call returns when
  * the device is done — and a caller who sent one would be told nothing, which is the silent
  * answer this protocol is built to avoid.
+ *
+ * The same reasoning is why `type_text` and `press_key` extend this and add no `target`: they
+ * address no element, and `.strict()` turns a target sent to one of them into `invalid_params`
+ * rather than a field the host ignores.
  */
 const VerbCallBaseSchema = z.object({
 	leaseId: LeaseIdSchema,
@@ -135,6 +140,44 @@ export const ScrollParamsSchema = VerbCallBaseSchema.extend({
 	durationMs: GestureDurationSchema,
 }).strict();
 export type ScrollParams = z.infer<typeof ScrollParamsSchema>;
+
+/**
+ * The longest string one `type_text` call may carry.
+ *
+ * Allocation hygiene rather than validation, in the style of `ATTRIBUTION_MAX_LENGTH`: the
+ * host echoes none of this anywhere, but it does decode it on a peer's behalf before any
+ * handler sees it, and an unbounded field is one a peer chooses the size of. Generous enough
+ * that no real caller meets it — a long paragraph is a few hundred characters — and small
+ * enough that a frame is a frame.
+ *
+ * It says nothing about what a device can type. That question has a different answer on every
+ * device, only the backend knows it, and the answer arrives as an `unsupported-text` failure
+ * naming the characters (`src/verbs/failure.ts`).
+ */
+export const TYPE_TEXT_MAX_LENGTH = 4_096;
+
+/**
+ * `z.string()` with a bound and **no `.trim()`**: leading and trailing spaces are content
+ * here, not formatting, and a schema that quietly dropped them would type a different string
+ * than the caller sent. The empty string is legal for the same reason the backend still calls
+ * the device for it — typing nothing on a device that has gone away should report the device.
+ *
+ * No refinement over the characters, deliberately. See {@link TYPE_TEXT_MAX_LENGTH}.
+ */
+export const TypeTextParamsSchema = VerbCallBaseSchema.extend({
+	text: z.string().max(TYPE_TEXT_MAX_LENGTH),
+}).strict();
+export type TypeTextParams = z.infer<typeof TypeTextParamsSchema>;
+
+/**
+ * `DeviceKeySchema` rather than a string, so the verb, the backend and the wire share one
+ * vocabulary: a key nobody implements is `invalid_params` at the boundary instead of a press
+ * that reports success and does nothing.
+ */
+export const PressKeyParamsSchema = VerbCallBaseSchema.extend({
+	key: DeviceKeySchema,
+}).strict();
+export type PressKeyParams = z.infer<typeof PressKeyParamsSchema>;
 
 /**
  * What all three app-lifecycle rows carry — `launch_app`, `stop_app` and `clear_app_data`.

@@ -55,6 +55,7 @@ import type {
 	DeviceInfoParams,
 	IpcHandlers,
 	LongPressParams,
+	PressKeyParams,
 	ReadLogsCallResult,
 	ReadLogsParams,
 	ReadScreenParams,
@@ -62,6 +63,7 @@ import type {
 	ScrollParams,
 	SwipeParams,
 	TapParams,
+	TypeTextParams,
 	VerbCallRefusal,
 	VerbCallResult,
 	VerbCallResultOf,
@@ -74,10 +76,12 @@ import { toVerbFailure } from '../verbs/failure.js';
 import {
 	type GestureOptions,
 	longPress,
+	pressKey,
 	type ScrollOptions,
 	scroll,
 	swipe,
 	tap,
+	typeText,
 } from '../verbs/input.js';
 import { type ReadLogsVerbOptions, readLogs } from '../verbs/logs.js';
 import { deviceInfo, readScreen, screenshot } from '../verbs/read.js';
@@ -96,6 +100,8 @@ export type VerbHandlers = Pick<
 	| 'long_press'
 	| 'swipe'
 	| 'scroll'
+	| 'type_text'
+	| 'press_key'
 	| 'read_screen'
 	| 'device_info'
 	| 'screenshot'
@@ -222,6 +228,16 @@ export function createVerbHandlers(
 					...(params.target === undefined ? {} : { target: params.target }),
 				} satisfies ScrollOptions),
 			);
+		},
+
+		// The caller's string, handed on untouched. Nothing between the wire and the backend
+		// inspects or rewrites it, which is what makes `type_text` mean what it says.
+		type_text(params: TypeTextParams): Promise<VerbCallResult> {
+			return runVerb(params.leaseId, (context) => typeText(context, params.text));
+		},
+
+		press_key(params: PressKeyParams): Promise<VerbCallResult> {
+			return runVerb(params.leaseId, (context) => pressKey(context, params.key));
 		},
 
 		// The three read rows. All take the lease id and nothing else — `screenshot` no more

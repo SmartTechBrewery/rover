@@ -11,12 +11,13 @@
 
 import { describe, expect, it, vi } from 'vitest';
 import type { DeviceBackend } from '@/core/device.js';
-import { WaitTimeoutError } from '@/core/errors.js';
+import { UnsupportedTextError, WaitTimeoutError } from '@/core/errors.js';
 import { parseAppId } from '@/core/ids.js';
 import {
 	AppVerbParamsSchema,
 	DeviceInfoParamsSchema,
 	LongPressParamsSchema,
+	PressKeyParamsSchema,
 	ReadLogsCallResultSchema,
 	ReadLogsParamsSchema,
 	ReadScreenParamsSchema,
@@ -24,12 +25,13 @@ import {
 	ScrollParamsSchema,
 	SwipeParamsSchema,
 	TapParamsSchema,
+	TypeTextParamsSchema,
 	VerbCallResultSchema,
 } from '@/ipc/verb-methods.js';
 import { launchApp } from '@/verbs/app.js';
 import { capabilityMethod, type VerbContext } from '@/verbs/context.js';
 import { toVerbFailure } from '@/verbs/failure.js';
-import { scroll, tap } from '@/verbs/input.js';
+import { pressKey, scroll, tap, typeText } from '@/verbs/input.js';
 import { ReadLogsResultSchema, readLogs } from '@/verbs/logs.js';
 import { performAction } from '@/verbs/perform.js';
 import { deviceInfo, readScreen, screenshot } from '@/verbs/read.js';
@@ -158,6 +160,22 @@ describe('the verb layer speaks only in plain data', () => {
 		// trip where an absent key would not.
 		expect(scrolled.target).toBeNull();
 		expect(unserializableParts(scrolled)).toEqual([]);
+	});
+
+	it('round-trips the two input verbs that address no element, whose target is null', async () => {
+		const context = contextShowingSave();
+
+		const typed = await typeText(context, 'zażółć 🙂  %s');
+		const pressed = await pressKey(context, 'home');
+
+		expect(ActionResultSchema.parse(roundTrip(typed))).toEqual(typed);
+		expect(ActionResultSchema.parse(roundTrip(pressed))).toEqual(pressed);
+		// `null` survives the trip where an absent key would not, which is why these results
+		// carry one rather than leaving `target` off.
+		expect(typed.target).toBeNull();
+		expect(pressed.target).toBeNull();
+		expect(unserializableParts(typed)).toEqual([]);
+		expect(unserializableParts(pressed)).toEqual([]);
 	});
 
 	it('round-trips an app verb result, which addresses a package rather than a screen', async () => {
@@ -348,6 +366,23 @@ describe('a verb call answers in plain data too', () => {
 		expect(unserializableParts(answer)).toEqual([]);
 	});
 
+	it("round-trips a failure carrying a caller's own string, unchanged", () => {
+		const failure = toVerbFailure(
+			new UnsupportedTextError(
+				createMockVerbContext().serial,
+				'zażółć 🙂',
+				['U+017C ("ż")', 'U+1F642 ("🙂")'],
+				'only ASCII',
+			),
+		);
+		const answer = { outcome: 'failed', failure } as const;
+
+		// The text and the escapes both survive the trip: an agent reading this on another
+		// machine has to be able to see which character to strip.
+		expect(VerbCallResultSchema.parse(roundTrip(answer))).toEqual(answer);
+		expect(unserializableParts(answer)).toEqual([]);
+	});
+
 	it('round-trips the refused branch and re-parses it equal', () => {
 		const answer = {
 			outcome: 'refused',
@@ -417,6 +452,10 @@ describe('a verb call answers in plain data too', () => {
 			ScrollParamsSchema,
 			{ leaseId: 'lease-1', direction: 'down', target: { by: 'element', id: 'list' } },
 		],
+		// Non-ASCII on purpose: JSON is where a string most plausibly stops being itself, and
+		// this is the one verb whose whole contract is that it does not.
+		['type_text', TypeTextParamsSchema, { leaseId: 'lease-1', text: 'zażółć 🙂  %s' }],
+		['press_key', PressKeyParamsSchema, { leaseId: 'lease-1', key: 'home' }],
 		// One row for the three app verbs, because one schema serves all three.
 		['launch_app', AppVerbParamsSchema, { leaseId: 'lease-1', appId: 'com.android.settings' }],
 		['read_logs', ReadLogsParamsSchema, { leaseId: 'lease-1', maxEntries: 50 }],

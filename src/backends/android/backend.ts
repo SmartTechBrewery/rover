@@ -45,6 +45,7 @@ import {
 	type ReadLogsOptions,
 	type ScreenElement,
 } from '../../core/device.js';
+import { UnsupportedTextError } from '../../core/errors.js';
 import { type AppId, type DeviceSerial, parseAppId, unwrap } from '../../core/ids.js';
 import {
 	type AdbBinaryResult,
@@ -63,7 +64,13 @@ import {
 } from './adb.js';
 import { attachmentOfSerial } from './attachment.js';
 import { ANDROID_PLATFORM_ID } from './capabilities.js';
-import { KEY_CODES, toDevicePixels, toSwipeDuration, typeTextSegments } from './input.js';
+import {
+	KEY_CODES,
+	toDevicePixels,
+	toSwipeDuration,
+	typeTextSegments,
+	untypeableCharacters,
+} from './input.js';
 import {
 	isSilent,
 	parseResolvedActivity,
@@ -752,15 +759,31 @@ export class AndroidDeviceBackend implements DeviceBackend {
 	 * **Usually one call, occasionally more.** `input text` substitutes a space for a literal
 	 * `%s`, so a caller's own `%s` is not representable in a single injection;
 	 * `./input.js`'s `typeTextSegments` cuts the string so that each piece is typed as itself,
-	 * and everything without a `%s` is still exactly one call. That module also refuses what
-	 * the device was measured not to type — a tab or a newline is dropped in silence, and a
-	 * non-ASCII character throws inside the device and types nothing at all — before anything
-	 * is sent.
+	 * and everything without a `%s` is still exactly one call.
+	 *
+	 * **What the device was measured not to type is refused before anything is sent** — a tab
+	 * or a newline is dropped in silence, and a non-ASCII character throws inside the device
+	 * and types nothing at all (PROJECT.md §6). That refusal is an `UnsupportedTextError`
+	 * rather than a plain one because it is a caller's string that is wrong rather than the
+	 * host: `src/verbs/failure.ts` carries it to the agent as `unsupported-text`, naming the
+	 * characters to change, where a plain `Error` would arrive as `internal_error`. The words
+	 * for what this device *can* take are passed in from here, because they are this
+	 * platform's and the error class names no platform's particulars.
 	 *
 	 * Each piece is checked on its own, so a run that got half the text in says so rather
 	 * than reporting a success for the half that landed.
 	 */
 	async typeText(serial: DeviceSerial, text: string): Promise<void> {
+		const unsupported = untypeableCharacters(text);
+		if (unsupported.length > 0) {
+			throw new UnsupportedTextError(
+				serial,
+				text,
+				unsupported,
+				"'input text' only types printable ASCII",
+			);
+		}
+
 		for (const segment of typeTextSegments(text)) {
 			const result = await runAdbOnDevice(serial, ['shell', 'input', 'text', shellText(segment)]);
 
