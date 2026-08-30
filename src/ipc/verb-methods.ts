@@ -318,7 +318,8 @@ export type ScreenshotParams = z.infer<typeof ScreenshotParamsSchema>;
  * that rate the frames stop being a sample and start being the recording again at several
  * times its size, and a caller who wants every frame already has the recording itself. There
  * is deliberately no frame *width* and no format here: those are one bounded default the verb
- * owns (`src/verbs/frames.ts`), not a configuration surface (ai/RULES.md §7).
+ * owns (`FRAME_WIDTH_PX`, `src/verbs/record.ts`), not a configuration surface
+ * (ai/RULES.md §7).
  */
 export const RecordVideoParamsSchema = VerbCallBaseSchema.extend({
 	durationMs: z.number().int().positive().max(MAX_RECORDING_MS).optional(),

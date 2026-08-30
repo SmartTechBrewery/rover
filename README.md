@@ -211,7 +211,8 @@ short. A caller asking for a long one should raise its own request timeout, whic
 never a path — and they are cut out of the **finished** recording on the host, after the completion
 condition and the pull, so the device is touched once and never sampled while it is being recorded.
 They are scaled down on purpose: a frame is for reading *what changed*, and the full-resolution read
-of one moment is `screenshot`. The one knob is `framesPerSecond`, two by default.
+of one moment is `screenshot`. The one knob is `framesPerSecond`, two by default — and `rover record`
+exposes it as `--frames-per-second`, bounded before the call the way `--duration-ms` is.
 
 Extraction needs a video decoder, this project contains none, and writing one is out of the
 question — so the host drives `ffmpeg`, found on `PATH` the way `adb` is, with the recording written
@@ -220,10 +221,21 @@ written**, which is also why no path exists that could end up in an answer. That
 *host* rather than about the device, so it is not a device capability: a machine without `ffmpeg`
 refuses by name — `frame-extraction-unavailable`, naming the program and what to install — rather
 than answering with an empty list of frames, because an empty list would read as a screen on which
-nothing happened. The count, the width and the total size are all bounded and named, and frames that
-would not fit beside the recording in one message are refused whole, carrying both numbers, rather
-than returned as a shorter list: a frame list missing its middle reads as a recording in which
-nothing happened between two moments that are no longer next to each other.
+nothing happened. **No path answers with an empty list at all**: a decoder that could not start, one
+that exited non-zero, one that wrote something unreadable and one that exited cleanly having written
+nothing are four failures with four names.
+
+The count, the width and the total size are all bounded and named, and going over any of them is a
+refusal rather than a shorter list — a frame list missing its middle reads as a recording in which
+nothing happened between two moments that are no longer next to each other. The width is a fixed
+default the verb owns. The count is derived from the longest recording at the densest sampling, and
+it is a bound a real call can reach: a capture of a screen that barely changed declares a container
+timeline much longer than the recording was asked for, and the sampling follows the container. The
+total size is the bound the ordinary case reaches, refused with both numbers on it.
+
+Because the extraction happens inside the same call, `rover record` answers with **both or neither**:
+on a host with no decoder installed the command exits 1 with `frame-extraction-unavailable` and
+writes no video either, and its `--help` says so.
 
 **What a recording is honest about: it samples motion, and the frames sample it again.** It can tell
 you something moved and roughly when. It cannot tell you how the movement eased, whether a frame was

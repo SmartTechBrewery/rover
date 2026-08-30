@@ -354,13 +354,19 @@ describe('record_video answers with the frames sliced out of the recording', () 
 	});
 
 	/**
-	 * A recording of a screen that never changed really does have nothing to sample, and that
-	 * is the **only** thing an empty list may mean here. A host that could not look says so by
-	 * name instead (`frame-extraction-unavailable`, `src/verbs/errors.ts`), which is why the
-	 * extractor is a required parameter: there is no way to call this verb without saying who
-	 * slices.
+	 * There is no recording left that legitimately samples to nothing — the one case there was,
+	 * a screen that never changed, is covered by `round=up` in the extractor — so an `ok` answer
+	 * always carries frames. A host that could not look says so by name instead
+	 * (`frame-extraction-…`, `src/verbs/errors.ts`), which is why the extractor is a required
+	 * parameter: there is no way to call this verb without saying who slices, and the one
+	 * implementation refuses rather than answering with an empty list
+	 * (`tests/unit/daemon/frames.test.ts`).
+	 *
+	 * This layer still passes on whatever the extractor answered rather than second-guessing it:
+	 * the schema admits an empty array so that a host bug arrives as the named failure the host
+	 * sent, not as a client that cannot parse the reply.
 	 */
-	it('answers with no frames when the extractor found none, and still with the recording', async () => {
+	it('passes an extractor’s answer through untouched, and always with the recording', async () => {
 		const { context, options } = recording({ frames: [] });
 
 		const result = await recordVideo(context, options);
@@ -423,13 +429,15 @@ describe('record_video answers with the frames sliced out of the recording', () 
 	});
 
 	/**
-	 * The frame cap is derived so it cannot bite: the longest recording the wire admits, at the
-	 * densest rate it admits, is exactly this many frames. Asserted rather than trusted, because
-	 * a constant derived from another by hand is one the other is free to drift away from — and
-	 * a cap that started biting would silently shorten a list rather than refuse one.
+	 * The frame cap is derived so it cannot bite, and the `+ 1` is the whole of the derivation's
+	 * point: sampling rounds *up*, so the longest recording the wire admits at the densest rate
+	 * it admits fills slots `0…duration × rate` — one frame more than the bare product. Asserted
+	 * rather than trusted, because a constant derived from another by hand is one the other is
+	 * free to drift away from, and a cap that started biting would shorten a list rather than
+	 * refuse one.
 	 */
-	it('caps the frame count at the longest recording times the densest sampling', () => {
-		expect(MAX_FRAMES).toBe((MAX_RECORDING_MS / 1_000) * MAX_FRAMES_PER_SECOND);
+	it('caps the frame count one above the longest recording times the densest sampling', () => {
+		expect(MAX_FRAMES).toBe((MAX_RECORDING_MS / 1_000) * MAX_FRAMES_PER_SECOND + 1);
 		expect(MAX_FRAMES_PER_SECOND).toBeGreaterThan(DEFAULT_FRAMES_PER_SECOND);
 	});
 

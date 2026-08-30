@@ -2,14 +2,9 @@ import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
 import { describe, expect, it, vi } from 'vitest';
 import { parseDeviceSerial } from '@/core/ids.js';
-import {
-	extractFrames,
-	FFMPEG,
-	FRAME_EXTRACTION_TIMEOUT_MS,
-	FRAME_STREAM_MAX_BUFFER_BYTES,
-} from '@/daemon/frames.js';
+import { extractFrames, FFMPEG, FRAME_STREAM_MAX_BUFFER_BYTES } from '@/daemon/frames.js';
 import { FrameExtractionFailedError, FrameExtractionUnavailableError } from '@/verbs/errors.js';
-import { FRAME_WIDTH_PX, MAX_FRAMES } from '@/verbs/record.js';
+import { FRAME_EXTRACTION_TIMEOUT_MS, FRAME_WIDTH_PX, MAX_FRAMES } from '@/verbs/record.js';
 import { createMockPngBytes, createMockPngStream } from '../../helpers/factories.js';
 
 /**
@@ -112,14 +107,19 @@ const SIGNATURE_IN_THE_PAYLOAD = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a
 
 describe('the frame extractor drives one program over the recording', () => {
 	it('asks for the sampling rate, the frame width and the frame cap it was told to', async () => {
-		await extracting((child) => child.stdout.end(), { framesPerSecond: 3 });
+		await extracting((child) => child.stdout.end(createMockPngStream([createMockPngBytes()])), {
+			framesPerSecond: 3,
+		});
 
 		expect(spawnMock.mock.calls[0]?.[0]).toBe(FFMPEG);
 		const args = spawnMock.mock.calls[0]?.[1] as string[];
 		expect(args).toContain(`fps=3:round=up,scale=${FRAME_WIDTH_PX}:-2`);
+		// One *above* the cap on purpose: `-frames:v` stops ffmpeg and exits 0, so a bound set at
+		// the cap itself would be a silent trim. One higher makes an overrun visible to the check
+		// that refuses it by name.
 		expect(args.slice(args.indexOf('-frames:v'), args.indexOf('-frames:v') + 2)).toEqual([
 			'-frames:v',
-			String(MAX_FRAMES),
+			String(MAX_FRAMES + 1),
 		]);
 	});
 
@@ -149,7 +149,7 @@ describe('the frame extractor drives one program over the recording', () => {
 	// Every external invocation has a timeout (ai/CODING_STANDARDS.md) — a hung decoder with
 	// none of its own would wedge a lease until it expires.
 	it('gives the run a timeout', async () => {
-		await extracting((child) => child.stdout.end());
+		await extracting((child) => child.stdout.end(createMockPngStream([createMockPngBytes()])));
 
 		expect(spawnMock.mock.calls[0]?.[2]).toMatchObject({ timeout: FRAME_EXTRACTION_TIMEOUT_MS });
 	});
@@ -183,10 +183,39 @@ describe('the frame extractor drives one program over the recording', () => {
 		expect(frames).toEqual([image]);
 	});
 
-	// A recording with nothing in it to sample is a real answer — and the only one an empty
-	// list may ever mean, which is what the refusals below are for.
-	it('answers with no frames when the decoder wrote none', async () => {
-		expect(await extracting((child) => child.stdout.end())).toEqual([]);
+	/**
+	 * An empty list is not an answer this module gives. The recording that reaches it has been
+	 * proved finished and non-empty by phase 1, and `round=up` covers the one case that
+	 * legitimately sampled to nothing — a still screen — so a decoder that exits 0 having
+	 * written no images did something unanticipated, and saying so beats reporting a recording
+	 * in which nothing happened (ai/RULES.md §2).
+	 */
+	it('refuses by name when the decoder exited 0 having written no images at all', async () => {
+		const thrown = await refusalOf((child) => child.stdout.end());
+
+		expect(thrown).toBeInstanceOf(FrameExtractionFailedError);
+		expect(thrown).toMatchObject({ serial: SERIAL, program: FFMPEG, exitCode: 0 });
+		expect((thrown as Error).message).toContain('without writing a single image');
+	});
+
+	/**
+	 * The other half of the same guarantee, at the top of the range: the decoder is asked for
+	 * `MAX_FRAMES + 1`, so a stream that would have overrun the cap comes back one over it and
+	 * is refused rather than handed over as exactly `MAX_FRAMES` frames of a longer recording.
+	 */
+	it('answers with a full MAX_FRAMES list, and refuses the one frame past it', async () => {
+		const image = createMockPngBytes();
+		const atTheCap = await extracting((child) =>
+			child.stdout.end(createMockPngStream(Array.from({ length: MAX_FRAMES }, () => image))),
+		);
+		expect(atTheCap).toHaveLength(MAX_FRAMES);
+
+		const thrown = await refusalOf((child) =>
+			child.stdout.end(createMockPngStream(Array.from({ length: MAX_FRAMES + 1 }, () => image))),
+		);
+
+		expect(thrown).toBeInstanceOf(FrameExtractionFailedError);
+		expect((thrown as Error).message).toContain(`more than the ${MAX_FRAMES} frames`);
 	});
 
 	/**

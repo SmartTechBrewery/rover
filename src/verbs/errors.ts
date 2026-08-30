@@ -10,9 +10,10 @@
  *
  * The last two are about a **host** rather than a device, and that is deliberate rather than
  * a stray: frame extraction runs on the machine holding the hardware and needs a program that
- * may not be installed on it (`./frames.ts`). A missing host program is not a capability —
- * capabilities describe what a device backend can do (D11) — and it is not a bug either, so
- * it is an answer with a name like the rest of these.
+ * may not be installed on it (`../daemon/frames.ts` — the runner lives under `src/daemon/`
+ * precisely because it spawns, and nothing under `src/verbs/` may). A missing host program is
+ * not a capability — capabilities describe what a device backend can do (D11) — and it is not
+ * a bug either, so it is an answer with a name like the rest of these.
  *
  * **Every field is plain data on purpose**, for the reason `WaitTimeoutError` states: verb
  * execution happens on the host, so these are serialized and sent back over a socket that may
@@ -316,7 +317,7 @@ export class FrameExtractionFailedError extends Error {
 /**
  * Thrown when the frames extracted from a recording are larger than one answer may carry.
  *
- * The bound it names is `MAX_FRAMES_BYTES` (`./frames.ts`), and this error is what makes
+ * The bound it names is `MAX_FRAMES_BYTES` (`./record.ts`), and this error is what makes
  * reaching it a **loud refusal rather than a shorter list**, the stance
  * {@link ArtifactTooLargeError} already takes for the recording itself. Trimming would be
  * worse here than anywhere else: a frame list quietly missing its middle reads as a recording

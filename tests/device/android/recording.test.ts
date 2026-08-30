@@ -5,7 +5,14 @@ import { AndroidDeviceBackend } from '@/backends/android/backend.js';
 import { isFinishedRecording } from '@/backends/android/parsers/screenrecord.js';
 import type { Device } from '@/core/device.js';
 import { extractFrames } from '@/daemon/frames.js';
-import { FRAME_WIDTH_PX, MAX_FRAMES_BYTES } from '@/verbs/record.js';
+import { FrameExtractionFailedError } from '@/verbs/errors.js';
+import {
+	FRAME_WIDTH_PX,
+	MAX_FRAMES,
+	MAX_FRAMES_BYTES,
+	MAX_FRAMES_PER_SECOND,
+	MAX_RECORDING_MS,
+} from '@/verbs/record.js';
 
 /**
  * `screenrecord` against a real attached device. Skips rather than fails when there is none
@@ -138,9 +145,12 @@ describe.skipIf(!process.env.ROVER_TEST_DEVICE || !process.env.ROVER_TEST_FRAME_
 			// Never empty: a recording of a screen that never moved still has one sample in it, and
 			// an empty list is what this whole phase exists to make impossible (ai/RULES.md §2).
 			expect(frames.length).toBeGreaterThan(0);
-			// At most one more than the rate and the duration call for — the recorder's own
-			// duration is its business, so this is a ceiling rather than an equality.
-			expect(frames.length).toBeLessThanOrEqual((DURATION_MS / 1_000) * FRAMES_PER_SECOND + 1);
+			// The ceiling is `MAX_FRAMES` and **not** the rate times the duration, which was
+			// measured and is not a bound at all: `screenrecord` gives a still screen a container
+			// duration far longer than the capture was asked for — 27.61 s for a 15 s recording on
+			// an API 35 emulator (PROJECT.md §6) — and `fps` samples the timeline the container
+			// declares. Asserting the product here would be asserting a device's timing.
+			expect(frames.length).toBeLessThanOrEqual(MAX_FRAMES);
 
 			for (const frame of frames) {
 				expect(isPng(frame)).toBe(true);
@@ -151,6 +161,41 @@ describe.skipIf(!process.env.ROVER_TEST_DEVICE || !process.env.ROVER_TEST_FRAME_
 				MAX_FRAMES_BYTES,
 			);
 		}, 90_000);
+
+		/**
+		 * The count bound, at the two values most likely to reach it — and the only place a real
+		 * decoder can be asked whether it reaches it at all.
+		 *
+		 * `-frames:v` at the bound itself would make ffmpeg stop writing and exit **0**, which is
+		 * a frame list cut short that nothing downstream can tell from a complete one. So the
+		 * decoder is asked for one frame *more* than the bound, and either answer here is a pass:
+		 * a count within the bound, or the named failure. What may never happen is the third
+		 * thing — an `ok` answer that stopped exactly where the decoder was told to.
+		 *
+		 * On the emulator this was measured against, it is the refusing branch: a fifteen-second
+		 * capture of a mostly-still screen declares a 27.61 s timeline (PROJECT.md §6), and four
+		 * frames a second over that is roughly a hundred slots.
+		 */
+		it('refuses by name rather than answering with a list that stopped at the cap', async () => {
+			const device = await firstUsableDevice();
+			const recording = await backend.recordVideo(device.serial, {
+				durationMs: MAX_RECORDING_MS,
+			});
+
+			const answer: Uint8Array[] | Error = await extractFrames(device.serial, recording, {
+				framesPerSecond: MAX_FRAMES_PER_SECOND,
+			}).catch((error: Error) => error);
+
+			if (answer instanceof Error) {
+				expect(answer).toBeInstanceOf(FrameExtractionFailedError);
+				expect(answer.message).toContain(`more than the ${MAX_FRAMES} frames`);
+				// And it says which way out, because the pair of numbers alone does not.
+				expect(answer.message).toContain('Record for less time');
+				return;
+			}
+			expect(answer.length).toBeGreaterThan(0);
+			expect(answer.length).toBeLessThanOrEqual(MAX_FRAMES);
+		}, 120_000);
 
 		// The rate is honoured rather than merely accepted: half the sampling over the same
 		// recording is fewer frames, which is the one thing a fixed-rate extractor would fail.

@@ -22,7 +22,10 @@
  * different remedy — install it here, rather than stop asking this device. So a host that
  * cannot extract says so by name ({@link FrameExtractionUnavailableError}) instead of
  * answering with an empty frame list, which is the plausible-looking empty result
- * ai/RULES.md §2 forbids.
+ * ai/RULES.md §2 forbids. **No path out of this module returns an empty list at all**: a
+ * decoder that could not start, one that exited non-zero, one that wrote a stream this host
+ * cannot read and one that exited 0 having written nothing are four named failures, so
+ * `result.frames` on an `ok` answer is never empty (`withinFrameCount`).
  *
  * **No host temp file.** The recording goes in on stdin and the images come back on stdout,
  * so no path on the host's disk exists for an answer to leak (D19) and nothing is left behind
@@ -32,22 +35,15 @@
 import { spawn } from 'node:child_process';
 import type { DeviceSerial } from '../core/ids.js';
 import { FrameExtractionFailedError, FrameExtractionUnavailableError } from '../verbs/errors.js';
-import { FRAME_WIDTH_PX, type FrameExtractor, MAX_FRAMES } from '../verbs/record.js';
+import {
+	FRAME_EXTRACTION_TIMEOUT_MS,
+	FRAME_WIDTH_PX,
+	type FrameExtractor,
+	MAX_FRAMES,
+} from '../verbs/record.js';
 
 /** The program name, looked up on `PATH`. */
 export const FFMPEG = 'ffmpeg';
-
-/**
- * Every external invocation has a timeout (ai/CODING_STANDARDS.md) — a hung decoder with no
- * timeout wedges a lease until it expires, and this one runs while a lease is held.
- *
- * Generous rather than tuned, for the reason the device bridge's own budgets are: it exists
- * to stop a wedged process holding a lease forever, not to bound a slow but healthy decode.
- * Three seconds of a 1080×2400 screen became four images in well under a second on an
- * ordinary host (PROJECT.md §6); a fifteen-second recording of a busy screen on a loaded
- * machine is what the rest of the budget is for.
- */
-export const FRAME_EXTRACTION_TIMEOUT_MS = 60_000;
 
 /**
  * How much of the decoder's stdout is held before the run is abandoned.
@@ -91,13 +87,63 @@ const PNG_END_CHUNK = 'IEND';
  * phase 1 promised.
  *
  * @throws FrameExtractionUnavailableError when the decoder could not be started at all.
- * @throws FrameExtractionFailedError when it ran and refused, or answered with a stream this
- *   host could not read.
+ * @throws FrameExtractionFailedError when it ran and refused, answered with a stream this host
+ *   could not read, produced no images at all, or produced more than one answer may carry.
  */
 export const extractFrames: FrameExtractor = async (serial, recording, options) => {
 	const stream = await runFfmpeg(serial, recording, options.framesPerSecond);
-	return splitPngStream(serial, stream);
+	return withinFrameCount(serial, splitPngStream(serial, stream));
 };
+
+/**
+ * The frames, or the failure that says the decoder did not produce a readable sample of this
+ * recording.
+ *
+ * Both branches exist because the alternative to each is a **plausible-looking empty or short
+ * list** (ai/RULES.md §2), which is the one answer this verb must never give:
+ *
+ * - **None at all.** The recording that reaches this module has already been proved finished
+ *   and non-empty by phase 1, and `round=up` covers the one case that legitimately sampled to
+ *   nothing (a still screen). Every remaining way ffmpeg writes no images — an undecodable
+ *   input, a rejected filter — exits non-zero and never reaches here, so a run that exited 0
+ *   with an empty stdout is a decoder that did something this host did not anticipate, not a
+ *   recording with nothing in it.
+ * - **More than {@link MAX_FRAMES}.** Reachable by a call the wire admits, because the sampling
+ *   follows the *container's* timeline and a capture of a still screen declares one far longer
+ *   than it was asked for (PROJECT.md §6). The decoder is asked for one frame more than the cap
+ *   precisely so this is visible: `-frames:v` at the cap itself stops ffmpeg and exits 0, which
+ *   is a trimmed list nothing downstream can tell from a complete one.
+ *
+ * @throws FrameExtractionFailedError in both cases, in the shape the unreadable-stream branch
+ *   already uses — the exit code that was seen, and an outcome saying what was wrong with it.
+ */
+function withinFrameCount(serial: DeviceSerial, frames: Uint8Array[]): Uint8Array[] {
+	if (frames.length === 0) {
+		throw new FrameExtractionFailedError(
+			serial,
+			FFMPEG,
+			0,
+			'',
+			'exited 0 without writing a single image, for a recording that was already proved ' +
+				'finished and non-empty — an empty frame list is not an answer this host will give',
+		);
+	}
+	if (frames.length > MAX_FRAMES) {
+		throw new FrameExtractionFailedError(
+			serial,
+			FFMPEG,
+			0,
+			'',
+			`wrote more than the ${MAX_FRAMES} frames one answer may carry. The recording's ` +
+				'container claims a longer timeline than the recording was asked for, which a ' +
+				'capture of a screen that barely changed does (PROJECT.md §6), and the sampling ' +
+				'follows the container. Record for less time, or ask for fewer frames a second — ' +
+				'they are refused together rather than returned as a list quietly stopping at the ' +
+				'bound',
+		);
+	}
+	return frames;
+}
 
 /**
  * The argv, written out here rather than assembled at the call site so there is one place
@@ -107,8 +153,15 @@ export const extractFrames: FrameExtractor = async (serial, recording, options) 
  * list from ever being the answer to a recording that has frames: a screen that never changed
  * produces a single sample with no duration, and plain `fps=n` over a stream of zero duration
  * emits **nothing at all** — measured on ffmpeg 8.0 against a real capture of a still screen
- * (PROJECT.md §6). `-frames:v` is the guard `MAX_FRAMES` describes, and `-loglevel error`
- * keeps the banner and the per-frame progress out of the stderr a failure carries.
+ * (PROJECT.md §6). `-loglevel error` keeps the banner and the per-frame progress out of the
+ * stderr a failure carries.
+ *
+ * `-frames:v` is the guard `MAX_FRAMES` describes, and it is set **one above** it on purpose.
+ * The flag makes ffmpeg stop writing and exit 0, so a bound set at the cap itself is a silent
+ * trim: the answer would be exactly `MAX_FRAMES` frames of a recording that had more, with
+ * nothing in it saying so. One higher turns that into something {@link splitPngStream}'s
+ * caller can see — a run that overran comes back over the cap and is refused by name, and a
+ * run that did not is untouched.
  */
 function ffmpegArgs(framesPerSecond: number): string[] {
 	return [
@@ -120,7 +173,7 @@ function ffmpegArgs(framesPerSecond: number): string[] {
 		'-vf',
 		`fps=${framesPerSecond}:round=up,scale=${FRAME_WIDTH_PX}:-2`,
 		'-frames:v',
-		String(MAX_FRAMES),
+		String(MAX_FRAMES + 1),
 		'-f',
 		'image2pipe',
 		'-vcodec',
@@ -191,8 +244,8 @@ async function runFfmpeg(
 		child.stdin.end(recording);
 
 		child.on('error', (error: Error) => {
-			// Nothing ran at all — the program absent from PATH is the common one, and this is
-			// the branch that keeps an empty frame list from ever being an answer.
+			// Nothing ran at all — the program absent from PATH is the common one, and it is the
+			// one case with a remedy on the host rather than in the call.
 			finish(() => reject(new FrameExtractionUnavailableError(serial, FFMPEG, error.message)));
 		});
 		child.on('close', (code: number | null, signal: NodeJS.Signals | null) => {

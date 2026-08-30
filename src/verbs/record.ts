@@ -105,19 +105,54 @@ export const DEFAULT_FRAMES_PER_SECOND = 2;
 export const MAX_FRAMES_PER_SECOND = 4;
 
 /**
- * The most frames one extraction may produce — {@link MAX_RECORDING_MS} at
- * {@link MAX_FRAMES_PER_SECOND}.
+ * The most frames one answer may carry — {@link MAX_RECORDING_MS} at
+ * {@link MAX_FRAMES_PER_SECOND}, **plus one for the round-up**.
  *
- * **A guard rather than a trim.** It is derived so that no call the wire admits can reach it:
- * the longest recording at the densest sampling is exactly this many frames, so the count the
- * extractor is given can only bite on a degenerate stream — one whose container claims a
- * duration its samples do not have. `tests/unit/verbs/record.test.ts` asserts the derivation,
- * because a constant derived from another by hand is one the other is free to drift away from.
+ * The derivation is what a recording whose timeline matches the call can produce. Sampling
+ * rounds *up* (`fps=n:round=up`, `src/daemon/frames.ts`), mapping an input sample at time `t`
+ * to output slot `ceil(t × n)`: a stream whose last sample sits anywhere above `(k − 1) / n`
+ * fills slots `0…k`, one more frame than `duration × rate`. So a fifteen-second recording at
+ * four frames a second is 61 frames and not 60. `tests/unit/verbs/record.test.ts` asserts that
+ * relationship, because a constant derived from another by hand is one the other is free to
+ * drift away from.
  *
- * What actually stops an over-sized answer is {@link MAX_FRAMES_BYTES}, and it stops it as a
- * refusal naming both numbers rather than as a list quietly cut short.
+ * **A real bound, not a guard that cannot bite** — this was measured, and the measurement is in
+ * PROJECT.md §6. A recording of a screen that barely changed carries a container duration far
+ * longer than the recording was asked for: fifteen seconds asked for came back declaring
+ * **27.61 s** across two encoded samples, because a recorder that emits a buffer only when the
+ * screen changes can leave its last sample's timestamp well past the end of the window. The
+ * sampling follows the timeline the container declares, not the one the caller asked for, so at
+ * four frames a second that is a hundred-odd slots for a call the wire admits.
+ *
+ * So it is **enforced as a refusal**. The extractor asks the decoder for one frame more than
+ * this and fails by name when that many come back (`src/daemon/frames.ts`), because the one
+ * thing that must never happen here is a list arriving quietly cut short: `-frames:v` at the
+ * bound itself would stop ffmpeg and exit 0, and nothing downstream could tell that answer from
+ * a complete one. {@link MAX_FRAMES_BYTES} stops an over-sized answer the same way, naming both
+ * numbers, and in practice usually first.
  */
-export const MAX_FRAMES = 60;
+export const MAX_FRAMES = 61;
+
+/**
+ * How long the host may spend slicing one recording into frames.
+ *
+ * **A verb-layer bound rather than the runner's own**, even though the only thing that reads
+ * it is `src/daemon/frames.ts`. Every external invocation has a timeout
+ * (ai/CODING_STANDARDS.md) — a hung decoder with no timeout wedges a lease until it expires,
+ * and this one runs while a lease is held — but the number also has to be visible to the
+ * *client*, whose request timeout covers the whole call and has to be larger than every
+ * budget inside it (`src/cli/commands/record.ts`). A client cannot import a daemon module
+ * without putting a process spawn in its module graph (D19,
+ * `tests/unit/no-backend-in-a-client.test.ts`), so the bound lives here beside the other
+ * numbers that decide how long this verb takes, and both ends import it.
+ *
+ * Generous rather than tuned, for the reason the device bridge's own budgets are: it exists
+ * to stop a wedged process holding a lease forever, not to bound a slow but healthy decode.
+ * Three seconds of a 1080×2400 screen became four images in well under a second on an
+ * ordinary host (PROJECT.md §6); a fifteen-second recording of a busy screen on a loaded
+ * machine is what the rest of the budget is for.
+ */
+export const FRAME_EXTRACTION_TIMEOUT_MS = 60_000;
 
 /**
  * How wide a frame is, in pixels; the height follows the recording's aspect ratio.
@@ -184,11 +219,18 @@ export type FrameExtractor = (
  * stays on `artifact` where phase 1 put it — the frames are the one field added, not a second
  * home for the bytes.
  *
- * `frames` is a **required, possibly empty** array rather than an optional one: `undefined`
- * does not survive JSON, and a recording really can have nothing in it to sample — a screen
- * that never changed produces one sample with no duration. What it may never be is empty
- * *because this host could not look*, which is what the two `frame-extraction-…` refusals are
- * for (`./errors.ts`).
+ * `frames` is **required rather than optional** — `undefined` does not survive JSON — and on an
+ * `ok` answer it is **never empty**. There is no recording left that legitimately samples to
+ * nothing: the one case there was, a screen that never changed and so produced a single sample
+ * with no duration, is covered by `round=up` (`src/daemon/frames.ts`), and every other way a
+ * host produces no images is one of the `frame-extraction-…` failures (`./errors.ts`). An
+ * empty list would be the plausible-looking empty result ai/RULES.md §2 forbids, so it is
+ * refused by name at the extractor instead.
+ *
+ * The schema still admits one, deliberately: a `.min(1)` here would be a second bound on the
+ * same fact, and the answer it produces is worse — a client failing to *parse* a host's reply,
+ * rather than the named failure the host already sent. The guarantee is enforced where it can
+ * be given a name.
  */
 export const RecordVideoResultSchema = ActionResultSchema.extend({
 	frames: z.array(ArtifactSchema),
@@ -203,7 +245,8 @@ export interface RecordVideoVerbOptions {
 	 * decoder out of every client's module graph: a default would be an import, and the import
 	 * is what puts a process spawn in a CLI. It is also what makes an empty frame list
 	 * impossible to reach by accident — there is no way to call this verb without saying who
-	 * extracts, so `frames: []` can only ever mean a recording with nothing in it to sample.
+	 * extracts, and an extractor that found nothing to extract says so by throwing rather than
+	 * by answering with an empty array (`src/daemon/frames.ts`).
 	 */
 	readonly extractFrames: FrameExtractor;
 	/**

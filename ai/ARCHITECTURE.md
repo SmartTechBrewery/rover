@@ -143,8 +143,10 @@ Backends are genuinely asymmetric and flattening that is the design mistake to a
   can do; `ffmpeg` says nothing about any device, and the remedy is different in kind — install a
   program *here*, rather than stop asking *that device*. So it is a named verb failure
   (`frame-extraction-unavailable`) and never a `Capabilities` flag, and the honest empty-result rule
-  applies exactly as it does to a capability: a frame list may be empty because a recording has
-  nothing in it to sample, and never because this host could not look.
+  applies exactly as it does to a capability — with no exception left to it. A frame list on an `ok`
+  answer is **never empty**: the one case that legitimately sampled to nothing (a screen that never
+  changed) is closed inside the filter, and every other way a host produces no images is one of the
+  named `frame-extraction-…` failures.
 
 So: each backend declares its manifest, the verb layer checks before dispatching, and an unbacked verb fails with an error naming the capability and the device. A conformance suite runs once per registered manifest — see `ai/TESTING.md`.
 
@@ -296,7 +298,10 @@ Verbs live above the backends and below the adapters, and this is where determin
   one implementation (`src/daemon/frames.ts`), exactly as it supplies `context.backend`. That is the
   pattern to copy for the next host-side tool, and `tests/unit/no-backend-in-a-client.test.ts` walks
   the graph from each client entrypoint so it stays a fact rather than a convention. The bounds live
-  with the verb rather than with the tool, so they hold whichever extractor was handed in.
+  with the verb rather than with the tool, so they hold whichever extractor was handed in — and that
+  includes the extraction *timeout*, which is a verb-layer constant even though only the daemon's
+  runner passes it to a process: `rover record`'s own request timeout has to cover every budget the
+  host spends inside one call, and a client cannot import a daemon module to read one.
 - **`readScreen()` and `deviceInfo()`** (`src/verbs/read.ts`) are the spine with the *middle* left
   out: their action is empty, because a read verb's work is the capture `performAction()` already
   performs for every verb — the screen for the after-state, the device for D14. Routing them
