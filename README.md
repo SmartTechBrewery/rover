@@ -189,13 +189,31 @@ which is the case that would otherwise leave somebody's package on a machine tha
 hardware to the next agent. `install_app` carries no application id, because the core knows no
 application's name; what gets installed is the package the caller sent, pinned to the leased device.
 
+**`push_file` names the file to write, never a directory to put it in.** A push to a path that is
+already a directory is refused rather than transferred into, and that is a rule Rover states rather
+than a device answer it relays: the platforms' own transfer tools copy the file *inside* such a path
+under a basename the **host** chose, report a success, and print nothing that names where the bytes
+actually went. So a caller that meant `/sdcard/Download/report.bin` and wrote `/sdcard/Download`
+would be told `ok` about a file it cannot find, under a name that appears in no schema and no
+answer — on hardware this host lends to somebody else next. A trailing slash is caught at the
+boundary; an existing directory is caught by asking the device before any bytes move.
+
+**No path on the host reaches the agent, in an answer or in a failure.** A refusal from a transfer
+names the device path, the device and what the device said — never the temporary file the daemon
+wrote the caller's bytes into, which names nothing on the machine reading the message and has been
+deleted by the time anyone reads it.
+
 **One call carries one whole file, and the limit says so out loud.** A payload over
 `MAX_TRANSFER_BYTES` (4 MiB, derived from the 8 MiB frame cap with base64's inflation accounted
 for) is refused at the boundary with a message naming both its size and the limit — never a file cut
 to fit, because a truncated file is not distinguishable from a whole one. Say the uncomfortable part
 plainly: **a real APK is routinely tens of megabytes**, so `install_app` works today for a small
 package and refuses a large one by name. Chunked transfer is its own issue, and it will land
-underneath these verbs rather than change what they promise.
+underneath these verbs rather than change what they promise. The outbound limit is enforced the same
+way round: `MAX_ARTIFACT_BYTES` is handed **down** to the backend, so `pull_file` refuses a file too
+big to answer with *before* copying it onto the host and into the daemon's memory — a bound applied
+only on the way back would have already cost what it was meant to prevent, in the one process
+holding every lease on the machine.
 
 The remaining verbs — `type_text` and `press_key` — are their own issues.
 
@@ -215,10 +233,14 @@ reports, `read_logs` brings back the device's own log, `push_file` and `pull_fil
 file to the device and back byte for byte — and, since the Android backend learned to
 read its own screen — a target addressed by text resolves against a hierarchy read inside the verb,
 both waits poll a real screen, and every action comes back carrying the elements that were on it
-afterwards. Two gaps are recorded rather than hidden. **`install_app` is not covered by the
-automated suite at all**: there is no APK in this repository and adding a binary to carry one is
-not a change's job, so it is verified by hand and everything else about it — the decode, the host
-temp file and its removal, the size refusal — is covered over a stub backend. And a device-level
+afterwards. Two gaps are recorded rather than hidden. **`install_app` has not been run against a
+device by anyone yet**: there is no APK in this repository and adding a binary to carry one is not
+a change's job, so the verb is unverified on hardware — read that as a stated gap rather than as a
+check somebody completed. What is established is the half adb settles before the device is
+involved, which is the half `withInstallablePackage` exists for: `adb install -r` refuses a file
+whose name does not end `.apk` or `.apex`, and takes the same bytes once renamed. Everything else
+about it — the decode, the host temp file and its removal, the size refusal — is covered over a
+stub backend. And a device-level
 refusal, such as launching a package that is not installed, still reaches the caller as
 `internal_error` rather than as an answer about the device — which is what a `pull_file` of a
 path the device does not have reports today. That is true of every verb family here, not just this

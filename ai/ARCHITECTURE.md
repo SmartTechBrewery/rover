@@ -263,7 +263,19 @@ Verbs live above the backends and below the adapters, and this is where determin
   daemon's handler in a `finally` — not by the verb, which touches no filesystem, and not in
   `src/ipc/`. Two named caps bound the two directions (`MAX_TRANSFER_BYTES` in, `MAX_ARTIFACT_BYTES`
   out), and both refuse rather than truncate; raising them is R24's row, landing underneath these
-  verbs rather than changing what they promise.
+  verbs rather than changing what they promise. **Each cap is applied where its bytes are.** The
+  inbound one is a params schema, so an over-sized call is refused before the host decodes anything;
+  the outbound one is handed *down* to the backend (`PullFileOptions`, the way `ReadLogsOptions`
+  already carries `maxEntries`), so a file too big to answer with is refused before it is staged on
+  the host and read into the daemon's memory. A bound checked only on the way back would already
+  have cost what it was for.
+- **Two things that layer does *not* relay, and states instead.** `pushFile`'s `devicePath` names
+  the file to write, never a directory to put it in: the platforms' own transfer tools copy the file
+  inside such a path under a **host-side** basename and call that a success, so relaying it as "the
+  device's answer" is how a caller gets `ok` about bytes under a name this host invented
+  (ai/RULES.md §2). And no host path reaches the caller in a *failure* either — the same D19 that
+  keeps paths out of results keeps the daemon's own temporary file out of the message an
+  `internal_error` carries, since it names nothing on the machine reading it.
 - **`ActionResult`** names the verb, the device (as `DeviceInfo`, so D14's density travels with the
   measurement), the resolved target and the state after the action. A backend with input but no
   screen reading answers an explicit `unavailable` after-state naming the capability that would have

@@ -11,6 +11,7 @@
 
 import { describe, expect, it, vi } from 'vitest';
 import type { DeviceBackend } from '@/core/device.js';
+import { FileTooLargeError } from '@/core/errors.js';
 import { MAX_TRANSFER_BYTES } from '@/ipc/verb-methods.js';
 import { ArtifactTooLargeError } from '@/verbs/errors.js';
 import { installApp, pullFile, pushFile } from '@/verbs/files.js';
@@ -36,7 +37,7 @@ interface Recording {
 	readonly calls: string[];
 	readonly pushes: Array<{ hostPath: string; devicePath: string }>;
 	readonly installs: string[];
-	readonly pulls: string[];
+	readonly pulls: Array<{ devicePath: string; maxBytes: number }>;
 	readonly context: ReturnType<typeof createMockVerbContext>;
 }
 
@@ -45,7 +46,7 @@ function recording(overrides: Partial<DeviceBackend> = {}): Recording {
 	const calls: string[] = [];
 	const pushes: Array<{ hostPath: string; devicePath: string }> = [];
 	const installs: string[] = [];
-	const pulls: string[] = [];
+	const pulls: Array<{ devicePath: string; maxBytes: number }> = [];
 
 	const backend = createMockDeviceBackend({
 		installApp: vi.fn<DeviceBackend['installApp']>(async (_serial, packagePath) => {
@@ -56,9 +57,9 @@ function recording(overrides: Partial<DeviceBackend> = {}): Recording {
 			calls.push('pushFile');
 			pushes.push({ hostPath, devicePath });
 		}),
-		pullFile: vi.fn<DeviceBackend['pullFile']>(async (_serial, devicePath) => {
+		pullFile: vi.fn<DeviceBackend['pullFile']>(async (_serial, devicePath, options) => {
 			calls.push('pullFile');
-			pulls.push(devicePath);
+			pulls.push({ devicePath, maxBytes: options.maxBytes });
 			return CONTENT;
 		}),
 		readScreen: vi.fn<NonNullable<DeviceBackend['readScreen']>>(async () => {
@@ -164,7 +165,7 @@ describe('pull_file', () => {
 
 		const result = await pullFile(context, DEVICE_PATH);
 
-		expect(pulls).toEqual([DEVICE_PATH]);
+		expect(pulls.map((pull) => pull.devicePath)).toEqual([DEVICE_PATH]);
 		expect(result).toMatchObject({
 			verb: 'pull_file',
 			target: null,
@@ -214,6 +215,42 @@ describe('pull_file', () => {
 		// this is an error class and not a `slice` (R24).
 		await expect(failure).resolves.toBeInstanceOf(ArtifactTooLargeError);
 		// Refused where the bytes arrived, so no screen read was spent reaching it.
+		expect(calls).toEqual([]);
+	});
+
+	/**
+	 * The bound goes **down**, not on the way back. A backend that is only told afterwards has
+	 * already copied the file onto this host and read it into the daemon's heap — a refusal
+	 * that cost exactly what it was for, in the one process holding every lease on the machine
+	 * (D6, D17). This is the assertion that stops it regressing to a post-hoc check.
+	 */
+	it('tells the backend what the answer may carry, before the backend fetches anything', async () => {
+		const { context, pulls } = recording();
+
+		await pullFile(context, DEVICE_PATH);
+
+		expect(pulls).toEqual([{ devicePath: DEVICE_PATH, maxBytes: MAX_ARTIFACT_BYTES }]);
+	});
+
+	/**
+	 * And what the backend refuses arrives as the vocabulary the agent already knows. The two
+	 * ends of the transfer notice the same fact — this does not fit one answer — and it would
+	 * be a worse protocol for having two names for it depending on which end noticed.
+	 */
+	it('turns the backend’s refusal into the same named artifact-too-large answer', async () => {
+		const { context, calls } = recording({
+			pullFile: vi.fn<DeviceBackend['pullFile']>(async (serial, devicePath, options) => {
+				throw new FileTooLargeError(serial, devicePath, options.maxBytes + 1, options.maxBytes);
+			}),
+		});
+
+		const failure = await pullFile(context, DEVICE_PATH).catch((error: unknown) => error);
+
+		expect(failure).toBeInstanceOf(ArtifactTooLargeError);
+		expect(failure).toMatchObject({
+			byteLength: MAX_ARTIFACT_BYTES + 1,
+			maxBytes: MAX_ARTIFACT_BYTES,
+		});
 		expect(calls).toEqual([]);
 	});
 

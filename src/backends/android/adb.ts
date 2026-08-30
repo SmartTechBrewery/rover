@@ -114,6 +114,22 @@ export interface AdbBinaryResult {
 export interface RunAdbOptions {
 	/** Overrides {@link DEFAULT_ADB_TIMEOUT_MS} for one call. */
 	readonly timeoutMs?: number;
+
+	/**
+	 * argv entries that must not appear in {@link AdbCommandError}'s **message**.
+	 *
+	 * For the one class of argument that is a path on *this host*: the file a transfer
+	 * reads or writes here on the caller's behalf. An `AdbCommandError` becomes the text of
+	 * an `internal_error` response (`src/ipc/server.ts`), and that response is read on the
+	 * agent's machine — possibly another machine entirely — where a `/var/folders/…` path
+	 * this host already deleted names nothing anyone can act on (D19, PROJECT.md §4).
+	 *
+	 * Matched as whole argv entries rather than as substrings of the joined line, so the
+	 * masking cannot depend on how the message happens to be assembled. {@link
+	 * AdbCommandError.argv} keeps the real value: it never crosses the boundary, and the
+	 * host's own log is exactly where the staged path is worth having.
+	 */
+	readonly redactArgv?: readonly string[];
 }
 
 /**
@@ -126,6 +142,11 @@ export interface RunAdbOptions {
  * The streams stay separate rather than being merged. The `* daemon not running …` banner
  * goes to stderr on `adb` 37.0.0 while the device list goes to stdout (PROJECT.md §6), so
  * merging them would corrupt the one and lose the ability to quote the other.
+ *
+ * **The message is not the argv, and the difference is the boundary.** {@link argv} is
+ * whole, for this host's own log; the message masks whatever {@link
+ * RunAdbOptions.redactArgv} named, because this message is what an `internal_error`
+ * response carries to a client that may be on another machine (D19).
  */
 export class AdbCommandError extends Error {
 	readonly argv: readonly string[];
@@ -141,6 +162,7 @@ export class AdbCommandError extends Error {
 		error: ExecFileException,
 		stdout: string,
 		stderr: string,
+		redactArgv: readonly string[] = [],
 	) {
 		const exitCode = typeof error.code === 'number' ? error.code : null;
 		// `killed` is also set when `maxBuffer` overflows, and that is not a timeout.
@@ -149,7 +171,7 @@ export class AdbCommandError extends Error {
 
 		super(
 			[
-				`${ADB} ${argv.join(' ')} ${outcome({ error, exitCode, signal, timedOut, timeoutMs })}`,
+				`${ADB} ${quoteArgv(argv, redactArgv)} ${outcome({ error, exitCode, signal, timedOut, timeoutMs })}`,
 				`stdout: ${quoteStream(stdout)}`,
 				`stderr: ${quoteStream(stderr)}`,
 			].join('\n'),
@@ -179,6 +201,28 @@ function outcome(failure: {
 	// is the only thing that says so.
 	return `failed to run: ${failure.error.message}`;
 }
+
+/**
+ * The command as it may be read on the caller's machine.
+ *
+ * Everything `adb` was given, in order, with the host-local paths in `redact` replaced by
+ * {@link REDACTED_ARGV}. Whole entries are compared rather than substrings of the joined
+ * line: an argv entry either *is* the path this host made up or it is the caller's own
+ * value, and a substring rule would also mask a device path that happened to share a
+ * prefix with it.
+ */
+function quoteArgv(argv: readonly string[], redact: readonly string[]): string {
+	return argv.map((entry) => (redact.includes(entry) ? REDACTED_ARGV : entry)).join(' ');
+}
+
+/**
+ * What a host path reads as once it has crossed the boundary.
+ *
+ * Says what was there rather than eliding it, so a failure message stays a sentence: the
+ * caller sent bytes and this host wrote them somewhere of its own choosing, which is the
+ * whole fact the path was carrying.
+ */
+const REDACTED_ARGV = '<the file you sent>';
 
 /**
  * One captured stream, ready to be read inside an error message.
@@ -293,7 +337,7 @@ export async function runAdb(
 					resolve({ stdout, stderr });
 					return;
 				}
-				reject(new AdbCommandError(args, timeoutMs, error, stdout, stderr));
+				reject(new AdbCommandError(args, timeoutMs, error, stdout, stderr, options.redactArgv));
 			},
 		);
 	});
@@ -348,7 +392,16 @@ export async function runAdbBinaryOnDevice(
 				// The error carries a *description* of stdout rather than stdout: there is no
 				// text to quote, and pasting a megabyte of PNG into a message corrupts the
 				// terminal reading it.
-				reject(new AdbCommandError(argv, timeoutMs, error, describeBytes(stdout), message));
+				reject(
+					new AdbCommandError(
+						argv,
+						timeoutMs,
+						error,
+						describeBytes(stdout),
+						message,
+						options.redactArgv,
+					),
+				);
 			},
 		);
 	});

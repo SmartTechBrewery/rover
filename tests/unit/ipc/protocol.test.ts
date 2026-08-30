@@ -23,6 +23,7 @@ import {
 	RequestEnvelopeSchema,
 	ResponseSchema,
 } from '@/ipc/protocol.js';
+import { MAX_ARTIFACT_BYTES } from '@/verbs/result.js';
 
 describe('request envelope', () => {
 	it('parses a well-formed request', () => {
@@ -461,6 +462,65 @@ describe('file transfer params schemas', () => {
 			version: PROTOCOL_VERSION,
 			method: 'install_app',
 			params: { leaseId: 'lease-1', packageBase64: payloadOf(MAX_TRANSFER_BYTES) },
+		});
+
+		expect(Buffer.byteLength(frame, 'utf8')).toBeLessThan(MAX_FRAME_BYTES);
+	});
+
+	/**
+	 * The same assertion in the **answering** direction, which had none.
+	 *
+	 * `MAX_ARTIFACT_BYTES` is derived from `MAX_FRAME_BYTES` by hand in a third module, and
+	 * the frame cap is enforced on the *receiving* side — where going over it is not a
+	 * refusal a caller can read but a destroyed connection (`src/ipc/framing.ts`). So without
+	 * this, a future change to either constant turns a readable `artifact-too-large` into a
+	 * `malformed_frame` that kills the socket.
+	 *
+	 * It stops being theoretical with `pull_file`: it is the first verb where the caller
+	 * picks the artifact's size exactly, by naming a 4 MiB file, where `screenshot` only ever
+	 * reached the cap with a panel nobody has. The screen read beside it is deliberately
+	 * generous — two hundred elements with real text on them — because that is what shares
+	 * the frame with the payload.
+	 */
+	it('leaves an answer at the artifact limit inside one frame, screen read and all', () => {
+		const elements = Array.from({ length: 200 }, (_unused, index) => ({
+			id: `element-${index}`,
+			text: `Some row of ordinary length, number ${index}`,
+			label: `A content description of ordinary length, number ${index}`,
+			bounds: { x: 0, y: index * 48, width: 1080, height: 48 },
+		}));
+
+		const frame = encodeFrame({
+			id: 'request-1',
+			version: PROTOCOL_VERSION,
+			result: {
+				outcome: 'ok',
+				result: {
+					verb: 'pull_file',
+					device: {
+						serial: 'emulator-5554',
+						platform: 'test-platform',
+						model: 'sdk_gphone16k_arm64',
+						screen: {
+							widthPx: 1080,
+							heightPx: 2424,
+							density: 420,
+							densityScale: 2.625,
+							widthDp: 411.43,
+							heightDp: 923.43,
+						},
+						osVersion: '17',
+						osApiLevel: 37,
+					},
+					target: null,
+					after: { kind: 'screen', elements },
+					artifact: {
+						mediaType: 'application/octet-stream',
+						base64: payloadOf(MAX_ARTIFACT_BYTES),
+						byteLength: MAX_ARTIFACT_BYTES,
+					},
+				},
+			},
 		});
 
 		expect(Buffer.byteLength(frame, 'utf8')).toBeLessThan(MAX_FRAME_BYTES);

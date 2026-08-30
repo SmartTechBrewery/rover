@@ -230,6 +230,22 @@ export interface ReadLogsOptions {
 }
 
 /**
+ * What bounds one {@link DeviceBackend.pullFile} call.
+ *
+ * Required and passed down for {@link ReadLogsOptions}'s reason, with one more behind it:
+ * the number belongs to the layer that knows what an *answer* may carry
+ * (`MAX_ARTIFACT_BYTES`, `src/verbs/result.ts`), and the enforcement belongs to the layer
+ * that is about to fetch the bytes. Splitting them is what keeps the refusal both correctly
+ * sized and cheap — a backend that invented its own bound would disagree with the verb that
+ * has to serialize the result, and a verb that checked afterwards would already be holding
+ * what it refuses.
+ */
+export interface PullFileOptions {
+	/** The most bytes the caller can be given. A larger file is refused, never truncated. */
+	readonly maxBytes: number;
+}
+
+/**
  * What a {@link DeviceBackend.watchDevices} caller is told, as the set it watches changes.
  *
  * Neither method may throw. Both are called from inside the backend's own read path,
@@ -389,9 +405,20 @@ export interface DeviceBackend {
 	 * relay the path through a shell on the device — quotes it itself, exactly as the app
 	 * verbs' backends do.
 	 *
-	 * Nothing here says what happens to a path that already exists, is a directory, or is
-	 * unwritable: those are the device's answers, and a backend surfaces them rather than
-	 * ruling on them. Recursive directory transfer is deliberately not in this contract.
+	 * **`devicePath` names the file, never a directory to put it in**, and a backend that
+	 * can tell the difference refuses the second rather than transferring into it. This is
+	 * a rule rather than a device answer because the platforms' own transfer tools do not
+	 * treat it as one: a push to a path that is already a directory copies the file
+	 * *inside* it under the **host-side** basename and reports a success — measured, not
+	 * assumed (PROJECT.md §6). So a caller that meant `/downloads/report.bin` and wrote
+	 * `/downloads` is told `ok` about bytes it can no longer find, under a name this host
+	 * invented. Leaving that to "the device's answer" is what makes it silent
+	 * (ai/RULES.md §2).
+	 *
+	 * What happens to a path that already exists as a *file*, or is unwritable, is still
+	 * the device's answer and comes back as one — an existing file is overwritten, which is
+	 * what the caller asked for. Recursive directory transfer is deliberately not in this
+	 * contract.
 	 */
 	pushFile(serial: DeviceSerial, hostPath: string, devicePath: string): Promise<void>;
 
@@ -410,8 +437,13 @@ export interface DeviceBackend {
 	 * Throws when the device has no such file: a missing file is not a device that answered
 	 * with nothing, and answering with an empty array would be indistinguishable from an
 	 * empty file that really is there.
+	 *
+	 * **The bound is not advisory, and it is not checked after the fact.** `options.maxBytes`
+	 * is what the caller can be given, and a file over it is `FileTooLargeError` *before*
+	 * this host has staged or buffered it — a refusal issued after the bytes have landed is
+	 * an allocation the caller chose (`src/core/errors.ts`, {@link FileTooLargeError}).
 	 */
-	pullFile(serial: DeviceSerial, devicePath: string): Promise<Uint8Array>;
+	pullFile(serial: DeviceSerial, devicePath: string, options: PullFileOptions): Promise<Uint8Array>;
 
 	// --- Capability-gated: present only when the manifest declares the capability ---
 

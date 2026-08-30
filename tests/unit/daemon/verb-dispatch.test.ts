@@ -145,6 +145,7 @@ let transfers: Array<{
 	hostPath?: string;
 	devicePath?: string;
 	contents?: string;
+	maxBytes?: number;
 }>;
 
 /**
@@ -220,8 +221,8 @@ async function serve(options: HostOptions = {}): Promise<void> {
 			},
 			pullFile:
 				options.pullFile ??
-				(async (serial, devicePath) => {
-					transfers.push({ method: 'pullFile', serial, devicePath });
+				(async (serial, devicePath, { maxBytes }) => {
+					transfers.push({ method: 'pullFile', serial, devicePath, maxBytes });
 					return PULLED;
 				}),
 		}),
@@ -1057,6 +1058,45 @@ describe('the transfer rows carry a file across the boundary', () => {
 				maxBytes: MAX_ARTIFACT_BYTES,
 			},
 		});
+	});
+
+	/**
+	 * And the same refusal issued **where the bytes are**. A backend told the bound can decline
+	 * a 2 GB file for the price of one question; a backend told nothing copies it onto this
+	 * host and into the daemon's heap first, and the daemon holds every lease on the machine
+	 * (D6, D17). This assertion is what stops the check drifting back to the far end.
+	 */
+	it('tells the backend the bound rather than checking it once the bytes have arrived', async () => {
+		await serve();
+		const client = await connect();
+		const leaseId = await acquire(client);
+
+		await client.request('pull_file', { leaseId, devicePath: DEVICE_PATH });
+
+		expect(transfers).toMatchObject([{ method: 'pullFile', maxBytes: MAX_ARTIFACT_BYTES }]);
+	});
+
+	/**
+	 * The one shape of device path this boundary rules on rather than relaying. A trailing
+	 * slash names a directory in every convention there is, and the platforms' own transfer
+	 * tools answer one with a success while putting the file inside it under a name this host
+	 * invented — a caller told `ok` about bytes it cannot find (`DevicePathSchema`).
+	 */
+	it.each([
+		['push_file', { devicePath: '/data/local/tmp/', contentBase64: PACKAGE }],
+		['pull_file', { devicePath: '/data/local/tmp/' }],
+	] as const)('refuses %s on a path that names a directory, before writing anything', async (method, params) => {
+		await serve();
+		const client = await connect();
+		const leaseId = await acquire(client);
+
+		const thrown = await client
+			.request(method, { leaseId, ...params })
+			.catch((error: unknown) => error);
+
+		expect(thrown).toBeInstanceOf(IpcRequestError);
+		expect((thrown as IpcRequestError).code).toBe('invalid_params');
+		expect(transfers).toEqual([]);
 	});
 
 	/**

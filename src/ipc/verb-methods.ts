@@ -176,9 +176,16 @@ export type AppVerbParams = z.infer<typeof AppVerbParamsSchema>;
  * (`src/ipc/framing.ts`), enforced on the *receiving* side, where going over it is not a
  * refusal the caller can read but a destroyed connection. The byte bound that actually
  * holds is `MAX_LOG_BYTES` in `src/verbs/logs.ts`. Every payload-carrying row has one of
- * these: the file transfers' is {@link MAX_TRANSFER_BYTES} below, and a capture's is
- * `MAX_ARTIFACT_BYTES` (`src/verbs/result.ts`) — entries, elements and files are all counts
- * of things whose size the caller chooses.
+ * these: what a call may carry *in* is {@link MAX_TRANSFER_BYTES} below, and what an answer
+ * may carry *out* is `MAX_ARTIFACT_BYTES` (`src/verbs/result.ts`) — entries, elements and
+ * files are all counts of things whose size the caller chooses.
+ *
+ * **A bound is only worth the point it is applied at.** The inbound ones are enforced here,
+ * before the host has decoded anything. The outbound ones have to be enforced where the
+ * bytes are produced, which is why `MAX_ARTIFACT_BYTES` is handed *down* to the backend for
+ * a pull (`DeviceBackend.pullFile`, `PullFileOptions`) rather than only checked on the way
+ * back: a refusal issued after the file is on this host's disk and in the daemon's heap has
+ * already cost what it was meant to prevent.
  */
 export const MAX_LOG_ENTRIES = 5_000;
 
@@ -334,13 +341,28 @@ export const MAX_DEVICE_PATH_LENGTH = 4096;
  * A NUL is refused separately: it terminates a path for every operating system underneath
  * this, so `'/tmp/a\0/b'` and `'/tmp/a'` are the same file to a device and two different
  * strings to everything above it.
+ *
+ * A **trailing slash** is refused for a related reason, and it is the one shape here that
+ * is about the transfers rather than about paths in general: a path ending in `/` names a
+ * directory in every convention there is, and a directory is not what either of these verbs
+ * addresses — a push writes *the file named*, a pull reads it. The platforms' own transfer
+ * tools do not refuse one: they copy the bytes in under the host-side basename and report a
+ * success (measured, PROJECT.md §6), which is a caller told `ok` about a file it cannot
+ * find. Caught here when the path says so on its face, and by `DeviceBackend.pushFile` when
+ * only the device knows.
  */
 export const DevicePathSchema = z
 	.string()
 	.min(1)
 	.max(MAX_DEVICE_PATH_LENGTH)
 	.startsWith('/', 'must be an absolute path on the device, starting with /')
-	.refine((value) => !value.includes('\0'), 'must not contain a NUL character');
+	.refine((value) => !value.includes('\0'), 'must not contain a NUL character')
+	.refine(
+		(value) => !value.endsWith('/'),
+		'must name a file, not a directory — a trailing slash is a directory in every ' +
+			'convention there is, and a transfer that accepted one would put the file inside it ' +
+			'under a name this host chose',
+	);
 
 /**
  * `install_app` — the package, **from the caller's machine**, and nothing else.

@@ -42,9 +42,17 @@
  * and refuses a large one by name. Chunking, resumption and streaming are R24's row.
  */
 
+import { FileTooLargeError } from '../core/errors.js';
 import type { VerbContext } from './context.js';
+import { ArtifactTooLargeError } from './errors.js';
 import { performAction } from './perform.js';
-import { type ActionResult, ActionResultSchema, type Artifact, artifactFrom } from './result.js';
+import {
+	type ActionResult,
+	ActionResultSchema,
+	type Artifact,
+	artifactFrom,
+	MAX_ARTIFACT_BYTES,
+} from './result.js';
 
 /**
  * Install an application package that is already on this host, onto the leased device.
@@ -76,9 +84,12 @@ export async function installApp(context: VerbContext, packagePath: string): Pro
  * is the caller's own and was checked as a shape at the boundary (`DevicePathSchema`) rather
  * than escaped, because nothing between here and the device interprets it.
  *
- * What happens to a path that already exists, is a directory, or cannot be written is the
- * *device's* answer and comes back as one. Recursive directory transfer is deliberately not
- * this verb.
+ * What happens to a path that already exists as a file, or cannot be written, is the
+ * *device's* answer and comes back as one. A path that is already a **directory** is not one
+ * of those: the platforms' own transfers copy the file inside it under a name this host
+ * invented and call that a success, so `DeviceBackend.pushFile` refuses it instead — see
+ * that contract for why the rule is the backend's and not the device's. Recursive directory
+ * transfer is deliberately not this verb.
  */
 export async function pushFile(
 	context: VerbContext,
@@ -115,14 +126,40 @@ export async function pullFile(context: VerbContext, devicePath: string): Promis
 		verb: 'pull_file',
 		requires: [],
 		act: async () => {
-			pulled = artifactFrom(
-				context.serial,
-				await context.backend.pullFile(context.serial, devicePath),
-			);
+			pulled = artifactFrom(context.serial, await read(context, devicePath));
 		},
 	});
 
 	// Re-parsed rather than spread and returned, so the artifact is held to the same schema
 	// the spine's own answer was — `./read.ts`'s `screenshot` assembles its result the same way.
 	return ActionResultSchema.parse({ ...result, artifact: pulled });
+}
+
+/**
+ * The bytes, with the bound the answer will be held to handed **down** rather than applied
+ * on the way back.
+ *
+ * `artifactFrom` above is still the check that decides what an answer may carry, and it is
+ * unchanged; this is the same number, given to the layer that is about to fetch the file so
+ * that a refusal costs nothing. Without it a 2 GB recording on the device is copied onto
+ * the host and read into the daemon's heap before `artifactFrom` says what was knowable
+ * from its size alone — and the daemon holds every lease on the machine (D6, D17), so
+ * exhausting it is not one caller's problem.
+ *
+ * The backend answers in the device layer's vocabulary ({@link FileTooLargeError}) and this
+ * is where it becomes the verb layer's, so what reaches an agent is the same named
+ * `artifact-too-large` refusal `screenshot` raises, carrying both numbers. One wire shape
+ * for one fact, whichever end of the transfer noticed it.
+ */
+async function read(context: VerbContext, devicePath: string): Promise<Uint8Array> {
+	try {
+		return await context.backend.pullFile(context.serial, devicePath, {
+			maxBytes: MAX_ARTIFACT_BYTES,
+		});
+	} catch (error) {
+		if (error instanceof FileTooLargeError) {
+			throw new ArtifactTooLargeError(error.serial, error.byteLength, error.maxBytes);
+		}
+		throw error;
+	}
 }

@@ -136,6 +136,13 @@ const ABSENT_PACKAGE = parseAppId('com.rover.no.such.package');
 const TRANSFER_PATH = '/data/local/tmp/rover-transfer-probe.bin';
 
 /**
+ * And where the directory case makes its directory, for the same reasons. Its own name
+ * rather than the file's parent, so the check can assert the directory is empty afterwards
+ * without saying anything about what else `/data/local/tmp` holds.
+ */
+const TRANSFER_DIRECTORY = '/data/local/tmp/rover-transfer-probe-dir';
+
+/**
  * The payload that round-trips, and every byte of it is chosen to break a path that decodes
  * on the way through: a NUL, a 0xff, a CRLF pair, a bare LF, and two bytes that are not
  * valid UTF-8 in any position. A text payload survives a broken path unchanged, which is
@@ -806,45 +813,92 @@ describe.skipIf(!process.env.ROVER_TEST_DEVICE)('a daemon runs verbs on its own 
 		const device = await freeDevice(client);
 		const leaseId = await lease(client, device.serial);
 
-		const pushed = await client.request('push_file', {
-			leaseId,
-			devicePath: TRANSFER_PATH,
-			contentBase64: Buffer.from(BINARY_PAYLOAD).toString('base64'),
-		});
+		// `try`/`finally` rather than a trailing statement, and inside the `it` rather than in
+		// an `afterEach`: the restore has to run after a *failed* assertion too — this suite
+		// exists so the next agent is handed the device as it was found (ai/TESTING.md) — and
+		// it has to run while this test still holds the lease, which an `afterEach` would not,
+		// since the shared release has already happened by then.
+		try {
+			const pushed = await client.request('push_file', {
+				leaseId,
+				devicePath: TRANSFER_PATH,
+				contentBase64: Buffer.from(BINARY_PAYLOAD).toString('base64'),
+			});
 
-		expect(pushed).toMatchObject({
-			outcome: 'ok',
-			result: {
-				verb: 'push_file',
-				device: { serial: device.serial },
-				// A file addresses no element on the screen (D12(a)), and the bytes went the other
-				// way, so there is nothing to attach to this answer.
-				target: null,
-				artifact: null,
-			},
-		});
+			expect(pushed).toMatchObject({
+				outcome: 'ok',
+				result: {
+					verb: 'push_file',
+					device: { serial: device.serial },
+					// A file addresses no element on the screen (D12(a)), and the bytes went the
+					// other way, so there is nothing to attach to this answer.
+					target: null,
+					artifact: null,
+				},
+			});
 
-		const pulled = await client.request('pull_file', { leaseId, devicePath: TRANSFER_PATH });
+			const pulled = await client.request('pull_file', { leaseId, devicePath: TRANSFER_PATH });
 
-		expect(pulled).toMatchObject({
-			outcome: 'ok',
-			result: { verb: 'pull_file', device: { serial: device.serial }, target: null },
-		});
-		if (pulled.outcome !== 'ok') throw new Error('the assertion above should have caught this');
-		const artifact = pulled.result.artifact;
-		if (!artifact) throw new Error('the pull answered with no bytes at all');
-		// Byte for byte, off the hardware, through the encoding the socket actually carries.
-		expect(Uint8Array.from(Buffer.from(artifact.base64, 'base64'))).toEqual(BINARY_PAYLOAD);
-		expect(artifact.byteLength).toBe(BINARY_PAYLOAD.byteLength);
-		// And no path came back with them: not the device path this test named, and nothing
-		// from the host's own disk (D19). Where the bytes go is this client's decision.
-		expect(JSON.stringify(pulled)).not.toContain(TRANSFER_PATH);
-		expect(JSON.stringify(pulled)).not.toContain('/tmp/');
+			expect(pulled).toMatchObject({
+				outcome: 'ok',
+				result: { verb: 'pull_file', device: { serial: device.serial }, target: null },
+			});
+			if (pulled.outcome !== 'ok') throw new Error('the assertion above should have caught this');
+			const artifact = pulled.result.artifact;
+			if (!artifact) throw new Error('the pull answered with no bytes at all');
+			// Byte for byte, off the hardware, through the encoding the socket actually carries.
+			expect(Uint8Array.from(Buffer.from(artifact.base64, 'base64'))).toEqual(BINARY_PAYLOAD);
+			expect(artifact.byteLength).toBe(BINARY_PAYLOAD.byteLength);
+			// And no path came back with them: not the device path this test named, and nothing
+			// from the host's own disk (D19). Where the bytes go is this client's decision.
+			expect(JSON.stringify(pulled)).not.toContain(TRANSFER_PATH);
+			expect(JSON.stringify(pulled)).not.toContain('/tmp/');
+		} finally {
+			// Leave the device as this test found it. Pinned to the serial the *lease* names and
+			// made while this test holds that lease, which is what keeps it from being the
+			// outside-the-lease adb ai/TESTING.md warns about.
+			await runAdbOnDevice(device.serial, ['shell', 'rm', '-f', TRANSFER_PATH]);
+		}
+	});
 
-		// Leave the device as this test found it. Pinned to the serial the *lease* names and
-		// made while this test holds that lease, which is what keeps it from being the
-		// outside-the-lease adb ai/TESTING.md warns about.
-		await runAdbOnDevice(device.serial, ['shell', 'rm', '-f', TRANSFER_PATH]);
+	/**
+	 * The blocker's other half, on real hardware: a device path that is already a directory.
+	 *
+	 * The platform's own transfer answers `1 file pushed` for it and leaves the bytes at
+	 * `<dir>/<host basename>` — a name the daemon invented — which is a caller told `ok`
+	 * about a file it cannot find, on hardware this host lends out next. What is asserted is
+	 * both halves: the call does not succeed, and the directory is **empty afterwards**.
+	 */
+	it('refuses a push whose device path is a directory, and leaves nothing inside it', async () => {
+		const client = await startHost();
+		const device = await freeDevice(client);
+		const leaseId = await lease(client, device.serial);
+
+		try {
+			await runAdbOnDevice(device.serial, ['shell', 'mkdir', '-p', TRANSFER_DIRECTORY]);
+
+			const answer = await client
+				.request('push_file', {
+					leaseId,
+					devicePath: TRANSFER_DIRECTORY,
+					contentBase64: Buffer.from(BINARY_PAYLOAD).toString('base64'),
+				})
+				.catch((error: unknown) => error);
+
+			// A device-level refusal still reaches the caller as `internal_error` — the repo-wide
+			// gap the other cases here record — but it is a refusal, and it names the reason.
+			expect(String(answer)).toMatch(/is a directory/);
+
+			const listing = await runAdbOnDevice(device.serial, [
+				'shell',
+				'ls',
+				'-A',
+				TRANSFER_DIRECTORY,
+			]);
+			expect(listing.stdout.trim()).toBe('');
+		} finally {
+			await runAdbOnDevice(device.serial, ['shell', 'rm', '-rf', TRANSFER_DIRECTORY]);
+		}
 	});
 
 	/**
