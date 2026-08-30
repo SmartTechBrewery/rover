@@ -23,7 +23,10 @@ import {
 	FrameExtractionFailedError,
 	FrameExtractionUnavailableError,
 	FramesTooLargeError,
+	InstallHookFailedError,
+	InstallHookUndeclaredError,
 	OffScreenPointError,
+	ProjectNotRegisteredError,
 	TargetNotFoundError,
 	UnaddressableElementError,
 } from '@/verbs/errors.js';
@@ -252,6 +255,90 @@ describe('a verb-layer error becomes a failure a client can branch on', () => {
 		});
 	});
 
+	/**
+	 * The three ways a project install answers "no", and the reason all three are here: an
+	 * `internal_error` would say the host broke over a hook file nobody wrote, and an `ok` would
+	 * report an install that never ran. Each is a different next move for the agent — send the
+	 * bytes, ask the operator, or read the build's own stderr.
+	 */
+	it('maps a project this host has never been told about, naming it', () => {
+		const error = new ProjectNotRegisteredError(SERIAL, 'checkout-web');
+
+		expect(failureOf(error)).toEqual({
+			kind: 'project-not-registered',
+			serial: SERIAL,
+			project: 'checkout-web',
+			message: error.message,
+		});
+	});
+
+	it('maps a registered project whose hook file declares no install', () => {
+		const error = new InstallHookUndeclaredError(SERIAL, 'checkout-web');
+
+		expect(failureOf(error)).toEqual({
+			kind: 'install-hook-undeclared',
+			serial: SERIAL,
+			project: 'checkout-web',
+			message: error.message,
+		});
+	});
+
+	// The exit code and the stderr tail travel together, because a non-zero exit is data and
+	// neither half says on its own why a build refused.
+	it('maps an install command that ran and failed, carrying its exit code and stderr', () => {
+		const error = new InstallHookFailedError({
+			serial: SERIAL,
+			project: 'checkout-web',
+			command: 'bash',
+			exitCode: 1,
+			signal: null,
+			stderr: 'FAILURE: Build failed with an exception.\n',
+			outcome: 'exited 1',
+		});
+
+		expect(failureOf(error)).toEqual({
+			kind: 'install-hook-failed',
+			serial: SERIAL,
+			project: 'checkout-web',
+			command: 'bash',
+			exitCode: 1,
+			signal: null,
+			stderr: 'FAILURE: Build failed with an exception.\n',
+			outcome: 'exited 1',
+			message: error.message,
+		});
+	});
+
+	// A command killed at its bound and one that never started both arrive with no exit code,
+	// which is what `signal` and `outcome` are for.
+	it('keeps a command killed at its bound distinguishable from one that never started', () => {
+		const killed = failureOf(
+			new InstallHookFailedError({
+				serial: SERIAL,
+				project: 'checkout-web',
+				command: 'bash',
+				exitCode: null,
+				signal: 'SIGKILL',
+				stderr: '',
+				outcome: 'was killed by SIGKILL — its 300000ms budget is the likely reason',
+			}),
+		);
+		const neverStarted = failureOf(
+			new InstallHookFailedError({
+				serial: SERIAL,
+				project: 'checkout-web',
+				command: 'build.sh',
+				exitCode: null,
+				signal: null,
+				stderr: '',
+				outcome: 'could not be started — spawn build.sh ENOENT',
+			}),
+		);
+
+		expect(killed).toMatchObject({ exitCode: null, signal: 'SIGKILL' });
+		expect(neverStarted).toMatchObject({ exitCode: null, signal: null });
+	});
+
 	it('maps a wait that timed out, with the polls that make the elapsed time diagnosable', () => {
 		const error = new WaitTimeoutError("text containing 'Save'", 'an empty screen', 5_000, 21);
 
@@ -319,6 +406,20 @@ describe('a failure survives the trip to the agent', () => {
 			new FrameExtractionFailedError(SERIAL, 'ffmpeg', 183, 'invalid data', 'exited 183'),
 		],
 		['frames-too-large', new FramesTooLargeError(SERIAL, 30, 3_000_000, 1_572_864)],
+		['project-not-registered', new ProjectNotRegisteredError(SERIAL, 'checkout-web')],
+		['install-hook-undeclared', new InstallHookUndeclaredError(SERIAL, 'checkout-web')],
+		[
+			'install-hook-failed',
+			new InstallHookFailedError({
+				serial: SERIAL,
+				project: 'checkout-web',
+				command: 'bash',
+				exitCode: 1,
+				signal: null,
+				stderr: 'FAILURE: Build failed with an exception.',
+				outcome: 'exited 1',
+			}),
+		],
 	])('round-trips a %s failure through JSON and re-parses it equal', (_kind, error) => {
 		const failure = failureOf(error);
 

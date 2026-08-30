@@ -29,7 +29,13 @@ import {
 } from '@/backends/registry.js';
 import type { Capabilities } from '@/core/capabilities.js';
 import type { DeviceBackend } from '@/core/device.js';
-import { type AppId, type LeaseId, parseAppId, parseDeviceSerial } from '@/core/ids.js';
+import {
+	type AppId,
+	type DeviceSerial,
+	type LeaseId,
+	parseAppId,
+	parseDeviceSerial,
+} from '@/core/ids.js';
 import { createDeviceInventory } from '@/daemon/inventory.js';
 import { createLeaseHandlers, type LeaseHandlers } from '@/daemon/lease-handlers.js';
 import { createLeaseStore, type LeaseStore } from '@/daemon/leases.js';
@@ -80,6 +86,10 @@ interface HarnessOptions {
 	readonly projectName?: string;
 	/** Defaults to the restorer's own ten seconds, which no unit test can wait out. */
 	readonly teardownTimeoutMs?: number;
+	/** Defaults to the restorer's own ten seconds, for {@link teardownTimeoutMs}'s reason. */
+	readonly settleTimeoutMs?: number;
+	/** Defaults to resolving at once — the restorer's own default is the same. */
+	readonly settleTraffic?: (serial: DeviceSerial) => Promise<void>;
 }
 
 function createHarness(options: HarnessOptions = {}): Harness {
@@ -120,6 +130,8 @@ function createHarness(options: HarnessOptions = {}): Harness {
 		...(options.teardownTimeoutMs === undefined
 			? {}
 			: { teardownTimeoutMs: options.teardownTimeoutMs }),
+		...(options.settleTimeoutMs === undefined ? {} : { settleTimeoutMs: options.settleTimeoutMs }),
+		...(options.settleTraffic === undefined ? {} : { settleTraffic: options.settleTraffic }),
 	});
 	const leases = createLeaseStore({
 		ttlMs: TTL_MS,
@@ -425,6 +437,54 @@ describe('a project teardown hook that never returns', () => {
 		expect(harness.warnings).toHaveLength(1);
 		expect(harness.warnings[0]).toContain('the project teardown hook did not finish within');
 		expect(harness.warnings[0]).toContain(SERIAL);
+	});
+});
+
+describe('a verb call from the ending lease that never unwinds', () => {
+	it('stops waiting for it, says so, and restores the device anyway', async () => {
+		const harness = createHarness({
+			// The restorer's real bound is ten seconds; the same seam `teardownTimeoutMs` is.
+			settleTimeoutMs: 5,
+			// A call the lease's end could not reach: revoking a backend stops the *next* method,
+			// and a verb awaiting a host process — `install_app` running a project's install
+			// command — has none to stop. Unbounded, this is worse than a teardown that hangs,
+			// because it comes *first*: nothing on the device is restored either.
+			settleTraffic: () => new Promise<void>(() => {}),
+		});
+		const leaseId = await harness.acquire('issue-112');
+		harness.handlers.release_device({ leaseId });
+
+		await expect(harness.acquire('pr-127-review')).resolves.toBeTruthy();
+		expect(harness.performed).toEqual([
+			`stopApp ${APP}`,
+			`stopApp ${OTHER_APP}`,
+			'setAirplaneMode false',
+			'setWifiEnabled true',
+			'teardown',
+		]);
+		expect(harness.warnings).toHaveLength(1);
+		expect(harness.warnings[0]).toContain('had not unwound within');
+		expect(harness.warnings[0]).toContain(SERIAL);
+	});
+
+	it('waits for one that does unwind, so the bound is a backstop and not the rule', async () => {
+		const unwound = createGate();
+		const harness = createHarness({
+			settleTimeoutMs: 5_000,
+			settleTraffic: () => unwound.reached,
+		});
+		const leaseId = await harness.acquire('issue-112');
+		harness.handlers.release_device({ leaseId });
+
+		// Nothing is undone while the previous holder's call is still in flight: the restoration
+		// and that call would be two drivers of one device, which is what this wait exists for.
+		await Promise.resolve();
+		expect(harness.performed).toEqual([]);
+
+		unwound.reach();
+		await harness.settle();
+		expect(harness.performed).toContain('teardown');
+		expect(harness.warnings).toEqual([]);
 	});
 });
 

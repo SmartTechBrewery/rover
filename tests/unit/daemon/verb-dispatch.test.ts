@@ -30,7 +30,7 @@
  * decoder no more than a `tap` needs a finger.
  */
 
-import { access, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -1370,6 +1370,272 @@ describe('the transfer rows carry a file across the boundary', () => {
 
 		expect(thrown).toBeInstanceOf(IpcRequestError);
 		expect((thrown as IpcRequestError).code).toBe('invalid_params');
+	});
+});
+
+/**
+ * `install_app` with **no bytes**: the host runs what the lease's *project* declared installing
+ * to be (D13/R17 phase 3).
+ *
+ * Over the real socket and against a **real hook file and a real child process**, for the reason
+ * `tests/unit/daemon/restoration.test.ts` runs the teardown that way: what is being asserted is
+ * that what an operator writes in `<project>.json` is what the daemon runs, and that the child
+ * is told which device — the one property whose failure looks like success from both sides
+ * (PROJECT.md §2).
+ */
+describe('install_app runs the project’s own install command', () => {
+	/** The `project` every lease in this file is taken with, and so the hook file's own name. */
+	const HOOK_PROJECT = 'rover';
+
+	/** Where a hook writes proof that it ran, and what it was told. */
+	function markerPath(): string {
+		return join(temp.projectsRoot, 'install-ran.txt');
+	}
+
+	/** Write `<projectsRoot>/<name>.json`, creating the root the way an operator would. */
+	async function writeHookFile(name: string, hooks: unknown): Promise<void> {
+		await mkdir(temp.projectsRoot, { recursive: true });
+		await writeFile(join(temp.projectsRoot, `${name}.json`), JSON.stringify(hooks), 'utf8');
+	}
+
+	/** A hook file whose install is a real program leaving proof of what it was told. */
+	async function writeInstallingHookFile(): Promise<void> {
+		await writeHookFile(HOOK_PROJECT, {
+			project: HOOK_PROJECT,
+			install: {
+				command: process.execPath,
+				args: [
+					'-e',
+					"require('node:fs').writeFileSync(process.argv[1], process.env.ROVER_PROJECT + ' ' + process.env.ROVER_DEVICE_SERIAL)",
+					markerPath(),
+				],
+			},
+		});
+	}
+
+	/** Whether the install hook left its marker behind. */
+	async function installRan(): Promise<boolean> {
+		return readFile(markerPath(), 'utf8').then(
+			() => true,
+			() => false,
+		);
+	}
+
+	/**
+	 * Yield until the hook's child has actually started — it says so by writing its marker.
+	 *
+	 * A loop over {@link drainEventLoop} rather than a delay, for this repository's usual reason
+	 * (D12(b)): what the test is waiting for is a real `spawn` and a real write, and a duration
+	 * long enough for those on one machine is a flake on another. The loop is bounded by the
+	 * suite's own timeout, which is the only thing a hook that never starts should hit.
+	 */
+	async function untilInstallStarted(): Promise<void> {
+		while (!(await installRan())) {
+			await drainEventLoop();
+		}
+	}
+
+	/**
+	 * The headline criterion: the project's command ran, and it ran **against the leased
+	 * device**. An install that landed on a neighbour's device is the worst failure this tool
+	 * has and looks like success from both sides, so the serial is asserted out of the child's
+	 * own environment rather than out of the daemon's intent.
+	 */
+	it('runs the hook with ROVER_DEVICE_SERIAL set to the leased device', async () => {
+		await serve();
+		await writeInstallingHookFile();
+		const client = await connect();
+		const leaseId = await acquire(client);
+
+		const answer = await client.request('install_app', { leaseId });
+
+		expect(answer).toMatchObject({
+			outcome: 'ok',
+			// The same verb, the same answer shape and the same after-state as a call carrying
+			// bytes: one operation, one vocabulary (D10, D12(c), D14).
+			result: { verb: 'install_app', target: null, artifact: null, device: { serial: SERIAL } },
+		});
+		await expect(readFile(markerPath(), 'utf8')).resolves.toBe(`${HOOK_PROJECT} ${SERIAL}`);
+		// The host installed nothing of its own: there were no caller bytes, so no file was
+		// written and the backend was never handed a package.
+		expect(transfers).toEqual([]);
+		expect(JSON.stringify(answer)).not.toContain(temp.projectsRoot);
+	});
+
+	/**
+	 * The sibling of 'does not re-lend the device while the previous holder is still inside a
+	 * device call', for the half of a verb call that revocation cannot reach.
+	 *
+	 * There, the holder is suspended inside a **backend** call and the next grant rightly queues
+	 * behind it. Here it is suspended inside a **host process**, which a revoked backend never
+	 * touches — so without the verb call's own abort signal the release would leave the build
+	 * running, `settle` waiting on it, and every later `acquire_device` for this device parked
+	 * for the rest of `INSTALL_HOOK_TIMEOUT_MS`: five minutes, against a client request timeout
+	 * of thirty seconds. This test cannot pass by waiting; the bound outlasts the suite's own.
+	 */
+	it('does not park the next grant behind a released lease’s install', async () => {
+		await serve();
+		await writeHookFile(HOOK_PROJECT, {
+			project: HOOK_PROJECT,
+			install: {
+				command: process.execPath,
+				args: [
+					'-e',
+					"require('node:fs').writeFileSync(process.argv[1], 'started'); setInterval(() => {}, 1000)",
+					markerPath(),
+				],
+			},
+		});
+		const holder = await connect();
+		const leaseId = await acquire(holder);
+
+		const verb = holder.request('install_app', { leaseId });
+		await untilInstallStarted();
+		await holder.request('release_device', { leaseId });
+
+		// A second agent on its own connection, asking for the device the first one just gave
+		// back — the sequence a caller reaches by simply retrying after a timeout.
+		const other = await connect();
+		await expect(
+			other.request('acquire_device', { serial: SERIAL, owner: 'pr-127-review', project: 'rover' }),
+		).resolves.toMatchObject({ outcome: 'granted' });
+
+		// And the ex-holder gets the same answer every other revoked verb gives. A build stopped
+		// because its own lease ended is not a build that failed, so this is not the
+		// `install-hook-failed` the runner would otherwise produce.
+		expect(await verb).toMatchObject({ outcome: 'refused', reason: 'no-lease' });
+	});
+
+	/**
+	 * The first of the three named answers. A host that has never been told about a project is
+	 * somebody's configuration, not a daemon that broke, and `internal_error` would send the
+	 * agent looking at the wrong machine.
+	 */
+	it('refuses by name when the lease’s project has no hook file', async () => {
+		await serve();
+		const client = await connect();
+		const leaseId = await acquire(client);
+
+		const answer = await client.request('install_app', { leaseId });
+
+		expect(answer).toMatchObject({
+			outcome: 'failed',
+			failure: { kind: 'project-not-registered', serial: SERIAL, project: HOOK_PROJECT },
+		});
+		expect(transfers).toEqual([]);
+	});
+
+	/**
+	 * The second, and it is a different fact from the first: the file is there and says nothing
+	 * about installing. An `ok` here would report an install that never happened, and a default
+	 * command would be the core guessing at an application's name (D13).
+	 */
+	it('refuses by name when the hook file declares no install command', async () => {
+		await serve();
+		await writeHookFile(HOOK_PROJECT, { project: HOOK_PROJECT, apps: [] });
+		const client = await connect();
+		const leaseId = await acquire(client);
+
+		const answer = await client.request('install_app', { leaseId });
+
+		expect(answer).toMatchObject({
+			outcome: 'failed',
+			failure: { kind: 'install-hook-undeclared', serial: SERIAL, project: HOOK_PROJECT },
+		});
+		expect(transfers).toEqual([]);
+	});
+
+	/**
+	 * The third: the command ran and refused. A non-zero exit is data — the code says a program
+	 * declined, and only its stderr says why — so it travels as an answer rather than as
+	 * `internal_error`.
+	 */
+	it('answers a non-zero exit with the code and the stderr tail, not internal_error', async () => {
+		await serve();
+		await writeHookFile(HOOK_PROJECT, {
+			project: HOOK_PROJECT,
+			install: {
+				command: process.execPath,
+				args: ['-e', "process.stderr.write('FAILURE: Build failed'); process.exit(3)"],
+			},
+		});
+		const client = await connect();
+		const leaseId = await acquire(client);
+
+		const answer = await client.request('install_app', { leaseId });
+
+		expect(answer).toMatchObject({
+			outcome: 'failed',
+			failure: {
+				kind: 'install-hook-failed',
+				serial: SERIAL,
+				project: HOOK_PROJECT,
+				exitCode: 3,
+				signal: null,
+				outcome: 'exited 3',
+			},
+		});
+		if (answer.outcome !== 'failed' || answer.failure.kind !== 'install-hook-failed') {
+			throw new Error('the assertion above should have caught this');
+		}
+		expect(answer.failure.stderr).toContain('FAILURE: Build failed');
+	});
+
+	/**
+	 * **The existing path, untouched.** A call that carries bytes installs those bytes and never
+	 * consults the project — the hook file below would leave a marker if it ran, and does not.
+	 */
+	it('leaves a call that does carry bytes exactly as it was', async () => {
+		await serve();
+		await writeInstallingHookFile();
+		const client = await connect();
+		const leaseId = await acquire(client);
+
+		const answer = await client.request('install_app', {
+			leaseId,
+			packageBase64: Buffer.from('a package the caller sent', 'utf8').toString('base64'),
+		});
+
+		expect(answer).toMatchObject({ outcome: 'ok', result: { verb: 'install_app' } });
+		expect(transfers).toMatchObject([
+			{ method: 'installApp', serial: SERIAL, contents: 'a package the caller sent' },
+		]);
+		expect(await installRan()).toBe(false);
+	});
+
+	/**
+	 * The one thing here that is **not** a named answer, deliberately. A hook file that exists
+	 * and will not parse is the operator's mistake and nothing the caller can act on, so it is
+	 * not dressed up as an answer about the project: the restorer contains this into a warning
+	 * because a device still has to be put back, and there is nothing to contain it into here.
+	 */
+	it('lets a hook file that will not parse fail loudly rather than reading as no project', async () => {
+		await serve();
+		await mkdir(temp.projectsRoot, { recursive: true });
+		await writeFile(join(temp.projectsRoot, `${HOOK_PROJECT}.json`), '{ not json', 'utf8');
+		const client = await connect();
+		const leaseId = await acquire(client);
+
+		const thrown = await client
+			.request('install_app', { leaseId })
+			.catch((error: unknown) => error);
+
+		expect(thrown).toBeInstanceOf(IpcRequestError);
+		expect((thrown as IpcRequestError).code).toBe('internal_error');
+		expect((thrown as IpcRequestError).message).toContain('not valid JSON');
+	});
+
+	it('refuses a project install on a lease id the store does not know, without running anything', async () => {
+		await serve();
+		await writeInstallingHookFile();
+		const client = await connect();
+
+		const answer = await client.request('install_app', { leaseId: parseLeaseId('never-granted') });
+
+		// The hook file is read inside `runVerb`, so a call on a lease this host does not know
+		// never reaches it — the refusal costs no process.
+		expect(answer).toMatchObject({ outcome: 'refused', reason: 'no-lease' });
+		expect(await installRan()).toBe(false);
 	});
 });
 
