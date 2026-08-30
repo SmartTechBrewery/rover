@@ -170,6 +170,71 @@ describe('a hook that fails', () => {
 	});
 });
 
+describe('a hook that leaves something holding its stdio', () => {
+	/**
+	 * A teardown that backgrounds a grandchild inheriting its stdout and stderr — `nohup … &`,
+	 * `docker compose up -d`, a helper restarted rather than only stopped. The pipes stay open
+	 * after the hook itself is gone, which is why the run cannot end on `'close'`: nothing is
+	 * ever going to close them, and the child that was killable has already exited.
+	 *
+	 * The grandchild's pid goes to `marker` before the parent does anything else, so this suite
+	 * can end it afterwards rather than leaving a process behind on whoever ran the tests — and
+	 * it holds the pipes with a timer that runs out on its own, so even a run that dies before
+	 * that kill leaves nothing behind for good.
+	 */
+	function orphanHook(marker: string, parentSource: string): HookCommand {
+		return nodeHook(
+			"const orphan = require('node:child_process').spawn(process.execPath," +
+				"['-e','setTimeout(() => {}, 30_000)'],{ detached: true, stdio: 'inherit' });" +
+				'orphan.unref();' +
+				"require('node:fs').writeFileSync(process.argv[1], String(orphan.pid));" +
+				parentSource,
+			[marker],
+		);
+	}
+
+	/** Kill whatever the hook left running. Nothing to do if it never got that far. */
+	async function killOrphan(marker: string): Promise<void> {
+		const pid = await readFile(marker, 'utf8').catch(() => null);
+		if (pid === null) return;
+		try {
+			process.kill(Number(pid), 'SIGKILL');
+		} catch {
+			// Already gone, which is the outcome this wanted either way.
+		}
+	}
+
+	it('resolves when the hook itself exited 0, however long the grandchild lives', async () => {
+		const marker = join(dir, 'orphan.pid');
+		try {
+			// The bound is on the hook, not on everything the hook chose to start. Waiting on the
+			// pipes instead left this pending for the daemon's lifetime, while the restorer
+			// reported a teardown that had in fact succeeded as one that never finished.
+			await expect(
+				runHookCommand(orphanHook(marker, 'process.exit(0)'), CONTEXT),
+			).resolves.toBeUndefined();
+		} finally {
+			await killOrphan(marker);
+		}
+	});
+
+	it('still kills a parent that never exits, at the bound the runner was given', async () => {
+		const marker = join(dir, 'orphan.pid');
+		try {
+			// SIGKILL on the child cannot close a pipe its grandchild also holds, so this is the
+			// case where `'close'` never arrives at all: the bound has to come from the process
+			// ending and from nothing else. The budget is generous enough for the parent to reach
+			// its `spawn` first, and is still a fraction of the real one.
+			const failure = await failureOf(orphanHook(marker, 'setInterval(() => {}, 1000)'), 500);
+
+			expect(failure.signal).toBe('SIGKILL');
+			expect(failure.message).toContain('500ms budget');
+		} finally {
+			await killOrphan(marker);
+		}
+	});
+});
+
 describe('the two bounds around one teardown', () => {
 	it('kills the child before the restorer stops waiting for it', async () => {
 		// Asserted rather than left to drift, the way `MAX_RECORDING_MS` is asserted against

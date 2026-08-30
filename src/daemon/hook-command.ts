@@ -14,6 +14,16 @@
  * restoration queued behind it, and a **tail** of the output rather than all of it, because a
  * hook is not a place to buffer a megabyte. Success is silent — a quiet teardown is the normal
  * one — and a failure is a named error carrying the exit code and that tail.
+ *
+ * **The run ends on `'exit'`, not on `'close'`, and that is what makes the timeout a bound.**
+ * `'close'` waits for the *pipes* as well as the process, and a teardown that backgrounds
+ * anything inheriting its stdio — `nohup … &`, `docker compose up -d`, a helper restarted rather
+ * than only stopped — leaves a grandchild holding them open with nothing left to kill it. Waiting
+ * on that turns eight seconds into no bound at all: the child exits 0 in milliseconds, `'close'`
+ * never arrives, and `./restore.ts` reports at ten seconds that a hook which in fact succeeded did
+ * not finish — while the promise stays pending, holding two pipes, for the daemon's lifetime. The
+ * price is that the stderr tail is whatever arrived before the child exited, which is the right
+ * trade: a bound that holds, over the last few bytes of a program that is already gone.
  */
 
 import { spawn } from 'node:child_process';
@@ -132,6 +142,19 @@ export async function runHookCommand(
 		/** Set by whichever of the two endings arrives first; suppresses the other. */
 		let settled = false;
 
+		/**
+		 * Let go of the two pipes, which is this process's whole claim on them.
+		 *
+		 * Required because the run ends on `'exit'` rather than on `'close'`, so nothing else
+		 * will: the streams are still open, and a promise holding them for the daemon's lifetime
+		 * is a handle leak per lease that ended. Anything the child left behind keeps its own
+		 * descriptors — those were never ours to close.
+		 */
+		const releasePipes = (): void => {
+			child.stdout.destroy();
+			child.stderr.destroy();
+		};
+
 		const fail = (
 			exitCode: number | null,
 			signal: NodeJS.Signals | null,
@@ -139,6 +162,7 @@ export async function runHookCommand(
 		): void => {
 			if (settled) return;
 			settled = true;
+			releasePipes();
 			reject(
 				new HookCommandFailedError({
 					project: context.project,
@@ -167,10 +191,12 @@ export async function runHookCommand(
 			// The common one, and the one whose remedy is on the host rather than in the lease.
 			fail(null, null, `could not be started — ${error.message}`);
 		});
-		child.on('close', (code: number | null, signal: NodeJS.Signals | null) => {
+		// `'exit'`, never `'close'`: this is where the bound above is actually enforced.
+		child.on('exit', (code: number | null, signal: NodeJS.Signals | null) => {
 			if (settled) return;
 			if (code === 0) {
 				settled = true;
+				releasePipes();
 				resolve();
 				return;
 			}

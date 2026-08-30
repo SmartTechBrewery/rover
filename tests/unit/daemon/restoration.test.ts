@@ -522,10 +522,13 @@ describe('a project hook file, on both paths a lease can end', () => {
 		);
 	}
 
-	function createFileBackedHarness(): Harness {
+	function createFileBackedHarness(hookTimeoutMs?: number): Harness {
 		return createHarness({
 			projectName: HOOK_PROJECT,
-			resolver: createProjectResolver({ root }),
+			resolver: createProjectResolver({
+				root,
+				...(hookTimeoutMs === undefined ? {} : { hookTimeoutMs }),
+			}),
 		});
 	}
 
@@ -650,6 +653,80 @@ describe('a project hook file, on both paths a lease can end', () => {
 		expect(harness.warnings).toHaveLength(1);
 		expect(harness.warnings[0]).toContain('exited 3');
 		expect(harness.warnings[0]).toContain('the helper service was already gone');
+		await expect(harness.acquire('pr-127-review')).resolves.toBeTruthy();
+	});
+
+	it('does not wait on what a teardown left running after it exited', async () => {
+		const orphanPid = join(root, 'orphan.pid');
+		await writeHookFile(
+			JSON.stringify({
+				project: HOOK_PROJECT,
+				apps: [CHECKOUT],
+				teardown: {
+					command: process.execPath,
+					args: [
+						'-e',
+						"const orphan = require('node:child_process').spawn(process.execPath," +
+							"['-e','setTimeout(() => {}, 30_000)'],{ detached: true, stdio: 'inherit' });" +
+							'orphan.unref();' +
+							"require('node:fs').writeFileSync(process.argv[1], String(orphan.pid));" +
+							'process.exit(0)',
+						orphanPid,
+					],
+				},
+			}),
+		);
+		const harness = createFileBackedHarness();
+		const leaseId = await harness.acquire('issue-112');
+
+		harness.handlers.release_device({ leaseId });
+		await harness.settle();
+
+		try {
+			// The ordinary shape of a teardown: `nohup … &`, `docker compose up -d`, a helper
+			// restarted rather than only stopped. The hook exited 0 and it succeeded — so the
+			// restorer's ten seconds must not be spent, and nothing may be reported as a hang.
+			// This test cannot pass by waiting: the restorer's bound outlasts the suite's own.
+			expect(harness.warnings).toEqual([]);
+			expect(harness.performed).toEqual([
+				`stopApp ${CHECKOUT}`,
+				'setAirplaneMode false',
+				'setWifiEnabled true',
+			]);
+		} finally {
+			const pid = await readFile(orphanPid, 'utf8').catch(() => null);
+			if (pid !== null) {
+				try {
+					process.kill(Number(pid), 'SIGKILL');
+				} catch {
+					// Already gone, which is the outcome this wanted either way.
+				}
+			}
+		}
+	});
+
+	it('lets the hook run out its own budget before the restorer runs out of patience', async () => {
+		await writeHookFile(
+			JSON.stringify({
+				project: HOOK_PROJECT,
+				apps: [CHECKOUT],
+				teardown: { command: process.execPath, args: ['-e', 'setInterval(() => {}, 1000)'] },
+			}),
+		);
+		// The resolver's own seam, shortened the way `teardownTimeoutMs` is above. The restorer
+		// keeps its real ten seconds here deliberately: which of the two bounds fires is the
+		// thing under test, and it has to be the one that can actually end the process.
+		const harness = createFileBackedHarness(25);
+		const leaseId = await harness.acquire('issue-112');
+
+		harness.handlers.release_device({ leaseId });
+		await harness.settle();
+
+		expect(harness.warnings).toHaveLength(1);
+		expect(harness.warnings[0]).toContain('25ms budget');
+		// Not the restorer giving up: that bound is on the *wait* and leaves the program running
+		// against a device already handed on. A hook past its budget is a killed hook.
+		expect(harness.warnings[0]).not.toContain('did not finish within');
 		await expect(harness.acquire('pr-127-review')).resolves.toBeTruthy();
 	});
 });

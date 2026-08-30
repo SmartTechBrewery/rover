@@ -460,9 +460,10 @@ after it, under `ROVER_PROJECTS_PATH`:
 }
 ```
 
-Four fields, and only these four today. `project` is required and **must equal the file's own
-name** — a mismatch is a startup-shaped refusal naming both, so a file copied from another project
-cannot quietly serve this one. `apps` is the list of applications a lease on this project drove;
+Three fields, and only these three today. `project` is required and **must equal the file's own
+name** — a mismatch is refused out loud when the lease ends, in a warning naming both, with that
+project's apps and teardown skipped while the device itself is still restored; a file copied from
+another project cannot quietly serve this one. `apps` is the list of applications a lease on this project drove;
 they are stopped on the device when the lease ends, in the order given, and an empty list is a
 perfectly good answer. `teardown` is one command the **host** runs when the lease ends: `command`
 and `args` only — never a shell line, because nothing here is word-split or glob-expanded, so an
@@ -475,11 +476,13 @@ The hook runs when a lease on that project **ends by either path — a `rover re
 expiry with the agent that held the device long gone** (`PROJECT.md` D9). Its child gets
 `ROVER_PROJECT` and `ROVER_DEVICE_SERIAL` in the environment, on top of the daemon's own and
 whatever `env` declares, so a teardown can name the device it is undoing. It is bounded: eight
-seconds, then the process is killed and the failure — the exit code and the tail of its stderr —
-becomes a warning. A hook that fails costs its own project's steps and nothing else; the device is
-still put back.
+seconds, then the hook's own process is killed and the failure — the exit code and the tail of its
+stderr — becomes a warning. The bound is on the hook and not on everything the hook started: a
+teardown that backgrounds a helper is finished the moment it exits, and what it left running is
+the operator's to manage. A hook that fails costs its own project's steps and nothing else; the
+device is still put back.
 
-Three things worth being clear about, because this file's commands run with the daemon's
+Four things worth being clear about, because this file's commands run with the daemon's
 privileges:
 
 - **It lives on the host, never on the client.** Verbs run where the hardware is (`PROJECT.md`
@@ -492,6 +495,15 @@ privileges:
 - **Nothing is cached.** Every lease that ends re-reads the file, so an edit needs no restart, and
   a file that will not parse is a warning naming the file rather than a project silently treated
   as having no hooks.
+- **A lease's `project` string authorizes nothing** (`PROJECT.md` D20) — it attributes, and here
+  it also *selects*. Any caller that can take a lease at all, over the local socket or over the
+  TCP listener with any operator-issued token, can name any project registered on this host and
+  cause that project's teardown to run when the lease ends. That is the same trust already
+  extended to everyone in `ROVER_USERS_PATH`, but it is worth saying rather than inferring,
+  because the natural mistake is a teardown written as though it only ever follows a lease that
+  project's own team took — restarting a shared service, clearing shared state — which a mistyped
+  or borrowed `project` string on somebody else's lease would then trigger. Per-user project
+  authorization is deliberately not in scope: D20 is that the two never mix.
 
 ### The artifact archive
 
