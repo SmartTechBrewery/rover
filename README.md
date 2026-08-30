@@ -47,18 +47,25 @@ applications a project owns and what its hook does arrive through an injected re
 per-project configuration that fills it is its own issue (`PROJECT.md` §9.3, R17), so today that
 resolver answers nothing and only the two network steps have work to do.
 
-**There is a CLI** (D4) — `rover list`, `acquire`, `release`, `status` and `users`, human-readable by
-default and one JSON document on stdout with `--json`, every diagnostic on stderr. It holds no
-verb logic: each command parses flags, calls one IPC method, renders the answer and picks an exit
-code. `list` shows what is attached, what is free and who holds the rest — the owner, project and
-test name, and how much longer they have — and says out loud when the host does not know its own
-view to be current, rather than quietly printing a short list. `acquire` requires an explicit
-`--owner` and `--project` and derives neither. `status` says which host answered. The host is named
-by `--host`: no flag means the local one, `remote` is the machine `ROVER_HOST_ADDRESS`,
-`ROVER_HOST_PORT` and `ROVER_HOST_TOKEN` name, and anything else fails loudly instead of hanging.
-`users` is the one command that asks no host at all: it reads and writes this machine's own
-`~/.rover/users.json` directly, works whether or not a daemon is running, and takes no `--host`
-(see "Managing host users" below).
+**There is a CLI** (D4) — `rover list`, `acquire`, `release`, `screenshot`, `record`, `status` and
+`users`, human-readable by default and one JSON document on stdout with `--json`, every diagnostic
+on stderr. It holds no verb logic: each command parses flags, calls one IPC method, renders the
+answer and picks an exit code. `list` shows what is attached, what is free and who holds the rest —
+the owner, project and test name, and how much longer they have — and says out loud when the host
+does not know its own view to be current, rather than quietly printing a short list. `acquire`
+requires an explicit `--owner` and `--project` and derives neither. `status` says which host
+answered. The host is named by `--host`: no flag means the local one, `remote` is the machine
+`ROVER_HOST_ADDRESS`, `ROVER_HOST_PORT` and `ROVER_HOST_TOKEN` name, and anything else fails loudly
+instead of hanging. `screenshot` and `record` are the two commands that bring bytes back: the verb
+runs on the host and the capture returns base64 rather than a path (D19), so `--out` is a path on
+**this** machine, it is required — there is no filename the CLI could invent that anything calling
+it could predict — and the path reported is `path.resolve` of what you passed. What decoded is
+checked against the byte length the host encoded before anything is written, so a capture the host
+refused, or one that did not survive the trip, exits 1 and leaves no file at `--out` at all rather
+than a short one. `rover record --duration-ms <n>` raises its own request timeout past the
+recording, so a long recording is never a hang. `users` is the one command that asks no host at
+all: it reads and writes this machine's own `~/.rover/users.json` directly, works whether or not a
+daemon is running, and takes no `--host` (see "Managing host users" below).
 
 **Waiting is a condition, never a duration.** `src/core/wait.ts` is the one module in the
 repository allowed to construct a delay: `waitForCondition` polls a probe until it reports the

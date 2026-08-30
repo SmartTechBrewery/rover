@@ -13,6 +13,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { LOCAL_HOST, REMOTE_HOST, resolveHost } from '@/cli/_shared/host.js';
 import { EXIT_OK, EXIT_USAGE, run } from '@/cli/index.js';
 import { ATTRIBUTION_MAX_LENGTH, AttributionStringSchema } from '@/ipc/methods.js';
+import { MAX_RECORDING_MS } from '@/verbs/record.js';
 import {
 	connectWithoutStarting,
 	createTempSocket,
@@ -213,6 +214,69 @@ describe('rover acquire, on its required attribution', () => {
 		// host accepts — or waving through ones it does not — the moment the schema moves.
 		expect(() => AttributionStringSchema.parse('x'.repeat(ATTRIBUTION_MAX_LENGTH))).not.toThrow();
 		expect(() => AttributionStringSchema.parse('x'.repeat(ATTRIBUTION_MAX_LENGTH + 1))).toThrow();
+	});
+});
+
+describe('rover screenshot and rover record, on --out and --duration-ms', () => {
+	// Every case in here has to be decided before a connection, like the rest of this file:
+	// a capture spends a lease-renewing round trip and several megabytes, and reporting a
+	// mistyped flag afterwards would spend all of it to say something knowable up front.
+	it.each([
+		'screenshot',
+		'record',
+	])('exits 2 without --out rather than inventing a filename for %s', async (command) => {
+		expect(await run([command, 'lease-1'])).toBe(EXIT_USAGE);
+
+		expect(errored.join('\n')).toContain('--out is required');
+		expect(errored.join('\n')).toContain(`Usage: rover ${command}`);
+	});
+
+	it.each(['screenshot', 'record'])('exits 2 without a lease id for %s', async (command) => {
+		expect(await run([command, '--out', 'somewhere.bin'])).toBe(EXIT_USAGE);
+
+		expect(errored.join('\n')).toContain('expected <lease-id>');
+	});
+
+	it('exits 2 for a --duration-ms that is not a whole number of milliseconds', async () => {
+		expect(await run(['record', 'lease-1', '--out', 'out.mp4', '--duration-ms', 'a while'])).toBe(
+			EXIT_USAGE,
+		);
+
+		expect(errored.join('\n')).toContain('--duration-ms');
+	});
+
+	it('exits 2 for a --duration-ms past what one answer can carry, naming the bound', async () => {
+		// The bound is the verb's own, imported rather than restated, so the two cannot drift.
+		// Left to the host this is a round trip that comes back `invalid_params` at exit 1 —
+		// the code this CLI reserves for a refused verb or an unreachable host.
+		expect(
+			await run([
+				'record',
+				'lease-1',
+				'--out',
+				'out.mp4',
+				'--duration-ms',
+				String(MAX_RECORDING_MS + 1),
+			]),
+		).toBe(EXIT_USAGE);
+
+		expect(errored.join('\n')).toContain(`${MAX_RECORDING_MS} ms`);
+	});
+
+	it('exits 2 for a screenshot flag that does not exist', async () => {
+		expect(await run(['screenshot', 'lease-1', '--destination', 'out.png'])).toBe(EXIT_USAGE);
+
+		expect(errored.join('\n')).toContain('--destination');
+	});
+
+	it.each([
+		'screenshot',
+		'record',
+	])("prints %s's own usage for --help, and asks no host", async (command) => {
+		expect(await run([command, '--help'])).toBe(EXIT_OK);
+
+		expect(logged.join('\n')).toContain(`Usage: rover ${command}`);
+		expect(errored).toEqual([]);
 	});
 });
 

@@ -86,7 +86,16 @@ all of them are load-bearing:
   from the device they exist to serve.
 - **Artifacts cross a machine boundary.** Screenshots, recordings and pulled files come back as
   bytes; a path handed to the agent must exist **on the agent's machine**. A verb that returns a
-  host-local path is a bug even when it works on a local host.
+  host-local path is a bug even when it works on a local host. The client half of that contract is
+  `src/cli/_shared/artifact.ts` — the one place a client turns an `ActionResult.artifact` into a
+  file. It decodes, checks the decoded length against the `byteLength` the host encoded (`Buffer`
+  drops characters outside the base64 alphabet rather than failing, so a mangled payload otherwise
+  becomes a short file that announces nothing), writes the bytes locally and answers
+  `path.resolve` of the caller's own `--out`. **The write is the last thing it does and only on
+  the `ok` branch**, so a refusal or a failed transfer leaves no file at the destination rather
+  than a truncated one. Nothing in it branches on `--host`: a local host and a remote one arrive
+  as the same field of the same schema, which is what makes the guarantee a property of the module
+  instead of of every command remembering it.
 
 Authentication is the host's token; attribution is the lease's owner string. They are separate
 fields on purpose (D20) — collapsing them either leaks the token into reports or makes the owner
