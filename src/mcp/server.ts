@@ -8,6 +8,7 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { HostName } from '../daemon/host.js';
 import { registerDeviceTools } from './tools/devices.js';
+import { registerVerbTools } from './tools/verbs.js';
 
 /** What an MCP client sees this server called. The `IPC_METHODS` names are the tool names. */
 export const ROVER_MCP_NAME = 'rover';
@@ -22,5 +23,6 @@ export const ROVER_MCP_VERSION = '0.1.0';
 export function createRoverMcpServer(host: HostName): McpServer {
 	const server = new McpServer({ name: ROVER_MCP_NAME, version: ROVER_MCP_VERSION });
 	registerDeviceTools(server, host);
+	registerVerbTools(server, host);
 	return server;
 }

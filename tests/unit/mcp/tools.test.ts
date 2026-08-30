@@ -12,9 +12,7 @@
  * agent reaches them rather than by calling the handlers directly.
  */
 
-import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
-import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
+import type { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
 	_resetDeviceBackendRegistryForTesting,
@@ -29,13 +27,13 @@ import {
 	HOST_PORT_ENV_VAR,
 	HOST_TOKEN_ENV_VAR,
 } from '@/daemon/network-config.js';
-import { createRoverMcpServer } from '@/mcp/server.js';
 import {
 	createTempSocket,
 	removeTempSocket,
 	type TempSocket,
 } from '../../helpers/daemon-socket.js';
 import { createMockDevice, createMockDeviceBackend } from '../../helpers/factories.js';
+import { callTool, connectMcpAgent, textOf } from '../../helpers/mcp-agent.js';
 
 const attached = createMockDevice({ serial: parseDeviceSerial('attached-1') });
 
@@ -70,37 +68,21 @@ function registerFakeBackend(): void {
 }
 
 async function startHost(): Promise<void> {
-	const result = await startDaemon({ socketPath: temp.socketPath });
+	const result = await startDaemon({
+		socketPath: temp.socketPath,
+		artifactsRoot: temp.artifactsRoot,
+	});
 	if (!result.started) {
 		throw new Error('Another daemon holds the temp socket — the test cannot proceed');
 	}
 	running.push(result);
 }
 
-/** An MCP client connected to a Rover server configured for `host`. */
+/** An MCP client this suite closes in `afterEach` (`../../helpers/mcp-agent.ts`). */
 async function connectAgent(host: HostName = 'local'): Promise<Client> {
-	const server = createRoverMcpServer(host);
-	const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-	const client = new Client({ name: 'rover-test-agent', version: '0.0.0' });
-	await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+	const client = await connectMcpAgent(host);
 	clients.push(client);
 	return client;
-}
-
-async function call(
-	client: Client,
-	name: string,
-	args: Record<string, unknown> = {},
-): Promise<CallToolResult> {
-	return (await client.callTool({ name, arguments: args })) as CallToolResult;
-}
-
-/** What the agent reads: the tool's own text blocks, joined. */
-function textOf(result: CallToolResult): string {
-	return result.content
-		.filter((block) => block.type === 'text')
-		.map((block) => block.text)
-		.join('\n');
 }
 
 beforeEach(async () => {
@@ -126,7 +108,7 @@ describe('the device tools over a live host', () => {
 		await startHost();
 		const agent = await connectAgent();
 
-		const result = await call(agent, 'status');
+		const result = await callTool(agent, 'status');
 
 		expect(result.isError).toBeFalsy();
 		// An in-process daemon, so the pid it reports is this one — what matters is that the
@@ -140,7 +122,7 @@ describe('the device tools over a live host', () => {
 		await startHost();
 		const agent = await connectAgent();
 
-		const result = await call(agent, 'list_devices');
+		const result = await callTool(agent, 'list_devices');
 
 		expect(result.isError).toBeFalsy();
 		expect(result.structuredContent).toMatchObject({
@@ -154,7 +136,7 @@ describe('the device tools over a live host', () => {
 		await startHost();
 		const agent = await connectAgent();
 
-		const granted = await call(agent, 'acquire_device', {
+		const granted = await callTool(agent, 'acquire_device', {
 			serial: 'attached-1',
 			owner: 'issue-112',
 			project: 'rover',
@@ -163,12 +145,12 @@ describe('the device tools over a live host', () => {
 		expect(granted.isError).toBeFalsy();
 		const lease = (granted.structuredContent as { lease: { leaseId: string } }).lease;
 
-		const listed = await call(agent, 'list_devices');
+		const listed = await callTool(agent, 'list_devices');
 		expect(listed.structuredContent).toMatchObject({
 			devices: [{ heldBy: { owner: 'issue-112', project: 'rover', testName: 'checkout flow' } }],
 		});
 
-		const released = await call(agent, 'release_device', { leaseId: lease.leaseId });
+		const released = await callTool(agent, 'release_device', { leaseId: lease.leaseId });
 		expect(released.isError).toBeFalsy();
 		expect(released.structuredContent).toEqual({ released: true });
 	});
@@ -177,13 +159,13 @@ describe('the device tools over a live host', () => {
 		registerFakeBackend();
 		await startHost();
 		const agent = await connectAgent();
-		await call(agent, 'acquire_device', {
+		await callTool(agent, 'acquire_device', {
 			serial: 'attached-1',
 			owner: 'issue-112',
 			project: 'rover',
 		});
 
-		const refused = await call(agent, 'acquire_device', {
+		const refused = await callTool(agent, 'acquire_device', {
 			serial: 'attached-1',
 			owner: 'pr-127-review',
 			project: 'rover',
@@ -204,7 +186,7 @@ describe('the device tools over a live host', () => {
 		await startHost();
 		const agent = await connectAgent();
 
-		const result = await call(agent, 'release_device', { leaseId: 'no-such-lease' });
+		const result = await callTool(agent, 'release_device', { leaseId: 'no-such-lease' });
 
 		// The store cannot tell a never-granted id from an expired one, so this is an honest
 		// answer and not an error — the agent reads `released: false` and moves on.
@@ -218,7 +200,7 @@ describe('what a tool does when the answer is not an answer', () => {
 		await startHost();
 		const agent = await connectAgent();
 
-		const result = await call(agent, 'acquire_device', {
+		const result = await callTool(agent, 'acquire_device', {
 			serial: '   ',
 			owner: 'issue-112',
 			project: 'rover',
@@ -236,7 +218,7 @@ describe('what a tool does when the answer is not an answer', () => {
 		vi.stubEnv(HOST_TOKEN_ENV_VAR, A_TOKEN);
 		const agent = await connectAgent('remote');
 
-		const result = await call(agent, 'list_devices');
+		const result = await callTool(agent, 'list_devices');
 
 		// The whole point of D19's loud failure: an unreachable host is a sentence naming what
 		// could not be reached, never an empty device list that reads like "nothing attached".
