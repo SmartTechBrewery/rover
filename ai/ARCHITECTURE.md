@@ -32,6 +32,12 @@ the unit tests drive the whole surface over an in-memory stream pair that is not
 | Local unix socket | `src/daemon/listen.ts` — no token, no configuration | `src/daemon/connect.ts` — **and autostart lives here** (D5) |
 | TCP + TLS | `src/daemon/network-listen.ts` — opt-in via `ROVER_LISTEN_PORT` | `src/daemon/network-connect.ts` — configured by `ROVER_HOST_ADDRESS` |
 
+`src/daemon/host.ts` is where a client **chooses** between those two client halves, and it is
+single because there are two clients: the CLI asks for a host with `--host` and the MCP server
+takes one from its own environment, and a second copy of that function would be a second place
+autostart could be reached from. Each client keeps only its own translation — `--host` and exit
+codes in `src/cli/_shared/host.ts`, the environment switch in `src/mcp/_shared/host.ts`.
+
 Each pair is handed the same `IpcServer` or wrapped by the same `createIpcClient`, so there is
 one method table, one dispatcher, one set of schemas, and nothing for the four to drift from.
 `src/daemon/network-config.ts` carries both halves' configuration, and the two halves are
@@ -377,6 +383,34 @@ the process with a registry.
   are what that promise looks like cashed: they share one params schema between them, because the
   three calls are identical, and a verb that later grows a field of its own forks it rather than
   widening what every row would then advertise.
+
+### Where an MCP tool call comes from
+
+`src/mcp/` is the second adapter onto the same host surface (D4, R19), and it is a **client**
+exactly as the CLI is: it holds no verb logic and reaches no backend, which
+`tests/unit/no-backend-in-a-client.test.ts` walks its module graph to keep true.
+
+- **The Zod schemas are the tool declarations.** Each `registerTool` is handed the exported
+  `*ParamsSchema` from `src/ipc/methods.ts` whole, so the JSON Schema an agent reads and the parse
+  the daemon performs are one object rather than two that drift (`ai/CODING_STANDARDS.md`,
+  boundary #1). The tool names are the `IPC_METHODS` keys, unchanged. No `outputSchema` is
+  declared: a result schema's *output* type is full of branded transforms JSON Schema cannot
+  express, and the client has already parsed the answer against the real schema.
+- **One tool call is one connection**: connect, one request, `close()` in a `finally` — the same
+  thing every CLI command does, so there is no held connection to reconnect and the local host
+  autostarts on the first call (D5).
+- **The host is configuration, never a parameter** (D17). `ROVER_HOST_ADDRESS` set means the
+  remote host, unset means the local daemon, and it is resolved at startup, before the stdio
+  transport is connected — a half-configured server dies naming what is missing rather than
+  advertising tools and failing at the agent's first call. No tool takes a host argument, so an
+  agent cannot redirect a call at a machine nobody pointed it at.
+- **A refusal is loud and carries the host's own document.** The answer travels verbatim as a JSON
+  text block plus `structuredContent`; a refused acquire is `isError` carrying `heldBy`, and an
+  unreachable host is a sentence naming the address and the port. Never an empty list that reads
+  like an answer.
+- **stdout belongs to the protocol.** The stdio transport frames on stdout, so nothing under
+  `src/mcp/` may import `src/cli/_shared/output.ts` or call `console.log`; diagnostics go to
+  stderr, and `tests/unit/mcp/stdout.test.ts` is the source-scan gate under that.
 
 ---
 

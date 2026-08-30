@@ -39,7 +39,7 @@ import { describe, expect, it } from 'vitest';
  * entrypoint absent from this list is a client nothing checks, which is why the list is
  * asserted to be non-empty and every file on it asserted to exist.
  */
-const CLIENT_ENTRYPOINTS = ['cli/index.ts'];
+const CLIENT_ENTRYPOINTS = ['cli/index.ts', 'mcp/index.ts'];
 
 /** The only modules that may import the backend barrel: the process that hosts devices. */
 const BARREL_IMPORTERS = ['daemon/main.ts'];
