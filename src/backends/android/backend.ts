@@ -219,13 +219,23 @@ function appArg(appId: AppId): string {
  * on stderr, while every guide of the era shows them on stdout (PROJECT.md §6). The device
  * is named because a message about the wrong device is the failure mode this backend's
  * pinning exists to prevent.
+ *
+ * `redact` is the same list the run itself was given, for the same reason and against the
+ * same hazard: the streams quoted here are the streams `AdbCommandError` would have quoted
+ * had the exit code been honest, and a host path in them crosses the boundary either way
+ * (D19). Only the transfers pass one; every other caller quotes device output only.
  */
-function refused(what: string, serial: DeviceSerial, result: AdbResult): Error {
+function refused(
+	what: string,
+	serial: DeviceSerial,
+	result: AdbResult,
+	redact: readonly string[] = [],
+): Error {
 	return new Error(
 		[
 			`${what} on device '${unwrap(serial)}' reported a failure`,
-			`stdout: ${quoteStream(result.stdout)}`,
-			`stderr: ${quoteStream(result.stderr)}`,
+			`stdout: ${quoteStream(result.stdout, redact)}`,
+			`stderr: ${quoteStream(result.stderr, redact)}`,
 		].join('\n'),
 	);
 }
@@ -332,6 +342,30 @@ function pushedIntoDirectory(serial: DeviceSerial, devicePath: string): Error {
 }
 
 /**
+ * A pull whose source is a directory.
+ *
+ * The counterpart of {@link pushedIntoDirectory}, and the refusal that keeps `pull_file`'s
+ * byte bound meaningful. `adb pull <dir>` is a **recursive** copy of the whole tree
+ * (measured on API 37, PROJECT.md §6), while `stat` answers for the directory inode alone
+ * — 4096 bytes on ext4 whatever is underneath it. So the size the probe returns says
+ * nothing about what the transfer would fetch, and a caller naming `/sdcard/DCIM/Camera`
+ * would have every recording on this host's temp filesystem before any check could look at
+ * it. The daemon holds every lease on this machine (D6, D17), so that filesystem is not
+ * one tenant's to fill.
+ *
+ * Refused on the *kind*, before the transfer, rather than bounded harder afterwards: there
+ * is no bound that helps, because the bytes are already on the disk by the time anything
+ * downstream of `adb pull` can count them.
+ */
+function pulledDirectory(serial: DeviceSerial, devicePath: string): Error {
+	return new Error(
+		`'${devicePath}' is a directory on device '${unwrap(serial)}', and a pull answers ` +
+			'with the bytes of one file — pulling a directory would copy the whole tree onto ' +
+			`this host before its size could be checked. Name the file: '${devicePath}/<name>'`,
+	);
+}
+
+/**
  * A pull that exited 0 and produced no file on this host.
  *
  * The **structural** counterpart of {@link refused}, and it is what this backend asserts on
@@ -345,18 +379,23 @@ function pushedIntoDirectory(serial: DeviceSerial, devicePath: string): Error {
  * `ENOENT` from `node:fs` names the host path it was given, and this message is read on the
  * agent's machine where that path is somebody else's filesystem (D19). The cause is still
  * attached, so a host-side log has the whole of it.
+ *
+ * `staged` is masked out of the quoted streams for the same reason one line up: `adb pull`
+ * names the destination it was writing to when it complains about it, and that destination
+ * is this host's own scratch file.
  */
 function pulledNothing(
 	serial: DeviceSerial,
 	devicePath: string,
+	staged: string,
 	result: AdbResult,
 	cause: unknown,
 ): Error {
 	return new Error(
 		[
 			`adb pull '${devicePath}' from device '${unwrap(serial)}' produced no file on this host`,
-			`stdout: ${quoteStream(result.stdout)}`,
-			`stderr: ${quoteStream(result.stderr)}`,
+			`stdout: ${quoteStream(result.stdout, [staged])}`,
+			`stderr: ${quoteStream(result.stderr, [staged])}`,
 			`nothing was left where this host staged it (${nameOf(cause)})`,
 		].join('\n'),
 		{ cause },
@@ -580,22 +619,26 @@ export class AndroidDeviceBackend implements DeviceBackend {
 	 * above having to know a package format.
 	 */
 	async installApp(serial: DeviceSerial, packagePath: string): Promise<void> {
-		const result = await withInstallablePackage(packagePath, (path) =>
-			runAdbOnDevice(serial, ['install', '-r', path], {
+		// The wording check lives *inside* the staging closure so the path adb was handed is
+		// still in scope for the refusal's own redaction: `adb install` writes that path back
+		// out itself — `adb: filename doesn't end .apk or .apex: <path>`, measured (PROJECT.md §6)
+		// — and the streams `refused` quotes are the streams that carry it.
+		await withInstallablePackage(packagePath, async (path) => {
+			const result = await runAdbOnDevice(serial, ['install', '-r', path], {
 				timeoutMs: INSTALL_ADB_TIMEOUT_MS,
 				redactArgv: [path],
-			}),
-		);
+			});
 
-		// **No path at all**, not even the caller's own. `packagePath` is not the caller's: the
-		// caller sent bytes and the daemon wrote them to a temporary file of its own
-		// (`src/daemon/verb-handlers.ts`), which this call's `finally` deletes moments later.
-		// This message is read on the agent's machine, where a `/var/folders/…` path names
-		// nothing (D19, PROJECT.md §4) — so what identifies the package here is that the caller
-		// sent it, and the device's own words say the rest.
-		if (!saysSuccess(result.stdout)) {
-			throw refused('adb install -r (the package you sent)', serial, result);
-		}
+			// **No path at all**, not even the caller's own. `packagePath` is not the caller's:
+			// the caller sent bytes and the daemon wrote them to a temporary file of its own
+			// (`src/daemon/verb-handlers.ts`), which this call's `finally` deletes moments later.
+			// This message is read on the agent's machine, where a `/var/folders/…` path names
+			// nothing (D19, PROJECT.md §4) — so what identifies the package here is that the
+			// caller sent it, and the device's own words say the rest.
+			if (!saysSuccess(result.stdout)) {
+				throw refused('adb install -r (the package you sent)', serial, result, [path]);
+			}
+		});
 	}
 
 	/**
@@ -799,6 +842,12 @@ export class AndroidDeviceBackend implements DeviceBackend {
 	 * temp filesystem — and again of what landed, before the file is read into the daemon's
 	 * heap. The daemon holds every lease on this machine (D6, D17), so an allocation a peer
 	 * chose is not one tenant's mistake.
+	 *
+	 * **A source that is a directory is refused before either bound**, because for that one
+	 * shape a size is not an answer: `adb pull` copies the tree recursively while `stat`
+	 * reports the directory inode's own few kilobytes, so both bounds pass and the whole of
+	 * `/sdcard/DCIM` lands here first. It is the same probe `pushFile` asks and the same
+	 * rule stated on `DeviceBackend.pullFile`; see {@link pulledDirectory}.
 	 */
 	async pullFile(
 		serial: DeviceSerial,
@@ -806,8 +855,14 @@ export class AndroidDeviceBackend implements DeviceBackend {
 		options: PullFileOptions,
 	): Promise<Uint8Array> {
 		// Asked of the device first, so a file that was never going to fit costs one `stat`
-		// rather than a full transfer onto this host's disk.
+		// rather than a full transfer onto this host's disk. Both halves of the probe's answer
+		// are acted on, and the *kind* has to come first: a directory's own size says nothing
+		// about the recursive copy `adb pull` would make of it, so the bound below would admit
+		// a tree of any depth ({@link pulledDirectory}).
 		const onDevice = await this.statOnDevice(serial, devicePath);
+		if (onDevice?.kind === 'directory') {
+			throw pulledDirectory(serial, devicePath);
+		}
 		if (onDevice !== null && onDevice.byteLength > options.maxBytes) {
 			throw new FileTooLargeError(serial, devicePath, onDevice.byteLength, options.maxBytes);
 		}
@@ -825,13 +880,20 @@ export class AndroidDeviceBackend implements DeviceBackend {
 			// host's own disk, and it is the difference between refusing an allocation and
 			// making it first. The staged copy is removed by `inHostTempDirectory` either way.
 			const landed = await stat(staged).catch((cause: unknown) => {
-				throw pulledNothing(serial, devicePath, result, cause);
+				throw pulledNothing(serial, devicePath, staged, result, cause);
 			});
 			if (landed.size > options.maxBytes) {
 				throw new FileTooLargeError(serial, devicePath, landed.size, options.maxBytes);
 			}
 
-			return readFile(staged);
+			// The read is guarded too, and the `stat` above is not its spare: a staged object can
+			// answer a `stat` and still refuse to be read — a permission this host does not have,
+			// a file that went away between the two calls — and those are the cases
+			// {@link pulledNothing} was written for. Left bare, they reach the caller as whatever
+			// `node:fs` said, which is a message with no device in it and a host path in it.
+			return await readFile(staged).catch((cause: unknown) => {
+				throw pulledNothing(serial, devicePath, staged, result, cause);
+			});
 		});
 	}
 

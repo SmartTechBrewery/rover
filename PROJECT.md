@@ -736,6 +736,23 @@ the review of the transfer verbs (#70), **2026-08-30**:
   whose target was 11 bytes answered `33 symbolic link` — the length of the link text. With `-L`
   it answers `11 regular file`, and a link to a directory answers `4096 directory`, which is what
   both transfers are actually asking about, since `push` and `pull` follow the link too.
+- **`adb pull <directory>` is a *recursive* copy, and exits 0.** `adb -s "$SERIAL" pull
+  /data/local/tmp/rover-pulldir-probe /tmp/…/pulled` on a directory holding two files across two
+  levels printed `2 files pulled, 0 skipped` and reproduced the whole tree on the host. `stat -L
+  -c '%s %F'` on that same directory answers `4096 directory` — the inode's own size, not the
+  tree's. **So a size read without a kind beside it is not a bound**: it is why `pull_file`
+  refuses a device path the probe calls a `directory` before the transfer starts, rather than
+  bounding harder afterwards. There is nothing to bound afterwards; the bytes are already here.
+- **adb writes the *host* path into its own stdout and stderr, so masking the argv is not
+  enough.** Measured for all three transfer failures: a refused push prints
+  `<host path>: 1 file pushed, 0 skipped.` and then `adb: error: failed to copy '<host path>' to
+  '<device path>': remote couldn't create file: Permission denied`; a refused install prints
+  `adb: filename doesn't end .apk or .apex: <host path>`; a pull that cannot write its
+  destination prints `adb: error: cannot create '<host path>': Permission denied`. All three
+  quote the path **byte for byte as it was given**, which is what makes a substring substitution
+  on the captured streams safe — and necessary, since D19 says none of those strings may reach a
+  client that is not on this machine. (A *successful* pull names the remote path instead:
+  `/data/local/tmp/rover-pulldir-probe/: 2 files pulled`.)
 
 Checked against Node 25.2 while building R22's client, 2026-08-30:
 

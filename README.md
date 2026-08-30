@@ -198,6 +198,14 @@ would be told `ok` about a file it cannot find, under a name that appears in no 
 answer — on hardware this host lends to somebody else next. A trailing slash is caught at the
 boundary; an existing directory is caught by asking the device before any bytes move.
 
+**`pull_file` names the file to read, and refuses a directory for a second reason: the size bound
+below would not hold.** The platforms' own transfer copies a directory *recursively*, while asking
+the device how big a directory is answers for the directory itself — 4096 bytes, whatever the tree
+under it holds (measured, PROJECT.md §6). So `pull_file` on `/sdcard/DCIM/Camera` would clear the
+bound on 4096 and put every recording on this host's disk before anything could count them, in the
+one process that holds every lease on the machine. The same probe that catches a push into a
+directory catches this, and it runs before the transfer rather than after.
+
 **No path on the host reaches the agent, in an answer or in a failure.** A refusal from a transfer
 names the device path, the device and what the device said — never the temporary file the daemon
 wrote the caller's bytes into, which names nothing on the machine reading the message and has been

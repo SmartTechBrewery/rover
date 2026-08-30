@@ -1,12 +1,15 @@
 /**
  * Parser for `stat -L -c '%s %F' <path>` — what the device says a path *is*, and how big.
  *
- * One command answering both questions because both transfers need one of them before
- * they move any bytes, and asking twice would be two round trips for one fact about one
- * inode. `push_file` needs the kind: `adb push` to a path that is already a directory
- * silently lands the file *inside* it, under the host-side basename, and answers `1 file
- * pushed` (PROJECT.md §6). `pull_file` needs the size: without it the whole file is on
- * this host's disk and in the daemon's heap before anything can refuse it.
+ * One command answering both questions because both transfers need an answer before they
+ * move any bytes, and asking twice would be two round trips for one fact about one inode.
+ * `push_file` needs the kind: `adb push` to a path that is already a directory silently
+ * lands the file *inside* it, under the host-side basename, and answers `1 file pushed`
+ * (PROJECT.md §6). `pull_file` needs **both**: the size, because without it the whole file
+ * is on this host's disk and in the daemon's heap before anything can refuse it — and the
+ * kind before that, because `adb pull` of a directory is a recursive copy of the tree
+ * while `%s` reports only the directory inode's own 4096 bytes, so a size read without a
+ * kind beside it is a bound that passes on a transfer of any size at all.
  *
  * **`-L` follows symlinks, and that is the question both callers are asking.** Without it
  * a link to a directory reads as `symbolic link` with the length of the link text as its

@@ -1,6 +1,6 @@
 import type { ExecFileException } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -741,9 +741,12 @@ describe('the file transfers', () => {
 		it('refuses a device path that is already a directory, before any bytes move', async () => {
 			fakeAdb({ probe: STAT_DIRECTORY });
 
-			const failure = backend.pushFile(SERIAL, '/data/local/tmp', '/tmp/host/payload');
+			const failure = backend.pushFile(SERIAL, '/tmp/host/payload', '/data/local/tmp');
 
-			await expect(failure).rejects.toThrow(/is a directory/);
+			// The *device* path is what the refusal names, asserted as itself rather than as
+			// `/is a directory/`: the fake answers `directory` for whichever path is probed, so
+			// a looser match would pass just as well if the probe read the wrong argument.
+			await expect(failure).rejects.toThrow(/'\/data\/local\/tmp' is a directory/);
 			await expect(failure).rejects.toThrow(/emulator-5554/);
 			expect(transfers()).toHaveLength(0);
 		});
@@ -803,6 +806,39 @@ describe('the file transfers', () => {
 				timeoutMs: TRANSFER_ADB_TIMEOUT_MS,
 				redactArgv: [hostPath],
 			});
+		});
+
+		/**
+		 * And the message that actually results, which is the assertion the options check
+		 * above cannot make on its own: adb writes the host path into its **own** stderr, so
+		 * a run that only masked the argv would leave it in the message one line down. The
+		 * error is built here the way the real runner builds it — from the options the
+		 * backend passed — because the masking belongs to `AdbCommandError` and what this
+		 * suite is proving is that the backend hands it the path to mask. The wording is
+		 * adb 37.0.0's own (PROJECT.md §6).
+		 */
+		it('keeps it out of a failure adb worded around it, too', async () => {
+			const hostPath = '/var/folders/xy/rover-transfer-abc123/payload';
+			runAdbOnDevice.mockImplementation(async (_serial, args, options): Promise<AdbResult> => {
+				if (isProbe([...args])) return answerProbe([...args], undefined);
+				throw new AdbCommandError(
+					[...args],
+					TRANSFER_ADB_TIMEOUT_MS,
+					exitedWith({ code: 1 }),
+					`${hostPath}: 1 file pushed, 0 skipped.\n`,
+					`adb: error: failed to copy '${hostPath}' to '${DEVICE_PATH}': ` +
+						"remote couldn't create file: Permission denied\n",
+					options?.redactArgv,
+				);
+			});
+
+			const failure = backend.pushFile(SERIAL, hostPath, DEVICE_PATH);
+
+			await expect(failure).rejects.not.toThrow(new RegExp(hostPath.replaceAll('.', '\\.')));
+			// The device's own half of the sentence is what the caller can act on, and it is
+			// untouched — this masks a path, it does not drop a stream.
+			await expect(failure).rejects.toThrow(/remote couldn't create file: Permission denied/);
+			await expect(failure).rejects.toThrow(/<the file you sent>/);
 		});
 	});
 
@@ -920,6 +956,50 @@ describe('the file transfers', () => {
 		});
 
 		/**
+		 * The bound above is only a bound while the source is one file. `adb pull <dir>` is a
+		 * **recursive** copy of the tree, while `stat` answers for the directory inode alone —
+		 * 4096 bytes, whatever is under it (both measured on API 37, PROJECT.md §6). So a
+		 * caller naming `/sdcard/DCIM/Camera` would clear the device-side check on 4096, clear
+		 * the staged check on the staged *directory's* size, and have every recording on this
+		 * host's temp filesystem in between. The kind is what refuses it, before anything
+		 * moves — the same probe and the same shape as `pushFile`'s.
+		 */
+		it('refuses a device path that is a directory, before the recursive copy starts', async () => {
+			fakeAdb({ probe: STAT_DIRECTORY, pulls: CONTENT });
+
+			const failure = backend.pullFile(SERIAL, '/sdcard/DCIM/Camera', ROOMY);
+
+			await expect(failure).rejects.toThrow(/'\/sdcard\/DCIM\/Camera' is a directory/);
+			await expect(failure).rejects.toThrow(/emulator-5554/);
+			expect(transfers()).toHaveLength(0);
+		});
+
+		/**
+		 * The `stat` guard is not the read's spare: a staged object can answer a `stat` and
+		 * still refuse to be read — a permission this host does not have, a file that went
+		 * away between the two calls. Left bare, `node:fs` is what reaches the caller: no
+		 * device, no adb streams, and a host path in the message (D19).
+		 */
+		it('reports a staged file that stats but will not read as a pull that produced nothing', async () => {
+			// A directory where the file should be: `stat` answers, `readFile` throws EISDIR.
+			runAdbOnDevice.mockImplementation(async (_serial, args): Promise<AdbResult> => {
+				if (isProbe([...args])) return answerProbe([...args], undefined);
+				const destination = args[2];
+				if (destination !== undefined) await mkdir(destination);
+				return { stdout: '', stderr: '' };
+			});
+
+			const failure = backend.pullFile(SERIAL, DEVICE_PATH, ROOMY);
+
+			await expect(failure).rejects.toThrow(/produced no file on this host/);
+			await expect(failure).rejects.toThrow(/EISDIR/);
+			await expect(failure).rejects.toThrow(new RegExp(DEVICE_PATH.replaceAll('.', '\\.')));
+			const staged = transfers()[0]?.[2];
+			if (staged === undefined) throw new Error('the pull named no destination');
+			await expect(failure).rejects.not.toThrow(new RegExp(staged.replaceAll('.', '\\.')));
+		});
+
+		/**
 		 * And again on what landed, because the first check can be missed — a device whose
 		 * toybox words `stat` differently, a file that grew between the two calls. This one
 		 * cannot be: it is a `stat` of a file on this host's own disk, and it is the difference
@@ -954,6 +1034,27 @@ describe('the file transfers', () => {
 				timeoutMs: TRANSFER_ADB_TIMEOUT_MS,
 				redactArgv: [staged],
 			});
+		});
+
+		/**
+		 * The other message a pull can produce, and the one the runner's own masking does not
+		 * reach: this pull exited 0, so `pulledNothing` is what quotes the streams — and adb
+		 * names the destination it was writing to when it complains about it.
+		 */
+		it('masks the staged path where adb echoed it into a stream that exited 0', async () => {
+			runAdbOnDevice.mockImplementation(async (_serial, args): Promise<AdbResult> => {
+				if (isProbe([...args])) return answerProbe([...args], undefined);
+				return { stdout: '', stderr: `adb: error: cannot create '${args[2] ?? ''}': read-only\n` };
+			});
+
+			const failure = backend.pullFile(SERIAL, DEVICE_PATH, ROOMY);
+
+			await expect(failure).rejects.toThrow(/produced no file on this host/);
+			await expect(failure).rejects.toThrow(/read-only/);
+			await expect(failure).rejects.toThrow(/<the file you sent>/);
+			const staged = transfers()[0]?.[2];
+			if (staged === undefined) throw new Error('the pull named no destination');
+			await expect(failure).rejects.not.toThrow(new RegExp(staged.replaceAll('.', '\\.')));
 		});
 	});
 
@@ -1024,6 +1125,28 @@ describe('the file transfers', () => {
 				redactArgv: [staged[0]],
 			});
 			expect(existsSync(staged[0] as string)).toBe(false);
+		});
+
+		/**
+		 * The same boundary, in the failure adb words *around* the path rather than in the
+		 * argv: `adb: failed to install <path>: Failure […]` (adb 37.0.0, PROJECT.md §6). The
+		 * refusal above names no path of its own — this is about the streams quoted beneath
+		 * it, which are adb's words and carry one.
+		 */
+		it('masks the staged path adb wrote into its own output', async () => {
+			const packagePath = await hostFile('payload', CONTENT);
+			runAdbOnDevice.mockImplementation(
+				async (_serial, args): Promise<AdbResult> => ({
+					stdout: 'Performing Streamed Install\n',
+					stderr: `adb: failed to install ${args[2] ?? ''}: Failure [INSTALL_PARSE_FAILED_NOT_APK]\n`,
+				}),
+			);
+
+			const failure = backend.installApp(SERIAL, packagePath);
+
+			await expect(failure).rejects.toThrow(/INSTALL_PARSE_FAILED_NOT_APK/);
+			await expect(failure).rejects.toThrow(/adb: failed to install <the file you sent>: Failure/);
+			await expect(failure).rejects.not.toThrow(new RegExp(tmpdir().replaceAll('.', '\\.')));
 		});
 	});
 });

@@ -124,10 +124,22 @@ export interface RunAdbOptions {
 	 * agent's machine — possibly another machine entirely — where a `/var/folders/…` path
 	 * this host already deleted names nothing anyone can act on (D19, PROJECT.md §4).
 	 *
-	 * Matched as whole argv entries rather than as substrings of the joined line, so the
-	 * masking cannot depend on how the message happens to be assembled. {@link
-	 * AdbCommandError.argv} keeps the real value: it never crosses the boundary, and the
-	 * host's own log is exactly where the staged path is worth having.
+	 * **Masked in the argv *and* in the captured streams**, because adb writes the path it
+	 * was given back out itself: measured on adb 37.0.0, a failed push says `adb: error:
+	 * failed to copy '<host path>' to '<device path>'`, a failed install says `adb: filename
+	 * doesn't end .apk or .apex: <host path>`, and a pull that cannot write its destination
+	 * says `adb: error: cannot create '<host path>'` (PROJECT.md §6). Masking only the argv
+	 * would leave the same string in the message one line further down, which is exactly the
+	 * hole a first pass at this left open.
+	 *
+	 * The argv is matched as whole entries so the masking cannot depend on how the message
+	 * happens to be assembled; the streams are matched as substrings, because adb embeds
+	 * the path inside a sentence of its own — byte for byte as it was given, which is what
+	 * makes the substitution safe to do that way ({@link quoteStream}).
+	 *
+	 * {@link AdbCommandError.argv}, {@link AdbCommandError.stdout} and {@link
+	 * AdbCommandError.stderr} all keep the real values: they never cross the boundary, and
+	 * the host's own log is exactly where the staged path is worth having.
 	 */
 	readonly redactArgv?: readonly string[];
 }
@@ -143,10 +155,12 @@ export interface RunAdbOptions {
  * goes to stderr on `adb` 37.0.0 while the device list goes to stdout (PROJECT.md §6), so
  * merging them would corrupt the one and lose the ability to quote the other.
  *
- * **The message is not the argv, and the difference is the boundary.** {@link argv} is
- * whole, for this host's own log; the message masks whatever {@link
- * RunAdbOptions.redactArgv} named, because this message is what an `internal_error`
- * response carries to a client that may be on another machine (D19).
+ * **The message is not what this carries, and the difference is the boundary.** {@link
+ * argv}, {@link stdout} and {@link stderr} are whole, for this host's own log; the message
+ * masks whatever {@link RunAdbOptions.redactArgv} named — in the argv *and* in both
+ * streams, since adb quotes the path it was given back into its own output — because this
+ * message is what an `internal_error` response carries to a client that may be on another
+ * machine (D19).
  */
 export class AdbCommandError extends Error {
 	readonly argv: readonly string[];
@@ -172,8 +186,8 @@ export class AdbCommandError extends Error {
 		super(
 			[
 				`${ADB} ${quoteArgv(argv, redactArgv)} ${outcome({ error, exitCode, signal, timedOut, timeoutMs })}`,
-				`stdout: ${quoteStream(stdout)}`,
-				`stderr: ${quoteStream(stderr)}`,
+				`stdout: ${quoteStream(stdout, redactArgv)}`,
+				`stderr: ${quoteStream(stderr, redactArgv)}`,
 			].join('\n'),
 		);
 
@@ -216,7 +230,7 @@ function quoteArgv(argv: readonly string[], redact: readonly string[]): string {
 }
 
 /**
- * What a host path reads as once it has crossed the boundary.
+ * What a host path reads as once it has crossed the boundary, in an argv or in a stream.
  *
  * Says what was there rather than eliding it, so a failure message stays a sentence: the
  * caller sent bytes and this host wrote them somewhere of its own choosing, which is the
@@ -230,10 +244,26 @@ const REDACTED_ARGV = '<the file you sent>';
  * Exported because {@link AdbCommandError} is not the only failure worth quoting: the
  * failures adb reports *while exiting 0* are caught a layer up in `./backend.ts`, and the
  * two messages get read side by side. One definition so they never disagree about what an
- * empty stream looks like.
+ * empty stream looks like — or about how a host path reads once it has crossed the
+ * boundary, which is what `redact` is for.
+ *
+ * **`redact` is a substring rule here where {@link quoteArgv}'s is a whole-entry rule**,
+ * and the asymmetry is the difference between the two subjects. An argv entry either *is*
+ * the path this host made up or it is the caller's own value, so comparing whole entries
+ * is both sufficient and the only rule that cannot mask a device path sharing a prefix
+ * with it. A stream is a sentence adb wrote, with the path embedded in it — `adb: error:
+ * failed to copy '<host path>' to '<device path>'` — so nothing but a substring rule
+ * reaches it. That is safe because adb echoes the path byte for byte as it was given
+ * (measured on adb 37.0.0, PROJECT.md §6), and because the only values ever passed here
+ * are `mkdtemp` paths this host invented moments earlier: they cannot collide with a
+ * caller's device path, and the empty-string case cannot arise from one.
  */
-export function quoteStream(stream: string): string {
-	const text = stream.trimEnd();
+export function quoteStream(stream: string, redact: readonly string[] = []): string {
+	const masked = redact.reduce(
+		(text, path) => (path.length === 0 ? text : text.replaceAll(path, REDACTED_ARGV)),
+		stream,
+	);
+	const text = masked.trimEnd();
 	return text.length === 0 ? '(empty)' : text;
 }
 

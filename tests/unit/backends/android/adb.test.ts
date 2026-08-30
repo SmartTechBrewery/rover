@@ -162,6 +162,113 @@ describe('runAdb', () => {
 	});
 });
 
+/**
+ * D19 at the one boundary a transfer crosses: the message of an `AdbCommandError` becomes
+ * the text of an `internal_error` response (`src/ipc/server.ts`), read on the agent's
+ * machine, where a `/var/folders/…` path this host has already deleted names nothing.
+ */
+describe('redactArgv', () => {
+	const STAGED = '/var/folders/mq/rover-probe-q24AlC/payload';
+
+	it('masks the host path in the argv it quotes', async () => {
+		fails({ code: 1 });
+
+		const error = await failureOf(
+			runAdb(['push', STAGED, '/data/rover-x.bin'], { redactArgv: [STAGED] }),
+		);
+
+		expect(error.message).toContain('adb push <the file you sent> /data/rover-x.bin exited 1');
+		expect(error.message).not.toContain(STAGED);
+	});
+
+	/**
+	 * The half a first pass at this missed: adb writes the path it was handed into its own
+	 * output, so masking the argv alone leaves the same string one line further down.
+	 * Both wordings are quoted from adb 37.0.0 against an API 37 emulator (PROJECT.md §6).
+	 */
+	it('masks it again wherever adb echoed it back into its own streams', async () => {
+		fails(
+			{ code: 1 },
+			`${STAGED}: 1 file pushed, 0 skipped.\n`,
+			`adb: error: failed to copy '${STAGED}' to '/data/rover-x.bin': ` +
+				"remote couldn't create file: Permission denied\n",
+		);
+
+		const error = await failureOf(
+			runAdb(['push', STAGED, '/data/rover-x.bin'], { redactArgv: [STAGED] }),
+		);
+
+		expect(error.message).not.toContain(STAGED);
+		expect(error.message).not.toContain('/var/folders');
+		// Masked, not elided: the sentence adb wrote still reads, and the device's own half
+		// of it — which is the only part the caller can act on — is untouched.
+		expect(error.message).toContain(
+			"adb: error: failed to copy '<the file you sent>' to '/data/rover-x.bin'",
+		);
+		expect(error.message).toContain("remote couldn't create file: Permission denied");
+		expect(error.message).toContain('<the file you sent>: 1 file pushed, 0 skipped.');
+	});
+
+	/** The other transfer's wording, which embeds the path without quoting it. */
+	it('masks it in an install failure adb worded without quotes', async () => {
+		fails(
+			{ code: 1 },
+			'Performing Streamed Install\n',
+			`adb: failed to install ${STAGED}: Failure [INSTALL_PARSE_FAILED_NOT_APK]\n`,
+		);
+
+		const error = await failureOf(runAdb(['install', '-r', STAGED], { redactArgv: [STAGED] }));
+
+		expect(error.message).not.toContain(STAGED);
+		expect(error.message).toContain(
+			'adb: failed to install <the file you sent>: Failure [INSTALL_PARSE_FAILED_NOT_APK]',
+		);
+	});
+
+	/**
+	 * The message is masked; the error is not. Whoever is reading this on the host — a log,
+	 * a debugger — loses nothing, because none of these fields crosses the boundary.
+	 */
+	it('keeps the real argv and both real streams on the error itself', async () => {
+		fails({ code: 1 }, `${STAGED}: pushed\n`, `failed to copy '${STAGED}'\n`);
+
+		const error = await failureOf(
+			runAdb(['push', STAGED, '/data/rover-x.bin'], { redactArgv: [STAGED] }),
+		);
+
+		expect(error.argv).toEqual(['push', STAGED, '/data/rover-x.bin']);
+		expect(error.stdout).toBe(`${STAGED}: pushed\n`);
+		expect(error.stderr).toBe(`failed to copy '${STAGED}'\n`);
+	});
+
+	/**
+	 * The argv rule stays whole-entry, and this is why: an argv entry either *is* the path
+	 * this host made up or it is the caller's own value, and a device path that merely
+	 * shares a prefix with the staged one is the caller's — the one thing in the message it
+	 * can act on.
+	 */
+	it('masks whole argv entries, not entries that merely share a prefix', async () => {
+		fails({ code: 1 });
+
+		const error = await failureOf(
+			runAdb(['push', '/tmp/rover-abc', '/tmp/rover-abc-elsewhere'], {
+				redactArgv: ['/tmp/rover-abc'],
+			}),
+		);
+
+		expect(error.message).toContain('adb push <the file you sent> /tmp/rover-abc-elsewhere');
+	});
+
+	it('quotes the streams unchanged when there is nothing to redact', async () => {
+		fails({ code: 1 }, 'out\n', 'err\n');
+
+		const error = await failureOf(runAdb(['devices']));
+
+		expect(error.message).toContain('stdout: out');
+		expect(error.message).toContain('stderr: err');
+	});
+});
+
 describe('runAdbOnDevice', () => {
 	// The pin is the point of the function: an unpinned command landing on another
 	// agent's device is the worst failure mode this tool has (PROJECT.md §2).

@@ -868,6 +868,13 @@ describe.skipIf(!process.env.ROVER_TEST_DEVICE)('a daemon runs verbs on its own 
 	 * `<dir>/<host basename>` — a name the daemon invented — which is a caller told `ok`
 	 * about a file it cannot find, on hardware this host lends out next. What is asserted is
 	 * both halves: the call does not succeed, and the directory is **empty afterwards**.
+	 *
+	 * The pull is here for the mirror-image reason and is why the directory has a file put
+	 * in it first: `adb pull <dir>` is a **recursive** copy, and the size `stat` answers for
+	 * a directory is the inode's own 4096 bytes however much is under it — so `pull_file`'s
+	 * byte bound would pass and the whole tree would land on this host before anything could
+	 * count it. A directory with something in it is what tells a refusal-before-transfer
+	 * apart from a transfer that happened to find nothing.
 	 */
 	it('refuses a push whose device path is a directory, and leaves nothing inside it', async () => {
 		const client = await startHost();
@@ -896,6 +903,26 @@ describe.skipIf(!process.env.ROVER_TEST_DEVICE)('a daemon runs verbs on its own 
 				TRANSFER_DIRECTORY,
 			]);
 			expect(listing.stdout.trim()).toBe('');
+
+			// And the same path in the other direction, with the directory no longer empty. The
+			// file is made by the device's own shell rather than pushed, so nothing about this
+			// half depends on the push that was just refused.
+			await runAdbOnDevice(device.serial, [
+				'shell',
+				'echo',
+				'rover',
+				'>',
+				`${TRANSFER_DIRECTORY}/inside.bin`,
+			]);
+
+			const pulled = await client
+				.request('pull_file', { leaseId, devicePath: TRANSFER_DIRECTORY })
+				.catch((error: unknown) => error);
+
+			expect(String(pulled)).toMatch(/is a directory/);
+			// Not merely "it failed": what makes this a refusal *before* the transfer is that
+			// the message is this backend's own rule, never adb's account of a copy it made.
+			expect(String(pulled)).toMatch(/the bytes of one file/);
 		} finally {
 			await runAdbOnDevice(device.serial, ['shell', 'rm', '-rf', TRANSFER_DIRECTORY]);
 		}

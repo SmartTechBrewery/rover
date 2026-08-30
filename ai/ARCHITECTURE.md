@@ -269,13 +269,17 @@ Verbs live above the backends and below the adapters, and this is where determin
   already carries `maxEntries`), so a file too big to answer with is refused before it is staged on
   the host and read into the daemon's memory. A bound checked only on the way back would already
   have cost what it was for.
-- **Two things that layer does *not* relay, and states instead.** `pushFile`'s `devicePath` names
-  the file to write, never a directory to put it in: the platforms' own transfer tools copy the file
-  inside such a path under a **host-side** basename and call that a success, so relaying it as "the
-  device's answer" is how a caller gets `ok` about bytes under a name this host invented
-  (ai/RULES.md §2). And no host path reaches the caller in a *failure* either — the same D19 that
-  keeps paths out of results keeps the daemon's own temporary file out of the message an
-  `internal_error` carries, since it names nothing on the machine reading it.
+- **Two things that layer does *not* relay, and states instead.** Neither transfer's `devicePath`
+  is a directory, in either direction, and both refusals are Rover's rule rather than a device
+  answer. For `pushFile` the platforms' own tools copy the file inside such a path under a
+  **host-side** basename and call that a success, so relaying it is how a caller gets `ok` about
+  bytes under a name this host invented (ai/RULES.md §2). For `pullFile` it is what keeps the cap
+  above meaningful: the transfer is *recursive* while the size a device reports for a directory is
+  the directory's own few kilobytes, so a backend bounding on that number alone would admit a
+  transfer of any size and only discover it once every byte was on the host. And no host path
+  reaches the caller in a *failure* either — the same D19 that keeps paths out of results keeps the
+  daemon's own temporary file out of the message an `internal_error` carries, in the command it
+  quotes *and* in the streams, since adb writes the path it was handed back into its own output.
 - **`ActionResult`** names the verb, the device (as `DeviceInfo`, so D14's density travels with the
   measurement), the resolved target and the state after the action. A backend with input but no
   screen reading answers an explicit `unavailable` after-state naming the capability that would have

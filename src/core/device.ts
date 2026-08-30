@@ -442,6 +442,16 @@ export interface DeviceBackend {
 	 * is what the caller can be given, and a file over it is `FileTooLargeError` *before*
 	 * this host has staged or buffered it — a refusal issued after the bytes have landed is
 	 * an allocation the caller chose (`src/core/errors.ts`, {@link FileTooLargeError}).
+	 *
+	 * **`devicePath` names the file, never a directory to read out of**, the mirror of
+	 * {@link pushFile}'s rule and, like it, a rule rather than a device answer — and here it
+	 * is what keeps the bound above meaningful. The platforms' own transfer tools copy a
+	 * directory *recursively*, while asking a device how big a directory is answers for the
+	 * directory itself: a few kilobytes, whatever the tree under it holds. So a backend that
+	 * bounded on that number alone would admit an unbounded transfer, and would only find
+	 * out once every byte of it was already on this host. A backend that can tell the two
+	 * apart refuses a directory before it moves anything. Recursive directory transfer is
+	 * deliberately not in this contract, in either direction.
 	 */
 	pullFile(serial: DeviceSerial, devicePath: string, options: PullFileOptions): Promise<Uint8Array>;
 
