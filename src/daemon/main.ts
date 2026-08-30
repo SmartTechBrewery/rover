@@ -21,13 +21,25 @@
 // into a type-only one: what this line does is run every backend's registration.
 import '../backends/index.js';
 import { startDaemon } from './listen.js';
+import { resolveNetworkListener } from './network-config.js';
 import { resolveSocketPath } from './socket-path.js';
 
 async function main(): Promise<void> {
 	const socketPath = resolveSocketPath();
-	const daemon = await startDaemon({ socketPath });
+	// The one place the network listener is resolved from the environment. A missing token
+	// beside a set port throws here, `main().catch` below prints it and the process exits 1 —
+	// a misconfigured listener is a loud startup failure, never a host that quietly serves
+	// only the local socket while its operator believes otherwise.
+	const network = resolveNetworkListener();
+	const daemon = await startDaemon({ socketPath, ...(network ? { network } : {}) });
 	if (!daemon.started) {
 		return;
+	}
+
+	if (daemon.networkPort !== null && network !== undefined) {
+		// The address and the port, and nothing else: never the token, never the certificate,
+		// and nothing about what is attached.
+		console.log(`Rover is listening on ${network.address}:${daemon.networkPort} (TLS).`);
 	}
 
 	let shuttingDown = false;
