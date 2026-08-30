@@ -3,8 +3,10 @@
  *
  * Every shape here is a Zod schema of **plain data**, because a verb runs on the host and its
  * result is read on the agent's machine (D19): no live handle, no stream, and no host-local
- * path survives that trip. `tests/unit/verbs/serializable.test.ts` holds the
- * line by round-tripping each of them through JSON.
+ * path survives that trip. Bytes do, and only in one form —
+ * {@link ArtifactSchema} carries them base64-encoded, because raw ones do not.
+ * `tests/unit/verbs/serializable.test.ts` holds the line by round-tripping each of them
+ * through JSON.
  *
  * `DeviceInfoSchema` is reused rather than restated. It already carries the serial, the
  * platform, the model and the density, so D14 — *every result names the device and its
@@ -20,6 +22,7 @@ import {
 import { DeviceInfoSchema, PointSchema, ScreenElementSchema } from '../core/device.js';
 import type { DeviceSerial } from '../core/ids.js';
 import { capabilityMethod, type VerbContext } from './context.js';
+import { ArtifactTooLargeError } from './errors.js';
 
 /**
  * Where a resolved point came from.
@@ -79,11 +82,109 @@ export const AfterStateSchema = z.discriminatedUnion('kind', [
 export type AfterState = z.infer<typeof AfterStateSchema>;
 
 /**
- * What every verb answers with: what it did, on which device, to what, and what the screen
- * looked like afterwards.
+ * The bytes a verb produced, in the one form that means the same thing on the agent's
+ * machine as it does on the host (D19).
+ *
+ * **Base64, never a path.** A verb runs on the host and its answer is read somewhere else,
+ * so a filesystem location is meaningless there — and worse than meaningless, because it
+ * names a file that may well exist on the reader's own disk and be something entirely
+ * different. Raw bytes are no better: `JSON.stringify` turns a `Uint8Array` into an object
+ * of numeric keys, which survives a local round trip and arrives as nonsense over a socket,
+ * which is why `tests/unit/verbs/serializable.test.ts` fails one deliberately. Any path a
+ * client later writes these bytes to is the client's own; the host returns none.
+ *
+ * `byteLength` is the length of the **decoded** bytes, not of the string carrying them, so
+ * a client can check what it decoded against what the host encoded without decoding twice.
+ *
+ * The durable host-side copy of the same bytes (D23) and the chunked transfer of ones too
+ * big for this shape are separate rows (R24, R25); this is the payload, whole, in one
+ * answer.
+ */
+export const ArtifactSchema = z
+	.object({
+		mediaType: z.string().min(1),
+		base64: z.string(),
+		byteLength: z.number().int().nonnegative(),
+	})
+	.strict();
+export type Artifact = z.infer<typeof ArtifactSchema>;
+
+/**
+ * The largest artifact one verb answer may carry — 4 MiB of bytes.
+ *
+ * Derived from the 8 MiB frame cap (`src/ipc/framing.ts`) rather than picked: an answer
+ * travels as one message, base64 inflates the payload by four thirds, and the rest of the
+ * result — a screen read of a few hundred elements among it — travels in the same frame. 4
+ * MiB encodes to about 5.4 MiB and leaves the remainder to everything else. The
+ * relationship is asserted in `tests/unit/verbs/read.test.ts`, because a constant derived
+ * from another constant by hand is one the other is free to drift away from.
+ *
+ * There is real headroom in it: the largest capture measured on a device so far is 1.7 MB
+ * (PROJECT.md §6). It is a bound against a screen nobody anticipated, not a routine limit —
+ * and reaching it is {@link ArtifactTooLargeError}, a refusal naming both numbers, never a
+ * payload quietly cut to fit.
+ */
+export const MAX_ARTIFACT_BYTES = 4 * 1024 * 1024;
+
+/** The eight bytes every PNG starts with (PNG 1.2 §3.1). */
+const PNG_SIGNATURE = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
+
+/** What bytes nothing here recognises are called — honestly unlabelled, not guessed at. */
+const UNKNOWN_MEDIA_TYPE = 'application/octet-stream';
+
+/**
+ * What kind of file these bytes are, read **off the bytes** rather than assumed.
+ *
+ * `DeviceBackend.screenshot` promises image bytes and does not say which encoding, so a
+ * media type stamped on here from the verb's own expectations would be a claim nobody
+ * checked — decoded by a client that has only this label to go on. Sniffing the signature
+ * is the cheap version of checking, and the same check a backend already makes about its
+ * own capture before handing it over. Unrecognised bytes get {@link UNKNOWN_MEDIA_TYPE},
+ * which is the true statement about them; it is not a failure, and it is not a guess.
+ */
+function mediaTypeOf(bytes: Uint8Array): string {
+	if (bytes.length < PNG_SIGNATURE.length) return UNKNOWN_MEDIA_TYPE;
+	return PNG_SIGNATURE.every((byte, index) => bytes[index] === byte)
+		? 'image/png'
+		: UNKNOWN_MEDIA_TYPE;
+}
+
+/**
+ * Turn captured bytes into the {@link Artifact} an answer carries, or refuse them for being
+ * too large.
+ *
+ * The bound is checked **before** the encoding rather than after it: base64 of an
+ * over-sized capture is a copy a third larger again, built only to be thrown away.
+ *
+ * @throws ArtifactTooLargeError when `bytes` is over {@link MAX_ARTIFACT_BYTES}.
+ */
+export function artifactFrom(serial: DeviceSerial, bytes: Uint8Array): Artifact {
+	if (bytes.byteLength > MAX_ARTIFACT_BYTES) {
+		throw new ArtifactTooLargeError(serial, bytes.byteLength, MAX_ARTIFACT_BYTES);
+	}
+
+	return ArtifactSchema.parse({
+		mediaType: mediaTypeOf(bytes),
+		base64: Buffer.from(bytes).toString('base64'),
+		byteLength: bytes.byteLength,
+	});
+}
+
+/**
+ * What every verb answers with: what it did, on which device, to what, what the screen
+ * looked like afterwards, and the bytes it produced if it produced any.
  *
  * `target` is null for a verb that addresses no element — a key press, a screen read — and
  * that is a fact about the verb rather than a failure to resolve one.
+ *
+ * `artifact` is null for every verb that produces no bytes, which is nearly all of them. It
+ * is **required-and-nullable rather than optional**, the rule the rest of this protocol
+ * already follows (`heldBy: null` for a free device): `undefined` does not survive JSON, so
+ * an optional field would make "this verb produced nothing" a case every client has to
+ * special-case instead of a value it can read. And it lives on this schema rather than on a
+ * wider sibling because this one is `.strict()` and `VerbCallResultSchema`'s `ok` branch
+ * parses *it* — an extended schema carrying a payload would be rejected on arrival as an
+ * invalid result, which is the protocol working correctly.
  */
 export const ActionResultSchema = z
 	.object({
@@ -91,6 +192,7 @@ export const ActionResultSchema = z
 		device: DeviceInfoSchema,
 		target: ResolvedTargetSchema.nullable(),
 		after: AfterStateSchema,
+		artifact: ArtifactSchema.nullable(),
 	})
 	.strict();
 export type ActionResult = z.infer<typeof ActionResultSchema>;
@@ -104,6 +206,12 @@ export type ActionResult = z.infer<typeof ActionResultSchema>;
  * `performAction` (`./perform.ts`) and directly by the waits (`./wait-for.ts`), which
  * cannot go through the spine: their work *is* the resolution, and a spine that resolves
  * the target before running the action would resolve it before the wait had happened.
+ *
+ * **`artifact: null` here, always.** A verb that produced bytes attaches them to what this
+ * returns (`./read.ts`'s `screenshot` does) rather than handing them down through the
+ * spine: one verb in a dozen carries a payload, and widening `PerformActionOptions` for it
+ * would put a parameter on every call site that will never use it — the same reason
+ * `./perform.ts` declined to widen for `swipe`'s second target.
  */
 export async function resultAfterAction(
 	context: VerbContext,
@@ -124,7 +232,7 @@ export async function resultAfterAction(
 	// it is has nothing left to report an action about.
 	const device = await context.backend.deviceInfo(context.serial);
 
-	return ActionResultSchema.parse({ verb, device, target, after });
+	return ActionResultSchema.parse({ verb, device, target, after, artifact: null });
 }
 
 /** Why a `failed` after-state happened — the action ran, the read did not. */

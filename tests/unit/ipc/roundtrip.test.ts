@@ -41,6 +41,7 @@ function statusHandlers(overrides: Partial<IpcHandlers> = {}): IpcHandlers {
 		scroll: () => refusedWithoutAHost(),
 		read_screen: () => refusedWithoutAHost(),
 		device_info: () => refusedWithoutAHost(),
+		screenshot: () => refusedWithoutAHost(),
 		launch_app: () => refusedWithoutAHost(),
 		stop_app: () => refusedWithoutAHost(),
 		clear_app_data: () => refusedWithoutAHost(),
@@ -143,6 +144,9 @@ describe('request/response over a duplex pair', () => {
 						device: createMockDeviceInfo(),
 						target: { source: 'screen', point: { x: 60, y: 40 }, element: save },
 						after: { kind: 'screen', elements: [save] },
+						// `null` rather than absent: no bytes is a value a client reads, not a key it
+						// has to notice is missing.
+						artifact: null,
 					},
 				}),
 			}),

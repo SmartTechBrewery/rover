@@ -29,6 +29,7 @@ import {
 	ReadLogsCallResultSchema,
 	ReadLogsParamsSchema,
 	ReadScreenParamsSchema,
+	ScreenshotParamsSchema,
 	ScrollParamsSchema,
 	SwipeParamsSchema,
 	TapParamsSchema,
@@ -52,6 +53,8 @@ export {
 	ReadLogsParamsSchema,
 	type ReadScreenParams,
 	ReadScreenParamsSchema,
+	type ScreenshotParams,
+	ScreenshotParamsSchema,
 	type ScrollParams,
 	ScrollParamsSchema,
 	type SwipeParams,
@@ -291,12 +294,15 @@ export type ReleaseDeviceResult = z.infer<typeof ReleaseDeviceResultSchema>;
  * The names follow the verb table in PROJECT.md §4 (`list_devices`), not a camelCase
  * variant of it.
  *
- * The verb rows are the two waits, the four gestures, the two read verbs, the three
+ * The verb rows are the two waits, the four gestures, the three read verbs, the three
  * app-lifecycle verbs and the log read; each further verb family is one more row beside them
  * and one more entry in `src/daemon/verb-handlers.ts`. All but one answer with
  * `VerbCallResultSchema`, because "what happened on the device" is one shape whatever was
- * asked of it — and the three app rows share one params schema too, because they take exactly
- * the same call.
+ * asked of it — which is why none of the read rows needs a result schema of its own:
+ * `read_screen` and `device_info` answer with the state every other verb already reports,
+ * asked for on its own, and `screenshot`'s bytes ride on `ActionResult.artifact` rather than
+ * in a second answer shape. The three app rows share one params schema too, because they take
+ * exactly the same call.
  *
  * `read_logs` is the exception that proves the rule: its answer is that same shape with the
  * log entries added, built by the same factory in `./verb-methods.ts`, so its refusals are
@@ -315,6 +321,7 @@ export const IPC_METHODS = {
 	scroll: { params: ScrollParamsSchema, result: VerbCallResultSchema },
 	read_screen: { params: ReadScreenParamsSchema, result: VerbCallResultSchema },
 	device_info: { params: DeviceInfoParamsSchema, result: VerbCallResultSchema },
+	screenshot: { params: ScreenshotParamsSchema, result: VerbCallResultSchema },
 	launch_app: { params: AppVerbParamsSchema, result: VerbCallResultSchema },
 	stop_app: { params: AppVerbParamsSchema, result: VerbCallResultSchema },
 	clear_app_data: { params: AppVerbParamsSchema, result: VerbCallResultSchema },

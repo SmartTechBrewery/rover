@@ -1,9 +1,10 @@
 /**
- * The two read verbs that answer with nothing but the state itself — `read_screen` and
- * `device_info` (PROJECT.md §4, "Reading"; backlog row R13, phase 2).
+ * The three read verbs — `read_screen`, `device_info` and `screenshot` (PROJECT.md §4,
+ * "Reading"; backlog row R13, phases 2 and 3).
  *
- * **Their `act` is empty, and that is the design rather than a gap.** Every other verb does
- * something to the device and then reports the state after it; these two ask for that state
+ * **Two of the three have an empty `act`, and that is the design rather than a gap.** Every
+ * other verb does something to the device and then reports the state after it; `read_screen`
+ * and `device_info` ask for that state
  * and nothing else, and the spine already captures it — `captureAfterState()` reads the
  * screen and `resultAfterAction()` reads the device fresh, after the action, for every verb
  * there is (`./result.ts`). So the work of a read verb *is* the spine's own capture. Routing
@@ -30,18 +31,23 @@
  * live in the `DeviceInfo` D14 already puts on *every* result. Nothing new is reported here;
  * what this verb adds is a way to ask for it without moving the device first.
  *
- * **Neither addresses anything on the screen**, so neither passes a `target` and both answer
- * `target: null` — a fact about the verb rather than a resolution that failed
+ * **`screenshot` is the one read whose answer is not a state the result already carries**,
+ * because pixels are bytes. It is on the same spine and needs no capability either —
+ * `screenshot` is a *required* backend method (`src/core/device.ts`) — and what it adds is
+ * an `act` that does something and an `ActionResult.artifact` attached to the spine's
+ * answer afterwards. The bytes never become a path on the host (D19): `artifactFrom` encodes
+ * them and refuses one too large for a single answer by name, so an oversized capture is a
+ * failure an agent can read rather than a picture cut short (`./result.ts`).
+ *
+ * **None of the three addresses anything on the screen**, so none passes a `target` and all
+ * answer `target: null` — a fact about the verb rather than a resolution that failed
  * (`PerformActionOptions.target`). A `read_screen` that took a target would be a wait
  * (`./wait-for.ts`), which is a different question with a different answer.
- *
- * `screenshot` is the third read verb and is phase 3: it is the one that cannot answer in the
- * shape above, because pixels are bytes rather than a state a result already carries (R24).
  */
 
 import type { VerbContext } from './context.js';
 import { performAction } from './perform.js';
-import type { ActionResult } from './result.js';
+import { type ActionResult, ActionResultSchema, type Artifact, artifactFrom } from './result.js';
 
 /**
  * Read what is on the screen — the texts and the rectangles, in dp.
@@ -73,4 +79,44 @@ export async function deviceInfo(context: VerbContext): Promise<ActionResult> {
 		requires: [],
 		act: async () => {},
 	});
+}
+
+/**
+ * Capture the screen as an image.
+ *
+ * The bytes come back on `result.artifact`, base64-encoded, together with what kind of image
+ * they are and how many bytes they decode to. **Never a path**: the capture happens on the
+ * host and the answer is read wherever the agent is, so a filesystem location would name a
+ * file that is not there — or, worse, one that is (D19). Somewhere to put them is the
+ * client's decision and the client's disk.
+ *
+ * A capture larger than one answer can carry is refused by name — `artifact-too-large`,
+ * carrying the size and the bound — rather than trimmed to fit. See `./result.ts` for why
+ * truncation is the failure worth spending a branch on.
+ *
+ * **A black image is a true answer about the device, not a failed capture.** An application
+ * can block screen capture, and the system then hands back a valid, entirely black image
+ * with nothing in any log to say so (PROJECT.md §6). Nothing here judges the pixels,
+ * because at this layer a black screen and a blocked one are the same bytes. The check that
+ * separates them, when it matters, is to capture the **system home screen**: black there is
+ * a broken device, black only inside the application is that application blocking capture.
+ * And `read_screen` is the read that survives the block — the hierarchy stays fully readable
+ * while the pixels are gone — so it is what to reach for on a screen this verb cannot see.
+ */
+export async function screenshot(context: VerbContext): Promise<ActionResult> {
+	let captured: Artifact | null = null;
+
+	const result = await performAction(context, {
+		verb: 'screenshot',
+		requires: [],
+		act: async () => {
+			// Encoded here, inside the action, so a capture too large to answer with refuses
+			// before the spine spends a screen read reaching the same refusal.
+			captured = artifactFrom(context.serial, await context.backend.screenshot(context.serial));
+		},
+	});
+
+	// Re-parsed rather than spread and returned, so the artifact is held to the same schema
+	// the spine's own answer was — this is the one verb assembling part of a result itself.
+	return ActionResultSchema.parse({ ...result, artifact: captured });
 }

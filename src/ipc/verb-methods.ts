@@ -198,6 +198,19 @@ export const DeviceInfoParamsSchema = VerbCallBaseSchema.strict();
 export type DeviceInfoParams = z.infer<typeof DeviceInfoParamsSchema>;
 
 /**
+ * What a `screenshot` call carries — again the lease id alone, and again its own schema for
+ * the reason {@link DeviceInfoParamsSchema} gives.
+ *
+ * **No destination and no format.** A path would be the one field D19 rules out: the capture
+ * happens on the host and the answer is read on the caller's machine, so a path sent here
+ * either names nothing or names something on the wrong disk. What comes back is
+ * `ActionResult.artifact` — the bytes, base64-encoded — and where they end up is the
+ * client's own decision.
+ */
+export const ScreenshotParamsSchema = VerbCallBaseSchema.strict();
+export type ScreenshotParams = z.infer<typeof ScreenshotParamsSchema>;
+
+/**
  * Why a call never reached a verb at all.
  *
  * Deliberately the same words as `AcquireRefusalReasonSchema` for the three they share, so

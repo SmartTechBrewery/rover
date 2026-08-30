@@ -42,6 +42,14 @@ import {
  * describes — because on a device whose size nobody knows in advance that is the only
  * cross-check there is.
  *
+ * **`screenshot` is on the wire since #68**, and it is the one verb whose answer crosses the
+ * boundary as bytes. What a device is needed to prove about it is that the payload is still
+ * an image after the capture, the base64 encoding and the framing — and that it is an image
+ * of *this* device, which is the IHDR size against the panel `device_info` reports
+ * (PROJECT.md §6). `tests/device/android/screenshot.test.ts` makes the same two checks one
+ * layer down, against the backend directly; what is new here is that the bytes came off a
+ * lease, over a socket, from the process that owns the hardware.
+ *
  * **Only one point on the device is ever touched**, and it is {@link HARMLESS_POINT}. That
  * is the rule the whole suite is bounded by, and it is why every target below is either
  * absent from the screen, resolved by a verb that touches nothing, or that one coordinate.
@@ -103,6 +111,21 @@ const SETTINGS = parseAppId('com.android.settings');
 
 /** A package no device has. Both halves matter: it is not installed, and it never will be. */
 const ABSENT_PACKAGE = parseAppId('com.rover.no.such.package');
+
+/**
+ * PNG 1.2 §11.2.2: the IHDR chunk opens the file, width then height, big-endian.
+ *
+ * The same reader `tests/device/android/screenshot.test.ts` uses, and written out again for
+ * the reason that file's own copy exists: it is four lines, and a shared helper would put a
+ * knowledge of image formats in `tests/helpers/` that nothing else wants.
+ */
+function pngSize(bytes: Uint8Array): { width: number; height: number } {
+	const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+	return { width: view.getUint32(16), height: view.getUint32(20) };
+}
+
+/** The eight bytes every PNG starts with (PNG 1.2 §3.1). */
+const PNG_SIGNATURE = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
 
 /** How long to wait for the host's first view of its devices — a subscription, not a verb. */
 const INVENTORY_TIMEOUT_MS = 20_000;
@@ -472,6 +495,57 @@ describe.skipIf(!process.env.ROVER_TEST_DEVICE)('a daemon runs verbs on its own 
 		expect(screen.widthDp).toBeCloseTo(screen.widthPx / screen.densityScale, 10);
 		expect(screen.heightDp).toBeCloseTo(screen.heightPx / screen.densityScale, 10);
 		expect(osVersion).toBeTruthy();
+	});
+
+	/**
+	 * The capture row against real hardware, and the one assertion that says the bytes are a
+	 * picture of **this** device rather than merely a well-formed file: the image's own IHDR
+	 * dimensions against the panel `device_info` reports, as an **unordered** pair, because
+	 * the capture follows the current rotation while the panel is reported unrotated
+	 * (PROJECT.md §6). Read-only — it captures the screen as it finds it and changes nothing.
+	 *
+	 * Nothing here judges the pixels. An application blocking screen capture yields a valid,
+	 * entirely black PNG that passes every check below, which is a true answer about the
+	 * device rather than a failed capture; the check that separates it from a broken device is
+	 * a capture of the system home screen, and it is documented on the verb rather than
+	 * asserted here, because this suite runs against whatever screen is in front of it.
+	 */
+	it('captures the real screen as bytes, at the size the device reports', async () => {
+		const client = await startHost();
+		const device = await freeDevice(client);
+		const leaseId = await lease(client, device.serial);
+
+		const shot = await client.request('screenshot', { leaseId });
+		const info = await client.request('device_info', { leaseId });
+
+		expect(shot).toMatchObject({
+			outcome: 'ok',
+			// A capture addresses nothing on the screen either — it *is* the screen (D12(a)).
+			result: { verb: 'screenshot', target: null, device: { serial: device.serial } },
+		});
+		if (shot.outcome !== 'ok' || info.outcome !== 'ok') {
+			throw new Error('the assertion above should have caught this');
+		}
+		const { artifact } = shot.result;
+		if (!artifact)
+			throw new Error(`the capture answered with no artifact: ${JSON.stringify(shot)}`);
+
+		// Bytes, and only bytes: three fields, none of them a path on the host (D19).
+		expect(Object.keys(artifact).sort()).toEqual(['base64', 'byteLength', 'mediaType']);
+		expect(artifact.mediaType).toBe('image/png');
+
+		const bytes = new Uint8Array(Buffer.from(artifact.base64, 'base64'));
+		expect(bytes.byteLength).toBe(artifact.byteLength);
+		// Still a PNG after the capture, the encoding and the framing — the check that catches
+		// a binary stream that came back translated or truncated.
+		expect([...bytes.slice(0, PNG_SIGNATURE.length)]).toEqual(PNG_SIGNATURE);
+		// A capture of a real screen is kilobytes at the very least; the floor is here for the
+		// shape a mangled stream takes when it happens to keep its header.
+		expect(bytes.byteLength).toBeGreaterThan(1024);
+
+		const { width, height } = pngSize(bytes);
+		const { screen } = info.result.device;
+		expect([width, height].sort()).toEqual([screen.widthPx, screen.heightPx].sort());
 	});
 
 	/**
