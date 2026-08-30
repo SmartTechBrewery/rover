@@ -223,9 +223,17 @@ export type AppVerbParams = z.infer<typeof AppVerbParamsSchema>;
  * serialised HTTP bodies — while a response travels as one frame under `MAX_FRAME_BYTES`
  * (`src/ipc/framing.ts`), enforced on the *receiving* side, where going over it is not a
  * refusal the caller can read but a destroyed connection. The byte bound that actually
- * holds is `MAX_LOG_BYTES` in `src/verbs/logs.ts`. The next payload-carrying verb
- * (`pull_file`, R24) needs one too, and for the same reason: entries, elements and lines
- * are all counts of things whose size the caller chooses.
+ * holds is `MAX_LOG_BYTES` in `src/verbs/logs.ts`. Every payload-carrying row has one of
+ * these: what a call may carry *in* is {@link MAX_TRANSFER_BYTES} below, and what an answer
+ * may carry *out* is `MAX_ARTIFACT_BYTES` (`src/verbs/result.ts`) — entries, elements and
+ * files are all counts of things whose size the caller chooses.
+ *
+ * **A bound is only worth the point it is applied at.** The inbound ones are enforced here,
+ * before the host has decoded anything. The outbound ones have to be enforced where the
+ * bytes are produced, which is why `MAX_ARTIFACT_BYTES` is handed *down* to the backend for
+ * a pull (`DeviceBackend.pullFile`, `PullFileOptions`) rather than only checked on the way
+ * back: a refusal issued after the file is on this host's disk and in the daemon's heap has
+ * already cost what it was meant to prevent.
  */
 export const MAX_LOG_ENTRIES = 5_000;
 
@@ -246,6 +254,201 @@ export const ReadLogsParamsSchema = VerbCallBaseSchema.extend({
 	maxEntries: z.number().int().positive().max(MAX_LOG_ENTRIES).optional(),
 }).strict();
 export type ReadLogsParams = z.infer<typeof ReadLogsParamsSchema>;
+
+/**
+ * The most **bytes** one call may carry across the machine boundary — 4 MiB, whole, in one
+ * frame.
+ *
+ * Derived rather than picked, exactly the way `MAX_ARTIFACT_BYTES` (`src/verbs/result.ts`)
+ * is derived for the answer travelling the other way: a call is one frame under
+ * `MAX_FRAME_BYTES` (8 MiB, `./framing.ts`), a payload travels base64 — a third larger
+ * again — and the JSON escaping and the envelope ride in the same frame. 4 MiB encodes to
+ * about 5.4 MiB and leaves the rest to everything else. The relationship is asserted in
+ * `tests/unit/ipc/protocol.test.ts`, because a constant derived from another constant by
+ * hand is one the other is free to drift away from.
+ *
+ * **Say plainly what this does not fit: a real application package is routinely larger.**
+ * The one used to check the install recipe on this project was 45 MB — recorded on the
+ * install timeout of the backend that measured it — which is ten times this. So
+ * `install_app` works today for a small package and refuses a large one **by name** —
+ * never a package cut to fit, which would install as a corrupt file or, worse, as a
+ * plausible one. Lifting it is R24's row and its whole subject: chunking, resumption and
+ * streaming, landing underneath this contract rather than changing it.
+ */
+export const MAX_TRANSFER_BYTES = 4 * 1024 * 1024;
+
+/**
+ * Standard base64, padded — the alphabet `Buffer.from(…, 'base64')` reads and no other.
+ *
+ * Deliberately **one star over one character class** rather than the `(?:….{4})*` grouping
+ * this is usually written as: the grouped form recurses per group in V8's engine and
+ * overflows the stack on a payload of this size, which would turn an over-sized call into a
+ * host that crashed instead of a refusal the caller can read. What this form gives up — that
+ * the string is a whole number of four-character groups — is the O(1) length check beside it
+ * in {@link isBase64}.
+ */
+const BASE64_PATTERN = /^[A-Za-z0-9+/]*={0,2}$/;
+
+/**
+ * Whether `value` is base64 this host can decode without dropping anything.
+ *
+ * Two conditions, and both are needed: the alphabet (with padding only at the end, which is
+ * what the pattern's shape says) and a length that is a whole number of four-character
+ * groups — an encoder never produces anything else, and `Buffer` decodes a trailing partial
+ * group by discarding it.
+ */
+function isBase64(value: string): boolean {
+	return value.length % 4 === 0 && BASE64_PATTERN.test(value);
+}
+
+/**
+ * How many bytes an encoded payload decodes to, read off its **length** rather than by
+ * decoding it.
+ *
+ * The bound has to be on the decoded size and not on the encoded one, and the difference is
+ * not academic: base64 pads to a multiple of four, so a payload one byte over the limit
+ * encodes to exactly as many characters as one at the limit. A length-only check would let
+ * two bytes past a bound whose whole job is to be exact about where the line is — and the
+ * refusal below names the caller's real size, which it could not do either.
+ *
+ * Only sound for a string that already matched {@link BASE64_PATTERN}, which is why the
+ * check below runs in that order.
+ */
+function decodedByteLength(base64: string): number {
+	const padding = base64.endsWith('==') ? 2 : base64.endsWith('=') ? 1 : 0;
+	return (base64.length / 4) * 3 - padding;
+}
+
+/**
+ * A file's bytes, as they travel: base64 in JSON, because the framing is NDJSON
+ * (`./framing.ts`) and raw bytes do not survive it.
+ *
+ * **Refused at the boundary, by name, with the caller's own size in the message.** An
+ * oversize transfer is `invalid_params` before the host has decoded anything or opened a
+ * file — the refusal is the answer, and the one thing it must never be is a payload
+ * silently cut to fit: a truncated package is one that installs and misbehaves, and a
+ * truncated file is one nobody can tell from a whole one (R24, and `./result.ts` records
+ * the same reasoning for the bytes going the other way).
+ *
+ * The shape is checked before the size because `Buffer.from(…, 'base64')` **ignores**
+ * characters outside the alphabet rather than failing: a payload mangled in transit would
+ * otherwise decode to fewer bytes, land on a device, and be discovered by whoever ran it.
+ *
+ * Zero bytes is legal. An empty file is a file, and refusing to move one would be this
+ * schema inventing a rule the filesystem does not have.
+ */
+export const Base64PayloadSchema = z.string().superRefine((value, ctx) => {
+	if (!isBase64(value)) {
+		ctx.addIssue({
+			code: z.ZodIssueCode.custom,
+			message:
+				'must be standard base64 (A–Z, a–z, 0–9, + and /, padded with =) — anything else is ' +
+				'decoded by dropping the characters that do not belong, which silently shortens the ' +
+				'payload rather than failing',
+		});
+		return;
+	}
+
+	const byteLength = decodedByteLength(value);
+	if (byteLength > MAX_TRANSFER_BYTES) {
+		ctx.addIssue({
+			code: z.ZodIssueCode.custom,
+			message:
+				`is ${byteLength} bytes, over the ${MAX_TRANSFER_BYTES}-byte limit one call may ` +
+				'carry — it travels base64-encoded, which is a third larger again, and the whole ' +
+				'call has to fit one message. It is refused whole rather than sent cut short, ' +
+				'because a truncated file is not distinguishable from a complete one. A real ' +
+				'application package is routinely larger than this; transferring one is its own ' +
+				'piece of work (R24)',
+		});
+	}
+});
+
+/**
+ * The longest path a call may name on the device.
+ *
+ * The limit every platform this targets happens to share, and allocation hygiene of the
+ * kind `ATTRIBUTION_MAX_LENGTH` already applies rather than a claim about any filesystem:
+ * the host echoes the path back inside a failure it builds on a peer's behalf.
+ */
+export const MAX_DEVICE_PATH_LENGTH = 4096;
+
+/**
+ * A path **on the device** — the only kind of path this protocol carries in either
+ * direction (D19).
+ *
+ * A shape check rather than an escape, because nothing downstream interprets it: the
+ * transfer takes it as an argument, not as a fragment of a command line a shell reads. A
+ * backend that could not keep that true would quote it itself, the way it already quotes
+ * every other value it relays into one. What this does check is the two things a caller gets
+ * wrong in a way the
+ * device cannot report usefully — an empty path, and a **relative** one, which resolves
+ * against whatever directory the transfer happened to start in and so names a different
+ * file depending on the platform, the tool and the day.
+ *
+ * A NUL is refused separately: it terminates a path for every operating system underneath
+ * this, so `'/tmp/a\0/b'` and `'/tmp/a'` are the same file to a device and two different
+ * strings to everything above it.
+ *
+ * A **trailing slash** is refused for a related reason, and it is the one shape here that
+ * is about the transfers rather than about paths in general: a path ending in `/` names a
+ * directory in every convention there is, and a directory is not what either of these verbs
+ * addresses — a push writes *the file named*, a pull reads it. The platforms' own transfer
+ * tools do not refuse one: they copy the bytes in under the host-side basename and report a
+ * success (measured, PROJECT.md §6), which is a caller told `ok` about a file it cannot
+ * find. Caught here when the path says so on its face, and by `DeviceBackend.pushFile` when
+ * only the device knows.
+ */
+export const DevicePathSchema = z
+	.string()
+	.min(1)
+	.max(MAX_DEVICE_PATH_LENGTH)
+	.startsWith('/', 'must be an absolute path on the device, starting with /')
+	.refine((value) => !value.includes('\0'), 'must not contain a NUL character')
+	.refine(
+		(value) => !value.endsWith('/'),
+		'must name a file, not a directory — a trailing slash is a directory in every ' +
+			'convention there is, and a transfer that accepted one would put the file inside it ' +
+			'under a name this host chose',
+	);
+
+/**
+ * `install_app` — the package, **from the caller's machine**, and nothing else.
+ *
+ * No path, and that is the field this row exists without: the package is on the caller's
+ * disk, the install happens on the host, and a path sent here would name a file on the
+ * wrong machine — or, worse, one that is on both (D19). What travels is the bytes; the
+ * host writes them to a file of its own and deletes it again
+ * (`src/daemon/verb-handlers.ts`).
+ *
+ * No app id either. The core knows no application's name and this row does not introduce
+ * one: what gets installed is the package the caller sent, and which application that is is
+ * a fact about the bytes. The project install hook that would name one is D13/R17.
+ */
+export const InstallAppParamsSchema = VerbCallBaseSchema.extend({
+	packageBase64: Base64PayloadSchema,
+}).strict();
+export type InstallAppParams = z.infer<typeof InstallAppParamsSchema>;
+
+/** `push_file` — the bytes from the caller's machine, and where on the device to put them. */
+export const PushFileParamsSchema = VerbCallBaseSchema.extend({
+	devicePath: DevicePathSchema,
+	contentBase64: Base64PayloadSchema,
+}).strict();
+export type PushFileParams = z.infer<typeof PushFileParamsSchema>;
+
+/**
+ * `pull_file` — the device path to read, and deliberately nowhere to put it.
+ *
+ * A destination would be the one field D19 rules out, for the reason
+ * {@link ScreenshotParamsSchema} gives in fewer words: the read happens on the host and the
+ * answer is read on the caller's machine. The bytes come back on `ActionResult.artifact`
+ * and where they land is the client's own decision.
+ */
+export const PullFileParamsSchema = VerbCallBaseSchema.extend({
+	devicePath: DevicePathSchema,
+}).strict();
+export type PullFileParams = z.infer<typeof PullFileParamsSchema>;
 
 /**
  * What both environment rows carry — `set_airplane_mode` and `set_wifi`.
@@ -362,8 +565,8 @@ export type VerbRefusalReason = z.infer<typeof VerbRefusalReasonSchema>;
  * out of the handler and arrives as `internal_error`, which keeps that code meaning what it
  * says.
  *
- * A **factory** because one verb's answer now carries more than an `ActionResult`
- * (`read_logs`, and `pull_file` after it), and only the `ok` branch differs: the failure
+ * A **factory** because one verb's answer carries more than an `ActionResult`
+ * (`read_logs`), and only the `ok` branch differs: the failure
  * and the refusal are the same two schemas whatever was asked, which is the point rather
  * than an economy — an agent learns one refusal vocabulary, not one per verb family. The `ok`
  * schema is always an `ActionResult` or an extension of one, so every verb's answer carries

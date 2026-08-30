@@ -77,7 +77,7 @@ test behind it rather than only a convention: `tests/unit/no-sleep.test.ts` scan
 are exempt from the scan. It is a floor, not a proof — a determined re-implementation gets
 through, and reading the wait vocabulary is still how you learn what a wait here looks like.
 
-**The verb layer has a spine, eleven verbs on it and the two waits standing beside it.**
+**The verb layer has a spine, nineteen verbs on it and the two waits standing beside it.**
 `src/verbs/` is the layer above the backends where determinism stops being a rule and becomes a
 signature (D12): `resolveTarget()` takes
 a target and *nothing else* — no screen, no element list, no state read a turn ago — so a target can
@@ -253,6 +253,54 @@ kept, and `truncated` says when there were more, because a short read that reads
 is worse than no read. Following a log would be a wait with no condition and a stream over IPC, and
 is deliberately not here.
 
+**`install_app`, `push_file` and `pull_file` are the family whose whole subject is *which machine a
+file is on*** (`src/verbs/files.ts`). The agent is somewhere else, the device is here, and the host
+is in between — so a package to install and a file to push arrive **as bytes from the caller's
+machine**, never as a path, and a pulled file goes back **as bytes** on the same `result.artifact`
+a screenshot uses. That means `pull_file`'s answer contains no path at all: where the file lands is
+the client's own decision and the client's own disk. The host writes the inbound bytes to a file of
+its own, hands it to the device, and deletes it in a `finally` — including when the transfer failed,
+which is the case that would otherwise leave somebody's package on a machine that lends the same
+hardware to the next agent. `install_app` carries no application id, because the core knows no
+application's name; what gets installed is the package the caller sent, pinned to the leased device.
+
+**`push_file` names the file to write, never a directory to put it in.** A push to a path that is
+already a directory is refused rather than transferred into, and that is a rule Rover states rather
+than a device answer it relays: the platforms' own transfer tools copy the file *inside* such a path
+under a basename the **host** chose, report a success, and print nothing that names where the bytes
+actually went. So a caller that meant `/sdcard/Download/report.bin` and wrote `/sdcard/Download`
+would be told `ok` about a file it cannot find, under a name that appears in no schema and no
+answer — on hardware this host lends to somebody else next. A trailing slash is caught at the
+boundary; an existing directory is caught by asking the device before any bytes move.
+
+**`pull_file` names the file to read, and refuses a directory for a second reason: the size bound
+below would not hold.** The platforms' own transfer copies a directory *recursively*, while asking
+the device how big a directory is answers for the directory itself — 4096 bytes, whatever the tree
+under it holds (measured, PROJECT.md §6). So `pull_file` on `/sdcard/DCIM/Camera` would clear the
+bound on 4096 and put every recording on this host's disk before anything could count them, in the
+one process that holds every lease on the machine. The same probe that catches a push into a
+directory catches this, and it runs before the transfer rather than after.
+
+**No path on the host reaches the agent, in an answer or in a failure.** A refusal from a transfer
+names the device path, the device and what the device said — never the temporary file the daemon
+wrote the caller's bytes into, which names nothing on the machine reading the message and has been
+deleted by the time anyone reads it.
+
+**One call carries one whole file, and the limit says so out loud.** A payload over
+`MAX_TRANSFER_BYTES` (4 MiB, derived from the 8 MiB frame cap with base64's inflation accounted
+for) is refused at the boundary with a message naming both its size and the limit — never a file cut
+to fit, because a truncated file is not distinguishable from a whole one. Say the uncomfortable part
+plainly: **a real APK is routinely tens of megabytes**, so `install_app` works today for a small
+package and refuses a large one by name. Chunked transfer is its own issue, and it will land
+underneath these verbs rather than change what they promise. The outbound limit is enforced the same
+way round: `MAX_ARTIFACT_BYTES` is handed **down** to the backend, so `pull_file` refuses a file too
+big to answer with *before* copying it onto the host and into the daemon's memory — a bound applied
+only on the way back would have already cost what it was meant to prevent, in the one process
+holding every lease on the machine. That bound only means anything on a **regular file**, so that
+is what a pull requires: a directory is a recursive copy whose reported size is the inode's own few
+kilobytes, and a character device reports zero and then reads forever, so both are refused on what
+the device says the path *is* rather than bounded on what it says the path weighs.
+
 **`set_airplane_mode` and `set_wifi` toggle the radios without root** (`src/verbs/environment.ts`),
 through the commands verified on a real device rather than the `svc wifi disable` every guide on the
 internet still shows — that one does not exist on the API level Rover was built against, and it
@@ -265,14 +313,12 @@ nothing in the device abstraction reads one back. They are also exactly the comm
 ends, so there is one recipe per toggle rather than two that can drift, and the order matters for
 the reason the restoration records: airplane mode first, wifi last.
 
-The remaining verbs — `install_app`, `pull_file` and `push_file` — are their own issues.
-
 **The daemon loads the core and runs the verbs**, and a client only asks (D19). The two waits, the
-six input verbs, the three app verbs, the three read verbs, the log read, screen recording, and two
-environment verbs are callable over the same connection as `acquire_device` — the same envelope,
-the same framing, one method table — and a verb call carries the lease id rather than a serial,
-because the lease id is the credential and the host derives the device from it. A verb that fails
-comes back as an *answer* naming what happened —
+six input verbs, the three app verbs, the three read verbs, the log read, screen recording, the two
+environment verbs and the three file transfers are callable over the same connection as
+`acquire_device` — the same envelope, the same framing, one method table — and a verb call carries
+the lease id rather than a serial, because the lease id is the credential and the host derives the
+device from it. A verb that fails comes back as an *answer* naming what happened —
 the element was not there, the wait timed out, the device cannot read its screen — and never as a
 broken host; only the host actually breaking is an `internal_error`. There is no `adb` in a client
 process — and no `ffmpeg` either, nor anything else that starts a program:
@@ -284,13 +330,22 @@ anything, `launch_app` and `stop_app` reach the package, `read_screen` and `devi
 the hardware, `screenshot` brings back a real PNG of the panel the device reports, `record_video`
 brings back a recording that is provably finished before it leaves the device together with the
 frames sliced out of it on the host, `read_logs` brings
-back the device's own log, and `set_airplane_mode` and `set_wifi` move the device's real radios
+back the device's own log, `push_file` and `pull_file` move a binary file to the device and back
+byte for byte, and `set_airplane_mode` and `set_wifi` move the device's real radios
 over a lease and without root — and, since the Android backend learned to read its own screen —
 a target addressed by text resolves against a hierarchy read inside the verb, both waits poll a
-real screen, and every action comes back carrying the elements that were on it afterwards. One gap
-is recorded rather than hidden — a device-level refusal, such as launching a package that is not
-installed, still reaches the caller as `internal_error` rather than as an answer about the device.
-That is true of every verb family here, not just this one, and it is filed as its own issue.
+real screen, and every action comes back carrying the elements that were on it afterwards. Two gaps
+are recorded rather than hidden. **`install_app` has not been run against a device by anyone yet**:
+there is no APK in this repository and adding a binary to carry one is not a change's job, so the
+verb is unverified on hardware — read that as a stated gap rather than as a check somebody
+completed. What is established is the half adb settles before the device is involved, which is the
+half `withInstallablePackage` exists for: `adb install -r` refuses a file whose name does not end
+`.apk` or `.apex`, and takes the same bytes once renamed. Everything else about it — the decode,
+the host temp file and its removal, the size refusal — is covered over a stub backend. And a
+device-level refusal, such as launching a package that is not installed, still reaches the caller as
+`internal_error` rather than as an answer about the device — which is what a `pull_file` of a path
+the device does not have reports today. That is true of every verb family here, not just this one,
+and it is filed as its own issue.
 
 **The host can now listen on the network, and only if you ask it to** (D17, D20, D25). Setting
 `ROVER_LISTEN_PORT` — with a TLS certificate beside it — starts a TCP+TLS listener alongside the

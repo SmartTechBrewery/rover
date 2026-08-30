@@ -160,6 +160,12 @@ function createRecordingBackend(
 		readLogs: async () => {
 			throw new Error('readLogs is not part of a restoration');
 		},
+		pushFile: async () => {
+			throw new Error('pushFile is not part of a restoration');
+		},
+		pullFile: async () => {
+			throw new Error('pullFile is not part of a restoration');
+		},
 		setAirplaneMode: async (_serial, enabled: boolean) => {
 			performed.push(`setAirplaneMode ${enabled}`);
 		},

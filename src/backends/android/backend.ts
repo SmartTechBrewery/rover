@@ -2,13 +2,13 @@
  * The device backend for this platform.
  *
  * It answers every required method of the contract — enumeration, presence, the device
- * facts, the app lifecycle, the capture and the log read — with no stub, which is what
- * lets it declare `implements DeviceBackend` and what lets `./index.ts` register it
- * (ai/TESTING.md, "A backend under construction registers nothing"), plus **every**
- * capability-gated method: the environment pair behind `canControlNetwork`, the four input
- * primitives behind `canInput`, `readScreen` behind `canReadScreen` (#13) and `recordVideo`
- * behind `canRecordVideo` (#14). No flag in `./capabilities.ts` is a declared opt-out any
- * more.
+ * facts, the app lifecycle, the capture, the log read, the recording and the two file
+ * transfers — with no stub, which is what lets it declare `implements DeviceBackend` and what
+ * lets `./index.ts` register it (ai/TESTING.md, "A backend under construction registers
+ * nothing"), plus **every** capability-gated method: the environment pair behind
+ * `canControlNetwork`, the four input primitives behind `canInput`, `readScreen` behind
+ * `canReadScreen` (#13) and `recordVideo` behind `canRecordVideo` (#14). No flag in
+ * `./capabilities.ts` is a declared opt-out any more.
  *
  * Everything that touches the device goes through `./adb.js`, everything that reads its
  * output goes through `./parsers/`, and the two pure modules beside this one own the
@@ -29,8 +29,17 @@
  *   and the numbers `tap`, `swipe` and `recordVideo` compute. No caller's string reaches any
  *   of them, which is the property `shellArg` exists to restore when one does. A new argument
  *   outside that list takes a quoter.
+ *
+ * There is one more kind of value and it takes **no** quoter on purpose: a path handed to
+ * `install`, `push` or `pull`. Those are adb subcommands taking argv entries, so nothing in
+ * them reaches a shell on either machine — the quoting question does not arise, and the
+ * check that does belongs at the boundary as a shape (`src/ipc/verb-methods.ts`). A future
+ * transfer routed through `shell` instead would move it back onto this list.
  */
 
+import { copyFile, mkdtemp, readFile, rm, stat } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import {
 	type Device,
 	type DeviceBackend,
@@ -43,15 +52,21 @@ import {
 	type DeviceWatcher,
 	type LogRead,
 	type Point,
+	type PullFileOptions,
 	type ReadLogsOptions,
 	type RecordVideoOptions,
 	type ScreenElement,
 } from '../../core/device.js';
-import { UnfinishedRecordingError, UnsupportedTextError } from '../../core/errors.js';
+import {
+	FileTooLargeError,
+	UnfinishedRecordingError,
+	UnsupportedTextError,
+} from '../../core/errors.js';
 import { type AppId, type DeviceSerial, parseAppId, unwrap } from '../../core/ids.js';
 import { waitForCondition } from '../../core/wait.js';
 import {
 	type AdbBinaryResult,
+	AdbCommandError,
 	type AdbResult,
 	type AdbStream,
 	describeBytes,
@@ -66,6 +81,7 @@ import {
 	shellArg,
 	shellText,
 	streamAdb,
+	TRANSFER_ADB_TIMEOUT_MS,
 } from './adb.js';
 import { attachmentOfSerial } from './attachment.js';
 import { ANDROID_PLATFORM_ID } from './capabilities.js';
@@ -95,6 +111,7 @@ import { parseLogcat } from './parsers/logcat.js';
 import { acceptedNetworkChange } from './parsers/network.js';
 import { isPng } from './parsers/screencap.js';
 import { isFinishedRecording, isRecorderRunning, recorderPids } from './parsers/screenrecord.js';
+import { type DeviceStat, parseDeviceStat } from './parsers/stat.js';
 import { TrackFrameDecoder } from './parsers/track.js';
 import { dumpedPath } from './parsers/uiautomator.js';
 import { parseWmDensity, parseWmSize } from './parsers/wm.js';
@@ -253,15 +270,232 @@ function appArg(appId: AppId): string {
  * on stderr, while every guide of the era shows them on stdout (PROJECT.md §6). The device
  * is named because a message about the wrong device is the failure mode this backend's
  * pinning exists to prevent.
+ *
+ * `redact` is the same list the run itself was given, for the same reason and against the
+ * same hazard: the streams quoted here are the streams `AdbCommandError` would have quoted
+ * had the exit code been honest, and a host path in them crosses the boundary either way
+ * (D19). Only the transfers pass one; every other caller quotes device output only.
  */
-function refused(what: string, serial: DeviceSerial, result: AdbResult): Error {
+function refused(
+	what: string,
+	serial: DeviceSerial,
+	result: AdbResult,
+	redact: readonly string[] = [],
+): Error {
 	return new Error(
 		[
 			`${what} on device '${unwrap(serial)}' reported a failure`,
-			`stdout: ${quoteStream(result.stdout)}`,
-			`stderr: ${quoteStream(result.stderr)}`,
+			`stdout: ${quoteStream(result.stdout, redact)}`,
+			`stderr: ${quoteStream(result.stderr, redact)}`,
 		].join('\n'),
 	);
+}
+
+/**
+ * The file-name suffixes `adb install` accepts, checked by **adb itself** on the string
+ * before the device is reached at all: a package under any other name is refused with
+ * `filename doesn't end .apk or .apex`, whatever the bytes in it are.
+ *
+ * That matters because the host-side layer that writes the caller's payload to a file
+ * (`src/daemon/verb-handlers.ts`) names it neutrally — a package format belongs to one
+ * platform, and that layer names none (ai/RULES.md §2) — so the name arriving here is
+ * routinely not one adb will take. {@link withInstallablePackage} gives it one.
+ *
+ * **Not re-verified against a device in this change** — none was attached — which is
+ * precisely why the staging is unconditional in shape rather than a branch on an error
+ * message: it costs one copy of an already-bounded payload when the name is wrong, nothing
+ * at all when it is right, and it is harmless if adb turns out to accept any name.
+ */
+const INSTALLABLE_SUFFIXES = ['.apk', '.apex'] as const;
+
+/** What a staged package is called. Only the suffix is load-bearing; see above. */
+const STAGED_PACKAGE_NAME = 'package.apk';
+
+/** What a pulled file is called on the way through this host. Never seen by a caller. */
+const PULLED_FILE_NAME = 'pulled';
+
+/**
+ * `stat`'s format string — the size, then the kind. See `./parsers/stat.js` for the order.
+ *
+ * A literal of this backend's own rather than a caller's value, so it is `shellArg`'d (the
+ * shape check that refuses a `'`) where the path beside it is `shellText`'d.
+ */
+const STAT_FORMAT = '%s %F';
+
+/** Prefixes for this backend's own scratch directories, so a stray one is attributable. */
+const STAGING_PREFIX = 'rover-install-';
+const PULL_PREFIX = 'rover-pull-';
+
+/**
+ * Run `use` against a directory on this host that is removed however it ends.
+ *
+ * The `finally` is the whole point: a transfer that throws part-way leaves the payload
+ * behind otherwise, on a host that lends the same hardware to somebody else next. Removal
+ * is `force`d so cleaning up after a failure cannot itself fail and replace the real error.
+ */
+async function inHostTempDirectory<Result>(
+	prefix: string,
+	use: (directory: string) => Promise<Result>,
+): Promise<Result> {
+	const directory = await mkdtemp(join(tmpdir(), prefix));
+	try {
+		return await use(directory);
+	} finally {
+		await rm(directory, { recursive: true, force: true });
+	}
+}
+
+/**
+ * Hand `install` a path adb will accept, copying the package under a name it takes when the
+ * one it was given is not (see {@link INSTALLABLE_SUFFIXES}).
+ *
+ * The copy is made only when it is needed, so a caller that already has a `.apk` pays
+ * nothing, and it lives inside a directory that is removed whether the install worked or
+ * not. The device is never told either name — `adb install` reads the file here.
+ */
+async function withInstallablePackage<Result>(
+	packagePath: string,
+	install: (path: string) => Promise<Result>,
+): Promise<Result> {
+	const named = packagePath.toLowerCase();
+	if (INSTALLABLE_SUFFIXES.some((suffix) => named.endsWith(suffix))) {
+		return install(packagePath);
+	}
+
+	return inHostTempDirectory(STAGING_PREFIX, async (directory) => {
+		const staged = join(directory, STAGED_PACKAGE_NAME);
+		await copyFile(packagePath, staged);
+		return install(staged);
+	});
+}
+
+/**
+ * A push whose destination is a directory the device already has.
+ *
+ * `adb push` treats that as a request to copy the file *into* it, under the basename of
+ * the path on **this host** — a name the daemon invented for a temporary file — and reports
+ * `1 file pushed` (measured on API 37, PROJECT.md §6). So the caller is told `ok` about
+ * bytes that are not where it asked, under a name that appears in no schema, no result and
+ * no document, on hardware this host lends to somebody else next. This is the refusal that
+ * makes it loud instead (ai/RULES.md §2).
+ *
+ * Named as a rule rather than quoted from adb, because adb never says it: its success line
+ * carries the *local* path (`/tmp/…/payload: 1 file pushed, 0 skipped`), so there is
+ * nothing in the output a parser could read the real destination out of.
+ */
+function pushedIntoDirectory(serial: DeviceSerial, devicePath: string): Error {
+	return new Error(
+		`'${devicePath}' is a directory on device '${unwrap(serial)}', and a push names the ` +
+			'file to write, not a directory to write it into — pushing to it would put the ' +
+			'file inside under a name this host chose, and report success. Name the file: ' +
+			`'${devicePath}/<name>'`,
+	);
+}
+
+/**
+ * A pull whose source is a directory.
+ *
+ * The counterpart of {@link pushedIntoDirectory}, and the refusal that keeps `pull_file`'s
+ * byte bound meaningful. `adb pull <dir>` is a **recursive** copy of the whole tree
+ * (measured on API 37, PROJECT.md §6), while `stat` answers for the directory inode alone
+ * — 4096 bytes on ext4 whatever is underneath it. So the size the probe returns says
+ * nothing about what the transfer would fetch, and a caller naming `/sdcard/DCIM/Camera`
+ * would have every recording on this host's temp filesystem before any check could look at
+ * it. The daemon holds every lease on this machine (D6, D17), so that filesystem is not
+ * one tenant's to fill.
+ *
+ * Refused on the *kind*, before the transfer, rather than bounded harder afterwards: there
+ * is no bound that helps, because the bytes are already on the disk by the time anything
+ * downstream of `adb pull` can count them.
+ */
+function pulledDirectory(serial: DeviceSerial, devicePath: string): Error {
+	return new Error(
+		`'${devicePath}' is a directory on device '${unwrap(serial)}', and a pull answers ` +
+			'with the bytes of one file — pulling a directory would copy the whole tree onto ' +
+			`this host before its size could be checked. Name the file: '${devicePath}/<name>'`,
+	);
+}
+
+/**
+ * A pull whose source is neither a regular file nor a directory.
+ *
+ * The other half of {@link pulledDirectory}, and the same defect on the shape that looks
+ * harmless because its size is small. `%F` calls a character device, a fifo, a socket and a
+ * block device something other than `regular file`, and for every one of them `%s` says
+ * nothing about what a pull would fetch: `/dev/urandom` stats as **`0 character device`**,
+ * so the byte bound compares 0 against the cap and lets it through, and `adb pull` then
+ * writes until the transfer timeout — 769,196,032 bytes onto this host in five seconds on
+ * API 37 (PROJECT.md §6). The staged-size check downstream cannot help, because it does not
+ * run until that pull has returned: it bounds the daemon's heap, never its disk.
+ *
+ * So the refusal is on the *kind*, and it is stated positively — a pull needs a **regular
+ * file**, rather than "anything that is not a directory". The device's own `%F` phrase goes
+ * into the message, because the useful thing to tell a caller that named `/dev/urandom` is
+ * what the device says it actually is.
+ */
+function pulledNonRegularFile(
+	serial: DeviceSerial,
+	devicePath: string,
+	description: string,
+): Error {
+	return new Error(
+		`'${devicePath}' is a ${description} on device '${unwrap(serial)}', and a pull answers ` +
+			'with the bytes of one file — a path that is not a regular file has a size that says ' +
+			'nothing about how much it would transfer, so it is refused rather than bounded ' +
+			'afterwards. Name a regular file.',
+	);
+}
+
+/**
+ * A pull that exited 0 and produced no file on this host.
+ *
+ * The **structural** counterpart of {@link refused}, and it is what this backend asserts on
+ * instead of a wording: a transfer either put the bytes on the disk or it did not, and that
+ * question needs no fixture to answer — which is what makes it safe to ask on a repository
+ * with no capture of a failed `adb pull` in it. Both streams are quoted anyway, because
+ * whichever of them carries the reason (a missing remote object, a permission the shell
+ * user does not have) is the only thing that says *why*.
+ *
+ * **The staging failure is described, not quoted**, and the `cause` is what keeps it: an
+ * `ENOENT` from `node:fs` names the host path it was given, and this message is read on the
+ * agent's machine where that path is somebody else's filesystem (D19). The cause is still
+ * attached, so a host-side log has the whole of it.
+ *
+ * `staged` is masked out of the quoted streams for the same reason one line up: `adb pull`
+ * names the destination it was writing to when it complains about it, and that destination
+ * is this host's own scratch file.
+ */
+function pulledNothing(
+	serial: DeviceSerial,
+	devicePath: string,
+	staged: string,
+	result: AdbResult,
+	cause: unknown,
+): Error {
+	return new Error(
+		[
+			`adb pull '${devicePath}' from device '${unwrap(serial)}' produced no file on this host`,
+			`stdout: ${quoteStream(result.stdout, [staged])}`,
+			`stderr: ${quoteStream(result.stderr, [staged])}`,
+			`nothing was left where this host staged it (${nameOf(cause)})`,
+		].join('\n'),
+		{ cause },
+	);
+}
+
+/**
+ * A failure named by its *kind* rather than by its text.
+ *
+ * `Error.name`, or a Node `code` when there is one — `ENOENT` says everything the caller
+ * needs and, unlike `message`, carries no path. The whole error is still attached as a
+ * `cause` for whoever is on this host.
+ */
+function nameOf(cause: unknown): string {
+	if (typeof cause === 'object' && cause !== null && 'code' in cause) {
+		const { code } = cause as { code: unknown };
+		if (typeof code === 'string') return code;
+	}
+	return cause instanceof Error ? cause.name : 'a non-Error value';
 }
 
 /**
@@ -460,15 +694,32 @@ export class AndroidDeviceBackend implements DeviceBackend {
 	 * Whether the success wording is there is `./parsers/app-control.js`'s question — the
 	 * short version is that neither `stdout.trim() === 'Success'` nor an empty stderr
 	 * survives what a real install prints (PROJECT.md §6).
+	 *
+	 * What the *name* of that file has to be is adb's own requirement rather than the
+	 * device's, and {@link withInstallablePackage} is what satisfies it without the layer
+	 * above having to know a package format.
 	 */
 	async installApp(serial: DeviceSerial, packagePath: string): Promise<void> {
-		const result = await runAdbOnDevice(serial, ['install', '-r', packagePath], {
-			timeoutMs: INSTALL_ADB_TIMEOUT_MS,
-		});
+		// The wording check lives *inside* the staging closure so the path adb was handed is
+		// still in scope for the refusal's own redaction: `adb install` writes that path back
+		// out itself — `adb: filename doesn't end .apk or .apex: <path>`, measured (PROJECT.md §6)
+		// — and the streams `refused` quotes are the streams that carry it.
+		await withInstallablePackage(packagePath, async (path) => {
+			const result = await runAdbOnDevice(serial, ['install', '-r', path], {
+				timeoutMs: INSTALL_ADB_TIMEOUT_MS,
+				redactArgv: [path],
+			});
 
-		if (!saysSuccess(result.stdout)) {
-			throw refused(`adb install -r '${packagePath}'`, serial, result);
-		}
+			// **No path at all**, not even the caller's own. `packagePath` is not the caller's:
+			// the caller sent bytes and the daemon wrote them to a temporary file of its own
+			// (`src/daemon/verb-handlers.ts`), which this call's `finally` deletes moments later.
+			// This message is read on the agent's machine, where a `/var/folders/…` path names
+			// nothing (D19, PROJECT.md §4) — so what identifies the package here is that the
+			// caller sent it, and the device's own words say the rest.
+			if (!saysSuccess(result.stdout)) {
+				throw refused('adb install -r (the package you sent)', serial, result, [path]);
+			}
+		});
 	}
 
 	/**
@@ -609,6 +860,181 @@ export class AndroidDeviceBackend implements DeviceBackend {
 		const truncated = entries.length > options.maxEntries;
 
 		return { entries: truncated ? entries.slice(-options.maxEntries) : entries, truncated };
+	}
+
+	/**
+	 * `adb push <hostPath> <devicePath>` — the file, straight across the link.
+	 *
+	 * **No device shell is involved, and that is deliberate.** `push` is an adb subcommand
+	 * whose arguments stay argv entries: neither path is joined into a string the device's
+	 * `sh` reads, so neither takes `shellArg` and a metacharacter in a device path is a
+	 * character in a file name rather than a second command (`./adb.js`, `shellArg`). Routing
+	 * this through `shell cat` instead — the recipe that circulates for it — would hand a
+	 * caller's path to that shell and put the payload through a pty on the way.
+	 * `src/ipc/verb-methods.ts` checks the path's *shape* at the boundary, which is the
+	 * check that belongs to a value nothing here interprets.
+	 *
+	 * **A destination that is already a directory is refused before anything moves.**
+	 * Measured on API 37 (PROJECT.md §6): `adb push <file> <existing-dir>` prints `1 file
+	 * pushed, 0 skipped`, exits 0, and leaves the bytes at `<existing-dir>/<host basename>`
+	 * — a name the daemon made up for a temporary file. There is nothing in adb's output to
+	 * catch that with, either: the line names the **local** path, never the remote one it
+	 * resolved. So the check is a question put to the device first ({@link statOnDevice}),
+	 * and the contract it enforces is stated on `DeviceBackend.pushFile`.
+	 *
+	 * **Only a directory is refused, and the asymmetry with {@link pullFile} is deliberate.**
+	 * A push to a character device, a fifo or a socket is relayed, because the reason the
+	 * directory case is refused does not apply to it: there the daemon's own temporary
+	 * basename becomes device state under a name the caller never chose, while a push to
+	 * `/dev/null` writes exactly where the caller said, and the bytes are the caller's own
+	 * already-bounded upload rather than something this host has to hold. What the device
+	 * makes of them is the device's answer, and it comes back as one. The rule is stated on
+	 * `DeviceBackend.pushFile` so it binds every backend.
+	 *
+	 * **What this still does not assert, said out loud rather than left to be discovered:**
+	 * the wording of an exit-0 `push` failure. `./adb.js` throws on a non-zero exit, and
+	 * every other verb in this file additionally checks the *wording* of an exit-0 failure —
+	 * because adb reports plenty of them that way (PROJECT.md §6). No such failure has been
+	 * captured from `push`, and a wording asserted from memory is exactly what `./parsers/`
+	 * and its captures exist to prevent (ai/RULES.md §6). When one is captured, the check
+	 * belongs beside the others as a parser with a fixture, not as a regex inlined here.
+	 */
+	async pushFile(serial: DeviceSerial, hostPath: string, devicePath: string): Promise<void> {
+		const existing = await this.statOnDevice(serial, devicePath);
+		if (existing?.kind === 'directory') {
+			throw pushedIntoDirectory(serial, devicePath);
+		}
+
+		await runAdbOnDevice(serial, ['push', hostPath, devicePath], {
+			timeoutMs: TRANSFER_ADB_TIMEOUT_MS,
+			redactArgv: [hostPath],
+		});
+	}
+
+	/**
+	 * `adb pull <devicePath>` into a directory on this host, and then the bytes.
+	 *
+	 * **`pull`, never `exec-out cat`**, for two reasons that both cost bytes. A `cat` puts
+	 * the payload through the device's shell, where a pty can translate every `\n` into
+	 * `\r\n` and silently corrupt anything that is not text — the same trap
+	 * {@link screenshot} records — and it answers a missing file with an empty stream that
+	 * looks exactly like an empty file. `pull` writes a file or does not, which is a question
+	 * this side can answer without knowing what adb prints ({@link pulledNothing}).
+	 *
+	 * The staging directory is this backend's own and is removed in a `finally`: the bytes
+	 * cross the boundary from the layer above, and a path on this host is never part of the
+	 * answer (D19) — nor of a failure about it, which is why the pull's own argv is redacted
+	 * and {@link pulledNothing} names a `code` rather than quoting `node:fs`.
+	 *
+	 * **Bounded twice, and neither check is the other's spare.** `options.maxBytes` is what
+	 * the caller can be given, and it is asked of the *device* before the transfer starts —
+	 * a 2 GB recording is refused for the price of one `stat` instead of filling this host's
+	 * temp filesystem — and again of what landed, before the file is read into the daemon's
+	 * heap. The daemon holds every lease on this machine (D6, D17), so an allocation a peer
+	 * chose is not one tenant's mistake.
+	 *
+	 * **A source the probe does not call a regular file is refused before either bound**,
+	 * because for every other shape a size is not an answer. `adb pull` copies a directory's
+	 * tree recursively while `stat` reports the directory inode's own few kilobytes, so both
+	 * bounds pass and the whole of `/sdcard/DCIM` lands here first ({@link pulledDirectory});
+	 * a character device stats as `0` and pulls until the transfer timeout
+	 * ({@link pulledNonRegularFile}). The staged check below is not the spare for either one —
+	 * it does not run until `adb pull` has returned, so it bounds this daemon's heap and not
+	 * its disk. It is the same probe `pushFile` asks and the same rule stated on
+	 * `DeviceBackend.pullFile`.
+	 */
+	async pullFile(
+		serial: DeviceSerial,
+		devicePath: string,
+		options: PullFileOptions,
+	): Promise<Uint8Array> {
+		// Asked of the device first, so a file that was never going to fit costs one `stat`
+		// rather than a full transfer onto this host's disk. Both halves of the probe's answer
+		// are acted on, and the *kind* has to come first: only a regular file's size predicts
+		// what a pull would fetch. A directory's own size says nothing about the recursive copy
+		// `adb pull` would make of it ({@link pulledDirectory}), and a character device reports
+		// zero while pulling without end ({@link pulledNonRegularFile}) — the bound below would
+		// admit either. A probe that answered `null` leaves the transfer where it was before
+		// the probe existed, which is what keeps a device wording `%F` differently working.
+		const onDevice = await this.statOnDevice(serial, devicePath);
+		if (onDevice?.kind === 'directory') {
+			throw pulledDirectory(serial, devicePath);
+		}
+		if (onDevice !== null && onDevice.kind !== 'regular-file') {
+			throw pulledNonRegularFile(serial, devicePath, onDevice.description);
+		}
+		if (onDevice !== null && onDevice.byteLength > options.maxBytes) {
+			throw new FileTooLargeError(serial, devicePath, onDevice.byteLength, options.maxBytes);
+		}
+
+		return inHostTempDirectory(PULL_PREFIX, async (directory) => {
+			const staged = join(directory, PULLED_FILE_NAME);
+			const result = await runAdbOnDevice(serial, ['pull', devicePath, staged], {
+				timeoutMs: TRANSFER_ADB_TIMEOUT_MS,
+				redactArgv: [staged],
+			});
+
+			// And again on what actually landed, **before** it is read into memory. The probe
+			// above can be missed — a device whose `stat` words itself differently, a file that
+			// grew between the two calls — and this one cannot: it is a `stat` of a file on this
+			// host's own disk, and it is the difference between refusing an allocation and
+			// making it first. The staged copy is removed by `inHostTempDirectory` either way.
+			const landed = await stat(staged).catch((cause: unknown) => {
+				throw pulledNothing(serial, devicePath, staged, result, cause);
+			});
+			if (landed.size > options.maxBytes) {
+				throw new FileTooLargeError(serial, devicePath, landed.size, options.maxBytes);
+			}
+
+			// The read is guarded too, and the `stat` above is not its spare: a staged object can
+			// answer a `stat` and still refuse to be read — a permission this host does not have,
+			// a file that went away between the two calls — and those are the cases
+			// {@link pulledNothing} was written for. Left bare, they reach the caller as whatever
+			// `node:fs` said, which is a message with no device in it and a host path in it.
+			return await readFile(staged).catch((cause: unknown) => {
+				throw pulledNothing(serial, devicePath, staged, result, cause);
+			});
+		});
+	}
+
+	/**
+	 * What the device says `devicePath` is, or `null` when it would not say.
+	 *
+	 * One `stat` standing behind both transfers, for the two questions each of them has to
+	 * settle before it moves any bytes — see `./parsers/stat.js` for the command and why it
+	 * follows symlinks.
+	 *
+	 * **`null` on any failure, and that is not laziness.** A missing path is the *ordinary*
+	 * case for a push — it is the file about to be created — and toybox answers it with exit
+	 * 1 and `No such file or directory` on stderr, which `./adb.js` turns into an exception.
+	 * A probe that threw would make the common push fail. So a run that did not exit 0, and
+	 * output this repository has no capture for, both mean the same thing here: *this probe
+	 * has nothing to add*, and the caller proceeds exactly as it would have without it. Both
+	 * callers keep a check that does not depend on the answer.
+	 *
+	 * A timeout is deliberately **not** swallowed: an adb that hung is a failing call, not a
+	 * device declining to answer, and passing it on is what keeps a wedged link from looking
+	 * like an unremarkable transfer.
+	 */
+	private async statOnDevice(serial: DeviceSerial, devicePath: string): Promise<DeviceStat | null> {
+		try {
+			const result = await runAdbOnDevice(serial, [
+				'shell',
+				'stat',
+				'-L',
+				'-c',
+				shellArg(STAT_FORMAT),
+				// `shellText`, not `shellArg`: a device path is the caller's data, and an
+				// apostrophe in a file name is an ordinary character rather than a failed shape
+				// check (`./adb.js`). This is the only place a transfer's path reaches a shell —
+				// `push` and `pull` take theirs as argv entries and never quote them.
+				shellText(devicePath),
+			]);
+			return parseDeviceStat(result.stdout);
+		} catch (error) {
+			if (error instanceof AdbCommandError && !error.timedOut) return null;
+			throw error;
+		}
 	}
 
 	/**

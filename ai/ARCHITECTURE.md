@@ -137,6 +137,7 @@ Backends are genuinely asymmetric and flattening that is the design mistake to a
   `requires: ['canRecordVideo']` for `read_screen`'s reason — the payload *is* the answer, so a
   backend without it has to fail by name before dispatch rather than answer with no recording.
 - **A system log is not one of those asymmetries**, which is why `readLogs` is a *required* method and not a capability: every platform here keeps one, and a flag that is always `true` is noise (`src/core/capabilities.ts`). What differs is the wording inside an entry — that is what the neutral `LogEntry` shape and a backend's own parser absorb.
+- **Moving a file is not one either**, so `pushFile` and `pullFile` are required too. The asymmetry that matters there is the *direction* rather than the platform: a push takes a path on the host, because the host is where the daemon runs, and a pull answers with **bytes**, because the answer is read on the agent's machine (D19).
 - **A missing *host* program is not one either, and it must not be modelled as a capability.**
   Slicing a recording into frames needs a video decoder this project does not contain, so the host
   drives `ffmpeg` off `PATH` (`src/daemon/frames.ts`). Capabilities describe what a device backend
@@ -280,8 +281,8 @@ Verbs live above the backends and below the adapters, and this is where determin
   carries **more than an `ActionResult`**: the log entries ride on top of it. That is what factored
   `VerbCallResultSchema` into a `verbCallResultOf()` factory in `src/ipc/verb-methods.ts` and made
   `runVerb` generic in the result type — only the `ok` branch varies, so a failure and a refusal
-  stay one vocabulary whatever was asked, and the next payload-carrying verb (`pull_file`) reuses
-  both rather than forking them. The verb owns the default bound; a backend never invents one, and
+  stay one vocabulary whatever was asked. It is still the only verb that needs that extension:
+  `pull_file`'s payload is bytes, and bytes already have a place on every result. The verb owns the default bound; a backend never invents one, and
   a `truncated` flag it cannot decide for itself keeps a short read from reading as a quiet device.
   Like the app verbs it requires no capability and resolves no target, and like every bounded read
   in this repository it does not follow — a tail that stays open is a wait with no condition and a
@@ -312,6 +313,40 @@ Verbs live above the backends and below the adapters, and this is where determin
   context around an action, it is the entire answer, so D11's loud failure has to come before
   dispatch. `device_info` requires nothing (a required backend method, like the app family) and
   answers with `result.device`. Neither passes a target, for the same reason the app verbs do not.
+- **`installApp()`, `pushFile()` and `pullFile()`** (`src/verbs/files.ts`) are the family whose
+  subject is **which machine a file is on**. The spine again, with `requires: []` and no target for
+  the app family's reasons; what is particular to them is the boundary. Bytes go *in* — a package
+  and a pushed file arrive base64 in the call, because a path from a caller names a file on the
+  wrong machine — and bytes come *out*: `pull_file` puts them on `ActionResult.artifact`, exactly
+  where `screenshot` puts a capture, rather than in a result shape of its own. That reuse is the
+  load-bearing decision rather than an economy: the artifact already refuses an over-sized answer by
+  name instead of cutting it, and an answer with no field for a path is one that can never carry a
+  host path (D19). The host-side file the two inbound rows need is written and removed by the
+  daemon's handler in a `finally` — not by the verb, which touches no filesystem, and not in
+  `src/ipc/`. Two named caps bound the two directions (`MAX_TRANSFER_BYTES` in, `MAX_ARTIFACT_BYTES`
+  out), and both refuse rather than truncate; raising them is R24's row, landing underneath these
+  verbs rather than changing what they promise. **Each cap is applied where its bytes are.** The
+  inbound one is a params schema, so an over-sized call is refused before the host decodes anything;
+  the outbound one is handed *down* to the backend (`PullFileOptions`, the way `ReadLogsOptions`
+  already carries `maxEntries`), so a file too big to answer with is refused before it is staged on
+  the host and read into the daemon's memory. A bound checked only on the way back would already
+  have cost what it was for.
+- **Two things that layer does *not* relay, and states instead.** A `devicePath` is never a
+  directory, in either direction, and both refusals are Rover's rule rather than a device answer.
+  For `pushFile` the platforms' own tools copy the file inside such a path under a **host-side**
+  basename and call that a success, so relaying it is how a caller gets `ok` about bytes under a
+  name this host invented (ai/RULES.md §2). For `pullFile` the rule is stronger — the source must
+  be a **regular file**, not merely not-a-directory — and that is what keeps the cap above
+  meaningful, because a regular file is the only shape whose reported size predicts the transfer.
+  A directory's copy is *recursive* while the size reported for it is the directory's own few
+  kilobytes; a character device reports **zero** and then reads until the transfer times out. A
+  backend bounding on the reported number alone would admit either and only discover it once every
+  byte was on the host, so the kind is refused before the transfer rather than the size after it.
+  The asymmetry is deliberate: inbound there is nothing to bound, the caller named the exact
+  destination, and what a device special file does with the bytes is the device's answer. And no host path
+  reaches the caller in a *failure* either — the same D19 that keeps paths out of results keeps the
+  daemon's own temporary file out of the message an `internal_error` carries, in the command it
+  quotes *and* in the streams, since adb writes the path it was handed back into its own output.
 - **`setAirplaneMode()` and `setWifi()`** (`src/verbs/environment.ts`) are the same spine again, and
   the family where `requires` finally does the other half of its job. Both declare
   `requires: ['canControlNetwork']` and reach the backend through `capabilityMethod()` rather than

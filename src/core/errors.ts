@@ -213,3 +213,42 @@ export class WaitTimeoutError extends Error {
 		this.polls = polls;
 	}
 }
+
+/**
+ * Thrown when a file on the device is larger than the bound its reader was given.
+ *
+ * A device-layer error rather than a verb-layer one, and that is the whole point of it:
+ * the bound has to be enforced **where the bytes are**, by the backend that is about to
+ * fetch them, or the refusal arrives after the file is already on this host's disk and in
+ * the daemon's heap. `DeviceBackend.pullFile` takes the bound as an option
+ * (`PullFileOptions`) for the reason `ReadLogsOptions` exists — a backend is never in the
+ * position of inventing a limit, and no two backends can invent different ones.
+ *
+ * The verb layer turns this into its own vocabulary: `src/verbs/files.ts` catches it and
+ * rethrows `ArtifactTooLargeError`, so what an agent reads is still the named
+ * `artifact-too-large` refusal it already knows, carrying both numbers. That translation
+ * is deliberate rather than a second wire shape — "too big for one answer" is one fact
+ * about a call however the host found it out.
+ *
+ * `devicePath` is safe to carry across the boundary and a host path would not be (D19):
+ * it is the caller's own string, naming a file on the device the caller asked about.
+ */
+export class FileTooLargeError extends Error {
+	readonly serial: DeviceSerial;
+	readonly devicePath: string;
+	readonly byteLength: number;
+	readonly maxBytes: number;
+
+	constructor(serial: DeviceSerial, devicePath: string, byteLength: number, maxBytes: number) {
+		super(
+			`'${devicePath}' on device '${serial}' is ${byteLength} bytes, over the ` +
+				`${maxBytes}-byte limit this read was given — it is refused whole rather than ` +
+				'read short, because a truncated file is not distinguishable from a complete one',
+		);
+		this.name = 'FileTooLargeError';
+		this.serial = serial;
+		this.devicePath = devicePath;
+		this.byteLength = byteLength;
+		this.maxBytes = maxBytes;
+	}
+}

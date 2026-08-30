@@ -1,10 +1,16 @@
 import { describe, expect, it } from 'vitest';
+import { encodeFrame, MAX_FRAME_BYTES } from '@/ipc/framing.js';
 import {
 	AppVerbParamsSchema,
+	InstallAppParamsSchema,
 	LongPressParamsSchema,
+	MAX_DEVICE_PATH_LENGTH,
 	MAX_LOG_ENTRIES,
+	MAX_TRANSFER_BYTES,
 	MAX_VERB_TIMEOUT_MS,
 	PressKeyParamsSchema,
+	PullFileParamsSchema,
+	PushFileParamsSchema,
 	ReadLogsParamsSchema,
 	ScrollParamsSchema,
 	StatusParamsSchema,
@@ -20,6 +26,7 @@ import {
 	RequestEnvelopeSchema,
 	ResponseSchema,
 } from '@/ipc/protocol.js';
+import { MAX_ARTIFACT_BYTES } from '@/verbs/result.js';
 
 describe('request envelope', () => {
 	it('parses a well-formed request', () => {
@@ -415,6 +422,229 @@ describe('read_logs params schema', () => {
 
 	it('needs the lease id, which is the credential', () => {
 		expect(ReadLogsParamsSchema.safeParse({ maxEntries: 10 }).success).toBe(false);
+	});
+});
+
+/**
+ * The three rows that carry a file, and the two things they check that no other row does:
+ * **how big a payload may be**, and **what a path on the device has to look like**.
+ *
+ * Both are boundary checks by design. An over-sized transfer refused here is
+ * `invalid_params` the caller can read, on a call the host has not decoded, has not written
+ * to a disk, and has not sent to a device — where the same payload accepted and cut to fit
+ * would be a file that arrives looking whole (R24).
+ */
+describe('file transfer params schemas', () => {
+	/** `n` bytes of payload, as the caller would encode them. */
+	const payloadOf = (byteLength: number): string =>
+		Buffer.alloc(byteLength, 0xab).toString('base64');
+
+	const DEVICE_PATH = '/data/local/tmp/rover-probe.bin';
+
+	it('parses the three calls, each carrying only what it needs', () => {
+		expect(
+			InstallAppParamsSchema.parse({ leaseId: 'lease-1', packageBase64: payloadOf(16) }),
+		).toEqual({ leaseId: 'lease-1', packageBase64: payloadOf(16) });
+		expect(
+			PushFileParamsSchema.parse({
+				leaseId: 'lease-1',
+				devicePath: DEVICE_PATH,
+				contentBase64: payloadOf(16),
+			}),
+		).toEqual({
+			leaseId: 'lease-1',
+			devicePath: DEVICE_PATH,
+			contentBase64: payloadOf(16),
+		});
+		expect(PullFileParamsSchema.parse({ leaseId: 'lease-1', devicePath: DEVICE_PATH })).toEqual({
+			leaseId: 'lease-1',
+			devicePath: DEVICE_PATH,
+		});
+	});
+
+	it('takes a payload of exactly the limit', () => {
+		expect(
+			InstallAppParamsSchema.safeParse({
+				leaseId: 'lease-1',
+				packageBase64: payloadOf(MAX_TRANSFER_BYTES),
+			}).success,
+		).toBe(true);
+	});
+
+	/**
+	 * **The acceptance criterion of this row.** One byte over is refused, and the refusal
+	 * names the limit — because base64 pads to a multiple of four, a payload one byte over
+	 * encodes to exactly as many characters as one at the limit, so a schema that bounded the
+	 * *encoded* length would let this through while looking correct.
+	 */
+	it.each([
+		['install_app', InstallAppParamsSchema, 'packageBase64'],
+		['push_file', PushFileParamsSchema, 'contentBase64'],
+	])('refuses a %s payload one byte over the limit, naming it', (_row, schema, field) => {
+		const outcome = schema.safeParse({
+			leaseId: 'lease-1',
+			devicePath: DEVICE_PATH,
+			[field]: payloadOf(MAX_TRANSFER_BYTES + 1),
+		});
+
+		expect(outcome.success).toBe(false);
+		const message = outcome.success ? '' : (outcome.error.issues[0]?.message ?? '');
+		// Both numbers: how far over this call was, and where the line is — so an agent can
+		// tell "this file is too big" from "this bound is too low for any file".
+		expect(message).toContain(String(MAX_TRANSFER_BYTES));
+		expect(message).toContain(String(MAX_TRANSFER_BYTES + 1));
+		// And what to do about it, rather than only that it happened.
+		expect(message).toMatch(/refused whole rather than sent cut short/);
+	});
+
+	/**
+	 * `Buffer.from(…, 'base64')` **ignores** anything outside the alphabet rather than
+	 * failing, so a payload mangled in transit decodes to a shorter file that installs or
+	 * lands and is discovered by whoever runs it. This is the check that makes that loud.
+	 */
+	it.each([
+		['a space in the middle', 'AQ ID'],
+		['a character outside the alphabet', 'AQI$'],
+		['url-safe base64, which decodes to different bytes', '-_-_'],
+		['a length that is not a multiple of four', 'AQIDA'],
+		['padding in the middle', 'AQ==AQID'],
+	])('refuses %s rather than decoding it short', (_label, packageBase64) => {
+		expect(InstallAppParamsSchema.safeParse({ leaseId: 'lease-1', packageBase64 }).success).toBe(
+			false,
+		);
+	});
+
+	it('takes an empty payload, because an empty file is a file', () => {
+		expect(
+			InstallAppParamsSchema.safeParse({ leaseId: 'lease-1', packageBase64: '' }).success,
+		).toBe(true);
+	});
+
+	/**
+	 * Derived from the frame cap by hand in a different module, so this is what keeps the two
+	 * from drifting apart: a call at the limit — payload, envelope, JSON escaping and all —
+	 * still fits one frame, with room left for the rest of the message.
+	 */
+	it('leaves a call at the limit comfortably inside one frame', () => {
+		const frame = encodeFrame({
+			id: 'request-1',
+			version: PROTOCOL_VERSION,
+			method: 'install_app',
+			params: { leaseId: 'lease-1', packageBase64: payloadOf(MAX_TRANSFER_BYTES) },
+		});
+
+		expect(Buffer.byteLength(frame, 'utf8')).toBeLessThan(MAX_FRAME_BYTES);
+	});
+
+	/**
+	 * The same assertion in the **answering** direction, which had none.
+	 *
+	 * `MAX_ARTIFACT_BYTES` is derived from `MAX_FRAME_BYTES` by hand in a third module, and
+	 * the frame cap is enforced on the *receiving* side — where going over it is not a
+	 * refusal a caller can read but a destroyed connection (`src/ipc/framing.ts`). So without
+	 * this, a future change to either constant turns a readable `artifact-too-large` into a
+	 * `malformed_frame` that kills the socket.
+	 *
+	 * It stops being theoretical with `pull_file`: it is the first verb where the caller
+	 * picks the artifact's size exactly, by naming a 4 MiB file, where `screenshot` only ever
+	 * reached the cap with a panel nobody has. The screen read beside it is deliberately
+	 * generous — two hundred elements with real text on them — because that is what shares
+	 * the frame with the payload.
+	 */
+	it('leaves an answer at the artifact limit inside one frame, screen read and all', () => {
+		const elements = Array.from({ length: 200 }, (_unused, index) => ({
+			id: `element-${index}`,
+			text: `Some row of ordinary length, number ${index}`,
+			label: `A content description of ordinary length, number ${index}`,
+			bounds: { x: 0, y: index * 48, width: 1080, height: 48 },
+		}));
+
+		const frame = encodeFrame({
+			id: 'request-1',
+			version: PROTOCOL_VERSION,
+			result: {
+				outcome: 'ok',
+				result: {
+					verb: 'pull_file',
+					device: {
+						serial: 'emulator-5554',
+						platform: 'test-platform',
+						model: 'sdk_gphone16k_arm64',
+						screen: {
+							widthPx: 1080,
+							heightPx: 2424,
+							density: 420,
+							densityScale: 2.625,
+							widthDp: 411.43,
+							heightDp: 923.43,
+						},
+						osVersion: '17',
+						osApiLevel: 37,
+					},
+					target: null,
+					after: { kind: 'screen', elements },
+					artifact: {
+						mediaType: 'application/octet-stream',
+						base64: payloadOf(MAX_ARTIFACT_BYTES),
+						byteLength: MAX_ARTIFACT_BYTES,
+					},
+				},
+			},
+		});
+
+		expect(Buffer.byteLength(frame, 'utf8')).toBeLessThan(MAX_FRAME_BYTES);
+	});
+
+	it.each([
+		['a relative path, which resolves against nobody knows what', 'rover-probe.bin'],
+		['a bare file name with a leading dot', './rover-probe.bin'],
+		['an empty path', ''],
+		['a path with a NUL, which every filesystem underneath reads as the end', '/tmp/a\u0000/b'],
+		['a path longer than any filesystem takes', `/${'a'.repeat(MAX_DEVICE_PATH_LENGTH)}`],
+	])('refuses %s on the device', (_label, devicePath) => {
+		expect(PullFileParamsSchema.safeParse({ leaseId: 'lease-1', devicePath }).success).toBe(false);
+	});
+
+	it.each([
+		[
+			'a serial beside the lease id',
+			PushFileParamsSchema,
+			{ devicePath: DEVICE_PATH, contentBase64: '', serial: 'emulator-5554' },
+		],
+		// The field D19 rules out, on the row it would be most tempting on: where the pulled
+		// bytes go is the client's own disk, and a destination sent here names a file on the
+		// wrong machine — or, worse, one that exists on both.
+		[
+			'a place on the host to write the pulled file',
+			PullFileParamsSchema,
+			{
+				devicePath: DEVICE_PATH,
+				destination: '/tmp/pulled.bin',
+			},
+		],
+		// A package is bytes; naming an application would put one in the core, which knows none.
+		[
+			'an app id beside the package',
+			InstallAppParamsSchema,
+			{
+				packageBase64: '',
+				appId: 'com.android.settings',
+			},
+		],
+		// And the path that would make `install_app` read a file on the host it was sent from.
+		[
+			'a host path instead of the package',
+			InstallAppParamsSchema,
+			{
+				packagePath: '/tmp/app.apk',
+			},
+		],
+	])('rejects %s rather than silently stripping it', (_label, schema, params) => {
+		expect(schema.safeParse({ leaseId: 'lease-1', ...params }).success).toBe(false);
+	});
+
+	it('needs the lease id, which is the credential', () => {
+		expect(PullFileParamsSchema.safeParse({ devicePath: DEVICE_PATH }).success).toBe(false);
 	});
 });
 

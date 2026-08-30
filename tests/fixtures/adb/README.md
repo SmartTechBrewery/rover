@@ -21,11 +21,11 @@ All from an Android Emulator AVD `Pixel_10_Pro` (`sdk_gphone16k_arm64`, API 37 /
 macOS. `SERIAL` is `emulator-5554`. Everything above the `input` rows was captured
 **2026-08-29**: the enumeration, `wm` and `uiautomator` rows with `adb` 37.0.0-14910828, and the
 app-control rows below them (`install-success` onwards) with `adb` 37.0.1-15733141, the version
-that host had by then. Every row dated **2026-08-30** except the four
-`screenrecord` ones — the three `input` captures, the two `uiautomator-dump` captures and the three
-`logcat` captures — was taken on a host back on `adb` 37.0.0-14910828. The four `screenrecord` rows
-are also **2026-08-30**, on `adb` 37.0.1-15733141 against Android 17, and `screenrecord` reports
-itself as **v1.4**.
+that host had by then. Every row dated **2026-08-30** except the four `screenrecord` ones — the
+three `input` captures, the two `uiautomator-dump` captures, the three `logcat` captures and the
+four `stat` captures — was taken on a host back on `adb` 37.0.0-14910828. The four `screenrecord`
+rows are also **2026-08-30**, on `adb` 37.0.1-15733141 against Android 17, and `screenrecord`
+reports itself as **v1.4**.
 
 | Fixture | Command | Model | API | Captured |
 |---|---|---|---|---|
@@ -58,6 +58,11 @@ itself as **v1.4**.
 | `logcat-threadtime.api37-sdk-gphone16k-arm64.txt` | `adb -s $SERIAL logcat -d -v threadtime -t 60 -b main -b crash` (stdout) | sdk_gphone16k_arm64 | 37 | 2026-08-30 |
 | `logcat-threadtime.crash.api37-sdk-gphone16k-arm64.txt` | the same narrowed to `-t 2 -b crash`, after `adb -s $SERIAL shell am crash com.android.settings` | sdk_gphone16k_arm64 | 37 | 2026-08-30 |
 | `logcat-threadtime.levels.api37-sdk-gphone16k-arm64.txt` | `adb -s $SERIAL shell 'log -p v/d/i/w/e/f -t RoverFixture "<level> line"'` (six commands), then the recipe at `-t 20` | sdk_gphone16k_arm64 | 37 | 2026-08-30 |
+| `stat.file.api37-sdk-gphone16k-arm64.txt` | `adb -s $SERIAL shell stat -L -c '%s %F' '/data/local/tmp/rover-f1-file.bin' > f 2>&1` | sdk_gphone16k_arm64 | 37 | 2026-08-30 |
+| `stat.empty-file.api37-sdk-gphone16k-arm64.txt` | the same for a path created with `touch` | sdk_gphone16k_arm64 | 37 | 2026-08-30 |
+| `stat.directory.api37-sdk-gphone16k-arm64.txt` | the same for a path created with `mkdir` | sdk_gphone16k_arm64 | 37 | 2026-08-30 |
+| `stat.missing.api37-sdk-gphone16k-arm64.txt` | the same for a path no device has | sdk_gphone16k_arm64 | 37 | 2026-08-30 |
+| `stat.character-device.api37-sdk-gphone16k-arm64.txt` | the same for `/dev/urandom` | sdk_gphone16k_arm64 | 37 | 2026-08-30 |
 | `screenrecord.unwritable-path.api37-sdk-gphone16k-arm64.txt` | `adb -s $SERIAL shell screenrecord --bit-rate 2000000 --time-limit 1 /data/nope/rover-recording.mp4 > f 2>&1` | sdk_gphone16k_arm64 | 37 | 2026-08-30 |
 | `screenrecord-pidof.running.api37-sdk-gphone16k-arm64.txt` | `adb -s $SERIAL shell 'sleep 3; pidof screenrecord' > f 2>&1`, run beside a `screenrecord --time-limit 8` | sdk_gphone16k_arm64 | 37 | 2026-08-30 |
 | `screenrecord.finished.api37-sdk-gphone16k-arm64.mp4` | `adb -s $SERIAL shell screenrecord --bit-rate 2000000 --time-limit 3 /sdcard/rover-recording.mp4`, then `adb -s $SERIAL exec-out cat /sdcard/rover-recording.mp4` | sdk_gphone16k_arm64 | 37 | 2026-08-30 |
@@ -67,6 +72,10 @@ Both `wm` overrides were reset with `wm size reset` / `wm density reset` immedia
 capture. The `track-devices` capture leaves the host as it found it the same way: the second entry
 it creates is removed by the `adb disconnect` that is part of the recipe, confirmed with
 `adb devices -l` afterwards.
+
+The `stat` session left the device as it found it too: every path it created under
+`/data/local/tmp/` — the probe file, the empty file, the directory, the two symlinks and the file
+pushed into the directory — was removed afterwards, confirmed with `ls -A /data/local/tmp`.
 
 The two network captures come from a session that toggled the emulator's radios repeatedly, and it
 ended the way it found them: `settings get global airplane_mode_on` → `0`, `settings get global
@@ -239,6 +248,32 @@ re-capturing — a fixture nobody can re-create is a fixture nobody can extend.
   telephony config, adbd echoing the command it was given — plus the crash of a system app and six
   lines this capture wrote itself. Checked for an address, a key or an account before committing.
 
+- **The five `stat` captures are what both file transfers ask the device before they move any
+  bytes**, and three of them are the reason the parser is pinned at all.
+  - **`%F` for an empty file is `regular empty file`, not `regular file`.** A predicate written
+    from memory against `regular file` calls a zero-byte file something it is not, and an empty
+    file is one this protocol already decided it moves (`Base64PayloadSchema`, "Zero bytes is
+    legal"). A directory is the single word `directory`.
+  - **`stat.missing` is captured but never parsed.** A path that is not there exits **1** with an
+    empty stdout, so `runAdb` rejects before any parser sees it — and *that* is the ordinary case
+    for a push, whose destination does not exist yet. It is committed as the evidence for why the
+    probe treats a failed run as "nothing to add" rather than as a failure.
+  - **A character device answers `0 character device`, and exits 0.** That is the capture behind
+    `pull_file`'s second refusal: `%s` is zero for it while `adb pull /dev/urandom` writes until
+    something stops it — 769,196,032 bytes onto the host in five seconds here (PROJECT.md §6). So
+    the parser reports a *regular file* as its own kind rather than as "not a directory", and a
+    fifo, a socket and a block device fall on the same side of that line even though none of them
+    is captured: `pull_file` refuses everything the probe does not call a regular file.
+  - **`-L` is load-bearing and is part of the recipe.** Without it, `stat` on a symlink reports the
+    length of the link text and the word `symbolic link`: a link whose target was 11 bytes answered
+    `33 symbolic link`. `push` and `pull` both follow the link, so the probe must too.
+  - The four parsed captures are stdout with an empty stderr; all five were taken with `> f 2>&1`
+    for the app-control fixtures' reason, and the merge is only visible in the missing one.
+- **`adb push` has no fixture, and could not usefully have one.** Its success line names the
+  **host** path it read (`/tmp/probe/payload: 1 file pushed, 0 skipped…`), never the remote path it
+  resolved — including when the remote path was a directory and the file landed *inside* it. So
+  there is nothing in that output a parser could confirm a destination from, which is why the
+  directory case is settled by the `stat` probe above instead. The measurement is in PROJECT.md §6.
 - **The two `screenrecord.*.mp4` fixtures are the acceptance criterion of `record_video`, as two
   files.** They are the only binary fixtures here besides the `track-devices` capture, and they are
   committed whole and unedited because the point is that **nothing distinguishes them but one box**.
@@ -293,6 +328,10 @@ Nothing may be asserted about these until one exists — no test here claims any
   Only `device`, `offline` and `authorizing` were captured, which is why `AdbDevice.state` is an
   open string and not an enum — the full token list is longer than what is pinned here, and writing
   it from memory would be the same mistake as a hand-written fixture.
+- **A fifo, a socket or a block device on a device.** `/dev/urandom` is the one non-regular,
+  non-directory shape captured, and `pull_file`'s refusal is written against the *absence* of
+  `regular file` rather than against any list of the others — so nothing here claims to know what
+  `%F` calls them.
 - **A `goldfish` emulator.** Only `ro.hardware=ranchu` was observed, so only `ranchu` is encoded.
 - **A device reachable only through another machine's address.** The `track-devices` capture has
   `localhost:5555`, which is a network transport to *this* host; producing a genuine

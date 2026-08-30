@@ -64,6 +64,14 @@ import {
  * layer down, against the backend directly; what is new here is that the bytes came off a
  * lease, over a socket, from the process that owns the hardware.
  *
+ * **The transfer rows are on the wire since #70**, and what a device is needed to prove
+ * about them is the one thing a stub cannot: that a file survives the trip **byte for byte**
+ * in both directions. A UTF-8 decode anywhere in the middle of that path corrupts a binary
+ * payload silently — the file arrives, it is the right length in the easy cases, and nothing
+ * says otherwise — so the payload below is bytes no text encoding leaves alone. The file is
+ * written under `/data/local/tmp/`, which is writable without root on every Android build,
+ * and removed afterwards.
+ *
  * **Only one point on the device is ever touched**, and it is {@link HARMLESS_POINT}. That
  * is the rule the whole suite is bounded by, and it is why every target below is either
  * absent from the screen, resolved by a verb that touches nothing, or that one coordinate.
@@ -90,6 +98,13 @@ import {
  *   application's data, and there is no package on an arbitrary device whose data is safe for
  *   a test suite to destroy. Its dispatch is covered over a stub backend in
  *   `tests/unit/daemon/verb-dispatch.test.ts` instead.
+ * - **`install_app` has no case here at all**, for the reason
+ *   `tests/device/android/app-control.test.ts` already records: there is no APK in this
+ *   repository and adding a binary to carry one is not this change's job. Its dispatch is
+ *   covered over a stub backend in `tests/unit/daemon/verb-dispatch.test.ts`, including the
+ *   host temp file it writes and deletes, and the recipe underneath it is the one the
+ *   `install-success` fixture was captured from. The automated suite does not install
+ *   anything onto a device.
  * - **`long_press` and `scroll` are not exercised here at all.** Neither can be told from a
  *   plain tap without watching the device: the injection succeeds either way. Both were
  *   confirmed by hand against a real device, and the threshold a long press has to clear is
@@ -127,6 +142,31 @@ const SETTINGS = parseAppId('com.android.settings');
 
 /** A package no device has. Both halves matter: it is not installed, and it never will be. */
 const ABSENT_PACKAGE = parseAppId('com.rover.no.such.package');
+
+/**
+ * Where the transfer round trip puts its file. `/data/local/tmp/` is writable without root
+ * on every Android build and belongs to no application's sandbox, which is why the recipes
+ * in PROJECT.md §6 already use it. The name is this suite's own so a leftover from a run
+ * that died is attributable, and the file is removed at the end of the test.
+ */
+const TRANSFER_PATH = '/data/local/tmp/rover-transfer-probe.bin';
+
+/**
+ * And where the directory case makes its directory, for the same reasons. Its own name
+ * rather than the file's parent, so the check can assert the directory is empty afterwards
+ * without saying anything about what else `/data/local/tmp` holds.
+ */
+const TRANSFER_DIRECTORY = '/data/local/tmp/rover-transfer-probe-dir';
+
+/**
+ * The payload that round-trips, and every byte of it is chosen to break a path that decodes
+ * on the way through: a NUL, a 0xff, a CRLF pair, a bare LF, and two bytes that are not
+ * valid UTF-8 in any position. A text payload survives a broken path unchanged, which is
+ * exactly why this is not one.
+ */
+const BINARY_PAYLOAD = Uint8Array.from([
+	0x00, 0x01, 0x0d, 0x0a, 0x0a, 0x1a, 0x7f, 0x80, 0xc3, 0x28, 0xfe, 0xff, 0x50, 0x4e, 0x47, 0x00,
+]);
 
 /**
  * PNG 1.2 §11.2.2: the IHDR chunk opens the file, width then height, big-endian.
@@ -953,6 +993,186 @@ describe.skipIf(!process.env.ROVER_TEST_DEVICE)('a daemon runs verbs on its own 
 			expect(logged.timestamp).toMatch(/\d/);
 			expect(logged.level.length).toBeGreaterThan(0);
 		}
+	});
+
+	/**
+	 * **The acceptance criterion of #70, against real hardware: a file crosses the machine
+	 * boundary in both directions and arrives unchanged.**
+	 *
+	 * The payload is deliberately **binary**, and every byte of it is chosen: 0x00 and 0xff,
+	 * a 0x0d 0x0a pair, a lone 0x0a, and a byte sequence that is not valid UTF-8. A decode
+	 * anywhere along the path — the base64 on the way in, the device's own shell, the pull on
+	 * the way back — turns those into replacement characters or an extra byte per line, and
+	 * the file still arrives, still has a plausible length, and is wrong. That is the failure
+	 * this test exists for; a text payload would pass through a broken path unharmed.
+	 *
+	 * The two directions are asserted against **each other** rather than against a fixture,
+	 * because the file only has to be what was sent.
+	 */
+	it('round-trips a binary file to the device and back, byte for byte', async () => {
+		const client = await startHost();
+		const device = await freeDevice(client);
+		const leaseId = await lease(client, device.serial);
+
+		// `try`/`finally` rather than a trailing statement, and inside the `it` rather than in
+		// an `afterEach`: the restore has to run after a *failed* assertion too — this suite
+		// exists so the next agent is handed the device as it was found (ai/TESTING.md) — and
+		// it has to run while this test still holds the lease, which an `afterEach` would not,
+		// since the shared release has already happened by then.
+		try {
+			const pushed = await client.request('push_file', {
+				leaseId,
+				devicePath: TRANSFER_PATH,
+				contentBase64: Buffer.from(BINARY_PAYLOAD).toString('base64'),
+			});
+
+			expect(pushed).toMatchObject({
+				outcome: 'ok',
+				result: {
+					verb: 'push_file',
+					device: { serial: device.serial },
+					// A file addresses no element on the screen (D12(a)), and the bytes went the
+					// other way, so there is nothing to attach to this answer.
+					target: null,
+					artifact: null,
+				},
+			});
+
+			const pulled = await client.request('pull_file', { leaseId, devicePath: TRANSFER_PATH });
+
+			expect(pulled).toMatchObject({
+				outcome: 'ok',
+				result: { verb: 'pull_file', device: { serial: device.serial }, target: null },
+			});
+			if (pulled.outcome !== 'ok') throw new Error('the assertion above should have caught this');
+			const artifact = pulled.result.artifact;
+			if (!artifact) throw new Error('the pull answered with no bytes at all');
+			// Byte for byte, off the hardware, through the encoding the socket actually carries.
+			expect(Uint8Array.from(Buffer.from(artifact.base64, 'base64'))).toEqual(BINARY_PAYLOAD);
+			expect(artifact.byteLength).toBe(BINARY_PAYLOAD.byteLength);
+			// And no path came back with them: not the device path this test named, and nothing
+			// from the host's own disk (D19). Where the bytes go is this client's decision.
+			expect(JSON.stringify(pulled)).not.toContain(TRANSFER_PATH);
+			expect(JSON.stringify(pulled)).not.toContain('/tmp/');
+		} finally {
+			// Leave the device as this test found it. Pinned to the serial the *lease* names and
+			// made while this test holds that lease, which is what keeps it from being the
+			// outside-the-lease adb ai/TESTING.md warns about.
+			await runAdbOnDevice(device.serial, ['shell', 'rm', '-f', TRANSFER_PATH]);
+		}
+	});
+
+	/**
+	 * The blocker's other half, on real hardware: a device path that is already a directory.
+	 *
+	 * The platform's own transfer answers `1 file pushed` for it and leaves the bytes at
+	 * `<dir>/<host basename>` — a name the daemon invented — which is a caller told `ok`
+	 * about a file it cannot find, on hardware this host lends out next. What is asserted is
+	 * both halves: the call does not succeed, and the directory is **empty afterwards**.
+	 *
+	 * The pull is here for the mirror-image reason and is why the directory has a file put
+	 * in it first: `adb pull <dir>` is a **recursive** copy, and the size `stat` answers for
+	 * a directory is the inode's own 4096 bytes however much is under it — so `pull_file`'s
+	 * byte bound would pass and the whole tree would land on this host before anything could
+	 * count it. A directory with something in it is what tells a refusal-before-transfer
+	 * apart from a transfer that happened to find nothing.
+	 */
+	it('refuses a push whose device path is a directory, and leaves nothing inside it', async () => {
+		const client = await startHost();
+		const device = await freeDevice(client);
+		const leaseId = await lease(client, device.serial);
+
+		try {
+			await runAdbOnDevice(device.serial, ['shell', 'mkdir', '-p', TRANSFER_DIRECTORY]);
+
+			const answer = await client
+				.request('push_file', {
+					leaseId,
+					devicePath: TRANSFER_DIRECTORY,
+					contentBase64: Buffer.from(BINARY_PAYLOAD).toString('base64'),
+				})
+				.catch((error: unknown) => error);
+
+			// A device-level refusal still reaches the caller as `internal_error` — the repo-wide
+			// gap the other cases here record — but it is a refusal, and it names the reason.
+			expect(String(answer)).toMatch(/is a directory/);
+
+			const listing = await runAdbOnDevice(device.serial, [
+				'shell',
+				'ls',
+				'-A',
+				TRANSFER_DIRECTORY,
+			]);
+			expect(listing.stdout.trim()).toBe('');
+
+			// And the same path in the other direction, with the directory no longer empty. The
+			// file is made by the device's own shell rather than pushed, so nothing about this
+			// half depends on the push that was just refused.
+			await runAdbOnDevice(device.serial, [
+				'shell',
+				'echo',
+				'rover',
+				'>',
+				`${TRANSFER_DIRECTORY}/inside.bin`,
+			]);
+
+			const pulled = await client
+				.request('pull_file', { leaseId, devicePath: TRANSFER_DIRECTORY })
+				.catch((error: unknown) => error);
+
+			expect(String(pulled)).toMatch(/is a directory/);
+			// Not merely "it failed": what makes this a refusal *before* the transfer is that
+			// the message is this backend's own rule, never adb's account of a copy it made.
+			expect(String(pulled)).toMatch(/the bytes of one file/);
+		} finally {
+			await runAdbOnDevice(device.serial, ['shell', 'rm', '-rf', TRANSFER_DIRECTORY]);
+		}
+	});
+
+	/**
+	 * The same rule as the directory above, on the shape whose reported size lies quietly
+	 * rather than obviously. Every device has `/dev/urandom`, `stat` answers `0 character
+	 * device` for it, and a bound that trusted that number would compare zero against the cap
+	 * and let through a transfer that never ends — 769,196,032 bytes onto this host in five
+	 * seconds, measured on this emulator (PROJECT.md §6). Nothing has to be arranged for this
+	 * case and nothing has to be cleaned up after it; what it costs when the rule is missing
+	 * is the whole point, which is that it does not fail by returning something wrong, it
+	 * fails by filling the disk until the transfer times out.
+	 */
+	it('refuses to pull a path the device does not call a regular file', async () => {
+		const client = await startHost();
+		const device = await freeDevice(client);
+		const leaseId = await lease(client, device.serial);
+
+		const answer = await client
+			.request('pull_file', { leaseId, devicePath: '/dev/urandom' })
+			.catch((error: unknown) => error);
+
+		// A device-level refusal still arrives as `internal_error` (the repo-wide gap recorded
+		// above), so the assertion is on what it says: the device's own word for the path, and
+		// this backend's own rule rather than adb's account of a copy it made.
+		expect(String(answer)).toMatch(/'\/dev\/urandom' is a character device/);
+		expect(String(answer)).toMatch(/the bytes of one file/);
+	});
+
+	/**
+	 * A file the device does not have is a *device* answer, and today it reaches the caller as
+	 * `internal_error` — the same repo-wide gap `launch_app` records above, pinned rather than
+	 * papered over. What matters for this row is the half underneath: the backend asks whether
+	 * the pull produced a file rather than trusting what adb printed, so a missing remote
+	 * object cannot come back as an empty file that looks like a real one.
+	 */
+	it('reports a device path that is not there rather than answering with an empty file', async () => {
+		const client = await startHost();
+		const device = await freeDevice(client);
+		const leaseId = await lease(client, device.serial);
+
+		const thrown = await client
+			.request('pull_file', { leaseId, devicePath: `${TRANSFER_PATH}.absent` })
+			.catch((error: unknown) => error);
+
+		expect(thrown).toBeInstanceOf(IpcRequestError);
+		expect((thrown as IpcRequestError).code).toBe('internal_error');
 	});
 
 	it('refuses a verb call once the lease is over', async () => {

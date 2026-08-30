@@ -17,8 +17,11 @@ import {
 	AppVerbParamsSchema,
 	DeviceInfoParamsSchema,
 	EnvironmentVerbParamsSchema,
+	InstallAppParamsSchema,
 	LongPressParamsSchema,
 	PressKeyParamsSchema,
+	PullFileParamsSchema,
+	PushFileParamsSchema,
 	ReadLogsCallResultSchema,
 	ReadLogsParamsSchema,
 	ReadScreenParamsSchema,
@@ -33,6 +36,7 @@ import {
 import { launchApp } from '@/verbs/app.js';
 import { capabilityMethod, type VerbContext } from '@/verbs/context.js';
 import { toVerbFailure } from '@/verbs/failure.js';
+import { pullFile } from '@/verbs/files.js';
 import { pressKey, scroll, tap, typeText } from '@/verbs/input.js';
 import { ReadLogsResultSchema, readLogs } from '@/verbs/logs.js';
 import { performAction } from '@/verbs/perform.js';
@@ -56,6 +60,9 @@ import {
 } from '../../helpers/factories.js';
 
 const save = createMockScreenElement({ id: 'save', text: 'Save' });
+
+/** A path on the **device** — the one kind of path a call is allowed to name (D19). */
+const DEVICE_PATH = '/data/local/tmp/rover-probe.bin';
 
 function roundTrip<T>(value: T): unknown {
 	return JSON.parse(JSON.stringify(value));
@@ -304,6 +311,38 @@ describe('the verb layer speaks only in plain data', () => {
 		expect(parsed.artifact?.byteLength).toBe(bytes.byteLength);
 	});
 
+	/**
+	 * The second verb whose answer is bytes, and the one where a path would have been the
+	 * natural thing to put beside them.
+	 *
+	 * The walk below is the assertion: a `pull_file` result carries the device's bytes and
+	 * **no string that looks like a place a file is** — not the host directory the backend
+	 * staged through, and not the device path the caller named. That is why the payload rides
+	 * on `ActionResult.artifact` rather than in a shape of its own; a result with somewhere to
+	 * put a path is a result that eventually has one in it (D19).
+	 */
+	it('round-trips a pull_file result, whose answer is a file as bytes', async () => {
+		const bytes = Uint8Array.from([0x00, 0xff, 0x0d, 0x0a, 0x80, 0x7f]);
+		const context = createMockVerbContext({
+			backend: createMockDeviceBackend({
+				readScreen: vi.fn<NonNullable<DeviceBackend['readScreen']>>(async () => [save]),
+				pullFile: vi.fn<DeviceBackend['pullFile']>(async () => bytes),
+			}),
+		});
+
+		const pulled = await pullFile(context, '/data/local/tmp/rover-probe.bin');
+
+		expect(ActionResultSchema.parse(roundTrip(pulled))).toEqual(pulled);
+		expect(unserializableParts(pulled)).toEqual([]);
+		const parsed = ActionResultSchema.parse(roundTrip(pulled));
+		expect(parsed.artifact?.base64).toBe(Buffer.from(bytes).toString('base64'));
+		expect(parsed.artifact?.byteLength).toBe(bytes.byteLength);
+		// The device path the caller sent is not echoed anywhere in the answer either: the walk
+		// above would read it as a host-local path, and it is the one string on this call that
+		// could plausibly have been kept.
+		expect(JSON.stringify(pulled)).not.toContain('/data/local/tmp');
+	});
+
 	it('carries artifact: null on every verb that produced no bytes', async () => {
 		const context = contextShowingSave();
 
@@ -504,6 +543,11 @@ describe('a verb call answers in plain data too', () => {
 		// One row for the three app verbs, because one schema serves all three.
 		['launch_app', AppVerbParamsSchema, { leaseId: 'lease-1', appId: 'com.android.settings' }],
 		['read_logs', ReadLogsParamsSchema, { leaseId: 'lease-1', maxEntries: 50 }],
+		// The three transfer rows. A payload is a base64 *string* on the wire for the reason
+		// `ArtifactSchema` is one in the other direction: raw bytes do not survive JSON, and a
+		// path would name a file on the wrong machine (D19).
+		['install_app', InstallAppParamsSchema, { leaseId: 'lease-1', packageBase64: 'AQIDBA==' }],
+
 		[
 			'record_video',
 			RecordVideoParamsSchema,
@@ -523,5 +567,31 @@ describe('a verb call answers in plain data too', () => {
 
 		expect(schema.parse(roundTrip(parsed))).toEqual(parsed);
 		expect(unserializableParts(parsed)).toEqual([]);
+	});
+
+	/**
+	 * The two rows that carry a path, and the only place in this protocol where one may.
+	 *
+	 * The walk above reads any leading-`/` string as host-local, which is the right rule for a
+	 * **result** — that is the direction a host path would be meaningless in, or worse,
+	 * meaningful and wrong. A *call* naming a path on the **device** is the opposite: it means
+	 * the same thing on both machines, because it is a place on neither of them. So these two
+	 * are asserted apart, and what is pinned is that the device path is the *only* thing in
+	 * the call the walk finds — nothing else path-shaped rode along with it (D19).
+	 */
+	it.each([
+		[
+			'push_file',
+			PushFileParamsSchema,
+			{ leaseId: 'lease-1', devicePath: DEVICE_PATH, contentBase64: 'AQIDBA==' },
+		],
+		['pull_file', PullFileParamsSchema, { leaseId: 'lease-1', devicePath: DEVICE_PATH }],
+	])('round-trips what a %s call carries, path and all', (_name, schema, params) => {
+		const parsed = schema.parse(params);
+
+		expect(schema.parse(roundTrip(parsed))).toEqual(parsed);
+		expect(unserializableParts(parsed)).toEqual([
+			`$.devicePath: a host-local path ('${DEVICE_PATH}')`,
+		]);
 	});
 });

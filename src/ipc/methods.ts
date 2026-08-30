@@ -26,8 +26,11 @@ import {
 	AppVerbParamsSchema,
 	DeviceInfoParamsSchema,
 	EnvironmentVerbParamsSchema,
+	InstallAppParamsSchema,
 	LongPressParamsSchema,
 	PressKeyParamsSchema,
+	PullFileParamsSchema,
+	PushFileParamsSchema,
 	ReadLogsCallResultSchema,
 	ReadLogsParamsSchema,
 	ReadScreenParamsSchema,
@@ -46,16 +49,26 @@ import {
 export {
 	type AppVerbParams,
 	AppVerbParamsSchema,
+	Base64PayloadSchema,
 	type DeviceInfoParams,
 	DeviceInfoParamsSchema,
+	DevicePathSchema,
 	type EnvironmentVerbParams,
 	EnvironmentVerbParamsSchema,
+	type InstallAppParams,
+	InstallAppParamsSchema,
 	type LongPressParams,
 	LongPressParamsSchema,
+	MAX_DEVICE_PATH_LENGTH,
 	MAX_LOG_ENTRIES,
+	MAX_TRANSFER_BYTES,
 	MAX_VERB_TIMEOUT_MS,
 	type PressKeyParams,
 	PressKeyParamsSchema,
+	type PullFileParams,
+	PullFileParamsSchema,
+	type PushFileParams,
+	PushFileParamsSchema,
 	type ReadLogsCallResult,
 	ReadLogsCallResultSchema,
 	type ReadLogsParams,
@@ -311,12 +324,13 @@ export type ReleaseDeviceResult = z.infer<typeof ReleaseDeviceResultSchema>;
  * variant of it.
  *
  * The verb rows are the two waits, the six input verbs, the three read verbs, the three
- * app-lifecycle verbs, the log read, the screen recording, and the two environment verbs;
- * each further verb family is one more row beside them and one more entry in
- * `src/daemon/verb-handlers.ts`. All but two answer with `VerbCallResultSchema`, because
- * "what happened on the device" is one shape whatever was asked of it. `read_screen` and
- * `device_info` answer with the state every other verb already reports, while `screenshot`
- * and `record_video` carry their bytes on `ActionResult.artifact`. The verbs that address no
+ * app-lifecycle verbs, the log read, the screen recording, the two environment verbs and the
+ * three file transfers; each further verb family is one more row beside them and one more
+ * entry in `src/daemon/verb-handlers.ts`. All but two answer with `VerbCallResultSchema`,
+ * because "what happened on the device" is one shape whatever was asked of it. `read_screen`
+ * and `device_info` answer with the state every other verb already reports, while
+ * `screenshot`, `record_video` and `pull_file` carry their bytes on `ActionResult.artifact` —
+ * which is why no path of any kind is in a transfer's result. The verbs that address no
  * element — those two reads, `type_text`, `press_key`, and both environment rows because a
  * radio is not something on the screen — answer with a null `target`. The three app rows
  * share one params schema, and the two environment rows share a lease id and boolean schema.
@@ -325,6 +339,10 @@ export type ReleaseDeviceResult = z.infer<typeof ReleaseDeviceResultSchema>;
  * that same shape with one field added — the log entries on one, the frames sliced out of the
  * recording on the other — built by the same factory in `./verb-methods.ts`, so their refusals
  * are word for word every other verb's.
+ *
+ * The two rows that carry bytes **into** the host — `install_app` and `push_file` — are the
+ * only ones whose params are bounded in bytes (`MAX_TRANSFER_BYTES`), and going over that is
+ * `invalid_params` naming the limit rather than a frame the host allocates.
  */
 export const IPC_METHODS = {
 	status: { params: StatusParamsSchema, result: StatusResultSchema },
@@ -346,6 +364,9 @@ export const IPC_METHODS = {
 	stop_app: { params: AppVerbParamsSchema, result: VerbCallResultSchema },
 	clear_app_data: { params: AppVerbParamsSchema, result: VerbCallResultSchema },
 	read_logs: { params: ReadLogsParamsSchema, result: ReadLogsCallResultSchema },
+	install_app: { params: InstallAppParamsSchema, result: VerbCallResultSchema },
+	push_file: { params: PushFileParamsSchema, result: VerbCallResultSchema },
+	pull_file: { params: PullFileParamsSchema, result: VerbCallResultSchema },
 	record_video: { params: RecordVideoParamsSchema, result: RecordVideoCallResultSchema },
 	set_airplane_mode: { params: EnvironmentVerbParamsSchema, result: VerbCallResultSchema },
 	set_wifi: { params: EnvironmentVerbParamsSchema, result: VerbCallResultSchema },

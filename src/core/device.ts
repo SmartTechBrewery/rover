@@ -230,6 +230,22 @@ export interface ReadLogsOptions {
 }
 
 /**
+ * What bounds one {@link DeviceBackend.pullFile} call.
+ *
+ * Required and passed down for {@link ReadLogsOptions}'s reason, with one more behind it:
+ * the number belongs to the layer that knows what an *answer* may carry
+ * (`MAX_ARTIFACT_BYTES`, `src/verbs/result.ts`), and the enforcement belongs to the layer
+ * that is about to fetch the bytes. Splitting them is what keeps the refusal both correctly
+ * sized and cheap — a backend that invented its own bound would disagree with the verb that
+ * has to serialize the result, and a verb that checked afterwards would already be holding
+ * what it refuses.
+ */
+export interface PullFileOptions {
+	/** The most bytes the caller can be given. A larger file is refused, never truncated. */
+	readonly maxBytes: number;
+}
+
+/**
  * What bounds one {@link DeviceBackend.recordVideo} call.
  *
  * One knob, because one is what a recording needs to be asked for. Frame rate, size and
@@ -400,6 +416,92 @@ export interface DeviceBackend {
 	 * ordinary chatter and silently omits the fatal exception is worse than no log at all.
 	 */
 	readLogs(serial: DeviceSerial, options: ReadLogsOptions): Promise<LogRead>;
+
+	/**
+	 * Copy a file from a path on **this host** onto a path on the device.
+	 *
+	 * A host path here is not the thing D19 forbids, and the asymmetry with
+	 * {@link pullFile} below is the whole shape of this pair. The daemon runs on the host, so
+	 * a path is a perfectly good way for one host-side layer to hand a file to another; what
+	 * may never cross the machine boundary is a path *given to or taken from the caller*,
+	 * because the caller is somewhere else. Whoever calls this has already turned the
+	 * caller's bytes into a file of its own (`src/daemon/verb-handlers.ts`), the same way
+	 * {@link installApp} is called.
+	 *
+	 * `devicePath` is validated as a shape at the boundary (`src/ipc/verb-methods.ts`) rather
+	 * than escaped here: it is an argument to the transfer, not a fragment of a command line
+	 * the device interprets, which is why this takes a plain string where the app verbs take
+	 * a branded {@link AppId}. A backend that cannot keep that true — one that would have to
+	 * relay the path through a shell on the device — quotes it itself, exactly as the app
+	 * verbs' backends do.
+	 *
+	 * **`devicePath` names the file, never a directory to put it in**, and a backend that
+	 * can tell the difference refuses the second rather than transferring into it. This is
+	 * a rule rather than a device answer because the platforms' own transfer tools do not
+	 * treat it as one: a push to a path that is already a directory copies the file
+	 * *inside* it under the **host-side** basename and reports a success — measured, not
+	 * assumed (PROJECT.md §6). So a caller that meant `/downloads/report.bin` and wrote
+	 * `/downloads` is told `ok` about bytes it can no longer find, under a name this host
+	 * invented. Leaving that to "the device's answer" is what makes it silent
+	 * (ai/RULES.md §2).
+	 *
+	 * What happens to a path that already exists as a *file*, or is unwritable, is still
+	 * the device's answer and comes back as one — an existing file is overwritten, which is
+	 * what the caller asked for. Recursive directory transfer is deliberately not in this
+	 * contract.
+	 *
+	 * **A directory is the only shape refused here, and the asymmetry with {@link pullFile}
+	 * is deliberate rather than an omission.** That method refuses everything that is not a
+	 * regular file, because on the way *out* a non-regular source is unbounded. On the way
+	 * *in* there is nothing to bound: the bytes are a file this host already holds, the
+	 * caller named the exact destination it meant, and what a device special file makes of
+	 * them is the device's answer. A backend refuses a directory because a push into one
+	 * lands under a basename this host invented; it does not otherwise second-guess the
+	 * destination.
+	 */
+	pushFile(serial: DeviceSerial, hostPath: string, devicePath: string): Promise<void>;
+
+	/**
+	 * The bytes of a file on the device.
+	 *
+	 * **Bytes, not a path**, following {@link screenshot}'s precedent for exactly the same
+	 * reason: the answer is read on the agent's machine, where a path this host wrote would
+	 * name nothing — or, worse, would name something else entirely (D19). Where the bytes
+	 * end up is the caller's own decision and the caller's own disk.
+	 *
+	 * A backend that stages the file on the host on the way through — most will, since that
+	 * is what the platform's own transfer does — removes what it staged before answering.
+	 * That copy is an implementation detail of the backend and never reaches the caller.
+	 *
+	 * Throws when the device has no such file: a missing file is not a device that answered
+	 * with nothing, and answering with an empty array would be indistinguishable from an
+	 * empty file that really is there.
+	 *
+	 * **The bound is not advisory, and it is not checked after the fact.** `options.maxBytes`
+	 * is what the caller can be given, and a file over it is `FileTooLargeError` *before*
+	 * this host has staged or buffered it — a refusal issued after the bytes have landed is
+	 * an allocation the caller chose (`src/core/errors.ts`, {@link FileTooLargeError}).
+	 *
+	 * **`devicePath` names one *regular file*** — never a directory to read out of, and
+	 * never a device special file, a fifo or a socket. This is the mirror of
+	 * {@link pushFile}'s rule and, like it, a rule rather than a device answer — and here it
+	 * is what keeps the bound above meaningful, because a regular file is the only shape
+	 * whose reported size predicts what the transfer will fetch. The platforms' own transfer
+	 * tools copy a directory *recursively*, while asking a device how big a directory is
+	 * answers for the directory itself: a few kilobytes, whatever the tree under it holds. A
+	 * character device is worse still — it reports **zero** and then reads forever
+	 * (`/dev/urandom`, measured on API 37: PROJECT.md §6). So a backend that bounded on the
+	 * reported number alone would admit an unbounded transfer, and would only find out once
+	 * every byte of it was already on this host.
+	 *
+	 * A backend that can tell these apart therefore refuses **anything its probe does not
+	 * call a regular file, before it moves a byte** — not a directory alone, and not by
+	 * bounding harder afterwards, since after the transfer the disk is already spent. A
+	 * backend whose probe cannot answer at all is left where it was before the probe existed;
+	 * silently degrading to no bound is what this paragraph exists to prevent. Recursive
+	 * directory transfer is deliberately not in this contract, in either direction.
+	 */
+	pullFile(serial: DeviceSerial, devicePath: string, options: PullFileOptions): Promise<Uint8Array>;
 
 	// --- Capability-gated: present only when the manifest declares the capability ---
 

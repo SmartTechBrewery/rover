@@ -31,10 +31,20 @@
  * Every further verb family inherits that by being run through {@link runVerb} — there is
  * nothing here for a verb author to remember, which is the point.
  *
- * **{@link runVerb} is generic in what the verb answers with**, because two of them now carry
- * a payload beyond `ActionResult` (`read_logs` and `record_video`, and `pull_file` after them).
- * Only the `ok` branch varies: the three refusal branches are untouched by that, which is the point rather than an
- * economy — a refusal is one vocabulary whatever was asked of the device.
+ * **{@link runVerb} is generic in what the verb answers with**, because two of them carry a
+ * payload beyond `ActionResult` (`read_logs` and `record_video`). Only the `ok` branch varies:
+ * the three refusal branches are untouched by that, which is the point rather than an economy
+ * — a refusal is one vocabulary whatever was asked of the device.
+ *
+ * **This is also where a caller's bytes become a file, and stop being one again.** Two rows
+ * carry a payload *in* — `install_app` and `push_file` — and the backend methods behind them
+ * take a path, because a path is how one host-side layer hands a file to another and the
+ * daemon is on the host. Turning the payload into that file belongs here rather than in the
+ * verb: the verb layer touches no filesystem, and D19 is about a path *crossing the machine
+ * boundary*, which none does. {@link withPayloadOnDisk} writes it, hands the path down and
+ * removes the directory in a `finally` — on the failure path too, since a transfer that threw
+ * is exactly the one that would otherwise leave a caller's file on hardware lent out next to
+ * somebody else.
  *
  * **A call that produced bytes has a second effect: the archive** (D23, `./archive.ts`).
  * Every `ok` answer goes past `ArtifactArchive.record` on its way out, which writes the
@@ -57,6 +67,9 @@
  * meaning what it says.
  */
 
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { requireDeviceBackend } from '../backends/registry.js';
 import type { Device } from '../core/device.js';
 import type { LeaseId } from '../core/ids.js';
@@ -64,9 +77,12 @@ import type {
 	AppVerbParams,
 	DeviceInfoParams,
 	EnvironmentVerbParams,
+	InstallAppParams,
 	IpcHandlers,
 	LongPressParams,
 	PressKeyParams,
+	PullFileParams,
+	PushFileParams,
 	ReadLogsCallResult,
 	ReadLogsParams,
 	ReadScreenParams,
@@ -87,6 +103,7 @@ import { clearAppData, launchApp, stopApp } from '../verbs/app.js';
 import type { VerbContext } from '../verbs/context.js';
 import { setAirplaneMode, setWifi } from '../verbs/environment.js';
 import { toVerbFailure } from '../verbs/failure.js';
+import { installApp, pullFile, pushFile } from '../verbs/files.js';
 import {
 	type GestureOptions,
 	longPress,
@@ -125,10 +142,53 @@ export type VerbHandlers = Pick<
 	| 'stop_app'
 	| 'clear_app_data'
 	| 'read_logs'
+	| 'install_app'
+	| 'push_file'
+	| 'pull_file'
 	| 'record_video'
 	| 'set_airplane_mode'
 	| 'set_wifi'
 >;
+
+/**
+ * What a decoded payload is called inside its own directory.
+ *
+ * Deliberately says nothing about what the file is. A name carrying a package format would
+ * be one platform's vocabulary in shared code (ai/RULES.md §2). A backend that needs a
+ * particular name gives it one inside its own folder, where naming a format is what that
+ * folder is for.
+ */
+const PAYLOAD_FILE_NAME = 'payload';
+
+/** So a directory that somehow outlives its `finally` is attributable to this daemon. */
+const PAYLOAD_PREFIX = 'rover-transfer-';
+
+/**
+ * Turn a caller's base64 payload into a file on this host, run `use` against its path, and
+ * remove the directory however that ends.
+ *
+ * A directory rather than a bare file, so the removal is one call that cannot leave a
+ * sibling behind, and `force` so a cleanup after a failure cannot itself throw and replace
+ * the real error with its own.
+ *
+ * The payload is already bounded by `MAX_TRANSFER_BYTES` at the boundary
+ * (`src/ipc/verb-methods.ts`), which is what keeps this from being an allocation a peer
+ * chose: by the time anything is written, the call has been parsed and refused if it was too
+ * big.
+ */
+async function withPayloadOnDisk<Result>(
+	base64: string,
+	use: (hostPath: string) => Promise<Result>,
+): Promise<Result> {
+	const directory = await mkdtemp(join(tmpdir(), PAYLOAD_PREFIX));
+	try {
+		const hostPath = join(directory, PAYLOAD_FILE_NAME);
+		await writeFile(hostPath, Buffer.from(base64, 'base64'));
+		return await use(hostPath);
+	} finally {
+		await rm(directory, { recursive: true, force: true });
+	}
+}
 
 /**
  * What the preamble reached: a verb that can run, or the answer the call already has.
@@ -308,6 +368,30 @@ export function createVerbHandlers(
 		// returns, so what it answers when no verb ran is word for word a gesture's.
 		read_logs(params: ReadLogsParams): Promise<ReadLogsCallResult> {
 			return runVerb(params.leaseId, (context) => readLogs(context, logOptions(params)));
+		},
+
+		// The three transfer rows. Two of them decode first and the decoding is **inside**
+		// `runVerb`'s callback rather than before it, so a call on a lease this host does not
+		// know is refused without a file ever being written — the refusal costs nothing, which
+		// is the same reason `screenshot` encodes inside its action rather than around it.
+		install_app(params: InstallAppParams): Promise<VerbCallResult> {
+			return runVerb(params.leaseId, (context) =>
+				withPayloadOnDisk(params.packageBase64, (hostPath) => installApp(context, hostPath)),
+			);
+		},
+
+		push_file(params: PushFileParams): Promise<VerbCallResult> {
+			return runVerb(params.leaseId, (context) =>
+				withPayloadOnDisk(params.contentBase64, (hostPath) =>
+					pushFile(context, hostPath, params.devicePath),
+				),
+			);
+		},
+
+		// The one direction with nothing to write here: the bytes come off the device and go
+		// back on `ActionResult.artifact`, so this row carries no host path at either end.
+		pull_file(params: PullFileParams): Promise<VerbCallResult> {
+			return runVerb(params.leaseId, (context) => pullFile(context, params.devicePath));
 		},
 
 		// The recording row — the second whose answer carries a payload of its own, and for the
