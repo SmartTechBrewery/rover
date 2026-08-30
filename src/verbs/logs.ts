@@ -25,10 +25,14 @@
  * a fact about the verb rather than a resolution that failed. And a tail that stays open is
  * a wait with no condition (ai/RULES.md §2) plus a stream over IPC (D19): this is a bounded
  * dump, and `logs.truncated` says when the device had more.
+ *
+ * **The read is bounded twice — in entries and in bytes** ({@link MAX_LOG_BYTES}), because
+ * an entry has no fixed size and the answer travels as one frame. Both bounds report the
+ * same way: the oldest go and `logs.truncated` says so.
  */
 
 import type { z } from 'zod';
-import { type LogRead, LogReadSchema } from '../core/device.js';
+import { type LogEntry, type LogRead, LogReadSchema } from '../core/device.js';
 import type { VerbContext } from './context.js';
 import { performAction } from './perform.js';
 import { ActionResultSchema } from './result.js';
@@ -43,6 +47,61 @@ import { ActionResultSchema } from './result.js';
  * chasing something older asks for more, and `truncated` is what tells them there was.
  */
 export const DEFAULT_MAX_LOG_ENTRIES = 200;
+
+/**
+ * The most log **bytes** one answer may carry — 4 MiB of serialised entries.
+ *
+ * The entry bound above and `MAX_LOG_ENTRIES` in `src/ipc/verb-methods.ts` count entries,
+ * and an entry has no fixed size: logcat's own per-entry payload limit is about 4 KB, so
+ * `MAX_LOG_ENTRIES` entries of chatter is a few hundred kilobytes while `MAX_LOG_ENTRIES`
+ * entries of serialised HTTP bodies is over 20 MB. An answer travels as **one frame**, and
+ * `MAX_FRAME_BYTES` (8 MiB, `src/ipc/framing.ts`) is enforced on the *receiving* side —
+ * so a response over it is not a refusal the caller can read, it is `malformed_frame` on
+ * their decoder, every other in-flight request on that connection failed with it, and the
+ * connection destroyed. A bound only on entries cannot prevent that; this one can.
+ *
+ * 4 MiB is derived the same way `MAX_ARTIFACT_BYTES` (`src/verbs/result.ts`) is, and for the
+ * same reason: the
+ * rest of the result — a screen read of a few hundred elements — travels in the same frame,
+ * and JSON escaping inflates what is measured here. The relationship to the frame cap is
+ * asserted in `tests/unit/verbs/logs.test.ts`, because a constant derived from another
+ * constant by hand is one the other is free to drift away from.
+ *
+ * Going over it is **truncation, not a refusal** — the opposite of an over-sized artifact,
+ * and the difference is that a log read already has a word for a partial answer. Dropping
+ * the oldest entries is what a bounded read of a ring buffer does anyway, `truncated` is
+ * already the flag that says it happened, and a refusal here would deny the caller the
+ * newest entries — the ones they asked for the log to see.
+ */
+export const MAX_LOG_BYTES = 4 * 1024 * 1024;
+
+/**
+ * The newest entries that fit in {@link MAX_LOG_BYTES}, and whether any were dropped to
+ * make them fit.
+ *
+ * Measured on `JSON.stringify` of each entry, which is what actually goes on the wire,
+ * rather than on the message alone: a timestamp, a tag, a level and the JSON punctuation
+ * around them are bytes in the frame too. The one-byte allowance per entry is the comma
+ * between them in the encoded array.
+ *
+ * Walked newest-first because that is the end a log read is asked from — the same reason
+ * the backend keeps the tail of an over-long dump.
+ */
+function withinByteBudget(read: LogRead): LogRead {
+	let budget = MAX_LOG_BYTES;
+	const newestFirst: LogEntry[] = [];
+
+	for (let index = read.entries.length - 1; index >= 0; index -= 1) {
+		const entry = read.entries[index];
+		if (entry === undefined) continue;
+		const cost = Buffer.byteLength(JSON.stringify(entry), 'utf8') + 1;
+		if (cost > budget) return { entries: newestFirst.reverse(), truncated: true };
+		budget -= cost;
+		newestFirst.push(entry);
+	}
+
+	return read;
+}
 
 /**
  * What `read_logs` answers with: everything every verb answers with, **plus the log**.
@@ -90,5 +149,5 @@ export async function readLogs(
 		throw new Error(`read_logs on device '${context.serial}' finished without reading anything`);
 	}
 
-	return ReadLogsResultSchema.parse({ ...result, logs });
+	return ReadLogsResultSchema.parse({ ...result, logs: withinByteBudget(logs) });
 }

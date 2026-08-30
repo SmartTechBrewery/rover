@@ -165,9 +165,19 @@ export type AppVerbParams = z.infer<typeof AppVerbParamsSchema>;
  * A bound rather than a preference: the host reads this many entries out of a device,
  * parses them and encodes them into one response, all on a peer's behalf, so an unbounded
  * `maxEntries` is an allocation somebody else chose — the same reasoning
- * `ATTRIBUTION_MAX_LENGTH` applies to a string it never reads. Five thousand entries came
- * off a real device well inside a query's budget (PROJECT.md §6) and are far more than a
- * crash investigation needs.
+ * `ATTRIBUTION_MAX_LENGTH` applies to a string it never reads. Two thousand entries came
+ * off a real device in 36 ms (2253 lines, 331 KB — PROJECT.md §6), so five thousand is
+ * still a query, and it is far more than a crash investigation needs.
+ *
+ * **This bound is on entries and cannot bound the answer**, which is why it is not the only
+ * one. An entry has no fixed size — logcat's own per-entry payload limit is about 4 KB, so
+ * this many entries is a few hundred kilobytes of ordinary chatter and over 20 MB of
+ * serialised HTTP bodies — while a response travels as one frame under `MAX_FRAME_BYTES`
+ * (`src/ipc/framing.ts`), enforced on the *receiving* side, where going over it is not a
+ * refusal the caller can read but a destroyed connection. The byte bound that actually
+ * holds is `MAX_LOG_BYTES` in `src/verbs/logs.ts`. The next payload-carrying verb
+ * (`pull_file`, R24) needs one too, and for the same reason: entries, elements and lines
+ * are all counts of things whose size the caller chooses.
  */
 export const MAX_LOG_ENTRIES = 5_000;
 

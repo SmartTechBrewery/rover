@@ -589,14 +589,16 @@ describe('the read rows dispatch like the app rows', () => {
 
 		expect(answer).toMatchObject({
 			outcome: 'ok',
+			// No target: a read addresses nothing on the screen, it *is* the screen.
 			result: { verb: 'read_screen', target: null, device: { serial: SERIAL } },
 		});
 		if (answer.outcome !== 'ok') throw new Error('the assertion above should have caught this');
 		expect(answer.result.after).toEqual({ kind: 'screen', elements: [save] });
+		// One read, which is the spine's own capture — the verb adds none of its own.
 		expect(reads).toBe(1);
 	});
 
-	it('answers device_info with the device the lease names and its density', async () => {
+	it('answers device_info with the device the lease names, and its density (D14)', async () => {
 		await serve();
 		const client = await connect();
 		const leaseId = await acquire(client);
@@ -608,25 +610,52 @@ describe('the read rows dispatch like the app rows', () => {
 			result: {
 				verb: 'device_info',
 				target: null,
+				// The client sent a lease id and nothing else; the serial, the size, the density and
+				// the computed dp width all came off the host.
 				device: { serial: SERIAL, screen: { density: 480, densityScale: 3, widthDp: 360 } },
 			},
 		});
 	});
 
-	it('fails read_screen loudly without canReadScreen, while device_info still works', async () => {
+	it('fails read_screen loudly on a backend that does not declare the capability (D11)', async () => {
 		await serve({ capabilities: { canReadScreen: false } });
 		const client = await connect();
 		const leaseId = await acquire(client);
 
-		const read = await client.request('read_screen', { leaseId });
-		expect(read).toMatchObject({
-			outcome: 'failed',
-			failure: { kind: 'missing-capability', capability: 'canReadScreen', serial: SERIAL },
-		});
-		expect(reads).toBe(0);
+		const answer = await client.request('read_screen', { leaseId });
 
-		const info = await client.request('device_info', { leaseId });
-		expect(info).toMatchObject({ outcome: 'ok', result: { verb: 'device_info' } });
+		// Named in full — capability, device and backend — rather than an `ok` carrying an empty
+		// screen, which is the plausible-looking empty result this verb exists not to return.
+		expect(answer).toMatchObject({
+			outcome: 'failed',
+			failure: {
+				kind: 'missing-capability',
+				capability: 'canReadScreen',
+				serial: SERIAL,
+				platform: 'test-platform',
+				backendLabel: 'Test',
+			},
+		});
+		// Refused before anything was dispatched: no screen was read to reach an answer that
+		// never depended on one.
+		expect(reads).toBe(0);
+	});
+
+	it('still answers device_info on that same backend, because it requires nothing', async () => {
+		await serve({ capabilities: { canReadScreen: false } });
+		const client = await connect();
+		const leaseId = await acquire(client);
+
+		const answer = await client.request('device_info', { leaseId });
+
+		expect(answer).toMatchObject({ outcome: 'ok', result: { verb: 'device_info' } });
+		if (answer.outcome !== 'ok') throw new Error('the assertion above should have caught this');
+		// And the screen it could not read is reported as the capability that would have read
+		// it, which is the honest half of the same distinction.
+		expect(answer.result.after).toMatchObject({
+			kind: 'unavailable',
+			capability: 'canReadScreen',
+		});
 	});
 
 	/**
@@ -688,35 +717,51 @@ describe('the read rows dispatch like the app rows', () => {
 	] as const)('refuses %s on a lease id the store does not know, without touching the device', async (method) => {
 		await serve();
 		const client = await connect();
+
 		const answer = await client.request(method, { leaseId: parseLeaseId('never-granted') });
+
+		// Proof these go through `runVerb` rather than around it.
 		expect(answer).toMatchObject({ outcome: 'refused', reason: 'no-lease' });
 		expect(reads).toBe(0);
 	});
 
-	it('refuses fields the read rows do not advertise', async () => {
+	it('refuses a wait knob on read_screen, which reads once and answers', async () => {
 		await serve();
 		const client = await connect();
 		const leaseId = await acquire(client);
 
-		const readError = await client
+		const thrown = await client
 			.request('read_screen', {
 				leaseId,
-				// @ts-expect-error validation test
+				// Accepting this would advertise a wait this verb does not perform — waiting for
+				// something to appear is `wait_for`, and it is a different question.
+				// @ts-expect-error — the point of the test is what a client that ignored the type gets.
 				timeoutMs: 1_000,
 			})
 			.catch((error: unknown) => error);
-		expect(readError).toBeInstanceOf(IpcRequestError);
-		expect((readError as IpcRequestError).code).toBe('invalid_params');
 
-		const infoError = await client
+		expect(thrown).toBeInstanceOf(IpcRequestError);
+		expect((thrown as IpcRequestError).code).toBe('invalid_params');
+		expect(reads).toBe(0);
+	});
+
+	it('refuses a serial sent beside the lease id on device_info (D20)', async () => {
+		await serve();
+		const client = await connect();
+		const leaseId = await acquire(client);
+
+		const thrown = await client
 			.request('device_info', {
 				leaseId,
-				// @ts-expect-error validation test
+				// The lease id is the credential and the host derives the device from it. A serial
+				// accepted here would let the holder of one lease ask about another device.
+				// @ts-expect-error — the point of the test is what a client that ignored the type gets.
 				serial: 'another-device',
 			})
 			.catch((error: unknown) => error);
-		expect(infoError).toBeInstanceOf(IpcRequestError);
-		expect((infoError as IpcRequestError).code).toBe('invalid_params');
+
+		expect(thrown).toBeInstanceOf(IpcRequestError);
+		expect((thrown as IpcRequestError).code).toBe('invalid_params');
 	});
 });
 

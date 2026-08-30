@@ -526,7 +526,9 @@ export class AndroidDeviceBackend implements DeviceBackend {
 	 *
 	 * **`-t` counts logcat *entries*, and an entry is not a line.** One Java crash is a
 	 * single entry whose message runs to fourteen lines, so `-t 2` on the crash buffer
-	 * returned twenty-eight lines here. The cap this method promises is on **entries as the
+	 * returned 28 log lines here — 29 lines of output, the first being logcat's own
+	 * `--------- beginning of crash` separator (PROJECT.md §6,
+	 * `tests/fixtures/adb/README.md`). The cap this method promises is on **entries as the
 	 * caller sees them** — one per line — so the request is `maxEntries + 1` and whatever
 	 * comes back is bounded on this side. The `+ 1` is what makes {@link LogRead.truncated}
 	 * honest in the ordinary single-line case: without it, a device holding exactly

@@ -11,8 +11,15 @@
  */
 
 import { describe, expect, it, vi } from 'vitest';
-import type { DeviceBackend } from '@/core/device.js';
-import { DEFAULT_MAX_LOG_ENTRIES, ReadLogsResultSchema, readLogs } from '@/verbs/logs.js';
+import type { DeviceBackend, LogEntry } from '@/core/device.js';
+import { encodeFrame, FrameDecoder, MAX_FRAME_BYTES } from '@/ipc/framing.js';
+import { MAX_LOG_ENTRIES } from '@/ipc/verb-methods.js';
+import {
+	DEFAULT_MAX_LOG_ENTRIES,
+	MAX_LOG_BYTES,
+	ReadLogsResultSchema,
+	readLogs,
+} from '@/verbs/logs.js';
 import {
 	createMockCapabilities,
 	createMockCapabilityManifest,
@@ -167,5 +174,83 @@ describe('read_logs', () => {
 		});
 
 		await expect(readLogs(context)).rejects.toThrow('device offline');
+	});
+});
+
+/**
+ * The bound that is not on entries.
+ *
+ * `MAX_LOG_ENTRIES` counts entries and an entry has no fixed size, so the entry bound alone
+ * cannot keep an answer inside one frame. It has to, and the failure if it does not is not
+ * one the caller can read: `MAX_FRAME_BYTES` is enforced on the *receiving* side, so an
+ * over-sized response is `malformed_frame` on the client's decoder, every other in-flight
+ * request on that connection failed with it, and the connection destroyed (PROJECT.md §6).
+ *
+ * These build the worst legal answer — the schema's own entry ceiling, at messages logcat
+ * would actually emit — and encode it the way the daemon does.
+ */
+describe('a log answer is bounded in bytes, not only in entries', () => {
+	/** A message the size of one logcat entry's payload — an HTTP body, a JSON response. */
+	function fat(index: number): LogEntry {
+		return createMockLogEntry({ tag: 'Http', message: `${index}:${'x'.repeat(2_048)}` });
+	}
+
+	/**
+	 * A constant derived from another constant by hand is one the other is free to drift
+	 * away from, so the relationship is asserted rather than commented — the same way
+	 * `MAX_ARTIFACT_BYTES` is.
+	 */
+	it('keeps MAX_LOG_BYTES inside the frame cap with room for the rest of the result', () => {
+		expect(MAX_LOG_BYTES).toBeLessThan(MAX_FRAME_BYTES);
+		expect(MAX_LOG_BYTES * 2).toBeLessThanOrEqual(MAX_FRAME_BYTES);
+	});
+
+	it('encodes an answer at the entry ceiling into a frame the decoder accepts', async () => {
+		const entries = Array.from({ length: MAX_LOG_ENTRIES }, (_, index) => fat(index));
+		const context = createMockVerbContext({
+			backend: createMockDeviceBackend({
+				readLogs: vi.fn<DeviceBackend['readLogs']>(async () =>
+					createMockLogRead({ entries, truncated: true }),
+				),
+			}),
+		});
+
+		const answer = await readLogs(context, { maxEntries: MAX_LOG_ENTRIES });
+		const frame = encodeFrame({ protocolVersion: 1, id: 1, outcome: 'ok', result: answer });
+
+		expect(Buffer.byteLength(frame, 'utf8')).toBeLessThan(MAX_FRAME_BYTES);
+		expect(() => new FrameDecoder().push(frame)).not.toThrow();
+	});
+
+	/**
+	 * Dropped, not refused, and never silently: a log read already has the word for a
+	 * partial answer, and the entries kept are the newest — the end the read was asked from.
+	 */
+	it('drops the oldest entries to fit and says the answer was truncated', async () => {
+		const entries = Array.from({ length: MAX_LOG_ENTRIES }, (_, index) => fat(index));
+		const context = createMockVerbContext({
+			backend: createMockDeviceBackend({
+				readLogs: vi.fn<DeviceBackend['readLogs']>(async () =>
+					createMockLogRead({ entries, truncated: false }),
+				),
+			}),
+		});
+
+		const answer = await readLogs(context, { maxEntries: MAX_LOG_ENTRIES });
+
+		expect(answer.logs.entries.length).toBeLessThan(entries.length);
+		expect(answer.logs.truncated).toBe(true);
+		// The newest survived; the oldest are the ones that went.
+		expect(answer.logs.entries.at(-1)).toEqual(entries.at(-1));
+		expect(answer.logs.entries[0]).not.toEqual(entries[0]);
+	});
+
+	/** A read that fits is handed back untouched — no flag the device did not earn. */
+	it('leaves a read that fits alone, flag included', async () => {
+		const { context } = recording();
+
+		const answer = await readLogs(context);
+
+		expect(answer.logs).toEqual({ entries: [crash], truncated: false });
 	});
 });

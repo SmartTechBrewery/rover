@@ -138,7 +138,7 @@ Working names. All of them take a device handle, and over the wire that handle i
 | `screenshot` | The captured image, **as bytes on the result rather than as a path** (D19) — base64, its media type and its byte length, so any file written is the client's own. Needs no capability; a capture over the named size bound is refused by name rather than returned cut short. **A black image is a true answer, not a failed capture** (§6): the check that separates a blocked capture from a broken device is a screenshot of the system home screen, and `read_screen` is the read that survives the block |
 | `read_screen` | Texts and element rectangles. **Works even when the app blocks screenshots**. Declares `canReadScreen` as a requirement, so a backend without it fails by name before anything is dispatched rather than answering with an empty screen (D11) |
 | `record_video` | A recording plus a slice into frames — for states that do not stand still |
-| `device_info` | Size, density, computed width in dp, OS version |
+| `device_info` | Size, density, computed width in dp, OS version. Needs no capability and addresses nothing on the screen — it answers with the `DeviceInfo` every result already carries (D14), asked for on its own |
 
 ### Waiting
 
@@ -667,6 +667,17 @@ Checked on the same API 37 emulator (`sdk_gphone16k_arm64`) with `adb` 37.0.0 wh
   9 s; while an app was launching, 120 entries spanned **1 s** — so a crash twenty seconds old
   was already off the end of a `-t 120` read. A read that has to catch a crash asks for
   thousands, not hundreds, which is why `read_logs` takes the bound from the caller.
+- **An entry bound is not a byte bound, and only the byte bound protects the frame.** The
+  331 KB / 2253-line measurement above is ~147 bytes a line, so ordinary chatter is nowhere
+  near anything — but logcat's own per-entry payload limit is about 4 KB, and the trigger is
+  line *size*, not entry count. Measured in this checkout: 5000 entries whose message is 2 KB
+  (an HTTP body, a serialised JSON response — well under logcat's limit) encode to a
+  **10,440,123-byte** frame, over the 8 MiB `MAX_FRAME_BYTES`. That cap is enforced on the
+  **receiving** side, so the result is not a refusal the caller can read: `FrameDecoder`
+  throws, the client fails *every* in-flight request on that connection as `malformed_frame`
+  and destroys it — a protocol error blaming the host, on a call the params schema explicitly
+  allowed. Hence `MAX_LOG_BYTES` (`src/verbs/logs.ts`): a payload-carrying verb needs a bound
+  in **bytes**, and a count of things whose size the caller chooses is not one.
 - **`kill -6 <pid>` on an app process is refused for the shell user** (`Operation not
   permitted`), so a native abort cannot be induced without `adb root`. The fatal-level fixture was
   produced with `adb -s "$SERIAL" shell log -p f -t <tag> "<message>"` instead, which writes an
@@ -690,9 +701,14 @@ Checked on the same API 37 emulator (`sdk_gphone16k_arm64`) with `adb` 37.0.0 wh
 
 Checked against Node 25.2 while building R22's client, 2026-08-30:
 
-- **`tls.connect({ servername })` throws when the value is an IP address.** Send SNI only when
-  the configured address is a name (`isIP(address) === 0`); Node still verifies an IP SAN against
-  `host` when `servername` is omitted.
+- **`tls.connect({ servername })` throws when the value is an IP address.** Not a warning and not
+  a value quietly ignored — `ERR_INVALID_ARG_VALUE`, synchronously, before a packet is sent
+  ("Setting the TLS ServerName to an IP address is not permitted", RFC 6066). Setting
+  `servername` to whatever the caller configured as the host is the obvious thing to write and
+  breaks `ROVER_HOST_ADDRESS=10.0.0.4`, which is the *ordinary* way to name a host on a private
+  network — while passing every test written against `localhost`. Send SNI only when the address
+  is a name (`isIP(address) === 0`). Leaving it out costs nothing: Node still verifies the
+  certificate against `host`, IP SANs included, which is the check that matters.
 
 ---
 

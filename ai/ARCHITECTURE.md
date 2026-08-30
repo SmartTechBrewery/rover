@@ -23,13 +23,27 @@ that consumes this one**, handing it an already-connected stream. That is what m
 listener an added transport rather than a rewrite, and it is checkable by reading the imports:
 the unit tests drive the whole surface over an in-memory stream pair that is not a socket at all.
 
-**Both transports exist now**, and they share one `IpcServer` instance built in
-`src/daemon/listen.ts`:
+**Both transports exist now, and both halves of each.** The two listeners share one
+`IpcServer` instance built in `src/daemon/listen.ts`; the two clients share one
+`createIpcClient`:
 
-- `src/daemon/listen.ts` binds the local unix socket. It needs no token and no configuration.
-- `src/daemon/network-listen.ts` binds TCP+TLS when the operator opted in
-  (`src/daemon/network-config.ts`, `ROVER_LISTEN_PORT`). It is handed the same `IpcServer`, so
-  there is one method table and one dispatcher and nothing for the two to drift from.
+| | Host side | Client side |
+|---|---|---|
+| Local unix socket | `src/daemon/listen.ts` — no token, no configuration | `src/daemon/connect.ts` — **and autostart lives here** (D5) |
+| TCP + TLS | `src/daemon/network-listen.ts` — opt-in via `ROVER_LISTEN_PORT` | `src/daemon/network-connect.ts` — configured by `ROVER_HOST_ADDRESS` |
+
+Each pair is handed the same `IpcServer` or wrapped by the same `createIpcClient`, so there is
+one method table, one dispatcher, one set of schemas, and nothing for the four to drift from.
+`src/daemon/network-config.ts` carries both halves' configuration, and `ROVER_HOST_TOKEN` is
+deliberately one variable for both: a machine that hosts devices and also borrows one is
+holding one secret, not two.
+
+**Autostart is contained by that table rather than by discipline.** `network-connect.ts` does
+not import `node:child_process` and never may — a host reachable over a network is a service
+its operator runs, so a client that cannot reach one says so, naming the address, the port and
+the error code (D5). `tests/unit/daemon/remote-never-spawns.test.ts` is the executable form of
+that line, and `src/cli/_shared/host.ts` is the single place the two client halves are chosen
+between (`--host local | remote`).
 
 **The token gate sits in front of `handleConnection`, never inside it.** A request envelope is
 `{ protocolVersion, id, method, params }` and nothing else, so authentication cannot be a field
@@ -226,10 +240,16 @@ Verbs live above the backends and below the adapters, and this is where determin
   Like the app verbs it requires no capability and resolves no target, and like every bounded read
   in this repository it does not follow — a tail that stays open is a wait with no condition and a
   stream over a protocol built for request and response.
-- **`readScreen()` and `deviceInfo()`** (`src/verbs/read.ts`) use the same spine with an empty
-  action: their answer is the state every verb already captures. `readScreen()` requires
-  `canReadScreen` so an unavailable backend fails loudly before dispatch; `deviceInfo()` requires
-  nothing and returns the device information carried by every result.
+- **`readScreen()` and `deviceInfo()`** (`src/verbs/read.ts`) are the spine with the *middle* left
+  out: their action is empty, because a read verb's work is the capture `performAction()` already
+  performs for every verb — the screen for the after-state, the device for D14. Routing them
+  through the spine rather than around it costs one no-op call and is what keeps a read from
+  growing an answer shape of its own. `read_screen` declares `requires: ['canReadScreen']`, and
+  that declaration is the verb: without it the call would still answer, with the `unavailable`
+  after-state below, which is honest for a *tap* and wrong here — for a read the state is not
+  context around an action, it is the entire answer, so D11's loud failure has to come before
+  dispatch. `device_info` requires nothing (a required backend method, like the app family) and
+  answers with `result.device`. Neither passes a target, for the same reason the app verbs do not.
 - **`ActionResult`** names the verb, the device (as `DeviceInfo`, so D14's density travels with the
   measurement), the resolved target and the state after the action. A backend with input but no
   screen reading answers an explicit `unavailable` after-state naming the capability that would have
