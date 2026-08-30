@@ -145,12 +145,33 @@ state *is* the answer rather than context around an action. `device_info` requir
 every backend must answer it, and reports size, density, the computed width in dp and the OS
 version — the same `DeviceInfo` every result already carries (D14), now askable on its own without
 moving the device first. Neither addresses anything on the screen, so both answer `target: null`,
-and both carry the lease id and nothing else on the wire. The remaining verbs — `type_text`,
-`press_key`, `screenshot`, `read_logs`, `install_app`, `pull_file`, `push_file` — are their own
-issues.
+and both carry the lease id and nothing else on the wire.
+
+**`screenshot` is the third read, and the one whose answer is a payload** rather than a state the
+result already carries. It sits on the same spine and needs no capability either, and what it adds
+is one field: `result.artifact`, carrying the image **as bytes** — base64, its media type and the
+length those bytes decode to. **Never a path.** The capture happens on the host and the answer is
+read wherever the agent is, so a filesystem location would name a file that is not there, or worse,
+one that is; where the bytes end up is the client's own decision and the client's own disk. The
+call carries the lease id and nothing else for the same reason — there is no destination to send.
+A capture too large for one answer is refused by name, `artifact-too-large` carrying both the size
+and the bound, rather than trimmed to fit: half a PNG still decodes to a picture, and an agent
+handed one reads a screen that is blank below a line as something the device did. Chunked transfer
+of anything bigger, and the durable copy the host keeps, are their own issues.
+
+**A black screenshot is a true answer about the device, not a failed capture.** An app can block
+screen capture, and the system then hands back a valid, entirely black image with nothing in any
+log to say so. So the check that tells a blocked capture from a broken device is **a screenshot of
+the system home screen**: black there is a broken device, black only inside the app is that app
+blocking capture. And `read_screen` is the read that survives the block — on a screen whose pixels
+are gone the hierarchy comes back in full, texts and rectangles and all, which is why it is a
+first-class verb rather than a fallback for when a screenshot is inconvenient (PROJECT.md §6).
+
+The remaining verbs — `type_text`, `press_key`, `read_logs`, `install_app`, `pull_file`,
+`push_file` — are their own issues.
 
 **The daemon loads the core and runs the verbs**, and a client only asks (D19). The two waits, the
-four gestures, the three app verbs and the two read verbs are callable over the same connection as
+four gestures, the three app verbs and the three read verbs are callable over the same connection as
 `acquire_device` — the same envelope,
 the same framing, one method table — and a verb call carries the lease id rather than a serial,
 because the lease id is the credential and the host derives the device from it. A verb that fails
@@ -160,7 +181,8 @@ device cannot read its screen — and never as a broken host; only the host actu
 `tests/unit/no-backend-in-a-client.test.ts` walks the import graph from every client entrypoint to
 say so rather than asking politely. Against a real device today all of it runs on the hardware: a
 `tap` at a coordinate injects, `launch_app` and `stop_app` reach the package, `read_screen` and
-`device_info` answer off the hardware, and — since the Android backend learned to read its own
+`device_info` answer off the hardware, `screenshot` brings back a real PNG of the panel the device
+reports, and — since the Android backend learned to read its own
 screen — a target addressed by text resolves against a hierarchy read inside the verb, both waits
 poll a real screen, and every action comes back carrying the elements that were on it afterwards. One gap is recorded rather than hidden — a device-level
 refusal, such as launching a package that is not installed, still reaches the caller as

@@ -51,6 +51,7 @@ import type {
 	IpcHandlers,
 	LongPressParams,
 	ReadScreenParams,
+	ScreenshotParams,
 	ScrollParams,
 	SwipeParams,
 	TapParams,
@@ -69,7 +70,7 @@ import {
 	swipe,
 	tap,
 } from '../verbs/input.js';
-import { deviceInfo, readScreen } from '../verbs/read.js';
+import { deviceInfo, readScreen, screenshot } from '../verbs/read.js';
 import type { ActionResult } from '../verbs/result.js';
 import { type WaitVerbOptions, waitFor, waitUntilGone } from '../verbs/wait-for.js';
 import type { DeviceInventory } from './inventory.js';
@@ -87,6 +88,7 @@ export type VerbHandlers = Pick<
 	| 'scroll'
 	| 'read_screen'
 	| 'device_info'
+	| 'screenshot'
 	| 'launch_app'
 	| 'stop_app'
 	| 'clear_app_data'
@@ -211,16 +213,21 @@ export function createVerbHandlers(
 			);
 		},
 
-		// The two read rows. Their whole answer is the state the spine captures for every verb,
-		// so they take no arguments beyond the lease id and reach the verb layer with nothing
-		// else — `read_screen`'s `requires: ['canReadScreen']` is what makes a backend that
-		// cannot read one say so by name instead of answering with an empty screen (D11).
+		// The three read rows. All take the lease id and nothing else — `screenshot` no more
+		// than the other two, because a destination path is the client's own business and
+		// never the host's (D19). `read_screen`'s `requires: ['canReadScreen']` is what makes
+		// a backend that cannot read one say so by name instead of answering with an empty
+		// screen (D11).
 		read_screen(params: ReadScreenParams): Promise<VerbCallResult> {
 			return runVerb(params.leaseId, (context) => readScreen(context));
 		},
 
 		device_info(params: DeviceInfoParams): Promise<VerbCallResult> {
 			return runVerb(params.leaseId, (context) => deviceInfo(context));
+		},
+
+		screenshot(params: ScreenshotParams): Promise<VerbCallResult> {
+			return runVerb(params.leaseId, (context) => screenshot(context));
 		},
 
 		// The three app rows. They call the *verb* of that name and never `context.backend.*`,

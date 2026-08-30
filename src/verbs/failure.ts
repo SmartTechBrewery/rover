@@ -32,6 +32,7 @@ import { MissingCapabilityError, WaitTimeoutError } from '../core/errors.js';
 import { DeviceSerialSchema, PlatformIdSchema } from '../core/ids.js';
 import {
 	AmbiguousTargetError,
+	ArtifactTooLargeError,
 	OffScreenPointError,
 	TargetNotFoundError,
 	UnaddressableElementError,
@@ -109,6 +110,24 @@ export const VerbFailureSchema = z.discriminatedUnion('kind', [
 		})
 		.strict(),
 	/**
+	 * The verb ran, the device answered, and what it answered with does not fit one message.
+	 *
+	 * Both numbers travel because the pair is what makes it actionable: `byteLength` says how
+	 * far over the line this capture was, and `maxBytes` says where the line is, so an agent
+	 * can tell "this screen is unusually large" from "this bound is too low for any screen".
+	 * Without the branch this would arrive as `internal_error` — "the host broke" — for a
+	 * device that is merely showing a big screen.
+	 */
+	z
+		.object({
+			kind: z.literal('artifact-too-large'),
+			serial: DeviceSerialSchema,
+			byteLength: z.number().int().nonnegative(),
+			maxBytes: z.number().int().positive(),
+			message: z.string().min(1),
+		})
+		.strict(),
+	/**
 	 * The condition was still unmet at the deadline. Carries no serial: a wait is over a
 	 * condition rather than over a device, and the host names the device in the refusal's
 	 * message and in the call that asked for it.
@@ -130,7 +149,7 @@ export type VerbFailure = z.infer<typeof VerbFailureSchema>;
  * The failure `error` is, or `null` when it is not one of them — the caller then rethrows,
  * and the host reports a host failure as one.
  *
- * Adding a seventh error class to the verb layer without a branch here surfaces as that
+ * Adding an eighth error class to the verb layer without a branch here surfaces as that
  * class's own test seeing an internal error instead of an answer, which is the loud version
  * of this drifting.
  */
@@ -187,6 +206,15 @@ export function toVerbFailure(error: unknown): VerbFailure | null {
 			widthDp: error.widthDp,
 			heightDp: error.heightDp,
 			reason: error.reason,
+			message: error.message,
+		};
+	}
+	if (error instanceof ArtifactTooLargeError) {
+		return {
+			kind: 'artifact-too-large',
+			serial: error.serial,
+			byteLength: error.byteLength,
+			maxBytes: error.maxBytes,
 			message: error.message,
 		};
 	}

@@ -18,6 +18,7 @@ import {
 	DeviceInfoParamsSchema,
 	LongPressParamsSchema,
 	ReadScreenParamsSchema,
+	ScreenshotParamsSchema,
 	ScrollParamsSchema,
 	SwipeParamsSchema,
 	TapParamsSchema,
@@ -28,11 +29,12 @@ import { capabilityMethod, type VerbContext } from '@/verbs/context.js';
 import { toVerbFailure } from '@/verbs/failure.js';
 import { scroll, tap } from '@/verbs/input.js';
 import { performAction } from '@/verbs/perform.js';
-import { deviceInfo, readScreen } from '@/verbs/read.js';
+import { deviceInfo, readScreen, screenshot } from '@/verbs/read.js';
 import {
 	type ActionResult,
 	ActionResultSchema,
 	AfterStateSchema,
+	ArtifactSchema,
 	ResolvedTargetSchema,
 } from '@/verbs/result.js';
 import { TargetSchema } from '@/verbs/target.js';
@@ -185,6 +187,69 @@ describe('the verb layer speaks only in plain data', () => {
 		expect(unserializableParts(info)).toEqual([]);
 	});
 
+	/**
+	 * The guard this file exists for, on the one verb that has bytes to lose.
+	 *
+	 * A `Uint8Array` handed straight into a result would pass a local test and arrive at a
+	 * client on another machine as an object of numeric keys; a host-local path would pass
+	 * both and name the wrong file. The walk below rejects either, and the round trip proves
+	 * the base64 form survives the trip the raw bytes would not have.
+	 */
+	it('round-trips a screenshot result, whose answer is bytes rather than a state', async () => {
+		const bytes = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x01, 0x02]);
+		const context = createMockVerbContext({
+			backend: createMockDeviceBackend({
+				readScreen: vi.fn<NonNullable<DeviceBackend['readScreen']>>(async () => [save]),
+				screenshot: vi.fn<DeviceBackend['screenshot']>(async () => bytes),
+			}),
+		});
+
+		const shot = await screenshot(context);
+
+		expect(ActionResultSchema.parse(roundTrip(shot))).toEqual(shot);
+		// No raw bytes, no function, and no string that looks like somewhere on this host.
+		expect(unserializableParts(shot)).toEqual([]);
+		// And the payload really made the trip: what comes back out of the JSON decodes to the
+		// bytes that went in, rather than to an object of numeric keys.
+		const parsed = ActionResultSchema.parse(roundTrip(shot));
+		expect(parsed.artifact?.base64).toBe(Buffer.from(bytes).toString('base64'));
+		expect(parsed.artifact?.byteLength).toBe(bytes.byteLength);
+	});
+
+	it('carries artifact: null on every verb that produced no bytes', async () => {
+		const context = contextShowingSave();
+
+		const tapped = await tap(context, { by: 'text', text: 'Save' });
+		const read = await readScreen(context);
+
+		// `null` rather than an absent key, for the reason `heldBy: null` is: `undefined` does
+		// not survive JSON, so an optional field would make "no bytes" something every client
+		// has to special-case instead of a value it can read.
+		expect(tapped.artifact).toBeNull();
+		expect(read.artifact).toBeNull();
+		expect(roundTrip(read)).toMatchObject({ artifact: null });
+	});
+
+	it('rejects a result carrying raw bytes where the artifact belongs', () => {
+		const good = ArtifactSchema.parse({ mediaType: 'image/png', base64: 'AQID', byteLength: 3 });
+
+		expect(ArtifactSchema.parse(roundTrip(good))).toEqual(good);
+		// The shape the whole artifact exists to keep out of a result — and the one a local
+		// round trip would not have caught.
+		expect(() =>
+			ArtifactSchema.parse({ mediaType: 'image/png', bytes: new Uint8Array([1]), byteLength: 1 }),
+		).toThrow();
+		// And a path is not an artifact, whatever else is beside it (D19).
+		expect(() =>
+			ArtifactSchema.parse({
+				mediaType: 'image/png',
+				base64: 'AQID',
+				byteLength: 3,
+				path: '/tmp/rover/shot.png',
+			}),
+		).toThrow();
+	});
+
 	it('round-trips a resolved target and a screen after-state on their own', () => {
 		const resolved = ResolvedTargetSchema.parse({
 			source: 'screen',
@@ -296,10 +361,12 @@ describe('a verb call answers in plain data too', () => {
 		],
 		// One row for the three app verbs, because one schema serves all three.
 		['launch_app', AppVerbParamsSchema, { leaseId: 'lease-1', appId: 'com.android.settings' }],
-		// The two read rows carry the credential and nothing else: no target, and no wait knob
-		// on a verb that reads once and answers.
+		// The three read rows carry the credential and nothing else: no target, no wait knob on
+		// a verb that reads once and answers, and — for `screenshot` — no destination, because
+		// a path on the host is the one thing its answer must never contain (D19).
 		['read_screen', ReadScreenParamsSchema, { leaseId: 'lease-1' }],
 		['device_info', DeviceInfoParamsSchema, { leaseId: 'lease-1' }],
+		['screenshot', ScreenshotParamsSchema, { leaseId: 'lease-1' }],
 	])('round-trips what a %s call carries', (_name, schema, params) => {
 		const parsed = schema.parse(params);
 

@@ -1,11 +1,12 @@
 /**
- * Verb-layer error types — the four ways a target fails to become one point.
+ * Verb-layer error types — the four ways a target fails to become one point, and the one
+ * way an answer is too big to give.
  *
  * Device-layer errors (a missing capability, a device that vanished) stay in
  * `src/core/errors.ts`; these are about what the caller asked for, and every one of them
  * exists because the alternative is a **silent** answer: a first match among two, a tap
- * into nowhere, or an empty result where the honest answer is that the screen no longer
- * holds what was named (ai/RULES.md §2).
+ * into nowhere, a truncated image, or an empty result where the honest answer is that the
+ * screen no longer holds what was named (ai/RULES.md §2).
  *
  * **Every field is plain data on purpose**, for the reason `WaitTimeoutError` states: verb
  * execution happens on the host, so these are serialized and sent back over a socket that may
@@ -190,5 +191,39 @@ export class UnaddressableElementError extends Error {
 		this.widthDp = widthDp;
 		this.heightDp = heightDp;
 		this.reason = reason;
+	}
+}
+
+/**
+ * Thrown when a captured artifact is larger than a verb answer may carry.
+ *
+ * The bound it names is {@link MAX_ARTIFACT_BYTES} (`./result.ts`), and this error is what
+ * makes reaching it a **loud refusal rather than a truncated payload**. Truncation is the
+ * failure mode worth spending an error class on: half a PNG still decodes to an image on
+ * most readers, so an agent handed one sees a screen that is blank below a line and reads
+ * it as something the device did — which is the plausible-looking wrong answer ai/RULES.md
+ * §2 forbids, arriving in the one verb whose output nobody can sanity-check by eye.
+ *
+ * Distinct from the frame cap it is derived from: that one is a transport limit a client
+ * discovers as a broken connection, and this is an answer about a capture, raised on the
+ * host before anything is put on the wire.
+ */
+export class ArtifactTooLargeError extends Error {
+	readonly serial: DeviceSerial;
+	readonly byteLength: number;
+	readonly maxBytes: number;
+
+	constructor(serial: DeviceSerial, byteLength: number, maxBytes: number) {
+		super(
+			`The artifact captured from device '${serial}' is ${byteLength} bytes, over the ` +
+				`${maxBytes}-byte limit one verb answer may carry — it travels base64-encoded, ` +
+				'which is a third larger again, and the whole answer has to fit one message. ' +
+				'It is refused whole rather than returned cut short, because a truncated image ' +
+				'is not distinguishable from a screen that really looks like that',
+		);
+		this.name = 'ArtifactTooLargeError';
+		this.serial = serial;
+		this.byteLength = byteLength;
+		this.maxBytes = maxBytes;
 	}
 }

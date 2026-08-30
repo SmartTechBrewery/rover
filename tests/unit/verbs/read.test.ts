@@ -1,8 +1,9 @@
 /**
- * The two read verbs, over a backend that records what it was asked to do.
+ * The three read verbs, over a backend that records what it was asked to do.
  *
- * These verbs do nothing to the device, so a result that *looks* right proves almost
- * nothing on its own — every assertion here is about something the shape cannot show:
+ * `read_screen` and `device_info` do nothing to the device, so a result that *looks* right
+ * proves almost nothing on its own — every assertion here is about something the shape
+ * cannot show:
  *
  * - **`read_screen` on a backend without `canReadScreen` throws and never touches it.** The
  *   verb would otherwise still answer, with the spine's `after: { kind: 'unavailable' }`,
@@ -15,15 +16,22 @@
  *   `false` — and still names the device and its density (D14).
  * - **Both go through the spine**, which is the order the call log shows and the reason
  *   neither verb has to assemble a result of its own.
+ *
+ * `screenshot` is the one that does something, and its assertions are about the payload
+ * instead: that the bytes arrive as bytes rather than as a path, that `byteLength` describes
+ * what actually decodes out of the base64, that the bound is refused rather than trimmed to,
+ * and that the bound is one the transport can carry.
  */
 
 import { describe, expect, it, vi } from 'vitest';
 import type { Capabilities } from '@/core/capabilities.js';
 import type { DeviceBackend, ScreenElement } from '@/core/device.js';
 import { MissingCapabilityError } from '@/core/errors.js';
+import { MAX_FRAME_BYTES } from '@/ipc/framing.js';
 import type { VerbContext } from '@/verbs/context.js';
-import { deviceInfo, readScreen } from '@/verbs/read.js';
-import type { ActionResult } from '@/verbs/result.js';
+import { ArtifactTooLargeError } from '@/verbs/errors.js';
+import { deviceInfo, readScreen, screenshot } from '@/verbs/read.js';
+import { type ActionResult, MAX_ARTIFACT_BYTES } from '@/verbs/result.js';
 import {
 	createMockCapabilities,
 	createMockCapabilityManifest,
@@ -40,6 +48,24 @@ const save = createMockScreenElement({
 });
 const cancel = createMockScreenElement({ id: 'cancel', text: 'Cancel' });
 
+/**
+ * The eight bytes every PNG starts with (PNG 1.2 §3.1), written out rather than imported.
+ *
+ * The verb layer cannot reach the backend that owns the other copy of this constant, and a
+ * test that borrowed the implementation's own would agree with it whatever it said.
+ */
+const PNG_HEADER = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
+
+/** A capture of `byteLength` bytes that a decoder would accept as a PNG at the signature. */
+function capture(byteLength: number): Uint8Array {
+	const bytes = new Uint8Array(byteLength);
+	bytes.set(PNG_HEADER.slice(0, byteLength));
+	// Not all zeroes past the header: a base64 round trip of a run of zeroes is the one
+	// payload an off-by-one in the encoding would survive unnoticed.
+	for (let at = PNG_HEADER.length; at < byteLength; at += 1) bytes[at] = at % 251;
+	return bytes;
+}
+
 interface Recording {
 	readonly calls: string[];
 	readonly context: VerbContext;
@@ -47,10 +73,15 @@ interface Recording {
 
 /** A context whose backend records every call on one shared log, in order. */
 function recording(
-	options: { screen?: readonly ScreenElement[]; capabilities?: Capabilities } = {},
+	options: {
+		screen?: readonly ScreenElement[];
+		capabilities?: Capabilities;
+		capture?: Uint8Array;
+	} = {},
 ): Recording {
 	const calls: string[] = [];
 	const screen = options.screen ?? [save, cancel];
+	const bytes = options.capture ?? capture(2_048);
 
 	const backend = createMockDeviceBackend({
 		readScreen: vi.fn<NonNullable<DeviceBackend['readScreen']>>(async () => {
@@ -60,6 +91,10 @@ function recording(
 		deviceInfo: vi.fn<DeviceBackend['deviceInfo']>(async (serial) => {
 			calls.push('deviceInfo');
 			return createMockDeviceInfo({ serial });
+		}),
+		screenshot: vi.fn<DeviceBackend['screenshot']>(async () => {
+			calls.push('screenshot');
+			return bytes;
 		}),
 	});
 
@@ -73,16 +108,18 @@ function recording(
 	return { calls, context };
 }
 
-/** One call of each verb, for the properties both share. */
+/** One call of each verb, for the properties all three share. */
 const READS: ReadonlyArray<[string, (context: VerbContext) => Promise<ActionResult>]> = [
 	['read_screen', readScreen],
 	['device_info', deviceInfo],
+	['screenshot', screenshot],
 ];
 
-describe('both read verbs are on the spine', () => {
-	it.each(
-		READS,
-	)('%s reads the screen once and the device once, in that order', async (_name, run) => {
+describe('all three read verbs are on the spine', () => {
+	it.each([
+		['read_screen', readScreen],
+		['device_info', deviceInfo],
+	] as const)('%s reads the screen once and the device once, in that order', async (_name, run) => {
 		const { calls, context } = recording();
 
 		await run(context);
@@ -91,6 +128,16 @@ describe('both read verbs are on the spine', () => {
 		// would show a third call here, and would be a second place deciding what an answer
 		// looks like.
 		expect(calls).toEqual(['readScreen', 'deviceInfo']);
+	});
+
+	it('screenshot captures first and then takes the same spine capture', async () => {
+		const { calls, context } = recording();
+
+		await screenshot(context);
+
+		// The capture is the verb's own work and the two reads after it are the spine's — the
+		// same two, in the same order, that a verb doing nothing at all already produces.
+		expect(calls).toEqual(['screenshot', 'readScreen', 'deviceInfo']);
 	});
 
 	it.each(
@@ -201,5 +248,144 @@ describe('device_info', () => {
 
 		// Two calls for two asks: a rotated device reports the dimensions it has now (D12(a)).
 		expect(context.backend.deviceInfo).toHaveBeenCalledTimes(2);
+	});
+});
+
+/**
+ * The one read whose answer is a payload rather than a state.
+ *
+ * Nothing here looks at the pixels, because at this layer there is nothing to look at: a
+ * black capture is a true answer about a device with screen capture blocked (PROJECT.md §6)
+ * and the verb's own documentation says how to tell that from a broken one. What is
+ * asserted instead is everything about the payload that a wrong answer would still *look*
+ * right without — the encoding, the length, the absence of a path, and the refusal.
+ */
+describe('screenshot', () => {
+	it('answers with the captured bytes, base64-encoded and decoding back to them', async () => {
+		const bytes = capture(3_333);
+		const { context } = recording({ capture: bytes });
+
+		const result = await screenshot(context);
+
+		expect(result.verb).toBe('screenshot');
+		if (!result.artifact) throw new Error('the screenshot verb answered with no artifact');
+		// Byte for byte, not merely the same length: base64 of a mangled buffer is the same
+		// size as base64 of the right one.
+		expect(new Uint8Array(Buffer.from(result.artifact.base64, 'base64'))).toEqual(bytes);
+	});
+
+	it('reports the length of the decoded bytes, not of the string carrying them', async () => {
+		const { context } = recording({ capture: capture(3_333) });
+
+		const result = await screenshot(context);
+
+		if (!result.artifact) throw new Error('the screenshot verb answered with no artifact');
+		const { base64, byteLength } = result.artifact;
+		expect(byteLength).toBe(3_333);
+		// The distinction the field exists for: the encoded string is a third longer, so a
+		// `byteLength` taken off it would be wrong by exactly that and still look plausible.
+		expect(base64.length).toBeGreaterThan(byteLength);
+		expect(Buffer.from(base64, 'base64').byteLength).toBe(byteLength);
+	});
+
+	it('names the media type off the bytes rather than off what it expected', async () => {
+		const png = recording({ capture: capture(64) });
+		const notAnImage = recording({ capture: Uint8Array.from([0x1f, 0x8b, 0x08, 0x00]) });
+
+		const recognised = await screenshot(png.context);
+		const unrecognised = await screenshot(notAnImage.context);
+
+		expect(recognised.artifact?.mediaType).toBe('image/png');
+		// Not a failure and not a guess: the backend promised image bytes without naming a
+		// format, so bytes nothing recognises are labelled as what they honestly are.
+		expect(unrecognised.artifact?.mediaType).toBe('application/octet-stream');
+	});
+
+	it('returns bytes and never a path on the host (D19)', async () => {
+		const { context } = recording();
+
+		const result = await screenshot(context);
+
+		if (!result.artifact) throw new Error('the screenshot verb answered with no artifact');
+		// The whole artifact is three fields, and none of them is a place: a filesystem
+		// location means nothing on the machine reading this, and means something wrong on a
+		// machine that happens to have that path.
+		expect(Object.keys(result.artifact).sort()).toEqual(['base64', 'byteLength', 'mediaType']);
+	});
+
+	it('refuses a capture over the bound rather than answering with a trimmed one', async () => {
+		const oversized = new Uint8Array(MAX_ARTIFACT_BYTES + 1);
+		const { calls, context } = recording({ capture: oversized });
+
+		const thrown = await screenshot(context).catch((error: unknown) => error);
+
+		// A refusal naming both numbers — never an `ok` carrying the first four megabytes of a
+		// picture, which decodes to a screen that is blank below a line and reads as something
+		// the device did.
+		expect(thrown).toBeInstanceOf(ArtifactTooLargeError);
+		expect(thrown).toMatchObject({
+			serial: context.serial,
+			byteLength: MAX_ARTIFACT_BYTES + 1,
+			maxBytes: MAX_ARTIFACT_BYTES,
+		});
+		// And it refused where the capture happened, before the spine spent a screen read
+		// reaching the same answer.
+		expect(calls).toEqual(['screenshot']);
+	});
+
+	it('accepts a capture exactly at the bound, so the limit is not off by one', async () => {
+		const { context } = recording({ capture: capture(MAX_ARTIFACT_BYTES) });
+
+		const result = await screenshot(context);
+
+		expect(result.artifact?.byteLength).toBe(MAX_ARTIFACT_BYTES);
+	});
+
+	it('needs no capability, so it answers on a backend that declares none', async () => {
+		const { context } = recording({
+			capabilities: createMockCapabilities({
+				canReadScreen: false,
+				canInput: false,
+				canControlNetwork: false,
+			}),
+		});
+
+		const result = await screenshot(context);
+
+		// `screenshot` is a required backend method, so there is no capability to assert — and
+		// the screen it could not read is the honest `unavailable`, never an empty screen.
+		expect(result.artifact?.byteLength).toBeGreaterThan(0);
+		expect(result.after).toMatchObject({ kind: 'unavailable', capability: 'canReadScreen' });
+	});
+
+	it('captures inside the call rather than answering off anything cached', async () => {
+		const { context } = recording();
+
+		await screenshot(context);
+		await screenshot(context);
+
+		expect(context.backend.screenshot).toHaveBeenCalledTimes(2);
+	});
+});
+
+/**
+ * The bound is derived from the frame cap by hand, so the derivation is asserted rather than
+ * left in a comment.
+ *
+ * `src/verbs/` may not import `src/ipc/` — the verb layer reaches `src/core/` and nothing
+ * else, which is what keeps a client's module graph free of a backend
+ * (`tests/unit/no-backend-in-a-client.test.ts`) — so the two constants cannot be defined in
+ * terms of each other. A test can hold both, and this is the one place that notices if
+ * either moves.
+ */
+describe('the artifact bound fits the transport it was chosen against', () => {
+	it('leaves room for the base64 inflation and the rest of the answer', () => {
+		// Base64 is four characters per three bytes, and the result travels in the same frame:
+		// the elements of a screen read, the device, the envelope. A bound that only just fit
+		// its own encoding would be a bound the first large screen read pushed over the cap.
+		const encoded = Math.ceil(MAX_ARTIFACT_BYTES / 3) * 4;
+
+		expect(encoded).toBeLessThan(MAX_FRAME_BYTES);
+		expect(MAX_FRAME_BYTES - encoded).toBeGreaterThan(1024 * 1024);
 	});
 });
