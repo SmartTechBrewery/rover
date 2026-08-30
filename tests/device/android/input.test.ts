@@ -25,12 +25,14 @@ import type { Device, DeviceKey } from '@/core/device.js';
  *
  * **What this deliberately does not cover, so silence is not read as "checked":**
  *
- * - **No assertion reads the screen back.** The backend declares `canReadScreen: false`
- *   until `read_screen` lands (#13), so what is proved here is that the device **accepted**
- *   the injection — not that a button was pressed or that text arrived in a field. Asserting
- *   through a `uiautomator dump` of this suite's own would be the suite testing through an
- *   adb call outside the primitive it is testing, which `./network.test.ts` refuses for the
- *   same reason.
+ * - **No assertion reads the screen back**, and that is now a choice rather than a limit:
+ *   the backend has declared `canReadScreen: true` since #13, so `readScreen` *could* be
+ *   called here. It is not, because these are the primitives underneath the verbs and
+ *   asserting one primitive through another turns a failure in either into a failure that
+ *   names the wrong one — the same reason `./network.test.ts` refuses to check a radio
+ *   through a second adb call. So what is proved here is still that the device **accepted**
+ *   the injection, not that a button was pressed or that text arrived in a field; the verb
+ *   layer's own post-state is what asserts the latter, in `./verb-dispatch.test.ts`.
  * - **That a long press produces a long press, and that the measured text lands in a
  *   field, are observed by hand** in the session behind PROJECT.md §6 and recorded there —
  *   including the 400 ms threshold, which is a device setting rather than a constant.

@@ -10,22 +10,28 @@
  * Each flag flips in the change that lands the methods behind it, so the manifest is
  * honest at every commit rather than aspirational. `canControlNetwork` flipped here (#9)
  * because state restoration needs `setAirplaneMode` and `setWifiEnabled` to be real before
- * anything drives them, and `canInput` flips here (#12) on the same seam: the four
- * primitives `tap`, `swipe`, `typeText` and `pressKey` are what this backend now answers,
- * while the verbs over them are phases 2 and 3 — R16 is the *verb* layer over what #9
+ * anything drives them, and `canInput` flipped here (#12) on the same seam: the four
+ * primitives `tap`, `swipe`, `typeText` and `pressKey` are what this backend answers,
+ * while the verbs over them are separate phases — R16 is the *verb* layer over what #9
  * landed, not the primitives, and it is not what moved either flag.
  *
- * All four had to land together rather than one at a time. `CAPABILITY_METHODS.canInput`
- * names every one of them, so a manifest declaring the capability with three of the four
- * implemented fails `tests/helpers/backend-conformance.ts` — the split point is forced by
- * the repository rather than chosen.
+ * The four input primitives had to land together rather than one at a time.
+ * `CAPABILITY_METHODS.canInput` names every one of them, so a manifest declaring the
+ * capability with three of the four implemented fails
+ * `tests/helpers/backend-conformance.ts` — the split point is forced by the repository
+ * rather than chosen.
  *
- * `canReadScreen` (#13) is the one flag still declared `false`, because `readScreen` does
- * not exist yet.
+ * `canReadScreen` flips here (#13), on that same seam and for that same reason:
+ * `CAPABILITY_METHODS.canReadScreen` names exactly one method, `readScreen`, and this
+ * backend now answers it — `uiautomator dump` mapped onto `ScreenElement[]` in dp
+ * (`../android/screen.ts`). The three read *verbs* over it are later phases, and they are
+ * not what moves this flag either.
  *
- * A capability declared before its methods exist is exactly the "an agent is told a device
- * can do something it cannot" failure D11 is for, and an honest opt-out is a complete
- * backend rather than an unfinished one.
+ * **Every flag in this manifest is now `true`, so nothing here is a declared opt-out.**
+ * That is a statement about this backend, not about the model: a capability declared
+ * before its methods exist is exactly the "an agent is told a device can do something it
+ * cannot" failure D11 is for, and the next flag added to `CapabilityManifestInput` starts
+ * at `false` here until the change that lands its methods.
  */
 
 import type { CapabilityManifestInput } from '../../core/capabilities.js';
@@ -37,7 +43,7 @@ export const androidCapabilityManifest: CapabilityManifestInput = {
 	platform: ANDROID_PLATFORM_ID,
 	label: 'Android',
 	capabilities: {
-		canReadScreen: false,
+		canReadScreen: true,
 		canInput: true,
 		canControlNetwork: true,
 	},

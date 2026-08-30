@@ -4,16 +4,17 @@
  * It answers every required method of the contract — enumeration, presence, the device
  * facts, the app lifecycle and the capture — with no stub, which is what lets it declare
  * `implements DeviceBackend` and what lets `./index.ts` register it (ai/TESTING.md, "A
- * backend under construction registers nothing"), plus the environment pair behind
- * `canControlNetwork` and the four input primitives behind `canInput`. The one
- * capability-gated method still missing — `readScreen` (#13) — is a declared opt-out in
- * `./capabilities.ts` rather than an omission, and the flag flips in the change that lands
- * it.
+ * backend under construction registers nothing"), plus **every** capability-gated method:
+ * the environment pair behind `canControlNetwork`, the four input primitives behind
+ * `canInput`, and `readScreen` behind `canReadScreen` (#13). No flag in
+ * `./capabilities.ts` is a declared opt-out any more.
  *
- * Everything that touches the device goes through `./adb.js`, and everything that reads
- * its output goes through `./parsers/`. This file is the join between them and holds no
- * text-shaped knowledge of its own — the wording each verb asserts on lives in
- * `./parsers/app-control.js`, `./parsers/network.js` and `./parsers/input.js`, pinned
+ * Everything that touches the device goes through `./adb.js`, everything that reads its
+ * output goes through `./parsers/`, and the two pure modules beside this one own the
+ * arithmetic — `./input.js` on the way to the device, `./screen.js` on the way back. This
+ * file is the join between them and holds no text-shaped knowledge of its own: the wording
+ * each verb asserts on lives in `./parsers/app-control.js`, `./parsers/network.js`,
+ * `./parsers/input.js` and `./parsers/uiautomator.js`, pinned
  * against captures, and every **caller-supplied** value that enters a device-side command
  * line is quoted by `./adb.js`. Which quoter is the one judgement call in this file:
  *
@@ -23,9 +24,10 @@
  * - `shellText` for `typeText`'s argument, the only value here that is screen *content*:
  *   an apostrophe in it is ordinary, so it is escaped rather than refused.
  * - **Neither, only for a literal this file owns** — the environment pair's two words, the
- *   four keycodes of `./input.js`'s `KEY_CODES`, and the numbers `tap` and `swipe` compute.
- *   No caller's string reaches any of them, which is the property `shellArg` exists to
- *   restore when one does. A new argument outside that list takes a quoter.
+ *   four keycodes of `./input.js`'s `KEY_CODES`, {@link DUMP_PATH}, and the numbers `tap`
+ *   and `swipe` compute. No caller's string reaches any of them, which is the property
+ *   `shellArg` exists to restore when one does. A new argument outside that list takes a
+ *   quoter.
  */
 
 import {
@@ -39,6 +41,7 @@ import {
 	type DeviceWatch,
 	type DeviceWatcher,
 	type Point,
+	type ScreenElement,
 } from '../../core/device.js';
 import { type AppId, type DeviceSerial, parseAppId, unwrap } from '../../core/ids.js';
 import {
@@ -72,14 +75,30 @@ import {
 	parseAdbDevices,
 } from './parsers/devices.js';
 import { parseGetprop } from './parsers/getprop.js';
+import { parseUiHierarchy, type UiHierarchy } from './parsers/hierarchy.js';
 import { acceptedInput } from './parsers/input.js';
 import { acceptedNetworkChange } from './parsers/network.js';
 import { isPng } from './parsers/screencap.js';
 import { TrackFrameDecoder } from './parsers/track.js';
+import { dumpedPath } from './parsers/uiautomator.js';
 import { parseWmDensity, parseWmSize } from './parsers/wm.js';
+import { toScreenElements } from './screen.js';
 
 /** The state token adb prints for a device whose authorisation was refused or not granted. */
 const UNAUTHORIZED_STATE = 'unauthorized';
+
+/**
+ * Where {@link AndroidDeviceBackend.readScreen} has the device write its hierarchy.
+ *
+ * `/sdcard/window_dump.xml` is uiautomator's own default and the path PROJECT.md §6's
+ * verified recipe uses — writable without root on API 37, and on external storage rather
+ * than in the app sandbox of whatever happens to be running. Fixed rather than randomised
+ * per call: a unique path per read would make a stale document impossible by construction,
+ * and would also leave one behind for every read that died before its cleanup, on hardware
+ * lent out to somebody else next. Freshness is bought with the confirmation check instead,
+ * which costs nothing on the device.
+ */
+const DUMP_PATH = '/sdcard/window_dump.xml';
 
 /**
  * The tracker's argv. `-l` because the long format is what carries `model:`, and the
@@ -473,6 +492,76 @@ export class AndroidDeviceBackend implements DeviceBackend {
 		if (!isPng(result.stdout)) throw notAnImage(serial, result);
 
 		return result.stdout;
+	}
+
+	/**
+	 * The screen as elements — `uiautomator dump` to a file on the device, then the file.
+	 *
+	 * Two commands and a cleanup, because uiautomator has no mode that writes the document
+	 * to stdout: `dump /dev/tty` is the recipe every guide shows for that and it interleaves
+	 * the XML with the confirmation line below (PROJECT.md §6).
+	 *
+	 * **`exec-out` for the `cat`, never `shell`.** `adb shell` may put a pty between the
+	 * device and this process, and a pty translates `\n` to `\r\n` — which turns a
+	 * well-formed hierarchy into a document the parser will not accept, or worse, one it
+	 * will. It is the same trap as {@link screenshot}'s, and conditional in the same way:
+	 * §6 records that a `shell cat` of a dump did *not* corrupt on adb 37.0.1 with stdout
+	 * redirected, because adb only allocates the pty in some combinations of version,
+	 * platform and whether stdin is a terminal. That is the argument *for* `exec-out`, not
+	 * against it — it never allocates one, so the guarantee stops depending on the machine
+	 * the code happens to run on. The text runner rather than the binary one: the payload is
+	 * UTF-8.
+	 *
+	 * **The confirmation line is checked before the `cat`, and that check is the freshness
+	 * guarantee.** {@link DUMP_PATH} is a fixed literal, so it can already hold the document
+	 * a previous read left there; a dump that produced nothing followed by a `cat` that
+	 * succeeds would hand back a screen from a minute ago, indistinguishable from this one
+	 * and acted on. What the check can and cannot prove is
+	 * `./parsers/uiautomator.js`'s subject — in short, it says the command named the path
+	 * this call asked for, and the `cat` says a file is there.
+	 *
+	 * **The density is asked fresh**, for the reason {@link pixelScale} gives, and started
+	 * before the dump so the two overlap. It is awaited only after the dump has settled, so
+	 * the cleanup below can never race a dump that is still writing.
+	 *
+	 * **The `rm` runs in a `finally` and its own failure never replaces the answer.**
+	 * Leaving a file behind on hardware held under a lease is what the cleanup exists to
+	 * prevent; losing a screen the caller already paid for because the cleanup failed is
+	 * worse. It also runs on the refusal path, which is where it does the most good: a stale
+	 * file removed now is one the *next* read cannot be served.
+	 *
+	 * The default ten-second timeout: a dump is a query on the order of a `wm size`, not a
+	 * capture of the framebuffer.
+	 *
+	 * `DUMP_PATH` takes no `shellArg` — it is a literal this file owns, the case this file's
+	 * header names. If it ever becomes a caller's value it takes a quoter.
+	 */
+	async readScreen(serial: DeviceSerial): Promise<ScreenElement[]> {
+		const density = this.pixelScale(serial);
+		// Awaited at the end; the handler is attached now so a density that fails while the
+		// dump is still in flight is never an unhandled rejection.
+		void density.catch(() => undefined);
+
+		const dumped = await runAdbOnDevice(serial, ['shell', 'uiautomator', 'dump', DUMP_PATH]);
+
+		try {
+			if (dumpedPath(dumped.stdout) !== DUMP_PATH) {
+				throw refused(`uiautomator dump ${DUMP_PATH}`, serial, dumped);
+			}
+
+			const document = await runAdbOnDevice(serial, ['exec-out', 'cat', DUMP_PATH]);
+
+			let hierarchy: UiHierarchy;
+			try {
+				hierarchy = parseUiHierarchy(document.stdout);
+			} catch (cause) {
+				throw unparseable(`adb exec-out cat ${DUMP_PATH}`, document, cause);
+			}
+
+			return toScreenElements(hierarchy, await density);
+		} finally {
+			await runAdbOnDevice(serial, ['shell', 'rm', '-f', DUMP_PATH]).catch(() => undefined);
+		}
 	}
 
 	/**

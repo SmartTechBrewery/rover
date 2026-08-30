@@ -941,6 +941,173 @@ describe('screenshot', () => {
 });
 
 /**
+ * `readScreen`, the primitive behind `canReadScreen`.
+ *
+ * Three device calls and a fourth that runs beside them, so this block is above all about
+ * the **argv and its order**: the `cat` has to be `exec-out` rather than `shell`, the
+ * confirmation has to be read before the `cat` runs, and the cleanup has to run whatever
+ * happened. `tests/device/android/backend.test.ts` is the half that proves a real device
+ * answers the recipe at all.
+ */
+const DUMP_OK = fixture('uiautomator-dump.api37-sdk-gphone16k-arm64.txt');
+const DUMP_ELSEWHERE = fixture('uiautomator-dump.unwritable-path.api37-sdk-gphone16k-arm64.txt');
+const HIERARCHY = fixture('uiautomator.api37-sdk-gphone16k-arm64.xml');
+
+const DUMP_ARGV = ['shell', 'uiautomator', 'dump', '/sdcard/window_dump.xml'];
+const CAT_ARGV = ['exec-out', 'cat', '/sdcard/window_dump.xml'];
+const RM_ARGV = ['shell', 'rm', '-f', '/sdcard/window_dump.xml'];
+
+const READ_FACTS: Record<string, string | AdbResult | Error> = {
+	'shell wm density': DENSITY,
+	[DUMP_ARGV.join(' ')]: DUMP_OK,
+	[CAT_ARGV.join(' ')]: HIERARCHY,
+	[RM_ARGV.join(' ')]: '',
+};
+
+/** {@link answers}, plus the ability to make one pinned call reject the way `adb.js` does. */
+function reads(overrides: Record<string, string | AdbResult | Error> = {}): void {
+	const replies = { ...READ_FACTS, ...overrides };
+	runAdbOnDevice.mockImplementation(async (_serial, args): Promise<AdbResult> => {
+		const reply = replies[args.join(' ')];
+		if (reply === undefined) throw new Error(`unexpected call: ${args.join(' ')}`);
+		if (reply instanceof Error) throw reply;
+		return typeof reply === 'string' ? { stdout: reply, stderr: '' } : reply;
+	});
+}
+
+const argvOf = (): string[][] => runAdbOnDevice.mock.calls.map(([, args]) => [...args]);
+
+describe('readScreen', () => {
+	it('dumps, fetches and cleans up, in that order and pinned to the device', async () => {
+		reads();
+
+		await backend.readScreen(SERIAL);
+
+		expect(argvOf()).toEqual([['shell', 'wm', 'density'], DUMP_ARGV, CAT_ARGV, RM_ARGV]);
+		for (const call of runAdbOnDevice.mock.calls) expect(call[0]).toBe(SERIAL);
+		expect(runAdb).not.toHaveBeenCalled();
+	});
+
+	/**
+	 * The acceptance criterion as an assertion about the argv: `adb shell` may put a pty
+	 * between the device and this process, and a pty translates `\n` to `\r\n` — which is
+	 * how a well-formed hierarchy stops being one. `exec-out` never allocates one.
+	 */
+	it('fetches the document with exec-out and never with shell', async () => {
+		reads();
+
+		await backend.readScreen(SERIAL);
+
+		const fetch = argvOf().find((argv) => argv.includes('cat'));
+		expect(fetch?.[0]).toBe('exec-out');
+		expect(argvOf()).not.toContainEqual(['shell', 'cat', '/sdcard/window_dump.xml']);
+	});
+
+	it('answers the captured screen as elements in dp', async () => {
+		reads();
+
+		const elements = await backend.readScreen(SERIAL);
+
+		expect(elements).toHaveLength(75);
+		// 1280x2856 physical pixels at the captured scale of 3.
+		expect(elements[0].bounds).toEqual({ x: 0, y: 0, width: 1280 / 3, height: 2856 / 3 });
+		expect(elements.some((element) => element.text === 'Display size & text')).toBe(true);
+	});
+
+	/**
+	 * The stale-file guard, as a test. The dump path is a fixed literal, so it can already
+	 * hold the document a previous read left there; a dump that named some other path
+	 * followed by a `cat` that succeeds would hand back a screen from a minute ago,
+	 * indistinguishable from this one. The `cat` never running is the assertion.
+	 */
+	it('never fetches a document the dump did not say it wrote here', async () => {
+		reads({ [DUMP_ARGV.join(' ')]: DUMP_ELSEWHERE });
+
+		await expect(backend.readScreen(SERIAL)).rejects.toThrow(/uiautomator dump/);
+		expect(argvOf()).not.toContainEqual(CAT_ARGV);
+	});
+
+	it('never fetches a document after a dump that confirmed nothing, quoting both streams', async () => {
+		reads({
+			[DUMP_ARGV.join(' ')]: { stdout: '', stderr: 'ERROR: could not get idle state.\n' },
+		});
+
+		const failure = backend.readScreen(SERIAL);
+
+		await expect(failure).rejects.toThrow(/could not get idle state/);
+		await expect(failure).rejects.toThrow(/emulator-5554/);
+		expect(argvOf()).not.toContainEqual(CAT_ARGV);
+	});
+
+	// Still removes the file it may have left behind: a stale document deleted now is one
+	// the next read cannot be served.
+	it('cleans up even on the refusal path', async () => {
+		reads({ [DUMP_ARGV.join(' ')]: DUMP_ELSEWHERE });
+
+		await expect(backend.readScreen(SERIAL)).rejects.toThrow();
+		expect(argvOf()).toContainEqual(RM_ARGV);
+	});
+
+	it('throws with the command and stderr attached when the document will not parse', async () => {
+		reads({
+			[CAT_ARGV.join(' ')]: { stdout: '<hierarchy rotation="0" />', stderr: 'cat: no such file\n' },
+		});
+
+		const failure = backend.readScreen(SERIAL);
+
+		await expect(failure).rejects.toThrow(/adb exec-out cat \/sdcard\/window_dump\.xml/);
+		await expect(failure).rejects.toThrow(/stderr: cat: no such file/);
+	});
+
+	it('removes the file even when the fetch itself failed', async () => {
+		reads({ [CAT_ARGV.join(' ')]: new Error("device 'emulator-5554' not found") });
+
+		await expect(backend.readScreen(SERIAL)).rejects.toThrow("device 'emulator-5554' not found");
+		expect(argvOf()).toContainEqual(RM_ARGV);
+	});
+
+	/**
+	 * Losing a screen the caller already paid for because the cleanup failed is worse than
+	 * leaving the file: the freshness of the *next* read is guaranteed by the confirmation
+	 * check regardless.
+	 */
+	it('does not let a failing cleanup replace an answer it already has', async () => {
+		reads({ [RM_ARGV.join(' ')]: new Error('rm: Read-only file system') });
+
+		await expect(backend.readScreen(SERIAL)).resolves.toHaveLength(75);
+	});
+
+	// The same rule the input primitives follow, for the same reason: `wm density <n>`
+	// changes under a running lease, and a remembered scale misplaces every rectangle on the
+	// screen (D6 — adb is the truth).
+	it('asks the device for its density on every call', async () => {
+		reads();
+
+		await backend.readScreen(SERIAL);
+		await backend.readScreen(SERIAL);
+
+		expect(argvOf().filter((argv) => argv[1] === 'wm')).toHaveLength(2);
+	});
+
+	it('honours an overridden density rather than the physical one', async () => {
+		reads({ 'shell wm density': DENSITY_OVERRIDE });
+
+		const [root] = await backend.readScreen(SERIAL);
+
+		// `wm density 320` on the same panel — scale 2, so every rectangle is half again as
+		// large in dp as the physical density would make it.
+		expect(root.bounds).toEqual({ x: 0, y: 0, width: 640, height: 1428 });
+	});
+
+	it('refuses to read when the density cannot be parsed, and still cleans up', async () => {
+		reads({ 'shell wm density': "Error: Can't find service: window\n" });
+
+		await expect(backend.readScreen(SERIAL)).rejects.toThrow(/wm density/);
+		expect(argvOf()).toContainEqual(RM_ARGV);
+	});
+});
+
+/**
  * The environment pair behind `canControlNetwork`. `tests/device/android/network.test.ts`
  * is the half that proves a real device accepts these two recipes at all; what is proved
  * here is the join, and above all the **argv**.

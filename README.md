@@ -119,7 +119,9 @@ way — the screen for `wait_for`, which missed on all of it, the matches that a
 `wait_until_gone` — bounded so a two-hundred-element screen is a message and not a wall, and a
 backend that does not declare `canReadScreen` is told so by name before the first poll rather than
 after a whole timeout. Both answer with the same `ActionResult` as every other action. The remaining
-verbs — `type_text`, `press_key`, `screenshot`, `read_screen` — are their own issues.
+verbs — `type_text`, `press_key`, `screenshot`, `read_screen` — are their own issues; the *reading*
+`read_screen` will expose is already there underneath them, because the Android backend answers
+`readScreen` and declares `canReadScreen`.
 
 **The daemon loads the core and runs the verbs**, and a client only asks (D19). The two waits and
 the four gestures are callable over the same connection as `acquire_device` — the same envelope,
@@ -129,9 +131,10 @@ comes back as an *answer* naming what happened — the element was not there, th
 device cannot read its screen — and never as a broken host; only the host actually breaking is an
 `internal_error`. There is no `adb` in a client process, and
 `tests/unit/no-backend-in-a-client.test.ts` walks the import graph from every client entrypoint to
-say so rather than asking politely. Against a real device today a `tap` at a coordinate runs on the
-hardware, while both waits and anything addressed by text answer `missing-capability`:
-`read_screen` is its own issue, and the manifest says so rather than pretending.
+say so rather than asking politely. Against a real device today all of it runs on the hardware: a
+`tap` at a coordinate injects, and — since the Android backend learned to read its own screen —
+a target addressed by text resolves against a hierarchy read inside the verb, both waits poll a
+real screen, and every action comes back carrying the elements that were on it afterwards.
 
 **The host can now listen on the network, and only if you ask it to** (D17, D20). Setting
 `ROVER_LISTEN_PORT` — with a host token and a TLS certificate beside it — starts a TCP+TLS
