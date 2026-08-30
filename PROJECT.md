@@ -105,7 +105,7 @@ lends what is physically attached to it (D18).
 | D21 | **Rover never starts an emulator or connects a physical device — that is the host operator's job** | The host only ever reports what `adb devices` already shows on its own machine (D6). Bringing hardware online — booting an emulator, plugging in a phone — is physical, local work done by whoever operates that machine; it is never a verb the daemon executes and never something a remote client can trigger. Rover's job starts once the device is already there | 2026-08-28 |
 | D22 | **A lease carries two more explicit, caller-supplied strings: `project` and `test_name`** | `owner` (D16) alone does not give an artifact a findable home: two projects can reuse the same owner string, and "before/after" comparisons need a way to group runs by what they were checking. `project` names which registered project a lease belongs to; `test_name` names the scenario being run and is **deliberately not required to be unique** — running "home screen before changes" and "home screen after changes" as two separate leases with the same-shaped name is the point, not an error case. Both are opaque strings the core never inspects, parses or defaults from context, exactly like `owner` (D20) | 2026-08-29 |
 | D23 | **The host durably archives every artifact-producing verb's output, additive to D19's bytes-over-the-wire return** | A screenshot handed to the agent once during a session answers "does it work right now"; it cannot answer "does it still look the way it did before the refactor" unless a copy survives on disk to diff against later. The archive (§10) is a second effect of the same verb call — it changes nothing about what the client receives, and a path into the archive is never a path handed to the agent. D19 keeps holding: artifacts still cross the machine boundary as bytes | 2026-08-29 |
-| D24 | **The artifact archive's tree shape is a deliberate, stable surface, built for a future read-only viewer, not just for a human `find`** | A screenshot returned once to whichever client asked for it (D19) cannot later answer "show me what changed" to anyone outside that one session — the archive (§10, D23) exists so it can. This decision is that the directory shape (`<project>/<test_name>/<lease-id>/<device-serial>/…`) is the contract a future web panel (`ai/WEB_PANEL.md`) would read directly off disk — no database, no rewrite of the tree the day that panel gets built. **This does not move the panel into scope now** (§7 still excludes a dashboard) — it only means the archive's shape is not free to casually change once R25 ships, because something will eventually depend on it | 2026-08-30 |
+| D24 | **The artifact archive's tree shape is a deliberate, stable surface, built for a future read-only viewer, not just for a human `find`** | A screenshot returned once to whichever client asked for it (D19) cannot later answer "show me what changed" to anyone outside that one session — the archive (§10, D23) exists so it can. This decision is that the directory shape (`<project>/<test_name>/<lease-id>/<device-serial>/…`) is the contract a future web panel (`docs/WEB_PANEL.md`) would read directly off disk — no database, no rewrite of the tree the day that panel gets built. **This does not move the panel into scope now** (§7 still excludes a dashboard) — it only means the archive's shape is not free to casually change once R25 ships, because something will eventually depend on it | 2026-08-30 |
 
 ---
 
@@ -653,7 +653,7 @@ device farms, **more than one Rover host in a single deployment** (D18, revised 
 a host catalogue, hosts registering with one another, and anything resembling a dashboard — a
 client is configured with the address of its one host and that is all. (The artifact archive in
 §10 is deliberately shaped so a future read-only viewer could be built on it without a redesign,
-D24, `ai/WEB_PANEL.md` — that viewer itself is still not being built now.) Comparison against
+D24, `docs/WEB_PANEL.md` — that viewer itself is still not being built now.) Comparison against
 design renders — Rover supplies screenshots and measurements; judging them against the design is
 the agent's job. **Starting emulators and connecting physical devices** — that belongs to whoever
 operates the host machine, not to Rover (D21).
@@ -748,7 +748,7 @@ Four rules when filing these issues:
   add the column or configure that phase away. Do not add a column nobody uses in the meantime.
 - **Retention policy for the artifact archive (§10, D23, D24).** A TTL, a size cap, and who runs
   the prune — a human operator by cron, or the daemon itself — are all still undecided. This can no
-  longer be left until disk pressure is actually observed: once a future web panel (`ai/WEB_PANEL.md`)
+  longer be left until disk pressure is actually observed: once a future web panel (`docs/WEB_PANEL.md`)
   reads this archive directly, unbounded growth is a problem from the panel's first day, not
   something to wait and see about. R25 still builds the archive with no pruning of its own — but
   the follow-up retention row is filed **once R25 ships**, ahead of any panel work, not deferred
@@ -763,7 +763,7 @@ Four rules when filing these issues:
 - **The web panel.** Not scheduled, not sized, no issue filed — CLI and MCP are the whole interface
   for now (§7). But the daemon and the archive (§10, D23, D24) are deliberately shaped so a
   read-only panel can be added later without a redesign, so the functionality it will need is being
-  written down as it comes up, in `ai/WEB_PANEL.md`. Turning any one line of it into an actual
+  written down as it comes up, in `docs/WEB_PANEL.md`. Turning any one line of it into an actual
   backlog row happens only when this section's other rows are far enough along to make room for it.
 
 ---
