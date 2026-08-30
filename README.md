@@ -54,8 +54,8 @@ code. `list` shows what is attached, what is free and who holds the rest — the
 test name, and how much longer they have — and says out loud when the host does not know its own
 view to be current, rather than quietly printing a short list. `acquire` requires an explicit
 `--owner` and `--project` and derives neither. `status` says which host answered. The host is named
-by `--host`; no flag means the local one, and `local` is the only value reachable until the network
-listener lands (`PROJECT.md` R22), so anything else fails loudly instead of hanging.
+by `--host`: no flag means the local one, `remote` is the machine `ROVER_HOST_ADDRESS`,
+`ROVER_HOST_PORT` and `ROVER_HOST_TOKEN` name, and anything else fails loudly instead of hanging.
 
 **Waiting is a condition, never a duration.** `src/core/wait.ts` is the one module in the
 repository allowed to construct a delay: `waitForCondition` polls a probe until it reports the
@@ -136,7 +136,8 @@ network host.
 over TLS to the host `ROVER_HOST_ADDRESS` and `ROVER_HOST_PORT` name, presents `ROVER_HOST_TOKEN`,
 and drives the identical method table; `--host local` and no flag are unchanged, autostart
 included. **A client never starts a remote host**: nothing listening on that port is a failure
-naming the address, the port and `ECONNREFUSED` — never an empty device list and never a hang —
+naming the address, the port and `ECONNREFUSED`, and a peer that accepts the connection and then
+says nothing is given ten seconds and then named too — never an empty device list, never a hang —
 and a token the host rejects says so, distinctly, without ever printing the token. The
 certificate is verified; a self-signed host is trusted by naming its certificate in
 `ROVER_HOST_CA`, never by turning verification off. The backlog is twenty issues in dependency
@@ -236,7 +237,12 @@ next moves: **nothing is listening there** (the address, the port and `ECONNREFU
 host is a service its operator starts, and no client will ever start one for you); **the host
 rejected `ROVER_HOST_TOKEN`** (the two machines hold different secrets — the value itself is
 never printed); and **the certificate was not trusted** (name it in `ROVER_HOST_CA`). None of
-them is ever an empty device list.
+them is ever an empty device list, and none of them ever waits: a peer that accepts the
+connection and then never completes the TLS handshake — a forwarded port whose far end is gone,
+a load balancer with no live backend — is given ten seconds and then reported as `ETIMEDOUT`,
+naming the same address and port. A certificate that verifies but does not carry
+`ROVER_HOST_ADDRESS`'s value in its `subjectAltName` is a fourth, separate message, because
+`ROVER_HOST_CA` is not what fixes it.
 
 ## Where things are
 

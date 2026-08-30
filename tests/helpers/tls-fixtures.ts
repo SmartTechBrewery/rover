@@ -38,13 +38,26 @@ export interface TestCertificate {
 	readonly certPem: string;
 }
 
+export interface TestCertificateOptions {
+	/** The subject CN. Defaults to `localhost`. */
+	readonly commonName?: string;
+	/**
+	 * The `subjectAltName` extension, verbatim. Defaults to the loopback pair every suite
+	 * connects on; override it to build the certificate that verifies and still does not name
+	 * the address, which is `ERR_TLS_CERT_ALTNAME_INVALID` rather than a trust failure.
+	 */
+	readonly subjectAltName?: string;
+}
+
 /**
  * A self-signed certificate for `localhost`/`127.0.0.1`, valid for one day.
  *
  * One day on purpose: a fixture certificate that cannot expire in a drawer is a fixture
  * nobody ever has to think about again.
  */
-export async function createTestCertificate(): Promise<TestCertificate> {
+export async function createTestCertificate(
+	options: TestCertificateOptions = {},
+): Promise<TestCertificate> {
 	const dir = await mkdtemp(join(tmpdir(), 'rover-tls-'));
 	const certPath = join(dir, 'cert.pem');
 	const keyPath = join(dir, 'key.pem');
@@ -63,9 +76,9 @@ export async function createTestCertificate(): Promise<TestCertificate> {
 			'-out',
 			certPath,
 			'-subj',
-			'/CN=localhost',
+			`/CN=${options.commonName ?? 'localhost'}`,
 			'-addext',
-			'subjectAltName=DNS:localhost,IP:127.0.0.1',
+			`subjectAltName=${options.subjectAltName ?? 'DNS:localhost,IP:127.0.0.1'}`,
 		]);
 	} catch (error) {
 		// Named explicitly so a machine without the tool reads as a missing tool rather than

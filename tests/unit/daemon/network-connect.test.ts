@@ -14,7 +14,7 @@
  * is counted for the whole file, so that is asserted as a fact rather than as an intention.
  */
 
-import { createServer as createNetServer, type Server } from 'node:net';
+import { createServer as createNetServer, type Server, type Socket } from 'node:net';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
 	_resetDeviceBackendRegistryForTesting,
@@ -23,7 +23,11 @@ import {
 import type { Device, DeviceBackend, DeviceWatch, DeviceWatcher } from '@/core/device.js';
 import { parseDeviceSerial } from '@/core/ids.js';
 import { type RunningDaemon, startDaemon } from '@/daemon/listen.js';
-import type { NetworkListenerConfig, RemoteHostConfig } from '@/daemon/network-config.js';
+import {
+	HOST_ADDRESS_ENV_VAR,
+	type NetworkListenerConfig,
+	type RemoteHostConfig,
+} from '@/daemon/network-config.js';
 import { connectToNetworkHost } from '@/daemon/network-connect.js';
 import type { IpcClient } from '@/ipc/client.js';
 import {
@@ -71,22 +75,35 @@ const WRONG_TOKEN = 'the-wrong-token-but-long-enough-1234';
 
 /**
  * Generated once for the file: a 2048-bit key costs a few hundred milliseconds and nothing
- * here mutates either of them. The second is the host nobody trusts — a certificate that is
- * perfectly valid and simply is not the one `ROVER_HOST_CA` names.
+ * here mutates any of them. The second is the host nobody trusts — a certificate that is
+ * perfectly valid and simply is not the one `ROVER_HOST_CA` names. The third is the opposite
+ * failure: trusted, and issued for a name this client is not connecting to.
  */
 let certificate: TestCertificate;
 let stranger: TestCertificate;
+let misnamed: TestCertificate;
 let temp: TempSocket;
 const running: RunningDaemon[] = [];
 const clients: IpcClient[] = [];
 const occupied: Server[] = [];
+/** Sockets a silent listener is deliberately holding open — see {@link silentListenerOn}. */
+const held: Socket[] = [];
 
 beforeAll(async () => {
-	[certificate, stranger] = await Promise.all([createTestCertificate(), createTestCertificate()]);
+	[certificate, stranger, misnamed] = await Promise.all([
+		createTestCertificate(),
+		createTestCertificate(),
+		// Trusted as its own CA below, and still wrong for `127.0.0.1`: the private-network
+		// deployment this transport was built for, with a certificate issued for a hostname.
+		createTestCertificate({
+			commonName: 'rover-host.example',
+			subjectAltName: 'DNS:rover-host.example',
+		}),
+	]);
 });
 
 afterAll(async () => {
-	await Promise.all([removeTestCertificate(certificate), removeTestCertificate(stranger)]);
+	await Promise.all([certificate, stranger, misnamed].map(removeTestCertificate));
 });
 
 beforeEach(async () => {
@@ -97,6 +114,11 @@ beforeEach(async () => {
 afterEach(async () => {
 	await Promise.all(clients.splice(0).map((client) => client.close()));
 	await Promise.all(running.splice(0).map((daemon) => daemon.close()));
+	// Before the servers, never after: `server.close()` stops accepting and then waits for the
+	// connections still open, and a socket held on purpose is one that will never close itself.
+	for (const socket of held.splice(0)) {
+		socket.destroy();
+	}
 	await Promise.all(
 		occupied
 			.splice(0)
@@ -198,14 +220,34 @@ async function freePort(): Promise<number> {
 }
 
 /**
- * A TCP listener that accepts and immediately drops, for "something is on that port and it
- * is not a Rover host". It must not merely accept and go quiet — a peer that never answers a
- * ClientHello is a handshake that waits forever, which is not a case this client can report.
+ * A TCP listener that accepts and immediately drops, for "something is on that port and it is
+ * not a Rover host" — the peer that answers the ClientHello with a reset.
+ *
+ * Its silent counterpart is {@link silentListenerOn}, which is the harder half of the same
+ * case and is covered by its own test below.
  */
 async function plainListenerOn(port: number): Promise<void> {
 	const server = createNetServer((socket) => {
 		socket.on('error', () => {});
 		socket.destroy();
+	});
+	await new Promise<void>((resolve) => server.listen(port, '127.0.0.1', resolve));
+	occupied.push(server);
+}
+
+/**
+ * A TCP listener that accepts and then says **nothing at all** — never answering the
+ * ClientHello, never closing.
+ *
+ * This is the shape a dead `ssh -L` tunnel, an L4 balancer with no live backend and a
+ * SIGSTOPped host all present. It raises no socket event of any kind, so only the client's own
+ * deadline can end it, and the socket is retained rather than left to the garbage collector so
+ * that nothing closes it early and turns this back into the easy case above.
+ */
+async function silentListenerOn(port: number): Promise<void> {
+	const server = createNetServer((socket) => {
+		socket.on('error', () => {});
+		held.push(socket);
 	});
 	await new Promise<void>((resolve) => server.listen(port, '127.0.0.1', resolve));
 	occupied.push(server);
@@ -347,6 +389,24 @@ describe('a client never starts a host (D5)', () => {
 		await expect(connectToNetworkHost(remoteConfig(port))).rejects.toThrow();
 	});
 
+	it('gives up on a peer that accepts and never answers, naming ETIMEDOUT', async () => {
+		const port = await freePort();
+		await silentListenerOn(port);
+
+		// The deadline is passed in only so this test does not wait the production ten seconds;
+		// nothing shipping supplies it. Without it there is no event on this socket at all, so
+		// the promise would stay pending forever and the CLI would sit there with no output and
+		// no exit code — the one failure a caller cannot tell apart from a slow host.
+		const attempt = connectToNetworkHost(remoteConfig(port), { connectTimeoutMs: 250 });
+
+		await expect(attempt).rejects.toThrow(`127.0.0.1:${port}`);
+		await expect(attempt).rejects.toThrow('ETIMEDOUT');
+		// Its own diagnosis, not ECONNREFUSED's: something *is* answering there, so the next
+		// step is a firewall or a dead tunnel rather than a daemon that was never started.
+		await expect(attempt).rejects.toThrow(/never completed the handshake/);
+		expect(spawned).not.toHaveBeenCalled();
+	});
+
 	it('starts nothing for a host that is on the port and is not a Rover', async () => {
 		const port = await freePort();
 		await plainListenerOn(port);
@@ -419,6 +479,24 @@ describe('the host’s certificate is verified, never waved through', () => {
 		// this client that would have let it through.
 		await expect(connectToNetworkHost(remoteConfig(port, { caPath: undefined }))).rejects.toThrow(
 			'SELF_SIGNED_CERT',
+		);
+	});
+
+	it('sends a mismatched name to the address, not to ROVER_HOST_CA', async () => {
+		const port = await startHost({ certPath: misnamed.certPath, keyPath: misnamed.keyPath });
+
+		// Trusted as its own CA, so the chain verifies and only `checkServerIdentity` fails —
+		// which is why `ROVER_HOST_CA` is the one thing that cannot fix this.
+		const attempt = connectToNetworkHost(remoteConfig(port, { caPath: misnamed.certPath }));
+
+		await expect(attempt).rejects.toThrow('ERR_TLS_CERT_ALTNAME_INVALID');
+		await expect(attempt).rejects.toThrow(HOST_ADDRESS_ENV_VAR);
+		await expect(attempt).rejects.toThrow('subjectAltName');
+		// The trust sentence would send an operator to re-do the thing they already did right.
+		await expect(attempt).rejects.toThrow(
+			expect.objectContaining({
+				message: expect.not.stringContaining('does not trust'),
+			}),
 		);
 	});
 
