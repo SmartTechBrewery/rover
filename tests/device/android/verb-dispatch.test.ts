@@ -36,11 +36,14 @@ import {
  *   capability nothing backs. When that flag flips, this suite gains the assertions it cannot
  *   make today: a wait that resolves off a real read, a tap that lands on a named button, and
  *   a timeout naming what was on screen instead.
- * - **A point-addressed `tap` does run on the hardware**, and it is the one call here that
- *   reaches the device rather than being refused before it: the verb resolves the coordinate
- *   against the real screen size, converts it, and injects. What is *not* proved is what the
- *   tap did — nothing here can read the screen back — which is why the point below is one
- *   where a tap does nothing.
+ * - **A point-addressed `tap` and a `press_key` do run on the hardware**, and they are the two
+ *   calls here that reach the device rather than being refused before it: the tap resolves the
+ *   coordinate against the real screen size, converts it, and injects; the key press addresses
+ *   no element at all, which is what makes it the one input verb this repository can prove end
+ *   to end today — it needs no screen read to aim. What is *not* proved for either is what it
+ *   did — nothing here can read the screen back — which is why the point below is one where a
+ *   tap does nothing, and why the key press below is `home`, which every device answers and
+ *   which is itself the way back to a known state.
  * - **`long_press` and `scroll` are not exercised here at all.** Neither can be told from a
  *   plain tap without watching the device: the injection succeeds either way. Both were
  *   confirmed by hand against a real device, and the threshold a long press has to clear is
@@ -62,11 +65,11 @@ const ABSENT = { by: 'text', text: 'rover-r21-absent-text' } as const;
  * A coordinate in the top-left corner of the panel, where a tap does nothing on any screen a
  * device happens to be showing.
  *
- * This suite runs against whatever is in front of it and has no verb to put the device back
- * (`press_key` is #12 phase 3), so the tap it injects has to be one that needs no putting
- * back. In dp, because that is the space `Point` is declared in — the conversion to the pixels
- * the device takes is the backend's, and asserting it is `tests/device/android/input.test.ts`'s
- * job rather than this suite's.
+ * This suite runs against whatever is in front of it, so the tap it injects has to be one that
+ * needs no putting back — `press_key 'home'` exists now, but a suite that undid one verb with
+ * another would be asserting the second one to test the first. In dp, because that is the space
+ * `Point` is declared in — the conversion to the pixels the device takes is the backend's, and
+ * asserting it is `tests/device/android/input.test.ts`'s job rather than this suite's.
  */
 const HARMLESS_POINT = { by: 'point', at: { x: 1, y: 1 } } as const;
 
@@ -216,6 +219,71 @@ describe.skipIf(!process.env.ROVER_TEST_DEVICE)('a daemon runs verbs on its own 
 		expect(answer).toMatchObject({
 			result: { after: { kind: 'unavailable', capability: 'canReadScreen' } },
 		});
+	});
+
+	it('presses a key on the device the lease names, addressing no element', async () => {
+		const client = await startHost();
+		const device = await freeDevice(client);
+		const leaseId = await lease(client, device.serial);
+
+		// `home` and not the other three: every key in the vocabulary moves the screen, this is
+		// the only one that moves it somewhere known, and it leaves the device where the next
+		// test expects it. All four are pressed against the backend directly in
+		// `tests/device/android/input.test.ts`; what is new here is the path they take.
+		const answer = await client.request('press_key', { leaseId, key: 'home' });
+
+		// The first input verb this repository proves end to end on hardware, and the reason it
+		// can be is in the `target`: a key press aims at nothing, so it needs no screen read and
+		// is not blocked behind `canReadScreen` the way every target-by-text call here is.
+		expect(answer).toMatchObject({
+			outcome: 'ok',
+			result: {
+				verb: 'press_key',
+				device: { serial: device.serial },
+				target: null,
+			},
+		});
+		// `home` changed what is on screen and this device cannot say what to — the honest
+		// answer, and the one an agent gets until #13 lands. Never an empty element list.
+		expect(answer).toMatchObject({
+			result: { after: { kind: 'unavailable', capability: 'canReadScreen' } },
+		});
+	});
+
+	it('types a string into whatever has focus, without escaping any of it', async () => {
+		const client = await startHost();
+		const device = await freeDevice(client);
+		const leaseId = await lease(client, device.serial);
+
+		// Sent with nothing focused on purpose. What is proved here is the *path* — the row, the
+		// handler, the verb, the backend's quoting, the device accepting the injection — and not
+		// what appeared on screen, which nothing here can read back (#13). PROJECT.md §6 records
+		// what each of these characters types into a focused field, checked by eye.
+		const answer = await client.request('type_text', { leaseId, text: "don't 100% a b" });
+
+		expect(answer).toMatchObject({
+			outcome: 'ok',
+			result: { verb: 'type_text', device: { serial: device.serial }, target: null },
+		});
+	});
+
+	it('answers text this device cannot type as a failure about the string', async () => {
+		const client = await startHost();
+		const device = await freeDevice(client);
+		const leaseId = await lease(client, device.serial);
+
+		const answer = await client.request('type_text', { leaseId, text: 'café 🙂' });
+
+		// A real backend refusing a real string, all the way back as data: an agent is told
+		// which characters to change rather than that the host broke. `client.request` resolved.
+		expect(answer).toMatchObject({
+			outcome: 'failed',
+			failure: { kind: 'unsupported-text', serial: device.serial, text: 'café 🙂' },
+		});
+		if (answer.outcome !== 'failed' || answer.failure.kind !== 'unsupported-text') {
+			throw new Error('the assertion above should have caught this');
+		}
+		expect(answer.failure.unsupported.join(' ')).toContain('U+00E9');
 	});
 
 	it('refuses a tap by text until the device can read its own screen', async () => {

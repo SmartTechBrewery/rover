@@ -3,11 +3,11 @@
  *
  * "This device cannot do that" and "this broke" call for opposite responses from an
  * agent, so a missing capability is its own type rather than a generic `Error`
- * (ai/CODING_STANDARDS.md "Error handling", D11). The same test admits the two below:
- * "the device went away" and "the device is not attached to this host" are each an answer
- * a caller acts on differently, and neither is a bug. Everything else in this layer
- * throws plain `Error` for a programmer or validation bug, and returns `null` for
- * not-found.
+ * (ai/CODING_STANDARDS.md "Error handling", D11). The same test admits the three below:
+ * "the device went away", "the device is not attached to this host" and "this device
+ * cannot type that string" are each an answer a caller acts on differently, and none of
+ * them is a bug. Everything else in this layer throws plain `Error` for a programmer or
+ * validation bug, and returns `null` for not-found.
  *
  * Imports from `./capabilities.js` are type-only on purpose: that module imports this
  * one for its value, so an erased edge is what keeps the pair free of a runtime cycle.
@@ -91,6 +91,48 @@ export class ForeignDeviceError extends Error {
 		);
 		this.name = 'ForeignDeviceError';
 		this.serial = serial;
+	}
+}
+
+/**
+ * Thrown when a backend can inject text but not *this* text.
+ *
+ * A near-twin of {@link MissingCapabilityError} and deliberately not the same type: the
+ * device does declare `canInput`, so "stop asking" is the wrong advice — the way out is to
+ * change the string, and only this error can say which characters to change. Nor is it a
+ * plain `Error`: `src/verbs/failure.ts` maps it, so a caller who sent a string with an
+ * emoji in it is told what the device will not take rather than that the host broke.
+ *
+ * It exists because the refusal turned out to be **ordinary rather than rare**. What a
+ * device will type is far narrower than what a caller can write — the first backend to
+ * implement this takes printable ASCII and nothing else (PROJECT.md §6) — so an accented
+ * letter, a newline or an emoji all land here, and an agent handling text it did not
+ * author will meet them.
+ *
+ * `unsupported` is the characters as readable escapes rather than the raw ones, because
+ * the whole difficulty of this failure is that the offending character is frequently
+ * invisible: a tab and four spaces look identical in a message, and a caller told "this
+ * text has a tab in it" can act while one shown the text again cannot. `text` travels
+ * whole beside it so the caller does not have to reconstruct what it sent.
+ *
+ * `reason` is the backend's own words for what it *can* take, passed in rather than
+ * written here: what is typable is a fact about a device, and this layer names no device's
+ * particulars (ai/RULES.md §2).
+ */
+export class UnsupportedTextError extends Error {
+	readonly serial: DeviceSerial;
+	readonly text: string;
+	readonly unsupported: readonly string[];
+
+	constructor(serial: DeviceSerial, text: string, unsupported: readonly string[], reason: string) {
+		super(
+			`Device '${serial}' cannot type ${JSON.stringify(text)}: ${reason}, and this carries ` +
+				`${unsupported.join(', ')} — remove or replace those characters and ask again`,
+		);
+		this.name = 'UnsupportedTextError';
+		this.serial = serial;
+		this.text = text;
+		this.unsupported = unsupported;
 	}
 }
 

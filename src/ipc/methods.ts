@@ -24,9 +24,11 @@ import { DeviceSerialSchema, LeaseIdSchema } from '../core/ids.js';
 import { ProtocolVersionSchema } from './protocol.js';
 import {
 	LongPressParamsSchema,
+	PressKeyParamsSchema,
 	ScrollParamsSchema,
 	SwipeParamsSchema,
 	TapParamsSchema,
+	TypeTextParamsSchema,
 	VerbCallResultSchema,
 	WaitForParamsSchema,
 	WaitUntilGoneParamsSchema,
@@ -36,12 +38,17 @@ export {
 	type LongPressParams,
 	LongPressParamsSchema,
 	MAX_VERB_TIMEOUT_MS,
+	type PressKeyParams,
+	PressKeyParamsSchema,
 	type ScrollParams,
 	ScrollParamsSchema,
 	type SwipeParams,
 	SwipeParamsSchema,
 	type TapParams,
 	TapParamsSchema,
+	TYPE_TEXT_MAX_LENGTH,
+	type TypeTextParams,
+	TypeTextParamsSchema,
 	type VerbCallResult,
 	VerbCallResultSchema,
 	type VerbRefusalReason,
@@ -273,10 +280,11 @@ export type ReleaseDeviceResult = z.infer<typeof ReleaseDeviceResultSchema>;
  * The names follow the verb table in PROJECT.md §4 (`list_devices`), not a camelCase
  * variant of it.
  *
- * The verb rows are the two waits and the four gestures; each further verb family is one more
- * row beside them and one more entry in `src/daemon/verb-handlers.ts`. They all answer with
- * `VerbCallResultSchema`, because "what happened on the device" is one shape whatever was
- * asked of it.
+ * The verb rows are the two waits and the six input verbs; each further verb family is one
+ * more row beside them and one more entry in `src/daemon/verb-handlers.ts`. They all answer
+ * with `VerbCallResultSchema`, because "what happened on the device" is one shape whatever was
+ * asked of it — including the two that address no element, whose answer carries a null
+ * `target` rather than a shape of their own.
  */
 export const IPC_METHODS = {
 	status: { params: StatusParamsSchema, result: StatusResultSchema },
@@ -289,6 +297,8 @@ export const IPC_METHODS = {
 	long_press: { params: LongPressParamsSchema, result: VerbCallResultSchema },
 	swipe: { params: SwipeParamsSchema, result: VerbCallResultSchema },
 	scroll: { params: ScrollParamsSchema, result: VerbCallResultSchema },
+	type_text: { params: TypeTextParamsSchema, result: VerbCallResultSchema },
+	press_key: { params: PressKeyParamsSchema, result: VerbCallResultSchema },
 } as const satisfies Record<string, IpcMethodDefinition>;
 
 export type IpcMethodName = keyof typeof IPC_METHODS;

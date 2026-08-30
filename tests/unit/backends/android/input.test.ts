@@ -5,6 +5,7 @@ import {
 	toDevicePixels,
 	toSwipeDuration,
 	typeTextSegments,
+	untypeableCharacters,
 } from '@/backends/android/input.js';
 import { DeviceKeySchema } from '@/core/device.js';
 
@@ -49,6 +50,50 @@ describe('KEY_CODES', () => {
 	it('wakes with KEYCODE_WAKEUP rather than the toggle', () => {
 		expect(KEY_CODES.wake).toBe('KEYCODE_WAKEUP');
 		expect(Object.values(KEY_CODES)).not.toContain('KEYCODE_POWER');
+	});
+});
+
+/**
+ * The two refusals, and the difference between them is why both are refused before the call
+ * rather than left to the device:
+ *
+ * - a tab or a newline is **dropped in silence** — exit 0, zero bytes, the surrounding
+ *   characters typed as if the caller never asked;
+ * - a non-ASCII character throws `NullPointerException` inside the device at exit 255 and
+ *   types nothing at all, naming no character.
+ */
+describe('untypeableCharacters', () => {
+	it.each([
+		['a tab', 'a\tb', 'U+0009'],
+		['a newline', 'a\nb', 'U+000A'],
+		['Latin beyond ASCII', 'zażółć', 'U+017C'],
+		['a non-Latin script', '日本語', 'U+65E5'],
+		['an astral-plane character', 'a🙂b', 'U+1F642'],
+	])('names the character of %s', (_what, text, codepoint) => {
+		expect(untypeableCharacters(text).join(' ')).toContain(codepoint);
+	});
+
+	// Every printable ASCII character typed verbatim in one call on API 37, so none of them is
+	// here — including the space, which is content and not formatting.
+	it.each([
+		'hello world',
+		"don't",
+		'100%',
+		'a%sb',
+		'  padded  ',
+		'',
+	])('finds nothing to refuse in %p', (text) => {
+		expect(untypeableCharacters(text)).toEqual([]);
+	});
+
+	// A paragraph of one wrong alphabet should name each letter once, not once per occurrence.
+	it('names each character once, in the order it was first seen', () => {
+		expect(untypeableCharacters('éé😀é😀')).toEqual(['U+00E9 ("é")', 'U+1F600 ("😀")']);
+	});
+
+	// The escape, not the character: a tab and four spaces are the same picture in a message.
+	it('answers escapes a human can read back rather than the characters themselves', () => {
+		expect(untypeableCharacters('a\tb')).toEqual(['U+0009 ("\\t")']);
 	});
 });
 
@@ -196,26 +241,12 @@ describe('typeTextSegments', () => {
 	});
 
 	/**
-	 * The two refusals, and the difference between them is why both are refused here rather
-	 * than left to the device:
-	 *
-	 * - a tab or a newline is **dropped in silence** — exit 0, zero bytes, the surrounding
-	 *   characters typed as if the caller never asked;
-	 * - a non-ASCII character throws `NullPointerException` inside the device at exit 255 and
-	 *   types nothing at all, naming no character.
+	 * Cutting only. What the device will not type is {@link untypeableCharacters}, below, and
+	 * `./backend.ts` asks that before it asks this — so nothing here has an opinion about a
+	 * string it is handed.
 	 */
-	it.each([
-		['a tab', 'a\tb', 'U+0009'],
-		['a newline', 'a\nb', 'U+000A'],
-		['Latin beyond ASCII', 'zażółć', 'U+017C'],
-		['a non-Latin script', '日本語', 'U+65E5'],
-		['an astral-plane character', 'a🙂b', 'U+1F642'],
-	])('refuses %s, naming the character', (_what, text, codepoint) => {
-		expect(() => typeTextSegments(text)).toThrow(codepoint);
-	});
-
-	it('names the text it refused as well as the characters', () => {
-		expect(() => typeTextSegments('café')).toThrow(/café/);
+	it('cuts a string the device would refuse, because refusing is not its job', () => {
+		expect(typeTextSegments('café')).toEqual(['café']);
 	});
 
 	/**

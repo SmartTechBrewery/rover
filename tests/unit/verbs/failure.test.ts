@@ -9,7 +9,12 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { DeviceVanishedError, MissingCapabilityError, WaitTimeoutError } from '@/core/errors.js';
+import {
+	DeviceVanishedError,
+	MissingCapabilityError,
+	UnsupportedTextError,
+	WaitTimeoutError,
+} from '@/core/errors.js';
 import { parseDeviceSerial, parsePlatformId } from '@/core/ids.js';
 import {
 	AmbiguousTargetError,
@@ -111,6 +116,43 @@ describe('a verb-layer error becomes a failure a client can branch on', () => {
 		});
 	});
 
+	it('maps text a device will not type, naming the characters rather than only the string', () => {
+		const error = new UnsupportedTextError(
+			SERIAL,
+			'café',
+			['U+00E9 ("é")'],
+			'this device only types printable ASCII',
+		);
+
+		// Not `missing-capability`: the device does take input, and the way out is a different
+		// string rather than a different device.
+		expect(failureOf(error)).toEqual({
+			kind: 'unsupported-text',
+			serial: SERIAL,
+			text: 'café',
+			unsupported: ['U+00E9 ("é")'],
+			message: error.message,
+		});
+	});
+
+	it('carries the offending characters as escapes, so an invisible one is still actionable', () => {
+		const error = new UnsupportedTextError(
+			SERIAL,
+			'a\tb',
+			['U+0009 ("\\t")'],
+			'this device only types printable ASCII',
+		);
+		const failure = failureOf(error);
+
+		if (failure.kind !== 'unsupported-text') {
+			throw new Error('the mapping above should have caught this');
+		}
+		// A tab and four spaces look identical in a message; the escape is what a caller can act
+		// on without guessing which character to strip.
+		expect(failure.unsupported).toEqual(['U+0009 ("\\t")']);
+		expect(failure.message).toContain('U+0009');
+	});
+
 	it('maps a wait that timed out, with the polls that make the elapsed time diagnosable', () => {
 		const error = new WaitTimeoutError("text containing 'Save'", 'an empty screen', 5_000, 21);
 
@@ -158,6 +200,15 @@ describe('a failure survives the trip to the agent', () => {
 			),
 		],
 		['wait-timeout', new WaitTimeoutError("element 'save'", 'an empty screen', 5_000, 21)],
+		[
+			'unsupported-text',
+			new UnsupportedTextError(
+				SERIAL,
+				'zażółć 🙂',
+				['U+017C ("ż")', 'U+1F642 ("🙂")'],
+				'only ASCII',
+			),
+		],
 	])('round-trips a %s failure through JSON and re-parses it equal', (_kind, error) => {
 		const failure = failureOf(error);
 

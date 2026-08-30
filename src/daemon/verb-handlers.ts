@@ -48,9 +48,11 @@ import type { LeaseId } from '../core/ids.js';
 import type {
 	IpcHandlers,
 	LongPressParams,
+	PressKeyParams,
 	ScrollParams,
 	SwipeParams,
 	TapParams,
+	TypeTextParams,
 	VerbCallResult,
 	WaitForParams,
 	WaitUntilGoneParams,
@@ -60,10 +62,12 @@ import { toVerbFailure } from '../verbs/failure.js';
 import {
 	type GestureOptions,
 	longPress,
+	pressKey,
 	type ScrollOptions,
 	scroll,
 	swipe,
 	tap,
+	typeText,
 } from '../verbs/input.js';
 import type { ActionResult } from '../verbs/result.js';
 import { type WaitVerbOptions, waitFor, waitUntilGone } from '../verbs/wait-for.js';
@@ -74,7 +78,14 @@ import { LeaseEndedError, type VerbCall, type VerbTraffic } from './verb-traffic
 
 export type VerbHandlers = Pick<
 	IpcHandlers,
-	'wait_for' | 'wait_until_gone' | 'tap' | 'long_press' | 'swipe' | 'scroll'
+	| 'wait_for'
+	| 'wait_until_gone'
+	| 'tap'
+	| 'long_press'
+	| 'swipe'
+	| 'scroll'
+	| 'type_text'
+	| 'press_key'
 >;
 
 /**
@@ -194,6 +205,16 @@ export function createVerbHandlers(
 					...(params.target === undefined ? {} : { target: params.target }),
 				} satisfies ScrollOptions),
 			);
+		},
+
+		// The caller's string, handed on untouched. Nothing between the wire and the backend
+		// inspects or rewrites it, which is what makes `type_text` mean what it says.
+		type_text(params: TypeTextParams): Promise<VerbCallResult> {
+			return runVerb(params.leaseId, (context) => typeText(context, params.text));
+		},
+
+		press_key(params: PressKeyParams): Promise<VerbCallResult> {
+			return runVerb(params.leaseId, (context) => pressKey(context, params.key));
 		},
 	};
 }

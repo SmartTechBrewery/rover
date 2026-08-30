@@ -28,7 +28,7 @@
 import { z } from 'zod';
 import { CapabilityIdSchema } from '../core/capabilities.js';
 import { PointSchema, ScreenElementSchema } from '../core/device.js';
-import { MissingCapabilityError, WaitTimeoutError } from '../core/errors.js';
+import { MissingCapabilityError, UnsupportedTextError, WaitTimeoutError } from '../core/errors.js';
 import { DeviceSerialSchema, PlatformIdSchema } from '../core/ids.js';
 import {
 	AmbiguousTargetError,
@@ -109,6 +109,27 @@ export const VerbFailureSchema = z.discriminatedUnion('kind', [
 		})
 		.strict(),
 	/**
+	 * The device takes text, and not this text.
+	 *
+	 * Kept apart from `missing-capability` even though both are "the device cannot", because
+	 * the two ask opposite things of the caller: that one says stop, this one says send a
+	 * different string. Named for the *text* rather than for the input capability for the
+	 * same reason — a kind called `unsupported-input` beside a `missing-capability` carrying
+	 * `canInput` would read as the same answer twice.
+	 *
+	 * `unsupported` is the offending characters as readable escapes, so a caller can act on
+	 * a tab or a zero-width space it cannot see in `text`.
+	 */
+	z
+		.object({
+			kind: z.literal('unsupported-text'),
+			serial: DeviceSerialSchema,
+			text: z.string(),
+			unsupported: z.array(z.string().min(1)).min(1),
+			message: z.string().min(1),
+		})
+		.strict(),
+	/**
 	 * The condition was still unmet at the deadline. Carries no serial: a wait is over a
 	 * condition rather than over a device, and the host names the device in the refusal's
 	 * message and in the call that asked for it.
@@ -130,7 +151,7 @@ export type VerbFailure = z.infer<typeof VerbFailureSchema>;
  * The failure `error` is, or `null` when it is not one of them — the caller then rethrows,
  * and the host reports a host failure as one.
  *
- * Adding a seventh error class to the verb layer without a branch here surfaces as that
+ * Adding an eighth error class to the verb layer without a branch here surfaces as that
  * class's own test seeing an internal error instead of an answer, which is the loud version
  * of this drifting.
  */
@@ -187,6 +208,17 @@ export function toVerbFailure(error: unknown): VerbFailure | null {
 			widthDp: error.widthDp,
 			heightDp: error.heightDp,
 			reason: error.reason,
+			message: error.message,
+		};
+	}
+	if (error instanceof UnsupportedTextError) {
+		return {
+			kind: 'unsupported-text',
+			serial: error.serial,
+			text: error.text,
+			// Copied for the reason the candidates above are: the union's own type is a mutable
+			// array and the error published a `readonly` one to whoever caught it.
+			unsupported: [...error.unsupported],
 			message: error.message,
 		};
 	}

@@ -27,6 +27,7 @@ import {
 } from '@/backends/registry.js';
 import type { Capabilities } from '@/core/capabilities.js';
 import type { Device, DeviceBackend, DeviceWatch, DeviceWatcher, Point } from '@/core/device.js';
+import { UnsupportedTextError } from '@/core/errors.js';
 import { type LeaseId, parseDeviceSerial, parseLeaseId } from '@/core/ids.js';
 import { type RunningDaemon, startDaemon } from '@/daemon/listen.js';
 import type { IpcClient } from '@/ipc/client.js';
@@ -62,6 +63,7 @@ interface HostOptions {
 	readonly describeDevice?: DeviceBackend['describeDevice'];
 	readonly readScreen?: DeviceBackend['readScreen'];
 	readonly deviceInfo?: DeviceBackend['deviceInfo'];
+	readonly typeText?: DeviceBackend['typeText'];
 	readonly capabilities?: Partial<Capabilities>;
 	readonly leaseTtlMs?: number;
 }
@@ -78,6 +80,9 @@ let reads: number;
  */
 let taps: Point[];
 let drags: Array<{ from: Point; to: Point; durationMs: number }>;
+/** Every string and every key the daemon's backend was handed, in order and unaltered. */
+let typed: string[];
+let keys: string[];
 
 /**
  * A daemon on a temp socket with one ready device behind one registered backend.
@@ -89,6 +94,8 @@ async function serve(options: HostOptions = {}): Promise<void> {
 	reads = 0;
 	taps = [];
 	drags = [];
+	typed = [];
+	keys = [];
 	const watchDevices = vi.fn<DeviceBackend['watchDevices']>((watcher: DeviceWatcher) => {
 		watcher.onDevices([attached]);
 		return { stop: vi.fn<DeviceWatch['stop']>(async () => {}) };
@@ -117,6 +124,14 @@ async function serve(options: HostOptions = {}): Promise<void> {
 			},
 			swipe: async (_serial, from, to, durationMs) => {
 				drags.push({ from, to, durationMs });
+			},
+			typeText:
+				options.typeText ??
+				(async (_serial, text) => {
+					typed.push(text);
+				}),
+			pressKey: async (_serial, key) => {
+				keys.push(key);
 			},
 		}),
 	});
@@ -237,11 +252,11 @@ describe('the daemon runs the verb against its own device', () => {
 });
 
 /**
- * The four gesture rows over the same surface, which is the claim: a verb family is a row and
+ * The six input rows over the same surface, which is the claim: a verb family is a row and
  * a handler, and nothing about the envelope, the framing or the connection changed to carry
  * these (R6, D19).
  */
-describe('the gesture rows dispatch like the waits', () => {
+describe('the input rows dispatch like the waits', () => {
 	it('taps a coordinate the client sent, and says it was one', async () => {
 		await serve();
 		const client = await connect();
@@ -351,6 +366,81 @@ describe('the gesture rows dispatch like the waits', () => {
 		// The manifest is consulted before anything is dispatched: no screen was read to reach
 		// an answer that never depended on one.
 		expect(reads).toBe(0);
+	});
+
+	it("carries a caller's string to the device byte for byte, over the wire", async () => {
+		await serve();
+		const client = await connect();
+		const leaseId = await acquire(client);
+		// The characters a layer in between would most plausibly quote, trim or escape.
+		const text = "  don't $HOME `x` 100% a%sb  ";
+
+		const answer = await client.request('type_text', { leaseId, text });
+
+		expect(answer).toMatchObject({
+			outcome: 'ok',
+			// No element was addressed, so the result says so rather than inventing one.
+			result: { verb: 'type_text', target: null, device: { serial: SERIAL } },
+		});
+		// The whole point of this row: what the client sent is what the backend was handed, and
+		// the JSON encoding in between changed nothing about it.
+		expect(typed).toEqual([text]);
+		// One read, and it is the post-state: nothing was targeted, so nothing was resolved and
+		// no screen was read to resolve it.
+		expect(reads).toBe(1);
+	});
+
+	it('answers text the device will not type as a failure about the string, not the host', async () => {
+		await serve({
+			typeText: async (serial, text) => {
+				throw new UnsupportedTextError(serial, text, ['U+00E9 ("é")'], 'only printable ASCII');
+			},
+		});
+		const client = await connect();
+		const leaseId = await acquire(client);
+
+		const answer = await client.request('type_text', { leaseId, text: 'café' });
+
+		// `internal_error` would tell an agent the host broke over a string it chose itself; this
+		// tells it which character to change. `client.request` resolved rather than rejecting.
+		expect(answer).toMatchObject({
+			outcome: 'failed',
+			failure: {
+				kind: 'unsupported-text',
+				serial: SERIAL,
+				text: 'café',
+				unsupported: ['U+00E9 ("é")'],
+			},
+		});
+	});
+
+	it('presses a key on the device the lease names, addressing no element', async () => {
+		await serve();
+		const client = await connect();
+		const leaseId = await acquire(client);
+
+		const answer = await client.request('press_key', { leaseId, key: 'home' });
+
+		expect(answer).toMatchObject({
+			outcome: 'ok',
+			result: { verb: 'press_key', target: null, device: { serial: SERIAL } },
+		});
+		expect(keys).toEqual(['home']);
+		expect(taps).toEqual([]);
+		expect(drags).toEqual([]);
+	});
+
+	it('refuses a key nobody implements at the boundary, before any handler runs', async () => {
+		await serve();
+		const client = await connect();
+		const leaseId = await acquire(client);
+
+		// An `IpcRequestError` rather than a verb answer: a key outside the shared vocabulary is
+		// a malformed call, not something that happened on a device.
+		await expect(
+			client.request('press_key', { leaseId, key: 'volume_up' } as never),
+		).rejects.toBeInstanceOf(IpcRequestError);
+		expect(keys).toEqual([]);
 	});
 
 	it('stops a gesture whose lease ended part-way, before it reaches the hardware', async () => {
