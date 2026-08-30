@@ -38,6 +38,9 @@ import { DeviceSerialSchema, PlatformIdSchema } from '../core/ids.js';
 import {
 	AmbiguousTargetError,
 	ArtifactTooLargeError,
+	FrameExtractionFailedError,
+	FrameExtractionUnavailableError,
+	FramesTooLargeError,
 	OffScreenPointError,
 	TargetNotFoundError,
 	UnaddressableElementError,
@@ -173,6 +176,70 @@ export const VerbFailureSchema = z.discriminatedUnion('kind', [
 		})
 		.strict(),
 	/**
+	 * The frames could not be extracted because the program that extracts them is not on this
+	 * host.
+	 *
+	 * **The branch that keeps an empty frame list from ever being an answer.** Without it a
+	 * host without `ffmpeg` would have two ways to reply, and both would be wrong: `frames: []`,
+	 * which reads as a recording in which nothing happened, or `internal_error`, which reads as
+	 * a broken host for a machine that is merely missing a program. `program` and `reason` are
+	 * what make it actionable — the name to install, and Node's own words for why the spawn
+	 * failed, since a program present but not executable fails here too.
+	 *
+	 * Not a `missing-capability`: that one is about a *device backend* (D11), and a host tool
+	 * says nothing about the hardware. Same answer shape, different machine, different remedy.
+	 */
+	z
+		.object({
+			kind: z.literal('frame-extraction-unavailable'),
+			serial: DeviceSerialSchema,
+			program: z.string().min(1),
+			reason: z.string().min(1),
+			message: z.string().min(1),
+		})
+		.strict(),
+	/**
+	 * The extractor ran and produced no frames — a recording it would not read, a filter it
+	 * refused, or a run that outlived its budget.
+	 *
+	 * Kept apart from the branch above because the two are fixed in different places: that one
+	 * says install a program, this one says something about *these bytes*. The exit code and the
+	 * stderr travel together because "a non-zero exit is data" (ai/CODING_STANDARDS.md) and
+	 * neither half is worth much alone, and `outcome` says how the run ended in words, since an
+	 * exit, a signal and a stream this host could not read are indistinguishable from a code.
+	 */
+	z
+		.object({
+			kind: z.literal('frame-extraction-failed'),
+			serial: DeviceSerialSchema,
+			program: z.string().min(1),
+			exitCode: z.number().int().nullable(),
+			stderr: z.string(),
+			outcome: z.string().min(1),
+			message: z.string().min(1),
+		})
+		.strict(),
+	/**
+	 * The frames were extracted and do not fit one answer beside the recording they came from.
+	 *
+	 * Its own kind rather than a shape of `artifact-too-large`, because the way out differs:
+	 * that one is a capture that will never fit, while this has two knobs — a shorter recording
+	 * or a lower `framesPerSecond` — and `frames` beside the two byte counts is what says which
+	 * is worth turning. Refused whole rather than trimmed, for the reason
+	 * `FramesTooLargeError` records: a frame list missing its middle reads as a recording in
+	 * which nothing happened between two moments that are no longer adjacent.
+	 */
+	z
+		.object({
+			kind: z.literal('frames-too-large'),
+			serial: DeviceSerialSchema,
+			frames: z.number().int().nonnegative(),
+			byteLength: z.number().int().nonnegative(),
+			maxBytes: z.number().int().positive(),
+			message: z.string().min(1),
+		})
+		.strict(),
+	/**
 	 * The condition was still unmet at the deadline. Carries no serial: a wait is over a
 	 * condition rather than over a device, and the host names the device in the refusal's
 	 * message and in the call that asked for it.
@@ -279,6 +346,36 @@ export function toVerbFailure(error: unknown): VerbFailure | null {
 			kind: 'unfinished-recording',
 			serial: error.serial,
 			byteLength: error.byteLength,
+			message: error.message,
+		};
+	}
+	if (error instanceof FrameExtractionUnavailableError) {
+		return {
+			kind: 'frame-extraction-unavailable',
+			serial: error.serial,
+			program: error.program,
+			reason: error.reason,
+			message: error.message,
+		};
+	}
+	if (error instanceof FrameExtractionFailedError) {
+		return {
+			kind: 'frame-extraction-failed',
+			serial: error.serial,
+			program: error.program,
+			exitCode: error.exitCode,
+			stderr: error.stderr,
+			outcome: error.outcome,
+			message: error.message,
+		};
+	}
+	if (error instanceof FramesTooLargeError) {
+		return {
+			kind: 'frames-too-large',
+			serial: error.serial,
+			frames: error.frames,
+			byteLength: error.byteLength,
+			maxBytes: error.maxBytes,
 			message: error.message,
 		};
 	}

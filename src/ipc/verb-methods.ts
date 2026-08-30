@@ -25,7 +25,11 @@ import { AppIdSchema, LeaseIdSchema } from '../core/ids.js';
 import { VerbFailureSchema } from '../verbs/failure.js';
 import { ScrollDirectionSchema } from '../verbs/input.js';
 import { ReadLogsResultSchema } from '../verbs/logs.js';
-import { MAX_RECORDING_MS } from '../verbs/record.js';
+import {
+	MAX_FRAMES_PER_SECOND,
+	MAX_RECORDING_MS,
+	RecordVideoResultSchema,
+} from '../verbs/record.js';
 import { type ActionResult, ActionResultSchema } from '../verbs/result.js';
 import { AbsenceTargetSchema, ScreenTargetSchema, TargetSchema } from '../verbs/target.js';
 
@@ -307,9 +311,19 @@ export type ScreenshotParams = z.infer<typeof ScreenshotParamsSchema>;
  * `IpcRequestOptions.timeoutMs` defaults to 30 s (`./client.ts`), and a call that spends
  * fifteen of them recording before it begins transferring several megabytes can reach it.
  * That is the bound at the caller's end, and this module already documents the pair.
+ *
+ * `framesPerSecond` is the second knob and the only thing phase 2 added to the call. Absent
+ * rather than defaulted for `durationMs`'s reason, and bounded by `MAX_FRAMES_PER_SECOND`
+ * imported rather than restated, for the reason {@link MAX_RECORDING_MS} is imported. Past
+ * that rate the frames stop being a sample and start being the recording again at several
+ * times its size, and a caller who wants every frame already has the recording itself. There
+ * is deliberately no frame *width* and no format here: those are one bounded default the verb
+ * owns (`FRAME_WIDTH_PX`, `src/verbs/record.ts`), not a configuration surface
+ * (ai/RULES.md §7).
  */
 export const RecordVideoParamsSchema = VerbCallBaseSchema.extend({
 	durationMs: z.number().int().positive().max(MAX_RECORDING_MS).optional(),
+	framesPerSecond: z.number().int().positive().max(MAX_FRAMES_PER_SECOND).optional(),
 }).strict();
 export type RecordVideoParams = z.infer<typeof RecordVideoParamsSchema>;
 
@@ -387,6 +401,14 @@ export type VerbCallResult = z.infer<typeof VerbCallResultSchema>;
  */
 export const ReadLogsCallResultSchema = verbCallResultOf(ReadLogsResultSchema);
 export type ReadLogsCallResult = z.infer<typeof ReadLogsCallResultSchema>;
+
+/**
+ * `record_video`, whose answer carries the frames sliced out of the recording on top of the
+ * common shape (`src/verbs/record.ts`). The recording itself is still `ActionResult.artifact`,
+ * so only one field distinguishes this from every other verb's answer.
+ */
+export const RecordVideoCallResultSchema = verbCallResultOf(RecordVideoResultSchema);
+export type RecordVideoCallResult = z.infer<typeof RecordVideoCallResultSchema>;
 
 /**
  * The two answers that mean no verb result exists — the branches every row shares whatever

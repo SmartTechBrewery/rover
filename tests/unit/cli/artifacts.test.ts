@@ -40,6 +40,24 @@ import {
 	createMockRecordingBytes,
 } from '../../helpers/factories.js';
 
+/**
+ * The CLI artifact suite verifies the bytes received from a real daemon and deliberately does
+ * not require the host's external frame decoder. Frame extraction has its own suite with a
+ * mocked process; here it only needs to supply the `frames` result field.
+ *
+ * Two frames rather than one, so a renderer that dropped the array and a renderer that kept
+ * only its first entry are told apart, and each one a different length so the document has to
+ * carry both byte lengths rather than one repeated.
+ */
+const EXTRACTED_FRAMES = [
+	Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x01]),
+	Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x02, 0x03]),
+];
+
+const extractFramesMock = vi.hoisted(() => vi.fn());
+
+vi.mock('@/daemon/frames.js', () => ({ extractFrames: extractFramesMock }));
+
 const attached = createMockDevice({ serial: parseDeviceSerial('attached-1') });
 
 /** A PNG signature and then some, so the media type sniffed off the bytes is a real one. */
@@ -109,6 +127,8 @@ beforeEach(async () => {
 	vi.stubEnv('ROVER_SOCKET_PATH', temp.socketPath);
 	logged = [];
 	errored = [];
+	extractFramesMock.mockReset();
+	extractFramesMock.mockResolvedValue(EXTRACTED_FRAMES);
 	vi.spyOn(console, 'log').mockImplementation((line: string) => logged.push(line));
 	vi.spyOn(console, 'warn').mockImplementation((line: string) => errored.push(line));
 	vi.spyOn(console, 'error').mockImplementation((line: string) => errored.push(line));
@@ -225,6 +245,64 @@ describe('rover record', () => {
 		).toBe(EXIT_OK);
 
 		expect(recordVideo.mock.calls[0]?.[1]).toEqual({ durationMs: 1500 });
+	});
+
+	it('sends --frames-per-second through to the host rather than to the device', async () => {
+		const recordVideo = vi.fn<NonNullable<DeviceBackend['recordVideo']>>(async () =>
+			createMockRecordingBytes(),
+		);
+		registerFakeBackend({ recordVideo });
+		await start();
+		const leaseId = await acquireLease();
+
+		expect(
+			await run(['record', leaseId, '--out', destination('r.mp4'), '--frames-per-second', '3']),
+		).toBe(EXIT_OK);
+
+		// The rate is the extractor's knob, not the recorder's: the device is asked for a
+		// recording and nothing else, and the sampling happens on the bytes afterwards.
+		expect(recordVideo.mock.calls[0]?.[1]).toEqual({ durationMs: DEFAULT_RECORDING_MS });
+		expect(extractFramesMock.mock.calls[0]?.[2]).toEqual({ framesPerSecond: 3 });
+	});
+
+	/**
+	 * `screenshot`'s `--json` contract, over the field this verb adds. The frames are the same
+	 * kind of payload as the recording — at the byte budget, 1.5 MiB of PNG inflating to 2 MiB
+	 * of base64 — so the mode most likely to be piped into a parser must not carry them either.
+	 *
+	 * They are *described* rather than dropped: the count and each byte length stay, because a
+	 * silently absent field would be indistinguishable from a host that extracted nothing, and
+	 * the frames are otherwise invisible to a CLI caller.
+	 */
+	it('writes one --json document naming the frames and carrying no base64 anywhere', async () => {
+		registerFakeBackend({
+			recordVideo: vi.fn<NonNullable<DeviceBackend['recordVideo']>>(async () =>
+				createMockRecordingBytes(),
+			),
+		});
+		await start();
+		const leaseId = await acquireLease();
+		const out = destination('recording.mp4');
+
+		expect(await run(['record', leaseId, '--out', out, '--json'])).toBe(EXIT_OK);
+
+		expect(logged).toHaveLength(1);
+		const document = logged[0] ?? '';
+		expect(JSON.parse(document)).toMatchObject({
+			host: 'local',
+			outcome: 'ok',
+			artifactPath: path.resolve(out),
+			result: {
+				artifact: { mediaType: 'video/mp4' },
+				frames: EXTRACTED_FRAMES.map((frame) => ({
+					mediaType: 'image/png',
+					byteLength: frame.byteLength,
+				})),
+			},
+		});
+		// Neither the recording nor the frames: the one thing `--out` plus `--json` promises is
+		// that the bytes went to the file and the document says where.
+		expect(document).not.toContain('base64');
 	});
 
 	it('exits 1 naming the device and writes nothing when the recording came off unfinished', async () => {

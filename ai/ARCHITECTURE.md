@@ -137,6 +137,16 @@ Backends are genuinely asymmetric and flattening that is the design mistake to a
   `requires: ['canRecordVideo']` for `read_screen`'s reason — the payload *is* the answer, so a
   backend without it has to fail by name before dispatch rather than answer with no recording.
 - **A system log is not one of those asymmetries**, which is why `readLogs` is a *required* method and not a capability: every platform here keeps one, and a flag that is always `true` is noise (`src/core/capabilities.ts`). What differs is the wording inside an entry — that is what the neutral `LogEntry` shape and a backend's own parser absorb.
+- **A missing *host* program is not one either, and it must not be modelled as a capability.**
+  Slicing a recording into frames needs a video decoder this project does not contain, so the host
+  drives `ffmpeg` off `PATH` (`src/daemon/frames.ts`). Capabilities describe what a device backend
+  can do; `ffmpeg` says nothing about any device, and the remedy is different in kind — install a
+  program *here*, rather than stop asking *that device*. So it is a named verb failure
+  (`frame-extraction-unavailable`) and never a `Capabilities` flag, and the honest empty-result rule
+  applies exactly as it does to a capability — with no exception left to it. A frame list on an `ok`
+  answer is **never empty**: the one case that legitimately sampled to nothing (a screen that never
+  changed) is closed inside the filter, and every other way a host produces no images is one of the
+  named `frame-extraction-…` failures.
 
 So: each backend declares its manifest, the verb layer checks before dispatching, and an unbacked verb fails with an error naming the capability and the device. A conformance suite runs once per registered manifest — see `ai/TESTING.md`.
 
@@ -276,6 +286,22 @@ Verbs live above the backends and below the adapters, and this is where determin
   Like the app verbs it requires no capability and resolves no target, and like every bounded read
   in this repository it does not follow — a tail that stays open is a wait with no condition and a
   stream over a protocol built for request and response.
+- **`recordVideo()`** (`src/verbs/record.ts`) is the second verb whose answer carries more than an
+  `ActionResult`, and it reuses `readLogs`' machinery rather than forking it:
+  `RecordVideoResultSchema` is `ActionResultSchema.extend({ frames })`, its row's answer comes out
+  of the same `verbCallResultOf()` factory, and `runVerb` was already generic. The recording rides
+  on `artifact` where `screenshot`'s capture does; the frames are the one field added. What is new
+  in shape is **where the work happens**: extracting frames needs a host program, and a program
+  started from anywhere under `src/verbs/` would be `node:child_process` in every client's module
+  graph, since `src/ipc/verb-methods.ts` imports these schemas (D19). So the verb declares a
+  `FrameExtractor` — a function from a finished recording to images — and the daemon supplies the
+  one implementation (`src/daemon/frames.ts`), exactly as it supplies `context.backend`. That is the
+  pattern to copy for the next host-side tool, and `tests/unit/no-backend-in-a-client.test.ts` walks
+  the graph from each client entrypoint so it stays a fact rather than a convention. The bounds live
+  with the verb rather than with the tool, so they hold whichever extractor was handed in — and that
+  includes the extraction *timeout*, which is a verb-layer constant even though only the daemon's
+  runner passes it to a process: `rover record`'s own request timeout has to cover every budget the
+  host spends inside one call, and a client cannot import a daemon module to read one.
 - **`readScreen()` and `deviceInfo()`** (`src/verbs/read.ts`) are the spine with the *middle* left
   out: their action is empty, because a read verb's work is the capture `performAction()` already
   performs for every verb — the screen for the after-state, the device for D14. Routing them
@@ -307,7 +333,8 @@ Verbs live above the backends and below the adapters, and this is where determin
   screen reading answers an explicit `unavailable` after-state naming the capability that would have
   answered — never an empty element list, which reads as a blank screen. `screenshot` and
   `record_video` are the two verbs whose answer is not a state the result already carries, and both
-  hang their bytes off the same nullable `artifact` field rather than growing a shape each. A read that was declared,
+  hang their bytes off the same nullable `artifact` field rather than growing a second home for
+  them — `record_video` extends the schema for its *frames* and still leaves the recording there. A read that was declared,
   attempted and rejected is the separate `failed` branch: once the action has run, an exception in
   its place would leave the agent unable to tell whether it landed, which is exactly what D12(c)
   rules out. Every shape is a Zod schema of plain data, because the host executes the verb and the

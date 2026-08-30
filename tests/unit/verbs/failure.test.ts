@@ -20,6 +20,9 @@ import { parseDeviceSerial, parsePlatformId } from '@/core/ids.js';
 import {
 	AmbiguousTargetError,
 	ArtifactTooLargeError,
+	FrameExtractionFailedError,
+	FrameExtractionUnavailableError,
+	FramesTooLargeError,
 	OffScreenPointError,
 	TargetNotFoundError,
 	UnaddressableElementError,
@@ -192,6 +195,63 @@ describe('a verb-layer error becomes a failure a client can branch on', () => {
 		});
 	});
 
+	/**
+	 * The branch that keeps an empty frame list from ever being an answer.
+	 *
+	 * Without it a host with no decoder installed has two ways to reply and both are wrong:
+	 * `frames: []`, which reads as a recording in which nothing happened, or `internal_error`,
+	 * which reads as a broken host for a machine that is merely missing a program. The program
+	 * name and the reason travel because they are the remedy.
+	 */
+	it('maps a host that cannot slice a recording, naming the program and why it would not start', () => {
+		const error = new FrameExtractionUnavailableError(SERIAL, 'ffmpeg', 'spawn ffmpeg ENOENT');
+
+		expect(failureOf(error)).toEqual({
+			kind: 'frame-extraction-unavailable',
+			serial: SERIAL,
+			program: 'ffmpeg',
+			reason: 'spawn ffmpeg ENOENT',
+			message: error.message,
+		});
+	});
+
+	// Kept apart from the branch above because the two are fixed in different places: that one
+	// says install a program, this one says something about these bytes.
+	it('maps an extractor that ran and refused, carrying its exit code and its stderr', () => {
+		const error = new FrameExtractionFailedError(
+			SERIAL,
+			'ffmpeg',
+			183,
+			'pipe:0: Invalid data found when processing input\n',
+			'exited 183',
+		);
+
+		expect(failureOf(error)).toEqual({
+			kind: 'frame-extraction-failed',
+			serial: SERIAL,
+			program: 'ffmpeg',
+			exitCode: 183,
+			stderr: 'pipe:0: Invalid data found when processing input\n',
+			outcome: 'exited 183',
+			message: error.message,
+		});
+	});
+
+	// Its own kind rather than a shape of `artifact-too-large`: that one is a capture that will
+	// never fit, this one has two knobs, and `frames` is what says which is worth turning.
+	it('maps frames over the budget, carrying the count and both byte numbers', () => {
+		const error = new FramesTooLargeError(SERIAL, 30, 3_000_000, 1_572_864);
+
+		expect(failureOf(error)).toEqual({
+			kind: 'frames-too-large',
+			serial: SERIAL,
+			frames: 30,
+			byteLength: 3_000_000,
+			maxBytes: 1_572_864,
+			message: error.message,
+		});
+	});
+
 	it('maps a wait that timed out, with the polls that make the elapsed time diagnosable', () => {
 		const error = new WaitTimeoutError("text containing 'Save'", 'an empty screen', 5_000, 21);
 
@@ -250,6 +310,15 @@ describe('a failure survives the trip to the agent', () => {
 		],
 		['artifact-too-large', new ArtifactTooLargeError(SERIAL, 9_000_000, 4_194_304)],
 		['unfinished-recording', new UnfinishedRecordingError(SERIAL, 3_232)],
+		[
+			'frame-extraction-unavailable',
+			new FrameExtractionUnavailableError(SERIAL, 'ffmpeg', 'spawn ffmpeg ENOENT'),
+		],
+		[
+			'frame-extraction-failed',
+			new FrameExtractionFailedError(SERIAL, 'ffmpeg', 183, 'invalid data', 'exited 183'),
+		],
+		['frames-too-large', new FramesTooLargeError(SERIAL, 30, 3_000_000, 1_572_864)],
 	])('round-trips a %s failure through JSON and re-parses it equal', (_kind, error) => {
 		const failure = failureOf(error);
 

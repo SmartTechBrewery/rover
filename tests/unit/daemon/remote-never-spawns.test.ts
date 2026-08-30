@@ -23,6 +23,12 @@ const ALLOWED_TO_SPAWN = [
 	// a second backend file reaching for a process has to be added here deliberately.
 	'backends/android/adb.ts',
 	'daemon/connect.ts',
+	// Slicing a recording into frames needs a decoder this tree does not contain, so the host
+	// drives one. It starts no daemon either — it runs one program over bytes already in
+	// memory — and it lives under `src/daemon/` rather than in the verb layer precisely so that
+	// this list stays true of every client: `src/ipc/verb-methods.ts` imports the verb schemas,
+	// so a spawn under `src/verbs/` would be a spawn in a CLI's module graph.
+	'daemon/frames.ts',
 ];
 
 const SRC_ROOT = fileURLToPath(new URL('../../../src', import.meta.url));

@@ -31,9 +31,9 @@
  * Every further verb family inherits that by being run through {@link runVerb} — there is
  * nothing here for a verb author to remember, which is the point.
  *
- * **{@link runVerb} is generic in what the verb answers with**, because one of them now carries
- * a payload beyond `ActionResult` (`read_logs`, and `pull_file` after it). Only the `ok` branch
- * varies: the three refusal branches are untouched by that, which is the point rather than an
+ * **{@link runVerb} is generic in what the verb answers with**, because two of them now carry
+ * a payload beyond `ActionResult` (`read_logs` and `record_video`, and `pull_file` after them).
+ * Only the `ok` branch varies: the three refusal branches are untouched by that, which is the point rather than an
  * economy — a refusal is one vocabulary whatever was asked of the device.
  *
  * **None of `./lease-handlers.ts`'s await-ordering constraint applies here**, and that is
@@ -60,6 +60,7 @@ import type {
 	ReadLogsCallResult,
 	ReadLogsParams,
 	ReadScreenParams,
+	RecordVideoCallResult,
 	RecordVideoParams,
 	ScreenshotParams,
 	ScrollParams,
@@ -91,6 +92,7 @@ import { deviceInfo, readScreen, screenshot } from '../verbs/read.js';
 import { type RecordVideoVerbOptions, recordVideo } from '../verbs/record.js';
 import type { ActionResult } from '../verbs/result.js';
 import { type WaitVerbOptions, waitFor, waitUntilGone } from '../verbs/wait-for.js';
+import { extractFrames } from './frames.js';
 import type { DeviceInventory } from './inventory.js';
 import { refusalReasonFor } from './lease-handlers.js';
 import type { Lease, LeaseStore } from './leases.js';
@@ -286,11 +288,13 @@ export function createVerbHandlers(
 			return runVerb(params.leaseId, (context) => readLogs(context, logOptions(params)));
 		},
 
-		// The recording row. Its answer is an ordinary `VerbCallResult` — the recording rides on
-		// `ActionResult.artifact` the way `screenshot`'s capture does — and its
-		// `requires: ['canRecordVideo']` is what makes a backend that cannot record say so by
-		// name instead of answering with a null artifact that reads like a success (D11).
-		record_video(params: RecordVideoParams): Promise<VerbCallResult> {
+		// The recording row — the second whose answer carries a payload of its own, and for the
+		// same reason it goes through the same preamble: `runVerb` is generic in the
+		// `ActionResult` subtype. The recording still rides on `ActionResult.artifact` the way
+		// `screenshot`'s capture does, and what widened the `ok` branch is the frames beside it.
+		// Its `requires: ['canRecordVideo']` is what makes a backend that cannot record say so
+		// by name instead of answering with a null artifact that reads like a success (D11).
+		record_video(params: RecordVideoParams): Promise<RecordVideoCallResult> {
 			return runVerb(params.leaseId, (context) => recordVideo(context, recordOptions(params)));
 		},
 
@@ -379,13 +383,25 @@ function logOptions(params: { readonly maxEntries?: number }): ReadLogsVerbOptio
 }
 
 /**
- * The one recording knob a call may carry, omitted rather than passed as `undefined` for the
- * reason {@link waitOptions}, {@link gestureOptions} and {@link logOptions} omit theirs: the
- * verb's own default is what a caller who said nothing asked for, and the host must not be
- * the second place that number is decided.
+ * The two recording knobs a call may carry — each omitted rather than passed as `undefined` for
+ * the reason {@link waitOptions}, {@link gestureOptions} and {@link logOptions} omit theirs:
+ * the verb's own default is what a caller who said nothing asked for, and the host must not be
+ * the second place either number is decided — plus the one thing on a verb's options that is
+ * not a caller's at all.
  */
-function recordOptions(params: { readonly durationMs?: number }): RecordVideoVerbOptions {
-	return params.durationMs === undefined ? {} : { durationMs: params.durationMs };
+function recordOptions(params: {
+	readonly durationMs?: number;
+	readonly framesPerSecond?: number;
+}): RecordVideoVerbOptions {
+	return {
+		// The host half of the call, and the only verb option that is not a caller's number:
+		// the verb layer names the shape and the daemon resolves the implementation, exactly as
+		// it resolves the backend, because the implementation starts a process and nothing under
+		// `src/verbs/` may (`./frames.ts`).
+		extractFrames,
+		...(params.durationMs === undefined ? {} : { durationMs: params.durationMs }),
+		...(params.framesPerSecond === undefined ? {} : { framesPerSecond: params.framesPerSecond }),
+	};
 }
 
 /** The error's own words: it already names the device and says what happened to it. */

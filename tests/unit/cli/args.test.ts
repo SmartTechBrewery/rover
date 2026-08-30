@@ -13,7 +13,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { LOCAL_HOST, REMOTE_HOST, resolveHost } from '@/cli/_shared/host.js';
 import { EXIT_OK, EXIT_USAGE, run } from '@/cli/index.js';
 import { ATTRIBUTION_MAX_LENGTH, AttributionStringSchema } from '@/ipc/methods.js';
-import { MAX_RECORDING_MS } from '@/verbs/record.js';
+import { MAX_FRAMES_PER_SECOND, MAX_RECORDING_MS } from '@/verbs/record.js';
 import {
 	connectWithoutStarting,
 	createTempSocket,
@@ -217,7 +217,7 @@ describe('rover acquire, on its required attribution', () => {
 	});
 });
 
-describe('rover screenshot and rover record, on --out and --duration-ms', () => {
+describe('rover screenshot and rover record, on --out, --duration-ms and --frames-per-second', () => {
 	// Every case in here has to be decided before a connection, like the rest of this file:
 	// a capture spends a lease-renewing round trip and several megabytes, and reporting a
 	// mistyped flag afterwards would spend all of it to say something knowable up front.
@@ -261,6 +261,32 @@ describe('rover screenshot and rover record, on --out and --duration-ms', () => 
 		).toBe(EXIT_USAGE);
 
 		expect(errored.join('\n')).toContain(`${MAX_RECORDING_MS} ms`);
+	});
+
+	it('exits 2 for a --frames-per-second that is not a whole number of frames', async () => {
+		expect(
+			await run(['record', 'lease-1', '--out', 'out.mp4', '--frames-per-second', 'lots']),
+		).toBe(EXIT_USAGE);
+
+		expect(errored.join('\n')).toContain('--frames-per-second');
+	});
+
+	it('exits 2 for a --frames-per-second past the densest sampling, naming the bound', async () => {
+		// `--duration-ms`'s reasoning, applied to the verb's second knob: the rate is bounded on
+		// the wire too, but reaching that costs a connection, a lease renewal and a round trip to
+		// be told at exit 1 what this end already knew.
+		expect(
+			await run([
+				'record',
+				'lease-1',
+				'--out',
+				'out.mp4',
+				'--frames-per-second',
+				String(MAX_FRAMES_PER_SECOND + 1),
+			]),
+		).toBe(EXIT_USAGE);
+
+		expect(errored.join('\n')).toContain(String(MAX_FRAMES_PER_SECOND));
 	});
 
 	it('exits 2 for a screenshot flag that does not exist', async () => {

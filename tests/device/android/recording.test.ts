@@ -4,6 +4,15 @@ import { describe, expect, it } from 'vitest';
 import { AndroidDeviceBackend } from '@/backends/android/backend.js';
 import { isFinishedRecording } from '@/backends/android/parsers/screenrecord.js';
 import type { Device } from '@/core/device.js';
+import { extractFrames } from '@/daemon/frames.js';
+import { FrameExtractionFailedError } from '@/verbs/errors.js';
+import {
+	FRAME_WIDTH_PX,
+	MAX_FRAMES,
+	MAX_FRAMES_BYTES,
+	MAX_FRAMES_PER_SECOND,
+	MAX_RECORDING_MS,
+} from '@/verbs/record.js';
 
 /**
  * `screenrecord` against a real attached device. Skips rather than fails when there is none
@@ -26,6 +35,14 @@ import type { Device } from '@/core/device.js';
  * this suite has not been converted onto it. `./verb-dispatch.test.ts` records through a
  * lease, and that is where the wire-level claim lives.
  *
+ * **The frame extraction is here too, and it is the only place it can be checked** (#82).
+ * Everything the unit suites assert about it is asserted over a mocked process, which cannot
+ * say whether a real decoder reads a real recording off a pipe at all. It can: a recorder on
+ * this platform writes its index box *before* the payload, so the whole file is decodable
+ * from a stream with no host temp file anywhere (PROJECT.md §6). Those cases gate on
+ * `ROVER_TEST_FRAME_EXTRACTION` and the run **says so loudly** when the program is missing
+ * (`tests/device/setup.ts`) rather than passing in silence.
+ *
  * Nothing below hardcodes a size, a model or a byte count off one device — every assertion
  * is a property of whatever is attached.
  */
@@ -37,6 +54,9 @@ const RECORDING_PATH = '/sdcard/rover-recording.mp4';
 
 /** A short recording: long enough to have a payload, short enough for a suite to wait on. */
 const DURATION_MS = 2_000;
+
+/** The sampling rate the frame cases ask for — named, so the count assertion can use it. */
+const FRAMES_PER_SECOND = 2;
 
 const backend = new AndroidDeviceBackend();
 
@@ -98,3 +118,123 @@ describe.skipIf(!process.env.ROVER_TEST_DEVICE)('record_video against a real dev
 		expect(isFinishedRecording(second)).toBe(true);
 	}, 120_000);
 });
+
+/**
+ * The extraction against a real recording off a real device — the half no mock can assert.
+ *
+ * Gated on the host having the decoder, and the run says so loudly when it does not
+ * (`tests/device/setup.ts`), because a case that quietly does not run reads as one that
+ * passed (ai/RULES.md §6).
+ */
+describe.skipIf(!process.env.ROVER_TEST_DEVICE || !process.env.ROVER_TEST_FRAME_EXTRACTION)(
+	'slicing a real recording into frames',
+	() => {
+		/**
+		 * The headline criterion of phase 2, and three claims a mocked process cannot make: that a
+		 * real decoder reads this platform's recording **off a pipe**, that what it writes back
+		 * splits into whole images, and that they are the size this host asked for.
+		 */
+		it('answers with frames a reader would accept, at the width it asked for', async () => {
+			const device = await firstUsableDevice();
+			const recording = await backend.recordVideo(device.serial, { durationMs: DURATION_MS });
+
+			const frames = await extractFrames(device.serial, recording, {
+				framesPerSecond: FRAMES_PER_SECOND,
+			});
+
+			// Never empty: a recording of a screen that never moved still has one sample in it, and
+			// an empty list is what this whole phase exists to make impossible (ai/RULES.md §2).
+			expect(frames.length).toBeGreaterThan(0);
+			// The ceiling is `MAX_FRAMES` and **not** the rate times the duration, which was
+			// measured and is not a bound at all: `screenrecord` gives a still screen a container
+			// duration far longer than the capture was asked for — 27.61 s for a 15 s recording on
+			// an API 35 emulator (PROJECT.md §6) — and `fps` samples the timeline the container
+			// declares. Asserting the product here would be asserting a device's timing.
+			expect(frames.length).toBeLessThanOrEqual(MAX_FRAMES);
+
+			for (const frame of frames) {
+				expect(isPng(frame)).toBe(true);
+				expect(ihdrWidth(frame)).toBe(FRAME_WIDTH_PX);
+			}
+			// And the whole set fits one answer, which is what the bound is for.
+			expect(frames.reduce((total, frame) => total + frame.byteLength, 0)).toBeLessThanOrEqual(
+				MAX_FRAMES_BYTES,
+			);
+		}, 90_000);
+
+		/**
+		 * The count bound, at the two values most likely to reach it — and the only place a real
+		 * decoder can be asked whether it reaches it at all.
+		 *
+		 * `-frames:v` at the bound itself would make ffmpeg stop writing and exit **0**, which is
+		 * a frame list cut short that nothing downstream can tell from a complete one. So the
+		 * decoder is asked for one frame *more* than the bound, and either answer here is a pass:
+		 * a count within the bound, or the named failure. What may never happen is the third
+		 * thing — an `ok` answer that stopped exactly where the decoder was told to.
+		 *
+		 * On the emulator this was measured against, it is the refusing branch: a fifteen-second
+		 * capture of a mostly-still screen declares a 27.61 s timeline (PROJECT.md §6), and four
+		 * frames a second over that is roughly a hundred slots.
+		 */
+		it('refuses by name rather than answering with a list that stopped at the cap', async () => {
+			const device = await firstUsableDevice();
+			const recording = await backend.recordVideo(device.serial, {
+				durationMs: MAX_RECORDING_MS,
+			});
+
+			const answer: Uint8Array[] | Error = await extractFrames(device.serial, recording, {
+				framesPerSecond: MAX_FRAMES_PER_SECOND,
+			}).catch((error: Error) => error);
+
+			if (answer instanceof Error) {
+				expect(answer).toBeInstanceOf(FrameExtractionFailedError);
+				expect(answer.message).toContain(`more than the ${MAX_FRAMES} frames`);
+				// And it says which way out, because the pair of numbers alone does not.
+				expect(answer.message).toContain('Record for less time');
+				return;
+			}
+			expect(answer.length).toBeGreaterThan(0);
+			expect(answer.length).toBeLessThanOrEqual(MAX_FRAMES);
+		}, 120_000);
+
+		// The rate is honoured rather than merely accepted: half the sampling over the same
+		// recording is fewer frames, which is the one thing a fixed-rate extractor would fail.
+		it('samples at the rate it was asked for', async () => {
+			const device = await firstUsableDevice();
+			const recording = await backend.recordVideo(device.serial, { durationMs: DURATION_MS });
+
+			const dense = await extractFrames(device.serial, recording, { framesPerSecond: 4 });
+			const sparse = await extractFrames(device.serial, recording, { framesPerSecond: 1 });
+
+			expect(sparse.length).toBeLessThanOrEqual(dense.length);
+			expect(sparse.length).toBeGreaterThan(0);
+		}, 120_000);
+
+		// No host temp file, so nothing to clean up and no path that could reach an answer (D19).
+		// The one thing a file-based extractor would leave behind is a file, and the recording's own
+		// scratch path is the only one this repository ever writes.
+		it('leaves nothing on the device behind either', async () => {
+			const device = await firstUsableDevice();
+			const recording = await backend.recordVideo(device.serial, { durationMs: DURATION_MS });
+
+			await extractFrames(device.serial, recording, { framesPerSecond: FRAMES_PER_SECOND });
+
+			expect(await listScratchFile(device.serial)).toMatch(/No such file or directory/);
+		}, 90_000);
+	},
+);
+
+/** The eight bytes every PNG starts with (PNG 1.2 §3.1), read rather than assumed. */
+function isPng(bytes: Uint8Array): boolean {
+	return [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a].every(
+		(byte, index) => bytes[index] === byte,
+	);
+}
+
+/**
+ * The width in a PNG's `IHDR`, which is the first chunk and always at the same offset: the
+ * signature (8), the chunk length and type (8), then `width:uint32` (PNG 1.2 §4.1.1).
+ */
+function ihdrWidth(bytes: Uint8Array): number {
+	return new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength).getUint32(16);
+}

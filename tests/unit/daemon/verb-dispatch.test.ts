@@ -18,6 +18,12 @@
  * Nothing here sleeps. Where a test needs a wait to have actually taken time it asks a verb
  * to poll to its own deadline, which is the wait vocabulary doing what it is for; everywhere
  * else `timeoutMs: 0` makes a wait exactly one screen read (`src/core/wait.ts`).
+ *
+ * One host-side tool is mocked, and only one: the frame extractor `record_video` is handed
+ * (`src/daemon/frames.ts`). It drives a program that may not be installed, and its own suite
+ * covers the argv, the failures and the split against a mocked process — what this file is
+ * about is whether the frames it produced reach a client over the real framing, which needs a
+ * decoder no more than a `tap` needs a finger.
  */
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -41,7 +47,12 @@ import type { IpcClient } from '@/ipc/client.js';
 import { IpcRequestError } from '@/ipc/protocol.js';
 import { LONG_PRESS_DURATION_MS } from '@/verbs/input.js';
 import { DEFAULT_MAX_LOG_ENTRIES } from '@/verbs/logs.js';
-import { DEFAULT_RECORDING_MS, MAX_RECORDING_MS } from '@/verbs/record.js';
+import {
+	DEFAULT_FRAMES_PER_SECOND,
+	DEFAULT_RECORDING_MS,
+	MAX_FRAMES_PER_SECOND,
+	MAX_RECORDING_MS,
+} from '@/verbs/record.js';
 import { MAX_ARTIFACT_BYTES } from '@/verbs/result.js';
 import {
 	connectWithoutStarting,
@@ -59,6 +70,33 @@ import {
 	createMockScreenElement,
 } from '../../helpers/factories.js';
 import { createGate, drainEventLoop } from '../../helpers/timing.js';
+
+/**
+ * The frames the daemon's host tool answers with, and what it was asked to slice.
+ *
+ * Declared through `vi.hoisted` so the module factory can close over it, the shape
+ * `tests/unit/backends/android/adb.test.ts` established.
+ */
+const { frameCalls, FRAMES } = vi.hoisted(() => ({
+	frameCalls: [] as Array<{ recording: Uint8Array; framesPerSecond: number }>,
+	FRAMES: [
+		// Two PNGs, distinguishable byte for byte, so an answer that lost or reordered them
+		// fails the comparison rather than merely having the right length.
+		Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x01, 0x02, 0x03]),
+		Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0xfe, 0xff, 0x7f]),
+	],
+}));
+
+vi.mock('@/daemon/frames.js', () => ({
+	extractFrames: async (
+		_serial: DeviceSerial,
+		recording: Uint8Array,
+		options: { framesPerSecond: number },
+	) => {
+		frameCalls.push({ recording, framesPerSecond: options.framesPerSecond });
+		return FRAMES;
+	},
+}));
 
 const SERIAL = parseDeviceSerial('attached-1');
 const attached = createMockDevice({ serial: SERIAL });
@@ -165,6 +203,7 @@ async function serve(options: HostOptions = {}): Promise<void> {
 	appCalls = [];
 	logReads = [];
 	recordings = [];
+	frameCalls.length = 0;
 	radioCalls = [];
 	const watchDevices = vi.fn<DeviceBackend['watchDevices']>((watcher: DeviceWatcher) => {
 		watcher.onDevices([attached]);
@@ -1009,6 +1048,63 @@ describe('the recording row carries its payload on the artifact', () => {
 		expect(Object.keys(artifact).sort()).toEqual(['base64', 'byteLength', 'mediaType']);
 		// The serial came off the lease on the host, and the duration off the verb's own default.
 		expect(recordings).toEqual([{ serial: SERIAL, durationMs: DEFAULT_RECORDING_MS }]);
+	});
+
+	/**
+	 * The frames over the real framing, for the reason the recording above needs a socket:
+	 * `JSON.stringify` turns a `Uint8Array` into an object of numeric keys, and a list of ten
+	 * of those still looks like a list of frames until a client tries to decode one.
+	 */
+	it('answers with the frames beside the recording, in order and intact after the round trip', async () => {
+		await serve();
+		const client = await connect();
+		const leaseId = await acquire(client);
+
+		const answer = await client.request('record_video', { leaseId });
+
+		if (answer.outcome !== 'ok') throw new Error('the recording row refused');
+		expect(answer.result.frames.map((frame) => frame.mediaType)).toEqual([
+			'image/png',
+			'image/png',
+		]);
+		expect(
+			answer.result.frames.map((frame) => new Uint8Array(Buffer.from(frame.base64, 'base64'))),
+		).toEqual(FRAMES);
+		// Three fields on every frame, and none of them a place on the host's disk (D19).
+		for (const frame of answer.result.frames) {
+			expect(Object.keys(frame).sort()).toEqual(['base64', 'byteLength', 'mediaType']);
+		}
+		// Sliced from the recording the host pulled, at the verb's own rate — one pass over the
+		// device, and no second number decided by the daemon.
+		expect(frameCalls).toEqual([
+			{ recording: RECORDING, framesPerSecond: DEFAULT_FRAMES_PER_SECOND },
+		]);
+	});
+
+	it('passes a rate the caller did send, and never a default of its own', async () => {
+		await serve();
+		const client = await connect();
+		const leaseId = await acquire(client);
+
+		await client.request('record_video', { leaseId, framesPerSecond: 1 });
+
+		expect(frameCalls.map((call) => call.framesPerSecond)).toEqual([1]);
+	});
+
+	it('refuses a sampling rate past what one answer can carry, at the boundary', async () => {
+		await serve();
+		const client = await connect();
+		const leaseId = await acquire(client);
+
+		const thrown = await client
+			.request('record_video', { leaseId, framesPerSecond: MAX_FRAMES_PER_SECOND + 1 })
+			.catch((error: unknown) => error);
+
+		// `invalid_params` rather than a host that records, slices and then refuses the answer
+		// for being too big — the bound is knowable before anything runs.
+		expect(thrown).toBeInstanceOf(IpcRequestError);
+		expect((thrown as IpcRequestError).code).toBe('invalid_params');
+		expect(recordings).toEqual([]);
 	});
 
 	it('passes a duration the caller did send, and never a default of its own', async () => {

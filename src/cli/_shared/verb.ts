@@ -12,6 +12,7 @@
  */
 
 import type { VerbCallRefusal, VerbCallResult } from '../../ipc/methods.js';
+import type { RecordVideoResult } from '../../verbs/record.js';
 import type { Artifact } from '../../verbs/result.js';
 import { EXIT_FAILED, EXIT_OK } from './exit.js';
 import * as out from './output.js';
@@ -70,7 +71,23 @@ export function requireArtifact(result: VerbCallOk['result'], verb: string): Art
 }
 
 /**
- * The `ok` answer with the base64 payload dropped and everything else — the media type, the
+ * Every `ok` result this renderer may be handed — the common shape, plus the one verb whose
+ * answer carries a **second** set of artifacts.
+ *
+ * Written as a union rather than reached for with a cast so the `in` check below narrows
+ * instead of asserting: when a third verb extends `ActionResult` with bytes of its own, adding
+ * it here is what makes the compiler point at {@link describeWithoutBytes} rather than letting
+ * the new field arrive on stdout unnoticed.
+ */
+type RenderableResult = VerbCallOk['result'] | RecordVideoResult;
+
+/** One artifact as the `--json` document describes it: what it is and how big, never bytes. */
+function withoutBytes(artifact: Artifact): { mediaType: string; byteLength: number } {
+	return { mediaType: artifact.mediaType, byteLength: artifact.byteLength };
+}
+
+/**
+ * The `ok` answer with every base64 payload dropped and everything else — the media type, the
  * byte length, the device, the after-state — left exactly where the host put it.
  *
  * **A rendering decision the CLI owns; the protocol's shape is untouched.** By the time this
@@ -79,17 +96,29 @@ export function requireArtifact(result: VerbCallOk['result'], verb: string): Art
  * mode most likely to be piped into a parser. The two fields kept are named rather than
  * deleted around, so a field added to `ArtifactSchema` later has to be considered here
  * instead of silently arriving on stdout.
+ *
+ * **`record_video`'s frames go through the same treatment**, because they are the same kind of
+ * payload on the same answer: at the byte budget they are 1.5 MiB of PNG that base64-encodes
+ * to 2 MiB, and the mode that must not carry the recording must not carry them either. They
+ * are *described* rather than deleted — the array stays, one `{ mediaType, byteLength }` per
+ * frame — so the document still says how many were extracted and how large each one is. A
+ * `--json` caller cannot read the frames from the CLI at all today (writing them to disk is
+ * R14's follow-up), and a silently absent field would be indistinguishable from a host that
+ * extracted nothing.
  */
 export function describeWithoutBytes(answer: VerbCallOk): object {
-	const { artifact } = answer.result;
+	return { ...answer, result: describeResultWithoutBytes(answer.result) };
+}
+
+/**
+ * The result half of {@link describeWithoutBytes}, taken as a parameter of the union type so
+ * the `in` check below is a narrowing rather than a widening of `ActionResult`.
+ */
+function describeResultWithoutBytes(result: RenderableResult): object {
+	const { artifact } = result;
 	return {
-		...answer,
-		result: {
-			...answer.result,
-			artifact:
-				artifact === null
-					? null
-					: { mediaType: artifact.mediaType, byteLength: artifact.byteLength },
-		},
+		...result,
+		artifact: artifact === null ? null : withoutBytes(artifact),
+		...('frames' in result ? { frames: result.frames.map(withoutBytes) } : {}),
 	};
 }
