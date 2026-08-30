@@ -29,6 +29,7 @@ import { pause } from '../core/wait.js';
 import type { IpcHandlers } from '../ipc/methods.js';
 import type { IpcServer } from '../ipc/server.js';
 import { createIpcServer } from '../ipc/server.js';
+import { type ArtifactArchive, createArtifactArchive } from './archive.js';
 import { createDeviceInventory, type DeviceInventory } from './inventory.js';
 import { createLeaseHandlers } from './lease-handlers.js';
 import { createLeaseStore, type LeaseStore } from './leases.js';
@@ -125,6 +126,15 @@ export interface StartDaemonOptions {
 	 * port because the developer happened to export `ROVER_LISTEN_PORT` in that shell.
 	 */
 	readonly network?: NetworkListenerConfig;
+	/**
+	 * Where the durable artifact archive writes (D23, `./archive.ts`).
+	 *
+	 * **Required**, and resolved from the environment by `./main.ts` rather than here, for the
+	 * reason {@link StartDaemonOptions.network} is: a `startDaemon()` in a unit test must not
+	 * write into the developer's own `~/.rover/artifacts` because of a variable in their shell
+	 * — or, with a default here, because nobody thought to override one.
+	 */
+	readonly artifactsRoot: string;
 }
 
 /** The daemon this process owns. Only the winner of the bind gets one. */
@@ -160,12 +170,13 @@ export function createDaemonHandlers(
 	leases: LeaseStore,
 	restorer: DeviceRestorer,
 	traffic: VerbTraffic,
+	archive: ArtifactArchive,
 ): IpcHandlers {
 	return {
 		status: handleStatus,
 		...createListDevicesHandler(inventory, leases),
 		...createLeaseHandlers(inventory, leases, restorer),
-		...createVerbHandlers(inventory, leases, traffic),
+		...createVerbHandlers(inventory, leases, traffic, archive),
 	};
 }
 
@@ -198,6 +209,10 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartRes
 		inventory,
 		settleTraffic: (serial) => traffic.settle(serial),
 	});
+	// Built before the store for the restorer's reason: the store's end hook calls into it. It
+	// creates no directory until a verb call actually produces bytes, so a loser of the bind
+	// leaves nothing behind here either — not even an empty root.
+	const archive = createArtifactArchive({ root: options.artifactsRoot });
 	// Built here for the same reason and with the same lifecycle: one store per process,
 	// constructed once for both bind attempts. It starts nothing, so a loser leaves nothing
 	// behind, and a lease is host state that dies with the host by design (D6) — nothing
@@ -217,13 +232,19 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartRes
 		onLeaseEnded: (lease, reason) => {
 			traffic.stop(lease);
 			restorer.restore(lease, reason);
+			// Last, so it cannot delay either of the two above, and third rather than folded into
+			// them because it undoes nothing on the device: it drops this lease's sequence
+			// counters so the daemon does not grow with the number of leases it has granted.
+			archive.forget(lease);
 		},
 	});
 	// Built once, for **both** transports. Not once per bind attempt and not once per
 	// listener: one method table and one dispatcher is what makes the network listener an
 	// added transport rather than a second implementation of the surface (D17). It holds no
 	// resources of its own, so a loser of the bind leaves nothing behind here either.
-	const ipcServer = createIpcServer(createDaemonHandlers(inventory, leases, restorer, traffic));
+	const ipcServer = createIpcServer(
+		createDaemonHandlers(inventory, leases, restorer, traffic, archive),
+	);
 
 	const parts: DaemonParts = {
 		ipcServer,

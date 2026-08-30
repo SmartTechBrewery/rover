@@ -129,6 +129,7 @@ async function startHostAndPointAtIt(): Promise<RunningDaemon> {
 	registerFakeBackend();
 	const daemon = await startDaemon({
 		socketPath: temp.socketPath,
+		artifactsRoot: temp.artifactsRoot,
 		network: {
 			address: '127.0.0.1',
 			port: 0,

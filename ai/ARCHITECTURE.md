@@ -370,6 +370,17 @@ the process with a registry.
   restoration a lease's end starts waits for those calls to unwind first, and `acquire_device`
   inherits that wait through `DeviceRestorer.settle`. Without both, the host itself becomes the
   second driver of a device it has already lent to somebody else.
+- **A call that produced bytes has a second effect: the archive** (D23, `PROJECT.md` §10). Every
+  `ok` answer from a `screenshot`, a `record_video` or a `read_logs` is also written into the
+  host's own durable tree — `src/daemon/archive.ts`, wired into the same preamble. It is
+  **additive, never substitutive**: the bytes still go back to the client exactly as R24 settled,
+  and no archive path is ever put on an answer. That last part is structural rather than
+  disciplined — `src/ipc/server.ts` parses every handler's answer against that row's `.strict()`
+  result schema, so a path on a result is `invalid_result` before it leaves the host. It cannot
+  fail the call either: `ArtifactArchive.record` never throws, so an unwritable root is a warning
+  on the host and an unchanged answer to the agent. It lives in the daemon for `src/daemon/frames.ts`'s
+  reason — the verb layer is in every client's module graph, and host filesystem work under it
+  would be host behaviour inside a CLI (D19).
 - **A shared preamble, one row per verb.** `createVerbHandlers` does the renew / register /
   re-verify / resolve work once, so each further verb family is one `IPC_METHODS` row and one
   `runVerb` call rather than another copy of it — and inherits the rule above by construction rather

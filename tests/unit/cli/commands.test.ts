@@ -62,7 +62,10 @@ function registerFakeBackend(options: { interrupted?: boolean } = {}): void {
 }
 
 async function start(): Promise<void> {
-	const result = await startDaemon({ socketPath: temp.socketPath });
+	const result = await startDaemon({
+		socketPath: temp.socketPath,
+		artifactsRoot: temp.artifactsRoot,
+	});
 	if (!result.started) {
 		throw new Error('Another daemon holds the temp socket — the test cannot proceed');
 	}
