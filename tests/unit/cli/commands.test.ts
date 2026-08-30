@@ -11,6 +11,8 @@
  * nobody in `src/cli/` named.
  */
 
+import { writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
 	_resetDeviceBackendRegistryForTesting,
@@ -20,6 +22,7 @@ import { EXIT_FAILED, EXIT_OK, run } from '@/cli/index.js';
 import type { DeviceBackend, DeviceWatch, DeviceWatcher } from '@/core/device.js';
 import { parseDeviceSerial } from '@/core/ids.js';
 import { type RunningDaemon, startDaemon } from '@/daemon/listen.js';
+import { PROJECT_FILE_ENV_VAR } from '@/daemon/project-hooks.js';
 import {
 	createTempSocket,
 	removeTempSocket,
@@ -76,6 +79,9 @@ async function start(): Promise<void> {
 beforeEach(async () => {
 	temp = await createTempSocket();
 	vi.stubEnv('ROVER_SOCKET_PATH', temp.socketPath);
+	// Stubbed empty for every test so a developer's own exported hook file cannot decide what
+	// a lease taken in here is attributed to.
+	vi.stubEnv(PROJECT_FILE_ENV_VAR, '');
 	logged = [];
 	errored = [];
 	vi.spyOn(console, 'log').mockImplementation((line: string) => logged.push(line));
@@ -185,6 +191,57 @@ describe('acquire, list, release', () => {
 		logged = [];
 		expect(await run(['list'])).toBe(EXIT_OK);
 		expect(logged.join('\n')).toContain('free');
+	});
+
+	it('takes --project from the configured hook file, and says where it came from', async () => {
+		registerFakeBackend();
+		await start();
+		const path = join(temp.dir, 'checkout-web.json');
+		await writeFile(path, JSON.stringify({ project: 'checkout-web' }), 'utf8');
+		vi.stubEnv(PROJECT_FILE_ENV_VAR, path);
+
+		expect(await run(['acquire', 'attached-1', '--owner', 'issue-112'])).toBe(EXIT_OK);
+
+		// The lease is attributed to the file's identifier — and the grant says so, because a
+		// caller who never typed a project would otherwise have to guess what it names.
+		expect(logged.join('\n')).toContain('project checkout-web');
+		expect(logged.join('\n')).toContain(path);
+		logged = [];
+		expect(await run(['list'])).toBe(EXIT_OK);
+		expect(logged.join('\n')).toContain('issue-112 (project checkout-web)');
+	});
+
+	it('lets --project override the file, and then says nothing about the file', async () => {
+		registerFakeBackend();
+		await start();
+		const path = join(temp.dir, 'checkout-web.json');
+		await writeFile(path, JSON.stringify({ project: 'checkout-web' }), 'utf8');
+		vi.stubEnv(PROJECT_FILE_ENV_VAR, path);
+
+		expect(await run(['acquire', 'attached-1', '--owner', 'issue-112', '--project', 'rover'])).toBe(
+			EXIT_OK,
+		);
+
+		expect(logged.join('\n')).toContain('project rover');
+		expect(logged.join('\n')).not.toContain(path);
+	});
+
+	it('keeps the --json document the host’s answer, with no key about this machine in it', async () => {
+		registerFakeBackend();
+		await start();
+		const path = join(temp.dir, 'checkout-web.json');
+		await writeFile(path, JSON.stringify({ project: 'checkout-web' }), 'utf8');
+		vi.stubEnv(PROJECT_FILE_ENV_VAR, path);
+
+		expect(await run(['acquire', 'attached-1', '--owner', 'issue-112', '--json'])).toBe(EXIT_OK);
+
+		// The wire is untouched by any of this: the grant carries `project` as the plain string
+		// it always was, and where this client read it is not part of what a script parses.
+		expect(JSON.parse(logged[0] ?? '')).toMatchObject({
+			host: 'local',
+			lease: { owner: 'issue-112', project: 'checkout-web' },
+		});
+		expect(logged.join('\n')).not.toContain(path);
 	});
 
 	it('exits 1 and names the holder when the device is already held', async () => {

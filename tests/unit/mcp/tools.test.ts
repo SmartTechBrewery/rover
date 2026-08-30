@@ -80,8 +80,8 @@ async function startHost(): Promise<void> {
 }
 
 /** An MCP client this suite closes in `afterEach` (`../../helpers/mcp-agent.ts`). */
-async function connectAgent(host: HostName = 'local'): Promise<Client> {
-	const client = await connectMcpAgent(host);
+async function connectAgent(host: HostName = 'local', defaultProject?: string): Promise<Client> {
+	const client = await connectMcpAgent(host, defaultProject);
 	clients.push(client);
 	return client;
 }
@@ -154,6 +154,58 @@ describe('the device tools over a live host', () => {
 		const released = await callTool(agent, 'release_device', { leaseId: lease.leaseId });
 		expect(released.isError).toBeFalsy();
 		expect(released.structuredContent).toEqual({ released: true });
+	});
+
+	it('attributes a lease to the configured project when the call omits one', async () => {
+		registerFakeBackend();
+		await startHost();
+		const agent = await connectAgent('local', 'checkout-web');
+
+		const granted = await callTool(agent, 'acquire_device', {
+			serial: 'attached-1',
+			owner: 'issue-112',
+		});
+
+		expect(granted.isError).toBeFalsy();
+		// It reaches the *host* filled in — the wire is unchanged, and `project` is the required
+		// opaque string it always was. What moved is who typed it (D22).
+		expect(granted.structuredContent).toMatchObject({
+			lease: { owner: 'issue-112', project: 'checkout-web' },
+		});
+		const listed = await callTool(agent, 'list_devices');
+		expect(listed.structuredContent).toMatchObject({
+			devices: [{ heldBy: { owner: 'issue-112', project: 'checkout-web' } }],
+		});
+	});
+
+	it('passes a project the call did supply through untouched, default or no default', async () => {
+		registerFakeBackend();
+		await startHost();
+		const agent = await connectAgent('local', 'checkout-web');
+
+		const granted = await callTool(agent, 'acquire_device', {
+			serial: 'attached-1',
+			owner: 'issue-112',
+			project: 'storefront',
+		});
+
+		expect(granted.structuredContent).toMatchObject({ lease: { project: 'storefront' } });
+	});
+
+	it('refuses a call that omits project when nothing is configured to default it', async () => {
+		registerFakeBackend();
+		await startHost();
+		const agent = await connectAgent();
+
+		const result = await callTool(agent, 'acquire_device', {
+			serial: 'attached-1',
+			owner: 'issue-112',
+		});
+
+		// Refused by the SDK against the declaration, before the handler runs — which is why
+		// the declaration is what changes when a default exists, and never the handler alone.
+		expect(result.isError).toBe(true);
+		expect(textOf(result)).toContain('project');
 	});
 
 	it('makes a refused acquire an error naming the holder, never a plausible success', async () => {

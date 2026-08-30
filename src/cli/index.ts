@@ -77,7 +77,8 @@ There is no \`bin/\` launcher yet (PROJECT.md R20), so \`rover\` below stands fo
 
 Commands:
   list                     What is attached to the host, what is free, and who holds it
-  acquire <serial>         Take a lease on one device (--owner and --project required)
+  acquire <serial>         Take a lease on one device (--owner required, and --project
+                           unless ROVER_PROJECT_FILE names a project hook file)
   release <lease-id>       Hand a lease back
   screenshot <lease-id>    Capture the screen to a file on this machine (--out required)
   record <lease-id>        Record the screen to a file on this machine (--out required)
@@ -123,7 +124,8 @@ Exit codes:
 The local daemon starts itself on the first call, so nothing here needs starting by hand;
 a remote host is a service its operator runs and is never started from a client.
 Set ROVER_SOCKET_PATH to point at a socket other than ~/.rover/rover.sock,
-ROVER_USERS_PATH for a user store other than ~/.rover/users.json, and
+ROVER_USERS_PATH for a user store other than ~/.rover/users.json,
+ROVER_PROJECT_FILE at a project hook file to take \`acquire --project\` from, and
 ROVER_HOST_ADDRESS, ROVER_HOST_PORT and ROVER_HOST_TOKEN (plus ROVER_HOST_CA for a
 certificate to trust) to reach a remote one.`;
 }

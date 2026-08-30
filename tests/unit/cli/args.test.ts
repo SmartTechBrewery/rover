@@ -9,9 +9,12 @@
  * name.
  */
 
+import { writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { LOCAL_HOST, REMOTE_HOST, resolveHost } from '@/cli/_shared/host.js';
 import { EXIT_OK, EXIT_USAGE, run } from '@/cli/index.js';
+import { PROJECT_FILE_ENV_VAR } from '@/daemon/project-hooks.js';
 import { ATTRIBUTION_MAX_LENGTH, AttributionStringSchema } from '@/ipc/methods.js';
 import { MAX_FRAMES_PER_SECOND, MAX_RECORDING_MS } from '@/verbs/record.js';
 import {
@@ -29,6 +32,9 @@ let errored: string[];
 beforeEach(async () => {
 	temp = await createTempSocket();
 	vi.stubEnv('ROVER_SOCKET_PATH', temp.socketPath);
+	// Stubbed empty for every test so a developer's own exported hook file cannot decide
+	// whether `--project` is required in here.
+	vi.stubEnv(PROJECT_FILE_ENV_VAR, '');
 	logged = [];
 	errored = [];
 	vi.spyOn(console, 'log').mockImplementation((line: string) => logged.push(line));
@@ -207,6 +213,53 @@ describe('rover acquire, on its required attribution', () => {
 		// The flag as the caller spelled it, not the request key it maps to.
 		expect(errored.join('\n')).toContain(`--${flag} is ${tooLong.length} characters`);
 		expect(errored.join('\n')).not.toContain('testName');
+	});
+
+	it('names the variable that can supply --project in its own usage text', async () => {
+		expect(await run(['acquire', '--help'])).toBe(EXIT_OK);
+
+		// Where a defaulted project came from has to be readable from the command itself; a
+		// caller who never typed one otherwise has to guess what the lease was attributed to.
+		expect(logged.join('\n')).toContain(PROJECT_FILE_ENV_VAR);
+	});
+
+	it('exits 2 naming the path when the configured hook file is not there', async () => {
+		const missing = join(temp.dir, 'nothing-here.json');
+		vi.stubEnv(PROJECT_FILE_ENV_VAR, missing);
+
+		expect(await run(['acquire', 'serial-1', '--owner', 'issue-112'])).toBe(EXIT_USAGE);
+
+		// Never a silent fallback to "no default": a lease attributed to nothing is the failure
+		// D20 and D22 exist to prevent, so the path and the variable are both in the message.
+		expect(errored.join('\n')).toContain(missing);
+		expect(errored.join('\n')).toContain(PROJECT_FILE_ENV_VAR);
+	});
+
+	it('refuses a configured file that is not there even when --project was typed', async () => {
+		const missing = join(temp.dir, 'nothing-here.json');
+		vi.stubEnv(PROJECT_FILE_ENV_VAR, missing);
+
+		// The flag wins on the *value*, but a broken configuration that only surfaced on the
+		// invocations where somebody happened to leave the flag off would be intermittent.
+		expect(await run(['acquire', 'serial-1', '--owner', 'issue-112', '--project', 'rover'])).toBe(
+			EXIT_USAGE,
+		);
+
+		expect(errored.join('\n')).toContain(missing);
+	});
+
+	it('exits 2 for a --project given as an empty string, file configured or not', async () => {
+		const path = join(temp.dir, 'checkout-web.json');
+		await writeFile(path, JSON.stringify({ project: 'checkout-web' }), 'utf8');
+		vi.stubEnv(PROJECT_FILE_ENV_VAR, path);
+
+		// A flag typed with nothing after it is a mistake, and answering it with a value the
+		// caller did not type would hide the mistake behind a lease that looks fine.
+		expect(await run(['acquire', 'serial-1', '--owner', 'issue-112', '--project', ''])).toBe(
+			EXIT_USAGE,
+		);
+
+		expect(errored.join('\n')).toContain('--project is required');
 	});
 
 	it('takes its ceiling from the host schema rather than restating it', () => {

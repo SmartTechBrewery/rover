@@ -9,6 +9,12 @@
  * The SDK validates incoming arguments against it too, which is why each handler receives the
  * branded `IpcParams` the client wants and no boundary parse is written here.
  *
+ * `acquire_device` has the one variation, and it is still that object: a server pointed at a
+ * project hook file declares `project` optional by *deriving* the variant from
+ * `AcquireDeviceParamsSchema` (D22, `src/daemon/project-hooks.ts`), never by writing a second
+ * one out. It has to be the declaration that changes, because the SDK validates against it
+ * before the handler runs; the handler then fills the argument in from the same file.
+ *
  * **The names are the `IPC_METHODS` keys**, unchanged and with no platform suffix (D10) — a
  * tool that renamed a row would be a second vocabulary for the same operation.
  *
@@ -21,7 +27,9 @@
 
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { HostName } from '../../daemon/host.js';
+import { PROJECT_FILE_ENV_VAR } from '../../daemon/project-hooks.js';
 import {
+	type AcquireDeviceParams,
 	AcquireDeviceParamsSchema,
 	ListDevicesParamsSchema,
 	ReleaseDeviceParamsSchema,
@@ -30,7 +38,41 @@ import {
 import { guarded, toolAnswer, toolRefusal } from '../_shared/answer.js';
 import { callHost } from '../_shared/call.js';
 
-export function registerDeviceTools(server: McpServer, host: HostName): void {
+/**
+ * What an `acquire_device` call carries once the SDK has admitted it: the params the host
+ * takes, with `project` possibly left to {@link attributedProject}. Written as the wider of
+ * the two declarations below rather than inferred, because the declaration is chosen at
+ * runtime and a handler typed as a union of both would be typed as neither.
+ */
+type AcquireArgs = Omit<AcquireDeviceParams, 'project'> & {
+	project?: AcquireDeviceParams['project'];
+};
+
+/**
+ * The `project` this call is attributed to: the agent's own, then the server's default.
+ *
+ * The throw is what the declaration below makes unreachable — with no default configured the
+ * advertised schema requires `project` and the SDK refuses a call without one before this ever
+ * runs. It is a throw rather than an empty string because attributing a lease to nothing is
+ * precisely the failure D20 and D22 exist to prevent, and `guarded` turns it into a tool error
+ * naming the tool.
+ */
+function attributedProject(supplied: string | undefined, fallback: string | undefined): string {
+	const project = supplied ?? fallback;
+	if (project === undefined) {
+		throw new Error(
+			`no 'project' was supplied and this server has no ${PROJECT_FILE_ENV_VAR} to default ` +
+				`one from — a lease names the project it belongs to.`,
+		);
+	}
+	return project;
+}
+
+export function registerDeviceTools(
+	server: McpServer,
+	host: HostName,
+	defaultProject?: string,
+): void {
 	server.registerTool(
 		'status',
 		{
@@ -62,6 +104,21 @@ export function registerDeviceTools(server: McpServer, host: HostName): void {
 			guarded('list_devices', async () => toolAnswer(await callHost(host, 'list_devices', {}))),
 	);
 
+	/**
+	 * The SDK validates a call's arguments against this **before** the handler runs, so
+	 * `project` may only be left out when this server actually has one to put there — a
+	 * declaration that said otherwise would refuse the call upstream, where no handler could
+	 * fill anything in, and would be lying to the agent reading it either way.
+	 *
+	 * Derived from the source schema rather than restated: `.partial()` over the one key, so
+	 * `AcquireDeviceParamsSchema` stays the single object both the tool declaration and the
+	 * host's own parse come from (ai/CODING_STANDARDS.md, boundary #1).
+	 */
+	const acquireParams =
+		defaultProject === undefined
+			? AcquireDeviceParamsSchema
+			: AcquireDeviceParamsSchema.partial({ project: true });
+
 	server.registerTool(
 		'acquire_device',
 		{
@@ -70,18 +127,26 @@ export function registerDeviceTools(server: McpServer, host: HostName): void {
 				'Take a lease on one device by serial, so no other agent drives it while you do. ' +
 				'The returned `lease.leaseId` is the credential every later call carries and the only ' +
 				'thing that releases the lease — keep it. `owner`, `project` and the optional ' +
-				'`testName` are attribution you supply and Rover never derives from a branch, a ' +
-				'process or whoever authenticated: say who this lease is for. They authorize nothing. ' +
+				'`testName` are attribution you supply and they authorize nothing: say who this lease ' +
+				'is for. `owner` is never derived from a branch, a process or whoever authenticated. ' +
+				(defaultProject === undefined
+					? ''
+					: `\`project\` may be left out here: this server was pointed at a project hook ` +
+						`file (${PROJECT_FILE_ENV_VAR}) and defaults it to '${defaultProject}'. Pass ` +
+						`one to attribute the lease to something else. `) +
 				'A device someone else holds is refused rather than queued, and the refusal names the ' +
 				'holder and how much longer they have; a device that is gone, not attached to this ' +
 				'host, or not in a state a verb could run against is refused by name too. The device ' +
 				'is re-verified at grant time, so a granted lease is a device that was there a moment ' +
 				'ago rather than one that was cached.',
-			inputSchema: AcquireDeviceParamsSchema,
+			inputSchema: acquireParams,
 		},
-		async (params) =>
+		async (params: AcquireArgs) =>
 			guarded('acquire_device', async () => {
-				const result = await callHost(host, 'acquire_device', params);
+				const result = await callHost(host, 'acquire_device', {
+					...params,
+					project: attributedProject(params.project, defaultProject),
+				});
 				// A refusal is data on the wire and an error to the agent: not getting the device
 				// you asked for must never read as having got it.
 				return result.outcome === 'refused'
