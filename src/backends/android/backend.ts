@@ -5,18 +5,27 @@
  * facts, the app lifecycle and the capture — with no stub, which is what lets it declare
  * `implements DeviceBackend` and what lets `./index.ts` register it (ai/TESTING.md, "A
  * backend under construction registers nothing"), plus the environment pair behind
- * `canControlNetwork`. The capability-gated groups that are still missing are a declared
- * opt-out in `./capabilities.ts` rather than an omission, and each flips in the change
- * that lands its methods.
+ * `canControlNetwork` and the four input primitives behind `canInput`. The one
+ * capability-gated method still missing — `readScreen` (#13) — is a declared opt-out in
+ * `./capabilities.ts` rather than an omission, and the flag flips in the change that lands
+ * it.
  *
  * Everything that touches the device goes through `./adb.js`, and everything that reads
  * its output goes through `./parsers/`. This file is the join between them and holds no
  * text-shaped knowledge of its own — the wording each verb asserts on lives in
- * `./parsers/app-control.js` and `./parsers/network.js`, pinned against captures, and
- * every **caller-supplied** value that enters a device-side command line is quoted by
- * `./adb.js`'s `shellArg`. The one exception is stated where it happens: the environment
- * pair passes one of two literals this file owns, which no caller's string reaches. A new
- * argument that is not such a literal takes `shellArg`.
+ * `./parsers/app-control.js`, `./parsers/network.js` and `./parsers/input.js`, pinned
+ * against captures, and every **caller-supplied** value that enters a device-side command
+ * line is quoted by `./adb.js`. Which quoter is the one judgement call in this file:
+ *
+ * - `shellArg` for a value whose shape was already checked — every app id, and the
+ *   component resolved off the device. It refuses an apostrophe, because one arriving there
+ *   is a bug in that check.
+ * - `shellText` for `typeText`'s argument, the only value here that is screen *content*:
+ *   an apostrophe in it is ordinary, so it is escaped rather than refused.
+ * - **Neither, only for a literal this file owns** — the environment pair's two words, the
+ *   four keycodes of `./input.js`'s `KEY_CODES`, and the numbers `tap` and `swipe` compute.
+ *   No caller's string reaches any of them, which is the property `shellArg` exists to
+ *   restore when one does. A new argument outside that list takes a quoter.
  */
 
 import {
@@ -24,10 +33,12 @@ import {
 	type DeviceBackend,
 	type DeviceInfo,
 	DeviceInfoSchema,
+	type DeviceKey,
 	DeviceSchema,
 	type DeviceState,
 	type DeviceWatch,
 	type DeviceWatcher,
+	type Point,
 } from '../../core/device.js';
 import { type AppId, type DeviceSerial, parseAppId, unwrap } from '../../core/ids.js';
 import {
@@ -42,10 +53,12 @@ import {
 	runAdbOnDevice,
 	SCREENSHOT_ADB_TIMEOUT_MS,
 	shellArg,
+	shellText,
 	streamAdb,
 } from './adb.js';
 import { attachmentOfSerial } from './attachment.js';
 import { ANDROID_PLATFORM_ID } from './capabilities.js';
+import { KEY_CODES, toDevicePixels, toSwipeDuration, typeTextSegments } from './input.js';
 import {
 	isSilent,
 	parseResolvedActivity,
@@ -59,6 +72,7 @@ import {
 	parseAdbDevices,
 } from './parsers/devices.js';
 import { parseGetprop } from './parsers/getprop.js';
+import { acceptedInput } from './parsers/input.js';
 import { acceptedNetworkChange } from './parsers/network.js';
 import { isPng } from './parsers/screencap.js';
 import { TrackFrameDecoder } from './parsers/track.js';
@@ -462,6 +476,115 @@ export class AndroidDeviceBackend implements DeviceBackend {
 	}
 
 	/**
+	 * `input tap <x> <y>`, with `at` converted from dp to physical pixels first.
+	 *
+	 * The conversion is the whole subtlety and it is silent when it is missing: `PointSchema`
+	 * is device-independent coordinates and `input` takes pixels, so an unconverted point on
+	 * this scale-3 emulator lands a third of the way to where the caller asked, on a real
+	 * control, with `input` reporting success either way. `./input.js`'s `toDevicePixels`
+	 * holds the arithmetic and the reason it floors.
+	 *
+	 * **Silence is the assertion**, the shape `am force-stop` and the environment pair have:
+	 * `input tap` printed zero bytes on both streams at exit 0 on API 37, and the one refusal
+	 * that exits 0 (`Unknown command: …`) is what {@link acceptedInput} catches. The cost is
+	 * stated rather than papered over: a coordinate off the edge of the screen is *also*
+	 * silent and exit 0 (PROJECT.md §6), so this cannot tell "tapped it" from "tapped past
+	 * the panel". Keeping a point on the screen is the verb layer's, which is the layer that
+	 * holds the screen it resolved the point from (D12).
+	 *
+	 * The two coordinates and the duration below are numbers this file produced, so unlike
+	 * every app verb they take no `shellArg` — the property that function exists to restore
+	 * is already theirs. {@link typeText} is the one method here whose argument *is* a
+	 * caller's string, and it is quoted.
+	 */
+	async tap(serial: DeviceSerial, at: Point): Promise<void> {
+		const { x, y } = toDevicePixels(at, await this.pixelScale(serial));
+		const result = await runAdbOnDevice(serial, ['shell', 'input', 'tap', String(x), String(y)]);
+
+		if (!acceptedInput(result)) throw refused(`input tap ${x} ${y}`, serial, result);
+	}
+
+	/**
+	 * `input swipe <x1> <y1> <x2> <y2> <ms>` — both points converted the same way
+	 * {@link tap}'s is, off one `wm density` query.
+	 *
+	 * **This is also the long press**, and phase 2 composes one out of it rather than getting
+	 * a method of its own: a drag from a point to the same point, held past the platform's
+	 * long-press timeout, raised the long-press menu on API 37 at 390 ms and did not at
+	 * 380 ms, against a device whose `settings get secure long_press_timeout` reads `400`
+	 * (PROJECT.md §6). The threshold is a device setting, not a constant, which is why no
+	 * default duration is baked in here — the primitive takes the caller's number.
+	 */
+	async swipe(serial: DeviceSerial, from: Point, to: Point, durationMs: number): Promise<void> {
+		// Before the query, so a programmer error costs no round trip and reads as itself.
+		const duration = toSwipeDuration(durationMs);
+		const scale = await this.pixelScale(serial);
+		const start = toDevicePixels(from, scale);
+		const end = toDevicePixels(to, scale);
+
+		const argv = [String(start.x), String(start.y), String(end.x), String(end.y)];
+		const result = await runAdbOnDevice(serial, [
+			'shell',
+			'input',
+			'swipe',
+			...argv,
+			String(duration),
+		]);
+
+		if (!acceptedInput(result)) {
+			throw refused(`input swipe ${argv.join(' ')} ${duration}`, serial, result);
+		}
+	}
+
+	/**
+	 * `input text <text>` — the caller's string, quoted for the device's own shell.
+	 *
+	 * The quoting is `./adb.js`'s `shellText` and not `shellArg`: this is the one argument in
+	 * this file that is screen *content* rather than a shape somebody already checked, and an
+	 * apostrophe in it is ordinary rather than a bug. Once it is one shell word, a space needs
+	 * no `%s` and every shell metacharacter arrives verbatim (measured — PROJECT.md §6).
+	 *
+	 * **Usually one call, occasionally more.** `input text` substitutes a space for a literal
+	 * `%s`, so a caller's own `%s` is not representable in a single injection;
+	 * `./input.js`'s `typeTextSegments` cuts the string so that each piece is typed as itself,
+	 * and everything without a `%s` is still exactly one call. That module also refuses what
+	 * the device was measured not to type — a tab or a newline is dropped in silence, and a
+	 * non-ASCII character throws inside the device and types nothing at all — before anything
+	 * is sent.
+	 *
+	 * Each piece is checked on its own, so a run that got half the text in says so rather
+	 * than reporting a success for the half that landed.
+	 */
+	async typeText(serial: DeviceSerial, text: string): Promise<void> {
+		for (const segment of typeTextSegments(text)) {
+			const result = await runAdbOnDevice(serial, ['shell', 'input', 'text', shellText(segment)]);
+
+			if (!acceptedInput(result)) {
+				throw refused(`input text ${JSON.stringify(segment)}`, serial, result);
+			}
+		}
+	}
+
+	/**
+	 * `input keyevent <keycode>` — the neutral key mapped through `./input.js`'s `KEY_CODES`.
+	 *
+	 * The keycode is a literal this file's neighbour owns and no caller's string reaches it,
+	 * so it takes no `shellArg` for the reason the environment pair states.
+	 *
+	 * The check below cannot catch the failure that matters here, and saying so is the point:
+	 * `input keyevent NOT_A_KEY` exits **0 with zero bytes on both streams** on API 37, so a
+	 * wrong keycode is indistinguishable from a key that was pressed. What keeps the map
+	 * honest is that it is exhaustive over `DeviceKey` at compile time, pinned in the unit
+	 * suite, and pressed against a real device in `tests/device/android/input.test.ts`.
+	 */
+	async pressKey(serial: DeviceSerial, key: DeviceKey): Promise<void> {
+		const keycode = KEY_CODES[key];
+		const result = await runAdbOnDevice(serial, ['shell', 'input', 'keyevent', keycode]);
+
+		if (!acceptedInput(result)) throw refused(`input keyevent ${keycode}`, serial, result);
+	}
+
+	/**
 	 * `cmd connectivity airplane-mode enable|disable` — the first half of the environment
 	 * pair the daemon restores on release and on expiry (D9).
 	 *
@@ -521,6 +644,31 @@ export class AndroidDeviceBackend implements DeviceBackend {
 
 		if (!acceptedNetworkChange(result)) {
 			throw refused(`cmd wifi set-wifi-enabled ${argument}`, serial, result);
+		}
+	}
+
+	/**
+	 * The device's physical-pixels-per-dp, asked fresh for every injection.
+	 *
+	 * **Not cached.** D6's rule — the daemon is a cache and adb is the truth — applies to a
+	 * density as much as to a device list: `wm density <n>` changes it under a running lease,
+	 * and a remembered scale would then put every subsequent tap somewhere the caller did not
+	 * ask for, silently. One `wm density` is a millisecond-scale query beside the injection it
+	 * precedes.
+	 *
+	 * **Not `deviceInfo`**, which would be three queries where one answers the question.
+	 *
+	 * The parse failure is wrapped the way `listDevices` wraps its own: the parser only ever
+	 * saw stdout, and what explains an unparseable answer to a well-formed command is usually
+	 * on stderr.
+	 */
+	private async pixelScale(serial: DeviceSerial): Promise<number> {
+		const result = await runAdbOnDevice(serial, ['shell', 'wm', 'density']);
+
+		try {
+			return parseWmDensity(result.stdout).scale;
+		} catch (cause) {
+			throw unparseable('adb shell wm density', result, cause);
 		}
 	}
 

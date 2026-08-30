@@ -12,6 +12,8 @@ import {
 	runAdb,
 	runAdbBinaryOnDevice,
 	runAdbOnDevice,
+	shellArg,
+	shellText,
 	streamAdb,
 } from '@/backends/android/adb.js';
 import { parseDeviceSerial } from '@/core/ids.js';
@@ -479,5 +481,70 @@ describe('streamAdb', () => {
 		await stream.stop();
 
 		expect(child.kill).not.toHaveBeenCalled();
+	});
+});
+
+/**
+ * The two quoters, asserted together because the only thing worth getting wrong about
+ * either is which one a call site should have used.
+ *
+ * Both produce a string the **device's** `sh` reads, so what is pinned is the exact
+ * characters — not a round trip through a host shell, which is a different shell with
+ * different rules. What the device does with these forms was measured on API 37 with adb
+ * 37.0.0 and is recorded in PROJECT.md §6.
+ */
+describe('shellArg and shellText', () => {
+	it('both wrap an ordinary value in single quotes', () => {
+		expect(shellArg('com.android.settings')).toBe("'com.android.settings'");
+		expect(shellText('hello world')).toBe("'hello world'");
+	});
+
+	/**
+	 * The whole reason there are two. `shellArg` guards values whose shape was already
+	 * checked, so an apostrophe there is a bug in that check and is refused; `shellText`
+	 * carries screen content, where `don't` is ordinary and refusing it would be refusing
+	 * the caller's data.
+	 */
+	it('differ on an apostrophe: one refuses it, the other splices it', () => {
+		expect(() => shellArg("don't")).toThrow(/single quote/);
+		expect(shellText("don't")).toBe("'don'\\''t'");
+	});
+
+	/**
+	 * The splice is `'` → close the quote, hand the shell a backslashed quote, reopen.
+	 * `input text 'don'\''t'` typed `don't` on the device; nothing else works, because a
+	 * single-quoted string in `sh` has no escapes inside it at all.
+	 */
+	it('splices every apostrophe, not only the first', () => {
+		expect(shellText("'a'b'")).toBe("''\\''a'\\''b'\\'''");
+	});
+
+	/**
+	 * The injection this exists to prevent: `am force-stop 'com.rover.nope;echo INJECTED'`
+	 * printed `INJECTED` on the device before `shellArg` landed (PROJECT.md §6). Text is the
+	 * more exposed of the two — it is arbitrary by definition — so the metacharacters are
+	 * asserted to come out inert rather than escaped away. All of them arrived verbatim in a
+	 * field on API 37.
+	 */
+	it('makes shell metacharacters inert rather than removing them', () => {
+		const text = 'a&b|c;d $e `f` "g" (h) *?[i]';
+
+		expect(shellText(text)).toBe(`'${text}'`);
+	});
+
+	// Empty is a legal argument on both sides: `input text ''` exits 0 and types nothing.
+	it('quotes an empty string as an empty word rather than nothing', () => {
+		expect(shellText('')).toBe("''");
+		expect(shellArg('')).toBe("''");
+	});
+
+	/**
+	 * A newline is quoted rather than refused. `typeText` never sends one — `./input.js`
+	 * rejects it, because `input text` drops it in silence — but that is a decision about
+	 * what the *device command* accepts, and this function's job is only to keep the value
+	 * one word. A quoter that also policed content would put the same rule in two places.
+	 */
+	it('keeps a newline inside the quoted word', () => {
+		expect(shellText('a\nb')).toBe("'a\nb'");
 	});
 });

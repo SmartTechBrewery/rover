@@ -13,15 +13,15 @@ Note the double meaning of "test" in this repo and keep it straight: Rover *perf
 
 Device tests take a lease like any other client. A device test that talks to `adb` directly, outside the lease, will eventually run on a device another agent is using, and that is precisely the failure this whole project exists to prevent. One temporary exemption, below.
 
-### The exemption: four `tests/device/` suites still drive the backend directly
+### The exemption: five `tests/device/` suites still drive the backend directly
 
-Four suites under `tests/device/` construct the backend class and call it, outside any lease. That is a departure from the rule above, and unlike the socket exception below it is **temporary** — it is a wiring gap, not a property of what the suites assert.
+Five suites under `tests/device/` construct the backend class and call it, outside any lease. That is a departure from the rule above, and unlike the socket exception below it is **temporary** — it is a wiring gap, not a property of what the suites assert.
 
 **Half of that gap is now closed.** `src/daemon/main.ts` imports the backend barrel (R21), so a daemon on a socket has a registry, lends devices and runs the verbs. `tests/device/android/verb-dispatch.test.ts` is the first suite to take its lease from one, and it is the shape the rest convert to: start a daemon on a temp socket, `list_devices`, `acquire_device`, call the verb, `release_device` in `afterEach`. `tests/device/android/restoration.test.ts` is a step behind it — it takes a lease, but from the daemon's objects rather than from a daemon on a socket, because what it asserts is the store's end hook rather than the protocol.
 
-- **What is exempt.** `app-control`, `backend`, `network` and `screenshot`, and only for the lease: every other rule here still binds them, and a suite that changes device state additionally restores it (see the network suite).
-- **Why.** Nothing about the daemon now; only that four suites have not been converted, and each conversion is a real edit to how the suite arranges its device rather than a mechanical one.
-- **What ends it.** A helper under `tests/helpers/` that acquires and releases a lease around a suite — the boilerplate `verb-dispatch.test.ts` currently writes by hand — and then those four suites converted onto it. When that lands, delete this section; the exemption expires with the gap, not with any particular issue being closed.
+- **What is exempt.** `app-control`, `backend`, `input`, `network` and `screenshot`, and only for the lease: every other rule here still binds them, and a suite that changes device state additionally restores it (see the network and input suites).
+- **Why.** Nothing about the daemon now; only that five suites have not been converted, and each conversion is a real edit to how the suite arranges its device rather than a mechanical one. `input` is the one entry with a second reason on top of that: its four primitives have **no IPC row and no verb** until #12's phase 2, so there is no call a lease could be taken around yet. That half of its exemption expires when the verbs land, ahead of the wiring gap the other four are waiting on.
+- **What ends it.** A helper under `tests/helpers/` that acquires and releases a lease around a suite — the boilerplate `verb-dispatch.test.ts` currently writes by hand — and then those five suites converted onto it. When that lands, delete this section; the exemption expires with the gap, not with any particular issue being closed.
 
 Until then, say *this* in a suite header rather than "leases do not exist yet": leases do exist, a daemon will lend one, and the reason a suite is not taking one is that it has not been converted.
 
