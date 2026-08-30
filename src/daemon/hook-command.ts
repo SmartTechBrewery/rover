@@ -109,6 +109,20 @@ export interface HookCommandContext {
 	 * eight-second bound and a unit test cannot both be in the same run.
 	 */
 	readonly timeoutMs?: number;
+	/**
+	 * Kill the child when this aborts, rather than waiting out {@link timeoutMs}.
+	 *
+	 * The caller's reason to stop, as opposed to the budget's: `install_app` passes the verb
+	 * call's own signal (`./verb-traffic.ts`), so a `release_device` ends the build instead of
+	 * leaving the restoration — and every later `acquire_device` on that device — parked behind
+	 * it for the rest of a five-minute bound. Omitted by the teardown, which has no such caller:
+	 * it *is* the end of the lease.
+	 *
+	 * `SIGKILL` for the timeout's reason: this has to end a program that ignores a polite ask.
+	 * The failure says a cancellation is what happened, so it is not read back as a build that
+	 * failed on its merits.
+	 */
+	readonly signal?: AbortSignal;
 }
 
 /**
@@ -120,8 +134,8 @@ export interface HookCommandContext {
  * — a teardown that cannot name the device it is undoing is the wrong shape to hand the phases
  * that follow.
  *
- * @throws HookCommandFailedError on a non-zero exit, a signal (the timeout's kill included), or
- *   a program that could not be started.
+ * @throws HookCommandFailedError on a non-zero exit, a signal (the timeout's kill and
+ *   {@link HookCommandContext.signal}'s included), or a program that could not be started.
  */
 export async function runHookCommand(
 	hook: HookCommand,
@@ -130,6 +144,7 @@ export async function runHookCommand(
 	const timeoutMs = context.timeoutMs ?? HOOK_COMMAND_TIMEOUT_MS;
 
 	return new Promise<void>((resolve, reject) => {
+		const cancel = context.signal;
 		const child = spawn(hook.command, hook.args, {
 			// Never a shell: what the file declares is a program and its arguments, and a shell
 			// here would turn a stray metacharacter in any of them into a second command.
@@ -152,6 +167,12 @@ export async function runHookCommand(
 		let stderrTail = '';
 		/** Set by whichever of the two endings arrives first; suppresses the other. */
 		let settled = false;
+		/**
+		 * Set by {@link HookCommandContext.signal}, and read only to word the failure: a child
+		 * killed because its caller went away and one killed at its budget both arrive on `'exit'`
+		 * with the same signal and no exit code, and the two have different remedies.
+		 */
+		let cancelled = false;
 
 		/**
 		 * Let go of the two pipes, which is this process's whole claim on them.
@@ -166,6 +187,22 @@ export async function runHookCommand(
 			child.stderr.destroy();
 		};
 
+		const onCancel = (): void => {
+			cancelled = true;
+			// The child, not the promise: whatever it started is the thing that has to stop, and
+			// the run still ends on `'exit'` like every other ending so there is one settle path.
+			child.kill('SIGKILL');
+		};
+
+		/**
+		 * Stop listening for a cancellation that can no longer change anything. Required rather
+		 * than tidy: the signal outlives this call — it belongs to the verb call — and a listener
+		 * left on it is one retained closure per hook this daemon has ever run.
+		 */
+		const releaseSignal = (): void => {
+			cancel?.removeEventListener('abort', onCancel);
+		};
+
 		const fail = (
 			exitCode: number | null,
 			signal: NodeJS.Signals | null,
@@ -173,6 +210,7 @@ export async function runHookCommand(
 		): void => {
 			if (settled) return;
 			settled = true;
+			releaseSignal();
 			releasePipes();
 			reject(
 				new HookCommandFailedError({
@@ -197,6 +235,16 @@ export async function runHookCommand(
 			stderrTail = `${stderrTail}${chunk}`.slice(-HOOK_OUTPUT_TAIL_CHARS);
 		});
 
+		// After the listeners, so a signal that is *already* aborted still ends on `'exit'` with
+		// everything wired rather than racing them.
+		if (cancel !== undefined) {
+			if (cancel.aborted) {
+				onCancel();
+			} else {
+				cancel.addEventListener('abort', onCancel, { once: true });
+			}
+		}
+
 		child.on('error', (error: Error) => {
 			// Nothing ran at all — the program absent from `PATH`, or a `cwd` that is not there.
 			// The common one, and the one whose remedy is on the host rather than in the lease.
@@ -207,17 +255,29 @@ export async function runHookCommand(
 			if (settled) return;
 			if (code === 0) {
 				settled = true;
+				releaseSignal();
 				releasePipes();
 				resolve();
 				return;
 			}
-			fail(code, signal, endOfRun(code, signal, timeoutMs));
+			fail(code, signal, endOfRun(code, signal, timeoutMs, cancelled));
 		});
 	});
 }
 
 /** How a run that did not succeed ended, in words a human reads before the stderr tail. */
-function endOfRun(code: number | null, signal: NodeJS.Signals | null, timeoutMs: number): string {
+function endOfRun(
+	code: number | null,
+	signal: NodeJS.Signals | null,
+	timeoutMs: number,
+	cancelled: boolean,
+): string {
+	// First, and before the exit code is even looked at: a cancelled hook may well exit non-zero
+	// on its own way out, and "exited 1" would send whoever reads it to the build's log for a
+	// failure that never happened.
+	if (cancelled) {
+		return 'was stopped because the lease that asked for it ended';
+	}
 	if (code !== null) return `exited ${code}`;
 	if (signal !== null) {
 		return `was killed by ${signal} — its ${timeoutMs}ms budget is the likely reason`;

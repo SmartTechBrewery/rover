@@ -73,6 +73,28 @@ export interface ProjectRestoration {
 export const TEARDOWN_TIMEOUT_MS = 10_000;
 
 /**
+ * How long a restoration waits for the ending lease's verb calls to unwind before it stops
+ * waiting, says so, and restores anyway ({@link DeviceRestorerOptions.settleTraffic}).
+ *
+ * **A bound was missing here and the teardown's already existed**, which is the wrong way
+ * round: this wait comes *first* in a restoration, and `acquire_device` waits on the whole
+ * chain. Without it the wait is as long as whatever the ending lease was doing — a backend
+ * round trip already issued to the device (`INSTALL_ADB_TIMEOUT_MS` is five minutes), or a host
+ * process a revocation cannot reach at all. So a grant could be parked for minutes with no
+ * bound of its own, long past the client's 30 s `DEFAULT_REQUEST_TIMEOUT_MS`: the caller gives
+ * up, the daemon does not learn that, and the device is eventually granted to somebody who is
+ * no longer there and held for a full `LEASE_TTL_MS`.
+ *
+ * **Ten seconds, matching {@link TEARDOWN_TIMEOUT_MS}, and the same trade.** What can still be
+ * running when it expires is at most *one* backend round trip per call: the lease's end revoked
+ * the backend before this was awaited, so a revoked verb issues nothing further — and
+ * `install_app`'s host process is now cancelled rather than waited out (`./verb-traffic.ts`).
+ * A restoration overlapping one round trip that was already in flight, reported out loud, beats
+ * every later grant on the device queueing behind it silently.
+ */
+export const SETTLE_TIMEOUT_MS = 10_000;
+
+/**
  * How the `project` string on a lease becomes something to tear down.
  *
  * **This is a seam, not a configuration surface.** What fills it is `./project-resolver.ts`,
@@ -144,13 +166,25 @@ export interface DeviceRestorerOptions {
 	 */
 	readonly teardownTimeoutMs?: number;
 	/**
+	 * Defaults to {@link SETTLE_TIMEOUT_MS}. A test seam in the spirit of
+	 * {@link teardownTimeoutMs}, and not a configuration surface for the same reason.
+	 */
+	readonly settleTimeoutMs?: number;
+	/**
 	 * Resolve once nothing else is still driving the device — the ending lease's verb calls
 	 * (`./verb-traffic.ts`, wired in `./listen.ts`).
 	 *
 	 * A restoration and a verb are two drivers of one device, and the verb is the one that was
 	 * there first: stopping an app underneath a wait would answer that wait about a screen the
-	 * teardown produced. The lease's end revokes the device from those calls before this is
-	 * ever awaited, so the wait is one backend call long, not a verb timeout long.
+	 * teardown produced. The lease's end revokes the device from those calls before this is ever
+	 * awaited, so a revoked verb issues no *further* backend call.
+	 *
+	 * That is not the same as the wait being short, and this used to say it was. What can still
+	 * be outstanding is a round trip the backend already handed to the device — up to
+	 * `INSTALL_ADB_TIMEOUT_MS`, five minutes, for the transfer rows — and, for a verb that awaits
+	 * a host process rather than a backend, work the revocation never touched at all. So the
+	 * wait is bounded here by {@link SETTLE_TIMEOUT_MS} the way the teardown is, and
+	 * `install_app`'s install command is cancelled with the lease rather than waited out.
 	 *
 	 * Defaults to resolving immediately — a restorer wired without a verb surface has nothing
 	 * to wait for, and nothing else in this module knows what a verb is.
@@ -163,6 +197,7 @@ export function createDeviceRestorer(options: DeviceRestorerOptions): DeviceRest
 	const resolveProject: ProjectResolver = options.resolveProject ?? (() => Promise.resolve(null));
 	const warn = options.warn ?? ((message: string) => console.warn(message));
 	const teardownTimeoutMs = options.teardownTimeoutMs ?? TEARDOWN_TIMEOUT_MS;
+	const settleTimeoutMs = options.settleTimeoutMs ?? SETTLE_TIMEOUT_MS;
 	const settleTraffic: (serial: DeviceSerial) => Promise<void> =
 		options.settleTraffic ?? (() => Promise.resolve());
 
@@ -260,8 +295,9 @@ export function createDeviceRestorer(options: DeviceRestorerOptions): DeviceRest
 		const serial = lease.serial;
 		// Before anything is undone: the lease that just ended may still have a verb unwinding
 		// against this device, and a teardown running beside it is the two-drivers failure with
-		// the host on both ends. See {@link DeviceRestorerOptions.settleTraffic}.
-		await settleTraffic(serial);
+		// the host on both ends. Bounded, because `acquire_device` waits on the whole chain —
+		// see {@link DeviceRestorerOptions.settleTraffic}.
+		await awaitSettled(serial);
 		const project = await describeProject(serial, lease.project);
 		const registered = await resolveDevice(serial, reason);
 
@@ -283,6 +319,23 @@ export function createDeviceRestorer(options: DeviceRestorerOptions): DeviceRest
 	};
 
 	/**
+	 * The ending lease's verb calls, bounded — {@link SETTLE_TIMEOUT_MS} says why there is a
+	 * bound at all, and it is enforced the way the teardown's is because the shape is the same:
+	 * nothing here can cancel what it is waiting for, so the bound is on the wait and the
+	 * warning says exactly that.
+	 */
+	const awaitSettled = async (serial: DeviceSerial): Promise<void> => {
+		if ((await raceTimeout(settleTraffic(serial), settleTimeoutMs)) === 'timed-out') {
+			warn(
+				`Restoring device '${serial}': a verb call from the lease that just ended had not ` +
+					`unwound within ${settleTimeoutMs}ms. Restoring anyway, so the next grant is not ` +
+					`held behind it; that call can issue no further device call, but one it had ` +
+					`already issued may still be in flight.`,
+			);
+		}
+	};
+
+	/**
 	 * The project's teardown hook, bounded. `step` contains a failure but not a duration, and
 	 * every other step is a backend call that carries its own timeout — this one is foreign
 	 * code reached through {@link ProjectRestoration.teardown}, and `settle` is awaited by
@@ -296,24 +349,12 @@ export function createDeviceRestorer(options: DeviceRestorerOptions): DeviceRest
 		serial: DeviceSerial,
 		teardown: () => Promise<void>,
 	): Promise<void> => {
-		let timer: NodeJS.Timeout | undefined;
-		const expiry = new Promise<'timed-out'>((resolve) => {
-			timer = setTimeout(() => resolve('timed-out'), teardownTimeoutMs);
-			// Unreferenced: this exists to stop us waiting, never to keep a process alive that is
-			// otherwise finished.
-			timer.unref();
-		});
-
-		try {
-			if ((await Promise.race([teardown(), expiry])) === 'timed-out') {
-				warn(
-					`Restoring device '${serial}': the project teardown hook did not finish within ` +
-						`${teardownTimeoutMs}ms. The device is being handed on anyway; whatever the ` +
-						`hook started may still be running.`,
-				);
-			}
-		} finally {
-			clearTimeout(timer);
+		if ((await raceTimeout(teardown(), teardownTimeoutMs)) === 'timed-out') {
+			warn(
+				`Restoring device '${serial}': the project teardown hook did not finish within ` +
+					`${teardownTimeoutMs}ms. The device is being handed on anyway; whatever the ` +
+					`hook started may still be running.`,
+			);
 		}
 	};
 
@@ -388,6 +429,35 @@ function required<Method extends 'setAirplaneMode' | 'setWifiEnabled'>(
 		);
 	}
 	return implementation.bind(backend) as NonNullable<DeviceBackend[Method]>;
+}
+
+/**
+ * Wait for `work`, but not past `timeoutMs` — the one shape both bounds in this module use.
+ *
+ * Neither of them can cancel what it is waiting for, so `'timed-out'` means "stopped waiting"
+ * and never "stopped it"; each caller's warning is what says so. A rejection from `work` still
+ * travels, because a step that failed is a different thing from one that ran long, and `step`
+ * is what contains it.
+ *
+ * The timer is unreferenced and cleared: this exists to stop us waiting, never to keep a
+ * process alive that is otherwise finished, and a ten-second handle per lease that ended would
+ * outlive every restoration that came in under its bound.
+ */
+async function raceTimeout(
+	work: Promise<unknown>,
+	timeoutMs: number,
+): Promise<'settled' | 'timed-out'> {
+	let timer: NodeJS.Timeout | undefined;
+	const expiry = new Promise<'timed-out'>((resolve) => {
+		timer = setTimeout(() => resolve('timed-out'), timeoutMs);
+		timer.unref();
+	});
+
+	try {
+		return await Promise.race([work.then(() => 'settled' as const), expiry]);
+	} finally {
+		clearTimeout(timer);
+	}
 }
 
 function describe(error: unknown): string {

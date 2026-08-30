@@ -1422,6 +1422,20 @@ describe('install_app runs the project’s own install command', () => {
 	}
 
 	/**
+	 * Yield until the hook's child has actually started — it says so by writing its marker.
+	 *
+	 * A loop over {@link drainEventLoop} rather than a delay, for this repository's usual reason
+	 * (D12(b)): what the test is waiting for is a real `spawn` and a real write, and a duration
+	 * long enough for those on one machine is a flake on another. The loop is bounded by the
+	 * suite's own timeout, which is the only thing a hook that never starts should hit.
+	 */
+	async function untilInstallStarted(): Promise<void> {
+		while (!(await installRan())) {
+			await drainEventLoop();
+		}
+	}
+
+	/**
 	 * The headline criterion: the project's command ran, and it ran **against the leased
 	 * device**. An install that landed on a neighbour's device is the worst failure this tool
 	 * has and looks like success from both sides, so the serial is asserted out of the child's
@@ -1446,6 +1460,50 @@ describe('install_app runs the project’s own install command', () => {
 		// written and the backend was never handed a package.
 		expect(transfers).toEqual([]);
 		expect(JSON.stringify(answer)).not.toContain(temp.projectsRoot);
+	});
+
+	/**
+	 * The sibling of 'does not re-lend the device while the previous holder is still inside a
+	 * device call', for the half of a verb call that revocation cannot reach.
+	 *
+	 * There, the holder is suspended inside a **backend** call and the next grant rightly queues
+	 * behind it. Here it is suspended inside a **host process**, which a revoked backend never
+	 * touches — so without the verb call's own abort signal the release would leave the build
+	 * running, `settle` waiting on it, and every later `acquire_device` for this device parked
+	 * for the rest of `INSTALL_HOOK_TIMEOUT_MS`: five minutes, against a client request timeout
+	 * of thirty seconds. This test cannot pass by waiting; the bound outlasts the suite's own.
+	 */
+	it('does not park the next grant behind a released lease’s install', async () => {
+		await serve();
+		await writeHookFile(HOOK_PROJECT, {
+			project: HOOK_PROJECT,
+			install: {
+				command: process.execPath,
+				args: [
+					'-e',
+					"require('node:fs').writeFileSync(process.argv[1], 'started'); setInterval(() => {}, 1000)",
+					markerPath(),
+				],
+			},
+		});
+		const holder = await connect();
+		const leaseId = await acquire(holder);
+
+		const verb = holder.request('install_app', { leaseId });
+		await untilInstallStarted();
+		await holder.request('release_device', { leaseId });
+
+		// A second agent on its own connection, asking for the device the first one just gave
+		// back — the sequence a caller reaches by simply retrying after a timeout.
+		const other = await connect();
+		await expect(
+			other.request('acquire_device', { serial: SERIAL, owner: 'pr-127-review', project: 'rover' }),
+		).resolves.toMatchObject({ outcome: 'granted' });
+
+		// And the ex-holder gets the same answer every other revoked verb gives. A build stopped
+		// because its own lease ended is not a build that failed, so this is not the
+		// `install-hook-failed` the runner would otherwise produce.
+		expect(await verb).toMatchObject({ outcome: 'refused', reason: 'no-lease' });
 	});
 
 	/**

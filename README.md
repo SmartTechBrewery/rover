@@ -589,7 +589,12 @@ privileges:
   because the natural mistake is a teardown written as though it only ever follows a lease that
   project's own team took — restarting a shared service, clearing shared state — which a mistyped
   or borrowed `project` string on somebody else's lease would then trigger. Per-user project
-  authorization is deliberately not in scope: D20 is that the two never mix.
+  authorization is deliberately not in scope: D20 is that the two never mix. Naming a project also
+  buys that caller a little of what the host knows about it, because a failed install has to be
+  actionable: the answer names the **program** the hook file declared and carries the tail of its
+  **stderr**, and if the file exists but will not parse — or disagrees with its own name — the
+  `internal_error` that reports the operator's mistake names the **host path** it lives at. The
+  three named failures carry no path; that one branch does.
 
 The one thing a **client** may do with a hook file is read the `project` out of it. Point
 `ROVER_PROJECT_FILE` at one — the project's own copy in its repository will do; it need not be the

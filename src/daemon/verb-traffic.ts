@@ -23,13 +23,21 @@
  * The capability-gated methods keep being absent when the backend does not have them, which
  * is what `requireCapability` and the restorer's `required()` both read.
  *
- * **Revocation stops the next call, never the one in flight.** Nothing here can cancel a
- * round trip a backend has already issued to the device, and pretending otherwise would be
- * the more dangerous lie. So there is a second half: {@link VerbTraffic.settle} resolves
- * once the calls on a device have actually unwound, and the restoration a lease's end starts
- * waits on it — which is in turn what `acquire_device` already waits on. The bound on that
- * wait is the bound on one backend call, not on the verb's timeout, because a revoked verb
- * reaches its next backend call and stops there.
+ * **Revocation stops the next backend call, never the round trip already issued.** Nothing
+ * here can cancel a round trip a backend has handed to the device, and pretending otherwise
+ * would be the more dangerous lie. So there is a second half: {@link VerbTraffic.settle}
+ * resolves once the calls on a device have actually unwound, and the restoration a lease's end
+ * starts waits on it — which is in turn what `acquire_device` already waits on.
+ *
+ * **What that wait actually costs, stated rather than assumed.** A revoked verb reaches its
+ * next backend call and stops there, so for a verb built only out of backend calls the wait is
+ * one round trip long — which is already up to `INSTALL_ADB_TIMEOUT_MS` (five minutes) for the
+ * transfer rows, not the small number the phrase suggests. And a verb may await something that
+ * is *not* a backend call at all: `install_app` with no bytes runs a project's install command
+ * as a host process, and `record_video` extracts frames as one. Revoking a backend reaches
+ * neither. That is what {@link VerbCall.signal} is for — it is the half of {@link
+ * VerbTraffic.stop} that can reach work the guard cannot — and why `./restore.ts` bounds its
+ * own wait on {@link VerbTraffic.settle} instead of trusting it to be short.
  *
  * **A call is registered before the preamble, not before the verb.** `./verb-handlers.ts`
  * re-verifies the device between resolving the lease and running anything, and that is an
@@ -74,6 +82,22 @@ export interface VerbCall {
 	 * result to the verb; the verb learns nothing about leases from it.
 	 */
 	guard(backend: DeviceBackend): DeviceBackend;
+	/**
+	 * Aborted the moment the lease ends — the second half of {@link VerbTraffic.stop}, for the
+	 * work {@link VerbCall.guard} cannot reach.
+	 *
+	 * The guard covers everything a verb does *through the backend*, which is almost all of it.
+	 * What it does not cover is a verb awaiting a **host process**: `install_app` with no bytes
+	 * runs a project's install command that way, and its budget is five minutes
+	 * (`INSTALL_HOOK_TIMEOUT_MS`). Left alone, a released lease's build keeps running, {@link
+	 * VerbTraffic.settle} keeps waiting for it, and the restoration — and therefore the next
+	 * `acquire_device` on that device — parks behind it for the whole budget.
+	 *
+	 * So a handler that spawns hands this on and the process is killed with the lease. It is a
+	 * signal rather than a second guard because a child process is not a method call: there is
+	 * nothing to intercept, only something to stop.
+	 */
+	readonly signal: AbortSignal;
 }
 
 export interface VerbTraffic {
@@ -89,7 +113,8 @@ export interface VerbTraffic {
 	 *
 	 * Synchronous, returns at once and never throws — it is called from the lease store's end
 	 * hook, where a throw would abort a grant and a wait would put an `await` in the middle of
-	 * one (`./leases.ts`). It stops the *next* backend call; {@link settle} is the wait.
+	 * one (`./leases.ts`). It stops the *next* backend call and aborts {@link VerbCall.signal},
+	 * which is what reaches a host process the guard cannot; {@link settle} is the wait.
 	 */
 	stop(lease: Lease): void;
 	/**
@@ -103,6 +128,8 @@ interface RegisteredCall {
 	readonly leaseId: LeaseId;
 	/** Flipped by {@link VerbTraffic.stop}; read by every guarded method. Never flipped back. */
 	revoked: boolean;
+	/** Aborted by {@link VerbTraffic.stop}, beside `revoked`. See {@link VerbCall.signal}. */
+	readonly cancel: AbortController;
 	/** Resolves — never rejects — when the call has stopped touching the device. */
 	readonly finished: Promise<void>;
 	readonly finish: () => void;
@@ -121,6 +148,7 @@ export function createVerbTraffic(): VerbTraffic {
 			try {
 				return await work({
 					guard: (backend: DeviceBackend) => revocableBackend(backend, lease, call),
+					signal: call.cancel.signal,
 				});
 			} finally {
 				forgetCall(inFlight, lease.serial, call);
@@ -133,6 +161,9 @@ export function createVerbTraffic(): VerbTraffic {
 				// their call is not this lease's to stop.
 				if (call.leaseId === lease.id) {
 					call.revoked = true;
+					// Beside the flag, not instead of it: the flag stops the next backend call and
+					// this stops a host process the guard never sees. Neither subsumes the other.
+					call.cancel.abort();
 				}
 			}
 		},
@@ -154,7 +185,13 @@ function registerCall(
 	const finished = new Promise<void>((resolve) => {
 		finish = resolve;
 	});
-	const call: RegisteredCall = { leaseId: lease.id, revoked: false, finished, finish };
+	const call: RegisteredCall = {
+		leaseId: lease.id,
+		revoked: false,
+		cancel: new AbortController(),
+		finished,
+		finish,
+	};
 
 	const calls = inFlight.get(lease.serial) ?? new Set<RegisteredCall>();
 	calls.add(call);

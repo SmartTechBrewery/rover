@@ -80,7 +80,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { requireDeviceBackend } from '../backends/registry.js';
 import type { Device } from '../core/device.js';
-import type { LeaseId } from '../core/ids.js';
+import type { DeviceSerial, LeaseId } from '../core/ids.js';
 import type {
 	AppVerbParams,
 	DeviceInfoParams,
@@ -217,16 +217,19 @@ export function createVerbHandlers(
 	/**
 	 * The preamble every verb call shares: renew, register, re-verify, resolve the backend, run.
 	 *
-	 * `run` is handed a context and the lease that authorised it. The context is the whole of
-	 * what reaches the verb layer — a verb never looks a device up and never learns that leases
-	 * exist — and the lease is for the *handler* around it, which is a different layer: only
-	 * `install_app` reads it today, for the `project` it needs to find that project's own
-	 * install command, and it reads it off the lease already resolved above rather than looking
-	 * it up a second time, so the project and the device on one call cannot disagree.
+	 * `run` is handed a context, the lease that authorised it, and the registration that lease's
+	 * end will stop. The context is the whole of what reaches the verb layer — a verb never looks
+	 * a device up and never learns that leases exist — and the other two are for the *handler*
+	 * around it, which is a different layer: only `install_app` reads either today. It reads the
+	 * lease for the `project` it needs to find that project's own install command, off the lease
+	 * already resolved above rather than looking it up a second time, so the project and the
+	 * device on one call cannot disagree; and it reads `call.signal` because the install it
+	 * starts is a host process, which is the one thing `call.guard` cannot take away
+	 * (`./verb-traffic.ts`).
 	 */
 	function runVerb<Result extends ArchivableResult>(
 		leaseId: LeaseId,
-		run: (context: VerbContext, lease: Lease) => Promise<Result>,
+		run: (context: VerbContext, lease: Lease, call: VerbCall) => Promise<Result>,
 	): Promise<VerbCallResultOf<Result>> {
 		// First, and before any await: this is the renewal (D8).
 		const lease = leases.use(leaseId);
@@ -248,7 +251,7 @@ export function createVerbHandlers(
 			if ('refusal' in prepared) {
 				return prepared.refusal;
 			}
-			const answered = await answer(prepared.context, lease, run);
+			const answered = await answer(prepared.context, lease, call, run);
 			if (answered.outcome === 'ok') {
 				// The second effect of the call (D23) — awaited rather than fired and forgotten,
 				// because the bytes are already in memory and bounded, the lease is still held, and
@@ -295,6 +298,35 @@ export function createVerbHandlers(
 		// The one place the guard is applied. The verb receives a backend like any other, and it
 		// stops being able to reach the device the moment this lease ends.
 		return { context: { serial: device.serial, backend: call.guard(backend), manifest } };
+	}
+
+	/**
+	 * The project's install command, run for this call and stopped with this call's lease.
+	 *
+	 * The signal is the whole of why this is not one expression at the `install_app` row: an
+	 * install is a host process, so `call.guard` — which is how every other verb stops when its
+	 * lease ends — reaches nothing here, and without it a released lease's build would keep the
+	 * restoration and every later `acquire_device` on this device waiting out the rest of
+	 * `INSTALL_HOOK_TIMEOUT_MS` (`./verb-traffic.ts`, `./restore.ts`).
+	 *
+	 * A cancelled build answers {@link LeaseEndedError} rather than the `install-hook-failed`
+	 * the runner would otherwise produce. The kill is not the build's own verdict, and the agent
+	 * that asked has already ended its lease: the honest answer is the `no-lease` refusal every
+	 * other revoked verb gives, so one event has one answer whichever verb was running.
+	 */
+	async function runProjectInstall(
+		lease: Lease,
+		call: VerbCall,
+		serial: DeviceSerial,
+	): Promise<void> {
+		try {
+			await installProject(lease.project, serial, call.signal);
+		} catch (error) {
+			if (call.signal.aborted) {
+				throw new LeaseEndedError(lease.serial, lease.id);
+			}
+			throw error;
+		}
 	}
 
 	return {
@@ -396,9 +428,9 @@ export function createVerbHandlers(
 		// from the caller — which is what pins the install to the leased device and keeps it off
 		// a neighbour's.
 		install_app(params: InstallAppParams): Promise<VerbCallResult> {
-			return runVerb(params.leaseId, (context, lease) =>
+			return runVerb(params.leaseId, (context, lease, call) =>
 				params.packageBase64 === undefined
-					? installProjectApp(context, (serial) => installProject(lease.project, serial))
+					? installProjectApp(context, (serial) => runProjectInstall(lease, call, serial))
 					: withPayloadOnDisk(params.packageBase64, (hostPath) => installApp(context, hostPath)),
 			);
 		},
@@ -449,10 +481,11 @@ export function createVerbHandlers(
 async function answer<Result extends ArchivableResult>(
 	context: VerbContext,
 	lease: Lease,
-	run: (context: VerbContext, lease: Lease) => Promise<Result>,
+	call: VerbCall,
+	run: (context: VerbContext, lease: Lease, call: VerbCall) => Promise<Result>,
 ): Promise<VerbCallResultOf<Result>> {
 	try {
-		return { outcome: 'ok', result: await run(context, lease) };
+		return { outcome: 'ok', result: await run(context, lease, call) };
 	} catch (error) {
 		if (error instanceof LeaseEndedError) {
 			// The verb was running and the device stopped being this call's to drive part-way

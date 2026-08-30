@@ -41,8 +41,21 @@ import { readProjectHooks } from './project-hooks.js';
  * nothing a caller sent, which is what makes an install land on the leased device and never on
  * a neighbour's — the worst failure this tool has, and one that looks like success from both
  * sides (PROJECT.md §2).
+ *
+ * **And a way to stop one that is still running.** A build is the longest thing a verb call
+ * awaits on this host and it is not a backend call, so `./verb-traffic.ts`'s guard cannot reach
+ * it: revoking a backend stops the *next* method, and a spawned process has none. So
+ * `./verb-handlers.ts` hands the verb call's own signal down, and a `release_device` — or an
+ * expiry — kills the child instead of leaving `VerbTraffic.settle`, the restoration behind it
+ * and every later `acquire_device` on that device parked for the rest of
+ * `INSTALL_HOOK_TIMEOUT_MS`. Optional because the signal belongs to a verb call: a caller
+ * without one gets the budget and nothing else.
  */
-export type ProjectInstall = (project: string, serial: DeviceSerial) => Promise<void>;
+export type ProjectInstall = (
+	project: string,
+	serial: DeviceSerial,
+	signal?: AbortSignal,
+) => Promise<void>;
 
 export interface ProjectInstallOptions {
 	/** Where the hook files are — `ROVER_PROJECTS_PATH`, resolved once in `./main.ts`. */
@@ -66,7 +79,7 @@ export interface ProjectInstallOptions {
  * @throws InstallHookFailedError when the command ran and did not succeed.
  */
 export function createProjectInstall(options: ProjectInstallOptions): ProjectInstall {
-	return async (project, serial) => {
+	return async (project, serial, signal) => {
 		// Throws for a file that exists and will not parse, and that throw is *not* contained
 		// here the way `./restore.ts` contains the resolver's: a teardown swallowing it still
 		// leaves the device restored, while an install swallowing it would report the caller's
@@ -87,6 +100,9 @@ export function createProjectInstall(options: ProjectInstallOptions): ProjectIns
 				project,
 				serial,
 				timeoutMs: options.hookTimeoutMs ?? INSTALL_HOOK_TIMEOUT_MS,
+				// Omitted rather than passed as `undefined`, so a caller without a verb call behind
+				// it reads as one that never had a signal.
+				...(signal === undefined ? {} : { signal }),
 			});
 		} catch (error) {
 			if (error instanceof HookCommandFailedError) {

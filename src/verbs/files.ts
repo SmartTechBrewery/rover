@@ -125,10 +125,9 @@ export type ProjectInstaller = (serial: DeviceSerial) => Promise<void>;
  * (D19). So it lives here, beside the other numbers that say how long this verb can take.
  *
  * **Generous on purpose, because this is a build and not a teardown.** `HOOK_COMMAND_TIMEOUT_MS`
- * (8 s, `src/daemon/hook-command.ts`) bounds a hook that stops a helper service while a grant
- * queues behind it; nothing queues behind this one, and a real project's install compiles, links
- * and pushes. Its two relationships are stated rather than discovered, and
- * `tests/unit/verbs/files.test.ts` asserts both:
+ * (8 s, `src/daemon/hook-command.ts`) bounds a hook that stops a helper service, and a real
+ * project's install compiles, links and pushes. Its three relationships are stated rather than
+ * discovered, and `tests/unit/verbs/files.test.ts` asserts all three:
  *
  * - **Against the lease TTL (D8)**: `LEASE_TTL_MS` is twenty minutes and the lease is renewed
  *   when the call *arrives*, so an install may not outlive it — a lease expiring under a running
@@ -140,6 +139,15 @@ export type ProjectInstaller = (serial: DeviceSerial) => Promise<void>;
  *   `IpcRequestOptions.timeoutMs` past this, the way `rover record` already derives one from the
  *   budgets inside its call. A caller that does not gets a timeout on its own end while the
  *   build keeps running on the host — which is a hang reported at the wrong machine.
+ * - **Against everybody else's `acquire_device`**: an install runs inside a registered verb call
+ *   (`src/daemon/verb-traffic.ts`), a restoration waits for those calls to unwind, and
+ *   `acquire_device` waits on the restoration. So this is not only how long *this* caller waits
+ *   — left unhandled it is how long the device is unavailable to every other agent on the host.
+ *   Two things keep that from being the case, and both are load-bearing rather than incidental:
+ *   the lease's end **cancels** the install (`VerbCall.signal`, which is what reaches a host
+ *   process a revoked backend cannot), and the restoration bounds its wait anyway at
+ *   `SETTLE_TIMEOUT_MS`. Neither lives in this module, which is precisely why the relationship
+ *   is written down here beside the number that would otherwise be paid.
  */
 export const INSTALL_HOOK_TIMEOUT_MS = 5 * 60_000;
 

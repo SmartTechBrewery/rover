@@ -14,6 +14,8 @@ import type { DeviceBackend } from '@/core/device.js';
 import { FileTooLargeError } from '@/core/errors.js';
 import { HOOK_COMMAND_TIMEOUT_MS } from '@/daemon/hook-command.js';
 import { LEASE_TTL_MS } from '@/daemon/leases.js';
+import { SETTLE_TIMEOUT_MS } from '@/daemon/restore.js';
+import { DEFAULT_REQUEST_TIMEOUT_MS } from '@/ipc/client.js';
 import { MAX_TRANSFER_BYTES, MAX_VERB_TIMEOUT_MS } from '@/ipc/verb-methods.js';
 import { ArtifactTooLargeError, ProjectNotRegisteredError } from '@/verbs/errors.js';
 import {
@@ -378,5 +380,16 @@ describe('how long a project install may take', () => {
 		// The comparison that says what this number is for: a teardown's eight seconds bound a
 		// hook stopping a helper service, and a project's install compiles and pushes.
 		expect(INSTALL_HOOK_TIMEOUT_MS).toBeGreaterThan(HOOK_COMMAND_TIMEOUT_MS);
+	});
+
+	it('is not also how long the device is unavailable to every other agent', () => {
+		// The third relationship, and the only one that is not this caller's own: an install runs
+		// inside a registered verb call, a restoration waits for those calls to unwind, and
+		// `acquire_device` waits on the restoration. What keeps this number off that path is the
+		// restorer's own bound, so that bound has to be a fraction of this one — and inside the
+		// request timeout of the client whose grant is queued behind it, or the daemon finishes
+		// waiting after the caller has already given up and grants the device to nobody.
+		expect(SETTLE_TIMEOUT_MS).toBeLessThan(INSTALL_HOOK_TIMEOUT_MS);
+		expect(SETTLE_TIMEOUT_MS).toBeLessThan(DEFAULT_REQUEST_TIMEOUT_MS);
 	});
 });
