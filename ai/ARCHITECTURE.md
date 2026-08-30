@@ -117,6 +117,7 @@ Backends are genuinely asymmetric and flattening that is the design mistake to a
 - **Semantic screen reading may have no iOS equivalent at all.** On Android it is the one capability that survives an app blocking screen capture. That is why `read_screen` is **not a required method** of the interface but a declared capability the verb layer queries first.
 - A physical Android phone cannot be handed a synthetic fingerprint; an emulator can.
 - **A system log is not one of those asymmetries**, which is why `readLogs` is a *required* method and not a capability: every platform here keeps one, and a flag that is always `true` is noise (`src/core/capabilities.ts`). What differs is the wording inside an entry — that is what the neutral `LogEntry` shape and a backend's own parser absorb.
+- **Moving a file is not one either**, so `pushFile` and `pullFile` are required too. The asymmetry that matters there is the *direction* rather than the platform: a push takes a path on the host, because the host is where the daemon runs, and a pull answers with **bytes**, because the answer is read on the agent's machine (D19).
 
 So: each backend declares its manifest, the verb layer checks before dispatching, and an unbacked verb fails with an error naming the capability and the device. A conformance suite runs once per registered manifest — see `ai/TESTING.md`.
 
@@ -234,8 +235,8 @@ Verbs live above the backends and below the adapters, and this is where determin
   carries **more than an `ActionResult`**: the log entries ride on top of it. That is what factored
   `VerbCallResultSchema` into a `verbCallResultOf()` factory in `src/ipc/verb-methods.ts` and made
   `runVerb` generic in the result type — only the `ok` branch varies, so a failure and a refusal
-  stay one vocabulary whatever was asked, and the next payload-carrying verb (`pull_file`) reuses
-  both rather than forking them. The verb owns the default bound; a backend never invents one, and
+  stay one vocabulary whatever was asked. It is still the only verb that needs that extension:
+  `pull_file`'s payload is bytes, and bytes already have a place on every result. The verb owns the default bound; a backend never invents one, and
   a `truncated` flag it cannot decide for itself keeps a short read from reading as a quiet device.
   Like the app verbs it requires no capability and resolves no target, and like every bounded read
   in this repository it does not follow — a tail that stays open is a wait with no condition and a
@@ -250,6 +251,19 @@ Verbs live above the backends and below the adapters, and this is where determin
   context around an action, it is the entire answer, so D11's loud failure has to come before
   dispatch. `device_info` requires nothing (a required backend method, like the app family) and
   answers with `result.device`. Neither passes a target, for the same reason the app verbs do not.
+- **`installApp()`, `pushFile()` and `pullFile()`** (`src/verbs/files.ts`) are the family whose
+  subject is **which machine a file is on**. The spine again, with `requires: []` and no target for
+  the app family's reasons; what is particular to them is the boundary. Bytes go *in* — a package
+  and a pushed file arrive base64 in the call, because a path from a caller names a file on the
+  wrong machine — and bytes come *out*: `pull_file` puts them on `ActionResult.artifact`, exactly
+  where `screenshot` puts a capture, rather than in a result shape of its own. That reuse is the
+  load-bearing decision rather than an economy: the artifact already refuses an over-sized answer by
+  name instead of cutting it, and an answer with no field for a path is one that can never carry a
+  host path (D19). The host-side file the two inbound rows need is written and removed by the
+  daemon's handler in a `finally` — not by the verb, which touches no filesystem, and not in
+  `src/ipc/`. Two named caps bound the two directions (`MAX_TRANSFER_BYTES` in, `MAX_ARTIFACT_BYTES`
+  out), and both refuse rather than truncate; raising them is R24's row, landing underneath these
+  verbs rather than changing what they promise.
 - **`ActionResult`** names the verb, the device (as `DeviceInfo`, so D14's density travels with the
   measurement), the resolved target and the state after the action. A backend with input but no
   screen reading answers an explicit `unavailable` after-state naming the capability that would have

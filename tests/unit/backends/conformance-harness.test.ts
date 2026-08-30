@@ -118,6 +118,13 @@ class OptedOutBackend implements DeviceBackend {
 			truncated: false,
 		};
 	}
+	async pushFile(serial: DeviceSerial, hostPath: string, devicePath: string): Promise<void> {
+		this.record(`pushFile ${serial} ${hostPath} ${devicePath}`);
+	}
+	async pullFile(serial: DeviceSerial, devicePath: string): Promise<Uint8Array> {
+		this.record(`pullFile ${serial} ${devicePath}`);
+		return new Uint8Array([devicePath.length]);
+	}
 
 	private record(action: string): void {
 		this.performed.push(action);
@@ -316,7 +323,7 @@ describe('checkNoStubbedMethods', () => {
 	it('reports every method of a fully mocked backend', () => {
 		const entry = registeredBackend(createMockDeviceBackend());
 
-		expect(checkNoStubbedMethods(entry)).toHaveLength(17);
+		expect(checkNoStubbedMethods(entry)).toHaveLength(19);
 	});
 });
 

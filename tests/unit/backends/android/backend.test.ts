@@ -1,10 +1,14 @@
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
 	type AdbResult,
 	type AdbStreamHandlers,
 	INSTALL_ADB_TIMEOUT_MS,
 	SCREENSHOT_ADB_TIMEOUT_MS,
+	TRANSFER_ADB_TIMEOUT_MS,
 } from '@/backends/android/adb.js';
 import { AndroidDeviceBackend } from '@/backends/android/backend.js';
 import type { Device, DeviceWatcher } from '@/core/device.js';
@@ -560,6 +564,231 @@ describe('installApp', () => {
 		runAdbOnDevice.mockRejectedValue(new Error('adb -s emulator-5554 install -r … exited 1'));
 
 		await expect(backend.installApp(SERIAL, '/tmp/probe.apk')).rejects.toThrow('exited 1');
+	});
+});
+
+/**
+ * The two transfers, driven off a fake `adb` that behaves the way the real one does in the
+ * one respect this backend depends on: a pull that worked leaves a file where it was told
+ * to, and a pull that did not leaves nothing.
+ *
+ * That is deliberately a **structural** dependency rather than a wording one. Every other
+ * verb here asserts on text captured from a real device (`tests/fixtures/adb/`), and there
+ * is no capture of a failed `adb push`/`adb pull` in this repository — so rather than pin a
+ * remembered message, `pullFile` asks the question a fixture is not needed for. What
+ * `pushFile` therefore does *not* check is recorded on the method itself.
+ */
+describe('the file transfers', () => {
+	const DEVICE_PATH = '/data/local/tmp/rover-probe.bin';
+	/** Not text, not uniform: the three things a transfer can quietly turn a file into. */
+	const CONTENT = Buffer.from([0x00, 0xff, 0x0d, 0x0a, 0x80, 0x7f, 0x01, 0xfe]);
+
+	/** The host directories a test made, removed however the test ends. */
+	const made: string[] = [];
+
+	async function hostFile(name: string, contents: Buffer): Promise<string> {
+		const directory = await mkdtemp(join(tmpdir(), 'rover-backend-test-'));
+		made.push(directory);
+		const path = join(directory, name);
+		await writeFile(path, contents);
+		return path;
+	}
+
+	afterEach(async () => {
+		await Promise.all(
+			made.splice(0).map((directory) => rm(directory, { recursive: true, force: true })),
+		);
+	});
+
+	/** A fake `adb pull` that writes `contents` where it was told, or writes nothing. */
+	function pullsInto(
+		contents: Buffer | null,
+		streams: AdbResult = { stdout: '', stderr: '' },
+	): void {
+		runAdbOnDevice.mockImplementation(async (_serial, args): Promise<AdbResult> => {
+			const destination = args[2];
+			if (contents !== null && destination !== undefined) await writeFile(destination, contents);
+			return streams;
+		});
+	}
+
+	describe('pushFile', () => {
+		it('pushes through the pinned runner, host path first and device path second', async () => {
+			runAdbOnDevice.mockResolvedValue({ stdout: '1 file pushed\n', stderr: '' });
+
+			await backend.pushFile(SERIAL, '/tmp/host/payload', DEVICE_PATH);
+
+			// Pinned, because an unpinned transfer lands on whichever device adb picked
+			// (PROJECT.md §2), and the two paths are both strings — swapping them is the bug
+			// nothing else in this stack would catch.
+			expect(runAdb).not.toHaveBeenCalled();
+			expect(runAdbOnDevice.mock.calls[0][0]).toBe(SERIAL);
+			expect(runAdbOnDevice.mock.calls[0][1]).toEqual(['push', '/tmp/host/payload', DEVICE_PATH]);
+		});
+
+		/**
+		 * The device path reaches adb as an **argv entry**, so it is neither quoted nor
+		 * refused: `push` is an adb subcommand and nothing joins its arguments into a string
+		 * the device's `sh` reads. A path carrying a space or a metacharacter is a file name,
+		 * not a second command — and if this ever went through `shell`, this assertion is the
+		 * one that would have to change with it.
+		 */
+		it('passes the device path through verbatim, with no shell quoting', async () => {
+			runAdbOnDevice.mockResolvedValue({ stdout: '', stderr: '' });
+			const awkward = '/data/local/tmp/a file; echo INJECTED.bin';
+
+			await backend.pushFile(SERIAL, '/tmp/host/payload', awkward);
+
+			expect(runAdbOnDevice.mock.calls[0][1]).toEqual(['push', '/tmp/host/payload', awkward]);
+			expect(runAdbOnDevice.mock.calls[0][1]).not.toContain('shell');
+		});
+
+		it('gives the transfer its own timeout rather than the ten seconds a query gets', async () => {
+			runAdbOnDevice.mockResolvedValue({ stdout: '', stderr: '' });
+
+			await backend.pushFile(SERIAL, '/tmp/host/payload', DEVICE_PATH);
+
+			expect(runAdbOnDevice.mock.calls[0][2]).toEqual({ timeoutMs: TRANSFER_ADB_TIMEOUT_MS });
+		});
+
+		it('lets a non-zero exit surface as the runner reported it', async () => {
+			runAdbOnDevice.mockRejectedValue(new Error('adb -s emulator-5554 push … exited 1'));
+
+			await expect(backend.pushFile(SERIAL, '/tmp/host/payload', DEVICE_PATH)).rejects.toThrow(
+				'exited 1',
+			);
+		});
+	});
+
+	describe('pullFile', () => {
+		it('pulls into a directory on this host and answers with the bytes it finds there', async () => {
+			pullsInto(CONTENT);
+
+			const bytes = await backend.pullFile(SERIAL, DEVICE_PATH);
+
+			expect(Buffer.from(bytes).equals(CONTENT)).toBe(true);
+			expect(runAdbOnDevice.mock.calls[0][0]).toBe(SERIAL);
+			expect(runAdbOnDevice.mock.calls[0][1]?.slice(0, 2)).toEqual(['pull', DEVICE_PATH]);
+			expect(runAdbOnDevice.mock.calls[0][2]).toEqual({ timeoutMs: TRANSFER_ADB_TIMEOUT_MS });
+		});
+
+		/**
+		 * `exec-out cat` is the recipe that circulates for this and it costs bytes twice over: a
+		 * pty can translate every 0x0a on the way through — the trap `screenshot` records — and
+		 * a missing file comes back as an empty stream indistinguishable from an empty file.
+		 */
+		it('never routes the payload through a shell on the device', async () => {
+			pullsInto(CONTENT);
+
+			await backend.pullFile(SERIAL, DEVICE_PATH);
+
+			expect(runAdbOnDevice.mock.calls[0][1]).not.toContain('shell');
+			expect(runAdbOnDevice.mock.calls[0][1]).not.toContain('exec-out');
+			expect(runAdbBinaryOnDevice).not.toHaveBeenCalled();
+		});
+
+		it('removes the file it staged, so nothing is left on a host that lends this device on', async () => {
+			pullsInto(CONTENT);
+
+			await backend.pullFile(SERIAL, DEVICE_PATH);
+
+			const staged = runAdbOnDevice.mock.calls[0][1]?.[2];
+			if (staged === undefined) throw new Error('the pull named no destination');
+			expect(existsSync(staged)).toBe(false);
+		});
+
+		/**
+		 * The structural check, and the reason this method does not need a captured wording: a
+		 * pull that exited 0 and produced no file did not transfer anything, whatever adb said
+		 * about it. Handing back an empty array instead would be a file that is not there
+		 * presenting itself as one that is empty.
+		 */
+		it('throws when the pull produced no file, quoting both streams and the path', async () => {
+			pullsInto(null, {
+				stdout: '',
+				stderr: "adb: error: failed to stat remote object '/data/local/tmp/nope': No such file\n",
+			});
+
+			const failure = backend.pullFile(SERIAL, '/data/local/tmp/nope');
+
+			await expect(failure).rejects.toThrow(/No such file/);
+			await expect(failure).rejects.toThrow(/data\/local\/tmp\/nope/);
+			await expect(failure).rejects.toThrow(/emulator-5554/);
+		});
+
+		it('removes the directory it staged into even when nothing arrived', async () => {
+			pullsInto(null);
+
+			await backend.pullFile(SERIAL, DEVICE_PATH).catch(() => undefined);
+
+			const staged = runAdbOnDevice.mock.calls[0][1]?.[2];
+			if (staged === undefined) throw new Error('the pull named no destination');
+			expect(existsSync(staged)).toBe(false);
+		});
+
+		it('answers for an empty file rather than treating it as a pull that failed', async () => {
+			pullsInto(Buffer.alloc(0));
+
+			await expect(backend.pullFile(SERIAL, DEVICE_PATH)).resolves.toHaveLength(0);
+		});
+	});
+
+	/**
+	 * `adb install` checks the *name* of the file it is given before the device is involved,
+	 * and refuses anything not ending `.apk` or `.apex`. The host-side layer that writes a
+	 * caller's package to disk names it neutrally on purpose — a package format is one
+	 * platform's vocabulary and that layer names none — so the staging below is what joins the
+	 * two without either of them knowing about the other.
+	 */
+	describe('installApp on a file adb would refuse for its name', () => {
+		it('installs a package already named for it, without copying anything', async () => {
+			const packagePath = await hostFile('probe.apk', CONTENT);
+			runAdbOnDevice.mockResolvedValue({ stdout: 'Success\n', stderr: '' });
+
+			await backend.installApp(SERIAL, packagePath);
+
+			expect(runAdbOnDevice.mock.calls[0][1]).toEqual(['install', '-r', packagePath]);
+			expect(existsSync(packagePath)).toBe(true);
+		});
+
+		it('stages one that is not, with the same bytes, and removes the copy afterwards', async () => {
+			const packagePath = await hostFile('payload', CONTENT);
+			let installed: { path: string; contents: Buffer } | null = null;
+			runAdbOnDevice.mockImplementation(async (_serial, args): Promise<AdbResult> => {
+				const path = args[2];
+				if (path === undefined) throw new Error('the install named no package');
+				installed = { path, contents: await readFile(path) };
+				return { stdout: 'Success\n', stderr: '' };
+			});
+
+			await backend.installApp(SERIAL, packagePath);
+
+			if (installed === null) throw new Error('the install never reached the runner');
+			const seen = installed as { path: string; contents: Buffer };
+			// A name adb takes, the caller's bytes unchanged, and the caller's own file untouched.
+			expect(seen.path).toMatch(/\.apk$/);
+			expect(seen.path).not.toBe(packagePath);
+			expect(seen.contents.equals(CONTENT)).toBe(true);
+			expect(existsSync(packagePath)).toBe(true);
+			// And the copy is gone: it exists for one call, on a host that lends this device on.
+			expect(existsSync(seen.path)).toBe(false);
+		});
+
+		it('removes the copy even when the install failed, and names the caller’s own path', async () => {
+			const packagePath = await hostFile('payload', CONTENT);
+			const staged: string[] = [];
+			runAdbOnDevice.mockImplementation(async (_serial, args): Promise<AdbResult> => {
+				const path = args[2];
+				if (path !== undefined) staged.push(path);
+				return { stdout: 'Failure [INSTALL_FAILED_INSUFFICIENT_STORAGE]\n', stderr: '' };
+			});
+
+			// The message names the path the *caller* gave, not a temporary directory this call
+			// has already deleted — the first is something to act on, the second is noise.
+			await expect(backend.installApp(SERIAL, packagePath)).rejects.toThrow(packagePath);
+			expect(staged[0]).toBeDefined();
+			expect(existsSync(staged[0] as string)).toBe(false);
+		});
 	});
 });
 

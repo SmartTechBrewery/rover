@@ -371,6 +371,48 @@ export interface DeviceBackend {
 	 */
 	readLogs(serial: DeviceSerial, options: ReadLogsOptions): Promise<LogRead>;
 
+	/**
+	 * Copy a file from a path on **this host** onto a path on the device.
+	 *
+	 * A host path here is not the thing D19 forbids, and the asymmetry with
+	 * {@link pullFile} below is the whole shape of this pair. The daemon runs on the host, so
+	 * a path is a perfectly good way for one host-side layer to hand a file to another; what
+	 * may never cross the machine boundary is a path *given to or taken from the caller*,
+	 * because the caller is somewhere else. Whoever calls this has already turned the
+	 * caller's bytes into a file of its own (`src/daemon/verb-handlers.ts`), the same way
+	 * {@link installApp} is called.
+	 *
+	 * `devicePath` is validated as a shape at the boundary (`src/ipc/verb-methods.ts`) rather
+	 * than escaped here: it is an argument to the transfer, not a fragment of a command line
+	 * the device interprets, which is why this takes a plain string where the app verbs take
+	 * a branded {@link AppId}. A backend that cannot keep that true — one that would have to
+	 * relay the path through a shell on the device — quotes it itself, exactly as the app
+	 * verbs' backends do.
+	 *
+	 * Nothing here says what happens to a path that already exists, is a directory, or is
+	 * unwritable: those are the device's answers, and a backend surfaces them rather than
+	 * ruling on them. Recursive directory transfer is deliberately not in this contract.
+	 */
+	pushFile(serial: DeviceSerial, hostPath: string, devicePath: string): Promise<void>;
+
+	/**
+	 * The bytes of a file on the device.
+	 *
+	 * **Bytes, not a path**, following {@link screenshot}'s precedent for exactly the same
+	 * reason: the answer is read on the agent's machine, where a path this host wrote would
+	 * name nothing — or, worse, would name something else entirely (D19). Where the bytes
+	 * end up is the caller's own decision and the caller's own disk.
+	 *
+	 * A backend that stages the file on the host on the way through — most will, since that
+	 * is what the platform's own transfer does — removes what it staged before answering.
+	 * That copy is an implementation detail of the backend and never reaches the caller.
+	 *
+	 * Throws when the device has no such file: a missing file is not a device that answered
+	 * with nothing, and answering with an empty array would be indistinguishable from an
+	 * empty file that really is there.
+	 */
+	pullFile(serial: DeviceSerial, devicePath: string): Promise<Uint8Array>;
+
 	// --- Capability-gated: present only when the manifest declares the capability ---
 
 	/**

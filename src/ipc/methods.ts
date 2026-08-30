@@ -25,7 +25,10 @@ import { ProtocolVersionSchema } from './protocol.js';
 import {
 	AppVerbParamsSchema,
 	DeviceInfoParamsSchema,
+	InstallAppParamsSchema,
 	LongPressParamsSchema,
+	PullFileParamsSchema,
+	PushFileParamsSchema,
 	ReadLogsCallResultSchema,
 	ReadLogsParamsSchema,
 	ReadScreenParamsSchema,
@@ -41,12 +44,22 @@ import {
 export {
 	type AppVerbParams,
 	AppVerbParamsSchema,
+	Base64PayloadSchema,
 	type DeviceInfoParams,
 	DeviceInfoParamsSchema,
+	DevicePathSchema,
+	type InstallAppParams,
+	InstallAppParamsSchema,
 	type LongPressParams,
 	LongPressParamsSchema,
+	MAX_DEVICE_PATH_LENGTH,
 	MAX_LOG_ENTRIES,
+	MAX_TRANSFER_BYTES,
 	MAX_VERB_TIMEOUT_MS,
+	type PullFileParams,
+	PullFileParamsSchema,
+	type PushFileParams,
+	PushFileParamsSchema,
 	type ReadLogsCallResult,
 	ReadLogsCallResultSchema,
 	type ReadLogsParams,
@@ -295,18 +308,23 @@ export type ReleaseDeviceResult = z.infer<typeof ReleaseDeviceResultSchema>;
  * variant of it.
  *
  * The verb rows are the two waits, the four gestures, the three read verbs, the three
- * app-lifecycle verbs and the log read; each further verb family is one more row beside them
- * and one more entry in `src/daemon/verb-handlers.ts`. All but one answer with
- * `VerbCallResultSchema`, because "what happened on the device" is one shape whatever was
- * asked of it — which is why none of the read rows needs a result schema of its own:
- * `read_screen` and `device_info` answer with the state every other verb already reports,
- * asked for on its own, and `screenshot`'s bytes ride on `ActionResult.artifact` rather than
- * in a second answer shape. The three app rows share one params schema too, because they take
- * exactly the same call.
+ * app-lifecycle verbs, the log read and the three file transfers; each further verb family
+ * is one more row beside them and one more entry in `src/daemon/verb-handlers.ts`. All but
+ * one answer with `VerbCallResultSchema`, because "what happened on the device" is one shape
+ * whatever was asked of it — which is why none of the read rows needs a result schema of its
+ * own: `read_screen` and `device_info` answer with the state every other verb already
+ * reports, asked for on its own, and `screenshot`'s bytes ride on `ActionResult.artifact`
+ * rather than in a second answer shape. `pull_file` answers there too, for the same reason
+ * and with the same consequence — no path of any kind is in its result. The three app rows
+ * share one params schema too, because they take exactly the same call.
  *
  * `read_logs` is the exception that proves the rule: its answer is that same shape with the
  * log entries added, built by the same factory in `./verb-methods.ts`, so its refusals are
  * word for word every other verb's.
+ *
+ * The two rows that carry bytes **into** the host — `install_app` and `push_file` — are the
+ * only ones whose params are bounded in bytes (`MAX_TRANSFER_BYTES`), and going over that is
+ * `invalid_params` naming the limit rather than a frame the host allocates.
  */
 export const IPC_METHODS = {
 	status: { params: StatusParamsSchema, result: StatusResultSchema },
@@ -326,6 +344,9 @@ export const IPC_METHODS = {
 	stop_app: { params: AppVerbParamsSchema, result: VerbCallResultSchema },
 	clear_app_data: { params: AppVerbParamsSchema, result: VerbCallResultSchema },
 	read_logs: { params: ReadLogsParamsSchema, result: ReadLogsCallResultSchema },
+	install_app: { params: InstallAppParamsSchema, result: VerbCallResultSchema },
+	push_file: { params: PushFileParamsSchema, result: VerbCallResultSchema },
+	pull_file: { params: PullFileParamsSchema, result: VerbCallResultSchema },
 } as const satisfies Record<string, IpcMethodDefinition>;
 
 export type IpcMethodName = keyof typeof IPC_METHODS;

@@ -179,6 +179,8 @@ export function createMockDeviceBackend(overrides: Partial<DeviceBackend> = {}):
 		clearAppData: vi.fn<DeviceBackend['clearAppData']>(async () => {}),
 		screenshot: vi.fn<DeviceBackend['screenshot']>(async () => new Uint8Array([1, 2, 3])),
 		readLogs: vi.fn<DeviceBackend['readLogs']>(async () => createMockLogRead()),
+		pushFile: vi.fn<DeviceBackend['pushFile']>(async () => {}),
+		pullFile: vi.fn<DeviceBackend['pullFile']>(async () => new Uint8Array([4, 5, 6])),
 		readScreen: vi.fn<NonNullable<DeviceBackend['readScreen']>>(async () => []),
 		tap: vi.fn<NonNullable<DeviceBackend['tap']>>(async () => {}),
 		swipe: vi.fn<NonNullable<DeviceBackend['swipe']>>(async () => {}),
@@ -253,6 +255,16 @@ export function createConformingDeviceBackend(
 			return createMockLogRead({
 				entries: [createMockLogEntry({ message: `a line ${serial} printed` })],
 			});
+		},
+		async pushFile(serial, hostPath, devicePath) {
+			performed.push(`pushFile ${serial} ${hostPath} ${devicePath}`);
+		},
+		// Bytes that are neither empty nor all the same, so a body that lost or reordered them
+		// fails a comparison — an empty array here is what the conformance harness flags, and
+		// rightly, since it is what a backend that never implemented this looks like.
+		async pullFile(serial, devicePath) {
+			performed.push(`pullFile ${serial} ${devicePath}`);
+			return new Uint8Array([4, 5, 6]);
 		},
 		async readScreen(serial) {
 			performed.push(`readScreen ${serial}`);

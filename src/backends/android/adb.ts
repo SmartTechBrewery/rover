@@ -38,6 +38,19 @@ export const DEFAULT_ADB_TIMEOUT_MS = 10_000;
 export const INSTALL_ADB_TIMEOUT_MS = 5 * 60_000;
 
 /**
+ * A file transfer in either direction, which is the install above without the platform's
+ * half: the bytes cross the link and nothing else happens.
+ *
+ * The payload is bounded — `MAX_TRANSFER_BYTES` in `src/ipc/verb-methods.ts` caps it at 4
+ * MiB — but the *link* is not: the same 4 MiB is a moment over an emulator's loopback and a
+ * different order of magnitude over USB to a phone that is busy, which is the case this
+ * number exists for. So it mirrors {@link INSTALL_ADB_TIMEOUT_MS} rather than being tuned
+ * against a measurement, and it is a separate constant because the two bound different
+ * things: raising the transfer cap (R24) moves this one and leaves the install alone.
+ */
+export const TRANSFER_ADB_TIMEOUT_MS = 5 * 60_000;
+
+/**
  * The other call that is not a query. A capture is an encode of the whole framebuffer on
  * the device and a transfer of the result: three runs against an API 37 emulator on a
  * fast host each took **2.4 s** for a 1080×2424 screen (PROJECT.md §6), which is two

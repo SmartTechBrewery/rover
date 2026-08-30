@@ -178,12 +178,30 @@ kept, and `truncated` says when there were more, because a short read that reads
 is worse than no read. Following a log would be a wait with no condition and a stream over IPC, and
 is deliberately not here.
 
-The remaining verbs — `type_text`, `press_key`, `install_app`, `pull_file`, `push_file` — are their
-own issues.
+**`install_app`, `push_file` and `pull_file` are the family whose whole subject is *which machine a
+file is on*** (`src/verbs/files.ts`). The agent is somewhere else, the device is here, and the host
+is in between — so a package to install and a file to push arrive **as bytes from the caller's
+machine**, never as a path, and a pulled file goes back **as bytes** on the same `result.artifact`
+a screenshot uses. That means `pull_file`'s answer contains no path at all: where the file lands is
+the client's own decision and the client's own disk. The host writes the inbound bytes to a file of
+its own, hands it to the device, and deletes it in a `finally` — including when the transfer failed,
+which is the case that would otherwise leave somebody's package on a machine that lends the same
+hardware to the next agent. `install_app` carries no application id, because the core knows no
+application's name; what gets installed is the package the caller sent, pinned to the leased device.
+
+**One call carries one whole file, and the limit says so out loud.** A payload over
+`MAX_TRANSFER_BYTES` (4 MiB, derived from the 8 MiB frame cap with base64's inflation accounted
+for) is refused at the boundary with a message naming both its size and the limit — never a file cut
+to fit, because a truncated file is not distinguishable from a whole one. Say the uncomfortable part
+plainly: **a real APK is routinely tens of megabytes**, so `install_app` works today for a small
+package and refuses a large one by name. Chunked transfer is its own issue, and it will land
+underneath these verbs rather than change what they promise.
+
+The remaining verbs — `type_text` and `press_key` — are their own issues.
 
 **The daemon loads the core and runs the verbs**, and a client only asks (D19). The two waits, the
-four gestures, the three app verbs, the three read verbs and the log read are callable over the same
-connection as `acquire_device` — the same envelope,
+four gestures, the three app verbs, the three read verbs, the log read and the three file transfers
+are callable over the same connection as `acquire_device` — the same envelope,
 the same framing, one method table — and a verb call carries the lease id rather than a serial,
 because the lease id is the credential and the host derives the device from it. A verb that fails
 comes back as an *answer* naming what happened — the element was not there, the wait timed out, the
@@ -193,13 +211,18 @@ device cannot read its screen — and never as a broken host; only the host actu
 say so rather than asking politely. Against a real device today all of it runs on the hardware: a
 `tap` at a coordinate injects, `launch_app` and `stop_app` reach the package, `read_screen` and
 `device_info` answer off the hardware, `screenshot` brings back a real PNG of the panel the device
-reports, `read_logs` brings back the device's own log — and, since the Android backend learned to
+reports, `read_logs` brings back the device's own log, `push_file` and `pull_file` move a binary
+file to the device and back byte for byte — and, since the Android backend learned to
 read its own screen — a target addressed by text resolves against a hierarchy read inside the verb,
 both waits poll a real screen, and every action comes back carrying the elements that were on it
-afterwards. One gap is recorded rather than hidden — a device-level
+afterwards. Two gaps are recorded rather than hidden. **`install_app` is not covered by the
+automated suite at all**: there is no APK in this repository and adding a binary to carry one is
+not a change's job, so it is verified by hand and everything else about it — the decode, the host
+temp file and its removal, the size refusal — is covered over a stub backend. And a device-level
 refusal, such as launching a package that is not installed, still reaches the caller as
-`internal_error` rather than as an answer about the device. That is true of every verb family here,
-not just this one, and it is filed as its own issue.
+`internal_error` rather than as an answer about the device — which is what a `pull_file` of a
+path the device does not have reports today. That is true of every verb family here, not just this
+one, and it is filed as its own issue.
 
 **The host can now listen on the network, and only if you ask it to** (D17, D20). Setting
 `ROVER_LISTEN_PORT` — with a host token and a TLS certificate beside it — starts a TCP+TLS

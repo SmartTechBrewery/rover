@@ -20,6 +20,7 @@
  * else `timeoutMs: 0` makes a wait exactly one screen read (`src/core/wait.ts`).
  */
 
+import { access, readFile } from 'node:fs/promises';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
 	_resetDeviceBackendRegistryForTesting,
@@ -38,6 +39,7 @@ import {
 import { type RunningDaemon, startDaemon } from '@/daemon/listen.js';
 import type { IpcClient } from '@/ipc/client.js';
 import { IpcRequestError } from '@/ipc/protocol.js';
+import { MAX_TRANSFER_BYTES } from '@/ipc/verb-methods.js';
 import { LONG_PRESS_DURATION_MS } from '@/verbs/input.js';
 import { DEFAULT_MAX_LOG_ENTRIES } from '@/verbs/logs.js';
 import { MAX_ARTIFACT_BYTES } from '@/verbs/result.js';
@@ -80,12 +82,20 @@ interface HostOptions {
 	readonly describeDevice?: DeviceBackend['describeDevice'];
 	readonly launchApp?: DeviceBackend['launchApp'];
 	readonly readLogs?: DeviceBackend['readLogs'];
+	readonly installApp?: DeviceBackend['installApp'];
+	readonly pullFile?: DeviceBackend['pullFile'];
 	readonly readScreen?: DeviceBackend['readScreen'];
 	readonly deviceInfo?: DeviceBackend['deviceInfo'];
 	readonly capture?: Uint8Array;
 	readonly capabilities?: Partial<Capabilities>;
 	readonly leaseTtlMs?: number;
 }
+
+/**
+ * What a `pull_file` answers with: bytes that are not text, not uniform and not a PNG — the
+ * three things a transfer path can quietly turn a file into on the way through.
+ */
+const PULLED = Uint8Array.from([0x00, 0xff, 0x0d, 0x0a, 0x80, 0x7f, 0x01, 0xfe]);
 
 /**
  * A capture the daemon's device answers with — a PNG signature and then bytes that are not
@@ -121,6 +131,23 @@ let appCalls: Array<{ method: string; serial: string; appId: string }>;
 let logReads: Array<{ serial: string; maxEntries: number }>;
 
 /**
+ * The transfers the daemon's backend received, and — for the two directions that carry a
+ * payload in — **what was actually on the host's disk when the backend was called**.
+ *
+ * The path is recorded rather than the file, because the assertion this file exists for is
+ * that it is *gone* afterwards: the handler writes a caller's bytes into a directory of its
+ * own and removes it in a `finally`, and nothing but a look at the filesystem after the call
+ * can tell that apart from a handler that merely meant to.
+ */
+let transfers: Array<{
+	method: string;
+	serial: string;
+	hostPath?: string;
+	devicePath?: string;
+	contents?: string;
+}>;
+
+/**
  * A daemon on a temp socket with one ready device behind one registered backend.
  *
  * `describeDevice` defaults to answering about whatever serial it was asked, because the
@@ -132,6 +159,7 @@ async function serve(options: HostOptions = {}): Promise<void> {
 	drags = [];
 	appCalls = [];
 	logReads = [];
+	transfers = [];
 	const watchDevices = vi.fn<DeviceBackend['watchDevices']>((watcher: DeviceWatcher) => {
 		watcher.onDevices([attached]);
 		return { stop: vi.fn<DeviceWatch['stop']>(async () => {}) };
@@ -170,6 +198,31 @@ async function serve(options: HostOptions = {}): Promise<void> {
 				(async (serial, { maxEntries }) => {
 					logReads.push({ serial, maxEntries });
 					return createMockLogRead({ entries: [crashed] });
+				}),
+			installApp:
+				options.installApp ??
+				(async (serial, packagePath) => {
+					transfers.push({
+						method: 'installApp',
+						serial,
+						hostPath: packagePath,
+						contents: await readFile(packagePath, 'utf8'),
+					});
+				}),
+			pushFile: async (serial, hostPath, devicePath) => {
+				transfers.push({
+					method: 'pushFile',
+					serial,
+					hostPath,
+					devicePath,
+					contents: await readFile(hostPath, 'utf8'),
+				});
+			},
+			pullFile:
+				options.pullFile ??
+				(async (serial, devicePath) => {
+					transfers.push({ method: 'pullFile', serial, devicePath });
+					return PULLED;
 				}),
 		}),
 	});
@@ -846,6 +899,251 @@ describe('the log row carries a payload back over the same surface', () => {
 		expect(thrown).toBeInstanceOf(IpcRequestError);
 		expect((thrown as IpcRequestError).code).toBe('invalid_params');
 		expect(logReads).toEqual([]);
+	});
+});
+
+/**
+ * The three transfer rows, which are the only ones where **a file crosses the machine
+ * boundary** — and where the host does something no other row does: it turns a caller's
+ * bytes into a file of its own, and gets rid of it again.
+ *
+ * Everything below is asserted over the real socket, against the real framing, because the
+ * base64 payload and the temp file are exactly what a test with the handler called directly
+ * would skip.
+ */
+describe('the transfer rows carry a file across the boundary', () => {
+	/** `n` bytes as a caller would send them. */
+	const payloadOf = (byteLength: number): string =>
+		Buffer.alloc(byteLength, 0x61).toString('base64');
+
+	const PACKAGE = Buffer.from('a package the caller sent', 'utf8').toString('base64');
+	const DEVICE_PATH = '/data/local/tmp/rover-probe.bin';
+
+	/** Whether the path the backend was handed is still on this host's disk. */
+	async function stillOnDisk(path: string): Promise<boolean> {
+		return access(path).then(
+			() => true,
+			() => false,
+		);
+	}
+
+	it('decodes install_app onto a file the backend can read, on the lease’s device', async () => {
+		await serve();
+		const client = await connect();
+		const leaseId = await acquire(client);
+
+		const answer = await client.request('install_app', { leaseId, packageBase64: PACKAGE });
+
+		expect(answer).toMatchObject({
+			outcome: 'ok',
+			// No target — a package addresses no element — and no artifact, because the bytes
+			// went the other way.
+			result: { verb: 'install_app', target: null, artifact: null, device: { serial: SERIAL } },
+		});
+		// The caller's bytes reached the backend as a file it could open, and the install was
+		// pinned to the serial the *lease* names, which the client never sent (D20).
+		expect(transfers).toMatchObject([
+			{ method: 'installApp', serial: SERIAL, contents: 'a package the caller sent' },
+		]);
+	});
+
+	it('removes the file it wrote, once the install has returned', async () => {
+		await serve();
+		const client = await connect();
+		const leaseId = await acquire(client);
+
+		await client.request('install_app', { leaseId, packageBase64: PACKAGE });
+
+		const hostPath = transfers[0]?.hostPath;
+		if (!hostPath) throw new Error('the backend was never handed a path');
+		expect(await stillOnDisk(hostPath)).toBe(false);
+	});
+
+	/**
+	 * **The failure path is the one that matters.** A cleanup that only runs when the transfer
+	 * worked is not a cleanup: the install that threw is exactly the case that leaves a
+	 * caller's package sitting on a host that lends the same hardware to somebody else next.
+	 */
+	it('removes the file it wrote even when the backend threw', async () => {
+		const seen: string[] = [];
+		await serve({
+			installApp: async (_serial, packagePath) => {
+				seen.push(packagePath);
+				throw new Error('INSTALL_FAILED_INSUFFICIENT_STORAGE');
+			},
+		});
+		const client = await connect();
+		const leaseId = await acquire(client);
+
+		// The backend's rejection is not a verb answer, so it arrives as `internal_error` — the
+		// repo-wide gap the app rows already record. What is asserted here is the `finally`.
+		await client
+			.request('install_app', { leaseId, packageBase64: PACKAGE })
+			.catch((error: unknown) => error);
+
+		const hostPath = seen[0];
+		if (!hostPath) throw new Error('the backend was never handed a path');
+		expect(await stillOnDisk(hostPath)).toBe(false);
+	});
+
+	it('pushes a file to the device path the caller named', async () => {
+		await serve();
+		const client = await connect();
+		const leaseId = await acquire(client);
+
+		const answer = await client.request('push_file', {
+			leaseId,
+			devicePath: DEVICE_PATH,
+			contentBase64: Buffer.from('pushed bytes', 'utf8').toString('base64'),
+		});
+
+		expect(answer).toMatchObject({ outcome: 'ok', result: { verb: 'push_file' } });
+		expect(transfers).toMatchObject([
+			{ method: 'pushFile', serial: SERIAL, devicePath: DEVICE_PATH, contents: 'pushed bytes' },
+		]);
+		const hostPath = transfers[0]?.hostPath;
+		if (!hostPath) throw new Error('the backend was never handed a path');
+		expect(await stillOnDisk(hostPath)).toBe(false);
+	});
+
+	/**
+	 * The direction that answers with a payload, and the property the whole row exists for:
+	 * the bytes arrive on the *client* as bytes, and **nothing in the answer is a path** —
+	 * not the host's staging directory, and not the device path either (D19).
+	 */
+	it('answers pull_file with the device’s bytes and no path at all', async () => {
+		await serve();
+		const client = await connect();
+		const leaseId = await acquire(client);
+
+		const answer = await client.request('pull_file', { leaseId, devicePath: DEVICE_PATH });
+
+		expect(answer).toMatchObject({
+			outcome: 'ok',
+			result: {
+				verb: 'pull_file',
+				target: null,
+				device: { serial: SERIAL },
+				artifact: {
+					base64: Buffer.from(PULLED).toString('base64'),
+					byteLength: PULLED.byteLength,
+				},
+			},
+		});
+		if (answer.outcome !== 'ok') throw new Error('the assertion above should have caught this');
+		// Byte for byte, after the encode, the frame and the parse on the way back.
+		expect(Uint8Array.from(Buffer.from(answer.result.artifact?.base64 ?? '', 'base64'))).toEqual(
+			PULLED,
+		);
+		expect(JSON.stringify(answer)).not.toContain(DEVICE_PATH);
+		expect(JSON.stringify(answer)).not.toContain('/tmp/');
+		expect(transfers).toMatchObject([
+			{ method: 'pullFile', serial: SERIAL, devicePath: DEVICE_PATH },
+		]);
+	});
+
+	it('refuses a file too large to answer with by name, rather than one cut to fit', async () => {
+		await serve({ pullFile: async () => new Uint8Array(MAX_ARTIFACT_BYTES + 1) });
+		const client = await connect();
+		const leaseId = await acquire(client);
+
+		const answer = await client.request('pull_file', { leaseId, devicePath: DEVICE_PATH });
+
+		expect(answer).toMatchObject({
+			outcome: 'failed',
+			failure: {
+				kind: 'artifact-too-large',
+				byteLength: MAX_ARTIFACT_BYTES + 1,
+				maxBytes: MAX_ARTIFACT_BYTES,
+			},
+		});
+	});
+
+	/**
+	 * **The acceptance criterion of this row, over the wire.** An over-sized payload is
+	 * `invalid_params` at the boundary — refused before the host decoded anything, opened a
+	 * file or reached a device — and the message names the limit, so the caller learns what to
+	 * do rather than that something went wrong.
+	 */
+	it('refuses a payload over the transfer limit before it writes anything', async () => {
+		await serve();
+		const client = await connect();
+		const leaseId = await acquire(client);
+
+		const thrown = await client
+			.request('install_app', { leaseId, packageBase64: payloadOf(MAX_TRANSFER_BYTES + 1) })
+			.catch((error: unknown) => error);
+
+		expect(thrown).toBeInstanceOf(IpcRequestError);
+		expect((thrown as IpcRequestError).code).toBe('invalid_params');
+		expect((thrown as IpcRequestError).message).toContain(String(MAX_TRANSFER_BYTES));
+		// Nothing was written and no device was touched: the refusal is the whole call.
+		expect(transfers).toEqual([]);
+	});
+
+	it('refuses install_app on a lease id the store does not know, without writing a file', async () => {
+		await serve();
+		const client = await connect();
+
+		// Proof this goes through `runVerb` rather than around it — including the decode, which
+		// happens *inside* it, so a refusal never costs a file on this host.
+		const answer = await client.request('install_app', {
+			leaseId: parseLeaseId('never-granted'),
+			packageBase64: PACKAGE,
+		});
+
+		expect(answer).toMatchObject({ outcome: 'refused', reason: 'no-lease' });
+		expect(transfers).toEqual([]);
+	});
+
+	it.each([
+		['push_file', { devicePath: DEVICE_PATH, contentBase64: PACKAGE }],
+		['pull_file', { devicePath: DEVICE_PATH }],
+	] as const)('refuses %s on a lease id the store does not know', async (method, params) => {
+		await serve();
+		const client = await connect();
+
+		const answer = await client.request(method, {
+			leaseId: parseLeaseId('never-granted'),
+			...params,
+		} as never);
+
+		expect(answer).toMatchObject({ outcome: 'refused', reason: 'no-lease' });
+		expect(transfers).toEqual([]);
+	});
+
+	it('refuses a relative device path rather than resolving it against nobody knows what', async () => {
+		await serve();
+		const client = await connect();
+		const leaseId = await acquire(client);
+
+		const thrown = await client
+			.request('pull_file', { leaseId, devicePath: 'rover-probe.bin' })
+			.catch((error: unknown) => error);
+
+		expect(thrown).toBeInstanceOf(IpcRequestError);
+		expect((thrown as IpcRequestError).code).toBe('invalid_params');
+		expect(transfers).toEqual([]);
+	});
+
+	it('refuses a place on the host to put the pulled file (D19)', async () => {
+		await serve();
+		const client = await connect();
+		const leaseId = await acquire(client);
+
+		const thrown = await client
+			.request('pull_file', {
+				leaseId,
+				devicePath: DEVICE_PATH,
+				// Where the bytes go is the client's own disk. A destination here names a file on
+				// the wrong machine — or, worse, one that exists on both.
+				// @ts-expect-error — the point of the test is what a client that ignored the type gets.
+				destination: '/tmp/pulled.bin',
+			})
+			.catch((error: unknown) => error);
+
+		expect(thrown).toBeInstanceOf(IpcRequestError);
+		expect((thrown as IpcRequestError).code).toBe('invalid_params');
 	});
 });
 
