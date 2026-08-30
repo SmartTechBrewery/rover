@@ -66,8 +66,8 @@ Commands:
   status                   Which host answered, its pid, uptime and protocol version
 
 Global options:
-  --host <name>   Which host to ask. Default 'local'; nothing else is reachable until the
-                  host network listener lands (PROJECT.md R22)
+  --host <name>   Which host to ask: 'local' (the default) or 'remote', the machine
+                  ROVER_HOST_ADDRESS, ROVER_HOST_PORT and ROVER_HOST_TOKEN name
   --json          One JSON document on stdout, every diagnostic on stderr
   --help          This text, or a command's own when given after one
 
@@ -76,10 +76,14 @@ Exit codes:
   1   the operation did not succeed — a refused acquire, a release that found no live
       lease, an unreachable host, or a request the host rejected
   2   usage error — unknown command, unknown flag, a missing required option, an
-      attribution string longer than the host accepts, or a --host nothing can reach yet
+      attribution string longer than the host accepts, or a --host that is neither
+      'local' nor 'remote' — or 'remote' with nothing in the environment naming one
 
-The daemon starts itself on the first call, so nothing here needs starting by hand.
-Set ROVER_SOCKET_PATH to point at a socket other than ~/.rover/rover.sock.`;
+The local daemon starts itself on the first call, so nothing here needs starting by hand;
+a remote host is a service its operator runs and is never started from a client.
+Set ROVER_SOCKET_PATH to point at a socket other than ~/.rover/rover.sock, and
+ROVER_HOST_ADDRESS, ROVER_HOST_PORT and ROVER_HOST_TOKEN (plus ROVER_HOST_CA for a
+certificate to trust) to reach a remote one.`;
 }
 
 /**

@@ -24,9 +24,11 @@ import { DeviceSerialSchema, LeaseIdSchema } from '../core/ids.js';
 import { ProtocolVersionSchema } from './protocol.js';
 import {
 	AppVerbParamsSchema,
+	DeviceInfoParamsSchema,
 	LongPressParamsSchema,
 	ReadLogsCallResultSchema,
 	ReadLogsParamsSchema,
+	ReadScreenParamsSchema,
 	ScrollParamsSchema,
 	SwipeParamsSchema,
 	TapParamsSchema,
@@ -38,6 +40,8 @@ import {
 export {
 	type AppVerbParams,
 	AppVerbParamsSchema,
+	type DeviceInfoParams,
+	DeviceInfoParamsSchema,
 	type LongPressParams,
 	LongPressParamsSchema,
 	MAX_LOG_ENTRIES,
@@ -46,6 +50,8 @@ export {
 	ReadLogsCallResultSchema,
 	type ReadLogsParams,
 	ReadLogsParamsSchema,
+	type ReadScreenParams,
+	ReadScreenParamsSchema,
 	type ScrollParams,
 	ScrollParamsSchema,
 	type SwipeParams,
@@ -285,11 +291,12 @@ export type ReleaseDeviceResult = z.infer<typeof ReleaseDeviceResultSchema>;
  * The names follow the verb table in PROJECT.md §4 (`list_devices`), not a camelCase
  * variant of it.
  *
- * The verb rows are the two waits, the four gestures, the three app-lifecycle verbs and the
- * log read; each further verb family is one more row beside them and one more entry in
- * `src/daemon/verb-handlers.ts`. All but one answer with `VerbCallResultSchema`, because
- * "what happened on the device" is one shape whatever was asked of it — and the three app
- * rows share one params schema too, because they take exactly the same call.
+ * The verb rows are the two waits, the four gestures, the two read verbs, the three
+ * app-lifecycle verbs and the log read; each further verb family is one more row beside them
+ * and one more entry in `src/daemon/verb-handlers.ts`. All but one answer with
+ * `VerbCallResultSchema`, because "what happened on the device" is one shape whatever was
+ * asked of it — and the three app rows share one params schema too, because they take exactly
+ * the same call.
  *
  * `read_logs` is the exception that proves the rule: its answer is that same shape with the
  * log entries added, built by the same factory in `./verb-methods.ts`, so its refusals are
@@ -306,6 +313,8 @@ export const IPC_METHODS = {
 	long_press: { params: LongPressParamsSchema, result: VerbCallResultSchema },
 	swipe: { params: SwipeParamsSchema, result: VerbCallResultSchema },
 	scroll: { params: ScrollParamsSchema, result: VerbCallResultSchema },
+	read_screen: { params: ReadScreenParamsSchema, result: VerbCallResultSchema },
+	device_info: { params: DeviceInfoParamsSchema, result: VerbCallResultSchema },
 	launch_app: { params: AppVerbParamsSchema, result: VerbCallResultSchema },
 	stop_app: { params: AppVerbParamsSchema, result: VerbCallResultSchema },
 	clear_app_data: { params: AppVerbParamsSchema, result: VerbCallResultSchema },

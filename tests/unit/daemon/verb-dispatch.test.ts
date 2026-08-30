@@ -560,6 +560,94 @@ describe('the app rows dispatch like the gestures', () => {
 	});
 });
 
+describe('the read rows dispatch like the app rows', () => {
+	it('answers read_screen with the screen the host read, off one read', async () => {
+		await serve();
+		const client = await connect();
+		const leaseId = await acquire(client);
+
+		const answer = await client.request('read_screen', { leaseId });
+
+		expect(answer).toMatchObject({
+			outcome: 'ok',
+			result: { verb: 'read_screen', target: null, device: { serial: SERIAL } },
+		});
+		if (answer.outcome !== 'ok') throw new Error('the assertion above should have caught this');
+		expect(answer.result.after).toEqual({ kind: 'screen', elements: [save] });
+		expect(reads).toBe(1);
+	});
+
+	it('answers device_info with the device the lease names and its density', async () => {
+		await serve();
+		const client = await connect();
+		const leaseId = await acquire(client);
+
+		const answer = await client.request('device_info', { leaseId });
+
+		expect(answer).toMatchObject({
+			outcome: 'ok',
+			result: {
+				verb: 'device_info',
+				target: null,
+				device: { serial: SERIAL, screen: { density: 480, densityScale: 3, widthDp: 360 } },
+			},
+		});
+	});
+
+	it('fails read_screen loudly without canReadScreen, while device_info still works', async () => {
+		await serve({ capabilities: { canReadScreen: false } });
+		const client = await connect();
+		const leaseId = await acquire(client);
+
+		const read = await client.request('read_screen', { leaseId });
+		expect(read).toMatchObject({
+			outcome: 'failed',
+			failure: { kind: 'missing-capability', capability: 'canReadScreen', serial: SERIAL },
+		});
+		expect(reads).toBe(0);
+
+		const info = await client.request('device_info', { leaseId });
+		expect(info).toMatchObject({ outcome: 'ok', result: { verb: 'device_info' } });
+	});
+
+	it.each([
+		'read_screen',
+		'device_info',
+	] as const)('refuses %s for an unknown lease without touching the device', async (method) => {
+		await serve();
+		const client = await connect();
+		const answer = await client.request(method, { leaseId: parseLeaseId('never-granted') });
+		expect(answer).toMatchObject({ outcome: 'refused', reason: 'no-lease' });
+		expect(reads).toBe(0);
+	});
+
+	it('refuses fields the read rows do not advertise', async () => {
+		await serve();
+		const client = await connect();
+		const leaseId = await acquire(client);
+
+		const readError = await client
+			.request('read_screen', {
+				leaseId,
+				// @ts-expect-error validation test
+				timeoutMs: 1_000,
+			})
+			.catch((error: unknown) => error);
+		expect(readError).toBeInstanceOf(IpcRequestError);
+		expect((readError as IpcRequestError).code).toBe('invalid_params');
+
+		const infoError = await client
+			.request('device_info', {
+				leaseId,
+				// @ts-expect-error validation test
+				serial: 'another-device',
+			})
+			.catch((error: unknown) => error);
+		expect(infoError).toBeInstanceOf(IpcRequestError);
+		expect((infoError as IpcRequestError).code).toBe('invalid_params');
+	});
+});
+
 /**
  * The log row, which is every claim the app rows make plus one more: **the answer carries a
  * payload**. The daemon parses each handler's return value against that row's own schema

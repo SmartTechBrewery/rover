@@ -36,6 +36,12 @@ import {
  * read against the fresh read it takes itself. Where this suite used to assert
  * `missing-capability`, it now asserts the thing the capability was standing in for.
  *
+ * **`read_screen` and `device_info` are on the wire since #67**, and they are the two verbs
+ * whose whole answer is that state rather than an action's consequence. They are asserted
+ * against each other over one lease — the root of the read against the panel `device_info`
+ * describes — because on a device whose size nobody knows in advance that is the only
+ * cross-check there is.
+ *
  * **Only one point on the device is ever touched**, and it is {@link HARMLESS_POINT}. That
  * is the rule the whole suite is bounded by, and it is why every target below is either
  * absent from the screen, resolved by a verb that touches nothing, or that one coordinate.
@@ -381,6 +387,91 @@ describe.skipIf(!process.env.ROVER_TEST_DEVICE)('a daemon runs verbs on its own 
 			outcome: 'failed',
 			failure: { kind: 'target-not-found', serial: device.serial },
 		});
+	});
+
+	/**
+	 * The read rows against real hardware, which is the join this suite exists for: a screen
+	 * read arriving over a socket, off a lease, from the process that owns the device.
+	 *
+	 * Both verbs run over the same lease and are asserted against **each other**, because
+	 * that is the only cross-check available on a device nobody knows the size of in advance:
+	 * the root of the read has to be the panel `device_info` describes. Had the backend's
+	 * px→dp conversion been skipped, or had the two verbs answered about different devices,
+	 * these rectangles would disagree by the density scale. `tests/device/android/backend.test.ts`
+	 * makes the same comparison one layer down, against the backend directly; what is new here
+	 * is that both numbers crossed the protocol.
+	 *
+	 * The dump follows the current surface while the panel is reported unrotated, so the two
+	 * are compared as an **unordered** pair — on a rotated device they are each other's
+	 * transpose (PROJECT.md §6).
+	 */
+	it('reads the real screen and describes the device it read, over one lease', async () => {
+		const client = await startHost();
+		const device = await freeDevice(client);
+		const leaseId = await lease(client, device.serial);
+
+		const read = await client.request('read_screen', { leaseId });
+		const info = await client.request('device_info', { leaseId });
+
+		expect(read).toMatchObject({
+			outcome: 'ok',
+			// A read addresses nothing on the screen, it *is* the screen (D12(a)).
+			result: { verb: 'read_screen', target: null, device: { serial: device.serial } },
+		});
+		expect(info).toMatchObject({
+			outcome: 'ok',
+			result: { verb: 'device_info', target: null, device: { serial: device.serial } },
+		});
+		if (read.outcome !== 'ok' || info.outcome !== 'ok') {
+			throw new Error('the assertions above should have caught this');
+		}
+		if (read.result.after.kind !== 'screen') {
+			throw new Error(`the device could not report its screen: ${JSON.stringify(read.result)}`);
+		}
+
+		const { elements } = read.result.after;
+		expect(elements.length).toBeGreaterThan(0);
+		// A screen every one of whose elements carries neither a text nor a label is one no
+		// verb could address by name, and would mean both attributes were being dropped.
+		expect(elements.some((element) => element.text !== null || element.label !== null)).toBe(true);
+
+		const root = elements[0]?.bounds;
+		if (!root) throw new Error('the read answered with no root element');
+		const { screen } = info.result.device;
+		const measured = [root.width, root.height].sort((a, b) => a - b);
+		const reported = [screen.widthDp, screen.heightDp].sort((a, b) => a - b);
+		expect(measured[0]).toBeCloseTo(reported[0] as number, 6);
+		expect(measured[1]).toBeCloseTo(reported[1] as number, 6);
+	});
+
+	/**
+	 * D14 over the wire: size, density, the computed dp width and the OS version, all named
+	 * beside the device they were measured on.
+	 *
+	 * No number is hardcoded — the machine running this has a different device from the one
+	 * that wrote it — so what is asserted is the arithmetic relating them, which is what a
+	 * conversion done in the wrong direction would break.
+	 */
+	it('reports size, density, computed dp width and OS version off the real device', async () => {
+		const client = await startHost();
+		const device = await freeDevice(client);
+		const leaseId = await lease(client, device.serial);
+
+		const answer = await client.request('device_info', { leaseId });
+
+		if (answer.outcome !== 'ok') {
+			throw new Error(`device_info did not answer: ${JSON.stringify(answer)}`);
+		}
+		const { screen, osVersion, platform } = answer.result.device;
+		expect(platform).toBe('android');
+		expect(screen.widthPx).toBeGreaterThan(0);
+		expect(screen.heightPx).toBeGreaterThan(0);
+		expect(screen.density).toBeGreaterThan(0);
+		// The dp values are exact quotients rather than rounded ones, and this is the assertion
+		// that a skipped conversion could not pass.
+		expect(screen.widthDp).toBeCloseTo(screen.widthPx / screen.densityScale, 10);
+		expect(screen.heightDp).toBeCloseTo(screen.heightPx / screen.densityScale, 10);
+		expect(osVersion).toBeTruthy();
 	});
 
 	/**

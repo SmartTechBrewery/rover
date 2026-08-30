@@ -189,6 +189,14 @@ export const ReadLogsParamsSchema = VerbCallBaseSchema.extend({
 }).strict();
 export type ReadLogsParams = z.infer<typeof ReadLogsParamsSchema>;
 
+/** What a `read_screen` call carries: the lease id, and nothing else. */
+export const ReadScreenParamsSchema = VerbCallBaseSchema.strict();
+export type ReadScreenParams = z.infer<typeof ReadScreenParamsSchema>;
+
+/** What a `device_info` call carries — the same one field, for the same reasons. */
+export const DeviceInfoParamsSchema = VerbCallBaseSchema.strict();
+export type DeviceInfoParams = z.infer<typeof DeviceInfoParamsSchema>;
+
 /**
  * Why a call never reached a verb at all.
  *

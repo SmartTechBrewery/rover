@@ -54,8 +54,8 @@ code. `list` shows what is attached, what is free and who holds the rest — the
 test name, and how much longer they have — and says out loud when the host does not know its own
 view to be current, rather than quietly printing a short list. `acquire` requires an explicit
 `--owner` and `--project` and derives neither. `status` says which host answered. The host is named
-by `--host`; no flag means the local one, and `local` is the only value reachable until the network
-listener lands (`PROJECT.md` R22), so anything else fails loudly instead of hanging.
+by `--host`: no flag means the local one, `remote` is the machine `ROVER_HOST_ADDRESS`,
+`ROVER_HOST_PORT` and `ROVER_HOST_TOKEN` name, and anything else fails loudly instead of hanging.
 
 **Waiting is a condition, never a duration.** `src/core/wait.ts` is the one module in the
 repository allowed to construct a delay: `waitForCondition` polls a probe until it reports the
@@ -131,8 +131,14 @@ capability either, and say so with an explicit empty list: the three backend met
 no backend method, no capability and no result shape — the whole family is one module, one params
 schema shared by all three, and three rows on the method table. `stop_app` cannot tell "stopped it"
 from "there was no such package", because the device is silent either way; the state after the
-action is what will answer that once `read_screen` lands, and there is deliberately no probe
-pretending otherwise in the meantime.
+action is what answers that, and there is deliberately no probe pretending otherwise.
+
+**`read_screen` and `device_info` are the same spine again, with nothing in the middle**
+(`src/verbs/read.ts`). Every other verb does something and then reports the state after it; these
+two ask for that state and nothing else, so their action is empty and the answer is the capture the
+spine already performs for every verb. `read_screen` returns texts and element rectangles in dp and
+requires `canReadScreen`; `device_info` requires no capability and returns the device information
+already present on every action result.
 
 **`read_logs` is the verb that sees what a screenshot cannot** (`src/verbs/logs.ts`), and it is the
 first one whose answer carries a payload of its own: the device's log, parsed into neutral entries —
@@ -144,10 +150,10 @@ device, where a crashed app is named in the read while nothing on the screen nam
 kept, and `truncated` says when there were more, because a short read that reads as a quiet device
 is worse than no read. Following a log would be a wait with no condition and a stream over IPC, and
 is deliberately not here. The remaining verbs — `type_text`, `press_key`, `screenshot`,
-`read_screen`, `install_app`, `pull_file`, `push_file` — are their own issues.
+`install_app`, `pull_file`, `push_file` — are their own issues.
 
 **The daemon loads the core and runs the verbs**, and a client only asks (D19). The two waits, the
-four gestures, the three app verbs and the log read are callable over the same connection as
+four gestures, the two read verbs, the three app verbs and the log read are callable over the same connection as
 `acquire_device` — the same envelope,
 the same framing, one method table — and a verb call carries the lease id rather than a serial,
 because the lease id is the credential and the host derives the device from it. A verb that fails

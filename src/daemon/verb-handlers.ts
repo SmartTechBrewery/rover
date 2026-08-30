@@ -52,10 +52,12 @@ import type { Device } from '../core/device.js';
 import type { LeaseId } from '../core/ids.js';
 import type {
 	AppVerbParams,
+	DeviceInfoParams,
 	IpcHandlers,
 	LongPressParams,
 	ReadLogsCallResult,
 	ReadLogsParams,
+	ReadScreenParams,
 	ScrollParams,
 	SwipeParams,
 	TapParams,
@@ -77,6 +79,7 @@ import {
 	tap,
 } from '../verbs/input.js';
 import { type ReadLogsVerbOptions, readLogs } from '../verbs/logs.js';
+import { deviceInfo, readScreen } from '../verbs/read.js';
 import type { ActionResult } from '../verbs/result.js';
 import { type WaitVerbOptions, waitFor, waitUntilGone } from '../verbs/wait-for.js';
 import type { DeviceInventory } from './inventory.js';
@@ -92,6 +95,8 @@ export type VerbHandlers = Pick<
 	| 'long_press'
 	| 'swipe'
 	| 'scroll'
+	| 'read_screen'
+	| 'device_info'
 	| 'launch_app'
 	| 'stop_app'
 	| 'clear_app_data'
@@ -215,6 +220,14 @@ export function createVerbHandlers(
 					...(params.target === undefined ? {} : { target: params.target }),
 				} satisfies ScrollOptions),
 			);
+		},
+
+		read_screen(params: ReadScreenParams): Promise<VerbCallResult> {
+			return runVerb(params.leaseId, (context) => readScreen(context));
+		},
+
+		device_info(params: DeviceInfoParams): Promise<VerbCallResult> {
+			return runVerb(params.leaseId, (context) => deviceInfo(context));
 		},
 
 		// The three app rows. They call the *verb* of that name and never `context.backend.*`,

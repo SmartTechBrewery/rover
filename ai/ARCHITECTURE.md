@@ -226,6 +226,10 @@ Verbs live above the backends and below the adapters, and this is where determin
   Like the app verbs it requires no capability and resolves no target, and like every bounded read
   in this repository it does not follow — a tail that stays open is a wait with no condition and a
   stream over a protocol built for request and response.
+- **`readScreen()` and `deviceInfo()`** (`src/verbs/read.ts`) use the same spine with an empty
+  action: their answer is the state every verb already captures. `readScreen()` requires
+  `canReadScreen` so an unavailable backend fails loudly before dispatch; `deviceInfo()` requires
+  nothing and returns the device information carried by every result.
 - **`ActionResult`** names the verb, the device (as `DeviceInfo`, so D14's density travels with the
   measurement), the resolved target and the state after the action. A backend with input but no
   screen reading answers an explicit `unavailable` after-state naming the capability that would have
