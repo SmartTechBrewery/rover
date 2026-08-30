@@ -45,6 +45,7 @@ function statusHandlers(overrides: Partial<IpcHandlers> = {}): IpcHandlers {
 		launch_app: () => refusedWithoutAHost(),
 		stop_app: () => refusedWithoutAHost(),
 		clear_app_data: () => refusedWithoutAHost(),
+		read_logs: () => refusedWithoutAHost(),
 		...overrides,
 	};
 }

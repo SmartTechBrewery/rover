@@ -107,7 +107,7 @@ This is the **local** host only. A remote host is a long-running service its ope
 
 ## The device abstraction
 
-One interface, several backends, registered through a manifest (`ai/CODING_STANDARDS.md`, "Module shape for a device backend"). The interface covers: enumeration and being told when the attached set changes, lifecycle, device facts (screen size, density, the derived dp scale and the OS version), install, app control, screen capture, hierarchy read, input, and environment (network state).
+One interface, several backends, registered through a manifest (`ai/CODING_STANDARDS.md`, "Module shape for a device backend"). The interface covers: enumeration and being told when the attached set changes, lifecycle, device facts (screen size, density, the derived dp scale and the OS version), install, app control, screen capture, the system-log read, hierarchy read, input, and environment (network state).
 
 ### Capabilities, not a lowest common denominator
 
@@ -116,6 +116,7 @@ Backends are genuinely asymmetric and flattening that is the design mistake to a
 - `simctl` cannot tap and cannot dump a hierarchy. Input and tree reads on iOS need `idb` or WebDriverAgent — a heavy dependency with its own lifecycle.
 - **Semantic screen reading may have no iOS equivalent at all.** On Android it is the one capability that survives an app blocking screen capture. That is why `read_screen` is **not a required method** of the interface but a declared capability the verb layer queries first.
 - A physical Android phone cannot be handed a synthetic fingerprint; an emulator can.
+- **A system log is not one of those asymmetries**, which is why `readLogs` is a *required* method and not a capability: every platform here keeps one, and a flag that is always `true` is noise (`src/core/capabilities.ts`). What differs is the wording inside an entry — that is what the neutral `LogEntry` shape and a backend's own parser absorb.
 
 So: each backend declares its manifest, the verb layer checks before dispatching, and an unbacked verb fails with an error naming the capability and the device. A conformance suite runs once per registered manifest — see `ai/TESTING.md`.
 
@@ -229,6 +230,16 @@ Verbs live above the backends and below the adapters, and this is where determin
   device-level refusal, such as launching a package that is not installed, is still a rejected
   promise out of the backend and so arrives as `internal_error`. That is true of every verb family
   here and is filed as its own issue rather than fixed one family at a time.
+- **`readLogs()`** (`src/verbs/logs.ts`) is the same spine again, and the first verb whose answer
+  carries **more than an `ActionResult`**: the log entries ride on top of it. That is what factored
+  `VerbCallResultSchema` into a `verbCallResultOf()` factory in `src/ipc/verb-methods.ts` and made
+  `runVerb` generic in the result type — only the `ok` branch varies, so a failure and a refusal
+  stay one vocabulary whatever was asked, and the next payload-carrying verb (`pull_file`) reuses
+  both rather than forking them. The verb owns the default bound; a backend never invents one, and
+  a `truncated` flag it cannot decide for itself keeps a short read from reading as a quiet device.
+  Like the app verbs it requires no capability and resolves no target, and like every bounded read
+  in this repository it does not follow — a tail that stays open is a wait with no condition and a
+  stream over a protocol built for request and response.
 - **`readScreen()` and `deviceInfo()`** (`src/verbs/read.ts`) are the spine with the *middle* left
   out: their action is empty, because a read verb's work is the capture `performAction()` already
   performs for every verb — the screen for the after-state, the device for D14. Routing them

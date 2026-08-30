@@ -47,6 +47,7 @@ export const REQUIRED_BACKEND_METHODS = [
 	'stopApp',
 	'clearAppData',
 	'screenshot',
+	'readLogs',
 ] as const satisfies ReadonlyArray<RequiredBackendMethod>;
 
 /** The capability vocabulary, read off the mapping rather than restated (D11). */

@@ -31,6 +31,11 @@
  * Every further verb family inherits that by being run through {@link runVerb} — there is
  * nothing here for a verb author to remember, which is the point.
  *
+ * **{@link runVerb} is generic in what the verb answers with**, because one of them now carries
+ * a payload beyond `ActionResult` (`read_logs`, and `pull_file` after it). Only the `ok` branch
+ * varies: the three refusal branches are untouched by that, which is the point rather than an
+ * economy — a refusal is one vocabulary whatever was asked of the device.
+ *
  * **None of `./lease-handlers.ts`'s await-ordering constraint applies here**, and that is
  * worth saying so nobody copies a rule that does not hold: nothing in this file takes
  * anything exclusive. The lease is already held, and holding it is what makes this call
@@ -50,12 +55,16 @@ import type {
 	DeviceInfoParams,
 	IpcHandlers,
 	LongPressParams,
+	ReadLogsCallResult,
+	ReadLogsParams,
 	ReadScreenParams,
 	ScreenshotParams,
 	ScrollParams,
 	SwipeParams,
 	TapParams,
+	VerbCallRefusal,
 	VerbCallResult,
+	VerbCallResultOf,
 	WaitForParams,
 	WaitUntilGoneParams,
 } from '../ipc/methods.js';
@@ -70,6 +79,7 @@ import {
 	swipe,
 	tap,
 } from '../verbs/input.js';
+import { type ReadLogsVerbOptions, readLogs } from '../verbs/logs.js';
 import { deviceInfo, readScreen, screenshot } from '../verbs/read.js';
 import type { ActionResult } from '../verbs/result.js';
 import { type WaitVerbOptions, waitFor, waitUntilGone } from '../verbs/wait-for.js';
@@ -92,6 +102,7 @@ export type VerbHandlers = Pick<
 	| 'launch_app'
 	| 'stop_app'
 	| 'clear_app_data'
+	| 'read_logs'
 >;
 
 /**
@@ -100,7 +111,7 @@ export type VerbHandlers = Pick<
  * Two shapes rather than a nullable context, so a refusal cannot be mistaken for "nothing
  * went wrong" by whoever reads it next.
  */
-type Prepared = { readonly context: VerbContext } | { readonly refusal: VerbCallResult };
+type Prepared = { readonly context: VerbContext } | { readonly refusal: VerbCallRefusal };
 
 export function createVerbHandlers(
 	inventory: DeviceInventory,
@@ -113,10 +124,10 @@ export function createVerbHandlers(
 	 * `run` is handed a context and nothing else, which is the verb layer's contract — it
 	 * never looks a device up and never learns that leases exist.
 	 */
-	function runVerb(
+	function runVerb<Result extends ActionResult>(
 		leaseId: LeaseId,
-		run: (context: VerbContext) => Promise<ActionResult>,
-	): Promise<VerbCallResult> {
+		run: (context: VerbContext) => Promise<Result>,
+	): Promise<VerbCallResultOf<Result>> {
 		// First, and before any await: this is the renewal (D8).
 		const lease = leases.use(leaseId);
 		if (!lease) {
@@ -132,7 +143,7 @@ export function createVerbHandlers(
 		// Registered before the re-verification, because that is an await like any other: a call
 		// registered after it would leave a window in which the lease ends, finds nothing to
 		// revoke, and the verb starts driving a device the host has already handed on.
-		return traffic.run(lease, async (call) => {
+		return traffic.run<VerbCallResultOf<Result>>(lease, async (call) => {
 			const prepared = await prepare(lease, call);
 			return 'refusal' in prepared ? prepared.refusal : answer(prepared.context, run);
 		});
@@ -244,6 +255,13 @@ export function createVerbHandlers(
 		clear_app_data(params: AppVerbParams): Promise<VerbCallResult> {
 			return runVerb(params.leaseId, (context) => clearAppData(context, params.appId));
 		},
+
+		// The one row whose answer carries a payload of its own, and it goes through exactly the
+		// same preamble as the rest — `runVerb` is generic in the `ActionResult` subtype the verb
+		// returns, so what it answers when no verb ran is word for word a gesture's.
+		read_logs(params: ReadLogsParams): Promise<ReadLogsCallResult> {
+			return runVerb(params.leaseId, (context) => readLogs(context, logOptions(params)));
+		},
 	};
 }
 
@@ -251,10 +269,10 @@ export function createVerbHandlers(
  * Run the verb, and turn what comes back into one of the answers that mean it ran — or into
  * the one refusal that can arrive after a verb has already started.
  */
-async function answer(
+async function answer<Result extends ActionResult>(
 	context: VerbContext,
-	run: (context: VerbContext) => Promise<ActionResult>,
-): Promise<VerbCallResult> {
+	run: (context: VerbContext) => Promise<Result>,
+): Promise<VerbCallResultOf<Result>> {
 	try {
 		return { outcome: 'ok', result: await run(context) };
 	} catch (error) {
@@ -304,6 +322,16 @@ function waitOptions(params: {
  */
 function gestureOptions(params: { readonly durationMs?: number }): GestureOptions {
 	return params.durationMs === undefined ? {} : { durationMs: params.durationMs };
+}
+
+/**
+ * The one log knob a call may carry, omitted rather than passed as `undefined` for the
+ * reason {@link waitOptions} and {@link gestureOptions} omit theirs: the verb's own default
+ * is what a caller who said nothing asked for, and the host must not be the second place
+ * that number is decided.
+ */
+function logOptions(params: { readonly maxEntries?: number }): ReadLogsVerbOptions {
+	return params.maxEntries === undefined ? {} : { maxEntries: params.maxEntries };
 }
 
 /** The error's own words: it already names the device and says what happened to it. */

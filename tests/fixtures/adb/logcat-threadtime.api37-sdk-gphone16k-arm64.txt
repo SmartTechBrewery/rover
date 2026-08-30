@@ -1,0 +1,61 @@
+--------- beginning of main
+08-30 10:54:11.130   472   570 W skia    : AGTM parsing failed flags.readFromStream(s) at 159
+08-30 10:54:11.849 14878 14878 I wpa_supplicant: wlan0: CTRL-EVENT-BEACON-LOSS 
+08-30 10:54:12.656   635   777 I HalDevMgr: bestIfaceCreationProposal is null, requestIface=STA, existingIface=[name=wlan0 type=STA]
+08-30 10:54:12.658   635   790 W libbinder.IPCThreadState: Sending oneway calls to frozen process.
+08-30 10:54:12.658   635   790 W libbinder.IPCThreadState: Sending oneway calls to frozen process.
+08-30 10:54:12.658   635   790 W libbinder.IPCThreadState: Sending oneway calls to frozen process.
+08-30 10:54:12.658   635   790 W libbinder.IPCThreadState: Sending oneway calls to frozen process.
+08-30 10:54:12.658   635   790 W libbinder.IPCThreadState: Sending oneway calls to frozen process.
+08-30 10:54:12.658   635   790 W libbinder.IPCThreadState: Sending oneway calls to frozen process.
+08-30 10:54:12.658   635   790 W libbinder.IPCThreadState: Sending oneway calls to frozen process.
+08-30 10:54:12.658   635   790 W libbinder.IPCThreadState: Sending oneway calls to frozen process.
+08-30 10:54:12.658   635   790 W libbinder.IPCThreadState: Sending oneway calls to frozen process.
+08-30 10:54:12.658   635   790 W libbinder.IPCThreadState: Sending oneway calls to frozen process.
+08-30 10:54:12.658 25703 26440 D WM-WorkConstraintsTrack: NetworkRequestConstraintController onCapabilitiesChanged callback
+08-30 10:54:12.660 26229 26269 I BugleRcsEngine: Connected state: [1], networkType: [WIFI] [CONTEXT thread_id=62 ]
+08-30 10:54:12.660   635   790 D ConnectivityService: NetReassign [no changes] [c 1] [a 0] [i 1]
+08-30 10:54:12.660 26229 26277 I BugleRcsEngine: handleMessage processing message:[NOTIFY_UPTIME_IGNORE_STATE_CHANGED] with [non-null]:RcsEngineImpl reference [CONTEXT log_prefix="RcsEngineImpl[DUAL_REG]:[6a074b6e-2753]>Handler" thread_id=70 ]
+08-30 10:54:12.661  1220  7248 I NullBinder: NullBinder for android.net.action.RECOMMEND_NETWORKS triggering remote TransactionTooLargeException due to Service without Chimera impl, calling uid: 1000, calling pid: 0
+08-30 10:54:12.661  1220  7248 W libbinder.Binder: Large reply transaction of 1056768 bytes, interface descriptor , function: UNKNOWN_FUNCTION_NAME, code: 1, flags: 17
+08-30 10:54:12.661  1220  5764 I NearbyMediums: Wifi changed new SSID: "AndroidWifi"
+08-30 10:54:12.661  1220  5764 I NearbyMediums: WifiLanConnectivityInfo is not changed, skip notify.
+08-30 10:54:12.664 26229 26277 I BugleRcsEngine: No RCS Configuration was found in Bugle for simID: redacted-pii:sim_id[chars:20,last3:897] [CONTEXT log_prefix="ProvisioningEngineDataRetriever" thread_id=70 ]
+08-30 10:54:13.160  1220  1220 I NearbySharing: Network state changed: NetworkState(isRestricted=false, isOnline=true, isCongested=false, isMetered=false, isWifiConnected=true)
+08-30 10:54:15.665   635   777 I HalDevMgr: bestIfaceCreationProposal is null, requestIface=STA, existingIface=[name=wlan0 type=STA]
+08-30 10:54:18.673   635   777 I HalDevMgr: bestIfaceCreationProposal is null, requestIface=STA, existingIface=[name=wlan0 type=STA]
+08-30 10:54:18.713   476   476 I adbd    : adbd service requested 'shell,v2,TERM=xterm-256color,raw:dumpsys package com.google.android.gms'
+08-30 10:54:18.780  3465  3466 I artd    : GetBestInfo: odex next to the dex file (/data/app/~~3cVnfQ_iF19rzcXAKNavjg==/com.google.android.gms-e5Fu0DSm_Lqoyo_Cu6ZgLg==/oat/arm64/base.odex) is kOatUpToDate with filter 'speed-profile' executable 'false'
+08-30 10:54:18.782  3465  3466 I artd    : GetBestInfo: dm (/data/app/~~3cVnfQ_iF19rzcXAKNavjg==/com.google.android.gms-e5Fu0DSm_Lqoyo_Cu6ZgLg==/split_AdsDynamite_installtime.dm) is kOatUpToDate with filter 'verify' executable 'false'
+08-30 10:54:18.783  3465  3466 I artd    : GetBestInfo: odex next to the dex file (/data/app/~~3cVnfQ_iF19rzcXAKNavjg==/com.google.android.gms-e5Fu0DSm_Lqoyo_Cu6ZgLg==/oat/arm64/split_CronetDynamite_installtime.odex) is kOatUpToDate with filter 'speed-profile' executable 'false'
+08-30 10:54:18.785  3465  3466 I artd    : GetBestInfo: dm (/data/app/~~3cVnfQ_iF19rzcXAKNavjg==/com.google.android.gms-e5Fu0DSm_Lqoyo_Cu6ZgLg==/split_DynamiteLoader_installtime.dm) is kOatUpToDate with filter 'verify' executable 'false'
+08-30 10:54:18.786  3465  3466 I artd    : GetBestInfo: dm (/data/app/~~3cVnfQ_iF19rzcXAKNavjg==/com.google.android.gms-e5Fu0DSm_Lqoyo_Cu6ZgLg==/split_DynamiteModulesA_installtime.dm) is kOatUpToDate with filter 'verify' executable 'false'
+08-30 10:54:18.787  3465  3466 I artd    : GetBestInfo: dm (/data/app/~~3cVnfQ_iF19rzcXAKNavjg==/com.google.android.gms-e5Fu0DSm_Lqoyo_Cu6ZgLg==/split_DynamiteModulesC_installtime.dm) is kOatUpToDate with filter 'verify' executable 'false'
+08-30 10:54:18.788  3465  3466 I artd    : GetBestInfo: dm (/data/app/~~3cVnfQ_iF19rzcXAKNavjg==/com.google.android.gms-e5Fu0DSm_Lqoyo_Cu6ZgLg==/split_GoogleCertificates_installtime.dm) is kOatUpToDate with filter 'verify' executable 'false'
+08-30 10:54:18.790  3465  3466 I artd    : GetBestInfo: dm (/data/app/~~3cVnfQ_iF19rzcXAKNavjg==/com.google.android.gms-e5Fu0DSm_Lqoyo_Cu6ZgLg==/split_MapsDynamite_installtime.dm) is kOatUpToDate with filter 'verify' executable 'false'
+08-30 10:54:18.791  3465  3466 I artd    : GetBestInfo: dm (/data/app/~~3cVnfQ_iF19rzcXAKNavjg==/com.google.android.gms-e5Fu0DSm_Lqoyo_Cu6ZgLg==/split_MeasurementDynamite_installtime.dm) is kOatUpToDate with filter 'verify' executable 'false'
+08-30 10:54:18.792  3465  3466 I artd    : GetBestInfo: /data/user_de/0/com.google.android.gms/app_chimera/m/00000015/dl-TfliteDynamiteDynamite.integ_252130102100400.apk has no usable artifacts
+08-30 10:54:18.793  3465  3466 I artd    : GetBestInfo: /data/user_de/0/com.google.android.gms/app_chimera/m/00000013/dl-IdentityCredentialsPlatform.optional_262031100400.apk has no usable artifacts
+08-30 10:54:18.794  3465  3466 I artd    : GetBestInfo: /data/user_de/0/com.google.android.gms/app_chimera/m/00000001/CronetDynamite.apk has no usable artifacts
+08-30 10:54:18.795  3465  3466 I artd    : GetBestInfo: /data/user_de/0/com.google.android.gms/app_chimera/m/00000011/dl-VisionOcr.optional_262031100000.apk has no usable artifacts
+08-30 10:54:18.797  3465  3466 I artd    : GetBestInfo: vdex next to the dex file (/data/user/0/com.google.android.gms/app_dg_cache/F43216EC192C66BFB5A30C3CDD57E8C5C9005730/oat/arm64/the.vdex) is kOatUpToDate with filter 'verify' executable 'false'
+08-30 10:54:18.799  3465  3466 I artd    : GetBestInfo: /data/user_de/0/com.google.android.gms/app_chimera/m/00000016/dl-MlkitOcrCommon.optional_262031100400.apk has no usable artifacts
+08-30 10:54:18.799  3465  3466 I artd    : GetBestInfo: /data/user_de/0/com.google.android.gms/app_chimera/m/00000002/DynamiteLoader.apk has no usable artifacts
+08-30 10:54:18.800  3465  3466 I artd    : GetBestInfo: /data/user_de/0/com.google.android.gms/app_chimera/m/00000005/GoogleCertificates.apk has no usable artifacts
+08-30 10:54:18.801  3465  3466 I artd    : GetBestInfo: /data/user_de/0/com.google.android.gms/app_chimera/m/00000017/dl-MlkitBarcodeUi.optional_262031100400.apk has no usable artifacts
+08-30 10:54:18.803  3465  3466 I artd    : GetBestInfo: /data/user_de/0/com.google.android.gms/app_chimera/m/0000000c/dl-TfliteDynamiteDynamite.integ_260580502100400.apk has no usable artifacts
+08-30 10:54:18.804  3465  3466 I artd    : GetBestInfo: /data/user_de/0/com.google.android.gms/app_chimera/m/0000000a/dl-VisionOcr.optional_261136100000.apk has no usable artifacts
+08-30 10:54:18.805  3465  3466 I artd    : GetBestInfo: /data/user_de/0/com.google.android.gms/app_chimera/m/0000000e/dl-Appsearch.optional_261136100400.apk has no usable artifacts
+08-30 10:54:18.807  3465  3466 I artd    : GetBestInfo: /data/user_de/0/com.google.android.gms/app_chimera/m/00000010/dl-PlayCloudSearch.optional_261136100000.apk has no usable artifacts
+08-30 10:54:18.808  3465  3466 I artd    : GetBestInfo: /data/user/0/com.google.android.gms/app_dg_cache/5833371D1ACC412507A92815B074897510CCCEDD/the.apk has no usable artifacts
+08-30 10:54:18.809  3465  3466 I artd    : GetBestInfo: /data/user/0/com.google.android.gms/app_dg_cache/10FF5D5C646CC9E2F04BD9D73A072BD012EF1A7A/the.apk has no usable artifacts
+08-30 10:54:18.811  3465  3466 I artd    : GetBestInfo: /data/user_de/0/com.google.android.gms/app_chimera/m/0000000b/dl-MlkitOcrCommon.optional_261136100400.apk has no usable artifacts
+08-30 10:54:18.812  3465  3466 I artd    : GetBestInfo: /data/user/0/com.google.android.gms/app_dg_cache/574CF0A3144EB354068F133F674AB38CCBB02976/the.apk has no usable artifacts
+08-30 10:54:18.814  3465  3466 I artd    : GetBestInfo: /data/user_de/0/com.google.android.gms/app_chimera/m/00000018/dl-Appsearch.optional_262031100400.apk has no usable artifacts
+08-30 10:54:18.815  3465  3466 I artd    : GetBestInfo: /data/user_de/0/com.google.android.gms/app_chimera/m/00000009/dl-MlkitBarcodeUi.optional_261136100400.apk has no usable artifacts
+08-30 10:54:18.817  3465  3466 I artd    : GetBestInfo: /data/user_de/0/com.google.android.gms/app_chimera/m/0000000d/dl-IdentityCredentialsPlatform.optional_261136100400.apk has no usable artifacts
+08-30 10:54:18.818  3465  3466 I artd    : GetBestInfo: /data/user/0/com.google.android.gms/app_dg_cache/729D45471C06B554246842057AC1D981DDFFE340/the.apk has no usable artifacts
+08-30 10:54:18.819  3465  3466 I artd    : GetBestInfo: /data/user_de/0/com.google.android.gms/app_chimera/m/00000012/dl-PlayCloudSearch.optional_262031100000.apk has no usable artifacts
+08-30 10:54:18.820  3465  3466 I artd    : GetBestInfo: /data/user_de/0/com.google.android.gms/app_chimera/m/00000007/MeasurementDynamite.apk has no usable artifacts
+08-30 10:54:19.785 14878 14878 I wpa_supplicant: wlan0: CTRL-EVENT-BEACON-LOSS 
+08-30 10:54:20.463   476   476 I adbd    : adbd service requested 'shell,v2,TERM=xterm-256color:export ANDROID_LOG_TAGS=''; exec logcat '-d' '-v' 'threadtime' '-t' '60' '-b' 'main' '-b' 'crash''

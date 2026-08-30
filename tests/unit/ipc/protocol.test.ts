@@ -2,7 +2,9 @@ import { describe, expect, it } from 'vitest';
 import {
 	AppVerbParamsSchema,
 	LongPressParamsSchema,
+	MAX_LOG_ENTRIES,
 	MAX_VERB_TIMEOUT_MS,
+	ReadLogsParamsSchema,
 	ScrollParamsSchema,
 	StatusParamsSchema,
 	StatusResultSchema,
@@ -293,6 +295,57 @@ describe('app verb params schemas', () => {
 	it('needs both the lease id and the app id', () => {
 		expect(AppVerbParamsSchema.safeParse({ leaseId: 'lease-1' }).success).toBe(false);
 		expect(AppVerbParamsSchema.safeParse({ appId: 'com.android.settings' }).success).toBe(false);
+	});
+});
+
+/**
+ * The one row whose call carries a bound rather than a target.
+ *
+ * `maxEntries` is **absent by default on purpose**: the verb owns the default
+ * (`src/verbs/logs.ts`), and a params schema that defaulted it here would be a second place
+ * that number is decided — which is how two callers end up reading different amounts of a
+ * device's log while both believe they asked for the same thing.
+ */
+describe('read_logs params schema', () => {
+	it('parses a call that names only the lease, leaving the bound to the verb', () => {
+		const parsed = ReadLogsParamsSchema.parse({ leaseId: 'lease-1' });
+
+		expect(parsed.leaseId).toBe('lease-1');
+		expect(parsed.maxEntries).toBeUndefined();
+	});
+
+	it('takes a bound a caller did ask for', () => {
+		expect(ReadLogsParamsSchema.parse({ leaseId: 'lease-1', maxEntries: 50 }).maxEntries).toBe(50);
+		expect(ReadLogsParamsSchema.parse({ leaseId: 'lease-1', maxEntries: MAX_LOG_ENTRIES })).toEqual(
+			{ leaseId: 'lease-1', maxEntries: MAX_LOG_ENTRIES },
+		);
+	});
+
+	it.each([
+		// Zero entries is a read that answers nothing — a caller asking for it means something
+		// else, and being told so beats being handed an empty log.
+		['no entries at all', 0],
+		['a negative bound', -1],
+		['a fraction of an entry', 1.5],
+		// The host reads, parses and encodes this many entries on a peer's behalf, so the
+		// ceiling is allocation hygiene rather than taste.
+		['more than the host will read', MAX_LOG_ENTRIES + 1],
+	])('rejects %s', (_label, maxEntries) => {
+		expect(ReadLogsParamsSchema.safeParse({ leaseId: 'lease-1', maxEntries }).success).toBe(false);
+	});
+
+	it.each([
+		['a serial beside the lease id', { serial: 'emulator-5554' }],
+		// The two knobs this row deliberately does not have: a follow is a wait with no
+		// condition and a stream over IPC, and neither arrives as a silently ignored key.
+		['a request to follow the log', { follow: true }],
+		['a tag filter', { tag: 'AndroidRuntime' }],
+	])('rejects %s rather than silently stripping it', (_label, extra) => {
+		expect(ReadLogsParamsSchema.safeParse({ leaseId: 'lease-1', ...extra }).success).toBe(false);
+	});
+
+	it('needs the lease id, which is the credential', () => {
+		expect(ReadLogsParamsSchema.safeParse({ maxEntries: 10 }).success).toBe(false);
 	});
 });
 

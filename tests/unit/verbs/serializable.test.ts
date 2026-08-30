@@ -17,6 +17,8 @@ import {
 	AppVerbParamsSchema,
 	DeviceInfoParamsSchema,
 	LongPressParamsSchema,
+	ReadLogsCallResultSchema,
+	ReadLogsParamsSchema,
 	ReadScreenParamsSchema,
 	ScreenshotParamsSchema,
 	ScrollParamsSchema,
@@ -28,6 +30,7 @@ import { launchApp } from '@/verbs/app.js';
 import { capabilityMethod, type VerbContext } from '@/verbs/context.js';
 import { toVerbFailure } from '@/verbs/failure.js';
 import { scroll, tap } from '@/verbs/input.js';
+import { ReadLogsResultSchema, readLogs } from '@/verbs/logs.js';
 import { performAction } from '@/verbs/perform.js';
 import { deviceInfo, readScreen, screenshot } from '@/verbs/read.js';
 import {
@@ -169,17 +172,39 @@ describe('the verb layer speaks only in plain data', () => {
 		expect(unserializableParts(launched)).toEqual([]);
 	});
 
-	it('round-trips a read verb result, whose answer is the state rather than an action', async () => {
+	/**
+	 * The one verb whose answer carries more than an `ActionResult`, and the only shape here
+	 * that could smuggle something across the boundary in a field the common schema does not
+	 * describe. A log entry's `timestamp` is the device's own **string** for exactly this
+	 * reason: the client shares no clock with the device (D17), so there is no instant here
+	 * to be misread on the far side.
+	 */
+	it('round-trips a read_logs result, payload and all', async () => {
 		const context = contextShowingSave();
 
+		const read = await readLogs(context, { maxEntries: 3 });
+
+		expect(ReadLogsResultSchema.parse(roundTrip(read))).toEqual(read);
+		expect(read.logs.entries.length).toBeGreaterThan(0);
+		expect(unserializableParts(read)).toEqual([]);
+
+		// The common half is an `ActionResult` field for field, which is what lets the verb
+		// layer, the after-state and D14 stay one shape across every verb. The *schema* is
+		// `.strict()`, so it rejects the extra key rather than dropping it — a client parses
+		// with the row's own schema, and what the two share is the shape, not the parser.
+		const { logs, ...common } = read;
+		expect(ActionResultSchema.parse(roundTrip(common))).toEqual(common);
+		expect(() => ActionResultSchema.parse(roundTrip(read))).toThrow();
+		expect(logs.truncated).toBe(false);
+	});
+
+	it('round-trips read verb results, whose answers are state rather than an action', async () => {
+		const context = contextShowingSave();
 		const read = await readScreen(context);
 		const info = await deviceInfo(context);
 
 		expect(ActionResultSchema.parse(roundTrip(read))).toEqual(read);
 		expect(ActionResultSchema.parse(roundTrip(info))).toEqual(info);
-		// The elements a read verb answers with are the one payload here that is a list of
-		// rectangles rather than a scalar, and a branded element id is a plain string on the
-		// wire.
 		expect(read.after).toMatchObject({ kind: 'screen', elements: [save] });
 		expect(read.target).toBeNull();
 		expect(info.target).toBeNull();
@@ -334,6 +359,39 @@ describe('a verb call answers in plain data too', () => {
 		expect(unserializableParts(answer)).toEqual([]);
 	});
 
+	it('round-trips the ok branch of the row that carries a payload', async () => {
+		const answer = {
+			outcome: 'ok',
+			result: await readLogs(contextShowingSave()),
+		} as const;
+
+		expect(ReadLogsCallResultSchema.parse(roundTrip(answer))).toEqual(answer);
+		expect(unserializableParts(answer)).toEqual([]);
+	});
+
+	/**
+	 * The two branches that are not `ok` are the *same* schema for every row, which is what
+	 * the factory in `src/ipc/verb-methods.ts` exists for: an agent learns one refusal
+	 * vocabulary whatever it asked for.
+	 */
+	it('answers a refusal in the same words whichever row was called', () => {
+		const refusal = {
+			outcome: 'refused',
+			reason: 'no-lease',
+			message: 'That lease id is not live on this host',
+		} as const;
+
+		expect(ReadLogsCallResultSchema.parse(refusal)).toEqual(VerbCallResultSchema.parse(refusal));
+	});
+
+	// An `ActionResult` with no `logs` is not a `read_logs` answer, and the row's own schema is
+	// what keeps a payload from going missing between the verb and the wire.
+	it('rejects a read_logs answer that lost its payload', async () => {
+		const result = await fakeTapResult(contextShowingSave());
+
+		expect(() => ReadLogsCallResultSchema.parse({ outcome: 'ok', result })).toThrow();
+	});
+
 	it('rejects an answer whose outcome nobody produces', () => {
 		expect(() => VerbCallResultSchema.parse({ outcome: 'maybe', result: null })).toThrow();
 	});
@@ -361,6 +419,7 @@ describe('a verb call answers in plain data too', () => {
 		],
 		// One row for the three app verbs, because one schema serves all three.
 		['launch_app', AppVerbParamsSchema, { leaseId: 'lease-1', appId: 'com.android.settings' }],
+		['read_logs', ReadLogsParamsSchema, { leaseId: 'lease-1', maxEntries: 50 }],
 		// The three read rows carry the credential and nothing else: no target, no wait knob on
 		// a verb that reads once and answers, and — for `screenshot` — no destination, because
 		// a path on the host is the one thing its answer must never contain (D19).

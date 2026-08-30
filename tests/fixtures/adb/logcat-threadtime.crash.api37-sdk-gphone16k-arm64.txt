@@ -1,0 +1,29 @@
+--------- beginning of crash
+08-30 10:51:51.239 14682 14682 E AndroidRuntime: FATAL EXCEPTION: main
+08-30 10:51:51.239 14682 14682 E AndroidRuntime: Process: com.android.settings, PID: 14682
+08-30 10:51:51.239 14682 14682 E AndroidRuntime: android.app.RemoteServiceException$CrashedByAdbException: shell-induced crash
+08-30 10:51:51.239 14682 14682 E AndroidRuntime: 	at android.app.ActivityThread.throwRemoteServiceException(ActivityThread.java:2581)
+08-30 10:51:51.239 14682 14682 E AndroidRuntime: 	at android.app.ActivityThread.-$$Nest$mthrowRemoteServiceException(ActivityThread.java:0)
+08-30 10:51:51.239 14682 14682 E AndroidRuntime: 	at android.app.ActivityThread$H.handleMessage(ActivityThread.java:2950)
+08-30 10:51:51.239 14682 14682 E AndroidRuntime: 	at android.os.Handler.dispatchMessageImpl(Handler.java:142)
+08-30 10:51:51.239 14682 14682 E AndroidRuntime: 	at android.os.Handler.dispatchMessage(Handler.java:125)
+08-30 10:51:51.239 14682 14682 E AndroidRuntime: 	at android.os.Looper.loopOnce(Looper.java:296)
+08-30 10:51:51.239 14682 14682 E AndroidRuntime: 	at android.os.Looper.loop(Looper.java:397)
+08-30 10:51:51.239 14682 14682 E AndroidRuntime: 	at android.app.ActivityThread.main(ActivityThread.java:9523)
+08-30 10:51:51.239 14682 14682 E AndroidRuntime: 	at java.lang.reflect.Method.invoke(Native Method)
+08-30 10:51:51.239 14682 14682 E AndroidRuntime: 	at com.android.internal.os.RuntimeInit$MethodAndArgsCaller.run(RuntimeInit.java:575)
+08-30 10:51:51.239 14682 14682 E AndroidRuntime: 	at com.android.internal.os.ZygoteInit.main(ZygoteInit.java:939)
+08-30 10:54:26.945 16432 16432 E AndroidRuntime: FATAL EXCEPTION: main
+08-30 10:54:26.945 16432 16432 E AndroidRuntime: Process: com.android.settings, PID: 16432
+08-30 10:54:26.945 16432 16432 E AndroidRuntime: android.app.RemoteServiceException$CrashedByAdbException: shell-induced crash
+08-30 10:54:26.945 16432 16432 E AndroidRuntime: 	at android.app.ActivityThread.throwRemoteServiceException(ActivityThread.java:2581)
+08-30 10:54:26.945 16432 16432 E AndroidRuntime: 	at android.app.ActivityThread.-$$Nest$mthrowRemoteServiceException(ActivityThread.java:0)
+08-30 10:54:26.945 16432 16432 E AndroidRuntime: 	at android.app.ActivityThread$H.handleMessage(ActivityThread.java:2950)
+08-30 10:54:26.945 16432 16432 E AndroidRuntime: 	at android.os.Handler.dispatchMessageImpl(Handler.java:142)
+08-30 10:54:26.945 16432 16432 E AndroidRuntime: 	at android.os.Handler.dispatchMessage(Handler.java:125)
+08-30 10:54:26.945 16432 16432 E AndroidRuntime: 	at android.os.Looper.loopOnce(Looper.java:296)
+08-30 10:54:26.945 16432 16432 E AndroidRuntime: 	at android.os.Looper.loop(Looper.java:397)
+08-30 10:54:26.945 16432 16432 E AndroidRuntime: 	at android.app.ActivityThread.main(ActivityThread.java:9523)
+08-30 10:54:26.945 16432 16432 E AndroidRuntime: 	at java.lang.reflect.Method.invoke(Native Method)
+08-30 10:54:26.945 16432 16432 E AndroidRuntime: 	at com.android.internal.os.RuntimeInit$MethodAndArgsCaller.run(RuntimeInit.java:575)
+08-30 10:54:26.945 16432 16432 E AndroidRuntime: 	at com.android.internal.os.ZygoteInit.main(ZygoteInit.java:939)

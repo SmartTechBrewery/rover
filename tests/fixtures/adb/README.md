@@ -21,7 +21,8 @@ All from an Android Emulator AVD `Pixel_10_Pro` (`sdk_gphone16k_arm64`, API 37 /
 macOS. `SERIAL` is `emulator-5554`. Everything above the `input` rows was captured
 **2026-08-29**: the enumeration, `wm` and `uiautomator` rows with `adb` 37.0.0-14910828, and the
 app-control rows below them (`install-success` onwards) with `adb` 37.0.1-15733141, the version
-that host had by then. The three `input` rows were captured **2026-08-30** on a host back on
+that host had by then. Every row dated **2026-08-30** — the three `input` captures, the two
+`uiautomator-dump` captures and the three `logcat` captures — was taken on a host back on
 `adb` 37.0.0-14910828.
 
 | Fixture | Command | Model | API | Captured |
@@ -52,6 +53,9 @@ that host had by then. The three `input` rows were captured **2026-08-30** on a 
 | `input-text.non-ascii.api37-sdk-gphone16k-arm64.txt` | `adb -s $SERIAL shell input text 'zażółć' > f 2>&1` | sdk_gphone16k_arm64 | 37 | 2026-08-30 |
 | `uiautomator-dump.api37-sdk-gphone16k-arm64.txt` | `adb -s $SERIAL shell uiautomator dump /sdcard/window_dump.xml > f 2>&1` | sdk_gphone16k_arm64 | 37 | 2026-08-30 |
 | `uiautomator-dump.unwritable-path.api37-sdk-gphone16k-arm64.txt` | `adb -s $SERIAL shell uiautomator dump /data/nope/window_dump.xml > f 2>&1` | sdk_gphone16k_arm64 | 37 | 2026-08-30 |
+| `logcat-threadtime.api37-sdk-gphone16k-arm64.txt` | `adb -s $SERIAL logcat -d -v threadtime -t 60 -b main -b crash` (stdout) | sdk_gphone16k_arm64 | 37 | 2026-08-30 |
+| `logcat-threadtime.crash.api37-sdk-gphone16k-arm64.txt` | the same narrowed to `-t 2 -b crash`, after `adb -s $SERIAL shell am crash com.android.settings` | sdk_gphone16k_arm64 | 37 | 2026-08-30 |
+| `logcat-threadtime.levels.api37-sdk-gphone16k-arm64.txt` | `adb -s $SERIAL shell 'log -p v/d/i/w/e/f -t RoverFixture "<level> line"'` (six commands), then the recipe at `-t 20` | sdk_gphone16k_arm64 | 37 | 2026-08-30 |
 
 Both `wm` overrides were reset with `wm size reset` / `wm density reset` immediately after the
 capture. The `track-devices` capture leaves the host as it found it the same way: the second entry
@@ -201,6 +205,33 @@ re-capturing — a fixture nobody can re-create is a fixture nobody can extend.
   Settings search box because that is a text field reachable with one intent and one tap on any
   build, and what was typed was read back out of `uiautomator dump` — the exit code alone cannot
   tell a character that was typed from one that was dropped.
+
+- **The three `logcat` captures are what `parsers/logcat.ts` reads**, and each is there for
+  something the others cannot show.
+  - The **ordinary** one is the recipe as the backend runs it: 61 lines for `-t 60`, because
+    logcat prints its own `--------- beginning of main` above the sixty entries. It carries the
+    padded tag (`W skia    :`), a message with a colon in it (`wlan0: CTRL-EVENT-BEACON-LOSS`)
+    and a trailing space the parser deliberately does not tidy away.
+  - The **crash** one is the acceptance criterion in a file: `E AndroidRuntime: FATAL EXCEPTION:
+    main` and `Process: com.android.settings, PID: 14682`, from `am crash`. It is `-b crash`
+    only because of the entry/line discrepancy below — the merged recipe at a bound big enough
+    to still hold the crash is 60 KB of mostly graphics chatter, and pins nothing this does not.
+  - The **levels** one exists because a device prints `V/D/I/W/E/F` and a table written from
+    memory is exactly the hand-written fixture this file forbids. `log -p f` is the only way to
+    get an `F` line without root: `kill -6 <pid>` on an app process is `Operation not permitted`
+    for the shell user, and the other producer of `F` is a native abort's `F libc` / `F DEBUG`
+    tombstone.
+- **`-t <n>` counts logcat *entries*, and an entry is not a line.** One Java crash is a single
+  entry whose message is fourteen lines, each carrying the full `threadtime` prefix, so
+  `-t 2 -b crash` returned 29 lines. That is why the crash fixture is small and why the backend
+  bounds the answer on the host side rather than trusting `-t`.
+- **An empty read is zero bytes** — measured with a tag filter nothing matched, and not even the
+  `--------- beginning of …` line. So there is no empty-logcat fixture, for the reason the network
+  and input rows have none: a committed empty file reads as a mistake. `logcat.test.ts` holds the
+  case inline and says so.
+- **Nothing in the three needed redacting.** They are an emulator's own chatter — graphics, wifi,
+  telephony config, adbd echoing the command it was given — plus the crash of a system app and six
+  lines this capture wrote itself. Checked for an address, a key or an account before committing.
 
 ## Redactions
 
