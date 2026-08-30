@@ -390,9 +390,14 @@ uses `npm run -s rover -- list --json` or invokes `node --import tsx/esm src/cli
 MCP protocol frames, so an agent's server entry runs `node --import tsx/esm src/mcp/index.ts`
 directly (`npm run -s mcp` is the by-hand equivalent) and a bare `npm run mcp` writes two lines
 into the stream before the first frame. Wiring an agent up properly is `PROJECT.md` R20's to
-settle; what exists today is the server, speaking stdio, declaring `status`, `list_devices`,
-`acquire_device` and `release_device`. There is no `bin/` launcher yet — the published entry point is `PROJECT.md` R20's
-to settle.
+settle; what exists today is the server, speaking stdio, declaring twenty tools under the
+`IPC_METHODS` names exactly: the four device and lease rows (`status`, `list_devices`,
+`acquire_device`, `release_device`) and the sixteen verbs whose answer is plain data
+(`wait_for`, `wait_until_gone`, `tap`, `long_press`, `swipe`, `scroll`, `type_text`,
+`press_key`, `read_screen`, `device_info`, `launch_app`, `stop_app`, `clear_app_data`,
+`read_logs`, `set_airplane_mode`, `set_wifi`). The rows that carry bytes — `screenshot`,
+`record_video`, `install_app`, `push_file` and `pull_file` — are `PROJECT.md` R19 phase 3's.
+There is no `bin/` launcher yet — the published entry point is `PROJECT.md` R20's to settle.
 
 Exit codes: `0` success; `1` the operation did not succeed (a refused `acquire`, a `release` that
 found no live lease, an unreachable host, a request the host rejected); `2` usage error (unknown

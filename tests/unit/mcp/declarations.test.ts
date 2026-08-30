@@ -16,7 +16,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { IPC_METHODS } from '@/ipc/methods.js';
 import { createRoverMcpServer, ROVER_MCP_NAME, ROVER_MCP_VERSION } from '@/mcp/server.js';
 
-/** The four rows this phase exposes. The verb rows are phase 2 (R19). */
+/** The four device and lease rows. The verb rows have their own suite, `./verb-declarations`. */
 const DEVICE_METHODS = ['status', 'list_devices', 'acquire_device', 'release_device'] as const;
 
 interface AdvertisedTool {
@@ -64,8 +64,10 @@ describe('what tools/list advertises', () => {
 		const tools = await advertisedTools();
 
 		// The `IPC_METHODS` keys verbatim: a renamed tool would be a second vocabulary for the
-		// same operation, and no platform suffix ever appears in one (D10).
-		expect(tools.map((tool) => tool.name).sort()).toEqual([...DEVICE_METHODS].sort());
+		// same operation, and no platform suffix ever appears in one (D10). Which rows are
+		// advertised *in total* — and that every row is either advertised or deliberately not —
+		// is `./verb-declarations.test.ts`'s completeness gate.
+		expect(tools.map((tool) => tool.name)).toEqual(expect.arrayContaining([...DEVICE_METHODS]));
 	});
 
 	it('gives every tool a description an agent can act on', async () => {

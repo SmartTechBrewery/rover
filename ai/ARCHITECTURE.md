@@ -445,6 +445,29 @@ exactly as the CLI is: it holds no verb logic and reaches no backend, which
 - **One tool call is one connection**: connect, one request, `close()` in a `finally` — the same
   thing every CLI command does, so there is no held connection to reconnect and the local host
   autostarts on the first call (D5).
+- **The verbs are tools under the same names.** The sixteen `IPC_METHODS` verb rows whose answer
+  is plain data are declared from one table (`src/mcp/tools/verbs.ts`), each from its own exported
+  `*ParamsSchema` — so the three app rows share one declaration and the two environment rows share
+  another, exactly as the calls do. **Zero verb logic**: every handler is one `callHost` and one
+  shared mapping of `verbCallResultOf`'s three branches (`src/mcp/_shared/verb-answer.ts`), so an
+  `ok` travels whole — the resolved target, the after-state and `read_logs`' entries included — and
+  a failure and a refusal are both `isError` carrying the host's own sentence with the structured
+  document under it. The CLI's `src/cli/_shared/verb.ts` is the same three branches rendered for a
+  human; neither decides anything the host already decided. The rows that carry bytes are R19
+  phase 3's, and a completeness gate over `IPC_METHODS` is what stops a verb row landing later
+  with no tool and no decision.
+- **A missing capability is a loud, agent-readable error** (D11). `read_screen` against a backend
+  that does not declare `canReadScreen`, and either environment row against one without
+  `canControlNetwork`, come back `isError` carrying the `missing-capability` failure — the
+  capability, the serial, the platform and the backend's label — never an empty screen, never a
+  toggle that quietly did nothing, never an `ok`. The tool descriptions name the capability too,
+  so an agent can check the list `acquire_device` handed it before it calls.
+- **A call that can outlast the client's own deadline raises it.** A verb may be asked to wait or
+  hold for up to `MAX_VERB_TIMEOUT_MS`, well past the 30 s `DEFAULT_REQUEST_TIMEOUT_MS`, so the two
+  waits and the three gestures with a `durationMs` derive a request timeout from the call's own
+  knob plus that default — `rover record`'s pattern. The verb's own default is imported to size it
+  and never put on the request, so the verb's default stays the only default, and a long-but-normal
+  call is never reported as a hang.
 - **The host is configuration, never a parameter** (D17). `ROVER_HOST_ADDRESS` set means the
   remote host, unset means the local daemon, and it is resolved at startup, before the stdio
   transport is connected — a half-configured server dies naming what is missing rather than
