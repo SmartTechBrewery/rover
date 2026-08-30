@@ -10,7 +10,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { LOCAL_HOST, resolveHost } from '@/cli/_shared/host.js';
+import { LOCAL_HOST, REMOTE_HOST, resolveHost } from '@/cli/_shared/host.js';
 import { EXIT_OK, EXIT_USAGE, run } from '@/cli/index.js';
 import { ATTRIBUTION_MAX_LENGTH, AttributionStringSchema } from '@/ipc/methods.js';
 import {
@@ -100,14 +100,16 @@ describe('rover, before it talks to anything', () => {
 		expect(errored.join('\n')).toContain('expected no arguments');
 	});
 
-	it('names R22 and exits 2 for a host that is not the local one', async () => {
+	it('names both hosts and exits 2 for one that is neither', async () => {
 		expect(await run(['list', '--host', 'somewhere-else'])).toBe(EXIT_USAGE);
 
 		const said = errored.join('\n');
 		expect(said).toContain("Unknown host 'somewhere-else'");
-		// The failure has to say what *would* make another host reachable, or the flag reads
-		// as broken rather than as not built yet.
-		expect(said).toContain('R22');
+		// The failure has to say what the reachable hosts *are*, or the flag reads as broken
+		// rather than as mistyped — and for 'remote' that means naming what configures it.
+		expect(said).toContain("'local'");
+		expect(said).toContain("'remote'");
+		expect(said).toContain('ROVER_HOST_ADDRESS');
 		// The rejecting command's own usage, not the dispatcher's: the shape the caller got
 		// wrong is what they need back.
 		expect(said).toContain('Usage: rover list');
@@ -119,6 +121,13 @@ describe('rover, before it talks to anything', () => {
 		// autostart a daemon in a suite that has no business starting one.
 		expect(resolveHost('local')).toBe(LOCAL_HOST);
 		expect(resolveHost(undefined)).toBe(LOCAL_HOST);
+	});
+
+	it('resolves --host remote without connecting to anything', () => {
+		// Same reason as above, mirrored: resolving the *name* is a pure decision, and it has
+		// to stay one — a `resolveHost` that reached for the environment or a socket would
+		// make every flag-parsing test depend on what the developer exported.
+		expect(resolveHost('remote')).toBe(REMOTE_HOST);
 	});
 
 	it("prints a command's own usage for `<command> --help`", async () => {

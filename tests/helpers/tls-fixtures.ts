@@ -7,9 +7,12 @@
  * cannot. So the certificate is real, generated per test into a `mkdtemp` directory that is
  * removed again, and the listener always binds `127.0.0.1:0`.
  *
- * **There is no client module yet** — `connectToNetworkHost` is phase 2 of R22. That is the
- * point of driving the host with `tls.connect` here: it proves the second transport serves
- * the same surface without a second client implementation existing to prove it with.
+ * **These are the raw clients, deliberately, even now that `connectToNetworkHost` exists.**
+ * `tests/unit/daemon/network-listener.test.ts` drives the host with `tls.connect` and a
+ * hand-written greeting so that the host half is asserted against the *wire*, not against
+ * whatever this repo's own client happens to send — a suite in which one bug on each side
+ * cancels out is a suite that proves nothing. The shipping client has its own file
+ * (`tests/unit/daemon/network-connect.test.ts`), and shares only the certificate below.
  */
 
 import { execFile } from 'node:child_process';
