@@ -81,6 +81,7 @@ async function start(options: { leaseTtlMs?: number } = {}): Promise<RunningDaem
 	const result = await startDaemon({
 		socketPath: temp.socketPath,
 		artifactsRoot: temp.artifactsRoot,
+		projectsRoot: temp.projectsRoot,
 		...options,
 	});
 	if (!result.started) {
@@ -165,8 +166,16 @@ describe('list_devices over the socket', () => {
 		temp = await createTempSocket();
 
 		const results = await Promise.all([
-			startDaemon({ socketPath: temp.socketPath, artifactsRoot: temp.artifactsRoot }),
-			startDaemon({ socketPath: temp.socketPath, artifactsRoot: temp.artifactsRoot }),
+			startDaemon({
+				socketPath: temp.socketPath,
+				artifactsRoot: temp.artifactsRoot,
+				projectsRoot: temp.projectsRoot,
+			}),
+			startDaemon({
+				socketPath: temp.socketPath,
+				artifactsRoot: temp.artifactsRoot,
+				projectsRoot: temp.projectsRoot,
+			}),
 		]);
 		for (const result of results) {
 			if (result.started) running.push(result);

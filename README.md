@@ -421,6 +421,7 @@ startup, naming the variable and the reason, rather than binding something surpr
 | `ROVER_SOCKET_PATH` | `~/.rover/rover.sock` | Absolute path of the unix socket the local daemon binds and a local client connects to. **Empty counts as unset** — an exported-but-blank variable is what a shell leaves behind, and reading it as a real setting would point the daemon at the current directory. At most **103 bytes of UTF-8**: a unix socket address is a fixed-size struct (104 bytes on macOS, 108 on Linux, NUL included), and over the cap `bind` truncates or answers `EINVAL` instead of naming the length, so a longer path is rejected at startup with the byte count and the path. |
 | `ROVER_USERS_PATH` | `~/.rover/users.json` | Absolute path of the host's own user store — one record per user: identifier, display name, the **hash** of that user's token, and when it was created. Never a token: `rover users add` and `rover users rotate` print the raw value once and store only its hash. **Empty counts as unset**, as it is for the socket. Read by `rover users`, which touches the file directly and never goes over the network (`PROJECT.md` D25), **and by the network listener**, which is the host's entire authentication surface: the token in a caller's greeting is hashed and looked up here, re-read at every connection attempt and never cached, so `revoke` and `rotate` take effect on the very next attempt with the daemon still running. |
 | `ROVER_ARTIFACTS_PATH` | `~/.rover/artifacts` | Root of the durable artifact archive: every `screenshot`, `record_video` and `read_logs` call additionally writes its output here, on the host, **in addition to** returning the bytes to the client (`PROJECT.md` D23, §10). **Empty counts as unset**, as it is for the socket. Read only by the daemon — a client never resolves it, and the archive path is never the one an agent is given. **Nothing prunes it**: retention is deliberately undecided (`PROJECT.md` §9.4), so this grows without bound until an operator removes what they no longer want. |
+| `ROVER_PROJECTS_PATH` | `~/.rover/projects` | Directory holding the **per-project hook files** — one `<project>.json` per project, selected by the `project` string a lease carries (`PROJECT.md` D13, and see below). **Empty counts as unset**, as it is for the socket. Read only by the daemon, on the machine the devices are attached to: a hook file names a program the host runs with the daemon's own privileges, and nothing about it is ever accepted over the wire. Files are **re-read every time a lease ends and never cached** (`PROJECT.md` D6), so editing one takes effect on the next lease with nothing restarted. A `project` string that is not a valid identifier — anything with a separator, a leading `-`, whitespace or over 64 characters — resolves to **no hooks at all**, because no path is ever built from it. |
 | `ROVER_LISTEN_PORT` | unset — **no network listener** | The opt-in switch for the TCP+TLS listener that serves the same IPC surface as the local socket. Unset or empty and nothing binds, nothing else below is read, and the daemon is a purely local host. Set it and the next two become **required together**: a port with no TLS material would be a listener nobody could trust, so a missing one is a startup failure naming every variable still missing rather than a half-configured host. Who may connect is not a variable at all — it comes from the user store (`ROVER_USERS_PATH`), which always resolves, so a host with no users yet starts and refuses everyone. 1–65535. |
 | `ROVER_TLS_CERT` | — (required with the port) | Path to the PEM certificate (chain) the listener presents. |
 | `ROVER_TLS_KEY` | — (required with the port) | Path to the matching PEM private key. Unreadable material is a startup failure naming the variable and the path, not a TLS mystery on the first connection. |
@@ -433,6 +434,64 @@ startup, naming the variable and the reason, rather than binding something surpr
 While a daemon is coming up over a socket a crashed one left behind, a `<socket>.reclaim` lock file
 may briefly appear beside it. It is removed by whoever took it, and any left behind by a killed
 process is discarded on age by the next start.
+
+### Project hooks
+
+Everything application-specific is a hook in the project's own file (`PROJECT.md` D13) — the core
+knows no application's name, and a default that mentions one is a bug. One file per project, named
+after it, under `ROVER_PROJECTS_PATH`:
+
+```
+~/.rover/projects/
+  checkout-web.json
+  storefront.json
+```
+
+```jsonc
+{
+  "project": "checkout-web",
+  "apps": ["com.example.checkout", "com.example.checkout.helper"],
+  "teardown": {
+    "command": "bash",
+    "args": ["-lc", "scripts/rover-teardown.sh"],
+    "cwd": "/srv/checkout-web",
+    "env": { "STAGE": "local" }
+  }
+}
+```
+
+Four fields, and only these four today. `project` is required and **must equal the file's own
+name** — a mismatch is a startup-shaped refusal naming both, so a file copied from another project
+cannot quietly serve this one. `apps` is the list of applications a lease on this project drove;
+they are stopped on the device when the lease ends, in the order given, and an empty list is a
+perfectly good answer. `teardown` is one command the **host** runs when the lease ends: `command`
+and `args` only — never a shell line, because nothing here is word-split or glob-expanded, so an
+operator who wants a shell makes the shell the program, as the example does. `cwd` and `env` are
+optional. The install command and helper services are named in D13 and are not in the file yet;
+adding a field before its consumer exists would be a row in this table describing something
+nothing reads.
+
+The hook runs when a lease on that project **ends by either path — a `rover release`, and an
+expiry with the agent that held the device long gone** (`PROJECT.md` D9). Its child gets
+`ROVER_PROJECT` and `ROVER_DEVICE_SERIAL` in the environment, on top of the daemon's own and
+whatever `env` declares, so a teardown can name the device it is undoing. It is bounded: eight
+seconds, then the process is killed and the failure — the exit code and the tail of its stderr —
+becomes a warning. A hook that fails costs its own project's steps and nothing else; the device is
+still put back.
+
+Three things worth being clear about, because this file's commands run with the daemon's
+privileges:
+
+- **It lives on the host, never on the client.** Verbs run where the hardware is (`PROJECT.md`
+  D19), and a teardown stranded on the far side of the network could not stop what it started. No
+  IPC method reads a hook file, writes one, or takes a path into this directory — a lease carries
+  a `project` *string* and nothing else.
+- **It is the host operator's file.** Whoever can write into `ROVER_PROJECTS_PATH` can run
+  programs as the user the daemon runs as. That is the same trust the daemon already has, and it
+  is why the directory is host-side configuration rather than anything a borrower supplies.
+- **Nothing is cached.** Every lease that ends re-reads the file, so an edit needs no restart, and
+  a file that will not parse is a warning naming the file rather than a project silently treated
+  as having no hooks.
 
 ### The artifact archive
 
@@ -564,8 +623,8 @@ folder per platform, `src/verbs/` the verb spine with the input verbs, the app v
 and the waits described above, `src/ipc/` the
 wire protocol and the transport-agnostic client and server, `src/daemon/` the socket and the
 inventory and the leases — plus the host-side tools the verbs are handed, such as the frame
-extractor, and the durable artifact archive (`src/daemon/archive.ts`) — and `src/cli/` the `rover`
-command.
+extractor, the durable artifact archive (`src/daemon/archive.ts`) and the per-project hook files
+(`src/daemon/project-hooks.ts`) — and `src/cli/` the `rover` command.
 
 ## Shape
 

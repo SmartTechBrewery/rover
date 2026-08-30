@@ -56,8 +56,9 @@ function createHost() {
 	const inventory = createDeviceInventory({ warn: (message) => warnings.push(message) });
 	const restorer = createDeviceRestorer({
 		inventory,
-		// Standing in for R17, which is what will supply this from a project file.
-		resolveProject: () => ({
+		// Standing in for `project-resolver.ts`, which supplies this from a project hook file —
+		// this suite is about what reaches the device, not about where the hooks came from.
+		resolveProject: async () => ({
 			apps: [SETTINGS],
 			teardown: async () => {
 				hookRan = true;

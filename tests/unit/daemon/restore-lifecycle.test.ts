@@ -118,6 +118,7 @@ async function start(options: { sweepIntervalMs?: number; leaseTtlMs?: number } 
 	const result = await startDaemon({
 		socketPath: temp.socketPath,
 		artifactsRoot: temp.artifactsRoot,
+		projectsRoot: temp.projectsRoot,
 		...options,
 	});
 	if (!result.started) {

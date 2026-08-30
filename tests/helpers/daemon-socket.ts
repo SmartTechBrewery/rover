@@ -39,18 +39,33 @@ export interface TempSocket {
 	 * directory does not exist" rather than as "the directory is empty".
 	 */
 	readonly artifactsRoot: string;
+	/**
+	 * Where a daemon started on this socket looks for per-project hook files.
+	 *
+	 * **Nothing pre-creates it either**, and that is the safe default: a project with no hook
+	 * file has no apps and no teardown, so a test that says nothing about hooks gets none.
+	 * Never `~/.rover/projects` — a hook file declares a program the daemon runs, and a test
+	 * that read the developer's own directory would start running their commands.
+	 */
+	readonly projectsRoot: string;
 }
 
 /**
  * A socket path nobody else uses. Never `~/.rover/rover.sock`: a test that bound the real
  * default would take the developer's own daemon down mid-run.
  *
- * The archive root beside it follows the same rule and for the same reason: no test ever
- * writes into `~/.rover/artifacts`, which is the developer's own durable tree.
+ * The archive root and the project hook directory beside it follow the same rule and for the
+ * same reason: no test ever writes into `~/.rover/artifacts`, which is the developer's own
+ * durable tree, and none ever reads `~/.rover/projects`, which names programs to run.
  */
 export async function createTempSocket(): Promise<TempSocket> {
 	const dir = await mkdtemp(join(tmpdir(), 'rover-'));
-	return { dir, socketPath: join(dir, 'rover.sock'), artifactsRoot: join(dir, 'artifacts') };
+	return {
+		dir,
+		socketPath: join(dir, 'rover.sock'),
+		artifactsRoot: join(dir, 'artifacts'),
+		projectsRoot: join(dir, 'projects'),
+	};
 }
 
 export async function removeTempSocket(temp: TempSocket): Promise<void> {

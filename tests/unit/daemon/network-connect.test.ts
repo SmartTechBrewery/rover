@@ -179,6 +179,7 @@ async function startHost(overrides: Partial<NetworkListenerConfig> = {}): Promis
 	const result = await startDaemon({
 		socketPath: temp.socketPath,
 		artifactsRoot: temp.artifactsRoot,
+		projectsRoot: temp.projectsRoot,
 		network: networkConfig(overrides),
 	});
 	if (!result.started) {

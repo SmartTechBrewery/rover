@@ -23,6 +23,7 @@ import '../backends/index.js';
 import { resolveArtifactsRoot } from './archive-path.js';
 import { startDaemon } from './listen.js';
 import { resolveNetworkListener } from './network-config.js';
+import { resolveProjectsRoot } from './project-hooks.js';
 import { resolveSocketPath } from './socket-path.js';
 
 async function main(): Promise<void> {
@@ -31,6 +32,9 @@ async function main(): Promise<void> {
 	// reason: `startDaemon` never consults `process.env`, so an in-process daemon in a test
 	// cannot start writing into the developer's own `~/.rover/artifacts`.
 	const artifactsRoot = resolveArtifactsRoot();
+	// The one place the project hook directory is read from the environment, for the same
+	// reason — and rather more sharply, because a hook file names a program this process runs.
+	const projectsRoot = resolveProjectsRoot();
 	// The one place the network listener is resolved from the environment. A missing token
 	// beside a set port throws here, `main().catch` below prints it and the process exits 1 —
 	// a misconfigured listener is a loud startup failure, never a host that quietly serves
@@ -39,6 +43,7 @@ async function main(): Promise<void> {
 	const daemon = await startDaemon({
 		socketPath,
 		artifactsRoot,
+		projectsRoot,
 		...(network ? { network } : {}),
 	});
 	if (!daemon.started) {

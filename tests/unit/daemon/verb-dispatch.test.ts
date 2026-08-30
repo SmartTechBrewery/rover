@@ -332,6 +332,7 @@ async function serve(options: HostOptions = {}): Promise<void> {
 	const result = await startDaemon({
 		socketPath: temp.socketPath,
 		artifactsRoot: options.artifactsRoot ?? temp.artifactsRoot,
+		projectsRoot: temp.projectsRoot,
 		...(options.leaseTtlMs === undefined ? {} : { leaseTtlMs: options.leaseTtlMs }),
 	});
 	if (!result.started) {
