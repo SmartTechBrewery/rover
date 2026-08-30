@@ -215,6 +215,16 @@ Verbs live above the backends and below the adapters, and this is where determin
   device-level refusal, such as launching a package that is not installed, is still a rejected
   promise out of the backend and so arrives as `internal_error`. That is true of every verb family
   here and is filed as its own issue rather than fixed one family at a time.
+- **`readScreen()` and `deviceInfo()`** (`src/verbs/read.ts`) are the spine with the *middle* left
+  out: their action is empty, because a read verb's work is the capture `performAction()` already
+  performs for every verb — the screen for the after-state, the device for D14. Routing them
+  through the spine rather than around it costs one no-op call and is what keeps a read from
+  growing an answer shape of its own. `read_screen` declares `requires: ['canReadScreen']`, and
+  that declaration is the verb: without it the call would still answer, with the `unavailable`
+  after-state below, which is honest for a *tap* and wrong here — for a read the state is not
+  context around an action, it is the entire answer, so D11's loud failure has to come before
+  dispatch. `device_info` requires nothing (a required backend method, like the app family) and
+  answers with `result.device`. Neither passes a target, for the same reason the app verbs do not.
 - **`ActionResult`** names the verb, the device (as `DeviceInfo`, so D14's density travels with the
   measurement), the resolved target and the state after the action. A backend with input but no
   screen reading answers an explicit `unavailable` after-state naming the capability that would have

@@ -15,7 +15,9 @@ import { WaitTimeoutError } from '@/core/errors.js';
 import { parseAppId } from '@/core/ids.js';
 import {
 	AppVerbParamsSchema,
+	DeviceInfoParamsSchema,
 	LongPressParamsSchema,
+	ReadScreenParamsSchema,
 	ScrollParamsSchema,
 	SwipeParamsSchema,
 	TapParamsSchema,
@@ -26,6 +28,7 @@ import { capabilityMethod, type VerbContext } from '@/verbs/context.js';
 import { toVerbFailure } from '@/verbs/failure.js';
 import { scroll, tap } from '@/verbs/input.js';
 import { performAction } from '@/verbs/perform.js';
+import { deviceInfo, readScreen } from '@/verbs/read.js';
 import {
 	type ActionResult,
 	ActionResultSchema,
@@ -164,6 +167,24 @@ describe('the verb layer speaks only in plain data', () => {
 		expect(unserializableParts(launched)).toEqual([]);
 	});
 
+	it('round-trips a read verb result, whose answer is the state rather than an action', async () => {
+		const context = contextShowingSave();
+
+		const read = await readScreen(context);
+		const info = await deviceInfo(context);
+
+		expect(ActionResultSchema.parse(roundTrip(read))).toEqual(read);
+		expect(ActionResultSchema.parse(roundTrip(info))).toEqual(info);
+		// The elements a read verb answers with are the one payload here that is a list of
+		// rectangles rather than a scalar, and a branded element id is a plain string on the
+		// wire.
+		expect(read.after).toMatchObject({ kind: 'screen', elements: [save] });
+		expect(read.target).toBeNull();
+		expect(info.target).toBeNull();
+		expect(unserializableParts(read)).toEqual([]);
+		expect(unserializableParts(info)).toEqual([]);
+	});
+
 	it('round-trips a resolved target and a screen after-state on their own', () => {
 		const resolved = ResolvedTargetSchema.parse({
 			source: 'screen',
@@ -275,6 +296,10 @@ describe('a verb call answers in plain data too', () => {
 		],
 		// One row for the three app verbs, because one schema serves all three.
 		['launch_app', AppVerbParamsSchema, { leaseId: 'lease-1', appId: 'com.android.settings' }],
+		// The two read rows carry the credential and nothing else: no target, and no wait knob
+		// on a verb that reads once and answers.
+		['read_screen', ReadScreenParamsSchema, { leaseId: 'lease-1' }],
+		['device_info', DeviceInfoParamsSchema, { leaseId: 'lease-1' }],
 	])('round-trips what a %s call carries', (_name, schema, params) => {
 		const parsed = schema.parse(params);
 
