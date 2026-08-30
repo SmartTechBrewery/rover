@@ -4,12 +4,16 @@ import {
 	type AdbResult,
 	type AdbStreamHandlers,
 	INSTALL_ADB_TIMEOUT_MS,
+	RECORDING_FINISH_TIMEOUT_MS,
+	RECORDING_PULL_TIMEOUT_MS,
 	SCREENSHOT_ADB_TIMEOUT_MS,
 } from '@/backends/android/adb.js';
-import { AndroidDeviceBackend } from '@/backends/android/backend.js';
+import { AndroidDeviceBackend, RECORDING_BIT_RATE_BPS } from '@/backends/android/backend.js';
 import type { Device, DeviceWatcher } from '@/core/device.js';
-import { UnsupportedTextError } from '@/core/errors.js';
+import { UnfinishedRecordingError, UnsupportedTextError } from '@/core/errors.js';
 import { type AppId, InvalidIdError, parseAppId, parseDeviceSerial } from '@/core/ids.js';
+import { MAX_RECORDING_MS } from '@/verbs/record.js';
+import { MAX_ARTIFACT_BYTES } from '@/verbs/result.js';
 
 /**
  * The backend driven off the **captured** adb output of `tests/fixtures/adb/`, with only
@@ -1767,5 +1771,297 @@ describe('no input verb swallows a failure', () => {
 		runAdbOnDevice.mockRejectedValue(new Error("device 'emulator-5554' not found"));
 
 		await expect(call()).rejects.toThrow("device 'emulator-5554' not found");
+	});
+});
+
+/**
+ * `recordVideo`, the primitive behind `canRecordVideo`.
+ *
+ * The order is the subject of this block, because the order is the acceptance criterion:
+ * **remove, record, wait on the condition, pull, check, answer**. A recording pulled before
+ * `screenrecord` has exited has no `moov` atom and cannot be read at all, so what is
+ * asserted below is not that a pull happened but that it happened *after* the recorder was
+ * gone. `tests/device/android/recording.test.ts` is the half that proves a real device
+ * answers the recipe.
+ */
+const RECORDING_PATH = '/sdcard/rover-recording.mp4';
+const RECORDING_RM_ARGV = ['shell', 'rm', '-f', RECORDING_PATH];
+const RECORDING_PIDOF_ARGV = ['shell', 'pidof screenrecord || true'];
+const RECORDING_PULL_ARGV = ['exec-out', 'cat', RECORDING_PATH];
+
+const recordArgv = (seconds: number): string[] => [
+	'shell',
+	'screenrecord',
+	'--bit-rate',
+	'2000000',
+	'--time-limit',
+	String(seconds),
+	RECORDING_PATH,
+];
+
+const FINISHED_RECORDING = readFileSync(
+	new URL(
+		'../../../fixtures/adb/screenrecord.finished.api37-sdk-gphone16k-arm64.mp4',
+		import.meta.url,
+	),
+);
+const UNFINISHED_RECORDING = readFileSync(
+	new URL(
+		'../../../fixtures/adb/screenrecord.unfinished.api37-sdk-gphone16k-arm64.mp4',
+		import.meta.url,
+	),
+);
+
+/**
+ * The text half of a recording: every `shell` call answers, and `pidof` answers with the
+ * `pids` queued for it — one entry per probe, so a test can make the recorder outlive its
+ * adb client for exactly as many polls as it wants to.
+ */
+function records(options: { pids?: string[]; fails?: Record<string, Error> } = {}): void {
+	const pids = [...(options.pids ?? [''])];
+	runAdbOnDevice.mockImplementation(async (_serial, args): Promise<AdbResult> => {
+		const key = args.join(' ');
+		const failure = options.fails?.[key];
+		if (failure) throw failure;
+		if (key === RECORDING_PIDOF_ARGV.join(' ')) {
+			return { stdout: pids.length > 1 ? (pids.shift() as string) : (pids[0] ?? ''), stderr: '' };
+		}
+		return { stdout: '', stderr: '' };
+	});
+	runAdbBinaryOnDevice.mockResolvedValue({ stdout: FINISHED_RECORDING, stderr: '' });
+}
+
+/** Every device call in the order it was made, text and binary interleaved by call time. */
+function recordingArgv(): string[][] {
+	return [
+		...runAdbOnDevice.mock.calls.map(([, args]) => [...args]),
+		...runAdbBinaryOnDevice.mock.calls.map(([, args]) => [...args]),
+	];
+}
+
+describe('recordVideo', () => {
+	it('removes, records, waits, pulls and removes again, in that order and pinned to the device', async () => {
+		records();
+
+		await backend.recordVideo(SERIAL, { durationMs: 3_000 });
+
+		expect(runAdbOnDevice.mock.calls.map(([, args]) => [...args])).toEqual([
+			RECORDING_RM_ARGV,
+			recordArgv(3),
+			RECORDING_PIDOF_ARGV,
+			RECORDING_RM_ARGV,
+		]);
+		expect(runAdbBinaryOnDevice.mock.calls[0][1]).toEqual(RECORDING_PULL_ARGV);
+		for (const call of runAdbOnDevice.mock.calls) expect(call[0]).toBe(SERIAL);
+		expect(runAdbBinaryOnDevice.mock.calls[0][0]).toBe(SERIAL);
+		expect(runAdb).not.toHaveBeenCalled();
+	});
+
+	it('answers the pulled bytes untouched', async () => {
+		records();
+
+		const bytes = await backend.recordVideo(SERIAL, { durationMs: 3_000 });
+
+		expect(Buffer.from(bytes).equals(FINISHED_RECORDING)).toBe(true);
+	});
+
+	/**
+	 * `--time-limit` counts whole seconds, so a duration that is not a whole number of them
+	 * has to round **up**: a caller who asked for 2500 ms and got two seconds was quietly
+	 * given less than it asked for, with nothing in the answer to say so.
+	 */
+	it('rounds a fractional duration up to the next whole second, never down', async () => {
+		records();
+
+		await backend.recordVideo(SERIAL, { durationMs: 2_500 });
+
+		expect(recordingArgv()).toContainEqual(recordArgv(3));
+	});
+
+	/**
+	 * The rounding is floored as well as rounded up, because `screenrecord` reads
+	 * `--time-limit 0` as *removing* the limit: the one duration that looks like "record
+	 * nothing" is the one that would leave an unbounded recorder on the device, outliving
+	 * its adb client and the lease. `RecordVideoParamsSchema` refuses it on the wire, but an
+	 * in-process caller of the core library never crosses the wire — so the guard the
+	 * `--time-limit` argument exists to be has to hold in the mapping that computes it.
+	 */
+	it.each([0, -1_000])('floors a duration of %d ms at one second', async (durationMs) => {
+		records();
+
+		await backend.recordVideo(SERIAL, { durationMs });
+
+		expect(recordingArgv()).toContainEqual(recordArgv(1));
+		expect(recordingArgv()).not.toContainEqual(recordArgv(0));
+	});
+
+	it('gives the recording command the capture window plus the finish budget', async () => {
+		records();
+
+		await backend.recordVideo(SERIAL, { durationMs: 3_000 });
+
+		expect(runAdbOnDevice.mock.calls[1][2]).toEqual({
+			timeoutMs: 3_000 + RECORDING_FINISH_TIMEOUT_MS,
+		});
+	});
+
+	// The window is the limit that was *passed*, not the one that was asked for: the adb
+	// client has to outlive the command it is waiting on, and the command runs for the
+	// rounded-and-floored seconds.
+	it('budgets the recording command against the floored limit, not the raw duration', async () => {
+		records();
+
+		await backend.recordVideo(SERIAL, { durationMs: 2_500 });
+
+		expect(runAdbOnDevice.mock.calls[1][2]).toEqual({
+			timeoutMs: 3_000 + RECORDING_FINISH_TIMEOUT_MS,
+		});
+	});
+
+	// A transfer of up to `MAX_ARTIFACT_BYTES` over USB, not a query — so it carries its own
+	// budget rather than the ten seconds a `wm size` gets.
+	it('gives the pull its own timeout rather than the query budget', async () => {
+		records();
+
+		await backend.recordVideo(SERIAL, { durationMs: 3_000 });
+
+		expect(runAdbBinaryOnDevice.mock.calls[0][2]).toEqual({
+			timeoutMs: RECORDING_PULL_TIMEOUT_MS,
+		});
+	});
+
+	/**
+	 * The acceptance criterion, as an assertion about ordering: the recorder is still there
+	 * on the first probe and gone on the second, and **nothing is pulled in between**. This
+	 * is the wait being a condition rather than a sleep — `waitForCondition` probes before
+	 * any delay, so the cases above cost no real time and this one costs a single default
+	 * poll gap.
+	 */
+	it('never pulls while the recorder is still running', async () => {
+		records({ pids: ['29633\n', ''] });
+
+		await backend.recordVideo(SERIAL, { durationMs: 1_000 });
+
+		const argv = runAdbOnDevice.mock.calls.map(([, args]) => args.join(' '));
+		expect(argv.filter((call) => call === RECORDING_PIDOF_ARGV.join(' '))).toHaveLength(2);
+		// The pull is the one binary call, and it happened after both probes had run.
+		expect(runAdbBinaryOnDevice).toHaveBeenCalledTimes(1);
+		expect(argv.at(-1)).toBe(RECORDING_RM_ARGV.join(' '));
+	});
+
+	/**
+	 * A recorder somebody else started on the same device never goes away. That is a timeout
+	 * naming the pids rather than a lease held until it expires — and **no pull**, because
+	 * the file under it is one somebody else is still writing.
+	 */
+	it('times out naming the pids, and pulls nothing, when the recorder never goes away', async () => {
+		// Fake timers because the budget is ten real seconds, and a wait that long is not
+		// something a unit test may spend — the same seam `src/core/wait.ts` documents.
+		vi.useFakeTimers();
+		try {
+			records({ pids: ['29633\n'] });
+
+			// Caught on creation rather than asserted on later: the rejection lands while the
+			// timers below are being advanced, and an assertion attached after that is an
+			// unhandled rejection first.
+			const failure = backend.recordVideo(SERIAL, { durationMs: 1_000 }).catch((error) => error);
+			await vi.advanceTimersByTimeAsync(RECORDING_FINISH_TIMEOUT_MS + 1_000);
+
+			expect(String(await failure)).toMatch(/29633/);
+			expect(String(await failure)).toMatch(/emulator-5554/);
+			expect(runAdbBinaryOnDevice).not.toHaveBeenCalled();
+			expect(runAdbOnDevice.mock.calls.filter(([, args]) => args[1] === 'rm')).toHaveLength(2);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	/**
+	 * The headline failure of this whole verb. The device exited 0, the pull succeeded, and
+	 * what came back is a file no player will open — so it is refused **by name**, carrying
+	 * the serial and the byte length, rather than handed over or reported as a host bug.
+	 */
+	it('refuses a recording pulled without its index, naming the device and the byte length', async () => {
+		records();
+		runAdbBinaryOnDevice.mockResolvedValue({ stdout: UNFINISHED_RECORDING, stderr: '' });
+
+		const failure = backend.recordVideo(SERIAL, { durationMs: 1_000 });
+
+		await expect(failure).rejects.toBeInstanceOf(UnfinishedRecordingError);
+		await expect(failure).rejects.toThrow(/emulator-5554/);
+		await expect(failure).rejects.toThrow(String(UNFINISHED_RECORDING.byteLength));
+	});
+
+	// The scratch file is removed on every path out, including the ones that threw: a
+	// multi-megabyte file left on borrowed hardware is what this cleanup is for.
+	it('removes the scratch file even when the pull came back unfinished', async () => {
+		records();
+		runAdbBinaryOnDevice.mockResolvedValue({ stdout: UNFINISHED_RECORDING, stderr: '' });
+
+		await expect(backend.recordVideo(SERIAL, { durationMs: 1_000 })).rejects.toThrow();
+		expect(runAdbOnDevice.mock.calls.filter(([, args]) => args[1] === 'rm')).toHaveLength(2);
+	});
+
+	it('removes the scratch file even when the recording command itself failed', async () => {
+		records({ fails: { [recordArgv(1).join(' ')]: new Error('adb … screenrecord … exited 1') } });
+
+		await expect(backend.recordVideo(SERIAL, { durationMs: 1_000 })).rejects.toThrow('exited 1');
+		expect(recordingArgv()).toContainEqual(RECORDING_RM_ARGV);
+	});
+
+	// Losing a recording the caller already paid for because the cleanup failed is worse
+	// than leaving a file behind.
+	it('never lets the cleanup’s own failure replace the answer', async () => {
+		records();
+		const succeeds = runAdbOnDevice.getMockImplementation();
+		let removals = 0;
+		runAdbOnDevice.mockImplementation(async (serial, args, options) => {
+			if (args[1] === 'rm') {
+				removals += 1;
+				if (removals === 2) throw new Error('rm: Permission denied');
+			}
+			return (succeeds as NonNullable<typeof succeeds>)(serial, args, options);
+		});
+
+		await expect(backend.recordVideo(SERIAL, { durationMs: 1_000 })).resolves.toBeInstanceOf(
+			Uint8Array,
+		);
+	});
+
+	/**
+	 * The scratch path is a fixed literal, so two recordings on one device would otherwise
+	 * share one file and corrupt both — and nothing above this backend excludes them: the
+	 * IPC server dispatches frames without awaiting them. The argv sequence is the
+	 * assertion, because it is the thing that has to be true on the device.
+	 */
+	it('never lets two recordings of one device overlap', async () => {
+		records();
+
+		await Promise.all([
+			backend.recordVideo(SERIAL, { durationMs: 1_000 }),
+			backend.recordVideo(SERIAL, { durationMs: 1_000 }),
+		]);
+
+		expect(runAdbOnDevice.mock.calls.map(([, args]) => [...args])).toEqual([
+			RECORDING_RM_ARGV,
+			recordArgv(1),
+			RECORDING_PIDOF_ARGV,
+			RECORDING_RM_ARGV,
+			RECORDING_RM_ARGV,
+			recordArgv(1),
+			RECORDING_PIDOF_ARGV,
+			RECORDING_RM_ARGV,
+		]);
+	});
+
+	/**
+	 * The derivation guard. `MAX_RECORDING_MS` is what fits in **one answer**, and it is only
+	 * true while the bit rate this backend records at agrees with it: a constant derived from
+	 * another by hand is one the other is free to drift away from.
+	 */
+	it('records slowly enough that the longest recording still fits one answer', () => {
+		const longestBytes = (MAX_RECORDING_MS / 1_000) * (RECORDING_BIT_RATE_BPS / 8);
+
+		expect(longestBytes).toBeLessThanOrEqual(MAX_ARTIFACT_BYTES);
 	});
 });

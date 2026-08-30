@@ -21,9 +21,11 @@ All from an Android Emulator AVD `Pixel_10_Pro` (`sdk_gphone16k_arm64`, API 37 /
 macOS. `SERIAL` is `emulator-5554`. Everything above the `input` rows was captured
 **2026-08-29**: the enumeration, `wm` and `uiautomator` rows with `adb` 37.0.0-14910828, and the
 app-control rows below them (`install-success` onwards) with `adb` 37.0.1-15733141, the version
-that host had by then. Every row dated **2026-08-30** — the three `input` captures, the two
-`uiautomator-dump` captures and the three `logcat` captures — was taken on a host back on
-`adb` 37.0.0-14910828.
+that host had by then. Every row dated **2026-08-30** except the four
+`screenrecord` ones — the three `input` captures, the two `uiautomator-dump` captures and the three
+`logcat` captures — was taken on a host back on `adb` 37.0.0-14910828. The four `screenrecord` rows
+are also **2026-08-30**, on `adb` 37.0.1-15733141 against Android 17, and `screenrecord` reports
+itself as **v1.4**.
 
 | Fixture | Command | Model | API | Captured |
 |---|---|---|---|---|
@@ -56,6 +58,10 @@ that host had by then. Every row dated **2026-08-30** — the three `input` capt
 | `logcat-threadtime.api37-sdk-gphone16k-arm64.txt` | `adb -s $SERIAL logcat -d -v threadtime -t 60 -b main -b crash` (stdout) | sdk_gphone16k_arm64 | 37 | 2026-08-30 |
 | `logcat-threadtime.crash.api37-sdk-gphone16k-arm64.txt` | the same narrowed to `-t 2 -b crash`, after `adb -s $SERIAL shell am crash com.android.settings` | sdk_gphone16k_arm64 | 37 | 2026-08-30 |
 | `logcat-threadtime.levels.api37-sdk-gphone16k-arm64.txt` | `adb -s $SERIAL shell 'log -p v/d/i/w/e/f -t RoverFixture "<level> line"'` (six commands), then the recipe at `-t 20` | sdk_gphone16k_arm64 | 37 | 2026-08-30 |
+| `screenrecord.unwritable-path.api37-sdk-gphone16k-arm64.txt` | `adb -s $SERIAL shell screenrecord --bit-rate 2000000 --time-limit 1 /data/nope/rover-recording.mp4 > f 2>&1` | sdk_gphone16k_arm64 | 37 | 2026-08-30 |
+| `screenrecord-pidof.running.api37-sdk-gphone16k-arm64.txt` | `adb -s $SERIAL shell 'sleep 3; pidof screenrecord' > f 2>&1`, run beside a `screenrecord --time-limit 8` | sdk_gphone16k_arm64 | 37 | 2026-08-30 |
+| `screenrecord.finished.api37-sdk-gphone16k-arm64.mp4` | `adb -s $SERIAL shell screenrecord --bit-rate 2000000 --time-limit 3 /sdcard/rover-recording.mp4`, then `adb -s $SERIAL exec-out cat /sdcard/rover-recording.mp4` | sdk_gphone16k_arm64 | 37 | 2026-08-30 |
+| `screenrecord.unfinished.api37-sdk-gphone16k-arm64.mp4` | the same `exec-out cat`, run **three seconds into** a `screenrecord --time-limit 8` | sdk_gphone16k_arm64 | 37 | 2026-08-30 |
 
 Both `wm` overrides were reset with `wm size reset` / `wm density reset` immediately after the
 capture. The `track-devices` capture leaves the host as it found it the same way: the second entry
@@ -232,6 +238,39 @@ re-capturing — a fixture nobody can re-create is a fixture nobody can extend.
 - **Nothing in the three needed redacting.** They are an emulator's own chatter — graphics, wifi,
   telephony config, adbd echoing the command it was given — plus the crash of a system app and six
   lines this capture wrote itself. Checked for an address, a key or an account before committing.
+
+- **The two `screenrecord.*.mp4` fixtures are the acceptance criterion of `record_video`, as two
+  files.** They are the only binary fixtures here besides the `track-devices` capture, and they are
+  committed whole and unedited because the point is that **nothing distinguishes them but one box**.
+  The finished one walks as `ftyp` (24 B), `moov` (1620 B), `free` (1572 B), `mdat` (64-bit extended
+  size, 60925 B) — note the index comes **second**, before the payload. The unfinished one, pulled
+  from the *same* recording while `screenrecord` was still writing, walks as `ftyp` (24 B), `free`
+  (3192 B — the reserved gap the index is written into) and an `mdat` whose 64-bit size reads
+  **4557430888798830399** over a 3232-byte file. Both start with a well-formed header, both are
+  plausible sizes, and `screenrecord` exited 0 for each; only the `moov` separates them, which is
+  why `isFinishedRecording` looks for exactly that and `backend.test.ts` drives both files through
+  the whole `recordVideo` path. `.gitignore` ignores `*.mp4` as a run artifact and carries an
+  explicit exception for this directory, because these two are the opposite of a run artifact: a
+  hand-written pair would prove exactly what a hand-written pair cannot.
+- **`screenrecord`'s success has no fixture, because it is zero bytes** — nothing on either stream
+  at exit 0 — for the reason the network and `input` rows have none. The refusal is what is
+  committed, and it is a **merged** capture (`> f 2>&1`) whose content came back on stderr at exit
+  **1**: `Unable to open '…': No such file or directory`. adb propagates that exit code, so
+  `../../../src/backends/android/adb.ts` rejects it before any predicate sees it — the fixture is
+  pinned anyway, because an exit code that agrees today is not a reason to stop reading what the
+  device said, and because it is the evidence that **no `screenrecord` failure exits 0** on this
+  build. That is why `parsers/screenrecord.ts` has no refusal predicate at all.
+- **`pidof screenrecord` has no not-running fixture, and its exit code is the finding.** While a
+  recording is in flight it prints one bare pid and a newline (`29633\n`) on stdout at exit 0; once
+  the recorder has gone it prints **nothing and exits 1**. Zero bytes is not a file worth
+  committing, but that non-zero exit is the trap: `adb shell` propagates it and the runner treats a
+  non-zero exit as a failure, so "no such process" — the answer the completion wait is looking for —
+  would arrive as a broken device. The recipe is `pidof screenrecord || true`, and
+  `screenrecord.test.ts` holds the empty cases inline and says so.
+- **The recording session left the device as it found it.** It recorded the launcher, reached with
+  `input keyevent KEYCODE_HOME`, so the two `.mp4` files contain nothing but an emulator's own home
+  screen — checked before committing. `/sdcard/rover-recording.mp4` was removed afterwards and
+  `adb shell ls` on it reports `No such file or directory`.
 
 ## Redactions
 

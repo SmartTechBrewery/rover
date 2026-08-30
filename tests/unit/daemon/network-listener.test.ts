@@ -113,7 +113,12 @@ function registerFakeBackend(devices: Device[] = [attached, second]) {
 		manifest: {
 			platform: 'test-platform',
 			label: 'Test',
-			capabilities: { canReadScreen: true, canInput: true, canControlNetwork: true },
+			capabilities: {
+				canReadScreen: true,
+				canInput: true,
+				canControlNetwork: true,
+				canRecordVideo: true,
+			},
 		},
 		backend: createMockDeviceBackend({
 			watchDevices,

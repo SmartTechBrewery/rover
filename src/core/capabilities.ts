@@ -15,7 +15,7 @@
  * fails at module load rather than at the first verb call.
  *
  * Only genuinely divergent abilities get a flag; a capability that is always `true`
- * would be noise. The three below are the divergences PROJECT.md §5 and
+ * would be noise. The four below are the divergences PROJECT.md §5 and
  * ai/ARCHITECTURE.md actually name.
  */
 
@@ -45,6 +45,12 @@ export const CapabilitiesSchema = z
 		canInput: z.boolean(),
 		/** Airplane mode and wifi toggles — the "environment" half of the device abstraction. */
 		canControlNetwork: z.boolean(),
+		/**
+		 * Recording the screen to a video file. One platform records a *simulator* with a
+		 * command-line tool and has no cheap equivalent for a physical device at all
+		 * (PROJECT.md §5), which is the same asymmetry `canReadScreen` above is for.
+		 */
+		canRecordVideo: z.boolean(),
 	})
 	.strict();
 export type Capabilities = z.infer<typeof CapabilitiesSchema>;
@@ -115,6 +121,7 @@ export const CAPABILITY_METHODS = {
 	canReadScreen: ['readScreen'],
 	canInput: ['tap', 'swipe', 'typeText', 'pressKey'],
 	canControlNetwork: ['setAirplaneMode', 'setWifiEnabled'],
+	canRecordVideo: ['recordVideo'],
 } as const satisfies Record<CapabilityId, readonly CapabilityGatedMethod[]>;
 
 /** Non-throwing query — what the verb layer asks before dispatching. */

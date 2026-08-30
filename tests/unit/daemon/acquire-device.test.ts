@@ -76,7 +76,12 @@ function registerFakeBackend(
 		manifest: {
 			platform: 'test-platform',
 			label: 'Test',
-			capabilities: { canReadScreen: true, canInput: false, canControlNetwork: true },
+			capabilities: {
+				canReadScreen: true,
+				canInput: false,
+				canControlNetwork: true,
+				canRecordVideo: true,
+			},
 		},
 		backend: createMockDeviceBackend({ watchDevices, describeDevice }),
 	});
@@ -201,6 +206,7 @@ describe('what a granted lease carries', () => {
 			canReadScreen: true,
 			canInput: false,
 			canControlNetwork: true,
+			canRecordVideo: true,
 		});
 	});
 

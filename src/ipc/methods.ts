@@ -31,6 +31,7 @@ import {
 	ReadLogsCallResultSchema,
 	ReadLogsParamsSchema,
 	ReadScreenParamsSchema,
+	RecordVideoParamsSchema,
 	ScreenshotParamsSchema,
 	ScrollParamsSchema,
 	SwipeParamsSchema,
@@ -60,6 +61,8 @@ export {
 	ReadLogsParamsSchema,
 	type ReadScreenParams,
 	ReadScreenParamsSchema,
+	type RecordVideoParams,
+	RecordVideoParamsSchema,
 	type ScreenshotParams,
 	ScreenshotParamsSchema,
 	type ScrollParams,
@@ -305,18 +308,15 @@ export type ReleaseDeviceResult = z.infer<typeof ReleaseDeviceResultSchema>;
  * variant of it.
  *
  * The verb rows are the two waits, the six input verbs, the three read verbs, the three
- * app-lifecycle verbs, the log read and the two environment verbs; each further verb family
- * is one more row beside them and one more entry in `src/daemon/verb-handlers.ts`. All but
- * one answer with `VerbCallResultSchema`, because "what happened on the device" is one shape
- * whatever was asked of it — which is why none of the read rows needs a result schema of its
- * own: `read_screen` and `device_info` answer with the state every other verb already
- * reports, asked for on its own, and `screenshot`'s bytes ride on `ActionResult.artifact`
- * rather than in a second answer shape. The verbs that address no element at all — those
- * two, `type_text` and `press_key`, and both environment rows, because a radio is not
- * something on the screen — answer with a null `target` rather than a shape of their own.
- * The three app rows share one params schema too, because they take exactly the same call,
- * and the two environment rows share one for the same reason: a lease id and a boolean,
- * whichever radio is being asked about.
+ * app-lifecycle verbs, the log read, the screen recording, and the two environment verbs;
+ * each further verb family is one more row beside them and one more entry in
+ * `src/daemon/verb-handlers.ts`. All but one answer with `VerbCallResultSchema`, because
+ * "what happened on the device" is one shape whatever was asked of it. `read_screen` and
+ * `device_info` answer with the state every other verb already reports, while `screenshot`
+ * and `record_video` carry their bytes on `ActionResult.artifact`. The verbs that address no
+ * element — those two reads, `type_text`, `press_key`, and both environment rows because a
+ * radio is not something on the screen — answer with a null `target`. The three app rows
+ * share one params schema, and the two environment rows share a lease id and boolean schema.
  *
  * `read_logs` is the exception that proves the rule: its answer is that same shape with the
  * log entries added, built by the same factory in `./verb-methods.ts`, so its refusals are
@@ -342,6 +342,7 @@ export const IPC_METHODS = {
 	stop_app: { params: AppVerbParamsSchema, result: VerbCallResultSchema },
 	clear_app_data: { params: AppVerbParamsSchema, result: VerbCallResultSchema },
 	read_logs: { params: ReadLogsParamsSchema, result: ReadLogsCallResultSchema },
+	record_video: { params: RecordVideoParamsSchema, result: VerbCallResultSchema },
 	set_airplane_mode: { params: EnvironmentVerbParamsSchema, result: VerbCallResultSchema },
 	set_wifi: { params: EnvironmentVerbParamsSchema, result: VerbCallResultSchema },
 } as const satisfies Record<string, IpcMethodDefinition>;

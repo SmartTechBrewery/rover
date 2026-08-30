@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 // suite starts would have an empty registry and lend nothing.
 import '@/backends/index.js';
 import { runAdbOnDevice } from '@/backends/android/adb.js';
+import { isFinishedRecording } from '@/backends/android/parsers/screenrecord.js';
 import type { LogEntry } from '@/core/device.js';
 import { type DeviceSerial, type LeaseId, parseAppId, unwrap } from '@/core/ids.js';
 import { type Observation, waitForCondition } from '@/core/wait.js';
@@ -41,6 +42,13 @@ import {
  * against each other over one lease — the root of the read against the panel `device_info`
  * describes — because on a device whose size nobody knows in advance that is the only
  * cross-check there is.
+ *
+ * **`record_video` is on the wire since #14**, and it is the second verb whose answer
+ * crosses the boundary as bytes. What a device is needed to prove about it is the one thing
+ * no mock can: that the recording was **finished** before it was pulled. A file copied while
+ * the encoder is still writing has no index box and no player will open it, and it is
+ * indistinguishable from a good one by length or exit code — so the assertion is the index,
+ * over the bytes that came back through the socket.
  *
  * **`screenshot` is on the wire since #68**, and it is the one verb whose answer crosses the
  * boundary as bytes. What a device is needed to prove about it is that the payload is still
@@ -131,6 +139,16 @@ const PNG_SIGNATURE = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
 
 /** How long to wait for the host's first view of its devices — a subscription, not a verb. */
 const INVENTORY_TIMEOUT_MS = 20_000;
+
+/** A short recording: long enough to have a payload, short enough for a suite to wait on. */
+const RECORDING_MS = 2_000;
+
+/**
+ * The client-side bound for the one call that spends seconds recording before it transfers
+ * anything — the other end of the pair `src/ipc/verb-methods.ts` documents. The default is
+ * 30 s and a recording plus a pull can outrun it on a slow link.
+ */
+const RECORDING_REQUEST_TIMEOUT_MS = 60_000;
 const INVENTORY_POLL_MS = 100;
 
 /**
@@ -612,6 +630,59 @@ describe.skipIf(!process.env.ROVER_TEST_DEVICE)('a daemon runs verbs on its own 
 		const { screen } = info.result.device;
 		expect([width, height].sort()).toEqual([screen.widthPx, screen.heightPx].sort());
 	});
+
+	/**
+	 * The recording row against real hardware, and the D19 half `screenshot` already has here:
+	 * the bytes survive the encode on the device, the pull, the base64 and the framing, and the
+	 * answer names the device the lease points at.
+	 *
+	 * **What only a device can prove is that the recording is finished.** A file pulled while
+	 * the encoder is still running has no index box and no player will open it — and it looks
+	 * exactly like this one otherwise, down to the exit code. `isFinishedRecording` over the
+	 * bytes that came back through the socket is the assertion;
+	 * `tests/device/android/recording.test.ts` makes it one layer down, against the backend
+	 * directly.
+	 *
+	 * Read-only with respect to the screen: it records whatever is in front of it and touches
+	 * nothing, so it obeys this suite's one-point rule by never using the point at all.
+	 */
+	it('records the real screen as bytes that are finished by the time they arrive', async () => {
+		const client = await startHost();
+		const device = await freeDevice(client);
+		const leaseId = await lease(client, device.serial);
+
+		const recorded = await client.request(
+			'record_video',
+			{ leaseId, durationMs: RECORDING_MS },
+			// The client's own bound, raised past its 30 s default: this call spends the whole
+			// recording before it starts transferring anything (`src/ipc/verb-methods.ts`).
+			{ timeoutMs: RECORDING_REQUEST_TIMEOUT_MS },
+		);
+
+		expect(recorded).toMatchObject({
+			outcome: 'ok',
+			// A recording addresses nothing on the screen either — it *is* the screen (D12(a)).
+			result: { verb: 'record_video', target: null, device: { serial: device.serial } },
+		});
+		if (recorded.outcome !== 'ok') {
+			throw new Error('the assertion above should have caught this');
+		}
+		const { artifact } = recorded.result;
+		if (!artifact)
+			throw new Error(`the recording answered with no artifact: ${JSON.stringify(recorded)}`);
+
+		// Bytes, and only bytes: three fields, none of them a path on the host (D19).
+		expect(Object.keys(artifact).sort()).toEqual(['base64', 'byteLength', 'mediaType']);
+		expect(artifact.mediaType).toBe('video/mp4');
+
+		const bytes = new Uint8Array(Buffer.from(artifact.base64, 'base64'));
+		expect(bytes.byteLength).toBe(artifact.byteLength);
+		// The criterion: the index box is there, so the recorder had exited before the pull.
+		expect(isFinishedRecording(bytes)).toBe(true);
+		// A real encode of a real screen is kilobytes at the very least; the floor is here for
+		// the shape a mangled stream takes when it happens to keep its header.
+		expect(bytes.byteLength).toBeGreaterThan(4 * 1024);
+	}, 90_000);
 
 	/**
 	 * The app rows against real hardware: a package really launched and really stopped, over a

@@ -184,6 +184,27 @@ blocking capture. And `read_screen` is the read that survives the block — on a
 are gone the hierarchy comes back in full, texts and rectangles and all, which is why it is a
 first-class verb rather than a fallback for when a screenshot is inconvenient (PROJECT.md §6).
 
+**`record_video` is the second verb whose answer is bytes**, and the whole verb is one promise:
+the recording it hands you is a file a player will actually open. A recorder writes its container
+index **last**, so a file copied off a device a moment early is not a shorter video — it is a file no
+decoder will accept at all, which reads like a broken tool rather than a race. So the host records,
+then waits on a *condition* for the recorder to be gone (never a sleep), then pulls, then checks the
+index on the bytes that actually arrived, and only then answers. A recording missing that index is
+refused by name — `unfinished-recording`, carrying the device and the byte length — rather than
+handed over, and rather than surfacing as a broken host. The recording rides on the same
+`result.artifact` a screenshot does, base64 and `video/mp4` and a byte length, and never a path, for
+the reasons above. It declares `canRecordVideo`, so a device that cannot record says so before
+anything is dispatched. Duration is the one knob — five seconds by default, capped at fifteen,
+because that is what **one answer** can carry; a longer recording is chunked transfer, its own
+issue, and going over the bound is the same `artifact-too-large` refusal rather than a file cut
+short. A caller asking for a long one should raise its own request timeout, which defaults to 30 s.
+
+**What a recording is honest about: it samples motion.** It can tell you something moved and roughly
+when. It cannot tell you how the movement eased, whether a frame was dropped, or whether what a
+person would call jank happened — and reading any of that out of it anyway is exactly the
+plausible-looking wrong answer this whole design is against. Slicing a recording into frames is the
+second phase of this verb and is not here yet.
+
 **`read_logs` is the verb that sees what a screenshot cannot** (`src/verbs/logs.ts`), and it is the
 first one whose answer carries a payload of its own: the device's log, parsed into neutral entries —
 a timestamp as the device printed it, a level, a tag, a process id and the line — on top of
@@ -210,18 +231,20 @@ the reason the restoration records: airplane mode first, wifi last.
 The remaining verbs — `install_app`, `pull_file` and `push_file` — are their own issues.
 
 **The daemon loads the core and runs the verbs**, and a client only asks (D19). The two waits, the
-six input verbs, the three app verbs, the three read verbs, the log read and the two environment
-verbs are callable over the same connection as `acquire_device` — the same envelope, the same
-framing, one method table — and a verb call carries the lease id rather than a serial, because the
-lease id is the credential and the host derives the device from it. A verb that fails comes back as an *answer* naming what happened —
+six input verbs, the three app verbs, the three read verbs, the log read, screen recording, and two
+environment verbs are callable over the same connection as `acquire_device` — the same envelope,
+the same framing, one method table — and a verb call carries the lease id rather than a serial,
+because the lease id is the credential and the host derives the device from it. A verb that fails
+comes back as an *answer* naming what happened —
 the element was not there, the wait timed out, the device cannot read its screen — and never as a
 broken host; only the host actually breaking is an `internal_error`. There is no `adb` in a client
 process, and `tests/unit/no-backend-in-a-client.test.ts` walks the import graph from every client
 entrypoint to say so rather than asking politely. Against a real device today all of it runs on the
 hardware: a `tap` at a coordinate injects, `press_key` and `type_text` reach the device without aiming at
 anything, `launch_app` and `stop_app` reach the package, `read_screen` and `device_info` answer off
-the hardware, `screenshot` brings back a real PNG of the panel the device reports, `read_logs`
-brings back the device's own log, `set_airplane_mode` and `set_wifi` move the device's real radios
+the hardware, `screenshot` brings back a real PNG of the panel the device reports, `record_video`
+brings back a recording that is provably finished before it leaves the device, `read_logs` brings
+back the device's own log, and `set_airplane_mode` and `set_wifi` move the device's real radios
 over a lease and without root — and, since the Android backend learned to read its own screen —
 a target addressed by text resolves against a hierarchy read inside the verb, both waits poll a
 real screen, and every action comes back carrying the elements that were on it afterwards. One gap

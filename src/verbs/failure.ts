@@ -28,7 +28,12 @@
 import { z } from 'zod';
 import { CapabilityIdSchema } from '../core/capabilities.js';
 import { PointSchema, ScreenElementSchema } from '../core/device.js';
-import { MissingCapabilityError, UnsupportedTextError, WaitTimeoutError } from '../core/errors.js';
+import {
+	MissingCapabilityError,
+	UnfinishedRecordingError,
+	UnsupportedTextError,
+	WaitTimeoutError,
+} from '../core/errors.js';
 import { DeviceSerialSchema, PlatformIdSchema } from '../core/ids.js';
 import {
 	AmbiguousTargetError,
@@ -149,6 +154,25 @@ export const VerbFailureSchema = z.discriminatedUnion('kind', [
 		})
 		.strict(),
 	/**
+	 * The recording came off the device without its container index — it was still being
+	 * written when it was copied.
+	 *
+	 * Its own kind rather than a shape of `artifact-too-large`, because the two ask opposite
+	 * things of the caller: that one says the answer will never fit, this one says ask again.
+	 * `byteLength` is what makes it actionable — a few kilobytes is a recording caught at its
+	 * very start, megabytes is one whose writer was killed at the end — and without the branch
+	 * this would arrive as `internal_error`, i.e. "the host broke", for a device that merely
+	 * got cut off (`src/core/errors.ts`, `UnfinishedRecordingError`).
+	 */
+	z
+		.object({
+			kind: z.literal('unfinished-recording'),
+			serial: DeviceSerialSchema,
+			byteLength: z.number().int().nonnegative(),
+			message: z.string().min(1),
+		})
+		.strict(),
+	/**
 	 * The condition was still unmet at the deadline. Carries no serial: a wait is over a
 	 * condition rather than over a device, and the host names the device in the refusal's
 	 * message and in the call that asked for it.
@@ -170,7 +194,7 @@ export type VerbFailure = z.infer<typeof VerbFailureSchema>;
  * The failure `error` is, or `null` when it is not one of them — the caller then rethrows,
  * and the host reports a host failure as one.
  *
- * Adding an eighth error class to the verb layer without a branch here surfaces as that
+ * Adding a further error class to the verb layer without a branch here surfaces as that
  * class's own test seeing an internal error instead of an answer, which is the loud version
  * of this drifting.
  */
@@ -247,6 +271,14 @@ export function toVerbFailure(error: unknown): VerbFailure | null {
 			serial: error.serial,
 			byteLength: error.byteLength,
 			maxBytes: error.maxBytes,
+			message: error.message,
+		};
+	}
+	if (error instanceof UnfinishedRecordingError) {
+		return {
+			kind: 'unfinished-recording',
+			serial: error.serial,
+			byteLength: error.byteLength,
 			message: error.message,
 		};
 	}
