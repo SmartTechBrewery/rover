@@ -9,7 +9,7 @@
 		"lint:fix": "biome check --write .",
 		"typecheck": "tsc --noEmit -p tsconfig.typecheck.json",
 		"daemon": "node --import tsx/esm src/daemon/main.ts",
-		"daemon:status": "node --import tsx/esm src/daemon/status-cli.ts",
+		"rover": "node --import tsx/esm src/cli/index.ts",
 		"test": "npm run test:unit",
 		"test:unit": "vitest run --project unit",
 		"test:device": "vitest run --project device",

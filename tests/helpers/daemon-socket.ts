@@ -1,5 +1,6 @@
 /**
- * Temp-directory sockets and daemon-process cleanup for `tests/unit/daemon/`.
+ * Temp-directory sockets and daemon-process cleanup for `tests/unit/daemon/` and
+ * `tests/unit/cli/`.
  *
  * These tests run against a **real** unix socket and, for autostart, real child processes
  * (ai/TESTING.md "The daemon suite is the exception"), so every one of them has to leave

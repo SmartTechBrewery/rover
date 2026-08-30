@@ -1,0 +1,148 @@
+/**
+ * The flag surface all four commands share, and the error a mis-typed invocation raises.
+ *
+ * Node's `parseArgs` and nothing else — no CLI dependency, matching Swarm's own
+ * `src/cli/`. `strict: true`, so an unknown flag is a refusal rather than a value silently
+ * dropped: a caller who typed `--owener` has to be told, not handed a lease attributed to
+ * nobody.
+ */
+
+import { type ParseArgsOptionsConfig, parseArgs } from 'node:util';
+import { ATTRIBUTION_MAX_LENGTH } from '../../ipc/methods.js';
+
+/**
+ * The caller asked wrong — an unknown flag, a missing required option, an unsupported
+ * host. Its own type so `index.ts` can answer exit code 2 with the usage text instead of
+ * exit code 1 with a bare message: "you typed it wrong" and "it did not work" are
+ * different next moves.
+ */
+export class UsageError extends Error {
+	constructor(message: string) {
+		super(message);
+		this.name = 'UsageError';
+	}
+}
+
+/** `--json`, `--host` and `--help`, accepted by every command. */
+export const GLOBAL_OPTIONS = {
+	json: { type: 'boolean', default: false },
+	host: { type: 'string' },
+	help: { type: 'boolean', default: false },
+} as const satisfies ParseArgsOptionsConfig;
+
+/**
+ * `parseArgs` with its throw translated. The message it raises already names the offending
+ * token; what it cannot know is which command rejected it.
+ */
+export function parseCommandArgs<Options extends ParseArgsOptionsConfig>(
+	command: string,
+	argv: string[],
+	options: Options,
+) {
+	try {
+		return parseArgs({ args: argv, options, allowPositionals: true, strict: true });
+	} catch (error) {
+		throw new UsageError(
+			`rover ${command}: ${error instanceof Error ? error.message : String(error)}`,
+		);
+	}
+}
+
+/**
+ * Exactly the positionals a command takes, named as the usage text names them.
+ *
+ * A blank one is rejected here rather than left to the id parser below it, so an empty
+ * argument is a usage error with the command's own shape in it instead of a validation
+ * failure from two layers down.
+ */
+export function expectPositionals(
+	command: string,
+	positionals: string[],
+	expected: readonly string[],
+): string[] {
+	const shape = expected.length === 0 ? 'no arguments' : expected.join(' ');
+	if (positionals.length !== expected.length) {
+		const got =
+			positionals.length === 0 ? 'none' : positionals.map((value) => `'${value}'`).join(' ');
+		throw new UsageError(`rover ${command}: expected ${shape}, got ${got}`);
+	}
+	if (positionals.some((value) => value.trim().length === 0)) {
+		throw new UsageError(`rover ${command}: expected ${shape}, got a blank argument`);
+	}
+	return positionals;
+}
+
+/**
+ * A required option, with the reason it is required in the failure.
+ *
+ * There is deliberately no fallback anywhere below this: `--owner` and `--project` are
+ * caller-supplied strings the host stores and never reads (D16, D20, D22), and a value
+ * this CLI synthesized from an environment variable, a branch or a process id would
+ * attribute a device to nobody in particular — the exact failure those decisions exist to
+ * prevent.
+ */
+export function requireOption(
+	command: string,
+	name: string,
+	value: string | undefined,
+	why: string,
+): string {
+	if (value === undefined || value.trim().length === 0) {
+		throw new UsageError(`rover ${command}: --${name} is required — ${why}`);
+	}
+	return value;
+}
+
+/**
+ * The shape of an attribution string, checked here rather than at the host.
+ *
+ * The bound is the host's — {@link ATTRIBUTION_MAX_LENGTH}, imported rather than restated,
+ * so the two cannot drift. What the CLI adds is *where the failure lands*: the host answers
+ * a bad value with Zod's own words naming `testName`, a key the caller never typed, over a
+ * round trip that exits 1 — the code this CLI reserves for a refused acquire or an
+ * unreachable host. A caller reading only the exit code could not then tell a mistyped flag
+ * from a busy device. Rejecting it here makes every bad attribution value one thing: exit 2,
+ * naming the flag as it was spelled, with the command's own usage under it.
+ */
+function boundAttribution(command: string, name: string, value: string): string {
+	if (value.length > ATTRIBUTION_MAX_LENGTH) {
+		throw new UsageError(
+			`rover ${command}: --${name} is ${value.length} characters — an attribution string is ` +
+				`stored and echoed back by the host, never read, so it is capped at ` +
+				`${ATTRIBUTION_MAX_LENGTH}.`,
+		);
+	}
+	return value;
+}
+
+/** A required attribution string: present ({@link requireOption}) and within the bound. */
+export function requireAttribution(
+	command: string,
+	name: string,
+	value: string | undefined,
+	why: string,
+): string {
+	return boundAttribution(command, name, requireOption(command, name, value, why));
+}
+
+/**
+ * An optional attribution string. Absent is fine; present-but-blank is not — a flag typed
+ * with nothing after it is a mistake, and omitting it is how you say there is nothing to
+ * name.
+ */
+export function optionalAttribution(
+	command: string,
+	name: string,
+	value: string | undefined,
+): string | undefined {
+	if (value === undefined) {
+		return undefined;
+	}
+	if (value.trim().length === 0) {
+		throw new UsageError(
+			`rover ${command}: --${name} was given with no value — omit the flag rather than ` +
+				`passing an empty one.`,
+		);
+	}
+	return boundAttribution(command, name, value);
+}

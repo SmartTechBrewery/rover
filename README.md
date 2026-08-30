@@ -47,6 +47,16 @@ applications a project owns and what its hook does arrive through an injected re
 per-project configuration that fills it is its own issue (`PROJECT.md` §9.3, R17), so today that
 resolver answers nothing and only the two network steps have work to do.
 
+**There is a CLI** (D4) — `rover list`, `acquire`, `release` and `status`, human-readable by
+default and one JSON document on stdout with `--json`, every diagnostic on stderr. It holds no
+verb logic: each command parses flags, calls one IPC method, renders the answer and picks an exit
+code. `list` shows what is attached, what is free and who holds the rest — the owner, project and
+test name, and how much longer they have — and says out loud when the host does not know its own
+view to be current, rather than quietly printing a short list. `acquire` requires an explicit
+`--owner` and `--project` and derives neither. `status` says which host answered. The host is named
+by `--host`; no flag means the local one, and `local` is the only value reachable until the network
+listener lands (`PROJECT.md` R22), so anything else fails loudly instead of hanging.
+
 **Waiting is a condition, never a duration.** `src/core/wait.ts` is the one module in the
 repository allowed to construct a delay: `waitForCondition` polls a probe until it reports the
 condition met or the deadline passes, and a probe that reports *unmet* is required by its own type
@@ -111,11 +121,27 @@ pretending. The backlog is twenty issues in dependency order — see
 [`PROJECT.md`](PROJECT.md) §9.3.
 
 ```bash
-npm run daemon:status   # start the daemon if it is not running, print its state as JSON
-npm run daemon          # run it in the foreground instead, to watch it start
+npm run rover -- status              # start the daemon if it is not running, report which host answered
+npm run rover -- list                # what is attached, what is free, who holds the rest
+npm run rover -- acquire <serial> --owner issue-112 --project rover
+npm run rover -- release <lease-id>
+npm run rover -- --help              # the four commands, the global flags and the exit codes
+npm run daemon                       # run the daemon in the foreground instead, to watch it start
 ```
 
-Stopping the daemon is `kill <pid>` on the pid `daemon:status` printed; it unlinks its socket on
+`npm run` prints its own banner to stdout ahead of the command, so a script that parses the JSON
+uses `npm run -s rover -- list --json` or invokes `node --import tsx/esm src/cli/index.ts list
+--json` directly. There is no `bin/` launcher yet — the published entry point is `PROJECT.md` R20's
+to settle.
+
+Exit codes: `0` success; `1` the operation did not succeed (a refused `acquire`, a `release` that
+found no live lease, an unreachable host, a request the host rejected); `2` usage error (unknown
+command or flag, a missing `--owner`/`--project`, an attribution string past the 256 characters
+the host accepts, a `--host` nothing can reach yet). A `release`
+that found nothing exits `1` on purpose — the host cannot tell "no such id" from "already gone",
+and exiting `0` would let a mistyped lease id read as success.
+
+Stopping the daemon is `kill <pid>` on the pid `rover status` printed; it unlinks its socket on
 the way out, and the next call brings a new one up.
 
 ## Configuration
@@ -141,6 +167,11 @@ process is discarded on age by the next start.
 | [`ai/ARCHITECTURE.md`](ai/ARCHITECTURE.md) | The four components, the lease lifecycle, where the iOS seam runs |
 | [`ai/CODING_STANDARDS.md`](ai/CODING_STANDARDS.md) | Stack, Zod boundaries, error handling, module shape |
 | [`ai/TESTING.md`](ai/TESTING.md) | Vitest, the real-device gate, fixtures, conformance |
+
+In the source tree: `src/core/` holds the device contract and the branded ids, `src/backends/` one
+folder per platform, `src/verbs/` the verb spine and the two waits described above, `src/ipc/` the
+wire protocol and the transport-agnostic client and server, `src/daemon/` the socket and the
+inventory and the leases, and `src/cli/` the `rover` command.
 
 ## Shape
 

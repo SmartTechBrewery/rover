@@ -149,7 +149,8 @@ export type ListDevicesResult = z.infer<typeof ListDevicesResultSchema>;
  * one is a response it allocates and encodes on a peer's behalf. It looks at the length and
  * never at the meaning.
  */
-export const AttributionStringSchema = z.string().min(1).max(256);
+export const ATTRIBUTION_MAX_LENGTH = 256;
+export const AttributionStringSchema = z.string().min(1).max(ATTRIBUTION_MAX_LENGTH);
 
 /**
  * `.strict()` so a typo'd key is `invalid_params` rather than a lease granted with an
