@@ -1,5 +1,5 @@
 /**
- * The four gesture verbs, over a backend that records what it was asked to do.
+ * The six input verbs, over a backend that records what it was asked to do.
  *
  * Two things are asserted here that a correct-looking result cannot show. The first is
  * **order** — the screen read before the gesture, the state after it *after* it — which is
@@ -8,24 +8,36 @@
  * long press that reached the device as two different points is a swipe, a `scroll 'down'`
  * that dragged downwards moves the list the wrong way, and both answer with a result that
  * reads exactly like success.
+ *
+ * The two keyboard verbs are the same claim from the other side: what has to be asserted about
+ * `type_text` is that the string arrived **unchanged**, because a verb that escaped it would
+ * also answer with a result that reads exactly like success — and the escaping would show up
+ * on the device's screen rather than in any test that only reads the answer.
  */
 
 import { describe, expect, it, vi } from 'vitest';
 import type { Capabilities } from '@/core/capabilities.js';
-import type { DeviceBackend, Point, ScreenElement } from '@/core/device.js';
-import { MissingCapabilityError } from '@/core/errors.js';
+import {
+	type DeviceBackend,
+	DeviceKeySchema,
+	type Point,
+	type ScreenElement,
+} from '@/core/device.js';
+import { MissingCapabilityError, UnsupportedTextError } from '@/core/errors.js';
 import { parseElementId } from '@/core/ids.js';
 import type { VerbContext } from '@/verbs/context.js';
 import { TargetNotFoundError } from '@/verbs/errors.js';
 import {
 	LONG_PRESS_DURATION_MS,
 	longPress,
+	pressKey,
 	SCROLL_DURATION_MS,
 	type ScrollDirection,
 	SWIPE_DURATION_MS,
 	scroll,
 	swipe,
 	tap,
+	typeText,
 } from '@/verbs/input.js';
 import type { ActionResult } from '@/verbs/result.js';
 import {
@@ -68,6 +80,9 @@ interface Recording {
 	readonly calls: string[];
 	readonly taps: Point[];
 	readonly drags: Drag[];
+	/** Every string the backend was asked to type, in order and exactly as it received it. */
+	readonly typed: string[];
+	readonly keys: string[];
 	readonly context: VerbContext;
 }
 
@@ -78,6 +93,8 @@ function recording(
 	const calls: string[] = [];
 	const taps: Point[] = [];
 	const drags: Drag[] = [];
+	const typed: string[] = [];
+	const keys: string[] = [];
 	const screen = options.screen ?? [save];
 
 	const backend = createMockDeviceBackend({
@@ -97,6 +114,14 @@ function recording(
 			calls.push('swipe');
 			drags.push({ from, to, durationMs });
 		}),
+		typeText: vi.fn<NonNullable<DeviceBackend['typeText']>>(async (_serial, text) => {
+			calls.push('typeText');
+			typed.push(text);
+		}),
+		pressKey: vi.fn<NonNullable<DeviceBackend['pressKey']>>(async (_serial, key) => {
+			calls.push('pressKey');
+			keys.push(key);
+		}),
 	});
 
 	const context = createMockVerbContext({
@@ -106,7 +131,7 @@ function recording(
 		}),
 	});
 
-	return { calls, taps, drags, context };
+	return { calls, taps, drags, typed, keys, context };
 }
 
 /**
@@ -122,8 +147,8 @@ const AGAINST_THE_CONTENT: ReadonlyArray<[ScrollDirection, 'x' | 'y', 1 | -1]> =
 	['right', 'x', 1],
 ];
 
-/** One call of each verb, for the properties all four share. */
-const GESTURES: ReadonlyArray<[string, (context: VerbContext) => Promise<ActionResult>]> = [
+/** One call of each verb, for the properties all six share. */
+const INPUT_VERBS: ReadonlyArray<[string, (context: VerbContext) => Promise<ActionResult>]> = [
 	['tap', (context) => tap(context, { by: 'text', text: 'Save' })],
 	['long_press', (context) => longPress(context, { by: 'text', text: 'Save' })],
 	[
@@ -131,11 +156,13 @@ const GESTURES: ReadonlyArray<[string, (context: VerbContext) => Promise<ActionR
 		(context) => swipe(context, { by: 'text', text: 'Save' }, { by: 'text', text: 'Cancel' }),
 	],
 	['scroll', (context) => scroll(context, 'down')],
+	['type_text', (context) => typeText(context, 'hello')],
+	['press_key', (context) => pressKey(context, 'home')],
 ];
 
-describe('every gesture verb is on the spine', () => {
+describe('every input verb is on the spine', () => {
 	it.each(
-		GESTURES,
+		INPUT_VERBS,
 	)('%s reads the state after the action, after it (D12(c))', async (_name, run) => {
 		const { calls, context } = recording({ screen: [save, cancel] });
 
@@ -148,7 +175,7 @@ describe('every gesture verb is on the spine', () => {
 	});
 
 	it.each(
-		GESTURES,
+		INPUT_VERBS,
 	)('%s is refused before the device is touched at all (D11)', async (_name, run) => {
 		const { calls, context } = recording({
 			screen: [save, cancel],
@@ -391,6 +418,152 @@ describe('scroll', () => {
 		);
 
 		expect(thrown).toBeInstanceOf(TargetNotFoundError);
+		expect(calls).not.toContain('swipe');
+	});
+});
+
+/**
+ * The escaping cases the first backend measured (PROJECT.md §6) plus the ones a verb author is
+ * most likely to "help" with. Every one of them must arrive at the backend byte for byte.
+ */
+const PASSED_THROUGH = [
+	'hello',
+	'hello world',
+	'  leading and trailing  ',
+	"don't",
+	'a&b|c;d $e `f` "g" (h) *?[i]',
+	'100%',
+	'a%sb',
+	'%s',
+	'zażółć gęślą jaźń',
+	'日本語 🙂',
+	'line\nbreak\ttab',
+	'',
+];
+
+describe('type_text', () => {
+	it("hands the backend the caller's string and nothing of its own", async () => {
+		const { calls, typed, context } = recording();
+
+		const result = await typeText(context, 'hello world');
+
+		// No screen read before the typing: this verb addresses no element, so there is nothing
+		// to resolve and nothing to read a screen for.
+		expect(calls).toEqual(['typeText', 'readScreen', 'deviceInfo']);
+		expect(typed).toEqual(['hello world']);
+		expect(result.verb).toBe('type_text');
+	});
+
+	it.each(PASSED_THROUGH)('passes %j through byte for byte', async (text) => {
+		const { typed, context } = recording();
+
+		await typeText(context, text);
+
+		// Identity, asserted on the exact string rather than on a shape: a verb that quoted,
+		// trimmed or percent-escaped anything here would answer with a result that reads like
+		// success while the device typed something else. What a device cannot type is the
+		// backend's refusal, and this layer holds no opinion about which strings those are.
+		expect(typed).toEqual([text]);
+	});
+
+	it('addresses no element, so its target is null rather than invented', async () => {
+		const { context } = recording();
+
+		const result = await typeText(context, 'hello');
+
+		expect(result.target).toBeNull();
+	});
+
+	it('taps nothing and presses no key, whatever the string looks like', async () => {
+		const { calls, context } = recording();
+
+		await typeText(context, 'home');
+
+		expect(calls).not.toContain('tap');
+		expect(calls).not.toContain('pressKey');
+		expect(calls).not.toContain('swipe');
+	});
+
+	it("lets a backend's refusal out, rather than answering as though it typed", async () => {
+		const { context } = recording();
+		const refusal = new UnsupportedTextError(
+			context.serial,
+			'café',
+			['U+00E9 ("é")'],
+			'this device only types printable ASCII',
+		);
+		vi.mocked(context.backend.typeText as NonNullable<DeviceBackend['typeText']>).mockRejectedValue(
+			refusal,
+		);
+
+		// `toVerbFailure` turns it into an `unsupported-text` answer at the daemon
+		// (`tests/unit/verbs/failure.test.ts`); what matters here is that the verb does not
+		// swallow it and report a successful action.
+		await expect(typeText(context, 'café')).rejects.toThrow(UnsupportedTextError);
+	});
+});
+
+describe('press_key', () => {
+	it('presses the key it was given, on a device it never read the screen of', async () => {
+		const { calls, keys, context } = recording();
+
+		const result = await pressKey(context, 'back');
+
+		expect(keys).toEqual(['back']);
+		expect(calls).toEqual(['pressKey', 'readScreen', 'deviceInfo']);
+		expect(result.verb).toBe('press_key');
+	});
+
+	it.each(DeviceKeySchema.options)('carries %s to the backend unchanged', async (key) => {
+		const { keys, context } = recording();
+
+		await pressKey(context, key);
+
+		// The whole vocabulary, read off the schema rather than listed again: a key added to
+		// `DeviceKeySchema` without a way through this verb is red here rather than silent.
+		expect(keys).toEqual([key]);
+	});
+
+	it('addresses no element, so its target is null rather than invented', async () => {
+		const { context } = recording();
+
+		const result = await pressKey(context, 'home');
+
+		// A key press has no element behind it, and that is a fact about the verb rather than a
+		// resolution that failed — which is why it is `null` and not an error.
+		expect(result.target).toBeNull();
+	});
+
+	it('reports the state after the press, which is the only evidence home did anything', async () => {
+		const { context } = recording({ screen: [cancel] });
+
+		const result = await pressKey(context, 'home');
+
+		expect(result.after).toEqual({ kind: 'screen', elements: [cancel] });
+	});
+
+	it('says so honestly when the device cannot report what the press did', async () => {
+		const { context } = recording({
+			capabilities: createMockCapabilities({ canReadScreen: false }),
+		});
+
+		const result = await pressKey(context, 'recents');
+
+		// Never an empty element list, which would read as a blank screen — the capability that
+		// would have answered, named.
+		expect(result.after).toEqual({
+			kind: 'unavailable',
+			capability: 'canReadScreen',
+			message: expect.stringContaining('canReadScreen'),
+		});
+	});
+
+	it('injects no touch event: a key press is not a tap anywhere', async () => {
+		const { calls, context } = recording();
+
+		await pressKey(context, 'back');
+
+		expect(calls).not.toContain('tap');
 		expect(calls).not.toContain('swipe');
 	});
 });

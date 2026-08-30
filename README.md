@@ -47,7 +47,7 @@ applications a project owns and what its hook does arrive through an injected re
 per-project configuration that fills it is its own issue (`PROJECT.md` §9.3, R17), so today that
 resolver answers nothing and only the two network steps have work to do.
 
-**There is a CLI** (D4) — `rover list`, `acquire`, `release` and `status`, human-readable by
+**There is a CLI** (D4) — `rover list`, `acquire`, `release`, `status` and `users`, human-readable by
 default and one JSON document on stdout with `--json`, every diagnostic on stderr. It holds no
 verb logic: each command parses flags, calls one IPC method, renders the answer and picks an exit
 code. `list` shows what is attached, what is free and who holds the rest — the owner, project and
@@ -56,6 +56,9 @@ view to be current, rather than quietly printing a short list. `acquire` require
 `--owner` and `--project` and derives neither. `status` says which host answered. The host is named
 by `--host`: no flag means the local one, `remote` is the machine `ROVER_HOST_ADDRESS`,
 `ROVER_HOST_PORT` and `ROVER_HOST_TOKEN` name, and anything else fails loudly instead of hanging.
+`users` is the one command that asks no host at all: it reads and writes this machine's own
+`~/.rover/users.json` directly, works whether or not a daemon is running, and takes no `--host`
+(see "Managing host users" below).
 
 **Waiting is a condition, never a duration.** `src/core/wait.ts` is the one module in the
 repository allowed to construct a delay: `waitForCondition` polls a probe until it reports the
@@ -67,7 +70,7 @@ test behind it rather than only a convention: `tests/unit/no-sleep.test.ts` scan
 are exempt from the scan. It is a floor, not a proof — a determined re-implementation gets
 through, and reading the wait vocabulary is still how you learn what a wait here looks like.
 
-**The verb layer has a spine, seven verbs on it and the two waits standing beside it.**
+**The verb layer has a spine, eleven verbs on it and the two waits standing beside it.**
 `src/verbs/` is the layer above the backends where determinism stops being a rule and becomes a
 signature (D12): `resolveTarget()` takes
 a target and *nothing else* — no screen, no element list, no state read a turn ago — so a target can
@@ -87,7 +90,7 @@ that leaves the agent guessing whether it landed. Every argument and every
 result is a Zod schema of plain data, because the host runs the verb and the agent reads the answer
 somewhere else (D19).
 
-**`tap`, `long_press`, `swipe` and `scroll` are that spine used four times** (`src/verbs/input.ts`),
+**The six input verbs are that spine used six times** (`src/verbs/input.ts`),
 and each of them is one `performAction()` call: not one reads a screen of its own, so a verb author
 has nothing to remember and nothing to get wrong. `long_press` is a drag from a point to that same
 point, held past the device's own long-press timeout — never the long-press flag on a key event,
@@ -121,6 +124,20 @@ backend that does not declare `canReadScreen` is told so by name before the firs
 after a whole timeout. Both answer with the same `ActionResult` as every other action, and the
 *reading* they poll is real: the Android backend answers `readScreen` and declares
 `canReadScreen`, and `read_screen` is now the verb that exposes it directly.
+
+**`type_text` and `press_key` complete the input row, and they are the two of it that address no
+element.** A key press aims at nothing and neither does text going to whatever holds focus, so both
+go through the spine with **no target at all** and their result's `target` is `null` — a fact about
+the verb rather than a resolution that failed. There is no target *option* on `type_text` either: an
+agent that wants text in a particular field taps it and then types, rather than having a second copy
+of `tap`'s resolution live here. `press_key` speaks the four keys of `DeviceKey` — back, home,
+recents, wake — shared with the backend and the wire so a key nobody implements is refused at the
+boundary instead of pressed into silence. `type_text` hands the caller's string to the backend
+**byte for byte**: quoting and whatever a device's own text entry reads rather than types belong to
+the backend, and a string this layer had helpfully escaped would arrive on screen with the escaping
+in it. What a device cannot type at all — every non-ASCII character on the Android backend today —
+comes back as an `unsupported-text` failure naming the characters as escapes, so an agent is told
+which one to change rather than that the host broke.
 
 **`launch_app`, `stop_app` and `clear_app_data` are that same spine used three more times**
 (`src/verbs/app.ts`), and they are what a verb looks like when it addresses **a package rather than
@@ -223,36 +240,34 @@ big to answer with *before* copying it onto the host and into the daemon's memor
 only on the way back would have already cost what it was meant to prevent, in the one process
 holding every lease on the machine.
 
-The remaining verbs — `type_text` and `press_key` — are their own issues.
-
 **The daemon loads the core and runs the verbs**, and a client only asks (D19). The two waits, the
-four gestures, the three app verbs, the three read verbs, the log read and the three file transfers
-are callable over the same connection as `acquire_device` — the same envelope,
-the same framing, one method table — and a verb call carries the lease id rather than a serial,
-because the lease id is the credential and the host derives the device from it. A verb that fails
-comes back as an *answer* naming what happened — the element was not there, the wait timed out, the
-device cannot read its screen — and never as a broken host; only the host actually breaking is an
+six input verbs, the three app verbs, the three read verbs, the log read and the three file
+transfers are callable over the same connection as `acquire_device` — the same envelope, the same
+framing, one method table — and a verb call carries the lease id rather than a serial, because the
+lease id is the credential and the host derives the device from it. A verb that fails comes back as
+an *answer* naming what happened — the element was not there, the wait timed out, the device cannot
+read its screen — and never as a broken host; only the host actually breaking is an
 `internal_error`. There is no `adb` in a client process, and
 `tests/unit/no-backend-in-a-client.test.ts` walks the import graph from every client entrypoint to
 say so rather than asking politely. Against a real device today all of it runs on the hardware: a
-`tap` at a coordinate injects, `launch_app` and `stop_app` reach the package, `read_screen` and
-`device_info` answer off the hardware, `screenshot` brings back a real PNG of the panel the device
-reports, `read_logs` brings back the device's own log, `push_file` and `pull_file` move a binary
-file to the device and back byte for byte — and, since the Android backend learned to
-read its own screen — a target addressed by text resolves against a hierarchy read inside the verb,
-both waits poll a real screen, and every action comes back carrying the elements that were on it
-afterwards. Two gaps are recorded rather than hidden. **`install_app` has not been run against a
-device by anyone yet**: there is no APK in this repository and adding a binary to carry one is not
-a change's job, so the verb is unverified on hardware — read that as a stated gap rather than as a
-check somebody completed. What is established is the half adb settles before the device is
-involved, which is the half `withInstallablePackage` exists for: `adb install -r` refuses a file
-whose name does not end `.apk` or `.apex`, and takes the same bytes once renamed. Everything else
-about it — the decode, the host temp file and its removal, the size refusal — is covered over a
-stub backend. And a device-level
+`tap` at a coordinate injects, `press_key` and `type_text` reach the device without aiming at
+anything, `launch_app` and `stop_app` reach the package, `read_screen` and `device_info` answer off
+the hardware, `screenshot` brings back a real PNG of the panel the device reports, `read_logs`
+brings back the device's own log, `push_file` and `pull_file` move a binary file to the device and
+back byte for byte — and, since the Android backend learned to read its own screen — a target
+addressed by text resolves against a hierarchy read inside the verb, both waits poll a real screen,
+and every action comes back carrying the elements that were on it afterwards. Two gaps are recorded
+rather than hidden. **`install_app` has not been run against a device by anyone yet**: there is no
+APK in this repository and adding a binary to carry one is not a change's job, so the verb is
+unverified on hardware — read that as a stated gap rather than as a check somebody completed. What
+is established is the half adb settles before the device is involved, which is the half
+`withInstallablePackage` exists for: `adb install -r` refuses a file whose name does not end `.apk`
+or `.apex`, and takes the same bytes once renamed. Everything else about it — the decode, the host
+temp file and its removal, the size refusal — is covered over a stub backend. And a device-level
 refusal, such as launching a package that is not installed, still reaches the caller as
-`internal_error` rather than as an answer about the device — which is what a `pull_file` of a
-path the device does not have reports today. That is true of every verb family here, not just this
-one, and it is filed as its own issue.
+`internal_error` rather than as an answer about the device — which is what a `pull_file` of a path
+the device does not have reports today. That is true of every verb family here, not just this one,
+and it is filed as its own issue.
 
 **The host can now listen on the network, and only if you ask it to** (D17, D20). Setting
 `ROVER_LISTEN_PORT` — with a host token and a TLS certificate beside it — starts a TCP+TLS
@@ -312,6 +327,7 @@ startup, naming the variable and the reason, rather than binding something surpr
 | Variable | Default | Value |
 |---|---|---|
 | `ROVER_SOCKET_PATH` | `~/.rover/rover.sock` | Absolute path of the unix socket the local daemon binds and a local client connects to. **Empty counts as unset** — an exported-but-blank variable is what a shell leaves behind, and reading it as a real setting would point the daemon at the current directory. At most **103 bytes of UTF-8**: a unix socket address is a fixed-size struct (104 bytes on macOS, 108 on Linux, NUL included), and over the cap `bind` truncates or answers `EINVAL` instead of naming the length, so a longer path is rejected at startup with the byte count and the path. |
+| `ROVER_USERS_PATH` | `~/.rover/users.json` | Absolute path of the host's own user store — one record per user: identifier, display name, the **hash** of that user's token, and when it was created. Never a token: `rover users add` and `rover users rotate` print the raw value once and store only its hash. **Empty counts as unset**, as it is for the socket. Read only by `rover users`, which touches the file directly and never goes over the network (`PROJECT.md` D25); the daemon does not read it yet. |
 | `ROVER_LISTEN_PORT` | unset — **no network listener** | The opt-in switch for the TCP+TLS listener that serves the same IPC surface as the local socket. Unset or empty and nothing binds, nothing else below is read, and the daemon is a purely local host. Set it and the next three become **required together**: a port with no token would be a listener that lets strangers in, so a missing one is a startup failure naming every variable still missing rather than a half-configured host. 1–65535. |
 | `ROVER_HOST_TOKEN` | — (required with the port) | The shared secret every network caller presents. At least **32 characters**; it is a bearer secret on an open port, and length is the only thing that makes guessing hopeless. It is a **host-level** setting and belongs in the environment, never in a file the repository tracks. Deliberately **the same variable the client reads** (below), so a machine that is both holds one secret rather than two that drift apart. The token **authenticates and attributes nothing**: a lease's owner is a separate, caller-supplied string (`PROJECT.md` D20). |
 | `ROVER_TLS_CERT` | — (required with the port) | Path to the PEM certificate (chain) the listener presents. |
@@ -324,6 +340,31 @@ startup, naming the variable and the reason, rather than binding something surpr
 While a daemon is coming up over a socket a crashed one left behind, a `<socket>.reclaim` lock file
 may briefly appear beside it. It is removed by whoever took it, and any left behind by a killed
 process is discarded on age by the next start.
+
+### Managing host users
+
+`rover users` is the host's own credential file and the command that manages it (`PROJECT.md`
+D25). It runs **on the machine holding the devices**, against `~/.rover/users.json` directly — no
+network, no daemon, no `--host`, and it works with nothing running.
+
+```bash
+npm run rover -- users add alice --name "Alice Example"   # prints the token once
+npm run rover -- users list                               # identifier, name, created — never a token
+npm run rover -- users rotate alice                       # a fresh token; the old one stops working
+npm run rover -- users revoke alice                       # removes the record outright
+```
+
+The token is printed **exactly once**, by `add` and by `rotate`. Only its `scrypt` hash — a fresh
+random salt per record, `node:crypto` and no dependency — is written to the file, which is created
+mode `0600`; `list` never prints a token or a hash, and nothing can show a token again. An operator
+who loses one runs `rotate`, which is what makes that safe. A duplicate identifier is refused by
+name rather than overwritten, because an overwrite would silently revoke a credential somebody is
+holding.
+
+**The daemon does not read this store yet.** `ROVER_HOST_TOKEN` is still the one secret the network
+listener checks (`PROJECT.md` D20), so a token issued here does not yet let anyone in — per-user
+host authentication is the next row (`PROJECT.md` §9.3, R28). Creating users now is how a host is
+made ready for it, not a way to hand out access today.
 
 ### Exposing a host on the network
 
@@ -390,7 +431,8 @@ naming the same address and port. A certificate that verifies but does not carry
 | [`ai/TESTING.md`](ai/TESTING.md) | Vitest, the real-device gate, fixtures, conformance |
 
 In the source tree: `src/core/` holds the device contract and the branded ids, `src/backends/` one
-folder per platform, `src/verbs/` the verb spine with the gestures, the app verbs and the waits described above, `src/ipc/` the
+folder per platform, `src/verbs/` the verb spine with the input verbs, the app verbs, the read verbs
+and the waits described above, `src/ipc/` the
 wire protocol and the transport-agnostic client and server, `src/daemon/` the socket and the
 inventory and the leases, and `src/cli/` the `rover` command.
 

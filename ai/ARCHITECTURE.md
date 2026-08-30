@@ -201,7 +201,7 @@ Verbs live above the backends and below the adapters, and this is where determin
   without a text target's `index`: an index is a slot in the match list, not an identity, so it
   empties as soon as any sibling goes and would report a row as gone while it is still on screen.
   Both refusals are types rather than runtime checks, so neither verb is handed a field it drops.
-- **`tap()`, `longPress()`, `swipe()` and `scroll()`** (`src/verbs/input.ts`) are the first family
+- **`tap()`, `longPress()`, `swipe()` and `scroll()`** (`src/verbs/input.ts`) are the first verbs
   built *on* the spine rather than beside it, and each is one `performAction()` call: none of them
   reads a screen itself, so the three rules hold for them by construction instead of by four
   authors remembering. `long_press` is a drag from a point to that same point held past the
@@ -215,6 +215,22 @@ Verbs live above the backends and below the adapters, and this is where determin
   may travel. `swipe` is the one verb with two targets: `from` goes through the spine and is what
   the result reports, `to` is resolved inside the action from its own read, because widening the
   spine to carry a second target would generalise it for one caller.
+- **`typeText()` and `pressKey()`** (`src/verbs/input.ts`) complete that family and are the two
+  that pass **no target at all**. `PerformActionOptions.target` is optional for exactly this: a key
+  press addresses no element, and neither does text going to whatever holds focus, so the
+  `ActionResult`'s `target` is `null` — a fact about the verb, not a resolution that failed. Neither
+  therefore reads a screen to aim, so neither can fail on a target a screen read would have had to
+  find first. There is no target *option* on `type_text` either: an
+  agent composes `tap` with it, rather than keeping a second copy of the spine's resolution here.
+  `pressKey` takes `DeviceKey` — the vocabulary in `src/core/device.ts`, shared with the backend and
+  with the wire so all three refuse the same keys. `typeText` hands the caller's string to the
+  backend **byte for byte and inspects none of it**: what a device's own text entry reads rather
+  than types is that backend's knowledge, and any escaping rule applied here would be one platform's
+  rule applied to every platform. A device that cannot type a string at all answers
+  `UnsupportedTextError` — a device-layer error like a missing capability, mapped to an
+  `unsupported-text` failure naming the offending characters as escapes, because the string is the
+  caller's and the caller is who can change it. A plain `Error` there would arrive as
+  `internal_error`, telling an agent the host broke over a string the agent chose.
 - **`launchApp()`, `stopApp()` and `clearAppData()`** (`src/verbs/app.ts`) are the same spine with
   two things left out, and both omissions are the family's whole content. **`requires: []` is the
   honest answer for a verb built only on required interface methods**: these three are declared on

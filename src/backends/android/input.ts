@@ -65,15 +65,27 @@ const SPACE_ESCAPE = '%s';
  *   events for it, and **nothing at all is typed**, not even the ASCII around it. Loud, but
  *   as a Java stack trace about a null array rather than as anything a caller could act on.
  *
- * So both are refused here by name. The alternative for the second — letting the device
- * throw — is defensible and was rejected: the exception says nothing about which character
- * was the problem, and a caller told "`é` cannot be typed on this device" can strip it,
- * while a caller handed a stack trace cannot.
+ * So both are refused by name, before anything is sent. The alternative for the second —
+ * letting the device throw — is defensible and was rejected: the exception says nothing
+ * about which character was the problem, and a caller told "`é` cannot be typed on this
+ * device" can strip it, while a caller handed a stack trace cannot.
  */
 const TYPEABLE = /^[\x20-\x7e]*$/;
 
-/** The offending characters of a refusal, as escapes a human can read back. */
-function untypeable(text: string): string[] {
+/**
+ * What `text` carries that this device will not type, as escapes a human can read back —
+ * empty for a string it will.
+ *
+ * Escapes rather than the characters themselves, because most of what lands here is
+ * invisible in a message: a tab, a non-breaking space and a zero-width joiner all print as
+ * nothing or as a space, and a caller shown its own string back learns nothing from it.
+ *
+ * Answers rather than throws, and `./backend.ts` is what turns a non-empty answer into an
+ * `UnsupportedTextError` — the error needs the serial, which is the caller's, not this
+ * module's. Deduplicated and in first-seen order, so a paragraph of one wrong alphabet
+ * names each letter once instead of five hundred times.
+ */
+export function untypeableCharacters(text: string): string[] {
 	return [...new Set([...text].filter((character) => !TYPEABLE.test(character)))].map(
 		(character) => {
 			const code = character.codePointAt(0) ?? 0;
@@ -100,19 +112,15 @@ function untypeable(text: string): string[] {
  * alternative was refusing `%s` outright, which loses a legitimate string to protect
  * against a race nobody has seen.
  *
- * Throws for anything the device was measured not to type, naming the characters
- * ({@link TYPEABLE}). An empty string is one empty piece rather than none, so a `typeText`
- * of `''` still reaches the device and a device that has gone away is still reported.
+ * An empty string is one empty piece rather than none, so a `typeText` of `''` still
+ * reaches the device and a device that has gone away is still reported.
+ *
+ * **Cutting only** — what the device will not type is {@link untypeableCharacters}, checked
+ * by the caller before this runs. The two were one function and were split when the refusal
+ * became an answer the wire carries (`src/verbs/failure.ts`): a rule that produces an error
+ * needs the serial, and this one is arithmetic on a string.
  */
 export function typeTextSegments(text: string): string[] {
-	const rejected = untypeable(text);
-	if (rejected.length > 0) {
-		throw new Error(
-			`Cannot type ${JSON.stringify(text)} on this device: ` +
-				`'input text' only types printable ASCII, and this carries ${rejected.join(', ')}`,
-		);
-	}
-
 	const segments: string[] = [];
 	let start = 0;
 	for (

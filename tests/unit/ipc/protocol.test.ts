@@ -8,6 +8,7 @@ import {
 	MAX_LOG_ENTRIES,
 	MAX_TRANSFER_BYTES,
 	MAX_VERB_TIMEOUT_MS,
+	PressKeyParamsSchema,
 	PullFileParamsSchema,
 	PushFileParamsSchema,
 	ReadLogsParamsSchema,
@@ -16,6 +17,8 @@ import {
 	StatusResultSchema,
 	SwipeParamsSchema,
 	TapParamsSchema,
+	TYPE_TEXT_MAX_LENGTH,
+	TypeTextParamsSchema,
 } from '@/ipc/methods.js';
 import {
 	IpcRequestError,
@@ -240,6 +243,72 @@ describe('gesture verb params schemas', () => {
 				direction: 'down',
 				target: { by: 'point', at: { x: 1, y: 2 } },
 			}).success,
+		).toBe(false);
+	});
+});
+
+/**
+ * The two keyboard rows, whose whole shape is what they refuse: a target neither of them can
+ * act on, and a key nobody implements.
+ */
+describe('keyboard verb params schemas', () => {
+	it("carries the caller's string and no target at all", () => {
+		expect(TypeTextParamsSchema.parse({ leaseId: 'lease-1', text: 'hello world' })).toEqual({
+			leaseId: 'lease-1',
+			text: 'hello world',
+		});
+		// Tap then type: an optional target here would duplicate resolution `tap` already does.
+		expect(
+			TypeTextParamsSchema.safeParse({
+				leaseId: 'lease-1',
+				text: 'hello',
+				target: { by: 'text', text: 'Search' },
+			}).success,
+		).toBe(false);
+	});
+
+	it.each([
+		['a leading and trailing space, which is content', '  padded  '],
+		['an empty string', ''],
+		['a shell metacharacter', "don't $HOME `x` %s"],
+		["a character no device may take, which is the backend's answer and not this one", 'café 🙂'],
+	])('takes %s unchanged', (_what, text) => {
+		const parsed = TypeTextParamsSchema.parse({ leaseId: 'lease-1', text });
+
+		// Byte for byte: no `.trim()`, no refinement over the characters. What a *device* can
+		// type is a different question, answered by the backend as an `unsupported-text` failure.
+		expect(parsed.text).toBe(text);
+	});
+
+	it('bounds the string as allocation hygiene rather than as validation', () => {
+		const call = { leaseId: 'lease-1' };
+
+		expect(
+			TypeTextParamsSchema.safeParse({ ...call, text: 'a'.repeat(TYPE_TEXT_MAX_LENGTH) }).success,
+		).toBe(true);
+		expect(
+			TypeTextParamsSchema.safeParse({ ...call, text: 'a'.repeat(TYPE_TEXT_MAX_LENGTH + 1) })
+				.success,
+		).toBe(false);
+	});
+
+	it('presses a key of the shared vocabulary and no other', () => {
+		expect(PressKeyParamsSchema.parse({ leaseId: 'lease-1', key: 'home' }).key).toBe('home');
+		// A key the backends have no mapping for is `invalid_params` here rather than a press
+		// that reports success and does nothing.
+		expect(PressKeyParamsSchema.safeParse({ leaseId: 'lease-1', key: 'volume_up' }).success).toBe(
+			false,
+		);
+		expect(PressKeyParamsSchema.safeParse({ leaseId: 'lease-1' }).success).toBe(false);
+	});
+
+	it.each([
+		['a target on a verb that addresses nothing', { target: { by: 'text', text: 'Save' } }],
+		['a wait timeout on a verb that does not wait', { timeoutMs: 1_000 }],
+		['a gesture duration on a verb that is not a gesture', { durationMs: 100 }],
+	])('refuses %s on a key press', (_label, extra) => {
+		expect(
+			PressKeyParamsSchema.safeParse({ leaseId: 'lease-1', key: 'back', ...extra }).success,
 		).toBe(false);
 	});
 });

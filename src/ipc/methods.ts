@@ -27,6 +27,7 @@ import {
 	DeviceInfoParamsSchema,
 	InstallAppParamsSchema,
 	LongPressParamsSchema,
+	PressKeyParamsSchema,
 	PullFileParamsSchema,
 	PushFileParamsSchema,
 	ReadLogsCallResultSchema,
@@ -36,6 +37,7 @@ import {
 	ScrollParamsSchema,
 	SwipeParamsSchema,
 	TapParamsSchema,
+	TypeTextParamsSchema,
 	VerbCallResultSchema,
 	WaitForParamsSchema,
 	WaitUntilGoneParamsSchema,
@@ -56,6 +58,8 @@ export {
 	MAX_LOG_ENTRIES,
 	MAX_TRANSFER_BYTES,
 	MAX_VERB_TIMEOUT_MS,
+	type PressKeyParams,
+	PressKeyParamsSchema,
 	type PullFileParams,
 	PullFileParamsSchema,
 	type PushFileParams,
@@ -74,6 +78,9 @@ export {
 	SwipeParamsSchema,
 	type TapParams,
 	TapParamsSchema,
+	TYPE_TEXT_MAX_LENGTH,
+	type TypeTextParams,
+	TypeTextParamsSchema,
 	type VerbCallRefusal,
 	type VerbCallResult,
 	type VerbCallResultOf,
@@ -307,16 +314,18 @@ export type ReleaseDeviceResult = z.infer<typeof ReleaseDeviceResultSchema>;
  * The names follow the verb table in PROJECT.md §4 (`list_devices`), not a camelCase
  * variant of it.
  *
- * The verb rows are the two waits, the four gestures, the three read verbs, the three
- * app-lifecycle verbs, the log read and the three file transfers; each further verb family
- * is one more row beside them and one more entry in `src/daemon/verb-handlers.ts`. All but
- * one answer with `VerbCallResultSchema`, because "what happened on the device" is one shape
+ * The verb rows are the two waits, the six input verbs, the three read verbs, the three
+ * app-lifecycle verbs, the log read and the three file transfers; each further verb family is
+ * one more row beside them and one more entry in `src/daemon/verb-handlers.ts`. All but one
+ * answer with `VerbCallResultSchema`, because "what happened on the device" is one shape
  * whatever was asked of it — which is why none of the read rows needs a result schema of its
  * own: `read_screen` and `device_info` answer with the state every other verb already
  * reports, asked for on its own, and `screenshot`'s bytes ride on `ActionResult.artifact`
  * rather than in a second answer shape. `pull_file` answers there too, for the same reason
- * and with the same consequence — no path of any kind is in its result. The three app rows
- * share one params schema too, because they take exactly the same call.
+ * and with the same consequence — no path of any kind is in its result. The verbs that
+ * address no element at all — the two reads, `type_text` and `press_key` — answer with a null
+ * `target` rather than a shape of their own. The three app rows share one params schema too,
+ * because they take exactly the same call.
  *
  * `read_logs` is the exception that proves the rule: its answer is that same shape with the
  * log entries added, built by the same factory in `./verb-methods.ts`, so its refusals are
@@ -337,6 +346,8 @@ export const IPC_METHODS = {
 	long_press: { params: LongPressParamsSchema, result: VerbCallResultSchema },
 	swipe: { params: SwipeParamsSchema, result: VerbCallResultSchema },
 	scroll: { params: ScrollParamsSchema, result: VerbCallResultSchema },
+	type_text: { params: TypeTextParamsSchema, result: VerbCallResultSchema },
+	press_key: { params: PressKeyParamsSchema, result: VerbCallResultSchema },
 	read_screen: { params: ReadScreenParamsSchema, result: VerbCallResultSchema },
 	device_info: { params: DeviceInfoParamsSchema, result: VerbCallResultSchema },
 	screenshot: { params: ScreenshotParamsSchema, result: VerbCallResultSchema },

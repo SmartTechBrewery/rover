@@ -3,7 +3,7 @@
  *
  * Two contracts live here, and both exist for the same reader — a script consuming stdout:
  *
- * - **`--json`: exactly one document on stdout, nothing else.** {@link printJson} is its
+ * - **`--json`: exactly one document on stdout, nothing else.** {@link printDocument} is its
  *   only writer, and every diagnostic — an error, a warning, the stale-view banner — goes
  *   to stderr through the functions below. A caller can pipe stdout straight into a parser
  *   without filtering a banner out of it first.
@@ -47,14 +47,27 @@ export function error(message: string): void {
 }
 
 /**
- * The single JSON document a `--json` invocation writes.
+ * The single JSON document a `--json` invocation writes — the one writer, so "exactly one
+ * document on stdout" is a property of this function rather than of every call site.
  *
- * `host` is the only key the CLI adds, and **every** command adds it, so a script never has
- * to know which answers carry it. None of the four result schemas has a `host` key, so
- * there is nothing to collide with.
+ * {@link printJson} is what a command that asked a host uses; this is what a command with no
+ * host to name uses. `rover users` is the only one of those today (D25 — it reads and writes
+ * the host's own file and never opens a connection), and giving it its own `console.log`
+ * would put a second writer next to the contract.
+ */
+export function printDocument(result: object): void {
+	console.log(JSON.stringify(result, null, 2));
+}
+
+/**
+ * The document a command that asked a host writes.
+ *
+ * `host` is the only key the CLI adds, and **every** command that talks to one adds it, so a
+ * script never has to know which answers carry it. None of the four result schemas has a
+ * `host` key, so there is nothing to collide with.
  */
 export function printJson(host: string, result: object): void {
-	console.log(JSON.stringify({ host, ...result }, null, 2));
+	printDocument({ host, ...result });
 }
 
 /** `\n`, `\r` and `\t` as a reader already knows them; everything else in C0 as `\xNN`. */

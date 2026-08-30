@@ -28,7 +28,7 @@
 import { z } from 'zod';
 import { CapabilityIdSchema } from '../core/capabilities.js';
 import { PointSchema, ScreenElementSchema } from '../core/device.js';
-import { MissingCapabilityError, WaitTimeoutError } from '../core/errors.js';
+import { MissingCapabilityError, UnsupportedTextError, WaitTimeoutError } from '../core/errors.js';
 import { DeviceSerialSchema, PlatformIdSchema } from '../core/ids.js';
 import {
 	AmbiguousTargetError,
@@ -106,6 +106,27 @@ export const VerbFailureSchema = z.discriminatedUnion('kind', [
 			widthDp: z.number(),
 			heightDp: z.number(),
 			reason: z.enum(['clipped', 'off-screen']),
+			message: z.string().min(1),
+		})
+		.strict(),
+	/**
+	 * The device takes text, and not this text.
+	 *
+	 * Kept apart from `missing-capability` even though both are "the device cannot", because
+	 * the two ask opposite things of the caller: that one says stop, this one says send a
+	 * different string. Named for the *text* rather than for the input capability for the
+	 * same reason — a kind called `unsupported-input` beside a `missing-capability` carrying
+	 * `canInput` would read as the same answer twice.
+	 *
+	 * `unsupported` is the offending characters as readable escapes, so a caller can act on
+	 * a tab or a zero-width space it cannot see in `text`.
+	 */
+	z
+		.object({
+			kind: z.literal('unsupported-text'),
+			serial: DeviceSerialSchema,
+			text: z.string(),
+			unsupported: z.array(z.string().min(1)).min(1),
 			message: z.string().min(1),
 		})
 		.strict(),
@@ -206,6 +227,17 @@ export function toVerbFailure(error: unknown): VerbFailure | null {
 			widthDp: error.widthDp,
 			heightDp: error.heightDp,
 			reason: error.reason,
+			message: error.message,
+		};
+	}
+	if (error instanceof UnsupportedTextError) {
+		return {
+			kind: 'unsupported-text',
+			serial: error.serial,
+			text: error.text,
+			// Copied for the reason the candidates above are: the union's own type is a mutable
+			// array and the error published a `readonly` one to whoever caught it.
+			unsupported: [...error.unsupported],
 			message: error.message,
 		};
 	}

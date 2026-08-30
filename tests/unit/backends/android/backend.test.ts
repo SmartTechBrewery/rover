@@ -14,7 +14,7 @@ import {
 } from '@/backends/android/adb.js';
 import { AndroidDeviceBackend } from '@/backends/android/backend.js';
 import type { Device, DeviceWatcher } from '@/core/device.js';
-import { FileTooLargeError } from '@/core/errors.js';
+import { FileTooLargeError, UnsupportedTextError } from '@/core/errors.js';
 import { type AppId, InvalidIdError, parseAppId, parseDeviceSerial } from '@/core/ids.js';
 
 /**
@@ -2253,14 +2253,28 @@ describe('typeText', () => {
 	 * What the device was measured not to type is refused before anything is sent — a tab is
 	 * dropped in silence, and a non-ASCII character throws inside the device and types
 	 * nothing at all (PROJECT.md §6).
+	 *
+	 * An `UnsupportedTextError` rather than a plain one, and that is the load-bearing half:
+	 * it is the caller's string that is wrong rather than the host, so `src/verbs/failure.ts`
+	 * carries it to the agent as `unsupported-text` naming the characters, where a plain
+	 * `Error` would arrive as `internal_error` — "the host broke" — for a string the agent
+	 * chose itself.
 	 */
 	it.each([
-		['a tab', 'a\tb'],
-		['a non-ASCII character', 'café'],
-	])('refuses %s without touching the device', async (_what, text) => {
+		['a tab', 'a\tb', 'U+0009'],
+		['a non-ASCII character', 'café', 'U+00E9'],
+	])('refuses %s without touching the device', async (_what, text, codepoint) => {
 		answers({});
 
-		await expect(backend.typeText(SERIAL, text)).rejects.toThrow(/printable ASCII/);
+		const thrown = await backend.typeText(SERIAL, text).catch((error: unknown) => error);
+
+		expect(thrown).toBeInstanceOf(UnsupportedTextError);
+		expect((thrown as UnsupportedTextError).serial).toBe(SERIAL);
+		expect((thrown as UnsupportedTextError).text).toBe(text);
+		expect((thrown as UnsupportedTextError).unsupported.join(' ')).toContain(codepoint);
+		// The words for what this device *can* take are the backend's, and they reach the
+		// message from here rather than from the neutral error class.
+		expect((thrown as UnsupportedTextError).message).toContain('printable ASCII');
 		expect(runAdbOnDevice).not.toHaveBeenCalled();
 	});
 

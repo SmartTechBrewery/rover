@@ -1,5 +1,6 @@
 /**
- * The four gesture verbs — `tap`, `long_press`, `swipe` and `scroll` (PROJECT.md §4, "Input").
+ * The input verbs — `tap`, `long_press`, `swipe`, `scroll`, `type_text` and `press_key`
+ * (PROJECT.md §4, "Input").
  *
  * Every one of them is a call to {@link performAction} (`./perform.ts`) and not one of them
  * reads a screen itself, which is what makes D12 true here **by construction** rather than by
@@ -27,12 +28,21 @@
  * at four methods rather than six, and keeps the composition somewhere it is written once for
  * every platform.
  *
- * `type_text` and `press_key` are the rest of this family (PROJECT.md §4) and extend this
- * module; they address no element, so they are the ones that will pass no target at all.
+ * **`type_text` and `press_key` pass no target at all.** A key press addresses nothing on the
+ * screen and neither does text going to whatever holds focus, so `PerformActionOptions.target`
+ * is absent and the result's `target` is `null` — a fact about the verb rather than a
+ * resolution that failed. That also means neither reads a screen before acting: there is
+ * nothing to resolve, so an agent gets them on a device that cannot read its screen at all.
+ *
+ * **Neither verb knows how its argument reaches the device.** `type_text` hands the caller's
+ * string to the backend byte for byte — quoting and whatever a device's own text injection
+ * reads rather than types are the backend's, which is where the knowledge of a particular
+ * device belongs (`src/core/device.ts`, ai/RULES.md §2). A string this layer had "helpfully"
+ * escaped would arrive on screen with the escaping in it.
  */
 
 import { z } from 'zod';
-import type { Point, Rect } from '../core/device.js';
+import type { DeviceKey, Point, Rect } from '../core/device.js';
 import { capabilityMethod, type VerbContext } from './context.js';
 import { performAction } from './perform.js';
 import type { ActionResult, ResolvedTarget } from './result.js';
@@ -221,6 +231,60 @@ export async function scroll(
 }
 
 /**
+ * Type text into whatever currently has focus.
+ *
+ * **No target, by design.** An agent that wants text in a particular field taps it and then
+ * types — `tap` already resolves an element from a screen read taken inside itself, and an
+ * optional target here would be a second copy of that resolution for the one verb that does
+ * not need it. The result's `target` is `null` for the same reason a key press's is: this
+ * addressed no element.
+ *
+ * **The string is passed through untouched.** Whatever a device's own text entry treats as
+ * special — a quote, a metacharacter, a per-platform substitution — is the backend's to
+ * handle, and a device that cannot type a character at all answers `UnsupportedTextError`,
+ * which reaches the agent as an `unsupported-text` failure naming the characters to change
+ * (`./failure.ts`). Nothing here inspects the text, because every rule this layer could
+ * apply would be one device's rule applied to all of them.
+ *
+ * Focus itself is not this verb's to guarantee and cannot be: nothing this layer can ask says
+ * where the caret is until a screen read is available (#13). What the result does report is
+ * the state after the typing, which is where an agent looks to see whether it landed.
+ */
+export async function typeText(context: VerbContext, text: string): Promise<ActionResult> {
+	return performAction(context, {
+		verb: 'type_text',
+		requires: ['canInput'],
+		act: async () => {
+			const type = capabilityMethod(context, 'canInput', 'typeText');
+			await type(context.serial, text);
+		},
+	});
+}
+
+/**
+ * Press one of the device's own keys — `back`, `home`, `recents` or `wake`.
+ *
+ * `DeviceKey` is the whole vocabulary and it is `src/core/device.ts`'s, shared with the
+ * backend and with the wire rather than restated here: a key this layer accepted and a
+ * backend had no mapping for would be a press that reports success and does nothing.
+ *
+ * **The post-state is the interesting half.** `home` and `recents` change what is on screen
+ * without anything on screen having been touched, so the `ActionResult`'s `after` is the only
+ * evidence of what the press did — and on a backend that cannot read its screen it says so
+ * (`unavailable`) rather than implying nothing changed.
+ */
+export async function pressKey(context: VerbContext, key: DeviceKey): Promise<ActionResult> {
+	return performAction(context, {
+		verb: 'press_key',
+		requires: ['canInput'],
+		act: async () => {
+			const press = capabilityMethod(context, 'canInput', 'pressKey');
+			await press(context.serial, key);
+		},
+	});
+}
+
+/**
  * How far into the region a scroll starts and ends, as a fraction of it.
  *
  * A quarter in from each edge, so the drag covers the middle half and neither end sits on an
@@ -265,9 +329,9 @@ function dragAcross(box: Rect, direction: ScrollDirection): { from: Point; to: P
 /**
  * The point the spine resolved, for the verbs that always name a target.
  *
- * `null` is unreachable from this module — every verb above passes one — but `act` is typed for
- * the verbs that address nothing at all (a key press, phase 3), so the impossibility is stated
- * once here rather than assumed at four call sites.
+ * `null` is unreachable from the four verbs that call this — each passes one — but `act` is
+ * typed for the two above that address nothing at all ({@link typeText}, {@link pressKey}), so
+ * the impossibility is stated once here rather than assumed at four call sites.
  */
 function pointOf(target: ResolvedTarget | null): Point {
 	if (target === null) {

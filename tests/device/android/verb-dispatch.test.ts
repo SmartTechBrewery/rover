@@ -68,15 +68,17 @@ import {
  *   target resolves to `centreOf(element)` rather than to the point the element was found
  *   under, and on an arbitrary screen the elements covering the harmless corner are
  *   full-screen containers whose centre is the middle of the panel — so a tap addressed that
- *   way would activate whatever the device happens to be showing, on a suite that has no
- *   verb to put it back afterwards (`press_key` has no IPC row yet). That dispatch is
+ *   way would activate whatever the device happens to be showing, and putting it back with
+ *   `press_key 'home'` would be asserting one verb in order to test another. That dispatch is
  *   covered over a stub in `tests/unit/verbs/input.test.ts` instead; what is proved here is
  *   the half a device is needed for — that an id off a real read resolves against a real
  *   read. Text matching is proved the same way, by waits that resolve a string taken off the
  *   device's own screen without touching it.
- * - **What a tap did is still not asserted.** The after-state now says what the screen looks
- *   like, but the point tapped is chosen so that nothing changes, so the read is evidence
- *   that the read works rather than evidence about the tap.
+ * - **What a tap, a key press or a typed string *did* is still not asserted.** The after-state
+ *   now says what the screen looks like, but the point tapped is chosen so that nothing
+ *   changes and `type_text` is sent with nothing focused, so the read is evidence that the
+ *   read works rather than evidence about the input. PROJECT.md §6 records what those
+ *   characters type into a focused field, checked by eye.
  * - **`clear_app_data` has no success case here**, for the reason
  *   `tests/device/android/app-control.test.ts` already records: a successful clear destroys an
  *   application's data, and there is no package on an arbitrary device whose data is safe for
@@ -110,11 +112,11 @@ const ABSENT = { by: 'text', text: 'rover-r21-absent-text' } as const;
  * A coordinate in the top-left corner of the panel, where a tap does nothing on any screen a
  * device happens to be showing.
  *
- * This suite runs against whatever is in front of it and has no verb to put the device back
- * (`press_key` is #12 phase 3), so the tap it injects has to be one that needs no putting
- * back. In dp, because that is the space `Point` is declared in — the conversion to the pixels
- * the device takes is the backend's, and asserting it is `tests/device/android/input.test.ts`'s
- * job rather than this suite's.
+ * This suite runs against whatever is in front of it, so the tap it injects has to be one that
+ * needs no putting back — `press_key 'home'` exists now, but a suite that undid one verb with
+ * another would be asserting the second one to test the first. In dp, because that is the space
+ * `Point` is declared in — the conversion to the pixels the device takes is the backend's, and
+ * asserting it is `tests/device/android/input.test.ts`'s job rather than this suite's.
  */
 const HARMLESS_POINT = { by: 'point', at: { x: 1, y: 1 } } as const;
 
@@ -435,6 +437,69 @@ describe.skipIf(!process.env.ROVER_TEST_DEVICE)('a daemon runs verbs on its own 
 				target: { source: 'screen', element: { id: addressable.id } },
 			},
 		});
+	});
+
+	it('presses a key on the device the lease names, addressing no element', async () => {
+		const client = await startHost();
+		const device = await freeDevice(client);
+		const leaseId = await lease(client, device.serial);
+
+		// `home` and not the other three: every key in the vocabulary moves the screen, this is
+		// the only one that moves it somewhere known, and it leaves the device where the next
+		// test expects it. All four are pressed against the backend directly in
+		// `tests/device/android/input.test.ts`; what is new here is the path they take.
+		const answer = await client.request('press_key', { leaseId, key: 'home' });
+
+		// The `target` is the whole point of this row: a key press aims at nothing, so it
+		// resolves nothing and says so with `null` rather than with a shape of its own.
+		expect(answer).toMatchObject({
+			outcome: 'ok',
+			result: {
+				verb: 'press_key',
+				device: { serial: device.serial },
+				target: null,
+			},
+		});
+		// D12(c): `home` changed what is on screen, and since #13 the answer says what to —
+		// a real read of the device rather than the capability that would have answered.
+		if (answer.outcome !== 'ok') throw new Error('the assertion above should have caught this');
+		expect(answer.result.after.kind).toBe('screen');
+	});
+
+	it('types a string into whatever has focus, without escaping any of it', async () => {
+		const client = await startHost();
+		const device = await freeDevice(client);
+		const leaseId = await lease(client, device.serial);
+
+		// Sent with nothing focused on purpose. What is proved here is the *path* — the row, the
+		// handler, the verb, the backend's quoting, the device accepting the injection — and not
+		// what appeared on screen, which is nothing, because nothing was focused. PROJECT.md §6
+		// records what each of these characters types into a focused field, checked by eye.
+		const answer = await client.request('type_text', { leaseId, text: "don't 100% a b" });
+
+		expect(answer).toMatchObject({
+			outcome: 'ok',
+			result: { verb: 'type_text', device: { serial: device.serial }, target: null },
+		});
+	});
+
+	it('answers text this device cannot type as a failure about the string', async () => {
+		const client = await startHost();
+		const device = await freeDevice(client);
+		const leaseId = await lease(client, device.serial);
+
+		const answer = await client.request('type_text', { leaseId, text: 'café 🙂' });
+
+		// A real backend refusing a real string, all the way back as data: an agent is told
+		// which characters to change rather than that the host broke. `client.request` resolved.
+		expect(answer).toMatchObject({
+			outcome: 'failed',
+			failure: { kind: 'unsupported-text', serial: device.serial, text: 'café 🙂' },
+		});
+		if (answer.outcome !== 'failed' || answer.failure.kind !== 'unsupported-text') {
+			throw new Error('the assertion above should have caught this');
+		}
+		expect(answer.failure.unsupported.join(' ')).toContain('U+00E9');
 	});
 
 	// The refusal is still the right answer for a target no screen carries — and now it is a
