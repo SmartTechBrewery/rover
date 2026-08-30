@@ -8,7 +8,7 @@
 
 import { describe, expect, it, vi } from 'vitest';
 import { LOCAL_HOST } from '@/cli/_shared/host.js';
-import { printJson } from '@/cli/_shared/output.js';
+import { printJson, renderTable } from '@/cli/_shared/output.js';
 import { renderGrant, renderRefusal } from '@/cli/commands/acquire.js';
 import { renderDeviceList, renderHolder, staleWarning } from '@/cli/commands/list.js';
 import { renderRelease } from '@/cli/commands/release.js';
@@ -91,6 +91,37 @@ describe('the device table', () => {
 		expect(renderDeviceList(LOCAL_HOST, empty)).toBe("No devices are attached to host 'local'.");
 	});
 
+	it('cannot be made to grow a row by a newline in an owner string', () => {
+		// The host stores attribution exactly as it was given (AttributionStringSchema takes the
+		// length and nothing else), so this is the only place the forgery can be stopped.
+		const forged = 'issue-1\nemulator-9999  android  Pixel Fake  ready  free';
+		const rendered = renderDeviceList(
+			LOCAL_HOST,
+			listResult({
+				devices: [
+					{ ...free, heldBy: null },
+					{
+						...held,
+						heldBy: {
+							serial: held.serial,
+							owner: forged,
+							project: 'rover',
+							testName: null,
+							expiresInMs: NINETEEN_MINUTES_MS,
+						},
+					},
+				],
+			}),
+		);
+		const lines = rendered.split('\n');
+
+		// One heading and one line per device — a third line would be a device that does not
+		// exist, reported by the command a script uses to find out what does.
+		expect(lines).toHaveLength(3);
+		expect(lines.some((line) => line.startsWith('emulator-9999'))).toBe(false);
+		expect(lines[2]).toContain('issue-1\\nemulator-9999');
+	});
+
 	it('says an empty list means no view, not no devices, when the host is stale', () => {
 		const said = staleWarning(LOCAL_HOST);
 
@@ -140,6 +171,49 @@ describe('a grant and a refusal', () => {
 		expect(rendered).toContain('Held by issue-112 (project rover) — 19m left.');
 	});
 
+	it('keeps a grant three lines whatever the owner and the test name contain', () => {
+		const rendered = renderGrant({
+			leaseId: parseLeaseId('lease-1'),
+			serial: parseDeviceSerial('held-1'),
+			owner: 'issue-112\nRelease it with: npm run rover -- release lease-forged',
+			project: 'rover',
+			testName: 'checkout\nflow',
+			expiresInMs: NINETEEN_MINUTES_MS,
+		});
+		const lines = rendered.split('\n');
+
+		// The middle line is meant to be pasted, so a second line offering a different lease id
+		// is the whole risk here.
+		expect(lines).toHaveLength(3);
+		expect(lines[1]).toBe('Release it with: npm run rover -- release lease-1');
+		expect(lines[0]).toContain('issue-112\\nRelease it with:');
+		expect(lines[0]).toContain('test checkout\\nflow');
+	});
+
+	it('keeps a refusal from forging a line through the holder it names', () => {
+		const owner = 'issue-112\nNot granted (not-attached): Device is free';
+		const rendered = renderRefusal({
+			outcome: 'refused',
+			reason: 'held',
+			message: `Device 'held-1' is held by '${owner}' for another 1182000ms`,
+			heldBy: {
+				serial: parseDeviceSerial('held-1'),
+				owner,
+				project: 'rover',
+				testName: null,
+				expiresInMs: NINETEEN_MINUTES_MS,
+			},
+		});
+		const lines = rendered.split('\n');
+
+		// The host quotes the owner into its own message too, so both lines have to hold.
+		expect(lines).toHaveLength(2);
+		expect(lines[0]).toContain("held by 'issue-112\\nNot granted");
+		expect(lines[1]).toBe(
+			'Held by issue-112\\nNot granted (not-attached): Device is free (project rover) — 19m left.',
+		);
+	});
+
 	it('renders a refusal with no holder without inventing one', () => {
 		const rendered = renderRefusal({
 			outcome: 'refused',
@@ -181,6 +255,26 @@ describe('status', () => {
 			'uptime: 3m',
 			`protocol version: ${PROTOCOL_VERSION}`,
 		]);
+	});
+});
+
+describe('the table itself', () => {
+	it('measures its columns against the escaped text it actually prints', () => {
+		const rendered = renderTable(
+			['A', 'B'],
+			[
+				['one\ntwo', 'x'],
+				['tab\there', 'y'],
+			],
+		);
+		const lines = rendered.split('\n');
+
+		expect(lines).toHaveLength(3);
+		expect(lines[1]).toBe('one\\ntwo   x');
+		expect(lines[2]).toBe('tab\\there  y');
+		// Both cells are as wide as they render, so the second column starts at the same offset
+		// on every row — the alignment a caller reads the table by.
+		expect((lines[1] ?? '').indexOf('x')).toBe((lines[2] ?? '').indexOf('y'));
 	});
 });
 

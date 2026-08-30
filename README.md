@@ -169,8 +169,9 @@ process is discarded on age by the next start.
 | [`ai/TESTING.md`](ai/TESTING.md) | Vitest, the real-device gate, fixtures, conformance |
 
 In the source tree: `src/core/` holds the device contract and the branded ids, `src/backends/` one
-folder per platform, `src/ipc/` the wire protocol and the transport-agnostic client and server,
-`src/daemon/` the socket and the inventory and the leases, and `src/cli/` the `rover` command.
+folder per platform, `src/verbs/` the verb spine and the two waits described above, `src/ipc/` the
+wire protocol and the transport-agnostic client and server, `src/daemon/` the socket and the
+inventory and the leases, and `src/cli/` the `rover` command.
 
 ## Shape
 

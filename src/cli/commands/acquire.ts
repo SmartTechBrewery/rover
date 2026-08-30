@@ -46,7 +46,11 @@ type Refusal = Extract<AcquireDeviceResult, { outcome: 'refused' }>;
 
 export function renderGrant(lease: GrantedLease): string {
 	return [
-		`Acquired '${lease.serial}' for '${lease.owner}' ` +
+		// Escaped, not because a grant is a table, but because it is three lines and the middle
+		// one is meant to be pasted: an owner carrying a newline could otherwise put text of its
+		// own choosing where the release command belongs.
+		`Acquired '${out.escapeControlCharacters(lease.serial)}' ` +
+			`for '${out.escapeControlCharacters(lease.owner)}' ` +
 			`(${out.formatAttribution(lease.project, lease.testName)}).`,
 		// Labelled by what it does rather than as a receipt: it is the credential, and the only
 		// thing that can end this lease.
@@ -56,7 +60,11 @@ export function renderGrant(lease: GrantedLease): string {
 }
 
 export function renderRefusal(refusal: Refusal): string {
-	const lines = [`Not granted (${refusal.reason}): ${refusal.message}`];
+	// The host's own sentence, but not only the host's words: a `held` refusal quotes the
+	// holder's owner string back into it, so it is escaped like any other echoed input.
+	const lines = [
+		`Not granted (${refusal.reason}): ${out.escapeControlCharacters(refusal.message)}`,
+	];
 	if (refusal.heldBy !== null) {
 		lines.push(`Held by ${out.formatHolder(refusal.heldBy)}.`);
 	}
