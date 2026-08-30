@@ -12,7 +12,7 @@
  * back to autostarting one (D5).
  */
 
-import { readFile } from 'node:fs/promises';
+import { readFile, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
@@ -50,6 +50,16 @@ const attached = createMockDevice({ serial: parseDeviceSerial('attached-1') });
 /** What the host's backend captures — distinctive, so "these bytes" means these bytes. */
 const REMOTE_CAPTURE = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x2a]);
 
+/**
+ * What a push sends across the wire — deliberately not text, so a UTF-8 decode anywhere
+ * between the two machines shows up as different bytes rather than as a file that still
+ * opens.
+ */
+const REMOTE_PAYLOAD = Uint8Array.from([0x00, 0xff, 0xfe, 0x80, 0x01, 0x0d, 0x0a, 0xc0]);
+
+/** The remote device's filesystem: what a push wrote is what a pull reads back. */
+let deviceFiles: Map<string, Uint8Array>;
+
 let certificate: TestCertificate;
 let temp: TempSocket;
 /** The host's user store and the one user in it — what the host authenticates against. */
@@ -76,6 +86,7 @@ beforeEach(async () => {
 	for (const variable of [HOST_ADDRESS_ENV_VAR, HOST_PORT_ENV_VAR, HOST_TOKEN_ENV_VAR]) {
 		vi.stubEnv(variable, '');
 	}
+	deviceFiles = new Map();
 	logged = [];
 	errored = [];
 	vi.spyOn(console, 'log').mockImplementation((line: string) => logged.push(line));
@@ -117,6 +128,18 @@ function registerFakeBackend(): void {
 			watchDevices,
 			describeDevice: async (serial) => createMockDevice({ serial }),
 			screenshot: async () => REMOTE_CAPTURE,
+			// Real bodies rather than the factory's stubs, so a round trip over TLS proves the
+			// bytes moved rather than that two mocks were called.
+			pushFile: async (_serial, hostPath, devicePath) => {
+				deviceFiles.set(devicePath, new Uint8Array(await readFile(hostPath)));
+			},
+			pullFile: async (_serial, devicePath) => {
+				const bytes = deviceFiles.get(devicePath);
+				if (bytes === undefined) {
+					throw new Error(`the fake device has no file at '${devicePath}'`);
+				}
+				return bytes;
+			},
 		}),
 	});
 }
@@ -150,6 +173,26 @@ async function startHostAndPointAtIt(): Promise<RunningDaemon> {
 	vi.stubEnv(HOST_TOKEN_ENV_VAR, store.token);
 	vi.stubEnv(HOST_CA_ENV_VAR, certificate.certPath);
 	return daemon;
+}
+
+/** A live lease on the remote host, through the CLI, because that is the only way to get one. */
+async function acquireRemoteLease(): Promise<string> {
+	expect(
+		await run([
+			'acquire',
+			attached.serial,
+			'--host',
+			'remote',
+			'--owner',
+			'issue-24',
+			'--project',
+			'rover',
+			'--json',
+		]),
+	).toBe(EXIT_OK);
+	const leaseId = (JSON.parse(logged[0] ?? '') as { lease: { leaseId: string } }).lease.leaseId;
+	logged.length = 0;
+	return leaseId;
 }
 
 describe('rover --host remote, before it talks to anything', () => {
@@ -248,22 +291,7 @@ describe('rover --host remote, against a live host', () => {
 		// when the verb ran on a host reached over TLS.
 		await startHostAndPointAtIt();
 		const out = join(temp.dir, 'remote-capture.bin');
-
-		expect(
-			await run([
-				'acquire',
-				attached.serial,
-				'--host',
-				'remote',
-				'--owner',
-				'issue-24',
-				'--project',
-				'rover',
-				'--json',
-			]),
-		).toBe(EXIT_OK);
-		const leaseId = (JSON.parse(logged[0] ?? '') as { lease: { leaseId: string } }).lease.leaseId;
-		logged.length = 0;
+		const leaseId = await acquireRemoteLease();
 
 		expect(await run(['screenshot', leaseId, '--host', 'remote', '--out', out])).toBe(EXIT_OK);
 
@@ -271,6 +299,38 @@ describe('rover --host remote, against a live host', () => {
 		expect(new Uint8Array(await readFile(out))).toEqual(REMOTE_CAPTURE);
 		// A path on the client's own disk, absolute, and never one belonging to the host.
 		expect(logged.join('\n')).toContain(resolve(out));
+		expect(errored).toEqual([]);
+	});
+
+	it('pushes a file from this machine and pulls it back, over the same modules', async () => {
+		// The other direction of the same criterion, and the one the screenshot cannot cover:
+		// `push` reads a file on **this** machine and `pull` writes one here, so a client that
+		// had quietly resolved either path against the host would move the wrong bytes — or
+		// none — the moment the two machines stopped being the same one.
+		await startHostAndPointAtIt();
+		const leaseId = await acquireRemoteLease();
+		const source = join(temp.dir, 'remote-sent.bin');
+		const destination = join(temp.dir, 'remote-received.bin');
+		await writeFile(source, REMOTE_PAYLOAD);
+
+		expect(
+			await run(['push', leaseId, source, '--host', 'remote', '/data/local/tmp/remote.bin']),
+		).toBe(EXIT_OK);
+		expect(
+			await run([
+				'pull',
+				leaseId,
+				'/data/local/tmp/remote.bin',
+				'--host',
+				'remote',
+				'--out',
+				destination,
+			]),
+		).toBe(EXIT_OK);
+
+		// Byte for byte across a TLS connection, in both directions.
+		expect(new Uint8Array(await readFile(destination))).toEqual(REMOTE_PAYLOAD);
+		expect(logged.join('\n')).toContain(resolve(destination));
 		expect(errored).toEqual([]);
 	});
 
