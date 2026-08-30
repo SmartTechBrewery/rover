@@ -39,6 +39,9 @@ function statusHandlers(overrides: Partial<IpcHandlers> = {}): IpcHandlers {
 		long_press: () => refusedWithoutAHost(),
 		swipe: () => refusedWithoutAHost(),
 		scroll: () => refusedWithoutAHost(),
+		launch_app: () => refusedWithoutAHost(),
+		stop_app: () => refusedWithoutAHost(),
+		clear_app_data: () => refusedWithoutAHost(),
 		...overrides,
 	};
 }

@@ -27,7 +27,14 @@ import {
 } from '@/backends/registry.js';
 import type { Capabilities } from '@/core/capabilities.js';
 import type { Device, DeviceBackend, DeviceWatch, DeviceWatcher, Point } from '@/core/device.js';
-import { type LeaseId, parseDeviceSerial, parseLeaseId } from '@/core/ids.js';
+import {
+	type AppId,
+	type DeviceSerial,
+	type LeaseId,
+	parseAppId,
+	parseDeviceSerial,
+	parseLeaseId,
+} from '@/core/ids.js';
 import { type RunningDaemon, startDaemon } from '@/daemon/listen.js';
 import type { IpcClient } from '@/ipc/client.js';
 import { IpcRequestError } from '@/ipc/protocol.js';
@@ -60,6 +67,7 @@ const clients: IpcClient[] = [];
 
 interface HostOptions {
 	readonly describeDevice?: DeviceBackend['describeDevice'];
+	readonly launchApp?: DeviceBackend['launchApp'];
 	readonly readScreen?: DeviceBackend['readScreen'];
 	readonly deviceInfo?: DeviceBackend['deviceInfo'];
 	readonly capabilities?: Partial<Capabilities>;
@@ -80,6 +88,12 @@ let taps: Point[];
 let drags: Array<{ from: Point; to: Point; durationMs: number }>;
 
 /**
+ * The app-lifecycle calls the daemon's backend received, in order and with the serial each
+ * one named — the serial the *lease* carries, which the client never sent (D20).
+ */
+let appCalls: Array<{ method: string; serial: string; appId: string }>;
+
+/**
  * A daemon on a temp socket with one ready device behind one registered backend.
  *
  * `describeDevice` defaults to answering about whatever serial it was asked, because the
@@ -89,6 +103,7 @@ async function serve(options: HostOptions = {}): Promise<void> {
 	reads = 0;
 	taps = [];
 	drags = [];
+	appCalls = [];
 	const watchDevices = vi.fn<DeviceBackend['watchDevices']>((watcher: DeviceWatcher) => {
 		watcher.onDevices([attached]);
 		return { stop: vi.fn<DeviceWatch['stop']>(async () => {}) };
@@ -118,6 +133,9 @@ async function serve(options: HostOptions = {}): Promise<void> {
 			swipe: async (_serial, from, to, durationMs) => {
 				drags.push({ from, to, durationMs });
 			},
+			launchApp: options.launchApp ?? recordApp('launchApp'),
+			stopApp: recordApp('stopApp'),
+			clearAppData: recordApp('clearAppData'),
 		}),
 	});
 
@@ -130,6 +148,13 @@ async function serve(options: HostOptions = {}): Promise<void> {
 		throw new Error('Another daemon holds the temp socket — the test cannot proceed');
 	}
 	running.push(result);
+}
+
+/** One backend app method that records the call the daemon made rather than doing anything. */
+function recordApp(method: string) {
+	return async (serial: DeviceSerial, appId: AppId): Promise<void> => {
+		appCalls.push({ method, serial, appId });
+	};
 }
 
 async function connect(): Promise<IpcClient> {
@@ -376,6 +401,138 @@ describe('the gesture rows dispatch like the waits', () => {
 		expect(await verb).toMatchObject({ outcome: 'refused', reason: 'no-lease' });
 		// The point of the guard: the gesture never reached the device the host had handed on.
 		expect(taps).toEqual([]);
+	});
+});
+
+/**
+ * The three app rows, which is the same claim the gestures make one more time: a verb family
+ * is a row and a handler, and nothing about the envelope, the framing or the connection
+ * changed to carry these (R6, D19). What is new is that they address a **package** rather
+ * than something on the screen — so no screen is read to reach the device, and the result's
+ * target is `null`.
+ */
+describe('the app rows dispatch like the gestures', () => {
+	const SETTINGS = parseAppId('com.android.settings');
+
+	it.each([
+		['launch_app', 'launchApp'],
+		['stop_app', 'stopApp'],
+		['clear_app_data', 'clearAppData'],
+	] as const)('%s reaches %s on the device the lease names', async (method, backendMethod) => {
+		await serve();
+		const client = await connect();
+		const leaseId = await acquire(client);
+
+		const answer = await client.request(method, { leaseId, appId: SETTINGS });
+
+		expect(answer).toMatchObject({
+			outcome: 'ok',
+			// No target, because an app id addresses a package: nothing on the screen was resolved.
+			result: { verb: method, target: null, device: { serial: SERIAL } },
+		});
+		// The serial came off the lease on the host. The client sent an app id and a lease id.
+		expect(appCalls).toEqual([{ method: backendMethod, serial: SERIAL, appId: SETTINGS }]);
+		// And no screen was read to get there — the read in the result is the after-state.
+		expect(reads).toBe(1);
+	});
+
+	it('refuses an app verb on a lease id the store does not know, without touching the device', async () => {
+		await serve();
+		const client = await connect();
+
+		const answer = await client.request('launch_app', {
+			leaseId: parseLeaseId('never-granted'),
+			appId: SETTINGS,
+		});
+
+		// Proof these go through `runVerb` rather than around it.
+		expect(answer).toMatchObject({ outcome: 'refused', reason: 'no-lease' });
+		expect(appCalls).toEqual([]);
+	});
+
+	it('refuses an app verb whose lease ended part-way, before it reaches the hardware', async () => {
+		const started = createGate();
+		const held = createGate();
+		await serve({
+			launchApp: async () => {
+				started.reach();
+				await held.reached;
+			},
+		});
+		const client = await connect();
+		const leaseId = await acquire(client);
+
+		const verb = client.request('launch_app', { leaseId, appId: SETTINGS });
+		await started.reached;
+		await client.request('release_device', { leaseId });
+		held.reach();
+
+		// The launch itself already ran; what the guard stops is everything after it, so the
+		// answer is the ex-holder's refusal rather than a result about a device it no longer has.
+		expect(await verb).toMatchObject({ outcome: 'refused', reason: 'no-lease' });
+	});
+
+	it('refuses an app id that is not a reverse-DNS name, at the boundary', async () => {
+		await serve();
+		const client = await connect();
+		const leaseId = await acquire(client);
+
+		const thrown = await client
+			.request('stop_app', {
+				leaseId,
+				// @ts-expect-error — the point of the test is what a client that ignored the type gets.
+				appId: 'notreversedns',
+			})
+			.catch((error: unknown) => error);
+
+		// `invalid_params` a caller can read, rather than an `InvalidIdError` thrown deep inside
+		// a backend building a device-side command line out of it.
+		expect(thrown).toBeInstanceOf(IpcRequestError);
+		expect((thrown as IpcRequestError).code).toBe('invalid_params');
+		expect(appCalls).toEqual([]);
+	});
+
+	it('refuses a serial sent beside the lease id (D20)', async () => {
+		await serve();
+		const client = await connect();
+		const leaseId = await acquire(client);
+
+		const thrown = await client
+			.request('launch_app', {
+				leaseId,
+				appId: SETTINGS,
+				// The lease id is the credential and the host derives the device from it. A serial
+				// accepted here would let the holder of one lease drive another device.
+				// @ts-expect-error — the point of the test is what a client that ignored the type gets.
+				serial: 'another-device',
+			})
+			.catch((error: unknown) => error);
+
+		expect(thrown).toBeInstanceOf(IpcRequestError);
+		expect((thrown as IpcRequestError).code).toBe('invalid_params');
+	});
+
+	/**
+	 * Pins today's behaviour rather than blessing it: a backend that refuses — a package the
+	 * device does not have — rejects, and the daemon has no `VerbFailure` branch for it, so it
+	 * arrives as `internal_error` ("the host broke"). That is a pre-existing, repo-wide gap
+	 * shared by every verb family, filed separately rather than widened into this change.
+	 */
+	it('leaves a device-level refusal as internal_error, for now', async () => {
+		await serve({
+			launchApp: async () => {
+				throw new Error("Device has no package 'com.rover.no.such.package'");
+			},
+		});
+		const client = await connect();
+		const leaseId = await acquire(client);
+
+		const thrown = await client
+			.request('launch_app', { leaseId, appId: parseAppId('com.rover.no.such.package') })
+			.catch((error: unknown) => error);
+
+		expect(thrown).toBeInstanceOf(IpcRequestError);
+		expect((thrown as IpcRequestError).code).toBe('internal_error');
 	});
 });
 

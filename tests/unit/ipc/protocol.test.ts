@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+	AppVerbParamsSchema,
 	LongPressParamsSchema,
 	MAX_VERB_TIMEOUT_MS,
 	ScrollParamsSchema,
@@ -231,6 +232,67 @@ describe('gesture verb params schemas', () => {
 				target: { by: 'point', at: { x: 1, y: 2 } },
 			}).success,
 		).toBe(false);
+	});
+});
+
+/**
+ * The three app rows' params, at the boundary rather than at the backend.
+ *
+ * One schema serves all three, so this is one `describe` rather than three near-copies —
+ * and the reverse-DNS shape is checked *here* so a malformed id is `invalid_params` a caller
+ * can read, instead of an `InvalidIdError` thrown deep inside a backend building a
+ * device-side command line out of it.
+ */
+describe('app verb params schemas', () => {
+	it('parses a well-formed call and brands the app id', () => {
+		const parsed = AppVerbParamsSchema.parse({
+			leaseId: 'lease-1',
+			appId: 'com.android.settings',
+		});
+
+		expect(parsed.appId).toBe('com.android.settings');
+		expect(parsed.leaseId).toBe('lease-1');
+	});
+
+	it('takes a two-segment id, which is the shortest reverse-DNS name there is', () => {
+		expect(
+			AppVerbParamsSchema.safeParse({ leaseId: 'lease-1', appId: 'com.example' }).success,
+		).toBe(true);
+	});
+
+	it.each([
+		['a name with no domain in it', 'notreversedns'],
+		['an empty id', ''],
+		['a leading dot', '.leading'],
+		['a trailing dot', 'com.example.'],
+		['a segment starting with a digit', 'com.1example'],
+		// Not a blocklist of metacharacters — the shape simply does not admit one, which is what
+		// keeps an id from becoming a second command on the device (`src/core/ids.ts`).
+		['a shell command riding along', 'com.example; rm -rf /'],
+	])('rejects %s', (_label, appId) => {
+		expect(AppVerbParamsSchema.safeParse({ leaseId: 'lease-1', appId }).success).toBe(false);
+	});
+
+	it.each([
+		['a serial beside the lease id', { serial: 'emulator-5554' }],
+		['a package path this row does not install', { packagePath: '/tmp/app.apk' }],
+		['a wait timeout on a verb that does not wait', { timeoutMs: 1_000 }],
+	])('rejects %s rather than silently stripping it', (_label, extra) => {
+		// The serial case is the load-bearing one: the lease id is the credential and the host
+		// derives the device from it (D20), so a serial accepted here would let the holder of one
+		// lease drive another device.
+		expect(
+			AppVerbParamsSchema.safeParse({
+				leaseId: 'lease-1',
+				appId: 'com.android.settings',
+				...extra,
+			}).success,
+		).toBe(false);
+	});
+
+	it('needs both the lease id and the app id', () => {
+		expect(AppVerbParamsSchema.safeParse({ leaseId: 'lease-1' }).success).toBe(false);
+		expect(AppVerbParamsSchema.safeParse({ appId: 'com.android.settings' }).success).toBe(false);
 	});
 });
 

@@ -2,11 +2,12 @@ import { afterEach, describe, expect, it } from 'vitest';
 // Side-effect import: exactly what `src/daemon/main.ts` now does. Without it the daemon this
 // suite starts would have an empty registry and lend nothing.
 import '@/backends/index.js';
-import type { DeviceSerial, LeaseId } from '@/core/ids.js';
+import { type DeviceSerial, type LeaseId, parseAppId } from '@/core/ids.js';
 import { type Observation, waitForCondition } from '@/core/wait.js';
 import { type RunningDaemon, startDaemon } from '@/daemon/listen.js';
 import type { IpcClient } from '@/ipc/client.js';
 import type { ListedDevice } from '@/ipc/methods.js';
+import { IpcRequestError } from '@/ipc/protocol.js';
 import {
 	connectWithoutStarting,
 	createTempSocket,
@@ -41,6 +42,11 @@ import {
  *   against the real screen size, converts it, and injects. What is *not* proved is what the
  *   tap did — nothing here can read the screen back — which is why the point below is one
  *   where a tap does nothing.
+ * - **`clear_app_data` has no success case here**, for the reason
+ *   `tests/device/android/app-control.test.ts` already records: a successful clear destroys an
+ *   application's data, and there is no package on an arbitrary device whose data is safe for
+ *   a test suite to destroy. Its dispatch is covered over a stub backend in
+ *   `tests/unit/daemon/verb-dispatch.test.ts` instead.
  * - **`long_press` and `scroll` are not exercised here at all.** Neither can be told from a
  *   plain tap without watching the device: the injection succeeds either way. Both were
  *   confirmed by hand against a real device, and the threshold a long press has to clear is
@@ -69,6 +75,15 @@ const ABSENT = { by: 'text', text: 'rover-r21-absent-text' } as const;
  * job rather than this suite's.
  */
 const HARMLESS_POINT = { by: 'point', at: { x: 1, y: 1 } } as const;
+
+/**
+ * Present on every Android build, and safe to open and close under someone else's eyes —
+ * the same package `tests/device/android/app-control.test.ts` drives, for the same reason.
+ */
+const SETTINGS = parseAppId('com.android.settings');
+
+/** A package no device has. Both halves matter: it is not installed, and it never will be. */
+const ABSENT_PACKAGE = parseAppId('com.rover.no.such.package');
 
 /** How long to wait for the host's first view of its devices — a subscription, not a verb. */
 const INVENTORY_TIMEOUT_MS = 20_000;
@@ -231,6 +246,76 @@ describe.skipIf(!process.env.ROVER_TEST_DEVICE)('a daemon runs verbs on its own 
 			outcome: 'failed',
 			failure: { kind: 'missing-capability', capability: 'canReadScreen', serial: device.serial },
 		});
+	});
+
+	/**
+	 * The app rows against real hardware: a package really launched and really stopped, over a
+	 * lease, by the process that owns the device. Both halves run in one test so the suite
+	 * leaves the device as it found it.
+	 */
+	it('launches and stops a real app on the device the lease names', async () => {
+		const client = await startHost();
+		const device = await freeDevice(client);
+		const leaseId = await lease(client, device.serial);
+
+		const launched = await client.request('launch_app', { leaseId, appId: SETTINGS });
+
+		expect(launched).toMatchObject({
+			outcome: 'ok',
+			result: {
+				verb: 'launch_app',
+				device: { serial: device.serial },
+				// An app id addresses a package, so no screen was read to resolve anything and there
+				// is nothing on it to report — `null` is a fact about the verb (D12(a)).
+				target: null,
+				// This device cannot read its screen yet, so the honest post-state is the capability
+				// that would have answered — never an empty element list.
+				after: { kind: 'unavailable', capability: 'canReadScreen' },
+			},
+		});
+
+		const stopped = await client.request('stop_app', { leaseId, appId: SETTINGS });
+
+		expect(stopped).toMatchObject({
+			outcome: 'ok',
+			result: { verb: 'stop_app', device: { serial: device.serial }, target: null },
+		});
+	});
+
+	/**
+	 * Pins what the code **actually answers** today rather than what it should. The backend
+	 * rejects for a package the device does not have, nothing converts that into a
+	 * `VerbFailure`, and so an agent reads `internal_error` — "the host broke" — for an
+	 * ordinary answer about a device. That is a pre-existing, repo-wide gap every verb family
+	 * shares, and it is filed as its own issue rather than widened into this change.
+	 */
+	it('reports a package the device does not have as internal_error, for now', async () => {
+		const client = await startHost();
+		const device = await freeDevice(client);
+		const leaseId = await lease(client, device.serial);
+
+		const thrown = await client
+			.request('launch_app', { leaseId, appId: ABSENT_PACKAGE })
+			.catch((error: unknown) => error);
+
+		expect(thrown).toBeInstanceOf(IpcRequestError);
+		expect((thrown as IpcRequestError).code).toBe('internal_error');
+	});
+
+	/**
+	 * `am force-stop` prints nothing and exits 0 whether it stopped something or the package was
+	 * never there (PROJECT.md §6), so this answers `ok` — which is the honest report of what the
+	 * device said, not a claim that anything was stopped. What settles it is the after-state,
+	 * once `read_screen` (#13) lands.
+	 */
+	it('cannot tell a stopped app from a package that was never there', async () => {
+		const client = await startHost();
+		const device = await freeDevice(client);
+		const leaseId = await lease(client, device.serial);
+
+		const answer = await client.request('stop_app', { leaseId, appId: ABSENT_PACKAGE });
+
+		expect(answer).toMatchObject({ outcome: 'ok', result: { verb: 'stop_app' } });
 	});
 
 	it('refuses a verb call once the lease is over', async () => {
