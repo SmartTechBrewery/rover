@@ -191,4 +191,29 @@ describe.skipIf(!process.env.ROVER_TEST_DEVICE)('reading the screen of a real de
 		const listing = await runAdbOnDevice(serial, ['shell', 'ls', '-a', '/sdcard/']);
 		expect(listing.stdout).not.toContain(DUMP_PATH.slice('/sdcard/'.length));
 	});
+
+	/**
+	 * The reason the reads are queued per device, against the hardware that punishes it: two
+	 * `uiautomator dump`s at once on one device get one of them killed — exit 137 with both
+	 * streams empty, measured 4 times out of 4 on API 37 (PROJECT.md §6) — and the narrower
+	 * window is one read's `rm` landing between the other's dump and its `cat`.
+	 *
+	 * Two verbs on one lease is not a misuse: the IPC server dispatches frames without
+	 * awaiting them, so a client that writes a wait and a tap without waiting for the first
+	 * reply has exactly this shape. Both resolving is the assertion.
+	 */
+	it('answers both of two reads started at the same time on one device', async () => {
+		const { serial } = await firstUsableDevice();
+
+		const [first, second] = await Promise.all([
+			backend.readScreen(serial),
+			backend.readScreen(serial),
+		]);
+
+		expect(first.length).toBeGreaterThan(0);
+		expect(second.length).toBeGreaterThan(0);
+
+		const listing = await runAdbOnDevice(serial, ['shell', 'ls', '-a', '/sdcard/']);
+		expect(listing.stdout).not.toContain(DUMP_PATH.slice('/sdcard/'.length));
+	});
 });

@@ -518,6 +518,15 @@ prints, what coordinate space it takes, and what `input text` does with a caller
 - **`input text` drops a tab and a newline in silence.** `'a<TAB>b'` and `'a<LF>b'` each exited 0
   with zero bytes on both streams and put `ab` in the field. Nothing downstream can see that
   happened.
+- **Any non-ASCII character throws inside the device, and nothing at all is typed.** `'zażółć'`,
+  `'日本語'`, `'a🙂b'` and `'ab±cd'` each exited **255** with `java.lang.NullPointerException:
+  Attempt to get length of null array` from `InputShellCommand.sendText` — `KeyCharacterMap` has
+  no events for the character — and the field was left completely unchanged rather than partially
+  typed. Loud, but as a stack trace about a null array rather than as anything a caller can act
+  on. `typeText` therefore refuses anything outside U+0020–U+007E *before* the call, naming the
+  offending characters; the same rule covers the silent tab-and-newline case above, which nothing
+  else would.
+- **`input text ''` is a legal no-op** — exit 0, nothing printed, nothing typed.
 
 Checked on the same API 37 emulator (`sdk_gphone16k_arm64`) with `adb` 37.0.0, **2026-08-30**,
 while building `readScreen` (#13 phase 1). The two-command recipe above is unchanged and still
@@ -537,13 +546,24 @@ correct; what follows is what building on it measured.
   one it asked for. What that comparison buys is freshness: the dump path is a fixed literal and
   can already hold a previous read's document, so a dump that produced nothing followed by a `cat`
   that succeeds would hand back a screen from a minute ago, indistinguishable from the current one.
-- **A dump that fails outright could not be reproduced here.** The widely-reported
-  `ERROR: could not get idle state` needs a screen that will not settle; a dump racing a fling,
-  and a dump under five concurrent flings, each returned the ordinary confirmation. `readScreen`
+- **`ERROR: could not get idle state` could not be reproduced here.** That widely-reported
+  failure needs a screen that will not settle; a dump racing a fling, and a dump under five
+  concurrent flings, each returned the ordinary confirmation. `readScreen`
   reports the shape loudly through `refused(...)` if a device ever produces it, and deliberately
   does **not** retry — a retry loop is a wait, and waiting belongs to `src/core/wait.ts` and the
   wait verbs rather than inside a primitive. No fixture was invented for it
   (`tests/fixtures/adb/README.md` says so).
+- **Two `uiautomator dump`s at once on one device get one of them killed — exit 137, both
+  streams empty.** Two `adb -s … shell uiautomator dump /sdcard/window_dump.xml` started
+  together: one printed the ordinary confirmation at exit 0 and the other exited **137** having
+  printed nothing at all on either stream (3 runs out of 3, 2026-08-30; which of the two loses is
+  not predictable). 137 is SIGKILL — the device kills the second instance rather than queueing
+  it — so the failure arrives as an `AdbCommandError` with no wording to read, not as a dump that
+  says something. The narrower window on the same shared path costs the same: one read's
+  `rm` landing between the other's dump and its `cat` leaves the `cat` with no file.
+  This is not an exotic case — the IPC server dispatches frames without awaiting them, so a
+  client holding one lease can have two verbs reading one device — and it is why
+  `AndroidDeviceBackend` queues its reads per serial rather than letting the device arbitrate.
 - **`read_screen` works while the app blocks screen capture — verified, and this is R13's own
   acceptance criterion.** On the Settings PIN-entry screen
   (`com.android.settings/…password.ChooseLockPassword`, reached with
@@ -564,15 +584,6 @@ correct; what follows is what building on it measured.
   `tests/device/android/backend.test.ts` compares the two as an unordered pair for this reason,
   which still catches a missing px→dp conversion — the thing that assertion is for — without
   pretending rotation is handled.
-- **Any non-ASCII character throws inside the device, and nothing at all is typed.** `'zażółć'`,
-  `'日本語'`, `'a🙂b'` and `'ab±cd'` each exited **255** with `java.lang.NullPointerException:
-  Attempt to get length of null array` from `InputShellCommand.sendText` — `KeyCharacterMap` has
-  no events for the character — and the field was left completely unchanged rather than partially
-  typed. Loud, but as a stack trace about a null array rather than as anything a caller can act
-  on. `typeText` therefore refuses anything outside U+0020–U+007E *before* the call, naming the
-  offending characters; the same rule covers the silent tab-and-newline case above, which nothing
-  else would.
-- **`input text ''` is a legal no-op** — exit 0, nothing printed, nothing typed.
 
 Checked on the same emulator while landing the gesture verbs over those primitives (#60, phase 2
 of #12), 2026-08-30:

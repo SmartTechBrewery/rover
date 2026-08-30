@@ -234,6 +234,16 @@ function notAnImage(serial: DeviceSerial, result: AdbBinaryResult): Error {
 }
 
 export class AndroidDeviceBackend implements DeviceBackend {
+	/**
+	 * The tail of the queue of screen reads on each device — {@link readsOn}'s register, and
+	 * the only state this class holds.
+	 *
+	 * It is a queue and not a cache, which is the distinction D6 draws: nothing about a
+	 * device is remembered here between calls, only whether a call is still running. A serial
+	 * appears while it is being read and is dropped again straight afterwards.
+	 */
+	private readonly reads = new Map<DeviceSerial, Promise<void>>();
+
 	async listDevices(): Promise<Device[]> {
 		const result = await runAdb(['devices', '-l']);
 
@@ -524,11 +534,23 @@ export class AndroidDeviceBackend implements DeviceBackend {
 	 * before the dump so the two overlap. It is awaited only after the dump has settled, so
 	 * the cleanup below can never race a dump that is still writing.
 	 *
+	 * **The whole triple is exclusive per device**, which is {@link readsOn}'s subject: the
+	 * three commands share one fixed device-side path, and a second read overlapping this
+	 * one either has its `uiautomator` killed by the device (exit 137 with both streams
+	 * empty, measured on API 37 — PROJECT.md §6) or has its file removed between its dump
+	 * and its `cat`. Either way a device that is working perfectly answers a verb with a
+	 * throw. Nothing above this stops that: the IPC server dispatches frames without
+	 * awaiting them and `src/daemon/verb-traffic.ts` registers concurrent calls on one
+	 * device rather than excluding them, both on purpose, so the exclusion belongs to the
+	 * one place that knows {@link DUMP_PATH} is shared.
+	 *
 	 * **The `rm` runs in a `finally` and its own failure never replaces the answer.**
 	 * Leaving a file behind on hardware held under a lease is what the cleanup exists to
 	 * prevent; losing a screen the caller already paid for because the cleanup failed is
 	 * worse. It also runs on the refusal path, which is where it does the most good: a stale
-	 * file removed now is one the *next* read cannot be served.
+	 * file removed now is one the *next* read cannot be served. The dump is *inside* the
+	 * `try` for that reason too — a dump that throws is exactly the case where a partial
+	 * file may be sitting there, and `rm -f` on a file that was never written costs nothing.
 	 *
 	 * The default ten-second timeout: a dump is a query on the order of a `wm size`, not a
 	 * capture of the framebuffer.
@@ -537,30 +559,65 @@ export class AndroidDeviceBackend implements DeviceBackend {
 	 * header names. If it ever becomes a caller's value it takes a quoter.
 	 */
 	async readScreen(serial: DeviceSerial): Promise<ScreenElement[]> {
-		const density = this.pixelScale(serial);
-		// Awaited at the end; the handler is attached now so a density that fails while the
-		// dump is still in flight is never an unhandled rejection.
-		void density.catch(() => undefined);
+		return this.readsOn(serial, async () => {
+			const density = this.pixelScale(serial);
+			// Awaited at the end; the handler is attached now so a density that fails while the
+			// dump is still in flight is never an unhandled rejection.
+			void density.catch(() => undefined);
 
-		const dumped = await runAdbOnDevice(serial, ['shell', 'uiautomator', 'dump', DUMP_PATH]);
+			try {
+				const dumped = await runAdbOnDevice(serial, ['shell', 'uiautomator', 'dump', DUMP_PATH]);
+
+				if (dumpedPath(dumped.stdout) !== DUMP_PATH) {
+					throw refused(`uiautomator dump ${DUMP_PATH}`, serial, dumped);
+				}
+
+				const document = await runAdbOnDevice(serial, ['exec-out', 'cat', DUMP_PATH]);
+
+				let hierarchy: UiHierarchy;
+				try {
+					hierarchy = parseUiHierarchy(document.stdout);
+				} catch (cause) {
+					throw unparseable(`adb exec-out cat ${DUMP_PATH}`, document, cause);
+				}
+
+				return toScreenElements(hierarchy, await density);
+			} finally {
+				await runAdbOnDevice(serial, ['shell', 'rm', '-f', DUMP_PATH]).catch(() => undefined);
+			}
+		});
+	}
+
+	/**
+	 * Run `work` after every read already queued for `serial`, and never beside one.
+	 *
+	 * A promise chain per serial rather than a lock, because there is nothing to unlock: the
+	 * entry *is* the tail of the queue, and the next caller waits on it. Per serial, because
+	 * the thing being made exclusive is one device's {@link DUMP_PATH} — two devices read at
+	 * the same time as before, which is what an inventory of several is for.
+	 *
+	 * The chain never rejects and never carries a value: a read that threw has still finished
+	 * with the device, and letting its rejection through would fail the *next* caller with the
+	 * previous caller's error. The entry is dropped once this call is the last one queued, so
+	 * the map is bounded by the devices being read right now rather than by every device this
+	 * host has ever read.
+	 *
+	 * It bounds nothing else. A read that hangs holds the queue for exactly as long as
+	 * `./adb.js`'s timeout allows the command underneath it to hang, which is the bound that
+	 * already applies to every caller of it.
+	 */
+	private async readsOn<T>(serial: DeviceSerial, work: () => Promise<T>): Promise<T> {
+		const queued = (this.reads.get(serial) ?? Promise.resolve()).then(work);
+		const settled = queued.then(
+			() => undefined,
+			() => undefined,
+		);
+		this.reads.set(serial, settled);
 
 		try {
-			if (dumpedPath(dumped.stdout) !== DUMP_PATH) {
-				throw refused(`uiautomator dump ${DUMP_PATH}`, serial, dumped);
-			}
-
-			const document = await runAdbOnDevice(serial, ['exec-out', 'cat', DUMP_PATH]);
-
-			let hierarchy: UiHierarchy;
-			try {
-				hierarchy = parseUiHierarchy(document.stdout);
-			} catch (cause) {
-				throw unparseable(`adb exec-out cat ${DUMP_PATH}`, document, cause);
-			}
-
-			return toScreenElements(hierarchy, await density);
+			return await queued;
 		} finally {
-			await runAdbOnDevice(serial, ['shell', 'rm', '-f', DUMP_PATH]).catch(() => undefined);
+			if (this.reads.get(serial) === settled) this.reads.delete(serial);
 		}
 	}
 

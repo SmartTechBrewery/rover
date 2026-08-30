@@ -1067,6 +1067,93 @@ describe('readScreen', () => {
 	});
 
 	/**
+	 * The dump is the command most likely to be the one that throws — a device kills a second
+	 * `uiautomator` with exit 137 (PROJECT.md §6) and an adb timeout kills the host-side
+	 * process while the device may still be writing — so it is inside the `try` the cleanup
+	 * hangs off, not before it.
+	 */
+	it('removes the file even when the dump itself failed', async () => {
+		reads({ [DUMP_ARGV.join(' ')]: new Error('adb … uiautomator dump … exited 137') });
+
+		await expect(backend.readScreen(SERIAL)).rejects.toThrow('exited 137');
+		expect(argvOf()).toContainEqual(RM_ARGV);
+	});
+
+	/**
+	 * Two reads on one device do not overlap, which is the property the fixed
+	 * {@link DUMP_PATH} needs and nothing above this backend provides: the IPC server
+	 * dispatches frames without awaiting them, so a client holding one lease can have two
+	 * verbs — a wait and a tap, say — reading the same device at the same time. Interleaved,
+	 * one of them dumps over the other's file or has its `uiautomator` killed, and a device
+	 * that is working perfectly answers a verb with a throw.
+	 *
+	 * The argv sequence is the assertion because it is the thing that has to be true on the
+	 * device: dump, cat, rm, then dump, cat, rm — never dump, dump.
+	 */
+	it('never lets two reads of one device overlap', async () => {
+		reads();
+
+		const [first, second] = await Promise.all([
+			backend.readScreen(SERIAL),
+			backend.readScreen(SERIAL),
+		]);
+
+		expect(argvOf()).toEqual([
+			['shell', 'wm', 'density'],
+			DUMP_ARGV,
+			CAT_ARGV,
+			RM_ARGV,
+			['shell', 'wm', 'density'],
+			DUMP_ARGV,
+			CAT_ARGV,
+			RM_ARGV,
+		]);
+		expect(first).toHaveLength(75);
+		expect(second).toHaveLength(75);
+	});
+
+	// The queue is not a place a failure can hide: a read that threw has still finished with
+	// the device, and the caller behind it gets its own answer rather than the first one's error.
+	it('does not fail the read behind one that threw', async () => {
+		reads();
+		const succeeds = runAdbOnDevice.getMockImplementation();
+		let fetches = 0;
+		runAdbOnDevice.mockImplementation(async (serial, args, options) => {
+			fetches += args.join(' ') === CAT_ARGV.join(' ') ? 1 : 0;
+			if (fetches === 1 && args.join(' ') === CAT_ARGV.join(' ')) {
+				throw new Error("device 'emulator-5554' not found");
+			}
+			return (succeeds as NonNullable<typeof succeeds>)(serial, args, options);
+		});
+
+		const failing = backend.readScreen(SERIAL);
+		const behind = backend.readScreen(SERIAL);
+
+		await expect(failing).rejects.toThrow("device 'emulator-5554' not found");
+		await expect(behind).resolves.toHaveLength(75);
+	});
+
+	// Per device, not per host: the thing being made exclusive is one device's dump path, and
+	// two devices are read at the same time — which is what an inventory of several is for.
+	it('reads two different devices at the same time', async () => {
+		reads();
+
+		await Promise.all([
+			backend.readScreen(SERIAL),
+			backend.readScreen(parseDeviceSerial('emulator-5556')),
+		]);
+
+		const argv = argvOf();
+		const dumps = argv.flatMap((call, index) => (call.includes('uiautomator') ? [index] : []));
+		const cleanups = argv.flatMap((call, index) => (call.includes('rm') ? [index] : []));
+		expect(dumps).toHaveLength(2);
+		expect(cleanups).toHaveLength(2);
+		// The second device dumped before the first one had finished: nothing here serialised
+		// two devices against each other.
+		expect(Math.max(...dumps)).toBeLessThan(Math.min(...cleanups));
+	});
+
+	/**
 	 * Losing a screen the caller already paid for because the cleanup failed is worse than
 	 * leaving the file: the freshness of the *next* read is guaranteed by the confirmation
 	 * check regardless.
