@@ -229,23 +229,26 @@ is recorded rather than hidden — a device-level refusal, such as launching a p
 installed, still reaches the caller as `internal_error` rather than as an answer about the device.
 That is true of every verb family here, not just this one, and it is filed as its own issue.
 
-**The host can now listen on the network, and only if you ask it to** (D17, D20). Setting
-`ROVER_LISTEN_PORT` — with a host token and a TLS certificate beside it — starts a TCP+TLS
-listener alongside the local unix socket, serving the *same* IPC surface from the same handler:
-one method table, two transports, no second implementation of anything. A network caller
-authenticates with a one-line greeting the transport reads and consumes before the message
-surface ever sees the connection, so the token never enters a request and never becomes a lease's
-owner — the token authenticates, the owner string attributes, and they are separate fields. Every
-pre-auth failure gets one byte-identical refusal and a closed connection: no reason, no device
-list, no count, no serials, because a refusal that varied would be an oracle. Without those
-variables nothing binds, the local socket needs no token and no configuration, and a daemon
-autostarted by `rover list` clears the switch so a plain command can never turn a laptop into a
-network host.
+**The host can now listen on the network, and only if you ask it to** (D17, D20, D25). Setting
+`ROVER_LISTEN_PORT` — with a TLS certificate beside it — starts a TCP+TLS listener alongside the
+local unix socket, serving the *same* IPC surface from the same handler: one method table, two
+transports, no second implementation of anything. A network caller authenticates with a one-line
+greeting the transport reads and consumes before the message surface ever sees the connection, so
+the token never enters a request and never becomes a lease's owner — the token authenticates, the
+owner string attributes, and they are separate fields. **The host holds no shared secret**: the
+greeting's token is hashed and looked up in the user store `rover users add` writes, re-read at
+every connection attempt, so `rover users revoke` refuses that user on their very next attempt
+with the daemon still running and nothing restarted. Every pre-auth failure gets one byte-identical
+refusal and a closed connection: no reason, no device list, no count, no serials, no user, because
+a refusal that varied would be an oracle. Without those variables nothing binds, the local socket
+needs no token and no configuration, and a daemon autostarted by `rover list` clears the switch so
+a plain command can never turn a laptop into a network host.
 
 **And a client can now reach one** — `rover --host remote list` (R22's other half). It connects
-over TLS to the host `ROVER_HOST_ADDRESS` and `ROVER_HOST_PORT` name, presents `ROVER_HOST_TOKEN`,
-and drives the identical method table; `--host local` and no flag are unchanged, autostart
-included. **A client never starts a remote host**: nothing listening on that port is a failure
+over TLS to the host `ROVER_HOST_ADDRESS` and `ROVER_HOST_PORT` name, presents
+`ROVER_HOST_TOKEN` — a token that host's own `rover users add` printed, not a secret both
+machines share — and drives the identical method table; `--host local` and no flag are
+unchanged, autostart included. **A client never starts a remote host**: nothing listening on that port is a failure
 naming the address, the port and `ECONNREFUSED`, and a peer that accepts the connection and then
 says nothing is given ten seconds and then named too — never an empty device list, never a hang —
 and a token the host rejects says so, distinctly, without ever printing the token. The
@@ -287,13 +290,13 @@ startup, naming the variable and the reason, rather than binding something surpr
 | Variable | Default | Value |
 |---|---|---|
 | `ROVER_SOCKET_PATH` | `~/.rover/rover.sock` | Absolute path of the unix socket the local daemon binds and a local client connects to. **Empty counts as unset** — an exported-but-blank variable is what a shell leaves behind, and reading it as a real setting would point the daemon at the current directory. At most **103 bytes of UTF-8**: a unix socket address is a fixed-size struct (104 bytes on macOS, 108 on Linux, NUL included), and over the cap `bind` truncates or answers `EINVAL` instead of naming the length, so a longer path is rejected at startup with the byte count and the path. |
-| `ROVER_USERS_PATH` | `~/.rover/users.json` | Absolute path of the host's own user store — one record per user: identifier, display name, the **hash** of that user's token, and when it was created. Never a token: `rover users add` and `rover users rotate` print the raw value once and store only its hash. **Empty counts as unset**, as it is for the socket. Read only by `rover users`, which touches the file directly and never goes over the network (`PROJECT.md` D25); the daemon does not read it yet. |
-| `ROVER_LISTEN_PORT` | unset — **no network listener** | The opt-in switch for the TCP+TLS listener that serves the same IPC surface as the local socket. Unset or empty and nothing binds, nothing else below is read, and the daemon is a purely local host. Set it and the next three become **required together**: a port with no token would be a listener that lets strangers in, so a missing one is a startup failure naming every variable still missing rather than a half-configured host. 1–65535. |
-| `ROVER_HOST_TOKEN` | — (required with the port) | The shared secret every network caller presents. At least **32 characters**; it is a bearer secret on an open port, and length is the only thing that makes guessing hopeless. It is a **host-level** setting and belongs in the environment, never in a file the repository tracks. Deliberately **the same variable the client reads** (below), so a machine that is both holds one secret rather than two that drift apart. The token **authenticates and attributes nothing**: a lease's owner is a separate, caller-supplied string (`PROJECT.md` D20). |
+| `ROVER_USERS_PATH` | `~/.rover/users.json` | Absolute path of the host's own user store — one record per user: identifier, display name, the **hash** of that user's token, and when it was created. Never a token: `rover users add` and `rover users rotate` print the raw value once and store only its hash. **Empty counts as unset**, as it is for the socket. Read by `rover users`, which touches the file directly and never goes over the network (`PROJECT.md` D25), **and by the network listener**, which is the host's entire authentication surface: the token in a caller's greeting is hashed and looked up here, re-read at every connection attempt and never cached, so `revoke` and `rotate` take effect on the very next attempt with the daemon still running. |
+| `ROVER_LISTEN_PORT` | unset — **no network listener** | The opt-in switch for the TCP+TLS listener that serves the same IPC surface as the local socket. Unset or empty and nothing binds, nothing else below is read, and the daemon is a purely local host. Set it and the next two become **required together**: a port with no TLS material would be a listener nobody could trust, so a missing one is a startup failure naming every variable still missing rather than a half-configured host. Who may connect is not a variable at all — it comes from the user store (`ROVER_USERS_PATH`), which always resolves, so a host with no users yet starts and refuses everyone. 1–65535. |
 | `ROVER_TLS_CERT` | — (required with the port) | Path to the PEM certificate (chain) the listener presents. |
 | `ROVER_TLS_KEY` | — (required with the port) | Path to the matching PEM private key. Unreadable material is a startup failure naming the variable and the path, not a TLS mystery on the first connection. |
 | `ROVER_LISTEN_ADDRESS` | `0.0.0.0` | Which interface the network listener binds, so an operator can narrow it to a VPN or loopback interface instead of every one. Only read when the port is set. |
 | `ROVER_HOST_ADDRESS` | unset — **no remote host** | The opt-in switch on the *client* side: the address of the host `--host remote` asks. Unset or empty and nothing below is read, `--host remote` is a usage error, and `rover` is a purely local client. Set it and `ROVER_HOST_PORT` and `ROVER_HOST_TOKEN` become **required together**, because a client cannot guess either — a missing one is a usage error naming every variable still missing. Exactly one remote host is configurable (`PROJECT.md` D18); there is no catalogue. |
+| `ROVER_HOST_TOKEN` | — (required with `ROVER_HOST_ADDRESS`) | **A client-side credential, and only that** — the value `rover users add` (or `users rotate`) printed on the host, pasted on the machine that borrows a device. The host itself no longer reads this variable: it authenticates against its user store, so a token is revocable and rotatable where it was issued rather than being a secret both machines hold forever (`PROJECT.md` D25). At least **32 characters**, checked locally so a truncated paste fails here naming the variable instead of coming back as an opaque refusal. It is a **host-level** setting and belongs in the environment, never in a file the repository tracks. The token **authenticates and attributes nothing**: a lease's owner is a separate, caller-supplied string (`PROJECT.md` D20). |
 | `ROVER_HOST_PORT` | — (required with the address) | The port that host listens on — its own `ROVER_LISTEN_PORT`, named from the other side. 1–65535. |
 | `ROVER_HOST_CA` | unset — the system trust store | Path to a PEM certificate to trust in addition to nothing else — normally the host's own certificate, which is how a self-signed host is trusted. There is deliberately **no variable that turns verification off**: a client that skipped the check would accept any host that answered on that port. |
 
@@ -321,34 +324,40 @@ who loses one runs `rotate`, which is what makes that safe. A duplicate identifi
 name rather than overwritten, because an overwrite would silently revoke a credential somebody is
 holding.
 
-**The daemon does not read this store yet.** `ROVER_HOST_TOKEN` is still the one secret the network
-listener checks (`PROJECT.md` D20), so a token issued here does not yet let anyone in — per-user
-host authentication is the next row (`PROJECT.md` §9.3, R28). Creating users now is how a host is
-made ready for it, not a way to hand out access today.
+**This store is what the network listener authenticates against.** A token issued here is the value
+a client puts in its own `ROVER_HOST_TOKEN`, and it is the only way in — there is no shared secret
+beside it (`PROJECT.md` D20, D25). The daemon re-reads the file at **every connection attempt** and
+caches nothing, so `revoke` and `rotate` bite on that user's very next attempt with the daemon
+still running: no restart, no signal, nothing to reload. `add` works the same way in the other
+direction — a user created while the daemon is up can connect immediately.
 
 ### Exposing a host on the network
 
 A network host is a **service its operator starts on purpose**, never something a client brings up
 behind their back — `rover list` clears `ROVER_LISTEN_PORT` in any daemon it autostarts, so the
-listener only ever exists because somebody exported these four variables and ran the daemon.
+listener only ever exists because somebody exported these three variables and ran the daemon.
 
 ```bash
 # A certificate for the host. Use your own CA in anything that matters; this is the shape.
 openssl req -x509 -newkey rsa:2048 -nodes -days 365   -keyout rover-key.pem -out rover-cert.pem   -subj "/CN=rover-host" -addext "subjectAltName=DNS:rover-host,IP:10.0.0.4"
 
-export ROVER_HOST_TOKEN="$(openssl rand -hex 24)"   # at least 32 characters
 export ROVER_TLS_CERT=/etc/rover/rover-cert.pem
 export ROVER_TLS_KEY=/etc/rover/rover-key.pem
 export ROVER_LISTEN_ADDRESS=10.0.0.4                # optional; 0.0.0.0 otherwise
 export ROVER_LISTEN_PORT=4711                       # the switch — set it last
 npm run daemon
+
+# Issue access, per person, before or after the daemon is up — it re-reads the store every time.
+npm run rover -- users add alice --name "Alice Example"
 ```
 
-The token is a shared secret: keep it in the environment (or your secret store), never in a file
-the repository tracks, and give the client machines the same value. `.gitignore` refuses `*.pem`
-and `*.key` so a certificate generated inside a checkout cannot be committed by accident. A caller
-that fails to authenticate is told only that authentication failed — no reason, no device list, no
-serials — and the connection is closed.
+**The host holds no secret of its own.** Access is one token per user, issued by `rover users add`
+and taken away by `rover users revoke` on this machine — so there is nothing here to copy to a
+client except the token that command printed for it, and nothing to rotate everywhere at once when
+one person leaves. `.gitignore` refuses `*.pem` and `*.key` so a certificate generated inside a
+checkout cannot be committed by accident. A caller that fails to authenticate is told only that
+authentication failed — no reason, no device list, no serials, and not even whether the token was
+unknown or revoked — and the connection is closed.
 
 ### Connecting to a remote host
 
@@ -357,7 +366,7 @@ On the machine doing the work, point the client at that host and add `--host rem
 ```bash
 export ROVER_HOST_ADDRESS=10.0.0.4                  # or the hostname on its certificate
 export ROVER_HOST_PORT=4711
-export ROVER_HOST_TOKEN="…"                         # the same value the host holds
+export ROVER_HOST_TOKEN="…"                         # the token `rover users add` printed on the host
 export ROVER_HOST_CA=/etc/rover/rover-cert.pem      # optional; the system trust store otherwise
 
 npm run rover -- list --host remote
@@ -371,8 +380,9 @@ the variable only if the host's certificate is signed by a CA the machine alread
 Three failures are three different messages, on purpose, because they call for three different
 next moves: **nothing is listening there** (the address, the port and `ECONNREFUSED` — a remote
 host is a service its operator starts, and no client will ever start one for you); **the host
-rejected `ROVER_HOST_TOKEN`** (the two machines hold different secrets — the value itself is
-never printed); and **the certificate was not trusted** (name it in `ROVER_HOST_CA`). None of
+rejected `ROVER_HOST_TOKEN`** (no user on that host holds this token, or the one who did has been
+revoked or rotated — ask its operator for a fresh `rover users add`; the value itself is never
+printed); and **the certificate was not trusted** (name it in `ROVER_HOST_CA`). None of
 them is ever an empty device list, and none of them ever waits: a peer that accepts the
 connection and then never completes the TLS handshake — a forwarded port whose far end is gone,
 a load balancer with no live backend — is given ten seconds and then reported as `ETIMEDOUT`,

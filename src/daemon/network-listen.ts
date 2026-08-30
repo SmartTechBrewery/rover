@@ -20,14 +20,34 @@
  * because the gate lives in this module, the local unix socket needs no token and no
  * configuration at all.
  *
- * **Every pre-auth failure gets one byte-identical refusal.** Wrong token, no greeting, a
- * greeting that is not JSON, an unknown key, an oversize line, a greeting that never arrives in
- * time — all of them get {@link REFUSAL_FRAME} and a destroyed connection. Anything that varied
- * with the reason would be an oracle, and a refusal names no device, no count, no serial and no
- * pid: a stranger learns only that there is a Rover here that wants a token (D20). Nothing
- * about an attempt is logged either, because the only interesting thing to log about one is
- * the token that was tried. A peer that never completes the TLS handshake is the one case with
- * no frame at all — there is no session to write one into — and it is simply dropped.
+ * **The gate has no secret of its own; it asks the user store (D25).** The presented token is
+ * hashed and looked up in `~/.rover/users.json` — whatever `ROVER_USERS_PATH` resolves to —
+ * so every credential that opens this port is one `rover users add` issued to a named user.
+ * There is no `ROVER_HOST_TOKEN` on this side and deliberately no fallback to one: a second
+ * way in that no `rover users` command could take away is exactly what the store retires.
+ *
+ * **The store is re-read at every connection attempt, and never cached** (D6, D25 — the daemon
+ * is a cache and holds nothing it cannot re-derive, the same rule the device inventory lives
+ * under). So `rover users revoke` bites on that user's *very next* attempt, with this daemon
+ * still running and no restart, and `rover users add` lets a new user in just as immediately.
+ * The cost is one `scrypt` per stored record per attempt, inside the pre-auth deadline below;
+ * that is the price of a stored credential that survives the file leaking, and caching the
+ * store to avoid it would trade away the only property this gate is here for.
+ *
+ * **Every pre-auth failure gets one byte-identical refusal.** A token no user holds, a token a
+ * revoked user still holds, no greeting, a greeting that is not JSON, an unknown key, an
+ * oversize line, a greeting that never arrives in time, a user store this host cannot read —
+ * all of them get {@link REFUSAL_FRAME} and a destroyed connection. Anything that varied with
+ * the reason would be an oracle, and a refusal names no device, no count, no serial, no user
+ * and no pid: a stranger learns only that there is a Rover here that wants a token (D20).
+ * Nothing about an attempt is logged either, because the only interesting thing to log about
+ * one is the token that was tried. A peer that never completes the TLS handshake is the one
+ * case with no frame at all — there is no session to write one into — and it is simply
+ * dropped.
+ *
+ * **The token authenticates; it attributes nothing** (D20). Which user a connection turned out
+ * to be is deliberately not carried past this gate: a lease's `owner` stays an explicit,
+ * caller-supplied string.
  */
 
 import { readFile } from 'node:fs/promises';
@@ -37,8 +57,8 @@ import { z } from 'zod';
 import { encodeFrame } from '../ipc/framing.js';
 import { type ErrorResponse, PROTOCOL_VERSION } from '../ipc/protocol.js';
 import type { IpcServer } from '../ipc/server.js';
-import { createTokenGate, type TokenGate } from './host-token.js';
 import { type NetworkListenerConfig, TLS_CERT_ENV_VAR, TLS_KEY_ENV_VAR } from './network-config.js';
+import { findUserByToken } from './user-store.js';
 
 /**
  * How long each half of authenticating gets: the TLS handshake, from the moment the TCP
@@ -49,6 +69,11 @@ import { type NetworkListenerConfig, TLS_CERT_ENV_VAR, TLS_KEY_ENV_VAR } from '.
  * Both deadlines are therefore **absolute** — armed once, never rearmed by arriving bytes — so
  * the total time an unauthenticated peer can hold a socket is bounded at twice this whatever it
  * sends and however it chunks it. Deadlines on a peer, not sleeps (ai/RULES.md §2).
+ *
+ * The greeting half of that budget covers the **store lookup** too, not merely the bytes: the
+ * deadline stays armed across one `scrypt` per stored user, which is what keeps "a peer that
+ * has not authenticated has no claim on a socket" literally true rather than true-until-the-
+ * verification-starts. Five seconds is comfortable at operator scale.
  */
 const AUTH_TIMEOUT_MS = 5_000;
 
@@ -118,7 +143,6 @@ export async function startNetworkListener(
 	// mystery on the first connection.
 	const cert = await readPem(config.certPath, TLS_CERT_ENV_VAR);
 	const key = await readPem(config.keyPath, TLS_KEY_ENV_VAR);
-	const gate = createTokenGate(config.token);
 
 	// Tracked by hand for the same reason `listenOnce` tracks its own: `tls.Server` has no
 	// `closeAllConnections()` either, so `close()` would wait forever on an idle peer.
@@ -150,7 +174,7 @@ export async function startNetworkListener(
 			}
 			connections.add(socket);
 			socket.on('close', () => connections.delete(socket));
-			gateConnection(socket, gate, ipcServer, authTimeoutMs);
+			gateConnection(socket, config.usersPath, ipcServer, authTimeoutMs);
 		},
 	);
 	server.on('connection', (socket: Socket) => {
@@ -228,23 +252,32 @@ function bind(
 }
 
 /**
- * Read the greeting, then either refuse or hand the stream to the IPC server.
+ * Read the greeting, look the token up in the user store, then either refuse or hand the
+ * stream to the IPC server.
  *
  * The handover order below is the whole correctness of this module. A peer is free to put the
  * greeting and its first request in one TCP write, so the bytes after the newline are already
  * in this handler's chunk; dropping them there is a hang that only ever shows up under a real
  * client. `pause()` / `unshift()` / `resume()` is what replays them into the IPC server.
+ *
+ * The store lookup makes the check **asynchronous**, which adds one state the byte-only
+ * version did not have: the greeting is complete but not yet judged. Hence a three-state
+ * `phase` rather than a boolean, and the strict ordering in `onGreeting` — pause the socket
+ * and drop the `'data'` listener *before* the first `await`, so no byte arriving during the
+ * verification is delivered to a handler that is no longer there and silently lost.
  */
 function gateConnection(
 	socket: TLSSocket,
-	gate: TokenGate,
+	usersPath: string,
 	ipcServer: IpcServer,
 	authTimeoutMs: number,
 ): void {
 	// First, before anything can fail: an `'error'` with no listener is a crashed daemon.
 	socket.on('error', () => {});
 
-	let settled = false;
+	// `checking` is the window the `await` opens: the greeting has been read and the socket
+	// paused, but nothing has been decided. Both of the other two are terminal for this gate.
+	let phase: 'reading' | 'checking' | 'settled' = 'reading';
 	// Explicitly typed: a chunk off a socket is `Buffer<ArrayBufferLike>`, which the narrower
 	// type `Buffer.alloc` infers will not accept.
 	let buffered: Buffer = Buffer.alloc(0);
@@ -252,10 +285,10 @@ function gateConnection(
 	let deadline: NodeJS.Timeout | undefined;
 
 	const refuse = (): void => {
-		if (settled) {
+		if (phase === 'settled') {
 			return;
 		}
-		settled = true;
+		phase = 'settled';
 		clearTimeout(deadline);
 		socket.removeListener('data', onGreeting);
 		if (socket.writable) {
@@ -265,8 +298,32 @@ function gateConnection(
 		socket.destroy();
 	};
 
+	/** The second half of the greeting, after the store has answered. */
+	async function check(line: string, remainder: Buffer): Promise<void> {
+		const authenticated = await authenticates(usersPath, line);
+		// The deadline may have fired, or the peer hung up, while `scrypt` ran. Either way this
+		// socket is spoken for and must not be handed to the IPC server or written to again.
+		if (phase === 'settled') {
+			return;
+		}
+		if (!authenticated) {
+			refuse();
+			return;
+		}
+
+		phase = 'settled';
+		// An authenticated connection has no deadline — a client may hold one open between verbs
+		// for as long as it likes.
+		clearTimeout(deadline);
+		if (remainder.length > 0) {
+			socket.unshift(remainder);
+		}
+		ipcServer.handleConnection(socket);
+		socket.resume();
+	}
+
 	function onGreeting(chunk: Buffer): void {
-		if (settled) {
+		if (phase !== 'reading') {
 			return;
 		}
 		buffered = buffered.length === 0 ? chunk : Buffer.concat([buffered, chunk]);
@@ -275,22 +332,24 @@ function gateConnection(
 		if (greeting.state === 'incomplete') {
 			return;
 		}
-		if (greeting.state === 'refused' || !accepts(gate, greeting.line)) {
+		if (greeting.state === 'refused') {
 			refuse();
 			return;
 		}
 
-		settled = true;
-		// An authenticated connection has no deadline — a client may hold one open between verbs
-		// for as long as it likes.
-		clearTimeout(deadline);
+		// This ordering is load-bearing, and all of it happens before the first `await`: the
+		// socket stops flowing and this handler stops listening while the store is consulted,
+		// so whatever the peer writes next stays in the stream for `handleConnection` — or goes
+		// away with the socket on a refusal — rather than being read and dropped.
+		phase = 'checking';
 		socket.pause();
 		socket.removeListener('data', onGreeting);
-		if (greeting.remainder.length > 0) {
-			socket.unshift(greeting.remainder);
-		}
-		ipcServer.handleConnection(socket);
-		socket.resume();
+		// The `.catch` is a backstop, not a path: `authenticates` swallows everything the store
+		// can throw. Anything left is a bug in the handover, and a bug there must drop the
+		// connection rather than become an unhandled rejection that takes the daemon down. Once
+		// the stream has been handed over the phase is already settled, so `refuse` is a no-op
+		// and an authenticated peer cannot be dropped by this.
+		void check(greeting.line, greeting.remainder).catch(() => refuse());
 	}
 
 	// One absolute window, and deliberately **not** `socket.setTimeout`: that is an *idle*
@@ -302,6 +361,12 @@ function gateConnection(
 	// Unreferenced: this timer exists to drop a socket, never to keep a process alive that is
 	// otherwise finished.
 	deadline.unref();
+	// A peer that hangs up mid-verification settles the gate itself, so the `await` above can
+	// never come back and attach the IPC server to a socket that is already gone.
+	socket.on('close', () => {
+		phase = 'settled';
+		clearTimeout(deadline);
+	});
 	socket.on('data', onGreeting);
 }
 
@@ -332,10 +397,21 @@ function splitGreeting(buffered: Buffer): Greeting {
 	};
 }
 
-/** Whether `line` is a greeting carrying the token this gate holds. */
-function accepts(gate: TokenGate, line: string): boolean {
+/** Whether `line` is a greeting carrying a token some user in the store holds. */
+async function authenticates(usersPath: string, line: string): Promise<boolean> {
 	const token = tokenIn(line);
-	return token !== undefined && gate.accepts(token);
+	if (token === undefined) {
+		return false;
+	}
+	try {
+		return (await findUserByToken(usersPath, token)) !== undefined;
+	} catch {
+		// A store this host cannot read authenticates nobody — and says so with the same bytes
+		// as every other refusal. Whether the operator's own file is missing, unreadable or
+		// malformed is not something the wire may reveal; `rover users list` is where that is
+		// diagnosed, by someone with a shell on this machine.
+		return false;
+	}
 }
 
 /** The token in a greeting line, or `undefined` for anything this host will not accept. */

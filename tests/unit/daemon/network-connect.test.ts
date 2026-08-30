@@ -40,9 +40,9 @@ import { createMockDevice, createMockDeviceBackend } from '../../helpers/factori
 import {
 	createTestCertificate,
 	removeTestCertificate,
-	TEST_HOST_TOKEN,
 	type TestCertificate,
 } from '../../helpers/tls-fixtures.js';
+import { createTestUserStore, type TestUserStore } from '../../helpers/user-store.js';
 
 /**
  * Every child process this test process starts, counted.
@@ -71,6 +71,7 @@ const attached = createMockDevice({ serial: parseDeviceSerial('attached-1') });
 const second = createMockDevice({ serial: parseDeviceSerial('attached-2') });
 
 /** Long enough to be accepted by the schema, and obviously not the host's. */
+/** A well-formed token no `rover users add` on this host ever issued. */
 const WRONG_TOKEN = 'the-wrong-token-but-long-enough-1234';
 
 /**
@@ -83,6 +84,8 @@ let certificate: TestCertificate;
 let stranger: TestCertificate;
 let misnamed: TestCertificate;
 let temp: TempSocket;
+/** The host's user store and the one user in it, recreated per test beside the temp socket. */
+let store: TestUserStore;
 const running: RunningDaemon[] = [];
 const clients: IpcClient[] = [];
 const occupied: Server[] = [];
@@ -109,6 +112,9 @@ afterAll(async () => {
 beforeEach(async () => {
 	spawned.mockClear();
 	temp = await createTempSocket();
+	// The host authenticates against a real store (R28), so the token this client presents is
+	// one the shipping `rover users add` minted, not a fixture constant.
+	store = await createTestUserStore(temp.dir);
 });
 
 afterEach(async () => {
@@ -155,9 +161,9 @@ function networkConfig(overrides: Partial<NetworkListenerConfig> = {}): NetworkL
 		// Port 0 and never a fixed one: the kernel picks and `RunningDaemon.networkPort` says
 		// which, so two suites running at once cannot collide.
 		port: 0,
-		token: TEST_HOST_TOKEN,
 		certPath: certificate.certPath,
 		keyPath: certificate.keyPath,
+		usersPath: store.path,
 		...overrides,
 	};
 }
@@ -183,7 +189,7 @@ function remoteConfig(port: number, overrides: Partial<RemoteHostConfig> = {}): 
 	return {
 		address: '127.0.0.1',
 		port,
-		token: TEST_HOST_TOKEN,
+		token: store.token,
 		caPath: certificate.certPath,
 		...overrides,
 	};
@@ -334,7 +340,7 @@ describe('the same surface over the network client', () => {
 		// Deep-scanned rather than field-by-field, so a field added later cannot quietly start
 		// carrying the token.
 		for (const result of [acquired, listed]) {
-			expect(JSON.stringify(result)).not.toContain(TEST_HOST_TOKEN);
+			expect(JSON.stringify(result)).not.toContain(store.token);
 		}
 	});
 
@@ -359,7 +365,7 @@ describe('the same surface over the network client', () => {
 		await expect(overNetwork(port, { token: WRONG_TOKEN })).rejects.toThrow();
 		await Promise.all(running.splice(0).map((daemon) => daemon.close()));
 
-		expect(written.join('\n')).not.toContain(TEST_HOST_TOKEN);
+		expect(written.join('\n')).not.toContain(store.token);
 		expect(written.join('\n')).not.toContain(WRONG_TOKEN);
 	});
 });
@@ -430,6 +436,20 @@ describe('a rejected token is reported as a rejected token', () => {
 		await expect(attempt).rejects.toThrow(
 			expect.objectContaining({ message: expect.not.stringContaining(WRONG_TOKEN) }),
 		);
+	});
+
+	it('sends the operator to rover users, not to a secret the host no longer holds', async () => {
+		// The message R28 makes wrong if it is left alone: there is no host-side value to copy
+		// here any more. The actionable next step is a token that host's own `rover users add`
+		// or `rover users rotate` printed.
+		const port = await startHost();
+
+		const rejected = await connectToNetworkHost(remoteConfig(port, { token: WRONG_TOKEN })).catch(
+			(error: Error) => error.message,
+		);
+
+		expect(rejected).toContain('rover users');
+		expect(rejected).not.toContain('same secret');
 	});
 
 	it('reads as a rejection rather than as an unreachable or a broken host', async () => {
