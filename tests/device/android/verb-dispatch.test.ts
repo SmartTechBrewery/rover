@@ -30,22 +30,45 @@ import {
  * **What this deliberately does not cover, so silence is not read as "checked":**
  *
  * - **No real screen is read.** The backend honestly declares `canReadScreen: false` until
- *   `read_screen` lands (R13), so both waits answer `missing-capability` — which is itself the
- *   assertion below, because a loud, structured refusal naming the real device and the real
- *   backend is exactly what D11 asks of a capability nothing backs. When that flag flips, this
- *   suite gains the two assertions it cannot make today: a wait that resolves off a real read,
- *   and one that times out naming what was on screen instead.
+ *   `read_screen` lands (R13), so both waits and any target-by-text answer
+ *   `missing-capability` — which is itself an assertion below, because a loud, structured
+ *   refusal naming the real device and the real backend is exactly what D11 asks of a
+ *   capability nothing backs. When that flag flips, this suite gains the assertions it cannot
+ *   make today: a wait that resolves off a real read, a tap that lands on a named button, and
+ *   a timeout naming what was on screen instead.
+ * - **A point-addressed `tap` does run on the hardware**, and it is the one call here that
+ *   reaches the device rather than being refused before it: the verb resolves the coordinate
+ *   against the real screen size, converts it, and injects. What is *not* proved is what the
+ *   tap did — nothing here can read the screen back — which is why the point below is one
+ *   where a tap does nothing.
+ * - **`long_press` and `scroll` are not exercised here at all.** Neither can be told from a
+ *   plain tap without watching the device: the injection succeeds either way. Both were
+ *   confirmed by hand against a real device, and the threshold a long press has to clear is
+ *   recorded in PROJECT.md §6.
  * - What *is* proved against the hardware is everything either side of the screen read: the
  *   daemon lends this machine's own device over a socket, derives it from the lease id,
  *   re-verifies it through its backend on every call (D6), reaches the verb layer with a
  *   context built from it, and brings the answer back as data.
  *
- * **Read-only**, so `ROVER_TEST_DEVICE` and not the local-only gate: it changes no setting and
- * touches no radio. Its lease is released in `afterEach`.
+ * It changes no setting and touches no radio, so `ROVER_TEST_DEVICE` rather than the local-only
+ * gate — a device reached over a network transport is a perfectly good subject for a tap. Its
+ * lease is released in `afterEach`.
  */
 
 /** Text no screen carries, so both directions of the wait are deterministic. */
 const ABSENT = { by: 'text', text: 'rover-r21-absent-text' } as const;
+
+/**
+ * A coordinate in the top-left corner of the panel, where a tap does nothing on any screen a
+ * device happens to be showing.
+ *
+ * This suite runs against whatever is in front of it and has no verb to put the device back
+ * (`press_key` is #12 phase 3), so the tap it injects has to be one that needs no putting
+ * back. In dp, because that is the space `Point` is declared in — the conversion to the pixels
+ * the device takes is the backend's, and asserting it is `tests/device/android/input.test.ts`'s
+ * job rather than this suite's.
+ */
+const HARMLESS_POINT = { by: 'point', at: { x: 1, y: 1 } } as const;
 
 /** How long to wait for the host's first view of its devices — a subscription, not a verb. */
 const INVENTORY_TIMEOUT_MS = 20_000;
@@ -167,6 +190,47 @@ describe.skipIf(!process.env.ROVER_TEST_DEVICE)('a daemon runs verbs on its own 
 		});
 
 		expect(answer).toMatchObject({ outcome: 'failed', failure: { kind: 'missing-capability' } });
+	});
+
+	it('taps a coordinate on the device the lease names', async () => {
+		const client = await startHost();
+		const device = await freeDevice(client);
+		const leaseId = await lease(client, device.serial);
+
+		const answer = await client.request('tap', { leaseId, target: HARMLESS_POINT });
+
+		// The whole path again, and this time with something reaching the hardware at the far
+		// end of it: the verb range-checked the coordinate against the screen the device
+		// reported, the backend converted it and injected, and the answer came back as data.
+		expect(answer).toMatchObject({
+			outcome: 'ok',
+			result: {
+				verb: 'tap',
+				device: { serial: device.serial },
+				// A coordinate is the documented fallback and the result says it was one (D12(a)).
+				target: { source: 'caller-point', point: HARMLESS_POINT.at, element: null },
+			},
+		});
+		// This device cannot read its screen yet, so the honest post-state is the capability that
+		// would have answered — never an empty element list, which would read as a blank screen.
+		expect(answer).toMatchObject({
+			result: { after: { kind: 'unavailable', capability: 'canReadScreen' } },
+		});
+	});
+
+	it('refuses a tap by text until the device can read its own screen', async () => {
+		const client = await startHost();
+		const device = await freeDevice(client);
+		const leaseId = await lease(client, device.serial);
+
+		const answer = await client.request('tap', { leaseId, target: ABSENT });
+
+		// D11 working rather than a gap: the target has to come off a screen read, the backend
+		// declares it cannot do one, and the refusal names the capability instead of guessing.
+		expect(answer).toMatchObject({
+			outcome: 'failed',
+			failure: { kind: 'missing-capability', capability: 'canReadScreen', serial: device.serial },
+		});
 	});
 
 	it('refuses a verb call once the lease is over', async () => {

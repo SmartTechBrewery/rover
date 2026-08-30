@@ -528,6 +528,25 @@ prints, what coordinate space it takes, and what `input text` does with a caller
   else would.
 - **`input text ''` is a legal no-op** — exit 0, nothing printed, nothing typed.
 
+Checked on the same emulator while landing the gesture verbs over those primitives (#60, phase 2
+of #12), 2026-08-30:
+
+- **A screen-wide `scroll` whose drag starts over the on-screen keyboard is read as gesture
+  typing, not as a scroll.** `scroll 'down'` with no target starts a quarter up from the bottom of
+  the *screen*, and on a screen showing a keyboard that band is inside it: the keyboard took the
+  drag and typed `ty` into the focused search field while the list underneath did not move.
+  Nothing failed — the injection exited 0 and the verb answered with an ordinary-looking result.
+  So a scroll with no target is a scroll of *whatever occupies that band*, and naming the region
+  is what makes it a scroll of the list. The verb has no way to tell the two apart until
+  `read_screen` (#13) gives it something to check against, which is why the region is a parameter
+  rather than something guessed.
+- **`long_press` and `scroll` both do on hardware what their names say.** The verb's default
+  800 ms drag in place at the middle of the home screen raised the Wallpaper / Widgets / Apps list
+  / Home settings menu, and `scroll 'down'` over the all-apps list moved it from
+  `315 INT Kurier DPD…Drive` to `Contacts…Maps`, with `scroll 'up'` putting it back. Neither is
+  observable from a mocked runner — the injection succeeds either way — so both were watched on
+  the device.
+
 ---
 
 ## 7. Scope
@@ -613,7 +632,7 @@ Four rules when filing these issues:
 | R11 | Verb layer foundation | Target resolution from a **fresh** read inside the verb, waiting on a condition with a timeout, returning the state after the action (D12). **There is not a single `sleep` in the repo** — enforced by a lint rule or a test. A timeout says what it waited for and what it found instead. A verb's result is serializable — the host will execute it, not the client (D19, R21) | R5, R8 | L |
 | R21 | Host-side verb execution | The daemon loads the core; the CLI and MCP call verbs over the same surface as leases (D19). **No adb in a client process** — checkable by a test. This row stands ahead of the verb families deliberately: changing the execution model after they are written is a rewrite of six files instead of one | R11 | L |
 | R22 | Host network listener and authentication | TCP with TLS alongside the local socket, **the same surface, a second transport** (D17). The host token authenticates, the owner string attributes — **two separate fields, and a test proves the token never becomes the owner nor reaches a log** (D20). A refusal does not reveal what the host has attached | R21 | L |
-| R12 | Input verbs | `tap`, `long_press`, `swipe`, `scroll`, `type_text`, `press_key`. `long_press` as a drag in place — **not** `keyevent --longpress` (§6) — held past the device's own `secure long_press_timeout`, which is configuration rather than a constant. `type_text` hides the device shell's quoting. Split the way R9 and R16 were: the backend's four **primitives** landed first (#12 phase 1) — `tap` / `swipe` / `typeText` / `pressKey` behind `canInput`, with the dp→px conversion and the text limits §6 records — so this row is the verb layer over them, not the recipes | R21 | M |
+| R12 | Input verbs | `tap`, `long_press`, `swipe`, `scroll`, `type_text`, `press_key`. `long_press` as a drag in place — **not** `keyevent --longpress` (§6) — held past the device's own `secure long_press_timeout`, which is configuration rather than a constant. `type_text` hides the device shell's quoting. Split the way R9 and R16 were, into three: the backend's four **primitives** landed first (#12 phase 1) — `tap` / `swipe` / `typeText` / `pressKey` behind `canInput`, with the dp→px conversion and the text limits §6 records — then the four **gesture verbs** over them (#60 phase 2), `tap` / `long_press` / `swipe` / `scroll`, each on the R11 spine with its own `IPC_METHODS` row; `type_text` and `press_key` are phase 3 and are what is left of this row | R21 | M |
 | R13 | Read verbs | `screenshot`, `read_screen`, `device_info`. `read_screen` works with screen capture blocked and **is a declared capability, not a required method** (§5) | R21 | M |
 | R14 | `record_video` + slicing into frames | The recording must finish before it is pulled — a file pulled earlier has no `moov` atom and cannot be read at all | R13 | S |
 | R15 | App verbs | `install_app`, `launch_app`, `stop_app`, `clear_app_data`, `read_logs`, `pull_file`, `push_file`. `read_logs` is to catch a failure a screenshot will not show | R21 | M |

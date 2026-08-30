@@ -33,18 +33,23 @@ function statusHandlers(overrides: Partial<IpcHandlers> = {}): IpcHandlers {
 		release_device: () => ({ released: false }),
 		// The verb rows, for the same reason and with the same cheapest real answer: these
 		// suites are about the surface, and a refusal is what a host with no device says.
-		wait_for: () => ({
-			outcome: 'refused',
-			reason: 'no-lease',
-			message: 'no lease store in these tests',
-		}),
-		wait_until_gone: () => ({
-			outcome: 'refused',
-			reason: 'no-lease',
-			message: 'no lease store in these tests',
-		}),
+		wait_for: () => refusedWithoutAHost(),
+		wait_until_gone: () => refusedWithoutAHost(),
+		tap: () => refusedWithoutAHost(),
+		long_press: () => refusedWithoutAHost(),
+		swipe: () => refusedWithoutAHost(),
+		scroll: () => refusedWithoutAHost(),
 		...overrides,
 	};
+}
+
+/** The answer every verb row above gives, since none of these suites has a device. */
+function refusedWithoutAHost() {
+	return {
+		outcome: 'refused',
+		reason: 'no-lease',
+		message: 'no lease store in these tests',
+	} as const;
 }
 
 /** Server on one end of an in-memory pair, typed client on the other. No socket anywhere. */

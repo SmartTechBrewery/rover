@@ -26,11 +26,12 @@ import {
 	registerDeviceBackend,
 } from '@/backends/registry.js';
 import type { Capabilities } from '@/core/capabilities.js';
-import type { Device, DeviceBackend, DeviceWatch, DeviceWatcher } from '@/core/device.js';
+import type { Device, DeviceBackend, DeviceWatch, DeviceWatcher, Point } from '@/core/device.js';
 import { type LeaseId, parseDeviceSerial, parseLeaseId } from '@/core/ids.js';
 import { type RunningDaemon, startDaemon } from '@/daemon/listen.js';
 import type { IpcClient } from '@/ipc/client.js';
 import { IpcRequestError } from '@/ipc/protocol.js';
+import { LONG_PRESS_DURATION_MS } from '@/verbs/input.js';
 import {
 	connectWithoutStarting,
 	createTempSocket,
@@ -69,6 +70,16 @@ interface HostOptions {
 let reads: number;
 
 /**
+ * What the daemon's backend was asked to do to the hardware, in order.
+ *
+ * The client sends a target and gets an answer; these are the only evidence that the host in
+ * between turned one into the other — and, for a long press, that it reached the device as a
+ * drag between two equal points rather than as anything else.
+ */
+let taps: Point[];
+let drags: Array<{ from: Point; to: Point; durationMs: number }>;
+
+/**
  * A daemon on a temp socket with one ready device behind one registered backend.
  *
  * `describeDevice` defaults to answering about whatever serial it was asked, because the
@@ -76,6 +87,8 @@ let reads: number;
  */
 async function serve(options: HostOptions = {}): Promise<void> {
 	reads = 0;
+	taps = [];
+	drags = [];
 	const watchDevices = vi.fn<DeviceBackend['watchDevices']>((watcher: DeviceWatcher) => {
 		watcher.onDevices([attached]);
 		return { stop: vi.fn<DeviceWatch['stop']>(async () => {}) };
@@ -99,6 +112,12 @@ async function serve(options: HostOptions = {}): Promise<void> {
 					return [save];
 				}),
 			deviceInfo: options.deviceInfo ?? (async (serial) => createMockDeviceInfo({ serial })),
+			tap: async (_serial, at) => {
+				taps.push(at);
+			},
+			swipe: async (_serial, from, to, durationMs) => {
+				drags.push({ from, to, durationMs });
+			},
 		}),
 	});
 
@@ -214,6 +233,149 @@ describe('the daemon runs the verb against its own device', () => {
 		const { expiresInMs } = await holderOn(client);
 		expect(elapsedMs).toBeGreaterThanOrEqual(300);
 		expect(expiresInMs).toBeGreaterThan(ttlMs - 200);
+	});
+});
+
+/**
+ * The four gesture rows over the same surface, which is the claim: a verb family is a row and
+ * a handler, and nothing about the envelope, the framing or the connection changed to carry
+ * these (R6, D19).
+ */
+describe('the gesture rows dispatch like the waits', () => {
+	it('taps a coordinate the client sent, and says it was one', async () => {
+		await serve();
+		const client = await connect();
+		const leaseId = await acquire(client);
+
+		const answer = await client.request('tap', {
+			leaseId,
+			target: { by: 'point', at: { x: 10, y: 20 } },
+		});
+
+		expect(answer).toMatchObject({
+			outcome: 'ok',
+			result: { verb: 'tap', target: { source: 'caller-point' } },
+		});
+		expect(taps).toEqual([{ x: 10, y: 20 }]);
+	});
+
+	it('resolves a text target on the host, from a screen the client never saw', async () => {
+		await serve();
+		const client = await connect();
+		const leaseId = await acquire(client);
+
+		const answer = await client.request('tap', { leaseId, target: { by: 'text', text: 'Save' } });
+
+		expect(answer).toMatchObject({ outcome: 'ok', result: { target: { source: 'screen' } } });
+		// The centre of `save`'s bounds. The client sent a word and the host sent a coordinate.
+		expect(taps).toEqual([{ x: 60, y: 40 }]);
+		expect(reads).toBeGreaterThan(0);
+	});
+
+	it('carries a long press to the device as a drag in place', async () => {
+		await serve();
+		const client = await connect();
+		const leaseId = await acquire(client);
+
+		const answer = await client.request('long_press', {
+			leaseId,
+			target: { by: 'text', text: 'Save' },
+		});
+
+		expect(answer).toMatchObject({ outcome: 'ok', result: { verb: 'long_press' } });
+		expect(drags).toEqual([
+			{ from: { x: 60, y: 40 }, to: { x: 60, y: 40 }, durationMs: LONG_PRESS_DURATION_MS },
+		]);
+		expect(taps).toEqual([]);
+	});
+
+	it('takes both ends of a swipe, and a caller-supplied duration', async () => {
+		await serve();
+		const client = await connect();
+		const leaseId = await acquire(client);
+
+		const answer = await client.request('swipe', {
+			leaseId,
+			from: { by: 'text', text: 'Save' },
+			to: { by: 'point', at: { x: 300, y: 700 } },
+			durationMs: 120,
+		});
+
+		// The result names the end the gesture started from, which is the target the caller aimed
+		// at rather than the one it aimed for.
+		expect(answer).toMatchObject({
+			outcome: 'ok',
+			result: { verb: 'swipe', target: { element: { id: 'save' } } },
+		});
+		expect(drags).toEqual([{ from: { x: 60, y: 40 }, to: { x: 300, y: 700 }, durationMs: 120 }]);
+	});
+
+	it('scrolls the screen when no region is named, in the direction the content moves', async () => {
+		await serve();
+		const client = await connect();
+		const leaseId = await acquire(client);
+
+		const answer = await client.request('scroll', { leaseId, direction: 'down' });
+
+		expect(answer).toMatchObject({ outcome: 'ok', result: { verb: 'scroll', target: null } });
+		const [drag] = drags;
+		expect((drag?.from.y ?? 0) - (drag?.to.y ?? 0)).toBeGreaterThan(0);
+	});
+
+	it('refuses a gesture on a lease that was released, without touching the device', async () => {
+		await serve();
+		const client = await connect();
+		const leaseId = await acquire(client);
+		await client.request('release_device', { leaseId });
+
+		const answer = await client.request('scroll', { leaseId, direction: 'up' });
+
+		expect(answer).toMatchObject({ outcome: 'refused', reason: 'no-lease' });
+		expect(drags).toEqual([]);
+	});
+
+	it('answers a device that cannot take input with a failure naming the capability', async () => {
+		await serve({ capabilities: { canInput: false } });
+		const client = await connect();
+		const leaseId = await acquire(client);
+
+		const answer = await client.request('tap', {
+			leaseId,
+			target: { by: 'point', at: { x: 1, y: 2 } },
+		});
+
+		expect(answer).toMatchObject({
+			outcome: 'failed',
+			failure: { kind: 'missing-capability', capability: 'canInput', serial: SERIAL },
+		});
+		// The manifest is consulted before anything is dispatched: no screen was read to reach
+		// an answer that never depended on one.
+		expect(reads).toBe(0);
+	});
+
+	it('stops a gesture whose lease ended part-way, before it reaches the hardware', async () => {
+		const read = createGate();
+		const held = createGate();
+		await serve({
+			readScreen: async () => {
+				reads += 1;
+				read.reach();
+				// Suspended inside the resolution, which is before the tap: the lease ends here.
+				await held.reached;
+				return [save];
+			},
+		});
+		const client = await connect();
+		const leaseId = await acquire(client);
+
+		const verb = client.request('tap', { leaseId, target: { by: 'text', text: 'Save' } });
+		await read.reached;
+		await client.request('release_device', { leaseId });
+		held.reach();
+
+		expect(await verb).toMatchObject({ outcome: 'refused', reason: 'no-lease' });
+		// The point of the guard: the gesture never reached the device the host had handed on.
+		expect(taps).toEqual([]);
 	});
 });
 
@@ -390,6 +552,45 @@ describe('the boundary parses what the type already forbids', () => {
 				// @ts-expect-error — the point of the test is what a client that ignored the type gets.
 				target: { by: 'text', text: 'Save', index: 0 },
 				leaseId,
+			})
+			.catch((error: unknown) => error);
+
+		expect(thrown).toBeInstanceOf(IpcRequestError);
+		expect((thrown as IpcRequestError).code).toBe('invalid_params');
+	});
+
+	it('refuses a wait knob on a verb that does not wait', async () => {
+		await serve();
+		const client = await connect();
+		const leaseId = await acquire(client);
+
+		const thrown = await client
+			.request('tap', {
+				leaseId,
+				target: { by: 'text', text: 'Save' },
+				// A gesture returns when the device is done with it. Accepting a timeout would
+				// advertise a wait this verb does not perform.
+				// @ts-expect-error — the point of the test is what a client that ignored the type gets.
+				timeoutMs: 1_000,
+			})
+			.catch((error: unknown) => error);
+
+		expect(thrown).toBeInstanceOf(IpcRequestError);
+		expect((thrown as IpcRequestError).code).toBe('invalid_params');
+	});
+
+	it('refuses a coordinate as the region a scroll happens in', async () => {
+		await serve();
+		const client = await connect();
+		const leaseId = await acquire(client);
+
+		const thrown = await client
+			.request('scroll', {
+				leaseId,
+				direction: 'down',
+				// A point has no extent, so it cannot say how far a scroll may travel.
+				// @ts-expect-error — the point of the test is what a client that ignored the type gets.
+				target: { by: 'point', at: { x: 1, y: 2 } },
 			})
 			.catch((error: unknown) => error);
 

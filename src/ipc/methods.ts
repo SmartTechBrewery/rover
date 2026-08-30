@@ -23,13 +23,25 @@ import { DeviceSchema } from '../core/device.js';
 import { DeviceSerialSchema, LeaseIdSchema } from '../core/ids.js';
 import { ProtocolVersionSchema } from './protocol.js';
 import {
+	LongPressParamsSchema,
+	ScrollParamsSchema,
+	SwipeParamsSchema,
+	TapParamsSchema,
 	VerbCallResultSchema,
 	WaitForParamsSchema,
 	WaitUntilGoneParamsSchema,
 } from './verb-methods.js';
 
 export {
+	type LongPressParams,
+	LongPressParamsSchema,
 	MAX_VERB_TIMEOUT_MS,
+	type ScrollParams,
+	ScrollParamsSchema,
+	type SwipeParams,
+	SwipeParamsSchema,
+	type TapParams,
+	TapParamsSchema,
 	type VerbCallResult,
 	VerbCallResultSchema,
 	type VerbRefusalReason,
@@ -261,8 +273,10 @@ export type ReleaseDeviceResult = z.infer<typeof ReleaseDeviceResultSchema>;
  * The names follow the verb table in PROJECT.md §4 (`list_devices`), not a camelCase
  * variant of it.
  *
- * The two verb rows are the ones that exist today; each further verb family is one more row
- * beside them and one more entry in `src/daemon/verb-handlers.ts`.
+ * The verb rows are the two waits and the four gestures; each further verb family is one more
+ * row beside them and one more entry in `src/daemon/verb-handlers.ts`. They all answer with
+ * `VerbCallResultSchema`, because "what happened on the device" is one shape whatever was
+ * asked of it.
  */
 export const IPC_METHODS = {
 	status: { params: StatusParamsSchema, result: StatusResultSchema },
@@ -271,6 +285,10 @@ export const IPC_METHODS = {
 	release_device: { params: ReleaseDeviceParamsSchema, result: ReleaseDeviceResultSchema },
 	wait_for: { params: WaitForParamsSchema, result: VerbCallResultSchema },
 	wait_until_gone: { params: WaitUntilGoneParamsSchema, result: VerbCallResultSchema },
+	tap: { params: TapParamsSchema, result: VerbCallResultSchema },
+	long_press: { params: LongPressParamsSchema, result: VerbCallResultSchema },
+	swipe: { params: SwipeParamsSchema, result: VerbCallResultSchema },
+	scroll: { params: ScrollParamsSchema, result: VerbCallResultSchema },
 } as const satisfies Record<string, IpcMethodDefinition>;
 
 export type IpcMethodName = keyof typeof IPC_METHODS;
