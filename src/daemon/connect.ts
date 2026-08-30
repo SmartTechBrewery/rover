@@ -18,6 +18,7 @@ import { extname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { pause } from '../core/wait.js';
 import { createIpcClient, type IpcClient } from '../ipc/client.js';
+import { LISTEN_PORT_ENV_VAR } from './network-config.js';
 import { attemptConnect } from './socket-connect.js';
 import { assertValidSocketPath, resolveSocketPath, SOCKET_PATH_ENV_VAR } from './socket-path.js';
 
@@ -137,6 +138,13 @@ async function tryConnect(socketPath: string): Promise<ConnectSucceeded | Connec
  * `ROVER_SOCKET_PATH` is passed explicitly rather than left to the child's own default:
  * the child must bind the path this caller resolved, not re-derive one from an environment
  * that may differ.
+ *
+ * `ROVER_LISTEN_PORT` is **cleared** for the opposite reason. The child inherits this
+ * process's environment, so without this a plain `rover list` on a machine whose shell
+ * happens to export it would silently turn that laptop into a network host. A host reachable
+ * over the network is a long-running service its operator starts on purpose (D17), never
+ * something a client brings up behind their back. Empty counts as unset, exactly as it does
+ * for the socket path.
  */
 function spawnDaemon(socketPath: string): void {
 	const entry = fileURLToPath(
@@ -151,7 +159,7 @@ function spawnDaemon(socketPath: string): void {
 		// directory that is later deleted is how a long-lived process ends up unable to
 		// resolve anything. It never depends on a client's cwd either (D17, D19).
 		cwd: PACKAGE_ROOT,
-		env: { ...process.env, [SOCKET_PATH_ENV_VAR]: socketPath },
+		env: { ...process.env, [SOCKET_PATH_ENV_VAR]: socketPath, [LISTEN_PORT_ENV_VAR]: '' },
 	});
 	child.unref();
 }

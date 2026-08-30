@@ -34,6 +34,12 @@ coverage/
 *.sock
 *.pid
 
+# ── Materiał TLS ───────────────────────────────────────────────────────────
+# Certyfikat i klucz hosta sieciowego to sekret jednej maszyny, nie kod.
+# Wygenerowany w katalogu repozytorium nie może trafić do commita przez pomyłkę.
+*.pem
+*.key
+
 # ── Artefakty przebiegów ───────────────────────────────────────────────────
 # Zrzuty ekranu, nagrania, zrzuty hierarchii — dowody z konkretnego przebiegu,
 # nie źródło. Trzymane poza repo, żeby historia nie puchła od PNG-ów.

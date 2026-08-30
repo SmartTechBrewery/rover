@@ -18,11 +18,31 @@ What is actually built, and where the seams run. `PROJECT.md` carries the decisi
 
 `src/ipc/` is the protocol and nothing else. It binds to a Node `Duplex` and to no other
 type (`PROJECT.md` D17): no socket path, no peer uid, no hostname, nothing that assumes the
-client shares a filesystem, a user or a clock with the host. A transport — the local socket
-first, TLS for a remote host later (D17, R22) — is a **separate module that consumes this
-one**, handing it an already-connected stream. That is what makes a network listener an added
-transport rather than a rewrite, and it is checkable by reading the imports: the unit tests
-drive the whole surface over an in-memory stream pair that is not a socket at all.
+client shares a filesystem, a user or a clock with the host. A transport is a **separate module
+that consumes this one**, handing it an already-connected stream. That is what makes a network
+listener an added transport rather than a rewrite, and it is checkable by reading the imports:
+the unit tests drive the whole surface over an in-memory stream pair that is not a socket at all.
+
+**Both transports exist now**, and they share one `IpcServer` instance built in
+`src/daemon/listen.ts`:
+
+- `src/daemon/listen.ts` binds the local unix socket. It needs no token and no configuration.
+- `src/daemon/network-listen.ts` binds TCP+TLS when the operator opted in
+  (`src/daemon/network-config.ts`, `ROVER_LISTEN_PORT`). It is handed the same `IpcServer`, so
+  there is one method table and one dispatcher and nothing for the two to drift from.
+
+**The token gate sits in front of `handleConnection`, never inside it.** A request envelope is
+`{ protocolVersion, id, method, params }` and nothing else, so authentication cannot be a field
+on a request or a method in the table. It is a one-line NDJSON greeting — `{"token":"…"}` — that
+`network-listen.ts` reads and consumes before the IPC server is attached to the stream. Three
+things follow, and all three are wanted: no method can be dispatched before authentication *by
+construction* rather than by a flag; the local socket stays ungated because the gate lives in the
+other transport; and `src/ipc/` genuinely does not know it is authenticated. Every pre-auth
+failure — wrong token, missing, malformed, oversize, or a handshake that times out — gets one
+byte-identical `unauthenticated` refusal and a destroyed connection, because a refusal that varied
+with the reason would tell a stranger something about the host (D20). The token authenticates and
+attributes nothing: a lease's owner is a separate, caller-supplied string, never derived from
+whoever authenticated.
 
 ### Why the daemon exists at all
 
