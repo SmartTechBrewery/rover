@@ -266,6 +266,22 @@ Verbs live above the backends and below the adapters, and this is where determin
   context around an action, it is the entire answer, so D11's loud failure has to come before
   dispatch. `device_info` requires nothing (a required backend method, like the app family) and
   answers with `result.device`. Neither passes a target, for the same reason the app verbs do not.
+- **`setAirplaneMode()` and `setWifi()`** (`src/verbs/environment.ts`) are the same spine again, and
+  the family where `requires` finally does the other half of its job. Both declare
+  `requires: ['canControlNetwork']` and reach the backend through `capabilityMethod()` rather than
+  `context.backend.*` — the mirror image of the app verbs, whose methods are required ones
+  `capabilityMethod` will not typecheck for. A backend that does not declare the capability is a
+  `MissingCapabilityError` before anything is dispatched, naming capability, device and backend
+  (D11), which is the difference between "this device cannot do that" and a toggle that answered
+  `ok` and moved nothing. Neither passes a target — a radio is not something on the screen, so
+  `ActionResult.target` is `null` like the app verbs' — and the after-state each answers with is the
+  spine's own capture: evidence that the device was still there and answering, and deliberately
+  **not** a reading of the radio, since `DeviceBackend` has no network getter and neither verb
+  invents one. These are the same two backend methods `src/daemon/restore.ts` drives when a lease
+  ends, which is what stops the verb layer and the restoration drifting: one recipe per toggle, in
+  one backend, with a second caller rather than a second path — and the order the restoration uses
+  is worth copying, because the airplane-mode toggle can move wifi underneath it while the wifi
+  toggle never moves airplane mode (`PROJECT.md` §6).
 - **`ActionResult`** names the verb, the device (as `DeviceInfo`, so D14's density travels with the
   measurement), the resolved target and the state after the action. A backend with input but no
   screen reading answers an explicit `unavailable` after-state naming the capability that would have

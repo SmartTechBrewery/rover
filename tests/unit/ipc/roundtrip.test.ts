@@ -48,6 +48,8 @@ function statusHandlers(overrides: Partial<IpcHandlers> = {}): IpcHandlers {
 		stop_app: () => refusedWithoutAHost(),
 		clear_app_data: () => refusedWithoutAHost(),
 		read_logs: () => refusedWithoutAHost(),
+		set_airplane_mode: () => refusedWithoutAHost(),
+		set_wifi: () => refusedWithoutAHost(),
 		...overrides,
 	};
 }
