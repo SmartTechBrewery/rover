@@ -18,7 +18,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { IPC_METHODS, type IpcMethodName } from '@/ipc/methods.js';
 import { connectMcpAgent } from '../../helpers/mcp-agent.js';
 
-/** The sixteen verb rows this phase exposes, in `IPC_METHODS` order. */
+/** The eighteen verb rows exposed as tools, in `IPC_METHODS` order. */
 const VERB_METHODS = [
 	'wait_for',
 	'wait_until_gone',
@@ -30,10 +30,12 @@ const VERB_METHODS = [
 	'press_key',
 	'read_screen',
 	'device_info',
+	'screenshot',
 	'launch_app',
 	'stop_app',
 	'clear_app_data',
 	'read_logs',
+	'record_video',
 	'set_airplane_mode',
 	'set_wifi',
 ] as const satisfies readonly IpcMethodName[];
@@ -42,17 +44,22 @@ const VERB_METHODS = [
 const DEVICE_METHODS = ['status', 'list_devices', 'acquire_device', 'release_device'] as const;
 
 /**
- * The rows deliberately **not** exposed yet, and the reason is one thing they have in common:
- * every one of them carries a payload of bytes, in or out. What a tool result does with several
- * megabytes of base64 — and where, if anywhere, a client writes them — is R19 phase 3's own
- * subject rather than a detail to settle in passing here.
+ * The rows deliberately **not** exposed yet — the three file transfers, and the reason is the
+ * direction their bytes travel rather than the fact that they carry any.
+ *
+ * `screenshot` and `record_video` answer *with* bytes, and R19 phase 3 settled what a tool does
+ * with those: an inline image, or a file this server writes on the agent's own machine
+ * (`src/mcp/_shared/artifact.ts`). `install_app` and `push_file` carry bytes the other way —
+ * an agent would have to produce several megabytes of base64 as a tool argument — and
+ * `pull_file` is the third of the same family. How a client supplies and receives a *file* is
+ * R24 phase 2's subject, which has landed for neither client: there is no `rover install`,
+ * `rover push` or `rover pull` either. Exposing them here would be settling that question in
+ * passing, in one adapter.
  *
  * The list is short and named so the gate below can be exact: a verb row added later is either
  * a registered tool or a deliberate entry here, never a row that quietly has no tool.
  */
 const NOT_YET_EXPOSED = [
-	'screenshot',
-	'record_video',
 	'install_app',
 	'push_file',
 	'pull_file',
@@ -103,7 +110,7 @@ afterEach(async () => {
 });
 
 describe('what tools/list advertises for the verbs', () => {
-	it('names the sixteen verb rows, spelled exactly as IPC_METHODS spells them', async () => {
+	it('names the eighteen verb rows, spelled exactly as IPC_METHODS spells them', async () => {
 		const tools = await advertisedTools();
 
 		const device: readonly string[] = DEVICE_METHODS;
@@ -157,6 +164,22 @@ describe('what tools/list advertises for the verbs', () => {
 			expect(Object.keys(schema.properties as object)).not.toContain('serial');
 			for (const property of Object.keys(schema.properties as object)) {
 				expect(property.toLowerCase()).not.toMatch(/host|address|port|token/);
+			}
+		}
+	});
+
+	it('offers the two byte-carrying rows no destination and no format', async () => {
+		const tools = await advertisedTools();
+
+		// D19, stated as a declaration rather than as prose: the capture happens on the host,
+		// which may be another machine, so a path sent there would name nothing or name the wrong
+		// disk — and the format is what the device recorder produced rather than something a
+		// caller picks. Where the recording lands on *this* machine is server configuration
+		// (`ROVER_MCP_ARTIFACT_DIR`), which is why there is nothing here to offer a model.
+		for (const method of ['screenshot', 'record_video']) {
+			const properties = Object.keys(toolNamed(tools, method).inputSchema.properties as object);
+			for (const property of properties) {
+				expect(property.toLowerCase()).not.toMatch(/out|path|dest|dir|file|format|codec/);
 			}
 		}
 	});

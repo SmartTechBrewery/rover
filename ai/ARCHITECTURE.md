@@ -13,6 +13,7 @@ What is actually built, and where the seams run. `PROJECT.md` carries the decisi
 | **Core** (`src/core/`, `src/backends/`, `src/verbs/`) | library | — | The device interface, the backends, the verbs |
 | **CLI** (`src/cli/`) | per invocation | seconds | Human and script entry point — a **client** of a host, local or remote |
 | **MCP server** (`src/mcp/`) | one per agent | agent session | Exposes the verbs as tools — also a **client** of a host |
+| **Shared client half** (`src/client/`) | library, loaded by both adapters | — | The parts of being a client that must not differ between them — today the artifact writer and its length check |
 
 ### Where the transport seam runs
 
@@ -93,15 +94,21 @@ all of them are load-bearing:
 - **Artifacts cross a machine boundary.** Screenshots, recordings and pulled files come back as
   bytes; a path handed to the agent must exist **on the agent's machine**. A verb that returns a
   host-local path is a bug even when it works on a local host. The client half of that contract is
-  `src/cli/_shared/artifact.ts` — the one place a client turns an `ActionResult.artifact` into a
+  `src/client/artifact.ts` — the one place any client turns an `ActionResult.artifact` into a
   file. It decodes, checks the decoded length against the `byteLength` the host encoded (`Buffer`
   drops characters outside the base64 alphabet rather than failing, so a mangled payload otherwise
   becomes a short file that announces nothing), writes the bytes locally and answers
-  `path.resolve` of the caller's own `--out`. **The write is the last thing it does and only on
-  the `ok` branch**, so a refusal or a failed transfer leaves no file at the destination rather
-  than a truncated one. Nothing in it branches on `--host`: a local host and a remote one arrive
-  as the same field of the same schema, which is what makes the guarantee a property of the module
-  instead of of every command remembering it. The other direction has the mirror of it,
+  `path.resolve` of the caller's own `--out`. It also owns `describeWithoutBytes`, which is how
+  either client says what an answer carries without repeating megabytes of base64 alongside it.
+  **The write is the last thing it does and only on the `ok` branch**, so a refusal or a failed
+  transfer leaves no file at the destination rather than a truncated one. Nothing in it branches
+  on which host answered: a local host and a remote one arrive as the same field of the same
+  schema, which is what makes the guarantee a property of the module instead of of every command
+  remembering it. It lives outside both adapters because the MCP server cannot import from
+  `src/cli/`: that tree prints through `console.log`, which would corrupt its stdio frames. What
+  each adapter keeps is what only it has: `--out` resolution, human rendering and exit codes on
+  one side (`src/cli/_shared/`), the artifact directory and MCP content blocks on the other
+  (`src/mcp/_shared/artifact.ts`). The other direction has the mirror of it,
   `src/cli/_shared/upload.ts` — the one place a client reads a local file for a host, behind
   `rover push` and `rover install`. It resolves the path against **this** process, stats it, and
   refuses a missing file, an unreadable one, one that is not a regular file and one over
@@ -464,9 +471,27 @@ exactly as the CLI is: it holds no verb logic and reaches no backend, which
   `ok` travels whole — the resolved target, the after-state and `read_logs`' entries included — and
   a failure and a refusal are both `isError` carrying the host's own sentence with the structured
   document under it. The CLI's `src/cli/_shared/verb.ts` is the same three branches rendered for a
-  human; neither decides anything the host already decided. The rows that carry bytes are R19
-  phase 3's, and a completeness gate over `IPC_METHODS` is what stops a verb row landing later
-  with no tool and no decision.
+  human; neither decides anything the host already decided. A completeness gate over
+  `IPC_METHODS` is what stops a verb row landing later with no tool and no decision.
+- **An artifact reaches the agent as bytes it can use, never as a path on the host**
+  (`src/mcp/tools/artifacts.ts`, `src/mcp/_shared/artifact.ts`). The two rows whose answer *is*
+  bytes answer differently, because their bytes are different things. `screenshot` comes back as
+  an inline MCP `image` block and writes nothing — a screenshot exists to be looked at, and an
+  inline image is the one form of an artifact that needs no path at all, which is how D19 is
+  satisfied here. `record_video` writes the recording to a file **on the agent's machine** and
+  reports its absolute local path, because an mp4 is not something a model can read; its frames
+  come back as image blocks, already bounded by `MAX_FRAMES_BYTES` and `MAX_FRAMES`, so the
+  recording is legible without a second call. Neither declaration has a destination or a format
+  on it, because the capture happens on the host. The document beside the blocks goes through
+  `describeWithoutBytes`, so `structuredContent` says what the answer carries without repeating
+  it. Where a recording lands is `ROVER_MCP_ARTIFACT_DIR` — server configuration for the reason
+  the host is one — created on demand, and only when there are bytes to write: a refusal
+  (`artifact-too-large`, `unfinished-recording`, `frame-extraction-unavailable`,
+  `frames-too-large`) is `isError` naming it and leaves **no** file behind, not a truncated one
+  and not a zero-byte one. `record_video` raises its own request timeout past the recording *and*
+  the host's frame extraction, `rover record`'s three-term sum with every term imported. The three
+  rows that move a whole file — `install_app`, `push_file`, `pull_file` — are deliberately not
+  tools: how a client supplies and receives a file is R24 phase 2's, and neither client has it.
 - **A missing capability is a loud, agent-readable error** (D11). `read_screen` against a backend
   that does not declare `canReadScreen`, and either environment row against one without
   `canControlNetwork`, come back `isError` carrying the `missing-capability` failure — the

@@ -7,6 +7,7 @@
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { HostName } from '../daemon/host.js';
+import { registerArtifactTools } from './tools/artifacts.js';
 import { registerDeviceTools } from './tools/devices.js';
 import { registerVerbTools } from './tools/verbs.js';
 
@@ -24,5 +25,6 @@ export function createRoverMcpServer(host: HostName): McpServer {
 	const server = new McpServer({ name: ROVER_MCP_NAME, version: ROVER_MCP_VERSION });
 	registerDeviceTools(server, host);
 	registerVerbTools(server, host);
+	registerArtifactTools(server, host);
 	return server;
 }

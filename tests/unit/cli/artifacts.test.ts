@@ -20,9 +20,10 @@ import {
 	_resetDeviceBackendRegistryForTesting,
 	registerDeviceBackend,
 } from '@/backends/registry.js';
-import { resolveDestination, writeArtifact } from '@/cli/_shared/artifact.js';
+import { resolveDestination } from '@/cli/_shared/artifact.js';
 import { UsageError } from '@/cli/_shared/flags.js';
 import { EXIT_FAILED, EXIT_OK, EXIT_USAGE, run } from '@/cli/index.js';
+import { writeArtifact } from '@/client/artifact.js';
 import type { DeviceBackend, DeviceWatch, DeviceWatcher } from '@/core/device.js';
 import { UnfinishedRecordingError } from '@/core/errors.js';
 import { parseDeviceSerial } from '@/core/ids.js';

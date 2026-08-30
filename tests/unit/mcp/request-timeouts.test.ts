@@ -25,6 +25,11 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { DEFAULT_REQUEST_TIMEOUT_MS, type IpcRequestOptions } from '@/ipc/client.js';
 import { MAX_VERB_TIMEOUT_MS } from '@/ipc/methods.js';
 import { LONG_PRESS_DURATION_MS, SCROLL_DURATION_MS, SWIPE_DURATION_MS } from '@/verbs/input.js';
+import {
+	DEFAULT_RECORDING_MS,
+	FRAME_EXTRACTION_TIMEOUT_MS,
+	MAX_RECORDING_MS,
+} from '@/verbs/record.js';
 import { DEFAULT_WAIT_TIMEOUT_MS } from '@/verbs/wait-for.js';
 import { callTool, connectMcpAgent } from '../../helpers/mcp-agent.js';
 
@@ -46,9 +51,12 @@ vi.mock('@/daemon/host.js', async (importOriginal) => ({
 			options: IpcRequestOptions | undefined,
 		) => {
 			requests.push({ method, params, options });
-			// Shaped like an `ok` answer, so the tool takes its success path and this suite stays
-			// about the request rather than about the reply. The real client is what parses one.
-			return { outcome: 'ok', result: { verb: method } };
+			// Shaped like an `ok` answer, so this suite stays about the request rather than about
+			// the reply. The real client is what parses one. It carries no artifact deliberately:
+			// the request has already been recorded by the time the two byte-carrying tools look
+			// at the answer, and a reply with bytes on it would have `record_video` write a file
+			// into the operator's own artifact directory from a suite that has no temp one.
+			return { outcome: 'ok', result: { verb: method, artifact: null } };
 		},
 		close: async () => {},
 	}),
@@ -150,6 +158,40 @@ describe.each(WAITING_VERBS)('$tool, which can be asked to take a long time', (r
 	});
 });
 
+describe('record_video, which records and then waits for the host to slice it', () => {
+	it('waits out the recording, the host’s frame extraction and the round trip', async () => {
+		const asked = 12_000;
+
+		const request = await requestFrom('record_video', { durationMs: asked });
+
+		// `rover record`'s three-term sum, term for term. Leaving the extraction out would put
+		// this client's deadline *inside* the host's, so a slow decode would be reported here as
+		// a nameless timeout while the host was about to say exactly what happened.
+		expect(request.options?.timeoutMs).toBe(
+			asked + FRAME_EXTRACTION_TIMEOUT_MS + DEFAULT_REQUEST_TIMEOUT_MS,
+		);
+	});
+
+	it('sizes the timeout from the verb’s own default and never sends one', async () => {
+		const request = await requestFrom('record_video', {});
+
+		expect(request.options?.timeoutMs).toBe(
+			DEFAULT_RECORDING_MS + FRAME_EXTRACTION_TIMEOUT_MS + DEFAULT_REQUEST_TIMEOUT_MS,
+		);
+		expect(request.params).not.toHaveProperty('durationMs');
+	});
+
+	it('outlives the longest recording the host will accept', async () => {
+		const request = await requestFrom('record_video', { durationMs: MAX_RECORDING_MS });
+
+		// The one call most likely to be legitimately slow, and the one it would be worst to
+		// report as a hang: the bytes exist by then and the host is about to send them.
+		expect(request.options?.timeoutMs ?? 0).toBeGreaterThan(
+			MAX_RECORDING_MS + FRAME_EXTRACTION_TIMEOUT_MS,
+		);
+	});
+});
+
 describe('a verb that cannot outrun the default is left alone', () => {
 	it.each([
 		{ tool: 'tap', args: { target: TARGET } },
@@ -160,6 +202,7 @@ describe('a verb that cannot outrun the default is left alone', () => {
 		{ tool: 'read_logs', args: {} },
 		{ tool: 'launch_app', args: { appId: 'com.example.app' } },
 		{ tool: 'set_wifi', args: { enabled: false } },
+		{ tool: 'screenshot', args: {} },
 	])('$tool passes no timeout, so the client’s own applies', async ({ tool, args }) => {
 		const request = await requestFrom(tool, args);
 

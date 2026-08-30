@@ -21,7 +21,7 @@
  * wrong failure mode to leave to a convention.
  */
 
-import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
+import type { CallToolResult, ImageContent } from '@modelcontextprotocol/sdk/types.js';
 
 /** The host's answer as data. `JSON.stringify` escapes control characters itself. */
 function asJson(document: object): string {
@@ -35,8 +35,23 @@ function asRecord(document: object): Record<string, unknown> {
 
 /** The host answered, and the answer is the answer. */
 export function toolAnswer(document: object): CallToolResult {
+	return toolAnswerWith(document, []);
+}
+
+/**
+ * The same answer, with the blocks an artifact's **bytes** became beside it — the images
+ * `./artifact.ts` builds for `screenshot` and `record_video`.
+ *
+ * The one exception to "the document travels verbatim" above, and it is the *document* that
+ * bends rather than the answer: those two verbs' payloads are megabytes of base64, so the
+ * caller hands in a document with the base64 already dropped and the bytes already turned into
+ * content a model can actually look at. Nothing is summarised, reshaped or decided here
+ * either — see `./artifact.ts` for why an inline image is the one form of an artifact that
+ * needs no path at all.
+ */
+export function toolAnswerWith(document: object, blocks: readonly ImageContent[]): CallToolResult {
 	return {
-		content: [{ type: 'text', text: asJson(document) }],
+		content: [{ type: 'text', text: asJson(document) }, ...blocks],
 		structuredContent: asRecord(document),
 	};
 }

@@ -32,10 +32,11 @@
 
 import { readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
+import { describeWithoutBytes, type VerbCallOk } from '../../client/artifact.js';
 import { MAX_TRANSFER_BYTES, type VerbCallResult } from '../../ipc/methods.js';
 import { UsageError } from './flags.js';
 import * as out from './output.js';
-import { describeWithoutBytes, exitCodeFor, renderVerbAnswer, type VerbCallOk } from './verb.js';
+import { exitCodeFor, renderVerbAnswer } from './verb.js';
 
 /**
  * What `stat` says the path *is*, in the words the refusal uses. `stat` follows symlinks, so
