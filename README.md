@@ -67,9 +67,9 @@ test behind it rather than only a convention: `tests/unit/no-sleep.test.ts` scan
 are exempt from the scan. It is a floor, not a proof — a determined re-implementation gets
 through, and reading the wait vocabulary is still how you learn what a wait here looks like.
 
-**The verb layer has a spine, and the two waits standing beside it.** `src/verbs/` is the layer
-above the backends where determinism stops being a rule and becomes a signature (D12):
-`resolveTarget()` takes
+**The verb layer has a spine, four gestures on it and the two waits standing beside it.**
+`src/verbs/` is the layer above the backends where determinism stops being a rule and becomes a
+signature (D12): `resolveTarget()` takes
 a target and *nothing else* — no screen, no element list, no state read a turn ago — so a target can
 only ever be resolved from a screen captured inside that call. Two elements matching one text target
 is a loud error naming every candidate rather than a first match that is right half the time; nothing
@@ -86,6 +86,21 @@ attempted and failed says *that*, because an exception after the action has run 
 that leaves the agent guessing whether it landed. Every argument and every
 result is a Zod schema of plain data, because the host runs the verb and the agent reads the answer
 somewhere else (D19).
+
+**`tap`, `long_press`, `swipe` and `scroll` are that spine used four times** (`src/verbs/input.ts`),
+and each of them is one `performAction()` call: not one reads a screen of its own, so a verb author
+has nothing to remember and nothing to get wrong. `long_press` is a drag from a point to that same
+point, held past the device's own long-press timeout — never the long-press flag on a key event,
+which applies to keys and not to touch — and `scroll` is a drag across the middle of a region, so
+neither needs anything new from a backend: the device interface keeps its four input primitives and
+the composition happens once, above them. `scroll`'s direction is where the **content** goes, the
+sense a scrollbar and a wheel already have, so `scroll 'down'` drags *upwards*; it scrolls the
+element it was pointed at, or the screen when it was pointed at nothing, and it will not take a
+coordinate, because a point has no extent and so cannot say how far a scroll may travel. `swipe` is
+the only verb here with two ends: the one it starts from goes through the spine and is what the
+result names, and the other is resolved inside the action from its own read. A gesture's duration is
+spent by the *device* — it is an argument to the drag, never a wait on this side — which is why
+none of these verbs is an exception to the no-sleep rule.
 
 **`wait_for` and `wait_until_gone` stand beside that spine rather than on it** — the vocabulary
 that replaces `sleep` rather than the rule that forbids it. They share its answer shape
@@ -104,20 +119,19 @@ way — the screen for `wait_for`, which missed on all of it, the matches that a
 `wait_until_gone` — bounded so a two-hundred-element screen is a message and not a wall, and a
 backend that does not declare `canReadScreen` is told so by name before the first poll rather than
 after a whole timeout. Both answer with the same `ActionResult` as every other action. The remaining
-verbs — `tap`, `type_text`, `screenshot`, `read_screen` — are their own issues; the suite still
-drives the spine itself with a fake action.
+verbs — `type_text`, `press_key`, `screenshot`, `read_screen` — are their own issues.
 
-**The daemon loads the core and runs the verbs**, and a client only asks (D19). `wait_for` and
-`wait_until_gone` are callable over the same connection as `acquire_device` — the same envelope,
+**The daemon loads the core and runs the verbs**, and a client only asks (D19). The two waits and
+the four gestures are callable over the same connection as `acquire_device` — the same envelope,
 the same framing, one method table — and a verb call carries the lease id rather than a serial,
 because the lease id is the credential and the host derives the device from it. A verb that fails
 comes back as an *answer* naming what happened — the element was not there, the wait timed out, the
 device cannot read its screen — and never as a broken host; only the host actually breaking is an
 `internal_error`. There is no `adb` in a client process, and
 `tests/unit/no-backend-in-a-client.test.ts` walks the import graph from every client entrypoint to
-say so rather than asking politely. Against a real device today both waits answer
-`missing-capability`: `read_screen` is its own issue, and the manifest says so rather than
-pretending.
+say so rather than asking politely. Against a real device today a `tap` at a coordinate runs on the
+hardware, while both waits and anything addressed by text answer `missing-capability`:
+`read_screen` is its own issue, and the manifest says so rather than pretending.
 
 **The host can now listen on the network, and only if you ask it to** (D17, D20). Setting
 `ROVER_LISTEN_PORT` — with a host token and a TLS certificate beside it — starts a TCP+TLS
@@ -211,7 +225,7 @@ serials — and the connection is closed.
 | [`ai/TESTING.md`](ai/TESTING.md) | Vitest, the real-device gate, fixtures, conformance |
 
 In the source tree: `src/core/` holds the device contract and the branded ids, `src/backends/` one
-folder per platform, `src/verbs/` the verb spine and the two waits described above, `src/ipc/` the
+folder per platform, `src/verbs/` the verb spine with the gestures and the waits described above, `src/ipc/` the
 wire protocol and the transport-agnostic client and server, `src/daemon/` the socket and the
 inventory and the leases, and `src/cli/` the `rover` command.
 

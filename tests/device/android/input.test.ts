@@ -17,9 +17,11 @@ import type { Device, DeviceKey } from '@/core/device.js';
  * It gates on `ROVER_TEST_DEVICE` rather than `ROVER_TEST_LOCAL_DEVICE`: input touches no
  * radio and cannot cut the transport it arrives over, so a device reached over a network
  * transport is a perfectly good subject here. Like `./backend.test.ts` it drives the backend
- * class directly rather than through a lease: R8 landed, but these primitives have no IPC
- * row until phase 2, so there is no verb to take a lease around (ai/TESTING.md, "The
- * exemption", which also records what ends it).
+ * class directly rather than through a lease — no longer because there is no verb to take one
+ * around, since #60 put `tap` and `swipe` behind lease-carrying rows and
+ * `./verb-dispatch.test.ts` taps through one, but because this suite asserts the primitives
+ * *underneath* those verbs and has not been converted onto the shared lease helper
+ * (ai/TESTING.md, "The exemption", which also records what ends it).
  *
  * **What this deliberately does not cover, so silence is not read as "checked":**
  *

@@ -145,6 +145,7 @@ Verbs live above the backends and below the adapters, and this is where determin
 - **Target resolution happens inside the verb**, from a screen captured during that call. A coordinate is a fallback, never the primary address of an element.
 - **Waiting is polling on a condition with a timeout.** There is no sleep in this codebase — the vocabulary is `waitForCondition` in `src/core/wait.ts`, the one module allowed to construct a delay, and `tests/unit/no-sleep.test.ts` is the gate that keeps it the only one. A timeout reports what it was waiting for and what was on screen instead. `wait_for` and `wait_until_gone` (`src/verbs/wait-for.ts`) are what an agent actually calls.
 - **Every verb returns post-state**, so the agent never infers success from the absence of an error.
+- **A gesture's duration is the device's own**, passed to the drag as an argument and never waited out on the host — which is why the input verbs need no exemption from the rule above.
 
 ### The spine every verb is built on
 
@@ -184,6 +185,20 @@ Verbs live above the backends and below the adapters, and this is where determin
   without a text target's `index`: an index is a slot in the match list, not an identity, so it
   empties as soon as any sibling goes and would report a row as gone while it is still on screen.
   Both refusals are types rather than runtime checks, so neither verb is handed a field it drops.
+- **`tap()`, `longPress()`, `swipe()` and `scroll()`** (`src/verbs/input.ts`) are the first family
+  built *on* the spine rather than beside it, and each is one `performAction()` call: none of them
+  reads a screen itself, so the three rules hold for them by construction instead of by four
+  authors remembering. `long_press` is a drag from a point to that same point held past the
+  device's own long-press timeout — never a key event carrying a long-press flag, which applies to
+  keys and not to touch (`PROJECT.md` §6) — and `scroll` is a drag across the middle of a region,
+  so neither adds a backend method: `DeviceBackend`'s input methods stay four primitives and the
+  composition lives in one place for every platform. `scroll`'s direction is where the **content**
+  goes, the sense a scrollbar has, which makes `scroll 'down'` a drag *upwards*; the region is the
+  resolved element's own rectangle, or the whole screen when none was named, and it will not take
+  a `by: 'point'` target at all — a coordinate has no extent, so it cannot say how far a scroll
+  may travel. `swipe` is the one verb with two targets: `from` goes through the spine and is what
+  the result reports, `to` is resolved inside the action from its own read, because widening the
+  spine to carry a second target would generalise it for one caller.
 - **`ActionResult`** names the verb, the device (as `DeviceInfo`, so D14's density travels with the
   measurement), the resolved target and the state after the action. A backend with input but no
   screen reading answers an explicit `unavailable` after-state naming the capability that would have

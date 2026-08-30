@@ -22,8 +22,9 @@
 import { z } from 'zod';
 import { LeaseIdSchema } from '../core/ids.js';
 import { VerbFailureSchema } from '../verbs/failure.js';
+import { ScrollDirectionSchema } from '../verbs/input.js';
 import { ActionResultSchema } from '../verbs/result.js';
-import { AbsenceTargetSchema, ScreenTargetSchema } from '../verbs/target.js';
+import { AbsenceTargetSchema, ScreenTargetSchema, TargetSchema } from '../verbs/target.js';
 
 /**
  * The longest a verb call may be asked to wait — five minutes, far below the lease TTL.
@@ -41,7 +42,20 @@ import { AbsenceTargetSchema, ScreenTargetSchema } from '../verbs/target.js';
 export const MAX_VERB_TIMEOUT_MS = 5 * 60_000;
 
 /**
- * What every verb call carries: the credential, and the two knobs a wait understands.
+ * What every verb call carries, and it is one field: the credential.
+ *
+ * The two wait knobs used to live here and were moved down to {@link WaitCallBaseSchema},
+ * because a base every row extends is a base every row *advertises*. A gesture verb that
+ * accepted `timeoutMs` would be offering a wait it does not perform — the call returns when
+ * the device is done — and a caller who sent one would be told nothing, which is the silent
+ * answer this protocol is built to avoid.
+ */
+const VerbCallBaseSchema = z.object({
+	leaseId: LeaseIdSchema,
+});
+
+/**
+ * The base for the two rows that actually wait, and only those.
  *
  * `timeoutMs` is **non-negative** rather than positive because zero is meaningful and the
  * wait vocabulary defines it: `waitForCondition` probes before any delay, so `timeoutMs: 0`
@@ -52,13 +66,12 @@ export const MAX_VERB_TIMEOUT_MS = 5 * 60_000;
  * attempt to send one into `invalid_params` rather than a host that quietly takes its clock
  * from a client.
  */
-const VerbCallBaseSchema = z.object({
-	leaseId: LeaseIdSchema,
+const WaitCallBaseSchema = VerbCallBaseSchema.extend({
 	timeoutMs: z.number().int().nonnegative().max(MAX_VERB_TIMEOUT_MS).optional(),
 	pollIntervalMs: z.number().int().positive().max(MAX_VERB_TIMEOUT_MS).optional(),
 });
 
-export const WaitForParamsSchema = VerbCallBaseSchema.extend({
+export const WaitForParamsSchema = WaitCallBaseSchema.extend({
 	target: ScreenTargetSchema,
 }).strict();
 export type WaitForParams = z.infer<typeof WaitForParamsSchema>;
@@ -68,10 +81,59 @@ export type WaitForParams = z.infer<typeof WaitForParamsSchema>;
  * refused at the boundary instead of dropped — see that schema for why a dropped one would
  * report a row as gone while it is still on the screen.
  */
-export const WaitUntilGoneParamsSchema = VerbCallBaseSchema.extend({
+export const WaitUntilGoneParamsSchema = WaitCallBaseSchema.extend({
 	target: AbsenceTargetSchema,
 }).strict();
 export type WaitUntilGoneParams = z.infer<typeof WaitUntilGoneParamsSchema>;
+
+/**
+ * How long a gesture takes on the device, when a caller wants something other than the verb's
+ * own default (`src/verbs/input.ts`).
+ *
+ * **Zero is legal**: a drag with no duration is a flick, which is a thing a caller can
+ * legitimately ask for. The upper bound is {@link MAX_VERB_TIMEOUT_MS} for the reason that
+ * bound exists at all — the lease is renewed when the call *arrives*, so a call that outruns
+ * the TTL could have its own lease expire underneath it and the sweep fire restoration on a
+ * device a verb is still driving. Whether the time is spent waiting on a screen or held
+ * against one makes no difference to the lease.
+ */
+const GestureDurationSchema = z.number().int().nonnegative().max(MAX_VERB_TIMEOUT_MS).optional();
+
+/**
+ * `TargetSchema` rather than the narrowed `ScreenTargetSchema` the waits take: a coordinate is
+ * PROJECT.md §4's documented fallback for exactly this verb, and the result says which of the
+ * two it was.
+ */
+export const TapParamsSchema = VerbCallBaseSchema.extend({
+	target: TargetSchema,
+}).strict();
+export type TapParams = z.infer<typeof TapParamsSchema>;
+
+export const LongPressParamsSchema = VerbCallBaseSchema.extend({
+	target: TargetSchema,
+	durationMs: GestureDurationSchema,
+}).strict();
+export type LongPressParams = z.infer<typeof LongPressParamsSchema>;
+
+/** Two targets, because a drag has two ends; `from` is the one the result reports. */
+export const SwipeParamsSchema = VerbCallBaseSchema.extend({
+	from: TargetSchema,
+	to: TargetSchema,
+	durationMs: GestureDurationSchema,
+}).strict();
+export type SwipeParams = z.infer<typeof SwipeParamsSchema>;
+
+/**
+ * `target` is a `ScreenTargetSchema` and optional: it names the scrollable region, absent for
+ * the screen as a whole, and a caller-supplied point has no extent to scroll within
+ * (`src/verbs/input.ts`, `ScrollOptions`).
+ */
+export const ScrollParamsSchema = VerbCallBaseSchema.extend({
+	direction: ScrollDirectionSchema,
+	target: ScreenTargetSchema.optional(),
+	durationMs: GestureDurationSchema,
+}).strict();
+export type ScrollParams = z.infer<typeof ScrollParamsSchema>;
 
 /**
  * Why a call never reached a verb at all.

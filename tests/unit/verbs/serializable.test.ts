@@ -12,9 +12,16 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { DeviceBackend } from '@/core/device.js';
 import { WaitTimeoutError } from '@/core/errors.js';
-import { VerbCallResultSchema } from '@/ipc/verb-methods.js';
+import {
+	LongPressParamsSchema,
+	ScrollParamsSchema,
+	SwipeParamsSchema,
+	TapParamsSchema,
+	VerbCallResultSchema,
+} from '@/ipc/verb-methods.js';
 import { capabilityMethod, type VerbContext } from '@/verbs/context.js';
 import { toVerbFailure } from '@/verbs/failure.js';
+import { scroll, tap } from '@/verbs/input.js';
 import { performAction } from '@/verbs/perform.js';
 import {
 	type ActionResult,
@@ -127,6 +134,21 @@ describe('the verb layer speaks only in plain data', () => {
 		expect(() => TargetSchema.parse({ by: 'point', at: { x: 1, y: 2 }, index: 0 })).toThrow();
 	});
 
+	it('round-trips a real gesture result, not only the spine driven by a fake action', async () => {
+		const context = contextShowingSave();
+
+		const tapped = await tap(context, { by: 'text', text: 'Save' });
+		const scrolled = await scroll(context, 'down');
+
+		expect(ActionResultSchema.parse(roundTrip(tapped))).toEqual(tapped);
+		expect(ActionResultSchema.parse(roundTrip(scrolled))).toEqual(scrolled);
+		expect(unserializableParts(tapped)).toEqual([]);
+		// A scroll addresses no element unless it was given a region, and `null` survives the
+		// trip where an absent key would not.
+		expect(scrolled.target).toBeNull();
+		expect(unserializableParts(scrolled)).toEqual([]);
+	});
+
 	it('round-trips a resolved target and a screen after-state on their own', () => {
 		const resolved = ResolvedTargetSchema.parse({
 			source: 'screen',
@@ -213,5 +235,33 @@ describe('a verb call answers in plain data too', () => {
 
 	it('rejects an answer whose outcome nobody produces', () => {
 		expect(() => VerbCallResultSchema.parse({ outcome: 'maybe', result: null })).toThrow();
+	});
+
+	it.each([
+		['tap', TapParamsSchema, { leaseId: 'lease-1', target: { by: 'point', at: { x: 1, y: 2 } } }],
+		[
+			'long_press',
+			LongPressParamsSchema,
+			{ leaseId: 'lease-1', target: { by: 'text', text: 'Save' }, durationMs: 800 },
+		],
+		[
+			'swipe',
+			SwipeParamsSchema,
+			{
+				leaseId: 'lease-1',
+				from: { by: 'text', text: 'Save' },
+				to: { by: 'point', at: { x: 3, y: 4 } },
+			},
+		],
+		[
+			'scroll',
+			ScrollParamsSchema,
+			{ leaseId: 'lease-1', direction: 'down', target: { by: 'element', id: 'list' } },
+		],
+	])('round-trips what a %s call carries', (_name, schema, params) => {
+		const parsed = schema.parse(params);
+
+		expect(schema.parse(roundTrip(parsed))).toEqual(parsed);
+		expect(unserializableParts(parsed)).toEqual([]);
 	});
 });

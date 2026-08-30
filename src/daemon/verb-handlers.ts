@@ -47,12 +47,24 @@ import type { Device } from '../core/device.js';
 import type { LeaseId } from '../core/ids.js';
 import type {
 	IpcHandlers,
+	LongPressParams,
+	ScrollParams,
+	SwipeParams,
+	TapParams,
 	VerbCallResult,
 	WaitForParams,
 	WaitUntilGoneParams,
 } from '../ipc/methods.js';
 import type { VerbContext } from '../verbs/context.js';
 import { toVerbFailure } from '../verbs/failure.js';
+import {
+	type GestureOptions,
+	longPress,
+	type ScrollOptions,
+	scroll,
+	swipe,
+	tap,
+} from '../verbs/input.js';
 import type { ActionResult } from '../verbs/result.js';
 import { type WaitVerbOptions, waitFor, waitUntilGone } from '../verbs/wait-for.js';
 import type { DeviceInventory } from './inventory.js';
@@ -60,7 +72,10 @@ import { refusalReasonFor } from './lease-handlers.js';
 import type { Lease, LeaseStore } from './leases.js';
 import { LeaseEndedError, type VerbCall, type VerbTraffic } from './verb-traffic.js';
 
-export type VerbHandlers = Pick<IpcHandlers, 'wait_for' | 'wait_until_gone'>;
+export type VerbHandlers = Pick<
+	IpcHandlers,
+	'wait_for' | 'wait_until_gone' | 'tap' | 'long_press' | 'swipe' | 'scroll'
+>;
 
 /**
  * What the preamble reached: a verb that can run, or the answer the call already has.
@@ -155,6 +170,31 @@ export function createVerbHandlers(
 				waitUntilGone(context, params.target, waitOptions(params)),
 			);
 		},
+
+		tap(params: TapParams): Promise<VerbCallResult> {
+			return runVerb(params.leaseId, (context) => tap(context, params.target));
+		},
+
+		long_press(params: LongPressParams): Promise<VerbCallResult> {
+			return runVerb(params.leaseId, (context) =>
+				longPress(context, params.target, gestureOptions(params)),
+			);
+		},
+
+		swipe(params: SwipeParams): Promise<VerbCallResult> {
+			return runVerb(params.leaseId, (context) =>
+				swipe(context, params.from, params.to, gestureOptions(params)),
+			);
+		},
+
+		scroll(params: ScrollParams): Promise<VerbCallResult> {
+			return runVerb(params.leaseId, (context) =>
+				scroll(context, params.direction, {
+					...gestureOptions(params),
+					...(params.target === undefined ? {} : { target: params.target }),
+				} satisfies ScrollOptions),
+			);
+		},
 	};
 }
 
@@ -205,6 +245,16 @@ function waitOptions(params: {
 		...(params.timeoutMs === undefined ? {} : { timeoutMs: params.timeoutMs }),
 		...(params.pollIntervalMs === undefined ? {} : { pollIntervalMs: params.pollIntervalMs }),
 	};
+}
+
+/**
+ * The one gesture knob a call may carry, omitted rather than passed as `undefined` for the
+ * same reason {@link waitOptions} omits its two: the verb's own default is what a caller who
+ * said nothing asked for, and `{ durationMs: undefined }` would read as a caller who did say
+ * something.
+ */
+function gestureOptions(params: { readonly durationMs?: number }): GestureOptions {
+	return params.durationMs === undefined ? {} : { durationMs: params.durationMs };
 }
 
 /** The error's own words: it already names the device and says what happened to it. */
