@@ -27,9 +27,9 @@ Six suites under `tests/device/` construct the backend class and call it, outsid
 
 Until then, say *this* in a suite header rather than "leases do not exist yet": leases do exist, a daemon will lend one, and the reason a suite is not taking one is that it has not been converted.
 
-### The exception: `tests/unit/daemon/` and `tests/unit/cli/` use a real socket and real child processes
+### The exception: `tests/unit/daemon/`, `tests/unit/cli/` and `tests/unit/mcp/` use a real socket and real child processes
 
-`tests/unit/daemon/` binds an actual unix socket and, for autostart, spawns actual detached `node` processes. `tests/unit/cli/` does the same, and for the same reason one level up: the CLI's whole job is to drive a host over that surface, and a mocked client would leave the commands asserted against a fake and the wiring — `ROVER_SOCKET_PATH`, `connectToLocalDaemon()`, the framing — asserted against nothing. That is a departure from the rule above and it is on purpose, because what those tests assert cannot be asserted against a mock:
+`tests/unit/daemon/` binds an actual unix socket and, for autostart, spawns actual detached `node` processes. `tests/unit/cli/` does the same, and for the same reason one level up: the CLI's whole job is to drive a host over that surface, and a mocked client would leave the commands asserted against a fake and the wiring — `ROVER_SOCKET_PATH`, `connectToLocalDaemon()`, the framing — asserted against nothing. `tests/unit/mcp/` inherits it for the same reason again: the MCP layer's whole job is to carry a tool call to a host, so `tools.test.ts` drives the shipping server with the SDK's own client over `InMemoryTransport.createLinkedPair()` — a real MCP client speaking the real protocol, with no child process and no stdio — against a real daemon on a temp socket. That is a departure from the rule above and it is on purpose, because what those tests assert cannot be asserted against a mock:
 
 - **The bind is the mutual exclusion.** Two invocations racing to start a daemon are arbitrated by the kernel — one `listen()` succeeds, the other gets `EADDRINUSE` and connects to the winner instead (no lock file, no PID file). A stubbed `listen()` that never touches the filesystem cannot produce `EADDRINUSE`, so a test built on one would prove only that the code calls the function it was written around.
 - **Autostart is a real process or it is nothing.** The acceptance criterion is three concurrent clients getting three answers carrying the **same** `pid`. A mocked `spawn` cannot have a pid, cannot lose a race, and cannot leave a stale socket behind when it is killed. `tests/unit/cli/autostart.test.ts` is the same assertion in the CLI's own words — "using the CLI never requires starting anything by hand" — and it needs a real child for the same reason.
@@ -88,11 +88,17 @@ Exactly three files are exempt, and the gate asserts that list is exactly three:
 
 The gate is a static walk of the module graph, in the family of `no-platform-names.test.ts` and `remote-never-spawns.test.ts` — self-contained, no new dependency. It follows relative `from '…'` and bare `import '…'` specifiers inside `src/`, rewriting `.js` to `.ts`, from every entrypoint in `CLIENT_ENTRYPOINTS`, and asserts nothing reachable lives under `src/backends/`. A failure names the **path** through the graph, because "a client can reach a backend" without the edge that made it true is a bug report nobody can act on. A second assertion holds `BARREL_IMPORTERS` — the files that may import `src/backends/index.js` — to exactly `src/daemon/main.ts`, the one process that hosts devices.
 
-`CLIENT_ENTRYPOINTS` is one file today (`cli/index.ts`); `src/mcp/` (R19) is added to it in the change that creates it. An entrypoint absent from the list is a client nothing checks, so the list is asserted non-empty and every file on it asserted to exist — a rename must not silently empty the gate.
+`CLIENT_ENTRYPOINTS` is two files: `cli/index.ts` (R10) and `mcp/index.ts` (R19), each added in the change that created it. An entrypoint absent from the list is a client nothing checks, so the list is asserted non-empty and every file on it asserted to exist — a rename must not silently empty the gate.
 
 The fourth test is the **positive control**: the walk from `daemon/main.ts` *does* reach `backends/`. Without it a walker that silently resolves nothing passes the first assertion by never looking at anything — the same trap `no-platform-names.test.ts` guards with its "scans something" test and `no-sleep-harness.test.ts` guards with fixtures.
 
 It pairs with the other two rather than replacing them: `no-platform-names.test.ts` says a client may not even name the tool, and this says it cannot reach the module that drives one. Note one intended consequence — `src/ipc/verb-methods.ts` imports schemas from `src/verbs/`, so every client has the verb layer in its graph. That is the same schema reuse the method table already does for `DeviceSchema`, and this gate is what keeps it from dragging a backend along.
+
+## The stdout-belongs-to-the-protocol gate
+
+`tests/unit/mcp/stdout.test.ts` — the MCP server speaks over stdio, so its stdout carries protocol frames. One stray `console.log` from anywhere under `src/mcp/` does not appear in front of a human; it corrupts a frame, and the agent sees a protocol error whose cause is nowhere near where it surfaced.
+
+Silent corruption is the wrong failure mode to leave to a convention, so it gets a source scan in the family above: no `console.log` under `src/mcp/`, and no import of anything under `src/cli/`, whose `_shared/output.ts` prints through one. Comments are stripped before matching, exactly as the no-sleep gate strips them and for the same reason — those files have to stay free to *discuss* stdout — and it asserts it scanned something, so a green run is not a vacuous one. Like its siblings, it is a floor under the rule rather than a proof of it.
 
 ## What the automated tests cannot cover
 

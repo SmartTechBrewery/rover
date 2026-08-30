@@ -13,8 +13,7 @@
  * `run(argv): Promise<number>`, where the number is the process exit code.
  */
 
-import { realpathSync } from 'node:fs';
-import { pathToFileURL } from 'node:url';
+import { entryUrl } from '../core/entrypoint.js';
 import { EXIT_FAILED, EXIT_OK, EXIT_USAGE } from './_shared/exit.js';
 import { UsageError } from './_shared/flags.js';
 import * as out from './_shared/output.js';
@@ -26,6 +25,11 @@ import * as screenshot from './commands/screenshot.js';
 import * as status from './commands/status.js';
 import * as users from './commands/users.js';
 
+/**
+ * The self-run guard's URL normaliser, re-exported from `src/core/entrypoint.ts` where it now
+ * lives so both entrypoints — this one and `src/mcp/index.ts` — share one copy of it.
+ */
+export { entryUrl } from '../core/entrypoint.js';
 /**
  * The exit codes, re-exported from `./_shared/exit.js` where they live so that a shared
  * helper can name one without importing this module back.
@@ -139,23 +143,6 @@ export async function run(argv: string[]): Promise<number> {
 		}
 		out.error(error instanceof Error ? error.message : String(error));
 		return EXIT_FAILED;
-	}
-}
-
-/**
- * `process.argv[1]` as the URL Node would have given this module had it been the entry.
- *
- * Two normalisations, and skipping either one makes the whole CLI a silent no-op that exits
- * 0: `import.meta.url` is a URL, so it percent-encodes a space (`/My Projects/` arrives as
- * `/My%20Projects/`), and Node resolves the ESM entry through `realpath`, so a checkout
- * reached by a symlink is compared against its real location. `argv[1]` is neither — it is
- * the raw path as typed. `null` when the path cannot be resolved, which is not this module.
- */
-export function entryUrl(argvPath: string): string | null {
-	try {
-		return pathToFileURL(realpathSync(argvPath)).href;
-	} catch {
-		return null;
 	}
 }
 

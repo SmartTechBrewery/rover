@@ -381,11 +381,17 @@ npm run rover -- acquire <serial> --owner issue-112 --project rover
 npm run rover -- release <lease-id>
 npm run rover -- --help              # the four commands, the global flags and the exit codes
 npm run daemon                       # run the daemon in the foreground instead, to watch it start
+npm run -s mcp                       # the MCP server, on stdio, for one agent session
 ```
 
 `npm run` prints its own banner to stdout ahead of the command, so a script that parses the JSON
 uses `npm run -s rover -- list --json` or invokes `node --import tsx/esm src/cli/index.ts list
---json` directly. There is no `bin/` launcher yet — the published entry point is `PROJECT.md` R20's
+--json` directly. **That banner matters more for `mcp` than anywhere else**: its stdout carries
+MCP protocol frames, so an agent's server entry runs `node --import tsx/esm src/mcp/index.ts`
+directly (`npm run -s mcp` is the by-hand equivalent) and a bare `npm run mcp` writes two lines
+into the stream before the first frame. Wiring an agent up properly is `PROJECT.md` R20's to
+settle; what exists today is the server, speaking stdio, declaring `status`, `list_devices`,
+`acquire_device` and `release_device`. There is no `bin/` launcher yet — the published entry point is `PROJECT.md` R20's
 to settle.
 
 Exit codes: `0` success; `1` the operation did not succeed (a refused `acquire`, a `release` that
@@ -414,7 +420,7 @@ startup, naming the variable and the reason, rather than binding something surpr
 | `ROVER_TLS_CERT` | — (required with the port) | Path to the PEM certificate (chain) the listener presents. |
 | `ROVER_TLS_KEY` | — (required with the port) | Path to the matching PEM private key. Unreadable material is a startup failure naming the variable and the path, not a TLS mystery on the first connection. |
 | `ROVER_LISTEN_ADDRESS` | `0.0.0.0` | Which interface the network listener binds, so an operator can narrow it to a VPN or loopback interface instead of every one. Only read when the port is set. |
-| `ROVER_HOST_ADDRESS` | unset — **no remote host** | The opt-in switch on the *client* side: the address of the host `--host remote` asks. Unset or empty and nothing below is read, `--host remote` is a usage error, and `rover` is a purely local client. Set it and `ROVER_HOST_PORT` and `ROVER_HOST_TOKEN` become **required together**, because a client cannot guess either — a missing one is a usage error naming every variable still missing. Exactly one remote host is configurable (`PROJECT.md` D18); there is no catalogue. |
+| `ROVER_HOST_ADDRESS` | unset — **no remote host** | The opt-in switch on the *client* side: the address of the host `--host remote` asks. Unset or empty and nothing below is read, `--host remote` is a usage error, and `rover` is a purely local client. Set it and `ROVER_HOST_PORT` and `ROVER_HOST_TOKEN` become **required together**, because a client cannot guess either — a missing one is a usage error naming every variable still missing. Exactly one remote host is configurable (`PROJECT.md` D18); there is no catalogue. **It is also what points an MCP server at a remote host** (`npm run mcp`), and there it is the *only* thing that can: an MCP client launches each server with its own `env` block, so this variable is that server's configuration, no tool takes a host parameter, and an agent can neither see nor change which host answered (`PROJECT.md` D17). An MCP server reads it at startup rather than at the first tool call, so a half-configured one fails on stderr before it advertises anything. |
 | `ROVER_HOST_TOKEN` | — (required with `ROVER_HOST_ADDRESS`) | **A client-side credential, and only that** — the value `rover users add` (or `users rotate`) printed on the host, pasted on the machine that borrows a device. The host itself no longer reads this variable: it authenticates against its user store, so a token is revocable and rotatable where it was issued rather than being a secret both machines hold forever (`PROJECT.md` D25). At least **32 characters**, checked locally so a truncated paste fails here naming the variable instead of coming back as an opaque refusal. It is a **host-level** setting and belongs in the environment, never in a file the repository tracks. The token **authenticates and attributes nothing**: a lease's owner is a separate, caller-supplied string (`PROJECT.md` D20). |
 | `ROVER_HOST_PORT` | — (required with the address) | The port that host listens on — its own `ROVER_LISTEN_PORT`, named from the other side. 1–65535. |
 | `ROVER_HOST_CA` | unset — the system trust store | Path to a PEM certificate to trust in addition to nothing else — normally the host's own certificate, which is how a self-signed host is trusted. There is deliberately **no variable that turns verification off**: a client that skipped the check would accept any host that answered on that port. |
