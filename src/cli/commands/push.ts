@@ -7,9 +7,9 @@
  * file goes as base64 — `../_shared/upload.ts` reads it and encodes it.
  *
  * **Every refusal this command can issue itself happens before the connection.** A missing
- * file, a directory, one over the transfer cap or one this process may not read exits 2 with
- * the usage, having sent nothing — the assertion behind that is that the host was never
- * asked. Only once the bytes are in hand is a host connected to at all.
+ * file, one that is not a regular file, one over the transfer cap or one this process may
+ * not read exits 2 with the usage, having sent nothing — the assertion behind that is that
+ * the host was never asked. Only once the bytes are in hand is a host connected to at all.
  *
  * A device path that is already a directory is the *host's* refusal and comes back as one:
  * the platforms' own transfer tools copy the file inside it under a name the host invented
@@ -36,9 +36,10 @@ Usage: rover push <lease-id> <local-path> <device-path> [--host <name>] [--json]
 
 One call carries one whole file. A source over the transfer cap is refused here, before
 anything is sent, naming the file, its size and the limit — never a file cut to fit, because
-a truncated file is not distinguishable from a complete one. A source that is missing, is a
-directory, or cannot be read is refused the same way, and in every one of those cases the
-host is never asked at all.
+a truncated file is not distinguishable from a complete one. A source that is missing, cannot
+be read, or is not a regular file — a directory, a named pipe, a device — is refused the same
+way, and in every one of those cases the host is never asked at all. A pipe is refused rather
+than sent because its size says nothing about how much it would send.
 
 --json reports what the host answered — the device, the state after the push — and never
 echoes the bytes back.`;

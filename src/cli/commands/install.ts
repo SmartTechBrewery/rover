@@ -39,8 +39,10 @@ sent, and Rover never learns its name.
 One call carries one whole package, up to ${MAX_TRANSFER_BYTES} bytes. A real application package
 is routinely larger than that, so this installs a small one today and refuses a large one by
 name, here, before anything is sent — never a package cut to fit, which would install as a
-corrupt file or as a plausible one. A source that is missing, is a directory, or cannot be
-read is refused the same way, and in every one of those cases the host is never asked at all.
+corrupt file or as a plausible one. A source that is missing, cannot be read, or is not a
+regular file — a directory, a named pipe, a device — is refused the same way, and in every one
+of those cases the host is never asked at all. A pipe is refused rather than sent because its
+size says nothing about how much it would send.
 
 --json reports what the host answered — the device, the state after the install — and never
 echoes the bytes back.`;

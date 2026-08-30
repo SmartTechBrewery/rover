@@ -65,11 +65,13 @@ host refused, or one that did not survive the trip, exits 1 and leaves no file a
 rather than a short one. `rover record --duration-ms <n>` raises its own request timeout past the
 recording, so a long recording is never a hang. `push` and `install` are the two that go the other
 way: they read a file from **this** machine, so the path they name is yours and never the host's,
-and everything they can refuse they refuse **before connecting** — a source that is missing, is a
-directory, cannot be read, or is over the bytes one call may carry exits 2 with the command's own
-usage, naming the file, its real size and the limit. The size is read off `stat` rather than off a
-buffer, so an over-sized file is refused without ever being loaded, and the host is never asked at
-all: nothing partial can be sent because nothing is sent. `users` is the one command that asks no
+and everything they can refuse they refuse **before connecting** — a source that is missing, cannot
+be read, is not a regular file (a directory, a named pipe, a device), or is over the bytes one call
+may carry exits 2 with the command's own usage, naming the file, its real size and the limit. The
+size is read off `stat` rather than off a buffer, so an over-sized file is refused without ever
+being loaded, and the kind is checked before the size, because a pipe's size says nothing about how
+much it would send. The host is never asked at all: nothing partial can be sent because nothing is
+sent. `users` is the one command that asks no
 host at all: it reads and writes this machine's own `~/.rover/users.json` directly, works whether or not a
 daemon is running, and takes no `--host` (see "Managing host users" below).
 
@@ -313,11 +315,15 @@ same two modules `screenshot` uses and with the same guarantee — a refusal or 
 not survive the trip exits 1 and leaves no file at `--out` at all. `rover push <lease-id>
 <local-path> <device-path>` and `rover install <lease-id> <local-path>` read a file from **this**
 machine and send its bytes; `src/cli/_shared/upload.ts` is the one place that happens. Everything
-those two can refuse, they refuse before a connection exists — a missing file, a directory, one
-this process cannot read, and one over the byte cap, named with its real size and the limit — and
-the size comes off `stat` rather than off a buffer, so an over-sized file is refused without ever
-being loaded. The consequence is the one worth stating: when a source is refused, **the host is not
-asked at all**, so nothing partial can have been sent. Neither direction echoes the payload back —
+those two can refuse, they refuse before a connection exists — a missing file, one this process
+cannot read, one that is not a regular file, and one over the byte cap, named with its real size
+and the limit — and the size comes off `stat` rather than off a buffer, so an over-sized file is
+refused without ever being loaded. **The kind is checked before the size on this side of the wire
+too**, for the reason a pull checks it on the device's: a named pipe or a character device stats as
+zero bytes and then reads without end, so the cap would wave either through — and `<(gzip -c
+big.bin)` hands a command a pipe without the caller thinking of it as one. The consequence is the
+one worth stating: when a source is refused, **the host is not asked at all**, so nothing partial
+can have been sent. Neither direction echoes the payload back —
 `--json` reports what the host answered and where the bytes went, never the bytes.
 
 **`set_airplane_mode` and `set_wifi` toggle the radios without root** (`src/verbs/environment.ts`),

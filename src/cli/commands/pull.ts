@@ -44,9 +44,11 @@ absolute; no host-local path is ever reported. A file too large for one answer, 
 did not survive the trip, is refused by name, exits 1 and writes nothing at all — never a
 file cut short.
 
-A directory on the device is refused rather than transferred: asking how big one is answers
-for the directory itself, whatever the tree under it holds, so the size bound would not
-hold.`;
+A pull answers with the bytes of one regular file. A directory, a character device or any
+other special file on the device is refused before the transfer starts rather than bounded
+afterwards: asking how big a directory is answers for the directory itself, whatever the tree
+under it holds, and a character device answers zero and then reads without end — so the size
+bound would not hold on either.`;
 
 const OPTIONS = {
 	...GLOBAL_OPTIONS,

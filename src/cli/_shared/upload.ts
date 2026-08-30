@@ -8,16 +8,23 @@
  * is base64 — the same encoding an artifact comes back in.
  *
  * **Everything this module refuses, it refuses before a connection exists.** A missing path,
- * a directory, a file over `MAX_TRANSFER_BYTES` and a file this process may not read are all
- * facts about the caller's own disk, knowable without asking anyone; a command calls
- * {@link resolveSource} and {@link readPayload} before `connectToHost`, so a refusal costs no
- * round trip, renews no lease, and — the load-bearing part — **sends nothing**. Nothing
- * partial ever reaches a device, because nothing at all does.
+ * a path that is not a regular file, a file over `MAX_TRANSFER_BYTES` and a file this process
+ * may not read are all facts about the caller's own disk, knowable without asking anyone; a
+ * command calls {@link resolveSource} and {@link readPayload} before `connectToHost`, so a
+ * refusal costs no round trip, renews no lease, and — the load-bearing part — **sends
+ * nothing**. Nothing partial ever reaches a device, because nothing at all does.
  *
  * **The size is read off `stat`, never off the buffer.** That is the same reasoning
  * `src/verbs/files.ts` records for handing `MAX_ARTIFACT_BYTES` *down* to `pullFile` instead
  * of checking on the way back: a refusal issued after a 2 GB file is in this process's heap
  * has already cost what it was meant to prevent.
+ *
+ * **And a size read without a kind beside it is not a bound** (PROJECT.md §6) — the same
+ * finding `pull_file` records on the device side, on this side of the wire. A fifo stats as
+ * zero bytes and then reads until the writer stops, a character device stats as zero bytes
+ * and never stops at all, and `<(gzip -c big.bin)` hands this command a fifo under
+ * `/dev/fd/` without the caller thinking of it as one. So the kind is checked first and the
+ * cap is only ever applied to the one shape whose reported size predicts the transfer.
  *
  * **Nothing here branches on `--host`,** for `./artifact.ts`'s reason: a local daemon and a
  * remote host take the same field of the same schema, so one module serves both.
@@ -31,9 +38,25 @@ import * as out from './output.js';
 import { describeWithoutBytes, exitCodeFor, renderVerbAnswer, type VerbCallOk } from './verb.js';
 
 /**
+ * What `stat` says the path *is*, in the words the refusal uses. `stat` follows symlinks, so
+ * a link is never one of these — it is whatever it points at, which is the thing that would
+ * actually be read.
+ */
+function describeKind(stats: Awaited<ReturnType<typeof stat>>): string {
+	if (stats.isFIFO()) return 'named pipe';
+	if (stats.isCharacterDevice()) return 'character device';
+	if (stats.isBlockDevice()) return 'block device';
+	if (stats.isSocket()) return 'socket';
+	// Not reachable through `resolveSource` — a directory is refused before this is asked and
+	// the four above are the rest of what `stat` can answer — but the sentence still has to
+	// read as one for a kind a future platform invents.
+	return 'special file';
+}
+
+/**
  * The file to send, absolute, checked before anything is connected to or read.
  *
- * Three shapes are refused, all as {@link UsageError} — exit 2 with the command's own usage,
+ * Four shapes are refused, all as {@link UsageError} — exit 2 with the command's own usage,
  * because the caller named the wrong file and no host was asked anything. Exit 2 rather than
  * the 1 this CLI reserves for a host that said no, mirroring `boundAttribution`
  * (`./flags.ts`): the value is the caller's and decidable before any connection, so it gets
@@ -43,6 +66,12 @@ import { describeWithoutBytes, exitCodeFor, renderVerbAnswer, type VerbCallOk } 
  *   after a connection and a lease renewal;
  * - a **directory**, which is `EISDIR` the same way — and recursive directory transfer is
  *   deliberately not these verbs (`src/verbs/files.ts`);
+ * - anything else that is **not a regular file** — a fifo, a character or block device, a
+ *   socket. This is the kind check `pull_file` makes on the device side, for the same reason
+ *   and stated the same way round: only a regular file's `stat` size predicts how much a
+ *   transfer would move. A fifo reports zero and then reads until its writer stops,
+ *   `/dev/zero` reports zero and never stops, and the cap below would wave both through —
+ *   so the cap is applied *after* this, to the one shape it can bound;
  * - a file **over {@link MAX_TRANSFER_BYTES}**, named with its real size and the limit, so
  *   the answer is actionable rather than merely a refusal. The host would refuse it too —
  *   `Base64PayloadSchema` is where the bound actually binds — but only after this process
@@ -72,6 +101,19 @@ export async function resolveSource(command: string, localPath: string): Promise
 		throw new UsageError(
 			`rover ${command}: '${source}' is a directory. Name the file to send: one call carries ` +
 				`one whole file, and transferring a tree is deliberately not one of these verbs.`,
+		);
+	}
+
+	// The kind before the size, because the size only means something once the kind is known:
+	// a fifo and a character device both stat as zero bytes and would sail past the cap below
+	// while `readPayload` loaded gigabytes — or blocked forever, on a fifo with no writer.
+	if (!stats.isFile()) {
+		throw new UsageError(
+			`rover ${command}: '${source}' is a ${describeKind(stats)}, and one call sends the ` +
+				`bytes of one regular file. A path that is not a regular file has a size that says ` +
+				`nothing about how much it would send — a named pipe or a character device stats ` +
+				`as zero bytes and then reads without end — so it is refused rather than bounded ` +
+				`afterwards. Name a regular file.`,
 		);
 	}
 

@@ -98,9 +98,12 @@ all of them are load-bearing:
   instead of of every command remembering it. The other direction has the mirror of it,
   `src/cli/_shared/upload.ts` — the one place a client reads a local file for a host, behind
   `rover push` and `rover install`. It resolves the path against **this** process, stats it, and
-  refuses a missing file, a directory, an unreadable one and one over `MAX_TRANSFER_BYTES` as a
-  usage error naming the file, its real size and the limit. **The size is read off `stat`, never
-  off the buffer**, and every check runs before `connectToHost`: an over-sized source is refused
+  refuses a missing file, an unreadable one, one that is not a regular file and one over
+  `MAX_TRANSFER_BYTES` as a usage error naming the file, its real size and the limit. **The size
+  is read off `stat`, never off the buffer, and the kind is read before the size** — a named pipe
+  or a character device stats as zero and then reads without end, so the cap only means something
+  once the path is known to be a regular file, which is the rule `pull_file` follows on the device
+  side. Every check runs before `connectToHost`: an over-sized source is refused
   without ever being loaded, and with the host not asked at all, so nothing partial can have been
   sent. That mirrors what `src/verbs/files.ts` does on the host by handing `MAX_ARTIFACT_BYTES`
   *down* to `pullFile` rather than checking on the way back.

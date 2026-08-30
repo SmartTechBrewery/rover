@@ -18,16 +18,18 @@
  *   equally consistent with a host that took four megabytes and then said no.
  */
 
+import { execFile as execFileCallback } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { mkdir, readFile, truncate, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, readFile, truncate, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
 	_resetDeviceBackendRegistryForTesting,
 	registerDeviceBackend,
 } from '@/backends/registry.js';
 import { UsageError } from '@/cli/_shared/flags.js';
-import { resolveSource } from '@/cli/_shared/upload.js';
+import { readPayload, resolveSource } from '@/cli/_shared/upload.js';
 import { EXIT_FAILED, EXIT_OK, EXIT_USAGE, run } from '@/cli/index.js';
 import type { DeviceBackend, DeviceWatch, DeviceWatcher } from '@/core/device.js';
 import { FileTooLargeError } from '@/core/errors.js';
@@ -41,6 +43,8 @@ import {
 	type TempSocket,
 } from '../../helpers/daemon-socket.js';
 import { createMockDevice, createMockDeviceBackend } from '../../helpers/factories.js';
+
+const execFile = promisify(execFileCallback);
 
 const attached = createMockDevice({ serial: parseDeviceSerial('attached-1') });
 
@@ -159,6 +163,23 @@ async function writeSource(name: string, bytes: Uint8Array): Promise<string> {
 	return source;
 }
 
+/**
+ * A named pipe in the temp directory — the shape `<(gzip -c big.bin)` hands a command without
+ * the caller thinking of it as one, and the one a size bound alone cannot see (PROJECT.md §6).
+ *
+ * Nothing ever writes to it, deliberately: a refusal that has to wait for a writer is not a
+ * refusal that landed before the file was read, which is the whole property under test. Node
+ * has no `mkfifo`, so this is the system's.
+ */
+async function makeFifo(name: string): Promise<string> {
+	const fifo = local(name);
+	await execFile('mkfifo', [fifo]);
+	return fifo;
+}
+
+/** A suite running as root reads a `0o000` file regardless, so those two cases sit this out. */
+const asRoot = process.getuid?.() === 0;
+
 beforeEach(async () => {
 	temp = await createTempSocket();
 	vi.stubEnv('ROVER_SOCKET_PATH', temp.socketPath);
@@ -275,6 +296,40 @@ describe('rover push, before the host is asked', () => {
 		expect(backend.pushFile).not.toHaveBeenCalled();
 	});
 
+	it('refuses a source that is a named pipe, with this command’s usage', async () => {
+		const backend = registerFakeBackend();
+		await start();
+		const leaseId = await acquireLease();
+		// A fifo stats as zero bytes, so the size cap alone waves it through and `readFile`
+		// then reads whatever a writer sends — or blocks forever when there is none, as here.
+		// That this call returns at all is half the assertion.
+		const fifo = await makeFifo('a-pipe');
+
+		expect(await run(['push', leaseId, fifo, DEVICE_PATH])).toBe(EXIT_USAGE);
+
+		const said = errored.join('\n');
+		expect(said).toContain('named pipe');
+		expect(said).toContain('Usage: rover push');
+		expect(backend.pushFile).not.toHaveBeenCalled();
+	});
+
+	it.skipIf(asRoot)('refuses a source it cannot read, with this command’s usage', async () => {
+		const backend = registerFakeBackend();
+		await start();
+		const leaseId = await acquireLease();
+		// Readable to `stat` and not to `readFile`: the one refusal that can only come from
+		// `readPayload`, and it still has to land before the host is asked.
+		const source = await writeSource('unreadable.bin', BINARY_PAYLOAD);
+		await chmod(source, 0o000);
+
+		expect(await run(['push', leaseId, source, DEVICE_PATH])).toBe(EXIT_USAGE);
+
+		const said = errored.join('\n');
+		expect(said).toContain(source);
+		expect(said).toContain('Usage: rover push');
+		expect(backend.pushFile).not.toHaveBeenCalled();
+	});
+
 	it('writes one --json document that never echoes the payload back', async () => {
 		registerFakeBackend();
 		await start();
@@ -374,7 +429,10 @@ describe('rover pull, when the host says no', () => {
 		expect(said).toContain(String(MAX_ARTIFACT_BYTES));
 	});
 
-	it('exits 2 with its own usage for a device path the boundary refuses', async () => {
+	// Exit 1 and not 2 on purpose, and the title says so: exit 2 is what this client decides
+	// before connecting, exit 1 is what a host said no to. A relative device path is the
+	// second kind — `pull` sends it unmodified rather than validating it locally.
+	it('exits 1 and writes nothing when the host’s boundary refuses the device path', async () => {
 		registerFakeBackend();
 		await start();
 		const leaseId = await acquireLease();
@@ -397,6 +455,33 @@ describe('the upload module itself', () => {
 
 	it('refuses a source that is a directory', async () => {
 		await expect(resolveSource('install', temp.dir)).rejects.toBeInstanceOf(UsageError);
+	});
+
+	it('refuses a named pipe, before anything is read off it', async () => {
+		// No writer is attached on purpose: the refusal has to be decided off `stat` alone.
+		// If this ever regresses to reading first, the case hangs rather than fails, which is
+		// exactly what the command would do to a caller.
+		await expect(resolveSource('push', await makeFifo('resolve-pipe'))).rejects.toBeInstanceOf(
+			UsageError,
+		);
+	});
+
+	it('refuses a character device, naming the kind', async () => {
+		// `/dev/zero` stats as zero bytes and reads without end — the shape the size bound
+		// cannot see, and the same one `pull_file` refuses on the device by kind.
+		await expect(resolveSource('push', '/dev/zero')).rejects.toThrow(/character device/);
+	});
+
+	it.skipIf(asRoot)('refuses a source it cannot read, naming it', async () => {
+		const source = await writeSource('locked.bin', BINARY_PAYLOAD);
+		await chmod(source, 0o000);
+
+		// `resolveSource` passes it — `stat` needs no read permission on the file itself — so
+		// this is `readPayload`'s own refusal, the one branch nothing else in the suite runs.
+		await expect(resolveSource('push', source)).resolves.toBe(source);
+		await expect(readPayload('push', source)).rejects.toThrow(
+			new RegExp(source.replaceAll(/[.*+?^${}()|[\]\\]/g, '\\$&')),
+		);
 	});
 
 	it('refuses a source over the limit without reading it', async () => {

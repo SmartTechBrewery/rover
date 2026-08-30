@@ -111,10 +111,10 @@ Exit codes:
       the host rejected
   2   usage error — unknown command, unknown flag, a missing required option, an
       attribution string longer than the host accepts, an --out that names a directory
-      or has no directory to write into, a file to push or install that is missing, is
-      a directory, cannot be read or is over the transfer limit, or a --host that is
-      neither 'local' nor 'remote' — or 'remote' with nothing in the environment
-      naming one
+      or has no directory to write into, a file to push or install that is missing,
+      cannot be read, is not a regular file (a directory, a pipe, a device) or is over
+      the transfer limit, or a --host that is neither 'local' nor 'remote' — or
+      'remote' with nothing in the environment naming one
 
 The local daemon starts itself on the first call, so nothing here needs starting by hand;
 a remote host is a service its operator runs and is never started from a client.
