@@ -159,6 +159,30 @@ export const AppVerbParamsSchema = VerbCallBaseSchema.extend({
 export type AppVerbParams = z.infer<typeof AppVerbParamsSchema>;
 
 /**
+ * What a `read_screen` call carries: the lease id, and nothing else.
+ *
+ * The one row where the *absence* of fields is the whole schema. It takes no target — a read
+ * that waited for something would be `wait_for` — and deliberately does not extend
+ * {@link WaitCallBaseSchema}, because it does not wait: it reads once and answers, so
+ * advertising `timeoutMs` would offer a wait nobody performs. `.strict()` is what turns a
+ * caller who sent one into `invalid_params` rather than a silently dropped key.
+ */
+export const ReadScreenParamsSchema = VerbCallBaseSchema.strict();
+export type ReadScreenParams = z.infer<typeof ReadScreenParamsSchema>;
+
+/**
+ * What a `device_info` call carries — the same one field, for the same reasons.
+ *
+ * A separate schema rather than a second name for {@link ReadScreenParamsSchema}, unlike the
+ * three app rows that genuinely share one: those three take the same *call* because they take
+ * the same app id, whereas these two are identical only because both happen to take nothing.
+ * A row's params schema is where that row's own arguments will land, and two verbs with
+ * nothing in common but their current emptiness should not have to fork one apart later.
+ */
+export const DeviceInfoParamsSchema = VerbCallBaseSchema.strict();
+export type DeviceInfoParams = z.infer<typeof DeviceInfoParamsSchema>;
+
+/**
  * Why a call never reached a verb at all.
  *
  * Deliberately the same words as `AcquireRefusalReasonSchema` for the three they share, so

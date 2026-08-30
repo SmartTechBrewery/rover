@@ -47,8 +47,10 @@ import type { Device } from '../core/device.js';
 import type { LeaseId } from '../core/ids.js';
 import type {
 	AppVerbParams,
+	DeviceInfoParams,
 	IpcHandlers,
 	LongPressParams,
+	ReadScreenParams,
 	ScrollParams,
 	SwipeParams,
 	TapParams,
@@ -67,6 +69,7 @@ import {
 	swipe,
 	tap,
 } from '../verbs/input.js';
+import { deviceInfo, readScreen } from '../verbs/read.js';
 import type { ActionResult } from '../verbs/result.js';
 import { type WaitVerbOptions, waitFor, waitUntilGone } from '../verbs/wait-for.js';
 import type { DeviceInventory } from './inventory.js';
@@ -82,6 +85,8 @@ export type VerbHandlers = Pick<
 	| 'long_press'
 	| 'swipe'
 	| 'scroll'
+	| 'read_screen'
+	| 'device_info'
 	| 'launch_app'
 	| 'stop_app'
 	| 'clear_app_data'
@@ -204,6 +209,18 @@ export function createVerbHandlers(
 					...(params.target === undefined ? {} : { target: params.target }),
 				} satisfies ScrollOptions),
 			);
+		},
+
+		// The two read rows. Their whole answer is the state the spine captures for every verb,
+		// so they take no arguments beyond the lease id and reach the verb layer with nothing
+		// else — `read_screen`'s `requires: ['canReadScreen']` is what makes a backend that
+		// cannot read one say so by name instead of answering with an empty screen (D11).
+		read_screen(params: ReadScreenParams): Promise<VerbCallResult> {
+			return runVerb(params.leaseId, (context) => readScreen(context));
+		},
+
+		device_info(params: DeviceInfoParams): Promise<VerbCallResult> {
+			return runVerb(params.leaseId, (context) => deviceInfo(context));
 		},
 
 		// The three app rows. They call the *verb* of that name and never `context.backend.*`,

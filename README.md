@@ -120,7 +120,7 @@ way — the screen for `wait_for`, which missed on all of it, the matches that a
 backend that does not declare `canReadScreen` is told so by name before the first poll rather than
 after a whole timeout. Both answer with the same `ActionResult` as every other action, and the
 *reading* they poll is real: the Android backend answers `readScreen` and declares
-`canReadScreen`, so the reading `read_screen` will expose is already there underneath them.
+`canReadScreen`, and `read_screen` is now the verb that exposes it directly.
 
 **`launch_app`, `stop_app` and `clear_app_data` are that same spine used three more times**
 (`src/verbs/app.ts`), and they are what a verb looks like when it addresses **a package rather than
@@ -131,12 +131,27 @@ capability either, and say so with an explicit empty list: the three backend met
 no backend method, no capability and no result shape — the whole family is one module, one params
 schema shared by all three, and three rows on the method table. `stop_app` cannot tell "stopped it"
 from "there was no such package", because the device is silent either way; the state after the
-action is what will answer that once `read_screen` lands, and there is deliberately no probe
-pretending otherwise in the meantime. The remaining verbs — `type_text`, `press_key`, `screenshot`,
-`read_screen`, `read_logs`, `install_app`, `pull_file`, `push_file` — are their own issues.
+action is what answers that, and there is deliberately no probe pretending otherwise.
+
+**`read_screen` and `device_info` are the same spine again, with nothing in the middle**
+(`src/verbs/read.ts`). Every other verb does something and then reports the state after it; these
+two ask for that state and nothing else, so their action is empty and the answer is the capture the
+spine already performs for every verb there is — which is what keeps "every verb answers the same
+way" true rather than giving the reads a second answer shape of their own. `read_screen` hands back
+the texts and the element rectangles, in dp, and it **declares `canReadScreen` as a requirement**:
+on a backend that does not have it the call fails by name — the capability, the device, the backend
+— before anything is dispatched, rather than answering with an empty screen, because for a read the
+state *is* the answer rather than context around an action. `device_info` requires nothing, since
+every backend must answer it, and reports size, density, the computed width in dp and the OS
+version — the same `DeviceInfo` every result already carries (D14), now askable on its own without
+moving the device first. Neither addresses anything on the screen, so both answer `target: null`,
+and both carry the lease id and nothing else on the wire. The remaining verbs — `type_text`,
+`press_key`, `screenshot`, `read_logs`, `install_app`, `pull_file`, `push_file` — are their own
+issues.
 
 **The daemon loads the core and runs the verbs**, and a client only asks (D19). The two waits, the
-four gestures and the three app verbs are callable over the same connection as `acquire_device` — the same envelope,
+four gestures, the three app verbs and the two read verbs are callable over the same connection as
+`acquire_device` — the same envelope,
 the same framing, one method table — and a verb call carries the lease id rather than a serial,
 because the lease id is the credential and the host derives the device from it. A verb that fails
 comes back as an *answer* naming what happened — the element was not there, the wait timed out, the
@@ -144,10 +159,10 @@ device cannot read its screen — and never as a broken host; only the host actu
 `internal_error`. There is no `adb` in a client process, and
 `tests/unit/no-backend-in-a-client.test.ts` walks the import graph from every client entrypoint to
 say so rather than asking politely. Against a real device today all of it runs on the hardware: a
-`tap` at a coordinate injects, `launch_app` and `stop_app` reach the package, and — since the
-Android backend learned to read its own screen — a target addressed by text resolves against a
-hierarchy read inside the verb, both waits poll a real screen, and every action comes back carrying
-the elements that were on it afterwards. One gap is recorded rather than hidden — a device-level
+`tap` at a coordinate injects, `launch_app` and `stop_app` reach the package, `read_screen` and
+`device_info` answer off the hardware, and — since the Android backend learned to read its own
+screen — a target addressed by text resolves against a hierarchy read inside the verb, both waits
+poll a real screen, and every action comes back carrying the elements that were on it afterwards. One gap is recorded rather than hidden — a device-level
 refusal, such as launching a package that is not installed, still reaches the caller as
 `internal_error` rather than as an answer about the device. That is true of every verb family here,
 not just this one, and it is filed as its own issue.
