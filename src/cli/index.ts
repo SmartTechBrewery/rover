@@ -18,7 +18,10 @@ import { EXIT_FAILED, EXIT_OK, EXIT_USAGE } from './_shared/exit.js';
 import { UsageError } from './_shared/flags.js';
 import * as out from './_shared/output.js';
 import * as acquire from './commands/acquire.js';
+import * as install from './commands/install.js';
 import * as list from './commands/list.js';
+import * as pull from './commands/pull.js';
+import * as push from './commands/push.js';
 import * as record from './commands/record.js';
 import * as release from './commands/release.js';
 import * as screenshot from './commands/screenshot.js';
@@ -57,6 +60,9 @@ const COMMANDS: Record<string, Command | undefined> = Object.assign(Object.creat
 	release,
 	screenshot,
 	record,
+	pull,
+	push,
+	install,
 	status,
 	users,
 });
@@ -75,12 +81,22 @@ Commands:
   release <lease-id>       Hand a lease back
   screenshot <lease-id>    Capture the screen to a file on this machine (--out required)
   record <lease-id>        Record the screen to a file on this machine (--out required)
+  pull <lease-id> <path>   Read a file off the device onto this machine (--out required)
+  push <lease-id> <local> <device>
+                           Send a file from this machine onto the device
+  install <lease-id> <local>
+                           Install a package from this machine onto the device
   status                   Which host answered, its pid, uptime and protocol version
   users <subcommand>       Who may use this host — add, list, rotate, revoke
 
-\`screenshot\` and \`record\` write their bytes **here**: the verb runs on the host and the
-capture comes back as bytes, so --out is a path on this machine and the path reported is
-yours, absolute. A capture the host refuses leaves no file at --out at all.
+\`screenshot\`, \`record\` and \`pull\` write their bytes **here**: the verb runs on the host and
+the answer comes back as bytes, so --out is a path on this machine and the path reported is
+yours, absolute. A transfer the host refuses leaves no file at --out at all.
+
+\`push\` and \`install\` read their file **here** and send its bytes, so the file they name is
+on this machine and never on the host. A source that is missing, is a directory, or is over
+the bytes one call may carry is refused before anything is sent, naming the file, its real
+size and the limit — the host is never asked at all.
 
 \`users\` is the one command that asks no host: it reads and writes this machine's own
 \`~/.rover/users.json\` directly, works with no daemon running, and takes no --host.
@@ -99,8 +115,10 @@ Exit codes:
       the host rejected
   2   usage error — unknown command, unknown flag, a missing required option, an
       attribution string longer than the host accepts, an --out that names a directory
-      or has no directory to write into, or a --host that is neither 'local' nor
-      'remote' — or 'remote' with nothing in the environment naming one
+      or has no directory to write into, a file to push or install that is missing,
+      cannot be read, is not a regular file (a directory, a pipe, a device) or is over
+      the transfer limit, or a --host that is neither 'local' nor 'remote' — or
+      'remote' with nothing in the environment naming one
 
 The local daemon starts itself on the first call, so nothing here needs starting by hand;
 a remote host is a service its operator runs and is never started from a client.

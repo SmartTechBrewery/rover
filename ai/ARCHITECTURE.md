@@ -97,22 +97,29 @@ all of them are load-bearing:
   `src/client/artifact.ts` — the one place any client turns an `ActionResult.artifact` into a
   file. It decodes, checks the decoded length against the `byteLength` the host encoded (`Buffer`
   drops characters outside the base64 alphabet rather than failing, so a mangled payload otherwise
-  becomes a short file that announces nothing), writes the bytes locally and answers the absolute
-  path they are now at. It also owns `describeWithoutBytes`, which is how either client says what
-  an answer carries without repeating megabytes of base64 alongside it. **The write is the last
-  thing that happens and only on the `ok` branch**, so a refusal or a failed transfer leaves no
-  file at the destination rather than a truncated one. Nothing in it branches on which host
-  answered: a local host and a remote one arrive as the same field of the same schema, which is
-  what makes the guarantee a property of the module instead of of every command remembering it.
-
-  **It lives outside both adapters on purpose.** `src/cli/_shared/artifact.ts` had all of it when
-  the CLI was the only client that had ever decoded an artifact; the MCP server is the second, and
-  it cannot import from `src/cli/` at all — that tree prints through `console.log`, which on a
-  stdio transport corrupts a frame. Two copies of the length check is one copy free to be true in
-  one client and forgotten in the other, and what it catches is a short file that announces
-  nothing to whoever is holding it. What each adapter keeps is what only it has: `--out`
-  resolution, human rendering and exit codes on one side (`src/cli/_shared/`), the artifact
-  directory and the MCP content blocks on the other (`src/mcp/_shared/artifact.ts`).
+  becomes a short file that announces nothing), writes the bytes locally and answers
+  `path.resolve` of the caller's own `--out`. It also owns `describeWithoutBytes`, which is how
+  either client says what an answer carries without repeating megabytes of base64 alongside it.
+  **The write is the last thing it does and only on the `ok` branch**, so a refusal or a failed
+  transfer leaves no file at the destination rather than a truncated one. Nothing in it branches
+  on which host answered: a local host and a remote one arrive as the same field of the same
+  schema, which is what makes the guarantee a property of the module instead of of every command
+  remembering it. It lives outside both adapters because the MCP server cannot import from
+  `src/cli/`: that tree prints through `console.log`, which would corrupt its stdio frames. What
+  each adapter keeps is what only it has: `--out` resolution, human rendering and exit codes on
+  one side (`src/cli/_shared/`), the artifact directory and MCP content blocks on the other
+  (`src/mcp/_shared/artifact.ts`). The other direction has the mirror of it,
+  `src/cli/_shared/upload.ts` — the one place a client reads a local file for a host, behind
+  `rover push` and `rover install`. It resolves the path against **this** process, stats it, and
+  refuses a missing file, an unreadable one, one that is not a regular file and one over
+  `MAX_TRANSFER_BYTES` as a usage error naming the file, its real size and the limit. **The size
+  is read off `stat`, never off the buffer, and the kind is read before the size** — a named pipe
+  or a character device stats as zero and then reads without end, so the cap only means something
+  once the path is known to be a regular file, which is the rule `pull_file` follows on the device
+  side. Every check runs before `connectToHost`: an over-sized source is refused
+  without ever being loaded, and with the host not asked at all, so nothing partial can have been
+  sent. That mirrors what `src/verbs/files.ts` does on the host by handing `MAX_ARTIFACT_BYTES`
+  *down* to `pullFile` rather than checking on the way back.
 
 Authentication is the host's token; attribution is the lease's owner string. They are separate
 fields on purpose (D20) — collapsing them either leaks the token into reports or makes the owner
