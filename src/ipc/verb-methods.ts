@@ -243,6 +243,29 @@ export const ReadLogsParamsSchema = VerbCallBaseSchema.extend({
 }).strict();
 export type ReadLogsParams = z.infer<typeof ReadLogsParamsSchema>;
 
+/**
+ * What both environment rows carry — `set_airplane_mode` and `set_wifi`.
+ *
+ * **One schema for two rows**, for the reason {@link AppVerbParamsSchema} records for its
+ * three: the two calls are identical, and a near-copy per row is a copy that drifts. A verb
+ * that later grows a field of its own forks this rather than widening it.
+ *
+ * `enabled` is a **required** boolean, and both halves of that matter. Optional would make
+ * "turn wifi off" and "say nothing" the same call, leaving the verb to invent a default
+ * nobody asked for; a boolean rather than a word keeps the wire out of the argument the
+ * device actually takes — the two commands underneath disagree about the words for the same
+ * boolean (PROJECT.md §6), and the backend owns both literals. So `{}` and
+ * `{ enabled: 'true' }` are each `invalid_params` at the boundary rather than a toggle that
+ * guessed.
+ *
+ * No wait knob: neither verb waits for anything, and offering one would advertise a wait
+ * that is not performed. `.strict()` keeps a `serial` out beside the lease id (D20).
+ */
+export const EnvironmentVerbParamsSchema = VerbCallBaseSchema.extend({
+	enabled: z.boolean(),
+}).strict();
+export type EnvironmentVerbParams = z.infer<typeof EnvironmentVerbParamsSchema>;
+
 /** What a `read_screen` call carries: the lease id, and nothing else. */
 export const ReadScreenParamsSchema = VerbCallBaseSchema.strict();
 export type ReadScreenParams = z.infer<typeof ReadScreenParamsSchema>;

@@ -17,6 +17,7 @@ import {
 	addUser,
 	DuplicateUserError,
 	defaultUsersPath,
+	findUserByToken,
 	readUsers,
 	resolveUsersPath,
 	revokeUser,
@@ -195,6 +196,50 @@ describe('readUsers', () => {
 
 		await expect(readUsers(path)).rejects.toThrow(path);
 		expect(await readFile(path, 'utf8')).toBe(malformed);
+	});
+});
+
+describe('findUserByToken', () => {
+	it('finds the record whose token it was given, and nobody else', async () => {
+		const alice = await addUser(path, { identifier: 'alice' });
+		const bob = await addUser(path, { identifier: 'bob' });
+
+		expect(await findUserByToken(path, alice.token)).toEqual(alice.user);
+		expect(await findUserByToken(path, bob.token)).toEqual(bob.user);
+		expect(await findUserByToken(path, generateUserToken())).toBeUndefined();
+	});
+
+	it('reads the file every call, so a revoke lands without anything being restarted', async () => {
+		// The property the daemon's network gate depends on (D6, D25). A memo anywhere in here
+		// would pass the first assertion and fail this one.
+		const alice = await addUser(path, { identifier: 'alice' });
+		expect(await findUserByToken(path, alice.token)).toEqual(alice.user);
+
+		await revokeUser(path, 'alice');
+
+		expect(await findUserByToken(path, alice.token)).toBeUndefined();
+	});
+
+	it('follows a rotation: the new token finds the record, the old one finds nothing', async () => {
+		const first = await addUser(path, { identifier: 'alice' });
+
+		const second = await rotateUserToken(path, 'alice');
+
+		expect(await findUserByToken(path, second.token)).toEqual(second.user);
+		expect(await findUserByToken(path, first.token)).toBeUndefined();
+	});
+
+	it('answers undefined for a host with no store yet, rather than throwing', async () => {
+		expect(await findUserByToken(path, generateUserToken())).toBeUndefined();
+	});
+
+	it('throws on a store it cannot parse, leaving the policy to its caller', async () => {
+		// Deliberately not swallowed here: a broken store is a real fault an operator has to
+		// see through `rover users list`. What a caller *on a socket* is told about it is the
+		// listener's decision (it refuses identically), not this module's.
+		await writeFile(path, 'not json at all', 'utf8');
+
+		await expect(findUserByToken(path, generateUserToken())).rejects.toThrow(path);
 	});
 });
 

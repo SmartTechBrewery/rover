@@ -34,9 +34,12 @@ the unit tests drive the whole surface over an in-memory stream pair that is not
 
 Each pair is handed the same `IpcServer` or wrapped by the same `createIpcClient`, so there is
 one method table, one dispatcher, one set of schemas, and nothing for the four to drift from.
-`src/daemon/network-config.ts` carries both halves' configuration, and `ROVER_HOST_TOKEN` is
-deliberately one variable for both: a machine that hosts devices and also borrows one is
-holding one secret, not two.
+`src/daemon/network-config.ts` carries both halves' configuration, and the two halves are
+deliberately **asymmetric** (D25): the host half holds no secret at all — it names a user store,
+`~/.rover/users.json`, that `rover users` writes — while `ROVER_HOST_TOKEN` is the *client's*
+own credential, the token that host printed for it once. There is no shared secret left on the
+host side, because a way in that no `rover users revoke` could take away is what the store
+exists to retire.
 
 **Autostart is contained by that table rather than by discipline.** `network-connect.ts` does
 not import `node:child_process` and never may — a host reachable over a network is a service
@@ -51,12 +54,15 @@ on a request or a method in the table. It is a one-line NDJSON greeting — `{"t
 `network-listen.ts` reads and consumes before the IPC server is attached to the stream. Three
 things follow, and all three are wanted: no method can be dispatched before authentication *by
 construction* rather than by a flag; the local socket stays ungated because the gate lives in the
-other transport; and `src/ipc/` genuinely does not know it is authenticated. Every pre-auth
-failure — wrong token, missing, malformed, oversize, or a handshake that times out — gets one
-byte-identical `unauthenticated` refusal and a destroyed connection, because a refusal that varied
-with the reason would tell a stranger something about the host (D20). The token authenticates and
-attributes nothing: a lease's owner is a separate, caller-supplied string, never derived from
-whoever authenticated.
+other transport; and `src/ipc/` genuinely does not know it is authenticated. The gate resolves
+the presented token against the user store — hashed, then looked up in `~/.rover/users.json`,
+**re-read at every connection attempt and never cached for the daemon's lifetime** (D6, D25), so
+a revoked user is refused on their very next attempt with nothing restarted. Every pre-auth
+failure — a token no user holds, a revoked one, missing, malformed, oversize, a store this host
+cannot read, or a handshake that times out — gets one byte-identical `unauthenticated` refusal
+and a destroyed connection, because a refusal that varied with the reason would tell a stranger
+something about the host (D20). The token authenticates and attributes nothing: a lease's owner
+is a separate, caller-supplied string, never derived from whoever authenticated.
 
 ### Why the daemon exists at all
 
@@ -271,6 +277,22 @@ Verbs live above the backends and below the adapters, and this is where determin
   context around an action, it is the entire answer, so D11's loud failure has to come before
   dispatch. `device_info` requires nothing (a required backend method, like the app family) and
   answers with `result.device`. Neither passes a target, for the same reason the app verbs do not.
+- **`setAirplaneMode()` and `setWifi()`** (`src/verbs/environment.ts`) are the same spine again, and
+  the family where `requires` finally does the other half of its job. Both declare
+  `requires: ['canControlNetwork']` and reach the backend through `capabilityMethod()` rather than
+  `context.backend.*` — the mirror image of the app verbs, whose methods are required ones
+  `capabilityMethod` will not typecheck for. A backend that does not declare the capability is a
+  `MissingCapabilityError` before anything is dispatched, naming capability, device and backend
+  (D11), which is the difference between "this device cannot do that" and a toggle that answered
+  `ok` and moved nothing. Neither passes a target — a radio is not something on the screen, so
+  `ActionResult.target` is `null` like the app verbs' — and the after-state each answers with is the
+  spine's own capture: evidence that the device was still there and answering, and deliberately
+  **not** a reading of the radio, since `DeviceBackend` has no network getter and neither verb
+  invents one. These are the same two backend methods `src/daemon/restore.ts` drives when a lease
+  ends, which is what stops the verb layer and the restoration drifting: one recipe per toggle, in
+  one backend, with a second caller rather than a second path — and the order the restoration uses
+  is worth copying, because the airplane-mode toggle can move wifi underneath it while the wifi
+  toggle never moves airplane mode (`PROJECT.md` §6).
 - **`ActionResult`** names the verb, the device (as `DeviceInfo`, so D14's density travels with the
   measurement), the resolved target and the state after the action. A backend with input but no
   screen reading answers an explicit `unavailable` after-state naming the capability that would have

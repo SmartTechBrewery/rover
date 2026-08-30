@@ -53,6 +53,7 @@ import type { LeaseId } from '../core/ids.js';
 import type {
 	AppVerbParams,
 	DeviceInfoParams,
+	EnvironmentVerbParams,
 	IpcHandlers,
 	LongPressParams,
 	PressKeyParams,
@@ -73,6 +74,7 @@ import type {
 } from '../ipc/methods.js';
 import { clearAppData, launchApp, stopApp } from '../verbs/app.js';
 import type { VerbContext } from '../verbs/context.js';
+import { setAirplaneMode, setWifi } from '../verbs/environment.js';
 import { toVerbFailure } from '../verbs/failure.js';
 import {
 	type GestureOptions,
@@ -112,6 +114,8 @@ export type VerbHandlers = Pick<
 	| 'clear_app_data'
 	| 'read_logs'
 	| 'record_video'
+	| 'set_airplane_mode'
+	| 'set_wifi'
 >;
 
 /**
@@ -288,6 +292,19 @@ export function createVerbHandlers(
 		// name instead of answering with a null artifact that reads like a success (D11).
 		record_video(params: RecordVideoParams): Promise<VerbCallResult> {
 			return runVerb(params.leaseId, (context) => recordVideo(context, recordOptions(params)));
+		},
+
+		// The two environment rows. Like the app rows they call the *verbs* rather than
+		// `context.backend.setAirplaneMode` — which reads identically, would skip the spine, and
+		// would also skip the `canControlNetwork` assertion the verbs carry, turning a device
+		// that cannot do this into a `TypeError` instead of a named failure (D11). No options
+		// helper: `enabled` is required, so there is no "omit rather than pass `undefined`" case.
+		set_airplane_mode(params: EnvironmentVerbParams): Promise<VerbCallResult> {
+			return runVerb(params.leaseId, (context) => setAirplaneMode(context, params.enabled));
+		},
+
+		set_wifi(params: EnvironmentVerbParams): Promise<VerbCallResult> {
+			return runVerb(params.leaseId, (context) => setWifi(context, params.enabled));
 		},
 	};
 }

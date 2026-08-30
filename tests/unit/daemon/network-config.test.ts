@@ -1,3 +1,5 @@
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
 	DEFAULT_LISTEN_ADDRESS,
@@ -12,6 +14,7 @@ import {
 	TLS_CERT_ENV_VAR,
 	TLS_KEY_ENV_VAR,
 } from '@/daemon/network-config.js';
+import { USERS_PATH_ENV_VAR } from '@/daemon/user-store.js';
 
 /**
  * Both opt-ins, and the loud failure that replaces a half-configured one of either.
@@ -19,12 +22,15 @@ import {
  * Both resolvers take their environment as an argument, so these are ordinary pure assertions
  * over a plain object — no `vi.stubEnv`, and no chance of a leaked variable turning a later
  * suite into a network host or pointing it at one.
+ *
+ * The two halves are deliberately asymmetric since R28: the listener holds **no** secret and
+ * names a user store, while `ROVER_HOST_TOKEN` is the client's own credential and nothing the
+ * host reads. Several assertions below exist only to keep it that way.
  */
 
 const TOKEN = 'a-thirty-two-character-token-1234';
 const complete = {
 	[LISTEN_PORT_ENV_VAR]: '4711',
-	[HOST_TOKEN_ENV_VAR]: TOKEN,
 	[TLS_CERT_ENV_VAR]: '/tmp/cert.pem',
 	[TLS_KEY_ENV_VAR]: '/tmp/key.pem',
 };
@@ -43,19 +49,40 @@ describe('the network listener is an opt-in', () => {
 	});
 
 	it('reads nothing else at all when the port is unset', () => {
-		// The zero-config local-only path: a host with no token, no certificate and no key is
-		// not a misconfiguration, it is the default.
+		// The zero-config local-only path: a host with no certificate and no key is not a
+		// misconfiguration, it is the default.
 		expect(resolveNetworkListener({})).toBeUndefined();
 	});
 
-	it('resolves the whole configuration when the port is set', () => {
+	it('resolves the whole configuration when the port is set, with no host token anywhere', () => {
+		// The shape R28 leaves behind: a port, TLS material and the store to authenticate
+		// against. There is no `token` field to configure and no shared secret to hold.
 		expect(resolve({})).toEqual({
 			address: DEFAULT_LISTEN_ADDRESS,
 			port: 4711,
-			token: TOKEN,
 			certPath: '/tmp/cert.pem',
 			keyPath: '/tmp/key.pem',
+			usersPath: join(homedir(), '.rover', 'users.json'),
 		});
+	});
+
+	it('follows ROVER_USERS_PATH, and never requires it — it always resolves', () => {
+		expect(resolve({ [USERS_PATH_ENV_VAR]: '/tmp/rover-users.json' })?.usersPath).toBe(
+			'/tmp/rover-users.json',
+		);
+		// A host with no users yet starts and refuses everyone. That is the correct state for
+		// one, not a startup failure, so the store is never in the required-together set.
+		expect(resolve({ [USERS_PATH_ENV_VAR]: '' })?.usersPath).toBe(
+			join(homedir(), '.rover', 'users.json'),
+		);
+	});
+
+	it('ignores ROVER_HOST_TOKEN entirely — the host half of it is gone (D25)', () => {
+		// The assertion that forbids the parallel path: a shared secret set in the host's own
+		// environment changes nothing about what this listener is, or what it will accept.
+		expect(resolve({ [HOST_TOKEN_ENV_VAR]: TOKEN })).toEqual(resolve({}));
+		expect(resolve({ [HOST_TOKEN_ENV_VAR]: 'far-too-short' })).toEqual(resolve({}));
+		expect(JSON.stringify(resolve({ [HOST_TOKEN_ENV_VAR]: TOKEN }))).not.toContain(TOKEN);
 	});
 
 	it('defaults the address to every interface and honours an explicit one', () => {
@@ -64,32 +91,24 @@ describe('the network listener is an opt-in', () => {
 	});
 });
 
-describe('a port with no token is a startup failure', () => {
+describe('a port with no TLS material is a startup failure', () => {
 	it.each([
-		['the token', HOST_TOKEN_ENV_VAR],
 		['the certificate', TLS_CERT_ENV_VAR],
 		['the key', TLS_KEY_ENV_VAR],
 	])('refuses to resolve when %s is missing', (_what, variable) => {
 		expect(() => resolve({ [variable]: undefined })).toThrow(variable);
 	});
 
-	it('names every missing variable at once, not just the first', () => {
-		// One error an operator can act on in one pass, rather than three restarts each
-		// naming the next thing.
-		const missing = () =>
-			resolve({
-				[HOST_TOKEN_ENV_VAR]: undefined,
-				[TLS_CERT_ENV_VAR]: undefined,
-				[TLS_KEY_ENV_VAR]: undefined,
-			});
+	it('names every missing variable at once, and nothing that is no longer required', () => {
+		// One error an operator can act on in one pass, rather than two restarts each naming
+		// the next thing — and never sending them to set a host token that nothing reads.
+		const missing = () => resolve({ [TLS_CERT_ENV_VAR]: undefined, [TLS_KEY_ENV_VAR]: undefined });
 
-		expect(missing).toThrow(HOST_TOKEN_ENV_VAR);
 		expect(missing).toThrow(TLS_CERT_ENV_VAR);
 		expect(missing).toThrow(TLS_KEY_ENV_VAR);
-	});
-
-	it('never resolves a listener with no token, whatever the port says', () => {
-		expect(() => resolve({ [HOST_TOKEN_ENV_VAR]: '' })).toThrow();
+		expect(missing).toThrow(
+			expect.objectContaining({ message: expect.not.stringContaining(HOST_TOKEN_ENV_VAR) }),
+		);
 	});
 });
 
@@ -101,21 +120,6 @@ describe('a bad value names the variable and never quotes the value', () => {
 		['fractional', '80.5'],
 	])('rejects a port that is %s, naming ROVER_LISTEN_PORT', (_what, port) => {
 		expect(() => resolve({ [LISTEN_PORT_ENV_VAR]: port })).toThrow(LISTEN_PORT_ENV_VAR);
-	});
-
-	it('rejects a token under the minimum length', () => {
-		expect(() => resolve({ [HOST_TOKEN_ENV_VAR]: 'too-short' })).toThrow(HOST_TOKEN_ENV_VAR);
-	});
-
-	it('does not put the rejected token in the message (D20)', () => {
-		// The assertion this file exists for. A schema whose failure interpolates the value it
-		// rejected is exactly how a secret reaches a log, a terminal and a support thread — so
-		// the rule that says so lives on the schema, and this is what holds it there.
-		const secret = 'short-but-secret';
-
-		expect(() => resolve({ [HOST_TOKEN_ENV_VAR]: secret })).toThrow(
-			expect.objectContaining({ message: expect.not.stringContaining(secret) }),
-		);
 	});
 });
 
@@ -157,8 +161,11 @@ describe('the remote host is an opt-in too', () => {
 		expect(resolveClient({})?.caPath).toBeUndefined();
 	});
 
-	it('reads the same token variable the host does, so one machine holds one secret', () => {
+	it('reads the token the host issued it, which the host itself no longer reads (D25)', () => {
 		expect(resolveClient({})?.token).toBe(TOKEN);
+		// Same variable, one direction only: this is the credential `rover users add` printed
+		// on the other machine, not half of a secret both machines hold.
+		expect(resolve({ [HOST_TOKEN_ENV_VAR]: TOKEN })).not.toHaveProperty('token');
 	});
 });
 
@@ -191,9 +198,16 @@ describe('an address with half a configuration is a caller failure', () => {
 		expect(rejection).not.toThrow(LISTEN_PORT_ENV_VAR);
 	});
 
+	it('rejects a token under the minimum length, naming the variable', () => {
+		// The floor is a **local** guard now: a truncated paste fails on the borrowing machine,
+		// naming what to fix, rather than travelling and coming back as an opaque refusal.
+		expect(() => resolveClient({ [HOST_TOKEN_ENV_VAR]: 'too-short' })).toThrow(HOST_TOKEN_ENV_VAR);
+	});
+
 	it('does not put the rejected token in the message (D20)', () => {
-		// The same rule as the listener schema, held on the client side: a client's token is
-		// exactly as much of a secret as a host's.
+		// The assertion this file exists for. A schema whose failure interpolates the value it
+		// rejected is exactly how a secret reaches a log, a terminal and a support thread — so
+		// the rule that says so lives on the schema, and this is what holds it there.
 		const secret = 'short-but-secret';
 
 		expect(() => resolveClient({ [HOST_TOKEN_ENV_VAR]: secret })).toThrow(

@@ -11,7 +11,9 @@
  * - **It is a local file, not a service.** Every function takes the resolved path and touches
  *   the filesystem directly. `rover users` is an operator tool for the machine holding the
  *   instance, so it works whether or not a daemon is running and never goes over the network
- *   (D25). Nothing here imports a client, a socket or an IPC method.
+ *   (D25). Nothing here imports a client, a socket or an IPC method. That stays true now the
+ *   daemon's network gate is a second reader ({@link findUserByToken}): it is on the same
+ *   machine and opens the same file, rather than asking anything for it.
  * - **A malformed store is never silently reset.** A read that cannot be parsed throws, naming
  *   the path; rewriting it as an empty list would delete every credential on the host to make
  *   one command succeed.
@@ -28,7 +30,12 @@ import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { z } from 'zod';
 import { describeIssues } from '../ipc/protocol.js';
-import { generateUserToken, hashUserToken, TOKEN_HASH_PATTERN } from './user-token.js';
+import {
+	generateUserToken,
+	hashUserToken,
+	TOKEN_HASH_PATTERN,
+	verifyUserToken,
+} from './user-token.js';
 
 /** Environment variable naming the store, for tests and for a non-default install. */
 export const USERS_PATH_ENV_VAR = 'ROVER_USERS_PATH';
@@ -156,6 +163,35 @@ export async function readUsers(path: string): Promise<UserRecord[]> {
 		);
 	}
 	return result.data.users;
+}
+
+/**
+ * The user whose token is `token`, or `undefined` when no stored record matches it.
+ *
+ * **The store is read on every call, deliberately** — no cache, no memo, no watcher. This is
+ * what the daemon's network gate authenticates against (D6: the daemon is a cache, and holds
+ * nothing it cannot re-derive), so a `rover users revoke` on this machine bites on the very
+ * next connection attempt with the daemon still running.
+ *
+ * One `scrypt` per record, by construction: the per-record salt this store's hashes carry
+ * makes a lookup *by* hash impossible, for the reason `user-token.ts` sets out, and a linear
+ * scan is the price of a credential that survives the file leaking. Returning early on a match
+ * costs a valid token nothing it did not already know — an invalid one always pays for every
+ * record — and only a caller already holding a token can observe its record's position.
+ *
+ * A store that cannot be read or parsed **throws**, carrying `readUsers`' own diagnosis. What
+ * a caller on a socket is told about that is the caller's policy to decide, not this module's.
+ */
+export async function findUserByToken(
+	path: string,
+	token: string,
+): Promise<UserRecord | undefined> {
+	for (const user of await readUsers(path)) {
+		if (await verifyUserToken(token, user.tokenHash)) {
+			return user;
+		}
+	}
+	return undefined;
 }
 
 /** Create a user and mint its first token. Throws {@link DuplicateUserError} on a repeat. */
