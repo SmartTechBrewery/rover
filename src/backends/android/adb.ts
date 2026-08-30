@@ -229,6 +229,35 @@ export function shellArg(value: string): string {
 }
 
 /**
+ * The same, for a value whose **content** is the point rather than its shape — the text a
+ * caller wants typed on the device.
+ *
+ * {@link shellArg} refuses a value carrying a `'`, and that refusal is correct where it
+ * lives: everything it quotes has already been through a shape check, so an apostrophe
+ * arriving there is a bug in that check. Screen content is the opposite kind of value.
+ * `don't` is ordinary text, and a primitive that refused it would be refusing the caller's
+ * data rather than catching anyone's mistake — so this one escapes instead of refusing,
+ * and the two live side by side so nobody has to decide which behaviour `shellArg` has
+ * today.
+ *
+ * The escape is the standard single-quote splice: close the quote, hand the shell a
+ * backslashed `'`, reopen it. That is the only form that works, because a single-quoted
+ * string in `sh` has no escapes inside it at all. It is what the device runs, and it is
+ * measured rather than assumed — `input text 'don'\''t'` typed `don't` on API 37 with adb
+ * 37.0.0, and one word carrying every shell metacharacter — ampersand, pipe, semicolon,
+ * dollar, backtick, double quote, parentheses, glob characters — arrived verbatim
+ * (PROJECT.md §6).
+ *
+ * Quoting is needed at all for the reason {@link shellArg} states: adb joins its arguments
+ * with single spaces and hands the string to the device's own `sh`, so an unquoted
+ * `input text hello world` reaches `input` as two arguments and an unquoted `;` starts a
+ * second command on hardware lent out for something else.
+ */
+export function shellText(value: string): string {
+	return `'${value.replaceAll("'", "'\\''")}'`;
+}
+
+/**
  * Run `adb <args>` and hand back both streams.
  *
  * Throws {@link AdbCommandError} on a non-zero exit, a timeout, or a failure to start.

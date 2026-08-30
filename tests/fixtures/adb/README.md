@@ -18,9 +18,11 @@ one: a parser has to keep working on the API levels already in use.
 ## Captures
 
 All from an Android Emulator AVD `Pixel_10_Pro` (`sdk_gphone16k_arm64`, API 37 / Android 17) on
-macOS, captured **2026-08-29**. `SERIAL` is `emulator-5554`. The enumeration, `wm` and
-`uiautomator` rows were taken with `adb` 37.0.0-14910828; the app-control rows below them
-(`install-success` onwards) with `adb` 37.0.1-15733141, the version that host had by then.
+macOS. `SERIAL` is `emulator-5554`. Everything above the `input` rows was captured
+**2026-08-29**: the enumeration, `wm` and `uiautomator` rows with `adb` 37.0.0-14910828, and the
+app-control rows below them (`install-success` onwards) with `adb` 37.0.1-15733141, the version
+that host had by then. The three `input` rows were captured **2026-08-30** on a host back on
+`adb` 37.0.0-14910828.
 
 | Fixture | Command | Model | API | Captured |
 |---|---|---|---|---|
@@ -45,6 +47,9 @@ macOS, captured **2026-08-29**. `SERIAL` is `emulator-5554`. The enumeration, `w
 | `track-devices-l.connect-disconnect.api37-sdk-gphone16k-arm64.txt` | `adb track-devices -l > f`, then `adb connect localhost:5555` and `adb disconnect localhost:5555` | sdk_gphone16k_arm64 | 37 | 2026-08-29 |
 | `cmd-connectivity-airplane-mode.bad-argument.api37-sdk-gphone16k-arm64.txt` | `adb -s $SERIAL shell cmd connectivity airplane-mode nonsense > f 2>&1` | sdk_gphone16k_arm64 | 37 | 2026-08-29 |
 | `cmd-wifi-set-wifi-enabled.bad-argument.api37-sdk-gphone16k-arm64.txt` | `adb -s $SERIAL shell cmd wifi set-wifi-enabled nonsense > f 2>&1` | sdk_gphone16k_arm64 | 37 | 2026-08-29 |
+| `input.unknown-command.api37-sdk-gphone16k-arm64.txt` | `adb -s $SERIAL shell input frobnicate 1 2 > f 2>&1` | sdk_gphone16k_arm64 | 37 | 2026-08-30 |
+| `input-tap.missing-argument.api37-sdk-gphone16k-arm64.txt` | `adb -s $SERIAL shell input tap > f 2>&1` | sdk_gphone16k_arm64 | 37 | 2026-08-30 |
+| `input-text.non-ascii.api37-sdk-gphone16k-arm64.txt` | `adb -s $SERIAL shell input text 'zażółć' > f 2>&1` | sdk_gphone16k_arm64 | 37 | 2026-08-30 |
 
 Both `wm` overrides were reset with `wm size reset` / `wm density reset` immediately after the
 capture. The `track-devices` capture leaves the host as it found it the same way: the second entry
@@ -143,6 +148,39 @@ re-capturing — a fixture nobody can re-create is a fixture nobody can extend.
   **`drawing-order` and `hint`, which it drops**; anything a newer API adds is dropped the same way.
   A dropped attribute becomes visible when a fixture from a newer API level is captured, which is
   the mechanism `ai/TESTING.md` already prescribes — so add the fixture first, then the field.
+
+- **The three `input` captures are all refusals, because every `input` success is zero bytes.**
+  `input tap`, `input swipe`, `input text` and `input keyevent` each print nothing on either
+  stream and exit 0 (PROJECT.md §6), so four empty files would read as a mistake for the reason
+  the network recipes' would. `parsers/input.test.ts` takes its "silent, with adb's banner on
+  stderr" case from `am-force-stop.daemon-start.stderr` for the same reason `network.test.ts`
+  does: the banner is the adb *client*'s, written before any subcommand is dispatched, so a
+  byte-identical copy under an input name would be a second thing to keep in sync.
+- **Only one of the three is a refusal the predicate ever sees.**
+  `input.unknown-command` is `Unknown command: frobnicate` on **stdout at exit 0** — the opposite
+  stream from `am start`'s refusals, and the one shape that reaches `acceptedInput` at all. The
+  other two exited **255**, so `runAdb` rejects them first; they are pinned anyway, because an
+  exit code that agrees today is not a reason to stop reading what the device said.
+- **The two exit-255 captures are Java stack traces, and which exception matters.**
+  `input-tap.missing-argument` is an `IllegalArgumentException: Argument expected after "tap"` —
+  the shape every malformed argv takes. `input-text.non-ascii` is a
+  `NullPointerException: Attempt to get length of null array` thrown from
+  `InputShellCommand.sendText`, which is what a character `KeyCharacterMap` cannot produce looks
+  like: **nothing at all is typed**, not even the ASCII around it. That capture is the evidence
+  behind `src/backends/android/input.ts` refusing non-ASCII before the call rather than letting
+  the device answer.
+- **The worst `input` failure has no capture, because it produces no bytes.**
+  `input keyevent NOT_A_KEY`, `input keyevent 999999` and `input tap 99999 99999` each exit **0
+  with zero bytes on both streams** and do nothing. There is no fixture that could pin that and
+  no predicate that could catch it; the keycode table and the dp→px conversion are pinned in
+  `tests/unit/backends/android/input.test.ts` instead, and that is the whole reason those checks
+  live before the call.
+- **The `input` session left the device as it found it** — Settings force-stopped, the search
+  field cleared, the home screen showing, `/sdcard/*.xml` scratch dumps removed, and
+  `settings get global airplane_mode_on` / `wifi_on` re-read as `0` / `1`. It typed into the
+  Settings search box because that is a text field reachable with one intent and one tap on any
+  build, and what was typed was read back out of `uiautomator dump` — the exit code alone cannot
+  tell a character that was typed from one that was dropped.
 
 ## Redactions
 

@@ -125,7 +125,7 @@ Working names. All of them take a device handle, and over the wire that handle i
 | `tap` | By text or element id; coordinates are the fallback |
 | `long_press` | Implemented as a drag in place with a duration |
 | `swipe` / `scroll` | |
-| `type_text` | Hides escaping of spaces and non-ASCII characters |
+| `type_text` | Hides the device shell's quoting, so a space, an apostrophe and a shell metacharacter all arrive verbatim. **Non-ASCII it cannot hide — `input text` cannot type it at all** (§6), so the honest answer is a refusal naming the character rather than a silent drop |
 | `press_key` | Back, home, recents, wake |
 
 ### Reading
@@ -459,6 +459,75 @@ step order depends on:
   step can move wifi underneath it, in a direction no caller can predict, while the wifi step
   cannot move airplane mode.
 
+Checked on the same API 37 emulator (`sdk_gphone16k_arm64`, Android 17, 1280×2856 at density
+480) with `adb` 37.0.0-14910828 while building the input primitives (#12), 2026-08-30. §6 above
+recorded what `input` *offers* and that a long press is a drag in place; this is what each recipe
+prints, what coordinate space it takes, and what `input text` does with a caller's string:
+
+- **All four recipes are completely silent on success, and exit 0.** `input tap <x> <y>`,
+  `input swipe <x1> <y1> <x2> <y2> <ms>`, `input text <string>` and `input keyevent <code>` each
+  printed **zero bytes on both streams** — the same shape `am force-stop` and the two network
+  recipes have, so silence is the only assertable success.
+- **`input` accepts a great deal of nonsense in exactly that silence, and that is the finding the
+  whole capability is built around.** `input keyevent NOT_A_KEY`, `KEYCODE_NOPE`, `999999` and
+  `-5` each exited **0 with zero bytes on both streams** and did nothing. So did
+  `input tap 99999 99999`, far outside a 1280×2856 panel. Neither a predicate nor a device test
+  can tell any of those from work that was done — which is why the keycode table and the dp→px
+  conversion are pinned in unit tests, and why a wrong keycode would otherwise be a verb that
+  reports success forever.
+- **A malformed argv is loud, at exit 255 on stderr.** `input tap` with no arguments, `input tap
+  x y`, `input text` with no argument and `input swipe … abc` each answered `Exception occurred
+  while executing '<sub>':` above a Java stack trace headed by an `IllegalArgumentException`, and
+  exited 255 — so `runAdb` rejects them before any predicate is consulted. **The one refusal that
+  exits 0** is `input`'s own dispatch failure: `Unknown command: <x>` on **stdout**, exit 0, which
+  is the opposite stream from `am start`'s refusals and is what `parsers/input.ts` exists to
+  catch.
+- **`input` takes physical pixels, and `Point` is dp — this backend converts.** `wm size` and the
+  hierarchy bounds agree at 1280×2856 while `wm density` reports 480, so the scale is 3; a tap at
+  the Settings search bar's pixel bounds landed on it, and the same numbers read as dp would have
+  landed in the status bar. The scale is `wm density ÷ 160`, asked of the device on **every**
+  injection rather than cached — `wm density <n>` changes it under a running lease — and
+  `read_screen` (#13) divides by the same number on the way back. The conversion floors, because
+  the question is which pixel a point is *in* rather than which pixel centre it is nearest. Note
+  that `widthPx / scale` is a rounded double, so the very largest dp coordinate the verb layer
+  admits can still multiply back to `widthPx` itself, one column past the panel: one dp value out
+  of a whole panel width, recorded rather than defended against, because clamping it needs a
+  second query on the hot path of every injection.
+- **A drag in place really is a long press, and the threshold is a device *setting*.** Long
+  pressing the empty home-screen wallpaper raised the Wallpaper/Widgets/Home-settings menu at
+  `input swipe 640 1500 640 1500 390` and did **not** at `380` — matching this device's
+  `settings get secure long_press_timeout`, which reads `400`. A plain `input tap` at the same
+  point never raised it. So the primitive stays the plain `swipe` with no default duration baked
+  in; phase 2's `long_press` should sit comfortably above the threshold rather than on it,
+  because the number is per-device configuration.
+- **A space needs no `%s` once the argument is quoted.** `input text 'hello world'` typed
+  `hello world`, and `'a  b'` kept both spaces — so the `%s` substitution every guide shows is
+  not used here at all. All 95 printable ASCII characters (U+0020–U+007E) typed verbatim in a
+  single call, backslash included, and one word carrying every shell metacharacter — ampersand,
+  pipe, semicolon, dollar, backtick, double quote, parentheses and glob characters — arrived in
+  the field unchanged once wrapped in single quotes.
+- **`%s` is `input text`'s escape for a space, and only that exact sequence.** `'a%sb'` typed
+  `a b`, while `'100%'`, `'%'`, `'%S'` and `'a%'` all typed verbatim. So a caller's literal `%s`
+  is not representable in one call — and is representable in two: `'a%'` followed by `'sb'` typed
+  `a%sb`. `typeText` cuts the string between the `%` and the `s` of each occurrence for that
+  reason, and everything without a `%s` is still exactly one injection.
+- **An apostrophe is ordinary text and is escaped rather than refused.** The device-side argument
+  `'don'\''t'` typed `don't`. That is why `shellText` sits beside `shellArg` rather than
+  replacing it: `shellArg` refuses a `'` because everything it quotes has had its shape checked
+  already, while screen content legitimately carries one.
+- **`input text` drops a tab and a newline in silence.** `'a<TAB>b'` and `'a<LF>b'` each exited 0
+  with zero bytes on both streams and put `ab` in the field. Nothing downstream can see that
+  happened.
+- **Any non-ASCII character throws inside the device, and nothing at all is typed.** `'zażółć'`,
+  `'日本語'`, `'a🙂b'` and `'ab±cd'` each exited **255** with `java.lang.NullPointerException:
+  Attempt to get length of null array` from `InputShellCommand.sendText` — `KeyCharacterMap` has
+  no events for the character — and the field was left completely unchanged rather than partially
+  typed. Loud, but as a stack trace about a null array rather than as anything a caller can act
+  on. `typeText` therefore refuses anything outside U+0020–U+007E *before* the call, naming the
+  offending characters; the same rule covers the silent tab-and-newline case above, which nothing
+  else would.
+- **`input text ''` is a legal no-op** — exit 0, nothing printed, nothing typed.
+
 Checked against Node 22 while building R22's host listener, 2026-08-30. All three bit the
 implementation before review caught them, and all three are invisible to a test whose peers are
 well behaved:
@@ -563,7 +632,7 @@ Four rules when filing these issues:
 | R11 | Verb layer foundation | Target resolution from a **fresh** read inside the verb, waiting on a condition with a timeout, returning the state after the action (D12). **There is not a single `sleep` in the repo** — enforced by a lint rule or a test. A timeout says what it waited for and what it found instead. A verb's result is serializable — the host will execute it, not the client (D19, R21) | R5, R8 | L |
 | R21 | Host-side verb execution | The daemon loads the core; the CLI and MCP call verbs over the same surface as leases (D19). **No adb in a client process** — checkable by a test. This row stands ahead of the verb families deliberately: changing the execution model after they are written is a rewrite of six files instead of one | R11 | L |
 | R22 | Host network listener and authentication | TCP with TLS alongside the local socket, **the same surface, a second transport** (D17). The host token authenticates, the owner string attributes — **two separate fields, and a test proves the token never becomes the owner nor reaches a log** (D20). A refusal does not reveal what the host has attached | R21 | L |
-| R12 | Input verbs | `tap`, `long_press`, `swipe`, `scroll`, `type_text`, `press_key`. `long_press` as a drag in place — **not** `keyevent --longpress` (§6). `type_text` hides the escaping of spaces | R21 | M |
+| R12 | Input verbs | `tap`, `long_press`, `swipe`, `scroll`, `type_text`, `press_key`. `long_press` as a drag in place — **not** `keyevent --longpress` (§6) — held past the device's own `secure long_press_timeout`, which is configuration rather than a constant. `type_text` hides the device shell's quoting. Split the way R9 and R16 were: the backend's four **primitives** landed first (#12 phase 1) — `tap` / `swipe` / `typeText` / `pressKey` behind `canInput`, with the dp→px conversion and the text limits §6 records — so this row is the verb layer over them, not the recipes | R21 | M |
 | R13 | Read verbs | `screenshot`, `read_screen`, `device_info`. `read_screen` works with screen capture blocked and **is a declared capability, not a required method** (§5) | R21 | M |
 | R14 | `record_video` + slicing into frames | The recording must finish before it is pulled — a file pulled earlier has no `moov` atom and cannot be read at all | R13 | S |
 | R15 | App verbs | `install_app`, `launch_app`, `stop_app`, `clear_app_data`, `read_logs`, `pull_file`, `push_file`. `read_logs` is to catch a failure a screenshot will not show | R21 | M |

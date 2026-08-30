@@ -1115,3 +1115,291 @@ describe('no environment verb swallows a failure', () => {
 		await expect(call()).rejects.toThrow("device 'emulator-5554' not found");
 	});
 });
+
+/**
+ * The four primitives behind `canInput`. `tests/device/android/input.test.ts` is the half
+ * that proves a real device accepts these recipes at all; what is proved here is the join,
+ * and above all the **argv and the arithmetic**.
+ *
+ * Both matter more here than anywhere else in this file, because `input` is the one command
+ * in this backend that accepts nonsense in silence. An unknown keycode, an off-screen
+ * coordinate and a dp point sent unconverted are each exit 0 with zero bytes on both streams
+ * (PROJECT.md §6) — so nothing downstream, and no device test, can tell them from work that
+ * was done. The pin is the only place they are visible.
+ */
+const INPUT_REFUSAL = fixture('input.unknown-command.api37-sdk-gphone16k-arm64.txt');
+
+/** What `wm density` is asked before every tap and swipe: 480 dpi, so a scale of 3. */
+const TAP_FACTS = { 'shell wm density': DENSITY } as const;
+
+describe('tap', () => {
+	it('converts the point to physical pixels and taps through the pinned runner', async () => {
+		answers({ ...TAP_FACTS, 'shell input tap 300 600': '' });
+
+		await backend.tap(SERIAL, { x: 100, y: 200 });
+
+		expect(runAdb).not.toHaveBeenCalled();
+		expect(runAdbOnDevice.mock.calls[0][1]).toEqual(['shell', 'wm', 'density']);
+		expect(runAdbOnDevice.mock.calls[1][0]).toBe(SERIAL);
+		expect(runAdbOnDevice.mock.calls[1][1]).toEqual(['shell', 'input', 'tap', '300', '600']);
+	});
+
+	/**
+	 * The density is asked **every time** rather than cached. `wm density <n>` changes it
+	 * under a running lease, and a remembered scale would then put every subsequent tap
+	 * somewhere the caller did not ask for, without a word (D6: adb is the truth).
+	 */
+	it('asks the device for its density on every call', async () => {
+		answers({ ...TAP_FACTS, 'shell input tap 300 600': '' });
+
+		await backend.tap(SERIAL, { x: 100, y: 200 });
+		await backend.tap(SERIAL, { x: 100, y: 200 });
+
+		expect(runAdbOnDevice.mock.calls.filter(([, args]) => args[1] === 'wm')).toHaveLength(2);
+	});
+
+	// The override is what the device renders at, so it is the scale a coordinate belongs to
+	// — `wm density 320` on the same panel means a dp point lands twice as close to the
+	// origin as the physical density would put it.
+	it('honours an overridden density rather than the physical one', async () => {
+		answers({ 'shell wm density': DENSITY_OVERRIDE, 'shell input tap 200 400': '' });
+
+		await backend.tap(SERIAL, { x: 100, y: 200 });
+
+		expect(runAdbOnDevice.mock.calls[1][1]).toEqual(['shell', 'input', 'tap', '200', '400']);
+	});
+
+	it('never puts the serial in the argv', async () => {
+		answers({ ...TAP_FACTS, 'shell input tap 300 600': '' });
+
+		await backend.tap(SERIAL, { x: 100, y: 200 });
+
+		expect(runAdbOnDevice.mock.calls[1][1]).not.toContain('emulator-5554');
+	});
+
+	it('throws when the device answered with anything, naming the command and the device', async () => {
+		answers({ ...TAP_FACTS, 'shell input tap 300 600': INPUT_REFUSAL });
+
+		const failure = backend.tap(SERIAL, { x: 100, y: 200 });
+
+		await expect(failure).rejects.toThrow(/input tap 300 600/);
+		await expect(failure).rejects.toThrow(/emulator-5554/);
+	});
+
+	it('is not fooled by the daemon banner adb writes to stderr on the way through', async () => {
+		answers({ ...TAP_FACTS, 'shell input tap 300 600': { stdout: '', stderr: DAEMON_BANNER } });
+
+		await expect(backend.tap(SERIAL, { x: 100, y: 200 })).resolves.toBeUndefined();
+	});
+
+	// The parse failure carries the command and the other stream, the way `listDevices`'
+	// does — a density that will not parse is not a tap that can be placed.
+	it('refuses to tap when the density cannot be read', async () => {
+		answers({ 'shell wm density': "Error: Can't find service: window\n" });
+
+		await expect(backend.tap(SERIAL, { x: 1, y: 1 })).rejects.toThrow(/wm density/);
+	});
+});
+
+describe('swipe', () => {
+	it('converts both points off one density query', async () => {
+		answers({ ...TAP_FACTS, 'shell input swipe 300 1200 300 600 250': '' });
+
+		await backend.swipe(SERIAL, { x: 100, y: 400 }, { x: 100, y: 200 }, 250);
+
+		expect(runAdbOnDevice.mock.calls).toHaveLength(2);
+		expect(runAdbOnDevice.mock.calls[1][1]).toEqual([
+			'shell',
+			'input',
+			'swipe',
+			'300',
+			'1200',
+			'300',
+			'600',
+			'250',
+		]);
+	});
+
+	/**
+	 * A drag in place is how a long press is done — phase 2 composes one out of this rather
+	 * than getting its own primitive. Pinned here so the two points staying equal survives
+	 * any later edit to the conversion.
+	 */
+	it('keeps a drag in place in place', async () => {
+		answers({ ...TAP_FACTS, 'shell input swipe 300 600 300 600 600': '' });
+
+		await backend.swipe(SERIAL, { x: 100, y: 200 }, { x: 100, y: 200 }, 600);
+
+		expect(runAdbOnDevice.mock.calls[1][1].slice(3)).toEqual(['300', '600', '300', '600', '600']);
+	});
+
+	// A programmer error costs no round trip and reads as itself, rather than arriving as a
+	// Java stack trace about invalid arguments.
+	it.each([Number.NaN, -1])('refuses a duration of %p before touching the device', async (ms) => {
+		answers(TAP_FACTS);
+
+		await expect(backend.swipe(SERIAL, { x: 1, y: 1 }, { x: 2, y: 2 }, ms)).rejects.toThrow(
+			/duration/,
+		);
+		expect(runAdbOnDevice).not.toHaveBeenCalled();
+	});
+
+	it('throws when the device answered with anything', async () => {
+		answers({ ...TAP_FACTS, 'shell input swipe 300 600 300 600 100': INPUT_REFUSAL });
+
+		await expect(
+			backend.swipe(SERIAL, { x: 100, y: 200 }, { x: 100, y: 200 }, 100),
+		).rejects.toThrow(/input swipe 300 600 300 600 100/);
+	});
+});
+
+describe('typeText', () => {
+	// No `wm density`: text has no coordinate, so the query every tap pays for is not paid
+	// here.
+	it('sends the text as one quoted word, with no density query', async () => {
+		answers({ "shell input text 'hello world'": '' });
+
+		await backend.typeText(SERIAL, 'hello world');
+
+		expect(runAdbOnDevice.mock.calls).toHaveLength(1);
+		expect(runAdbOnDevice.mock.calls[0][1]).toEqual(['shell', 'input', 'text', "'hello world'"]);
+	});
+
+	/**
+	 * The apostrophe case, which is the whole reason `shellText` exists beside `shellArg`.
+	 * It reaches the device as one word carrying a real `'`, rather than being refused as
+	 * every app id containing one is.
+	 */
+	it('splices an apostrophe rather than refusing the text', async () => {
+		answers({ "shell input text 'don'\\''t'": '' });
+
+		await backend.typeText(SERIAL, "don't");
+
+		expect(runAdbOnDevice.mock.calls[0][1][3]).toBe("'don'\\''t'");
+	});
+
+	// Quoted, so they are one word and inert — the injection `shellArg` exists to stop, on
+	// the one argument here that is arbitrary by definition.
+	it('makes shell metacharacters one inert word', async () => {
+		const text = 'a; echo INJECTED';
+		answers({ [`shell input text '${text}'`]: '' });
+
+		await backend.typeText(SERIAL, text);
+
+		expect(runAdbOnDevice.mock.calls[0][1][3]).toBe(`'${text}'`);
+	});
+
+	/**
+	 * The `%s` split. `input text` substitutes a space for a literal `%s`, so the caller's
+	 * own `%s` costs two injections — and the pieces are what typed `a%sb` on API 37.
+	 */
+	it('types a literal %s as two calls so it arrives as itself', async () => {
+		answers({ "shell input text 'a%'": '', "shell input text 'sb'": '' });
+
+		await backend.typeText(SERIAL, 'a%sb');
+
+		expect(runAdbOnDevice.mock.calls.map(([, args]) => args[3])).toEqual(["'a%'", "'sb'"]);
+	});
+
+	// Each piece is checked on its own, so a run that got half the text in says so rather
+	// than reporting success for the half that landed.
+	it('stops at the first piece the device refused', async () => {
+		answers({ "shell input text 'a%'": INPUT_REFUSAL, "shell input text 'sb'": '' });
+
+		await expect(backend.typeText(SERIAL, 'a%sb')).rejects.toThrow(/input text/);
+		expect(runAdbOnDevice.mock.calls).toHaveLength(1);
+	});
+
+	/**
+	 * What the device was measured not to type is refused before anything is sent — a tab is
+	 * dropped in silence, and a non-ASCII character throws inside the device and types
+	 * nothing at all (PROJECT.md §6).
+	 */
+	it.each([
+		['a tab', 'a\tb'],
+		['a non-ASCII character', 'café'],
+	])('refuses %s without touching the device', async (_what, text) => {
+		answers({});
+
+		await expect(backend.typeText(SERIAL, text)).rejects.toThrow(/printable ASCII/);
+		expect(runAdbOnDevice).not.toHaveBeenCalled();
+	});
+
+	// Typing nothing still reaches the device, so a device that has gone away is reported
+	// rather than resolving.
+	it('still calls the device for an empty string', async () => {
+		answers({ "shell input text ''": '' });
+
+		await backend.typeText(SERIAL, '');
+
+		expect(runAdbOnDevice.mock.calls[0][1]).toEqual(['shell', 'input', 'text', "''"]);
+	});
+});
+
+describe('pressKey', () => {
+	/**
+	 * All four keycodes pinned, for the reason the environment pair's four literals are: no
+	 * type can catch a wrong one, and neither can the device — `input keyevent NOT_A_KEY`
+	 * exits 0 with zero bytes on both streams, so a typo here is a key that reports success
+	 * and does nothing at all.
+	 */
+	it.each([
+		['back', 'KEYCODE_BACK'],
+		['home', 'KEYCODE_HOME'],
+		['recents', 'KEYCODE_APP_SWITCH'],
+		['wake', 'KEYCODE_WAKEUP'],
+	] as const)('presses %s as %s', async (key, keycode) => {
+		answers({ [`shell input keyevent ${keycode}`]: '' });
+
+		await backend.pressKey(SERIAL, key);
+
+		expect(runAdb).not.toHaveBeenCalled();
+		expect(runAdbOnDevice.mock.calls[0][0]).toBe(SERIAL);
+		expect(runAdbOnDevice.mock.calls[0][1]).toEqual(['shell', 'input', 'keyevent', keycode]);
+	});
+
+	// Power *toggles*, so a `wake` built on it would put an already-woken device to sleep.
+	it('never presses the power key for wake', async () => {
+		answers({ 'shell input keyevent KEYCODE_WAKEUP': '' });
+
+		await backend.pressKey(SERIAL, 'wake');
+
+		expect(runAdbOnDevice.mock.calls[0][1]).not.toContain('KEYCODE_POWER');
+	});
+
+	it('throws when the device answered with anything', async () => {
+		answers({ 'shell input keyevent KEYCODE_BACK': INPUT_REFUSAL });
+
+		await expect(backend.pressKey(SERIAL, 'back')).rejects.toThrow(/input keyevent KEYCODE_BACK/);
+	});
+});
+
+/**
+ * The counterpart of "no app verb swallows a failure" for the four primitives an agent
+ * drives the screen with. An injection that reported success without landing is the false
+ * green this whole tool exists to avoid, so both halves are asserted: a refusal adb exited 0
+ * on, and the failure the runner itself raises.
+ */
+describe('no input verb swallows a failure', () => {
+	const CALLS: ReadonlyArray<[string, () => Promise<void>]> = [
+		['tap', () => backend.tap(SERIAL, { x: 100, y: 200 })],
+		['swipe', () => backend.swipe(SERIAL, { x: 1, y: 1 }, { x: 2, y: 2 }, 100)],
+		['typeText', () => backend.typeText(SERIAL, 'hello')],
+		['pressKey', () => backend.pressKey(SERIAL, 'back')],
+	];
+
+	it.each(CALLS)('%s rejects rather than resolving', async (_name, call) => {
+		runAdbOnDevice.mockImplementation(async (_serial, args): Promise<AdbResult> => {
+			if (args[1] === 'wm') return { stdout: DENSITY, stderr: '' };
+			return { stdout: INPUT_REFUSAL, stderr: '' };
+		});
+
+		await expect(call()).rejects.toThrow();
+	});
+
+	it.each(CALLS)('%s lets a failed run surface as the runner reported it', async (_name, call) => {
+		runAdbOnDevice.mockRejectedValue(new Error("device 'emulator-5554' not found"));
+
+		await expect(call()).rejects.toThrow("device 'emulator-5554' not found");
+	});
+});
