@@ -63,7 +63,10 @@ const leases: Array<{ client: IpcClient; leaseId: LeaseId }> = [];
 /** A daemon of this repository's own making, on a socket nobody else uses. */
 async function startHost(): Promise<IpcClient> {
 	temp = await createTempSocket();
-	const daemon = await startDaemon({ socketPath: temp.socketPath });
+	const daemon = await startDaemon({
+		socketPath: temp.socketPath,
+		artifactsRoot: temp.artifactsRoot,
+	});
 	if (!daemon.started) {
 		throw new Error('Another daemon holds the temp socket — the test cannot proceed');
 	}

@@ -26,7 +26,7 @@ let temp: TempSocket;
 const running: RunningDaemon[] = [];
 
 async function start(socketPath: string): Promise<StartResult> {
-	const result = await startDaemon({ socketPath });
+	const result = await startDaemon({ socketPath, artifactsRoot: temp.artifactsRoot });
 	if (result.started) {
 		running.push(result);
 	}

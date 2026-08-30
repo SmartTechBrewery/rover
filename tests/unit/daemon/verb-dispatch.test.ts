@@ -19,6 +19,10 @@
  * to poll to its own deadline, which is the wait vocabulary doing what it is for; everywhere
  * else `timeoutMs: 0` makes a wait exactly one screen read (`src/core/wait.ts`).
  *
+ * The archive every artifact-producing verb also writes (D23, R25) is real here too, under
+ * the temp socket's own root: what the acceptance criteria are about is a file on the host's
+ * disk beside bytes on the wire, and neither half is provable without the other.
+ *
  * One host-side tool is mocked, and only one: the frame extractor `record_video` is handed
  * (`src/daemon/frames.ts`). It drives a program that may not be installed, and its own suite
  * covers the argv, the failures and the split against a mocked process — what this file is
@@ -26,7 +30,9 @@
  * decoder no more than a `tap` needs a finger.
  */
 
-import { access, readFile } from 'node:fs/promises';
+import { access, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
 	_resetDeviceBackendRegistryForTesting,
@@ -132,6 +138,8 @@ interface HostOptions {
 	readonly recordVideo?: DeviceBackend['recordVideo'];
 	readonly capabilities?: Partial<Capabilities>;
 	readonly leaseTtlMs?: number;
+	/** Defaults to the temp socket's own. Overridden by the test that makes the write fail. */
+	readonly artifactsRoot?: string;
 }
 
 /**
@@ -156,6 +164,9 @@ const CAPTURE = Uint8Array.from([
 const RECORDING = Uint8Array.from([
 	0x00, 0x00, 0x00, 0x18, 0x66, 0x74, 0x79, 0x70, 0x00, 0x01, 0xfe, 0xff, 0x7f, 0x80, 0x0a, 0x0d,
 ]);
+
+/** Temp directories made outside `temp`, removed with it — never `~/.rover/artifacts`. */
+const strays: string[] = [];
 
 /** The screen reads the daemon performed, so a test can prove the host did the work. */
 let reads: number;
@@ -320,6 +331,7 @@ async function serve(options: HostOptions = {}): Promise<void> {
 	temp = await createTempSocket();
 	const result = await startDaemon({
 		socketPath: temp.socketPath,
+		artifactsRoot: options.artifactsRoot ?? temp.artifactsRoot,
 		...(options.leaseTtlMs === undefined ? {} : { leaseTtlMs: options.leaseTtlMs }),
 	});
 	if (!result.started) {
@@ -352,11 +364,12 @@ async function connect(): Promise<IpcClient> {
 }
 
 /** A held lease on the one device, taken over the same client the verbs then use. */
-async function acquire(client: IpcClient): Promise<LeaseId> {
+async function acquire(client: IpcClient, testName?: string): Promise<LeaseId> {
 	const outcome = await client.request('acquire_device', {
 		serial: SERIAL,
 		owner: 'issue-21',
 		project: 'rover',
+		...(testName === undefined ? {} : { testName }),
 	});
 	if (outcome.outcome !== 'granted') {
 		throw new Error(`The test needs a lease and was refused: ${outcome.message}`);
@@ -378,6 +391,7 @@ afterEach(async () => {
 	await Promise.all(clients.splice(0).map((client) => client.close()));
 	await Promise.all(running.splice(0).map((daemon) => daemon.close()));
 	_resetDeviceBackendRegistryForTesting();
+	await Promise.all(strays.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
 	if (temp) {
 		await removeTempSocket(temp);
 	}
@@ -2039,5 +2053,155 @@ describe('a verb never outlives the lease that authorised it', () => {
 		// And only then. The grant was queued behind the ex-holder's call, so the two agents
 		// never had the device at once (PROJECT.md §2).
 		expect(await grant).toMatchObject({ outcome: 'granted' });
+	});
+});
+
+/**
+ * The archive R25 adds beside the answer (D23, PROJECT.md §10).
+ *
+ * Everything below asserts on the tree by **listing it**, which is the whole query a future
+ * read-only viewer would run (D24) — never by rebuilding the lease directory's name, which
+ * would only prove the test agrees with the code that made it.
+ */
+describe('an artifact-producing verb also writes the host-side archive', () => {
+	/** The one lease directory under `<project>/<test_name>`, or a failed test. */
+	async function leaseDirectory(project: string, testName: string): Promise<string> {
+		const under = join(temp.artifactsRoot, project, testName);
+		const entries = await readdir(under);
+		const only = entries[0];
+		if (entries.length !== 1 || only === undefined) {
+			throw new Error(
+				`Expected exactly one lease directory in '${under}', found ${entries.length}`,
+			);
+		}
+		return join(under, only, SERIAL);
+	}
+
+	it('files a screenshot under <project>/unlabeled/<lease>/<serial>, byte for byte', async () => {
+		await serve();
+		const client = await connect();
+		const leaseId = await acquire(client);
+
+		const answer = await client.request('screenshot', { leaseId });
+
+		if (answer.outcome !== 'ok') throw new Error('the screenshot did not answer ok');
+		const directory = await leaseDirectory('rover', 'unlabeled');
+		// The same bytes the client decoded, so the archived file and the answer can never
+		// disagree about what was on the screen.
+		expect(await readFile(join(directory, 'screenshots', '001_screenshot.png'))).toEqual(
+			Buffer.from(answer.result.artifact?.base64 ?? '', 'base64'),
+		);
+		// And the D14 snapshot beside it, per lease-device pair.
+		expect(
+			JSON.parse((await readFile(join(directory, 'device_info.json'))).toString()),
+		).toMatchObject({ serial: SERIAL });
+	});
+
+	it('files a recording with the frames cut out of it', async () => {
+		await serve();
+		const client = await connect();
+		const leaseId = await acquire(client);
+
+		const answer = await client.request('record_video', { leaseId });
+
+		if (answer.outcome !== 'ok') throw new Error('the recording did not answer ok');
+		const directory = await leaseDirectory('rover', 'unlabeled');
+		expect(await readFile(join(directory, 'recordings', '001.mp4'))).toEqual(
+			Buffer.from(answer.result.artifact?.base64 ?? '', 'base64'),
+		);
+		expect(await readdir(join(directory, 'recordings', '001_frames'))).toEqual([
+			'0001.png',
+			'0002.png',
+		]);
+	});
+
+	it('files a log read as text the way the device said it', async () => {
+		await serve();
+		const client = await connect();
+		const leaseId = await acquire(client);
+
+		const answer = await client.request('read_logs', { leaseId });
+
+		if (answer.outcome !== 'ok') throw new Error('the log read did not answer ok');
+		const directory = await leaseDirectory('rover', 'unlabeled');
+		expect((await readFile(join(directory, 'logs', '001_read_logs.txt'))).toString()).toContain(
+			crashed.message,
+		);
+	});
+
+	it("uses the lease's test name instead of the fallback when one was given", async () => {
+		await serve();
+		const client = await connect();
+		const leaseId = await acquire(client, 'home screen before changes');
+
+		await client.request('screenshot', { leaseId });
+
+		// The caller's string, opaque and sanitised into one path component (D22) — never
+		// parsed, and never `unlabeled` once it was supplied. The spaces are what the
+		// sanitiser rewrote, which is what the suffix is there to disambiguate.
+		expect(await readdir(join(temp.artifactsRoot, 'rover'))).toEqual([
+			expect.stringMatching(/^home_screen_before_changes-[0-9a-f]{8}$/),
+		]);
+	});
+
+	it('never puts an archive path on the answer, for any of the three verbs', async () => {
+		await serve();
+		const client = await connect();
+		const leaseId = await acquire(client, 'home-screen');
+
+		const answers = [
+			await client.request('screenshot', { leaseId }),
+			await client.request('record_video', { leaseId }),
+			await client.request('read_logs', { leaseId }),
+		];
+
+		// The directory really exists — otherwise "the answer does not name it" would pass for
+		// an archive that was never written.
+		const [leaseDir] = await readdir(join(temp.artifactsRoot, 'rover', 'home-screen'));
+		expect(leaseDir).toBeDefined();
+		// R24's contract, unchanged: the bytes are the delivery, and the host-side location of
+		// the copy is not the agent's business — it names a file that does not exist on the
+		// agent's machine (D19).
+		for (const answer of answers) {
+			const encoded = JSON.stringify(answer);
+			expect(encoded).not.toContain(temp.artifactsRoot);
+			expect(encoded).not.toContain('home-screen');
+			expect(encoded).not.toContain(leaseDir);
+		}
+	});
+
+	it('answers exactly the same when the archive cannot be written at all', async () => {
+		const dir = await mkdtemp(join(tmpdir(), 'rover-'));
+		strays.push(dir);
+		const blocked = join(dir, 'not-a-directory');
+		await writeFile(blocked, 'a file where the archive root should be');
+		await serve({ artifactsRoot: blocked });
+		const client = await connect();
+		const leaseId = await acquire(client);
+
+		const screenshot = await client.request('screenshot', { leaseId });
+		const recording = await client.request('record_video', { leaseId });
+		const logs = await client.request('read_logs', { leaseId });
+
+		// The archive is a second effect of the call, never a substitute for it (D23): a host
+		// that could not write still owes the agent the bytes.
+		expect(screenshot).toMatchObject({ outcome: 'ok', result: { verb: 'screenshot' } });
+		expect(recording).toMatchObject({ outcome: 'ok', result: { verb: 'record_video' } });
+		expect(logs).toMatchObject({ outcome: 'ok', result: { verb: 'read_logs' } });
+		if (screenshot.outcome !== 'ok') throw new Error('the screenshot did not answer ok');
+		expect(new Uint8Array(Buffer.from(screenshot.result.artifact?.base64 ?? '', 'base64'))).toEqual(
+			CAPTURE,
+		);
+	});
+
+	it('writes nothing for a verb that produced no bytes', async () => {
+		await serve();
+		const client = await connect();
+		const leaseId = await acquire(client);
+
+		await client.request('tap', { leaseId, target: { by: 'text', text: 'Save' } });
+
+		// Not an empty tree: a lease that only ever tapped leaves no scaffolding behind.
+		await expect(readdir(temp.artifactsRoot)).rejects.toMatchObject({ code: 'ENOENT' });
 	});
 });

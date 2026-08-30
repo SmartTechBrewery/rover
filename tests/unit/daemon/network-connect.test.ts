@@ -178,6 +178,7 @@ async function startHost(overrides: Partial<NetworkListenerConfig> = {}): Promis
 	registerFakeBackend();
 	const result = await startDaemon({
 		socketPath: temp.socketPath,
+		artifactsRoot: temp.artifactsRoot,
 		network: networkConfig(overrides),
 	});
 	if (!result.started) {

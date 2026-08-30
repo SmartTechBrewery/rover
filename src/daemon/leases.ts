@@ -61,6 +61,16 @@ export interface Lease {
 	/** Caller-supplied and optional; `null` when it was not given. Not unique (D22). */
 	readonly testName: string | null;
 	/**
+	 * When this lease was granted. A host-local instant that **never crosses the wire**, for
+	 * {@link Lease.expiresAtMs}'s reason.
+	 *
+	 * It is what the artifact archive names this lease's directory after
+	 * (`./archive-path.ts`), which is why it is not derived from `expiresAtMs`: {@link
+	 * LeaseStore.use} pushes that one forward on every verb call, so a directory named from
+	 * it would move with the lease's last activity rather than sit where the run started.
+	 */
+	readonly createdAtMs: number;
+	/**
 	 * A host-local instant. **Never crosses the wire** (D17): a client shares no clock with
 	 * the host, so what it is told is the remaining duration — see {@link LeaseStore.remainingMs}.
 	 */
@@ -207,16 +217,18 @@ export function createLeaseStore(options: LeaseStoreOptions = {}): LeaseStore {
 				return { granted: false, heldBy };
 			}
 
+			const granted = now();
 			const lease: Lease = {
-				// Opaque. PROJECT.md §10 gives the archive a `<timestamp>-<owner>-<hash>` shape for
-				// this id, which turns a caller-supplied string into a path component; that
-				// belongs with the archive that has to sanitise it (R25), not here.
+				// Opaque, and never a path component: the archive derives its directory name from
+				// this lease rather than from this id — `<timestamp>-<owner>-<hash>`, the hash over
+				// the id — and does its own sanitising of the caller's strings (`./archive-path.ts`).
 				id: parseLeaseId(randomUUID()),
 				serial: request.serial,
 				owner: request.owner,
 				project: request.project,
 				testName: request.testName,
-				expiresAtMs: now() + ttlMs,
+				createdAtMs: granted,
+				expiresAtMs: granted + ttlMs,
 			};
 			byId.set(lease.id, lease);
 			bySerial.set(lease.serial, lease.id);

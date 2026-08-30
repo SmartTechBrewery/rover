@@ -1,3 +1,5 @@
+import { readdir, readFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 // Side-effect import: exactly what `src/daemon/main.ts` now does. Without it the daemon this
 // suite starts would have an empty registry and lend nothing.
@@ -232,7 +234,10 @@ const leases: Array<{ client: IpcClient; leaseId: LeaseId }> = [];
 /** A daemon of this repository's own making, on a socket nobody else uses. */
 async function startHost(): Promise<IpcClient> {
 	temp = await createTempSocket();
-	const daemon = await startDaemon({ socketPath: temp.socketPath });
+	const daemon = await startDaemon({
+		socketPath: temp.socketPath,
+		artifactsRoot: temp.artifactsRoot,
+	});
 	if (!daemon.started) {
 		throw new Error('Another daemon holds the temp socket — the test cannot proceed');
 	}
@@ -673,6 +678,47 @@ describe.skipIf(!process.env.ROVER_TEST_DEVICE)('a daemon runs verbs on its own 
 		const { width, height } = pngSize(bytes);
 		const { screen } = info.result.device;
 		expect([width, height].sort()).toEqual([screen.widthPx, screen.heightPx].sort());
+	});
+
+	/**
+	 * The archive R25 adds beside the answer (D23, PROJECT.md §10), against real hardware.
+	 *
+	 * `tests/unit/daemon/archive.test.ts` pins the layout and
+	 * `tests/unit/daemon/verb-dispatch.test.ts` proves it happens over a real socket; what is
+	 * left for a device is that a real capture — not a fixture — lands on this host's own disk
+	 * with the same bytes the client got, which is the half ai/RULES.md §6 will not take on
+	 * trust. The archive root is inside this suite's temp directory, so nothing is written to
+	 * `~/.rover/artifacts`.
+	 */
+	it('also writes the capture into the host-side archive, beside the bytes it answered with', async () => {
+		const client = await startHost();
+		const device = await freeDevice(client);
+		const leaseId = await lease(client, device.serial);
+
+		const shot = await client.request('screenshot', { leaseId });
+
+		if (shot.outcome !== 'ok') {
+			throw new Error(`the capture did not answer ok: ${JSON.stringify(shot)}`);
+		}
+		// Found by listing rather than by rebuilding the name — listing is the whole query a
+		// future read-only viewer would run (D24), and the lease's own directory is the only
+		// one under this project and test name.
+		const under = join(temp.artifactsRoot, 'rover', 'verb-dispatch');
+		const [leaseDir] = await readdir(under);
+		if (leaseDir === undefined) {
+			throw new Error(`Nothing was archived under '${under}'`);
+		}
+		const directory = join(under, leaseDir, unwrap(device.serial));
+
+		expect(await readFile(join(directory, 'screenshots', '001_screenshot.png'))).toEqual(
+			Buffer.from(shot.result.artifact?.base64 ?? '', 'base64'),
+		);
+		// And the D14 snapshot of the device this run was taken on, beside it.
+		expect(
+			JSON.parse((await readFile(join(directory, 'device_info.json'))).toString()),
+		).toMatchObject({ serial: device.serial });
+		// The archive path is never the one returned to the agent — R24 is unchanged (D19).
+		expect(JSON.stringify(shot)).not.toContain(temp.artifactsRoot);
 	});
 
 	/**

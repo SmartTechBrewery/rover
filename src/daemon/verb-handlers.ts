@@ -46,6 +46,16 @@
  * is exactly the one that would otherwise leave a caller's file on hardware lent out next to
  * somebody else.
  *
+ * **A call that produced bytes has a second effect: the archive** (D23, `./archive.ts`).
+ * Every `ok` answer goes past `ArtifactArchive.record` on its way out, which writes the
+ * screenshot, the recording or the log read into the host's own durable tree. It is
+ * **additive, never substitutive** — the bytes still travel to the client exactly as R24
+ * settled, and no archive path is ever put on an answer — and it cannot fail the call:
+ * `record` never throws, so a host that could not write still returns the verb's result. It
+ * is wired here rather than in `src/verbs/` for `./frames.ts`'s reason: the verb layer sits
+ * in every client's module graph, and host filesystem work under it would be host behaviour
+ * inside a CLI (D19).
+ *
  * **None of `./lease-handlers.ts`'s await-ordering constraint applies here**, and that is
  * worth saying so nobody copies a rule that does not hold: nothing in this file takes
  * anything exclusive. The lease is already held, and holding it is what makes this call
@@ -107,8 +117,8 @@ import {
 import { type ReadLogsVerbOptions, readLogs } from '../verbs/logs.js';
 import { deviceInfo, readScreen, screenshot } from '../verbs/read.js';
 import { type RecordVideoVerbOptions, recordVideo } from '../verbs/record.js';
-import type { ActionResult } from '../verbs/result.js';
 import { type WaitVerbOptions, waitFor, waitUntilGone } from '../verbs/wait-for.js';
+import type { ArchivableResult, ArtifactArchive } from './archive.js';
 import { extractFrames } from './frames.js';
 import type { DeviceInventory } from './inventory.js';
 import { refusalReasonFor } from './lease-handlers.js';
@@ -192,6 +202,7 @@ export function createVerbHandlers(
 	inventory: DeviceInventory,
 	leases: LeaseStore,
 	traffic: VerbTraffic,
+	archive: ArtifactArchive,
 ): VerbHandlers {
 	/**
 	 * The preamble every verb call shares: renew, register, re-verify, resolve the backend, run.
@@ -199,7 +210,7 @@ export function createVerbHandlers(
 	 * `run` is handed a context and nothing else, which is the verb layer's contract — it
 	 * never looks a device up and never learns that leases exist.
 	 */
-	function runVerb<Result extends ActionResult>(
+	function runVerb<Result extends ArchivableResult>(
 		leaseId: LeaseId,
 		run: (context: VerbContext) => Promise<Result>,
 	): Promise<VerbCallResultOf<Result>> {
@@ -220,7 +231,18 @@ export function createVerbHandlers(
 		// revoke, and the verb starts driving a device the host has already handed on.
 		return traffic.run<VerbCallResultOf<Result>>(lease, async (call) => {
 			const prepared = await prepare(lease, call);
-			return 'refusal' in prepared ? prepared.refusal : answer(prepared.context, run);
+			if ('refusal' in prepared) {
+				return prepared.refusal;
+			}
+			const answered = await answer(prepared.context, run);
+			if (answered.outcome === 'ok') {
+				// The second effect of the call (D23) — awaited rather than fired and forgotten,
+				// because the bytes are already in memory and bounded, the lease is still held, and
+				// a write left running would race the restoration a `release_device` starts. It
+				// cannot fail this: `record` never throws.
+				await archive.record(lease, answered.result);
+			}
+			return answered;
 		});
 	}
 
@@ -401,7 +423,7 @@ export function createVerbHandlers(
  * Run the verb, and turn what comes back into one of the answers that mean it ran — or into
  * the one refusal that can arrive after a verb has already started.
  */
-async function answer<Result extends ActionResult>(
+async function answer<Result extends ArchivableResult>(
 	context: VerbContext,
 	run: (context: VerbContext) => Promise<Result>,
 ): Promise<VerbCallResultOf<Result>> {
