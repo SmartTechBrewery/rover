@@ -1,27 +1,28 @@
 /**
- * The one place a client turns an `ActionResult.artifact` into a file — the client half of
- * D19's artifact contract.
+ * The CLI's half of D19's artifact contract: where `--out` points, and what one verb answer
+ * that carries bytes prints, writes and exits with.
  *
- * The verb ran on the host and the bytes arrived base64-encoded, because a host-local path
- * either names nothing on this machine or names something else entirely
- * (`src/verbs/result.ts`, `ArtifactSchema`). What is left is the other end of that wire:
- * decode, check what decoded against what the host said it encoded, write it **here**, and
- * report the caller's own absolute path.
+ * **The bytes themselves are `src/client/artifact.ts`'s** — decoding them, checking what
+ * decoded against what the host said it encoded, and writing the file. That module is shared
+ * with the MCP server, so the check cannot be true in one client and forgotten in the other;
+ * this one is the part only a CLI has, which is a destination the caller typed, a line for a
+ * human and an exit code.
  *
  * **Nothing here branches on `--host`.** A capture from the daemon on this machine and one
  * from a host across the network arrive as the same field of the same schema, so they go
- * through the same two functions and land on the same kind of local path — which is what
- * makes "every path returned to the agent exists on the agent's machine" a property of this
- * module rather than of two commands remembering to agree.
+ * through the same functions and land on the same kind of local path — which is what makes
+ * "every path returned to the agent exists on the agent's machine" a property of these
+ * modules rather than of two commands remembering to agree.
  */
 
-import { stat, writeFile } from 'node:fs/promises';
+import { stat } from 'node:fs/promises';
 import path from 'node:path';
+import { describeWithoutBytes, requireArtifact, writeArtifact } from '../../client/artifact.js';
 import type { VerbCallResult } from '../../ipc/methods.js';
 import type { Artifact } from '../../verbs/result.js';
 import { UsageError } from './flags.js';
 import * as out from './output.js';
-import { describeWithoutBytes, exitCodeFor, renderVerbAnswer, requireArtifact } from './verb.js';
+import { exitCodeFor, renderVerbAnswer } from './verb.js';
 
 /**
  * Where `--out` points, absolute, checked before anything is captured.
@@ -63,38 +64,6 @@ export async function resolveDestination(command: string, out: string): Promise<
 		);
 	}
 
-	return destination;
-}
-
-/**
- * Decode `artifact`, check the length, write the bytes to `destination`, and answer with the
- * absolute path they are now at — on **this** machine.
- *
- * **The check precedes the write, and that ordering is the whole point.** `Buffer.from(…,
- * 'base64')` does not reject a mangled payload: it *drops* every character outside the
- * alphabet and decodes what is left, so a truncated or corrupted string becomes a shorter
- * file rather than an error. That is exactly the truncated artifact that does not announce
- * itself which D19's byte-length field exists to catch — `byteLength` is the length of what
- * the host encoded, so comparing it against what decoded here is the only end-to-end check
- * either side has, and this is the only place in the tree that performs it.
- *
- * A mismatch throws with both numbers and **writes nothing**: the destination is untouched,
- * so a failed transfer never leaves a short file where a whole one is expected. A plain
- * `Error` rather than a `UsageError` — the caller typed nothing wrong, the transfer failed —
- * so the dispatcher answers exit 1.
- */
-export async function writeArtifact(artifact: Artifact, destination: string): Promise<string> {
-	const bytes = Buffer.from(artifact.base64, 'base64');
-	if (bytes.byteLength !== artifact.byteLength) {
-		throw new Error(
-			`The artifact did not survive the trip: the host encoded ${artifact.byteLength} bytes ` +
-				`and ${bytes.byteLength} decoded here. Nothing was written to '${destination}' — a ` +
-				`file this short would open as a damaged ${artifact.mediaType} rather than announce ` +
-				`itself. Ask again.`,
-		);
-	}
-
-	await writeFile(destination, bytes);
 	return destination;
 }
 

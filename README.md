@@ -390,14 +390,30 @@ uses `npm run -s rover -- list --json` or invokes `node --import tsx/esm src/cli
 MCP protocol frames, so an agent's server entry runs `node --import tsx/esm src/mcp/index.ts`
 directly (`npm run -s mcp` is the by-hand equivalent) and a bare `npm run mcp` writes two lines
 into the stream before the first frame. Wiring an agent up properly is `PROJECT.md` R20's to
-settle; what exists today is the server, speaking stdio, declaring twenty tools under the
+settle; what exists today is the server, speaking stdio, declaring twenty-two tools under the
 `IPC_METHODS` names exactly: the four device and lease rows (`status`, `list_devices`,
-`acquire_device`, `release_device`) and the sixteen verbs whose answer is plain data
+`acquire_device`, `release_device`), the sixteen verbs whose answer is plain data
 (`wait_for`, `wait_until_gone`, `tap`, `long_press`, `swipe`, `scroll`, `type_text`,
 `press_key`, `read_screen`, `device_info`, `launch_app`, `stop_app`, `clear_app_data`,
-`read_logs`, `set_airplane_mode`, `set_wifi`). The rows that carry bytes — `screenshot`,
-`record_video`, `install_app`, `push_file` and `pull_file` — are `PROJECT.md` R19 phase 3's.
-There is no `bin/` launcher yet — the published entry point is `PROJECT.md` R20's to settle.
+`read_logs`, `set_airplane_mode`, `set_wifi`), and the two whose answer is bytes.
+
+Those two are `screenshot` and `record_video`, and how their bytes reach an agent is the point
+of the pair. **`screenshot` answers with the image inline** — an MCP `image` block the model
+looks at directly — and writes nothing, because an inline image is the one form of an artifact
+that needs no path at all. **`record_video` writes the recording to a file on the machine
+running the server** and reports its absolute local path, because an mp4 is not something a
+model can read; its frames come back inline like a screenshot, so the recording is legible
+without a second call. Where that file lands is `ROVER_MCP_ARTIFACT_DIR` below, and it is
+always a path on the agent's own machine — never one on the host, even when the two are the
+same machine. Neither tool takes a destination or a format, for the same reason neither takes
+a host. A refusal (`artifact-too-large`, `unfinished-recording`,
+`frame-extraction-unavailable`, `frames-too-large`) is an error naming it and leaves no file
+behind at all — never a truncated one.
+
+The three rows that move a whole file — `install_app`, `push_file` and `pull_file` — are not
+tools yet; how a client supplies and receives one is `PROJECT.md` R24 phase 2's, and no client
+has it. There is no `bin/` launcher yet — the published entry point is `PROJECT.md` R20's to
+settle.
 
 Exit codes: `0` success; `1` the operation did not succeed (a refused `acquire`, a `release` that
 found no live lease, an unreachable host, a request the host rejected); `2` usage error (unknown
@@ -429,6 +445,7 @@ startup, naming the variable and the reason, rather than binding something surpr
 | `ROVER_HOST_TOKEN` | — (required with `ROVER_HOST_ADDRESS`) | **A client-side credential, and only that** — the value `rover users add` (or `users rotate`) printed on the host, pasted on the machine that borrows a device. The host itself no longer reads this variable: it authenticates against its user store, so a token is revocable and rotatable where it was issued rather than being a secret both machines hold forever (`PROJECT.md` D25). At least **32 characters**, checked locally so a truncated paste fails here naming the variable instead of coming back as an opaque refusal. It is a **host-level** setting and belongs in the environment, never in a file the repository tracks. The token **authenticates and attributes nothing**: a lease's owner is a separate, caller-supplied string (`PROJECT.md` D20). |
 | `ROVER_HOST_PORT` | — (required with the address) | The port that host listens on — its own `ROVER_LISTEN_PORT`, named from the other side. 1–65535. |
 | `ROVER_HOST_CA` | unset — the system trust store | Path to a PEM certificate to trust in addition to nothing else — normally the host's own certificate, which is how a self-signed host is trusted. There is deliberately **no variable that turns verification off**: a client that skipped the check would accept any host that answered on that port. |
+| `ROVER_MCP_ARTIFACT_DIR` | a `rover-artifacts` directory under the OS temp directory | Where the **MCP server** writes the files it hands an agent — today just `record_video`'s recording, because an mp4 is not something a model can read inline. It is the agent's own machine, never the host's: the capture happens wherever the device is and the path reported back has to exist where the answer is read (`PROJECT.md` D19). **Empty counts as unset**, as it is for the socket. Server configuration rather than a tool parameter, for the reason `ROVER_HOST_ADDRESS` is one — an MCP client launches each server with its own `env` block, and where an agent's files land on your disk is your decision rather than a free-text field in front of a model. Created on demand and only when there are bytes to write, so a refused recording leaves nothing behind and a server nobody asked to record never creates it. **Nothing prunes it**, the way nothing prunes the host's own archive. `screenshot` never writes here at all, because its capture comes back as an inline image and an inline image needs no path. |
 
 While a daemon is coming up over a socket a crashed one left behind, a `<socket>.reclaim` lock file
 may briefly appear beside it. It is removed by whoever took it, and any left behind by a killed
