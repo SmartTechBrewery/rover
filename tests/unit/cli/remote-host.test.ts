@@ -12,6 +12,8 @@
  * back to autostarting one (D5).
  */
 
+import { readFile } from 'node:fs/promises';
+import { join, resolve } from 'node:path';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
 	_resetDeviceBackendRegistryForTesting,
@@ -44,6 +46,9 @@ import {
 import { createTestUserStore, type TestUserStore } from '../../helpers/user-store.js';
 
 const attached = createMockDevice({ serial: parseDeviceSerial('attached-1') });
+
+/** What the host's backend captures — distinctive, so "these bytes" means these bytes. */
+const REMOTE_CAPTURE = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x2a]);
 
 let certificate: TestCertificate;
 let temp: TempSocket;
@@ -111,6 +116,7 @@ function registerFakeBackend(): void {
 		backend: createMockDeviceBackend({
 			watchDevices,
 			describeDevice: async (serial) => createMockDevice({ serial }),
+			screenshot: async () => REMOTE_CAPTURE,
 		}),
 	});
 }
@@ -230,6 +236,40 @@ describe('rover --host remote, against a live host', () => {
 		// The owner is the caller's string, carried across the network and back — never the
 		// token, which authenticated and attributed nothing (D20).
 		expect(acquired).toMatchObject({ lease: { owner: 'issue-62' } });
+	});
+
+	it('writes a screenshot to this machine, through the same module the local host uses', async () => {
+		// Criterion 5 of #24, asserted end to end rather than by inspection: `--host remote` and
+		// `--host local` reach `src/cli/_shared/artifact.ts` by the same route and neither the
+		// module nor either command branches on which. What proves it is not that the code has
+		// no `if` in it — it is that the bytes land on *this* disk, at a path resolved here,
+		// when the verb ran on a host reached over TLS.
+		await startHostAndPointAtIt();
+		const out = join(temp.dir, 'remote-capture.bin');
+
+		expect(
+			await run([
+				'acquire',
+				attached.serial,
+				'--host',
+				'remote',
+				'--owner',
+				'issue-24',
+				'--project',
+				'rover',
+				'--json',
+			]),
+		).toBe(EXIT_OK);
+		const leaseId = (JSON.parse(logged[0] ?? '') as { lease: { leaseId: string } }).lease.leaseId;
+		logged.length = 0;
+
+		expect(await run(['screenshot', leaseId, '--host', 'remote', '--out', out])).toBe(EXIT_OK);
+
+		// The backend across the wire produced these; they arrived base64 and were decoded here.
+		expect(new Uint8Array(await readFile(out))).toEqual(REMOTE_CAPTURE);
+		// A path on the client's own disk, absolute, and never one belonging to the host.
+		expect(logged.join('\n')).toContain(resolve(out));
+		expect(errored).toEqual([]);
 	});
 
 	it('names the host in the --json document and never the token', async () => {
