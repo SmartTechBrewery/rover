@@ -38,14 +38,17 @@ import { createMockDevice, createMockDeviceBackend } from '../../helpers/factori
 import {
 	createTestCertificate,
 	removeTestCertificate,
-	TEST_HOST_TOKEN,
 	type TestCertificate,
+	UNISSUED_TOKEN,
 } from '../../helpers/tls-fixtures.js';
+import { createTestUserStore, type TestUserStore } from '../../helpers/user-store.js';
 
 const attached = createMockDevice({ serial: parseDeviceSerial('attached-1') });
 
 let certificate: TestCertificate;
 let temp: TempSocket;
+/** The host's user store and the one user in it — what the host authenticates against. */
+let store: TestUserStore;
 let logged: string[];
 let errored: string[];
 const running: RunningDaemon[] = [];
@@ -60,6 +63,7 @@ afterAll(async () => {
 
 beforeEach(async () => {
 	temp = await createTempSocket();
+	store = await createTestUserStore(temp.dir);
 	vi.stubEnv('ROVER_SOCKET_PATH', temp.socketPath);
 	// Empty rather than deleted, which is both how a shell leaves a variable behind and the
 	// rule the resolver states: an exported-but-blank value is not a setting. Stubbed for
@@ -117,9 +121,9 @@ async function startHostAndPointAtIt(): Promise<RunningDaemon> {
 		network: {
 			address: '127.0.0.1',
 			port: 0,
-			token: TEST_HOST_TOKEN,
 			certPath: certificate.certPath,
 			keyPath: certificate.keyPath,
+			usersPath: store.path,
 		},
 	});
 	if (!daemon.started || daemon.networkPort === null) {
@@ -129,7 +133,8 @@ async function startHostAndPointAtIt(): Promise<RunningDaemon> {
 
 	vi.stubEnv(HOST_ADDRESS_ENV_VAR, '127.0.0.1');
 	vi.stubEnv(HOST_PORT_ENV_VAR, String(daemon.networkPort));
-	vi.stubEnv(HOST_TOKEN_ENV_VAR, TEST_HOST_TOKEN);
+	// The token this client presents is the one `rover users add` issued on the host side.
+	vi.stubEnv(HOST_TOKEN_ENV_VAR, store.token);
 	vi.stubEnv(HOST_CA_ENV_VAR, certificate.certPath);
 	return daemon;
 }
@@ -171,7 +176,7 @@ describe('rover --host remote, before it talks to anything', () => {
 		// Port 1 needs no free-port dance: it is privileged, so nothing this suite could
 		// collide with is ever listening on it.
 		vi.stubEnv(HOST_PORT_ENV_VAR, '1');
-		vi.stubEnv(HOST_TOKEN_ENV_VAR, TEST_HOST_TOKEN);
+		vi.stubEnv(HOST_TOKEN_ENV_VAR, UNISSUED_TOKEN);
 
 		expect(await run(['list', '--host', 'remote'])).toBe(EXIT_FAILED);
 
@@ -231,19 +236,19 @@ describe('rover --host remote, against a live host', () => {
 		expect(JSON.parse(document)).toMatchObject({ host: 'remote' });
 		// The whole document, not one field: the token has no business anywhere in a machine
 		// -readable answer, and a deep scan is what keeps that true as fields are added.
-		expect(document).not.toContain(TEST_HOST_TOKEN);
-		expect(errored.join('\n')).not.toContain(TEST_HOST_TOKEN);
+		expect(document).not.toContain(store.token);
+		expect(errored.join('\n')).not.toContain(store.token);
 	});
 
 	it('exits 1 with a rejected-token message when the host does not accept ours', async () => {
 		await startHostAndPointAtIt();
-		vi.stubEnv(HOST_TOKEN_ENV_VAR, 'the-wrong-token-but-long-enough-1234');
+		vi.stubEnv(HOST_TOKEN_ENV_VAR, UNISSUED_TOKEN);
 
 		expect(await run(['list', '--host', 'remote'])).toBe(EXIT_FAILED);
 
 		const said = errored.join('\n');
 		expect(said).toContain(HOST_TOKEN_ENV_VAR);
-		expect(said).not.toContain('the-wrong-token-but-long-enough-1234');
+		expect(said).not.toContain(UNISSUED_TOKEN);
 		// Never an empty list dressed up as an answer.
 		expect(logged).toEqual([]);
 	});

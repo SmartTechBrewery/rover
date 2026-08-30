@@ -2,28 +2,24 @@
  * The credential half of the host's user store (D25): how a user's token is minted, hashed
  * and checked.
  *
- * It sits beside `host-token.ts` and keeps that module's discipline — nothing it returns can
- * be turned back into a token — but it solves a different problem, which is why it is a
- * second module rather than a second function there. `host-token.ts` gates **one** secret
- * held in memory for the lifetime of a process, so a bare digest is enough. A user's token
- * is written to a file that outlives the process and is read back cold, so it is hashed the
- * way a stored credential has to be: `scrypt` with a fresh per-record salt, the shape
+ * Nothing it returns can be turned back into a token. A user's token is written to a file
+ * that outlives the process and is read back cold, so it is hashed the way a stored
+ * credential has to be — not merely digested the way a secret held in memory for one
+ * process's lifetime could be: `scrypt` with a fresh per-record salt, the shape
  * `../swarm/src/identity/auth.ts` uses, minus the password/session split a bearer token does
  * not need. The token *is* the credential here; there is no separate login step.
  *
  * `node:crypto` only — no new dependency, for the reason ai/RULES.md gives about Swarm's own
  * dependency-free identity code.
  *
- * Two consequences worth stating rather than rediscovering:
+ * One consequence worth stating rather than rediscovering:
  *
  * - **A per-record salt means a token cannot be looked up by its hash.** Whoever authenticates
- *   a caller against this store has to run {@link verifyUserToken} once per record. That is
- *   fine at operator scale, and it is the price of a stored credential that survives the file
- *   leaking; weakening the hash to make a lookup possible would be the wrong trade.
- * - **{@link verifyUserToken} has no caller in `src/` yet** — the daemon starts reading this
- *   store in a later change. It ships now because without it there is no way to assert that
- *   the token `rover users add` printed is the token the stored hash actually matches, and a
- *   write-only hash is an untestable credential store.
+ *   a caller against this store has to run {@link verifyUserToken} once per record — which
+ *   `findUserByToken` does, on every network connection attempt the daemon's gate handles
+ *   (`network-listen.ts`). That is fine at operator scale, and it is the price of a stored
+ *   credential that survives the file leaking; weakening the hash to make a lookup possible
+ *   would be the wrong trade.
  */
 
 import { randomBytes, scrypt, timingSafeEqual } from 'node:crypto';
@@ -64,9 +60,9 @@ export async function hashUserToken(token: string): Promise<string> {
  * as a plain predicate: a record somebody hand-edited into nonsense must not authenticate
  * anyone, and must not take the daemon down either.
  *
- * `timingSafeEqual` throws on unequal lengths — the same trap `host-token.ts` documents — so
- * the derived key is computed at the stored key's own length, which makes the two buffers
- * equal-sized by construction.
+ * `timingSafeEqual` throws on unequal lengths — which would itself leak how long the stored
+ * key is — so the derived key is computed at the stored key's own length, which makes the two
+ * buffers equal-sized by construction.
  */
 export async function verifyUserToken(token: string, stored: string): Promise<boolean> {
 	const [saltHex, keyHex] = stored.split(':');

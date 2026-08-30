@@ -2,42 +2,55 @@
  * Both ends of the network transport, configured from the environment: whether this host
  * listens, and which host a client asks.
  *
- * The two resolvers sit together because they share a secret and a shape. Each is an
- * **opt-in** with one switch variable, and with that switch unset nothing else is read,
- * validated or required: `ROVER_LISTEN_PORT` for the listener (D17, D20), so the zero-config
- * local socket keeps working with no token and no certificate, and `ROVER_HOST_ADDRESS` for
- * the client, so a plain `rover list` never looks for a remote host it was not told about.
- * Set a switch and the rest of that half becomes required *together* — a port with no token
- * is a listener that lets strangers in, and an address with no token is a client that cannot
- * be let in — and the failure is loud, naming every variable still missing rather than
- * half-configuring anything.
+ * The two resolvers sit together because they share a shape. Each is an **opt-in** with one
+ * switch variable, and with that switch unset nothing else is read, validated or required:
+ * `ROVER_LISTEN_PORT` for the listener (D17, D20), so the zero-config local socket keeps
+ * working with no certificate at all, and `ROVER_HOST_ADDRESS` for the client, so a plain
+ * `rover list` never looks for a remote host it was not told about. Set a switch and the rest
+ * of that half becomes required *together* — a port with no TLS material is a listener that
+ * cannot be trusted, and an address with no token is a client that cannot be let in — and the
+ * failure is loud, naming every variable still missing rather than half-configuring anything.
  *
- * **`ROVER_HOST_TOKEN` is deliberately one variable for both halves.** A machine that hosts
- * devices *and* borrows one from somewhere else is holding one secret, not two that drift
- * apart.
+ * **The two halves are no longer symmetrical, and that is the point (D25).** The listener
+ * holds **no secret at all**: it names the user store, `~/.rover/users.json`, and every
+ * credential it accepts is one `rover users add` issued and `rover users revoke` can take
+ * away. The client half holds exactly one thing — its own token, in `ROVER_HOST_TOKEN` — the
+ * value a host printed for it once. There is deliberately no shared secret left to configure
+ * on the host side; a second way in that no `rover users` command could revoke is precisely
+ * what the user store exists to retire.
  *
  * **These are environment variables, not project config.** `ai/RULES.md` §7 splits the two:
  * the per-project file carries project hooks, the environment carries host-level settings. A
- * network listener and its shared secret are host-level, and a token in a file the repository
- * tracks is the accident this placement exists to prevent.
+ * network listener and a client's credential are host-level, and a token in a file the
+ * repository tracks is the accident this placement exists to prevent.
  *
  * Zod is the source of truth for what a valid value is, as it is for the socket path.
  */
 
 import { z } from 'zod';
 import { describeIssues } from '../ipc/protocol.js';
+import { resolveUsersPath, USERS_PATH_ENV_VAR } from './user-store.js';
 
 /** The opt-in switch. Unset or empty ⇒ no network listener at all. */
 export const LISTEN_PORT_ENV_VAR = 'ROVER_LISTEN_PORT';
 /** Which interface to bind, so an operator can narrow the listener to a VPN interface. */
 export const LISTEN_ADDRESS_ENV_VAR = 'ROVER_LISTEN_ADDRESS';
-/** The shared secret every network caller presents. Deliberately the same name a client reads. */
-export const HOST_TOKEN_ENV_VAR = 'ROVER_HOST_TOKEN';
 export const TLS_CERT_ENV_VAR = 'ROVER_TLS_CERT';
 export const TLS_KEY_ENV_VAR = 'ROVER_TLS_KEY';
 
 /** The client's opt-in switch. Unset or empty ⇒ this client has no remote host at all. */
 export const HOST_ADDRESS_ENV_VAR = 'ROVER_HOST_ADDRESS';
+/**
+ * **A client-side credential, and only that.** The value the host's own `rover users add` (or
+ * `rover users rotate`) printed once, pasted on the machine that borrows a device. The host no
+ * longer reads this variable at all: it authenticates against its user store, so a token is
+ * revocable and rotatable on the host that issued it rather than being a secret both machines
+ * hold forever (D25).
+ *
+ * It still authenticates only — a lease's owner is a separate, caller-supplied string and is
+ * never derived from whoever authenticated (D20).
+ */
+export const HOST_TOKEN_ENV_VAR = 'ROVER_HOST_TOKEN';
 /** The port that host listens on — its `ROVER_LISTEN_PORT`, named from the other side. */
 export const HOST_PORT_ENV_VAR = 'ROVER_HOST_PORT';
 /**
@@ -48,9 +61,15 @@ export const HOST_PORT_ENV_VAR = 'ROVER_HOST_PORT';
 export const HOST_CA_ENV_VAR = 'ROVER_HOST_CA';
 
 /**
- * The floor on a host token. It is a bearer secret on an open port, so the only thing that
- * makes guessing hopeless is length; 32 characters is the shortest value that stays out of
- * reach of an attacker who can try as fast as the network allows.
+ * The floor on the token a **client** presents. It is a bearer secret travelling to an open
+ * port, so the only thing that makes guessing hopeless is length; 32 characters is the
+ * shortest value that stays out of reach of an attacker who can try as fast as the network
+ * allows, and `generateUserToken()` clears it at 43.
+ *
+ * No listener field uses it any more — the host validates nothing about a length, it looks a
+ * token up in its store. What survives here is a **local** guard on the borrowing machine, so
+ * a truncated paste fails on this side, naming the variable, instead of travelling and coming
+ * back as an opaque `unauthenticated` that says nothing about which end is wrong.
  */
 export const MIN_HOST_TOKEN_LENGTH = 32;
 
@@ -58,20 +77,18 @@ export const MIN_HOST_TOKEN_LENGTH = 32;
 export const DEFAULT_LISTEN_ADDRESS = '0.0.0.0';
 
 /**
- * **No rule here may interpolate the value it rejected.** `SocketPathSchema` does exactly
- * that — a path in the message is the whole diagnosis — and copying its shape onto `token`
- * is precisely how a secret reaches a log or a support thread (D20: never let a token reach
- * a log or a report). Zod's own messages are path-and-rule only, and `describeIssues` prints
- * exactly those, so the failure below says `token: String must contain at least 32
- * character(s)` and never what was sent.
+ * **The listener holds no secret.** `usersPath` names the store the gate authenticates
+ * against, re-read at every connection attempt (D6, D25) — so there is nothing in this
+ * object a log, an error or a crash dump could leak, and revoking a user takes effect with
+ * the daemon still running.
  */
 export const NetworkListenerSchema = z
 	.object({
 		address: z.string().min(1),
 		port: z.coerce.number().int().min(1).max(65535),
-		token: z.string().min(MIN_HOST_TOKEN_LENGTH),
 		certPath: z.string().min(1),
 		keyPath: z.string().min(1),
+		usersPath: z.string().min(1),
 	})
 	.strict();
 export type NetworkListenerConfig = z.infer<typeof NetworkListenerSchema>;
@@ -80,17 +97,21 @@ export type NetworkListenerConfig = z.infer<typeof NetworkListenerSchema>;
 const ENV_VAR_BY_LISTENER_FIELD: Record<keyof NetworkListenerConfig, string> = {
 	address: LISTEN_ADDRESS_ENV_VAR,
 	port: LISTEN_PORT_ENV_VAR,
-	token: HOST_TOKEN_ENV_VAR,
 	certPath: TLS_CERT_ENV_VAR,
 	keyPath: TLS_KEY_ENV_VAR,
+	usersPath: USERS_PATH_ENV_VAR,
 };
 
 /**
  * The one remote host this client may ask (D18 — exactly one host per deployment, so there is
  * no catalogue here and no second entry to pick between).
  *
- * The same rule as the listener schema above binds this one: **no message may interpolate the
- * token**, so `token` carries a plain `.min()` and nothing that would quote what it rejected.
+ * **No rule here may interpolate the value it rejected.** `SocketPathSchema` does exactly
+ * that — a path in the message is the whole diagnosis — and copying its shape onto `token` is
+ * precisely how a secret reaches a log or a support thread (D20: never let a token reach a log
+ * or a report). Zod's own messages are path-and-rule only, and `describeIssues` prints exactly
+ * those, so a short token fails as `ROVER_HOST_TOKEN: String must contain at least 32
+ * character(s)` and never quotes what was sent.
  */
 export const RemoteHostSchema = z
 	.object({
@@ -126,11 +147,12 @@ export function resolveNetworkListener(
 		return undefined;
 	}
 
-	const token = optional(env[HOST_TOKEN_ENV_VAR]);
 	const certPath = optional(env[TLS_CERT_ENV_VAR]);
 	const keyPath = optional(env[TLS_KEY_ENV_VAR]);
+	// `usersPath` is deliberately not in this set: it always resolves, to `~/.rover/users.json`
+	// when nothing names it otherwise, so it can never be "missing". A host with no users yet
+	// starts and refuses everyone, which is the correct state for one — not a startup failure.
 	const missing = missingFrom({
-		[HOST_TOKEN_ENV_VAR]: token,
 		[TLS_CERT_ENV_VAR]: certPath,
 		[TLS_KEY_ENV_VAR]: keyPath,
 	});
@@ -138,17 +160,18 @@ export function resolveNetworkListener(
 		throw new Error(
 			`${LISTEN_PORT_ENV_VAR} is set, so this host would listen on the network, but ` +
 				`${nameThem(missing)} not set. Set ${missing.length === 1 ? 'it' : 'them'}, or unset ` +
-				`${LISTEN_PORT_ENV_VAR} to serve the local socket only. An unauthenticated listener ` +
-				`is never started.`,
+				`${LISTEN_PORT_ENV_VAR} to serve the local socket only. An unencrypted listener is ` +
+				`never started, and an unauthenticated one is never started either: every network ` +
+				`caller is checked against the user store that ${USERS_PATH_ENV_VAR} names.`,
 		);
 	}
 
 	const parsed = NetworkListenerSchema.safeParse({
 		address: optional(env[LISTEN_ADDRESS_ENV_VAR]) ?? DEFAULT_LISTEN_ADDRESS,
 		port,
-		token,
 		certPath,
 		keyPath,
+		usersPath: resolveUsersPath(env),
 	});
 	if (!parsed.success) {
 		throw new Error(describeIssues(withEnvVarNames(parsed.error, ENV_VAR_BY_LISTENER_FIELD)));

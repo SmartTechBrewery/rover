@@ -124,9 +124,9 @@ export async function connectToNetworkHost(
 function greetingRefused(error: unknown, config: RemoteHostConfig): Error {
 	if (error instanceof IpcRequestError && error.code === 'unauthenticated') {
 		return new Error(
-			`The Rover host at ${hostAndPort(config)} rejected ${HOST_TOKEN_ENV_VAR}. The host and ` +
-				`this client have to hold the same secret; set the host's own ${HOST_TOKEN_ENV_VAR} ` +
-				`here. The value itself is never printed.`,
+			`The Rover host at ${hostAndPort(config)} rejected ${HOST_TOKEN_ENV_VAR}. It has to be a ` +
+				`token that host's own 'rover users add' or 'rover users rotate' printed; one that ` +
+				`used to work has been revoked or rotated there. The value itself is never printed.`,
 		);
 	}
 	return new Error(
