@@ -199,6 +199,22 @@ Verbs live above the backends and below the adapters, and this is where determin
   may travel. `swipe` is the one verb with two targets: `from` goes through the spine and is what
   the result reports, `to` is resolved inside the action from its own read, because widening the
   spine to carry a second target would generalise it for one caller.
+- **`launchApp()`, `stopApp()` and `clearAppData()`** (`src/verbs/app.ts`) are the same spine with
+  two things left out, and both omissions are the family's whole content. **`requires: []` is the
+  honest answer for a verb built only on required interface methods**: these three are declared on
+  `DeviceBackend` itself, so there is no capability to assert, and the list is required rather than
+  optional precisely so an author has to say that out loud instead of leaving it off. They reach
+  `context.backend` directly rather than through `capabilityMethod()`, which will not typecheck for
+  an ungated method — the type saying so is the design working, and adding a `canControlApps` flag
+  to "fix" it would be a capability that is always true. **And they pass no target at all**, because
+  an app id addresses a package rather than something on the screen: no screen is read before the
+  action and `ActionResult.target` is `null`, which is a fact about the verb rather than a
+  resolution that failed. `stop_app` cannot distinguish a stopped app from a package that was never
+  installed — the device answers the same either way (`PROJECT.md` §6) — so the after-state is what
+  settles that, and no probe here pretends to. One family-wide gap is recorded rather than hidden: a
+  device-level refusal, such as launching a package that is not installed, is still a rejected
+  promise out of the backend and so arrives as `internal_error`. That is true of every verb family
+  here and is filed as its own issue rather than fixed one family at a time.
 - **`ActionResult`** names the verb, the device (as `DeviceInfo`, so D14's density travels with the
   measurement), the resolved target and the state after the action. A backend with input but no
   screen reading answers an explicit `unavailable` after-state naming the capability that would have
@@ -241,7 +257,10 @@ the process with a registry.
 - **A shared preamble, one row per verb.** `createVerbHandlers` does the renew / register /
   re-verify / resolve work once, so each further verb family is one `IPC_METHODS` row and one
   `runVerb` call rather than another copy of it — and inherits the rule above by construction rather
-  than by remembering it. That is why this row landed before the verb families.
+  than by remembering it. That is why this row landed before the verb families. The three app rows
+  are what that promise looks like cashed: they share one params schema between them, because the
+  three calls are identical, and a verb that later grows a field of its own forks it rather than
+  widening what every row would then advertise.
 
 ---
 

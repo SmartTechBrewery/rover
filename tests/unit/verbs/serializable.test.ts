@@ -12,13 +12,16 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { DeviceBackend } from '@/core/device.js';
 import { WaitTimeoutError } from '@/core/errors.js';
+import { parseAppId } from '@/core/ids.js';
 import {
+	AppVerbParamsSchema,
 	LongPressParamsSchema,
 	ScrollParamsSchema,
 	SwipeParamsSchema,
 	TapParamsSchema,
 	VerbCallResultSchema,
 } from '@/ipc/verb-methods.js';
+import { launchApp } from '@/verbs/app.js';
 import { capabilityMethod, type VerbContext } from '@/verbs/context.js';
 import { toVerbFailure } from '@/verbs/failure.js';
 import { scroll, tap } from '@/verbs/input.js';
@@ -149,6 +152,18 @@ describe('the verb layer speaks only in plain data', () => {
 		expect(unserializableParts(scrolled)).toEqual([]);
 	});
 
+	it('round-trips an app verb result, which addresses a package rather than a screen', async () => {
+		const context = contextShowingSave();
+
+		const launched = await launchApp(context, parseAppId('com.android.settings'));
+
+		expect(ActionResultSchema.parse(roundTrip(launched))).toEqual(launched);
+		// A branded app id is a plain string on the wire, and the target is `null` because this
+		// verb addressed no element — `null` survives the trip where an absent key would not.
+		expect(launched.target).toBeNull();
+		expect(unserializableParts(launched)).toEqual([]);
+	});
+
 	it('round-trips a resolved target and a screen after-state on their own', () => {
 		const resolved = ResolvedTargetSchema.parse({
 			source: 'screen',
@@ -258,6 +273,8 @@ describe('a verb call answers in plain data too', () => {
 			ScrollParamsSchema,
 			{ leaseId: 'lease-1', direction: 'down', target: { by: 'element', id: 'list' } },
 		],
+		// One row for the three app verbs, because one schema serves all three.
+		['launch_app', AppVerbParamsSchema, { leaseId: 'lease-1', appId: 'com.android.settings' }],
 	])('round-trips what a %s call carries', (_name, schema, params) => {
 		const parsed = schema.parse(params);
 

@@ -20,7 +20,7 @@
  */
 
 import { z } from 'zod';
-import { LeaseIdSchema } from '../core/ids.js';
+import { AppIdSchema, LeaseIdSchema } from '../core/ids.js';
 import { VerbFailureSchema } from '../verbs/failure.js';
 import { ScrollDirectionSchema } from '../verbs/input.js';
 import { ActionResultSchema } from '../verbs/result.js';
@@ -134,6 +134,29 @@ export const ScrollParamsSchema = VerbCallBaseSchema.extend({
 	durationMs: GestureDurationSchema,
 }).strict();
 export type ScrollParams = z.infer<typeof ScrollParamsSchema>;
+
+/**
+ * What all three app-lifecycle rows carry — `launch_app`, `stop_app` and `clear_app_data`.
+ *
+ * **One schema for three rows**, because the three verbs take exactly the same call and a
+ * near-copy per row is a copy that drifts. A verb that later grows a field of its own forks
+ * this rather than widening it, for the reason {@link WaitCallBaseSchema} records for not
+ * putting the wait knobs on {@link VerbCallBaseSchema}: a base every row extends is a base
+ * every row advertises.
+ *
+ * `AppIdSchema` rather than a bare `z.string()` is what makes the reverse-DNS shape a
+ * **boundary** check. A malformed id is `invalid_params` on the wire, where the caller can
+ * read it, instead of an `InvalidIdError` thrown deep inside a backend assembling a
+ * device-side command line out of it (`src/core/ids.ts`, `AppId`).
+ *
+ * No `serial`, and `.strict()` is what keeps one out: the lease id is the credential and the
+ * host derives the device from it (D20). A serial accepted beside it would be the one field
+ * that lets the holder of one lease drive another device.
+ */
+export const AppVerbParamsSchema = VerbCallBaseSchema.extend({
+	appId: AppIdSchema,
+}).strict();
+export type AppVerbParams = z.infer<typeof AppVerbParamsSchema>;
 
 /**
  * Why a call never reached a verb at all.

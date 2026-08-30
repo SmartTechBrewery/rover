@@ -23,6 +23,7 @@ import { DeviceSchema } from '../core/device.js';
 import { DeviceSerialSchema, LeaseIdSchema } from '../core/ids.js';
 import { ProtocolVersionSchema } from './protocol.js';
 import {
+	AppVerbParamsSchema,
 	LongPressParamsSchema,
 	ScrollParamsSchema,
 	SwipeParamsSchema,
@@ -33,6 +34,8 @@ import {
 } from './verb-methods.js';
 
 export {
+	type AppVerbParams,
+	AppVerbParamsSchema,
 	type LongPressParams,
 	LongPressParamsSchema,
 	MAX_VERB_TIMEOUT_MS,
@@ -273,10 +276,11 @@ export type ReleaseDeviceResult = z.infer<typeof ReleaseDeviceResultSchema>;
  * The names follow the verb table in PROJECT.md §4 (`list_devices`), not a camelCase
  * variant of it.
  *
- * The verb rows are the two waits and the four gestures; each further verb family is one more
- * row beside them and one more entry in `src/daemon/verb-handlers.ts`. They all answer with
- * `VerbCallResultSchema`, because "what happened on the device" is one shape whatever was
- * asked of it.
+ * The verb rows are the two waits, the four gestures and the three app-lifecycle verbs; each
+ * further verb family is one more row beside them and one more entry in
+ * `src/daemon/verb-handlers.ts`. They all answer with `VerbCallResultSchema`, because "what
+ * happened on the device" is one shape whatever was asked of it — and the three app rows
+ * share one params schema too, because they take exactly the same call.
  */
 export const IPC_METHODS = {
 	status: { params: StatusParamsSchema, result: StatusResultSchema },
@@ -289,6 +293,9 @@ export const IPC_METHODS = {
 	long_press: { params: LongPressParamsSchema, result: VerbCallResultSchema },
 	swipe: { params: SwipeParamsSchema, result: VerbCallResultSchema },
 	scroll: { params: ScrollParamsSchema, result: VerbCallResultSchema },
+	launch_app: { params: AppVerbParamsSchema, result: VerbCallResultSchema },
+	stop_app: { params: AppVerbParamsSchema, result: VerbCallResultSchema },
+	clear_app_data: { params: AppVerbParamsSchema, result: VerbCallResultSchema },
 } as const satisfies Record<string, IpcMethodDefinition>;
 
 export type IpcMethodName = keyof typeof IPC_METHODS;

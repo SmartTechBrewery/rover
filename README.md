@@ -67,7 +67,7 @@ test behind it rather than only a convention: `tests/unit/no-sleep.test.ts` scan
 are exempt from the scan. It is a floor, not a proof — a determined re-implementation gets
 through, and reading the wait vocabulary is still how you learn what a wait here looks like.
 
-**The verb layer has a spine, four gestures on it and the two waits standing beside it.**
+**The verb layer has a spine, seven verbs on it and the two waits standing beside it.**
 `src/verbs/` is the layer above the backends where determinism stops being a rule and becomes a
 signature (D12): `resolveTarget()` takes
 a target and *nothing else* — no screen, no element list, no state read a turn ago — so a target can
@@ -118,13 +118,25 @@ empties the moment any sibling leaves. A timeout names what was waited for and w
 way — the screen for `wait_for`, which missed on all of it, the matches that are still there for
 `wait_until_gone` — bounded so a two-hundred-element screen is a message and not a wall, and a
 backend that does not declare `canReadScreen` is told so by name before the first poll rather than
-after a whole timeout. Both answer with the same `ActionResult` as every other action. The remaining
-verbs — `type_text`, `press_key`, `screenshot`, `read_screen` — are their own issues; the *reading*
-`read_screen` will expose is already there underneath them, because the Android backend answers
-`readScreen` and declares `canReadScreen`.
+after a whole timeout. Both answer with the same `ActionResult` as every other action, and the
+*reading* they poll is real: the Android backend answers `readScreen` and declares
+`canReadScreen`, so the reading `read_screen` will expose is already there underneath them.
 
-**The daemon loads the core and runs the verbs**, and a client only asks (D19). The two waits and
-the four gestures are callable over the same connection as `acquire_device` — the same envelope,
+**`launch_app`, `stop_app` and `clear_app_data` are that same spine used three more times**
+(`src/verbs/app.ts`), and they are what a verb looks like when it addresses **a package rather than
+something on the screen**: they resolve no target at all, so no screen is read before the action and
+the result's target is `null` — a fact about the verb, not a resolution that failed. They need no
+capability either, and say so with an explicit empty list: the three backend methods behind them are
+*required* ones, and a `canControlApps` flag would be a capability that is always true. So they add
+no backend method, no capability and no result shape — the whole family is one module, one params
+schema shared by all three, and three rows on the method table. `stop_app` cannot tell "stopped it"
+from "there was no such package", because the device is silent either way; the state after the
+action is what will answer that once `read_screen` lands, and there is deliberately no probe
+pretending otherwise in the meantime. The remaining verbs — `type_text`, `press_key`, `screenshot`,
+`read_screen`, `read_logs`, `install_app`, `pull_file`, `push_file` — are their own issues.
+
+**The daemon loads the core and runs the verbs**, and a client only asks (D19). The two waits, the
+four gestures and the three app verbs are callable over the same connection as `acquire_device` — the same envelope,
 the same framing, one method table — and a verb call carries the lease id rather than a serial,
 because the lease id is the credential and the host derives the device from it. A verb that fails
 comes back as an *answer* naming what happened — the element was not there, the wait timed out, the
@@ -132,9 +144,13 @@ device cannot read its screen — and never as a broken host; only the host actu
 `internal_error`. There is no `adb` in a client process, and
 `tests/unit/no-backend-in-a-client.test.ts` walks the import graph from every client entrypoint to
 say so rather than asking politely. Against a real device today all of it runs on the hardware: a
-`tap` at a coordinate injects, and — since the Android backend learned to read its own screen —
-a target addressed by text resolves against a hierarchy read inside the verb, both waits poll a
-real screen, and every action comes back carrying the elements that were on it afterwards.
+`tap` at a coordinate injects, `launch_app` and `stop_app` reach the package, and — since the
+Android backend learned to read its own screen — a target addressed by text resolves against a
+hierarchy read inside the verb, both waits poll a real screen, and every action comes back carrying
+the elements that were on it afterwards. One gap is recorded rather than hidden — a device-level
+refusal, such as launching a package that is not installed, still reaches the caller as
+`internal_error` rather than as an answer about the device. That is true of every verb family here,
+not just this one, and it is filed as its own issue.
 
 **The host can now listen on the network, and only if you ask it to** (D17, D20). Setting
 `ROVER_LISTEN_PORT` — with a host token and a TLS certificate beside it — starts a TCP+TLS
@@ -228,7 +244,7 @@ serials — and the connection is closed.
 | [`ai/TESTING.md`](ai/TESTING.md) | Vitest, the real-device gate, fixtures, conformance |
 
 In the source tree: `src/core/` holds the device contract and the branded ids, `src/backends/` one
-folder per platform, `src/verbs/` the verb spine with the gestures and the waits described above, `src/ipc/` the
+folder per platform, `src/verbs/` the verb spine with the gestures, the app verbs and the waits described above, `src/ipc/` the
 wire protocol and the transport-agnostic client and server, `src/daemon/` the socket and the
 inventory and the leases, and `src/cli/` the `rover` command.
 
