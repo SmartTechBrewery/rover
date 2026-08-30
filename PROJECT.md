@@ -547,6 +547,25 @@ of #12), 2026-08-30:
   observable from a mocked runner — the injection succeeds either way — so both were watched on
   the device.
 
+Checked against Node 22 while building R22's host listener, 2026-08-30. All three bit the
+implementation before review caught them, and all three are invisible to a test whose peers are
+well behaved:
+
+- **`net.Server.close()` waits on sockets a TLS server never told you about.** Its callback fires
+  when the server's connection count reaches zero, and that count is incremented at `accept`, not
+  at `secureConnection`. A peer that opens a TCP connection and never sends a ClientHello — a port
+  scanner, a load balancer's health check, `nc host port` left open — is therefore in no set a
+  `secureConnection` handler could have built, while still holding `close()` open forever. Track
+  connections on the server's `'connection'` event, not only on `secureConnection`.
+- **`socket.setTimeout` is an idle deadline, and every arriving byte rearms it.** It is not a bound
+  on how long a peer may stay unauthenticated: one writing a byte at a time keeps it from ever
+  firing, so a byte cap bounds the bytes and nothing bounds the time. A window a peer cannot
+  extend has to be a plain `setTimeout`, armed once and cleared on the outcome.
+- **`handshakeTimeout` does not abort the connection.** It emits `'tlsClientError'` with
+  `ERR_TLS_HANDSHAKE_TIMEOUT` on the server and then leaves the socket exactly where it was, so a
+  server that merely swallows that event has a log line rather than a deadline. Destroying the
+  `TLSSocket` the event carries takes the raw socket with it.
+
 ---
 
 ## 7. Scope

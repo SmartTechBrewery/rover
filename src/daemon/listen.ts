@@ -14,6 +14,12 @@
  * short-lived reclaim lock below. It never decides who becomes the daemon, it cannot strand
  * one, and it is discarded on age rather than believed forever, so it is not the stale
  * second source of truth D6 warns about.
+ *
+ * **One handler, two transports.** The `IpcServer` is built once here and handed to both the
+ * unix socket and — when the operator opted in (`./network-config.ts`) — the TLS listener of
+ * `./network-listen.ts`. That is what makes "the same surface, a second transport" (D17)
+ * structural rather than a claim: there is one method table and one dispatcher, and neither
+ * transport can drift from the other because there is nothing to drift from.
  */
 
 import { mkdir, open, rm, stat } from 'node:fs/promises';
@@ -21,11 +27,14 @@ import { createServer, type Server, type Socket } from 'node:net';
 import { dirname } from 'node:path';
 import { pause } from '../core/wait.js';
 import type { IpcHandlers } from '../ipc/methods.js';
+import type { IpcServer } from '../ipc/server.js';
 import { createIpcServer } from '../ipc/server.js';
 import { createDeviceInventory, type DeviceInventory } from './inventory.js';
 import { createLeaseHandlers } from './lease-handlers.js';
 import { createLeaseStore, type LeaseStore } from './leases.js';
 import { createListDevicesHandler } from './list-devices.js';
+import type { NetworkListenerConfig } from './network-config.js';
+import { type NetworkListener, startNetworkListener } from './network-listen.js';
 import { createDeviceRestorer, type DeviceRestorer } from './restore.js';
 import { attemptConnect } from './socket-connect.js';
 import { assertValidSocketPath } from './socket-path.js';
@@ -83,6 +92,19 @@ const LEASE_SWEEP_INTERVAL_MS = 30_000;
  */
 const RESTORE_SETTLE_TIMEOUT_MS = 10_000;
 
+/**
+ * How long `close()` waits for the TLS listener to stop before shutting down anyway and saying
+ * so.
+ *
+ * Bounded for the same reason as {@link WATCH_STOP_TIMEOUT_MS}: `NetworkListener.close()` waits
+ * on `net.Server`'s connection count reaching zero, which is a count kept by Node over sockets
+ * this process does not fully control. A defect there — or a socket state nobody anticipated —
+ * may delay a shutdown, but it must never be able to prevent one, because a daemon whose
+ * `close()` never resolves neither dies nor stops serving (D6). Generous enough that dropping a
+ * handful of live TLS connections is never reported as a leak.
+ */
+const NETWORK_CLOSE_TIMEOUT_MS = 5_000;
+
 export interface StartDaemonOptions {
 	readonly socketPath: string;
 	/**
@@ -95,14 +117,28 @@ export interface StartDaemonOptions {
 	readonly sweepIntervalMs?: number;
 	/** Defaults to the lease store's own TTL (D8). The same test seam, for the same test. */
 	readonly leaseTtlMs?: number;
+	/**
+	 * The network listener, or absent for a host that serves the local socket only.
+	 *
+	 * The operator's opt-in, resolved from the environment by `./main.ts` and deliberately
+	 * **never** read from `process.env` here: a `startDaemon()` in a unit test must not open a
+	 * port because the developer happened to export `ROVER_LISTEN_PORT` in that shell.
+	 */
+	readonly network?: NetworkListenerConfig;
 }
 
 /** The daemon this process owns. Only the winner of the bind gets one. */
 export interface RunningDaemon {
 	readonly started: true;
 	/**
-	 * Stops accepting, drops live connections, waits out the restorations still owed (bounded)
-	 * and unlinks the socket. Safe to call twice.
+	 * The TCP port the network listener actually bound, or `null` when none was configured. A
+	 * configured port of `0` resolves to a real one here, which is what lets a test find out
+	 * where to connect and lets `./main.ts` print what it opened.
+	 */
+	readonly networkPort: number | null;
+	/**
+	 * Stops accepting on both transports, drops live connections, waits out the restorations
+	 * still owed (bounded) and unlinks the socket. Safe to call twice.
 	 */
 	close(): Promise<void>;
 }
@@ -183,17 +219,44 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartRes
 			restorer.restore(lease, reason);
 		},
 	});
-	const sweepIntervalMs = options.sweepIntervalMs ?? LEASE_SWEEP_INTERVAL_MS;
+	// Built once, for **both** transports. Not once per bind attempt and not once per
+	// listener: one method table and one dispatcher is what makes the network listener an
+	// added transport rather than a second implementation of the surface (D17). It holds no
+	// resources of its own, so a loser of the bind leaves nothing behind here either.
+	const ipcServer = createIpcServer(createDaemonHandlers(inventory, leases, restorer, traffic));
 
-	const first = await listenOnce(socketPath, inventory, leases, restorer, traffic);
+	const parts: DaemonParts = {
+		ipcServer,
+		inventory,
+		leases,
+		restorer,
+		sweepIntervalMs: options.sweepIntervalMs ?? LEASE_SWEEP_INTERVAL_MS,
+		network: options.network,
+	};
+
+	const first = await listenOnce(socketPath, ipcServer);
 	if (first.listening) {
-		return running(first, socketPath, inventory, leases, restorer, sweepIntervalMs);
+		return running(first, socketPath, parts);
 	}
 	if (first.error.code !== 'EADDRINUSE') {
 		throw first.error;
 	}
 
-	return reclaimAndRetry(socketPath, inventory, leases, restorer, traffic, sweepIntervalMs);
+	return reclaimAndRetry(socketPath, parts);
+}
+
+/**
+ * Everything a daemon is built from, carried as one value so the two bind attempts and the
+ * start-up and shutdown paths all name the same set rather than each threading its own list
+ * of positional arguments.
+ */
+interface DaemonParts {
+	readonly ipcServer: IpcServer;
+	readonly inventory: DeviceInventory;
+	readonly leases: LeaseStore;
+	readonly restorer: DeviceRestorer;
+	readonly sweepIntervalMs: number;
+	readonly network: NetworkListenerConfig | undefined;
 }
 
 /**
@@ -208,14 +271,7 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartRes
  * unlink. The holder either re-binds the path — this retry then loses honestly on
  * `EADDRINUSE` — or leaves it free, and this retry takes it.
  */
-async function reclaimAndRetry(
-	socketPath: string,
-	inventory: DeviceInventory,
-	leases: LeaseStore,
-	restorer: DeviceRestorer,
-	traffic: VerbTraffic,
-	sweepIntervalMs: number,
-): Promise<StartResult> {
+async function reclaimAndRetry(socketPath: string, parts: DaemonParts): Promise<StartResult> {
 	// Cheap check before queueing for the lock: a daemon that is simply already running is
 	// the common loser, and it needs no reclamation at all.
 	if (await probeAnswers(socketPath)) {
@@ -228,9 +284,9 @@ async function reclaimAndRetry(
 			return { started: false };
 		}
 
-		const second = await listenOnce(socketPath, inventory, leases, restorer, traffic);
+		const second = await listenOnce(socketPath, parts.ipcServer);
 		if (second.listening) {
-			return running(second, socketPath, inventory, leases, restorer, sweepIntervalMs);
+			return running(second, socketPath, parts);
 		}
 		if (second.error.code !== 'EADDRINUSE') {
 			throw second.error;
@@ -243,54 +299,65 @@ async function reclaimAndRetry(
 	}
 }
 
-function running(
+/**
+ * The winner-only path: start what a serving daemon runs, network listener included.
+ *
+ * The listener goes up **here** rather than in `startDaemon` because this is the only branch
+ * that won the bind. A loser must not open a port: two daemons on one machine would then race
+ * for it, and the one that lost the socket has no devices to lend anyway.
+ */
+async function running(
 	listening: ListenSucceeded,
 	socketPath: string,
-	inventory: DeviceInventory,
-	leases: LeaseStore,
-	restorer: DeviceRestorer,
-	sweepIntervalMs: number,
-): RunningDaemon {
+	parts: DaemonParts,
+): Promise<RunningDaemon> {
 	// Captured while we hold the path, so `close()` can tell our own socket file from one a
 	// successor bound after us and only ever unlinks the former.
 	const ownInode = boundInodeOf(listening.server);
 	let closed: Promise<void> | undefined;
+	let network: NetworkListener | undefined;
 
 	// Only ever reached by the winner of the bind — a `{ started: false }` caller has no
 	// inventory running and nothing to stop.
-	inventory.start();
+	parts.inventory.start();
 
-	const sweep = setInterval(() => leases.sweep(), sweepIntervalMs);
+	const sweep = setInterval(() => parts.leases.sweep(), parts.sweepIntervalMs);
 	// Unreferenced, like every other timer here: this exists to notice an expiry while the
 	// daemon is serving, never to keep a process alive that is otherwise finished.
 	sweep.unref();
 
-	return {
-		started: true,
-		close(): Promise<void> {
-			closed ??= closeServer(listening, socketPath, ownInode, inventory, {
-				leases,
-				restorer,
-				sweep,
-			});
-			return closed;
-		},
+	const close = (): Promise<void> => {
+		closed ??= closeServer(listening, socketPath, ownInode, parts, { sweep, network });
+		return closed;
 	};
+
+	if (parts.network !== undefined) {
+		try {
+			network = await startNetworkListener(parts.network, parts.ipcServer);
+		} catch (error) {
+			// A failed network bind fails the whole start. Serving only locally while the
+			// operator believes the host is reachable is silent degradation, and it would leave
+			// this process holding the socket a working host should have.
+			await close();
+			throw error;
+		}
+	}
+
+	return { started: true, networkPort: network?.port ?? null, close };
 }
 
-/** What `close()` has to wind down besides the socket itself. */
+/** What `close()` has to wind down besides the local socket itself. */
 interface ShutdownWork {
-	readonly leases: LeaseStore;
-	readonly restorer: DeviceRestorer;
 	readonly sweep: NodeJS.Timeout;
+	readonly network: NetworkListener | undefined;
 }
 
 async function closeServer(
 	{ server, connections, startClosing }: ListenSucceeded,
 	socketPath: string,
 	ownInode: Promise<bigint | undefined>,
-	inventory: DeviceInventory,
-	{ leases, restorer, sweep }: ShutdownWork,
+	{ inventory, leases, restorer }: DaemonParts,
+	{ sweep, network }: ShutdownWork,
 ): Promise<void> {
 	// First, and unconditionally: nothing below waits for a sweep that fires halfway through
 	// the shutdown, so the interval stops before anything else does.
@@ -313,6 +380,11 @@ async function closeServer(
 	// would add one bound to the other for nothing. Snapshotted now, after the final sweep, so
 	// it covers every restoration this daemon ever owed.
 	const restored = settleRestorations(restorer);
+	// And the network listener beside them, for the same reason: stopping the TLS server and
+	// stopping the watches are independent, and a peer holding an idle TLS connection would
+	// otherwise be waited on in sequence with them. `undefined` when this host never opened
+	// one — the local socket is the whole of it.
+	const networkClosed = network === undefined ? undefined : closeNetworkListener(network);
 
 	await new Promise<void>((resolve) => {
 		// Set before `close()`, not after: a connection already past `accept()` in the kernel
@@ -333,6 +405,7 @@ async function closeServer(
 
 	await stopped;
 	await restored;
+	await networkClosed;
 
 	// Node unlinks the path itself on a clean close, so this is the crash-shaped case and a
 	// belt-and-braces guarantee that the address is free. Skipped when the inode changed:
@@ -382,6 +455,23 @@ async function settleRestorations(restorer: DeviceRestorer): Promise<void> {
 	}
 }
 
+/**
+ * Stop the TLS listener, bounded — see {@link NETWORK_CLOSE_TIMEOUT_MS}.
+ *
+ * `NetworkListener.close()` never rejects: it stops accepting, destroys every socket it tracks,
+ * and resolves when the server's last connection is gone. The bound is here because that last
+ * clause is Node's bookkeeping rather than ours, and the shutdown path is the one place where
+ * "waited too long" has to beat "waited forever".
+ */
+async function closeNetworkListener(network: NetworkListener): Promise<void> {
+	if (await timesOut(network.close(), NETWORK_CLOSE_TIMEOUT_MS)) {
+		console.warn(
+			`The network listener did not stop within ${NETWORK_CLOSE_TIMEOUT_MS}ms. Shutting down ` +
+				`anyway; the port may stay bound until this process exits.`,
+		);
+	}
+}
+
 /** Whether `work` outlasted `limitMs`. The work itself is never cancelled — nothing here can. */
 async function timesOut(work: Promise<void>, limitMs: number): Promise<boolean> {
 	let timer: NodeJS.Timeout | undefined;
@@ -424,12 +514,8 @@ interface ListenFailed {
  */
 function listenOnce(
 	socketPath: string,
-	inventory: DeviceInventory,
-	leases: LeaseStore,
-	restorer: DeviceRestorer,
-	traffic: VerbTraffic,
+	ipcServer: IpcServer,
 ): Promise<ListenSucceeded | ListenFailed> {
-	const ipcServer = createIpcServer(createDaemonHandlers(inventory, leases, restorer, traffic));
 	const connections = new Set<Socket>();
 	let closing = false;
 	const server = createServer((socket: Socket) => {

@@ -49,7 +49,7 @@ export const MethodNameSchema = z.string().min(1).max(128);
  * broke" — those call for opposite responses — so the code is part of the contract
  * rather than something to recover from a message string.
  *
- * The first six travel on the wire. `timeout` and `connection_closed` are raised by the
+ * The first seven travel on the wire. `timeout` and `connection_closed` are raised by the
  * client against itself and are never sent by a server; they share the vocabulary so a
  * caller has one `code` to switch on however the request failed.
  */
@@ -66,6 +66,14 @@ export const IpcErrorCodeSchema = z.enum([
 	'invalid_result',
 	/** A handler threw. The host broke; the request was not malformed. */
 	'internal_error',
+	/**
+	 * The peer did not present a token this host accepts. Only the network transport ever
+	 * sends it — the local socket is ungated — and it arrives before any request, as an
+	 * `id: null` error that ends the connection. The message is fixed and identical for
+	 * every pre-auth failure: it says nothing about why, and nothing about the host's
+	 * inventory, because a refusal must not be an oracle (D20).
+	 */
+	'unauthenticated',
 	/** Client-side: no response arrived within the request's timeout. */
 	'timeout',
 	/** Client-side: the connection ended with the request still in flight. */

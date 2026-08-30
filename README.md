@@ -131,8 +131,21 @@ device cannot read its screen — and never as a broken host; only the host actu
 `tests/unit/no-backend-in-a-client.test.ts` walks the import graph from every client entrypoint to
 say so rather than asking politely. Against a real device today a `tap` at a coordinate runs on the
 hardware, while both waits and anything addressed by text answer `missing-capability`:
-`read_screen` is its own issue, and the manifest says so rather than pretending. The backlog is twenty issues in dependency order — see
-[`PROJECT.md`](PROJECT.md) §9.3.
+`read_screen` is its own issue, and the manifest says so rather than pretending.
+
+**The host can now listen on the network, and only if you ask it to** (D17, D20). Setting
+`ROVER_LISTEN_PORT` — with a host token and a TLS certificate beside it — starts a TCP+TLS
+listener alongside the local unix socket, serving the *same* IPC surface from the same handler:
+one method table, two transports, no second implementation of anything. A network caller
+authenticates with a one-line greeting the transport reads and consumes before the message
+surface ever sees the connection, so the token never enters a request and never becomes a lease's
+owner — the token authenticates, the owner string attributes, and they are separate fields. Every
+pre-auth failure gets one byte-identical refusal and a closed connection: no reason, no device
+list, no count, no serials, because a refusal that varied would be an oracle. Without those
+variables nothing binds, the local socket needs no token and no configuration, and a daemon
+autostarted by `rover list` clears the switch so a plain command can never turn a laptop into a
+network host. The client half — `--host remote` — is the other half of `PROJECT.md` R22. The
+backlog is twenty issues in dependency order — see [`PROJECT.md`](PROJECT.md) §9.3.
 
 ```bash
 npm run rover -- status              # start the daemon if it is not running, report which host answered
@@ -167,10 +180,39 @@ startup, naming the variable and the reason, rather than binding something surpr
 | Variable | Default | Value |
 |---|---|---|
 | `ROVER_SOCKET_PATH` | `~/.rover/rover.sock` | Absolute path of the unix socket the local daemon binds and a local client connects to. **Empty counts as unset** — an exported-but-blank variable is what a shell leaves behind, and reading it as a real setting would point the daemon at the current directory. At most **103 bytes of UTF-8**: a unix socket address is a fixed-size struct (104 bytes on macOS, 108 on Linux, NUL included), and over the cap `bind` truncates or answers `EINVAL` instead of naming the length, so a longer path is rejected at startup with the byte count and the path. |
+| `ROVER_LISTEN_PORT` | unset — **no network listener** | The opt-in switch for the TCP+TLS listener that serves the same IPC surface as the local socket. Unset or empty and nothing binds, nothing else below is read, and the daemon is a purely local host. Set it and the next three become **required together**: a port with no token would be a listener that lets strangers in, so a missing one is a startup failure naming every variable still missing rather than a half-configured host. 1–65535. |
+| `ROVER_HOST_TOKEN` | — (required with the port) | The shared secret every network caller presents. At least **32 characters**; it is a bearer secret on an open port, and length is the only thing that makes guessing hopeless. It is a **host-level** setting and belongs in the environment, never in a file the repository tracks. Deliberately the same name a client will read, so a machine that is both holds one secret rather than two that drift apart. The token **authenticates and attributes nothing**: a lease's owner is a separate, caller-supplied string (`PROJECT.md` D20). |
+| `ROVER_TLS_CERT` | — (required with the port) | Path to the PEM certificate (chain) the listener presents. |
+| `ROVER_TLS_KEY` | — (required with the port) | Path to the matching PEM private key. Unreadable material is a startup failure naming the variable and the path, not a TLS mystery on the first connection. |
+| `ROVER_LISTEN_ADDRESS` | `0.0.0.0` | Which interface the network listener binds, so an operator can narrow it to a VPN or loopback interface instead of every one. Only read when the port is set. |
 
 While a daemon is coming up over a socket a crashed one left behind, a `<socket>.reclaim` lock file
 may briefly appear beside it. It is removed by whoever took it, and any left behind by a killed
 process is discarded on age by the next start.
+
+### Exposing a host on the network
+
+A network host is a **service its operator starts on purpose**, never something a client brings up
+behind their back — `rover list` clears `ROVER_LISTEN_PORT` in any daemon it autostarts, so the
+listener only ever exists because somebody exported these four variables and ran the daemon.
+
+```bash
+# A certificate for the host. Use your own CA in anything that matters; this is the shape.
+openssl req -x509 -newkey rsa:2048 -nodes -days 365   -keyout rover-key.pem -out rover-cert.pem   -subj "/CN=rover-host" -addext "subjectAltName=DNS:rover-host,IP:10.0.0.4"
+
+export ROVER_HOST_TOKEN="$(openssl rand -hex 24)"   # at least 32 characters
+export ROVER_TLS_CERT=/etc/rover/rover-cert.pem
+export ROVER_TLS_KEY=/etc/rover/rover-key.pem
+export ROVER_LISTEN_ADDRESS=10.0.0.4                # optional; 0.0.0.0 otherwise
+export ROVER_LISTEN_PORT=4711                       # the switch — set it last
+npm run daemon
+```
+
+The token is a shared secret: keep it in the environment (or your secret store), never in a file
+the repository tracks, and give the client machines the same value. `.gitignore` refuses `*.pem`
+and `*.key` so a certificate generated inside a checkout cannot be committed by accident. A caller
+that fails to authenticate is told only that authentication failed — no reason, no device list, no
+serials — and the connection is closed.
 
 ## Where things are
 
