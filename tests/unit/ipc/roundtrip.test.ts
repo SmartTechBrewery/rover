@@ -51,6 +51,9 @@ function statusHandlers(overrides: Partial<IpcHandlers> = {}): IpcHandlers {
 		install_app: () => refusedWithoutAHost(),
 		push_file: () => refusedWithoutAHost(),
 		pull_file: () => refusedWithoutAHost(),
+		record_video: () => refusedWithoutAHost(),
+		set_airplane_mode: () => refusedWithoutAHost(),
+		set_wifi: () => refusedWithoutAHost(),
 		...overrides,
 	};
 }

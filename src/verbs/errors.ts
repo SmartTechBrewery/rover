@@ -1,12 +1,19 @@
 /**
- * Verb-layer error types — the four ways a target fails to become one point, and the one
- * way an answer is too big to give.
+ * Verb-layer error types — the four ways a target fails to become one point, the two ways an
+ * answer is too big to give, and the two ways this host cannot produce one at all.
  *
  * Device-layer errors (a missing capability, a device that vanished) stay in
  * `src/core/errors.ts`; these are about what the caller asked for, and every one of them
  * exists because the alternative is a **silent** answer: a first match among two, a tap
- * into nowhere, a truncated image, or an empty result where the honest answer is that the
- * screen no longer holds what was named (ai/RULES.md §2).
+ * into nowhere, a truncated image, a frame list missing its middle, or an empty result where
+ * the honest answer is that the screen no longer holds what was named (ai/RULES.md §2).
+ *
+ * The last two are about a **host** rather than a device, and that is deliberate rather than
+ * a stray: frame extraction runs on the machine holding the hardware and needs a program that
+ * may not be installed on it (`../daemon/frames.ts` — the runner lives under `src/daemon/`
+ * precisely because it spawns, and nothing under `src/verbs/` may). A missing host program is
+ * not a capability — capabilities describe what a device backend can do (D11) — and it is not
+ * a bug either, so it is an answer with a name like the rest of these.
  *
  * **Every field is plain data on purpose**, for the reason `WaitTimeoutError` states: verb
  * execution happens on the host, so these are serialized and sent back over a socket that may
@@ -223,6 +230,124 @@ export class ArtifactTooLargeError extends Error {
 		);
 		this.name = 'ArtifactTooLargeError';
 		this.serial = serial;
+		this.byteLength = byteLength;
+		this.maxBytes = maxBytes;
+	}
+}
+
+/**
+ * Thrown when the frame extractor could not be **started** — `ffmpeg` is not on this host's
+ * `PATH`.
+ *
+ * **The branch that keeps `frames: []` from ever being an answer.** A recording that has
+ * frames and a host that cannot slice it are two different facts, and an empty list conflates
+ * them into the plausible-looking empty result ai/RULES.md §2 forbids: an agent reading one
+ * concludes the screen never changed, which is a statement about the device made by a host
+ * that never looked.
+ *
+ * Kept apart from {@link FrameExtractionFailedError} because the remedy differs — install the
+ * program, rather than ask about this recording again — and apart from
+ * `MissingCapabilityError` because that one is about a *device*: capabilities describe what a
+ * backend can do, and nothing about a missing host program says anything about the hardware
+ * (D11).
+ *
+ * `reason` is Node's own words for the failed spawn (`spawn ffmpeg ENOENT`), because a
+ * program that is present but not executable fails here too and says so differently.
+ */
+export class FrameExtractionUnavailableError extends Error {
+	readonly serial: DeviceSerial;
+	readonly program: string;
+	readonly reason: string;
+
+	constructor(serial: DeviceSerial, program: string, reason: string) {
+		super(
+			`The recording from device '${serial}' could not be sliced into frames: '${program}' ` +
+				`could not be started (${reason}). Install it on this host and put it on PATH — it ` +
+				'is what decodes the recording. The recording itself is unaffected; it is the ' +
+				'frames that cannot be produced, and an empty frame list would read as a screen ' +
+				'on which nothing happened',
+		);
+		this.name = 'FrameExtractionUnavailableError';
+		this.serial = serial;
+		this.program = program;
+		this.reason = reason;
+	}
+}
+
+/**
+ * Thrown when the frame extractor **ran** and did not produce frames.
+ *
+ * Distinct from {@link FrameExtractionUnavailableError} so a recording the decoder would not
+ * read is distinguishable from a host that has no decoder — the first says something about
+ * these bytes, the second about this machine, and they are fixed in different places.
+ *
+ * Carries the exit code and the program's own stderr together, because "a non-zero exit is
+ * data" (ai/CODING_STANDARDS.md): the exit code alone says a decoder refused, and only its
+ * stderr says whether the input was unreadable, the filter graph was rejected, or the run was
+ * cut short. `outcome` is how the run ended in words — an exit, a signal, or a stream this
+ * host could not read afterwards — because those three read identically from an exit code.
+ */
+export class FrameExtractionFailedError extends Error {
+	readonly serial: DeviceSerial;
+	readonly program: string;
+	readonly exitCode: number | null;
+	readonly stderr: string;
+	readonly outcome: string;
+
+	constructor(
+		serial: DeviceSerial,
+		program: string,
+		exitCode: number | null,
+		stderr: string,
+		outcome: string,
+	) {
+		super(
+			`The recording from device '${serial}' could not be sliced into frames: ` +
+				`'${program}' ${outcome}\nstderr: ${stderr.trimEnd().length === 0 ? '(empty)' : stderr.trimEnd()}`,
+		);
+		this.name = 'FrameExtractionFailedError';
+		this.serial = serial;
+		this.program = program;
+		this.exitCode = exitCode;
+		this.stderr = stderr;
+		this.outcome = outcome;
+	}
+}
+
+/**
+ * Thrown when the frames extracted from a recording are larger than one answer may carry.
+ *
+ * The bound it names is `MAX_FRAMES_BYTES` (`./record.ts`), and this error is what makes
+ * reaching it a **loud refusal rather than a shorter list**, the stance
+ * {@link ArtifactTooLargeError} already takes for the recording itself. Trimming would be
+ * worse here than anywhere else: a frame list quietly missing its middle reads as a recording
+ * in which nothing happened between two moments that are no longer adjacent, and nothing
+ * about the answer says otherwise.
+ *
+ * Its own class rather than {@link ArtifactTooLargeError} because the two ask different things
+ * of the caller. That one is about a capture that will never fit whatever is done to it; this
+ * one has two ways out — a shorter recording, or a lower `framesPerSecond` — and `frames` is
+ * the number that says which is worth trying.
+ */
+export class FramesTooLargeError extends Error {
+	readonly serial: DeviceSerial;
+	readonly frames: number;
+	readonly byteLength: number;
+	readonly maxBytes: number;
+
+	constructor(serial: DeviceSerial, frames: number, byteLength: number, maxBytes: number) {
+		super(
+			`The ${frames} frames extracted from the recording on device '${serial}' are ` +
+				`${byteLength} bytes together, over the ${maxBytes}-byte limit one verb answer may ` +
+				'carry beside the recording itself — they travel base64-encoded, which is a third ' +
+				'larger again, and the whole answer has to fit one message. Record for less time, ' +
+				'or ask for fewer frames a second. They are refused together rather than returned ' +
+				'as a shorter list, because a frame list missing its middle reads as a recording ' +
+				'in which nothing happened',
+		);
+		this.name = 'FramesTooLargeError';
+		this.serial = serial;
+		this.frames = frames;
 		this.byteLength = byteLength;
 		this.maxBytes = maxBytes;
 	}

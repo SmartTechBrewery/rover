@@ -18,6 +18,12 @@
  * Nothing here sleeps. Where a test needs a wait to have actually taken time it asks a verb
  * to poll to its own deadline, which is the wait vocabulary doing what it is for; everywhere
  * else `timeoutMs: 0` makes a wait exactly one screen read (`src/core/wait.ts`).
+ *
+ * One host-side tool is mocked, and only one: the frame extractor `record_video` is handed
+ * (`src/daemon/frames.ts`). It drives a program that may not be installed, and its own suite
+ * covers the argv, the failures and the split against a mocked process — what this file is
+ * about is whether the frames it produced reach a client over the real framing, which needs a
+ * decoder no more than a `tap` needs a finger.
  */
 
 import { access, readFile } from 'node:fs/promises';
@@ -28,7 +34,7 @@ import {
 } from '@/backends/registry.js';
 import type { Capabilities } from '@/core/capabilities.js';
 import type { Device, DeviceBackend, DeviceWatch, DeviceWatcher, Point } from '@/core/device.js';
-import { UnsupportedTextError } from '@/core/errors.js';
+import { UnfinishedRecordingError, UnsupportedTextError } from '@/core/errors.js';
 import {
 	type AppId,
 	type DeviceSerial,
@@ -43,6 +49,12 @@ import { IpcRequestError } from '@/ipc/protocol.js';
 import { MAX_TRANSFER_BYTES } from '@/ipc/verb-methods.js';
 import { LONG_PRESS_DURATION_MS } from '@/verbs/input.js';
 import { DEFAULT_MAX_LOG_ENTRIES } from '@/verbs/logs.js';
+import {
+	DEFAULT_FRAMES_PER_SECOND,
+	DEFAULT_RECORDING_MS,
+	MAX_FRAMES_PER_SECOND,
+	MAX_RECORDING_MS,
+} from '@/verbs/record.js';
 import { MAX_ARTIFACT_BYTES } from '@/verbs/result.js';
 import {
 	connectWithoutStarting,
@@ -60,6 +72,33 @@ import {
 	createMockScreenElement,
 } from '../../helpers/factories.js';
 import { createGate, drainEventLoop } from '../../helpers/timing.js';
+
+/**
+ * The frames the daemon's host tool answers with, and what it was asked to slice.
+ *
+ * Declared through `vi.hoisted` so the module factory can close over it, the shape
+ * `tests/unit/backends/android/adb.test.ts` established.
+ */
+const { frameCalls, FRAMES } = vi.hoisted(() => ({
+	frameCalls: [] as Array<{ recording: Uint8Array; framesPerSecond: number }>,
+	FRAMES: [
+		// Two PNGs, distinguishable byte for byte, so an answer that lost or reordered them
+		// fails the comparison rather than merely having the right length.
+		Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x01, 0x02, 0x03]),
+		Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0xfe, 0xff, 0x7f]),
+	],
+}));
+
+vi.mock('@/daemon/frames.js', () => ({
+	extractFrames: async (
+		_serial: DeviceSerial,
+		recording: Uint8Array,
+		options: { framesPerSecond: number },
+	) => {
+		frameCalls.push({ recording, framesPerSecond: options.framesPerSecond });
+		return FRAMES;
+	},
+}));
 
 const SERIAL = parseDeviceSerial('attached-1');
 const attached = createMockDevice({ serial: SERIAL });
@@ -89,6 +128,8 @@ interface HostOptions {
 	readonly deviceInfo?: DeviceBackend['deviceInfo'];
 	readonly typeText?: DeviceBackend['typeText'];
 	readonly capture?: Uint8Array;
+	readonly recording?: Uint8Array;
+	readonly recordVideo?: DeviceBackend['recordVideo'];
 	readonly capabilities?: Partial<Capabilities>;
 	readonly leaseTtlMs?: number;
 }
@@ -105,6 +146,15 @@ const PULLED = Uint8Array.from([0x00, 0xff, 0x0d, 0x0a, 0x80, 0x7f, 0x01, 0xfe])
  */
 const CAPTURE = Uint8Array.from([
 	0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x01, 0xfe, 0xff, 0x7f, 0x80, 0x0a, 0x0d,
+]);
+
+/**
+ * A recording the daemon's device answers with — an `ftyp` box header and then bytes that
+ * are not all the same, for {@link CAPTURE}'s reason. Only the header is load-bearing: it is
+ * what makes the media type on the answer a fact read off the bytes.
+ */
+const RECORDING = Uint8Array.from([
+	0x00, 0x00, 0x00, 0x18, 0x66, 0x74, 0x79, 0x70, 0x00, 0x01, 0xfe, 0xff, 0x7f, 0x80, 0x0a, 0x0d,
 ]);
 
 /** The screen reads the daemon performed, so a test can prove the host did the work. */
@@ -154,6 +204,19 @@ let transfers: Array<{
 }>;
 
 /**
+ * The recordings the daemon's backend was asked for — the serial off the lease, and the
+ * duration the verb decided on, which is the one number a client can leave entirely unsaid.
+ */
+let recordings: Array<{ serial: string; durationMs: number }>;
+
+/**
+ * The radio calls the daemon's backend received, in order — which method, on which serial,
+ * and with the boolean the client sent. Two methods of identical signature is the family a
+ * crossed wire is invisible in, so these are recorded rather than inferred from an answer.
+ */
+let radioCalls: Array<{ method: string; serial: string; enabled: boolean }>;
+
+/**
  * A daemon on a temp socket with one ready device behind one registered backend.
  *
  * `describeDevice` defaults to answering about whatever serial it was asked, because the
@@ -168,6 +231,9 @@ async function serve(options: HostOptions = {}): Promise<void> {
 	appCalls = [];
 	logReads = [];
 	transfers = [];
+	recordings = [];
+	frameCalls.length = 0;
+	radioCalls = [];
 	const watchDevices = vi.fn<DeviceBackend['watchDevices']>((watcher: DeviceWatcher) => {
 		watcher.onDevices([attached]);
 		return { stop: vi.fn<DeviceWatch['stop']>(async () => {}) };
@@ -206,6 +272,8 @@ async function serve(options: HostOptions = {}): Promise<void> {
 			pressKey: async (_serial, key) => {
 				keys.push(key);
 			},
+			setAirplaneMode: recordRadio('setAirplaneMode'),
+			setWifiEnabled: recordRadio('setWifiEnabled'),
 			launchApp: options.launchApp ?? recordApp('launchApp'),
 			stopApp: recordApp('stopApp'),
 			clearAppData: recordApp('clearAppData'),
@@ -240,6 +308,12 @@ async function serve(options: HostOptions = {}): Promise<void> {
 					transfers.push({ method: 'pullFile', serial, devicePath, maxBytes });
 					return PULLED;
 				}),
+			recordVideo:
+				options.recordVideo ??
+				(async (serial, { durationMs }) => {
+					recordings.push({ serial, durationMs });
+					return options.recording ?? RECORDING;
+				}),
 		}),
 	});
 
@@ -258,6 +332,13 @@ async function serve(options: HostOptions = {}): Promise<void> {
 function recordApp(method: string) {
 	return async (serial: DeviceSerial, appId: AppId): Promise<void> => {
 		appCalls.push({ method, serial, appId });
+	};
+}
+
+/** The same, for the two capability-gated radio methods. */
+function recordRadio(method: string) {
+	return async (serial: DeviceSerial, enabled: boolean): Promise<void> => {
+		radioCalls.push({ method, serial, enabled });
 	};
 }
 
@@ -1277,6 +1358,315 @@ describe('the transfer rows carry a file across the boundary', () => {
 	});
 });
 
+describe('the recording row carries its payload on the artifact', () => {
+	/**
+	 * The bytes over the real framing, for the reason the `screenshot` row above needs a
+	 * socket: `JSON.stringify` turns a `Uint8Array` into an object of numeric keys, so a
+	 * result carrying raw bytes passes every in-process test and arrives here as nonsense.
+	 */
+	it('record_video answers with the recording the host pulled, intact after the round trip', async () => {
+		await serve();
+		const client = await connect();
+		const leaseId = await acquire(client);
+
+		const answer = await client.request('record_video', { leaseId });
+
+		expect(answer).toMatchObject({
+			outcome: 'ok',
+			// No target, and the device the *lease* names, which the client never sent (D20).
+			result: { verb: 'record_video', target: null, device: { serial: SERIAL } },
+		});
+		if (answer.outcome !== 'ok') throw new Error('the assertion above should have caught this');
+		const { artifact } = answer.result;
+		if (!artifact) throw new Error('the record_video answered with no artifact');
+		expect(artifact.mediaType).toBe('video/mp4');
+		expect(artifact.byteLength).toBe(RECORDING.byteLength);
+		expect(new Uint8Array(Buffer.from(artifact.base64, 'base64'))).toEqual(RECORDING);
+		// Three fields, and none of them a place on the host's disk to go and look (D19).
+		expect(Object.keys(artifact).sort()).toEqual(['base64', 'byteLength', 'mediaType']);
+		// The serial came off the lease on the host, and the duration off the verb's own default.
+		expect(recordings).toEqual([{ serial: SERIAL, durationMs: DEFAULT_RECORDING_MS }]);
+	});
+
+	/**
+	 * The frames over the real framing, for the reason the recording above needs a socket:
+	 * `JSON.stringify` turns a `Uint8Array` into an object of numeric keys, and a list of ten
+	 * of those still looks like a list of frames until a client tries to decode one.
+	 */
+	it('answers with the frames beside the recording, in order and intact after the round trip', async () => {
+		await serve();
+		const client = await connect();
+		const leaseId = await acquire(client);
+
+		const answer = await client.request('record_video', { leaseId });
+
+		if (answer.outcome !== 'ok') throw new Error('the recording row refused');
+		expect(answer.result.frames.map((frame) => frame.mediaType)).toEqual([
+			'image/png',
+			'image/png',
+		]);
+		expect(
+			answer.result.frames.map((frame) => new Uint8Array(Buffer.from(frame.base64, 'base64'))),
+		).toEqual(FRAMES);
+		// Three fields on every frame, and none of them a place on the host's disk (D19).
+		for (const frame of answer.result.frames) {
+			expect(Object.keys(frame).sort()).toEqual(['base64', 'byteLength', 'mediaType']);
+		}
+		// Sliced from the recording the host pulled, at the verb's own rate — one pass over the
+		// device, and no second number decided by the daemon.
+		expect(frameCalls).toEqual([
+			{ recording: RECORDING, framesPerSecond: DEFAULT_FRAMES_PER_SECOND },
+		]);
+	});
+
+	it('passes a rate the caller did send, and never a default of its own', async () => {
+		await serve();
+		const client = await connect();
+		const leaseId = await acquire(client);
+
+		await client.request('record_video', { leaseId, framesPerSecond: 1 });
+
+		expect(frameCalls.map((call) => call.framesPerSecond)).toEqual([1]);
+	});
+
+	it('refuses a sampling rate past what one answer can carry, at the boundary', async () => {
+		await serve();
+		const client = await connect();
+		const leaseId = await acquire(client);
+
+		const thrown = await client
+			.request('record_video', { leaseId, framesPerSecond: MAX_FRAMES_PER_SECOND + 1 })
+			.catch((error: unknown) => error);
+
+		// `invalid_params` rather than a host that records, slices and then refuses the answer
+		// for being too big — the bound is knowable before anything runs.
+		expect(thrown).toBeInstanceOf(IpcRequestError);
+		expect((thrown as IpcRequestError).code).toBe('invalid_params');
+		expect(recordings).toEqual([]);
+	});
+
+	it('passes a duration the caller did send, and never a default of its own', async () => {
+		await serve();
+		const client = await connect();
+		const leaseId = await acquire(client);
+
+		await client.request('record_video', { leaseId, durationMs: 1_000 });
+
+		expect(recordings).toEqual([{ serial: SERIAL, durationMs: 1_000 }]);
+	});
+
+	/**
+	 * The recording came off the device unfinished — not a host bug and not a device that is
+	 * gone, but an answer with a name, so the agent knows to ask again rather than to report
+	 * a corrupt download. Without the branch in `toVerbFailure` this arrives as
+	 * `internal_error`, i.e. "the host broke", which is the misattribution this whole row
+	 * exists to prevent.
+	 */
+	it('answers unfinished-recording as data rather than as a broken host', async () => {
+		await serve({
+			recordVideo: async (serial) => {
+				throw new UnfinishedRecordingError(serial, 3_232);
+			},
+		});
+		const client = await connect();
+		const leaseId = await acquire(client);
+
+		const answer = await client.request('record_video', { leaseId, durationMs: 1_000 });
+
+		expect(answer).toMatchObject({
+			outcome: 'failed',
+			failure: { kind: 'unfinished-recording', serial: SERIAL, byteLength: 3_232 },
+		});
+		// The device is fine, so the after-state was never the question — and no screen read was
+		// spent on an answer the recording had already decided.
+		expect(reads).toBe(0);
+	});
+
+	it('answers artifact-too-large as data rather than as a broken host', async () => {
+		await serve({ recording: new Uint8Array(MAX_ARTIFACT_BYTES + 1) });
+		const client = await connect();
+		const leaseId = await acquire(client);
+
+		const answer = await client.request('record_video', { leaseId, durationMs: 1_000 });
+
+		expect(answer).toMatchObject({
+			outcome: 'failed',
+			failure: {
+				kind: 'artifact-too-large',
+				serial: SERIAL,
+				byteLength: MAX_ARTIFACT_BYTES + 1,
+				maxBytes: MAX_ARTIFACT_BYTES,
+			},
+		});
+		// Refused where the recording happened, so no screen read was spent reaching it.
+		expect(reads).toBe(0);
+	});
+
+	/**
+	 * D11 over the wire: the payload *is* the answer, so a backend that does not declare the
+	 * capability fails by name before anything is dispatched rather than answering with a
+	 * null artifact that reads like a success.
+	 */
+	it('names the capability when the device cannot record, without touching the device', async () => {
+		await serve({ capabilities: { canRecordVideo: false } });
+		const client = await connect();
+		const leaseId = await acquire(client);
+
+		const answer = await client.request('record_video', { leaseId });
+		expect(answer).toMatchObject({
+			outcome: 'failed',
+			failure: {
+				kind: 'missing-capability',
+				capability: 'canRecordVideo',
+				serial: SERIAL,
+				platform: 'test-platform',
+				backendLabel: 'Test',
+			},
+		});
+		expect(recordings).toEqual([]);
+		expect(reads).toBe(0);
+	});
+
+	// Proof this row goes through `runVerb` rather than around it: the same refusal, in the
+	// same words, as every other verb.
+	it('refuses a lease id the store does not know, without touching the device', async () => {
+		await serve();
+		const client = await connect();
+
+		const answer = await client.request('record_video', {
+			leaseId: parseLeaseId('never-granted'),
+		});
+
+		expect(answer).toMatchObject({ outcome: 'refused', reason: 'no-lease' });
+		expect(recordings).toEqual([]);
+	});
+
+	it('refuses a duration past what one answer can carry, at the boundary', async () => {
+		await serve();
+		const client = await connect();
+		const leaseId = await acquire(client);
+
+		const thrown = await client
+			.request('record_video', { leaseId, durationMs: MAX_RECORDING_MS + 1 })
+			.catch((error: unknown) => error);
+
+		// `invalid_params` rather than a host that records for as long as it was asked and then
+		// refuses the answer for being too big — the bound is knowable before anything runs.
+		expect(thrown).toBeInstanceOf(IpcRequestError);
+		expect((thrown as IpcRequestError).code).toBe('invalid_params');
+		expect(recordings).toEqual([]);
+	});
+
+	it('refuses a destination path sent beside the lease id (D19)', async () => {
+		await serve();
+		const client = await connect();
+		const leaseId = await acquire(client);
+
+		const thrown = await client
+			.request('record_video', {
+				leaseId,
+				// The capture happens on the host and the answer is read on the caller's machine,
+				// so a path here either names nothing or names something on the wrong disk.
+				// @ts-expect-error — the point of the test is what a client that ignored the type gets.
+				destination: '/tmp/recording.mp4',
+			})
+			.catch((error: unknown) => error);
+
+		expect(thrown).toBeInstanceOf(IpcRequestError);
+		expect((thrown as IpcRequestError).code).toBe('invalid_params');
+		expect(recordings).toEqual([]);
+	});
+});
+
+/**
+ * The two environment rows, which are the app rows' claim with one addition: this is the
+ * first family on the wire whose `requires` names a **real capability**, so a backend that
+ * does not declare it has to refuse as data — `missing-capability` naming the capability,
+ * the device and the backend — rather than reach a method that is not there. What is
+ * otherwise new is the payload: a boolean, which has to arrive unaltered in both directions.
+ */
+describe('the environment rows dispatch like the app rows', () => {
+	it.each([
+		['set_airplane_mode', 'setAirplaneMode'],
+		['set_wifi', 'setWifiEnabled'],
+	] as const)('%s reaches %s on the device the lease names', async (method, backendMethod) => {
+		await serve();
+		const client = await connect();
+		const leaseId = await acquire(client);
+
+		const answer = await client.request(method, { leaseId, enabled: true });
+
+		expect(answer).toMatchObject({
+			outcome: 'ok',
+			// No target, because a radio is not something on the screen.
+			result: { verb: method, target: null, device: { serial: SERIAL } },
+		});
+		// The serial came off the lease on the host. The client sent a lease id and a boolean.
+		expect(radioCalls).toEqual([{ method: backendMethod, serial: SERIAL, enabled: true }]);
+		// And no screen was read to get there — the read in the result is the after-state, which
+		// is what "the verb returns the state after itself" means here (D12(c)).
+		expect(reads).toBe(1);
+	});
+
+	it.each([
+		['set_airplane_mode', 'setAirplaneMode'],
+		['set_wifi', 'setWifiEnabled'],
+	] as const)('%s carries `enabled: false` to the device as false', async (method, backendMethod) => {
+		await serve();
+		const client = await connect();
+		const leaseId = await acquire(client);
+
+		await client.request(method, { leaseId, enabled: false });
+
+		// The one payload this family has. A boolean flipped anywhere between the wire and the
+		// device is a toggle that answers `ok` and leaves the radio where it was.
+		expect(radioCalls).toEqual([{ method: backendMethod, serial: SERIAL, enabled: false }]);
+	});
+
+	it.each([
+		'set_airplane_mode',
+		'set_wifi',
+	] as const)('fails %s loudly on a backend that does not declare canControlNetwork (D11)', async (method) => {
+		await serve({ capabilities: { canControlNetwork: false } });
+		const client = await connect();
+		const leaseId = await acquire(client);
+
+		const answer = await client.request(method, { leaseId, enabled: true });
+
+		// D11 crossing the wire as data: named in full rather than an `ok` that moved nothing.
+		expect(answer).toMatchObject({
+			outcome: 'failed',
+			failure: {
+				kind: 'missing-capability',
+				capability: 'canControlNetwork',
+				serial: SERIAL,
+				platform: 'test-platform',
+				backendLabel: 'Test',
+			},
+		});
+		expect(radioCalls).toEqual([]);
+		// Refused before anything was dispatched, so no screen read was spent reaching it.
+		expect(reads).toBe(0);
+	});
+
+	it.each([
+		'set_airplane_mode',
+		'set_wifi',
+	] as const)('refuses %s on a lease id the store does not know, without touching the device', async (method) => {
+		await serve();
+		const client = await connect();
+
+		const answer = await client.request(method, {
+			leaseId: parseLeaseId('never-granted'),
+			enabled: false,
+		});
+
+		// Proof these go through `runVerb` rather than around it.
+		expect(answer).toMatchObject({ outcome: 'refused', reason: 'no-lease' });
+		expect(radioCalls).toEqual([]);
+	});
+});
+
 describe('a call that cannot reach a verb is refused, as data', () => {
 	it('refuses a lease id the store does not know, and resolves rather than rejecting', async () => {
 		await serve();
@@ -1494,6 +1884,65 @@ describe('the boundary parses what the type already forbids', () => {
 
 		expect(thrown).toBeInstanceOf(IpcRequestError);
 		expect((thrown as IpcRequestError).code).toBe('invalid_params');
+	});
+
+	it('refuses a set_wifi with no `enabled` at all', async () => {
+		await serve();
+		const client = await connect();
+		const leaseId = await acquire(client);
+
+		const thrown = await client
+			// An optional boolean would make "turn wifi off" and "say nothing" the same call, and
+			// leave the verb to invent a default nobody asked for.
+			// @ts-expect-error — the point of the test is what a client that ignored the type gets.
+			.request('set_wifi', { leaseId })
+			.catch((error: unknown) => error);
+
+		expect(thrown).toBeInstanceOf(IpcRequestError);
+		expect((thrown as IpcRequestError).code).toBe('invalid_params');
+		expect(radioCalls).toEqual([]);
+	});
+
+	it('refuses one of the device-side words in place of the boolean', async () => {
+		await serve();
+		const client = await connect();
+		const leaseId = await acquire(client);
+
+		const thrown = await client
+			.request('set_airplane_mode', {
+				leaseId,
+				// The two commands underneath disagree about the words for the same boolean
+				// (PROJECT.md §6), and a crossed pair is refused only once it reaches the device.
+				// A boolean on the wire is what keeps that argument the backend's alone.
+				// @ts-expect-error — the point of the test is what a client that ignored the type gets.
+				enabled: 'enable',
+			})
+			.catch((error: unknown) => error);
+
+		expect(thrown).toBeInstanceOf(IpcRequestError);
+		expect((thrown as IpcRequestError).code).toBe('invalid_params');
+		expect(radioCalls).toEqual([]);
+	});
+
+	it('refuses a serial sent beside the lease id on set_airplane_mode (D20)', async () => {
+		await serve();
+		const client = await connect();
+		const leaseId = await acquire(client);
+
+		const thrown = await client
+			.request('set_airplane_mode', {
+				leaseId,
+				enabled: true,
+				// A serial accepted here would let the holder of one lease take another device off
+				// the network.
+				// @ts-expect-error — the point of the test is what a client that ignored the type gets.
+				serial: 'another-device',
+			})
+			.catch((error: unknown) => error);
+
+		expect(thrown).toBeInstanceOf(IpcRequestError);
+		expect((thrown as IpcRequestError).code).toBe('invalid_params');
+		expect(radioCalls).toEqual([]);
 	});
 
 	it('refuses a wait longer than a lease could outlive', async () => {

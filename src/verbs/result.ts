@@ -129,6 +129,16 @@ export const MAX_ARTIFACT_BYTES = 4 * 1024 * 1024;
 /** The eight bytes every PNG starts with (PNG 1.2 §3.1). */
 const PNG_SIGNATURE = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
 
+/**
+ * The four bytes at offset 4 of every ISO base media file — an MP4's `ftyp` box type
+ * (ISO/IEC 14496-12 §4.3). The first four bytes are that box's *length*, which varies, so
+ * the signature is at an offset rather than at the start.
+ */
+const FTYP_BOX = [0x66, 0x74, 0x79, 0x70];
+
+/** Where {@link FTYP_BOX} sits: after the leading `size:uint32`. */
+const FTYP_BOX_OFFSET = 4;
+
 /** What bytes nothing here recognises are called — honestly unlabelled, not guessed at. */
 const UNKNOWN_MEDIA_TYPE = 'application/octet-stream';
 
@@ -141,12 +151,23 @@ const UNKNOWN_MEDIA_TYPE = 'application/octet-stream';
  * is the cheap version of checking, and the same check a backend already makes about its
  * own capture before handing it over. Unrecognised bytes get {@link UNKNOWN_MEDIA_TYPE},
  * which is the true statement about them; it is not a failure, and it is not a guess.
+ *
+ * `record_video`'s bytes are the second signature here, and they are read the same way for
+ * the same reason: `DeviceBackend.recordVideo` promises video bytes without saying in which
+ * container, so `video/mp4` is a claim this function checks rather than one the verb makes.
+ * It says nothing about whether the recording is *finished* — that is a different question,
+ * asked of a different box, by the backend that pulled the bytes (`UnfinishedRecordingError`).
  */
 function mediaTypeOf(bytes: Uint8Array): string {
-	if (bytes.length < PNG_SIGNATURE.length) return UNKNOWN_MEDIA_TYPE;
-	return PNG_SIGNATURE.every((byte, index) => bytes[index] === byte)
-		? 'image/png'
-		: UNKNOWN_MEDIA_TYPE;
+	if (hasSignature(bytes, PNG_SIGNATURE, 0)) return 'image/png';
+	if (hasSignature(bytes, FTYP_BOX, FTYP_BOX_OFFSET)) return 'video/mp4';
+	return UNKNOWN_MEDIA_TYPE;
+}
+
+/** Whether `signature` sits at `offset` of `bytes` — bounds checked, never a short read. */
+function hasSignature(bytes: Uint8Array, signature: number[], offset: number): boolean {
+	if (bytes.length < offset + signature.length) return false;
+	return signature.every((byte, index) => bytes[offset + index] === byte);
 }
 
 /**

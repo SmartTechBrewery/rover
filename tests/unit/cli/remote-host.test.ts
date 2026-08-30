@@ -12,6 +12,8 @@
  * back to autostarting one (D5).
  */
 
+import { readFile } from 'node:fs/promises';
+import { join, resolve } from 'node:path';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
 	_resetDeviceBackendRegistryForTesting,
@@ -38,14 +40,20 @@ import { createMockDevice, createMockDeviceBackend } from '../../helpers/factori
 import {
 	createTestCertificate,
 	removeTestCertificate,
-	TEST_HOST_TOKEN,
 	type TestCertificate,
+	UNISSUED_TOKEN,
 } from '../../helpers/tls-fixtures.js';
+import { createTestUserStore, type TestUserStore } from '../../helpers/user-store.js';
 
 const attached = createMockDevice({ serial: parseDeviceSerial('attached-1') });
 
+/** What the host's backend captures — distinctive, so "these bytes" means these bytes. */
+const REMOTE_CAPTURE = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x2a]);
+
 let certificate: TestCertificate;
 let temp: TempSocket;
+/** The host's user store and the one user in it — what the host authenticates against. */
+let store: TestUserStore;
 let logged: string[];
 let errored: string[];
 const running: RunningDaemon[] = [];
@@ -60,6 +68,7 @@ afterAll(async () => {
 
 beforeEach(async () => {
 	temp = await createTempSocket();
+	store = await createTestUserStore(temp.dir);
 	vi.stubEnv('ROVER_SOCKET_PATH', temp.socketPath);
 	// Empty rather than deleted, which is both how a shell leaves a variable behind and the
 	// rule the resolver states: an exported-but-blank value is not a setting. Stubbed for
@@ -97,11 +106,17 @@ function registerFakeBackend(): void {
 		manifest: {
 			platform: 'test-platform',
 			label: 'Test',
-			capabilities: { canReadScreen: true, canInput: true, canControlNetwork: true },
+			capabilities: {
+				canReadScreen: true,
+				canInput: true,
+				canControlNetwork: true,
+				canRecordVideo: true,
+			},
 		},
 		backend: createMockDeviceBackend({
 			watchDevices,
 			describeDevice: async (serial) => createMockDevice({ serial }),
+			screenshot: async () => REMOTE_CAPTURE,
 		}),
 	});
 }
@@ -117,9 +132,9 @@ async function startHostAndPointAtIt(): Promise<RunningDaemon> {
 		network: {
 			address: '127.0.0.1',
 			port: 0,
-			token: TEST_HOST_TOKEN,
 			certPath: certificate.certPath,
 			keyPath: certificate.keyPath,
+			usersPath: store.path,
 		},
 	});
 	if (!daemon.started || daemon.networkPort === null) {
@@ -129,7 +144,8 @@ async function startHostAndPointAtIt(): Promise<RunningDaemon> {
 
 	vi.stubEnv(HOST_ADDRESS_ENV_VAR, '127.0.0.1');
 	vi.stubEnv(HOST_PORT_ENV_VAR, String(daemon.networkPort));
-	vi.stubEnv(HOST_TOKEN_ENV_VAR, TEST_HOST_TOKEN);
+	// The token this client presents is the one `rover users add` issued on the host side.
+	vi.stubEnv(HOST_TOKEN_ENV_VAR, store.token);
 	vi.stubEnv(HOST_CA_ENV_VAR, certificate.certPath);
 	return daemon;
 }
@@ -171,7 +187,7 @@ describe('rover --host remote, before it talks to anything', () => {
 		// Port 1 needs no free-port dance: it is privileged, so nothing this suite could
 		// collide with is ever listening on it.
 		vi.stubEnv(HOST_PORT_ENV_VAR, '1');
-		vi.stubEnv(HOST_TOKEN_ENV_VAR, TEST_HOST_TOKEN);
+		vi.stubEnv(HOST_TOKEN_ENV_VAR, UNISSUED_TOKEN);
 
 		expect(await run(['list', '--host', 'remote'])).toBe(EXIT_FAILED);
 
@@ -222,6 +238,40 @@ describe('rover --host remote, against a live host', () => {
 		expect(acquired).toMatchObject({ lease: { owner: 'issue-62' } });
 	});
 
+	it('writes a screenshot to this machine, through the same module the local host uses', async () => {
+		// Criterion 5 of #24, asserted end to end rather than by inspection: `--host remote` and
+		// `--host local` reach `src/cli/_shared/artifact.ts` by the same route and neither the
+		// module nor either command branches on which. What proves it is not that the code has
+		// no `if` in it — it is that the bytes land on *this* disk, at a path resolved here,
+		// when the verb ran on a host reached over TLS.
+		await startHostAndPointAtIt();
+		const out = join(temp.dir, 'remote-capture.bin');
+
+		expect(
+			await run([
+				'acquire',
+				attached.serial,
+				'--host',
+				'remote',
+				'--owner',
+				'issue-24',
+				'--project',
+				'rover',
+				'--json',
+			]),
+		).toBe(EXIT_OK);
+		const leaseId = (JSON.parse(logged[0] ?? '') as { lease: { leaseId: string } }).lease.leaseId;
+		logged.length = 0;
+
+		expect(await run(['screenshot', leaseId, '--host', 'remote', '--out', out])).toBe(EXIT_OK);
+
+		// The backend across the wire produced these; they arrived base64 and were decoded here.
+		expect(new Uint8Array(await readFile(out))).toEqual(REMOTE_CAPTURE);
+		// A path on the client's own disk, absolute, and never one belonging to the host.
+		expect(logged.join('\n')).toContain(resolve(out));
+		expect(errored).toEqual([]);
+	});
+
 	it('names the host in the --json document and never the token', async () => {
 		await startHostAndPointAtIt();
 
@@ -231,19 +281,19 @@ describe('rover --host remote, against a live host', () => {
 		expect(JSON.parse(document)).toMatchObject({ host: 'remote' });
 		// The whole document, not one field: the token has no business anywhere in a machine
 		// -readable answer, and a deep scan is what keeps that true as fields are added.
-		expect(document).not.toContain(TEST_HOST_TOKEN);
-		expect(errored.join('\n')).not.toContain(TEST_HOST_TOKEN);
+		expect(document).not.toContain(store.token);
+		expect(errored.join('\n')).not.toContain(store.token);
 	});
 
 	it('exits 1 with a rejected-token message when the host does not accept ours', async () => {
 		await startHostAndPointAtIt();
-		vi.stubEnv(HOST_TOKEN_ENV_VAR, 'the-wrong-token-but-long-enough-1234');
+		vi.stubEnv(HOST_TOKEN_ENV_VAR, UNISSUED_TOKEN);
 
 		expect(await run(['list', '--host', 'remote'])).toBe(EXIT_FAILED);
 
 		const said = errored.join('\n');
 		expect(said).toContain(HOST_TOKEN_ENV_VAR);
-		expect(said).not.toContain('the-wrong-token-but-long-enough-1234');
+		expect(said).not.toContain(UNISSUED_TOKEN);
 		// Never an empty list dressed up as an answer.
 		expect(logged).toEqual([]);
 	});

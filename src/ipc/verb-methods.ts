@@ -25,6 +25,11 @@ import { AppIdSchema, LeaseIdSchema } from '../core/ids.js';
 import { VerbFailureSchema } from '../verbs/failure.js';
 import { ScrollDirectionSchema } from '../verbs/input.js';
 import { ReadLogsResultSchema } from '../verbs/logs.js';
+import {
+	MAX_FRAMES_PER_SECOND,
+	MAX_RECORDING_MS,
+	RecordVideoResultSchema,
+} from '../verbs/record.js';
 import { type ActionResult, ActionResultSchema } from '../verbs/result.js';
 import { AbsenceTargetSchema, ScreenTargetSchema, TargetSchema } from '../verbs/target.js';
 
@@ -445,6 +450,29 @@ export const PullFileParamsSchema = VerbCallBaseSchema.extend({
 }).strict();
 export type PullFileParams = z.infer<typeof PullFileParamsSchema>;
 
+/**
+ * What both environment rows carry — `set_airplane_mode` and `set_wifi`.
+ *
+ * **One schema for two rows**, for the reason {@link AppVerbParamsSchema} records for its
+ * three: the two calls are identical, and a near-copy per row is a copy that drifts. A verb
+ * that later grows a field of its own forks this rather than widening it.
+ *
+ * `enabled` is a **required** boolean, and both halves of that matter. Optional would make
+ * "turn wifi off" and "say nothing" the same call, leaving the verb to invent a default
+ * nobody asked for; a boolean rather than a word keeps the wire out of the argument the
+ * device actually takes — the two commands underneath disagree about the words for the same
+ * boolean (PROJECT.md §6), and the backend owns both literals. So `{}` and
+ * `{ enabled: 'true' }` are each `invalid_params` at the boundary rather than a toggle that
+ * guessed.
+ *
+ * No wait knob: neither verb waits for anything, and offering one would advertise a wait
+ * that is not performed. `.strict()` keeps a `serial` out beside the lease id (D20).
+ */
+export const EnvironmentVerbParamsSchema = VerbCallBaseSchema.extend({
+	enabled: z.boolean(),
+}).strict();
+export type EnvironmentVerbParams = z.infer<typeof EnvironmentVerbParamsSchema>;
+
 /** What a `read_screen` call carries: the lease id, and nothing else. */
 export const ReadScreenParamsSchema = VerbCallBaseSchema.strict();
 export type ReadScreenParams = z.infer<typeof ReadScreenParamsSchema>;
@@ -465,6 +493,42 @@ export type DeviceInfoParams = z.infer<typeof DeviceInfoParamsSchema>;
  */
 export const ScreenshotParamsSchema = VerbCallBaseSchema.strict();
 export type ScreenshotParams = z.infer<typeof ScreenshotParamsSchema>;
+
+/**
+ * What a `record_video` call carries: the lease id and, optionally, how long to record for.
+ *
+ * `durationMs` is **absent rather than defaulted**, so the verb's own default
+ * (`src/verbs/record.ts`) applies to a caller who said nothing and there is no second number
+ * that can disagree with it — {@link ReadLogsParamsSchema}'s reasoning exactly.
+ *
+ * The upper bound is {@link MAX_RECORDING_MS}, imported rather than restated: it is a bound
+ * on what one answer can carry, and a copy of it here would be free to drift from the one
+ * the verb enforces.
+ *
+ * **No destination path and no format**, for the sentence {@link ScreenshotParamsSchema}
+ * already carries: the recording happens on the host and the answer is read on the caller's
+ * machine, so a path sent here either names nothing or names something on the wrong disk
+ * (D19). What comes back is `ActionResult.artifact` — the bytes, base64-encoded.
+ *
+ * **A caller asking for a long recording must also raise its own request timeout.**
+ * `IpcRequestOptions.timeoutMs` defaults to 30 s (`./client.ts`), and a call that spends
+ * fifteen of them recording before it begins transferring several megabytes can reach it.
+ * That is the bound at the caller's end, and this module already documents the pair.
+ *
+ * `framesPerSecond` is the second knob and the only thing phase 2 added to the call. Absent
+ * rather than defaulted for `durationMs`'s reason, and bounded by `MAX_FRAMES_PER_SECOND`
+ * imported rather than restated, for the reason {@link MAX_RECORDING_MS} is imported. Past
+ * that rate the frames stop being a sample and start being the recording again at several
+ * times its size, and a caller who wants every frame already has the recording itself. There
+ * is deliberately no frame *width* and no format here: those are one bounded default the verb
+ * owns (`FRAME_WIDTH_PX`, `src/verbs/record.ts`), not a configuration surface
+ * (ai/RULES.md §7).
+ */
+export const RecordVideoParamsSchema = VerbCallBaseSchema.extend({
+	durationMs: z.number().int().positive().max(MAX_RECORDING_MS).optional(),
+	framesPerSecond: z.number().int().positive().max(MAX_FRAMES_PER_SECOND).optional(),
+}).strict();
+export type RecordVideoParams = z.infer<typeof RecordVideoParamsSchema>;
 
 /**
  * Why a call never reached a verb at all.
@@ -540,6 +604,14 @@ export type VerbCallResult = z.infer<typeof VerbCallResultSchema>;
  */
 export const ReadLogsCallResultSchema = verbCallResultOf(ReadLogsResultSchema);
 export type ReadLogsCallResult = z.infer<typeof ReadLogsCallResultSchema>;
+
+/**
+ * `record_video`, whose answer carries the frames sliced out of the recording on top of the
+ * common shape (`src/verbs/record.ts`). The recording itself is still `ActionResult.artifact`,
+ * so only one field distinguishes this from every other verb's answer.
+ */
+export const RecordVideoCallResultSchema = verbCallResultOf(RecordVideoResultSchema);
+export type RecordVideoCallResult = z.infer<typeof RecordVideoCallResultSchema>;
 
 /**
  * The two answers that mean no verb result exists — the branches every row shares whatever

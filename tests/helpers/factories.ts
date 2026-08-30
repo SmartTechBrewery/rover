@@ -42,8 +42,101 @@ export function createMockCapabilities(overrides: Partial<Capabilities> = {}): C
 		canReadScreen: true,
 		canInput: true,
 		canControlNetwork: true,
+		canRecordVideo: true,
 		...overrides,
 	};
+}
+
+/**
+ * Bytes shaped like the smallest thing a recorder could hand back: an `ftyp` box, then a
+ * `moov` — the index a finished recording has and an unfinished one does not.
+ *
+ * Real box headers rather than three arbitrary bytes, because two things downstream read
+ * them: `mediaTypeOf` sniffs the `ftyp` at offset 4 to answer `video/mp4`, and the Android
+ * backend's `isFinishedRecording` looks for the `moov`. A fixture that carried neither would
+ * make every test over it agree with a verb that had stopped checking.
+ */
+export function createMockRecordingBytes(): Uint8Array {
+	const box = (type: string) => [
+		0,
+		0,
+		0,
+		8,
+		...[...type].map((character) => character.charCodeAt(0)),
+	];
+	return Uint8Array.from([...box('ftyp'), ...box('moov')]);
+}
+
+/** The eight bytes every PNG starts with (PNG 1.2 §3.1) — the ones a frame is split on. */
+const PNG_SIGNATURE = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
+
+/** CRC-32 over a chunk's type and data, as PNG 1.2 §3.2 defines it. */
+function pngCrc(bytes: number[]): number {
+	let crc = 0xffffffff;
+	for (const byte of bytes) {
+		crc ^= byte;
+		for (let bit = 0; bit < 8; bit += 1) {
+			crc = crc & 1 ? (crc >>> 1) ^ 0xedb88320 : crc >>> 1;
+		}
+	}
+	return (crc ^ 0xffffffff) >>> 0;
+}
+
+/** One `length:uint32`, type, data and CRC — the shape every PNG chunk has. */
+function pngChunk(type: string, data: number[]): number[] {
+	const typed = [...[...type].map((character) => character.charCodeAt(0)), ...data];
+	const crc = pngCrc(typed);
+	return [
+		(data.length >>> 24) & 0xff,
+		(data.length >>> 16) & 0xff,
+		(data.length >>> 8) & 0xff,
+		data.length & 0xff,
+		...typed,
+		(crc >>> 24) & 0xff,
+		(crc >>> 16) & 0xff,
+		(crc >>> 8) & 0xff,
+		crc & 0xff,
+	];
+}
+
+/**
+ * A structurally real PNG: the signature, an `IHDR` carrying the size, one `IDAT` and an
+ * `IEND`, with correct chunk lengths and correct CRCs.
+ *
+ * Real chunks rather than "a signature and some bytes", because the thing being tested reads
+ * exactly this structure: the frame extractor walks chunk lengths to find where one image ends
+ * and the next begins, so a fixture that only carried the signature would agree with a split
+ * that searched for the signature — which is the split that gets a real frame stream wrong.
+ *
+ * `payload` is the `IDAT` data, and a test that wants the hard case passes bytes **containing
+ * the signature**: a compressed image really does produce those eight bytes now and then, and
+ * that is the payload a naive split cuts in half.
+ */
+export function createMockPngBytes(
+	options: { width?: number; height?: number; payload?: readonly number[] } = {},
+): Uint8Array {
+	const width = options.width ?? 320;
+	const height = options.height ?? 800;
+	const uint32 = (value: number) => [
+		(value >>> 24) & 0xff,
+		(value >>> 16) & 0xff,
+		(value >>> 8) & 0xff,
+		value & 0xff,
+	];
+	// 8-bit truecolour, deflate, adaptive filtering, no interlace — the header a frame has.
+	const header = [...uint32(width), ...uint32(height), 8, 2, 0, 0, 0];
+
+	return Uint8Array.from([
+		...PNG_SIGNATURE,
+		...pngChunk('IHDR', header),
+		...pngChunk('IDAT', [...(options.payload ?? [0x78, 0x9c, 0x01, 0x00])]),
+		...pngChunk('IEND', []),
+	]);
+}
+
+/** The bytes `image2pipe` writes for several frames: the images, concatenated, nothing else. */
+export function createMockPngStream(images: readonly Uint8Array[]): Uint8Array {
+	return Uint8Array.from(images.flatMap((image) => [...image]));
 }
 
 export function createMockDevice(overrides: Partial<Device> = {}): Device {
@@ -188,6 +281,9 @@ export function createMockDeviceBackend(overrides: Partial<DeviceBackend> = {}):
 		pressKey: vi.fn<NonNullable<DeviceBackend['pressKey']>>(async () => {}),
 		setAirplaneMode: vi.fn<NonNullable<DeviceBackend['setAirplaneMode']>>(async () => {}),
 		setWifiEnabled: vi.fn<NonNullable<DeviceBackend['setWifiEnabled']>>(async () => {}),
+		recordVideo: vi.fn<NonNullable<DeviceBackend['recordVideo']>>(async () =>
+			createMockRecordingBytes(),
+		),
 		...overrides,
 	};
 }
@@ -294,6 +390,13 @@ export function createConformingDeviceBackend(
 		},
 		async setWifiEnabled(serial, enabled) {
 			performed.push(`setWifiEnabled ${serial} ${enabled}`);
+		},
+		// A real body answering real bytes: an empty `Uint8Array` is what the harness flags as a
+		// silent stub, and it is also what a recording pulled off a device that never started
+		// looks like.
+		async recordVideo(serial, options) {
+			performed.push(`recordVideo ${serial} ${options.durationMs}`);
+			return createMockRecordingBytes();
 		},
 		...overrides,
 	};

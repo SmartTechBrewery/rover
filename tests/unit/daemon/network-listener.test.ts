@@ -1,18 +1,22 @@
 /**
- * R22's host half end to end: a real TLS listener beside the real unix socket, serving the
- * **same** `IpcServer`, with a token gate in front of it.
+ * R22's host half end to end, now authenticating against R28's user store: a real TLS listener
+ * beside the real unix socket, serving the **same** `IpcServer`, with a token gate in front of
+ * it that resolves every presented token against a real `users.json`.
  *
  * The daemon suite's real-socket exception applies and extends (ai/TESTING.md): a token gate
- * on a real TLS socket cannot be asserted against a mock any more than the bind race can. So
- * the certificate is real, the listener binds `127.0.0.1:0`, and the client is `tls.connect`
- * rather than a Rover client — phase 2 owns `connectToNetworkHost`, and driving the host with
- * a raw socket is what proves the second transport serves the same surface *without* a second
- * client implementation existing to prove it with.
+ * on a real TLS socket cannot be asserted against a mock any more than the bind race can, and
+ * neither can "a revoked user is refused on their very next attempt". So the certificate is
+ * real, the store is a real file in a per-test `mkdtemp` directory — never
+ * `~/.rover/users.json` — the listener binds `127.0.0.1:0`, and the client is `tls.connect`
+ * rather than a Rover client: driving the host with a raw socket is what proves the second
+ * transport serves the same surface *without* a second client implementation existing to
+ * prove it with.
  *
  * Nothing here ever binds a fixed public address, and every daemon is closed through its own
  * handle in `afterEach`.
  */
 
+import { rm, writeFile } from 'node:fs/promises';
 import {
 	createServer as createNetServer,
 	connect as netConnect,
@@ -30,7 +34,6 @@ import { parseDeviceSerial } from '@/core/ids.js';
 import { connectToLocalDaemon } from '@/daemon/connect.js';
 import { type RunningDaemon, startDaemon } from '@/daemon/listen.js';
 import {
-	HOST_TOKEN_ENV_VAR,
 	LISTEN_ADDRESS_ENV_VAR,
 	LISTEN_PORT_ENV_VAR,
 	type NetworkListenerConfig,
@@ -38,6 +41,7 @@ import {
 	TLS_KEY_ENV_VAR,
 } from '@/daemon/network-config.js';
 import { startNetworkListener } from '@/daemon/network-listen.js';
+import { addUser, revokeUser, rotateUserToken } from '@/daemon/user-store.js';
 import type { IpcClient } from '@/ipc/client.js';
 import { encodeFrame } from '@/ipc/framing.js';
 import { ErrorResponseSchema } from '@/ipc/protocol.js';
@@ -56,9 +60,10 @@ import {
 	rawTlsConnect,
 	readUntilClosed,
 	removeTestCertificate,
-	TEST_HOST_TOKEN,
 	type TestCertificate,
+	UNISSUED_TOKEN,
 } from '../../helpers/tls-fixtures.js';
+import { createTestUserStore, type TestUserStore } from '../../helpers/user-store.js';
 
 const attached = createMockDevice({ serial: parseDeviceSerial('attached-1') });
 const second = createMockDevice({ serial: parseDeviceSerial('attached-2') });
@@ -80,6 +85,11 @@ const SHORT_AUTH_TIMEOUT_MS = 250;
  */
 let certificate: TestCertificate;
 let temp: TempSocket;
+/**
+ * The store the listener authenticates against, and the one user in it. Created per test
+ * beside the temp socket by {@link withStore}, so a revoke in one test cannot reach another.
+ */
+let store: TestUserStore;
 const running: RunningDaemon[] = [];
 const clients: IpcClient[] = [];
 const sockets: TLSSocket[] = [];
@@ -103,7 +113,12 @@ function registerFakeBackend(devices: Device[] = [attached, second]) {
 		manifest: {
 			platform: 'test-platform',
 			label: 'Test',
-			capabilities: { canReadScreen: true, canInput: true, canControlNetwork: true },
+			capabilities: {
+				canReadScreen: true,
+				canInput: true,
+				canControlNetwork: true,
+				canRecordVideo: true,
+			},
 		},
 		backend: createMockDeviceBackend({
 			watchDevices,
@@ -118,11 +133,20 @@ function networkConfig(overrides: Partial<NetworkListenerConfig> = {}): NetworkL
 		// Port 0 and never a fixed one: the kernel picks, and `RunningDaemon.networkPort` says
 		// which, so two suites running at once cannot collide.
 		port: 0,
-		token: TEST_HOST_TOKEN,
 		certPath: certificate.certPath,
 		keyPath: certificate.keyPath,
+		usersPath: store.path,
 		...overrides,
 	};
+}
+
+/**
+ * A temp socket **and** a one-user store beside it, which is what every test here needs
+ * before it can start a listener at all — `networkConfig` reads `store.path`.
+ */
+async function withStore(): Promise<void> {
+	temp = await createTempSocket();
+	store = await createTestUserStore(temp.dir);
 }
 
 /** A daemon on the temp socket, with the TLS listener up beside it. */
@@ -147,7 +171,7 @@ function portOf(daemon: RunningDaemon): number {
 	return daemon.networkPort;
 }
 
-async function overTls(daemon: RunningDaemon, token = TEST_HOST_TOKEN): Promise<IpcClient> {
+async function overTls(daemon: RunningDaemon, token = store.token): Promise<IpcClient> {
 	const client = await connectWithToken(portOf(daemon), token, certificate.certPem);
 	clients.push(client);
 	return client;
@@ -289,7 +313,7 @@ describe('one surface, two transports', () => {
 	// (D17). A second copy of these assertions would be the thing this test exists to forbid.
 	it.each(TRANSPORTS)('answers status over %s', async (_name, connect) => {
 		registerFakeBackend();
-		temp = await createTempSocket();
+		await withStore();
 		const daemon = await startWithNetwork();
 
 		const status = await (await connect(daemon)).request('status', {});
@@ -299,7 +323,7 @@ describe('one surface, two transports', () => {
 
 	it.each(TRANSPORTS)('lists the attached devices over %s', async (_name, connect) => {
 		registerFakeBackend();
-		temp = await createTempSocket();
+		await withStore();
 		const daemon = await startWithNetwork();
 
 		const listed = await (await connect(daemon)).request('list_devices', {});
@@ -315,7 +339,7 @@ describe('one surface, two transports', () => {
 
 	it.each(TRANSPORTS)('grants and releases a lease over %s', async (_name, connect) => {
 		registerFakeBackend();
-		temp = await createTempSocket();
+		await withStore();
 		const daemon = await startWithNetwork();
 		const client = await connect(daemon);
 
@@ -337,7 +361,7 @@ describe('one surface, two transports', () => {
 		TRANSPORTS,
 	)('refuses an unknown param key the same way over %s', async (_name, connect) => {
 		registerFakeBackend();
-		temp = await createTempSocket();
+		await withStore();
 		const daemon = await startWithNetwork();
 
 		const rejection = (await connect(daemon)).request('list_devices', { serial: 'x' } as never);
@@ -347,7 +371,7 @@ describe('one surface, two transports', () => {
 
 	it('leaves the local socket ungated while the listener is up', async () => {
 		registerFakeBackend();
-		temp = await createTempSocket();
+		await withStore();
 		await startWithNetwork();
 
 		// The acceptance criterion in its literal form: a local client sends no greeting, has
@@ -361,7 +385,7 @@ describe('one surface, two transports', () => {
 describe('the token authenticates, the owner string attributes (D20)', () => {
 	it('never lets the token become the owner, and never echoes it back', async () => {
 		registerFakeBackend();
-		temp = await createTempSocket();
+		await withStore();
 		const daemon = await startWithNetwork();
 		const client = await overTls(daemon);
 
@@ -387,13 +411,14 @@ describe('the token authenticates, the owner string attributes (D20)', () => {
 		// Deep-scanned rather than field-by-field, so a field added later cannot quietly start
 		// carrying the token.
 		for (const result of [acquired, listed, refused]) {
-			expect(JSON.stringify(result)).not.toContain(TEST_HOST_TOKEN);
+			expect(JSON.stringify(result)).not.toContain(store.token);
+			expect(JSON.stringify(result)).not.toContain(store.identifier);
 		}
 	});
 
 	it('writes the token nowhere — not to a log, not to a refused socket', async () => {
 		registerFakeBackend();
-		temp = await createTempSocket();
+		await withStore();
 		const written: string[] = [];
 		for (const method of ['log', 'warn', 'error', 'info', 'debug'] as const) {
 			vi.spyOn(console, method).mockImplementation((...args: unknown[]) => {
@@ -412,31 +437,151 @@ describe('the token authenticates, the owner string attributes (D20)', () => {
 		// one, and the shutdown.
 		await (await overTls(daemon)).request('status', {});
 		const refusedSocket = await rawTlsConnect(portOf(daemon), certificate.certPem);
-		refusedSocket.write(greetingFor('the-wrong-token-but-long-enough-1234'));
+		refusedSocket.write(greetingFor(UNISSUED_TOKEN));
 		const refusal = await readUntilClosed(refusedSocket);
 		await Promise.all(running.splice(0).map((instance) => instance.close()));
 
-		expect(written.join('\n')).not.toContain(TEST_HOST_TOKEN);
-		expect(written.join('\n')).not.toContain('the-wrong-token-but-long-enough-1234');
+		expect(written.join('\n')).not.toContain(store.token);
+		expect(written.join('\n')).not.toContain(UNISSUED_TOKEN);
+		// The identifier too: a gate that started naming *who* failed would be an oracle even
+		// without the token, and would put a user's name in the host's logs (D20).
+		expect(written.join('\n')).not.toContain(store.identifier);
 		// The refusal is a fixed string; it cannot contain a token, and this is what keeps that
 		// true if anyone ever makes it "more helpful".
 		expect(refusal).toBe(REFUSAL);
 	});
 });
 
+describe('the store is the truth, re-read at every connection (D6, D25)', () => {
+	it('lets in every user the store holds, and only on their own token', async () => {
+		registerFakeBackend();
+		await withStore();
+		const bob = await addUser(store.path, { identifier: 'bob' });
+		const daemon = await startWithNetwork();
+
+		// Per-user credentials, not one shared secret wearing a new name: two different tokens
+		// both work, and neither is configured anywhere on this host.
+		await expect((await overTls(daemon, store.token)).request('status', {})).resolves.toMatchObject(
+			{ protocolVersion: 1 },
+		);
+		await expect((await overTls(daemon, bob.token)).request('status', {})).resolves.toMatchObject({
+			protocolVersion: 1,
+		});
+		await expect(
+			(await overTls(daemon, UNISSUED_TOKEN)).request('status', {}),
+		).rejects.toMatchObject({ code: 'unauthenticated' });
+	});
+
+	it('refuses a revoked user on their very next attempt, with the daemon still running', async () => {
+		// The headline acceptance criterion, in its literal form. No `close()`, no restart, no
+		// second `startDaemon` — the same daemon object answers one connection and refuses the
+		// next, because the store is re-read rather than cached for its lifetime.
+		registerFakeBackend();
+		await withStore();
+		const daemon = await startWithNetwork();
+		await expect((await overTls(daemon)).request('status', {})).resolves.toMatchObject({
+			protocolVersion: 1,
+		});
+
+		await revokeUser(store.path, store.identifier);
+
+		const socket = await rawTlsConnect(portOf(daemon), certificate.certPem);
+		socket.write(greetingFor(store.token));
+		expect(await readUntilClosed(socket)).toBe(REFUSAL);
+	});
+
+	it('accepts a rotated token and refuses the one it replaced, same daemon', async () => {
+		registerFakeBackend();
+		await withStore();
+		const daemon = await startWithNetwork();
+		const stale = store.token;
+
+		const rotated = await rotateUserToken(store.path, store.identifier);
+
+		const socket = await rawTlsConnect(portOf(daemon), certificate.certPem);
+		socket.write(greetingFor(stale));
+		expect(await readUntilClosed(socket)).toBe(REFUSAL);
+		await expect(
+			(await overTls(daemon, rotated.token)).request('status', {}),
+		).resolves.toMatchObject({ protocolVersion: 1 });
+	});
+
+	it('lets in a user added after it started, without a restart', async () => {
+		// The other direction of "never cached": a gate that read the store once at startup
+		// would pass the revoke test above by accident and fail this one.
+		registerFakeBackend();
+		await withStore();
+		const daemon = await startWithNetwork();
+
+		const carol = await addUser(store.path, { identifier: 'carol' });
+
+		await expect((await overTls(daemon, carol.token)).request('status', {})).resolves.toMatchObject(
+			{ protocolVersion: 1 },
+		);
+	});
+
+	it('keeps answering on a connection that was already authenticated when its user was revoked', async () => {
+		// The deliberate boundary, pinned so a reviewer can tell it from an oversight: the gate
+		// is pre-auth and stays there (ai/ARCHITECTURE.md). "Refused on the very next attempt"
+		// is the criterion; evicting a live session mid-lease is a different change.
+		registerFakeBackend();
+		await withStore();
+		const daemon = await startWithNetwork();
+		const client = await overTls(daemon);
+		await client.request('status', {});
+
+		await revokeUser(store.path, store.identifier);
+
+		await expect(client.request('status', {})).resolves.toMatchObject({ protocolVersion: 1 });
+	});
+
+	it.each([
+		[
+			'a host with no users yet',
+			async (): Promise<void> => {
+				await rm(store.path, { force: true });
+			},
+		],
+		[
+			'a store that is not valid JSON',
+			async (): Promise<void> => {
+				await writeFile(store.path, 'not json at all', 'utf8');
+			},
+		],
+		[
+			'a store whose shape is wrong',
+			async (): Promise<void> => {
+				await writeFile(store.path, JSON.stringify({ users: [{ identifier: 'x' }] }), 'utf8');
+			},
+		],
+	])('refuses identically against %s', async (_what, breakTheStore) => {
+		registerFakeBackend();
+		await withStore();
+		const daemon = await startWithNetwork();
+		await breakTheStore();
+
+		const socket = await rawTlsConnect(portOf(daemon), certificate.certPem);
+		socket.write(greetingFor(store.token));
+		const received = await readUntilClosed(socket);
+
+		// Byte-identical to every other refusal, and naming neither the path nor the parse
+		// error: whether the operator's own file is broken is not something the wire may say.
+		expect(received).toBe(REFUSAL);
+		expect(received).not.toContain(store.path);
+		expect(received).not.toContain(temp.dir);
+	});
+});
+
 describe('a refusal is not an oracle', () => {
 	it.each([
-		['a wrong token', greetingFor('the-wrong-token-but-long-enough-1234')],
+		['a wrong token', greetingFor(UNISSUED_TOKEN)],
 		['a greeting that is not JSON', 'hello there\n'],
-		[
-			'a greeting with an extra key',
-			`${JSON.stringify({ token: TEST_HOST_TOKEN, admin: true })}\n`,
-		],
+		['a greeting with an extra key', `${JSON.stringify({ token: UNISSUED_TOKEN, admin: true })}\n`],
 		['a greeting with no token at all', `${JSON.stringify({})}\n`],
 		['an oversize greeting', `${'x'.repeat(9000)}\n`],
 	])('answers %s with the one refusal frame and closes', async (_what, greeting) => {
 		registerFakeBackend();
-		temp = await createTempSocket();
+		await withStore();
 		const daemon = await startWithNetwork();
 
 		const socket = await rawTlsConnect(portOf(daemon), certificate.certPem);
@@ -453,11 +598,11 @@ describe('a refusal is not an oracle', () => {
 
 	it('parses as an ErrorResponse a client already knows how to fail on', async () => {
 		registerFakeBackend();
-		temp = await createTempSocket();
+		await withStore();
 		const daemon = await startWithNetwork();
 
 		const socket = await rawTlsConnect(portOf(daemon), certificate.certPem);
-		socket.write(greetingFor('the-wrong-token-but-long-enough-1234'));
+		socket.write(greetingFor(UNISSUED_TOKEN));
 		const parsed = ErrorResponseSchema.parse(JSON.parse(await readUntilClosed(socket)));
 
 		// `id: null` is what makes `createIpcClient` treat the connection as untrustworthy and
@@ -475,6 +620,7 @@ describe('a refusal is not an oracle', () => {
 		// second rather than the five the daemon runs with. The IPC server behind it is never
 		// reached — nothing here ever authenticates — which is the point: the refusal has to be
 		// the same bytes whatever is behind the gate.
+		await withStore();
 		const listener = await startNetworkListener(
 			networkConfig(),
 			{ handleConnection: () => {} },
@@ -490,6 +636,7 @@ describe('a refusal is not an oracle', () => {
 	});
 
 	it('refuses a peer that dribbles its greeting, on a deadline it cannot rearm', async () => {
+		await withStore();
 		const listener = await startNetworkListener(
 			networkConfig(),
 			{ handleConnection: () => {} },
@@ -515,6 +662,7 @@ describe('a refusal is not an oracle', () => {
 	});
 
 	it('drops a peer that opens a socket and never starts the handshake', async () => {
+		await withStore();
 		const listener = await startNetworkListener(
 			networkConfig(),
 			{ handleConnection: () => {} },
@@ -537,14 +685,14 @@ describe('a refusal is not an oracle', () => {
 describe('nothing is dispatched before the greeting is accepted', () => {
 	it('runs no verb from a request batched behind a bad token', async () => {
 		registerFakeBackend();
-		temp = await createTempSocket();
+		await withStore();
 		const daemon = await startWithNetwork();
 
 		const socket = await rawTlsConnect(portOf(daemon), certificate.certPem);
 		// One write, on purpose: the peer picks the chunking, so it can always put the garbage
 		// and the side effect it wants in the same TCP segment.
 		socket.write(
-			greetingFor('the-wrong-token-but-long-enough-1234') +
+			greetingFor(UNISSUED_TOKEN) +
 				requestFrame('acquire_device', {
 					serial: attached.serial,
 					owner: 'attacker',
@@ -562,11 +710,11 @@ describe('nothing is dispatched before the greeting is accepted', () => {
 
 	it('answers a request written in the same chunk as a good greeting', async () => {
 		registerFakeBackend();
-		temp = await createTempSocket();
+		await withStore();
 		const daemon = await startWithNetwork();
 
 		const socket = await raw(daemon);
-		socket.write(greetingFor(TEST_HOST_TOKEN) + requestFrame('status', {}));
+		socket.write(greetingFor(store.token) + requestFrame('status', {}));
 		const frame = JSON.parse(await readFirstFrame(socket));
 
 		// This is the test that goes red if the pause/unshift/resume handover is wrong: the
@@ -579,11 +727,10 @@ describe('nothing is dispatched before the greeting is accepted', () => {
 describe('the listener is opt-in and dies with the daemon', () => {
 	it('binds nothing when no network configuration was passed, whatever the environment says', async () => {
 		registerFakeBackend();
-		temp = await createTempSocket();
+		await withStore();
 		const port = await freePort();
 		vi.stubEnv(LISTEN_PORT_ENV_VAR, String(port));
 		vi.stubEnv(LISTEN_ADDRESS_ENV_VAR, '127.0.0.1');
-		vi.stubEnv(HOST_TOKEN_ENV_VAR, TEST_HOST_TOKEN);
 		vi.stubEnv(TLS_CERT_ENV_VAR, certificate.certPath);
 		vi.stubEnv(TLS_KEY_ENV_VAR, certificate.keyPath);
 
@@ -601,7 +748,7 @@ describe('the listener is opt-in and dies with the daemon', () => {
 
 	it('stops answering on the port once the daemon is closed, and closes twice safely', async () => {
 		registerFakeBackend();
-		temp = await createTempSocket();
+		await withStore();
 		const daemon = await startWithNetwork();
 		const port = portOf(daemon);
 
@@ -625,7 +772,7 @@ describe('the listener is opt-in and dies with the daemon', () => {
 
 	it('fails the whole start when the network bind fails, leaving the socket unserved', async () => {
 		registerFakeBackend();
-		temp = await createTempSocket();
+		await withStore();
 		const port = await freePort();
 		await occupy(port);
 
@@ -638,7 +785,7 @@ describe('the listener is opt-in and dies with the daemon', () => {
 
 	it('fails the start when the certificate cannot be read, naming the variable', async () => {
 		registerFakeBackend();
-		temp = await createTempSocket();
+		await withStore();
 
 		await expect(startWithNetwork({ certPath: '/nonexistent/cert.pem' })).rejects.toThrow(
 			TLS_CERT_ENV_VAR,
@@ -650,11 +797,10 @@ describe('an autostarted daemon is never a network host', () => {
 	it('brings up a child that answers locally and listens on no port', {
 		timeout: 30_000,
 	}, async () => {
-		temp = await createTempSocket();
+		await withStore();
 		const port = await freePort();
 		vi.stubEnv(LISTEN_PORT_ENV_VAR, String(port));
 		vi.stubEnv(LISTEN_ADDRESS_ENV_VAR, '127.0.0.1');
-		vi.stubEnv(HOST_TOKEN_ENV_VAR, TEST_HOST_TOKEN);
 		vi.stubEnv(TLS_CERT_ENV_VAR, certificate.certPath);
 		vi.stubEnv(TLS_KEY_ENV_VAR, certificate.keyPath);
 

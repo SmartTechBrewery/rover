@@ -25,6 +25,7 @@ import { ProtocolVersionSchema } from './protocol.js';
 import {
 	AppVerbParamsSchema,
 	DeviceInfoParamsSchema,
+	EnvironmentVerbParamsSchema,
 	InstallAppParamsSchema,
 	LongPressParamsSchema,
 	PressKeyParamsSchema,
@@ -33,6 +34,8 @@ import {
 	ReadLogsCallResultSchema,
 	ReadLogsParamsSchema,
 	ReadScreenParamsSchema,
+	RecordVideoCallResultSchema,
+	RecordVideoParamsSchema,
 	ScreenshotParamsSchema,
 	ScrollParamsSchema,
 	SwipeParamsSchema,
@@ -50,6 +53,8 @@ export {
 	type DeviceInfoParams,
 	DeviceInfoParamsSchema,
 	DevicePathSchema,
+	type EnvironmentVerbParams,
+	EnvironmentVerbParamsSchema,
 	type InstallAppParams,
 	InstallAppParamsSchema,
 	type LongPressParams,
@@ -70,6 +75,10 @@ export {
 	ReadLogsParamsSchema,
 	type ReadScreenParams,
 	ReadScreenParamsSchema,
+	type RecordVideoCallResult,
+	RecordVideoCallResultSchema,
+	type RecordVideoParams,
+	RecordVideoParamsSchema,
 	type ScreenshotParams,
 	ScreenshotParamsSchema,
 	type ScrollParams,
@@ -315,21 +324,21 @@ export type ReleaseDeviceResult = z.infer<typeof ReleaseDeviceResultSchema>;
  * variant of it.
  *
  * The verb rows are the two waits, the six input verbs, the three read verbs, the three
- * app-lifecycle verbs, the log read and the three file transfers; each further verb family is
- * one more row beside them and one more entry in `src/daemon/verb-handlers.ts`. All but one
- * answer with `VerbCallResultSchema`, because "what happened on the device" is one shape
- * whatever was asked of it — which is why none of the read rows needs a result schema of its
- * own: `read_screen` and `device_info` answer with the state every other verb already
- * reports, asked for on its own, and `screenshot`'s bytes ride on `ActionResult.artifact`
- * rather than in a second answer shape. `pull_file` answers there too, for the same reason
- * and with the same consequence — no path of any kind is in its result. The verbs that
- * address no element at all — the two reads, `type_text` and `press_key` — answer with a null
- * `target` rather than a shape of their own. The three app rows share one params schema too,
- * because they take exactly the same call.
+ * app-lifecycle verbs, the log read, the screen recording, the two environment verbs and the
+ * three file transfers; each further verb family is one more row beside them and one more
+ * entry in `src/daemon/verb-handlers.ts`. All but two answer with `VerbCallResultSchema`,
+ * because "what happened on the device" is one shape whatever was asked of it. `read_screen`
+ * and `device_info` answer with the state every other verb already reports, while
+ * `screenshot`, `record_video` and `pull_file` carry their bytes on `ActionResult.artifact` —
+ * which is why no path of any kind is in a transfer's result. The verbs that address no
+ * element — those two reads, `type_text`, `press_key`, and both environment rows because a
+ * radio is not something on the screen — answer with a null `target`. The three app rows
+ * share one params schema, and the two environment rows share a lease id and boolean schema.
  *
- * `read_logs` is the exception that proves the rule: its answer is that same shape with the
- * log entries added, built by the same factory in `./verb-methods.ts`, so its refusals are
- * word for word every other verb's.
+ * `read_logs` and `record_video` are the exceptions that prove the rule: their answers are
+ * that same shape with one field added — the log entries on one, the frames sliced out of the
+ * recording on the other — built by the same factory in `./verb-methods.ts`, so their refusals
+ * are word for word every other verb's.
  *
  * The two rows that carry bytes **into** the host — `install_app` and `push_file` — are the
  * only ones whose params are bounded in bytes (`MAX_TRANSFER_BYTES`), and going over that is
@@ -358,6 +367,9 @@ export const IPC_METHODS = {
 	install_app: { params: InstallAppParamsSchema, result: VerbCallResultSchema },
 	push_file: { params: PushFileParamsSchema, result: VerbCallResultSchema },
 	pull_file: { params: PullFileParamsSchema, result: VerbCallResultSchema },
+	record_video: { params: RecordVideoParamsSchema, result: RecordVideoCallResultSchema },
+	set_airplane_mode: { params: EnvironmentVerbParamsSchema, result: VerbCallResultSchema },
+	set_wifi: { params: EnvironmentVerbParamsSchema, result: VerbCallResultSchema },
 } as const satisfies Record<string, IpcMethodDefinition>;
 
 export type IpcMethodName = keyof typeof IPC_METHODS;

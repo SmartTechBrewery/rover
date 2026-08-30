@@ -16,6 +16,7 @@ import { parseAppId } from '@/core/ids.js';
 import {
 	AppVerbParamsSchema,
 	DeviceInfoParamsSchema,
+	EnvironmentVerbParamsSchema,
 	InstallAppParamsSchema,
 	LongPressParamsSchema,
 	PressKeyParamsSchema,
@@ -24,6 +25,7 @@ import {
 	ReadLogsCallResultSchema,
 	ReadLogsParamsSchema,
 	ReadScreenParamsSchema,
+	RecordVideoParamsSchema,
 	ScreenshotParamsSchema,
 	ScrollParamsSchema,
 	SwipeParamsSchema,
@@ -39,6 +41,7 @@ import { pressKey, scroll, tap, typeText } from '@/verbs/input.js';
 import { ReadLogsResultSchema, readLogs } from '@/verbs/logs.js';
 import { performAction } from '@/verbs/perform.js';
 import { deviceInfo, readScreen, screenshot } from '@/verbs/read.js';
+import { RecordVideoResultSchema, recordVideo } from '@/verbs/record.js';
 import {
 	type ActionResult,
 	ActionResultSchema,
@@ -51,6 +54,7 @@ import {
 	createMockCapabilities,
 	createMockCapabilityManifest,
 	createMockDeviceBackend,
+	createMockPngBytes,
 	createMockScreenElement,
 	createMockVerbContext,
 } from '../../helpers/factories.js';
@@ -221,6 +225,47 @@ describe('the verb layer speaks only in plain data', () => {
 		expect(ActionResultSchema.parse(roundTrip(common))).toEqual(common);
 		expect(() => ActionResultSchema.parse(roundTrip(read))).toThrow();
 		expect(logs.truncated).toBe(false);
+	});
+
+	/**
+	 * The other verb whose answer carries more than an `ActionResult`, and the one carrying
+	 * **several** payloads of bytes: the recording on `artifact` and every frame beside it.
+	 *
+	 * A frame list is exactly where the `Uint8Array` mistake would survive longest — one raw
+	 * buffer among ten base64 strings still looks like a list of frames until a client tries
+	 * to decode it — so the walk below is run over the whole answer rather than over the
+	 * recording alone.
+	 */
+	it('round-trips a record_video result, the recording and every frame with it', async () => {
+		const frames = [
+			createMockPngBytes({ payload: [0x11] }),
+			createMockPngBytes({ payload: [0x22] }),
+		];
+		const context = createMockVerbContext({
+			backend: createMockDeviceBackend({
+				readScreen: vi.fn<NonNullable<DeviceBackend['readScreen']>>(async () => [save]),
+			}),
+		});
+
+		const recorded = await recordVideo(context, { extractFrames: async () => frames });
+
+		expect(RecordVideoResultSchema.parse(roundTrip(recorded))).toEqual(recorded);
+		// No raw bytes, no function, and no string that looks like somewhere on this host —
+		// on the recording or on any frame.
+		expect(unserializableParts(recorded)).toEqual([]);
+		// And every payload really made the trip: what comes back out of the JSON decodes to
+		// the bytes that went in, rather than to an object of numeric keys.
+		const parsed = RecordVideoResultSchema.parse(roundTrip(recorded));
+		expect(
+			parsed.frames.map((frame) => new Uint8Array(Buffer.from(frame.base64, 'base64'))),
+		).toEqual(frames);
+
+		// The common half is an `ActionResult` field for field, and the schema is `.strict()`,
+		// so it rejects the extra key rather than dropping it — the same pair `read_logs` above
+		// asserts, for the same reason.
+		const { frames: _frames, ...common } = recorded;
+		expect(ActionResultSchema.parse(roundTrip(common))).toEqual(common);
+		expect(() => ActionResultSchema.parse(roundTrip(recorded))).toThrow();
 	});
 
 	it('round-trips read verb results, whose answers are state rather than an action', async () => {
@@ -503,6 +548,14 @@ describe('a verb call answers in plain data too', () => {
 		// path would name a file on the wrong machine (D19).
 		['install_app', InstallAppParamsSchema, { leaseId: 'lease-1', packageBase64: 'AQIDBA==' }],
 
+		[
+			'record_video',
+			RecordVideoParamsSchema,
+			{ leaseId: 'lease-1', durationMs: 5_000, framesPerSecond: 2 },
+		],
+		// One row for both environment verbs, because one schema serves both — the call is a
+		// lease id and a boolean whichever radio is being asked about.
+		['set_wifi', EnvironmentVerbParamsSchema, { leaseId: 'lease-1', enabled: false }],
 		// The three read rows carry the credential and nothing else: no target, no wait knob on
 		// a verb that reads once and answers, and — for `screenshot` — no destination, because
 		// a path on the host is the one thing its answer must never contain (D19).

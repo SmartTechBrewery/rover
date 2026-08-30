@@ -47,18 +47,25 @@ applications a project owns and what its hook does arrive through an injected re
 per-project configuration that fills it is its own issue (`PROJECT.md` §9.3, R17), so today that
 resolver answers nothing and only the two network steps have work to do.
 
-**There is a CLI** (D4) — `rover list`, `acquire`, `release`, `status` and `users`, human-readable by
-default and one JSON document on stdout with `--json`, every diagnostic on stderr. It holds no
-verb logic: each command parses flags, calls one IPC method, renders the answer and picks an exit
-code. `list` shows what is attached, what is free and who holds the rest — the owner, project and
-test name, and how much longer they have — and says out loud when the host does not know its own
-view to be current, rather than quietly printing a short list. `acquire` requires an explicit
-`--owner` and `--project` and derives neither. `status` says which host answered. The host is named
-by `--host`: no flag means the local one, `remote` is the machine `ROVER_HOST_ADDRESS`,
-`ROVER_HOST_PORT` and `ROVER_HOST_TOKEN` name, and anything else fails loudly instead of hanging.
-`users` is the one command that asks no host at all: it reads and writes this machine's own
-`~/.rover/users.json` directly, works whether or not a daemon is running, and takes no `--host`
-(see "Managing host users" below).
+**There is a CLI** (D4) — `rover list`, `acquire`, `release`, `screenshot`, `record`, `status` and
+`users`, human-readable by default and one JSON document on stdout with `--json`, every diagnostic
+on stderr. It holds no verb logic: each command parses flags, calls one IPC method, renders the
+answer and picks an exit code. `list` shows what is attached, what is free and who holds the rest —
+the owner, project and test name, and how much longer they have — and says out loud when the host
+does not know its own view to be current, rather than quietly printing a short list. `acquire`
+requires an explicit `--owner` and `--project` and derives neither. `status` says which host
+answered. The host is named by `--host`: no flag means the local one, `remote` is the machine
+`ROVER_HOST_ADDRESS`, `ROVER_HOST_PORT` and `ROVER_HOST_TOKEN` name, and anything else fails loudly
+instead of hanging. `screenshot` and `record` are the two commands that bring bytes back: the verb
+runs on the host and the capture returns base64 rather than a path (D19), so `--out` is a path on
+**this** machine, it is required — there is no filename the CLI could invent that anything calling
+it could predict — and the path reported is `path.resolve` of what you passed. What decoded is
+checked against the byte length the host encoded before anything is written, so a capture the host
+refused, or one that did not survive the trip, exits 1 and leaves no file at `--out` at all rather
+than a short one. `rover record --duration-ms <n>` raises its own request timeout past the
+recording, so a long recording is never a hang. `users` is the one command that asks no host at
+all: it reads and writes this machine's own `~/.rover/users.json` directly, works whether or not a
+daemon is running, and takes no `--host` (see "Managing host users" below).
 
 **Waiting is a condition, never a duration.** `src/core/wait.ts` is the one module in the
 repository allowed to construct a delay: `waitForCondition` polls a probe until it reports the
@@ -184,6 +191,57 @@ blocking capture. And `read_screen` is the read that survives the block — on a
 are gone the hierarchy comes back in full, texts and rectangles and all, which is why it is a
 first-class verb rather than a fallback for when a screenshot is inconvenient (PROJECT.md §6).
 
+**`record_video` is the second verb whose answer is bytes**, and the whole verb is one promise:
+the recording it hands you is a file a player will actually open. A recorder writes its container
+index **last**, so a file copied off a device a moment early is not a shorter video — it is a file no
+decoder will accept at all, which reads like a broken tool rather than a race. So the host records,
+then waits on a *condition* for the recorder to be gone (never a sleep), then pulls, then checks the
+index on the bytes that actually arrived, and only then answers. A recording missing that index is
+refused by name — `unfinished-recording`, carrying the device and the byte length — rather than
+handed over, and rather than surfacing as a broken host. The recording rides on the same
+`result.artifact` a screenshot does, base64 and `video/mp4` and a byte length, and never a path, for
+the reasons above. It declares `canRecordVideo`, so a device that cannot record says so before
+anything is dispatched. Duration is the one knob — five seconds by default, capped at fifteen,
+because that is what **one answer** can carry; a longer recording is chunked transfer, its own
+issue, and going over the bound is the same `artifact-too-large` refusal rather than a file cut
+short. A caller asking for a long one should raise its own request timeout, which defaults to 30 s.
+
+**The same answer carries the frames sliced out of that recording.** They come back on
+`result.frames` — PNGs, in the order they were recorded, each with its media type and byte length,
+never a path — and they are cut out of the **finished** recording on the host, after the completion
+condition and the pull, so the device is touched once and never sampled while it is being recorded.
+They are scaled down on purpose: a frame is for reading *what changed*, and the full-resolution read
+of one moment is `screenshot`. The one knob is `framesPerSecond`, two by default — and `rover record`
+exposes it as `--frames-per-second`, bounded before the call the way `--duration-ms` is.
+
+Extraction needs a video decoder, this project contains none, and writing one is out of the
+question — so the host drives `ffmpeg`, found on `PATH` the way `adb` is, with the recording written
+to its standard input and the images read back off its standard output. **No temporary file is ever
+written**, which is also why no path exists that could end up in an answer. That is a fact about the
+*host* rather than about the device, so it is not a device capability: a machine without `ffmpeg`
+refuses by name — `frame-extraction-unavailable`, naming the program and what to install — rather
+than answering with an empty list of frames, because an empty list would read as a screen on which
+nothing happened. **No path answers with an empty list at all**: a decoder that could not start, one
+that exited non-zero, one that wrote something unreadable and one that exited cleanly having written
+nothing are four failures with four names.
+
+The count, the width and the total size are all bounded and named, and going over any of them is a
+refusal rather than a shorter list — a frame list missing its middle reads as a recording in which
+nothing happened between two moments that are no longer next to each other. The width is a fixed
+default the verb owns. The count is derived from the longest recording at the densest sampling, and
+it is a bound a real call can reach: a capture of a screen that barely changed declares a container
+timeline much longer than the recording was asked for, and the sampling follows the container. The
+total size is the bound the ordinary case reaches, refused with both numbers on it.
+
+Because the extraction happens inside the same call, `rover record` answers with **both or neither**:
+on a host with no decoder installed the command exits 1 with `frame-extraction-unavailable` and
+writes no video either, and its `--help` says so.
+
+**What a recording is honest about: it samples motion, and the frames sample it again.** It can tell
+you something moved and roughly when. It cannot tell you how the movement eased, whether a frame was
+dropped, or whether what a person would call jank happened — and reading any of that out of it
+anyway is exactly the plausible-looking wrong answer this whole design is against.
+
 **`read_logs` is the verb that sees what a screenshot cannot** (`src/verbs/logs.ts`), and it is the
 first one whose answer carries a payload of its own: the device's log, parsed into neutral entries —
 a timestamp as the device printed it, a level, a tag, a process id and the line — on top of
@@ -269,23 +327,65 @@ refusal, such as launching a package that is not installed, still reaches the ca
 the device does not have reports today. That is true of every verb family here, not just this one,
 and it is filed as its own issue.
 
-**The host can now listen on the network, and only if you ask it to** (D17, D20). Setting
-`ROVER_LISTEN_PORT` — with a host token and a TLS certificate beside it — starts a TCP+TLS
-listener alongside the local unix socket, serving the *same* IPC surface from the same handler:
-one method table, two transports, no second implementation of anything. A network caller
-authenticates with a one-line greeting the transport reads and consumes before the message
-surface ever sees the connection, so the token never enters a request and never becomes a lease's
-owner — the token authenticates, the owner string attributes, and they are separate fields. Every
-pre-auth failure gets one byte-identical refusal and a closed connection: no reason, no device
-list, no count, no serials, because a refusal that varied would be an oracle. Without those
-variables nothing binds, the local socket needs no token and no configuration, and a daemon
-autostarted by `rover list` clears the switch so a plain command can never turn a laptop into a
-network host.
+**`set_airplane_mode` and `set_wifi` toggle the radios without root** (`src/verbs/environment.ts`),
+through the commands verified on a real device rather than the `svc wifi disable` every guide on the
+internet still shows — that one does not exist on the API level Rover was built against, and it
+fails in a way that looks like a permissions problem (PROJECT.md §6). Controlling the network is a
+declared capability rather than an assumption, and these two demand it the way `read_screen` demands
+its own: a device that cannot do it is told so by name, naming the capability and the device, rather
+than answering `ok` and moving nothing. Each returns the state after itself like every other verb —
+which is evidence the device was still there and answering, not a reading of the radio, because
+nothing in the device abstraction reads one back. They are also exactly the commands the daemon's own restoration runs when a lease
+ends, so there is one recipe per toggle rather than two that can drift, and the order matters for
+the reason the restoration records: airplane mode first, wifi last.
+
+The remaining verbs — `install_app`, `pull_file` and `push_file` — are their own issues.
+
+**The daemon loads the core and runs the verbs**, and a client only asks (D19). The two waits, the
+six input verbs, the three app verbs, the three read verbs, the log read, screen recording, and two
+environment verbs are callable over the same connection as `acquire_device` — the same envelope,
+the same framing, one method table — and a verb call carries the lease id rather than a serial,
+because the lease id is the credential and the host derives the device from it. A verb that fails
+comes back as an *answer* naming what happened —
+the element was not there, the wait timed out, the device cannot read its screen — and never as a
+broken host; only the host actually breaking is an `internal_error`. There is no `adb` in a client
+process — and no `ffmpeg` either, nor anything else that starts a program:
+`tests/unit/no-backend-in-a-client.test.ts` walks the import graph from every client entrypoint and
+says so rather than asking politely, which is why the frame extractor lives beside the daemon and is
+handed to the verb rather than imported by it. Against a real device today all of it runs on the
+hardware: a `tap` at a coordinate injects, `press_key` and `type_text` reach the device without aiming at
+anything, `launch_app` and `stop_app` reach the package, `read_screen` and `device_info` answer off
+the hardware, `screenshot` brings back a real PNG of the panel the device reports, `record_video`
+brings back a recording that is provably finished before it leaves the device together with the
+frames sliced out of it on the host, `read_logs` brings
+back the device's own log, and `set_airplane_mode` and `set_wifi` move the device's real radios
+over a lease and without root — and, since the Android backend learned to read its own screen —
+a target addressed by text resolves against a hierarchy read inside the verb, both waits poll a
+real screen, and every action comes back carrying the elements that were on it afterwards. One gap
+is recorded rather than hidden — a device-level refusal, such as launching a package that is not
+installed, still reaches the caller as `internal_error` rather than as an answer about the device.
+That is true of every verb family here, not just this one, and it is filed as its own issue.
+
+**The host can now listen on the network, and only if you ask it to** (D17, D20, D25). Setting
+`ROVER_LISTEN_PORT` — with a TLS certificate beside it — starts a TCP+TLS listener alongside the
+local unix socket, serving the *same* IPC surface from the same handler: one method table, two
+transports, no second implementation of anything. A network caller authenticates with a one-line
+greeting the transport reads and consumes before the message surface ever sees the connection, so
+the token never enters a request and never becomes a lease's owner — the token authenticates, the
+owner string attributes, and they are separate fields. **The host holds no shared secret**: the
+greeting's token is hashed and looked up in the user store `rover users add` writes, re-read at
+every connection attempt, so `rover users revoke` refuses that user on their very next attempt
+with the daemon still running and nothing restarted. Every pre-auth failure gets one byte-identical
+refusal and a closed connection: no reason, no device list, no count, no serials, no user, because
+a refusal that varied would be an oracle. Without those variables nothing binds, the local socket
+needs no token and no configuration, and a daemon autostarted by `rover list` clears the switch so
+a plain command can never turn a laptop into a network host.
 
 **And a client can now reach one** — `rover --host remote list` (R22's other half). It connects
-over TLS to the host `ROVER_HOST_ADDRESS` and `ROVER_HOST_PORT` name, presents `ROVER_HOST_TOKEN`,
-and drives the identical method table; `--host local` and no flag are unchanged, autostart
-included. **A client never starts a remote host**: nothing listening on that port is a failure
+over TLS to the host `ROVER_HOST_ADDRESS` and `ROVER_HOST_PORT` name, presents
+`ROVER_HOST_TOKEN` — a token that host's own `rover users add` printed, not a secret both
+machines share — and drives the identical method table; `--host local` and no flag are
+unchanged, autostart included. **A client never starts a remote host**: nothing listening on that port is a failure
 naming the address, the port and `ECONNREFUSED`, and a peer that accepts the connection and then
 says nothing is given ten seconds and then named too — never an empty device list, never a hang —
 and a token the host rejects says so, distinctly, without ever printing the token. The
@@ -327,13 +427,13 @@ startup, naming the variable and the reason, rather than binding something surpr
 | Variable | Default | Value |
 |---|---|---|
 | `ROVER_SOCKET_PATH` | `~/.rover/rover.sock` | Absolute path of the unix socket the local daemon binds and a local client connects to. **Empty counts as unset** — an exported-but-blank variable is what a shell leaves behind, and reading it as a real setting would point the daemon at the current directory. At most **103 bytes of UTF-8**: a unix socket address is a fixed-size struct (104 bytes on macOS, 108 on Linux, NUL included), and over the cap `bind` truncates or answers `EINVAL` instead of naming the length, so a longer path is rejected at startup with the byte count and the path. |
-| `ROVER_USERS_PATH` | `~/.rover/users.json` | Absolute path of the host's own user store — one record per user: identifier, display name, the **hash** of that user's token, and when it was created. Never a token: `rover users add` and `rover users rotate` print the raw value once and store only its hash. **Empty counts as unset**, as it is for the socket. Read only by `rover users`, which touches the file directly and never goes over the network (`PROJECT.md` D25); the daemon does not read it yet. |
-| `ROVER_LISTEN_PORT` | unset — **no network listener** | The opt-in switch for the TCP+TLS listener that serves the same IPC surface as the local socket. Unset or empty and nothing binds, nothing else below is read, and the daemon is a purely local host. Set it and the next three become **required together**: a port with no token would be a listener that lets strangers in, so a missing one is a startup failure naming every variable still missing rather than a half-configured host. 1–65535. |
-| `ROVER_HOST_TOKEN` | — (required with the port) | The shared secret every network caller presents. At least **32 characters**; it is a bearer secret on an open port, and length is the only thing that makes guessing hopeless. It is a **host-level** setting and belongs in the environment, never in a file the repository tracks. Deliberately **the same variable the client reads** (below), so a machine that is both holds one secret rather than two that drift apart. The token **authenticates and attributes nothing**: a lease's owner is a separate, caller-supplied string (`PROJECT.md` D20). |
+| `ROVER_USERS_PATH` | `~/.rover/users.json` | Absolute path of the host's own user store — one record per user: identifier, display name, the **hash** of that user's token, and when it was created. Never a token: `rover users add` and `rover users rotate` print the raw value once and store only its hash. **Empty counts as unset**, as it is for the socket. Read by `rover users`, which touches the file directly and never goes over the network (`PROJECT.md` D25), **and by the network listener**, which is the host's entire authentication surface: the token in a caller's greeting is hashed and looked up here, re-read at every connection attempt and never cached, so `revoke` and `rotate` take effect on the very next attempt with the daemon still running. |
+| `ROVER_LISTEN_PORT` | unset — **no network listener** | The opt-in switch for the TCP+TLS listener that serves the same IPC surface as the local socket. Unset or empty and nothing binds, nothing else below is read, and the daemon is a purely local host. Set it and the next two become **required together**: a port with no TLS material would be a listener nobody could trust, so a missing one is a startup failure naming every variable still missing rather than a half-configured host. Who may connect is not a variable at all — it comes from the user store (`ROVER_USERS_PATH`), which always resolves, so a host with no users yet starts and refuses everyone. 1–65535. |
 | `ROVER_TLS_CERT` | — (required with the port) | Path to the PEM certificate (chain) the listener presents. |
 | `ROVER_TLS_KEY` | — (required with the port) | Path to the matching PEM private key. Unreadable material is a startup failure naming the variable and the path, not a TLS mystery on the first connection. |
 | `ROVER_LISTEN_ADDRESS` | `0.0.0.0` | Which interface the network listener binds, so an operator can narrow it to a VPN or loopback interface instead of every one. Only read when the port is set. |
 | `ROVER_HOST_ADDRESS` | unset — **no remote host** | The opt-in switch on the *client* side: the address of the host `--host remote` asks. Unset or empty and nothing below is read, `--host remote` is a usage error, and `rover` is a purely local client. Set it and `ROVER_HOST_PORT` and `ROVER_HOST_TOKEN` become **required together**, because a client cannot guess either — a missing one is a usage error naming every variable still missing. Exactly one remote host is configurable (`PROJECT.md` D18); there is no catalogue. |
+| `ROVER_HOST_TOKEN` | — (required with `ROVER_HOST_ADDRESS`) | **A client-side credential, and only that** — the value `rover users add` (or `users rotate`) printed on the host, pasted on the machine that borrows a device. The host itself no longer reads this variable: it authenticates against its user store, so a token is revocable and rotatable where it was issued rather than being a secret both machines hold forever (`PROJECT.md` D25). At least **32 characters**, checked locally so a truncated paste fails here naming the variable instead of coming back as an opaque refusal. It is a **host-level** setting and belongs in the environment, never in a file the repository tracks. The token **authenticates and attributes nothing**: a lease's owner is a separate, caller-supplied string (`PROJECT.md` D20). |
 | `ROVER_HOST_PORT` | — (required with the address) | The port that host listens on — its own `ROVER_LISTEN_PORT`, named from the other side. 1–65535. |
 | `ROVER_HOST_CA` | unset — the system trust store | Path to a PEM certificate to trust in addition to nothing else — normally the host's own certificate, which is how a self-signed host is trusted. There is deliberately **no variable that turns verification off**: a client that skipped the check would accept any host that answered on that port. |
 
@@ -361,34 +461,40 @@ who loses one runs `rotate`, which is what makes that safe. A duplicate identifi
 name rather than overwritten, because an overwrite would silently revoke a credential somebody is
 holding.
 
-**The daemon does not read this store yet.** `ROVER_HOST_TOKEN` is still the one secret the network
-listener checks (`PROJECT.md` D20), so a token issued here does not yet let anyone in — per-user
-host authentication is the next row (`PROJECT.md` §9.3, R28). Creating users now is how a host is
-made ready for it, not a way to hand out access today.
+**This store is what the network listener authenticates against.** A token issued here is the value
+a client puts in its own `ROVER_HOST_TOKEN`, and it is the only way in — there is no shared secret
+beside it (`PROJECT.md` D20, D25). The daemon re-reads the file at **every connection attempt** and
+caches nothing, so `revoke` and `rotate` bite on that user's very next attempt with the daemon
+still running: no restart, no signal, nothing to reload. `add` works the same way in the other
+direction — a user created while the daemon is up can connect immediately.
 
 ### Exposing a host on the network
 
 A network host is a **service its operator starts on purpose**, never something a client brings up
 behind their back — `rover list` clears `ROVER_LISTEN_PORT` in any daemon it autostarts, so the
-listener only ever exists because somebody exported these four variables and ran the daemon.
+listener only ever exists because somebody exported these three variables and ran the daemon.
 
 ```bash
 # A certificate for the host. Use your own CA in anything that matters; this is the shape.
 openssl req -x509 -newkey rsa:2048 -nodes -days 365   -keyout rover-key.pem -out rover-cert.pem   -subj "/CN=rover-host" -addext "subjectAltName=DNS:rover-host,IP:10.0.0.4"
 
-export ROVER_HOST_TOKEN="$(openssl rand -hex 24)"   # at least 32 characters
 export ROVER_TLS_CERT=/etc/rover/rover-cert.pem
 export ROVER_TLS_KEY=/etc/rover/rover-key.pem
 export ROVER_LISTEN_ADDRESS=10.0.0.4                # optional; 0.0.0.0 otherwise
 export ROVER_LISTEN_PORT=4711                       # the switch — set it last
 npm run daemon
+
+# Issue access, per person, before or after the daemon is up — it re-reads the store every time.
+npm run rover -- users add alice --name "Alice Example"
 ```
 
-The token is a shared secret: keep it in the environment (or your secret store), never in a file
-the repository tracks, and give the client machines the same value. `.gitignore` refuses `*.pem`
-and `*.key` so a certificate generated inside a checkout cannot be committed by accident. A caller
-that fails to authenticate is told only that authentication failed — no reason, no device list, no
-serials — and the connection is closed.
+**The host holds no secret of its own.** Access is one token per user, issued by `rover users add`
+and taken away by `rover users revoke` on this machine — so there is nothing here to copy to a
+client except the token that command printed for it, and nothing to rotate everywhere at once when
+one person leaves. `.gitignore` refuses `*.pem` and `*.key` so a certificate generated inside a
+checkout cannot be committed by accident. A caller that fails to authenticate is told only that
+authentication failed — no reason, no device list, no serials, and not even whether the token was
+unknown or revoked — and the connection is closed.
 
 ### Connecting to a remote host
 
@@ -397,7 +503,7 @@ On the machine doing the work, point the client at that host and add `--host rem
 ```bash
 export ROVER_HOST_ADDRESS=10.0.0.4                  # or the hostname on its certificate
 export ROVER_HOST_PORT=4711
-export ROVER_HOST_TOKEN="…"                         # the same value the host holds
+export ROVER_HOST_TOKEN="…"                         # the token `rover users add` printed on the host
 export ROVER_HOST_CA=/etc/rover/rover-cert.pem      # optional; the system trust store otherwise
 
 npm run rover -- list --host remote
@@ -411,8 +517,9 @@ the variable only if the host's certificate is signed by a CA the machine alread
 Three failures are three different messages, on purpose, because they call for three different
 next moves: **nothing is listening there** (the address, the port and `ECONNREFUSED` — a remote
 host is a service its operator starts, and no client will ever start one for you); **the host
-rejected `ROVER_HOST_TOKEN`** (the two machines hold different secrets — the value itself is
-never printed); and **the certificate was not trusted** (name it in `ROVER_HOST_CA`). None of
+rejected `ROVER_HOST_TOKEN`** (no user on that host holds this token, or the one who did has been
+revoked or rotated — ask its operator for a fresh `rover users add`; the value itself is never
+printed); and **the certificate was not trusted** (name it in `ROVER_HOST_CA`). None of
 them is ever an empty device list, and none of them ever waits: a peer that accepts the
 connection and then never completes the TLS handshake — a forwarded port whose far end is gone,
 a load balancer with no live backend — is given ten seconds and then reported as `ETIMEDOUT`,
@@ -434,7 +541,8 @@ In the source tree: `src/core/` holds the device contract and the branded ids, `
 folder per platform, `src/verbs/` the verb spine with the input verbs, the app verbs, the read verbs
 and the waits described above, `src/ipc/` the
 wire protocol and the transport-agnostic client and server, `src/daemon/` the socket and the
-inventory and the leases, and `src/cli/` the `rover` command.
+inventory and the leases — plus the host-side tools the verbs are handed, such as the frame
+extractor — and `src/cli/` the `rover` command.
 
 ## Shape
 
@@ -450,7 +558,9 @@ one agent screenshots the other's build.
 
 Read `ai/RULES.md` in full first. `npm install` sets up the toolchain and installs the git hooks;
 `npm run verify` (lint, typecheck, unit tests) is the one command that says whether the tree is
-healthy. Issues are filed with `/write-issue` and implemented with
+healthy — it needs no device and no host tool. `npm run test:device` needs a device on `adb`, and
+the `record_video` cases additionally need `ffmpeg` on `PATH`; a host missing either **skips those
+suites loudly** rather than failing or passing in silence. Issues are filed with `/write-issue` and implemented with
 `/solve-issue`; both are committed under `.claude/skills/`. Work is also delegated to
 [Swarm](https://github.com/SmartTechBrewery/swarm), which is why every issue carries the `swarm`
 label.

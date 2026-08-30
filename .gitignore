@@ -46,6 +46,14 @@ coverage/
 artifacts/
 *.mp4
 
+# Wyjątek: nagrania w tests/fixtures/adb/ nie są artefaktami przebiegu, tylko
+# fixture'ami parsera — pinują `isFinishedRecording` (record_video, R14).
+# Sedno tkwi w tym, że nagranie skończone i nagranie wyciągnięte w trakcie zapisu
+# różnią się wyłącznie obecnością atomu `moov`, więc ręcznie napisany plik
+# udowodniłby dokładnie to, czego dowieść nie może (tests/fixtures/adb/README.md).
+# Razem ~67 KB i nigdy się nie zmienią — historia od tego nie spuchnie.
+!tests/fixtures/adb/*.mp4
+
 # ── Edytory ────────────────────────────────────────────────────────────────
 .idea/
 .vscode/

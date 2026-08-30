@@ -100,7 +100,12 @@ function registerRecordingBackend(holdAirplaneMode?: Promise<void>): Recorded {
 		manifest: {
 			platform: 'test-platform',
 			label: 'Test',
-			capabilities: { canReadScreen: true, canInput: false, canControlNetwork: true },
+			capabilities: {
+				canReadScreen: true,
+				canInput: false,
+				canControlNetwork: true,
+				canRecordVideo: true,
+			},
 		},
 		backend: createMockDeviceBackend(overrides),
 	});

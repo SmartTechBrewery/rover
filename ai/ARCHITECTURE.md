@@ -34,9 +34,12 @@ the unit tests drive the whole surface over an in-memory stream pair that is not
 
 Each pair is handed the same `IpcServer` or wrapped by the same `createIpcClient`, so there is
 one method table, one dispatcher, one set of schemas, and nothing for the four to drift from.
-`src/daemon/network-config.ts` carries both halves' configuration, and `ROVER_HOST_TOKEN` is
-deliberately one variable for both: a machine that hosts devices and also borrows one is
-holding one secret, not two.
+`src/daemon/network-config.ts` carries both halves' configuration, and the two halves are
+deliberately **asymmetric** (D25): the host half holds no secret at all — it names a user store,
+`~/.rover/users.json`, that `rover users` writes — while `ROVER_HOST_TOKEN` is the *client's*
+own credential, the token that host printed for it once. There is no shared secret left on the
+host side, because a way in that no `rover users revoke` could take away is what the store
+exists to retire.
 
 **Autostart is contained by that table rather than by discipline.** `network-connect.ts` does
 not import `node:child_process` and never may — a host reachable over a network is a service
@@ -51,12 +54,15 @@ on a request or a method in the table. It is a one-line NDJSON greeting — `{"t
 `network-listen.ts` reads and consumes before the IPC server is attached to the stream. Three
 things follow, and all three are wanted: no method can be dispatched before authentication *by
 construction* rather than by a flag; the local socket stays ungated because the gate lives in the
-other transport; and `src/ipc/` genuinely does not know it is authenticated. Every pre-auth
-failure — wrong token, missing, malformed, oversize, or a handshake that times out — gets one
-byte-identical `unauthenticated` refusal and a destroyed connection, because a refusal that varied
-with the reason would tell a stranger something about the host (D20). The token authenticates and
-attributes nothing: a lease's owner is a separate, caller-supplied string, never derived from
-whoever authenticated.
+other transport; and `src/ipc/` genuinely does not know it is authenticated. The gate resolves
+the presented token against the user store — hashed, then looked up in `~/.rover/users.json`,
+**re-read at every connection attempt and never cached for the daemon's lifetime** (D6, D25), so
+a revoked user is refused on their very next attempt with nothing restarted. Every pre-auth
+failure — a token no user holds, a revoked one, missing, malformed, oversize, a store this host
+cannot read, or a handshake that times out — gets one byte-identical `unauthenticated` refusal
+and a destroyed connection, because a refusal that varied with the reason would tell a stranger
+something about the host (D20). The token authenticates and attributes nothing: a lease's owner
+is a separate, caller-supplied string, never derived from whoever authenticated.
 
 ### Why the daemon exists at all
 
@@ -80,7 +86,16 @@ all of them are load-bearing:
   from the device they exist to serve.
 - **Artifacts cross a machine boundary.** Screenshots, recordings and pulled files come back as
   bytes; a path handed to the agent must exist **on the agent's machine**. A verb that returns a
-  host-local path is a bug even when it works on a local host.
+  host-local path is a bug even when it works on a local host. The client half of that contract is
+  `src/cli/_shared/artifact.ts` — the one place a client turns an `ActionResult.artifact` into a
+  file. It decodes, checks the decoded length against the `byteLength` the host encoded (`Buffer`
+  drops characters outside the base64 alphabet rather than failing, so a mangled payload otherwise
+  becomes a short file that announces nothing), writes the bytes locally and answers
+  `path.resolve` of the caller's own `--out`. **The write is the last thing it does and only on
+  the `ok` branch**, so a refusal or a failed transfer leaves no file at the destination rather
+  than a truncated one. Nothing in it branches on `--host`: a local host and a remote one arrive
+  as the same field of the same schema, which is what makes the guarantee a property of the module
+  instead of of every command remembering it.
 
 Authentication is the host's token; attribution is the lease's owner string. They are separate
 fields on purpose (D20) — collapsing them either leaks the token into reports or makes the owner
@@ -116,8 +131,23 @@ Backends are genuinely asymmetric and flattening that is the design mistake to a
 - `simctl` cannot tap and cannot dump a hierarchy. Input and tree reads on iOS need `idb` or WebDriverAgent — a heavy dependency with its own lifecycle.
 - **Semantic screen reading may have no iOS equivalent at all.** On Android it is the one capability that survives an app blocking screen capture. That is why `read_screen` is **not a required method** of the interface but a declared capability the verb layer queries first.
 - A physical Android phone cannot be handed a synthetic fingerprint; an emulator can.
+- **Screen recording is another of them**, and it is why `recordVideo` is a declared capability
+  rather than a required method: an iOS *simulator* records with `simctl io recordVideo`, while a
+  physical iOS device has no cheap command-line equivalent at all. `record_video` declares
+  `requires: ['canRecordVideo']` for `read_screen`'s reason — the payload *is* the answer, so a
+  backend without it has to fail by name before dispatch rather than answer with no recording.
 - **A system log is not one of those asymmetries**, which is why `readLogs` is a *required* method and not a capability: every platform here keeps one, and a flag that is always `true` is noise (`src/core/capabilities.ts`). What differs is the wording inside an entry — that is what the neutral `LogEntry` shape and a backend's own parser absorb.
 - **Moving a file is not one either**, so `pushFile` and `pullFile` are required too. The asymmetry that matters there is the *direction* rather than the platform: a push takes a path on the host, because the host is where the daemon runs, and a pull answers with **bytes**, because the answer is read on the agent's machine (D19).
+- **A missing *host* program is not one either, and it must not be modelled as a capability.**
+  Slicing a recording into frames needs a video decoder this project does not contain, so the host
+  drives `ffmpeg` off `PATH` (`src/daemon/frames.ts`). Capabilities describe what a device backend
+  can do; `ffmpeg` says nothing about any device, and the remedy is different in kind — install a
+  program *here*, rather than stop asking *that device*. So it is a named verb failure
+  (`frame-extraction-unavailable`) and never a `Capabilities` flag, and the honest empty-result rule
+  applies exactly as it does to a capability — with no exception left to it. A frame list on an `ok`
+  answer is **never empty**: the one case that legitimately sampled to nothing (a screen that never
+  changed) is closed inside the filter, and every other way a host produces no images is one of the
+  named `frame-extraction-…` failures.
 
 So: each backend declares its manifest, the verb layer checks before dispatching, and an unbacked verb fails with an error naming the capability and the device. A conformance suite runs once per registered manifest — see `ai/TESTING.md`.
 
@@ -257,6 +287,22 @@ Verbs live above the backends and below the adapters, and this is where determin
   Like the app verbs it requires no capability and resolves no target, and like every bounded read
   in this repository it does not follow — a tail that stays open is a wait with no condition and a
   stream over a protocol built for request and response.
+- **`recordVideo()`** (`src/verbs/record.ts`) is the second verb whose answer carries more than an
+  `ActionResult`, and it reuses `readLogs`' machinery rather than forking it:
+  `RecordVideoResultSchema` is `ActionResultSchema.extend({ frames })`, its row's answer comes out
+  of the same `verbCallResultOf()` factory, and `runVerb` was already generic. The recording rides
+  on `artifact` where `screenshot`'s capture does; the frames are the one field added. What is new
+  in shape is **where the work happens**: extracting frames needs a host program, and a program
+  started from anywhere under `src/verbs/` would be `node:child_process` in every client's module
+  graph, since `src/ipc/verb-methods.ts` imports these schemas (D19). So the verb declares a
+  `FrameExtractor` — a function from a finished recording to images — and the daemon supplies the
+  one implementation (`src/daemon/frames.ts`), exactly as it supplies `context.backend`. That is the
+  pattern to copy for the next host-side tool, and `tests/unit/no-backend-in-a-client.test.ts` walks
+  the graph from each client entrypoint so it stays a fact rather than a convention. The bounds live
+  with the verb rather than with the tool, so they hold whichever extractor was handed in — and that
+  includes the extraction *timeout*, which is a verb-layer constant even though only the daemon's
+  runner passes it to a process: `rover record`'s own request timeout has to cover every budget the
+  host spends inside one call, and a client cannot import a daemon module to read one.
 - **`readScreen()` and `deviceInfo()`** (`src/verbs/read.ts`) are the spine with the *middle* left
   out: their action is empty, because a read verb's work is the capture `performAction()` already
   performs for every verb — the screen for the after-state, the device for D14. Routing them
@@ -296,10 +342,29 @@ Verbs live above the backends and below the adapters, and this is where determin
   reaches the caller in a *failure* either — the same D19 that keeps paths out of results keeps the
   daemon's own temporary file out of the message an `internal_error` carries, in the command it
   quotes *and* in the streams, since adb writes the path it was handed back into its own output.
+- **`setAirplaneMode()` and `setWifi()`** (`src/verbs/environment.ts`) are the same spine again, and
+  the family where `requires` finally does the other half of its job. Both declare
+  `requires: ['canControlNetwork']` and reach the backend through `capabilityMethod()` rather than
+  `context.backend.*` — the mirror image of the app verbs, whose methods are required ones
+  `capabilityMethod` will not typecheck for. A backend that does not declare the capability is a
+  `MissingCapabilityError` before anything is dispatched, naming capability, device and backend
+  (D11), which is the difference between "this device cannot do that" and a toggle that answered
+  `ok` and moved nothing. Neither passes a target — a radio is not something on the screen, so
+  `ActionResult.target` is `null` like the app verbs' — and the after-state each answers with is the
+  spine's own capture: evidence that the device was still there and answering, and deliberately
+  **not** a reading of the radio, since `DeviceBackend` has no network getter and neither verb
+  invents one. These are the same two backend methods `src/daemon/restore.ts` drives when a lease
+  ends, which is what stops the verb layer and the restoration drifting: one recipe per toggle, in
+  one backend, with a second caller rather than a second path — and the order the restoration uses
+  is worth copying, because the airplane-mode toggle can move wifi underneath it while the wifi
+  toggle never moves airplane mode (`PROJECT.md` §6).
 - **`ActionResult`** names the verb, the device (as `DeviceInfo`, so D14's density travels with the
   measurement), the resolved target and the state after the action. A backend with input but no
   screen reading answers an explicit `unavailable` after-state naming the capability that would have
-  answered — never an empty element list, which reads as a blank screen. A read that was declared,
+  answered — never an empty element list, which reads as a blank screen. `screenshot` and
+  `record_video` are the two verbs whose answer is not a state the result already carries, and both
+  hang their bytes off the same nullable `artifact` field rather than growing a second home for
+  them — `record_video` extends the schema for its *frames* and still leaves the recording there. A read that was declared,
   attempted and rejected is the separate `failed` branch: once the action has run, an exception in
   its place would leave the agent unable to tell whether it landed, which is exactly what D12(c)
   rules out. Every shape is a Zod schema of plain data, because the host executes the verb and the

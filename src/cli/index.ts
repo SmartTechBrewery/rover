@@ -15,13 +15,22 @@
 
 import { realpathSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
+import { EXIT_FAILED, EXIT_OK, EXIT_USAGE } from './_shared/exit.js';
 import { UsageError } from './_shared/flags.js';
 import * as out from './_shared/output.js';
 import * as acquire from './commands/acquire.js';
 import * as list from './commands/list.js';
+import * as record from './commands/record.js';
 import * as release from './commands/release.js';
+import * as screenshot from './commands/screenshot.js';
 import * as status from './commands/status.js';
 import * as users from './commands/users.js';
+
+/**
+ * The exit codes, re-exported from `./_shared/exit.js` where they live so that a shared
+ * helper can name one without importing this module back.
+ */
+export { EXIT_FAILED, EXIT_OK, EXIT_USAGE } from './_shared/exit.js';
 
 interface Command {
 	/** The command's own usage text, printed when it rejects an invocation. */
@@ -42,16 +51,11 @@ const COMMANDS: Record<string, Command | undefined> = Object.assign(Object.creat
 	list,
 	acquire,
 	release,
+	screenshot,
+	record,
 	status,
 	users,
 });
-
-/** Success. */
-export const EXIT_OK = 0;
-/** The operation did not succeed — see the usage text below for what counts. */
-export const EXIT_FAILED = 1;
-/** The caller asked wrong. Always paired with the usage text. */
-export const EXIT_USAGE = 2;
 
 export function usage(): string {
 	return `rover — one device at a time, shared between whoever is working
@@ -65,8 +69,14 @@ Commands:
   list                     What is attached to the host, what is free, and who holds it
   acquire <serial>         Take a lease on one device (--owner and --project required)
   release <lease-id>       Hand a lease back
+  screenshot <lease-id>    Capture the screen to a file on this machine (--out required)
+  record <lease-id>        Record the screen to a file on this machine (--out required)
   status                   Which host answered, its pid, uptime and protocol version
   users <subcommand>       Who may use this host — add, list, rotate, revoke
+
+\`screenshot\` and \`record\` write their bytes **here**: the verb runs on the host and the
+capture comes back as bytes, so --out is a path on this machine and the path reported is
+yours, absolute. A capture the host refuses leaves no file at --out at all.
 
 \`users\` is the one command that asks no host: it reads and writes this machine's own
 \`~/.rover/users.json\` directly, works with no daemon running, and takes no --host.
@@ -81,10 +91,12 @@ Global options:
 Exit codes:
   0   success
   1   the operation did not succeed — a refused acquire, a release that found no live
-      lease, an unreachable host, or a request the host rejected
+      lease, a verb the host refused or that failed, an unreachable host, or a request
+      the host rejected
   2   usage error — unknown command, unknown flag, a missing required option, an
-      attribution string longer than the host accepts, or a --host that is neither
-      'local' nor 'remote' — or 'remote' with nothing in the environment naming one
+      attribution string longer than the host accepts, an --out that names a directory
+      or has no directory to write into, or a --host that is neither 'local' nor
+      'remote' — or 'remote' with nothing in the environment naming one
 
 The local daemon starts itself on the first call, so nothing here needs starting by hand;
 a remote host is a service its operator runs and is never started from a client.

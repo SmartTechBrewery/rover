@@ -60,7 +60,12 @@ function registerFakeBackend(devices: Device[] = [attached, elsewhere]) {
 		manifest: {
 			platform: 'test-platform',
 			label: 'Test',
-			capabilities: { canReadScreen: true, canInput: true, canControlNetwork: true },
+			capabilities: {
+				canReadScreen: true,
+				canInput: true,
+				canControlNetwork: true,
+				canRecordVideo: true,
+			},
 		},
 		// The factory's own `describeDevice` answers about one fixed serial whatever it is
 		// asked, which would quietly make every grant below land on the same device.

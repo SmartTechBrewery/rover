@@ -26,8 +26,16 @@ import { encodeFrame } from '@/ipc/framing.js';
 
 const run = promisify(execFile);
 
-/** A host token that satisfies `MIN_HOST_TOKEN_LENGTH` without being a secret anywhere real. */
-export const TEST_HOST_TOKEN = 'test-host-token-0123456789abcdefghij';
+/**
+ * A token **no store ever issued** — well-formed, long enough to clear
+ * `MIN_HOST_TOKEN_LENGTH`, and belonging to nobody.
+ *
+ * Since the gate authenticates against the user store (R28), the only tokens that work are
+ * the ones `createTestUserStore` minted; this is the constant for every path that must *not*
+ * work, and for the never-logged assertions, where a fixed value is what makes the assertion
+ * writable at all.
+ */
+export const UNISSUED_TOKEN = 'test-host-token-0123456789abcdefghij';
 
 export interface TestCertificate {
 	/** The temp directory holding both files. Removed by {@link removeTestCertificate}. */

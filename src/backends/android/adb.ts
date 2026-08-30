@@ -65,6 +65,34 @@ export const TRANSFER_ADB_TIMEOUT_MS = 5 * 60_000;
 export const SCREENSHOT_ADB_TIMEOUT_MS = 30_000;
 
 /**
+ * How long the encoder gets to close the file after the capture window ends — the budget
+ * for the last thing a recorder does, and the timeout of the wait that watches for it.
+ *
+ * It is a *finish* budget, not a recording budget: the recording command's own timeout is
+ * the requested duration plus this, because `screenrecord --time-limit N` runs for N
+ * seconds and then writes its index. On an API 37 emulator the recorder was already gone
+ * by the time its adb client returned (PROJECT.md §6), so the wait ordinarily costs one
+ * round trip and nothing else; ten seconds is the room a loaded device or a physical panel
+ * needs to finish the same work, well clear of the measurement rather than tuned to it.
+ *
+ * It also bounds the case this exists for: a recorder somebody *else* started on the same
+ * device never goes away, and the wait must end with a timeout naming the pids rather than
+ * holding the lease until it expires.
+ */
+export const RECORDING_FINISH_TIMEOUT_MS = 10_000;
+
+/**
+ * The third call here that is not a query: pulling a whole recording off the device.
+ *
+ * A recording is bounded by `MAX_ARTIFACT_BYTES` (4 MiB, `src/verbs/result.ts`) — up to
+ * three times the largest capture measured on a device — and it crosses the same link a
+ * capture does, which took 2.4 s. Generous rather than tuned, for
+ * {@link SCREENSHOT_ADB_TIMEOUT_MS}'s reason: it exists to stop a wedged `adb` holding a
+ * lease forever, not to bound a slow but healthy transfer over USB to a physical device.
+ */
+export const RECORDING_PULL_TIMEOUT_MS = 60_000;
+
+/**
  * How much of a long-lived run's stderr is kept for its end reason.
  *
  * Bounded because {@link streamAdb} runs for as long as the host does, and an adb that

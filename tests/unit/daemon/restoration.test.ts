@@ -80,6 +80,7 @@ function createHarness(options: HarnessOptions = {}): Harness {
 				canReadScreen: true,
 				canInput: true,
 				canControlNetwork: true,
+				canRecordVideo: true,
 				...options.capabilities,
 			},
 		},

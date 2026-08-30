@@ -246,6 +246,36 @@ export interface PullFileOptions {
 }
 
 /**
+ * What bounds one {@link DeviceBackend.recordVideo} call.
+ *
+ * One knob, because one is what a recording needs to be asked for. Frame rate, size and
+ * bit rate are the backend's own business — a caller that could set them would be choosing
+ * numbers only the backend knows the consequences of, and none of them changes what the
+ * verb answers.
+ *
+ * Not a schema and not optional, for {@link ReadLogsOptions}' reasons: the default is the
+ * *verb's* (`src/verbs/record.ts`), so no backend invents a second one, and what a caller
+ * sends is `RecordVideoParamsSchema` in `src/ipc/verb-methods.ts`.
+ */
+export interface RecordVideoOptions {
+	/**
+	 * How long to record for. A backend may round this **up** to its own granularity and
+	 * never down: a caller that asked for 2500 ms and got two seconds was quietly given
+	 * less than it asked for, with nothing in the answer to say so.
+	 *
+	 * **Must be positive, and a backend rounding up floors at its own granularity rather than
+	 * passing a zero on.** A recorder is typically given this duration as its own kill switch
+	 * — the thing that stops it when the process driving it is gone — and at least one such
+	 * tool reads a limit of zero as *no limit* (PROJECT.md §6). So the one value that looks
+	 * like "record nothing" is the one that leaves an unbounded recorder on hardware the next
+	 * lease gets. `RecordVideoParamsSchema` refuses it on the wire; an in-process caller of
+	 * the core library never crosses the wire, which is why the floor belongs in the mapping
+	 * as well.
+	 */
+	readonly durationMs: number;
+}
+
+/**
  * What a {@link DeviceBackend.watchDevices} caller is told, as the set it watches changes.
  *
  * Neither method may throw. Both are called from inside the backend's own read path,
@@ -489,4 +519,34 @@ export interface DeviceBackend {
 
 	/** Gated by `canControlNetwork`. */
 	setWifiEnabled?(serial: DeviceSerial, enabled: boolean): Promise<void>;
+
+	/**
+	 * Record the screen for `options.durationMs` and answer with the video bytes. Gated by
+	 * `canRecordVideo`.
+	 *
+	 * **Bytes, never a path**, for {@link screenshot}'s reason: a recording crosses the
+	 * machine boundary and a host-local path handed to a client is a bug even when the
+	 * client happens to be local (D19).
+	 *
+	 * **It returns only once the recording has finished on the device *and* been pulled off
+	 * it**, and that ordering is the whole contract rather than an implementation note. A
+	 * recorder writes its container index last, so a file copied while the encoder is still
+	 * running has no index at all — what comes back is not a short video, it is a file no
+	 * decoder will open, which reads to an agent as a broken tool rather than as a race. An
+	 * implementation checks the bytes it pulled and refuses them by name (`src/core/errors.ts`,
+	 * `UnfinishedRecordingError`) rather than handing over something unreadable.
+	 *
+	 * **Completion is a condition with a timeout, never a sleep** (D12(b), ai/RULES.md §2).
+	 * "The recorder process is gone" is a condition; "durationMs plus a bit" is a guess that
+	 * is wrong on a loaded device, in the direction that corrupts the answer.
+	 *
+	 * The bound on duration is the caller's and the granularity is the backend's — see
+	 * {@link RecordVideoOptions}.
+	 *
+	 * Optional rather than required because the divergence is real: one platform records a
+	 * simulator with a command-line tool and has no cheap equivalent for a physical device
+	 * (PROJECT.md §5, D11). A backend that cannot do it declares `canRecordVideo: false`
+	 * rather than shipping a method that answers with an empty file.
+	 */
+	recordVideo?(serial: DeviceSerial, options: RecordVideoOptions): Promise<Uint8Array>;
 }

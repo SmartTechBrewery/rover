@@ -2,12 +2,13 @@
  * The device backend for this platform.
  *
  * It answers every required method of the contract — enumeration, presence, the device
- * facts, the app lifecycle, the capture, the log read and the two file transfers — with no
- * stub, which is what lets it declare `implements DeviceBackend` and what lets `./index.ts`
- * register it (ai/TESTING.md, "A backend under construction registers nothing"), plus
- * **every** capability-gated method: the environment pair behind `canControlNetwork`, the
- * four input primitives behind `canInput`, and `readScreen` behind `canReadScreen` (#13). No
- * flag in `./capabilities.ts` is a declared opt-out any more.
+ * facts, the app lifecycle, the capture, the log read, the recording and the two file
+ * transfers — with no stub, which is what lets it declare `implements DeviceBackend` and what
+ * lets `./index.ts` register it (ai/TESTING.md, "A backend under construction registers
+ * nothing"), plus **every** capability-gated method: the environment pair behind
+ * `canControlNetwork`, the four input primitives behind `canInput`, `readScreen` behind
+ * `canReadScreen` (#13) and `recordVideo` behind `canRecordVideo` (#14). No flag in
+ * `./capabilities.ts` is a declared opt-out any more.
  *
  * Everything that touches the device goes through `./adb.js`, everything that reads its
  * output goes through `./parsers/`, and the two pure modules beside this one own the
@@ -24,10 +25,10 @@
  * - `shellText` for `typeText`'s argument, the only value here that is screen *content*:
  *   an apostrophe in it is ordinary, so it is escaped rather than refused.
  * - **Neither, only for a literal this file owns** — the environment pair's two words, the
- *   four keycodes of `./input.js`'s `KEY_CODES`, {@link DUMP_PATH}, and the numbers `tap`
- *   and `swipe` compute. No caller's string reaches any of them, which is the property
- *   `shellArg` exists to restore when one does. A new argument outside that list takes a
- *   quoter.
+ *   four keycodes of `./input.js`'s `KEY_CODES`, {@link DUMP_PATH}, {@link RECORDING_PATH},
+ *   and the numbers `tap`, `swipe` and `recordVideo` compute. No caller's string reaches any
+ *   of them, which is the property `shellArg` exists to restore when one does. A new argument
+ *   outside that list takes a quoter.
  *
  * There is one more kind of value and it takes **no** quoter on purpose: a path handed to
  * `install`, `push` or `pull`. Those are adb subcommands taking argv entries, so nothing in
@@ -53,10 +54,16 @@ import {
 	type Point,
 	type PullFileOptions,
 	type ReadLogsOptions,
+	type RecordVideoOptions,
 	type ScreenElement,
 } from '../../core/device.js';
-import { FileTooLargeError, UnsupportedTextError } from '../../core/errors.js';
+import {
+	FileTooLargeError,
+	UnfinishedRecordingError,
+	UnsupportedTextError,
+} from '../../core/errors.js';
 import { type AppId, type DeviceSerial, parseAppId, unwrap } from '../../core/ids.js';
+import { waitForCondition } from '../../core/wait.js';
 import {
 	type AdbBinaryResult,
 	AdbCommandError,
@@ -65,6 +72,8 @@ import {
 	describeBytes,
 	INSTALL_ADB_TIMEOUT_MS,
 	quoteStream,
+	RECORDING_FINISH_TIMEOUT_MS,
+	RECORDING_PULL_TIMEOUT_MS,
 	runAdb,
 	runAdbBinaryOnDevice,
 	runAdbOnDevice,
@@ -101,6 +110,7 @@ import { acceptedInput } from './parsers/input.js';
 import { parseLogcat } from './parsers/logcat.js';
 import { acceptedNetworkChange } from './parsers/network.js';
 import { isPng } from './parsers/screencap.js';
+import { isFinishedRecording, isRecorderRunning, recorderPids } from './parsers/screenrecord.js';
 import { type DeviceStat, parseDeviceStat } from './parsers/stat.js';
 import { TrackFrameDecoder } from './parsers/track.js';
 import { dumpedPath } from './parsers/uiautomator.js';
@@ -122,6 +132,41 @@ const UNAUTHORIZED_STATE = 'unauthorized';
  * which costs nothing on the device.
  */
 const DUMP_PATH = '/sdcard/window_dump.xml';
+
+/**
+ * Where {@link AndroidDeviceBackend.recordVideo} has the device write its recording.
+ *
+ * A fixed literal this file owns, for {@link DUMP_PATH}'s reason and with more at stake: a
+ * unique path per call would leave a multi-megabyte file behind for every recording that
+ * died before its cleanup, on hardware lent out to somebody else next. Freshness is bought
+ * with an `rm -f` *before* the recording rather than with the path, so a leftover from a
+ * killed run can never be the file that is pulled.
+ */
+const RECORDING_PATH = '/sdcard/rover-recording.mp4';
+
+/**
+ * What `screenrecord` is asked to encode at — 2 Mbps, a quarter of a megabyte per second.
+ *
+ * Derived rather than picked, and the derivation is what ties it to
+ * `MAX_RECORDING_MS` (`src/verbs/record.ts`): a recording travels on
+ * `ActionResult.artifact` and must fit `MAX_ARTIFACT_BYTES` (4 MiB), so the longest
+ * recording the verb allows times this rate has to stay under that bound — 15 s × 250 KB/s
+ * ≈ 3.6 MiB. `tests/unit/backends/android/backend.test.ts` asserts the relationship,
+ * because a constant derived from another by hand is one the other is free to drift away
+ * from.
+ *
+ * Well below `screenrecord`'s own 20 Mbps default, deliberately. The verb answers *what
+ * happened on the screen*, which a low-bitrate encode of a mostly-static UI carries fine;
+ * what it is not is a video-quality tool, and PROJECT.md §8 already says a recording samples
+ * motion rather than describing it.
+ */
+export const RECORDING_BIT_RATE_BPS = 2_000_000;
+
+/**
+ * `screenrecord --time-limit` counts whole seconds — see
+ * {@link AndroidDeviceBackend.recordVideo}.
+ */
+const RECORDING_TIME_LIMIT_UNIT_MS = 1_000;
 
 /**
  * The tracker's argv. `-l` because the long format is what carries `model:`, and the
@@ -445,14 +490,14 @@ function notAnImage(serial: DeviceSerial, result: AdbBinaryResult): Error {
 
 export class AndroidDeviceBackend implements DeviceBackend {
 	/**
-	 * The tail of the queue of screen reads on each device — {@link readsOn}'s register, and
-	 * the only state this class holds.
+	 * The tail of the queue of calls holding a device-side scratch path on each device —
+	 * {@link exclusivelyOn}'s register, and the only state this class holds.
 	 *
 	 * It is a queue and not a cache, which is the distinction D6 draws: nothing about a
 	 * device is remembered here between calls, only whether a call is still running. A serial
-	 * appears while it is being read and is dropped again straight afterwards.
+	 * appears while one is in flight and is dropped again straight afterwards.
 	 */
-	private readonly reads = new Map<DeviceSerial, Promise<void>>();
+	private readonly scratchUse = new Map<DeviceSerial, Promise<void>>();
 
 	async listDevices(): Promise<Device[]> {
 		const result = await runAdb(['devices', '-l']);
@@ -973,7 +1018,7 @@ export class AndroidDeviceBackend implements DeviceBackend {
 	 * before the dump so the two overlap. It is awaited only after the dump has settled, so
 	 * the cleanup below can never race a dump that is still writing.
 	 *
-	 * **The whole triple is exclusive per device**, which is {@link readsOn}'s subject: the
+	 * **The whole triple is exclusive per device**, which is {@link exclusivelyOn}'s subject: the
 	 * three commands share one fixed device-side path, and a second read overlapping this
 	 * one either has its `uiautomator` killed by the device (exit 137 with both streams
 	 * empty, measured on API 37 — PROJECT.md §6) or has its file removed between its dump
@@ -998,7 +1043,7 @@ export class AndroidDeviceBackend implements DeviceBackend {
 	 * header names. If it ever becomes a caller's value it takes a quoter.
 	 */
 	async readScreen(serial: DeviceSerial): Promise<ScreenElement[]> {
-		return this.readsOn(serial, async () => {
+		return this.exclusivelyOn(serial, async () => {
 			const density = this.pixelScale(serial);
 			// Awaited at the end; the handler is attached now so a density that fails while the
 			// dump is still in flight is never an unhandled rejection.
@@ -1028,35 +1073,44 @@ export class AndroidDeviceBackend implements DeviceBackend {
 	}
 
 	/**
-	 * Run `work` after every read already queued for `serial`, and never beside one.
+	 * Run `work` after every call already queued for `serial`, and never beside one.
+	 *
+	 * **The subject is the device-side scratch paths this backend owns** — {@link DUMP_PATH}
+	 * and {@link RECORDING_PATH} — both of which are fixed literals, so two overlapping calls
+	 * on one device would share one file. For a screen read that means a `uiautomator` killed
+	 * by the device or a document removed between the dump and the `cat`; for a recording it
+	 * means two encoders writing one file and both answers corrupt. One queue covers both
+	 * rather than one per path: the two do not overlap in practice, and a second register
+	 * would be a second thing to get right for a verb that is not competing for the device
+	 * anyway.
 	 *
 	 * A promise chain per serial rather than a lock, because there is nothing to unlock: the
 	 * entry *is* the tail of the queue, and the next caller waits on it. Per serial, because
-	 * the thing being made exclusive is one device's {@link DUMP_PATH} — two devices read at
+	 * the thing being made exclusive is one device's scratch path — two devices are driven at
 	 * the same time as before, which is what an inventory of several is for.
 	 *
-	 * The chain never rejects and never carries a value: a read that threw has still finished
+	 * The chain never rejects and never carries a value: a call that threw has still finished
 	 * with the device, and letting its rejection through would fail the *next* caller with the
 	 * previous caller's error. The entry is dropped once this call is the last one queued, so
-	 * the map is bounded by the devices being read right now rather than by every device this
-	 * host has ever read.
+	 * the map is bounded by the devices being driven right now rather than by every device
+	 * this host has ever touched.
 	 *
-	 * It bounds nothing else. A read that hangs holds the queue for exactly as long as
+	 * It bounds nothing else. A call that hangs holds the queue for exactly as long as
 	 * `./adb.js`'s timeout allows the command underneath it to hang, which is the bound that
 	 * already applies to every caller of it.
 	 */
-	private async readsOn<T>(serial: DeviceSerial, work: () => Promise<T>): Promise<T> {
-		const queued = (this.reads.get(serial) ?? Promise.resolve()).then(work);
+	private async exclusivelyOn<T>(serial: DeviceSerial, work: () => Promise<T>): Promise<T> {
+		const queued = (this.scratchUse.get(serial) ?? Promise.resolve()).then(work);
 		const settled = queued.then(
 			() => undefined,
 			() => undefined,
 		);
-		this.reads.set(serial, settled);
+		this.scratchUse.set(serial, settled);
 
 		try {
 			return await queued;
 		} finally {
-			if (this.reads.get(serial) === settled) this.reads.delete(serial);
+			if (this.scratchUse.get(serial) === settled) this.scratchUse.delete(serial);
 		}
 	}
 
@@ -1246,6 +1300,134 @@ export class AndroidDeviceBackend implements DeviceBackend {
 		if (!acceptedNetworkChange(result)) {
 			throw refused(`cmd wifi set-wifi-enabled ${argument}`, serial, result);
 		}
+	}
+
+	/**
+	 * `screenrecord` to a file on the device, then the file — and **never the other way
+	 * round**.
+	 *
+	 * Verified against API 37 / Android 17 with adb 37.0.1-15733141, and the whole method is
+	 * shaped by one finding (PROJECT.md §6): `screenrecord` writes the container header and a
+	 * *reserved gap* immediately, fills the payload as it records, and writes the `moov` index
+	 * into that gap **only when it exits**. Pull the file a moment early and what comes back is
+	 * not a shorter video — the committed capture is `ftyp`, `free`, then an `mdat` claiming a
+	 * 64-bit length of 4557430888798830399 over 3232 bytes, which no player will open
+	 * (`tests/fixtures/adb/screenrecord.unfinished.api37-….mp4`). To an agent that reads as a
+	 * broken tool rather than as a race, which is what the order below and the check at the end
+	 * exist to make impossible.
+	 *
+	 * The order is fixed: **remove, record, wait on the condition, pull, check, answer.**
+	 *
+	 * - **`rm -f` first**, so a leftover from a run that died before its own cleanup can never
+	 *   be the file that is pulled — the freshness guarantee {@link readScreen} buys with a
+	 *   confirmation line, bought here by removing the only file this method will ever read.
+	 * - **`--time-limit` is always passed, and never as `0`.** It is what makes a recorder that
+	 *   outlived its adb client self-terminate rather than run on under the next lease — and
+	 *   `--time-limit 0` is documented by `screenrecord` itself as *removing* the limit, so a
+	 *   zero computed here would turn the kill switch off rather than record nothing. It counts
+	 *   **whole seconds** (`screenrecord v1.4`, default 180), so the conversion rounds **up**
+	 *   and then floors at one: a caller who asked for 2500 ms gets three seconds, never two —
+	 *   never less than was asked for — and a duration of zero or below, which the wire schema
+	 *   already refuses but an in-process caller can still pass, gets one second rather than an
+	 *   unbounded recorder on borrowed hardware.
+	 * - **The completion check is a condition with a timeout, never a sleep** (D12(b),
+	 *   ai/RULES.md §2). "The recorder is gone" is what actually wrote the index; "the duration
+	 *   plus a bit" is a guess that is wrong on a loaded device, in the direction that corrupts
+	 *   the answer. `waitForCondition` probes *before* any delay, so the ordinary case — the
+	 *   recorder had already exited when its adb client returned, which is what this emulator
+	 *   did every time — costs one round trip and no wait at all.
+	 * - **`pidof screenrecord || true`**, because `pidof` exits **1** when nothing matches and
+	 *   `./adb.js` treats a non-zero exit as a failure. "No such process" is the answer this
+	 *   wait is looking for, not an error. The `|| true` is a literal this file owns, the case
+	 *   this file's header names, and no caller's string is anywhere near it.
+	 * - **`exec-out` for the pull, never `shell`.** `adb shell` may put a pty in the path and a
+	 *   pty translates every `0x0a` in the stream, conditionally on version and platform — so a
+	 *   recording that survives on one machine is corrupt on the next. Same trap as
+	 *   {@link screenshot}'s, and the binary runner because this is not text.
+	 * - **The `moov` check is on the bytes that actually arrived**, not on the device's exit
+	 *   code: `screenrecord` succeeded silently at exit 0 in every run here, including the ones
+	 *   whose file was pulled early. {@link UnfinishedRecordingError} names the device and the
+	 *   byte length so the failure is an answer rather than an `internal_error`.
+	 * - **The `rm -f` cleanup is in a `finally` and its own failure never replaces the
+	 *   answer**, exactly as {@link readScreen}'s is, and it runs on the refusal paths too —
+	 *   where it does the most good, because a multi-megabyte file left on borrowed hardware is
+	 *   what the cleanup is for.
+	 *
+	 * **Exclusive per device** ({@link exclusivelyOn}), because {@link RECORDING_PATH} is a
+	 * fixed literal: two concurrent recordings on one device would otherwise share one file and
+	 * corrupt both, and nothing above this excludes them — `src/daemon/verb-traffic.ts`
+	 * registers concurrent calls on one device rather than preventing them, on purpose.
+	 *
+	 * **A recorder somebody else started on the same device makes this time out.** The probe
+	 * asks whether *any* `screenrecord` is running, because matching a particular one would
+	 * mean matching a pid this code never learned; the timeout names the pids that were there,
+	 * which is what makes it actionable rather than mysterious.
+	 *
+	 * Neither `RECORDING_PATH` nor the bit rate takes a quoter: both are literals this file
+	 * owns, and the `--time-limit` argument is a number it computed.
+	 */
+	async recordVideo(serial: DeviceSerial, options: RecordVideoOptions): Promise<Uint8Array> {
+		// Whole seconds, rounded up: never record less than the caller asked for. Floored at one
+		// because `--time-limit 0` means "no limit" — the one value that would defeat the guard.
+		const timeLimitSeconds = Math.max(
+			1,
+			Math.ceil(options.durationMs / RECORDING_TIME_LIMIT_UNIT_MS),
+		);
+		// The window the recorder will actually run for, which is the floored limit rather than
+		// what was asked: the adb client must outlive the command it is waiting on.
+		const timeLimitMs = timeLimitSeconds * RECORDING_TIME_LIMIT_UNIT_MS;
+
+		return this.exclusivelyOn(serial, async () => {
+			await this.removeRecording(serial);
+
+			try {
+				await runAdbOnDevice(
+					serial,
+					[
+						'shell',
+						'screenrecord',
+						'--bit-rate',
+						String(RECORDING_BIT_RATE_BPS),
+						'--time-limit',
+						String(timeLimitSeconds),
+						RECORDING_PATH,
+					],
+					// The capture window plus the budget for the encoder to close the file: this
+					// command does not return until both have happened.
+					{ timeoutMs: timeLimitMs + RECORDING_FINISH_TIMEOUT_MS },
+				);
+
+				await waitForCondition({
+					what: `the recording on device '${serial}' to finish`,
+					timeoutMs: RECORDING_FINISH_TIMEOUT_MS,
+					probe: async () => {
+						const running = await runAdbOnDevice(serial, ['shell', 'pidof screenrecord || true']);
+						if (!isRecorderRunning(running.stdout)) return { met: true, value: undefined };
+						return {
+							found: `screenrecord still running as pid ${recorderPids(running.stdout).join(', ')}`,
+							met: false,
+						};
+					},
+				});
+
+				const pulled = await runAdbBinaryOnDevice(serial, ['exec-out', 'cat', RECORDING_PATH], {
+					timeoutMs: RECORDING_PULL_TIMEOUT_MS,
+				});
+
+				if (!isFinishedRecording(pulled.stdout)) {
+					throw new UnfinishedRecordingError(serial, pulled.stdout.byteLength);
+				}
+
+				return pulled.stdout;
+			} finally {
+				await this.removeRecording(serial).catch(() => undefined);
+			}
+		});
+	}
+
+	/** The scratch file, gone — run before the recording and again after it, on every path. */
+	private async removeRecording(serial: DeviceSerial): Promise<void> {
+		await runAdbOnDevice(serial, ['shell', 'rm', '-f', RECORDING_PATH]);
 	}
 
 	/**

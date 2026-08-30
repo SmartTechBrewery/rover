@@ -155,6 +155,7 @@ describe('a conforming backend', () => {
 			canReadScreen: false,
 			canInput: false,
 			canControlNetwork: false,
+			canRecordVideo: false,
 		});
 
 		expect(collectConformanceViolations(entry)).toEqual([]);
@@ -323,7 +324,7 @@ describe('checkNoStubbedMethods', () => {
 	it('reports every method of a fully mocked backend', () => {
 		const entry = registeredBackend(createMockDeviceBackend());
 
-		expect(checkNoStubbedMethods(entry)).toHaveLength(19);
+		expect(checkNoStubbedMethods(entry)).toHaveLength(20);
 	});
 });
 
