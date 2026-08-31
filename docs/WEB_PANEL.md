@@ -1,15 +1,22 @@
-# The Web Panel — Future
+# The Web Panel
 
-A running list of what a future read-only web panel needs to do, written down as the idea comes
-up, so it is not lost between now and whenever there is room to build it.
+A running list of what the web panel needs to do, written down as the idea comes up, so it is not
+lost between now and whenever there is room to build each part.
 
-**Nothing in this file is a decision or a backlog row.** `PROJECT.md` §9.4 explains why: CLI and
-MCP are the whole interface for now (§7), and this panel is not scheduled, not sized, and has no
-issue filed. What *is* a decision is that the daemon and the artifact archive are shaped so this
-panel can be added later without a redesign (`PROJECT.md` D24, §10) — that shape is what makes
-this list worth keeping instead of re-deriving later. When there is room to build any of it, the
-item is turned into an issue the same way every `PROJECT.md` §9.3 row is: an outcome, a scope
+**This file used to open by saying nothing in it was a decision or a backlog row, and that the
+panel was read-only.** Both stopped being true on 2026-08-31. The panel is in scope (`PROJECT.md`
+§7), it is **not** read-only, and what it may do is **D27**: it carries authority over the shared
+device pool — force-releasing a stuck lease is the first such action — and deliberately does *not*
+acquire devices, because a lease carries the caller's own `owner` string (D22) and a person
+clicking a button has nothing to sign one with.
+
+**Items 3, 6 and 7 are now scheduled**, as `PROJECT.md` §9.3 rows R29–R35, together with the
+transport and scaffolding they need. The rest of this list is still what it always was: gathered,
+unscheduled, and turned into an issue the same way every §9.3 row is — an outcome, a scope
 boundary, dependencies and a size.
+
+Design work lives in [`DESIGN.md`](./DESIGN.md); the brief that produced the first screens is
+[`DESIGN_INITIAL_PROMPT.md`](./DESIGN_INITIAL_PROMPT.md).
 
 ---
 
