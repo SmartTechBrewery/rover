@@ -1259,6 +1259,59 @@ Four things about that surface are worth knowing before pointing anything at it:
   next request `401`, with the daemon still running and nothing restarted — including on a
   keep-alive connection the revoked user is already holding.
 
+#### How a browser signs in
+
+A browser is not given that token to keep. It exchanges it, once, for a **session** — three verbs
+on one resource (`PROJECT.md` D30):
+
+```bash
+curl -sS -X POST http://127.0.0.1:4712/session -d "{\"token\":\"$TOKEN\"}"
+```
+
+```json
+{"session":"8Qk1…","identifier":"panel","displayName":"panel"}
+```
+
+```bash
+export SESSION=<the session that printed>
+
+# The probe: is this still good, and who is it?
+curl -sS http://127.0.0.1:4712/session -H "Authorization: Bearer $SESSION"
+
+# Anything the token could do, presented the same way.
+curl -sS -X POST http://127.0.0.1:4712/rpc \
+  -H "Authorization: Bearer $SESSION" \
+  -d '{"protocolVersion":1,"id":"1","method":"list_devices","params":{}}'
+
+# Sign out: the session ends on the host, not in the browser.
+curl -sS -X DELETE http://127.0.0.1:4712/session -H "Authorization: Bearer $SESSION"
+```
+
+The probe answers `{"identifier":"panel","displayName":"panel"}`, the sign-out answers `{}`, and
+the same `$SESSION` is `401` from the next request onwards.
+
+`POST /session` answers `{"session":…,"identifier":…,"displayName":…}` with `cache-control:
+no-store`, `GET /session` is the probe that says whether a session is still good, and `DELETE
+/session` ends it. **A raw token keeps working everywhere it worked before** — the `curl` above
+with `Authorization: Bearer $TOKEN` is unchanged — so nothing an operator does from a shell now
+requires signing in first.
+
+Three things are worth knowing about a session before pointing a browser at one:
+
+- **`rover users revoke panel`, or `rover users rotate panel`, ends a live browser session on its
+  very next request.** A session is bound to the user's identifier *and* to the hash of their
+  token, and that binding is re-checked against `users.json` on every request — so a revoked user's
+  browser is signed out with the daemon still running and the page still open, exactly as their
+  token stops working.
+- **Restarting the daemon signs everyone out.** Sessions live in memory and nowhere else. There is
+  no session file to leak, to prune or to keep in step with the user store, and nothing to clean up
+  after a crash. A session left unused for eight hours expires on its own; using it pushes that
+  window out again.
+- **No cookie is set and none is read**, so there is no CSRF surface and no CORS header for one to
+  ride in on. Every sign-in failure — no body, one over 4 KiB, one that is not JSON, an unknown
+  token, a revoked user's still-held token — is the same `401` above, byte for byte, with no hint
+  as to which it was.
+
 Off loopback, `ROVER_TLS_CERT` and `ROVER_TLS_KEY` become required and the daemon refuses to start
 without them: every request carries a bearer token in a header, and an unencrypted listener a
 stranger can reach would put it on the wire in the clear. The certificate is the host's own — the
