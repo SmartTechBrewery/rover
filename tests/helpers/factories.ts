@@ -141,11 +141,19 @@ export function createMockPngStream(images: readonly Uint8Array[]): Uint8Array {
 	return Uint8Array.from(images.flatMap((image) => [...image]));
 }
 
+/**
+ * One device as the host sees it. `osVersion` and `osApiLevel` carry
+ * {@link createMockDeviceInfo}'s neutral values, so a test that compares a listed device
+ * with the same device's `device_info` finds the two agreeing rather than differing for
+ * no reason. Pass `null` for either to build the device that could not be asked.
+ */
 export function createMockDevice(overrides: Partial<Device> = {}): Device {
 	return DeviceSchema.parse({
 		serial: 'test-serial-1',
 		platform: 'test-platform',
 		model: 'Test Model',
+		osVersion: '1.0',
+		osApiLevel: 1,
 		state: 'ready',
 		attachment: 'this-host',
 		...overrides,

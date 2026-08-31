@@ -52,15 +52,39 @@ export type DeviceAttachment = z.infer<typeof DeviceAttachmentSchema>;
 /**
  * One device as the host sees it.
  *
- * Deliberately minimal: screen size, density and OS version are what `device_info`
- * answers (PROJECT.md §4, D14), and they cost a query per device — too expensive to pay
- * on every enumeration. `model` is nullable because a device that is not `ready` often
- * cannot be asked for one.
+ * Deliberately minimal, and the line is drawn by *what changes while a device is
+ * attached* rather than by what a query costs. Screen size and density are what
+ * `device_info` answers (PROJECT.md §4, D14): an override or a rotation moves them, so a
+ * remembered one is a wrong one and they are paid for per call. The OS version does not
+ * move — it is a static per-device fact — which is what makes reading it once per device
+ * at enumeration reasonable, and what keeps it inside D6: whatever a host holds here it
+ * re-derives at the next enumeration.
+ *
+ * Every field a device cannot always answer is nullable, `model` included: a device that
+ * is not `ready` often cannot be asked anything at all, and a device the host can see is
+ * a device the host reports.
+ *
+ * Which query answers the version, and how, is the owning backend's business — only it
+ * knows how its platform reports one (ai/RULES.md §2).
  */
 export const DeviceSchema = z.object({
 	serial: DeviceSerialSchema,
 	platform: PlatformIdSchema,
 	model: z.string().nullable(),
+	/**
+	 * The user-facing OS version string, as the device reports it — the same fact
+	 * {@link DeviceInfoSchema} carries, under the same name and with the same nullability,
+	 * so a client reading one shape and a client reading the other read one vocabulary.
+	 *
+	 * Nullable, and a `null` here is a real answer rather than a failure: a device in a
+	 * state that cannot be asked — one waiting on an authorization prompt is the common
+	 * case — is reported **without** a version, never dropped from the enumeration and
+	 * never a reason for the whole enumeration to fail. Losing the device list because one
+	 * device is waiting on a prompt is the failure mode this nullability exists to prevent.
+	 */
+	osVersion: z.string().nullable(),
+	/** The OS API level, where the platform has one. Null on `osVersion`'s terms. */
+	osApiLevel: z.number().int().positive().nullable(),
 	state: DeviceStateSchema,
 	/**
 	 * Whether this device is physically attached to this host (D18) — a snapshot that cannot
@@ -104,14 +128,18 @@ export type ScreenInfo = z.infer<typeof ScreenInfoSchema>;
 /**
  * Everything `device_info` answers about one device (PROJECT.md §4).
  *
- * Separate from {@link DeviceSchema} because these facts cost a query per device, which
- * is too expensive to pay on every enumeration. It repeats `serial`, `platform` and
- * `model` rather than pointing at a `Device`: D14 makes "names the device and its
- * density" a property of the *result*, and a measurement that travels without the device
- * it was taken on is the contradiction D14 exists to prevent.
+ * Separate from {@link DeviceSchema} because the screen it carries is measured *now*:
+ * size and density move while a device is attached, so they are read per call and never
+ * remembered. It repeats `serial`, `platform` and `model` rather than pointing at a
+ * `Device`: D14 makes "names the device and its density" a property of the *result*, and
+ * a measurement that travels without the device it was taken on is the contradiction D14
+ * exists to prevent.
  *
- * `osVersion` and `osApiLevel` are nullable — a device that answered hundreds of other
- * facts but not that one has still answered (ai/CODING_STANDARDS.md "Error handling").
+ * `osVersion` and `osApiLevel` repeat {@link DeviceSchema}'s two fields for that same
+ * reason, and deliberately under the same names: this shape is a self-contained answer,
+ * not a delta on an enumeration a caller may not have. Both are nullable — a device that
+ * answered hundreds of other facts but not that one has still answered
+ * (ai/CODING_STANDARDS.md "Error handling").
  */
 export const DeviceInfoSchema = z
 	.object({

@@ -146,7 +146,9 @@ This is the **local** host only. A remote host is a long-running service its ope
 
 ## The device abstraction
 
-One interface, several backends, registered through a manifest (`ai/CODING_STANDARDS.md`, "Module shape for a device backend"). The interface covers: enumeration and being told when the attached set changes, lifecycle, device facts (screen size, density, the derived dp scale and the OS version), install, app control, screen capture, the system-log read, hierarchy read, input, and environment (network state).
+One interface, several backends, registered through a manifest (`ai/CODING_STANDARDS.md`, "Module shape for a device backend"). The interface covers: enumeration — which names each device, its state, whether it is attached to this host and the OS version it runs — and being told when the attached set changes, lifecycle, device facts (screen size, density, the derived dp scale and the OS version), install, app control, screen capture, the system-log read, hierarchy read, input, and environment (network state).
+
+The OS version is in both halves of that sentence on purpose. It is a **static** per-device fact, so enumeration reads it once per attached device and reports it for a free device as well as a held one, with a `null` where the device cannot be asked; `device_info` repeats it beside the screen, which is measured per call because it moves. Everything else enumeration answers is free in the platform's own device list; this one costs a query, which is what the caching is for (`PROJECT.md` D6 — nothing is held that is not re-derived at the next enumeration).
 
 ### Capabilities, not a lowest common denominator
 
