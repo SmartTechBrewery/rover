@@ -51,6 +51,14 @@ export interface ProjectResolverOptions {
  * what lets a project write a database before the thing that talks to it and have the two go
  * down the other way round. A service declaring no `stop` contributes no step at all, which is
  * what declaring none means.
+ *
+ * **Every stop is resolved with the ending lease's own slot**, the teardown's way, which is what
+ * makes a per-lease stop of a project's services possible at all: two devices can be leased for
+ * one project at once, and the slot is the only thing that tells their services apart (R18,
+ * `./slots.ts`). A `start`/`stop` pair that namespaces by it takes down what that grant brought
+ * up; one that ignores it addresses a single shared instance, and the ending lease's stop takes
+ * it away from whoever is still holding the project (`./restore.ts`,
+ * `ProjectRestoration.services`).
  */
 export function createProjectResolver(options: ProjectResolverOptions): ProjectResolver {
 	return async (project, serial, slot) => {

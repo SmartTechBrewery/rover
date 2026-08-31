@@ -24,6 +24,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { HOOK_COMMAND_TIMEOUT_MS } from '@/daemon/hook-command.js';
 import type { Lease } from '@/daemon/leases.js';
+import { MAX_PROJECT_SERVICES } from '@/daemon/project-hooks.js';
 import {
 	createProjectServices,
 	type ProjectServices,
@@ -84,7 +85,7 @@ async function writeHookFile(contents: unknown): Promise<void> {
 }
 
 function services(
-	overrides: { hookTimeoutMs?: number; startTimeoutMs?: number } = {},
+	overrides: { hookTimeoutMs?: number; startTimeoutMs?: number; now?: () => number } = {},
 ): ProjectServices {
 	return createProjectServices({
 		root,
@@ -251,9 +252,19 @@ describe('the budget the whole start phase shares', () => {
 		// Asserted rather than left to drift, the way `HOOK_COMMAND_TIMEOUT_MS` is asserted
 		// against the restorer's bound. `acquire_device` is the one call no client raises its own
 		// timeout for, and a grant answered after the caller gave up holds the device for a full
-		// `LEASE_TTL_MS` with nobody there to release it.
+		// `LEASE_TTL_MS` with nobody there to release it. It is the bound on the *whole* phase,
+		// the refusal path included, so it is the number a `'service-failed'` answer arrives
+		// inside — which is the only reason that answer reaches the agent at all rather than as
+		// a request timeout with no service named.
 		expect(SERVICE_START_TIMEOUT_MS).toBeLessThan(DEFAULT_REQUEST_TIMEOUT_MS);
 		expect(SERVICE_START_TIMEOUT_MS).toBeGreaterThan(HOOK_COMMAND_TIMEOUT_MS);
+		// And the reason there is a phase bound at all rather than only a per-command one: the
+		// per-command bound, spent by every service a project may declare, is far past what a
+		// client will wait. A day when this stops being true is a day the phase bound could be
+		// dropped, and it should be dropped deliberately rather than by arithmetic.
+		expect(MAX_PROJECT_SERVICES * HOOK_COMMAND_TIMEOUT_MS).toBeGreaterThan(
+			DEFAULT_REQUEST_TIMEOUT_MS,
+		);
 	});
 
 	it('kills a start that outlives it and refuses by name', async () => {
@@ -271,7 +282,7 @@ describe('the budget the whole start phase shares', () => {
 		expect(refusal?.message).toContain('25ms budget');
 	});
 
-	it('refuses the service it never reached rather than starting it with no time left', async () => {
+	it('lets a start killed at the budget stop the ones after it from being reached', async () => {
 		await writeHookFile({
 			project: PROJECT,
 			services: [
@@ -285,6 +296,79 @@ describe('the budget the whole start phase shares', () => {
 		// `db` is the one that spent the budget, so it is the one named; `api` was never spawned.
 		expect(refusal?.service).toBe('db');
 		expect(await performed()).toEqual([]);
+	});
+
+	it('refuses the service the budget never reached, with nothing spawned for it', async () => {
+		await writeHookFile({
+			project: PROJECT,
+			services: [
+				{ name: 'db', start: record('start-db') },
+				{ name: 'api', start: record('start-api') },
+				{ name: 'cache', start: record('start-cache') },
+			],
+		});
+
+		// This is the branch a *successful* start reaches, and a real clock cannot arrange it
+		// without racing: each command's own bound is already capped by what is left of the phase,
+		// so a start that outlives the budget is a killed start (the case above) rather than a
+		// spent one. So the phase's clock is moved by hand — a second per reading, the way
+		// `leases.test.ts` moves a TTL — and the child processes stay real.
+		let nowMs = 0;
+		const refusal = await services({
+			startTimeoutMs: 3_000,
+			hookTimeoutMs: 9_000,
+			now: () => (nowMs += 1_000),
+		}).start(lease);
+
+		// Two starts got a share of the budget and succeeded; the third is refused *by name*
+		// rather than spawned with nothing left to finish in, which is the honest answer — a
+		// command started with no time is a command that will be killed and reported as a failure
+		// the project did not commit.
+		expect(refusal?.service).toBe('cache');
+		expect(refusal?.message).toContain('was spent before it was reached');
+		expect(await performed()).toEqual([
+			`start-db ${PROJECT} ${lease.serial}`,
+			`start-api ${PROJECT} ${lease.serial}`,
+		]);
+	});
+
+	it('rolls a refused grant back inside it, warning about a stop it had no time for', async () => {
+		await writeHookFile({
+			project: PROJECT,
+			services: [
+				{ name: 'db', start: record('start-db'), stop: record('stop-db') },
+				{ name: 'cache', start: record('start-cache'), stop: record('stop-cache') },
+				{ name: 'api', start: refuse('the api would not bind') },
+			],
+		});
+
+		// The clock is moved by hand for the case above's reason. What it pins is that the
+		// rollback draws on the *same* budget the starts did: a fresh bound per stop would let a
+		// project with several slow `stop` commands answer `'service-failed'` after the client's
+		// 30 s request timeout had already turned it into an opaque host error — losing the one
+		// thing the refusal is for, the name of the service to go and look at.
+		let nowMs = 0;
+		const refusal = await services({
+			startTimeoutMs: 5_000,
+			hookTimeoutMs: 9_000,
+			now: () => (nowMs += 1_000),
+		}).start(lease);
+
+		expect(refusal?.service).toBe('api');
+		// `cache` came up last, so it went down first, and there was still budget for it.
+		expect(refusal?.message).toContain("The 'cache' service started for this grant was stopped");
+		expect(await performed()).toEqual([
+			`start-db ${PROJECT} ${lease.serial}`,
+			`start-cache ${PROJECT} ${lease.serial}`,
+			`stop-cache ${PROJECT} ${lease.serial}`,
+		]);
+		// And `db`'s stop was not tried at all rather than spawned past the bound. It is a leak,
+		// said out loud: the operator hears which service may still be running, and the agent
+		// still gets the refusal naming what would not start.
+		expect(warnings).toHaveLength(1);
+		expect(warnings[0]).toContain("'db'");
+		expect(warnings[0]).toContain('was not tried');
+		expect(warnings[0]).toContain('may still be running');
 	});
 });
 

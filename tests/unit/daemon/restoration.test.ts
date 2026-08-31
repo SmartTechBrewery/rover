@@ -55,6 +55,12 @@ import {
 import { createMockDevice, createNoProjectServices } from '../../helpers/factories.js';
 
 const SERIAL = parseDeviceSerial('attached-1');
+/**
+ * A second device on the same host, for the one thing a single device cannot arrange: two
+ * concurrent leases on one *project*. The recording backend answers `describeDevice` for any
+ * serial, which is the only thing a grant and a restoration ask of it.
+ */
+const OTHER_SERIAL = parseDeviceSerial('attached-2');
 const APP = parseAppId('com.example.rover');
 const OTHER_APP = parseAppId('com.example.rover.helper');
 const TTL_MS = 60_000;
@@ -76,9 +82,10 @@ interface Harness {
 	/** Every step the device and the project hook performed, in the order they performed it. */
 	readonly performed: string[];
 	readonly warnings: string[];
-	settle(): Promise<void>;
+	/** Defaults to {@link SERIAL} — the device every suite but the two-device one arranges. */
+	settle(serial?: DeviceSerial): Promise<void>;
 	at(instant: number): void;
-	acquire(owner: string): Promise<LeaseId>;
+	acquire(owner: string, serial?: DeviceSerial): Promise<LeaseId>;
 }
 
 interface HarnessOptions {
@@ -173,13 +180,13 @@ function createHarness(options: HarnessOptions = {}): Harness {
 		slots,
 		performed,
 		warnings,
-		settle: () => restorer.settle(SERIAL),
+		settle: (serial: DeviceSerial = SERIAL) => restorer.settle(serial),
 		at: (instant: number) => {
 			nowMs = instant;
 		},
-		async acquire(owner: string): Promise<LeaseId> {
+		async acquire(owner: string, serial: DeviceSerial = SERIAL): Promise<LeaseId> {
 			const result = await this.handlers.acquire_device({
-				serial: SERIAL,
+				serial,
 				owner,
 				project: options.projectName ?? 'rover',
 			});
@@ -649,6 +656,24 @@ describe('a project hook file, on both paths a lease can end', () => {
 		};
 	}
 
+	/**
+	 * {@link appendHook}, plus the slot the daemon told this run. What it pins is the one thing
+	 * that makes a project's services safe to lease twice at once: a `start`/`stop` pair
+	 * namespacing on `ROVER_SLOT` is per lease, and each end stops its own (R18).
+	 */
+	function appendHookWithSlot(what: string): { command: string; args: string[] } {
+		return {
+			command: process.execPath,
+			args: [
+				'-e',
+				"require('node:fs').appendFileSync(process.argv[1], process.argv[2] + ' slot=' + " +
+					"process.env.ROVER_SLOT + '\\n')",
+				hookLog,
+				what,
+			],
+		};
+	}
+
 	/** A hook that says why on stderr and exits non-zero. */
 	function failingHook(why: string): { command: string; args: string[] } {
 		return {
@@ -957,6 +982,58 @@ describe('a project hook file, on both paths a lease can end', () => {
 				'stop api',
 				'stop db',
 				'teardown',
+			]);
+			expect(harness.warnings).toEqual([]);
+		});
+
+		it('stops each lease its own services, told apart by the slot, while the other is live', async () => {
+			await writeHookFile(
+				JSON.stringify({
+					project: HOOK_PROJECT,
+					apps: [CHECKOUT],
+					services: [
+						{
+							name: 'db',
+							start: appendHookWithSlot('start db'),
+							stop: appendHookWithSlot('stop db'),
+						},
+					],
+					teardown: appendHookWithSlot('teardown'),
+				}),
+			);
+			const harness = createFileBackedHarness();
+			const first = await harness.acquire('issue-112');
+			const second = await harness.acquire('pr-127-review', OTHER_SERIAL);
+
+			// Two devices, one project — the case a project's services have to survive, and the
+			// reason every hook child is told a slot: both grants ran the same declared `start`,
+			// and the only thing telling the two instances apart is the number they were given.
+			expect(await hooksThatRan()).toEqual(['start db slot=0', 'start db slot=1']);
+
+			harness.handlers.release_device({ leaseId: first });
+			await harness.settle();
+
+			// The ending lease's stop runs with the ending lease's slot. That is what makes running
+			// it unconditionally correct rather than a teardown reaching into a live lease's state:
+			// slot 1 is untouched, and `pr-127-review` still has everything its grant implied.
+			expect(await hooksThatRan()).toEqual([
+				'start db slot=0',
+				'start db slot=1',
+				'stop db slot=0',
+				'teardown slot=0',
+			]);
+
+			harness.handlers.release_device({ leaseId: second });
+			await harness.settle(OTHER_SERIAL);
+
+			// And nothing waited for the last lease out: each stopped its own when it ended.
+			expect(await hooksThatRan()).toEqual([
+				'start db slot=0',
+				'start db slot=1',
+				'stop db slot=0',
+				'teardown slot=0',
+				'stop db slot=1',
+				'teardown slot=1',
 			]);
 			expect(harness.warnings).toEqual([]);
 		});

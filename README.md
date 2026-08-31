@@ -524,8 +524,16 @@ after it, under `ROVER_PROJECTS_PATH`:
   "services": [
     {
       "name": "db",
-      "start": { "command": "docker", "args": ["compose", "up", "-d", "db"] },
-      "stop": { "command": "docker", "args": ["compose", "down"] }
+      // One instance per lease, named after the slot — see "each stop runs with its own
+      // lease's slot" below. `$ROVER_SLOT` needs a shell, so the shell is the program.
+      "start": {
+        "command": "bash",
+        "args": ["-lc", "docker compose -p checkout-web-$ROVER_SLOT up -d db"]
+      },
+      "stop": {
+        "command": "bash",
+        "args": ["-lc", "docker compose -p checkout-web-$ROVER_SLOT down"]
+      }
     },
     {
       "name": "mock-payments",
@@ -588,13 +596,30 @@ the teardown hook, on **both** paths a lease ends by. Each stop is contained and
 teardown, and each runs **unconditionally** — the same way an application that was never launched
 is still stopped — so a `stop` has to tolerate a service that is not running.
 
+**Each stop runs with its own lease's slot, and that is a contract you have to keep.** Two devices
+can be leased for the same project at once — that is what slots are for — and when they are, both
+grants run the same declared `start` commands and each lease's end runs the same declared `stop`.
+So a `start`/`stop` pair has to **namespace on `ROVER_SLOT`**, the way the `db` service in the
+example above does: one instance per lease, and the stop takes down that lease's own. A pair that
+ignores the slot and addresses a single shared instance instead — `docker compose up -d db` and
+`docker compose down` with no project name — brings up one database that both leases use, and
+then the *first* lease to end takes it away from the other, in the middle of its lease, with no
+refusal left to tell it. Rover cannot check this for you: a hook is an opaque command, and the host
+has no way to read one and tell which of the two shapes it was handed. The same applies to the
+**`teardown`** hook, which runs at every lease's end and should undo that lease's slot rather than
+the project's shared state.
+
 Two things follow from a start being a bounded command like any other. All of a project's starts
-share **twenty seconds**, under the 30 s a client waits for a reply, because `acquire_device` is
-the one call no client raises its own timeout for: a grant answered after the caller gave up holds
-the device for the full twenty-minute TTL. And a start should *start* — Rover runs no health check,
-waits for no readiness probe and restarts nothing that crashes later; a service meant to outlive
-the command that starts it is the project's own business, exactly as it is for a teardown that
-backgrounds a helper.
+share **twenty seconds** — and so does stopping them again when one of them refuses the grant,
+which is inside the same wait the caller is doing. That sits under the 30 s a client waits for a
+reply, because `acquire_device` is the one call no client raises its own timeout for: a grant
+answered after the caller gave up holds the device for the full twenty-minute TTL, and a refusal
+answered late reaches the agent as a request timeout with no service named rather than as the
+`service-failed` it is. A `stop` that the budget runs out before is **not run**, and says so in a
+warning naming the service that may still be running. And a start should *start* — Rover runs no
+health check, waits for no readiness probe and restarts nothing that crashes later; a service meant
+to outlive the command that starts it is the project's own business, exactly as it is for a teardown
+that backgrounds a helper.
 
 The **teardown** hook runs when a lease on that project **ends by either path — a `rover release`,
 and an expiry with the agent that held the device long gone** (`PROJECT.md` D9). Its child gets

@@ -26,15 +26,31 @@
  * `HOOK_COMMAND_TIMEOUT_MS` bounds it like any other; a service meant to outlive the command
  * that started it is the project's own business, exactly as it is for a teardown that
  * backgrounds a helper (`./hook-command.ts`). What is bounded here in addition is the *whole*
- * phase — see {@link SERVICE_START_TIMEOUT_MS} — because this wait sits inside a grant.
+ * phase — see {@link SERVICE_START_TIMEOUT_MS} — because this wait sits inside a grant. The
+ * rollback above draws on that same budget rather than on a fresh one per stop: it is what the
+ * caller is waiting through before the refusal reaches it, so a rollback outside the bound is a
+ * `service-failed` answer that arrives after the client's request timeout has already turned it
+ * into an opaque host error.
  *
  * **Nothing is cached** (D6), for `./project-resolver.ts`'s reason: the file is re-read on every
  * grant, so an operator editing a project's services changes what the next lease on it starts
  * with the daemon still running.
  *
- * **No ports.** Allocating one per lease is R18, the row this phase unblocks. This module starts
- * and stops what the project declares and hands out nothing; until R18 lands, two concurrent
- * leases on one project share whatever ports that project's services hard-code.
+ * **A grant's services belong to that grant, and the slot is what keeps them apart.** Two
+ * devices can be leased for one project at once, and both grants run the same declared `start`
+ * commands against the same host. What stops those from being one shared set is R18: each lease
+ * has a slot, and every hook child is told its index and its port block (`./slots.ts`,
+ * `./hook-command.ts`), so a `start`/`stop` pair that namespaces by `ROVER_SLOT` brings up one
+ * instance per lease and the restoration takes down that lease's own (`./restore.ts`). A pair
+ * that ignores it addresses a single shared instance instead — the second grant then gets
+ * whatever the first brought up, and the first lease to end takes it away from the other. That
+ * is the project's contract to keep and not something the host can check: these are opaque
+ * commands, and nothing here can read one and tell which shape it is. `README.md`'s "Project
+ * hooks" says so where an operator writing the file will see it.
+ *
+ * **This module hands out nothing.** It starts and stops what the project declares; the ports a
+ * service may use come from the lease's slot, which is allocated by the grant before this runs
+ * and reaches a start only as the environment `./hook-command.ts` sets (R18).
  */
 
 import type { LeaseId } from '../core/ids.js';
@@ -63,6 +79,16 @@ import { readProjectHooks } from './project-hooks.js';
  * grant's wait — a grant also waits out the previous lessee's restoration — which is why a start
  * has to be a *start*: readiness probes and health checks are explicitly not this row (R18 and
  * beyond), and a start that waits for a service to be ready is a start that spends this budget.
+ *
+ * **The refusal path shares it, stops included.** The rollback of a refused grant is inside the
+ * wait the caller is doing, so giving each of its stops a fresh `HOOK_COMMAND_TIMEOUT_MS` would
+ * let `MAX_PROJECT_SERVICES - 1` of them run *past* this bound: a project with several slow
+ * `stop` commands and one failing `start` would answer `'service-failed'` after the client had
+ * already given up, which loses the named service this row exists to deliver and holds the
+ * device for the whole overrun. So the deadline is taken once, before the first start, and every
+ * command below it — start and rollback stop alike — gets whatever is left of it. A stop reached
+ * with nothing left is **warned about rather than run**: the alternative is a program spawned
+ * with no time to finish, and the honest answer is that the service may still be running.
  */
 export const SERVICE_START_TIMEOUT_MS = 20_000;
 
@@ -95,6 +121,13 @@ export interface ProjectServices {
 	 * A question in the spirit of `LeaseStore.holderOf`: it starts nothing and stops nothing. It
 	 * is here because the record is host state that must not outlive the lease it belongs to, and
 	 * a claim of that shape is worth being able to check.
+	 *
+	 * **It is deliberately not what decides what gets stopped.** That is the hook file, re-read
+	 * by the restoration at the moment the lease ends, so an operator's edit bites the next lease
+	 * out with nothing restarted (D6, `./project-resolver.ts`). Answering it from this record
+	 * instead would cache the file in host state for a whole lease — the one thing D6 says not to
+	 * do — and it would still be the wrong answer for the lease that was granted before the
+	 * services were declared.
 	 */
 	startedFor(lease: Lease): readonly string[];
 	/**
@@ -127,7 +160,14 @@ export interface ProjectServicesOptions {
 	 * same run.
 	 */
 	readonly startTimeoutMs?: number;
-	/** Where a failing rollback stop is reported. Defaults to `console.warn`; tests read it. */
+	/**
+	 * Defaults to `Date.now`. Injected so a test can move the phase's clock by hand, the way
+	 * `LeaseStoreOptions.now` is — a budget spent by commands that all succeeded is otherwise a
+	 * race between a real timeout and a real child process, and the branch that refuses a service
+	 * the budget never reached cannot be reached at all without it.
+	 */
+	readonly now?: () => number;
+	/** Where a failing or skipped rollback stop is reported. Defaults to `console.warn`. */
 	readonly warn?: (message: string) => void;
 }
 
@@ -140,6 +180,7 @@ export function createProjectServices(options: ProjectServicesOptions): ProjectS
 	const warn = options.warn ?? ((message: string) => console.warn(message));
 	const hookTimeoutMs = options.hookTimeoutMs ?? HOOK_COMMAND_TIMEOUT_MS;
 	const startTimeoutMs = options.startTimeoutMs ?? SERVICE_START_TIMEOUT_MS;
+	const now = options.now ?? Date.now;
 
 	/**
 	 * What this daemon started, per live lease, in the order it came up. Keyed by lease id and
@@ -175,6 +216,13 @@ export function createProjectServices(options: ProjectServicesOptions): ProjectS
 	};
 
 	/**
+	 * What is left of the phase for the next command, capped at one command's own bound. Never
+	 * more than `hookTimeoutMs`, and `0` or less once the deadline has passed — see
+	 * {@link SERVICE_START_TIMEOUT_MS} for why one deadline covers the starts and the rollback.
+	 */
+	const budgetLeft = (deadline: number): number => Math.min(hookTimeoutMs, deadline - now());
+
+	/**
 	 * Start each service in turn, recording what came up. The refusal, or `null`.
 	 *
 	 * Each command gets whatever is left of the phase budget, capped at its own — see
@@ -185,10 +233,10 @@ export function createProjectServices(options: ProjectServicesOptions): ProjectS
 		lease: Lease,
 		declared: readonly ProjectService[],
 		running: ProjectService[],
+		deadline: number,
 	): Promise<ServiceStartRefusal | null> => {
-		const deadline = Date.now() + startTimeoutMs;
 		for (const service of declared) {
-			const budget = Math.min(hookTimeoutMs, deadline - Date.now());
+			const budget = budgetLeft(deadline);
 			if (budget <= 0) {
 				return refusalFor(
 					lease,
@@ -214,16 +262,34 @@ export function createProjectServices(options: ProjectServicesOptions): ProjectS
 	 * Contained per service and never rethrown: the grant is already being refused, and a stop
 	 * that failed must not stop the ones after it from being tried. A service declaring no
 	 * `stop` is left alone rather than reported, which is what declaring none means.
+	 *
+	 * **Inside the phase deadline the starts drew on**, not a fresh bound per stop: the caller is
+	 * still waiting for the refusal, so a rollback that ran past the budget would answer after the
+	 * client's request timeout had already fired ({@link SERVICE_START_TIMEOUT_MS}). A stop with
+	 * nothing left is warned about and skipped rather than spawned with no time to finish.
 	 */
-	const rollBack = async (lease: Lease, running: readonly ProjectService[]): Promise<string[]> => {
+	const rollBack = async (
+		lease: Lease,
+		running: readonly ProjectService[],
+		deadline: number,
+	): Promise<string[]> => {
 		const stopped: string[] = [];
 		for (const service of [...running].reverse()) {
 			const stop = service.stop;
 			if (stop === undefined) {
 				continue;
 			}
+			const budget = budgetLeft(deadline);
+			if (budget <= 0) {
+				warn(
+					`Refusing device '${lease.serial}': the ${startTimeoutMs}ms this grant had to bring ` +
+						`the project's helper services up and down again was spent before the '${service.name}' ` +
+						`service could be stopped, so it was not tried. It may still be running.`,
+				);
+				continue;
+			}
 			try {
-				await runHookCommand(stop, contextFor(lease, hookTimeoutMs));
+				await runHookCommand(stop, contextFor(lease, budget));
 				stopped.push(service.name);
 			} catch (error) {
 				warn(
@@ -246,7 +312,14 @@ export function createProjectServices(options: ProjectServicesOptions): ProjectS
 			}
 
 			const running: ProjectService[] = [];
-			const refusal = await startEach(lease, declared.services, running);
+			// Taken here rather than inside `startEach`, so the rollback below is inside it too —
+			// the refusal is what the caller is waiting for, and everything it waits through has to
+			// fit under one bound ({@link SERVICE_START_TIMEOUT_MS}). Taken *after* the file read
+			// for the same reason the read is not a hook: it spawns nothing, and a budget a
+			// filesystem stat could spend is a budget that would refuse a project's first service
+			// on a slow disk.
+			const deadline = now() + startTimeoutMs;
+			const refusal = await startEach(lease, declared.services, running, deadline);
 			if (refusal === null) {
 				// Only a grant that is going ahead leaves a record: a refused one has nothing
 				// running, and the lease it would be filed under is about to end.
@@ -254,7 +327,7 @@ export function createProjectServices(options: ProjectServicesOptions): ProjectS
 				return null;
 			}
 
-			const stopped = await rollBack(lease, running);
+			const stopped = await rollBack(lease, running, deadline);
 			return stopped.length === 0
 				? refusal
 				: {

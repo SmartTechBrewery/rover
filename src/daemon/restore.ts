@@ -85,6 +85,17 @@ export interface ProjectRestoration {
 	 * never got the services up, so a `stop` that finds nothing to stop is the ordinary case
 	 * rather than a failure. Only what a project declares a `stop` for appears here.
 	 *
+	 * **And they are this lease's services, not the project's** — which is what makes running
+	 * them for every lease that ends correct rather than a teardown reaching into a neighbour's
+	 * state. Two devices can be leased for one project at once, and R18 is what keeps those two
+	 * sets apart: each lease has a slot, every hook child is told it (`./slots.ts`,
+	 * `./hook-command.ts`), and these stops run with the **ending lease's** slot in their
+	 * environment. A `start`/`stop` pair that namespaces by it stops exactly what that grant
+	 * started; one that ignores it and addresses a single shared instance takes that instance
+	 * away from whoever else is still holding the project, and no refusal is left to say so
+	 * (`README.md`, "Project hooks"). That contract is the project's to keep — the host cannot
+	 * read a `stop` command and tell which one it was handed.
+	 *
 	 * Each gets {@link TEARDOWN_TIMEOUT_MS} the teardown's way, so a project declaring the
 	 * `MAX_PROJECT_SERVICES` maximum of slow stops can keep the next grant on that device
 	 * waiting for that many bounds in a row (`./project-hooks.ts`). That is what keeps the
@@ -405,6 +416,9 @@ export function createDeviceRestorer(options: DeviceRestorerOptions): DeviceRest
 			// Ahead of the teardown, and on this path whether or not the device could be resolved,
 			// for the same reason the teardown is: a process on the host outlives the device that
 			// went away, and a lease that ended is the last thing that was ever going to stop it.
+			// Every one runs, for every lease that ends: each was resolved with the *ending*
+			// lease's slot, so what it addresses is that grant's own services — see
+			// {@link ProjectRestoration.services}.
 			await step(serial, `stopping the '${service.name}' helper service`, () =>
 				runHook(serial, `the '${service.name}' helper service's stop hook`, service.stop),
 			);
