@@ -1393,9 +1393,38 @@ label.
 `panel/dist` and `npm run panel:preview` serves that. **The host serves the panel's data surface
 but not the panel's own files** — `POST /rpc` is above, and serving `panel/dist` from that same
 listener is still a separate piece of work — so the panel runs from its development server for now
-and reads no live data.
+and reads no live device data yet.
 
 Its design comes from Stitch, not from this repository: `ai/RULES.md` §8 is how to reach it and
 `docs/DESIGN.md` is what the screens settled. The Analog Horizon tokens live in
 `panel/src/tokens.css`, which is the only file in the panel allowed to write a colour value —
 `tests/unit/panel/` holds the gates that keep it that way.
+
+#### Pointing it at a host and signing in
+
+The panel talks to the host over **relative** URLs (`/session`, `/rpc`), because in production the
+daemon will serve it from the very listener that serves the data. In development the dev server
+proxies those two paths to `ROVER_HTTP_PORT` on loopback — the same variable that switches the
+listener on, so there is one number to keep in step rather than two. There is no host field on the
+sign-in screen and no base URL to configure; the host emits no CORS header on purpose
+(`PROJECT.md` D29), so the proxy is what makes two origins into one.
+
+```bash
+npm run rover -- users add panel     # prints the token, once
+ROVER_HTTP_PORT=4712 npm run daemon  # in one terminal
+ROVER_HTTP_PORT=4712 npm run panel:dev   # in another; 4712 is also the default
+```
+
+Open the panel and paste that token into the one field. From then on:
+
+- **The browser holds a session, not the token.** It is exchanged once over `POST /session`; only
+  the session id is kept, under one `localStorage` key, and a reload restores it with the boot
+  probe rather than asking again.
+- **`Profile` says who you are signed in as, and carries the one `Sign out` control.** Signing out
+  sends `DELETE /session`, so the session ends on the host rather than only in the browser — and if
+  nothing answers, nothing ends: the panel stays signed in and says the host could not be reached,
+  because the browser holds the only id that can still end that session.
+- **`rover users revoke panel` ends a live session on its very next request.** The panel says
+  *Access ended* and asks for a credential again — without claiming which of a revoke, a rotate or
+  a restarted daemon it was, because those are indistinguishable from a browser.
+

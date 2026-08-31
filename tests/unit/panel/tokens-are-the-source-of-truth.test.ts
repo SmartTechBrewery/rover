@@ -173,12 +173,15 @@ describe('no colour is written outside tokens.css', () => {
 
 	// docs/DESIGN.md §5: the chromatic text-shadow is for the wordmark only. Never on data —
 	// serials, UTC timestamps, short hashes and file names stay crisp.
+	//
+	// Two screens carry the wordmark now — the shell's sidebar and the shell-less sign-in page —
+	// and it is one component rather than two class lists, so this still names exactly one file.
 	it('applies the wordmark chroma in exactly one component', () => {
 		const users = readPanelSources().filter(
 			(file) =>
 				!file.path.endsWith('.css') && file.sourceWithoutComments.includes('wordmark-chroma'),
 		);
 
-		expect(users.map((file) => file.path)).toEqual(['panel/src/components/layout/sidebar.tsx']);
+		expect(users.map((file) => file.path)).toEqual(['panel/src/components/wordmark.tsx']);
 	});
 });

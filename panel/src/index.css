@@ -59,6 +59,28 @@
 	}
 
 	/*
+	 * The primary control's press feedback: the design system's "borders as depth" again, a hard
+	 * offset under the button that collapses when it is pressed. The reference screen wrote the
+	 * offset colour inline as `#005236`; it is the `on-tertiary-fixed-variant` token and is read
+	 * as one here.
+	 *
+	 * A transition, never an animation — it runs once per press and does not loop, which is what
+	 * `docs/DESIGN.md` §5 forbids. A disabled control drops the class entirely rather than
+	 * keeping a shadow that promises a press that does nothing.
+	 */
+	.control-tactile {
+		box-shadow: 0 3px 0 0 var(--color-on-tertiary-fixed-variant);
+		transition:
+			transform 0.1s ease,
+			box-shadow 0.1s ease;
+	}
+
+	.control-tactile:active {
+		box-shadow: 0 0 0 0 var(--color-on-tertiary-fixed-variant);
+		transform: translateY(3px);
+	}
+
+	/*
 	 * There is no looping animation anywhere in the panel (`docs/DESIGN.md` §5), so the only
 	 * motion this can reach is hover and press feedback. It is still declared, because the
 	 * rule has to survive the next component someone adds.

@@ -441,6 +441,104 @@ and effort spent polishing it beyond this list is spent twice.
   nothing. **This is a deliberate exception to the uniform-refusal rule above** — recorded here so
   it is not mistaken for an oversight and quietly "fixed".
 
+### The four other states — settled
+
+Only the default form was ever designed. These four are **states of that one screen, not screens of
+their own**: the card, the wordmark, the vertical padding and the form are the default state's, and
+only what is said above or below the input changes. The implementation is
+`panel/src/screens/sign-in.tsx`, and the machine behind it is
+`panel/src/session/session-provider.tsx`.
+
+An earlier Stitch revision faked all four with a `DEBUG // UI STATES` switcher whose buttons did
+nothing and whose states existed only as HTML comments. That was scaffolding rather than a design and
+has been removed; it is recorded here because it is the shape a "state gallery" comes back in.
+
+**The screen is not a route, and that is what keeps the token out of every URL.** While there is no
+live session the panel renders it in place of the router (`panel/src/app.tsx`), so there is no
+address a credential could be attached to, no `?next=` to record and nothing to redirect back to.
+The form is `method="post"` with an unnamed field, so even a native submit with the script broken
+cannot put the token in a query string.
+
+**Checking — two faces, and neither is a spinner.**
+
+- **On boot**, with a session id the browser was holding: the same shell-less page, the wordmark, and
+  one quiet line — *Checking the session this browser was holding.* No form, because whether a form
+  is needed is exactly what the probe is deciding, and a form that appeared and then vanished would
+  invite a paste into a field about to be replaced.
+- **On submit**, with a token in flight: the form stays exactly where it is, its control disabled and
+  its label changed from `Sign in` to `Checking…`. **The form must not be unmounted** — the field
+  keeps what was pasted, which is the whole reason a refusal is recoverable in place.
+
+**Refused — one message, for every reason.** Below the input, in ordinary text, `aria-live="polite"`
+and never `role="alert"`: a refused attempt is not an emergency. It carries **no colour of alarm** —
+the same rule §7 applies to an empty state — and it must not hint which of a token nobody holds, a
+revoked user's token or a malformed one it was, because the host answers all three identically on
+purpose. It also covers a host that never answered at all, so the wording claims **neither the token
+nor the host** as the cause: *That did not sign you in. Check that the whole token was pasted, and
+that the host is running.* The field keeps its content **and its focus** — disabling the control is
+what takes focus away, so it is given back.
+
+**Signed out — the same card with one line.** After a deliberate sign-out: a small block above the
+form, `Signed out`, saying that the session ended on the host. **A cold arrival carries no line at
+all, and that is the only difference between the two.** The sign-out control itself is on `Profile`
+and nowhere else — the sidebar carries no action (§3), and the design's own early revision promoting
+`Log Out` into the navigation is one of the mistakes §7 records.
+
+That line says the session **ended on the host**, which means this state may only be reached once
+the host has answered. **A sign-out the host never answered does not arrive here.** It stays on
+`Profile`, still signed in, with the control re-enabled and one `aria-live="polite"` line below it —
+*Nothing answered on the host, so the session is still open and you are still signed in. Try
+again.* — in ordinary text with no colour of alarm, because nothing has gone wrong with the session.
+`Profile`'s own paragraph says the same thing before the fact rather than only after it. A `401`
+does arrive here: a host that will not take the id has already forgotten it, so that sign-out is
+finished. The reason it cannot be the other way is the whole reason the browser holds a session id
+rather than the token — announcing an ending nobody performed would clear the one id that could
+still perform it, leaving a live credential on the host for the rest of its idle window with nothing
+able to reach it.
+
+**Access ended — the deliberate exception, and it still does not claim why.** A session that was
+live and stopped being accepted says so plainly: `Access ended`, *This host stopped accepting the
+session. Sign in again — and if that does not work, ask whoever runs the host.* Telling this person
+costs nothing, because they authenticated a moment ago. What it may not do is name a cause: a
+revoke, a rotate and a daemon restart are indistinguishable from a browser, and §7's "the headline
+must not claim to know which" applies here too. It is not red, not a warning colour and not an
+alert; it is news. The stored session id is cleared on the way into this state, so a reload does not
+land here twice.
+
+**The edges those four have to answer between them**, and they are answered by what the *evidence*
+supports rather than by what is convenient. **One rule covers all of them: the panel never discards
+a session id without the host's answer, and never reports an ending it did not get.**
+
+- **A stored id the host refuses on boot is *access ended*, not a cold arrival.** The id in storage
+  is the evidence that somebody was signed in with it; a bare form with no explanation would be the
+  panel knowing something and not saying it.
+- **A boot probe that reaches nothing is a cold arrival, and the id is kept.** An unreachable host
+  has said nothing about whether the session is good, so signing someone out over a daemon that was
+  restarting would be inventing bad news. There is no `HOST UNREACHABLE` page here (§7's is a state
+  of the Devices screen): the sign-in card is already the shell-less page, and the one refusal above
+  is worded to cover this.
+- **A sign-out that reaches nothing is not a sign-out.** It stays on `Profile`, signed in, and says
+  the host did not answer — the *Signed out* paragraph above has the wording and the reason.
+- **A sign-in that replaces a kept id ends that id first, and does not wait to hear how it went.**
+  The bullet above leaves an id behind on an unreachable host, and the next successful sign-in is
+  what would otherwise strand it: the host would then hold two live sessions for one person, one of
+  them unreachable by any browser. So the replaced id goes to `DELETE /session` on the way out, and
+  the answer is ignored — a host that has come back reclaims it, a host still down changes nothing,
+  and the sign-in that just succeeded is not made to depend on either.
+
+**Where the session is kept, and what it costs.** The browser stores the **session id only**, under
+one `localStorage` key (`rover.panel.session`), and never the token — the token reaches the host once
+in a request body and is dropped. `localStorage` rather than `sessionStorage` because a per-tab
+credential would ask for the token again in a second tab and always after a browser restart, which
+is the whole thing the session exists to avoid. The cost is stated rather than hidden, exactly as
+`PROJECT.md` D30 states it: whatever the panel keeps the id in is readable by script, so an XSS in
+the panel reads it — but what it reads is a credential that expires on its own, that a sign-out
+ends, and that is not the token `rover users` issued. A cookie would swap that for a credential the
+browser attaches to cross-site requests whether the page meant to or not, which is why the host sets
+none and this reads none.
+
+---
+
 ## 9. What is not designed yet
 
 Two lists, and the difference between them matters. The first must exist as a Stitch design before
@@ -466,13 +564,6 @@ Build them in keeping with everything above — the palette and tokens, no loopi
 uniform refusal, the vocabulary — and **write what you settled back into this document** (see the
 top of this file). Do not commission a Stitch screen for them.
 
-- **The sign-in screen's four other states** (R34): refused, checking, signed out, and access
-  ended. Only the default form is designed, and §8 says why polishing this screen is a poor
-  investment: it is a placeholder for email-and-password sign-in. An earlier revision faked these
-  states with a `DEBUG // UI STATES` switcher whose buttons did nothing and whose states existed
-  only as HTML comments — scaffolding, not a design, and it has been removed. Keep the single
-  uniform refusal and the deliberate exception for a revoked session; those two are decisions, not
-  visual choices.
 - **The "no view" state with an *empty* list.** The variant with devices in it is settled (§7). The
   empty one is the dangerous half and is still undesigned: it is visually identical to "nothing
   attached" and means the opposite, so a person reading "nothing is attached" walks to the machine
