@@ -22,7 +22,7 @@
 import '../backends/index.js';
 import { resolveArtifactsRoot } from './archive-path.js';
 import { startDaemon } from './listen.js';
-import { resolveNetworkListener } from './network-config.js';
+import { resolveHttpListener, resolveNetworkListener } from './network-config.js';
 import { resolveProjectsRoot } from './project-hooks.js';
 import { resolveSocketPath } from './socket-path.js';
 
@@ -40,11 +40,16 @@ async function main(): Promise<void> {
 	// a misconfigured listener is a loud startup failure, never a host that quietly serves
 	// only the local socket while its operator believes otherwise.
 	const network = resolveNetworkListener();
+	// And the one place the HTTP surface is resolved from the environment, for the same reason
+	// and with the same failure: a non-loopback address with no TLS material throws here rather
+	// than putting a bearer token on a wire in the clear (D29).
+	const http = resolveHttpListener();
 	const daemon = await startDaemon({
 		socketPath,
 		artifactsRoot,
 		projectsRoot,
 		...(network ? { network } : {}),
+		...(http ? { http } : {}),
 	});
 	if (!daemon.started) {
 		return;
@@ -54,6 +59,19 @@ async function main(): Promise<void> {
 		// The address and the port, and nothing else: never the token, never the certificate,
 		// and nothing about what is attached.
 		console.log(`Rover is listening on ${network.address}:${daemon.networkPort} (TLS).`);
+	}
+
+	if (daemon.httpPort !== null && http !== undefined) {
+		// The scheme, the address, the port and the one route, and nothing else: never the token,
+		// never the certificate, and nothing about what is attached (D20).
+		const scheme = http.certPath === undefined ? 'http' : 'https';
+		// An IPv6 address needs its brackets back to be a URL somebody can paste. `network-config.ts`
+		// takes them off because `listen()` treats the bracketed form as a hostname and fails with
+		// `ENOTFOUND` — so this is the one place the URL notation belongs.
+		const host = http.address.includes(':') ? `[${http.address}]` : http.address;
+		console.log(
+			`Rover is serving the panel surface on ${scheme}://${host}:${daemon.httpPort}/rpc.`,
+		);
 	}
 
 	let shuttingDown = false;

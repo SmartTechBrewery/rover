@@ -15,11 +15,12 @@
  * one, and it is discarded on age rather than believed forever, so it is not the stale
  * second source of truth D6 warns about.
  *
- * **One handler, two transports.** The `IpcServer` is built once here and handed to both the
- * unix socket and — when the operator opted in (`./network-config.ts`) — the TLS listener of
- * `./network-listen.ts`. That is what makes "the same surface, a second transport" (D17)
- * structural rather than a claim: there is one method table and one dispatcher, and neither
- * transport can drift from the other because there is nothing to drift from.
+ * **One handler, every transport.** The `IpcServer` is built once here and handed to the unix
+ * socket and — each when the operator opted in (`./network-config.ts`) — to the TLS listener of
+ * `./network-listen.ts` and the HTTP listener of `./http-listen.ts`. That is what makes "the same
+ * surface, another transport" (D17, D29) structural rather than a claim: there is one method
+ * table and one dispatcher, and no transport can drift from the others because there is nothing
+ * to drift from.
  */
 
 import { mkdir, open, rm, stat } from 'node:fs/promises';
@@ -30,11 +31,12 @@ import type { IpcHandlers } from '../ipc/methods.js';
 import type { IpcServer } from '../ipc/server.js';
 import { createIpcServer } from '../ipc/server.js';
 import { type ArtifactArchive, createArtifactArchive } from './archive.js';
+import { type HttpListener, startHttpListener } from './http-listen.js';
 import { createDeviceInventory, type DeviceInventory } from './inventory.js';
 import { createLeaseHandlers } from './lease-handlers.js';
 import { createLeaseStore, type LeaseStore } from './leases.js';
 import { createListDevicesHandler } from './list-devices.js';
-import type { NetworkListenerConfig } from './network-config.js';
+import type { HttpListenerConfig, NetworkListenerConfig } from './network-config.js';
 import { type NetworkListener, startNetworkListener } from './network-listen.js';
 import { createProjectInstall, type ProjectInstall } from './project-install.js';
 import { createProjectResolver } from './project-resolver.js';
@@ -98,12 +100,13 @@ const LEASE_SWEEP_INTERVAL_MS = 30_000;
 const RESTORE_SETTLE_TIMEOUT_MS = 10_000;
 
 /**
- * How long `close()` waits for the TLS listener to stop before shutting down anyway and saying
- * so.
+ * How long `close()` waits for a **network transport** — the TLS listener, the HTTP one, or both
+ * — to stop before shutting down anyway and saying so. One bound shared by both, because it
+ * bounds the same thing on both.
  *
- * Bounded for the same reason as {@link WATCH_STOP_TIMEOUT_MS}: `NetworkListener.close()` waits
- * on `net.Server`'s connection count reaching zero, which is a count kept by Node over sockets
- * this process does not fully control. A defect there — or a socket state nobody anticipated —
+ * Bounded for the same reason as {@link WATCH_STOP_TIMEOUT_MS}: each `close()` waits on a
+ * server's connection count reaching zero, which is a count kept by Node over sockets this
+ * process does not fully control. A defect there — or a socket state nobody anticipated —
  * may delay a shutdown, but it must never be able to prevent one, because a daemon whose
  * `close()` never resolves neither dies nor stops serving (D6). Generous enough that dropping a
  * handful of live TLS connections is never reported as a leak.
@@ -130,6 +133,16 @@ export interface StartDaemonOptions {
 	 * port because the developer happened to export `ROVER_LISTEN_PORT` in that shell.
 	 */
 	readonly network?: NetworkListenerConfig;
+	/**
+	 * The HTTP surface a browser reaches (D29, `./http-listen.ts`), or absent for a host that
+	 * serves no browser — which is every host until an operator sets `ROVER_HTTP_PORT`.
+	 *
+	 * The operator's opt-in, resolved from the environment by `./main.ts` and deliberately
+	 * **never** read from `process.env` here, for {@link StartDaemonOptions.network}'s reason: a
+	 * `startDaemon()` in a unit test must not open a port because the developer happened to
+	 * export the switch in that shell.
+	 */
+	readonly http?: HttpListenerConfig;
 	/**
 	 * Where the durable artifact archive writes (D23, `./archive.ts`).
 	 *
@@ -161,7 +174,13 @@ export interface RunningDaemon {
 	 */
 	readonly networkPort: number | null;
 	/**
-	 * Stops accepting on both transports, drops live connections, waits out the restorations
+	 * The port the HTTP listener actually bound, or `null` when none was configured — which is
+	 * the default (D29). A configured port of `0` resolves to a real one here, for
+	 * {@link RunningDaemon.networkPort}'s reason.
+	 */
+	readonly httpPort: number | null;
+	/**
+	 * Stops accepting on every transport, drops live connections, waits out the restorations
 	 * still owed (bounded) and unlinks the socket. Safe to call twice.
 	 */
 	close(): Promise<void>;
@@ -307,6 +326,7 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartRes
 		restorer,
 		sweepIntervalMs: options.sweepIntervalMs ?? LEASE_SWEEP_INTERVAL_MS,
 		network: options.network,
+		http: options.http,
 	};
 
 	const first = await listenOnce(socketPath, ipcServer);
@@ -332,6 +352,7 @@ interface DaemonParts {
 	readonly restorer: DeviceRestorer;
 	readonly sweepIntervalMs: number;
 	readonly network: NetworkListenerConfig | undefined;
+	readonly http: HttpListenerConfig | undefined;
 }
 
 /**
@@ -375,11 +396,11 @@ async function reclaimAndRetry(socketPath: string, parts: DaemonParts): Promise<
 }
 
 /**
- * The winner-only path: start what a serving daemon runs, network listener included.
+ * The winner-only path: start what a serving daemon runs, the network listeners included.
  *
- * The listener goes up **here** rather than in `startDaemon` because this is the only branch
- * that won the bind. A loser must not open a port: two daemons on one machine would then race
- * for it, and the one that lost the socket has no devices to lend anyway.
+ * They go up **here** rather than in `startDaemon` because this is the only branch that won the
+ * bind. A loser must not open a port: two daemons on one machine would then race for it, and the
+ * one that lost the socket has no devices to lend anyway.
  */
 async function running(
 	listening: ListenSucceeded,
@@ -391,6 +412,7 @@ async function running(
 	const ownInode = boundInodeOf(listening.server);
 	let closed: Promise<void> | undefined;
 	let network: NetworkListener | undefined;
+	let http: HttpListener | undefined;
 
 	// Only ever reached by the winner of the bind — a `{ started: false }` caller has no
 	// inventory running and nothing to stop.
@@ -402,7 +424,7 @@ async function running(
 	sweep.unref();
 
 	const close = (): Promise<void> => {
-		closed ??= closeServer(listening, socketPath, ownInode, parts, { sweep, network });
+		closed ??= closeServer(listening, socketPath, ownInode, parts, { sweep, network, http });
 		return closed;
 	};
 
@@ -418,13 +440,31 @@ async function running(
 		}
 	}
 
-	return { started: true, networkPort: network?.port ?? null, close };
+	// After the TLS listener, and failing the whole start for exactly its reason: a host serving
+	// Rover clients while the browser its operator pointed at it gets nothing is the same silent
+	// degradation, one transport along. `close()` above already takes down whatever did come up.
+	if (parts.http !== undefined) {
+		try {
+			http = await startHttpListener(parts.http, parts.ipcServer);
+		} catch (error) {
+			await close();
+			throw error;
+		}
+	}
+
+	return {
+		started: true,
+		networkPort: network?.port ?? null,
+		httpPort: http?.port ?? null,
+		close,
+	};
 }
 
 /** What `close()` has to wind down besides the local socket itself. */
 interface ShutdownWork {
 	readonly sweep: NodeJS.Timeout;
 	readonly network: NetworkListener | undefined;
+	readonly http: HttpListener | undefined;
 }
 
 async function closeServer(
@@ -432,7 +472,7 @@ async function closeServer(
 	socketPath: string,
 	ownInode: Promise<bigint | undefined>,
 	{ inventory, leases, restorer }: DaemonParts,
-	{ sweep, network }: ShutdownWork,
+	{ sweep, network, http }: ShutdownWork,
 ): Promise<void> {
 	// First, and unconditionally: nothing below waits for a sweep that fires halfway through
 	// the shutdown, so the interval stops before anything else does.
@@ -460,6 +500,10 @@ async function closeServer(
 	// otherwise be waited on in sequence with them. `undefined` when this host never opened
 	// one — the local socket is the whole of it.
 	const networkClosed = network === undefined ? undefined : closeNetworkListener(network);
+	// And the HTTP listener beside it, started for the same reason and bounded by the same
+	// number: it is a third independent server, and closing three in sequence would add each
+	// one's bound to the others' for nothing.
+	const httpClosed = http === undefined ? undefined : closeHttpListener(http);
 
 	await new Promise<void>((resolve) => {
 		// Set before `close()`, not after: a connection already past `accept()` in the kernel
@@ -481,6 +525,7 @@ async function closeServer(
 	await stopped;
 	await restored;
 	await networkClosed;
+	await httpClosed;
 
 	// Node unlinks the path itself on a clean close, so this is the crash-shaped case and a
 	// belt-and-braces guarantee that the address is free. Skipped when the inode changed:
@@ -542,6 +587,23 @@ async function closeNetworkListener(network: NetworkListener): Promise<void> {
 	if (await timesOut(network.close(), NETWORK_CLOSE_TIMEOUT_MS)) {
 		console.warn(
 			`The network listener did not stop within ${NETWORK_CLOSE_TIMEOUT_MS}ms. Shutting down ` +
+				`anyway; the port may stay bound until this process exits.`,
+		);
+	}
+}
+
+/**
+ * Stop the HTTP listener, bounded — see {@link NETWORK_CLOSE_TIMEOUT_MS}.
+ *
+ * `HttpListener.close()` never rejects: it stops accepting, drops every live connection, and
+ * resolves when the server's last one is gone. The bound is here because that last clause is
+ * Node's bookkeeping rather than ours, and the shutdown path is the one place where "waited too
+ * long" has to beat "waited forever".
+ */
+async function closeHttpListener(http: HttpListener): Promise<void> {
+	if (await timesOut(http.close(), NETWORK_CLOSE_TIMEOUT_MS)) {
+		console.warn(
+			`The HTTP listener did not stop within ${NETWORK_CLOSE_TIMEOUT_MS}ms. Shutting down ` +
 				`anyway; the port may stay bound until this process exits.`,
 		);
 	}

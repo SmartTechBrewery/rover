@@ -22,7 +22,7 @@ Design work lives in [`DESIGN.md`](./DESIGN.md); the brief that produced the fir
 
 ## Functionality gathered so far
 
-1. **Login** — modeled on Swarm's own.
+1. **Login** — modeled on Swarm's own. Which credential it presents is now settled (below).
 2. **Project registration** — modeled on Swarm's own.
 3. **List of devices available in the system** — Android only for now, whatever the host's `adb`
    reports (`PROJECT.md` §4 `list_devices`).
@@ -59,6 +59,17 @@ Design work lives in [`DESIGN.md`](./DESIGN.md); the brief that produced the fir
 - **A multi-host aggregation view.** Moot — Rover is single-host by design (`PROJECT.md` D18,
   revised 2026-08-29). Nothing here aggregates across hosts because there is never more than one.
 
+## Settled since this list was written
+
+**The panel's login is an `rover users` credential** — the same one, not a layer on top
+(`PROJECT.md` D29, R32, #110). The panel reaches the host over an HTTP surface that is a *third
+transport of the same `IpcServer`*, not a panel-only API: one route,
+`POST /rpc`, carrying the same envelopes, authenticated by `Authorization: Bearer <token>` against
+`~/.rover/users.json` and re-read on **every request**, so `rover users revoke` ends a panel user's
+access on their next request rather than at their next login. There is no second secret and no
+fallback. What is still open is one layer above it — how a *browser* holds that credential between
+reloads — and that is R34's (#112), which inherits the answer rather than reopening it.
+
 ## Deliberately not decided here
 
 - **Whether a user's access is all-or-nothing.** R27–R28 (D25) give every user the same bearer
@@ -68,9 +79,5 @@ Design work lives in [`DESIGN.md`](./DESIGN.md); the brief that produced the fir
   **D28 does not close this**, and it says so itself: force-release is authorised by the reach every
   named user already has, precisely so that the first operator action did not have to invent a tier
   in passing. A read-only tier arriving later restricts that row along with the rest.
-- **Whether the panel's own login is the same credential as R27's users, or a second layer on top
-  of it.** Most likely the same one — the panel would be just another authenticated remote client
-  over the existing network listener (`PROJECT.md` D17, D20, D25) — but not confirmed, and nothing
-  here assumes a second, panel-only API exists.
 - **Implementation.** Framework, hosting, anything about *how* — this file is what the panel needs
   to do, never how it is built.
