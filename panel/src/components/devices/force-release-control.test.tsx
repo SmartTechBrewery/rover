@@ -102,6 +102,23 @@ describe('the control on the card', () => {
 		expect(host.call).not.toHaveBeenCalled();
 	});
 
+	/*
+	 * The dialog is mounted on `document.body` rather than inside this control (#124). `devices.tsx`
+	 * puts `opacity-75` on the grid wrapper while the host's view is stale, and CSS opacity applies
+	 * to every descendant including a `fixed` one — so an inline dialog would come up at 75% with
+	 * the grid showing through it. §7 quiets the stale grid *as a set*, and a modal is not part of
+	 * that set.
+	 */
+	it('opens the dialog outside the tree the stale grid quiets', () => {
+		const { container } = control();
+
+		fireEvent.click(onTheCard());
+
+		const dialog = screen.getByRole('dialog');
+		expect(container.contains(dialog)).toBe(false);
+		expect(document.body.contains(dialog)).toBe(true);
+	});
+
 	it('closes the dialog on cancel, and returns focus to itself', () => {
 		control();
 		fireEvent.click(onTheCard());

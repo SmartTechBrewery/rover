@@ -1,0 +1,28 @@
+[
+  {
+    "outcome": "released",
+    "heldBy": {
+      "serial": "emulator-5554",
+      "owner": "issue-113",
+      "project": "rover",
+      "testName": "the devices grid",
+      "grantedAt": "2026-08-31T18:48:48.247Z",
+      "expiresInMs": 1186759
+    }
+  },
+  {
+    "outcome": "refused",
+    "reason": "not-held",
+    "message": "Device 'emulator-5556' is attached to this host and no lease is held on it, so there was nothing to force-release"
+  },
+  {
+    "outcome": "refused",
+    "reason": "gone",
+    "message": "Device 'emulator-5558' is no longer attached to this host — it was there when the host last enumerated its devices and it is not there now"
+  },
+  {
+    "outcome": "refused",
+    "reason": "not-attached",
+    "message": "Device '192.168.1.42:5555' is not physically attached to this host — it is only reachable over a network transport, so this host never leases it (D18)"
+  }
+]

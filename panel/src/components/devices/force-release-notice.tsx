@@ -47,7 +47,7 @@ export function ForceReleaseNotice({
 			{settled === undefined ? null : (
 				<section className="mt-8 flex items-start justify-between gap-4 border-2 border-outline-variant bg-surface-container-low p-4">
 					<p className="max-w-3xl font-body-md text-body-md text-on-surface">
-						{said(settled.answer, nameOf(settled.device))}
+						{said(settled.answer, settled.device)}
 					</p>
 					{/*
 					 * Recessive, like every other control in this panel, and labelled by what it does to
@@ -85,13 +85,29 @@ function nameOf(device: ListedDevice): string {
  * it cannot see at all, and one it can see but does not own (D6, D18) — and exactly one fact for the
  * person reading this: that device is not on this host, so there was nothing to release and nothing
  * left to show either.
+ *
+ * **Only a `ready` device is called free**, which is why this takes the device and not just its
+ * name (#124). Ending a lease says nothing about the hardware: `src/daemon/lease-handlers.ts`
+ * releases a held lease before it ever looks at the device, so a phone that lost its adb
+ * authorisation or went `offline` mid-lease gets a `released` answer like any other. The host would
+ * then refuse the next `acquire` on it `not-ready`, so *free* would be a positive claim it will not
+ * honour — the very claim `device-card.tsx` stopped making about the same device in #123, and the
+ * counter above the grid already puts it in the *not ready* bucket. The line stops at what really
+ * settled and leaves the card to say what the hardware is.
  */
-function said(answer: SettledForceRelease['answer'], name: string): string {
+function said(answer: SettledForceRelease['answer'], device: ListedDevice): string {
+	const name = nameOf(device);
+	// Anything but the exact word is not leasable (`device-list.ts`, `device-card.tsx`), which is
+	// the safe direction to be wrong in: an unknown state gets the quieter line, never the claim.
+	const ready = device.state === 'ready';
+
 	if (answer.outcome === 'released') {
-		return `The lease ${answer.heldBy.owner} held on ${name} for ${answer.heldBy.project} has ended. The device is free.`;
+		const ended = `The lease ${answer.heldBy.owner} held on ${name} for ${answer.heldBy.project} has ended.`;
+		return ready ? `${ended} The device is free.` : ended;
 	}
 	if (answer.reason === 'not-held') {
-		return `That lease had already ended on its own, so there was nothing to release on ${name}. The device is free either way.`;
+		const nothing = `That lease had already ended on its own, so there was nothing to release on ${name}.`;
+		return ready ? `${nothing} The device is free either way.` : nothing;
 	}
 	return `${name} is no longer attached to this host, so there was nothing to release. It is no longer listed.`;
 }

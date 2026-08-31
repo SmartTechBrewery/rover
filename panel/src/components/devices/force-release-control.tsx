@@ -3,6 +3,7 @@ import type { ListedDevice } from '@panel/devices/device-list.js';
 import { type ForceReleaseAnswer, forceReleaseDevice } from '@panel/devices/force-release.js';
 import { useSession } from '@panel/session/session-provider.js';
 import { useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 
 /**
  * The panel's one operator control: end the lease on this device, after asking.
@@ -105,17 +106,34 @@ export function ForceReleaseControl({
 			>
 				Force release
 			</button>
-			{asking ? (
-				<ForceReleaseDialog
-					device={device}
-					ending={ending}
-					lease={lease}
-					onCancel={cancel}
-					onConfirm={confirm}
-					receivedAtMs={receivedAtMs}
-					unanswered={unanswered}
-				/>
-			) : null}
+			{/*
+			 * **Mounted on `document.body`, not here** (#124). The dialog is `fixed inset-0`, so its
+			 * position never needed a portal — but `devices.tsx` puts `opacity-75` on the grid
+			 * wrapper while the host's view is stale, and CSS opacity applies to the whole subtree
+			 * including fixed descendants. Rendered inline, a confirmation opened over a stale list
+			 * would come up at 75% with the grid showing through its own surface. §7 quiets the
+			 * stale grid *as a set* — a treatment of the list, and a modal asking about one
+			 * destructive action is not part of that set, which is the same reason the outcome line
+			 * lives outside the grid.
+			 *
+			 * The portal is here rather than inside `ForceReleaseDialog` because it is a fact about
+			 * where this control mounts it, not about what the dialog is: the dialog stays an
+			 * ordinary component that renders where it is put.
+			 */}
+			{asking
+				? createPortal(
+						<ForceReleaseDialog
+							device={device}
+							ending={ending}
+							lease={lease}
+							onCancel={cancel}
+							onConfirm={confirm}
+							receivedAtMs={receivedAtMs}
+							unanswered={unanswered}
+						/>,
+						document.body,
+					)
+				: null}
 		</>
 	);
 }

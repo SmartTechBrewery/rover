@@ -84,6 +84,13 @@ const FREE: ListedDevice = {
 	heldBy: null,
 };
 
+/**
+ * Held, and reported `offline` by the host — a phone that lost its cable or its authorisation
+ * mid-lease (#124). The lease is real and ends like any other; the device the lease was on is one
+ * the host would still refuse `not-ready`, so nothing about it may read as free.
+ */
+const HELD_OFFLINE: ListedDevice = { ...HELD, state: 'offline' };
+
 /** Attached and listed, holding no lease, and refused a lease by the host (#123). */
 const UNAUTHORIZED: ListedDevice = {
 	serial: 'emulator-5558',
@@ -320,6 +327,27 @@ describe('a force-release the host answered', () => {
 		expect(screen.getByText(/had already ended on its own/)).toBeDefined();
 		expect(screen.getByText(/nothing to release/)).toBeDefined();
 		expect(refresh).toHaveBeenCalledTimes(1);
+	});
+
+	/*
+	 * The one claim neither line may make on its own authority (#124). The daemon ends a held lease
+	 * before it ever looks at the hardware, so both of these answers arrive for a device the host
+	 * reports `offline` — and the host would refuse the next `acquire` on it `not-ready`, which is
+	 * what the card and the *not ready* counter on this same screen say. The line stops at what
+	 * really settled; `force-release-notice.test.tsx` pins it against the card's own words.
+	 */
+	it.each([
+		['the lease ended', { outcome: 'released', heldBy: LEASE }],
+		['the lease had already ended', { outcome: 'refused', reason: 'not-held' }],
+	])('does not call a device the host would refuse free (%s)', async (_case, answer) => {
+		host.answer = answer;
+		showing(ready([HELD_OFFLINE]));
+
+		await forceRelease();
+
+		// The news itself is unchanged — only the availability clause is absent.
+		expect(screen.getByRole('button', { name: 'Dismiss' })).toBeDefined();
+		expect(screen.queryByText(/is free/)).toBeNull();
 	});
 
 	/*

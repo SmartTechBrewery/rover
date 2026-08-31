@@ -1,5 +1,6 @@
 import type { HostAnswer, RpcEnvelope } from '@panel/session/host-client.js';
 import { describe, expect, it, vi } from 'vitest';
+import fixture from '../../../tests/fixtures/panel/force-release.json';
 import { ForceReleaseDeviceResultSchema, forceReleaseDevice } from './force-release.js';
 
 /**
@@ -167,5 +168,66 @@ describe('the mirror of the result schema', () => {
 		});
 
 		expect(JSON.stringify(parsed)).not.toContain('lease-01JQ');
+	});
+});
+
+/**
+ * The panel's half of the drift gate `tests/unit/panel/force-release-fixture.test.ts` opens, and
+ * `device-list.test.ts`'s reasoning applies verbatim: one file, parsed here by the mirror and there
+ * by the daemon's own schema, by two projects that cannot import each other.
+ *
+ * The literals everywhere above this block are the panel's own, so on their own they pin the panel
+ * against itself. This block is what ties them to `src/ipc/methods.ts` — and it matters more here
+ * than on the listing, because a reason renamed on the host narrows to `unanswered` rather than
+ * failing, which would turn every refusal in the browser into *"Nothing came back from the host"*
+ * with both suites still green.
+ */
+describe("the panel's mirror of force_release_device", () => {
+	it('reads a real released answer, down to the holder the line names', () => {
+		const parsed = ForceReleaseDeviceResultSchema.parse(fixture[0]);
+
+		expect(parsed).toEqual({
+			outcome: 'released',
+			heldBy: {
+				serial: 'emulator-5554',
+				owner: 'issue-113',
+				project: 'rover',
+				testName: 'the devices grid',
+				grantedAt: '2026-08-31T18:48:48.247Z',
+				expiresInMs: 1186759,
+			},
+		});
+	});
+
+	/*
+	 * Each refusal by name, off the fixture rather than off a literal written here: a reason the
+	 * host renames fails this assertion instead of quietly folding into `unanswered`. And the
+	 * host's `message` is dropped on every one of them — the panel says each outcome in its own
+	 * words (§7), so a host string reaching a screen would be a second vocabulary.
+	 */
+	it('reads every refusal the host can send, and none of its wording', () => {
+		const refusals = fixture.slice(1).map((answer) => ForceReleaseDeviceResultSchema.parse(answer));
+
+		expect(refusals).toEqual([
+			{ outcome: 'refused', reason: 'not-held' },
+			{ outcome: 'refused', reason: 'gone' },
+			{ outcome: 'refused', reason: 'not-attached' },
+		]);
+	});
+
+	/*
+	 * The whole file through the mirror, which is what proves nothing in it narrows to `unanswered`
+	 * — the answer the panel gives when it cannot read a reply, and the one a silent drift would
+	 * turn every refusal into.
+	 */
+	it.each(
+		fixture.map((answer, index) => [index, answer] as const),
+	)('reads entry %i rather than folding it into an ask that reached nothing', async (_index, answer) => {
+		const read = await forceReleaseDevice(host(result(answer)), {
+			serial: 'emulator-5554',
+			actor: 'karolina',
+		});
+
+		expect(read.outcome).not.toBe('unanswered');
 	});
 });

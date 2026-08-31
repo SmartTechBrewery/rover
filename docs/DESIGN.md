@@ -337,9 +337,13 @@ data never had to answer, settled here.
   either — a region announcing once a second is a screen-reader firehose, and the digits are
   ordinary text.
 
-**The card carries no control yet.** The design's markup has `FORCE RELEASE` on every held card and
-it is deliberately not reproduced: #113 is the grid and its states, and the action with its
-confirmation is the second half.
+**The held card carries one control** (#122), and only the held card: one recessive button at the
+foot of the lease panel, below `GRANTED`, so what it would end is read before it is reached. The
+design's markup puts a full-width solid orange `FORCE RELEASE` on it; **that treatment is still
+deliberately not reproduced** (§5, *Destructive actions are recessive*) — it warms to
+`secondary-fixed-dim` on hover like `Profile`'s sign-out, because a control that ends something is
+not the loudest thing on its screen. What it asks before it acts, and what each answer says
+afterwards, are settled in §7.
 
 ---
 
@@ -411,13 +415,19 @@ one**, plus a fourth case that is not an outcome at all. Each is ordinary text, 
 with no colour of alarm and no icon of alarm — nothing here has gone wrong, and §5's no-red rule
 holds through the panel's one destructive action.
 
-- **The lease ended.** The card going free *is* the outcome, and it happens without a reload: the
+- **The lease ended.** The card changing *is* the outcome, and it happens without a reload: the
   dialog closes and the screen asks the poll again rather than waiting up to `POLL_MS` for it. One
-  line names the lease that ended, because the card stops showing it the moment it is free.
+  line names the lease that ended, because the card stops showing it the moment the lease is gone.
 - **The lease had already ended on its own**, between the page loading and the click (`not-held`).
   **News, not a failure**: *"That lease had already ended on its own, so there was nothing to
-  release on … The device is free either way."* The poll is asked again here too — the card was
-  already out of date.
+  release on …"* The poll is asked again here too — the card was already out of date.
+- **Neither line calls a device free unless the host would honour that.** Both add *"The device is
+  free."* / *"The device is free either way."* only when the listing says `state: ready`. Ending a
+  lease says nothing about the hardware — the daemon releases a held lease before it looks at the
+  device at all — so a phone that went `unauthorized` or `offline` mid-lease gets an ordinary
+  `released` answer while the host would still refuse the next `acquire` on it `not-ready`. §6's
+  rule for the card is the same rule, and the counter above the grid already puts that device in
+  *not ready*: the line stops at what settled, and the card says what the hardware is.
 - **The device is not on this host any more** (`gone`, `not-attached`). There is nothing left to
   release *or to show*: *"… is no longer attached to this host, so there was nothing to release. It
   is no longer listed."* Two host-side facts — one device it cannot see at all (D6) and one it can

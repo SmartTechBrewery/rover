@@ -1415,10 +1415,13 @@ lease ends immediately, the device is restored to a clean state, and the agent h
 its next request. `Cancel` is the prominent control there and `Force release` the recessive one, on
 purpose: the safe exit is the easier target. What the host answers is then said above the grid, and
 the three answers read differently because they mean different things — the lease ended (the card
-goes free without a reload), the lease had already ended on its own, or the device is no longer
-attached to this host and is no longer listed. A confirmed release that reached nothing released
-nothing: the dialog stays open, the control comes back, and the panel says so rather than announcing
-an ending it never got. The call is attributed to the signed-in user's identifier, so
+stops showing it without a reload), the lease had already ended on its own, or the device is no
+longer attached to this host and is no longer listed. A device is called free only when the host
+still reports it ready to lease: ending a lease says nothing about the hardware, so a phone that
+went offline mid-lease is one the host would refuse, and the card says so instead. A confirmed
+release that reached nothing released nothing: the dialog stays open, the control comes back, and
+the panel says so rather than announcing an ending it never got. The call is attributed to the
+signed-in user's identifier, so
 `rover force-release`'s audit line on the host names a person and not a browser.
 
 Its design comes from Stitch, not from this repository: `ai/RULES.md` §8 is how to reach it and
