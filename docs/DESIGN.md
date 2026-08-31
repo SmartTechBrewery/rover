@@ -85,7 +85,10 @@ the main nav.
   whole page, not a widget beside the navigation.
 - The active item carries the green accent (`tertiary`, `#00e29d`).
 
-**Breadcrumb**, above the page title. It states **depth in the current hierarchy and nothing else**.
+**Breadcrumb, and no page title.** There is no `<h1>`: the breadcrumb *is* the page's identity.
+Both said `Devices`, one line apart, and the breadcrumb already says it in the colour that means
+"you are here" — the heading repeated it and earned nothing. It states **depth in the current
+hierarchy and nothing else**.
 
 - At the root it is the screen's own name — `Devices`.
 - Deeper: `Archive > checkout-app > login-flow`, with **`>` arrows**, never slashes.
@@ -93,6 +96,15 @@ the main nav.
   is not a link. Earlier segments are muted and navigate back up.
 - **Nothing but path segments.** No status chips, no counts. The Archive screen currently opens its
   path with a `SUCCESS` chip; that is wrong twice over.
+- It stayed at its original size after the heading went. That was checked rather than assumed: it
+  is small, and it is enough, because the active nav item is carrying the same information beside
+  it.
+
+**The header row** below it holds one line describing the screen on the left and the held/free
+counter on the right, above a rule. On Devices that line is *"Monitoring attached physical and
+virtual devices."* All three Devices states share this row's shape — they are three states of one
+screen, and a header that differs between them is the thing most of this document exists to
+correct.
 
 **One height.** The sidebar and the content area share it. With short content the page ends at the
 foot of the viewport and `Profile` sits on that line; with long content the sidebar stretches to
@@ -217,7 +229,7 @@ under the wordmark, a `DEPLOY UPDATE` button for an action the product does not 
 by an avatar, and a top bar the reference screen does not have. **Say "reuse the shell from
 `3458d89bda5e442d894ea54208230d4c`, change only the content area" explicitly, every time.**
 
-A correction also tends to land as a **new screen with a new id** rather than in place — the empty
+**Titles drift**: Stitch appends `(Corrected)`, `(V2)`, `(Full Page)` as it goes, so the id is the identity and the title is not. A correction also sometimes lands as a **new screen with a new id** rather than in place — the empty
 state moved from `13e46314b3a249cb805fffe8557355d4` to `ccdef7834ab9470f9a653a47321998c9` that way,
 while `get_screen` was still serving the old file. Re-read the id from the project after every
 round; do not carry one forward on the assumption it was edited in place.
