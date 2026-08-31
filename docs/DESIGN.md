@@ -207,6 +207,11 @@ agree with the cards below it.
 It is the one screen a person sees before they are authenticated, so it shares the design system
 and nothing else.
 
+**It is provisional, and should be treated as such.** Entering a token by hand is a placeholder for
+an email-and-password sign-in that will replace it. Everything below is what keeps it consistent
+with the rest of the panel — it is not an invitation to perfect a screen with a known expiry date,
+and effort spent polishing it beyond this list is spent twice.
+
 - **No sidebar, no navigation, no breadcrumb, no profile.** None of them mean anything yet. The
   wordmark carries the product's identity alone, centred, with vertical padding so the card never
   touches an edge — and the card stays fully visible and scrollable at short viewport heights
@@ -236,6 +241,13 @@ and nothing else.
 
 ## 8. What is not designed yet
 
+Two lists, and the difference between them matters. The first must exist as a Stitch design before
+anyone builds it, because getting it wrong is expensive and the mistakes are not obvious. The
+second is left to whoever implements it, working from this document — a design round would cost
+more than it would settle.
+
+### Design these first
+
 - **The empty state — "nothing is attached to this machine".** The single most important thing
   still missing. A host with no devices is normal and common: Rover never starts an emulator or
   plugs in a phone, a person does (D21). It must read as intentional, not as an error and not as a
@@ -250,12 +262,22 @@ and nothing else.
   requires it to ask before it fires, but nothing has been designed for the asking. It also needs
   its outcomes: the card becoming free without a reload, and the two refusals that mean different
   things — the lease was already gone, and the device has since vanished from the host.
-- **Placeholders for `Archive` and `System`** while they lead nowhere (R33). They must say so
-  rather than 404; what "say so" looks like is undesigned.
+
+### Leave these to whoever implements them
+
+Build them in keeping with everything above — the palette and tokens, no looping animation, the
+uniform refusal, the vocabulary — and **write what you settled back into this document** (see the
+top of this file). Do not commission a Stitch screen for them.
+
 - **The sign-in screen's four other states** (R34): refused, checking, signed out, and access
-  ended. Only the default form is designed. An earlier revision faked them with a
-  `DEBUG // UI STATES` switcher whose buttons did nothing and whose states existed only as HTML
-  comments — scaffolding, not a design, and it has been removed.
+  ended. Only the default form is designed, and §7 says why polishing this screen is a poor
+  investment: it is a placeholder for email-and-password sign-in. An earlier revision faked these
+  states with a `DEBUG // UI STATES` switcher whose buttons did nothing and whose states existed
+  only as HTML comments — scaffolding, not a design, and it has been removed. Keep the single
+  uniform refusal and the deliberate exception for a revoked session; those two are decisions, not
+  visual choices.
+- **Placeholders for `Archive` and `System`** while they lead nowhere (R33). They must say so
+  rather than 404 — calmly, in the language of the empty states, not as an error.
 
 **Screens 2–4 have not been brought in line with any of this.** Known problems, from a first pass:
 pass/fail semantics are back (a `SUCCESS` chip, `PASS` in a log, green ticks and red crosses beside
