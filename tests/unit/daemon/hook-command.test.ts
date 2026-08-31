@@ -25,16 +25,26 @@ import {
 } from '@/daemon/hook-command.js';
 import type { HookCommand } from '@/daemon/project-hooks.js';
 import { TEARDOWN_TIMEOUT_MS } from '@/daemon/restore.js';
+import { PORTS_PER_SLOT, SLOT_PORT_BASE, type Slot } from '@/daemon/slots.js';
 
 const SERIAL = parseDeviceSerial('attached-1');
 const PROJECT = 'checkout-web';
-const CONTEXT = { project: PROJECT, serial: SERIAL };
+/** Not slot 0, so a value that happened to be a default could not pass for the real one. */
+const SLOT: Slot = {
+	index: 3,
+	portBase: SLOT_PORT_BASE + 3 * PORTS_PER_SLOT,
+	portCount: PORTS_PER_SLOT,
+};
+const CONTEXT = { project: PROJECT, serial: SERIAL, slot: SLOT };
 
 /** Everything the child can see about how it was started, written where the test can read it. */
 const REPORT_SOURCE =
 	"require('node:fs').writeFileSync(process.argv[1], JSON.stringify({" +
 	'project: process.env.ROVER_PROJECT,' +
 	'serial: process.env.ROVER_DEVICE_SERIAL,' +
+	'slot: process.env.ROVER_SLOT,' +
+	'portBase: process.env.ROVER_PORT_BASE,' +
+	'portCount: process.env.ROVER_PORT_COUNT,' +
 	'stage: process.env.STAGE,' +
 	'onPath: process.env.PATH !== undefined,' +
 	'cwd: process.cwd(),' +
@@ -44,6 +54,9 @@ const REPORT_SOURCE =
 interface Report {
 	readonly project: string;
 	readonly serial: string;
+	readonly slot: string;
+	readonly portBase: string;
+	readonly portCount: string;
 	readonly stage: string;
 	readonly onPath: boolean;
 	readonly cwd: string;
@@ -101,6 +114,36 @@ describe('a hook that succeeds', () => {
 		expect(report.stage).toBe('local');
 		expect(report.onPath).toBe(true);
 		expect(report.cwd).toBe(await realpath(dir));
+	});
+
+	it('tells the child its slot and the ports that follow from it', async () => {
+		const marker = join(dir, 'report.json');
+
+		await runHookCommand(nodeHook(REPORT_SOURCE, [marker]), CONTEXT);
+
+		// Numbers stringified, because that is all an environment can carry — and the count is
+		// there so a hook reads the block size rather than hard-coding one that later drifts.
+		const report = JSON.parse(await readFile(marker, 'utf8')) as Report;
+		expect(report.slot).toBe('3');
+		expect(report.portBase).toBe(String(SLOT_PORT_BASE + 3 * PORTS_PER_SLOT));
+		expect(report.portCount).toBe(String(PORTS_PER_SLOT));
+	});
+
+	it('does not let a hook’s own env override the ports it was given', async () => {
+		const marker = join(dir, 'report.json');
+		const hook: HookCommand = {
+			...nodeHook(REPORT_SOURCE, [marker]),
+			// A project that hard-coded its ports before this row existed, or one trying to take
+			// a neighbour's block. The daemon's guarantee is that no two live leases were told
+			// the same numbers, and a declared `env` that won would end it.
+			env: { ROVER_PORT_BASE: '3000', ROVER_SLOT: '0' },
+		};
+
+		await runHookCommand(hook, CONTEXT);
+
+		const report = JSON.parse(await readFile(marker, 'utf8')) as Report;
+		expect(report.portBase).toBe(String(SLOT_PORT_BASE + 3 * PORTS_PER_SLOT));
+		expect(report.slot).toBe('3');
 	});
 
 	it('passes an argument as one argument, whatever is in it', async () => {

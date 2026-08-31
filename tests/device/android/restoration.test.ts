@@ -9,6 +9,7 @@ import { createDeviceInventory } from '@/daemon/inventory.js';
 import { createLeaseHandlers } from '@/daemon/lease-handlers.js';
 import { createLeaseStore } from '@/daemon/leases.js';
 import { createDeviceRestorer } from '@/daemon/restore.js';
+import { createSlotAllocator } from '@/daemon/slots.js';
 
 /**
  * Forced state restoration (D9) driven by the **daemon layer** against a real device.
@@ -54,6 +55,9 @@ function createHost() {
 	let hookRan = false;
 
 	const inventory = createDeviceInventory({ warn: (message) => warnings.push(message) });
+	// A real pool, wired the way `listen.ts` wires one: nothing here asserts about slots, but a
+	// grant needs one and a lease that ended must give it back (R18).
+	const slots = createSlotAllocator();
 	const restorer = createDeviceRestorer({
 		inventory,
 		// Standing in for `project-resolver.ts`, which supplies this from a project hook file —
@@ -65,6 +69,7 @@ function createHost() {
 			},
 		}),
 		warn: (message) => warnings.push(message),
+		onRestored: (lease) => slots.release(lease.slot),
 	});
 	const leases = createLeaseStore({
 		ttlMs: TTL_MS,
@@ -77,7 +82,7 @@ function createHost() {
 		leases,
 		restorer,
 		warnings,
-		handlers: createLeaseHandlers(inventory, leases, restorer),
+		handlers: createLeaseHandlers(inventory, leases, restorer, slots),
 		hookRan: () => hookRan,
 		at: (instant: number) => {
 			nowMs = instant;

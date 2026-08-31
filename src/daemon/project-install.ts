@@ -31,6 +31,7 @@ import {
 import { INSTALL_HOOK_TIMEOUT_MS } from '../verbs/files.js';
 import { HookCommandFailedError, runHookCommand } from './hook-command.js';
 import { readProjectHooks } from './project-hooks.js';
+import type { Slot } from './slots.js';
 
 /**
  * How a lease's `project` and its device become an install that has happened.
@@ -41,6 +42,10 @@ import { readProjectHooks } from './project-hooks.js';
  * nothing a caller sent, which is what makes an install land on the leased device and never on
  * a neighbour's — the worst failure this tool has, and one that looks like success from both
  * sides (PROJECT.md §2).
+ *
+ * **And the lease's slot**, off the same lease and for the same reason (R18, `./slots.ts`): an
+ * install that starts a helper service has to be told ports no other live lease was given, and
+ * the teardown that stops it is told the same block through the resolver's seam.
  *
  * **And a way to stop one that is still running.** A build is the longest thing a verb call
  * awaits on this host and it is not a backend call, so `./verb-traffic.ts`'s guard cannot reach
@@ -54,6 +59,7 @@ import { readProjectHooks } from './project-hooks.js';
 export type ProjectInstall = (
 	project: string,
 	serial: DeviceSerial,
+	slot: Slot,
 	signal?: AbortSignal,
 ) => Promise<void>;
 
@@ -79,7 +85,7 @@ export interface ProjectInstallOptions {
  * @throws InstallHookFailedError when the command ran and did not succeed.
  */
 export function createProjectInstall(options: ProjectInstallOptions): ProjectInstall {
-	return async (project, serial, signal) => {
+	return async (project, serial, slot, signal) => {
 		// Throws for a file that exists and will not parse, and that throw is *not* contained
 		// here the way `./restore.ts` contains the resolver's: a teardown swallowing it still
 		// leaves the device restored, while an install swallowing it would report the caller's
@@ -99,6 +105,7 @@ export function createProjectInstall(options: ProjectInstallOptions): ProjectIns
 			await runHookCommand(install, {
 				project,
 				serial,
+				slot,
 				timeoutMs: options.hookTimeoutMs ?? INSTALL_HOOK_TIMEOUT_MS,
 				// Omitted rather than passed as `undefined`, so a caller without a verb call behind
 				// it reads as one that never had a signal.

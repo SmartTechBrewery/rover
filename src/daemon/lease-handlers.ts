@@ -17,6 +17,14 @@
  * process is watching that device between the moment the holder's TTL passes and the moment
  * somebody asks about it.
  *
+ * **The slot is taken inside that same synchronous section** (R18, `./slots.ts`). A lease's
+ * helper-service ports are handed out by one allocator, so two concurrent grants cannot both be
+ * given one block for exactly the reason they cannot both be given one device — the allocation
+ * sits immediately before `leases.acquire`, with no `await` between it and either committing the
+ * slot to a lease or handing it straight back. It is taken *after* the capability lookup, the one
+ * thing on that path that can throw, so nothing that can throw runs while a slot is held by
+ * nobody.
+ *
  * A second ordering rule holds for the same reason in reverse: **nothing that can throw may
  * run after a successful acquire.** A throw becomes `internal_error`, the caller never learns
  * the lease id, and the device is wedged for the full TTL with nobody able to release it. The
@@ -43,6 +51,7 @@ import type { DeviceInventory } from './inventory.js';
 import { toLeaseHolder } from './lease-holder.js';
 import type { LeaseStore } from './leases.js';
 import type { DeviceRestorer } from './restore.js';
+import type { SlotAllocator } from './slots.js';
 
 export type LeaseHandlers = Pick<IpcHandlers, 'acquire_device' | 'release_device'>;
 
@@ -59,6 +68,7 @@ export function createLeaseHandlers(
 	inventory: DeviceInventory,
 	leases: LeaseStore,
 	restorer: DeviceRestorer,
+	slots: SlotAllocator,
 ): LeaseHandlers {
 	return {
 		async acquire_device(params: AcquireDeviceParams): Promise<AcquireDeviceResult> {
@@ -103,6 +113,25 @@ export function createLeaseHandlers(
 			const { manifest } = requireDeviceBackend(device.platform);
 
 			// Nothing between here and the return may await.
+
+			// Taken here, after the only thing above that can throw and before the insert, so a
+			// slot is never held by nobody and two concurrent grants cannot be given one block.
+			// Every lease gets one whether or not its project declares hooks: deciding otherwise
+			// would mean reading the hook file, which is a file read, which is an `await` in the
+			// one section that may not have one.
+			const slot = slots.allocate();
+			if (slot === null) {
+				return {
+					outcome: 'refused',
+					reason: 'no-slot',
+					message:
+						`Device '${device.serial}' is free, but all ${slots.size} helper-service slots ` +
+						`on this host are in use, so this lease would have no ports. Release a lease ` +
+						`and ask again`,
+					heldBy: null,
+				};
+			}
+
 			const outcome = leases.acquire({
 				serial: device.serial,
 				owner: params.owner,
@@ -110,9 +139,14 @@ export function createLeaseHandlers(
 				// `undefined` does not survive JSON, so an omitted name is stored and reported as
 				// `null` rather than as an absent key a client would have to special-case.
 				testName: params.testName ?? null,
+				slot,
 			});
 
 			if (!outcome.granted) {
+				// Straight back into the pool, still synchronously and still before any `await`: a
+				// refusal that kept the slot would leak one per contended acquire, and this host
+				// would run out of ports without a single lease being held.
+				slots.release(slot);
 				return {
 					outcome: 'refused',
 					reason: 'held',
