@@ -62,13 +62,14 @@ export interface Lease {
 	/** Caller-supplied and optional; `null` when it was not given. Not unique (D22). */
 	readonly testName: string | null;
 	/**
-	 * When this lease was granted. A host-local instant that **never crosses the wire**, for
-	 * {@link Lease.expiresAtMs}'s reason.
+	 * When this lease was granted. The one host-local instant that *does* reach a client —
+	 * `./lease-holder.ts` renders it as a UTC string on `LeaseHolderSchema`, because a
+	 * stranger cannot derive it from the remaining duration: {@link LeaseStore.use} moves the
+	 * expiry on every call and never moves this.
 	 *
-	 * It is what the artifact archive names this lease's directory after
-	 * (`./archive-path.ts`), which is why it is not derived from `expiresAtMs`: {@link
-	 * LeaseStore.use} pushes that one forward on every verb call, so a directory named from
-	 * it would move with the lease's last activity rather than sit where the run started.
+	 * It is also what the artifact archive names this lease's directory after
+	 * (`./archive-path.ts`), and for the same reason: a directory named from the expiry would
+	 * move with the lease's last activity rather than sit where the run started.
 	 */
 	readonly createdAtMs: number;
 	/**
