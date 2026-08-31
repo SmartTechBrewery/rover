@@ -120,6 +120,8 @@ npm run -s rover -- list --json
       "serial": "emulator-5554",
       "platform": "android",
       "model": "sdk_gphone64_arm64",
+      "osVersion": "15",
+      "osApiLevel": 35,
       "state": "ready",
       "attachment": "this-host",
       "heldBy": {
@@ -1230,7 +1232,10 @@ wire protocol and the transport-agnostic client and server, `src/daemon/` the so
 inventory and the leases — plus the host-side tools the verbs are handed, such as the frame
 extractor, the durable artifact archive (`src/daemon/archive.ts`) and the per-project hook files
 (`src/daemon/project-hooks.ts`) — `src/cli/` the `rover` command, and `src/mcp/` the MCP server,
-whose entry an agent's configuration names through `bin/rover-mcp.mjs`.
+whose entry an agent's configuration names through `bin/rover-mcp.mjs`. The web panel is the one
+tree outside `src/`: `panel/` is a Vite + React application with its own `tsconfig.json`, sharing
+the repository's single `package.json` so that `npm ci` and `npm run verify` reach it without a
+second install.
 
 ## Shape
 
@@ -1245,10 +1250,23 @@ one agent screenshots the other's build.
 ## Working on this repo
 
 Read `ai/RULES.md` in full first. `npm install` sets up the toolchain and installs the git hooks;
-`npm run verify` (lint, typecheck, unit tests) is the one command that says whether the tree is
-healthy — it needs no device and no host tool. `npm run test:device` needs a device on `adb`, and
+`npm run verify` (lint, typecheck of both the Node tree and the panel, then the unit and panel test
+projects) is the one command that says whether the tree is healthy — it needs no device and no host
+tool. `npm run test:device` needs a device on `adb`, and
 the `record_video` cases additionally need `ffmpeg` on `PATH`; a host missing either **skips those
 suites loudly** rather than failing or passing in silence. Issues are filed with `/write-issue` and implemented with
 `/solve-issue`; both are committed under `.claude/skills/`. Work is also delegated to
 [Swarm](https://github.com/SmartTechBrewery/swarm), which is why every issue carries the `swarm`
 label.
+
+### The web panel
+
+`npm run panel:dev` serves it on <http://localhost:5174>; `npm run panel:build` writes
+`panel/dist` and `npm run panel:preview` serves that. **It is not yet served by the host** — the
+daemon has no HTTP surface, and giving it one is a separate piece of work — so the panel is a
+development server for now and reads no live data.
+
+Its design comes from Stitch, not from this repository: `ai/RULES.md` §8 is how to reach it and
+`docs/DESIGN.md` is what the screens settled. The Analog Horizon tokens live in
+`panel/src/tokens.css`, which is the only file in the panel allowed to write a colour value —
+`tests/unit/panel/` holds the gates that keep it that way.

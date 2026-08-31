@@ -1,14 +1,24 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { isEmulatorFromProps, parseGetprop } from '@/backends/android/parsers/getprop.js';
+import {
+	isEmulatorFromProps,
+	OS_VERSION_PROPERTIES,
+	parseGetprop,
+	parseOsVersion,
+} from '@/backends/android/parsers/getprop.js';
 
 // The filename records what the device answered; the assertions below check the parser
 // against it, so a re-captured fixture that disagrees with its own name fails here.
 const FIXTURE = 'getprop.api37-sdk-gphone16k-arm64.txt';
-const GETPROP = readFileSync(
-	new URL(`../../../../fixtures/adb/${FIXTURE}`, import.meta.url),
-	'utf8',
-);
+const fixture = (name: string): string =>
+	readFileSync(new URL(`../../../../fixtures/adb/${name}`, import.meta.url), 'utf8');
+
+const GETPROP = fixture(FIXTURE);
+
+/** The enumeration probe's own captures — the two bare values, and one absent property. */
+const VERSION_FIXTURE = 'getprop-version.api37-sdk-gphone16k-arm64.txt';
+const VERSION = fixture(VERSION_FIXTURE);
+const VERSION_ABSENT = fixture('getprop-version.absent.api37-sdk-gphone16k-arm64.txt');
 
 describe('parseGetprop', () => {
 	it('reads the API level and model the fixture is named after', () => {
@@ -126,5 +136,61 @@ describe('isEmulatorFromProps', () => {
 	it('reads ro.build.characteristics as a comma-separated list', () => {
 		expect(isEmulatorFromProps({ 'ro.build.characteristics': 'nosdcard,emulator' })).toBe(true);
 		expect(isEmulatorFromProps({ 'ro.build.characteristics': 'nosdcard,default' })).toBe(false);
+	});
+});
+
+describe('parseOsVersion', () => {
+	it('reads the API level the fixture is named after, and the version beside it', () => {
+		const version = parseOsVersion(VERSION);
+
+		expect(VERSION_FIXTURE).toContain(`api${version.apiLevel}-`);
+		expect(version.apiLevel).toBe(37);
+		expect(version.androidRelease).toBe('17');
+	});
+
+	// The point of the cheap probe is that it answers what the full dump answers. Both
+	// captures come off the same device, so a disagreement here is a parser bug rather than
+	// two devices differing.
+	it('agrees with the full dump captured from the same device', () => {
+		const props = parseGetprop(GETPROP);
+
+		expect(parseOsVersion(VERSION)).toEqual({
+			androidRelease: props.androidRelease,
+			apiLevel: props.apiLevel,
+		});
+	});
+
+	it('returns exactly the agreed shape', () => {
+		expect(Object.keys(parseOsVersion(VERSION)).sort()).toEqual(['androidRelease', 'apiLevel']);
+	});
+
+	/**
+	 * The captured reason the values may be read positionally: `getprop` prints an **empty
+	 * line** for a property the device does not have rather than nothing at all, so the line
+	 * count is stable and the second value is still the second line (PROJECT.md §6).
+	 */
+	it('reads a property the device does not have as null, and still reads the next one', () => {
+		expect(parseOsVersion(VERSION_ABSENT)).toEqual({ androidRelease: null, apiLevel: 37 });
+	});
+
+	// Synthetic, from the captured text: a device shell that translates `\n` to `\r\n` is a
+	// trap this repo has already been bitten by (PROJECT.md §6).
+	it('parses identically when the device shell used CRLF line endings', () => {
+		expect(parseOsVersion(VERSION.replaceAll('\n', '\r\n'))).toEqual(parseOsVersion(VERSION));
+	});
+
+	it('reads a non-numeric API level as null rather than as NaN', () => {
+		expect(parseOsVersion('17\nnot-a-number\n').apiLevel).toBeNull();
+	});
+
+	it('answers nulls rather than throwing when the device printed nothing at all', () => {
+		expect(parseOsVersion('')).toEqual({ androidRelease: null, apiLevel: null });
+	});
+
+	it('reads the two properties the backend asks for, in the order it asks for them', () => {
+		expect([...OS_VERSION_PROPERTIES]).toEqual([
+			'ro.build.version.release',
+			'ro.build.version.sdk',
+		]);
 	});
 });

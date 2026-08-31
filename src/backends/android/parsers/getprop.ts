@@ -4,6 +4,12 @@
  * This is where "never parse a serial to infer anything" (ai/CODING_STANDARDS.md) is
  * actually paid for: `./devices.js` reports a serial and says nothing about it, and
  * emulator-vs-physical is decided **here**, from properties the device was asked for.
+ *
+ * Two entry points, because `getprop` prints two different things. {@link parseGetprop}
+ * reads the `[key]: [value]` records of a full dump — every property, and what
+ * `device_info` is built from. {@link parseOsVersion} reads the bare values of the two
+ * properties the *enumeration* asks each device for, which is a narrower and much cheaper
+ * read of facts the full dump also carries.
  */
 
 import { z } from 'zod';
@@ -85,6 +91,16 @@ function optional(all: Record<string, string>, key: string): string | null {
 }
 
 /**
+ * `ro.build.version.sdk` as a number, or `null` for anything that is not one.
+ *
+ * One helper for both parsers here, so the full dump and the narrow probe cannot come to
+ * different conclusions about what an API level is.
+ */
+function toApiLevel(sdk: string | null): number | null {
+	return sdk !== null && /^\d+$/.test(sdk) ? Number(sdk) : null;
+}
+
+/**
  * Continue a value that ran past `lines[start]`, which opened with `head`.
  *
  * Ends at the first line closing with `]`, and gives up at a line that opens the next
@@ -141,15 +157,67 @@ export function parseGetprop(stdout: string): DeviceProperties {
 		i = rest.last;
 	}
 
-	const sdk = optional(all, 'ro.build.version.sdk');
-	const apiLevel = sdk !== null && /^\d+$/.test(sdk) ? Number(sdk) : null;
-
 	return DevicePropertiesSchema.parse({
 		all,
-		apiLevel,
+		apiLevel: toApiLevel(optional(all, 'ro.build.version.sdk')),
 		androidRelease: optional(all, 'ro.build.version.release'),
 		model: optional(all, 'ro.product.model'),
 		manufacturer: optional(all, 'ro.product.manufacturer'),
 		isEmulator: isEmulatorFromProps(all),
+	});
+}
+
+/**
+ * The two properties the enumeration probe reads, in the order the recipe prints them —
+ * the marketing version first, the API level second (PROJECT.md §6).
+ *
+ * Exported so the backend builds its command line from the same list this parser reads
+ * positionally, rather than from a second copy of the key names.
+ */
+export const OS_VERSION_PROPERTIES = ['ro.build.version.release', 'ro.build.version.sdk'] as const;
+
+/**
+ * The OS version of one device, as the narrow probe answers it.
+ *
+ * The same two facts {@link DeviceProperties} carries, under the same names and with the
+ * same nullability — this is a cheaper way of reading them, not a different question.
+ */
+export const OsVersionSchema = z
+	.object({
+		/** `ro.build.version.release` — the marketing version, e.g. `17`. */
+		androidRelease: z.string().nullable(),
+		/** `ro.build.version.sdk`. */
+		apiLevel: z.number().int().positive().nullable(),
+	})
+	.strict();
+
+export type OsVersion = z.infer<typeof OsVersionSchema>;
+
+/**
+ * Parse the enumeration probe's output: the bare values of
+ * {@link OS_VERSION_PROPERTIES}, one per line, in that order.
+ *
+ * Its own function rather than a flag on {@link parseGetprop}, because the two read
+ * different text: that one reads the `[key]: [value]` records of a full dump, this one
+ * reads values with no keys beside them. So the values are read **positionally**, which
+ * `getprop` makes safe — a property the device does not have prints an *empty line*
+ * rather than nothing at all and rather than failing the command, measured on API 37
+ * (PROJECT.md §6). An empty or absent line is a `null`, on
+ * {@link DeviceProperties}' terms.
+ *
+ * A trailing `\r` is stripped per line, for the reason every parser here does it: a
+ * device shell that translates `\n` to `\r\n` is a trap this repo has already been bitten
+ * by (PROJECT.md §6).
+ */
+export function parseOsVersion(stdout: string): OsVersion {
+	const lines = stdout.split('\n').map((line) => line.replace(/\r$/, ''));
+	const value = (index: number): string | null => {
+		const line = lines[index];
+		return line === undefined || line.length === 0 ? null : line;
+	};
+
+	return OsVersionSchema.parse({
+		androidRelease: value(0),
+		apiLevel: toApiLevel(value(1)),
 	});
 }
