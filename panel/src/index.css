@@ -1,0 +1,76 @@
+@import 'tailwindcss';
+@import './tokens.css';
+
+@layer base {
+	body {
+		background-color: var(--color-surface);
+		color: var(--color-on-surface);
+		font-family: var(--font-body-md);
+		font-size: var(--text-body-md);
+		line-height: var(--text-body-md--line-height);
+	}
+
+	/*
+	 * The CRT scanline. It is a *static* 4px repeating gradient and does not move —
+	 * `docs/DESIGN.md` §5. Two rules ride on it and both are load-bearing:
+	 *
+	 *   1. It is never a fixed full-viewport layer, and never in a blend mode. The emitted
+	 *      design markup applied it exactly that way, which tints a screenshot of a mobile
+	 *      app — the one thing on those screens the operator opened the panel to look at.
+	 *   2. It is confined to interface chrome. Any region that will render a screenshot, an
+	 *      extracted video frame or a log dump stays clean.
+	 *
+	 * The reference screen darkened with a bare `rgba(0,0,0,0.1)`. That is the palette's
+	 * darkest surface at a tenth, and reading it as one keeps "no colour literal outside
+	 * tokens.css" absolute rather than nearly so; over every surface in this palette the two
+	 * differ by less than one step per channel.
+	 */
+	.scanline {
+		--scanline-ink: color-mix(in srgb, var(--color-surface-container-lowest) 10%, transparent);
+		background: linear-gradient(
+			to bottom,
+			transparent,
+			transparent 50%,
+			var(--scanline-ink) 50%,
+			var(--scanline-ink)
+		);
+		background-size: 100% 4px;
+		pointer-events: none;
+	}
+
+	/*
+	 * The chromatic offset on the wordmark, at the reference screen's own half opacity.
+	 * Wordmark only, never on data: serials, timestamps and hashes stay crisp
+	 * (`docs/DESIGN.md` §5).
+	 */
+	.wordmark-chroma {
+		text-shadow:
+			2px 0 color-mix(in srgb, var(--color-primary) 50%, transparent),
+			-2px 0 color-mix(in srgb, var(--color-secondary-container) 50%, transparent);
+	}
+
+	/*
+	 * The active nav item's hard-edge offset, the design system's "borders as depth" in place
+	 * of an ambient shadow. The reference screen wrote the colour inline as
+	 * `rgba(0,226,157,1)`; it is the tertiary token and is read as one here.
+	 */
+	.nav-item-active-tactile {
+		box-shadow: 2px 2px 0 0 var(--color-tertiary);
+	}
+
+	/*
+	 * There is no looping animation anywhere in the panel (`docs/DESIGN.md` §5), so the only
+	 * motion this can reach is hover and press feedback. It is still declared, because the
+	 * rule has to survive the next component someone adds.
+	 */
+	@media (prefers-reduced-motion: reduce) {
+		*,
+		*::before,
+		*::after {
+			transition-duration: 0.01ms !important;
+			animation-duration: 0.01ms !important;
+			animation-iteration-count: 1 !important;
+			scroll-behavior: auto !important;
+		}
+	}
+}

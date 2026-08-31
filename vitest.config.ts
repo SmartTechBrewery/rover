@@ -1,9 +1,15 @@
 import path from 'node:path';
 import { defineConfig } from 'vitest/config';
 
-// Mirror Swarm's `@/*` → `src/*` alias so imports resolve the same way tsc does.
+// Mirror Swarm's `@/*` → `src/*` alias so imports resolve the same way tsc does. The panel
+// deliberately gets a *different* prefix (`@panel/*` → `panel/src/*`, panel/tsconfig.json) so
+// one alias never means two trees; this one is repo-wide and would otherwise reach into the
+// panel project too.
 const resolve = {
-	alias: [{ find: '@', replacement: path.resolve(__dirname, './src') }],
+	alias: [
+		{ find: '@panel', replacement: path.resolve(__dirname, './panel/src') },
+		{ find: '@', replacement: path.resolve(__dirname, './src') },
+	],
 };
 
 const sharedTest = {
@@ -27,6 +33,23 @@ export default defineConfig({
 					include: ['tests/unit/**/*.test.ts'],
 					pool: 'threads',
 					...sharedTest,
+				},
+				resolve,
+			},
+			// The panel's component tests, co-located beside what they render. jsdom for the
+			// whole project rather than Swarm's per-file `@vitest-environment` pragma, since
+			// everything under `panel/src` is a component. Deliberately no `tests/setup.ts`:
+			// its job is keeping a daemon out of the operator's own artifact tree, and the
+			// panel starts no daemon.
+			{
+				test: {
+					name: 'panel',
+					include: ['panel/src/**/*.test.{ts,tsx}'],
+					globals: true,
+					environment: 'jsdom',
+					clearMocks: true,
+					unstubEnvs: true,
+					pool: 'threads',
 				},
 				resolve,
 			},

@@ -7,12 +7,14 @@ pre-commit:
       stage_fixed: true
     typecheck:
       run: npx tsc --noEmit -p tsconfig.typecheck.json
+    typecheck-panel:
+      run: npx tsc --noEmit -p panel/tsconfig.json
 
 pre-push:
   parallel: true
   commands:
     test:
-      run: npm run test:unit
+      run: npm test
 
 commit-msg:
   commands:

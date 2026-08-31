@@ -44,6 +44,25 @@ Earlier versions of each still exist and **must not be built from**. There is no
 screen through the API — only `delete_project`, which takes everything — so every iteration
 accumulates.
 
+**In the code, the tokens live in `panel/src/tokens.css`** (#111) — one `@theme static` block,
+harvested from `designMd` and captured verbatim beside it as
+`tests/fixtures/design/analog-horizon-tokens.json`. It is the only file in the panel allowed to
+write a colour value, and `tests/unit/panel/tokens-are-the-source-of-truth.test.ts` enforces both
+halves of that: every value in the fixture reached the file, and nothing under `panel/src` writes a
+colour anywhere else.
+
+Two things about the mapping, because neither is guessable from either end:
+
+- **Tailwind v4 shifted its radius scale one step.** Analog Horizon's five radii are exactly v4's
+  `xs`…`xl`, so the design's `sm` is `rounded-xs`, its `DEFAULT` (4px — the base radius for buttons
+  and inputs) is **`rounded-sm`**, and its `lg` (8px — cards and layout sections) is `rounded-lg`.
+  A rename, not a re-valuing. The design's `full` has no v4 theme key; `rounded-full` is built in.
+- **The design's spacing `unit` is v4's whole spacing scale.** `--spacing: 4px` makes `p-4` 16px and
+  `gap-5` the design's own 20px gutter. The four named measures (`gutter`, `margin-mobile`,
+  `margin-desktop`, `container-max`) stay plain custom properties read as `p-(--margin-desktop)`:
+  `--container-max` inside `@theme` lands in v4's `--container-*` namespace and emits a `max-w-max`
+  that shadows the built-in `max-width: max-content`.
+
 ---
 
 ## 2. What the panel is
@@ -98,7 +117,8 @@ hierarchy and nothing else**.
   path with a `SUCCESS` chip; that is wrong twice over.
 - It stayed at its original size after the heading went. That was checked rather than assumed: it
   is small, and it is enough, because the active nav item is carrying the same information beside
-  it.
+  it. In code that 12px comes from Tailwind's own `--text-xs` rather than from `text-label-caps`,
+  which would drag 700 weight and 0.1em tracking along with the size (#111).
 
 **The header row** below it holds one line describing the screen on the left and the held/free
 counter on the right, above a rule. On Devices that line is *"Monitoring attached physical and
@@ -106,9 +126,30 @@ virtual devices."* All three Devices states share this row's shape — they are 
 screen, and a header that differs between them is the thing most of this document exists to
 correct.
 
+**Destinations that lead nowhere yet — settled** (#111). `Archive`, `System` and `Profile` have
+routes and say plainly that they are not built yet, rather than 404ing; so does any unknown
+address, through the router's own not-found component. One shared component says it, in the
+language of the empty states (§7): a heading, one sentence naming what is missing, and one closing
+line. No error or warning colour, no icon of alarm, no spinner, no progress-shaped ornament, no
+`role="alert"`, and **no control** — there is nothing here to do yet, and a button would be the
+first thing to lie about that. `Profile` gets one for the same reason the other two do: a nav item
+pinned in the chrome that does nothing when clicked is worse than one that says where it stands.
+
+**The closing line differs between the two cases, on purpose.** A screen that is not built yet gets
+*"It will be. Nothing is wrong here."*; an unknown address gets *"Check the address, or pick a
+destination from the navigation."* A single reassurance for both would be false in one of them —
+that address is not going to be built.
+
 **One height.** The sidebar and the content area share it. With short content the page ends at the
 foot of the viewport and `Profile` sits on that line; with long content the sidebar stretches to
 the full page height. Neither column ever paints background below where the other ends.
+
+*As built* (#111): one flex row, `min-h-screen`, sidebar first. A flex row stretches its children
+to the row's height and the row is `max(100vh, content)`, so both halves of the rule fall out of
+one declaration. **The sidebar carries no `fixed`, `sticky` or `absolute`, and `<main>` carries no
+`ml-*` to compensate** — see §4. The accepted cost is that the navigation scrolls away on a long
+page; Swarm's dashboard pins its sidebar with `md:sticky md:h-screen` instead, and this rule wins
+here.
 
 ---
 
@@ -127,6 +168,14 @@ the full page height. Neither column ever paints background below where the othe
   edge.
 - Cards must survive a realistic host. Three devices look fine; **eight phones attached is an
   ordinary machine**, and tall cards scroll badly at that count.
+
+*As built* (#111): `<main>` carries `p-(--margin-desktop)`, which is the equal-margins rule in one
+declaration — the gap from the sidebar's border to the content is the same token as the gap from
+the content to the page edge. It also carries `min-w-0`, which is the *other* half of the bug
+above: without it a flex item cannot shrink below its contents' intrinsic width, and a grid inside
+it loses tracks for reasons that look nothing like the sidebar. `app-shell.test.tsx` asserts both —
+that the sidebar's class list contains none of `fixed`, `sticky`, `absolute`, and that `<main>`
+carries no horizontal margin.
 
 ---
 
@@ -148,8 +197,23 @@ mode: two of the four screens are mostly screenshots of mobile apps, and an over
 thing the user opened the screen to look at. Any region rendering a screenshot, an extracted frame
 or a log dump is clean.
 
+*As built* (#111): a `.scanline` class on the sidebar and nothing else, as an `absolute inset-0`
+child of that one element. The emitted design markup applied it **twice** — once per-element on
+chrome, and once as `fixed inset-0 … mix-blend-overlay`, a full-viewport blended layer, which is
+the exact thing this rule forbids. The fixed layer is deleted and the blend mode with it.
+`app-shell.test.tsx` asserts that `<main>` contains no `.scanline` and that no scanline element is
+`fixed` or in a blend mode.
+
 **The chromatic text-shadow is for the wordmark only.** Never on data — serials, UTC timestamps,
 short hashes and file names stay crisp and are never truncated or ellipsised.
+
+*As built* (#111): a `.wordmark-chroma` class, asserted by
+`tests/unit/panel/tokens-are-the-source-of-truth.test.ts` to be referenced from exactly one
+component. The reference screen wrote its two colours inline at 0.5 alpha; the class reads them
+from `--color-primary` and `--color-secondary-container` through `color-mix`, so the alpha is
+carried and no colour literal reaches it. The active nav item's `2px 2px` offset is
+`.nav-item-active-tactile` for the same reason — the screen had it as `rgba(0,226,157,1)`, which is
+the tertiary token spelled out.
 
 **Status LEDs are one component.** Same fill, same border, everywhere they appear; only the size
 changes with context (3 on a card header, 2.5 in the counter badge). None of them glows.
@@ -389,6 +453,13 @@ more than it would settle.
 Nothing, at present. Everything the Devices screen needs has a design; what is left is below.
 
 
+### Open, and not blocking anything
+
+- **The three font families are loaded from Google Fonts over the network** (#111). On a host with
+  no internet the panel falls back to system faces — legible, and wrong. Self-hosting them through
+  `@fontsource` is the fix and has not been done; it is worth doing in the change that first serves
+  the panel from the daemon, since that is when a Rover host stops being assumed to be online.
+
 ### Leave these to whoever implements them
 
 Build them in keeping with everything above — the palette and tokens, no looping animation, the
@@ -414,8 +485,6 @@ top of this file). Do not commission a Stitch screen for them.
   without a reload; the lease having already ended on its own between the page loading and the
   click, which is news rather than a failure; and the device having since vanished from the host,
   so there is nothing left to release *or to show*.
-- **Placeholders for `Archive` and `System`** while they lead nowhere (R33). They must say so
-  rather than 404 — calmly, in the language of the empty states, not as an error.
 
 **Screens 2–4 have not been brought in line with any of this.** Known problems, from a first pass:
 pass/fail semantics are back (a `SUCCESS` chip, `PASS` in a log, green ticks and red crosses beside
@@ -445,3 +514,17 @@ label rather than as a path.
 - Emitted HTML is Tailwind-CDN markup: useful for harvesting tokens, poor as an application
   starting point. It carries dead classes (`flat no shadows`), a duplicated stylesheet link and
   three font families. Harvest the tokens; rewrite the markup.
+- **The emitted Tailwind config's `borderRadius` block is wrong, and nothing in the markup says
+  so.** It reads `DEFAULT: 0.125rem, lg: 0.25rem, xl: 0.5rem, full: 0.75rem` — shifted one step
+  down from `designMd`'s own `rounded` map, with a `full` that cannot be a pill. Its colour, type
+  and spacing blocks *do* agree with `designMd`, which is what makes the radii dangerous. **Harvest
+  every token from `designMd`, never from the emitted config.**
+- **The screen carries `class="dark"` and a `dark:` variant on most colour utilities.** The design
+  is dark-only, so the `dark:` half is the effective one — usually the same value twice, but not
+  always: the reference's inactive nav hover is `hover:bg-surface-container-high
+  dark:hover:bg-surface-container-highest`, and it is the second that renders. Read the effective
+  value, do not assume the pair is redundant.
+- **The `md:hidden` mobile header is not portable.** Its content is a global `FORCE RELEASE`
+  button, a `settings` icon, an `account_circle` icon and a second copy of the sidebar's wordmark —
+  an action the shell may not carry (§7), plus a duplicate. It was dropped in #111 rather than
+  reproduced; below `md` the sidebar stacks full-width above the content.
