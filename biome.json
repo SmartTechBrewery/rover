@@ -38,7 +38,8 @@
 			"!**/dist",
 			"!**/coverage",
 			"!**/*.json",
-			"!.claude/**/*.md"
+			"!.claude/**/*.md",
+			"!panel/src/**/*.css"
 		]
 	}
 }
