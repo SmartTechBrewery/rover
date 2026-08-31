@@ -1,0 +1,49 @@
+{
+  "devices": [
+    {
+      "serial": "emulator-5554",
+      "platform": "android",
+      "model": "sdk_gphone64_arm64",
+      "osVersion": "15",
+      "osApiLevel": 35,
+      "state": "ready",
+      "attachment": "this-host",
+      "heldBy": {
+        "serial": "emulator-5554",
+        "owner": "issue-113",
+        "project": "rover",
+        "testName": "the devices grid",
+        "grantedAt": "2026-08-31T18:48:48.247Z",
+        "expiresInMs": 1186759
+      }
+    },
+    {
+      "serial": "emulator-5556",
+      "platform": "android",
+      "model": "sdk_gphone64_arm64",
+      "osVersion": "15",
+      "osApiLevel": 35,
+      "state": "ready",
+      "attachment": "this-host",
+      "heldBy": {
+        "serial": "emulator-5556",
+        "owner": "pr-127-review",
+        "project": "checkout-app",
+        "testName": null,
+        "grantedAt": "2026-08-31T18:49:38.416Z",
+        "expiresInMs": 1199974
+      }
+    },
+    {
+      "serial": "emulator-5558",
+      "platform": "android",
+      "model": null,
+      "osVersion": null,
+      "osApiLevel": null,
+      "state": "unauthorized",
+      "attachment": "this-host",
+      "heldBy": null
+    }
+  ],
+  "stale": false
+}

@@ -88,13 +88,20 @@ export function ProfileScreen() {
 				 * `aria-live="polite"` and no colour of alarm, for §7's reason: a host that did not
 				 * answer is news, not an emergency, and nothing here has gone wrong with the session.
 				 * The element is present in both states so the region exists before the text does.
+				 *
+				 * **It does not say "try again", and that is deliberate** (#123). The device poll
+				 * fails on the very `fetch` that made this sign-out unanswered, so within `POLL_MS`
+				 * `app.tsx` replaces the router — this screen and its control included — with the
+				 * unreachable page. Instructing an action that is about to have no control left to
+				 * perform it is the one thing this line must not do; it says what happened and where
+				 * the panel is going instead.
 				 */}
 				<p
 					aria-live="polite"
 					className="mt-4 max-w-prose font-body-md text-body-md text-on-surface"
 				>
 					{unreachable
-						? 'Nothing answered on the host, so the session is still open and you are still signed in. Try again.'
+						? 'Nothing answered on the host, so the session is still open and you are still signed in. If the host stays unreachable the panel says so in place of this page — sign out again once it is back.'
 						: ''}
 				</p>
 			</section>

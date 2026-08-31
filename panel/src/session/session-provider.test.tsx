@@ -17,6 +17,10 @@ import { SessionProvider, useSession } from './session-provider.js';
  * session id without the host's answer** (`docs/DESIGN.md` §8). A sign-out nothing answered ended
  * nothing, and an id kept by an unreachable boot probe is offered to the host before the next
  * sign-in overwrites it.
+ *
+ * A fourth property joined them with `Session.call`: a screen gets a *method* rather than the
+ * credential, and the bounce on a `401` happens inside this module — so no screen can be written
+ * that forgets it.
  */
 
 const STORAGE_KEY = 'rover.panel.session';
@@ -31,10 +35,12 @@ const IDENTITY = { identifier: 'panel', displayName: 'Panel' };
 
 /** Every state as one readable string, so a test asserts on the machine and not on a render. */
 function Probe() {
-	const { state, signIn, signOut, onRefusal } = useSession();
+	const { state, signIn, signOut, onRefusal, call } = useSession();
 	// What the last sign-out reported. `Profile` is the screen that has to say this out loud, and
 	// the outcome is the only way it can (`session-provider.tsx`, `SignOutOutcome`).
 	const [outcome, setOutcome] = useState('');
+	// What the last `call` answered, in the same one-string style as the state above.
+	const [answer, setAnswer] = useState('');
 
 	return (
 		<div>
@@ -46,6 +52,7 @@ function Probe() {
 				{state.status === 'access-ended' ? 'access-ended' : ''}
 			</span>
 			<span data-testid="outcome">{outcome}</span>
+			<span data-testid="answer">{answer}</span>
 			<button onClick={() => void signIn('the-printed-token')} type="button">
 				present
 			</button>
@@ -59,6 +66,16 @@ function Probe() {
 			</button>
 			<button onClick={onRefusal} type="button">
 				bounce
+			</button>
+			<button
+				onClick={() => {
+					void call('list_devices', {}).then((given) =>
+						setAnswer(given.ok ? `ok:${given.value.type}` : given.refusal),
+					);
+				}}
+				type="button"
+			>
+				ask
 			</button>
 		</div>
 	);
@@ -78,6 +95,10 @@ function state(): string {
 
 function outcome(): string {
 	return screen.getByTestId('outcome').textContent ?? '';
+}
+
+function answer(): string {
+	return screen.getByTestId('answer').textContent ?? '';
 }
 
 function stored(): string | null {
@@ -341,5 +362,95 @@ describe('the session provider', () => {
 		press('bounce');
 
 		expect(state()).toBe('signed-out:arrival');
+	});
+});
+
+/**
+ * The one way a screen reaches the host, and the reason it exists: the session id stays in a ref
+ * here and a screen gets a method instead of a credential.
+ */
+describe('a call carrying the session', () => {
+	beforeEach(() => {
+		fetchMock.mockReset();
+		vi.stubGlobal('fetch', fetchMock);
+	});
+
+	async function signedIn(): Promise<void> {
+		fetchMock.mockResolvedValue(answered(200, { session: 'a-session-id', ...IDENTITY }));
+		mount();
+		press('present');
+		await waitFor(() => expect(state()).toBe('signed-in:Panel'));
+		fetchMock.mockReset();
+	}
+
+	it('presents the session in the header, and hands back the envelope unparsed', async () => {
+		await signedIn();
+		fetchMock.mockResolvedValue(
+			answered(200, { protocolVersion: 1, id: '1', type: 'result', result: { anything: true } }),
+		);
+
+		press('ask');
+		await waitFor(() => expect(answer()).toBe('ok:result'));
+
+		const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+		expect(url).toBe('/rpc');
+		expect((init.headers as Record<string, string>).authorization).toBe('Bearer a-session-id');
+		expect(JSON.parse(init.body as string).method).toBe('list_devices');
+	});
+
+	/*
+	 * The bounce is performed here rather than at the call site, so a screen cannot be written that
+	 * forgets it. One path to *access ended*, and it clears the same storage every other path does.
+	 */
+	it('bounces to access ended when the host refuses the session', async () => {
+		await signedIn();
+		fetchMock.mockResolvedValue(answered(401, { error: { code: 'unauthenticated' } }));
+
+		press('ask');
+		await waitFor(() => expect(state()).toBe('access-ended'));
+
+		expect(answer()).toBe('refused');
+		expect(stored()).toBeNull();
+	});
+
+	// An `error` envelope is a value, not a refusal: the two vocabularies are kept apart here and
+	// each caller decides what an error means for the method it asked for (`host-client.ts`).
+	it('hands an error envelope back as a value, and stays signed in', async () => {
+		await signedIn();
+		fetchMock.mockResolvedValue(
+			answered(200, {
+				protocolVersion: 1,
+				id: '1',
+				type: 'error',
+				error: { code: 'internal_error', message: 'no' },
+			}),
+		);
+
+		press('ask');
+		await waitFor(() => expect(answer()).toBe('ok:error'));
+
+		expect(state()).toBe('signed-in:Panel');
+	});
+
+	it('says nothing came back when nothing answered, and keeps the session', async () => {
+		await signedIn();
+		fetchMock.mockRejectedValue(new TypeError('Failed to fetch'));
+
+		press('ask');
+		await waitFor(() => expect(answer()).toBe('unanswered'));
+
+		expect(state()).toBe('signed-in:Panel');
+		expect(stored()).toBe('a-session-id');
+	});
+
+	// With no id held there is nothing to ask with, so nothing is asked: `unanswered` is the honest
+	// answer, and no request reaches the host.
+	it('asks nothing at all with no session held', async () => {
+		mount();
+
+		press('ask');
+		await waitFor(() => expect(answer()).toBe('unanswered'));
+
+		expect(fetchMock).not.toHaveBeenCalled();
 	});
 });

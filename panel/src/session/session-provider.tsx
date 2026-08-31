@@ -9,8 +9,11 @@ import {
 } from 'react';
 import {
 	signOut as endSession,
+	type HostAnswer,
 	type HostIdentity,
 	signIn as mintSession,
+	type RpcEnvelope,
+	rpc,
 	whoAmI,
 } from './host-client.js';
 import { clearStoredSession, readStoredSession, storeSession } from './session-storage.js';
@@ -19,7 +22,9 @@ import { clearStoredSession, readStoredSession, storeSession } from './session-s
  * Whether there is a session, and the five states that answer for it.
  *
  * The whole of the panel's authentication lives here, so no screen has to know how a session is
- * held and R35's requests inherit {@link Session.onRefusal} instead of re-deriving the bounce.
+ * held and every screen's requests inherit {@link Session.onRefusal} instead of re-deriving the
+ * bounce — that is {@link Session.call}, and it is the only way out of this module for a request
+ * carrying the session.
  *
  * **The session id is in a ref, not in state.** Nothing renders it and nothing may: a credential
  * that is state ends up in a dependency array, a devtools panel and eventually a rendered
@@ -74,6 +79,21 @@ export interface Session {
 	 * *access ended*, so every screen bounces the same way and clears the same storage.
 	 */
 	readonly onRefusal: () => void;
+	/**
+	 * One call on the host's surface, with the session this browser holds.
+	 *
+	 * **This exists so the session id does not have to.** The id lives in a ref here and is never
+	 * handed out (see {@link SessionState}), so a screen that needs `list_devices` gets a method
+	 * rather than a credential — and the bounce to *access ended* on a `refused` happens by
+	 * construction, in the one place that knows how to perform it, instead of by every caller
+	 * remembering to.
+	 *
+	 * The result stays `unknown` for the caller to parse against the schema of the method it asked
+	 * for, exactly as `rpc` argues: this module knows about credentials and transports and
+	 * deliberately not about any method's shape. With no session held it answers `unanswered` —
+	 * nothing was asked, so nothing came back.
+	 */
+	readonly call: (method: string, params: unknown) => Promise<HostAnswer<RpcEnvelope>>;
 }
 
 const SessionContext = createContext<Session | undefined>(undefined);
@@ -198,7 +218,24 @@ export function SessionProvider({ children }: { readonly children: ReactNode }) 
 		setState({ status: 'access-ended' });
 	}, [forget]);
 
-	const value: Session = { state, signIn, signOut, onRefusal };
+	const call = useCallback(
+		async (method: string, params: unknown): Promise<HostAnswer<RpcEnvelope>> => {
+			const live = session.current;
+			if (live === undefined) {
+				return { ok: false, refusal: 'unanswered' };
+			}
+			const answer = await rpc(live, method, params);
+			if (!answer.ok && answer.refusal === 'refused') {
+				// Fired here rather than at the call site so a screen cannot forget it: a session the
+				// host will not take is *access ended*, and `app.tsx` takes the router down with it.
+				onRefusal();
+			}
+			return answer;
+		},
+		[onRefusal],
+	);
+
+	const value: Session = { state, signIn, signOut, onRefusal, call };
 
 	return <SessionContext.Provider value={value}>{children}</SessionContext.Provider>;
 }

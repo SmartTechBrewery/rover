@@ -1,3 +1,5 @@
+import { DeviceListProvider, useDeviceList } from '@panel/devices/device-list-provider.js';
+import { HostUnreachable } from '@panel/screens/host-unreachable.js';
 import { CheckingSession, SignInScreen } from '@panel/screens/sign-in.js';
 import { SessionProvider, useSession } from '@panel/session/session-provider.js';
 import { createRouter, RouterProvider } from '@tanstack/react-router';
@@ -31,11 +33,42 @@ function Panel() {
 	const { state, signIn } = useSession();
 
 	if (state.status === 'signed-in') {
-		return <RouterProvider router={router} />;
+		return (
+			<DeviceListProvider>
+				<Reachable />
+			</DeviceListProvider>
+		);
 	}
 	// The boot probe is the one state with no form: whether a form is needed is what it is deciding.
 	if (state.status === 'checking' && state.of === 'boot') {
 		return <CheckingSession />;
 	}
 	return <SignInScreen onSubmit={signIn} state={state} />;
+}
+
+/**
+ * The other thing that renders in place of the router, and for the same kind of reason.
+ *
+ * A host the panel cannot reach leaves the navigation nothing to reach — no inventory, no archive,
+ * no lease — so it is a state of the **whole page** rather than a card over a dimmed shell
+ * (`docs/DESIGN.md` §7). A route component cannot remove the shell its parent route renders, and a
+ * cover inside `<main>` would leave every nav link in the DOM and in the tab order behind an opaque
+ * layer; mounting the poll above `RouterProvider` and swapping the two is what makes "gone, not
+ * dimmed" literally true.
+ *
+ * **Only the reachability failure does this.** A poll that has not answered yet leaves the router
+ * where it is and the Devices screen says it is reading — a page that blinked out on every slow
+ * first request would be worse than the state it was reporting.
+ *
+ * The accepted cost, recorded in §7: the device poll runs while `Profile` is open, and an
+ * unreachable host takes `Profile` down with everything else. The panel has exactly one live data
+ * source and this is it.
+ */
+function Reachable() {
+	const { state, refresh } = useDeviceList();
+
+	if (state.status === 'unreachable') {
+		return <HostUnreachable onRetry={refresh} />;
+	}
+	return <RouterProvider router={router} />;
 }

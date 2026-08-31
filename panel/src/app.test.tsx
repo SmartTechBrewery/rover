@@ -3,7 +3,8 @@ import type { AnchorHTMLAttributes, ReactNode } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 /**
- * The gate, and only the gate: which of the router and the sign-in screen is mounted.
+ * The gate, and only the gate: which of the router, the sign-in screen and the host-unreachable page
+ * is mounted.
  *
  * **This is the file the "no credential in a URL" claim rests on.** `docs/DESIGN.md` §8 and
  * `PROJECT.md` D30 both argue it structurally rather than carefully — the sign-in screen is not a
@@ -13,6 +14,11 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
  * tests the header-not-cookie credential); the branch that makes it *true* is here. Without this
  * file, mounting `RouterProvider` unconditionally, or dropping the boot arm so the form flashes
  * during the probe, would ship green.
+ *
+ * **The second gate is here for the same kind of reason.** `docs/DESIGN.md` §7 says the sidebar, the
+ * navigation and the breadcrumb are *gone, not dimmed* when the host cannot be reached — and a route
+ * component cannot remove the shell its parent route renders. Swapping the router for that page is
+ * what makes the rule literally true, so this is where it is asserted.
  */
 
 // The router is stubbed to a marker, because what is asserted here is *whether* it is mounted and
@@ -47,6 +53,36 @@ const fetchMock = vi.fn();
 
 function answered(status: number, body: unknown): Response {
 	return { status, json: async () => body } as unknown as Response;
+}
+
+const IDENTITY = { identifier: 'panel', displayName: 'Panel' };
+
+/**
+ * A host that accepts the stored session and answers `list_devices` however the test says.
+ *
+ * Path-aware on purpose: with one answer for both routes, an `/rpc` reply that is not an envelope
+ * would put the panel on the unreachable page and every assertion about the router below would be
+ * about the wrong thing.
+ */
+function hostAnswers(rpc: Response | Error): void {
+	fetchMock.mockImplementation(async (path: string) => {
+		if (path === '/session') {
+			return answered(200, IDENTITY);
+		}
+		if (rpc instanceof Error) {
+			throw rpc;
+		}
+		return rpc;
+	});
+}
+
+function devices(list: unknown[]): Response {
+	return answered(200, {
+		protocolVersion: 1,
+		id: '1',
+		type: 'result',
+		result: { devices: list, stale: false },
+	});
 }
 
 function router(): HTMLElement | null {
@@ -86,13 +122,48 @@ describe('the panel gate', () => {
 
 	it('renders the router, and nothing that takes a credential, once the probe answers', async () => {
 		window.localStorage.setItem(STORAGE_KEY, 'a-session-id');
-		fetchMock.mockResolvedValue(answered(200, { identifier: 'panel', displayName: 'Panel' }));
+		hostAnswers(devices([]));
 
 		const { container } = render(<App />);
 
 		await waitFor(() => expect(router()).not.toBeNull());
+		await waitFor(() => expect(fetchMock.mock.calls.some(([path]) => path === '/rpc')).toBe(true));
+		expect(router()).not.toBeNull();
 		expect(tokenField()).toBeNull();
 		expect(container.querySelectorAll('input')).toHaveLength(0);
+	});
+
+	// A poll that has not answered yet leaves the router where it is. A page that blinked out on
+	// every slow first request would be worse than the state it was reporting.
+	it('keeps the router while the first device poll is still out', async () => {
+		window.localStorage.setItem(STORAGE_KEY, 'a-session-id');
+		fetchMock.mockImplementation(async (path: string) => {
+			if (path === '/session') {
+				return answered(200, IDENTITY);
+			}
+			return await new Promise<Response>(() => undefined);
+		});
+
+		render(<App />);
+
+		await waitFor(() => expect(router()).not.toBeNull());
+		expect(screen.queryByText('HOST UNREACHABLE')).toBeNull();
+	});
+
+	/*
+	 * `docs/DESIGN.md` §7: a state that leaves the navigation nothing to reach is the whole page.
+	 * The router is not dimmed behind the message — it is not mounted, so no nav link is left in the
+	 * DOM or in the tab order behind an opaque layer.
+	 */
+	it('replaces the router entirely when the host stops answering', async () => {
+		window.localStorage.setItem(STORAGE_KEY, 'a-session-id');
+		hostAnswers(new TypeError('Failed to fetch'));
+
+		render(<App />);
+
+		await waitFor(() => expect(screen.getByText('HOST UNREACHABLE')).toBeDefined());
+		expect(router()).toBeNull();
+		expect(tokenField()).toBeNull();
 	});
 
 	// A stored id the host refuses is *access ended*, which is a state of the same screen and still
