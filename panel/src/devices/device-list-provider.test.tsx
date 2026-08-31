@@ -1,5 +1,5 @@
 import { SessionProvider, useSession } from '@panel/session/session-provider.js';
-import { act, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import fixture from '../../../tests/fixtures/panel/list-devices.json';
 import { DeviceListProvider, POLL_MS, useDeviceList } from './device-list-provider.js';
@@ -45,8 +45,16 @@ function hostAnswers(...answers: readonly (Response | Error)[]): void {
 }
 
 function ListProbe() {
-	const { state } = useDeviceList();
-	return <p>list: {state.status === 'ready' ? `ready ${state.devices.length}` : state.status}</p>;
+	const { state, refresh } = useDeviceList();
+	return (
+		<>
+			<p>list: {state.status === 'ready' ? `ready ${state.devices.length}` : state.status}</p>
+			{/* `RETRY CONNECTION`'s stand-in, so the press is asserted through the real provider. */}
+			<button onClick={refresh} type="button">
+				retry
+			</button>
+		</>
+	);
 }
 
 /**
@@ -174,6 +182,66 @@ describe('the device poll', () => {
 		});
 
 		expect(screen.getByText(/list: ready 3/)).toBeDefined();
+	});
+
+	/** How many times `/rpc` has been asked, which is what both guard tests are actually about. */
+	function asks(): number {
+		return fetchMock.mock.calls.filter(([path]) => path === '/rpc').length;
+	}
+
+	// The guard's own case: a host slower than the interval must not have requests stacked on it.
+	it('drops an interval tick that arrives while the last one is still outstanding', async () => {
+		vi.useFakeTimers();
+		hostAnswers();
+
+		mount();
+		await settle();
+		expect(asks()).toBe(1);
+
+		await act(async () => {
+			await vi.advanceTimersByTimeAsync(POLL_MS * 3);
+		});
+
+		expect(asks()).toBe(1);
+	});
+
+	/*
+	 * And the case the guard must **not** cover. `RETRY CONNECTION` is reachable exactly while the
+	 * host is unreachable, and a request can be outstanding in that state — the state was set by the
+	 * previous poll's failure while the next tick's request is still open against a host that
+	 * accepts the connection and never answers. The button is not a spinner (§5), so a press the
+	 * guard swallowed would leave no trace at all.
+	 */
+	it('asks on a deliberate refresh even with a request already outstanding', async () => {
+		vi.useFakeTimers();
+		window.localStorage.setItem(STORAGE_KEY, 'a-session-id');
+		fetchMock.mockImplementation(async (path: string) => {
+			if (path === '/session') {
+				return answered(200, { identifier: 'panel', displayName: 'Panel' });
+			}
+			// The first ask fails outright, which is what puts the panel on the unreachable page;
+			// every ask after it is accepted and never answered.
+			if (asks() === 1) {
+				throw new TypeError('Failed to fetch');
+			}
+			return await new Promise<Response>(() => undefined);
+		});
+
+		mount();
+		await settle();
+		expect(screen.getByText(/list: unreachable/)).toBeDefined();
+
+		// One tick, whose request is still open when the press arrives.
+		await act(async () => {
+			await vi.advanceTimersByTimeAsync(POLL_MS);
+		});
+		const outstanding = asks();
+
+		await act(async () => {
+			fireEvent.click(screen.getByText('retry'));
+		});
+
+		expect(asks()).toBe(outstanding + 1);
 	});
 
 	it('stops asking when it goes away', async () => {

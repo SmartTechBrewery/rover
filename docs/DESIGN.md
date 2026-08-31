@@ -229,12 +229,19 @@ changes with context (3 on a card header, 2.5 in the counter badge). None of the
 | --- | --- |
 | Held | `bg-primary-container` + `border-primary` — neutral blue |
 | Free | `bg-tertiary` + `border-tertiary` — green |
+| Not ready | `bg-outline` + `border-outline` — grey |
 
-*As built* (#113): `panel/src/components/devices/status-led.tsx`, one component with a size prop and
-nothing else. It is `aria-hidden` everywhere it appears, because the card body already says
-`ACTIVE LEASE` or `free` and the counter's own text says "2 held" — it is a second channel for
-something already written, which makes it decoration to a screen reader rather than information
-withheld from one.
+*As built* (#113): `panel/src/components/devices/status-led.tsx`, one component with a tone and a
+size and nothing else. It is `aria-hidden` everywhere it appears, because the card body already says
+`ACTIVE LEASE`, `free` or what the host reports, and the counter's own text says "2 held" — it is a
+second channel for something already written, which makes it decoration to a screen reader rather
+than information withheld from one.
+
+The **third tone arrived with #123** and the row above is the whole of it. A device the host reports
+as `unauthorized` or `offline` is listed, holds no lease, and would be refused a lease
+(`not-ready`), so it may not carry the free green — and the rule two paragraphs down says it may not
+carry a warning colour either. Grey is what is left and it is the honest one: nothing has failed,
+there is simply nothing here to take.
 
 **There is no red or orange device state, and there will not be one.** A device that disappears
 from the host is simply not listed. Orange in this palette (`secondary-container`, `#ff5e07`) is the
@@ -281,17 +288,30 @@ else in software and this product has no verdicts.
 
 **There is no `STATE` field.** It was tried and removed: the card already said the device was held
 three times over — the panel header reads `ACTIVE LEASE`, the LED is the held colour, and the
-counter above the grid says so. (Note that the *device* state adb reports — `device`,
-`unauthorized`, `offline` — is a different thing that this card does not currently show. A phone
-that is attached but waiting on its RSA prompt has nowhere to say so. Open.)
+counter above the grid says so.
 
 Free — a dark inset panel in the same place the lease panel occupies, carrying a phone icon and
 `free` in green. The icon was originally a plug pulled from its socket, which means "disconnected",
 the opposite of what the card says: this phone is attached and ready.
 
+**Not ready — settled (#123), and it is what closes the note this section used to leave open.** The
+*device* state adb reports — `ready`, `unauthorized`, `offline` — is a different fact from being
+held, and the card had nowhere to say it, so a phone sitting on its RSA prompt was drawn as *free*.
+It is not: `src/daemon/lease-handlers.ts` refuses a lease on any device whose state is not `ready`,
+so that card made a positive availability claim the host would not honour, which is the one class of
+answer `ai/RULES.md` §2 singles out. It is still **not a `STATE` row** — the reason above holds. It
+is the **third body in the free panel's slot**: the same dashed inset, a grey phone icon, the
+state printed verbatim (`unauthorized`, not "Not authorized" — §6's rule about `platform`, and the
+words `rover list`'s `STATE` column already prints), and one line that is the same whatever the
+state, *Attached, but not available to lease.* No green, no tertiary token, and no warning colour.
+A **held** device is unaffected: its lease panel renders whatever the hardware state is, because a
+lease is the daemon's own bookkeeping and is still the answer to "who do I ask".
+
 **The counter badge** above the grid reads `● 2 held  ● 1 free`, using those very LEDs — the held
 one before the held count, the free one in place of the separator. No `·`, no glow, and it must
-agree with the cards below it.
+agree with the cards below it. *As built* (#123) it grows a third term, `● 1 not ready`, **only when
+that count is non-zero** — the three buckets sum to the grid, so the badge still agrees with the
+cards structurally, and on the ordinary screen it is exactly the two terms above.
 
 *As built* (#113): `panel/src/components/devices/device-card.tsx`, and five things the design's mock
 data never had to answer, settled here.
@@ -488,6 +508,15 @@ unreachable host takes `Profile` down with everything else. The panel has exactl
 source and this is it. Only the reachability failure does this — a first poll still in flight leaves
 the router where it is, and the Devices screen says it is reading.
 
+**One consequence of that is sharper than the general cost, and it is `Profile`'s** (#123). A
+sign-out the host never answered leaves the user signed in and says so on `Profile` (§8) — and it
+fails on the very `fetch` that makes the device poll report unreachable, so the two always fail
+together, at most `POLL_MS` apart. Whatever that line says, it is on screen for about five seconds
+before this page replaces the router it renders in. So it may not instruct an action there will be
+no control left to perform: it reports what happened and says where the panel is going instead, and
+the wording in §8 is written to that. `RETRY CONNECTION` here retries the **device poll**, not the
+sign-out; when the host comes back, the router returns and the sign-out is pressed again.
+
 **This is the one place in the panel that uses the `error` tokens**, and it is worth saying why that
 is consistent rather than an exception creeping in: §5 leaves red unused so it stays meaningful, and
 §7 calls a stale view "an uncertainty, not a fault" — a host that cannot be reached at all is the
@@ -578,9 +607,15 @@ and nowhere else — the sidebar carries no action (§3), and the design's own e
 That line says the session **ended on the host**, which means this state may only be reached once
 the host has answered. **A sign-out the host never answered does not arrive here.** It stays on
 `Profile`, still signed in, with the control re-enabled and one `aria-live="polite"` line below it —
-*Nothing answered on the host, so the session is still open and you are still signed in. Try
-again.* — in ordinary text with no colour of alarm, because nothing has gone wrong with the session.
-`Profile`'s own paragraph says the same thing before the fact rather than only after it. A `401`
+*Nothing answered on the host, so the session is still open and you are still signed in. If the host
+stays unreachable the panel says so in place of this page — sign out again once it is back.* — in
+ordinary text with no colour of alarm, because nothing has gone wrong with the session. `Profile`'s
+own paragraph says the same thing before the fact rather than only after it.
+
+**It said "Try again." until #123, and that was the one thing it could not say.** The device poll
+fails on the same `fetch`, so within `POLL_MS` the unreachable page replaces the router and takes
+this screen and its control with it — the instruction outlived the control that could follow it by
+about five seconds. §7 records the mechanism. A `401`
 does arrive here: a host that will not take the id has already forgotten it, so that sign-out is
 finished. The reason it cannot be the other way is the whole reason the browser holds a session id
 rather than the token — announcing an ending nobody performed would clear the one id that could

@@ -50,6 +50,21 @@ const ListedDeviceSchema = z.object({
 	model: z.string().nullable(),
 	/** Null is a real answer, commonly for a phone waiting on its authorization prompt. */
 	osVersion: z.string().nullable(),
+	/**
+	 * What the host can currently do with the hardware — `ready`, or `unauthorized`/`offline`,
+	 * which both mean "visible to the host, but no verb can run on it" (`src/core/device.ts`).
+	 *
+	 * **The card must read this**, because a device that is not `ready` and holds no lease is one
+	 * the daemon will refuse to lease (`not-ready`, `src/daemon/lease-handlers.ts`) — calling it
+	 * *free* is the plausible-looking answer `ai/RULES.md` §2 forbids, and the CLI's own `STATE`
+	 * column already says otherwise.
+	 *
+	 * A **string rather than an enum**, on the same non-`.strict()` reasoning as the rest of this
+	 * mirror: a newer daemon adding a fourth state must not blank a working screen. Everything but
+	 * the exact word `ready` is treated as not usable, which is the safe direction to be wrong in,
+	 * and the word itself is what the card prints.
+	 */
+	state: z.string(),
 	heldBy: LeaseHolderSchema.nullable(),
 });
 export type ListedDevice = z.infer<typeof ListedDeviceSchema>;

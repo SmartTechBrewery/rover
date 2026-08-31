@@ -1398,7 +1398,10 @@ listener is still a separate piece of work — so the panel runs from its develo
 method the surface lets it call, and shows every attached device as a card — model, serial,
 platform, OS version, and either *free* or the lease holding it, with the holder's `owner`,
 `project` and `test name`, the grant instant as the host wrote it, and a countdown that ticks down
-once a second and **goes back up** when activity renews the lease. Four states of that one screen
+once a second and **goes back up** when activity renews the lease. A device the host reports as
+`unauthorized` or `offline` is neither: it says so in the free panel's place, in grey, and it is
+counted apart from the free ones — the daemon would refuse a lease on it, so calling it free would
+be a claim the host will not honour. Four states of that one screen
 are distinguished on purpose, and the last two are the reason: nothing attached; a host view that is
 not current, over a list; a host view that is not current over an *empty* list, which means Rover
 cannot say what is attached rather than that nothing is; and the host being unreachable, which

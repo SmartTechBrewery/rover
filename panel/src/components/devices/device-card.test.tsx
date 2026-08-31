@@ -11,6 +11,7 @@ function device(overrides: Partial<ListedDevice> = {}): ListedDevice {
 		platform: 'android',
 		model: 'Pixel 7 Pro',
 		osVersion: '14',
+		state: 'ready',
 		heldBy: null,
 		...overrides,
 	};
@@ -128,6 +129,57 @@ describe('the fields a device cannot always answer', () => {
 
 		expect(screen.getByText('OS version')).toBeDefined();
 		expect(screen.getByText('unknown')).toBeDefined();
+	});
+
+	/*
+	 * The card's one positive availability claim, and the host has to be willing to honour it. A
+	 * device the host reports as `unauthorized` holds no lease and is still refused `not-ready`
+	 * (`src/daemon/lease-handlers.ts`), so saying `free` on it — in the green this screen reserves
+	 * for a device to take — is the plausible-looking answer ai/RULES.md §2 forbids.
+	 */
+	it('does not call a device free when the host cannot lease it', () => {
+		const { container } = render(
+			<DeviceCard
+				device={device({ state: 'unauthorized', heldBy: null })}
+				receivedAtMs={RECEIVED_AT_MS}
+			/>,
+		);
+
+		expect(screen.queryByText('free')).toBeNull();
+		expect(container.querySelectorAll('.bg-tertiary')).toHaveLength(0);
+		expect(container.querySelectorAll('.text-tertiary')).toHaveLength(0);
+	});
+
+	// Verbatim, for the reason `platform` is verbatim: a display table mapping the host's words onto
+	// prettier ones is a branch on host vocabulary, and `rover list`'s `STATE` column prints these.
+	it('says what the host reports instead, in the free panel’s place', () => {
+		render(
+			<DeviceCard
+				device={device({ state: 'offline', heldBy: null })}
+				receivedAtMs={RECEIVED_AT_MS}
+			/>,
+		);
+
+		expect(screen.getByText('offline')).toBeDefined();
+		expect(screen.getByText('Attached, but not available to lease.')).toBeDefined();
+		expect(screen.queryByText('Active lease')).toBeNull();
+	});
+
+	/*
+	 * A lease outlives the hardware going `offline` — it is the daemon's own bookkeeping, and who to
+	 * go and ask is still the answer this card owes. Only an unheld device's state decides the body.
+	 */
+	it('still shows the lease on a held device that went not ready', () => {
+		render(
+			<DeviceCard
+				device={device({ state: 'offline', heldBy: LEASE })}
+				receivedAtMs={RECEIVED_AT_MS}
+			/>,
+		);
+
+		expect(screen.getByText('Active lease')).toBeDefined();
+		expect(screen.getByText('pr-127-review')).toBeDefined();
+		expect(screen.queryByText('free')).toBeNull();
 	});
 
 	// `Android` is the platform and `14` is the version — never concatenated under one label.

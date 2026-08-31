@@ -21,10 +21,12 @@ import { StatusLed } from './status-led.js';
  * **No control.** Force-releasing a lease is the panel's one operator action and it is not on this
  * card yet — the design's markup carries the button and it is deliberately not reproduced here.
  *
- * **No device-state field either.** The card already says a device is held three times over
- * (`ACTIVE LEASE`, the LED, the counter above the grid). The *other* state — what adb reports about
- * the hardware, `unauthorized` or `offline` — is a different thing this card still does not show,
- * and §6 leaves it open.
+ * **No `STATE` field, but the device state is not ignored.** The card already says a device is held
+ * three times over (`ACTIVE LEASE`, the LED, the counter above the grid), so there is no `STATE`
+ * row. What adb reports about the hardware is a different fact, and it is not a row either — it is
+ * what the body *says* when the device is not held: a device the host reports as `unauthorized` or
+ * `offline` cannot be leased (`src/daemon/lease-handlers.ts` refuses it `not-ready`), so printing
+ * `free` on it would be a positive claim the host will not honour.
  */
 export function DeviceCard({
 	device,
@@ -35,6 +37,9 @@ export function DeviceCard({
 	readonly receivedAtMs: number;
 }) {
 	const lease = device.heldBy;
+	// Anything but the exact word is not usable (`device-list.ts`), which is the safe direction to
+	// be wrong in if a newer daemon ever adds a fourth state.
+	const ready = device.state === 'ready';
 
 	return (
 		<article
@@ -53,7 +58,12 @@ export function DeviceCard({
 						{device.model ?? device.serial}
 					</span>
 				</span>
-				<StatusLed held={lease !== null} />
+				{/*
+				 * The LED follows the body: held is blue, free is green, and a device that is
+				 * neither is grey. It must never be the free green here — that is the one colour on
+				 * this card that reads as "take me".
+				 */}
+				<StatusLed tone={lease !== null ? 'held' : ready ? 'free' : 'not-ready'} />
 			</div>
 
 			<div className="flex flex-1 flex-col gap-4 p-4">
@@ -78,7 +88,19 @@ export function DeviceCard({
 					<Field label="OS version" value={device.osVersion ?? 'unknown'} />
 				</dl>
 
-				{lease === null ? <FreePanel /> : <LeasePanel lease={lease} receivedAtMs={receivedAtMs} />}
+				{/*
+				 * Three bodies in one slot, and the order is the point. A lease is rendered whatever
+				 * the hardware state is — the lease is the daemon's own bookkeeping and stays exact
+				 * (D6's reasoning about `stale`, one level down). Only when nothing holds the device
+				 * does its state decide between *free* and *not usable*.
+				 */}
+				{lease !== null ? (
+					<LeasePanel lease={lease} receivedAtMs={receivedAtMs} />
+				) : ready ? (
+					<FreePanel />
+				) : (
+					<NotReadyPanel state={device.state} />
+				)}
 			</div>
 		</article>
 	);
@@ -136,6 +158,35 @@ function FreePanel() {
 		<div className="mt-auto flex flex-col items-center gap-2 rounded-sm border border-outline-variant border-dashed bg-surface p-6 text-center">
 			<Smartphone aria-hidden="true" className="text-tertiary" size={32} strokeWidth={2} />
 			<span className="font-code-md text-code-md text-tertiary">free</span>
+		</div>
+	);
+}
+
+/**
+ * The device nothing holds and nothing can take: attached, listed, and reported by the host as
+ * `unauthorized` or `offline` (#123).
+ *
+ * It occupies the free panel's slot and takes its shape, so the grid still reads as one set of
+ * cards — and **none of its colour**. Green is what this screen uses to say "take this one", and
+ * the host would refuse a lease on this device (`not-ready`), so the word `free` and the tertiary
+ * treatment are both wrong here. Grey rather than a warning colour: `docs/DESIGN.md` §5's rule that
+ * there is no red or orange device state still holds, and nothing has gone wrong — a phone waiting
+ * on its RSA prompt is an ordinary thing to walk past on the way to the machine.
+ *
+ * **The state is printed verbatim**, `unauthorized` and not "Not authorized", for the reason §6
+ * gives about `platform`: a display table mapping the wire's words onto prettier ones is a branch
+ * on host vocabulary in shared code, and `rover list`'s `STATE` column already prints these words.
+ * The line beneath it is deliberately the same in every state, so no state gets its own advice and
+ * no branch is needed to give it.
+ */
+function NotReadyPanel({ state }: { readonly state: string }) {
+	return (
+		<div className="mt-auto flex flex-col items-center gap-2 rounded-sm border border-outline-variant border-dashed bg-surface p-6 text-center">
+			<Smartphone aria-hidden="true" className="text-outline" size={32} strokeWidth={2} />
+			<span className="font-code-md text-code-md text-on-surface-variant">{state}</span>
+			<span className="font-body-md text-body-md text-on-surface-variant">
+				Attached, but not available to lease.
+			</span>
 		</div>
 	);
 }

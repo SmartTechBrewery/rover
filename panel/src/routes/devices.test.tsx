@@ -46,6 +46,7 @@ const HELD: ListedDevice = {
 	platform: 'android',
 	model: 'sdk_gphone64_arm64',
 	osVersion: '16',
+	state: 'ready',
 	heldBy: LEASE,
 };
 
@@ -54,6 +55,17 @@ const FREE: ListedDevice = {
 	platform: 'android',
 	model: 'Pixel 7 Pro',
 	osVersion: '14',
+	state: 'ready',
+	heldBy: null,
+};
+
+/** Attached and listed, holding no lease, and refused a lease by the host (#123). */
+const UNAUTHORIZED: ListedDevice = {
+	serial: 'emulator-5558',
+	platform: 'android',
+	model: null,
+	osVersion: null,
+	state: 'unauthorized',
 	heldBy: null,
 };
 
@@ -98,6 +110,19 @@ describe('with devices attached', () => {
 
 		expect(screen.getByText('1 held')).toBeDefined();
 		expect(screen.getByText('2 free')).toBeDefined();
+		expect(screen.queryByText(/not ready/)).toBeNull();
+	});
+
+	/*
+	 * A device the host would refuse `not-ready` is not part of the free pool, and the badge must
+	 * not claim it is. The three terms sum to the grid, so the counter still agrees with the cards.
+	 */
+	it('keeps a device the host cannot lease out of the free count', () => {
+		showing(ready([HELD, FREE, UNAUTHORIZED]));
+
+		expect(screen.getByText('1 held')).toBeDefined();
+		expect(screen.getByText('1 free')).toBeDefined();
+		expect(screen.getByText('1 not ready')).toBeDefined();
 	});
 
 	it('keeps the describing line every other state has', () => {

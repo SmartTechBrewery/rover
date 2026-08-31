@@ -17,7 +17,8 @@ import fixture from '../../fixtures/panel/list-devices.json' with { type: 'json'
  * reads it. A field renamed on the wire fails the first; a field the panel stopped reading fails
  * the second.
  *
- * **Where it came from, exactly** (`ai/TESTING.md`, "fixtures come off a real device"). It was
+ * **Where it came from, exactly** (`ai/TESTING.md`, "A wire answer is a fixture too, and it is filed
+ * differently" — which is where the two bends below are recorded against the rule they bend). It was
  * captured over the panel's own HTTP surface from a daemon on API 35 with an emulator attached
  * (`sdk_gphone64_arm64`), in three reads: a lease taken with a `testName`, one taken without, and
  * the device free after a `force-release`. The one machine had one device, so the second entry

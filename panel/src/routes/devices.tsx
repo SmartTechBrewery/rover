@@ -36,7 +36,17 @@ import { rootRoute } from './__root.js';
 export function DevicesScreen() {
 	const { state } = useDeviceList();
 	const devices = state.status === 'ready' ? state.devices : [];
+	/*
+	 * Three buckets that sum to the grid, in the order they exclude each other (#123). A device the
+	 * host reports as anything but `ready` cannot be leased, so counting it as free would claim a
+	 * pool the host would refuse — the same wrong answer the card's `free` panel used to give.
+	 * Held first, because a lease on a device that has since gone `offline` is still a lease and
+	 * still the answer to "who do I ask".
+	 */
 	const held = devices.filter((device) => device.heldBy !== null).length;
+	const notReady = devices.filter(
+		(device) => device.heldBy === null && device.state !== 'ready',
+	).length;
 
 	return (
 		<>
@@ -45,7 +55,11 @@ export function DevicesScreen() {
 				description="Monitoring attached physical and virtual devices."
 				aside={
 					devices.length === 0 ? undefined : (
-						<HeldFreeCounter held={held} free={devices.length - held} />
+						<HeldFreeCounter
+							held={held}
+							free={devices.length - held - notReady}
+							notReady={notReady}
+						/>
 					)
 				}
 			/>

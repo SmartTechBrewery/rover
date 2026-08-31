@@ -27,11 +27,52 @@ describe("the panel's mirror of list_devices", () => {
 		expect(held?.heldBy?.testName).toBe('the devices grid');
 		expect(held?.heldBy?.grantedAt).toBe('2026-08-31T18:48:48.247Z');
 		expect(held?.heldBy?.expiresInMs).toBe(1186759);
+		expect(held?.state).toBe('ready');
 
 		expect(parsed.devices[1]?.heldBy?.testName).toBeNull();
 		expect(parsed.devices[2]?.model).toBeNull();
 		expect(parsed.devices[2]?.osVersion).toBeNull();
 		expect(parsed.devices[2]?.heldBy).toBeNull();
+	});
+
+	/*
+	 * The field the card has to read before it may print `free`, asserted off the fixture's own
+	 * third entry so dropping it from the mirror fails here rather than on a screen. A device with
+	 * no lease whose state is not `ready` is one the host refuses `not-ready`.
+	 */
+	it('reads the device state, including the one the host would refuse', () => {
+		const parsed = ListDevicesResultSchema.parse(fixture);
+
+		expect(parsed.devices.map((device) => device.state)).toEqual([
+			'ready',
+			'ready',
+			'unauthorized',
+		]);
+		expect(parsed.devices[2]?.heldBy).toBeNull();
+	});
+
+	/*
+	 * Why the mirror types the state as a string rather than an enum, on the same reasoning as the
+	 * test below: a fourth state on the wire must not blank a working screen. Anything that is not
+	 * the word `ready` is treated as not usable, which is the safe direction to be wrong in.
+	 */
+	it('tolerates a device state this panel has never heard of', () => {
+		const parsed = ListDevicesResultSchema.safeParse({
+			devices: [
+				{
+					serial: 'emulator-5554',
+					platform: 'android',
+					model: null,
+					osVersion: null,
+					state: 'recovery',
+					heldBy: null,
+				},
+			],
+			stale: false,
+		});
+
+		expect(parsed.success).toBe(true);
+		expect(parsed.data?.devices[0]?.state).toBe('recovery');
 	});
 
 	/*
@@ -46,6 +87,7 @@ describe("the panel's mirror of list_devices", () => {
 					platform: 'android',
 					model: null,
 					osVersion: null,
+					state: 'ready',
 					heldBy: null,
 					batteryLevel: 87,
 				},
@@ -60,7 +102,34 @@ describe("the panel's mirror of list_devices", () => {
 
 	it('refuses an answer missing a field the screen needs', () => {
 		const parsed = ListDevicesResultSchema.safeParse({
-			devices: [{ serial: 'emulator-5554', platform: 'android', model: null, osVersion: null }],
+			devices: [
+				{
+					serial: 'emulator-5554',
+					platform: 'android',
+					model: null,
+					osVersion: null,
+					state: 'ready',
+				},
+			],
+			stale: false,
+		});
+
+		expect(parsed.success).toBe(false);
+	});
+
+	// Including the state itself. Tolerating its absence would put the card back to guessing that a
+	// device with no lease is free, which is the answer the host refuses.
+	it('refuses an answer that does not say what state the device is in', () => {
+		const parsed = ListDevicesResultSchema.safeParse({
+			devices: [
+				{
+					serial: 'emulator-5554',
+					platform: 'android',
+					model: null,
+					osVersion: null,
+					heldBy: null,
+				},
+			],
 			stale: false,
 		});
 
