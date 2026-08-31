@@ -138,7 +138,10 @@ export function registerDeviceTools(
 				'holder and how much longer they have; a device that is gone, not attached to this ' +
 				'host, or not in a state a verb could run against is refused by name too. The device ' +
 				'is re-verified at grant time, so a granted lease is a device that was there a moment ' +
-				'ago rather than one that was cached.',
+				'ago rather than one that was cached. If the project declares helper services, the ' +
+				'host starts them before answering and stops them when the lease ends; one that will ' +
+				'not start is a `service-failed` refusal naming it, because a device whose helper ' +
+				'services are down would fail at the first thing you tried.',
 			inputSchema: acquireParams,
 		},
 		async (params: AcquireArgs) =>

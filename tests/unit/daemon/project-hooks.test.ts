@@ -21,6 +21,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
 	defaultProjectsRoot,
+	MAX_PROJECT_SERVICES,
 	PROJECT_FILE_ENV_VAR,
 	PROJECTS_PATH_ENV_VAR,
 	ProjectHooksSchema,
@@ -56,7 +57,7 @@ describe('the schema is the source of truth for a hook file', () => {
 		// The row's headline: no default anywhere names an application (D13). An `install` that
 		// defaulted to anything would be this host guessing at what a project builds, which is
 		// exactly the plausible-looking default the rule rules out.
-		expect(parsed).toEqual({ project: PROJECT, apps: [] });
+		expect(parsed).toEqual({ project: PROJECT, apps: [], services: [] });
 		expect(parsed.install).toBeUndefined();
 		expect(parsed.teardown).toBeUndefined();
 	});
@@ -95,12 +96,99 @@ describe('the schema is the source of truth for a hook file', () => {
 	});
 
 	it('rejects a field it does not know, naming it', () => {
-		// `.strict()`, because the helper services are a later phase of this row. Until they
-		// exist, a file carrying one is a typo rather than a file from the future.
-		const result = ProjectHooksSchema.safeParse({ project: PROJECT, services: [{ port: 8080 }] });
+		// `.strict()`, so a key this file does not know is a typo rather than a file from the
+		// future — and a typo'd hook is a hook that silently never runs.
+		const result = ProjectHooksSchema.safeParse({ project: PROJECT, teadown: { command: 'x' } });
 
 		expect(result.success).toBe(false);
-		expect(JSON.stringify(result.error?.issues)).toContain('services');
+		expect(JSON.stringify(result.error?.issues)).toContain('teadown');
+	});
+
+	it('carries the helper services a project declares, start-only ones included', () => {
+		const parsed = ProjectHooksSchema.parse({
+			project: PROJECT,
+			services: [
+				{
+					name: 'db',
+					start: { command: 'docker', args: ['compose', 'up', '-d', 'db'] },
+					stop: { command: 'docker', args: ['compose', 'down'] },
+				},
+				{ name: 'mock-payments', start: { command: 'bash', args: ['-lc', 'scripts/mocks.sh'] } },
+			],
+		});
+
+		// The same `HookCommand` both hooks already use, with the same defaults, so a file that
+		// says less runs no more. `stop` is optional: a container started with `--rm` has nothing
+		// for the host to stop, and that is an answer rather than an omission.
+		expect(parsed.services).toEqual([
+			{
+				name: 'db',
+				start: { command: 'docker', args: ['compose', 'up', '-d', 'db'], env: {} },
+				stop: { command: 'docker', args: ['compose', 'down'], env: {} },
+			},
+			{
+				name: 'mock-payments',
+				start: { command: 'bash', args: ['-lc', 'scripts/mocks.sh'], env: {} },
+			},
+		]);
+	});
+
+	it('rejects a service with no start command, and one with no name', () => {
+		expect(
+			ProjectHooksSchema.safeParse({ project: PROJECT, services: [{ name: 'db' }] }).success,
+		).toBe(false);
+		expect(
+			ProjectHooksSchema.safeParse({
+				project: PROJECT,
+				services: [{ start: { command: 'docker' } }],
+			}).success,
+		).toBe(false);
+	});
+
+	it.each([
+		['a newline', 'db\napi'],
+		['a space', 'mock payments'],
+		['a path separator', 'services/db'],
+		['a leading dash', '-db'],
+		['nothing at all', ''],
+	])('rejects a service name carrying %s', (_what, name) => {
+		// The name is quoted back to whoever was refused a device, so the shape is what keeps a
+		// hook file from writing its own lines into a client's terminal.
+		expect(
+			ProjectHooksSchema.safeParse({
+				project: PROJECT,
+				services: [{ name, start: { command: 'docker' } }],
+			}).success,
+		).toBe(false);
+	});
+
+	it('rejects two services with the same name', () => {
+		// A name is how a refusal and a warning say *which* service; two of one name make both
+		// ambiguous exactly when somebody needs them.
+		const result = ProjectHooksSchema.safeParse({
+			project: PROJECT,
+			services: [
+				{ name: 'db', start: { command: 'docker' } },
+				{ name: 'db', start: { command: 'podman' } },
+			],
+		});
+
+		expect(result.success).toBe(false);
+		expect(JSON.stringify(result.error?.issues)).toContain('name of its own');
+	});
+
+	it(`rejects more than ${MAX_PROJECT_SERVICES} services`, () => {
+		const services = Array.from({ length: MAX_PROJECT_SERVICES + 1 }, (_unused, index) => ({
+			name: `service-${index}`,
+			start: { command: 'true' },
+		}));
+
+		// Every one of these is started inside `acquire_device` before the grant is answered, so
+		// an unbounded list would be an unbounded grant.
+		expect(ProjectHooksSchema.safeParse({ project: PROJECT, services }).success).toBe(false);
+		expect(
+			ProjectHooksSchema.safeParse({ project: PROJECT, services: services.slice(0, -1) }).success,
+		).toBe(true);
 	});
 
 	it('rejects an install command that names no program', () => {
@@ -157,13 +245,18 @@ describe('reading a project’s hooks', () => {
 		await expect(readProjectHooks(root, PROJECT)).resolves.toEqual({
 			project: PROJECT,
 			apps: ['com.example.checkout'],
+			services: [],
 			teardown: { command: 'true', args: [], cwd: '/srv/checkout-web', env: { STAGE: 'local' } },
 		});
 	});
 
 	it('re-reads the file at every call, so an edit needs no restart', async () => {
 		await writeHookFile(PROJECT, JSON.stringify({ project: PROJECT, apps: [] }));
-		await expect(readProjectHooks(root, PROJECT)).resolves.toEqual({ project: PROJECT, apps: [] });
+		await expect(readProjectHooks(root, PROJECT)).resolves.toEqual({
+			project: PROJECT,
+			apps: [],
+			services: [],
+		});
 
 		await writeHookFile(
 			PROJECT,
@@ -175,6 +268,7 @@ describe('reading a project’s hooks', () => {
 		await expect(readProjectHooks(root, PROJECT)).resolves.toEqual({
 			project: PROJECT,
 			apps: ['com.example.checkout'],
+			services: [],
 		});
 	});
 

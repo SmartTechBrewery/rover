@@ -1608,13 +1608,19 @@ describe('install_app runs the project’s own install command', () => {
 	 * and will not parse is the operator's mistake and nothing the caller can act on, so it is
 	 * not dressed up as an answer about the project: the restorer contains this into a warning
 	 * because a device still has to be put back, and there is nothing to contain it into here.
+	 *
+	 * The lease is taken **before** the file is broken, because a grant on a project whose file
+	 * will not parse is refused outright now — the host cannot start helper services it cannot
+	 * read (`src/daemon/project-services.ts`). Nothing is cached (D6), so an edit under a live
+	 * lease is what this call reads, which is also the shape an operator's typo really arrives
+	 * in.
 	 */
 	it('lets a hook file that will not parse fail loudly rather than reading as no project', async () => {
 		await serve();
-		await mkdir(temp.projectsRoot, { recursive: true });
-		await writeFile(join(temp.projectsRoot, `${HOOK_PROJECT}.json`), '{ not json', 'utf8');
 		const client = await connect();
 		const leaseId = await acquire(client);
+		await mkdir(temp.projectsRoot, { recursive: true });
+		await writeFile(join(temp.projectsRoot, `${HOOK_PROJECT}.json`), '{ not json', 'utf8');
 
 		const thrown = await client
 			.request('install_app', { leaseId })

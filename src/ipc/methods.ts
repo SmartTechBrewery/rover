@@ -277,6 +277,18 @@ export const AcquireRefusalReasonSchema = z.enum([
 	'not-attached',
 	/** Attached, but in a state no verb could run against — granting it would be a false yes. */
 	'not-ready',
+	/**
+	 * A helper service the lease's project declares did not start, so the grant was undone
+	 * (D13, R17 phase 4). The `message` names the service.
+	 *
+	 * One more reason rather than a second way to say no: granting a device whose helper
+	 * services are down is the same class of false yes as `not-ready`, and an agent's next move
+	 * is the same shape too — this device is not usable for this project right now, and the
+	 * sentence says which service to go and look at. The lease is released before the answer
+	 * travels, so the device is free for the next caller rather than held by a grant that
+	 * failed.
+	 */
+	'service-failed',
 ]);
 export type AcquireRefusalReason = z.infer<typeof AcquireRefusalReasonSchema>;
 

@@ -8,8 +8,9 @@
  * device is free and the moment it takes it. So every awaited step happens first — the
  * re-verification, then waiting out any restoration still running on the device — and
  * everything from there to the insert is straight-line synchronous code. Adding an await
- * below that point is the defect this file is arranged to prevent; adding one above it is
- * free.
+ * between the decision and the insert is the defect this file is arranged to prevent; adding
+ * one above it is free. Exactly one await sits *below* the insert — the project's helper
+ * services — and why that is safe is argued for on its own below.
  *
  * **A grant waits for the previous lessee's state to be undone** (D9). An expired holder is
  * observed here before the wait, because observing it is what starts its restoration — the
@@ -21,6 +22,15 @@
  * run after a successful acquire.** A throw becomes `internal_error`, the caller never learns
  * the lease id, and the device is wedged for the full TTL with nobody able to release it. The
  * capability lookup is resolved before the insert on purpose.
+ *
+ * **The project's helper services are the one awaited step below the insert** (D13, R17 phase
+ * 4), and both rules survive it. Exclusivity does, because the wait is *after* the
+ * decide-and-insert rather than inside it — by then this caller holds the device and no second
+ * grant can be interleaved. The second rule does, because `ProjectServices.start` never
+ * throws: it answers with a refusal, and this handler then **releases the lease it just took**,
+ * so the device is free for the next caller instead of held by a grant that did not work out.
+ * It cannot run before the insert: a caller who is about to be refused `held` would otherwise
+ * start — and then stop — the services of whoever actually holds the device.
  *
  * **A refusal is data.** `verifyForGrant` throws for the two cases it exists to detect — the
  * device vanished (D6), the device belongs to another host (D18) — and both are caught here
@@ -42,6 +52,7 @@ import type {
 import type { DeviceInventory } from './inventory.js';
 import { toLeaseHolder } from './lease-holder.js';
 import type { LeaseStore } from './leases.js';
+import type { ProjectServices } from './project-services.js';
 import type { DeviceRestorer } from './restore.js';
 
 export type LeaseHandlers = Pick<IpcHandlers, 'acquire_device' | 'release_device'>;
@@ -59,6 +70,7 @@ export function createLeaseHandlers(
 	inventory: DeviceInventory,
 	leases: LeaseStore,
 	restorer: DeviceRestorer,
+	services: ProjectServices,
 ): LeaseHandlers {
 	return {
 		async acquire_device(params: AcquireDeviceParams): Promise<AcquireDeviceResult> {
@@ -102,7 +114,7 @@ export function createLeaseHandlers(
 			// and a throw past the insert would wedge the device for the whole TTL.
 			const { manifest } = requireDeviceBackend(device.platform);
 
-			// Nothing between here and the return may await.
+			// Nothing between here and the insert may await, and nothing below it may throw.
 			const outcome = leases.acquire({
 				serial: device.serial,
 				owner: params.owner,
@@ -120,6 +132,23 @@ export function createLeaseHandlers(
 						`Device '${device.serial}' is held by '${outcome.heldBy.owner}' for another ` +
 						`${leases.remainingMs(outcome.heldBy)}ms`,
 					heldBy: toLeaseHolder(outcome.heldBy, leases),
+				};
+			}
+
+			// The one await below the insert — see this module's header. Contained absolutely: a
+			// refusal is data, and the lease it was taken under is handed straight back.
+			const refusal = await services.start(outcome.lease);
+			if (refusal !== null) {
+				// Ending the lease is what puts the device back: the restoration runs on this path
+				// exactly as it runs on a release (D9), so the project's own stops and teardown get
+				// their turn and the next caller waits for them through `settle`. What this grant
+				// had already started was stopped by `start` itself, before it answered.
+				leases.release(outcome.lease.id);
+				return {
+					outcome: 'refused',
+					reason: 'service-failed',
+					message: refusal.message,
+					heldBy: null,
 				};
 			}
 

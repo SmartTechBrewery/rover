@@ -9,6 +9,7 @@ import { createDeviceInventory } from '@/daemon/inventory.js';
 import { createLeaseHandlers } from '@/daemon/lease-handlers.js';
 import { createLeaseStore } from '@/daemon/leases.js';
 import { createDeviceRestorer } from '@/daemon/restore.js';
+import { createNoProjectServices } from '../../helpers/factories.js';
 
 /**
  * Forced state restoration (D9) driven by the **daemon layer** against a real device.
@@ -77,7 +78,10 @@ function createHost() {
 		leases,
 		restorer,
 		warnings,
-		handlers: createLeaseHandlers(inventory, leases, restorer),
+		// The stand-in for a host where no project declares helper services: this suite is about
+		// what a restoration puts back on the device, and a grant that started nothing is the
+		// honest arrangement for that.
+		handlers: createLeaseHandlers(inventory, leases, restorer, createNoProjectServices()),
 		hookRan: () => hookRan,
 		at: (instant: number) => {
 			nowMs = instant;
