@@ -146,6 +146,15 @@ and cannot opt out:
 npm run -s rover -- release <lease-id>
 ```
 
+If somebody else's lease is stuck and you are the operator, end it by naming the **device** — you
+were never handed their lease id, and the host will not hand it out (D20, D28). The device is
+restored exactly as it is on a normal release, and `--actor` is required because it records who did
+it:
+
+```bash
+npm run -s rover -- force-release <serial> --actor "$USER"
+```
+
 `npm run rover -- --help` lists every command, the global flags and the exit codes.
 
 ### Wire up the MCP server
@@ -404,8 +413,19 @@ exactly one winner. `list_devices` names each device's holder the same way — t
 test name, and how much longer they have, or nothing at all for a free device — and never the lease
 id, which is what ends a lease and belongs only to whoever was granted it.
 
-**The daemon restores the device itself** (D9) — on `release_device` and on expiry alike, from the
-one place a lease is observed to end. It stops the project's applications, turns airplane mode off,
+**A stuck lease can be ended by an operator** (`force_release_device`, D28) — and still without the
+lease id ever being handed out. That call is keyed on the device **serial**, which every listing
+already shows, precisely because ending somebody else's lease has no credential of theirs to
+present; putting the id in a listing so it could would be the disclosure the protocol refuses. It
+runs the same release path a normal release does, so the device is restored identically (D9), and
+the holder's next verb call is refused `no-lease` rather than quietly driving a device the host may
+since have handed on. A device nobody is holding is a named refusal and not an error, and the three
+reasons are three different next moves: `not-held`, `gone` and `not-attached`. Who did it is a
+caller-supplied `actor` string the host records and derives from nothing — never from whoever
+authenticated, and never a token (D20).
+
+**The daemon restores the device itself** (D9) — on `release_device`, on `force_release_device` and
+on expiry alike, from the one place a lease is observed to end. It stops the project's applications, turns airplane mode off,
 turns wifi back on (in that order: `PROJECT.md` §6 records why the wifi step has to be last), stops
 the project's helper services and runs the project's teardown hook. A caller is never asked to do any of it and cannot opt out; a
 step that fails is reported and the remaining steps still run — including a project resolver that
@@ -418,13 +438,16 @@ applications a project owns and what its hook does arrive through an injected re
 per-project configuration that fills it is its own issue (`PROJECT.md` §9.3, R17), so today that
 resolver answers nothing and only the two network steps have work to do.
 
-**There is a CLI** (D4) — `rover list`, `acquire`, `release`, `screenshot`, `record`, `pull`, `push`,
+**There is a CLI** (D4) — `rover list`, `acquire`, `release`, `force-release`, `screenshot`,
+`record`, `pull`, `push`,
 `install`, `status` and `users`, human-readable by default and one JSON document on stdout with `--json`, every diagnostic
 on stderr. It holds no verb logic: each command parses flags, calls one IPC method, renders the
 answer and picks an exit code. `list` shows what is attached, what is free and who holds the rest —
 the owner, project and test name, and how much longer they have — and says out loud when the host
 does not know its own view to be current, rather than quietly printing a short list. `acquire`
-requires an explicit `--owner` and `--project` and derives neither. `status` says which host
+requires an explicit `--owner` and `--project` and derives neither, and `force-release` requires an
+explicit `--actor` for the same reason — it names the device, not a lease id, because it ends a
+lease this caller never took. `status` says which host
 answered. The host is named by `--host`: no flag means the local one, `remote` is the machine
 `ROVER_HOST_ADDRESS`, `ROVER_HOST_PORT` and `ROVER_HOST_TOKEN` name, and anything else fails loudly
 instead of hanging. `screenshot`, `record` and `pull` are the three commands that bring bytes back:
@@ -837,13 +860,18 @@ package argument on it — the byte-carrying form stays the CLI's, because a who
 argument means an agent producing several megabytes of base64. That is what `push_file` and
 `pull_file` are still waiting for and why they are not tools: `PROJECT.md` R24 phase 2 owns how a
 client supplies and receives a file, and neither of those rows has a second form that carries
-none. There is no published `rover` command — a published entry point is outside the backlog
+none. `force_release_device` is the third row with no tool, and its reason will not expire: **an
+agent must not be able to end another agent's lease.** It is authority over the shared pool rather
+than a step in one caller's work, which is what makes it an operator action (D27, D28) reached from
+the CLI and, later, the panel. `tests/unit/mcp/verb-declarations.test.ts` records all three as
+decisions, so no row can quietly land with no tool. There is no published `rover` command — a published entry point is outside the backlog
 deliberately, and `PROJECT.md` §9.4 records why and what changes when it lands; `bin/rover-mcp.mjs`
 is a path an MCP config states absolutely and not that.
 
 Exit codes: `0` success; `1` the operation did not succeed (a refused `acquire`, a `release` that
-found no live lease, an unreachable host, a request the host rejected); `2` usage error (unknown
-command or flag, a missing `--owner`/`--project`, an attribution string past the 256 characters
+found no live lease, a `force-release` that found no lease on the device, an unreachable host, a
+request the host rejected); `2` usage error (unknown
+command or flag, a missing `--owner`/`--project`/`--actor`, an attribution string past the 256 characters
 the host accepts, a `--host` that is neither `local` nor `remote`, or `remote` with nothing in
 the environment naming one). A `release`
 that found nothing exits `1` on purpose — the host cannot tell "no such id" from "already gone",
@@ -869,7 +897,7 @@ startup, naming the variable and the reason, rather than binding something surpr
 | `ROVER_TLS_CERT` | — (required with the port) | Path to the PEM certificate (chain) the listener presents. |
 | `ROVER_TLS_KEY` | — (required with the port) | Path to the matching PEM private key. Unreadable material is a startup failure naming the variable and the path, not a TLS mystery on the first connection. |
 | `ROVER_LISTEN_ADDRESS` | `0.0.0.0` | Which interface the network listener binds, so an operator can narrow it to a VPN or loopback interface instead of every one. Only read when the port is set. |
-| `ROVER_HTTP_PORT` | unset — **no HTTP listener** | The opt-in switch for the HTTP surface a browser reaches (`PROJECT.md` D28) — one route, `POST /rpc`, carrying the same envelopes and served by the same `IpcServer` as the local socket. Unset or empty and nothing binds and nothing else below is read, so upgrading a daemon never starts listening for browsers. Deliberately **separate from `ROVER_LISTEN_PORT`**: exposing this host to a team's Rover clients is not the same decision as opening a browser surface, and neither implies the other. Who may connect comes from the user store (`ROVER_USERS_PATH`), re-read on **every request** — so `rover users revoke` takes effect on the very next one, with the daemon still running. A client never sets this: `rover list` clears it in any daemon it autostarts. 1–65535. |
+| `ROVER_HTTP_PORT` | unset — **no HTTP listener** | The opt-in switch for the HTTP surface a browser reaches (`PROJECT.md` D29) — one route, `POST /rpc`, carrying the same envelopes and served by the same `IpcServer` as the local socket. Unset or empty and nothing binds and nothing else below is read, so upgrading a daemon never starts listening for browsers. Deliberately **separate from `ROVER_LISTEN_PORT`**: exposing this host to a team's Rover clients is not the same decision as opening a browser surface, and neither implies the other. Who may connect comes from the user store (`ROVER_USERS_PATH`), re-read on **every request** — so `rover users revoke` takes effect on the very next one, with the daemon still running. A client never sets this: `rover list` clears it in any daemon it autostarts. 1–65535. |
 | `ROVER_HTTP_ADDRESS` | `127.0.0.1` | Which interface the HTTP listener binds. **Loopback by default**, unlike `ROVER_LISTEN_ADDRESS`, because the ordinary first use of the panel is the operator's own browser on this machine. Set it to something a stranger can reach and `ROVER_TLS_CERT` and `ROVER_TLS_KEY` become **required**: every request carries a bearer token in a header, and an unencrypted listener off loopback would put it on the wire in the clear, so the daemon refuses to start rather than half-configuring. On loopback, plain HTTP needs no certificate. Only read when the port is set. |
 | `ROVER_HOST_ADDRESS` | unset — **no remote host** | The opt-in switch on the *client* side: the address of the host `--host remote` asks. Unset or empty and nothing below is read, `--host remote` is a usage error, and `rover` is a purely local client. Set it and `ROVER_HOST_PORT` and `ROVER_HOST_TOKEN` become **required together**, because a client cannot guess either — a missing one is a usage error naming every variable still missing. Exactly one remote host is configurable (`PROJECT.md` D18); there is no catalogue. **It is also what points an MCP server at a remote host** (`npm run mcp`), and there it is the *only* thing that can: an MCP client launches each server with its own `env` block, so this variable is that server's configuration, no tool takes a host parameter, and an agent can neither see nor change which host answered (`PROJECT.md` D17). An MCP server reads it at startup rather than at the first tool call, so a half-configured one fails on stderr before it advertises anything. |
 | `ROVER_HOST_TOKEN` | — (required with `ROVER_HOST_ADDRESS`) | **A client-side credential, and only that** — the value `rover users add` (or `users rotate`) printed on the host, pasted on the machine that borrows a device. The host itself no longer reads this variable: it authenticates against its user store, so a token is revocable and rotatable where it was issued rather than being a secret both machines hold forever (`PROJECT.md` D25). At least **32 characters**, checked locally so a truncated paste fails here naming the variable instead of coming back as an opaque refusal. It is a **host-level** setting and belongs in the environment, never in a file the repository tracks. The token **authenticates and attributes nothing**: a lease's owner is a separate, caller-supplied string (`PROJECT.md` D20). |
@@ -1167,7 +1195,7 @@ unknown or revoked — and the connection is closed.
 ### Serving the panel surface over HTTP
 
 A browser cannot speak the framed NDJSON greeting the TCP listener consumes before dispatch, so
-the panel reaches the host through a third transport of the *same* surface (`PROJECT.md` D28):
+the panel reaches the host through a third transport of the *same* surface (`PROJECT.md` D29):
 one route, `POST /rpc`, whose request and response bodies are the envelopes every other transport
 already carries. It is **off unless `ROVER_HTTP_PORT` is set** — a daemon that started listening
 for browsers because somebody upgraded would be a change in exposure nobody chose — and `rover

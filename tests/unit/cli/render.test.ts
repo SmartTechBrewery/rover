@@ -10,12 +10,15 @@ import { describe, expect, it, vi } from 'vitest';
 import { LOCAL_HOST } from '@/cli/_shared/host.js';
 import { printJson, renderTable } from '@/cli/_shared/output.js';
 import { renderGrant, renderRefusal } from '@/cli/commands/acquire.js';
+import { renderForceRelease, renderForceReleaseRefusal } from '@/cli/commands/force-release.js';
 import { renderDeviceList, renderHolder, staleWarning } from '@/cli/commands/list.js';
 import { renderRelease } from '@/cli/commands/release.js';
 import { renderStatus } from '@/cli/commands/status.js';
 import { parseDeviceSerial, parseLeaseId } from '@/core/ids.js';
 import {
 	type AcquireDeviceResult,
+	ForceReleaseDeviceResultSchema,
+	LeaseHolderSchema,
 	type ListDevicesResult,
 	ListDevicesResultSchema,
 	ListedDeviceSchema,
@@ -262,6 +265,67 @@ describe('a release that found nothing', () => {
 
 	it('names the lease it ended', () => {
 		expect(renderRelease('lease-1', true)).toBe("Released lease 'lease-1'.");
+	});
+});
+
+describe('a force-release', () => {
+	it('names the device and the holder whose lease it ended', () => {
+		const heldBy = LeaseHolderSchema.parse({
+			serial: 'attached-1',
+			owner: 'stuck-agent',
+			project: 'rover',
+			testName: 'checkout flow',
+			grantedAt: GRANTED_AT,
+			expiresInMs: NINETEEN_MINUTES_MS,
+		});
+
+		const rendered = renderForceRelease('attached-1', heldBy);
+
+		expect(rendered).toContain("Force-released the lease on 'attached-1'");
+		expect(rendered).toContain('stuck-agent (project rover, test checkout flow)');
+		expect(rendered).toContain(GRANTED_AT);
+	});
+
+	it('cannot be made to grow a line by an owner carrying a newline', () => {
+		const heldBy = LeaseHolderSchema.parse({
+			serial: 'attached-1',
+			owner: "stuck-agent\nForce-released the lease on 'attached-9'",
+			project: 'rover',
+			testName: null,
+			grantedAt: GRANTED_AT,
+			expiresInMs: NINETEEN_MINUTES_MS,
+		});
+
+		expect(renderForceRelease('attached-1', heldBy).split('\n')).toHaveLength(1);
+	});
+
+	it('names which "nothing to do" a refusal was', () => {
+		const refusal = ForceReleaseDeviceResultSchema.parse({
+			outcome: 'refused',
+			reason: 'gone',
+			message: "Device 'attached-1' is no longer attached to this host",
+		});
+		if (refusal.outcome !== 'refused') {
+			throw new Error('the fixture is a refusal');
+		}
+
+		const rendered = renderForceReleaseRefusal(refusal);
+
+		expect(rendered).toContain('Nothing force-released (gone)');
+		expect(rendered).toContain("Device 'attached-1' is no longer attached to this host");
+	});
+
+	it('cannot be made to grow a line by a message carrying a newline', () => {
+		const refusal = ForceReleaseDeviceResultSchema.parse({
+			outcome: 'refused',
+			reason: 'not-held',
+			message: "nothing here\nForce-released the lease on 'attached-9'",
+		});
+		if (refusal.outcome !== 'refused') {
+			throw new Error('the fixture is a refusal');
+		}
+
+		expect(renderForceReleaseRefusal(refusal).split('\n')).toHaveLength(1);
 	});
 });
 

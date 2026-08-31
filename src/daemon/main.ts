@@ -42,7 +42,7 @@ async function main(): Promise<void> {
 	const network = resolveNetworkListener();
 	// And the one place the HTTP surface is resolved from the environment, for the same reason
 	// and with the same failure: a non-loopback address with no TLS material throws here rather
-	// than putting a bearer token on a wire in the clear (D28).
+	// than putting a bearer token on a wire in the clear (D29).
 	const http = resolveHttpListener();
 	const daemon = await startDaemon({
 		socketPath,

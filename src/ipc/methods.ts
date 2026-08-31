@@ -379,6 +379,82 @@ export const ReleaseDeviceResultSchema = z.object({ released: z.boolean() }).str
 export type ReleaseDeviceResult = z.infer<typeof ReleaseDeviceResultSchema>;
 
 /**
+ * Ending a lease you do **not** hold, keyed on the serial — the one row on this surface that
+ * names a device instead of presenting a credential.
+ *
+ * There is deliberately no `leaseId` here, and that absence is the whole point of the row.
+ * Force-releasing is by definition ending somebody else's lease, and the only credential that
+ * ends a lease is the id its holder was handed (D20) — so the alternatives were to give the
+ * operator the holder's id, which means putting it in a listing and undoing the reason
+ * {@link ListedDeviceSchema} does not carry one, or to key the call on the thing an operator
+ * can actually see. This is the second. The serial is public in every listing already, and
+ * naming it discloses nothing the caller could not read a moment earlier.
+ *
+ * **What authorizes the call is reaching this surface** (D28): the local socket is a shell on
+ * the host, which already has every device, and a network caller is a named user in the host's
+ * own store (D25, R28). No new tier is invented here — every named user has the same reach
+ * today, and `docs/WEB_PANEL.md` keeps tiering an open question rather than an assumed one.
+ * `actor` is **attribution and not authorisation**, exactly like `acquire_device`'s `owner`:
+ * the host records who said they were doing this and derives it from nothing, because deriving
+ * attribution from whoever authenticated is what D20 forbids — and the identity of the acting
+ * user is not their token, which never reaches a record.
+ *
+ * `.strict()` for {@link AcquireDeviceParamsSchema}'s reason: a typo'd key is `invalid_params`
+ * rather than a lease ended with the record of who ended it silently missing.
+ */
+export const ForceReleaseDeviceParamsSchema = z
+	.object({
+		serial: DeviceSerialSchema,
+		/** Who is ending it. Attribution only — it authorizes nothing (D20, D28). */
+		actor: AttributionStringSchema,
+	})
+	.strict();
+export type ForceReleaseDeviceParams = z.infer<typeof ForceReleaseDeviceParamsSchema>;
+
+/**
+ * Why there was nothing to force-release. Each is a different thing for the operator staring
+ * at the screen to do next, which is why they are three named answers and not one boolean.
+ */
+export const ForceReleaseRefusalReasonSchema = z.enum([
+	/** The device is attached to this host and nobody holds it — there was nothing to end. */
+	'not-held',
+	/** The device is no longer attached to this host (D6) — re-verification found nothing. */
+	'gone',
+	/** Visible to the host but not physically attached to it, so never leased (D18). */
+	'not-attached',
+]);
+export type ForceReleaseRefusalReason = z.infer<typeof ForceReleaseRefusalReasonSchema>;
+
+/**
+ * Released or refused, as **data** — {@link AcquireDeviceResultSchema}'s reasoning applies
+ * verbatim: "that device is already free" is an answer an operator acts on, not a host that
+ * broke.
+ */
+export const ForceReleaseDeviceResultSchema = z.discriminatedUnion('outcome', [
+	z
+		.object({
+			outcome: z.literal('released'),
+			/**
+			 * Who was holding it, as of the instant before the lease ended, and how much longer
+			 * they would have had. The same public projection a listing and a refusal carry
+			 * ({@link LeaseHolderSchema}, `src/daemon/lease-holder.ts`) — so, like both of those,
+			 * **never** the lease id: force-releasing a device must not be a way to obtain the
+			 * credential for the next one.
+			 */
+			heldBy: LeaseHolderSchema,
+		})
+		.strict(),
+	z
+		.object({
+			outcome: z.literal('refused'),
+			reason: ForceReleaseRefusalReasonSchema,
+			message: z.string().min(1),
+		})
+		.strict(),
+]);
+export type ForceReleaseDeviceResult = z.infer<typeof ForceReleaseDeviceResultSchema>;
+
+/**
  * `status` and `list_devices` exist in the *protocol* rather than in the MCP layer because
  * D16 requires daemon state to be answerable to something that is not an agent: whatever
  * Swarm asks, it asks here, the same way a local caller does. Nothing device-shaped may
@@ -386,6 +462,13 @@ export type ReleaseDeviceResult = z.infer<typeof ReleaseDeviceResultSchema>;
  *
  * The names follow the verb table in PROJECT.md §4 (`list_devices`), not a camelCase
  * variant of it.
+ *
+ * **`force_release_device` is the one row keyed on a serial rather than on a lease id**, and it
+ * is the exception that says why every other one is not. A verb call names the lease id because
+ * that id is the credential the caller was handed (D20); force-release ends a lease the caller
+ * never held, so there is no credential for it to present and the id must not be handed out to
+ * make one — that is the disclosure {@link ListedDeviceSchema} exists to refuse. It is a third
+ * trigger on the release path rather than a second release path: see `src/daemon/lease-handlers.ts`.
  *
  * The verb rows are the two waits, the six input verbs, the three read verbs, the three
  * app-lifecycle verbs, the log read, the screen recording, the two environment verbs and the
@@ -413,6 +496,10 @@ export const IPC_METHODS = {
 	list_devices: { params: ListDevicesParamsSchema, result: ListDevicesResultSchema },
 	acquire_device: { params: AcquireDeviceParamsSchema, result: AcquireDeviceResultSchema },
 	release_device: { params: ReleaseDeviceParamsSchema, result: ReleaseDeviceResultSchema },
+	force_release_device: {
+		params: ForceReleaseDeviceParamsSchema,
+		result: ForceReleaseDeviceResultSchema,
+	},
 	wait_for: { params: WaitForParamsSchema, result: VerbCallResultSchema },
 	wait_until_gone: { params: WaitUntilGoneParamsSchema, result: VerbCallResultSchema },
 	tap: { params: TapParamsSchema, result: VerbCallResultSchema },

@@ -20,7 +20,7 @@
  * what the user store exists to retire.
  *
  * **The HTTP listener is a third resolver, and it is separate from the TCP one on purpose**
- * (D28). It shares the shape — one switch, `ROVER_HTTP_PORT`, and nothing else read while it is
+ * (D29). It shares the shape — one switch, `ROVER_HTTP_PORT`, and nothing else read while it is
  * unset — and shares the TLS material and the user store, because it is the same host serving
  * the same surface. What it does not share is the *exposure question*: a Rover client is on
  * another machine by definition, so the TCP listener defaults to every interface, while the
@@ -49,7 +49,7 @@ export const TLS_CERT_ENV_VAR = 'ROVER_TLS_CERT';
 export const TLS_KEY_ENV_VAR = 'ROVER_TLS_KEY';
 
 /**
- * The HTTP surface's own opt-in switch. Unset or empty ⇒ no HTTP listener at all (D28).
+ * The HTTP surface's own opt-in switch. Unset or empty ⇒ no HTTP listener at all (D29).
  *
  * Deliberately **not** {@link LISTEN_PORT_ENV_VAR}: upgrading a daemon must not start listening
  * for browsers on a developer's machine, and an operator who exposed this host to their team's
@@ -140,7 +140,7 @@ const ENV_VAR_BY_LISTENER_FIELD: Record<keyof NetworkListenerConfig, string> = {
 };
 
 /**
- * The HTTP surface's listener (D28). It holds no secret either, for {@link NetworkListenerSchema}'s
+ * The HTTP surface's listener (D29). It holds no secret either, for {@link NetworkListenerSchema}'s
  * reason: `usersPath` names the store the per-request gate authenticates against.
  *
  * `certPath` and `keyPath` are **optional here and required there**, which is the one real
@@ -246,7 +246,7 @@ export function resolveNetworkListener(
 }
 
 /**
- * Resolve the HTTP surface's listener, or `undefined` when this host serves no browser (D28).
+ * Resolve the HTTP surface's listener, or `undefined` when this host serves no browser (D29).
  *
  * Empty counts as unset exactly as it does above, and for the same three reasons — a blank
  * exported variable is what a shell leaves behind, `spawnDaemon` blanks this one in an

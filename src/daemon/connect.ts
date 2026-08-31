@@ -143,7 +143,7 @@ async function tryConnect(socketPath: string): Promise<ConnectSucceeded | Connec
  * inherits this process's environment, so without this a plain `rover list` on a machine whose
  * shell happens to export either one would silently turn that laptop into a network host, or
  * into a panel host reachable from a browser. Both are long-running services their operator
- * starts on purpose (D17, D28), never something a client brings up behind their back. Empty
+ * starts on purpose (D17, D29), never something a client brings up behind their back. Empty
  * counts as unset for both, exactly as it does for the socket path.
  */
 function spawnDaemon(socketPath: string): void {

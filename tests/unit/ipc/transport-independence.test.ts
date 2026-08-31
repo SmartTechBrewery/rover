@@ -7,7 +7,7 @@ import { describe, expect, it } from 'vitest';
  * The headline acceptance criterion of issue #6, as an executable gate: **nothing under
  * `src/ipc/` may touch a transport, a filesystem or a process.**
  *
- * D17 makes the network listener (R22) an added transport rather than a rewrite — and D28 makes
+ * D17 makes the network listener (R22) an added transport rather than a rewrite — and D29 makes
  * the HTTP surface a browser reaches (R32) a third one on the same terms — and that only holds
  * while the message surface cannot tell what it is speaking over. The way it
  * stops holding is not a redesign — it is one convenience import: a socket path resolved

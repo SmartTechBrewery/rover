@@ -1,5 +1,6 @@
 /**
- * The `acquire_device` and `release_device` handlers — the lease store's only surface.
+ * The `acquire_device`, `release_device` and `force_release_device` handlers — the lease
+ * store's only surface.
  *
  * **The order of the work in {@link createLeaseHandlers} is the exclusivity guarantee**, and
  * it is the thing to preserve when editing this file. `LeaseStore.acquire` is synchronous, so
@@ -44,6 +45,19 @@
  * device vanished (D6), the device belongs to another host (D18) — and both are caught here
  * and turned into an answer. An agent told `internal_error` learns nothing it can act on; an
  * agent told `not-attached` stops asking.
+ *
+ * **`force_release_device` is a third *trigger* on the release path, never a third path**
+ * (D9, D28). It is keyed on the serial because it ends a lease the caller never held and so
+ * has no credential to present (D20), and it ends that lease through the same
+ * `LeaseStore.release` `release_device` calls — which is where the end hook, and therefore the
+ * traffic revocation, the restoration, the archive's bookkeeping and the project's teardown,
+ * are wired. That shared call is what makes "a force-release restores the device exactly as a
+ * release does" structural rather than a claim, and it is why this landed as its own row
+ * instead of as a parameter on `release_device`: the release path is genuinely shared, so the
+ * only thing a second row costs is a second entry in the table, while a union of "either a
+ * lease id or a serial" would weaken the one sentence `ReleaseDeviceParamsSchema` exists to
+ * state. None of the await-ordering rules above apply to it — nothing exclusive is being
+ * taken, and its one `await` sits below every decision.
  */
 
 import { requireDeviceBackend } from '../backends/registry.js';
@@ -53,6 +67,8 @@ import type {
 	AcquireDeviceParams,
 	AcquireDeviceResult,
 	AcquireRefusalReason,
+	ForceReleaseDeviceParams,
+	ForceReleaseDeviceResult,
 	IpcHandlers,
 	ReleaseDeviceParams,
 	ReleaseDeviceResult,
@@ -64,7 +80,10 @@ import type { ProjectServices } from './project-services.js';
 import type { DeviceRestorer } from './restore.js';
 import type { SlotAllocator } from './slots.js';
 
-export type LeaseHandlers = Pick<IpcHandlers, 'acquire_device' | 'release_device'>;
+export type LeaseHandlers = Pick<
+	IpcHandlers,
+	'acquire_device' | 'release_device' | 'force_release_device'
+>;
 
 /**
  * The two ways re-verifying a device answers "no".
@@ -75,13 +94,30 @@ export type LeaseHandlers = Pick<IpcHandlers, 'acquire_device' | 'release_device
  */
 export type InventoryRefusalReason = Extract<AcquireRefusalReason, 'gone' | 'not-attached'>;
 
+export interface LeaseHandlerOptions {
+	/**
+	 * Where the force-release record is written. Defaults to `console.warn`, which is the
+	 * daemon's own stderr — an operator's daemon is one they started and whose output they own.
+	 * Injected by tests so the line can be read without capturing a global.
+	 *
+	 * It is the record D28 requires and deliberately not a durable audit store: a queryable
+	 * history is the panel's own row, not something this handler invents. Nothing on this path
+	 * ever holds a token, so nothing here can leak one (D20) — the greeting consumes the
+	 * credential in `./network-listen.ts` and nothing carries it past the gate.
+	 */
+	readonly audit?: (message: string) => void;
+}
+
 export function createLeaseHandlers(
 	inventory: DeviceInventory,
 	leases: LeaseStore,
 	restorer: DeviceRestorer,
 	services: ProjectServices,
 	slots: SlotAllocator,
+	options: LeaseHandlerOptions = {},
 ): LeaseHandlers {
+	const audit = options.audit ?? ((message: string) => console.warn(message));
+
 	return {
 		async acquire_device(params: AcquireDeviceParams): Promise<AcquireDeviceResult> {
 			// The first await. The inventory is a cache and the platform is the truth, so the
@@ -207,6 +243,66 @@ export function createLeaseHandlers(
 			// business, and a caller that had to await it could also decline to (D9). The next
 			// `acquire_device` on this serial is what waits.
 			return { released: leases.release(params.leaseId) };
+		},
+
+		async force_release_device(
+			params: ForceReleaseDeviceParams,
+		): Promise<ForceReleaseDeviceResult> {
+			// **The lease is looked up before the device, and the order is the point.** A device
+			// that vanished mid-lease is precisely the stuck lease an operator most needs to
+			// clear, so asking the inventory first and refusing `gone` would pin that lease for
+			// the full TTL with nothing able to end it. If a live lease exists it ends, whatever
+			// the hardware is doing: the restorer already handles a device it cannot reach, with a
+			// warning, and the project's host-side teardown still runs.
+			//
+			// Synchronous and adjacent to the release below on purpose — nothing may `await`
+			// between observing the holder and ending its lease. `holderOf` also drops a record
+			// whose instant has passed, and dropping it is what starts that lease's restoration,
+			// so an already-expired holder reads as `not-held` here, correctly, with its teardown
+			// already under way.
+			const holder = leases.holderOf(params.serial);
+			if (holder) {
+				// Projected before the release, so `expiresInMs` reports what the holder would have
+				// had left rather than nothing. `toLeaseHolder` is the single disclosure path (D20):
+				// the id stays inside this process.
+				const disclosed = toLeaseHolder(holder, leases);
+				if (leases.release(holder.id)) {
+					// One line, on this branch only, and every quoted value goes through
+					// `JSON.stringify`: `actor`, `owner` and `project` are caller-supplied strings that
+					// may contain a newline, and a record another line can be forged into is not a
+					// record. No token is in scope on this path at all (D20).
+					audit(
+						`Force-released the lease on device '${holder.serial}' held by ` +
+							`${JSON.stringify(holder.owner)} (project ${JSON.stringify(holder.project)}, ` +
+							`granted ${disclosed.grantedAt}, ${disclosed.expiresInMs}ms left), asked for ` +
+							`by ${JSON.stringify(params.actor)} at ${new Date().toISOString()}.`,
+					);
+					return { outcome: 'released', heldBy: disclosed };
+				}
+				// Unreachable while the two calls above stay adjacent and synchronous. It is written
+				// rather than asserted because an `await` introduced between them is exactly the
+				// defect, and "nobody holds it" is the honest thing to say if one ever is.
+			}
+
+			// Nobody holds it, so the only question left is which "nothing to do" this is — and
+			// that is a question about the hardware, which the cache may not answer (D6).
+			try {
+				await inventory.verifyForGrant(params.serial);
+			} catch (error) {
+				const reason = refusalReasonFor(error);
+				if (!reason) {
+					throw error;
+				}
+				return { outcome: 'refused', reason, message: messageOf(error) };
+			}
+
+			return {
+				outcome: 'refused',
+				reason: 'not-held',
+				message:
+					`Device '${params.serial}' is attached to this host and no lease is held on it, ` +
+					`so there was nothing to force-release`,
+			};
 		},
 	};
 }

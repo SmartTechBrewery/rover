@@ -18,7 +18,7 @@
  * **One handler, every transport.** The `IpcServer` is built once here and handed to the unix
  * socket and — each when the operator opted in (`./network-config.ts`) — to the TLS listener of
  * `./network-listen.ts` and the HTTP listener of `./http-listen.ts`. That is what makes "the same
- * surface, another transport" (D17, D28) structural rather than a claim: there is one method
+ * surface, another transport" (D17, D29) structural rather than a claim: there is one method
  * table and one dispatcher, and no transport can drift from the others because there is nothing
  * to drift from.
  */
@@ -134,7 +134,7 @@ export interface StartDaemonOptions {
 	 */
 	readonly network?: NetworkListenerConfig;
 	/**
-	 * The HTTP surface a browser reaches (D28, `./http-listen.ts`), or absent for a host that
+	 * The HTTP surface a browser reaches (D29, `./http-listen.ts`), or absent for a host that
 	 * serves no browser — which is every host until an operator sets `ROVER_HTTP_PORT`.
 	 *
 	 * The operator's opt-in, resolved from the environment by `./main.ts` and deliberately
@@ -175,7 +175,7 @@ export interface RunningDaemon {
 	readonly networkPort: number | null;
 	/**
 	 * The port the HTTP listener actually bound, or `null` when none was configured — which is
-	 * the default (D28). A configured port of `0` resolves to a real one here, for
+	 * the default (D29). A configured port of `0` resolves to a real one here, for
 	 * {@link RunningDaemon.networkPort}'s reason.
 	 */
 	readonly httpPort: number | null;
@@ -194,7 +194,7 @@ export interface DaemonAlreadyRunning {
 export type StartResult = RunningDaemon | DaemonAlreadyRunning;
 
 /**
- * The method table the daemon serves — status, the device list, the two lease operations and
+ * The method table the daemon serves — status, the device list, the three lease operations and
  * the verbs, on one surface (D19). A new verb family is one more spread, or one more entry in
  * `./verb-handlers.ts`; nothing about the connection lifecycle changes to carry it.
  */

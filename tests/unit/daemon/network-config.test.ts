@@ -134,7 +134,7 @@ function resolveHttp(overrides: Record<string, string | undefined>) {
 describe('the HTTP surface is a third opt-in, off unless configured', () => {
 	it('resolves nothing when its own port is unset, however much else is configured', () => {
 		// Including the TCP listener being fully configured: the two switches are separate
-		// because exposing a host to Rover clients is not asking for a browser surface (D28).
+		// because exposing a host to Rover clients is not asking for a browser surface (D29).
 		expect(resolveHttpListener({ ...complete })).toBeUndefined();
 	});
 

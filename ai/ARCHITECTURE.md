@@ -32,7 +32,7 @@ has no Rover client at all because its client is a browser:
 |---|---|---|
 | Local unix socket | `src/daemon/listen.ts` — no token, no configuration | `src/daemon/connect.ts` — **and autostart lives here** (D5) |
 | TCP + TLS | `src/daemon/network-listen.ts` — opt-in via `ROVER_LISTEN_PORT` | `src/daemon/network-connect.ts` — configured by `ROVER_HOST_ADDRESS` |
-| HTTP(S) | `src/daemon/http-listen.ts` — opt-in via `ROVER_HTTP_PORT`, one route `POST /rpc` (D28) | the browser; **no Rover client**, and none is planned |
+| HTTP(S) | `src/daemon/http-listen.ts` — opt-in via `ROVER_HTTP_PORT`, one route `POST /rpc` (D29) | the browser; **no Rover client**, and none is planned |
 
 `src/daemon/host.ts` is where a client **chooses** between those two client halves, and it is
 single because there are two clients: the CLI asks for a host with `--host` and the MCP server
@@ -74,7 +74,7 @@ something about the host (D20). The token authenticates and attributes nothing: 
 is a separate, caller-supplied string, never derived from whoever authenticated.
 
 **On the HTTP transport the gate is per *request*, because HTTP has no connection to
-authenticate** (D28). A keep-alive connection carries many requests and a browser opens and drops
+authenticate** (D29). A keep-alive connection carries many requests and a browser opens and drops
 them as it pleases, so the credential travels on each one — `Authorization: Bearer <token>`,
 resolved against the same store, read afresh every time. That is strictly stronger than the TLS
 gate's per-connection check, and it is what makes `rover users revoke` bite on the very next
@@ -219,14 +219,16 @@ request ──▶ match against a re-verified inventory
                              │
                              │  every verb call pushes the expiry out
                              │
-                             ├─ release ──────┐
-                             ├─ expiry (20m) ─┤──▶ restore ──▶ back to the pool
-                             └─ device gone ──┘
+                             ├─ release ───────┐
+                             ├─ force-release ─┤
+                             ├─ expiry (20m) ──┤──▶ restore ──▶ back to the pool
+                             └─ device gone ───┘
 ```
 
 - **Per device, not per machine** (D7). The predecessor took the whole rig because it was a file.
 - **The TTL is refreshed by activity, not by a heartbeat** (D8). An agent pauses to think for minutes at a time, so a fixed budget is wrong in both directions; a dead agent issues no more calls and expires on its own.
-- **Restoration runs on release *and* on expiry** (D9): stop the app, airplane mode off, wifi on, stop the project's helper services, then the project's teardown hook. A teardown that only runs on the happy path is not a teardown. Every step is contained, including working out what the project owns, so one unreadable project description costs that project's steps rather than the device's. The teardown hook is foreign code and is bounded like the shutdown's other waits, because a grant queues behind it. `close()` sweeps once more and then waits out what is still owed, bounded: a lease dies with the host, so an abandoned restoration is never retried by anything.
+- **Restoration runs on release, on force-release *and* on expiry** (D9): stop the app, airplane mode off, wifi on, stop the project's helper services, then the project's teardown hook. A teardown that only runs on the happy path is not a teardown. Every step is contained, including working out what the project owns, so one unreadable project description costs that project's steps rather than the device's. The teardown hook is foreign code and is bounded like the shutdown's other waits, because a grant queues behind it. `close()` sweeps once more and then waits out what is still owed, bounded: a lease dies with the host, so an abandoned restoration is never retried by anything.
+- **Force-release is a third *trigger* on that same path, not a third path** (D28, `force_release_device`). It ends a lease its caller never took, so it is keyed on the device **serial** — there is no credential of the holder's for it to present, and handing out the lease id so there could be is the disclosure D20 keeps out of every listing. It reaches the store through the same `LeaseStore.release` a normal release does, which is what makes the restoration identical rather than merely adjacent, and the holder learns of it from its next verb call, refused `no-lease`. Who did it is a caller-supplied `actor` string recorded on the host, never derived from whoever authenticated.
 - **A lease carries an owner string** — `issue-112`, `pr-127-review`, and later a Swarm run identity (`ai/RULES.md` §1). Never derive it from a process id, and never from whoever authenticated (D20).
 - **A lease also carries a *slot*** (R18, `src/daemon/slots.ts`) — its numbered parallel position on this host, and the block of ports the hooks run for it are told. It is taken inside the same synchronous section that makes the grant exclusive, so concurrent grants cannot be given one block for the same reason they cannot be given one device, and it is reclaimed at the **tail of the restoration** rather than when the lease record disappears: the teardown queued above is the thing still using those ports, and the pool hands out the lowest free index, so freeing them earlier would hand a live block to the next lessee. That means reclamation runs on the same two paths and the same clock restoration does (D9) — never a second timer with its own idea of what is dead — so a slot orphaned by an agent that died without releasing comes back with the sweep. A host with every slot in use refuses the grant by name (`no-slot`) rather than granting a lease with no ports.
 - **Only a device physically attached to the host is ever granted a lease** (D18); the handle is
@@ -578,4 +580,4 @@ the same slot-aware runner, so concurrent leases receive separate port blocks.
 
 ## Not built, deliberately
 
-No database — the daemon's *operational* state (inventory, leases, ports) is per-host, ephemeral and re-derivable; a slot pool is the plainest case of it, since after a restart there are no leases and so there are no slots to reclaim from a predecessor. The artifact archive (`PROJECT.md` §10, D23) is a deliberate exception: files on disk, not daemon state, and nothing the daemon needs to survive a restart to keep working. Its directory shape is itself a stable contract the web panel will read directly off disk (`PROJECT.md` D24, `docs/WEB_PANEL.md`) — no index to build, a directory listing is the whole query. **That panel is in scope and is not read-only** (D27, since 2026-08-31): its transport exists (D28, the HTTP row above), and the screens do not yet. The archive is already shaped so building them needs no redesign. No cloud half. Rover is nothing's CI gate — it asserts nothing about the app under test and turns nothing red on its own; the `verify` workflow on this repo's own pull requests (`PROJECT.md` §7, R26) runs Rover's unit suite and is not part of the product. No device farm, no host catalogue and no registration of hosts with one another: a client learns about hosts from its own configuration and nowhere else (`PROJECT.md` §7). No comparison against design renders: Rover supplies screenshots and measurements; judging them is the agent's job.
+No database — the daemon's *operational* state (inventory, leases, ports) is per-host, ephemeral and re-derivable; a slot pool is the plainest case of it, since after a restart there are no leases and so there are no slots to reclaim from a predecessor. The artifact archive (`PROJECT.md` §10, D23) is a deliberate exception: files on disk, not daemon state, and nothing the daemon needs to survive a restart to keep working. Its directory shape is itself a stable contract the web panel will read directly off disk (`PROJECT.md` D24, `docs/WEB_PANEL.md`) — no index to build, a directory listing is the whole query. **That panel is in scope and is not read-only** (D27, since 2026-08-31): its transport exists (D29, the HTTP row above), and the screens do not yet. The archive is already shaped so building them needs no redesign. No cloud half. Rover is nothing's CI gate — it asserts nothing about the app under test and turns nothing red on its own; the `verify` workflow on this repo's own pull requests (`PROJECT.md` §7, R26) runs Rover's unit suite and is not part of the product. No device farm, no host catalogue and no registration of hosts with one another: a client learns about hosts from its own configuration and nowhere else (`PROJECT.md` §7). No comparison against design renders: Rover supplies screenshots and measurements; judging them is the agent's job.

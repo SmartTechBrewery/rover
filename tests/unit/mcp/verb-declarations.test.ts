@@ -52,13 +52,23 @@ const VERB_METHODS = [
  */
 const NARROWED_METHODS = ['install_app'] as const satisfies readonly IpcMethodName[];
 
-/** The four rows `./declarations.test.ts` owns. Not verbs, and not this suite's subject. */
+/** The device and lease rows `./declarations.test.ts` owns. Not verbs, and not this suite's subject. */
 const DEVICE_METHODS = ['status', 'list_devices', 'acquire_device', 'release_device'] as const;
 
 /**
- * The rows deliberately **not** exposed — the two file transfers, and the reason is that
- * **a whole file as a tool argument is the thing that has not been settled**, not that they
- * carry bytes at all.
+ * The rows deliberately **not** exposed — the two file transfers and the operator action, for
+ * two unrelated reasons.
+ *
+ * For the transfers the reason is that **a whole file as a tool argument is the thing that has
+ * not been settled**, not that they carry bytes at all.
+ *
+ * `force_release_device` is here for a reason that will not expire: **an agent must not be able
+ * to end another agent's lease.** The whole point of the row is authority over the shared pool
+ * rather than a step in one caller's own work, which is what makes it an operator action (D27,
+ * D28) reached from the CLI and, later, the panel. Exposing it as a tool would hand every agent
+ * on every machine the power to take a device out from under a peer mid-run — and it would do
+ * it by way of the surface whose refusals are supposed to *tell* an agent that a device is
+ * busy. It is recorded here as a decision rather than left as a row that quietly has no tool.
  *
  * `screenshot` and `record_video` answer *with* bytes, and R19 phase 3 settled what a tool does
  * with those: an inline image, or a file this server writes on the agent's own machine
@@ -75,7 +85,11 @@ const DEVICE_METHODS = ['status', 'list_devices', 'acquire_device', 'release_dev
  * The list is short and named so the gate below can be exact: a verb row added later is either
  * a registered tool or a deliberate entry here, never a row that quietly has no tool.
  */
-const NOT_YET_EXPOSED = ['push_file', 'pull_file'] as const satisfies readonly IpcMethodName[];
+const NOT_YET_EXPOSED = [
+	'push_file',
+	'pull_file',
+	'force_release_device',
+] as const satisfies readonly IpcMethodName[];
 
 /** The platform vocabulary `tests/unit/no-platform-names.test.ts` keeps out of `src/` (D10). */
 const PLATFORM_NAMES = /android|ios|iphone|ipad|adb|simctl|xcrun|uiautomator|emulator|espresso/i;

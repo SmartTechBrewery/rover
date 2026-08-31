@@ -2,7 +2,7 @@
  * Binding the transport-agnostic IPC surface to an HTTP listener a browser can reach, behind a
  * per-request token gate.
  *
- * **This is a third transport, not a third implementation** (D17, D28). It consumes the very
+ * **This is a third transport, not a third implementation** (D17, D29). It consumes the very
  * `IpcServer` the unix socket and `./network-listen.ts` are already serving and hands it one
  * framed envelope over an in-memory duplex; every method, every schema and every framing rule is
  * therefore shared by construction rather than by three files agreeing. `src/ipc/` never learns
@@ -110,8 +110,9 @@ import { findUserByToken } from './user-store.js';
  * The methods this transport serves — **a subset of the one table, never an addition to it**.
  *
  * Typed against `IpcMethodName`, so renaming a method is a compile error here rather than a
- * surface that silently stops answering. `force_release` (R31) joins this list in the change
- * that adds it to the table; nothing else is expected to.
+ * surface that silently stops answering. `force_release_device` is on the table already (R31,
+ * #109) and joins this list in the change that builds the screen calling it (R35); nothing else
+ * is expected to.
  */
 const PANEL_METHODS: readonly IpcMethodName[] = ['list_devices'];
 
