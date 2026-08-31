@@ -33,7 +33,7 @@ this sentence exists to prevent.
 | Devices (Home) | `3458d89bda5e442d894ea54208230d4c` | **The reference.** Settled. |
 | Devices — Nothing Attached | `ccdef7834ab9470f9a653a47321998c9` | Settled |
 | Devices — Host Unreachable | `c60c5830d23e4a328e9d77b83c98f9fc` | Settled |
-| Devices — Host View Stale | `769bdb0803d549f1bd575be0f9211043` | Being corrected |
+| Devices — Host View Stale | `46f3a297fee047028f29c8958a926995` | Settled, **list variant only** |
 | Devices — Force Release Confirmation | `7ad98bceb768455b92b8abe8a06a148a` | Being corrected |
 | Archive — Browsing (V2) | `f2de4344f7e347aa894b3054d9cf4098` | Not yet corrected — see §9 |
 | Run Detail — Artifacts (V2) | `36b54fbe032449d8a300ea0825bbf1c8` | Not yet corrected — see §9 |
@@ -238,6 +238,41 @@ correct state rather than a fault.
 - The `2 held · 1 free` counter is **absent**, not showing `0 held · 0 free` as though describing a
   pool.
 
+### Host view not current — settled, for the variant that has a list
+
+`list_devices` answers with `stale: true` when the host's view of the hardware is **not known to be
+current**. It keeps the shell, because unlike the unreachable state the rest of the panel still
+works — this is the other side of §7's rule.
+
+**What is uncertain here, and what is not, is the whole substance of this state**, and the first
+attempt got it backwards. `stale` is about the host's view of *the hardware*: which phones are
+plugged in and what adb says about their state. **It says nothing about leases.** A lease is the
+daemon's own bookkeeping and has no view that could go stale — `src/daemon/list-devices.ts` says so
+where it passes the flag through untouched. So:
+
+- **The lease fields stay exact and the countdown keeps ticking.** The first attempt blanked the
+  lease time to `--:--`, which discards the one part of the screen still worth trusting and tells
+  the operator the opposite of the truth.
+- **No `Status: UNCERTAIN` per card.** The uncertainty is about the list as a whole — whether these
+  are still the attached devices — and it is said once, in the banner. Per-card it asserts
+  something the flag does not mean.
+- **The banner says that the lease details below are still accurate.** Without that sentence it
+  casts doubt over the entire grid, and the operator stops trusting the part that was fine.
+- The grid may be quieted *as a set* to read as the last thing seen. That is a treatment of the
+  whole grid, never a rewriting of the data in it.
+
+Two more things this state fixed, both of which will recur:
+
+- **`Load --%`, `NODE-Alpha`, `SRV-Beta`, `DB-Gamma`.** Generated designs reach for
+  server-monitoring vocabulary whenever a screen looks like infrastructure. Rover lends **phones**:
+  there is no load, no node, and no server here.
+- **A headline is one clause.** `HOST VIEW NOT CURRENT // DATA STALE` became
+  `HOST VIEW NOT CURRENT`, the same trim `HOST UNREACHABLE // CONNECTION REFUSED` got. The `//`
+  second clause is either a restatement or a claim the panel cannot support.
+
+**This is an uncertainty, not a fault.** Nothing failed. Grey, not a warning colour, and nowhere
+near red.
+
 ### Host unreachable — settled
 
 The panel cannot reach the daemon at all.
@@ -310,10 +345,11 @@ more than it would settle.
 
 ### Design these first
 
-- **The "no view" state.** `list_devices` returns `stale: true` when the host's view was
-  interrupted, has not arrived, or is not running — and its own schema says an empty list with that
-  flag means *no view*, not *no devices* (D6). It must not render like the empty state, or the
-  screen will confidently report an empty machine when it has gone blind.
+- **The "no view" state with an *empty* list.** The variant with devices in it is settled (§7). The
+  empty one is the dangerous half and is still undesigned: it is visually identical to "nothing
+  attached" and means the opposite, so a person reading "nothing is attached" walks to the machine
+  and finds a phone sitting in the socket. `list_devices`'s own schema says it outright — an empty
+  list with `stale` set means *no view*, not *no devices* (D6).
 - **The force-release confirmation.** It is the only destructive action in the product and R35
   requires it to ask before it fires, but nothing has been designed for the asking. It also needs
   its outcomes: the card becoming free without a reload, and the two refusals that mean different
