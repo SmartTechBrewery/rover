@@ -37,7 +37,30 @@
  *
  * **Authentication happens before routing, before the body is read, and before anything is
  * dispatched.** An unauthenticated stranger therefore cannot learn which paths exist, cannot make
- * this host buffer a byte on their behalf, and cannot reach a handler.
+ * this host buffer a byte on their behalf, and cannot reach a handler. **`POST /session` is the
+ * one exception, and it is the exception by necessity**: a sign-in carries its credential in the
+ * body, so that body is read before the peer is known. It is bounded three ways — the
+ * `headersTimeout`/`requestTimeout` above, a tight {@link MAX_SIGN_IN_BYTES}, and the uniform
+ * refusal for *every* failure, so no diagnosis of a body a stranger sent ever leaves this host.
+ * `/rpc`'s `malformed_frame` wording must never be reused there: the peer is pre-auth, and every
+ * diagnosis handed to a pre-auth peer is an oracle.
+ *
+ * **A browser holds a session, not the token** (D30, R34). `POST /session` takes `{"token": …}`,
+ * verifies it against the very same store the gate does, and answers `{session, identifier,
+ * displayName}` with `cache-control: no-store`; the page then presents that session id where a
+ * token goes today. `GET /session` is the boot probe — is this still good — and `DELETE /session`
+ * ends it server-side, which is what makes signing out real rather than a `localStorage`
+ * deletion. `src/daemon/panel-session.ts` holds them, keyed by the SHA-256 of the id and bound to
+ * the user's `identifier` and `tokenHash`, so resolving one re-reads the user store and a revoke
+ * or a rotate ends the session on its very next request exactly as it ends a token's. A raw token
+ * keeps working everywhere it worked before, unchanged.
+ *
+ * **`/session` is a route, not an IPC method**, and that is a decision rather than an oversight:
+ * it is this transport's own credential exchange, the analogue of the greeting frame
+ * `./network-listen.ts` consumes before attaching the IPC server — which is likewise not on
+ * `IPC_METHODS`. A `create_panel_session` method on the one table would put a raw credential into
+ * an envelope layer that has never carried one, and would exist on the unix socket, where a
+ * browser cannot reach and a session means nothing.
  *
  * **Every pre-auth failure gets one byte-identical refusal**: no credential, a malformed one, a
  * scheme that is not `Bearer`, a token no user holds, a token a revoked user still holds, a user
@@ -56,7 +79,8 @@
  * `401`, the uniform refusal, and `200`, meaning the surface answered — *read the envelope*.
  * Dispatch outcomes are never mapped onto status codes, because `IpcErrorCodeSchema` is already
  * the complete error vocabulary and a second one in the status line is two sources of truth that
- * can disagree.
+ * can disagree. The `/session` verbs answer within that same pair: a `200` and a small object, or
+ * the one refusal.
  *
  * **Only the panel's methods are reachable here** — {@link PANEL_METHODS}, an allowlist and never
  * a second table. Every method still runs on the host either way (D19), so what this protects is
@@ -80,7 +104,14 @@
  * from any page a browser happens to have open. A preflight arrives without the
  * `Authorization` header and so gets the same uniform refusal, which is the correct answer to it.
  * Authentication is header-only and no cookie is read, so there is no CSRF surface here for a
- * session to have to defend — that question arrives with the session itself (R34).
+ * session to have to defend — and **the session did not bring one either** (D30): this module
+ * emits no `Set-Cookie` and reads no cookie, so the session id is a header the page attaches
+ * itself. A cookie is attached by the browser to a cross-site request whether the page meant it
+ * or not, which is the CSRF surface; a credential a script has to fetch and set cannot be
+ * attached by a page that is not this origin, and no CORS header is emitted for one to try. The
+ * cost is stated rather than hidden: whatever the panel stores the id in is readable by script,
+ * so an XSS in the panel reads it — but it reads a credential that expires, that `DELETE
+ * /session` ends, and that is not the token `rover users` issued.
  *
  * **The token authenticates; it attributes nothing** (D20). Which user a request turned out to be
  * is deliberately not carried past this gate: a lease's `owner` stays an explicit,
@@ -96,6 +127,7 @@ import {
 } from 'node:http';
 import { createServer as createHttpsServer, type Server as HttpsServer } from 'node:https';
 import { Duplex, PassThrough } from 'node:stream';
+import { z } from 'zod';
 import { encodeFrame } from '../ipc/framing.js';
 import { type IpcMethodName, isIpcMethodName } from '../ipc/methods.js';
 import {
@@ -109,7 +141,12 @@ import {
 } from '../ipc/protocol.js';
 import type { IpcServer } from '../ipc/server.js';
 import { type HttpListenerConfig, TLS_CERT_ENV_VAR, TLS_KEY_ENV_VAR } from './network-config.js';
-import { findUserByToken } from './user-store.js';
+import {
+	createPanelSessionStore,
+	type PanelSessionIdentity,
+	type PanelSessionStore,
+} from './panel-session.js';
+import { findUserByToken, type UserRecord } from './user-store.js';
 
 /**
  * The methods this transport serves — **a subset of the one table, never an addition to it**.
@@ -149,8 +186,27 @@ const REQUEST_TIMEOUT_MS = 30_000;
  */
 const MAX_PANEL_REQUEST_BYTES = 64 * 1024;
 
-/** The one route. Everything else is the uniform refusal, because routing happens after the gate. */
+/**
+ * Cap on a sign-in body — the one body read before the peer is known, so its bound is far tighter
+ * than {@link MAX_PANEL_REQUEST_BYTES} and is not the same number by accident. A token is 43
+ * characters; 4 KiB is room for a JSON object around one and nothing a stranger could park here.
+ * Over the cap the body is abandoned rather than drained, and the answer is the uniform refusal.
+ */
+const MAX_SIGN_IN_BYTES = 4 * 1024;
+
+/** The RPC route. Everything unmatched is the uniform refusal, because routing follows the gate. */
 const RPC_PATH = '/rpc';
+
+/** The credential-exchange route: `POST` mints a session, `GET` probes one, `DELETE` ends it. */
+const SESSION_PATH = '/session';
+
+/**
+ * The sign-in body, and the only thing this surface will read from a peer it has not
+ * authenticated. `.strict()` so an unexpected key is a refusal rather than something ignored —
+ * there is nothing else a browser has to send, and a body carrying more is not one this host
+ * wrote the panel for.
+ */
+const SignInRequestSchema = z.object({ token: z.string().min(1) }).strict();
 
 /**
  * The one refusal, as a body rather than as a frame.
@@ -216,6 +272,10 @@ export async function startHttpListener(
 			? createHttpServer(serverOptions)
 			: createHttpsServer({ ...serverOptions, ...material });
 
+	// Per listener, in memory, and gone when this daemon is: a restart signs every browser out,
+	// which needs no file and cannot go stale against the user store (D30).
+	const sessions = createPanelSessionStore();
+
 	server.on('request', (request: IncomingMessage, response: ServerResponse) => {
 		// First, before anything can fail: an `'error'` with no listener on either half is a
 		// crashed daemon, and a browser that navigates away mid-response produces one routinely.
@@ -224,7 +284,7 @@ export async function startHttpListener(
 		// The `.catch` is a backstop, not a path: everything below answers rather than throwing.
 		// Anything left is a bug, and a bug here must drop the connection rather than become an
 		// unhandled rejection that takes the whole daemon down.
-		void handleRequest(request, response, config, ipcServer).catch(() => {
+		void handleRequest(request, response, config, ipcServer, sessions).catch(() => {
 			response.destroy();
 		});
 	});
@@ -264,6 +324,9 @@ export async function startHttpListener(
 		port,
 		close(): Promise<void> {
 			closed ??= new Promise<void>((resolve) => {
+				// Nothing is going to present one of these again, and a closed listener has no
+				// business still holding a live credential in memory.
+				sessions.clear();
 				server.close(() => resolve());
 				// `close()` only stops accepting; a browser holding an idle keep-alive connection
 				// would keep it pending forever, and a daemon asked to shut down has to actually go
@@ -312,26 +375,46 @@ function bind(server: HttpServer | HttpsServer, config: HttpListenerConfig): Pro
 }
 
 /**
- * One request, in the order the module header promises: authenticate, then route, then read,
- * then dispatch.
+ * One request: sign in, or else authenticate, then route, then read, then dispatch.
  *
- * Nothing above a step has been examined by the time that step runs — in particular the body is
- * not touched until the peer is known, and the URL is not looked at until then either.
+ * Nothing above a step has been examined by the time that step runs — in particular a body is not
+ * touched until the peer is known, with the single exception the header names: `POST /session`,
+ * whose body *is* the credential. Matching that one route is the only thing the URL is read for
+ * before the gate, and everything it does not match falls through to the gate unchanged, so a
+ * stranger still learns nothing about which paths exist.
  */
 async function handleRequest(
 	request: IncomingMessage,
 	response: ServerResponse,
 	config: HttpListenerConfig,
 	ipcServer: IpcServer,
+	sessions: PanelSessionStore,
 ): Promise<void> {
-	if (!(await authenticates(config.usersPath, request.headers.authorization))) {
+	// Only the path, never the query: a credential must never be readable out of a URL, so there
+	// is deliberately no code here that could read one out of a URL (D20).
+	const path = pathOf(request.url);
+
+	if (request.method === 'POST' && path === SESSION_PATH) {
+		await signIn(request, response, config.usersPath, sessions);
+		return;
+	}
+
+	const authenticated = await authenticate(
+		config.usersPath,
+		sessions,
+		request.headers.authorization,
+	);
+	if (authenticated === undefined) {
 		refuse(response);
 		return;
 	}
 
-	// Only the path, never the query: a credential must never be readable out of a URL, so there
-	// is deliberately no code here that could read one out of a URL (D20).
-	if (request.method !== 'POST' || pathOf(request.url) !== RPC_PATH) {
+	if (path === SESSION_PATH) {
+		describeOrEndSession(request, response, sessions, authenticated);
+		return;
+	}
+
+	if (request.method !== 'POST' || path !== RPC_PATH) {
 		// Refused with the same bytes as an unauthenticated caller gets, on purpose: routing
 		// happens after the gate, so a stranger cannot use a `404` to learn which paths exist,
 		// and an authenticated caller learns nothing it did not already know from this file.
@@ -535,20 +618,125 @@ function readBody(request: IncomingMessage, cap: number): Promise<string | undef
 	});
 }
 
-/** Whether the `Authorization` header carries a token some user in the store holds. */
-async function authenticates(usersPath: string, header: string | undefined): Promise<boolean> {
-	const token = bearerTokenIn(header);
-	if (token === undefined) {
-		return false;
+/**
+ * `POST /session`: the credential exchange, and the one route reached before the gate.
+ *
+ * **Every failure is the one refusal, with no diagnosis whatsoever** — no body, a body over the
+ * cap, a body that is not JSON, a body that is not `{token: string}`, a token nobody holds, a
+ * token a revoked user still holds, a store this host cannot read. The peer is pre-auth, so any
+ * two of those answering differently is an oracle, and `/rpc`'s `malformed_frame` wording is
+ * deliberately not reused here for exactly that reason.
+ *
+ * The token is read out of the body, handed to `findUserByToken`, and reaches nothing else: not
+ * the answer, not a header, not a log, not the session entry that outlives the request.
+ */
+async function signIn(
+	request: IncomingMessage,
+	response: ServerResponse,
+	usersPath: string,
+	sessions: PanelSessionStore,
+): Promise<void> {
+	const body = await readBody(request, MAX_SIGN_IN_BYTES);
+	if (body === undefined) {
+		refuse(response);
+		return;
+	}
+
+	const parsed = SignInRequestSchema.safeParse(parseJson(body));
+	if (!parsed.success) {
+		refuse(response);
+		return;
+	}
+
+	let user: UserRecord | undefined;
+	try {
+		user = await findUserByToken(usersPath, parsed.data.token);
+	} catch {
+		refuse(response);
+		return;
+	}
+	if (user === undefined) {
+		refuse(response);
+		return;
+	}
+
+	// The one place a raw session id exists outside the browser that is about to hold it.
+	answerJson(response, {
+		session: sessions.open(user),
+		identifier: user.identifier,
+		displayName: user.displayName,
+	});
+}
+
+/**
+ * `GET /session` — the panel's boot probe, answering with who this credential is, which is also
+ * what renews a session's idle window — and `DELETE /session`, which ends it server-side.
+ *
+ * `DELETE` answers `200 {}` whether or not the credential it was given had a session behind it —
+ * a raw token has none — because an answer that varied would say whether an id was live. It is
+ * behind the gate like everything but the sign-in, so *repeating* a `DELETE` with an id that the
+ * first one killed is the uniform refusal rather than a second `200`: a dead session id is not a
+ * credential any more, and it is refused exactly as an id nobody was ever issued is. Any other
+ * method on this path is that same refusal, as every unrouted request is.
+ */
+function describeOrEndSession(
+	request: IncomingMessage,
+	response: ServerResponse,
+	sessions: PanelSessionStore,
+	authenticated: Authenticated,
+): void {
+	if (request.method === 'GET') {
+		answerJson(response, authenticated.identity);
+		return;
+	}
+	if (request.method === 'DELETE') {
+		if (authenticated.kind === 'session') {
+			sessions.end(authenticated.id);
+		}
+		answerJson(response, {});
+		return;
+	}
+	refuse(response);
+}
+
+/** Which credential a request presented, once it has turned out to be a real one. */
+type Authenticated =
+	| { readonly kind: 'session'; readonly id: string; readonly identity: PanelSessionIdentity }
+	| { readonly kind: 'user'; readonly identity: PanelSessionIdentity };
+
+/**
+ * The gate: the identity behind an `Authorization: Bearer` credential, or `undefined`.
+ *
+ * **Two kinds, one header, one refusal.** A session id is tried first because it is a `Map` hit
+ * against a hash, where a token costs one `scrypt` per stored record; a raw token then keeps
+ * working exactly as it did before this route existed, which is R32's documented `curl` recipe
+ * and not something a browser's convenience may cost the operator. Both kinds are resolved
+ * against the user store on **this** request, so a revoke bites either one on its next.
+ */
+async function authenticate(
+	usersPath: string,
+	sessions: PanelSessionStore,
+	header: string | undefined,
+): Promise<Authenticated | undefined> {
+	const credential = bearerTokenIn(header);
+	if (credential === undefined) {
+		return undefined;
 	}
 	try {
-		return (await findUserByToken(usersPath, token)) !== undefined;
+		const session = await sessions.resolve(usersPath, credential);
+		if (session !== undefined) {
+			return { kind: 'session', id: credential, identity: session };
+		}
+		const user = await findUserByToken(usersPath, credential);
+		return user === undefined
+			? undefined
+			: { kind: 'user', identity: { identifier: user.identifier, displayName: user.displayName } };
 	} catch {
 		// A store this host cannot read authenticates nobody — and says so with the same bytes as
 		// every other refusal. Whether the operator's own file is missing, unreadable or malformed
 		// is not something the wire may reveal; `rover users list` is where that is diagnosed, by
 		// someone with a shell on this machine.
-		return false;
+		return undefined;
 	}
 }
 
@@ -582,7 +770,7 @@ function pathOf(url: string | undefined): string {
 
 /** The uniform pre-auth refusal — the same bytes, the same headers, whatever it is refusing. */
 function refuse(response: ServerResponse): void {
-	write(response, 401, REFUSAL_BODY, true);
+	write(response, 401, REFUSAL_BODY, { close: true });
 }
 
 /**
@@ -597,14 +785,33 @@ function answer(
 	body: ErrorResponse | string,
 	options: { readonly close?: boolean } = {},
 ): void {
-	write(response, 200, typeof body === 'string' ? body : JSON.stringify(body), options.close);
+	write(response, 200, typeof body === 'string' ? body : JSON.stringify(body), {
+		close: options.close,
+	});
+}
+
+/**
+ * The `/session` verbs' answer: `200`, a small JSON object, and `cache-control: no-store`.
+ *
+ * `no-store` on all three, not only on the one that mints an id: a probe's answer names the
+ * signed-in user, and neither a credential nor an identity is something a browser, a proxy or a
+ * back button may keep a copy of. Nothing here ever writes a `Set-Cookie` — see the module
+ * header's CSRF paragraph for why that omission is the design and not an oversight.
+ */
+function answerJson(response: ServerResponse, value: unknown): void {
+	write(response, 200, JSON.stringify(value), { noStore: true });
+}
+
+interface WriteOptions {
+	readonly close?: boolean;
+	readonly noStore?: boolean;
 }
 
 function write(
 	response: ServerResponse,
 	status: number,
 	body: string,
-	close: boolean | undefined,
+	options: WriteOptions,
 ): void {
 	if (!response.writable) {
 		return;
@@ -612,7 +819,8 @@ function write(
 	response.writeHead(status, {
 		'content-type': 'application/json',
 		'content-length': Buffer.byteLength(body, 'utf8'),
-		...(close === true ? { connection: 'close' } : {}),
+		...(options.close === true ? { connection: 'close' } : {}),
+		...(options.noStore === true ? { 'cache-control': 'no-store' } : {}),
 	});
 	response.end(body);
 }

@@ -22,7 +22,8 @@ Design work lives in [`DESIGN.md`](./DESIGN.md); the brief that produced the fir
 
 ## Functionality gathered so far
 
-1. **Login** — modeled on Swarm's own. Which credential it presents is now settled (below).
+1. **Login** — modeled on Swarm's own. Which credential it presents, and how a browser holds it,
+   are both settled now (below).
 2. **Project registration** — modeled on Swarm's own.
 3. **List of devices available in the system** — Android only for now, whatever the host's `adb`
    reports (`PROJECT.md` §4 `list_devices`).
@@ -67,8 +68,19 @@ transport of the same `IpcServer`*, not a panel-only API: one route,
 `POST /rpc`, carrying the same envelopes, authenticated by `Authorization: Bearer <token>` against
 `~/.rover/users.json` and re-read on **every request**, so `rover users revoke` ends a panel user's
 access on their next request rather than at their next login. There is no second secret and no
-fallback. What is still open is one layer above it — how a *browser* holds that credential between
-reloads — and that is R34's (#112), which inherits the answer rather than reopening it.
+fallback.
+
+**And a browser holds a session, not that token** (`PROJECT.md` D30, R34, #112) — the layer the
+paragraph above used to leave open. `POST /session` takes `{"token": …}`, checks it against the
+same store, and answers `{session, identifier, displayName}`; the page presents that session id in
+the same `Authorization: Bearer` header afterwards, and never stores the token at all. `GET
+/session` is the boot probe, `DELETE /session` ends the session **on the host** — so signing out is
+real rather than a `localStorage.removeItem`. Each session is bound to the user's `identifier` and
+`tokenHash` and re-checked against the store on every request, so `rover users revoke` — or
+`rotate` — ends a live browser session on its very next request, exactly as it ends a token's. No
+cookie is set and none is read, so there is no CSRF surface; the daemon restarting signs everyone
+out. The browser's own half — the sign-in screen, where the id is kept, and the sign-out control —
+is #119.
 
 ## Deliberately not decided here
 
