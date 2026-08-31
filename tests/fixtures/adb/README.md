@@ -25,11 +25,14 @@ that host had by then. Every row dated **2026-08-30** except the four `screenrec
 three `input` captures, the two `uiautomator-dump` captures, the three `logcat` captures and the
 four `stat` captures — was taken on a host back on `adb` 37.0.0-14910828. The four `screenrecord`
 rows are also **2026-08-30**, on `adb` 37.0.1-15733141 against Android 17, and `screenrecord`
-reports itself as **v1.4**.
+reports itself as **v1.4**. The two `getprop-version` rows are **2026-08-31**, on `adb`
+37.0.1-15733141 against the same Android 17 emulator.
 
 | Fixture | Command | Model | API | Captured |
 |---|---|---|---|---|
 | `getprop.api37-sdk-gphone16k-arm64.txt` | `adb -s $SERIAL shell getprop` | sdk_gphone16k_arm64 | 37 | 2026-08-29 |
+| `getprop-version.api37-sdk-gphone16k-arm64.txt` | `adb -s $SERIAL shell 'getprop ro.build.version.release; getprop ro.build.version.sdk'` | sdk_gphone16k_arm64 | 37 | 2026-08-31 |
+| `getprop-version.absent.api37-sdk-gphone16k-arm64.txt` | the same with the first key replaced by `ro.rover.no.such.property` | sdk_gphone16k_arm64 | 37 | 2026-08-31 |
 | `devices-l.api37-sdk-gphone16k-arm64.txt` | `adb devices -l` | sdk_gphone16k_arm64 | 37 | 2026-08-29 |
 | `wm-size.api37-sdk-gphone16k-arm64.txt` | `adb -s $SERIAL shell wm size` | sdk_gphone16k_arm64 | 37 | 2026-08-29 |
 | `wm-density.api37-sdk-gphone16k-arm64.txt` | `adb -s $SERIAL shell wm density` | sdk_gphone16k_arm64 | 37 | 2026-08-29 |
@@ -106,6 +109,18 @@ one screen carrying everything the parser has to handle at once: 75 nodes 13 dee
 containers, a checkable `Switch` whose `checked` disagrees with its `checkable`, 38 single-child
 nodes, and a row clipped by the bottom of the scroll viewport. Navigate back to that screen before
 re-capturing — a fixture nobody can re-create is a fixture nobody can extend.
+
+The two `getprop-version.…` captures are the **enumeration's** read, not `device_info`'s: two bare
+values with no keys beside them, which is why `parsers/getprop.ts` has a second entry point for
+them (`parseOsVersion`) rather than a flag on `parseGetprop`. The `absent` one is the whole reason
+those values may be read positionally — a property the device does not have prints an **empty
+line** and exits 0, so the second value is still the second line. Measured, not assumed:
+`PROJECT.md` §6 records the session.
+
+**No `unauthorized` capture is needed for them, and that is deliberate.** The backend never issues
+this command against such a device: a device's state comes from `adb devices -l`, which is already
+pinned by `devices-l.offline.…` and by the synthetic `unauthorized` line the backend suite uses, and
+a device that is not usable is listed with a null version without any process being spawned at all.
 
 ## What the capture showed
 

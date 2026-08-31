@@ -8,13 +8,19 @@ import {
 	AdbCommandError,
 	type AdbResult,
 	type AdbStreamHandlers,
+	DEFAULT_ADB_TIMEOUT_MS,
 	INSTALL_ADB_TIMEOUT_MS,
+	OS_VERSION_ADB_TIMEOUT_MS,
 	RECORDING_FINISH_TIMEOUT_MS,
 	RECORDING_PULL_TIMEOUT_MS,
 	SCREENSHOT_ADB_TIMEOUT_MS,
 	TRANSFER_ADB_TIMEOUT_MS,
 } from '@/backends/android/adb.js';
-import { AndroidDeviceBackend, RECORDING_BIT_RATE_BPS } from '@/backends/android/backend.js';
+import {
+	AndroidDeviceBackend,
+	OS_VERSION_ARGV,
+	RECORDING_BIT_RATE_BPS,
+} from '@/backends/android/backend.js';
 import type { Device, DeviceWatcher } from '@/core/device.js';
 import {
 	FileTooLargeError,
@@ -66,6 +72,8 @@ const SIZE_OVERRIDE = fixture('wm-size.override.api37-sdk-gphone16k-arm64.txt');
 const DENSITY = fixture('wm-density.api37-sdk-gphone16k-arm64.txt');
 const DENSITY_OVERRIDE = fixture('wm-density.override.api37-sdk-gphone16k-arm64.txt');
 const GETPROP = fixture('getprop.api37-sdk-gphone16k-arm64.txt');
+const OS_VERSION = fixture('getprop-version.api37-sdk-gphone16k-arm64.txt');
+const OS_VERSION_ABSENT = fixture('getprop-version.absent.api37-sdk-gphone16k-arm64.txt');
 const STAT_FILE = fixture('stat.file.api37-sdk-gphone16k-arm64.txt');
 const STAT_EMPTY_FILE = fixture('stat.empty-file.api37-sdk-gphone16k-arm64.txt');
 const STAT_DIRECTORY = fixture('stat.directory.api37-sdk-gphone16k-arm64.txt');
@@ -74,11 +82,47 @@ const STAT_CHARACTER_DEVICE = fixture('stat.character-device.api37-sdk-gphone16k
 const SERIAL = parseDeviceSerial('emulator-5554');
 const SETTINGS = parseAppId('com.android.settings');
 const ABSENT = parseAppId('com.rover.nope');
-const backend = new AndroidDeviceBackend();
+
+/**
+ * A fresh backend per test, because it now remembers one thing between calls: the OS
+ * version of each attached device (`OsVersionCache`). A memo carried from one test into
+ * the next would make this file order-dependent — a read that was silenced by an earlier
+ * test's entry is a green test that proves nothing about the path it names.
+ */
+let backend = new AndroidDeviceBackend();
+
+beforeEach(() => {
+	backend = new AndroidDeviceBackend();
+});
 
 function enumerates(stdout: string, stderr = ''): void {
 	runAdb.mockResolvedValue({ stdout, stderr });
 }
+
+/**
+ * Answer the enumeration's OS-version read, and nothing else — every other pinned call
+ * belongs to {@link answers}.
+ *
+ * `reads` is what the device (or adb) does with it: captured output by default, a rejection
+ * for an adb that failed, unparseable text for a device that answered something else. It is
+ * separate from {@link answers} because the two are asked on different paths: this one is
+ * issued by `listDevices` and by the watch, while `answers` pins a verb's own calls.
+ */
+function versionRead(reply: string | Error = OS_VERSION): void {
+	runAdbOnDevice.mockImplementation(async (_serial, args): Promise<AdbResult> => {
+		if (args.join(' ') !== OS_VERSION_ARGV.join(' ')) {
+			throw new Error(`unexpected call: ${args.join(' ')}`);
+		}
+		if (reply instanceof Error) throw reply;
+		return { stdout: reply, stderr: '' };
+	});
+}
+
+/** The version the captured probe reports, as it lands on a `Device`. */
+const VERSION = { osVersion: '17', osApiLevel: 37 } as const;
+
+/** What a device that was never asked, or could not answer, carries instead. */
+const NO_VERSION = { osVersion: null, osApiLevel: null } as const;
 
 /**
  * Answers each pinned call by the arguments it was called with. A bare string is stdout
@@ -102,12 +146,14 @@ const FACTS = {
 describe('listDevices', () => {
 	it('reports a usable device with the model adb already printed', async () => {
 		enumerates(DEVICES);
+		versionRead();
 
 		expect(await backend.listDevices()).toEqual([
 			{
 				serial: 'emulator-5554',
 				platform: 'android',
 				model: 'sdk_gphone16k_arm64',
+				...VERSION,
 				state: 'ready',
 				attachment: 'this-host',
 			},
@@ -115,19 +161,174 @@ describe('listDevices', () => {
 		expect(runAdb.mock.calls[0][0]).toEqual(['devices', '-l']);
 	});
 
+	// The OS version is not in the `-l` tail for any device in any state, so it is read per
+	// device — and the command line it is read with is pinned here rather than left to the
+	// backend's own comment.
+	it('asks each usable device for its OS version, on one command line', async () => {
+		enumerates(DEVICES);
+		versionRead();
+
+		await backend.listDevices();
+
+		expect(runAdbOnDevice).toHaveBeenCalledTimes(1);
+		expect(runAdbOnDevice.mock.calls[0]?.[0]).toBe('emulator-5554');
+		expect(runAdbOnDevice.mock.calls[0]?.[1]).toEqual([
+			'shell',
+			'getprop ro.build.version.release; getprop ro.build.version.sdk',
+		]);
+	});
+
+	/**
+	 * The one query here that gets **less** than the default, and the only thing bounding
+	 * how long `listDevices` may take: the reads run together, so the slowest attached
+	 * device decides how long every lease grant on this host waits. Ten seconds of that for
+	 * a wedged handset is the cost this budget exists to cut.
+	 */
+	it('gives the version read a shorter budget than the query default', async () => {
+		enumerates(DEVICES);
+		versionRead();
+
+		await backend.listDevices();
+
+		expect(runAdbOnDevice.mock.calls[0]?.[2]).toEqual({ timeoutMs: OS_VERSION_ADB_TIMEOUT_MS });
+		expect(OS_VERSION_ADB_TIMEOUT_MS).toBeLessThan(DEFAULT_ADB_TIMEOUT_MS);
+	});
+
 	// The model is read off the `-l` tail rather than from a per-device query, and this is
 	// what says that survives a device that cannot answer a query at all.
 	it('still names a device that is attached but not usable', async () => {
 		enumerates(OFFLINE);
+		versionRead();
 
 		expect(await backend.listDevices()).toEqual([
 			{
 				serial: 'emulator-5554',
 				platform: 'android',
 				model: 'sdk_gphone16k_arm64',
+				...NO_VERSION,
 				state: 'offline',
 				attachment: 'this-host',
 			},
+		]);
+	});
+
+	/**
+	 * The acceptance criterion this change exists for, and the reason the read is gated on
+	 * the state adb already printed: a device that cannot be asked is listed **without** a
+	 * version and costs no process at all. Losing the whole device list because one device
+	 * is waiting on an authorisation prompt is the failure mode being avoided.
+	 */
+	it.each([
+		['offline', OFFLINE],
+		['unauthorized', 'List of devices attached\nserial-1\tunauthorized\n'],
+	])('never asks a %s device, and lists it with no version', async (_state, stdout) => {
+		enumerates(stdout);
+		versionRead();
+
+		expect((await backend.listDevices())[0]).toMatchObject(NO_VERSION);
+		expect(runAdbOnDevice).not.toHaveBeenCalled();
+	});
+
+	/**
+	 * D18: a device reached over a network transport never enters an inventory and is never
+	 * leased, so its version is a round trip to another machine that nothing will read — and
+	 * the round trip most likely to be the slow one. It is listed without one.
+	 */
+	it('never asks a device that is only reachable over a network transport', async () => {
+		enumerates('List of devices attached\n192.168.1.9:5555         device transport_id:4\n');
+		versionRead();
+
+		const devices = await backend.listDevices();
+
+		expect(devices[0]).toMatchObject({ attachment: 'another-host', ...NO_VERSION });
+		expect(runAdbOnDevice).not.toHaveBeenCalled();
+	});
+
+	it.each([
+		['adb refused the read', new Error('adb -s emulator-5554 shell exited 1')],
+		['the device answered nothing at all', ''],
+	])('lists the device with no version when %s', async (_case, reply) => {
+		enumerates(DEVICES);
+		versionRead(reply);
+
+		const devices = await backend.listDevices();
+
+		expect(devices).toHaveLength(1);
+		expect(devices[0]).toMatchObject(NO_VERSION);
+	});
+
+	// A failed read is not remembered as "this device has no version": the next enumeration
+	// asks again, which is what a device that was still booting needs.
+	it('asks again after a read that failed, rather than remembering the failure', async () => {
+		enumerates(DEVICES);
+		versionRead(new Error('adb -s emulator-5554 shell exited 1'));
+		expect((await backend.listDevices())[0]).toMatchObject(NO_VERSION);
+
+		versionRead();
+
+		expect((await backend.listDevices())[0]).toMatchObject(VERSION);
+	});
+
+	// Captured, not invented: `getprop` prints an empty line for a property the device does
+	// not have, so half an answer is possible — and half an answer is still an answer.
+	it('keeps the half of the answer a device gave', async () => {
+		enumerates(DEVICES);
+		versionRead(OS_VERSION_ABSENT);
+
+		expect((await backend.listDevices())[0]).toMatchObject({
+			osVersion: null,
+			osApiLevel: 37,
+		});
+	});
+
+	// The version is a *static* per-device fact, which is the whole reason it may be read
+	// once — while the device list itself is never cached (D6).
+	it('reads the version once per attached device, and the device list every time', async () => {
+		enumerates(DEVICES);
+		versionRead();
+
+		await backend.listDevices();
+		expect(await backend.listDevices()).toEqual([expect.objectContaining(VERSION)]);
+
+		expect(runAdb).toHaveBeenCalledTimes(2);
+		expect(runAdbOnDevice).toHaveBeenCalledTimes(1);
+	});
+
+	// D6: the cache holds nothing it cannot re-derive, so a serial that leaves the device
+	// set takes its entry with it and is asked again when it comes back.
+	it('asks again for a device that left the set and returned', async () => {
+		versionRead();
+		enumerates(DEVICES);
+		await backend.listDevices();
+		enumerates(EMPTY);
+		await backend.listDevices();
+		enumerates(DEVICES);
+
+		expect(await backend.listDevices()).toEqual([expect.objectContaining(VERSION)]);
+		expect(runAdbOnDevice).toHaveBeenCalledTimes(2);
+	});
+
+	// A host with several devices attached pays one round trip, not one per device.
+	it('asks every device at once rather than one after another', async () => {
+		enumerates('List of devices attached\nserial-1\tdevice model:A\nserial-2\tdevice model:B\n');
+		const settle: Array<() => void> = [];
+		runAdbOnDevice.mockImplementation(
+			async () =>
+				new Promise<AdbResult>((resolve) => {
+					settle.push(() => resolve({ stdout: OS_VERSION, stderr: '' }));
+				}),
+		);
+
+		const listing = backend.listDevices();
+		await Promise.resolve();
+
+		// Both reads were issued before either answered — in series, the second would still
+		// be waiting on the first.
+		expect(settle).toHaveLength(2);
+		for (const resolve of settle) resolve();
+		expect(await listing).toEqual([
+			expect.objectContaining(VERSION),
+			expect.objectContaining(VERSION),
 		]);
 	});
 
@@ -233,6 +434,7 @@ describe('watchDevices', () => {
 				serial: 'emulator-5554',
 				platform: 'android',
 				model: 'sdk_gphone16k_arm64',
+				...NO_VERSION,
 				state: 'ready',
 				attachment: 'this-host',
 			},
@@ -394,6 +596,164 @@ describe('watchDevices', () => {
 		await watch.stop();
 		await expect(watch.stop()).resolves.toBeUndefined();
 	});
+
+	/**
+	 * The ordering rule of the whole watch path: a frame is delivered the instant it is
+	 * decoded, and the OS version follows as a **second full set**.
+	 *
+	 * Delivering the frame behind the read would be the regression — this handler is how the
+	 * host learns a device was unplugged, and a read that hangs holds it for adb's whole
+	 * timeout. The contract already asks a watcher to accept the full current set repeatedly
+	 * and never a delta, which is what makes the second delivery free.
+	 */
+	it('delivers a frame at once without the version, then again with it', async () => {
+		const listener = watcher();
+		versionRead();
+		backend.watchDevices(listener);
+
+		trackers[0]?.onStdout(frame('emulator-5554         device model:sdk_gphone16k_arm64\n'));
+
+		expect(snapshots(listener)).toHaveLength(1);
+		expect(snapshots(listener)[0]?.[0]).toMatchObject(NO_VERSION);
+
+		await vi.advanceTimersByTimeAsync(0);
+
+		// The same full set, and the version the one difference between the two deliveries.
+		expect(snapshots(listener)).toHaveLength(2);
+		expect(snapshots(listener)[1]).toEqual([{ ...snapshots(listener)[0]?.[0], ...VERSION }]);
+	});
+
+	// Nothing *yet*, that is: a read that failed is not the end of the matter, and the two
+	// cases below are what says so.
+	it('delivers nothing a second time when there was nothing new to learn', async () => {
+		const listener = watcher();
+		versionRead(new Error('adb -s emulator-5554 shell exited 1'));
+		backend.watchDevices(listener);
+
+		trackers[0]?.onStdout(frame('emulator-5554         device model:sdk_gphone16k_arm64\n'));
+		await vi.advanceTimersByTimeAsync(0);
+
+		expect(snapshots(listener)).toHaveLength(1);
+		expect(listener.onInterrupted).not.toHaveBeenCalled();
+	});
+
+	/**
+	 * The recovery a watch cannot manage on its own: nothing in this host re-enumerates on a
+	 * timer, and a device set that does not change produces no further frame — so a frame
+	 * whose read failed would answer `null` for the rest of the watch's life if the version
+	 * had to come from its own read.
+	 *
+	 * The enumeration that answers is deliberately *another caller's* — `describeDevice` is
+	 * what a lease grant re-verifies through. Before this seam existed the two disagreed
+	 * permanently: the granted lease carried the version and `list_devices` carried `null`.
+	 */
+	it('delivers the version another caller’s enumeration read, with the set unchanged', async () => {
+		const listener = watcher();
+		versionRead(new Error('adb -s emulator-5554 shell exited 1'));
+		backend.watchDevices(listener);
+
+		trackers[0]?.onStdout(frame('emulator-5554         device model:sdk_gphone16k_arm64\n'));
+		await vi.advanceTimersByTimeAsync(0);
+		expect(snapshots(listener)).toHaveLength(1);
+
+		enumerates(DEVICES);
+		versionRead();
+		expect(await backend.describeDevice(SERIAL)).toMatchObject(VERSION);
+
+		// The same full set the tracker last named, and the version the one difference.
+		expect(snapshots(listener)).toHaveLength(2);
+		expect(snapshots(listener)[1]).toEqual([{ ...snapshots(listener)[0]?.[0], ...VERSION }]);
+	});
+
+	// One frame, two devices, one read each — and only one of them answers. The device that
+	// did not must not be the one left versionless for the life of the watch.
+	it('delivers a device whose own read failed once a later read answers for it', async () => {
+		const listener = watcher();
+		const TWO = 'serial-1\tdevice model:A\nserial-2\tdevice model:B\n';
+		runAdbOnDevice.mockImplementation(async (serial): Promise<AdbResult> => {
+			if (String(serial) === 'serial-2') throw new Error('adb -s serial-2 shell exited 1');
+			return { stdout: OS_VERSION, stderr: '' };
+		});
+		backend.watchDevices(listener);
+
+		trackers[0]?.onStdout(frame(TWO));
+		await vi.advanceTimersByTimeAsync(0);
+
+		expect(snapshots(listener)).toHaveLength(2);
+		expect(snapshots(listener)[1]?.[0]).toMatchObject(VERSION);
+		expect(snapshots(listener)[1]?.[1]).toMatchObject(NO_VERSION);
+
+		enumerates(`List of devices attached\n${TWO}`);
+		versionRead();
+		await backend.listDevices();
+
+		expect(snapshots(listener)).toHaveLength(3);
+		expect(snapshots(listener)[2]?.[1]).toMatchObject(VERSION);
+	});
+
+	// A device that cannot be asked is watched exactly as before: one snapshot, no process.
+	it('never asks a device the tracker reported as unusable', async () => {
+		const listener = watcher();
+		versionRead();
+		backend.watchDevices(listener);
+
+		trackers[0]?.onStdout(frame('emulator-5554         unauthorized\n'));
+		await vi.advanceTimersByTimeAsync(0);
+
+		expect(snapshots(listener)).toHaveLength(1);
+		expect(runAdbOnDevice).not.toHaveBeenCalled();
+	});
+
+	/**
+	 * Re-delivering a superseded set would move an inventory backwards — it would be told a
+	 * device is attached after a later frame said it had gone. So the second delivery only
+	 * happens while its own frame is still the latest one decoded.
+	 */
+	it('never re-delivers a frame a later one has already superseded', async () => {
+		const listener = watcher();
+		versionRead();
+		backend.watchDevices(listener);
+
+		trackers[0]?.onStdout(frame('emulator-5554         device model:sdk_gphone16k_arm64\n'));
+		trackers[0]?.onStdout(frame(''));
+		await vi.advanceTimersByTimeAsync(0);
+
+		// The two frames, and no third delivery of the device that had already gone away.
+		expect(snapshots(listener)).toHaveLength(2);
+		expect(snapshots(listener)[1]).toEqual([]);
+	});
+
+	// The other side of the seam above: a stopped watch is unsubscribed, so a read somebody
+	// else issues afterwards cannot deliver to a listener that has been let go.
+	it('is not woken by another caller’s read once it has been stopped', async () => {
+		const listener = watcher();
+		versionRead(new Error('adb -s emulator-5554 shell exited 1'));
+		const watch = backend.watchDevices(listener);
+
+		trackers[0]?.onStdout(frame('emulator-5554         device model:sdk_gphone16k_arm64\n'));
+		await vi.advanceTimersByTimeAsync(0);
+		await watch.stop();
+		listener.onDevices.mockClear();
+
+		enumerates(DEVICES);
+		versionRead();
+		await backend.listDevices();
+
+		expect(listener.onDevices).not.toHaveBeenCalled();
+	});
+
+	it('delivers nothing at all after the watch was stopped', async () => {
+		const listener = watcher();
+		versionRead();
+		const watch = backend.watchDevices(listener);
+
+		trackers[0]?.onStdout(frame('emulator-5554         device model:sdk_gphone16k_arm64\n'));
+		await watch.stop();
+		listener.onDevices.mockClear();
+		await vi.advanceTimersByTimeAsync(0);
+
+		expect(listener.onDevices).not.toHaveBeenCalled();
+	});
 });
 
 /** One synthetic frame, in the captured format: the length prefix counts bytes. */
@@ -405,11 +765,13 @@ function frame(payload: string): Buffer {
 describe('describeDevice', () => {
 	it('answers with the device when it is still attached', async () => {
 		enumerates(DEVICES);
+		versionRead();
 
 		expect(await backend.describeDevice(SERIAL)).toEqual({
 			serial: 'emulator-5554',
 			platform: 'android',
 			model: 'sdk_gphone16k_arm64',
+			...VERSION,
 			state: 'ready',
 			attachment: 'this-host',
 		});

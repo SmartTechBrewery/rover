@@ -54,6 +54,25 @@ describe.skipIf(!process.env.ROVER_TEST_DEVICE)('the backend against a real devi
 		expect(await backend.describeDevice(device.serial)).toEqual(device);
 	});
 
+	/**
+	 * The cheap read and the full dump, on one real device — the assertion that makes the
+	 * recipe *run* rather than read.
+	 *
+	 * The whole point of reading the version at enumeration is that a free device answers
+	 * the same version a held one does, so the two paths are compared against each other
+	 * rather than against a number. Nothing here hardcodes a version or an API level: the
+	 * machine running this has a different device from the machine that wrote it.
+	 */
+	it('reports the OS version at enumeration, and agrees with device_info', async () => {
+		const device = await firstUsableDevice();
+
+		const info = await backend.deviceInfo(device.serial);
+
+		expect(device.osVersion).toBeTruthy();
+		expect(device.osVersion).toBe(info.osVersion);
+		expect(device.osApiLevel).toBe(info.osApiLevel);
+	});
+
 	it('answers null for a serial no device has', async () => {
 		expect(await backend.describeDevice(parseDeviceSerial('rover-no-such-device'))).toBeNull();
 	});
