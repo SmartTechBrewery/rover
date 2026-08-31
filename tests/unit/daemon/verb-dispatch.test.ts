@@ -441,6 +441,9 @@ describe('the daemon runs the verb against its own device', () => {
 		const client = await connect();
 		const startedAtMs = Date.now();
 		const leaseId = await acquire(client);
+		// Read before anything renews: `list_devices` asks a question and does not renew, so
+		// this is the lease as granted.
+		const atGrant = await holderOn(client);
 
 		// A verb that polls to its own deadline, so real time passes without anything sleeping:
 		// what ends this call is the timeout it was given, and the timeout is the point.
@@ -455,9 +458,15 @@ describe('the daemon runs the verb against its own device', () => {
 		await client.request('wait_until_gone', { leaseId, target: ABSENT, timeoutMs: 0 });
 
 		const elapsedMs = Date.now() - startedAtMs;
-		const { expiresInMs } = await holderOn(client);
+		const { expiresInMs, grantedAt } = await holderOn(client);
 		expect(elapsedMs).toBeGreaterThanOrEqual(300);
 		expect(expiresInMs).toBeGreaterThan(ttlMs - 200);
+		// The renewal moved the expiry and not the grant time — end to end, over the wire and
+		// through both parses. The lease has been held for the whole elapsed time even though
+		// almost none of it has run down, which is exactly why neither field answers the
+		// other's question (#107).
+		expect(grantedAt).toBe(atGrant.grantedAt);
+		expect(Date.now() - Date.parse(grantedAt)).toBeGreaterThanOrEqual(300);
 	});
 });
 

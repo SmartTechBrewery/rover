@@ -149,13 +149,23 @@ export function formatAttribution(project: string, testName: string | null): str
 
 /**
  * One holder, the way a listing and a refusal both name one: who has it, what they said
- * they were doing, and how much longer they have. Never the lease id — a holder disclosed
- * to somebody who is not the holder carries no credential (D20).
+ * they were doing, how much longer they have, and since when. Never the lease id — a holder
+ * disclosed to somebody who is not the holder carries no credential (D20).
+ *
+ * `grantedAt` is printed **exactly as the host sent it**, and last, after the countdown.
+ * This process does no date arithmetic on it: the host's clock is not this one's, so the
+ * only honest relative number here is `expiresInMs`, which the host measured itself. The
+ * two are independent — activity renews the lease (D8), moving the expiry and not the
+ * grant — which is why both are shown.
+ *
+ * It is deliberately not passed through {@link escapeControlCharacters}. Every other string
+ * here is caller-supplied and unvalidated; this one is `z.string().datetime()`, so its shape
+ * is a parse rather than a convention, and escaping it would imply the schema is not trusted.
  */
 export function formatHolder(holder: LeaseHolder): string {
 	return (
 		`${escapeControlCharacters(holder.owner)} ` +
 		`(${formatAttribution(holder.project, holder.testName)}) — ` +
-		`${formatDuration(holder.expiresInMs)} left`
+		`${formatDuration(holder.expiresInMs)} left, granted ${holder.grantedAt}`
 	);
 }

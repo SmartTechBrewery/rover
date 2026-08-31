@@ -224,6 +224,7 @@ describe('who holds what, in a list reply', () => {
 		await start();
 		const client = await connect();
 
+		const beforeAcquireMs = Date.now();
 		const granted = await client.request('acquire_device', {
 			serial: attached.serial,
 			owner: 'issue-112',
@@ -243,6 +244,12 @@ describe('who holds what, in a list reply', () => {
 		// A duration, not an instant — the caller may share no clock with the host (D17).
 		expect(heldBy?.expiresInMs).toBeGreaterThan(0);
 		expect(heldBy?.expiresInMs).toBeLessThanOrEqual(LEASE_TTL_MS);
+		// The one exception, and it made it over the socket and both parses. Host and test are
+		// the same process here, so bounding it against this clock is a real check rather than
+		// the cross-machine arithmetic the field's own doc comment forbids a client.
+		const grantedAtMs = Date.parse(heldBy?.grantedAt ?? '');
+		expect(grantedAtMs).toBeGreaterThanOrEqual(beforeAcquireMs);
+		expect(grantedAtMs).toBeLessThanOrEqual(Date.now());
 	});
 
 	it('never puts the lease id in a list reply', async () => {

@@ -88,7 +88,7 @@ npm run -s rover -- acquire emulator-5554 --owner someone-else --project rover  
 
 ```
 Not granted (held): Device 'emulator-5554' is held by 'issue-20' for another 1186855ms
-Held by issue-20 (project rover, test quick start) — 19m left.
+Held by issue-20 (project rover, test quick start) — 19m left, granted 2026-08-31T09:14:07.512Z.
 ```
 
 Now drive it. The verb runs on the **host** and the bytes come back over the wire, so `--out` is a
@@ -129,6 +129,7 @@ npm run -s rover -- list --json
         "owner": "issue-20",
         "project": "rover",
         "testName": "quick start",
+        "grantedAt": "2026-08-31T09:14:07.512Z",
         "expiresInMs": 1191269
       }
     }

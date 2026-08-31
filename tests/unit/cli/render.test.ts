@@ -30,6 +30,9 @@ const held = createMockDevice({ serial: parseDeviceSerial('held-1'), model: 'Hel
 /** Nineteen minutes and a bit, so a truncating formatter has something to truncate. */
 const NINETEEN_MINUTES_MS = 19 * 60 * 1_000 + 42_000;
 
+/** One instant, written once: every expectation below quotes it character for character. */
+const GRANTED_AT = '2026-08-31T11:47:52.318Z';
+
 function listResult(overrides: Partial<ListDevicesResult> = {}): ListDevicesResult {
 	return ListDevicesResultSchema.parse({
 		devices: [
@@ -41,6 +44,7 @@ function listResult(overrides: Partial<ListDevicesResult> = {}): ListDevicesResu
 					owner: 'issue-112',
 					project: 'rover',
 					testName: 'checkout flow',
+					grantedAt: GRANTED_AT,
 					expiresInMs: NINETEEN_MINUTES_MS,
 				},
 			},
@@ -60,7 +64,18 @@ describe('the device table', () => {
 		expect(first).toContain('free');
 		// The headline criterion, in the column it lives in: who holds it, what they said they
 		// were doing, and how much longer they have.
-		expect(second).toContain('issue-112 (project rover, test checkout flow) — 19m left');
+		expect(second).toContain(
+			`issue-112 (project rover, test checkout flow) — 19m left, granted ${GRANTED_AT}`,
+		);
+	});
+
+	it('prints the grant instant exactly as the host sent it', () => {
+		const [, , second] = renderDeviceList(LOCAL_HOST, listResult()).split('\n');
+
+		// Character for character: no reformatting, no local time and no truncation. It is the
+		// host's clock, and the CLI has no business doing arithmetic on somebody else's — the
+		// relative number beside it is `expiresInMs`, which the host measured itself.
+		expect(second).toContain(GRANTED_AT);
 	});
 
 	it('never puts a lease id in the table, because a listing carries none', () => {
@@ -78,11 +93,14 @@ describe('the device table', () => {
 				owner: 'issue-112',
 				project: 'rover',
 				testName: null,
+				grantedAt: GRANTED_AT,
 				expiresInMs: NINETEEN_MINUTES_MS,
 			},
 		});
 
-		expect(renderHolder(holder)).toBe('issue-112 (project rover) — 19m left');
+		expect(renderHolder(holder)).toBe(
+			`issue-112 (project rover) — 19m left, granted ${GRANTED_AT}`,
+		);
 	});
 
 	it('says plainly that nothing is attached rather than printing an empty table', () => {
@@ -107,6 +125,7 @@ describe('the device table', () => {
 							owner: forged,
 							project: 'rover',
 							testName: null,
+							grantedAt: GRANTED_AT,
 							expiresInMs: NINETEEN_MINUTES_MS,
 						},
 					},
@@ -158,6 +177,7 @@ describe('a grant and a refusal', () => {
 				owner: 'issue-112',
 				project: 'rover',
 				testName: null,
+				grantedAt: GRANTED_AT,
 				expiresInMs: NINETEEN_MINUTES_MS,
 			},
 		};
@@ -168,7 +188,9 @@ describe('a grant and a refusal', () => {
 		// The reason is what makes a refusal actionable — a busy device and a device that
 		// vanished call for opposite next moves.
 		expect(rendered).toContain('Not granted (held)');
-		expect(rendered).toContain('Held by issue-112 (project rover) — 19m left.');
+		expect(rendered).toContain(
+			`Held by issue-112 (project rover) — 19m left, granted ${GRANTED_AT}.`,
+		);
 	});
 
 	it('keeps a grant three lines whatever the owner and the test name contain', () => {
@@ -201,6 +223,7 @@ describe('a grant and a refusal', () => {
 				owner,
 				project: 'rover',
 				testName: null,
+				grantedAt: GRANTED_AT,
 				expiresInMs: NINETEEN_MINUTES_MS,
 			},
 		});
@@ -210,7 +233,8 @@ describe('a grant and a refusal', () => {
 		expect(lines).toHaveLength(2);
 		expect(lines[0]).toContain("held by 'issue-112\\nNot granted");
 		expect(lines[1]).toBe(
-			'Held by issue-112\\nNot granted (not-attached): Device is free (project rover) — 19m left.',
+			'Held by issue-112\\nNot granted (not-attached): Device is free (project rover) — ' +
+				`19m left, granted ${GRANTED_AT}.`,
 		);
 	});
 

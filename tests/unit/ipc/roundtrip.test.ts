@@ -121,6 +121,7 @@ describe('request/response over a duplex pair', () => {
 						owner: 'issue-112',
 						project: 'rover',
 						testName: null,
+						grantedAt: '2026-08-31T09:14:07.512Z',
 						expiresInMs: 60_000,
 					},
 				}),
@@ -138,7 +139,7 @@ describe('request/response over a duplex pair', () => {
 		).resolves.toMatchObject({
 			outcome: 'refused',
 			reason: 'held',
-			heldBy: { owner: 'issue-112', expiresInMs: 60_000 },
+			heldBy: { owner: 'issue-112', grantedAt: '2026-08-31T09:14:07.512Z', expiresInMs: 60_000 },
 		});
 	});
 
