@@ -131,14 +131,19 @@ export const ListDevicesParamsSchema = z.object({}).strict();
 export type ListDevicesParams = z.infer<typeof ListDevicesParamsSchema>;
 
 /**
- * What a caller who is *not* the holder is told about a lease — deliberately
- * {@link GrantedLeaseSchema} minus `leaseId`. It is what a refusal names and what a listed
- * device names, because both are readable by anyone who can reach the host.
+ * What a caller who is *not* the holder is told about a lease — the same attribution
+ * {@link GrantedLeaseSchema} carries, minus the credential and **plus** the grant instant.
+ * It is what a refusal names and what a listed device names, because both are readable by
+ * anyone who can reach the host.
  *
  * Anyone may ask for a busy device, so anything in this shape is public to strangers. The
  * lease id ends the lease, so including it would let whoever was refused release the holder
  * and take the device. The owner, project and test name are here because "held by
  * `pr-127-review` for another eleven minutes" is what makes a refusal actionable.
+ *
+ * The grant instant is here and *not* on `GrantedLeaseSchema` for the opposite reason: the
+ * winner of an acquire already knows when it was granted, because it asked. A stranger
+ * reading a list has no other way to find out.
  */
 export const LeaseHolderSchema = z
 	.object({
@@ -146,6 +151,32 @@ export const LeaseHolderSchema = z
 		owner: z.string(),
 		project: z.string(),
 		testName: z.string().nullable(),
+		/**
+		 * When this lease was **granted**, as an ISO-8601 instant with a `Z`. The one field on
+		 * this schema that is an instant rather than a duration, and so the one deliberate
+		 * exception to D17 — which is why it says here what it gives up.
+		 *
+		 * It answers a different question from `expiresInMs`, and **neither is derivable from
+		 * the other**: activity renews the TTL (D8), so the expiry moves and this does not.
+		 * "How long has `pr-127-review` had this device" is what an operator asks before
+		 * deciding a lease is stuck, and subtracting `expiresInMs` from the TTL answers it only
+		 * for a lease nothing has renewed — the rare case, not the normal one.
+		 *
+		 * **What the encoding gives up is clock-skew independence, not JSON.** A string
+		 * survives JSON where a `Date` would not, so every client reads one shape. But it is
+		 * the *host's* clock: a client renders it as given — which is why it is UTC, and why
+		 * nothing truncates it — and must not difference it against its own `Date.now()`,
+		 * because that difference is the skew plus the answer. Anything relative still comes
+		 * from `expiresInMs`, which is a duration for exactly that reason.
+		 *
+		 * ISO-8601 rather than epoch milliseconds, and the trade is deliberate: it costs a
+		 * `Date.parse` to compute with, and it is unambiguous to read in a log, in
+		 * `rover list --json` and in the panel's `GRANTED` field. In an object whose other
+		 * numbers are durations, a bare epoch number is the one that gets subtracted from one
+		 * of them by accident. `UserRecordSchema.createdAt` is the same encoding for the same
+		 * kind of value.
+		 */
+		grantedAt: z.string().datetime(),
 		expiresInMs: z.number().int().nonnegative(),
 	})
 	.strict();

@@ -95,7 +95,9 @@ export function registerDeviceTools(
 			description:
 				'Every device attached to the Rover host, what the host knows about each, and who ' +
 				'holds it: `heldBy` is null for a free device, and otherwise names the owner, the ' +
-				'project and how much longer the lease runs. Only hardware physically attached to ' +
+				'project, how much longer the lease runs, and when the lease was granted, as a UTC ' +
+				"instant on the host's clock — the expiry moves when activity renews the lease, " +
+				'the grant time does not. Only hardware physically attached to ' +
 				'the host is ever listed. `stale: true` means the host is not in a position to know ' +
 				'what is attached — with it set, an empty list means *no view*, not *no devices*, so ' +
 				'do not read it as "nothing is connected".',
