@@ -1,6 +1,8 @@
 import type { ListedDevice } from '@panel/devices/device-list.js';
+import type { ForceReleaseAnswer } from '@panel/devices/force-release.js';
 import { Smartphone } from 'lucide-react';
 import type { ReactNode } from 'react';
+import { ForceReleaseControl } from './force-release-control.js';
 import { LeaseCountdown } from './lease-countdown.js';
 import { StatusLed } from './status-led.js';
 
@@ -18,8 +20,10 @@ import { StatusLed } from './status-led.js';
  * Nothing in this tree truncates or ellipsises. A serial is the device's identity and the longest
  * string on the card; it wraps.
  *
- * **No control.** Force-releasing a lease is the panel's one operator action and it is not on this
- * card yet — the design's markup carries the button and it is deliberately not reproduced here.
+ * **One control, and only on a held card** (#122). Force-releasing a lease is the panel's one
+ * operator action; it sits inside the lease panel, below the data it acts on, and a card with no
+ * lease has nothing for it to end. What the answer to it says is not said here — see
+ * `force-release-notice.tsx`.
  *
  * **No `STATE` field, but the device state is not ignored.** The card already says a device is held
  * three times over (`ACTIVE LEASE`, the LED, the counter above the grid), so there is no `STATE`
@@ -31,10 +35,16 @@ import { StatusLed } from './status-led.js';
 export function DeviceCard({
 	device,
 	receivedAtMs,
+	onForceReleaseSettled,
 }: {
 	readonly device: ListedDevice;
 	/** When the answer this card renders arrived, which is the countdown's base. */
 	readonly receivedAtMs: number;
+	/**
+	 * A force-release the host answered. It is reported *up*, because this card is about to go free
+	 * or leave the grid and cannot outlive the news about itself (`force-release-notice.tsx`).
+	 */
+	readonly onForceReleaseSettled: (answer: ForceReleaseAnswer, device: ListedDevice) => void;
 }) {
 	const lease = device.heldBy;
 	// Anything but the exact word is not usable (`device-list.ts`), which is the safe direction to
@@ -95,7 +105,12 @@ export function DeviceCard({
 				 * does its state decide between *free* and *not usable*.
 				 */}
 				{lease !== null ? (
-					<LeasePanel lease={lease} receivedAtMs={receivedAtMs} />
+					<LeasePanel
+						device={device}
+						lease={lease}
+						onForceReleaseSettled={onForceReleaseSettled}
+						receivedAtMs={receivedAtMs}
+					/>
 				) : ready ? (
 					<FreePanel />
 				) : (
@@ -111,11 +126,15 @@ export function DeviceCard({
  * before who to go and ask about it.
  */
 function LeasePanel({
+	device,
 	lease,
 	receivedAtMs,
+	onForceReleaseSettled,
 }: {
+	readonly device: ListedDevice;
 	readonly lease: NonNullable<ListedDevice['heldBy']>;
 	readonly receivedAtMs: number;
+	readonly onForceReleaseSettled: (answer: ForceReleaseAnswer, device: ListedDevice) => void;
 }) {
 	return (
 		<div className="mt-auto rounded-sm border border-outline-variant bg-surface-container-high p-3">
@@ -144,6 +163,16 @@ function LeasePanel({
 				 */}
 				<Field className="col-span-2" label="Granted" value={lease.grantedAt} />
 			</dl>
+			{/*
+			 * Below `GRANTED`, so everything the action would end is read before the control that
+			 * ends it is reached (`docs/DESIGN.md` §7).
+			 */}
+			<ForceReleaseControl
+				device={device}
+				lease={lease}
+				onSettled={onForceReleaseSettled}
+				receivedAtMs={receivedAtMs}
+			/>
 		</div>
 	);
 }

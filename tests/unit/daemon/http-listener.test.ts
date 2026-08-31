@@ -385,6 +385,66 @@ describe('one surface, a third transport', () => {
 		});
 	});
 
+	it('dispatches force_release_device, and answers the very bytes the unix socket answers', async () => {
+		registerFakeBackend();
+		await withStore();
+		const daemon = await startWithHttp();
+		const socket = await overSocket();
+
+		// A lease taken the way a real one is taken — by a client that is not a browser — because
+		// the point of this method on this transport is ending somebody else's (D28).
+		await expect(
+			socket.request('acquire_device', {
+				serial: attached.serial,
+				owner: 'issue-113',
+				project: 'rover',
+			}),
+		).resolves.toMatchObject({ outcome: 'granted' });
+
+		const released = envelopeOf(
+			await call(daemon, 'force_release_device', {
+				serial: attached.serial,
+				actor: 'karolina',
+			}),
+		);
+
+		expect(released).toMatchObject({
+			type: 'result',
+			protocolVersion: 1,
+			id: 'req-1',
+			result: { outcome: 'released', heldBy: { owner: 'issue-113', project: 'rover' } },
+		});
+		// The lease really ended, and the transport it ended over left no trace on the answer any
+		// other client reads.
+		const listed = await socket.request('list_devices', {});
+		expect(listed.devices.map((device) => device.heldBy)).toEqual([null, null]);
+		// Never the holder's credential, whatever the transport (D20) — the browser is the one
+		// caller that could put it straight into a page.
+		expect(released.result).not.toHaveProperty('lease');
+		expect(JSON.stringify(released)).not.toContain('leaseId');
+
+		// And the refusal for a device nobody holds is the same answer on both transports, field
+		// for field: one `IpcServer`, one set of schemas, asked twice.
+		const refusedOverHttp = envelopeOf(
+			await call(daemon, 'force_release_device', {
+				serial: attached.serial,
+				actor: 'karolina',
+			}),
+		);
+		const refusedOverUnix = await socket.request('force_release_device', {
+			serial: attached.serial,
+			actor: 'karolina',
+		});
+
+		expect(refusedOverHttp).toEqual({
+			type: 'result',
+			protocolVersion: 1,
+			id: 'req-1',
+			result: refusedOverUnix,
+		});
+		expect(refusedOverUnix).toMatchObject({ outcome: 'refused', reason: 'not-held' });
+	});
+
 	it('answers with the existing error vocabulary rather than with a status code', async () => {
 		registerFakeBackend();
 		await withStore();

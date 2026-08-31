@@ -40,14 +40,18 @@ Design work lives in [`DESIGN.md`](./DESIGN.md); the brief that produced the fir
    **goes back up** when activity renews the lease (`PROJECT.md` D8) — verified against a running
    host, not only in a test. A held/free counter above the grid is derived from the same array the
    cards come from, so it cannot disagree with them.
-7. **Force-release a stuck lease** — before its TTL naturally runs out, an operator action rather
-   than something a client can do to another client's lease. **The host method exists** (R31, #109):
-   `force_release_device`, keyed on the device serial rather than on the holder's lease id, running
-   the same restoration a normal release runs, and recorded against a caller-supplied `actor`
-   string. Its authorisation model is `PROJECT.md` **D28** — reaching the surface authorises, the
-   `actor` string attributes, and the host derives neither from the other. The panel's own
-   affordance, with a confirmation, is R35. It is on the CLI too (`rover force-release <serial>
-   --actor <string>`), so the action is debuggable without a browser (D4).
+7. **Force-release a stuck lease** — **done** (#122). Before its TTL naturally runs out, an operator
+   action rather than something a client can do to another client's lease. The host method landed
+   first (R31, #109): `force_release_device`, keyed on the device serial rather than on the holder's
+   lease id, running the same restoration a normal release runs, and recorded against a
+   caller-supplied `actor` string. Its authorisation model is `PROJECT.md` **D28** — reaching the
+   surface authorises, the `actor` string attributes, and the host derives neither from the other.
+   The panel's own affordance is now built: a recessive control on each held card, the settled
+   confirmation dialog (`docs/DESIGN.md` §7), and three distinct outcomes plus the request that
+   reached nothing. The `actor` it sends is the signed-in user's `identifier`, so the daemon's audit
+   line names a person rather than a browser, and `force_release_device` joined `PANEL_METHODS` on
+   the HTTP surface with it. It is on the CLI too (`rover force-release <serial> --actor <string>`),
+   so the action is debuggable without a browser (D4).
 8. **Host user management** — issuing and revoking a named user's access to the host. No longer a
    single shared secret to design around: `PROJECT.md` D25 already replaces `ROVER_HOST_TOKEN` with
    named, revocable per-user credentials (`rover users add/list/revoke/rotate`, R27–R28) precisely

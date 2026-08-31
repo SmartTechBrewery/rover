@@ -1230,8 +1230,8 @@ Four things about that surface are worth knowing before pointing anything at it:
   query-string credential to fall back on, and `POST /rpc?token=…` with no header is refused like
   any other stranger. Nothing about a request or a refusal is logged.
 - **Only the panel's methods are reachable.** Every method still runs on the host either way, but
-  this transport serves an allowlist over the one table — the device list today — so a browser tab
-  cannot take a lease and then drive a phone with it:
+  this transport serves an allowlist over the one table — the device list, and force-release — so a
+  browser tab cannot take a lease and then drive a phone with it:
 
   ```json
   {"type":"error","protocolVersion":1,"id":"2","error":{"code":"unknown_method","message":"'acquire_device' is not served over this host's HTTP surface"}}
@@ -1405,7 +1405,21 @@ be a claim the host will not honour. Four states of that one screen
 are distinguished on purpose, and the last two are the reason: nothing attached; a host view that is
 not current, over a list; a host view that is not current over an *empty* list, which means Rover
 cannot say what is attached rather than that nothing is; and the host being unreachable, which
-replaces the whole page. There is no force-release control on it yet.
+replaces the whole page.
+
+**Force-releasing a stuck lease is the panel's one operator action**, and it is the only request it
+makes that changes anything on the host. Each held card carries one recessive control below the lease
+data it acts on; it asks first, in a dialog that names the device, its serial, the owner, the project
+and the test name, shows the time to auto release, and says in plain words what confirming does — the
+lease ends immediately, the device is restored to a clean state, and the agent holding it fails on
+its next request. `Cancel` is the prominent control there and `Force release` the recessive one, on
+purpose: the safe exit is the easier target. What the host answers is then said above the grid, and
+the three answers read differently because they mean different things — the lease ended (the card
+goes free without a reload), the lease had already ended on its own, or the device is no longer
+attached to this host and is no longer listed. A confirmed release that reached nothing released
+nothing: the dialog stays open, the control comes back, and the panel says so rather than announcing
+an ending it never got. The call is attributed to the signed-in user's identifier, so
+`rover force-release`'s audit line on the host names a person and not a browser.
 
 Its design comes from Stitch, not from this repository: `ai/RULES.md` §8 is how to reach it and
 `docs/DESIGN.md` is what the screens settled. The Analog Horizon tokens live in

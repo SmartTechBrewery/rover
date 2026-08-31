@@ -1,10 +1,16 @@
 import { DeviceCard } from '@panel/components/devices/device-card.js';
+import {
+	ForceReleaseNotice,
+	type SettledForceRelease,
+} from '@panel/components/devices/force-release-notice.js';
 import { HeldFreeCounter } from '@panel/components/devices/held-free-counter.js';
 import { PageHeader } from '@panel/components/layout/page-header.js';
+import type { ListedDevice } from '@panel/devices/device-list.js';
 import { useDeviceList } from '@panel/devices/device-list-provider.js';
+import type { ForceReleaseAnswer } from '@panel/devices/force-release.js';
 import { createRoute } from '@tanstack/react-router';
 import { RefreshCwOff } from 'lucide-react';
-import type { ReactNode } from 'react';
+import { type ReactNode, useState } from 'react';
 import { rootRoute } from './__root.js';
 
 /**
@@ -30,11 +36,17 @@ import { rootRoute } from './__root.js';
  * The counter is derived from the very array the cards come from, so "the counter agrees with the
  * cards" is structural rather than something to keep in step.
  *
+ * **The one operator action's outcome is said here rather than on a card** (#122). This screen holds
+ * it because the card that was acted on is about to go free or leave the grid, and it asks the poll
+ * for a fresh answer the moment the host settles one — so the grid shows what happened without a
+ * reload. There is at most one such line, because there is at most one such action.
+ *
  * Exported for `devices.test.tsx`: a route's component is otherwise reachable only through a router
  * instance, and what is worth asserting here is which state renders which content.
  */
 export function DevicesScreen() {
-	const { state } = useDeviceList();
+	const { state, refresh } = useDeviceList();
+	const [settled, setSettled] = useState<SettledForceRelease | undefined>(undefined);
 	const devices = state.status === 'ready' ? state.devices : [];
 	/*
 	 * Three buckets that sum to the grid, in the order they exclude each other (#123). A device the
@@ -47,6 +59,24 @@ export function DevicesScreen() {
 	const notReady = devices.filter(
 		(device) => device.heldBy === null && device.state !== 'ready',
 	).length;
+
+	/*
+	 * The answer, and the fresh look that makes it visible. `refresh()` is what turns "the lease
+	 * ended" into a card that says `free` without a reload — the interval gets there on its own
+	 * within `POLL_MS`, and an operator who has just ended a lease should not have to watch for
+	 * it. A refusal asks too: `not-held` means this card was already out of date, and `gone`
+	 * means it is about to leave the grid entirely.
+	 *
+	 * The request that reached nothing settles nothing, so it never arrives here — it stays in the
+	 * dialog, which stays open (§8, `force-release.ts`).
+	 */
+	const onForceReleaseSettled = (answer: ForceReleaseAnswer, device: ListedDevice): void => {
+		if (answer.outcome !== 'released' && answer.outcome !== 'refused') {
+			return;
+		}
+		setSettled({ answer, device });
+		refresh();
+	};
 
 	return (
 		<>
@@ -63,12 +93,22 @@ export function DevicesScreen() {
 					)
 				}
 			/>
-			<Content />
+			{/*
+			 * Above the content area, so it is above the grid — and still there when the grid is not.
+			 * Force-releasing the last device on a host it has since left empties the list, and the
+			 * line explaining why must not sit inside the branch it just emptied.
+			 */}
+			<ForceReleaseNotice onDismiss={() => setSettled(undefined)} settled={settled} />
+			<Content onForceReleaseSettled={onForceReleaseSettled} />
 		</>
 	);
 }
 
-function Content() {
+function Content({
+	onForceReleaseSettled,
+}: {
+	readonly onForceReleaseSettled: (answer: ForceReleaseAnswer, device: ListedDevice) => void;
+}) {
 	const { state } = useDeviceList();
 
 	if (state.status === 'loading') {
@@ -120,7 +160,12 @@ function Content() {
 				}`}
 			>
 				{state.devices.map((device) => (
-					<DeviceCard device={device} key={device.serial} receivedAtMs={state.receivedAtMs} />
+					<DeviceCard
+						device={device}
+						key={device.serial}
+						onForceReleaseSettled={onForceReleaseSettled}
+						receivedAtMs={state.receivedAtMs}
+					/>
 				))}
 			</div>
 		</>
