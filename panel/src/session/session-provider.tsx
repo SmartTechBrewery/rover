@@ -47,12 +47,28 @@ export type SessionState =
 	 */
 	| { readonly status: 'access-ended' };
 
+/**
+ * What a sign-out achieved, which is not a detail the control may skip over.
+ *
+ * - `ended` — the host answered, so the session is finished there. A `401` counts: a host that will
+ *   not take the id has already forgotten it.
+ * - `unreachable` — nothing answered, so **nothing ended**. The session is still live on the host
+ *   and this browser holds the only id that can end it, so it stays signed in and the control says
+ *   so. Announcing a sign-out here would be the panel claiming an ending it never got, while
+ *   discarding the id would leave a live credential nothing can reach for the rest of its idle
+ *   window — the exact failure D30 has the browser hold a session id to avoid.
+ */
+export type SignOutOutcome = 'ended' | 'unreachable';
+
 export interface Session {
 	readonly state: SessionState;
 	/** Present a token. Moves through `checking` to `signed-in`, or to `refused`. */
 	readonly signIn: (token: string) => Promise<void>;
-	/** End the session on the host, then forget it here. */
-	readonly signOut: () => Promise<void>;
+	/**
+	 * End the session on the host, then forget it here — and report which of those happened, because
+	 * a host that never answered has ended nothing (see {@link SignOutOutcome}).
+	 */
+	readonly signOut: () => Promise<SignOutOutcome>;
 	/**
 	 * What a later request calls when the host refuses the session it presented — the one path to
 	 * *access ended*, so every screen bounces the same way and clears the same storage.
@@ -123,25 +139,54 @@ export function SessionProvider({ children }: { readonly children: ReactNode }) 
 			setState({ status: 'refused' });
 			return;
 		}
+		// Whatever the boot probe kept when it reached nothing is about to be overwritten, and the
+		// host may hold it still — so it is presented to `DELETE /session` on the way out. The
+		// answer is deliberately not read: a host that has come back reclaims the orphan, one that
+		// is still down changes nothing, and either way this sign-in has already succeeded. Without
+		// this the host would keep a second live session for the same person that no browser could
+		// reach or end.
+		const replaced = session.current;
 		session.current = answer.value.session;
 		storeSession(answer.value.session);
+		if (replaced !== undefined && replaced !== answer.value.session) {
+			void endSession(replaced);
+		}
 		setState({
 			status: 'signed-in',
 			identity: { identifier: answer.value.identifier, displayName: answer.value.displayName },
 		});
 	}, []);
 
-	const signOut = useCallback(async (): Promise<void> => {
+	// A sign-out already in flight, so a second click joins it rather than sending a second
+	// `DELETE`. This is what dropping the id up front used to buy: it cannot do that any more,
+	// because an unanswered sign-out has to leave the id behind to retry with.
+	const inFlight = useRef<Promise<SignOutOutcome> | undefined>(undefined);
+
+	const endOnHost = useCallback(async (): Promise<SignOutOutcome> => {
 		const ending = session.current;
-		// Dropped before the request rather than after it, so a second click has nothing left to
-		// end and the host is asked exactly once.
-		session.current = undefined;
 		if (ending !== undefined) {
-			await endSession(ending);
+			// Asked while the id is still in storage: a sign-out that cleared first would be a
+			// `localStorage.removeItem` with a live credential left behind it.
+			const answer = await endSession(ending);
+			if (!answer.ok && answer.refusal === 'unanswered') {
+				// Nothing answered, so nothing ended. The id is kept for the same reason the boot
+				// probe keeps it — an unreachable host has said nothing — and here it is also the
+				// only thing that can still end the session.
+				return 'unreachable';
+			}
+			// `ok` and `refused` alike are a finished sign-out (see `SignOutOutcome`).
 		}
-		clearStoredSession();
+		forget();
 		setState({ status: 'signed-out', after: 'sign-out' });
-	}, []);
+		return 'ended';
+	}, [forget]);
+
+	const signOut = useCallback((): Promise<SignOutOutcome> => {
+		inFlight.current ??= endOnHost().finally(() => {
+			inFlight.current = undefined;
+		});
+		return inFlight.current;
+	}, [endOnHost]);
 
 	const onRefusal = useCallback((): void => {
 		if (session.current === undefined) {

@@ -41,6 +41,12 @@ interface Notice {
  *
  * Neither is written in a colour of alarm. Both are normal, finished states in the language of §7,
  * and one of them is something the person did on purpose.
+ *
+ * **`SIGNED_OUT` claims something, so the machine has to earn it.** *The session ended on the host*
+ * is only true because `signed-out: 'sign-out'` is now reached solely once the host answered the
+ * `DELETE` — a sign-out that reached nothing stays *signed in* and says so on `Profile`
+ * (`SignOutOutcome`). If that ever stops holding, this sentence is the first thing that becomes a
+ * lie.
  */
 const SIGNED_OUT: Notice = {
 	heading: 'Signed out',

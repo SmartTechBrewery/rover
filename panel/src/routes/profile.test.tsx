@@ -79,6 +79,47 @@ describe('the Profile screen', () => {
 		expect(window.localStorage.getItem(STORAGE_KEY)).toBeNull();
 	});
 
+	// A `DELETE` nothing answered ended nothing, so this screen may not announce a sign-out: it is
+	// still signed in, the id is still the only thing that can end the session, and the control is
+	// there to try again with (`docs/DESIGN.md` §8).
+	it('says the host could not be reached, and stays signed in, when the sign-out reaches nothing', async () => {
+		await signedIn();
+
+		fetchMock.mockReset();
+		fetchMock.mockRejectedValue(new TypeError('Failed to fetch'));
+
+		fireEvent.click(screen.getByRole('button', { name: 'Sign out' }));
+
+		await waitFor(() => expect(screen.getByText(/Nothing answered on the host/)).toBeDefined());
+		// Still signed in, still holding the id, and the control is ready for the retry.
+		expect(screen.getByText('Panel')).toBeDefined();
+		expect(window.localStorage.getItem(STORAGE_KEY)).toBe('a-session-id');
+		const control = screen.getByRole('button', { name: 'Sign out' }) as HTMLButtonElement;
+		expect(control.disabled).toBe(false);
+	});
+
+	// §5 has no exception for progress, so the pending state is the disabled control with a changed
+	// label — not a spinner.
+	it('disables the control while the host is being told, with no spinner', async () => {
+		await signedIn();
+
+		let release: (value: Response) => void = () => undefined;
+		fetchMock.mockReset();
+		fetchMock.mockReturnValue(
+			new Promise<Response>((resolve) => {
+				release = resolve;
+			}),
+		);
+
+		fireEvent.click(screen.getByRole('button', { name: 'Sign out' }));
+
+		const pending = screen.getByRole('button', { name: 'Signing out…' }) as HTMLButtonElement;
+		expect(pending.disabled).toBe(true);
+
+		release(answered(200, {}));
+		await waitFor(() => expect(window.localStorage.getItem(STORAGE_KEY)).toBeNull());
+	});
+
 	// The panel authenticates and never administers (`docs/DESIGN.md` §8), and nothing here shows
 	// the credential itself.
 	it('carries one control, and nothing that administers a user', async () => {

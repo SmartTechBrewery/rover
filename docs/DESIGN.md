@@ -484,6 +484,18 @@ all, and that is the only difference between the two.** The sign-out control its
 and nowhere else — the sidebar carries no action (§3), and the design's own early revision promoting
 `Log Out` into the navigation is one of the mistakes §7 records.
 
+That line says the session **ended on the host**, which means this state may only be reached once
+the host has answered. **A sign-out the host never answered does not arrive here.** It stays on
+`Profile`, still signed in, with the control re-enabled and one `aria-live="polite"` line below it —
+*Nothing answered on the host, so the session is still open and you are still signed in. Try
+again.* — in ordinary text with no colour of alarm, because nothing has gone wrong with the session.
+`Profile`'s own paragraph says the same thing before the fact rather than only after it. A `401`
+does arrive here: a host that will not take the id has already forgotten it, so that sign-out is
+finished. The reason it cannot be the other way is the whole reason the browser holds a session id
+rather than the token — announcing an ending nobody performed would clear the one id that could
+still perform it, leaving a live credential on the host for the rest of its idle window with nothing
+able to reach it.
+
 **Access ended — the deliberate exception, and it still does not claim why.** A session that was
 live and stopped being accepted says so plainly: `Access ended`, *This host stopped accepting the
 session. Sign in again — and if that does not work, ask whoever runs the host.* Telling this person
@@ -493,8 +505,9 @@ must not claim to know which" applies here too. It is not red, not a warning col
 alert; it is news. The stored session id is cleared on the way into this state, so a reload does not
 land here twice.
 
-**Two edges those four have to answer between them**, and they are answered by what the *evidence*
-supports rather than by what is convenient:
+**The edges those four have to answer between them**, and they are answered by what the *evidence*
+supports rather than by what is convenient. **One rule covers all of them: the panel never discards
+a session id without the host's answer, and never reports an ending it did not get.**
 
 - **A stored id the host refuses on boot is *access ended*, not a cold arrival.** The id in storage
   is the evidence that somebody was signed in with it; a bare form with no explanation would be the
@@ -504,6 +517,14 @@ supports rather than by what is convenient:
   restarting would be inventing bad news. There is no `HOST UNREACHABLE` page here (§7's is a state
   of the Devices screen): the sign-in card is already the shell-less page, and the one refusal above
   is worded to cover this.
+- **A sign-out that reaches nothing is not a sign-out.** It stays on `Profile`, signed in, and says
+  the host did not answer — the *Signed out* paragraph above has the wording and the reason.
+- **A sign-in that replaces a kept id ends that id first, and does not wait to hear how it went.**
+  The bullet above leaves an id behind on an unreachable host, and the next successful sign-in is
+  what would otherwise strand it: the host would then hold two live sessions for one person, one of
+  them unreachable by any browser. So the replaced id goes to `DELETE /session` on the way out, and
+  the answer is ignored — a host that has come back reclaims it, a host still down changes nothing,
+  and the sign-in that just succeeded is not made to depend on either.
 
 **Where the session is kept, and what it costs.** The browser stores the **session id only**, under
 one `localStorage` key (`rover.panel.session`), and never the token — the token reaches the host once

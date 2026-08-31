@@ -25,8 +25,16 @@ const panelRoot = import.meta.dirname;
  * `ROVER_HTTP_PORT` is the daemon's own switch for that listener, so the same variable points the
  * dev server at it — one number to keep in step instead of two. 4712 is what the README's recipe
  * uses.
+ *
+ * **Empty counts as unset, exactly as the daemon counts it** (`optional()` in
+ * `src/daemon/network-config.ts`; README, "unset or *empty* and nothing binds"): an
+ * exported-but-blank variable is what a shell leaves behind, and `??` alone falls back on
+ * `undefined` only — it would build `http://127.0.0.1:`, a URL with no port, which is port 80. The
+ * developer's afternoon then goes on why `/session` reached whatever is listening there, instead of
+ * on a plain refused connection.
  */
-const hostTarget = `http://127.0.0.1:${process.env.ROVER_HTTP_PORT ?? 4712}`;
+const configuredPort = process.env.ROVER_HTTP_PORT;
+const hostTarget = `http://127.0.0.1:${configuredPort === undefined || configuredPort === '' ? 4712 : configuredPort}`;
 
 export default defineConfig({
 	root: panelRoot,

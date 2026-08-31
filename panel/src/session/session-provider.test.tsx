@@ -1,4 +1,5 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { useState } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { SessionProvider, useSession } from './session-provider.js';
@@ -11,6 +12,11 @@ import { SessionProvider, useSession } from './session-provider.js';
  * a live session lands on *access ended* and clears what the browser was holding. And a sign-out
  * reaches the host **before** the browser forgets, because the whole reason the panel holds a
  * session id rather than the token is that ending one is something the host does.
+ *
+ * The last of those has a converse the tests below pin just as hard: **the panel never discards a
+ * session id without the host's answer** (`docs/DESIGN.md` §8). A sign-out nothing answered ended
+ * nothing, and an id kept by an unreachable boot probe is offered to the host before the next
+ * sign-in overwrites it.
  */
 
 const STORAGE_KEY = 'rover.panel.session';
@@ -26,6 +32,9 @@ const IDENTITY = { identifier: 'panel', displayName: 'Panel' };
 /** Every state as one readable string, so a test asserts on the machine and not on a render. */
 function Probe() {
 	const { state, signIn, signOut, onRefusal } = useSession();
+	// What the last sign-out reported. `Profile` is the screen that has to say this out loud, and
+	// the outcome is the only way it can (`session-provider.tsx`, `SignOutOutcome`).
+	const [outcome, setOutcome] = useState('');
 
 	return (
 		<div>
@@ -36,10 +45,16 @@ function Probe() {
 				{state.status === 'refused' ? 'refused' : ''}
 				{state.status === 'access-ended' ? 'access-ended' : ''}
 			</span>
+			<span data-testid="outcome">{outcome}</span>
 			<button onClick={() => void signIn('the-printed-token')} type="button">
 				present
 			</button>
-			<button onClick={() => void signOut()} type="button">
+			<button
+				onClick={() => {
+					void signOut().then(setOutcome);
+				}}
+				type="button"
+			>
 				end
 			</button>
 			<button onClick={onRefusal} type="button">
@@ -59,6 +74,10 @@ function mount() {
 
 function state(): string {
 	return screen.getByTestId('state').textContent ?? '';
+}
+
+function outcome(): string {
+	return screen.getByTestId('outcome').textContent ?? '';
 }
 
 function stored(): string | null {
@@ -220,6 +239,81 @@ describe('the session provider', () => {
 		expect(init.method).toBe('DELETE');
 		expect((init.headers as Record<string, string>).authorization).toBe('Bearer a-session-id');
 		expect(stored()).toBeNull();
+	});
+
+	// A `DELETE` nothing answered ended nothing. Saying otherwise would be false *and* would throw
+	// away the only id that can still end the session — `docs/DESIGN.md` §8's rule, and the reason
+	// the browser holds a session id at all (`PROJECT.md` D30).
+	it('stays signed in, and keeps the id, when a sign-out reaches nothing', async () => {
+		fetchMock.mockResolvedValue(answered(200, { session: 'a-session-id', ...IDENTITY }));
+
+		mount();
+		press('present');
+		await waitFor(() => expect(state()).toBe('signed-in:Panel'));
+
+		fetchMock.mockReset();
+		fetchMock.mockRejectedValue(new TypeError('Failed to fetch'));
+
+		press('end');
+		await waitFor(() => expect(outcome()).toBe('unreachable'));
+
+		expect(state()).toBe('signed-in:Panel');
+		expect(stored()).toBe('a-session-id');
+
+		// And the retry the kept id exists for reaches the host with it.
+		fetchMock.mockReset();
+		fetchMock.mockResolvedValue(answered(200, {}));
+
+		press('end');
+		await waitFor(() => expect(state()).toBe('signed-out:sign-out'));
+		const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+		expect(init.method).toBe('DELETE');
+		expect((init.headers as Record<string, string>).authorization).toBe('Bearer a-session-id');
+		expect(stored()).toBeNull();
+	});
+
+	// The other half, so the fix above cannot over-correct into never signing anybody out: a host
+	// that will not take the id has already forgotten it, which is a finished sign-out.
+	it('signs out on a 401, because a session the host forgot is already ended', async () => {
+		fetchMock.mockResolvedValue(answered(200, { session: 'a-session-id', ...IDENTITY }));
+
+		mount();
+		press('present');
+		await waitFor(() => expect(state()).toBe('signed-in:Panel'));
+
+		fetchMock.mockReset();
+		fetchMock.mockResolvedValue(answered(401, { error: { code: 'unauthenticated' } }));
+
+		press('end');
+		await waitFor(() => expect(state()).toBe('signed-out:sign-out'));
+
+		expect(outcome()).toBe('ended');
+		expect(stored()).toBeNull();
+	});
+
+	// The tail of "a boot probe that reaches nothing keeps the id": without this the host would
+	// hold two live sessions for one person, and no browser could reach or end the older one.
+	it('ends the id a kept session is replaced by, on the next sign-in', async () => {
+		window.localStorage.setItem(STORAGE_KEY, 'a-kept-session');
+		fetchMock.mockRejectedValue(new TypeError('Failed to fetch'));
+
+		mount();
+		await waitFor(() => expect(state()).toBe('signed-out:arrival'));
+
+		fetchMock.mockReset();
+		fetchMock.mockResolvedValue(answered(200, { session: 'a-new-session', ...IDENTITY }));
+
+		press('present');
+		await waitFor(() => expect(state()).toBe('signed-in:Panel'));
+
+		expect(stored()).toBe('a-new-session');
+		await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+		const [, minted] = fetchMock.mock.calls[0] as [string, RequestInit];
+		expect(minted.method).toBe('POST');
+		const [url, ended] = fetchMock.mock.calls[1] as [string, RequestInit];
+		expect(url).toBe('/session');
+		expect(ended.method).toBe('DELETE');
+		expect((ended.headers as Record<string, string>).authorization).toBe('Bearer a-kept-session');
 	});
 
 	it('asks the host to end a session exactly once, however many times it is asked', async () => {

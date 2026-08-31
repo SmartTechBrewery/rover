@@ -89,8 +89,10 @@ credential could be attached to. One masked monospace field for the token, a rev
 no account creation, no spinner. `panel/src/session/` holds the client, the store and the state
 machine; the **session id only** goes into `localStorage`, never the token, and the credential travels
 in a header rather than a cookie so no cross-site request can carry it. `Profile` says who you are
-signed in as and carries the one **Sign out** control. The four states nobody had designed —
-refused, checking, signed out and access ended — are settled in `DESIGN.md` §8.
+signed in as and carries the one **Sign out** control, which reports what it achieved: a `DELETE`
+nothing answered ended nothing, so the panel stays signed in and says so rather than announcing a
+sign-out the host never performed. The four states nobody had designed — refused, checking, signed
+out and access ended — are settled in `DESIGN.md` §8.
 
 ## Deliberately not decided here
 

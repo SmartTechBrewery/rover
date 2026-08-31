@@ -1421,7 +1421,9 @@ Open the panel and paste that token into the one field. From then on:
   the session id is kept, under one `localStorage` key, and a reload restores it with the boot
   probe rather than asking again.
 - **`Profile` says who you are signed in as, and carries the one `Sign out` control.** Signing out
-  sends `DELETE /session`, so the session ends on the host rather than only in the browser.
+  sends `DELETE /session`, so the session ends on the host rather than only in the browser — and if
+  nothing answers, nothing ends: the panel stays signed in and says the host could not be reached,
+  because the browser holds the only id that can still end that session.
 - **`rover users revoke panel` ends a live session on its very next request.** The panel says
   *Access ended* and asks for a credential again — without claiming which of a revoke, a rotate or
   a restarted daemon it was, because those are indistinguishable from a browser.
