@@ -8,6 +8,15 @@ disagree, this document is what the screen should have been.
 *why* the product looks the way it does. `WEB_PANEL.md` is what the panel eventually needs to do.
 `ai/RULES.md` §8 is how to reach the designs at all — read it first.
 
+**This is a living document, and keeping it current is part of doing design work — not a follow-up.**
+Whenever a screen settles something, whenever a correction is made and the reason for it is worth
+keeping, whenever a Stitch screen is added or superseded, or whenever something moves out of §8's
+"not designed yet" list, it is written down **here, in the same change**, exactly as `PROJECT.md`
+and `README.md` must stay current (`ai/RULES.md` §1). A design decision that lives only in a chat
+log will be re-litigated by the next agent, and usually decided the other way: pass/fail semantics
+have already crept back into this product twice. If you find this document disagreeing with a
+screen, one of the two is a bug — say which, rather than working around it.
+
 ---
 
 ## 1. Where the designs are
@@ -22,9 +31,10 @@ this sentence exists to prevent.
 | Screen | ID | State |
 | --- | --- | --- |
 | Home — Devices (V3) | `3458d89bda5e442d894ea54208230d4c` | **The reference.** Settled. |
-| Archive — Browsing (V2) | `f2de4344f7e347aa894b3054d9cf4098` | Not yet corrected — see §7 |
-| Run Detail — Artifacts (V2) | `36b54fbe032449d8a300ea0825bbf1c8` | Not yet corrected — see §7 |
-| Compare — Visual Diff (V2) | `897632dcadce44de9bdee74a94da14f5` | Not yet corrected — see §7 |
+| Archive — Browsing (V2) | `f2de4344f7e347aa894b3054d9cf4098` | Not yet corrected — see §8 |
+| Run Detail — Artifacts (V2) | `36b54fbe032449d8a300ea0825bbf1c8` | Not yet corrected — see §8 |
+| Compare — Visual Diff (V2) | `897632dcadce44de9bdee74a94da14f5` | Not yet corrected — see §8 |
+| Sign In — Rover OS | `5035330b2c12401080263625ff564369` | Settled, **default state only** — see §7 |
 
 Earlier versions of each still exist and **must not be built from**. There is no way to delete a
 screen through the API — only `delete_project`, which takes everything — so every iteration
@@ -192,7 +202,39 @@ agree with the cards below it.
 
 ---
 
-## 7. What is not designed yet
+## 7. The sign-in screen, as settled
+
+It is the one screen a person sees before they are authenticated, so it shares the design system
+and nothing else.
+
+- **No sidebar, no navigation, no breadcrumb, no profile.** None of them mean anything yet. The
+  wordmark carries the product's identity alone, centred, with vertical padding so the card never
+  touches an edge — and the card stays fully visible and scrollable at short viewport heights
+  rather than being clipped from the top by a flex-centred container.
+- **One input: the access token.** An operator issues it on the host with `rover users add`; the
+  person pastes it. Set in the monospace face used for technical strings, sized for a 32-character
+  machine-generated string rather than for a word, masked with a reveal — somebody who pasted the
+  wrong thing has no other way to find out. The screen says where a token comes from.
+- **No host or address field.** The panel is served by the machine it talks to, so it already knows
+  where it is. This is worth stating because it is the obvious field to add and it would be wrong.
+- **No host name either.** A `HOST // NODE_01` line was tried and removed: `NODE_01` names a
+  concept Rover does not have, and it is the second time that invented identifier had to be taken
+  out. If the line ever returns it carries the machine's **real** hostname or it does not exist.
+- **One refusal, for every reason.** The host answers every failed attempt identically on purpose —
+  a token nobody holds, a token a revoked user still holds, and a malformed one are indistinguishable
+  from outside (`src/daemon/network-listen.ts` holds that line deliberately). The design must not
+  undo it by offering "unknown user" and "wrong token" as separate states.
+- **No account creation, no password reset, no "forgot", no email, no social sign-in.** Users are
+  issued on the host by an operator. The panel authenticates and never administers.
+- **No spinner.** The pending state is a disabled control whose label changes — a spinner is a
+  looping animation and §5's rule has no exception for progress.
+- **`rover users revoke` takes effect on the revoked user's next request**, not at their next
+  login, so the panel bounces them here mid-session. That arrival says so plainly: unlike a
+  stranger's failed attempt, this person was authenticated a moment ago, and telling them costs
+  nothing. **This is a deliberate exception to the uniform-refusal rule above** — recorded here so
+  it is not mistaken for an oversight and quietly "fixed".
+
+## 8. What is not designed yet
 
 - **The empty state — "nothing is attached to this machine".** The single most important thing
   still missing. A host with no devices is normal and common: Rover never starts an emulator or
@@ -204,7 +246,16 @@ agree with the cards below it.
   flag means *no view*, not *no devices* (D6). It must not render like the empty state, or the
   screen will confidently report an empty machine when it has gone blind.
 - **The "host unreachable" state**, which belongs to the whole page.
-- **The login screen** (R34). Left out of the first batch deliberately.
+- **The force-release confirmation.** It is the only destructive action in the product and R35
+  requires it to ask before it fires, but nothing has been designed for the asking. It also needs
+  its outcomes: the card becoming free without a reload, and the two refusals that mean different
+  things — the lease was already gone, and the device has since vanished from the host.
+- **Placeholders for `Archive` and `System`** while they lead nowhere (R33). They must say so
+  rather than 404; what "say so" looks like is undesigned.
+- **The sign-in screen's four other states** (R34): refused, checking, signed out, and access
+  ended. Only the default form is designed. An earlier revision faked them with a
+  `DEBUG // UI STATES` switcher whose buttons did nothing and whose states existed only as HTML
+  comments — scaffolding, not a design, and it has been removed.
 
 **Screens 2–4 have not been brought in line with any of this.** Known problems, from a first pass:
 pass/fail semantics are back (a `SUCCESS` chip, `PASS` in a log, green ticks and red crosses beside
@@ -215,7 +266,7 @@ label rather than as a path.
 
 ---
 
-## 8. Working with Stitch — what actually happens
+## 9. Working with Stitch — what actually happens
 
 - **Verify the markup; do not trust the report.** `edit_screens` returns a confident summary of
   what it changed, and it is sometimes wrong. Two edits to the free device card were reported as
