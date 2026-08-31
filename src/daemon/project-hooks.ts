@@ -29,8 +29,8 @@
  * {@link PROJECT_FILE_ENV_VAR}, `rover acquire` and the MCP server take the `project`
  * identifier out of it as the default for the string they would otherwise make somebody retype
  * on every call (D22). That is convenience and nothing more: the wire is unchanged, `apps`,
- * `install` and `teardown` are read by the host alone, and a client never runs anything a file
- * declares.
+ * `install`, `services` and `teardown` are read by the host alone, and a client never runs
+ * anything a file declares.
  *
  * This module reads a file and parses it, and imports nothing that starts a process, so it stays
  * safe to import from anywhere — which is what the paragraph above depends on, and what
@@ -106,17 +106,87 @@ export const HookCommandSchema = z
 export type HookCommand = z.infer<typeof HookCommandSchema>;
 
 /**
+ * How many helper services one project may declare.
+ *
+ * A bound rather than a preference, and the number it is measured against is the *client's*
+ * request timeout: every one of these is started inside `acquire_device` before the grant is
+ * answered (`./project-services.ts`), so an unbounded list would be an unbounded grant. The
+ * real ceiling on that wait is `SERVICE_START_TIMEOUT_MS`, which no number of services can
+ * exceed; this one keeps a hook file from declaring a list nobody meant to write.
+ *
+ * It bounds the other end too, where there is no single ceiling: each `stop` is a step of the
+ * restoration with a bound of its own (`./restore.ts`), and `acquire_device` waits on the whole
+ * restoration — so this is also how many slow stops in a row the next grant on that device can
+ * be made to wait for.
+ */
+export const MAX_PROJECT_SERVICES = 8;
+
+/**
+ * The shape of a helper service's name, following {@link PROJECT_IDENTIFIER}'s reasoning: a
+ * shape says what is allowed, a blocklist says what somebody thought of.
+ *
+ * It is narrow because it is **quoted back to whoever was refused a device**: a service that
+ * fails to start refuses the grant by name (`src/ipc/methods.ts`, `'service-failed'`), so a
+ * name carrying a control character or a newline would be a hook file writing its own lines
+ * into a client's terminal. No path separator of any platform, no whitespace, no leading `-`.
+ * Unlike a project identifier this is not a filename — nothing is ever looked up by it — so
+ * the shape is about the message and nothing else.
+ */
+const SERVICE_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,31}$/;
+
+/**
+ * One helper service the host starts for a lease on this project and stops when it ends
+ * (D13, R17 phase 4).
+ *
+ * **`stop` is optional and `start` is not.** A service nothing needs to stop is a real
+ * answer — a container started with `--rm`, a process the operator's own supervisor owns —
+ * while a service with no way to start it is nothing at all.
+ *
+ * **Both are ordinary {@link HookCommandSchema} commands**, bounded like every other hook.
+ * A service meant to outlive the command that starts it is the project's own business: the
+ * bound is on the *start*, not on the service, exactly as the teardown's bound is on the hook
+ * and not on what the hook left running (`./hook-command.ts`).
+ *
+ * **A `stop` must tolerate a service that is not running.** The restoration stops
+ * unconditionally, the way it stops applications that were never launched and sets both
+ * radios without reading them first (`./restore.ts`) — a `stop` that fails because there was
+ * nothing to stop is a warning nobody needs.
+ *
+ * Nothing here names a **port**: allocating one per lease is R18, the row this phase
+ * unblocks, and a field added in anticipation of it would be a row in the catalogue
+ * describing something nothing reads (ai/RULES.md §7). Until R18 lands, two concurrent
+ * leases on one project share whatever ports that project's services hard-code.
+ */
+export const ProjectServiceSchema = z
+	.object({
+		name: z
+			.string()
+			.regex(
+				SERVICE_NAME,
+				'a helper service name is 1–32 characters of letters, digits, dot, underscore ' +
+					'or -, starting with a letter or a digit (e.g. api, mock-payments)',
+			),
+		/** Run on the host at grant time. A non-zero exit refuses the grant by name. */
+		start: HookCommandSchema,
+		/** Run on the host when the lease ends, ahead of `teardown`. Absent is a good answer. */
+		stop: HookCommandSchema.optional(),
+	})
+	.strict();
+export type ProjectService = z.infer<typeof ProjectServiceSchema>;
+
+/**
  * A project's hook file, whole.
  *
- * **No default here names an application** (D13), and none ever may: `apps` defaults to the
- * empty list, `install` and `teardown` to absent, so a host that has never been told about a
- * project does nothing to one and installs nothing for one. `tests/unit/daemon/project-hooks.test.ts` asserts exactly that of the parsed
+ * **No default here names an application** (D13), and none ever may: `apps` and `services`
+ * default to the empty list, `install` and `teardown` to absent, so a host that has never been
+ * told about a project does nothing to one, starts nothing for one and installs nothing for
+ * one. `tests/unit/daemon/project-hooks.test.ts` asserts exactly that of the parsed
  * minimal file, because the failure this rules out is a plausible-looking default rather than a
  * missing feature.
  *
- * `.strict()` for the reason every other schema in this tree carries it: the helper services are
- * a later phase of this row, and until they exist a file carrying them is a typo rather than a
- * forward-compatible file. A field and its consumer land together (ai/RULES.md §7).
+ * `.strict()` for the reason every other schema in this tree carries it: a key this file does
+ * not know is a typo rather than a forward-compatible file, and a typo'd hook is a hook that
+ * silently never runs. A field and its consumer land together (ai/RULES.md §7).
  */
 export const ProjectHooksSchema = z
 	.object({
@@ -139,6 +209,31 @@ export const ProjectHooksSchema = z
 		 * lands where the lease says and never on a neighbour's device.
 		 */
 		install: HookCommandSchema.optional(),
+		/**
+		 * The processes the host runs for a lease on this project — started at grant time and
+		 * stopped when the lease ends, on release **and** on expiry (D9, R17 phase 4).
+		 *
+		 * **Order is declaration order.** They are started in the order written and stopped in
+		 * the reverse of it, so a service written after the one it depends on outlives it by
+		 * exactly as long as it takes to stop.
+		 *
+		 * Empty by default, and empty is the overwhelmingly common answer: a host that has never
+		 * been told about a project starts nothing for one.
+		 */
+		services: z
+			.array(ProjectServiceSchema)
+			.max(
+				MAX_PROJECT_SERVICES,
+				`a project may declare at most ${MAX_PROJECT_SERVICES} helper services`,
+			)
+			// Names, because a name is how a refusal and a warning say *which* service, and two
+			// services called the same thing make both messages ambiguous at the moment somebody
+			// most needs them.
+			.refine(
+				(services) => new Set(services.map((service) => service.name)).size === services.length,
+				'each helper service must have a name of its own',
+			)
+			.default([]),
 		/** Run on the host when a lease on this project ends — on release **and** on expiry (D9). */
 		teardown: HookCommandSchema.optional(),
 	})

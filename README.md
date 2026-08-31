@@ -35,8 +35,8 @@ id, which is what ends a lease and belongs only to whoever was granted it.
 
 **The daemon restores the device itself** (D9) — on `release_device` and on expiry alike, from the
 one place a lease is observed to end. It stops the project's applications, turns airplane mode off,
-turns wifi back on (in that order: `PROJECT.md` §6 records why the wifi step has to be last) and
-runs the project's teardown hook. A caller is never asked to do any of it and cannot opt out; a
+turns wifi back on (in that order: `PROJECT.md` §6 records why the wifi step has to be last), stops
+the project's helper services and runs the project's teardown hook. A caller is never asked to do any of it and cannot opt out; a
 step that fails is reported and the remaining steps still run — including a project resolver that
 throws, which costs that project's own steps and never the device's; and a device is never handed
 to the next lessee while its restoration is still in flight. An unref'ed sweep is what notices a
@@ -521,6 +521,26 @@ after it, under `ROVER_PROJECTS_PATH`:
     "args": ["-lc", "scripts/rover-install.sh"],
     "cwd": "/srv/checkout-web"
   },
+  "services": [
+    {
+      "name": "db",
+      // One instance per lease, named after the slot — see "each stop runs with its own
+      // lease's slot" below. `$ROVER_SLOT` needs a shell, so the shell is the program.
+      "start": {
+        "command": "bash",
+        "args": ["-lc", "docker compose -p checkout-web-$ROVER_SLOT up -d db"]
+      },
+      "stop": {
+        "command": "bash",
+        "args": ["-lc", "docker compose -p checkout-web-$ROVER_SLOT down"]
+      }
+    },
+    {
+      "name": "mock-payments",
+      "start": { "command": "bash", "args": ["-lc", "scripts/mocks.sh start"] },
+      "stop": { "command": "bash", "args": ["-lc", "scripts/mocks.sh stop"] }
+    }
+  ],
   "teardown": {
     "command": "bash",
     "args": ["-lc", "scripts/rover-teardown.sh"],
@@ -530,7 +550,7 @@ after it, under `ROVER_PROJECTS_PATH`:
 }
 ```
 
-Four fields, and only these four today. `project` is required and **must equal the file's own
+Five fields, and only these five. `project` is required and **must equal the file's own
 name** — a mismatch is refused out loud when the lease ends, in a warning naming both, with that
 project's apps and teardown skipped while the device itself is still restored; a file copied from
 another project cannot quietly serve this one. `apps` is the list of applications a lease on this project drove;
@@ -538,14 +558,14 @@ they are stopped on the device when the lease ends, in the order given, and an e
 perfectly good answer. `install` is one command the **host** runs when a caller asks for
 `install_app` **without sending a package** — what installing this project's application means
 here, which the core cannot know because it knows no application's name. `teardown` is one command
-the **host** runs when the lease ends. Both hooks have the same shape: `command`
+the **host** runs when the lease ends. `services` are the processes the host runs *for* a lease —
+each with a name, a `start` and an optional `stop`. Every hook has the same shape: `command`
 and `args` only — never a shell line, because nothing here is word-split or glob-expanded, so an
 operator who wants a shell makes the shell the program, as the example does. `cwd` and `env` are
-optional, and so are both hooks: nothing is defaulted, because a default here would be Rover
-naming somebody's application. Helper services are named in D13 and are not in the file yet;
-adding a field before its consumer exists would be a row in this table describing something
-nothing reads — but the ports such services will bind are already handed out per lease, and the
-hooks above are already told them (see "Every lease gets a slot", below).
+optional, and so is every hook: nothing is defaulted and `services` defaults to empty, because a
+default here would be Rover naming somebody's application. There is no **port** field: every
+lease receives a private port block automatically, and the hook receives it through the slot
+variables described below.
 
 The `install` hook runs only when a caller asks for it — never at grant time — and it gets
 `ROVER_PROJECT`, `ROVER_DEVICE_SERIAL` and the slot's three variables (below) the way the
@@ -558,6 +578,48 @@ for a project install has to raise that itself, or it will report a hang on its 
 the build is still running on the host. A command that is missing, declares no `install`, or exits
 non-zero is a **named** answer to that call (`project-not-registered`, `install-hook-undeclared`,
 `install-hook-failed` with the exit code and a stderr tail), never a broken host.
+
+The **helper services** are the one hook the host runs *without being asked*, at both ends of a
+lease. A grant starts them in the order they are declared, after the device has been re-verified
+and after the previous lessee's state has been put back, and **before the grant is answered** — so
+a caller holding a lease has the services that lease implies rather than services still coming up.
+One that will not start **refuses the grant, naming it**: `Not granted (service-failed): … the
+'mock-payments' helper service declared by project 'checkout-web' did not start — …`, with the
+program's own stderr on the end. Anything that grant had already brought up is stopped again, the
+lease is handed straight back, and the device is free for the next caller — granting a device whose
+helper services are down would be a success that fails at the first thing the agent tries. A hook
+file that will not parse refuses a grant the same way, naming the file: a file the host cannot read
+is a file whose services it cannot start.
+
+They are stopped by the restoration, in the reverse of the order they were declared in and ahead of
+the teardown hook, on **both** paths a lease ends by. Each stop is contained and bounded like the
+teardown, and each runs **unconditionally** — the same way an application that was never launched
+is still stopped — so a `stop` has to tolerate a service that is not running.
+
+**Each stop runs with its own lease's slot, and that is a contract you have to keep.** Two devices
+can be leased for the same project at once — that is what slots are for — and when they are, both
+grants run the same declared `start` commands and each lease's end runs the same declared `stop`.
+So a `start`/`stop` pair has to **namespace on `ROVER_SLOT`**, the way the `db` service in the
+example above does: one instance per lease, and the stop takes down that lease's own. A pair that
+ignores the slot and addresses a single shared instance instead — `docker compose up -d db` and
+`docker compose down` with no project name — brings up one database that both leases use, and
+then the *first* lease to end takes it away from the other, in the middle of its lease, with no
+refusal left to tell it. Rover cannot check this for you: a hook is an opaque command, and the host
+has no way to read one and tell which of the two shapes it was handed. The same applies to the
+**`teardown`** hook, which runs at every lease's end and should undo that lease's slot rather than
+the project's shared state.
+
+Two things follow from a start being a bounded command like any other. All of a project's starts
+share **twenty seconds** — and so does stopping them again when one of them refuses the grant,
+which is inside the same wait the caller is doing. That sits under the 30 s a client waits for a
+reply, because `acquire_device` is the one call no client raises its own timeout for: a grant
+answered after the caller gave up holds the device for the full twenty-minute TTL, and a refusal
+answered late reaches the agent as a request timeout with no service named rather than as the
+`service-failed` it is. A `stop` that the budget runs out before is **not run**, and says so in a
+warning naming the service that may still be running. And a start should *start* — Rover runs no
+health check, waits for no readiness probe and restarts nothing that crashes later; a service meant
+to outlive the command that starts it is the project's own business, exactly as it is for a teardown
+that backgrounds a helper.
 
 The **teardown** hook runs when a lease on that project **ends by either path — a `rover release`,
 and an expiry with the agent that held the device long gone** (`PROJECT.md` D9). Its child gets
@@ -623,8 +685,8 @@ privileges:
 - **A lease's `project` string authorizes nothing** (`PROJECT.md` D20) — it attributes, and here
   it also *selects*. Any caller that can take a lease at all, over the local socket or over the
   TCP listener with any operator-issued token, can name any project registered on this host and
-  cause that project's teardown to run when the lease ends — and, with one `install_app` carrying
-  no bytes, that project's install command to run while it is held. That is the same trust already
+  cause that project's teardown and helper services to run when the lease ends — and, with one
+  `install_app` carrying no bytes, that project's install command to run while it is held. That is the same trust already
   extended to everyone in `ROVER_USERS_PATH`, but it is worth saying rather than inferring,
   because the natural mistake is a teardown written as though it only ever follows a lease that
   project's own team took — restarting a shared service, clearing shared state — which a mistyped
@@ -640,7 +702,7 @@ The one thing a **client** may do with a hook file is read the `project` out of 
 `ROVER_PROJECT_FILE` at one — the project's own copy in its repository will do; it need not be the
 host's — and `rover acquire` stops needing `--project`, as does the MCP `acquire_device` tool
 (`PROJECT.md` D22). That is a convenience about who types the string and nothing else: the client
-reads that one field, never `apps`, `install` or `teardown`, never runs anything the file declares, and the
+reads that one field, never `apps`, `install`, `services` or `teardown`, never runs anything the file declares, and the
 lease still carries `project` as the plain string it always was. A file that is named but missing
 or unparseable fails on the spot, naming it. `--owner` is untouched by all of this and is never
 derived from anything (D16, D20).

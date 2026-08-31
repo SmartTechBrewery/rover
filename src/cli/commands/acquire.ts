@@ -51,7 +51,11 @@ attributed to nothing.
 
 The grant's lease id is the credential — it is the only thing that releases the lease, so
 it is shown to whoever was granted it and to nobody else. A busy device is a refusal
-naming the holder, and exits 1.`;
+naming the holder, and exits 1.
+
+If the project declares helper services in its hook file on the host, the grant starts them
+before answering and the release stops them. One that will not start refuses the grant,
+naming the service, and leaves the device free for the next caller.`;
 
 const OPTIONS = {
 	...GLOBAL_OPTIONS,

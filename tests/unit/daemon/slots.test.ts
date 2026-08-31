@@ -34,7 +34,7 @@ import {
 	type Slot,
 	type SlotAllocator,
 } from '@/daemon/slots.js';
-import { createMockDevice } from '../../helpers/factories.js';
+import { createMockDevice, createNoProjectServices } from '../../helpers/factories.js';
 
 const TTL_MS = 60_000;
 const START_MS = 1_000_000;
@@ -284,7 +284,13 @@ function createHarness(options: HarnessOptions = {}): Harness {
 		onLeaseEnded: (lease, reason) => restorer.restore(lease, reason),
 		warn: (message) => warnings.push(message),
 	});
-	const handlers = createLeaseHandlers(inventory, leases, restorer, slots);
+	const handlers = createLeaseHandlers(
+		inventory,
+		leases,
+		restorer,
+		createNoProjectServices(),
+		slots,
+	);
 
 	return {
 		handlers,

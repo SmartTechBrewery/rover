@@ -25,6 +25,12 @@
  * (`./verb-traffic.ts`, {@link DeviceRestorerOptions.settleTraffic}) rather than driving the
  * device alongside it. `acquire_device` inherits that wait through {@link DeviceRestorer.settle}.
  *
+ * **The project's services are stopped before its teardown hook.** A teardown is the project's
+ * own cleanup and may well expect its services to be down already — and the reverse order would
+ * have a teardown tidying up underneath processes that are still writing. They come after the
+ * device's own steps for the same reason the teardown does: what runs on the host is what a
+ * vanished device cannot stop us doing (D13, R17 phase 4).
+ *
  * **And the lease's slot comes back only once all of that has finished**
  * ({@link DeviceRestorerOptions.onRestored}, R18). The teardown is what was told the slot's
  * ports, so the numbers are reclaimed at the tail of this chain rather than when the lease
@@ -47,6 +53,18 @@ import type { Lease, LeaseEndReason } from './leases.js';
 import type { Slot } from './slots.js';
 
 /**
+ * One helper service to stop, and the name to say it by.
+ *
+ * The name is carried beside the closure because a warning about a stop that failed is only
+ * useful if it says *which* service — the same reason a refused grant names one
+ * (`./project-services.ts`).
+ */
+export interface ProjectServiceStop {
+	readonly name: string;
+	readonly stop: () => Promise<void>;
+}
+
+/**
  * What one project asks to have undone when a lease on it ends: the applications it drove,
  * and whatever else it started.
  */
@@ -54,7 +72,39 @@ export interface ProjectRestoration {
 	/** Stopped on the device, in the order given. Empty is a perfectly good answer. */
 	readonly apps: readonly AppId[];
 	/**
-	 * The project's own teardown (D13) — helper services, temporary files, its own state.
+	 * The project's helper services, stopped on the **host** — one step each, in the order
+	 * given, ahead of {@link ProjectRestoration.teardown} (D13, R17 phase 4).
+	 *
+	 * A list rather than one closure, because each stop is a step of its own: a failing stop is
+	 * contained and named, and the ones after it still run. `./project-resolver.ts` puts them in
+	 * the reverse of the order the grant started them in, so a service that came up after the
+	 * one it depends on goes down before it.
+	 *
+	 * **Stopped unconditionally**, the way the applications are and the way both radios are set
+	 * without being read first: this runs for every lease that ends, including one whose grant
+	 * never got the services up, so a `stop` that finds nothing to stop is the ordinary case
+	 * rather than a failure. Only what a project declares a `stop` for appears here.
+	 *
+	 * **And they are this lease's services, not the project's** — which is what makes running
+	 * them for every lease that ends correct rather than a teardown reaching into a neighbour's
+	 * state. Two devices can be leased for one project at once, and R18 is what keeps those two
+	 * sets apart: each lease has a slot, every hook child is told it (`./slots.ts`,
+	 * `./hook-command.ts`), and these stops run with the **ending lease's** slot in their
+	 * environment. A `start`/`stop` pair that namespaces by it stops exactly what that grant
+	 * started; one that ignores it and addresses a single shared instance takes that instance
+	 * away from whoever else is still holding the project, and no refusal is left to say so
+	 * (`README.md`, "Project hooks"). That contract is the project's to keep — the host cannot
+	 * read a `stop` command and tell which one it was handed.
+	 *
+	 * Each gets {@link TEARDOWN_TIMEOUT_MS} the teardown's way, so a project declaring the
+	 * `MAX_PROJECT_SERVICES` maximum of slow stops can keep the next grant on that device
+	 * waiting for that many bounds in a row (`./project-hooks.ts`). That is what keeps the
+	 * maximum small, and why a `stop` should stop rather than wait for anything.
+	 */
+	readonly services?: readonly ProjectServiceStop[];
+	/**
+	 * The project's own teardown (D13) — temporary files, shared state, whatever the declared
+	 * services do not cover. **Last**, so it runs with those services already stopped.
 	 *
 	 * **It must bound itself, and it is bounded here anyway.** `acquire_device` awaits
 	 * {@link DeviceRestorer.settle} before granting, so a hook that waits forever on a helper
@@ -75,6 +125,10 @@ export interface ProjectRestoration {
  * hook stopping a helper service normally is never reported as a hang. The hook is not
  * cancelled — nothing here can cancel it — so it may still be running when this returns; what
  * the bound protects is the grant queued behind it.
+ *
+ * **Every hook this module waits on gets it** — the teardown and each of the project's service
+ * stops alike (R17 phase 4). One number rather than two, because the trade is identical: each is
+ * foreign code the restoration cannot cancel, and each stands in front of a grant.
  */
 export const TEARDOWN_TIMEOUT_MS = 10_000;
 
@@ -358,12 +412,25 @@ export function createDeviceRestorer(options: DeviceRestorerOptions): DeviceRest
 		if (registered) {
 			await restoreNetwork(serial, registered);
 		}
+		for (const service of project?.services ?? []) {
+			// Ahead of the teardown, and on this path whether or not the device could be resolved,
+			// for the same reason the teardown is: a process on the host outlives the device that
+			// went away, and a lease that ended is the last thing that was ever going to stop it.
+			// Every one runs, for every lease that ends: each was resolved with the *ending*
+			// lease's slot, so what it addresses is that grant's own services — see
+			// {@link ProjectRestoration.services}.
+			await step(serial, `stopping the '${service.name}' helper service`, () =>
+				runHook(serial, `the '${service.name}' helper service's stop hook`, service.stop),
+			);
+		}
 		if (project?.teardown) {
 			// Runs even when the device could not be resolved: a project's teardown is the host's
 			// own cleanup (D13) — helper services, temporary files — and a device that vanished is
 			// the case where leaking those matters most.
 			const teardown = project.teardown;
-			await step(serial, 'the project teardown hook', () => runTeardown(serial, teardown));
+			await step(serial, 'the project teardown hook', () =>
+				runHook(serial, 'the project teardown hook', teardown),
+			);
 		}
 	};
 
@@ -385,22 +452,23 @@ export function createDeviceRestorer(options: DeviceRestorerOptions): DeviceRest
 	};
 
 	/**
-	 * The project's teardown hook, bounded. `step` contains a failure but not a duration, and
-	 * every other step is a backend call that carries its own timeout — this one is foreign
-	 * code reached through {@link ProjectRestoration.teardown}, and `settle` is awaited by
-	 * `acquire_device`, so a hook that never returns would hang every later grant on this
-	 * device with nothing left to expire it.
+	 * One of the project's hooks, bounded. `step` contains a failure but not a duration, and
+	 * every other step is a backend call that carries its own timeout — these are foreign code
+	 * reached through {@link ProjectRestoration}, and `settle` is awaited by `acquire_device`,
+	 * so a hook that never returns would hang every later grant on this device with nothing
+	 * left to expire it.
 	 *
 	 * The hook is not cancelled, because nothing here can cancel it; the bound is on the wait,
 	 * and the warning says so.
 	 */
-	const runTeardown = async (
+	const runHook = async (
 		serial: DeviceSerial,
-		teardown: () => Promise<void>,
+		what: string,
+		hook: () => Promise<void>,
 	): Promise<void> => {
-		if ((await raceTimeout(teardown(), teardownTimeoutMs)) === 'timed-out') {
+		if ((await raceTimeout(hook(), teardownTimeoutMs)) === 'timed-out') {
 			warn(
-				`Restoring device '${serial}': the project teardown hook did not finish within ` +
+				`Restoring device '${serial}': ${what} did not finish within ` +
 					`${teardownTimeoutMs}ms. The device is being handed on anyway; whatever the ` +
 					`hook started may still be running.`,
 			);

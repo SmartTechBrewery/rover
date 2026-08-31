@@ -35,6 +35,7 @@ import {
 } from '@/core/device.js';
 import { parseDeviceSerial, parseLeaseId } from '@/core/ids.js';
 import { LEASE_TTL_MS, type Lease } from '@/daemon/leases.js';
+import type { ProjectServices } from '@/daemon/project-services.js';
 import { PORTS_PER_SLOT, SLOT_PORT_BASE, type Slot } from '@/daemon/slots.js';
 import type { VerbContext } from '@/verbs/context.js';
 
@@ -440,5 +441,21 @@ export function createMockVerbContext(overrides: Partial<VerbContext> = {}): Ver
 		backend: createMockDeviceBackend(),
 		manifest: createMockCapabilityManifest(),
 		...overrides,
+	};
+}
+
+/**
+ * A {@link ProjectServices} for the suites that are not about helper services.
+ *
+ * The honest stand-in for a host where no project declares any: it starts nothing, has nothing
+ * running and forgets nothing. `createLeaseHandlers` requires the real thing rather than
+ * defaulting to this, because a grant that quietly started no services would be the false yes
+ * the row exists to prevent (`src/daemon/project-services.ts`).
+ */
+export function createNoProjectServices(): ProjectServices {
+	return {
+		start: async () => null,
+		startedFor: () => [],
+		forget: () => {},
 	};
 }

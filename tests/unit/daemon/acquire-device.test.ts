@@ -13,6 +13,8 @@
  * the store.
  */
 
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
 	_resetDeviceBackendRegistryForTesting,
@@ -304,6 +306,123 @@ describe('a device that cannot be granted', () => {
 		// Granting here would hand back a handle that looks like a success and fails at the
 		// first call — the plausible-looking answer ai/RULES.md §2 forbids.
 		expect(result).toMatchObject({ outcome: 'refused', reason: 'not-ready', heldBy: null });
+	});
+});
+
+/**
+ * A project's **helper services** over the real socket (D13, R17 phase 4): a real hook file, a
+ * real child process per service, and the refusal a start that fails becomes.
+ *
+ * `restoration.test.ts` pins the order the stops run in; what this suite adds is the wire — that
+ * the refusal is **data** carrying the service's name rather than an `internal_error`, and that a
+ * device refused this way is left free for whoever asks next.
+ */
+describe('a project that declares helper services', () => {
+	const PROJECT = 'checkout-web';
+
+	/** Every line the hooks appended, in the order they appended it. */
+	async function hooksThatRan(): Promise<string[]> {
+		const contents = await readFile(join(temp.dir, 'hooks.log'), 'utf8').catch(() => '');
+		return contents.split('\n').filter((line) => line !== '');
+	}
+
+	/** A hook that appends `what` to the log and exits 0. */
+	function appendHook(what: string): { command: string; args: string[] } {
+		return {
+			command: process.execPath,
+			args: [
+				'-e',
+				"require('node:fs').appendFileSync(process.argv[1], process.argv[2] + '\\n')",
+				join(temp.dir, 'hooks.log'),
+				what,
+			],
+		};
+	}
+
+	/** Written before the daemon starts, into the temp projects root nothing pre-creates. */
+	async function writeHookFile(services: unknown): Promise<void> {
+		await mkdir(temp.projectsRoot, { recursive: true });
+		await writeFile(
+			join(temp.projectsRoot, `${PROJECT}.json`),
+			JSON.stringify({ project: PROJECT, services }),
+			'utf8',
+		);
+	}
+
+	it('starts them before the grant is answered', async () => {
+		registerFakeBackend();
+		temp = await createTempSocket();
+		await writeHookFile([
+			{ name: 'db', start: appendHook('start db'), stop: appendHook('stop db') },
+			{ name: 'api', start: appendHook('start api') },
+		]);
+		await start();
+		const client = await connect();
+
+		const result = await acquire(client, 'issue-112', { project: PROJECT });
+
+		expect(result.outcome).toBe('granted');
+		// Answered *after* they were started, in declaration order: a caller holding a lease has
+		// the services that lease implies, not services that are still coming up.
+		expect(await hooksThatRan()).toEqual(['start db', 'start api']);
+	});
+
+	it('refuses by name when one will not start, as data rather than an error', async () => {
+		registerFakeBackend();
+		temp = await createTempSocket();
+		await writeHookFile([
+			{ name: 'db', start: appendHook('start db'), stop: appendHook('stop db') },
+			{
+				name: 'api',
+				start: {
+					command: process.execPath,
+					args: ['-e', "process.stderr.write('the api would not bind'); process.exit(3)"],
+				},
+			},
+		]);
+		await start();
+		const client = await connect();
+
+		const result = await acquire(client, 'issue-112', { project: PROJECT });
+
+		// Granting a device whose helper services are down is a false yes (ai/RULES.md §2). It is
+		// a refusal and never an IPC error: `internal_error` means the host broke, and an agent
+		// told that learns nothing it can act on.
+		if (result.outcome !== 'refused') throw new Error('the acquire must be refused');
+		expect(result.reason).toBe('service-failed');
+		expect(result.message).toContain("'api'");
+		expect(result.message).toContain('the api would not bind');
+		expect(result.heldBy).toBeNull();
+		// What the grant had already started is down again, before the answer travelled.
+		expect(await hooksThatRan()).toContain('stop db');
+	});
+
+	it('leaves the device free for the next caller after refusing one', async () => {
+		registerFakeBackend();
+		temp = await createTempSocket();
+		await writeHookFile([
+			{ name: 'api', start: { command: process.execPath, args: ['-e', 'process.exit(3)'] } },
+		]);
+		await start();
+		const client = await connect();
+		await acquire(client, 'issue-112', { project: PROJECT });
+
+		// The lease the refused grant took was handed straight back, so a caller on a project
+		// with no such services is not queueing behind a twenty-minute TTL nobody is using.
+		const other = await acquire(client, 'pr-127-review', { project: 'rover' });
+
+		expect(other.outcome).toBe('granted');
+	});
+
+	it('grants exactly as it does today when the project has no hook file', async () => {
+		await serveReadyDevice();
+		const client = await connect();
+
+		// A project nobody has described is the ordinary state of a host: nothing is started,
+		// nothing is refused, and no directory is created for one either.
+		await expect(acquire(client, 'issue-112', { project: 'unregistered' })).resolves.toMatchObject({
+			outcome: 'granted',
+		});
 	});
 });
 

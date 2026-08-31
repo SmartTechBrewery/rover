@@ -8,6 +8,12 @@
  * free of both. This module is the one line that joins them, and `./listen.ts` is the one line
  * that wires it in.
  *
+ * **Everything a lease's end undoes on the host comes through here** — the project's teardown
+ * hook and, ahead of it, the stops for the helper services its grant started
+ * (`./project-services.ts` is the starting half). One resolver rather than two seams, because
+ * both are the same question asked of the same file at the same moment, and answering it twice
+ * would mean reading the file twice for one lease.
+ *
  * **Nothing is cached** (D6): every call re-reads the file, so an operator editing a hook file
  * changes what the next lease that ends does, with the daemon still running and nothing to
  * restart.
@@ -16,7 +22,7 @@
 import type { HookCommandContext } from './hook-command.js';
 import { runHookCommand } from './hook-command.js';
 import { readProjectHooks } from './project-hooks.js';
-import type { ProjectResolver } from './restore.js';
+import type { ProjectResolver, ProjectServiceStop } from './restore.js';
 
 export interface ProjectResolverOptions {
 	/** Where the hook files are — `ROVER_PROJECTS_PATH`, resolved once in `./main.ts`. */
@@ -36,8 +42,23 @@ export interface ProjectResolverOptions {
  * **throws**, into the containment `./restore.ts` already has for exactly this: one warning
  * naming the project, and a device that is still put back.
  *
- * The teardown is handed over as a closure rather than as data, because that is the shape the
- * seam names: the restorer bounds the *wait* on it and knows nothing about processes.
+ * The teardown and the service stops are handed over as closures rather than as data, because
+ * that is the shape the seam names: the restorer bounds the *wait* on each and knows nothing
+ * about processes.
+ *
+ * **The services come back in the reverse of the order they are declared in** (R17 phase 4).
+ * The grant starts them in declaration order (`./project-services.ts`), so reversing here is
+ * what lets a project write a database before the thing that talks to it and have the two go
+ * down the other way round. A service declaring no `stop` contributes no step at all, which is
+ * what declaring none means.
+ *
+ * **Every stop is resolved with the ending lease's own slot**, the teardown's way, which is what
+ * makes a per-lease stop of a project's services possible at all: two devices can be leased for
+ * one project at once, and the slot is the only thing that tells their services apart (R18,
+ * `./slots.ts`). A `start`/`stop` pair that namespaces by it takes down what that grant brought
+ * up; one that ignores it addresses a single shared instance, and the ending lease's stop takes
+ * it away from whoever is still holding the project (`./restore.ts`,
+ * `ProjectRestoration.services`).
  */
 export function createProjectResolver(options: ProjectResolverOptions): ProjectResolver {
 	return async (project, serial, slot) => {
@@ -46,17 +67,28 @@ export function createProjectResolver(options: ProjectResolverOptions): ProjectR
 			return null;
 		}
 
-		const teardown = hooks.teardown;
-		if (teardown === undefined) {
-			return { apps: hooks.apps };
-		}
-
 		const context: HookCommandContext = {
 			project,
 			serial,
 			slot,
 			...(options.hookTimeoutMs === undefined ? {} : { timeoutMs: options.hookTimeoutMs }),
 		};
-		return { apps: hooks.apps, teardown: () => runHookCommand(teardown, context) };
+
+		const services: ProjectServiceStop[] = [];
+		for (const service of [...hooks.services].reverse()) {
+			const stop = service.stop;
+			if (stop !== undefined) {
+				services.push({ name: service.name, stop: () => runHookCommand(stop, context) });
+			}
+		}
+
+		const teardown = hooks.teardown;
+		return {
+			apps: hooks.apps,
+			// Omitted rather than empty when a project declares none, so "this project has nothing
+			// to stop" and "this project has an empty list of things to stop" are not two states.
+			...(services.length === 0 ? {} : { services }),
+			...(teardown === undefined ? {} : { teardown: () => runHookCommand(teardown, context) }),
+		};
 	};
 }

@@ -38,6 +38,7 @@ import type { NetworkListenerConfig } from './network-config.js';
 import { type NetworkListener, startNetworkListener } from './network-listen.js';
 import { createProjectInstall, type ProjectInstall } from './project-install.js';
 import { createProjectResolver } from './project-resolver.js';
+import { createProjectServices, type ProjectServices } from './project-services.js';
 import { createDeviceRestorer, type DeviceRestorer } from './restore.js';
 import { createSlotAllocator, type SlotAllocator } from './slots.js';
 import { attemptConnect } from './socket-connect.js';
@@ -185,12 +186,13 @@ export function createDaemonHandlers(
 	traffic: VerbTraffic,
 	archive: ArtifactArchive,
 	installProject: ProjectInstall,
+	services: ProjectServices,
 	slots: SlotAllocator,
 ): IpcHandlers {
 	return {
 		status: handleStatus,
 		...createListDevicesHandler(inventory, leases),
-		...createLeaseHandlers(inventory, leases, restorer, slots),
+		...createLeaseHandlers(inventory, leases, restorer, services, slots),
 		...createVerbHandlers(inventory, leases, traffic, archive, installProject),
 	};
 }
@@ -241,6 +243,11 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartRes
 	// creates no directory until a verb call actually produces bytes, so a loser of the bind
 	// leaves nothing behind here either — not even an empty root.
 	const archive = createArtifactArchive({ root: options.artifactsRoot });
+	// And built before the store for the same reason: the store's end hook drops this lease's
+	// record of what the grant started. It starts nothing on construction — a project's services
+	// only ever come up for a lease that was granted — so a loser of the bind leaves nothing
+	// running either.
+	const services = createProjectServices({ root: options.projectsRoot });
 	// Built here for the same reason and with the same lifecycle: one store per process,
 	// constructed once for both bind attempts. It starts nothing, so a loser leaves nothing
 	// behind, and a lease is host state that dies with the host by design (D6) — nothing
@@ -264,6 +271,10 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartRes
 			// them because it undoes nothing on the device: it drops this lease's sequence
 			// counters so the daemon does not grow with the number of leases it has granted.
 			archive.forget(lease);
+			// Beside the archive's and for the same reason: bookkeeping that undoes nothing. What
+			// stops this project's services is the restoration queued above, which re-reads the hook
+			// file (D6) and stops what it declares ahead of the teardown.
+			services.forget(lease);
 			// The lease's slot is deliberately **not** a fourth line here: its ports are what the
 			// teardown queued above was told, so they come back at the tail of that restoration
 			// instead (`DeviceRestorerOptions.onRestored`, wired at the restorer above).
@@ -284,6 +295,7 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartRes
 			// lease's `project` string becomes that project's *install* command, re-read on every
 			// call for the reason the teardown's is (D6).
 			createProjectInstall({ root: options.projectsRoot }),
+			services,
 			slots,
 		),
 	);

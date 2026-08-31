@@ -40,6 +40,7 @@ import { createDeviceInventory } from '@/daemon/inventory.js';
 import { createLeaseHandlers, type LeaseHandlers } from '@/daemon/lease-handlers.js';
 import { createLeaseStore, type LeaseStore } from '@/daemon/leases.js';
 import { createProjectResolver } from '@/daemon/project-resolver.js';
+import { createProjectServices, type ProjectServices } from '@/daemon/project-services.js';
 import {
 	createDeviceRestorer,
 	type ProjectResolver,
@@ -51,9 +52,15 @@ import {
 	SLOT_PORT_BASE,
 	type SlotAllocator,
 } from '@/daemon/slots.js';
-import { createMockDevice } from '../../helpers/factories.js';
+import { createMockDevice, createNoProjectServices } from '../../helpers/factories.js';
 
 const SERIAL = parseDeviceSerial('attached-1');
+/**
+ * A second device on the same host, for the one thing a single device cannot arrange: two
+ * concurrent leases on one *project*. The recording backend answers `describeDevice` for any
+ * serial, which is the only thing a grant and a restoration ask of it.
+ */
+const OTHER_SERIAL = parseDeviceSerial('attached-2');
 const APP = parseAppId('com.example.rover');
 const OTHER_APP = parseAppId('com.example.rover.helper');
 const TTL_MS = 60_000;
@@ -75,9 +82,10 @@ interface Harness {
 	/** Every step the device and the project hook performed, in the order they performed it. */
 	readonly performed: string[];
 	readonly warnings: string[];
-	settle(): Promise<void>;
+	/** Defaults to {@link SERIAL} — the device every suite but the two-device one arranges. */
+	settle(serial?: DeviceSerial): Promise<void>;
 	at(instant: number): void;
-	acquire(owner: string): Promise<LeaseId>;
+	acquire(owner: string, serial?: DeviceSerial): Promise<LeaseId>;
 }
 
 interface HarnessOptions {
@@ -98,6 +106,13 @@ interface HarnessOptions {
 	readonly settleTimeoutMs?: number;
 	/** Defaults to resolving at once — the restorer's own default is the same. */
 	readonly settleTraffic?: (serial: DeviceSerial) => Promise<void>;
+	/**
+	 * What a grant starts, over the harness's own warning list. Defaults to the stand-in for a
+	 * host where nothing is declared, so every suite that is about the *stopping* order says
+	 * nothing about it; the file-backed suite at the bottom passes the real thing over the same
+	 * hook file the resolver reads.
+	 */
+	readonly services?: (warnings: string[]) => ProjectServices;
 }
 
 function createHarness(options: HarnessOptions = {}): Harness {
@@ -154,18 +169,24 @@ function createHarness(options: HarnessOptions = {}): Harness {
 	});
 
 	return {
-		handlers: createLeaseHandlers(inventory, leases, restorer, slots),
+		handlers: createLeaseHandlers(
+			inventory,
+			leases,
+			restorer,
+			options.services?.(warnings) ?? createNoProjectServices(),
+			slots,
+		),
 		leases,
 		slots,
 		performed,
 		warnings,
-		settle: () => restorer.settle(SERIAL),
+		settle: (serial: DeviceSerial = SERIAL) => restorer.settle(serial),
 		at: (instant: number) => {
 			nowMs = instant;
 		},
-		async acquire(owner: string): Promise<LeaseId> {
+		async acquire(owner: string, serial: DeviceSerial = SERIAL): Promise<LeaseId> {
 			const result = await this.handlers.acquire_device({
-				serial: SERIAL,
+				serial,
 				owner,
 				project: options.projectName ?? 'rover',
 			});
@@ -563,10 +584,13 @@ describe('a project hook file, on both paths a lease can end', () => {
 
 	let root: string;
 	let marker: string;
+	/** Every hook that ran, in the order it ran — the host's own half of `performed`. */
+	let hookLog: string;
 
 	beforeEach(async () => {
 		root = await mkdtemp(join(tmpdir(), 'rover-restoration-'));
 		marker = join(root, 'teardown-ran.txt');
+		hookLog = join(root, 'hooks.log');
 	});
 
 	afterEach(async () => {
@@ -607,7 +631,61 @@ describe('a project hook file, on both paths a lease can end', () => {
 				root,
 				...(hookTimeoutMs === undefined ? {} : { hookTimeoutMs }),
 			}),
+			// The starting half, over the same file the resolver reads. Both halves real is the
+			// point of this suite: a service the grant did not start is a service the restoration
+			// has no business claiming to have stopped.
+			services: (warnings) =>
+				createProjectServices({
+					root,
+					warn: (message) => warnings.push(message),
+					...(hookTimeoutMs === undefined ? {} : { hookTimeoutMs }),
+				}),
 		});
+	}
+
+	/** A hook that appends `what` to {@link hookLog} and exits 0 — a real program, like a real one. */
+	function appendHook(what: string): { command: string; args: string[] } {
+		return {
+			command: process.execPath,
+			args: [
+				'-e',
+				"require('node:fs').appendFileSync(process.argv[1], process.argv[2] + '\\n')",
+				hookLog,
+				what,
+			],
+		};
+	}
+
+	/**
+	 * {@link appendHook}, plus the slot the daemon told this run. What it pins is the one thing
+	 * that makes a project's services safe to lease twice at once: a `start`/`stop` pair
+	 * namespacing on `ROVER_SLOT` is per lease, and each end stops its own (R18).
+	 */
+	function appendHookWithSlot(what: string): { command: string; args: string[] } {
+		return {
+			command: process.execPath,
+			args: [
+				'-e',
+				"require('node:fs').appendFileSync(process.argv[1], process.argv[2] + ' slot=' + " +
+					"process.env.ROVER_SLOT + '\\n')",
+				hookLog,
+				what,
+			],
+		};
+	}
+
+	/** A hook that says why on stderr and exits non-zero. */
+	function failingHook(why: string): { command: string; args: string[] } {
+		return {
+			command: process.execPath,
+			args: ['-e', `process.stderr.write(${JSON.stringify(why)}); process.exit(3)`],
+		};
+	}
+
+	/** Every line the hooks appended, in order. */
+	async function hooksThatRan(): Promise<string[]> {
+		const contents = await readFile(hookLog, 'utf8').catch(() => '');
+		return contents.split('\n').filter((line) => line !== '');
 	}
 
 	it('stops the declared apps and runs the teardown on release', async () => {
@@ -695,9 +773,12 @@ describe('a project hook file, on both paths a lease can end', () => {
 	});
 
 	it('warns once and still restores the device when the file will not parse', async () => {
-		await writeHookFile('{ "project": "checkout-web", ');
+		await writeWorkingHookFile();
 		const harness = createFileBackedHarness();
 		const leaseId = await harness.acquire('issue-112');
+		// Broken while the lease is held, which is the shape this actually arrives in: nothing is
+		// cached (D6), so the file the restoration reads is the file as it is now.
+		await writeHookFile('{ "project": "checkout-web", ');
 
 		harness.handlers.release_device({ leaseId });
 		await harness.settle();
@@ -709,6 +790,28 @@ describe('a project hook file, on both paths a lease can end', () => {
 		expect(harness.warnings).toHaveLength(1);
 		expect(harness.warnings[0]).toContain(HOOK_PROJECT);
 		expect(harness.warnings[0]).toContain('is not valid JSON');
+	});
+
+	it('refuses a grant on a project whose file will not parse, naming the file', async () => {
+		await writeHookFile('{ "project": "checkout-web", ');
+		const harness = createFileBackedHarness();
+
+		const result = await harness.handlers.acquire_device({
+			serial: SERIAL,
+			owner: 'issue-112',
+			project: HOOK_PROJECT,
+		});
+
+		// A file the host cannot read is a file whose helper services it cannot start, and
+		// granting anyway would report a device ready that nothing had been started for. Loud
+		// and actionable rather than `internal_error`: the sentence names the file and the fault.
+		if (result.outcome !== 'refused') throw new Error('the acquire must be refused');
+		expect(result.reason).toBe('service-failed');
+		expect(result.message).toContain(join(root, `${HOOK_PROJECT}.json`));
+		expect(result.message).toContain('is not valid JSON');
+		// And nothing was taken: the next caller — or the operator, having fixed the file — is
+		// not queueing behind a lease this refusal created.
+		expect(harness.leases.holderOf(SERIAL)).toBeNull();
 	});
 
 	it('warns with the exit code when the teardown command fails, and carries on', async () => {
@@ -791,6 +894,224 @@ describe('a project hook file, on both paths a lease can end', () => {
 				}
 			}
 		}
+	});
+
+	/**
+	 * The phase-4 half: a project's **helper services**, started by the grant and stopped by
+	 * the restoration ahead of the teardown (R17 phase 4).
+	 *
+	 * Both halves are real here — `createProjectServices` starts them and the resolver supplies
+	 * the stops — because the order across the two is the whole criterion: a caller with a lease
+	 * has the services that lease implies, and a device that has been handed on leaves nothing
+	 * of theirs running.
+	 */
+	describe('the helper services a project declares', () => {
+		/** Two services, the second depending on the first, plus the apps and the teardown. */
+		async function writeServicesHookFile(
+			overrides: {
+				dbStop?: { command: string; args: string[] };
+				apiStart?: { command: string; args: string[] };
+			} = {},
+		): Promise<void> {
+			await writeHookFile(
+				JSON.stringify({
+					project: HOOK_PROJECT,
+					apps: [CHECKOUT],
+					services: [
+						{
+							name: 'db',
+							start: appendHook('start db'),
+							stop: overrides.dbStop ?? appendHook('stop db'),
+						},
+						{
+							name: 'api',
+							start: overrides.apiStart ?? appendHook('start api'),
+							stop: appendHook('stop api'),
+						},
+					],
+					teardown: appendHook('teardown'),
+				}),
+			);
+		}
+
+		it('starts them on the grant and stops them, in reverse, before the teardown', async () => {
+			await writeServicesHookFile();
+			const harness = createFileBackedHarness();
+			const leaseId = await harness.acquire('issue-112');
+
+			// Before the grant was answered: a caller that has a lease has the services that
+			// lease implies, rather than services that are still coming up.
+			expect(await hooksThatRan()).toEqual(['start db', 'start api']);
+
+			harness.handlers.release_device({ leaseId });
+			await harness.settle();
+
+			// Reverse of declaration order, and both ahead of the teardown — a teardown tidying
+			// up underneath processes that are still writing is the order this pins.
+			expect(await hooksThatRan()).toEqual([
+				'start db',
+				'start api',
+				'stop api',
+				'stop db',
+				'teardown',
+			]);
+			// The device's own steps are unchanged and still come first.
+			expect(harness.performed).toEqual([
+				`stopApp ${CHECKOUT}`,
+				'setAirplaneMode false',
+				'setWifiEnabled true',
+			]);
+			expect(harness.warnings).toEqual([]);
+		});
+
+		it('stops them on the expiry path too, with nobody left to ask', async () => {
+			await writeServicesHookFile();
+			const harness = createFileBackedHarness();
+			await harness.acquire('issue-112');
+
+			// The path D9 exists for: the agent holding the device is gone, nothing here ends the
+			// lease, and the sweep is what observes it. Services left running here are services
+			// nothing would ever stop.
+			harness.at(1_000_000 + TTL_MS);
+			harness.leases.sweep();
+			await harness.settle();
+
+			expect(await hooksThatRan()).toEqual([
+				'start db',
+				'start api',
+				'stop api',
+				'stop db',
+				'teardown',
+			]);
+			expect(harness.warnings).toEqual([]);
+		});
+
+		it('stops each lease its own services, told apart by the slot, while the other is live', async () => {
+			await writeHookFile(
+				JSON.stringify({
+					project: HOOK_PROJECT,
+					apps: [CHECKOUT],
+					services: [
+						{
+							name: 'db',
+							start: appendHookWithSlot('start db'),
+							stop: appendHookWithSlot('stop db'),
+						},
+					],
+					teardown: appendHookWithSlot('teardown'),
+				}),
+			);
+			const harness = createFileBackedHarness();
+			const first = await harness.acquire('issue-112');
+			const second = await harness.acquire('pr-127-review', OTHER_SERIAL);
+
+			// Two devices, one project — the case a project's services have to survive, and the
+			// reason every hook child is told a slot: both grants ran the same declared `start`,
+			// and the only thing telling the two instances apart is the number they were given.
+			expect(await hooksThatRan()).toEqual(['start db slot=0', 'start db slot=1']);
+
+			harness.handlers.release_device({ leaseId: first });
+			await harness.settle();
+
+			// The ending lease's stop runs with the ending lease's slot. That is what makes running
+			// it unconditionally correct rather than a teardown reaching into a live lease's state:
+			// slot 1 is untouched, and `pr-127-review` still has everything its grant implied.
+			expect(await hooksThatRan()).toEqual([
+				'start db slot=0',
+				'start db slot=1',
+				'stop db slot=0',
+				'teardown slot=0',
+			]);
+
+			harness.handlers.release_device({ leaseId: second });
+			await harness.settle(OTHER_SERIAL);
+
+			// And nothing waited for the last lease out: each stopped its own when it ended.
+			expect(await hooksThatRan()).toEqual([
+				'start db slot=0',
+				'start db slot=1',
+				'stop db slot=0',
+				'teardown slot=0',
+				'stop db slot=1',
+				'teardown slot=1',
+			]);
+			expect(harness.warnings).toEqual([]);
+		});
+
+		it('warns which stop failed and runs the ones after it, teardown included', async () => {
+			await writeServicesHookFile({ dbStop: failingHook('the container was already gone') });
+			const harness = createFileBackedHarness();
+			const leaseId = await harness.acquire('issue-112');
+
+			harness.handlers.release_device({ leaseId });
+			await harness.settle();
+
+			// Contained the way every other restoration step is (D9) — one failing stop must not
+			// leave the teardown unrun, which is "only runs on the happy path" in a new costume.
+			expect(await hooksThatRan()).toEqual(['start db', 'start api', 'stop api', 'teardown']);
+			expect(harness.warnings).toHaveLength(1);
+			expect(harness.warnings[0]).toContain("'db'");
+			expect(harness.warnings[0]).toContain('the container was already gone');
+			await expect(harness.acquire('pr-127-review')).resolves.toBeTruthy();
+		});
+
+		it('refuses the grant by name when one will not start, and frees the device', async () => {
+			await writeServicesHookFile({ apiStart: failingHook('the api would not bind') });
+			const harness = createFileBackedHarness();
+
+			const result = await harness.handlers.acquire_device({
+				serial: SERIAL,
+				owner: 'issue-112',
+				project: HOOK_PROJECT,
+			});
+
+			if (result.outcome !== 'refused') throw new Error('the acquire must be refused');
+			// Granting a device whose helper services are down is a false yes (ai/RULES.md §2),
+			// and the answer names the service so the agent knows where to look.
+			expect(result.reason).toBe('service-failed');
+			expect(result.message).toContain("'api'");
+			expect(result.message).toContain('the api would not bind');
+			expect(result.heldBy).toBeNull();
+
+			await harness.settle();
+			// `stop db` twice, and deliberately so: the refusal stopped what its own grant had
+			// started, and the lease it took then ended — which runs the restoration, exactly as
+			// a release does. Both are unconditional, the way the app and radio steps are, which
+			// is why a `stop` has to tolerate a service that is not running.
+			expect(await hooksThatRan()).toEqual([
+				'start db',
+				'stop db',
+				'stop api',
+				'stop db',
+				'teardown',
+			]);
+			// And the device is free rather than held by a grant that failed — so the operator who
+			// fixes the service gets it back on the very next call, with nothing to wait out.
+			expect(harness.leases.holderOf(SERIAL)).toBeNull();
+			await writeServicesHookFile();
+			await expect(harness.acquire('pr-127-review')).resolves.toBeTruthy();
+		});
+
+		it('changes nothing about a project that declares none', async () => {
+			await writeWorkingHookFile();
+			const harness = createFileBackedHarness();
+			const leaseId = await harness.acquire('issue-112');
+
+			harness.handlers.release_device({ leaseId });
+			await harness.settle();
+
+			// The existing order, untouched: a field nobody uses costs nothing at all.
+			expect(harness.performed).toEqual([
+				`stopApp ${CHECKOUT}`,
+				`stopApp ${HELPER}`,
+				'setAirplaneMode false',
+				'setWifiEnabled true',
+			]);
+			await expect(readFile(marker, 'utf8')).resolves.toBe(
+				`${HOOK_PROJECT} ${SERIAL} 0 ${SLOT_PORT_BASE} ${PORTS_PER_SLOT}`,
+			);
+			expect(harness.warnings).toEqual([]);
+		});
 	});
 
 	it('lets the hook run out its own budget before the restorer runs out of patience', async () => {
