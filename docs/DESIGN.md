@@ -34,7 +34,7 @@ this sentence exists to prevent.
 | Devices — Nothing Attached | `ccdef7834ab9470f9a653a47321998c9` | Settled |
 | Devices — Host Unreachable | `c60c5830d23e4a328e9d77b83c98f9fc` | Settled |
 | Devices — Host View Stale | `46f3a297fee047028f29c8958a926995` | Settled, **list variant only** |
-| Devices — Force Release Confirmation | `7ad98bceb768455b92b8abe8a06a148a` | Being corrected |
+| Devices — Force Release Confirmation | `d86e794af4de4639979bc65104e2ec57` | Settled, **the asking only** |
 | Archive — Browsing (V2) | `f2de4344f7e347aa894b3054d9cf4098` | Not yet corrected — see §9 |
 | Run Detail — Artifacts (V2) | `36b54fbe032449d8a300ea0825bbf1c8` | Not yet corrected — see §9 |
 | Compare — Visual Diff (V2) | `897632dcadce44de9bdee74a94da14f5` | Not yet corrected — see §9 |
@@ -250,6 +250,35 @@ correct state rather than a fault.
 - The `2 held · 1 free` counter is **absent**, not showing `0 held · 0 free` as though describing a
   pool.
 
+### The force-release confirmation — settled, for the asking
+
+The only destructive action in the product, and it asks before it fires. It is a **modal over the
+working panel** — the rest of the panel still works, so by §7's rule it keeps the shell.
+
+- **`TIME TO AUTO RELEASE`, not "remaining time".** "Remaining" does not say remaining until what,
+  and the number's whole job here is to answer the comparison the operator is actually making: am I
+  shortcutting twelve minutes, or four seconds? The field exists on the wire (`expiresInMs` on
+  `LeaseHolder`, the same value that drives the card's countdown) — an earlier revision showed
+  `00:00`, which says the lease has already ended and there is nothing to release.
+  It is **not a fixed deadline**: expiry is pushed forward by activity rather than by a heartbeat
+  (D8), so this is the time until it would expire *if nothing else happens*. Not dressed as urgent.
+- **The header bar is `secondary-container` (#ff5e07), not red.** Analog Horizon defines that
+  colour for critical alerts and physical "power" metaphors, which is exactly the weight this
+  needs. A destructive action is the closest thing to an exception to §5's no-red rule and it still
+  is not one — leaving red unused keeps it meaningful if something ever genuinely needs it.
+- **`TEST NAME`, not `TEST`.** Third recurrence. Bare `TEST` reads as a category and makes the
+  panel look like a test runner.
+- **Cancel is the filled, prominent control; Force Release is the recessive one.** Deliberate, and
+  recorded here so it is not "fixed" later by promoting the destructive action to primary: the safe
+  exit is the easier target.
+- It identifies what is about to end — device, serial, owner, project, test name — so the operator
+  recognises the run without going back to look. And it says in plain words what happens: the lease
+  ends immediately, the device is restored to a clean state, and the agent holding it fails on its
+  next request. That is not softened.
+- An earlier revision carried an **"Outcome Snippets Reference"** strip — the same scaffolding
+  mistake as the sign-in screen's `DEBUG // UI STATES`. Removed. The three outcomes it sketched are
+  real and still need designing as states (§9).
+
 ### Host view not current — settled, for the variant that has a list
 
 `list_devices` answers with `stale: true` when the host's view of the hardware is **not known to be
@@ -362,10 +391,11 @@ more than it would settle.
   attached" and means the opposite, so a person reading "nothing is attached" walks to the machine
   and finds a phone sitting in the socket. `list_devices`'s own schema says it outright — an empty
   list with `stale` set means *no view*, not *no devices* (D6).
-- **The force-release confirmation.** It is the only destructive action in the product and R35
-  requires it to ask before it fires, but nothing has been designed for the asking. It also needs
-  its outcomes: the card becoming free without a reload, and the two refusals that mean different
-  things — the lease was already gone, and the device has since vanished from the host.
+- **The force-release action's three outcomes.** The asking is settled (§7); what happens after it
+  is not. They are three different things and must not collapse into one: the card becoming free
+  without a reload; the lease having already ended on its own between the page loading and the
+  click, which is news rather than a failure; and the device having since vanished from the host,
+  so there is nothing left to release *or to show*.
 
 ### Leave these to whoever implements them
 
