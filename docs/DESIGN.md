@@ -32,7 +32,7 @@ this sentence exists to prevent.
 | --- | --- | --- |
 | Devices (Home) | `3458d89bda5e442d894ea54208230d4c` | **The reference.** Settled. |
 | Devices — Nothing Attached | `ccdef7834ab9470f9a653a47321998c9` | Settled |
-| Devices — Host Unreachable | `80d92a4a77b64f108f9b963636b076cd` | Being corrected |
+| Devices — Host Unreachable | `c60c5830d23e4a328e9d77b83c98f9fc` | Settled |
 | Devices — Host View Stale | `769bdb0803d549f1bd575be0f9211043` | Being corrected |
 | Devices — Force Release Confirmation | `7ad98bceb768455b92b8abe8a06a148a` | Being corrected |
 | Archive — Browsing (V2) | `f2de4344f7e347aa894b3054d9cf4098` | Not yet corrected — see §9 |
@@ -238,6 +238,32 @@ correct state rather than a fault.
 - The `2 held · 1 free` counter is **absent**, not showing `0 held · 0 free` as though describing a
   pool.
 
+### Host unreachable — settled
+
+The panel cannot reach the daemon at all.
+
+**This one is a full-page state, not a dialog over the application** — and the rule generalises:
+*a state that leaves the navigation nothing to reach is the whole page; a state where the rest of
+the panel still works keeps the shell.* Here there is no inventory, no archive and no lease to
+show, so a card floating over a dimmed sidebar would be furniture behind a message, with every nav
+item leading nowhere. The sidebar, the navigation, the top bar and the breadcrumb are **gone, not
+dimmed**. Structurally it follows the sign-in screen — wordmark, one centred block, vertical
+padding — because that is already this system's shell-less page.
+
+That also disposes of the shell problem by construction: there is no shell left to regenerate
+wrongly.
+
+- **The title is exactly `HOST UNREACHABLE`.** Not "// CONNECTION REFUSED": a refused connection, a
+  timeout, a powered-off machine and a daemon that is not running are indistinguishable from here,
+  and the headline must not claim to know which.
+- **No error code.** An earlier revision printed `ERR_CODE: 0x80004005` — an unmodified Windows
+  `E_FAIL` HRESULT, from an operating system this product does not run on. A fabricated identifier
+  is worse than none, because somebody will search for it or quote it in a bug report. If a code
+  ever appears here it is one Rover actually produces.
+- **No `OFFLINE` badge** restating the headline.
+- `RETRY CONNECTION` stays. Retrying a read is harmless and it is the one useful thing to do from
+  here — and it is not a spinner while it runs.
+
 ## 8. The sign-in screen, as settled
 
 It is the one screen a person sees before they are authenticated, so it shares the design system
@@ -288,7 +314,6 @@ more than it would settle.
   interrupted, has not arrived, or is not running — and its own schema says an empty list with that
   flag means *no view*, not *no devices* (D6). It must not render like the empty state, or the
   screen will confidently report an empty machine when it has gone blind.
-- **The "host unreachable" state**, which belongs to the whole page.
 - **The force-release confirmation.** It is the only destructive action in the product and R35
   requires it to ask before it fires, but nothing has been designed for the asking. It also needs
   its outcomes: the card becoming free without a reload, and the two refusals that mean different
