@@ -2,7 +2,7 @@
  * The two tools whose answer is bytes: `screenshot` and `record_video`.
  *
  * **The schemas from `src/ipc/methods.ts` *are* the tool declarations**, exactly as
- * `./devices.ts` and `./verbs.ts` say for the other twenty rows (ai/CODING_STANDARDS.md,
+ * `./devices.ts` and `./verbs.ts` say for the other twenty-one rows (ai/CODING_STANDARDS.md,
  * boundary #1). Which matters twice over here, because of a field those two schemas do
  * **not** have: there is no destination and no format on either. The capture happens on the
  * host (D19), so a path sent to it would name nothing or name the wrong disk, and the format
@@ -32,6 +32,7 @@ import {
 	screenshotToolResult,
 } from '../_shared/artifact.js';
 import { callHost } from '../_shared/call.js';
+import { declaring } from '../_shared/declaration.js';
 
 /**
  * How long this client waits for a recording: the recording itself, **the host's frame
@@ -59,7 +60,7 @@ function recordingTimeoutMs(params: RecordVideoParams): number {
 export function registerArtifactTools(server: McpServer, host: HostName): void {
 	server.registerTool(
 		'screenshot',
-		{
+		declaring({
 			title: 'Capture the screen',
 			description:
 				'Capture the screen of the leased device and answer with the image itself, inline — ' +
@@ -71,7 +72,7 @@ export function registerArtifactTools(server: McpServer, host: HostName): void {
 				'`read_screen` is the read that survives the block — reach for it when a capture ' +
 				'comes back blank, and when you need element ids or rectangles rather than pixels.',
 			inputSchema: IPC_METHODS.screenshot.params,
-		},
+		}),
 		async (received: unknown) =>
 			guarded('screenshot', async () =>
 				screenshotToolResult(await callHost(host, 'screenshot', received as never)),
@@ -80,7 +81,7 @@ export function registerArtifactTools(server: McpServer, host: HostName): void {
 
 	server.registerTool(
 		'record_video',
-		{
+		declaring({
 			title: 'Record the screen',
 			description:
 				'Record the screen of the leased device for a few seconds, then answer with the ' +
@@ -96,7 +97,7 @@ export function registerArtifactTools(server: McpServer, host: HostName): void {
 				'animation was smooth. This call can take half a minute; that is the recording and ' +
 				'the slicing, not a hang.',
 			inputSchema: IPC_METHODS.record_video.params,
-		},
+		}),
 		async (received: unknown) => {
 			// The one cast, and it is `./verbs.ts`'s: what arrives has already been parsed against
 			// this row's own schema by the SDK — that is what handing it the `IPC_METHODS` params

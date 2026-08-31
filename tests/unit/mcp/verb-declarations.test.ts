@@ -15,10 +15,10 @@
 import type { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { toJsonSchemaCompat } from '@modelcontextprotocol/sdk/server/zod-json-schema-compat.js';
 import { afterEach, describe, expect, it } from 'vitest';
-import { IPC_METHODS, type IpcMethodName } from '@/ipc/methods.js';
+import { InstallAppParamsSchema, IPC_METHODS, type IpcMethodName } from '@/ipc/methods.js';
 import { connectMcpAgent } from '../../helpers/mcp-agent.js';
 
-/** The eighteen verb rows exposed as tools, in `IPC_METHODS` order. */
+/** The nineteen verb rows exposed as tools, in `IPC_METHODS` order. */
 const VERB_METHODS = [
 	'wait_for',
 	'wait_until_gone',
@@ -35,35 +35,47 @@ const VERB_METHODS = [
 	'stop_app',
 	'clear_app_data',
 	'read_logs',
+	'install_app',
 	'record_video',
 	'set_airplane_mode',
 	'set_wifi',
 ] as const satisfies readonly IpcMethodName[];
 
+/**
+ * The one row whose declaration is **not** its params schema whole.
+ *
+ * `install_app` advertises `InstallAppParamsSchema` minus `packageBase64`, so the tool is the
+ * byte-less form — the one that runs the lease's project `install` hook (D13) — and there is no
+ * way to paste megabytes of base64 into a tool argument. It is still that schema: the assertion
+ * below derives the expectation with the same `.omit()` the declaration uses, so a hand-written
+ * second shape cannot creep in here either.
+ */
+const NARROWED_METHODS = ['install_app'] as const satisfies readonly IpcMethodName[];
+
 /** The four rows `./declarations.test.ts` owns. Not verbs, and not this suite's subject. */
 const DEVICE_METHODS = ['status', 'list_devices', 'acquire_device', 'release_device'] as const;
 
 /**
- * The rows deliberately **not** exposed yet — the three file transfers, and the reason is the
- * direction their bytes travel rather than the fact that they carry any.
+ * The rows deliberately **not** exposed — the two file transfers, and the reason is that
+ * **a whole file as a tool argument is the thing that has not been settled**, not that they
+ * carry bytes at all.
  *
  * `screenshot` and `record_video` answer *with* bytes, and R19 phase 3 settled what a tool does
  * with those: an inline image, or a file this server writes on the agent's own machine
- * (`src/mcp/_shared/artifact.ts`). `install_app` and `push_file` carry bytes the other way —
- * an agent would have to produce several megabytes of base64 as a tool argument — and
- * `pull_file` is the third of the same family. How a client supplies and receives a *file* is
- * R24 phase 2's subject, which has landed for neither client: there is no `rover install`,
- * `rover push` or `rover pull` either. Exposing them here would be settling that question in
- * passing, in one adapter.
+ * (`src/mcp/_shared/artifact.ts`). `install_app` used to sit here beside these two and no
+ * longer does, which is the distinction: it has a **second form that carries no bytes** — the
+ * lease's project runs its own install (D13) — so the tool is that form and the payload is
+ * simply not in the declaration. `push_file` has no such form. Its whole subject is a file
+ * from the agent's machine, capped at 4 MiB, which an agent would have to produce as several
+ * megabytes of base64 in a tool argument; and `pull_file` is the same question in the other
+ * direction, whose answer is a destination on the agent's disk that R19 phase 3 settled only
+ * for the two artifact rows. Both wait for R24 phase 2, which is a mechanism underneath these
+ * verbs rather than a decision one adapter can take in passing.
  *
  * The list is short and named so the gate below can be exact: a verb row added later is either
  * a registered tool or a deliberate entry here, never a row that quietly has no tool.
  */
-const NOT_YET_EXPOSED = [
-	'install_app',
-	'push_file',
-	'pull_file',
-] as const satisfies readonly IpcMethodName[];
+const NOT_YET_EXPOSED = ['push_file', 'pull_file'] as const satisfies readonly IpcMethodName[];
 
 /** The platform vocabulary `tests/unit/no-platform-names.test.ts` keeps out of `src/` (D10). */
 const PLATFORM_NAMES = /android|ios|iphone|ipad|adb|simctl|xcrun|uiautomator|emulator|espresso/i;
@@ -110,7 +122,7 @@ afterEach(async () => {
 });
 
 describe('what tools/list advertises for the verbs', () => {
-	it('names the eighteen verb rows, spelled exactly as IPC_METHODS spells them', async () => {
+	it('names the nineteen verb rows, spelled exactly as IPC_METHODS spells them', async () => {
 		const tools = await advertisedTools();
 
 		const device: readonly string[] = DEVICE_METHODS;
@@ -131,9 +143,28 @@ describe('what tools/list advertises for the verbs', () => {
 	it('declares each verb from its own params schema, whole', async () => {
 		const tools = await advertisedTools();
 
-		for (const method of VERB_METHODS) {
+		const narrowed: readonly string[] = NARROWED_METHODS;
+		for (const method of VERB_METHODS.filter((name) => !narrowed.includes(name))) {
 			expect(toolNamed(tools, method).inputSchema).toEqual(declarationOf(method));
 		}
+	});
+
+	it('declares install_app as that same schema with the payload taken off it', async () => {
+		const tools = await advertisedTools();
+
+		// Derived with the `.omit()` the declaration itself uses, so this is "the host's object,
+		// narrowed" rather than a second shape written out beside it. The property assertion under
+		// it is the part that would notice a widening: a `packageBase64` back on this tool is an
+		// agent being invited to paste an APK into a JSON argument.
+		expect(toolNamed(tools, 'install_app').inputSchema).toEqual(
+			toJsonSchemaCompat(InstallAppParamsSchema.omit({ packageBase64: true }), {
+				strictUnions: true,
+				pipeStrategy: 'input',
+			}),
+		);
+		expect(Object.keys(toolNamed(tools, 'install_app').inputSchema.properties as object)).toEqual([
+			'leaseId',
+		]);
 	});
 
 	it('shares one declaration between the rows that share one params schema', async () => {

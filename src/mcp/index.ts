@@ -21,8 +21,15 @@
  * **stdout belongs to the protocol**, so every diagnostic goes to stderr and nothing under
  * `src/mcp/` may print through `src/cli/_shared/output.ts` (`./_shared/answer.ts`). That extends
  * past this tree: `npm run mcp` writes npm's own two-line banner to stdout ahead of the first
- * frame, so an agent's server entry is `node --import tsx/esm src/mcp/index.ts` and the npm
- * script is the by-hand form of it (`npm run -s mcp`).
+ * frame, so an agent's server entry is `node` on one file and the npm script is the by-hand form
+ * of it from inside the checkout (`npm run -s mcp`).
+ *
+ * **That file is `bin/rover-mcp.mjs` and not this one.** An MCP client picks its own working
+ * directory, and `node --import tsx/esm <this module, absolutely>` resolves `tsx/esm` against
+ * that directory rather than against the script — so it starts here and nowhere else
+ * (`PROJECT.md` §6). The launcher is a plain `.mjs` whose own bare specifier resolves next to
+ * itself, inside the checkout, and it calls {@link main} directly because the guard at the
+ * bottom of this file cannot fire when `process.argv[1]` is the launcher.
  */
 
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';

@@ -49,19 +49,35 @@ export function parseCommandArgs<Options extends ParseArgsOptionsConfig>(
 }
 
 /**
- * Exactly the positionals a command takes, named as the usage text names them.
+ * The positionals a command takes, named as the usage text names them.
  *
  * A blank one is rejected here rather than left to the id parser below it, so an empty
  * argument is a usage error with the command's own shape in it instead of a validation
  * failure from two layers down.
+ *
+ * `optional` names **trailing** positionals a command may be called without, and it exists
+ * for one call: `rover install`, whose package is optional because a call carrying no bytes
+ * is the form that runs the lease's project `install` hook (D13, `src/verbs/files.ts`). Only
+ * a trailing run of them, because anything else makes which argument was omitted a guess.
+ * Nothing here decides what an absent one means — the command reads it as `undefined` and
+ * the *host* still answers whether that form is available, which is what keeps a project
+ * with no hook declared a named `install-hook-undeclared` failure rather than a usage error
+ * this layer invented.
  */
 export function expectPositionals(
 	command: string,
 	positionals: string[],
 	expected: readonly string[],
-): string[] {
-	const shape = expected.length === 0 ? 'no arguments' : expected.join(' ');
-	if (positionals.length !== expected.length) {
+	optional: readonly string[] = [],
+): (string | undefined)[] {
+	const shape =
+		expected.length === 0 && optional.length === 0
+			? 'no arguments'
+			: [...expected, ...optional.map((name) => `[${name}]`)].join(' ');
+	if (
+		positionals.length < expected.length ||
+		positionals.length > expected.length + optional.length
+	) {
 		const got =
 			positionals.length === 0 ? 'none' : positionals.map((value) => `'${value}'`).join(' ');
 		throw new UsageError(`rover ${command}: expected ${shape}, got ${got}`);

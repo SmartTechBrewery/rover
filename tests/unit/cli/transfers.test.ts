@@ -404,6 +404,111 @@ describe('rover install', () => {
 	});
 });
 
+/**
+ * `rover install` with no `<local-path>` — the form that runs what the lease's project
+ * declared, and the one that had no client at all until #104.
+ *
+ * The two assertions that carry it are both about **who decides**: the hook's own marker file
+ * says the host ran the project's command rather than the caller sending anything, and the
+ * refusal for a project that declares no install is still the daemon's named
+ * `install-hook-undeclared` at exit 1 — not a usage error this CLI invented at exit 2, which
+ * would have named the wrong machine's configuration.
+ */
+describe('rover install with no package, which runs the project’s own install', () => {
+	/** Where the hook command leaves proof of having run, and of what it was told. */
+	function markerPath(): string {
+		return local('install-hook-ran');
+	}
+
+	/** A hook file for the project `acquireLease` attributes its lease to. */
+	async function writeHookFile(hooks: unknown): Promise<void> {
+		await mkdir(temp.projectsRoot, { recursive: true });
+		await writeFile(path.join(temp.projectsRoot, 'rover.json'), JSON.stringify(hooks), 'utf8');
+	}
+
+	/** A hook file whose install is a real program recording the device it was pointed at. */
+	async function writeInstallingHookFile(): Promise<void> {
+		await writeHookFile({
+			project: 'rover',
+			install: {
+				command: process.execPath,
+				args: [
+					'-e',
+					"require('node:fs').writeFileSync(process.argv[1], process.env.ROVER_DEVICE_SERIAL)",
+					markerPath(),
+				],
+			},
+		});
+	}
+
+	it('runs the host-side command, pinned to the leased device, and sends nothing', async () => {
+		const backend = registerFakeBackend();
+		await start();
+		const leaseId = await acquireLease();
+		await writeInstallingHookFile();
+
+		expect(await run(['install', leaseId])).toBe(EXIT_OK);
+
+		// The marker is the whole row: the project's own command ran on the host, and it was
+		// told the device the lease names rather than picking one (D13).
+		expect(await readFile(markerPath(), 'utf8')).toBe(attached.serial);
+		// And nothing travelled: this form never reaches the backend's own package install.
+		expect(backend.installApp).not.toHaveBeenCalled();
+		expect(installed).toEqual([]);
+		// The line a human reads names the *form* rather than a command this machine never saw:
+		// what ran is host-side configuration, and there is no byte count and no local path in it.
+		expect(logged.join('\n')).toContain("the lease's project");
+		expect(logged.join('\n')).not.toContain('bytes from');
+	});
+
+	it('keeps the host’s named refusal when the project declares no install', async () => {
+		const backend = registerFakeBackend();
+		await start();
+		const leaseId = await acquireLease();
+		await writeHookFile({ project: 'rover', apps: [] });
+
+		// Exit 1 — the host answered and the operation did not succeed — and never the exit 2
+		// this CLI reserves for "you typed it wrong". Whether this form is available is a fact
+		// about the host's configuration, so a client that refused it up front would be
+		// answering a question only the host can (D16).
+		expect(await run(['install', leaseId])).toBe(EXIT_FAILED);
+
+		const said = errored.join('\n');
+		expect(said).toContain('install-hook-undeclared');
+		expect(said).not.toContain('Usage: rover install');
+		expect(backend.installApp).not.toHaveBeenCalled();
+	});
+
+	it('reports the refusal as one --json document naming the project and the device', async () => {
+		registerFakeBackend();
+		await start();
+		const leaseId = await acquireLease();
+		await writeHookFile({ project: 'rover', apps: [] });
+
+		expect(await run(['install', leaseId, '--json'])).toBe(EXIT_FAILED);
+
+		expect(logged).toHaveLength(1);
+		expect(JSON.parse(logged[0] ?? '')).toMatchObject({
+			host: 'local',
+			outcome: 'failed',
+			failure: { kind: 'install-hook-undeclared', project: 'rover', serial: attached.serial },
+		});
+	});
+
+	it('still refuses a blank package argument as a usage error', async () => {
+		const backend = registerFakeBackend();
+		await start();
+		const leaseId = await acquireLease();
+
+		// Optional is not the same as "an empty string is fine": `rover install <id> ''` is a
+		// mistake, and reading it as the project form would run a build nobody asked for.
+		expect(await run(['install', leaseId, ''])).toBe(EXIT_USAGE);
+
+		expect(errored.join('\n')).toContain('[<local-path>]');
+		expect(backend.installApp).not.toHaveBeenCalled();
+	});
+});
+
 describe('rover pull, when the host says no', () => {
 	it('exits 1 and writes nothing at all when the file is too large for one answer', async () => {
 		registerFakeBackend({

@@ -37,6 +37,7 @@ import {
 } from '../../ipc/methods.js';
 import { guarded, toolAnswer, toolRefusal } from '../_shared/answer.js';
 import { callHost } from '../_shared/call.js';
+import { declaring } from '../_shared/declaration.js';
 
 /**
  * What an `acquire_device` call carries once the SDK has admitted it: the params the host
@@ -75,7 +76,7 @@ export function registerDeviceTools(
 ): void {
 	server.registerTool(
 		'status',
-		{
+		declaring({
 			title: 'Rover host status',
 			description:
 				'Ask the Rover host this server is configured for whether it is up, and what it is: ' +
@@ -83,13 +84,13 @@ export function registerDeviceTools(
 				'Which host that is comes from this server’s own configuration and is not something ' +
 				'a tool can choose. Answering at all is the smallest check that the host is reachable.',
 			inputSchema: StatusParamsSchema,
-		},
+		}),
 		async () => guarded('status', async () => toolAnswer(await callHost(host, 'status', {}))),
 	);
 
 	server.registerTool(
 		'list_devices',
-		{
+		declaring({
 			title: 'List devices',
 			description:
 				'Every device attached to the Rover host, what the host knows about each, and who ' +
@@ -99,7 +100,7 @@ export function registerDeviceTools(
 				'what is attached — with it set, an empty list means *no view*, not *no devices*, so ' +
 				'do not read it as "nothing is connected".',
 			inputSchema: ListDevicesParamsSchema,
-		},
+		}),
 		async () =>
 			guarded('list_devices', async () => toolAnswer(await callHost(host, 'list_devices', {}))),
 	);
@@ -121,7 +122,7 @@ export function registerDeviceTools(
 
 	server.registerTool(
 		'acquire_device',
-		{
+		declaring({
 			title: 'Acquire a device',
 			description:
 				'Take a lease on one device by serial, so no other agent drives it while you do. ' +
@@ -143,7 +144,7 @@ export function registerDeviceTools(
 				'not start is a `service-failed` refusal naming it, because a device whose helper ' +
 				'services are down would fail at the first thing you tried.',
 			inputSchema: acquireParams,
-		},
+		}),
 		async (params: AcquireArgs) =>
 			guarded('acquire_device', async () => {
 				const result = await callHost(host, 'acquire_device', {
@@ -160,7 +161,7 @@ export function registerDeviceTools(
 
 	server.registerTool(
 		'release_device',
-		{
+		declaring({
 			title: 'Release a device',
 			description:
 				'Hand a lease back by its `leaseId`, freeing the device for the next agent. The lease ' +
@@ -170,7 +171,7 @@ export function registerDeviceTools(
 				'moment ago and one whose lease had already expired are indistinguishable to the ' +
 				'host, and either way no lease is live on it now.',
 			inputSchema: ReleaseDeviceParamsSchema,
-		},
+		}),
 		async (params) =>
 			guarded('release_device', async () =>
 				toolAnswer(await callHost(host, 'release_device', params)),

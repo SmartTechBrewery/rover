@@ -359,6 +359,27 @@ describe('rover screenshot and rover record, on --out, --duration-ms and --frame
 	});
 });
 
+describe('rover install, whose package argument is optional', () => {
+	it('exits 2 without a lease id, naming the optional half as optional', async () => {
+		expect(await run(['install'])).toBe(EXIT_USAGE);
+
+		// The shape in the message is what tells a caller the package may be left off — which is
+		// the whole point of the byte-less form, and unreadable from a message that spelled both
+		// positionals as required.
+		expect(errored.join('\n')).toContain('expected <lease-id> [<local-path>]');
+	});
+
+	it('exits 2 on a third positional rather than ignoring it', async () => {
+		expect(await run(['install', 'lease-1', './app.apk', '/data/local/tmp/app.apk'])).toBe(
+			EXIT_USAGE,
+		);
+
+		// `install` has no device path — that is `push` — and a silently dropped argument is a
+		// caller who thinks they said where the package should land.
+		expect(errored.join('\n')).toContain('expected <lease-id> [<local-path>]');
+	});
+});
+
 describe('rover release, on its one argument', () => {
 	it('exits 2 without a lease id', async () => {
 		expect(await run(['release'])).toBe(EXIT_USAGE);
