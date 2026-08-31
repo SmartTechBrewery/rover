@@ -53,7 +53,7 @@ export interface ProjectResolverOptions {
  * what declaring none means.
  */
 export function createProjectResolver(options: ProjectResolverOptions): ProjectResolver {
-	return async (project, serial) => {
+	return async (project, serial, slot) => {
 		const hooks = await readProjectHooks(options.root, project);
 		if (hooks === null) {
 			return null;
@@ -62,6 +62,7 @@ export function createProjectResolver(options: ProjectResolverOptions): ProjectR
 		const context: HookCommandContext = {
 			project,
 			serial,
+			slot,
 			...(options.hookTimeoutMs === undefined ? {} : { timeoutMs: options.hookTimeoutMs }),
 		};
 

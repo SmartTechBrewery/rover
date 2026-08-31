@@ -289,6 +289,13 @@ export const AcquireRefusalReasonSchema = z.enum([
 	 * failed.
 	 */
 	'service-failed',
+	/**
+	 * Every helper-service slot on this host is in use, so there are no ports to give this
+	 * lease (R18) — release a lease and ask again. Granting without them would be the silent
+	 * degradation ai/RULES.md §2 forbids, and `internal_error` would say the host broke when
+	 * it is simply full.
+	 */
+	'no-slot',
 ]);
 export type AcquireRefusalReason = z.infer<typeof AcquireRefusalReasonSchema>;
 

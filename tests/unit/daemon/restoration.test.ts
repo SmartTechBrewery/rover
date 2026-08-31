@@ -46,6 +46,12 @@ import {
 	type ProjectResolver,
 	type ProjectRestoration,
 } from '@/daemon/restore.js';
+import {
+	createSlotAllocator,
+	PORTS_PER_SLOT,
+	SLOT_PORT_BASE,
+	type SlotAllocator,
+} from '@/daemon/slots.js';
 import { createMockDevice, createNoProjectServices } from '../../helpers/factories.js';
 
 const SERIAL = parseDeviceSerial('attached-1');
@@ -65,6 +71,8 @@ const FULL_RESTORATION = [
 interface Harness {
 	readonly handlers: LeaseHandlers;
 	readonly leases: LeaseStore;
+	/** The pool this harness's grants take from and its restorations give back to (R18). */
+	readonly slots: SlotAllocator;
 	/** Every step the device and the project hook performed, in the order they performed it. */
 	readonly performed: string[];
 	readonly warnings: string[];
@@ -121,6 +129,10 @@ function createHarness(options: HarnessOptions = {}): Harness {
 	});
 
 	const inventory = createDeviceInventory({ warn: (message) => warnings.push(message) });
+	// Wired exactly as `listen.ts` wires one: a grant takes a slot and the *tail* of the
+	// restoration gives it back, so what the teardown was told is never handed to the next
+	// lessee while that teardown is still using it.
+	const slots = createSlotAllocator();
 	const restorer = createDeviceRestorer({
 		inventory,
 		resolveProject:
@@ -140,6 +152,7 @@ function createHarness(options: HarnessOptions = {}): Harness {
 			: { teardownTimeoutMs: options.teardownTimeoutMs }),
 		...(options.settleTimeoutMs === undefined ? {} : { settleTimeoutMs: options.settleTimeoutMs }),
 		...(options.settleTraffic === undefined ? {} : { settleTraffic: options.settleTraffic }),
+		onRestored: (lease) => slots.release(lease.slot),
 	});
 	const leases = createLeaseStore({
 		ttlMs: TTL_MS,
@@ -154,8 +167,10 @@ function createHarness(options: HarnessOptions = {}): Harness {
 			leases,
 			restorer,
 			options.services?.(warnings) ?? createNoProjectServices(),
+			slots,
 		),
 		leases,
+		slots,
 		performed,
 		warnings,
 		settle: () => restorer.settle(SERIAL),
@@ -590,7 +605,11 @@ describe('a project hook file, on both paths a lease can end', () => {
 					command: process.execPath,
 					args: [
 						'-e',
-						"require('node:fs').writeFileSync(process.argv[1], process.env.ROVER_PROJECT + ' ' + process.env.ROVER_DEVICE_SERIAL)",
+						// Everything the daemon tells a hook, so what the file-backed path proves is
+						// the whole environment contract and not just the two strings (R18).
+						"require('node:fs').writeFileSync(process.argv[1], [process.env.ROVER_PROJECT," +
+							'process.env.ROVER_DEVICE_SERIAL,process.env.ROVER_SLOT,' +
+							"process.env.ROVER_PORT_BASE,process.env.ROVER_PORT_COUNT].join(' '))",
 						marker,
 					],
 				},
@@ -658,9 +677,14 @@ describe('a project hook file, on both paths a lease can end', () => {
 			'setAirplaneMode false',
 			'setWifiEnabled true',
 		]);
-		// The teardown ran as a real process, and it was told which project and which device —
-		// a hook that cannot name the device it is undoing is the wrong shape.
-		await expect(readFile(marker, 'utf8')).resolves.toBe(`${HOOK_PROJECT} ${SERIAL}`);
+		// The teardown ran as a real process, and it was told which project, which device and
+		// which ports — a hook that cannot name the device it is undoing, or the helper service
+		// it is stopping, is the wrong shape.
+		await expect(readFile(marker, 'utf8')).resolves.toBe(
+			`${HOOK_PROJECT} ${SERIAL} 0 ${SLOT_PORT_BASE} ${PORTS_PER_SLOT}`,
+		);
+		// And the numbers went back into the pool, but only once that teardown had finished.
+		expect(harness.slots.taken()).toBe(0);
 		expect(harness.warnings).toEqual([]);
 	});
 
@@ -681,7 +705,12 @@ describe('a project hook file, on both paths a lease can end', () => {
 			'setAirplaneMode false',
 			'setWifiEnabled true',
 		]);
-		await expect(readFile(marker, 'utf8')).resolves.toBe(`${HOOK_PROJECT} ${SERIAL}`);
+		// The expiry path is told the same thing, and reclaims the same way: an agent that died
+		// without releasing leaks no ports.
+		await expect(readFile(marker, 'utf8')).resolves.toBe(
+			`${HOOK_PROJECT} ${SERIAL} 0 ${SLOT_PORT_BASE} ${PORTS_PER_SLOT}`,
+		);
+		expect(harness.slots.taken()).toBe(0);
 		expect(harness.warnings).toEqual([]);
 	});
 
@@ -1001,7 +1030,9 @@ describe('a project hook file, on both paths a lease can end', () => {
 				'setAirplaneMode false',
 				'setWifiEnabled true',
 			]);
-			await expect(readFile(marker, 'utf8')).resolves.toBe(`${HOOK_PROJECT} ${SERIAL}`);
+			await expect(readFile(marker, 'utf8')).resolves.toBe(
+				`${HOOK_PROJECT} ${SERIAL} 0 ${SLOT_PORT_BASE} ${PORTS_PER_SLOT}`,
+			);
 			expect(harness.warnings).toEqual([]);
 		});
 	});

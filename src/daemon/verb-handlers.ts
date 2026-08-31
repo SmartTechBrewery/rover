@@ -320,7 +320,7 @@ export function createVerbHandlers(
 		serial: DeviceSerial,
 	): Promise<void> {
 		try {
-			await installProject(lease.project, serial, call.signal);
+			await installProject(lease.project, serial, lease.slot, call.signal);
 		} catch (error) {
 			if (call.signal.aborted) {
 				throw new LeaseEndedError(lease.serial, lease.id);

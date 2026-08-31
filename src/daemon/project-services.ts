@@ -150,6 +150,7 @@ export function createProjectServices(options: ProjectServicesOptions): ProjectS
 	const contextFor = (lease: Lease, timeoutMs: number): HookCommandContext => ({
 		project: lease.project,
 		serial: lease.serial,
+		slot: lease.slot,
 		timeoutMs,
 	});
 

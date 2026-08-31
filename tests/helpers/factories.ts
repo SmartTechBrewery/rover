@@ -36,6 +36,7 @@ import {
 import { parseDeviceSerial, parseLeaseId } from '@/core/ids.js';
 import { LEASE_TTL_MS, type Lease } from '@/daemon/leases.js';
 import type { ProjectServices } from '@/daemon/project-services.js';
+import { PORTS_PER_SLOT, SLOT_PORT_BASE, type Slot } from '@/daemon/slots.js';
 import type { VerbContext } from '@/verbs/context.js';
 
 export function createMockCapabilities(overrides: Partial<Capabilities> = {}): Capabilities {
@@ -158,6 +159,9 @@ export function createMockDevice(overrides: Partial<Device> = {}): Device {
  * `createdAtMs` is now, and `expiresAtMs` a full TTL out, because that is what the record
  * carries; what crosses the wire is the remaining duration (D17). Note that this builds a
  * record, it does not put one in a store — a test that needs a *held* device acquires it.
+ *
+ * The slot is slot 0's real block (R18), derived from the exported constants rather than
+ * written out, so a record built here says what a granted one would.
  */
 export function createMockLease(overrides: Partial<Lease> = {}): Lease {
 	return {
@@ -168,8 +172,14 @@ export function createMockLease(overrides: Partial<Lease> = {}): Lease {
 		testName: null,
 		createdAtMs: Date.now(),
 		expiresAtMs: Date.now() + LEASE_TTL_MS,
+		slot: createMockSlot(),
 		...overrides,
 	};
+}
+
+/** Slot 0's real block, for a test that needs one without standing a pool up. */
+export function createMockSlot(overrides: Partial<Slot> = {}): Slot {
+	return { index: 0, portBase: SLOT_PORT_BASE, portCount: PORTS_PER_SLOT, ...overrides };
 }
 
 /**

@@ -9,6 +9,7 @@ import { createDeviceInventory } from '@/daemon/inventory.js';
 import { createLeaseHandlers } from '@/daemon/lease-handlers.js';
 import { createLeaseStore } from '@/daemon/leases.js';
 import { createDeviceRestorer } from '@/daemon/restore.js';
+import { createSlotAllocator } from '@/daemon/slots.js';
 import { createNoProjectServices } from '../../helpers/factories.js';
 
 /**
@@ -55,6 +56,9 @@ function createHost() {
 	let hookRan = false;
 
 	const inventory = createDeviceInventory({ warn: (message) => warnings.push(message) });
+	// A real pool, wired the way `listen.ts` wires one: nothing here asserts about slots, but a
+	// grant needs one and a lease that ended must give it back (R18).
+	const slots = createSlotAllocator();
 	const restorer = createDeviceRestorer({
 		inventory,
 		// Standing in for `project-resolver.ts`, which supplies this from a project hook file —
@@ -66,6 +70,7 @@ function createHost() {
 			},
 		}),
 		warn: (message) => warnings.push(message),
+		onRestored: (lease) => slots.release(lease.slot),
 	});
 	const leases = createLeaseStore({
 		ttlMs: TTL_MS,
@@ -81,7 +86,7 @@ function createHost() {
 		// The stand-in for a host where no project declares helper services: this suite is about
 		// what a restoration puts back on the device, and a grant that started nothing is the
 		// honest arrangement for that.
-		handlers: createLeaseHandlers(inventory, leases, restorer, createNoProjectServices()),
+		handlers: createLeaseHandlers(inventory, leases, restorer, createNoProjectServices(), slots),
 		hookRan: () => hookRan,
 		at: (instant: number) => {
 			nowMs = instant;
