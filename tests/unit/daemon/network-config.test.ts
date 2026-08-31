@@ -2,13 +2,17 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
+	DEFAULT_HTTP_ADDRESS,
 	DEFAULT_LISTEN_ADDRESS,
 	HOST_ADDRESS_ENV_VAR,
 	HOST_CA_ENV_VAR,
 	HOST_PORT_ENV_VAR,
 	HOST_TOKEN_ENV_VAR,
+	HTTP_ADDRESS_ENV_VAR,
+	HTTP_PORT_ENV_VAR,
 	LISTEN_ADDRESS_ENV_VAR,
 	LISTEN_PORT_ENV_VAR,
+	resolveHttpListener,
 	resolveNetworkListener,
 	resolveRemoteHost,
 	TLS_CERT_ENV_VAR,
@@ -120,6 +124,104 @@ describe('a bad value names the variable and never quotes the value', () => {
 		['fractional', '80.5'],
 	])('rejects a port that is %s, naming ROVER_LISTEN_PORT', (_what, port) => {
 		expect(() => resolve({ [LISTEN_PORT_ENV_VAR]: port })).toThrow(LISTEN_PORT_ENV_VAR);
+	});
+});
+
+function resolveHttp(overrides: Record<string, string | undefined>) {
+	return resolveHttpListener({ [HTTP_PORT_ENV_VAR]: '4712', ...overrides });
+}
+
+describe('the HTTP surface is a third opt-in, off unless configured', () => {
+	it('resolves nothing when its own port is unset, however much else is configured', () => {
+		// Including the TCP listener being fully configured: the two switches are separate
+		// because exposing a host to Rover clients is not asking for a browser surface (D28).
+		expect(resolveHttpListener({ ...complete })).toBeUndefined();
+	});
+
+	it('treats an exported-but-blank port as unset, like every other variable here', () => {
+		expect(resolveHttp({ [HTTP_PORT_ENV_VAR]: '' })).toBeUndefined();
+	});
+
+	it('reads nothing else at all when the port is unset, so an upgrade opens nothing', () => {
+		expect(resolveHttpListener({})).toBeUndefined();
+	});
+
+	it('defaults the address to loopback rather than to every interface', () => {
+		// The one place the two listeners' defaults deliberately disagree: a Rover client is on
+		// another machine by definition, a browser is usually the operator's own.
+		expect(resolveHttp({})?.address).toBe(DEFAULT_HTTP_ADDRESS);
+		expect(DEFAULT_HTTP_ADDRESS).not.toBe(DEFAULT_LISTEN_ADDRESS);
+	});
+
+	it('serves plain HTTP on loopback with no certificate at all', () => {
+		expect(resolveHttp({})).toEqual({
+			address: '127.0.0.1',
+			port: 4712,
+			usersPath: join(homedir(), '.rover', 'users.json'),
+		});
+	});
+
+	it('shares the TLS material with the TCP listener — same host, same certificate', () => {
+		expect(resolveHttp({ ...complete })).toMatchObject({
+			certPath: '/tmp/cert.pem',
+			keyPath: '/tmp/key.pem',
+		});
+	});
+
+	it('follows ROVER_USERS_PATH, and never requires it', () => {
+		expect(resolveHttp({ [USERS_PATH_ENV_VAR]: '/tmp/rover-users.json' })?.usersPath).toBe(
+			'/tmp/rover-users.json',
+		);
+	});
+
+	it('ignores ROVER_HOST_TOKEN entirely — there is no second secret here either (D25)', () => {
+		expect(resolveHttp({ [HOST_TOKEN_ENV_VAR]: TOKEN })).toEqual(resolveHttp({}));
+		expect(JSON.stringify(resolveHttp({ [HOST_TOKEN_ENV_VAR]: TOKEN }))).not.toContain(TOKEN);
+	});
+});
+
+describe('the HTTP surface refuses to put a bearer token on a wire in the clear', () => {
+	it.each([
+		['the certificate', TLS_CERT_ENV_VAR, TLS_KEY_ENV_VAR],
+		['the key', TLS_KEY_ENV_VAR, TLS_CERT_ENV_VAR],
+	])('refuses half a certificate — %s alone — naming the other', (_what, present, missing) => {
+		expect(() => resolveHttp({ [present]: '/tmp/material.pem' })).toThrow(missing);
+	});
+
+	it.each([
+		['every interface', '0.0.0.0'],
+		['a LAN address', '10.0.0.4'],
+		['a hostname', 'rover.internal'],
+	])('refuses plain HTTP on %s, naming both ways out', (_what, address) => {
+		const off = () => resolveHttp({ [HTTP_ADDRESS_ENV_VAR]: address });
+
+		expect(off).toThrow(TLS_CERT_ENV_VAR);
+		expect(off).toThrow(TLS_KEY_ENV_VAR);
+		expect(off).toThrow(HTTP_ADDRESS_ENV_VAR);
+	});
+
+	it.each([
+		['127.0.0.1'],
+		['127.0.0.53'],
+		['localhost'],
+		['::1'],
+		['[::1]'],
+	])('allows plain HTTP on %s, which no stranger can reach', (address) => {
+		expect(resolveHttp({ [HTTP_ADDRESS_ENV_VAR]: address })?.address).toBe(address);
+	});
+
+	it('allows a non-loopback address once the TLS pair is set', () => {
+		expect(resolveHttp({ ...complete, [HTTP_ADDRESS_ENV_VAR]: '10.0.0.4' })?.address).toBe(
+			'10.0.0.4',
+		);
+	});
+
+	it.each([
+		['not a number', 'not-a-number'],
+		['zero', '0'],
+		['past the port range', '65536'],
+	])('rejects a port that is %s, naming ROVER_HTTP_PORT', (_what, port) => {
+		expect(() => resolveHttp({ [HTTP_PORT_ENV_VAR]: port })).toThrow(HTTP_PORT_ENV_VAR);
 	});
 });
 

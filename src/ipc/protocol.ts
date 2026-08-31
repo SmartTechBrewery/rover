@@ -130,6 +130,27 @@ export const ErrorResponseSchema = z.object({
 });
 export type ErrorResponse = z.infer<typeof ErrorResponseSchema>;
 
+/**
+ * **The one pre-auth refusal**, so the gates in front of the transports cannot drift into
+ * several refusals.
+ *
+ * Two modules send it — `src/daemon/network-listen.ts` as a frame, `src/daemon/http-listen.ts`
+ * as a response body — and the whole value of "every pre-auth failure gets one byte-identical
+ * refusal" (D20) is that it is identical *across* those two as well as within each. Spelling it
+ * out twice would make that a coincidence maintained by hand.
+ *
+ * It lives here rather than in either transport because it is a property of the **protocol**: an
+ * `id: null` error is what `createIpcClient` already treats as "this connection is not
+ * trustworthy". Nothing transport-shaped comes with it — no socket, no header, no status code —
+ * so `src/ipc/` still cannot tell where a connection came from.
+ */
+export const UNAUTHENTICATED_REFUSAL: ErrorResponse = {
+	type: 'error',
+	protocolVersion: PROTOCOL_VERSION,
+	id: null,
+	error: { code: 'unauthenticated', message: 'Authentication failed.' },
+};
+
 export const ResponseSchema = z.discriminatedUnion('type', [
 	ResultResponseSchema,
 	ErrorResponseSchema,

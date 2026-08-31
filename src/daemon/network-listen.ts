@@ -55,7 +55,7 @@ import type { Socket } from 'node:net';
 import { createServer, type TLSSocket } from 'node:tls';
 import { z } from 'zod';
 import { encodeFrame } from '../ipc/framing.js';
-import { type ErrorResponse, PROTOCOL_VERSION } from '../ipc/protocol.js';
+import { UNAUTHENTICATED_REFUSAL } from '../ipc/protocol.js';
 import type { IpcServer } from '../ipc/server.js';
 import { type NetworkListenerConfig, TLS_CERT_ENV_VAR, TLS_KEY_ENV_VAR } from './network-config.js';
 import { findUserByToken } from './user-store.js';
@@ -99,13 +99,12 @@ const HostGreetingSchema = z.object({ token: z.string().min(1) }).strict();
  * A valid `ErrorResponse` with `id: null`, which is the shape `createIpcClient` already treats
  * as "this connection is not trustworthy" — so a client needs no separate handling for it and
  * fails everything in flight with `unauthenticated`.
+ *
+ * The value comes from `src/ipc/protocol.ts` rather than being spelled out here, because
+ * `./http-listen.ts` refuses with the same bytes and the two must be identical by construction
+ * rather than by two files agreeing (D20).
  */
-const REFUSAL_FRAME = encodeFrame({
-	type: 'error',
-	protocolVersion: PROTOCOL_VERSION,
-	id: null,
-	error: { code: 'unauthenticated', message: 'Authentication failed.' },
-} satisfies ErrorResponse);
+const REFUSAL_FRAME = encodeFrame(UNAUTHENTICATED_REFUSAL);
 
 export interface NetworkListener {
 	/** The port actually bound — a configured port of 0 resolves to a real one here. */

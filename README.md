@@ -867,6 +867,8 @@ startup, naming the variable and the reason, rather than binding something surpr
 | `ROVER_TLS_CERT` | — (required with the port) | Path to the PEM certificate (chain) the listener presents. |
 | `ROVER_TLS_KEY` | — (required with the port) | Path to the matching PEM private key. Unreadable material is a startup failure naming the variable and the path, not a TLS mystery on the first connection. |
 | `ROVER_LISTEN_ADDRESS` | `0.0.0.0` | Which interface the network listener binds, so an operator can narrow it to a VPN or loopback interface instead of every one. Only read when the port is set. |
+| `ROVER_HTTP_PORT` | unset — **no HTTP listener** | The opt-in switch for the HTTP surface a browser reaches (`PROJECT.md` D28) — one route, `POST /rpc`, carrying the same envelopes and served by the same `IpcServer` as the local socket. Unset or empty and nothing binds and nothing else below is read, so upgrading a daemon never starts listening for browsers. Deliberately **separate from `ROVER_LISTEN_PORT`**: exposing this host to a team's Rover clients is not the same decision as opening a browser surface, and neither implies the other. Who may connect comes from the user store (`ROVER_USERS_PATH`), re-read on **every request** — so `rover users revoke` takes effect on the very next one, with the daemon still running. A client never sets this: `rover list` clears it in any daemon it autostarts. 1–65535. |
+| `ROVER_HTTP_ADDRESS` | `127.0.0.1` | Which interface the HTTP listener binds. **Loopback by default**, unlike `ROVER_LISTEN_ADDRESS`, because the ordinary first use of the panel is the operator's own browser on this machine. Set it to something a stranger can reach and `ROVER_TLS_CERT` and `ROVER_TLS_KEY` become **required**: every request carries a bearer token in a header, and an unencrypted listener off loopback would put it on the wire in the clear, so the daemon refuses to start rather than half-configuring. On loopback, plain HTTP needs no certificate. Only read when the port is set. |
 | `ROVER_HOST_ADDRESS` | unset — **no remote host** | The opt-in switch on the *client* side: the address of the host `--host remote` asks. Unset or empty and nothing below is read, `--host remote` is a usage error, and `rover` is a purely local client. Set it and `ROVER_HOST_PORT` and `ROVER_HOST_TOKEN` become **required together**, because a client cannot guess either — a missing one is a usage error naming every variable still missing. Exactly one remote host is configurable (`PROJECT.md` D18); there is no catalogue. **It is also what points an MCP server at a remote host** (`npm run mcp`), and there it is the *only* thing that can: an MCP client launches each server with its own `env` block, so this variable is that server's configuration, no tool takes a host parameter, and an agent can neither see nor change which host answered (`PROJECT.md` D17). An MCP server reads it at startup rather than at the first tool call, so a half-configured one fails on stderr before it advertises anything. |
 | `ROVER_HOST_TOKEN` | — (required with `ROVER_HOST_ADDRESS`) | **A client-side credential, and only that** — the value `rover users add` (or `users rotate`) printed on the host, pasted on the machine that borrows a device. The host itself no longer reads this variable: it authenticates against its user store, so a token is revocable and rotatable where it was issued rather than being a secret both machines hold forever (`PROJECT.md` D25). At least **32 characters**, checked locally so a truncated paste fails here naming the variable instead of coming back as an opaque refusal. It is a **host-level** setting and belongs in the environment, never in a file the repository tracks. The token **authenticates and attributes nothing**: a lease's owner is a separate, caller-supplied string (`PROJECT.md` D20). |
 | `ROVER_HOST_PORT` | — (required with the address) | The port that host listens on — its own `ROVER_LISTEN_PORT`, named from the other side. 1–65535. |
@@ -1159,6 +1161,75 @@ one person leaves. `.gitignore` refuses `*.pem` and `*.key` so a certificate gen
 checkout cannot be committed by accident. A caller that fails to authenticate is told only that
 authentication failed — no reason, no device list, no serials, and not even whether the token was
 unknown or revoked — and the connection is closed.
+
+### Serving the panel surface over HTTP
+
+A browser cannot speak the framed NDJSON greeting the TCP listener consumes before dispatch, so
+the panel reaches the host through a third transport of the *same* surface (`PROJECT.md` D28):
+one route, `POST /rpc`, whose request and response bodies are the envelopes every other transport
+already carries. It is **off unless `ROVER_HTTP_PORT` is set** — a daemon that started listening
+for browsers because somebody upgraded would be a change in exposure nobody chose — and `rover
+list` clears the switch in any daemon it autostarts, exactly as it clears `ROVER_LISTEN_PORT`.
+
+```bash
+npm run rover -- users add panel     # the credential — the same store, no second secret
+export TOKEN=<the token that printed>
+export ROVER_HTTP_PORT=4712          # the switch; ROVER_HTTP_ADDRESS defaults to loopback
+npm run daemon
+```
+
+```
+Rover is serving the panel surface on http://127.0.0.1:4712/rpc.
+```
+
+The device list, with the token that command printed:
+
+```bash
+curl -sS -X POST http://127.0.0.1:4712/rpc \
+  -H "Authorization: Bearer $TOKEN" \
+  -d '{"protocolVersion":1,"id":"1","method":"list_devices","params":{}}'
+```
+
+```json
+{"type":"result","protocolVersion":1,"id":"1","result":{"devices":[{"serial":"emulator-5554","platform":"android","model":"sdk_gphone64_arm64","state":"ready","attachment":"this-host","heldBy":null}],"stale":false}}
+```
+
+Four things about that surface are worth knowing before pointing anything at it:
+
+- **The token goes in the header and never in the URL** (`PROJECT.md` D20). There is no
+  query-string credential to fall back on, and `POST /rpc?token=…` with no header is refused like
+  any other stranger. Nothing about a request or a refusal is logged.
+- **Only the panel's methods are reachable.** Every method still runs on the host either way, but
+  this transport serves an allowlist over the one table — the device list today — so a browser tab
+  cannot take a lease and then drive a phone with it:
+
+  ```json
+  {"type":"error","protocolVersion":1,"id":"2","error":{"code":"unknown_method","message":"'acquire_device' is not served over this host's HTTP surface"}}
+  ```
+
+- **There are exactly two statuses.** `200` means the surface answered — read the envelope, whose
+  `error.code` is the same vocabulary every Rover client already reads. `401` is the one refusal,
+  identical for a missing credential, a malformed one, an unknown token, a revoked user, an
+  unreadable store, an unknown path and the wrong HTTP method alike, because authentication happens
+  before routing and a refusal that varied would tell a stranger something:
+
+  ```
+  HTTP/1.1 401 Unauthorized
+  content-type: application/json
+  connection: close
+
+  {"type":"error","protocolVersion":1,"id":null,"error":{"code":"unauthenticated","message":"Authentication failed."}}
+  ```
+
+- **The store is read on every request.** `rover users revoke panel` on this machine makes the very
+  next request `401`, with the daemon still running and nothing restarted — including on a
+  keep-alive connection the revoked user is already holding.
+
+Off loopback, `ROVER_TLS_CERT` and `ROVER_TLS_KEY` become required and the daemon refuses to start
+without them: every request carries a bearer token in a header, and an unencrypted listener a
+stranger can reach would put it on the wire in the clear. The certificate is the host's own — the
+same pair the TCP listener uses, generated the same way as in [expose this machine as a
+host](#expose-this-machine-as-a-host).
 
 ### Connecting to a remote host
 

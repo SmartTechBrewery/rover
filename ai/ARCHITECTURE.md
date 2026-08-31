@@ -24,14 +24,15 @@ that consumes this one**, handing it an already-connected stream. That is what m
 listener an added transport rather than a rewrite, and it is checkable by reading the imports:
 the unit tests drive the whole surface over an in-memory stream pair that is not a socket at all.
 
-**Both transports exist now, and both halves of each.** The two listeners share one
-`IpcServer` instance built in `src/daemon/listen.ts`; the two clients share one
-`createIpcClient`:
+**Three transports exist now**, all serving one `IpcServer` instance built in
+`src/daemon/listen.ts`; the two Rover clients share one `createIpcClient`, and the third transport
+has no Rover client at all because its client is a browser:
 
 | | Host side | Client side |
 |---|---|---|
 | Local unix socket | `src/daemon/listen.ts` — no token, no configuration | `src/daemon/connect.ts` — **and autostart lives here** (D5) |
 | TCP + TLS | `src/daemon/network-listen.ts` — opt-in via `ROVER_LISTEN_PORT` | `src/daemon/network-connect.ts` — configured by `ROVER_HOST_ADDRESS` |
+| HTTP(S) | `src/daemon/http-listen.ts` — opt-in via `ROVER_HTTP_PORT`, one route `POST /rpc` (D28) | the browser; **no Rover client**, and none is planned |
 
 `src/daemon/host.ts` is where a client **chooses** between those two client halves, and it is
 single because there are two clients: the CLI asks for a host with `--host` and the MCP server
@@ -39,10 +40,11 @@ takes one from its own environment, and a second copy of that function would be 
 autostart could be reached from. Each client keeps only its own translation — `--host` and exit
 codes in `src/cli/_shared/host.ts`, the environment switch in `src/mcp/_shared/host.ts`.
 
-Each pair is handed the same `IpcServer` or wrapped by the same `createIpcClient`, so there is
-one method table, one dispatcher, one set of schemas, and nothing for the four to drift from.
-`src/daemon/network-config.ts` carries both halves' configuration, and the two halves are
-deliberately **asymmetric** (D25): the host half holds no secret at all — it names a user store,
+Every listener is handed the same `IpcServer` and every Rover client is wrapped by the same
+`createIpcClient`, so there is one method table, one dispatcher, one set of schemas, and nothing
+for any of them to drift from. `src/daemon/network-config.ts` carries both network listeners' and the
+client's configuration, and the listener side and the client side are deliberately
+**asymmetric** (D25): the host half holds no secret at all — it names a user store,
 `~/.rover/users.json`, that `rover users` writes — while `ROVER_HOST_TOKEN` is the *client's*
 own credential, the token that host printed for it once. There is no shared secret left on the
 host side, because a way in that no `rover users revoke` could take away is what the store
@@ -70,6 +72,29 @@ cannot read, or a handshake that times out — gets one byte-identical `unauthen
 and a destroyed connection, because a refusal that varied with the reason would tell a stranger
 something about the host (D20). The token authenticates and attributes nothing: a lease's owner
 is a separate, caller-supplied string, never derived from whoever authenticated.
+
+**On the HTTP transport the gate is per *request*, because HTTP has no connection to
+authenticate** (D28). A keep-alive connection carries many requests and a browser opens and drops
+them as it pleases, so the credential travels on each one — `Authorization: Bearer <token>`,
+resolved against the same store, read afresh every time. That is strictly stronger than the TLS
+gate's per-connection check, and it is what makes `rover users revoke` bite on the very next
+request over a connection the revoked user is already holding. Everything else is the same
+policy, deliberately: the refusal is the identical bytes (both come from `UNAUTHENTICATED_REFUSAL`
+in `src/ipc/protocol.ts`, one minus its newline), authentication happens **before routing** so an
+unauthenticated stranger cannot learn which paths exist, and there are exactly two statuses —
+`401` for every pre-auth failure and `200` meaning *read the envelope*, because
+`IpcErrorCodeSchema` is already the complete error vocabulary and a second one in the status line
+is two sources of truth that can disagree. Dispatch reuses the one binding surface literally: the
+module hands `handleConnection` an in-memory duplex carrying one frame, which is why `src/ipc/`
+gained nothing and the independence gate simply grew two more forbidden imports.
+
+That transport also serves a **method allowlist** over the one table — never an addition to it.
+Every method still runs on the host either way (D19), so what the allowlist protects is D27: the
+panel has authority over the shared pool and deliberately does not acquire devices, and without it
+an authenticated user could take a lease from a browser tab and drive a phone with the id it was
+handed. And it is **request/response only**: `list_devices` answers with `expiresInMs`, a duration,
+so the panel's countdown ticks in the browser and re-syncs on the next poll — there is no SSE, no
+WebSocket, and therefore no second connection style to build, authenticate or shut down.
 
 ### Why the daemon exists at all
 
@@ -551,4 +576,4 @@ the same slot-aware runner, so concurrent leases receive separate port blocks.
 
 ## Not built, deliberately
 
-No database — the daemon's *operational* state (inventory, leases, ports) is per-host, ephemeral and re-derivable; a slot pool is the plainest case of it, since after a restart there are no leases and so there are no slots to reclaim from a predecessor. The artifact archive (`PROJECT.md` §10, D23) is a deliberate exception: files on disk, not daemon state, and nothing the daemon needs to survive a restart to keep working. Its directory shape is itself a stable contract a future read-only web panel would read directly off disk (`PROJECT.md` D24, `docs/WEB_PANEL.md`) — that panel is not being built now, but the archive is already shaped so building it later needs no redesign. No cloud half. Rover is nothing's CI gate — it asserts nothing about the app under test and turns nothing red on its own; the `verify` workflow on this repo's own pull requests (`PROJECT.md` §7, R26) runs Rover's unit suite and is not part of the product. No device farm, no host catalogue and no registration of hosts with one another: a client learns about hosts from its own configuration and nowhere else (`PROJECT.md` §7). No comparison against design renders: Rover supplies screenshots and measurements; judging them is the agent's job.
+No database — the daemon's *operational* state (inventory, leases, ports) is per-host, ephemeral and re-derivable; a slot pool is the plainest case of it, since after a restart there are no leases and so there are no slots to reclaim from a predecessor. The artifact archive (`PROJECT.md` §10, D23) is a deliberate exception: files on disk, not daemon state, and nothing the daemon needs to survive a restart to keep working. Its directory shape is itself a stable contract the web panel will read directly off disk (`PROJECT.md` D24, `docs/WEB_PANEL.md`) — no index to build, a directory listing is the whole query. **That panel is in scope and is not read-only** (D27, since 2026-08-31): its transport exists (D28, the HTTP row above), and the screens do not yet. The archive is already shaped so building them needs no redesign. No cloud half. Rover is nothing's CI gate — it asserts nothing about the app under test and turns nothing red on its own; the `verify` workflow on this repo's own pull requests (`PROJECT.md` §7, R26) runs Rover's unit suite and is not part of the product. No device farm, no host catalogue and no registration of hosts with one another: a client learns about hosts from its own configuration and nowhere else (`PROJECT.md` §7). No comparison against design renders: Rover supplies screenshots and measurements; judging them is the agent's job.
