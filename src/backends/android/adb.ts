@@ -93,6 +93,26 @@ export const RECORDING_FINISH_TIMEOUT_MS = 10_000;
 export const RECORDING_PULL_TIMEOUT_MS = 60_000;
 
 /**
+ * The one call that goes the *other* way: a query so small it deserves **less** than the
+ * default, because something is waiting on it that the default was never sized for.
+ *
+ * The per-device OS-version read is two `getprop` calls on one command line, and it is the
+ * only query issued from the enumeration path — which `DeviceInventory.verifyForGrant` runs
+ * on every lease grant, in parallel across every attached device. So the slowest device on
+ * the host sets how long a grant for a *healthy* one takes, and a wedged handset that adb
+ * still reports as `device` would spend the full ten seconds of every grant on a fact that
+ * is nice to have.
+ *
+ * Tuned against a measurement rather than generous, which is the opposite of the three
+ * budgets above: five runs against an API 35 emulator each took **0.07–0.11 s**
+ * (PROJECT.md §6), so three seconds is more than an order of magnitude of headroom for the
+ * same read over USB to a busy physical device, and a thirtieth of the wait a wedged one
+ * used to cost. Timing out is cheap here in a way it is not for a capture or an install:
+ * the device is listed without a version and asked again at the next enumeration.
+ */
+export const OS_VERSION_ADB_TIMEOUT_MS = 3_000;
+
+/**
  * How much of a long-lived run's stderr is kept for its end reason.
  *
  * Bounded because {@link streamAdb} runs for as long as the host does, and an adb that
