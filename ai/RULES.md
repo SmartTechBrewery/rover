@@ -101,9 +101,23 @@ The predecessor *asked* callers, in a comment, to restore state before releasing
 
   If a commit ever resolves to `jkwiecien@solvd.com` (the global default), the local override is missing or was reset — restore it before committing.
 
-- **Repo**: `SmartTechBrewery/rover`. The remote is `git@gh-personal:SmartTechBrewery/rover.git`, **not** `git@github.com:…`.
+- **Repo**: `SmartTechBrewery/rover`. **The push must go over SSH as the personal identity** — which remote URL achieves that is a property of the machine, not of this repository, so do not hard-code one here or in a clone.
 
-  `gh auth switch` governs the API only; `git push` goes over SSH and picks its key from `~/.ssh/config`, where plain `github.com` is pinned to the work identity. Pushing through it fails with `Permission to SmartTechBrewery/rover.git denied to jacek-solvd` — an authorization error that looks like a missing repository, on an account you thought you had switched away from. `gh-personal` is the alias carrying the personal key. If a clone or a new remote is ever added with the plain host, rewrite it.
+  `gh auth switch` governs the API only; `git push` picks its SSH key from `~/.ssh/config`. On a machine whose plain `github.com` already resolves to the personal key, `git@github.com:SmartTechBrewery/rover.git` is correct and nothing else is needed — check with `ssh -T git@github.com`, which names the account. On a machine where `github.com` is deliberately pinned to a **work** identity, pushing through it fails with `Permission to SmartTechBrewery/rover.git denied to <work-account>` — an authorization error that reads like a missing repository, on an account you thought you had switched away from.
+
+  Fix that **in the machine's git configuration, never by rewriting the remote**, so it survives every fresh clone and worktree an agent creates. Add a host alias carrying the personal key to `~/.ssh/config`, then scope the rewrite to where the work lives, leaving the global default alone:
+
+  ```gitconfig
+  # ~/.gitconfig — the trailing slash matters; without it only the directory itself matches
+  [includeIf "gitdir:~/<agent-workspace-root>/"]
+      path = ~/.config/git/rover.inc
+
+  # ~/.config/git/rover.inc
+  [url "git@<personal-alias>:"]
+      insteadOf = git@github.com:
+  ```
+
+  If the agent runs `git worktree add` from one clone rather than cloning afresh, `git config --local` in that clone is enough — worktrees share its `.git/config`.
 - **Conventional commits**, enforced by commitlint on `commit-msg`. Subject imperative and lowercase, 100 characters max, body explaining *why*.
 
 ---

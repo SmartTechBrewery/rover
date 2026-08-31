@@ -58,3 +58,16 @@ artifacts/
 .idea/
 .vscode/
 *.swp
+
+# ── Menedżer pakietów ──────────────────────────────────────────────────────
+# To repozytorium używa npm: `package-lock.json` jest commitowany i wszystkie
+# skrypty w `package.json` wołają `npm run`. Lockfile pnpm obok niego to nie
+# drugi wariant do wyboru, tylko pułapka — `pnpm install` i `npm ci` potrafią
+# rozwiązać różne drzewa zależności, a ten drugi plik nikt nie aktualizuje.
+pnpm-lock.yaml
+pnpm-workspace.yaml
+yarn.lock
+
+# ── Workspace'y Swarma ─────────────────────────────────────────────────────
+# Worktree i stan zadań agenta — jak `.rover/`, stan jednej maszyny, nie kod.
+.swarm-workspaces/
