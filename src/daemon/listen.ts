@@ -175,7 +175,7 @@ export interface DaemonAlreadyRunning {
 export type StartResult = RunningDaemon | DaemonAlreadyRunning;
 
 /**
- * The method table the daemon serves — status, the device list, the two lease operations and
+ * The method table the daemon serves — status, the device list, the three lease operations and
  * the verbs, on one surface (D19). A new verb family is one more spread, or one more entry in
  * `./verb-handlers.ts`; nothing about the connection lifecycle changes to carry it.
  */

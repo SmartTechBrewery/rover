@@ -380,6 +380,37 @@ describe('rover install, whose package argument is optional', () => {
 	});
 });
 
+describe('rover force-release, on its serial and its actor', () => {
+	it('exits 2 without a serial', async () => {
+		expect(await run(['force-release', '--actor', 'karolina'])).toBe(EXIT_USAGE);
+
+		expect(errored.join('\n')).toContain('expected <serial>');
+	});
+
+	it('exits 2 without --actor rather than deriving one', async () => {
+		expect(await run(['force-release', 'serial-1'])).toBe(EXIT_USAGE);
+
+		// The record of who ended somebody else's lease is the caller's to supply (D20, D28). A
+		// CLI that filled it in from the environment would attribute the action to nobody.
+		expect(errored.join('\n')).toContain('--actor is required');
+		expect(errored.join('\n')).toContain('Usage: rover force-release');
+	});
+
+	it('exits 2 for an --actor given as an empty string', async () => {
+		expect(await run(['force-release', 'serial-1', '--actor', ''])).toBe(EXIT_USAGE);
+
+		expect(errored.join('\n')).toContain('--actor is required');
+	});
+
+	it('takes no --lease-id: there is no credential to present', async () => {
+		expect(
+			await run(['force-release', 'serial-1', '--actor', 'karolina', '--lease-id', 'lease-1']),
+		).toBe(EXIT_USAGE);
+
+		expect(errored.join('\n')).toContain('--lease-id');
+	});
+});
+
 describe('rover release, on its one argument', () => {
 	it('exits 2 without a lease id', async () => {
 		expect(await run(['release'])).toBe(EXIT_USAGE);

@@ -18,6 +18,7 @@ import { EXIT_FAILED, EXIT_OK, EXIT_USAGE } from './_shared/exit.js';
 import { UsageError } from './_shared/flags.js';
 import * as out from './_shared/output.js';
 import * as acquire from './commands/acquire.js';
+import * as forceRelease from './commands/force-release.js';
 import * as install from './commands/install.js';
 import * as list from './commands/list.js';
 import * as pull from './commands/pull.js';
@@ -58,6 +59,7 @@ const COMMANDS: Record<string, Command | undefined> = Object.assign(Object.creat
 	list,
 	acquire,
 	release,
+	'force-release': forceRelease,
 	screenshot,
 	record,
 	pull,
@@ -80,6 +82,9 @@ Commands:
   acquire <serial>         Take a lease on one device (--owner required, and --project
                            unless ROVER_PROJECT_FILE names a project hook file)
   release <lease-id>       Hand a lease back
+  force-release <serial>   End the lease somebody else holds on a device (--actor required;
+                           keyed on the serial, because the lease id is its holder's
+                           credential and is never handed out)
   screenshot <lease-id>    Capture the screen to a file on this machine (--out required)
   record <lease-id>        Record the screen to a file on this machine (--out required)
   pull <lease-id> <path>   Read a file off the device onto this machine (--out required)
@@ -112,8 +117,8 @@ Global options:
 Exit codes:
   0   success
   1   the operation did not succeed — a refused acquire, a release that found no live
-      lease, a verb the host refused or that failed, an unreachable host, or a request
-      the host rejected
+      lease, a force-release that found no lease on the device, a verb the host refused
+      or that failed, an unreachable host, or a request the host rejected
   2   usage error — unknown command, unknown flag, a missing required option, an
       attribution string longer than the host accepts, an --out that names a directory
       or has no directory to write into, a file to push or install that is missing,

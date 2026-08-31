@@ -33,7 +33,13 @@ Design work lives in [`DESIGN.md`](./DESIGN.md); the brief that produced the fir
 6. **Live lease state** — which device is held, by which `owner` / `project` / `test_name`, and how
    long until the lease expires on its own (`PROJECT.md` D8).
 7. **Force-release a stuck lease** — before its TTL naturally runs out, an operator action rather
-   than something a client can do to another client's lease.
+   than something a client can do to another client's lease. **The host method exists** (R31, #109):
+   `force_release_device`, keyed on the device serial rather than on the holder's lease id, running
+   the same restoration a normal release runs, and recorded against a caller-supplied `actor`
+   string. Its authorisation model is `PROJECT.md` **D28** — reaching the surface authorises, the
+   `actor` string attributes, and the host derives neither from the other. The panel's own
+   affordance, with a confirmation, is R35. It is on the CLI too (`rover force-release <serial>
+   --actor <string>`), so the action is debuggable without a browser (D4).
 8. **Host user management** — issuing and revoking a named user's access to the host. No longer a
    single shared secret to design around: `PROJECT.md` D25 already replaces `ROVER_HOST_TOKEN` with
    named, revocable per-user credentials (`rover users add/list/revoke/rotate`, R27–R28) precisely
@@ -59,6 +65,9 @@ Design work lives in [`DESIGN.md`](./DESIGN.md); the brief that produced the fir
   credential with the same reach — device leases and (once it exists) the archive alike. A
   read-only role, scoped to browsing the archive without ever acquiring a device, is a real
   candidate once the panel actually needs one, but no such tiering exists yet and none is assumed.
+  **D28 does not close this**, and it says so itself: force-release is authorised by the reach every
+  named user already has, precisely so that the first operator action did not have to invent a tier
+  in passing. A read-only tier arriving later restricts that row along with the rest.
 - **Whether the panel's own login is the same credential as R27's users, or a second layer on top
   of it.** Most likely the same one — the panel would be just another authenticated remote client
   over the existing network listener (`PROJECT.md` D17, D20, D25) — but not confirmed, and nothing

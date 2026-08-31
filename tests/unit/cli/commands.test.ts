@@ -1,5 +1,5 @@
 /**
- * The four commands against a real daemon on a real socket.
+ * The commands against a real daemon on a real socket.
  *
  * The daemon suite's real-socket exception applies (ai/TESTING.md) — never
  * `~/.rover/rover.sock`, and every daemon closed through its own handle in `afterEach`.
@@ -299,5 +299,82 @@ describe('acquire, list, release', () => {
 		expect(await run(['release', 'no-such-lease'])).toBe(EXIT_FAILED);
 
 		expect(errored.join('\n')).toContain("No live lease 'no-such-lease'");
+	});
+});
+
+describe('rover force-release, over the socket', () => {
+	it('ends a lease it never took, naming the device rather than a credential', async () => {
+		registerFakeBackend();
+		await start();
+		expect(
+			await run(['acquire', 'attached-1', '--owner', 'stuck-agent', '--project', 'rover']),
+		).toBe(EXIT_OK);
+
+		logged = [];
+		// No lease id anywhere in the invocation: this caller was never handed one, which is the
+		// whole reason the row is keyed on the serial (D20, D28).
+		expect(await run(['force-release', 'attached-1', '--actor', 'karolina'])).toBe(EXIT_OK);
+
+		expect(logged.join('\n')).toContain('Force-released the lease');
+		expect(logged.join('\n')).toContain('stuck-agent');
+
+		logged = [];
+		expect(await run(['list'])).toBe(EXIT_OK);
+		expect(logged.join('\n')).toContain('free');
+	});
+
+	it('exits 1 and says not-held for a device nobody is holding', async () => {
+		registerFakeBackend();
+		await start();
+
+		expect(await run(['force-release', 'attached-1', '--actor', 'karolina'])).toBe(EXIT_FAILED);
+
+		// A refusal is the host's answer, so it goes to stderr and names which "nothing to do"
+		// this is — the operator's next move differs between the three.
+		expect(errored.join('\n')).toContain('Nothing force-released (not-held)');
+		expect(logged).toEqual([]);
+	});
+
+	it('writes the refusal document to stdout in --json mode, and still exits 1', async () => {
+		registerFakeBackend();
+		await start();
+
+		expect(await run(['force-release', 'attached-1', '--actor', 'karolina', '--json'])).toBe(
+			EXIT_FAILED,
+		);
+
+		expect(logged).toHaveLength(1);
+		expect(JSON.parse(logged[0] ?? '')).toMatchObject({
+			host: 'local',
+			outcome: 'refused',
+			reason: 'not-held',
+		});
+	});
+
+	it('never puts the ended lease’s id in the answer', async () => {
+		registerFakeBackend();
+		await start();
+		expect(
+			await run([
+				'acquire',
+				'attached-1',
+				'--owner',
+				'stuck-agent',
+				'--project',
+				'rover',
+				'--json',
+			]),
+		).toBe(EXIT_OK);
+		const leaseId = grantedLeaseId(logged[0] ?? '');
+
+		logged = [];
+		expect(await run(['force-release', 'attached-1', '--actor', 'karolina', '--json'])).toBe(
+			EXIT_OK,
+		);
+
+		// The host's own answer, straight out of the socket: force-releasing a device must not be
+		// a way to come by the credential for the next one.
+		expect(logged.join('\n')).not.toContain(leaseId);
+		expect(logged.join('\n')).not.toContain('leaseId');
 	});
 });
