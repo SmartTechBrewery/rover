@@ -1392,8 +1392,17 @@ label.
 `npm run panel:dev` serves it on <http://localhost:5174>; `npm run panel:build` writes
 `panel/dist` and `npm run panel:preview` serves that. **The host serves the panel's data surface
 but not the panel's own files** — `POST /rpc` is above, and serving `panel/dist` from that same
-listener is still a separate piece of work — so the panel runs from its development server for now
-and reads no live device data yet.
+listener is still a separate piece of work — so the panel runs from its development server for now.
+
+**Devices is the panel's default view and it reads the host.** It polls `list_devices`, the one
+method the surface lets it call, and shows every attached device as a card — model, serial,
+platform, OS version, and either *free* or the lease holding it, with the holder's `owner`,
+`project` and `test name`, the grant instant as the host wrote it, and a countdown that ticks down
+once a second and **goes back up** when activity renews the lease. Four states of that one screen
+are distinguished on purpose, and the last two are the reason: nothing attached; a host view that is
+not current, over a list; a host view that is not current over an *empty* list, which means Rover
+cannot say what is attached rather than that nothing is; and the host being unreachable, which
+replaces the whole page. There is no force-release control on it yet.
 
 Its design comes from Stitch, not from this repository: `ai/RULES.md` §8 is how to reach it and
 `docs/DESIGN.md` is what the screens settled. The Analog Horizon tokens live in

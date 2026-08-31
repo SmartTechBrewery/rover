@@ -27,14 +27,19 @@ Design work lives in [`DESIGN.md`](./DESIGN.md); the brief that produced the fir
    once, holds the session id it is given, and signs out in a way that ends the session on the
    host.
 2. **Project registration** — modeled on Swarm's own.
-3. **List of devices available in the system** — Android only for now, whatever the host's `adb`
-   reports (`PROJECT.md` §4 `list_devices`).
+3. **List of devices available in the system** — **done** (#113). Android only for now, whatever the
+   host's `adb` reports (`PROJECT.md` §4 `list_devices`): the Devices screen polls `list_devices`
+   over the HTTP surface and renders every device the host reports as one card — model, serial,
+   platform, OS version — in a grid whose column count follows the width available to the content.
 4. **List of jobs run** — global and per project, modeled on Swarm's own.
 5. **Access to historical test artifacts** — screenshots, recordings, reports — as a searchable
    file tree. This is exactly what the artifact archive (`PROJECT.md` §10) is shaped to serve
    directly off disk (D24): no index to build, a directory listing is the whole query.
-6. **Live lease state** — which device is held, by which `owner` / `project` / `test_name`, and how
-   long until the lease expires on its own (`PROJECT.md` D8).
+6. **Live lease state** — **done** (#113). A held card carries the `owner`, the `project`, the
+   `test_name` and the grant instant, with a countdown to the expiry that ticks once a second and
+   **goes back up** when activity renews the lease (`PROJECT.md` D8) — verified against a running
+   host, not only in a test. A held/free counter above the grid is derived from the same array the
+   cards come from, so it cannot disagree with them.
 7. **Force-release a stuck lease** — before its TTL naturally runs out, an operator action rather
    than something a client can do to another client's lease. **The host method exists** (R31, #109):
    `force_release_device`, keyed on the device serial rather than on the holder's lease id, running
@@ -82,6 +87,16 @@ real rather than a `localStorage.removeItem`. Each session is bound to the user'
 `rotate` — ends a live browser session on its very next request, exactly as it ends a token's. No
 cookie is set and none is read, so there is no CSRF surface; the daemon restarting signs everyone
 out.
+
+**And the Devices screen reads live host data** (#113). It polls `list_devices` — the only method it
+calls, and the only one the surface lets it (`PANEL_METHODS`) — and renders four states of one
+screen plus one of the whole page: devices attached; nothing attached, which is normal and common
+(D21); a stale view over a list, whose lease fields stay exact because `stale` is about the host's
+view of the *hardware* and a lease has no view to go stale (D6); a stale view over an **empty** list,
+which means *no view* and must never read as *nothing attached* — the state `DESIGN.md` §7 now
+settles; and the host being unreachable, which leaves the navigation nothing to reach and so
+replaces the whole page. No force-release control, no confirmation and no write of any kind: that is
+the second half of R35.
 
 **The browser's own half is built** (#119). The sign-in screen is deliberately **not a route** — the
 panel renders it in place of the router while there is no live session — so there is no address a

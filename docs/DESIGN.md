@@ -33,7 +33,7 @@ this sentence exists to prevent.
 | Devices (Home) | `3458d89bda5e442d894ea54208230d4c` | **The reference.** Settled. |
 | Devices — Nothing Attached | `ccdef7834ab9470f9a653a47321998c9` | Settled |
 | Devices — Host Unreachable | `c60c5830d23e4a328e9d77b83c98f9fc` | Settled |
-| Devices — Host View Stale | `46f3a297fee047028f29c8958a926995` | Settled, **list variant only** |
+| Devices — Host View Stale | `46f3a297fee047028f29c8958a926995` | Settled, **list variant only** — the empty variant has no Stitch screen and is settled in §7 |
 | Devices — Force Release Confirmation | `d86e794af4de4639979bc65104e2ec57` | Settled, **the asking only** |
 | Archive — Browsing (V2) | `f2de4344f7e347aa894b3054d9cf4098` | Not yet corrected — see §9 |
 | Run Detail — Artifacts (V2) | `36b54fbe032449d8a300ea0825bbf1c8` | Not yet corrected — see §9 |
@@ -191,6 +191,11 @@ full-page repaint every frame. The only motion in the interface is the lease cou
 digits once a second and ordinary hover/press feedback: both are responses to something real.
 Whatever remains is suppressed under `prefers-reduced-motion`.
 
+*As built* (#113): the countdown is that only motion, and it needs **nothing added** for
+`prefers-reduced-motion`. It changes text, with no transition and no animation on it, so the global
+block in `index.css` has nothing to reach. Recorded here so the next reader does not go looking for
+a branch that is missing on purpose.
+
 **The scanline texture stays, but only on chrome.** It carries the CRT character and costs nothing
 to read against because it does not move. It must never be a fixed full-viewport layer in a blend
 mode: two of the four screens are mostly screenshots of mobile apps, and an overlay tints the exact
@@ -202,7 +207,9 @@ child of that one element. The emitted design markup applied it **twice** — on
 chrome, and once as `fixed inset-0 … mix-blend-overlay`, a full-viewport blended layer, which is
 the exact thing this rule forbids. The fixed layer is deleted and the blend mode with it.
 `app-shell.test.tsx` asserts that `<main>` contains no `.scanline` and that no scanline element is
-`fixed` or in a blend mode.
+`fixed` or in a blend mode. The Devices screen's own markup offered two more of them — one
+inside the held/free counter badge and one in every card header, both blended — and neither is
+reproduced (#113), for the same reason and by the same test: both live inside `<main>`.
 
 **The chromatic text-shadow is for the wordmark only.** Never on data — serials, UTC timestamps,
 short hashes and file names stay crisp and are never truncated or ellipsised.
@@ -222,6 +229,12 @@ changes with context (3 on a card header, 2.5 in the counter badge). None of the
 | --- | --- |
 | Held | `bg-primary-container` + `border-primary` — neutral blue |
 | Free | `bg-tertiary` + `border-tertiary` — green |
+
+*As built* (#113): `panel/src/components/devices/status-led.tsx`, one component with a size prop and
+nothing else. It is `aria-hidden` everywhere it appears, because the card body already says
+`ACTIVE LEASE` or `free` and the counter's own text says "2 held" — it is a second channel for
+something already written, which makes it decoration to a screen reader rather than information
+withheld from one.
 
 **There is no red or orange device state, and there will not be one.** A device that disappears
 from the host is simply not listed. Orange in this palette (`secondary-container`, `#ff5e07`) is the
@@ -279,6 +292,33 @@ the opposite of what the card says: this phone is attached and ready.
 **The counter badge** above the grid reads `● 2 held  ● 1 free`, using those very LEDs — the held
 one before the held count, the free one in place of the separator. No `·`, no glow, and it must
 agree with the cards below it.
+
+*As built* (#113): `panel/src/components/devices/device-card.tsx`, and five things the design's mock
+data never had to answer, settled here.
+
+- **`grantedAt` is rendered exactly as the host sent it** — the whole ISO-8601 instant with its `Z`,
+  never truncated to the mock's `14:02 UTC`, and never differenced against this machine's clock. It
+  is the *host's* clock (`LeaseHolderSchema`, D17), so the only honest relative number on the card
+  is the countdown, which is driven by `expiresInMs` — a duration — plus the moment the answer
+  arrived. `src/cli/_shared/output.ts` holds the same line for the CLI.
+- **`model: null` falls back to the serial** in the header. The header's job is to identify the
+  device, and the serial always can.
+- **`osVersion: null` renders `unknown`.** It is a real answer for a device waiting on its
+  authorization prompt, and this field is one of the card's two fixed columns — `TEST NAME`'s
+  disappear-entirely rule does not transfer, because that field is genuinely optional while dropping
+  this one leaves the row lopsided.
+- **`platform` is rendered verbatim, so it reads `android` and not the mock's `Android`.** A display
+  table mapping one to the other would be a platform branch in shared code, which is the thing
+  `ai/RULES.md` §2 exists to prevent; the wire value is what the host said.
+- **The countdown carries no colour that changes with the time left.** The design's demo script
+  turns it orange under a minute; expiry is normal and renewable (D8), orange is this palette's
+  warning colour, and §7 already says this number is not dressed as urgent. It has no `aria-live`
+  either — a region announcing once a second is a screen-reader firehose, and the digits are
+  ordinary text.
+
+**The card carries no control yet.** The design's markup has `FORCE RELEASE` on every held card and
+it is deliberately not reproduced: #113 is the grid and its states, and the action with its
+confirmation is the second half.
 
 ---
 
@@ -378,6 +418,38 @@ Two more things this state fixed, both of which will recur:
 **This is an uncertainty, not a fault.** Nothing failed. Grey, not a warning colour, and nowhere
 near red.
 
+### Host view not current, with an *empty* list — settled (#113)
+
+The dangerous half, and the one state here designed from this document rather than commissioned as
+a Stitch screen (§9). `list_devices` answering an empty array with `stale` set means **no view**,
+not *no devices* — it is visually identical to *nothing attached* and means the opposite, so a
+person reading "nothing is attached" walks to the machine and finds a phone sitting in the socket.
+That is not a visual preference; it is the reason the state exists (D6).
+
+Both halves were reproduced against a running daemon before this was written: with an emulator
+attached, interrupting the host's view of the hardware gives `stale: true` with the device and its
+lease still listed; doing the same with nothing attached gives `stale: true` with an empty list,
+which is this state and is one poll away from the one above it.
+
+- **It is one block, not a banner over a block.** The banner exists to caveat a list, and with no
+  list there is nothing to caveat — so the whole content area is the message, said once.
+- **It takes the banner's grey treatment** (`surface-variant`, `border-outline-variant`, the icon in
+  `text-outline`), *not* the *nothing attached* panel's `surface-container-lowest` card with corner
+  accents. Different surface, different heading, different words: the two must not be mistakable,
+  and that is the whole point of the state.
+- Heading `HOST VIEW NOT CURRENT`, the same one clause the list variant carries. Then, in §7's
+  language and with no error colour, no warning icon and no spinner: *Rover cannot say what is
+  attached to this machine. Its view of the hardware was interrupted, has not arrived yet, or is not
+  running.* — and, on its own line, *This is not the same as nothing being attached — a phone may
+  well be plugged in.*
+- **The counter is absent**, for *nothing attached*'s reason and more sharply: `0 held · 0 free`
+  would describe an empty pool, which is the precise claim this state exists to refuse.
+- **No retry control.** This is host state that resolves itself, and the poll is already asking.
+
+`devices.test.tsx` names both empty states in one test and asserts that neither one's copy appears
+in the other, because "these two must not render the same" is the criterion on this screen most
+worth pinning.
+
 ### Host unreachable — settled
 
 The panel cannot reach the daemon at all.
@@ -403,6 +475,25 @@ wrongly.
 - **No `OFFLINE` badge** restating the headline.
 - `RETRY CONNECTION` stays. Retrying a read is harmless and it is the one useful thing to do from
   here — and it is not a spinner while it runs.
+
+*As built* (#113). Two things worth recording, because neither is guessable from the screen.
+
+**Where it is mounted is what makes "gone, not dimmed" true.** `panel/src/app.tsx` renders it *in
+place of* `RouterProvider`, above the router, exactly as the sign-in screen is rendered in place of
+it. A route component cannot remove the shell its parent route renders, and a cover inside `<main>`
+would leave every nav link in the DOM and in the tab order behind an opaque layer. That in turn is
+why the device poll lives above the router too (`panel/src/devices/device-list-provider.tsx`), and
+**the accepted cost is stated rather than hidden**: the poll runs while `Profile` is open, and an
+unreachable host takes `Profile` down with everything else. The panel has exactly one live data
+source and this is it. Only the reachability failure does this — a first poll still in flight leaves
+the router where it is, and the Devices screen says it is reading.
+
+**This is the one place in the panel that uses the `error` tokens**, and it is worth saying why that
+is consistent rather than an exception creeping in: §5 leaves red unused so it stays meaningful, and
+§7 calls a stale view "an uncertainty, not a fault" — a host that cannot be reached at all is the
+fault the reserve was kept for. It stays on the border, the mark and the headline. The design's
+`shadow-[0_0_40px_rgba(…)]` glow and its radial-dot background are dropped, both being ornament and
+colour literals at once.
 
 ## 8. The sign-in screen, as settled
 
@@ -564,13 +655,9 @@ Build them in keeping with everything above — the palette and tokens, no loopi
 uniform refusal, the vocabulary — and **write what you settled back into this document** (see the
 top of this file). Do not commission a Stitch screen for them.
 
-- **The "no view" state with an *empty* list.** The variant with devices in it is settled (§7). The
-  empty one is the dangerous half and is still undesigned: it is visually identical to "nothing
-  attached" and means the opposite, so a person reading "nothing is attached" walks to the machine
-  and finds a phone sitting in the socket. `list_devices`'s own schema says it outright — an empty
-  list with `stale` set means *no view*, not *no devices* (D6). Design it as a state of the Devices
-  screen, in keeping with §7's settled ones — but the constraint above is not a visual preference,
-  it is the reason the state exists.
+- **The "no view" state with an *empty* list — done** (#113). It was built from this document rather
+  than from a Stitch screen, exactly as this list intends, and what it settled is written into §7
+  above. Left named here so the next reader can see that the method worked once.
 - **The force-release action's three outcomes.** The asking is settled (§7); what happens after it
   is not. They are three different things and must not collapse into one: the card becoming free
   without a reload; the lease having already ended on its own between the page loading and the
