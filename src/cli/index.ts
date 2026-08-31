@@ -72,7 +72,7 @@ export function usage(): string {
 
 Usage: rover <command> [options]
 
-There is no \`bin/\` launcher yet (PROJECT.md R20), so \`rover\` below stands for
+There is no \`bin/\` launcher yet (PROJECT.md §9.4), so \`rover\` below stands for
 \`${out.INVOCATION}\` — \`rover status\` is typed \`${out.INVOCATION} status\`.
 
 Commands:
