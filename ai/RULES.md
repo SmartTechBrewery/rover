@@ -164,3 +164,16 @@ Rover reads configuration from a per-project file (the hooks of `PROJECT.md` D13
 - **Zod schemas are the source of truth** for every option; the human-facing catalogue mirrors them and must not drift.
 - **Keep the catalogue current** — whenever a change adds, removes, renames or re-defaults an option, update its row in the same change.
 - **Nothing project-specific may reach the core.** An option that names one application belongs in that project's hook file, never in a default.
+
+---
+
+## 8. Designs
+
+The web panel's designs live in **Stitch**, in the project named **`Rover`** — **ID `636633385461686529`**. Not "Rover Web Panel Designs": that was the project's original title and it has been renamed, so an agent searching by the old name finds nothing.
+
+**Reach them through the Stitch MCP server, never from memory or from an image pasted into an issue.** `list_screens` for what exists, `get_screen` for one screen's `htmlCode` and `screenshot` (both are download URLs — fetch them with `curl -L`), `get_project` for the design system. Every issue that implements or changes UI repeats that project ID and says which screen it implements.
+
+- **The design system is `Analog Horizon`**, asset `assets/0ceb612ce88e4adb9c88f8e4ff21e3d8`, carried on the project. It is the source of truth for the palette, the type scale, the spacing units and the component language — colours and sizes are taken from there, not invented at the keyboard and not eyeballed off a screenshot.
+- **Take the newest screen, and check.** Iterations accumulate as separate screens (`Home — Devices`, `… (V2)`, `… (V3)`) because the server exposes no way to delete one; only `delete_project`, which takes everything. Titles are not reliably ordered, so confirm against `get_project`'s `screenInstances` or the screen's own content before building against it.
+- **`get_screen` can serve a stale file for minutes after an edit.** The `file id` in the response is what changes when the render catches up; an unchanged id means you are looking at the version from before the last edit, not at the current design.
+- **The brief that produced these screens is [`docs/DESIGN_INITIAL_PROMPT.md`](../docs/DESIGN_INITIAL_PROMPT.md)**, and the running list of what the panel eventually needs is [`docs/WEB_PANEL.md`](../docs/WEB_PANEL.md). Both explain *why* a screen looks the way it does — in particular that Rover is not a test framework, so no pass/fail badge, status colour or success rate belongs anywhere in this UI, and that the panel is read-only apart from force-releasing a lease.
