@@ -1,8 +1,8 @@
 import type { ListedDevice } from '@panel/devices/device-list.js';
 import type { DeviceList, DeviceListState } from '@panel/devices/device-list-provider.js';
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { AnchorHTMLAttributes, ReactNode } from 'react';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 // `breadcrumb.test.tsx`'s shape: a `Link` is a plain anchor so the screen renders without a router
 // instance, and `createRoute` is here because this module builds one at import.
@@ -28,6 +28,31 @@ vi.mock('@tanstack/react-router', () => ({
 const { list } = vi.hoisted(() => ({ list: { current: undefined as DeviceList | undefined } }));
 vi.mock('@panel/devices/device-list-provider.js', () => ({
 	useDeviceList: () => list.current,
+}));
+
+/*
+ * The card's force-release control reads the session for the identity it attributes the call with
+ * (#122, D28), so this screen cannot render without one. `answer` is what the host says to the one
+ * request the panel makes — set per test, so each of the four answers can be shown reaching this
+ * screen, or not reaching it.
+ */
+const { host } = vi.hoisted(() => ({
+	host: {
+		answer: undefined as unknown,
+		refusal: undefined as 'refused' | 'unanswered' | undefined,
+	},
+}));
+vi.mock('@panel/session/session-provider.js', () => ({
+	useSession: () => ({
+		state: {
+			status: 'signed-in',
+			identity: { identifier: 'karolina', displayName: 'Karolina Waldon' },
+		},
+		call: async () =>
+			host.refusal === undefined
+				? { ok: true, value: { type: 'result', result: host.answer } }
+				: { ok: false, refusal: host.refusal },
+	}),
 }));
 
 import { DevicesScreen } from './devices.js';
@@ -59,6 +84,13 @@ const FREE: ListedDevice = {
 	heldBy: null,
 };
 
+/**
+ * Held, and reported `offline` by the host — a phone that lost its cable or its authorisation
+ * mid-lease (#124). The lease is real and ends like any other; the device the lease was on is one
+ * the host would still refuse `not-ready`, so nothing about it may read as free.
+ */
+const HELD_OFFLINE: ListedDevice = { ...HELD, state: 'offline' };
+
 /** Attached and listed, holding no lease, and refused a lease by the host (#123). */
 const UNAUTHORIZED: ListedDevice = {
 	serial: 'emulator-5558',
@@ -69,8 +101,8 @@ const UNAUTHORIZED: ListedDevice = {
 	heldBy: null,
 };
 
-function showing(state: DeviceListState) {
-	list.current = { state, refresh: () => undefined };
+function showing(state: DeviceListState, refresh: () => void = () => undefined) {
+	list.current = { state, refresh };
 	return render(<DevicesScreen />);
 }
 
@@ -238,5 +270,160 @@ describe('a stale view with an empty list', () => {
 
 		expect(surfaceOfNoView).toContain('bg-surface-variant');
 		expect(surfaceOfAttached).toContain('bg-surface-container-lowest');
+	});
+});
+
+/**
+ * The one operator action's three outcomes, above the grid (`docs/DESIGN.md` §7).
+ *
+ * **They must not collapse into one.** A lease that ended, a lease that had already ended on its
+ * own and a device that is not on this host any more are three different pieces of news, and the
+ * last two both mean "nothing was released" while meaning nothing else alike. Each is asserted on
+ * its own words here for exactly that reason.
+ */
+describe('a force-release the host answered', () => {
+	beforeEach(() => {
+		host.answer = undefined;
+		host.refusal = undefined;
+	});
+
+	/** Confirm on the first held card, and wait for the line the answer produced. */
+	async function forceRelease(): Promise<void> {
+		fireEvent.click(screen.getAllByRole('button', { name: 'Force release' })[0] as HTMLElement);
+		const inDialog = screen.getAllByRole('button', { name: 'Force release' });
+		fireEvent.click(inDialog[inDialog.length - 1] as HTMLElement);
+		await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+	}
+
+	/*
+	 * The card becoming free *is* the outcome, so the poll is asked again rather than waited for —
+	 * that is what makes it visible without a reload. The line names the lease that ended, which the
+	 * card no longer shows once it is free.
+	 */
+	it('says the lease ended, and asks the poll for the card that is now free', async () => {
+		host.answer = {
+			outcome: 'released',
+			heldBy: { ...LEASE, owner: 'issue-113', project: 'rover' },
+		};
+		const refresh = vi.fn();
+		showing(ready([HELD, FREE]), refresh);
+
+		await forceRelease();
+
+		expect(screen.getByText(/The lease issue-113 held on/)).toBeDefined();
+		expect(screen.getByText(/for rover has ended/)).toBeDefined();
+		expect(refresh).toHaveBeenCalledTimes(1);
+	});
+
+	// News, not a failure: the lease ended on its own between the page loading and the click, and
+	// the card is free either way.
+	it('says a lease that had already ended was not one it ended', async () => {
+		host.answer = { outcome: 'refused', reason: 'not-held' };
+		const refresh = vi.fn();
+		showing(ready([HELD]), refresh);
+
+		await forceRelease();
+
+		expect(screen.getByText(/had already ended on its own/)).toBeDefined();
+		expect(screen.getByText(/nothing to release/)).toBeDefined();
+		expect(refresh).toHaveBeenCalledTimes(1);
+	});
+
+	/*
+	 * The one claim neither line may make on its own authority (#124). The daemon ends a held lease
+	 * before it ever looks at the hardware, so both of these answers arrive for a device the host
+	 * reports `offline` — and the host would refuse the next `acquire` on it `not-ready`, which is
+	 * what the card and the *not ready* counter on this same screen say. The line stops at what
+	 * really settled; `force-release-notice.test.tsx` pins it against the card's own words.
+	 */
+	it.each([
+		['the lease ended', { outcome: 'released', heldBy: LEASE }],
+		['the lease had already ended', { outcome: 'refused', reason: 'not-held' }],
+	])('does not call a device the host would refuse free (%s)', async (_case, answer) => {
+		host.answer = answer;
+		showing(ready([HELD_OFFLINE]));
+
+		await forceRelease();
+
+		// The news itself is unchanged — only the availability clause is absent.
+		expect(screen.getByRole('button', { name: 'Dismiss' })).toBeDefined();
+		expect(screen.queryByText(/is free/)).toBeNull();
+	});
+
+	/*
+	 * The device is not on this host any more, so there is nothing to release *or to show* — which
+	 * is why this line is above the grid and not on the card: by the time it is read, the card is
+	 * gone. Two host-side reasons, one fact for the person reading it (D6, D18).
+	 */
+	it.each([
+		['gone'],
+		['not-attached'],
+	])('says a device that is not here is not listed (%s)', async (reason) => {
+		host.answer = { outcome: 'refused', reason };
+		showing(ready([HELD]));
+
+		await forceRelease();
+
+		expect(screen.getByText(/no longer attached to this host/)).toBeDefined();
+		expect(screen.getByText(/It is no longer listed/)).toBeDefined();
+	});
+
+	// The card it was about can leave the grid entirely, and the line explaining why must outlive
+	// it — including when it was the only device on the host.
+	it('keeps the line when the answer emptied the grid', async () => {
+		host.answer = { outcome: 'refused', reason: 'gone' };
+		const { rerender } = showing(ready([HELD]));
+		await forceRelease();
+
+		// The device really was the only one, so the poll it asked for comes back with nothing to
+		// show. The line explaining why must not have been inside the grid it just emptied.
+		list.current = { state: ready([]), refresh: () => undefined };
+		rerender(<DevicesScreen />);
+
+		expect(screen.getByText('No devices attached')).toBeDefined();
+		expect(screen.getByText(/no longer attached to this host/)).toBeDefined();
+	});
+
+	// It stays until dismissed rather than until the next poll: a line the poll clears is a line the
+	// operator may never have read, and this is the only place the panel says why nothing happened.
+	it('stays until it is dismissed', async () => {
+		host.answer = { outcome: 'refused', reason: 'not-held' };
+		showing(ready([HELD]));
+		await forceRelease();
+
+		fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }));
+
+		expect(screen.queryByText(/had already ended on its own/)).toBeNull();
+	});
+
+	// §5, once more: nothing here has gone wrong, and nothing here is red.
+	it('says all of it in ordinary text, announced politely', async () => {
+		host.answer = { outcome: 'refused', reason: 'gone' };
+		const { container } = showing(ready([HELD]));
+
+		await forceRelease();
+
+		const said = screen.getByText(/no longer attached to this host/);
+		expect(said.closest('[aria-live="polite"]')).not.toBeNull();
+		expect(container.innerHTML).not.toContain('error');
+	});
+
+	/*
+	 * The fourth case, which is not an outcome and never reaches this screen: nothing was released,
+	 * so the dialog stays open with its own line and the grid says nothing at all (§8).
+	 */
+	it('says nothing above the grid for an ask that reached nothing', async () => {
+		host.refusal = 'unanswered';
+		const refresh = vi.fn();
+		showing(ready([HELD]), refresh);
+
+		fireEvent.click(screen.getAllByRole('button', { name: 'Force release' })[0] as HTMLElement);
+		const inDialog = screen.getAllByRole('button', { name: 'Force release' });
+		fireEvent.click(inDialog[inDialog.length - 1] as HTMLElement);
+
+		await waitFor(() => expect(screen.getByText(/nothing was released/i)).toBeDefined());
+		expect(screen.getByRole('dialog')).toBeDefined();
+		expect(screen.queryByRole('button', { name: 'Dismiss' })).toBeNull();
+		expect(refresh).not.toHaveBeenCalled();
 	});
 });

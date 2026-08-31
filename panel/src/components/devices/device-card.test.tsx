@@ -1,6 +1,23 @@
 import type { ListedDevice } from '@panel/devices/device-list.js';
 import { render, screen } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+
+/*
+ * The card carries one control now (#122), and it reads the session for the identity it attributes
+ * the call with. A card is not a screen, so this suite gives it a signed-in session and nothing
+ * else — what the control *does* is `force-release-control.test.tsx`'s subject, and where the
+ * answer is said is `devices.test.tsx`'s.
+ */
+vi.mock('@panel/session/session-provider.js', () => ({
+	useSession: () => ({
+		state: {
+			status: 'signed-in',
+			identity: { identifier: 'karolina', displayName: 'Karolina Waldon' },
+		},
+		call: async () => ({ ok: false, refusal: 'unanswered' }),
+	}),
+}));
+
 import { DeviceCard } from './device-card.js';
 
 const RECEIVED_AT_MS = 1_000_000;
@@ -17,6 +34,17 @@ function device(overrides: Partial<ListedDevice> = {}): ListedDevice {
 	};
 }
 
+/** The card as the grid renders it. Nothing here listens for the answer — see the note above. */
+function card(subject: ListedDevice) {
+	return render(
+		<DeviceCard
+			device={subject}
+			onForceReleaseSettled={() => undefined}
+			receivedAtMs={RECEIVED_AT_MS}
+		/>,
+	);
+}
+
 const LEASE: NonNullable<ListedDevice['heldBy']> = {
 	serial: '39041FDJH00A7X',
 	owner: 'pr-127-review',
@@ -28,7 +56,7 @@ const LEASE: NonNullable<ListedDevice['heldBy']> = {
 
 describe('a held device card', () => {
 	it('says who holds it, for what, and since when', () => {
-		render(<DeviceCard device={device({ heldBy: LEASE })} receivedAtMs={RECEIVED_AT_MS} />);
+		card(device({ heldBy: LEASE }));
 
 		expect(screen.getByText('Active lease')).toBeDefined();
 		expect(screen.getByText('Test name')).toBeDefined();
@@ -43,19 +71,14 @@ describe('a held device card', () => {
 	 * against this machine's own `Date.now()` (D17).
 	 */
 	it('renders the grant instant exactly as the host sent it', () => {
-		render(<DeviceCard device={device({ heldBy: LEASE })} receivedAtMs={RECEIVED_AT_MS} />);
+		card(device({ heldBy: LEASE }));
 
 		expect(screen.getByText('2026-08-31T14:02:41.219Z')).toBeDefined();
 	});
 
 	// Optional and often absent (D22): no empty label and no `—`, so the panel starts with `OWNER`.
 	it('omits the test name entirely when the lease has none', () => {
-		render(
-			<DeviceCard
-				device={device({ heldBy: { ...LEASE, testName: null } })}
-				receivedAtMs={RECEIVED_AT_MS}
-			/>,
-		);
+		card(device({ heldBy: { ...LEASE, testName: null } }));
 
 		expect(screen.queryByText('Test name')).toBeNull();
 		expect(screen.getByText('pr-127-review')).toBeDefined();
@@ -63,19 +86,33 @@ describe('a held device card', () => {
 	});
 
 	// §6: there is no `STATE` field. The card already says a device is held three times over.
-	it('carries no state field and no control', () => {
-		const { container } = render(
-			<DeviceCard device={device({ heldBy: LEASE })} receivedAtMs={RECEIVED_AT_MS} />,
-		);
+	it('carries no state field', () => {
+		card(device({ heldBy: LEASE }));
 
 		expect(screen.queryByText('State')).toBeNull();
-		expect(container.querySelectorAll('button')).toHaveLength(0);
+	});
+
+	/*
+	 * The panel's one operator action, and the card's only control (#122) — inside the lease panel
+	 * and below `GRANTED`, so everything it would end is read before it is reached (§7).
+	 */
+	it('carries the force-release control, below the lease data it acts on', () => {
+		const { container } = card(device({ heldBy: LEASE }));
+
+		const controls = container.querySelectorAll('button');
+		expect(controls).toHaveLength(1);
+		const control = controls[0] as HTMLElement;
+		expect(control.textContent).toBe('Force release');
+		// After `GRANTED` in the document, which is what "below the lease data" means in markup.
+		expect(control.compareDocumentPosition(screen.getByText('Granted'))).toBe(
+			Node.DOCUMENT_POSITION_PRECEDING,
+		);
 	});
 });
 
 describe('a free device card', () => {
 	it('says free, in green, and shows no lease', () => {
-		const { container } = render(<DeviceCard device={device()} receivedAtMs={RECEIVED_AT_MS} />);
+		const { container } = card(device());
 
 		expect(screen.getByText('free')).toBeDefined();
 		expect(screen.queryByText('Active lease')).toBeNull();
@@ -83,16 +120,24 @@ describe('a free device card', () => {
 	});
 
 	/*
+	 * There is no lease to end, so there is nothing for a control to do — and an `unauthorized`
+	 * device holds no lease either (#122, #123). The control is rendered inside the lease panel and
+	 * nowhere else, which is what makes this structural rather than a check somebody has to keep.
+	 */
+	it('carries no control at all, held by nobody', () => {
+		for (const state of ['ready', 'unauthorized', 'offline']) {
+			const { container } = card(device({ state, heldBy: null }));
+			expect(container.querySelectorAll('button')).toHaveLength(0);
+		}
+	});
+
+	/*
 	 * §5: the screen answers "what can I use right now", so the free device is the most legible
 	 * thing on it — not the greyed-out one. An early version had this exactly backwards.
 	 */
 	it('is the card that is not dimmed', () => {
-		const { container: free } = render(
-			<DeviceCard device={device()} receivedAtMs={RECEIVED_AT_MS} />,
-		);
-		const { container: held } = render(
-			<DeviceCard device={device({ heldBy: LEASE })} receivedAtMs={RECEIVED_AT_MS} />,
-		);
+		const { container: free } = card(device());
+		const { container: held } = card(device({ heldBy: LEASE }));
 
 		expect((free.firstElementChild as HTMLElement).className).not.toContain('opacity-');
 		expect((held.firstElementChild as HTMLElement).className).toContain('opacity-80');
@@ -101,12 +146,8 @@ describe('a free device card', () => {
 	// The header bar is identical held or free: a pale header lost the green LED almost all of its
 	// contrast, so free is signalled by the LED and the body instead.
 	it('shares the held card’s header bar', () => {
-		const { container: free } = render(
-			<DeviceCard device={device()} receivedAtMs={RECEIVED_AT_MS} />,
-		);
-		const { container: held } = render(
-			<DeviceCard device={device({ heldBy: LEASE })} receivedAtMs={RECEIVED_AT_MS} />,
-		);
+		const { container: free } = card(device());
+		const { container: held } = card(device({ heldBy: LEASE }));
 
 		const headerOf = (root: HTMLElement): string =>
 			(root.querySelector('article > div') as HTMLElement).className;
@@ -116,7 +157,7 @@ describe('a free device card', () => {
 
 describe('the fields a device cannot always answer', () => {
 	it('falls back to the serial when the host could not read a model', () => {
-		render(<DeviceCard device={device({ model: null })} receivedAtMs={RECEIVED_AT_MS} />);
+		card(device({ model: null }));
 
 		// Twice: once identifying the device in the header, once as the `SERIAL` field.
 		expect(screen.getAllByText('39041FDJH00A7X')).toHaveLength(2);
@@ -125,7 +166,7 @@ describe('the fields a device cannot always answer', () => {
 	// A null version is a real answer, commonly a device on its authorization prompt — and the field
 	// is one of the card's two fixed columns, so it says `unknown` rather than disappearing.
 	it('says unknown for a version the device did not report', () => {
-		render(<DeviceCard device={device({ osVersion: null })} receivedAtMs={RECEIVED_AT_MS} />);
+		card(device({ osVersion: null }));
 
 		expect(screen.getByText('OS version')).toBeDefined();
 		expect(screen.getByText('unknown')).toBeDefined();
@@ -138,12 +179,7 @@ describe('the fields a device cannot always answer', () => {
 	 * for a device to take — is the plausible-looking answer ai/RULES.md §2 forbids.
 	 */
 	it('does not call a device free when the host cannot lease it', () => {
-		const { container } = render(
-			<DeviceCard
-				device={device({ state: 'unauthorized', heldBy: null })}
-				receivedAtMs={RECEIVED_AT_MS}
-			/>,
-		);
+		const { container } = card(device({ state: 'unauthorized', heldBy: null }));
 
 		expect(screen.queryByText('free')).toBeNull();
 		expect(container.querySelectorAll('.bg-tertiary')).toHaveLength(0);
@@ -153,12 +189,7 @@ describe('the fields a device cannot always answer', () => {
 	// Verbatim, for the reason `platform` is verbatim: a display table mapping the host's words onto
 	// prettier ones is a branch on host vocabulary, and `rover list`'s `STATE` column prints these.
 	it('says what the host reports instead, in the free panel’s place', () => {
-		render(
-			<DeviceCard
-				device={device({ state: 'offline', heldBy: null })}
-				receivedAtMs={RECEIVED_AT_MS}
-			/>,
-		);
+		card(device({ state: 'offline', heldBy: null }));
 
 		expect(screen.getByText('offline')).toBeDefined();
 		expect(screen.getByText('Attached, but not available to lease.')).toBeDefined();
@@ -170,12 +201,7 @@ describe('the fields a device cannot always answer', () => {
 	 * go and ask is still the answer this card owes. Only an unheld device's state decides the body.
 	 */
 	it('still shows the lease on a held device that went not ready', () => {
-		render(
-			<DeviceCard
-				device={device({ state: 'offline', heldBy: LEASE })}
-				receivedAtMs={RECEIVED_AT_MS}
-			/>,
-		);
+		card(device({ state: 'offline', heldBy: LEASE }));
 
 		expect(screen.getByText('Active lease')).toBeDefined();
 		expect(screen.getByText('pr-127-review')).toBeDefined();
@@ -184,7 +210,7 @@ describe('the fields a device cannot always answer', () => {
 
 	// `Android` is the platform and `14` is the version — never concatenated under one label.
 	it('keeps platform and version as two fields', () => {
-		render(<DeviceCard device={device()} receivedAtMs={RECEIVED_AT_MS} />);
+		card(device());
 
 		expect(screen.getByText('Platform')).toBeDefined();
 		expect(screen.getByText('android')).toBeDefined();
@@ -200,9 +226,7 @@ describe('the fields a device cannot always answer', () => {
 describe('nothing on the card is truncated', () => {
 	it('carries no truncation class in either state', () => {
 		for (const held of [null, LEASE]) {
-			const { container } = render(
-				<DeviceCard device={device({ heldBy: held })} receivedAtMs={RECEIVED_AT_MS} />,
-			);
+			const { container } = card(device({ heldBy: held }));
 			expect(container.innerHTML).not.toContain('truncate');
 			expect(container.innerHTML).not.toContain('text-ellipsis');
 			expect(container.innerHTML).not.toContain('line-clamp');
@@ -210,7 +234,7 @@ describe('nothing on the card is truncated', () => {
 	});
 
 	it('wraps the serial rather than clipping it', () => {
-		render(<DeviceCard device={device({ model: 'Pixel 7 Pro' })} receivedAtMs={RECEIVED_AT_MS} />);
+		card(device({ model: 'Pixel 7 Pro' }));
 
 		expect(screen.getByText('39041FDJH00A7X').className).toContain('break-all');
 	});

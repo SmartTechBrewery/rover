@@ -80,8 +80,9 @@ already come back twice. So, nowhere in this UI:
 must never be shortened to `TEST`, which reads as a category rather than as a label.
 
 **The panel is not read-only** (D27). It carries *authority over the shared device pool* —
-force-releasing a stuck lease is the first such action. It deliberately does **not** acquire
-devices: a lease carries the caller's own `owner` string (D22), an agent signs its own work, and a
+force-releasing a stuck lease is the first such action, and as of #122 it is built: one recessive
+control on each held card, the confirmation §7 settles, and the outcomes §7 settles beside it. It
+deliberately does **not** acquire devices: a lease carries the caller's own `owner` string (D22), an agent signs its own work, and a
 person clicking a button has nothing to sign one with. So: no "new lease", no "request device", no
 create/edit/delete anywhere.
 
@@ -336,9 +337,13 @@ data never had to answer, settled here.
   either — a region announcing once a second is a screen-reader firehose, and the digits are
   ordinary text.
 
-**The card carries no control yet.** The design's markup has `FORCE RELEASE` on every held card and
-it is deliberately not reproduced: #113 is the grid and its states, and the action with its
-confirmation is the second half.
+**The held card carries one control** (#122), and only the held card: one recessive button at the
+foot of the lease panel, below `GRANTED`, so what it would end is read before it is reached. The
+design's markup puts a full-width solid orange `FORCE RELEASE` on it; **that treatment is still
+deliberately not reproduced** (§5, *Destructive actions are recessive*) — it warms to
+`secondary-fixed-dim` on hover like `Profile`'s sign-out, because a control that ends something is
+not the loudest thing on its screen. What it asks before it acts, and what each answer says
+afterwards, are settled in §7.
 
 ---
 
@@ -401,7 +406,55 @@ working panel** — the rest of the panel still works, so by §7's rule it keeps
   next request. That is not softened.
 - An earlier revision carried an **"Outcome Snippets Reference"** strip — the same scaffolding
   mistake as the sign-in screen's `DEBUG // UI STATES`. Removed. The three outcomes it sketched are
-  real and still need designing as states (§9).
+  settled below, built from this document rather than from a screen.
+
+### What a force-release settles — settled (#122)
+
+The asking is above; this is what happens after it. **Three outcomes that must not collapse into
+one**, plus a fourth case that is not an outcome at all. Each is ordinary text, `aria-live="polite"`,
+with no colour of alarm and no icon of alarm — nothing here has gone wrong, and §5's no-red rule
+holds through the panel's one destructive action.
+
+- **The lease ended.** The card changing *is* the outcome, and it happens without a reload: the
+  dialog closes and the screen asks the poll again rather than waiting up to `POLL_MS` for it. One
+  line names the lease that ended, because the card stops showing it the moment the lease is gone.
+- **The lease had already ended on its own**, between the page loading and the click (`not-held`).
+  **News, not a failure**: *"That lease had already ended on its own, so there was nothing to
+  release on …"* The poll is asked again here too — the card was already out of date.
+- **Neither line calls a device free unless the host would honour that.** Both add *"The device is
+  free."* / *"The device is free either way."* only when the listing says `state: ready`. Ending a
+  lease says nothing about the hardware — the daemon releases a held lease before it looks at the
+  device at all — so a phone that went `unauthorized` or `offline` mid-lease gets an ordinary
+  `released` answer while the host would still refuse the next `acquire` on it `not-ready`. §6's
+  rule for the card is the same rule, and the counter above the grid already puts that device in
+  *not ready*: the line stops at what settled, and the card says what the hardware is.
+- **The device is not on this host any more** (`gone`, `not-attached`). There is nothing left to
+  release *or to show*: *"… is no longer attached to this host, so there was nothing to release. It
+  is no longer listed."* Two host-side facts — one device it cannot see at all (D6) and one it can
+  see but does not own (D18) — and exactly one fact for the person reading it, so they share a line.
+  The device is simply not listed; nothing marks its absence (§5).
+- **The fourth case, and it is not an outcome: the request that reached nothing.** No answer, an
+  `error` envelope, or a result the panel cannot read — all three released nothing, so the dialog
+  **stays open** with the control usable again and says exactly that. §8's rule applies unchanged:
+  the panel never reports an ending it did not get. It does not say "try again" and stop there,
+  because if the host is really gone the poll replaces this whole page within one interval. A
+  session the host refused is not this case: the bounce to *access ended* is already happening, and
+  the panel says nothing over it.
+
+**All three settled outcomes are said above the grid, not on the card.** The `gone` line has to be —
+its card has left the grid by the time the line is read. The other two are there for a reason of the
+same kind: the control lives inside the lease panel, so the lease ending unmounts the only place a
+card could have said so, and §6's card anatomy has no row for a fact that has already stopped being
+true of it. One region, one wording per outcome, and it outlives the card it was about.
+
+**The line stays until it is dismissed**, rather than until the next poll. A line the poll clears is
+a line the operator may never have read, and this is the only place the panel explains why a
+confirmed action changed nothing.
+
+The **actor** on the wire is the signed-in user's `identifier`, and there is no field for it on the
+dialog. D28 forbids *the host* deriving attribution from whoever authenticated; a client saying who
+it is, is the opposite of that, and it is what makes the daemon's audit line name a person rather
+than a browser. Never a constant like `panel`.
 
 ### Host view not current — settled, for the variant that has a list
 
@@ -693,11 +746,9 @@ top of this file). Do not commission a Stitch screen for them.
 - **The "no view" state with an *empty* list — done** (#113). It was built from this document rather
   than from a Stitch screen, exactly as this list intends, and what it settled is written into §7
   above. Left named here so the next reader can see that the method worked once.
-- **The force-release action's three outcomes.** The asking is settled (§7); what happens after it
-  is not. They are three different things and must not collapse into one: the card becoming free
-  without a reload; the lease having already ended on its own between the page loading and the
-  click, which is news rather than a failure; and the device having since vanished from the host,
-  so there is nothing left to release *or to show*.
+- **The force-release action's three outcomes — done** (#122). Built from this document, and what
+  they settled is written into §7 above, together with the fourth case the issue did not name: the
+  request that reached nothing, which released nothing and says so.
 
 **Screens 2–4 have not been brought in line with any of this.** Known problems, from a first pass:
 pass/fail semantics are back (a `SUCCESS` chip, `PASS` in a log, green ticks and red crosses beside

@@ -21,8 +21,15 @@ import { z } from 'zod';
  * reader wants and what a writer must not have.
  */
 
-/** Who holds a device, as a stranger is shown it — the lease id is never on this wire (D20). */
-const LeaseHolderSchema = z.object({
+/**
+ * Who holds a device, as a stranger is shown it — the lease id is never on this wire (D20).
+ *
+ * Exported because `force_release_device` answers with the same projection (`src/ipc/methods.ts`,
+ * `src/daemon/lease-holder.ts` — one path on the host, so one mirror here): the lease the panel
+ * ended is described in exactly the words the listing described it in, and there is no second
+ * place for a field to be added to only one of them.
+ */
+export const LeaseHolderSchema = z.object({
 	serial: z.string(),
 	owner: z.string(),
 	project: z.string(),
