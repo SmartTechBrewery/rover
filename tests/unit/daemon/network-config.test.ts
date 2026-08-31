@@ -201,13 +201,16 @@ describe('the HTTP surface refuses to put a bearer token on a wire in the clear'
 	});
 
 	it.each([
-		['127.0.0.1'],
-		['127.0.0.53'],
-		['localhost'],
-		['::1'],
-		['[::1]'],
-	])('allows plain HTTP on %s, which no stranger can reach', (address) => {
-		expect(resolveHttp({ [HTTP_ADDRESS_ENV_VAR]: address })?.address).toBe(address);
+		['127.0.0.1', '127.0.0.1'],
+		['127.0.0.53', '127.0.0.53'],
+		['localhost', 'localhost'],
+		['::1', '::1'],
+		// The bracketed form is accepted and **normalised**: it is what an operator copies out of
+		// a URL, and `listen()` would treat `[::1]` as a hostname and fail with `ENOTFOUND`. Both
+		// spellings therefore have to resolve to the one address that actually binds.
+		['[::1]', '::1'],
+	])('allows plain HTTP on %s, which no stranger can reach', (address, bound) => {
+		expect(resolveHttp({ [HTTP_ADDRESS_ENV_VAR]: address })?.address).toBe(bound);
 	});
 
 	it('allows a non-loopback address once the TLS pair is set', () => {

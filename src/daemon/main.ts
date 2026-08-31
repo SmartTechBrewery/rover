@@ -65,8 +65,12 @@ async function main(): Promise<void> {
 		// The scheme, the address, the port and the one route, and nothing else: never the token,
 		// never the certificate, and nothing about what is attached (D20).
 		const scheme = http.certPath === undefined ? 'http' : 'https';
+		// An IPv6 address needs its brackets back to be a URL somebody can paste. `network-config.ts`
+		// takes them off because `listen()` treats the bracketed form as a hostname and fails with
+		// `ENOTFOUND` — so this is the one place the URL notation belongs.
+		const host = http.address.includes(':') ? `[${http.address}]` : http.address;
 		console.log(
-			`Rover is serving the panel surface on ${scheme}://${http.address}:${daemon.httpPort}/rpc.`,
+			`Rover is serving the panel surface on ${scheme}://${host}:${daemon.httpPort}/rpc.`,
 		);
 	}
 

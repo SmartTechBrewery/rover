@@ -92,7 +92,11 @@ That transport also serves a **method allowlist** over the one table — never a
 Every method still runs on the host either way (D19), so what the allowlist protects is D27: the
 panel has authority over the shared pool and deliberately does not acquire devices, and without it
 an authenticated user could take a lease from a browser tab and drive a phone with the id it was
-handed. And it is **request/response only**: `list_devices` answers with `expiresInMs`, a duration,
+handed. The allowlist has a second half worth naming, because it is not obvious: the dispatcher it
+guards consumes NDJSON, so **one HTTP request has to become at most one frame** — a body that is not
+a single JSON value is answered by `http-listen.ts` itself rather than passed on, or two envelopes in
+one body would decode into two dispatches with only the first having been checked. And it is
+**request/response only**: `list_devices` answers with `expiresInMs`, a duration,
 so the panel's countdown ticks in the browser and re-syncs on the next poll — there is no SSE, no
 WebSocket, and therefore no second connection style to build, authenticate or shut down.
 

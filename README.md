@@ -1237,6 +1237,10 @@ Four things about that surface are worth knowing before pointing anything at it:
   {"type":"error","protocolVersion":1,"id":"2","error":{"code":"unknown_method","message":"'acquire_device' is not served over this host's HTTP surface"}}
   ```
 
+  One request is also **one envelope**: a body that is not a single JSON value is answered here
+  rather than handed on, so a refused method cannot arrive on a second line of a body whose first
+  line was allowed.
+
 - **There are exactly two statuses.** `200` means the surface answered — read the envelope, whose
   `error.code` is the same vocabulary every Rover client already reads. `401` is the one refusal,
   identical for a missing credential, a malformed one, an unknown token, a revoked user, an
@@ -1333,9 +1337,10 @@ label.
 ### The web panel
 
 `npm run panel:dev` serves it on <http://localhost:5174>; `npm run panel:build` writes
-`panel/dist` and `npm run panel:preview` serves that. **It is not yet served by the host** — the
-daemon has no HTTP surface, and giving it one is a separate piece of work — so the panel is a
-development server for now and reads no live data.
+`panel/dist` and `npm run panel:preview` serves that. **The host serves the panel's data surface
+but not the panel's own files** — `POST /rpc` is above, and serving `panel/dist` from that same
+listener is still a separate piece of work — so the panel runs from its development server for now
+and reads no live data.
 
 Its design comes from Stitch, not from this repository: `ai/RULES.md` §8 is how to reach it and
 `docs/DESIGN.md` is what the screens settled. The Analog Horizon tokens live in

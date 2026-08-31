@@ -467,6 +467,65 @@ describe('only the panel’s methods are reachable, and no table gained a row', 
 		).resolves.toMatchObject({ outcome: 'granted' });
 	});
 
+	it('cannot be smuggled past with a second envelope on a second line', async () => {
+		registerFakeBackend();
+		await withStore();
+		const daemon = await startWithHttp();
+
+		// The allowlist's other half: the whole body is not valid JSON, so nothing may hand it to
+		// a decoder that would split it on the newline and dispatch **both** envelopes — the
+		// allowed one and, behind it, the one that takes the phone.
+		const answer = await send({
+			port: portOf(daemon),
+			authorization: `Bearer ${store.token}`,
+			body: `${JSON.stringify({
+				protocolVersion: 1,
+				id: 'req-1',
+				method: 'list_devices',
+				params: {},
+			})}\n${JSON.stringify({
+				protocolVersion: 1,
+				id: 'req-2',
+				method: 'acquire_device',
+				params: { serial: attached.serial, owner: 'a-browser-tab', project: 'panel' },
+			})}`,
+		});
+
+		expect(answer.status).toBe(200);
+		expect(envelopeOf(answer)).toMatchObject({
+			type: 'error',
+			id: null,
+			error: { code: 'malformed_frame' },
+		});
+		const listed = await (await overSocket()).request('list_devices', {});
+		expect(listed.devices.map((device) => device.heldBy)).toEqual([null, null]);
+	});
+
+	it('runs nothing for an envelope with a garbage line after it, refusal or not', async () => {
+		registerFakeBackend();
+		await withStore();
+		const daemon = await startWithHttp();
+
+		// The same hole in its cheapest form: one trailing junk line is enough to make the body
+		// unparseable, and the answer a peer reads then says `malformed_frame` — so an acquire
+		// that ran anyway would have run *invisibly*.
+		const answer = await send({
+			port: portOf(daemon),
+			authorization: `Bearer ${store.token}`,
+			body: `${JSON.stringify({
+				protocolVersion: 1,
+				id: 'req-1',
+				method: 'acquire_device',
+				params: { serial: attached.serial, owner: 'a-browser-tab', project: 'panel' },
+			})}\nx`,
+		});
+
+		expect(envelopeOf(answer)).toMatchObject({ error: { code: 'malformed_frame' } });
+		expect(answer.body).not.toContain('leaseId');
+		const listed = await (await overSocket()).request('list_devices', {});
+		expect(listed.devices.map((device) => device.heldBy)).toEqual([null, null]);
+	});
+
 	it('answers a name that is on no table with the same shape', async () => {
 		registerFakeBackend();
 		await withStore();
@@ -592,6 +651,25 @@ describe('every pre-auth failure gets one byte-identical refusal', () => {
 		expect(await rawExchange(portOf(daemon), 'not an http request at all\r\n\r\n')).toBe('');
 	});
 
+	it.each([
+		['an Expect header it does not understand', 'Expect: foo'],
+		['an Expect: 100-continue it will not negotiate', 'Expect: 100-continue'],
+	])('answers %s with nothing at all', async (_what, header) => {
+		registerFakeBackend();
+		await withStore();
+		const daemon = await startWithHttp();
+
+		// Node answers an `Expect:` itself when nothing listens for it — `417 Expectation Failed`
+		// for an unknown one, a bare `100 Continue` for this one — both before the gate and both
+		// varying with what was sent, which is two more statuses than this surface has.
+		expect(
+			await rawExchange(
+				portOf(daemon),
+				`POST /rpc HTTP/1.1\r\nHost: 127.0.0.1\r\n${header}\r\nContent-Length: 0\r\n\r\n`,
+			),
+		).toBe('');
+	});
+
 	it('drops a peer that opens a connection and sends no headers, with no 408', async () => {
 		await withStore();
 		// A standalone listener so the deadline is a quarter of a second rather than the five the
@@ -708,6 +786,53 @@ describe('the body is bounded, and the server owns its own diagnosis', () => {
 		);
 
 		expect(envelopeOf(answer)).toMatchObject({ error: { code: 'malformed_frame' } });
+	});
+
+	it('hands the server at most one frame, whatever the body is', async () => {
+		await withStore();
+		const envelope = (id: string, method: string) =>
+			JSON.stringify({ protocolVersion: 1, id, method, params: {} });
+		const frames: string[] = [];
+		// A counting `IpcServer` rather than the real one: the property is about how many messages
+		// one HTTP request can become, which is invisible from the outside when the extra ones are
+		// answered on the same connection.
+		const listener = await startHttpListener(httpConfig(), {
+			handleConnection: (stream) => {
+				stream.on('data', (chunk: Buffer | string) => {
+					for (const frame of String(chunk).split('\n')) {
+						if (frame.trim().length > 0) {
+							frames.push(frame);
+						}
+					}
+					stream.write(`${JSON.stringify({ type: 'result', protocolVersion: 1, id: null })}\n`);
+				});
+			},
+		});
+
+		try {
+			const bodies = [
+				envelope('req-1', 'list_devices'),
+				`${envelope('req-1', 'list_devices')}\n${envelope('req-2', 'list_devices')}`,
+				`${envelope('req-1', 'list_devices')}\nx`,
+				'{ not json\nnot json either',
+				'\n\n',
+			];
+			for (const body of bodies) {
+				frames.length = 0;
+				await withinDeadline(
+					send({
+						port: listener.port,
+						authorization: `Bearer ${store.token}`,
+						body,
+					}),
+					5_000,
+					'One request was never answered',
+				);
+				expect(frames.length).toBeLessThanOrEqual(1);
+			}
+		} finally {
+			await listener.close();
+		}
 	});
 
 	it('carries a pretty-printed body through as one frame', async () => {

@@ -280,7 +280,7 @@ export function resolveHttpListener(
 		return undefined;
 	}
 
-	const address = optional(env[HTTP_ADDRESS_ENV_VAR]) ?? DEFAULT_HTTP_ADDRESS;
+	const address = withoutBrackets(optional(env[HTTP_ADDRESS_ENV_VAR]) ?? DEFAULT_HTTP_ADDRESS);
 	const certPath = optional(env[TLS_CERT_ENV_VAR]);
 	const keyPath = optional(env[TLS_KEY_ENV_VAR]);
 
@@ -370,11 +370,27 @@ export function resolveRemoteHost(
 }
 
 /**
+ * `[::1]` as `::1`, and any other bracketed address as the address inside the brackets.
+ *
+ * The bracketed form is accepted because it is the one an operator copies out of a URL — but
+ * brackets are URL notation and not part of an address, and `server.listen(port, '[::1]')` treats
+ * the whole string as a *hostname* to resolve and fails with `ENOTFOUND`. That is a DNS error
+ * naming nothing the operator can edit, which is exactly the mystery this module exists to turn
+ * into a message naming a variable. So the brackets come off here, where the value is understood
+ * and before anything else looks at it, and `[::1]` and `::1` resolve to the same bound address.
+ */
+function withoutBrackets(address: string): string {
+	const trimmed = address.trim();
+	return trimmed.startsWith('[') && trimmed.endsWith(']') ? trimmed.slice(1, -1) : trimmed;
+}
+
+/**
  * Whether `address` names an interface only this machine can reach.
  *
  * Deliberately conservative: it matches the loopback forms an operator actually writes —
- * `localhost`, the whole `127.0.0.0/8` block, and IPv6's `::1` with or without brackets — and
- * calls everything else reachable. Being wrong in that direction costs a startup failure with
+ * `localhost`, the whole `127.0.0.0/8` block, and IPv6's `::1` with or without brackets, though
+ * `resolveHttpListener` has already taken the brackets off by the time it asks — and calls
+ * everything else reachable. Being wrong in that direction costs a startup failure with
  * two named ways out; being wrong in the other would put a bearer token on a wire.
  */
 function isLoopbackAddress(address: string): boolean {

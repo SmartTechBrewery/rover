@@ -13,8 +13,9 @@
  * existing request envelope and whose response body is the existing response envelope. Not a
  * route per method: a REST-ish surface would be a second place a method name exists, to be kept
  * in step with `IPC_METHODS` by hand, which is the second implementation the whole design
- * forbids. With one route and one envelope, a method reachable over HTTP that is not on the one
- * table is structurally impossible.
+ * forbids. With one route and one envelope, there is nowhere here a method name could live that
+ * `IPC_METHODS` does not already hold — and **one request is one frame**, which is what makes
+ * the allowlist below see every method a request can run; see {@link frameFor}.
  *
  * **The token is a request header, never a URL.** `Authorization: Bearer <token>` (D20). The
  * query string is not read by anything in this module — there is no token-in-a-URL path to
@@ -45,10 +46,11 @@
  * refusal frame, minus the newline, because both come from `UNAUTHENTICATED_REFUSAL`. A `403`
  * beside a `401`, or a stack trace, or a `404` for a path that does not exist, would each be an
  * oracle, and it would undo the property for *both* transports rather than only for this one.
- * Two shapes get no answer at all, matching the TLS gate's "a peer that never completes the
- * handshake gets no frame": a malformed HTTP request and a peer that never finishes sending
- * headers, both of which Node would otherwise answer with a `400` or a `408` that varies with the
- * reason.
+ * Three shapes get no answer at all, matching the TLS gate's "a peer that never completes the
+ * handshake gets no frame": a malformed HTTP request, a peer that never finishes sending headers,
+ * and a peer that wants Node to negotiate an `Expect:` before it has presented a credential.
+ * Node would otherwise answer those with a `400`, a `408`, a `417` or a bare `100 Continue`,
+ * every one of them a pre-auth answer that varies with the reason.
  *
  * **So there are exactly two statuses**, and neither carries information the envelope does not:
  * `401`, the uniform refusal, and `200`, meaning the surface answered — *read the envelope*.
@@ -61,7 +63,8 @@
  * D27: the panel carries authority over the device pool and deliberately does not acquire
  * devices, and without the allowlist an authenticated user could `acquire_device` from a browser
  * tab and then drive the phone with the lease id it was handed. A method not on the list is
- * refused **before** dispatch, so nothing runs.
+ * refused **before** dispatch, so nothing runs — and because {@link frameFor} hands the server
+ * at most one frame per request, there is no second envelope for a refused method to ride in on.
  *
  * **Request/response only: the panel polls, this surface does not push.** `list_devices` answers
  * with `expiresInMs`, a duration (D17), so the countdown on the screen ticks in the browser from
@@ -71,9 +74,10 @@
  * shut down. Polling cannot keep a stuck lease alive either: `list_devices` reads the store and
  * never renews (`./leases.ts` — `use()` is the one call that does).
  *
- * **No CORS header is emitted anywhere**, deliberately. The panel will be served by this same
- * listener (R33), so it is same-origin and needs none; emitting one would make this surface
- * readable from any page a browser happens to have open. A preflight arrives without the
+ * **No CORS header is emitted anywhere**, deliberately. The panel is meant to be served by this
+ * same listener, so it will be same-origin and needs none — no roadmap row owns serving its assets
+ * yet (R33 built the panel, R32 built this route). Emitting one would make this surface readable
+ * from any page a browser happens to have open. A preflight arrives without the
  * `Authorization` header and so gets the same uniform refusal, which is the correct answer to it.
  * Authentication is header-only and no cookie is read, so there is no CSRF surface here for a
  * session to have to defend — that question arrives with the session itself (R34).
@@ -98,6 +102,7 @@ import {
 	type ErrorResponse,
 	type IpcErrorCode,
 	PROTOCOL_VERSION,
+	type RequestEnvelope,
 	RequestEnvelopeSchema,
 	type RequestId,
 	UNAUTHENTICATED_REFUSAL,
@@ -159,8 +164,6 @@ const REFUSAL_BODY = JSON.stringify(UNAUTHENTICATED_REFUSAL);
 export interface HttpListener {
 	/** The port actually bound — a configured port of 0 resolves to a real one here. */
 	readonly port: number;
-	/** Whether the listener terminates TLS itself, so a caller can print the right scheme. */
-	readonly secure: boolean;
 	/** Stops accepting and drops live connections. Safe to call twice. */
 	close(): Promise<void>;
 }
@@ -201,7 +204,6 @@ export async function startHttpListener(
 					key: await readPem(keyPath, TLS_KEY_ENV_VAR),
 				}
 			: undefined;
-	const secure = material !== undefined;
 
 	const serverOptions = {
 		// The pre-auth deadline. See {@link AUTH_TIMEOUT_MS}.
@@ -234,6 +236,23 @@ export async function startHttpListener(
 	server.on('clientError', (_error: Error, socket: Duplex) => {
 		socket.destroy();
 	});
+	// The same class of Node default, one layer up and easy to miss (§6): with no listener for
+	// these two events Node answers an `Expect:` header *itself* — `417 Expectation Failed` for
+	// one it does not understand, a bare `100 Continue` for `100-continue` — before this module
+	// sees the request at all, which is two more pre-auth statuses that vary with what was sent.
+	// A peer asking the host to negotiate before it has presented a credential is a peer with no
+	// claim on the socket, so it is dropped exactly as a malformed request line is. Nothing
+	// legitimate is lost: a body here is capped at {@link MAX_PANEL_REQUEST_BYTES}, far below the
+	// size at which any client volunteers an `Expect`.
+	const dropExpectant = (request: IncomingMessage, response: ServerResponse) => {
+		// For the `'request'` handler's reason: an `'error'` with no listener on either half is a
+		// crashed daemon, and these two halves never reach that handler.
+		request.on('error', () => {});
+		response.on('error', () => {});
+		response.socket?.destroy();
+	};
+	server.on('checkExpectation', dropExpectant);
+	server.on('checkContinue', dropExpectant);
 
 	await bind(server, config);
 
@@ -243,7 +262,6 @@ export async function startHttpListener(
 	let closed: Promise<void> | undefined;
 	return {
 		port,
-		secure,
 		close(): Promise<void> {
 			closed ??= new Promise<void>((resolve) => {
 				server.close(() => resolve());
@@ -335,33 +353,79 @@ async function handleRequest(
 		return;
 	}
 
-	const refusal = disallowedMethodIn(body);
-	if (refusal !== undefined) {
-		answer(response, refusal);
+	// One decision about the whole body, taken in one place: either the answer this module owes
+	// the peer, or the single frame the server is allowed to see. Nothing reaches `IpcServer`
+	// that this step has not classified.
+	const framed = frameFor(body);
+	if (typeof framed !== 'string') {
+		answer(response, framed);
 		return;
 	}
 
-	answer(response, await dispatch(ipcServer, body));
+	answer(response, await dispatch(ipcServer, framed));
+}
+
+/**
+ * The one frame this request may become, or the answer this module owes instead of one.
+ *
+ * **One request is one frame, and this is where that is true.** `IpcServer.handleConnection`
+ * consumes NDJSON, so a body carrying a raw newline decodes into *several* frames and the server
+ * dispatches every one of them (`src/ipc/framing.ts`) — which would let a body of two envelopes
+ * put a method the allowlist never saw on the wire behind one that it did, allowlist and all.
+ * So a `string` returned here is a frame that cannot decode into more than one message, and
+ * every path that cannot promise that answers rather than hands anything on.
+ *
+ * A body that parsed as JSON is **re-encoded** rather than passed through, which is what makes it
+ * exactly one frame: `JSON.stringify` escapes a newline inside a string, so an encoded frame can
+ * never contain a raw one, while a pretty-printed body would otherwise be split by the very
+ * framing that makes NDJSON work.
+ *
+ * A body that did not parse still gets `IpcServer`'s own `malformed_frame` rather than a second
+ * copy of that diagnosis — but only when it holds no raw newline, which is the one property that
+ * would make it more than one frame. One that holds one is diagnosed here, because there is
+ * nothing to hand on that would still be the peer's own bytes.
+ *
+ * A body that parsed as JSON but not as an envelope needs no allowlist decision: the server
+ * validates against this very same `RequestEnvelopeSchema` and refuses it before a method name is
+ * read at all, so no method can run that {@link disallowedMethodIn} did not pass.
+ */
+function frameFor(body: string): ErrorResponse | string {
+	if (body.trim().length === 0) {
+		// The one case the server has no message for: a blank frame carries no message and the
+		// decoder skips it, so handing this on would mean waiting for an answer that never comes.
+		return errorEnvelope(null, 'malformed_frame', 'A request body is required');
+	}
+
+	const parsed = parseJson(body);
+	if (parsed === undefined) {
+		return /[\n\r]/.test(body)
+			? errorEnvelope(
+					null,
+					'malformed_frame',
+					'A request body must be a single JSON value: one request, one envelope',
+				)
+			: `${body}\n`;
+	}
+
+	const envelope = RequestEnvelopeSchema.safeParse(parsed);
+	if (envelope.success) {
+		const refusal = disallowedMethodIn(envelope.data);
+		if (refusal !== undefined) {
+			return refusal;
+		}
+	}
+	return encodeFrame(parsed);
 }
 
 /**
  * The `unknown_method` answer for a request naming a method this transport does not serve, or
- * `undefined` when there is nothing to refuse here.
- *
- * A body that does not parse is deliberately **not** refused here: `IpcServer` is the single
- * source of the `malformed_frame` message, and duplicating its diagnosis would be a second
- * implementation of the smallest possible thing.
+ * `undefined` when the method is on {@link PANEL_METHODS} and may run.
  *
  * `unknown_method` is the closest code in the closed `IpcErrorCodeSchema` vocabulary; adding one
  * would change the wire for every client of every transport, to say something only this one has
  * to say. The message is what distinguishes the two cases for a human reading it.
  */
-function disallowedMethodIn(body: string): ErrorResponse | undefined {
-	const envelope = RequestEnvelopeSchema.safeParse(parseJson(body));
-	if (!envelope.success) {
-		return undefined;
-	}
-	const { id, method } = envelope.data;
+function disallowedMethodIn({ id, method }: RequestEnvelope): ErrorResponse | undefined {
 	if (PANEL_METHODS.some((allowed) => allowed === method)) {
 		return undefined;
 	}
@@ -374,23 +438,8 @@ function disallowedMethodIn(body: string): ErrorResponse | undefined {
 	);
 }
 
-/**
- * Hand one framed envelope to the IPC server and read the one it writes back.
- *
- * A body that parsed as JSON is **re-encoded** rather than passed through, which is what makes
- * it exactly one frame: `JSON.stringify` escapes a newline inside a string, so an encoded frame
- * can never contain a raw one, while a pretty-printed body would otherwise be split across
- * several frames by the very framing that makes NDJSON work. A body that did not parse is passed
- * through untouched, so the `malformed_frame` the peer reads is the server's own.
- */
-async function dispatch(ipcServer: IpcServer, body: string): Promise<ErrorResponse | string> {
-	const parsed = parseJson(body);
-	if (parsed === undefined && body.trim().length === 0) {
-		// The one case the server has no message for: a blank frame carries no message and the
-		// decoder skips it, so handing this on would mean waiting for an answer that never comes.
-		return errorEnvelope(null, 'malformed_frame', 'A request body is required');
-	}
-	const frame = parsed === undefined ? `${body}\n` : encodeFrame(parsed);
+/** Hand the one frame to the IPC server and read the one it writes back. */
+async function dispatch(ipcServer: IpcServer, frame: string): Promise<ErrorResponse | string> {
 	try {
 		return await callOnce(ipcServer, frame);
 	} catch (error) {
