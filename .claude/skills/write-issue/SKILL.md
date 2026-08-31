@@ -193,7 +193,10 @@ cannot be built before the device interface, and no backend can be registered be
 conformance suite exists to gate it.
 
 1. Identify prerequisites from the conversation, the issue body, or known board work.
-2. For each, record GitHub's native **Blocked by** relationship on the dependent issue, in
+2. **Also order issues that will collide on the same code, not only those that logically depend on
+   each other** (§3a). Work here is dispatched to agents in separate worktrees, and two of them
+   restructuring one module produces a merge conflict nobody was watching for.
+3. For each, record GitHub's native **Blocked by** relationship on the dependent issue, in
    addition to any prose. Do not substitute a checklist. `gh` has no subcommand for this; the REST
    endpoint takes the blocking issue's **node ID**, not its number:
 
@@ -207,10 +210,40 @@ conformance suite exists to gate it.
    `gh api repos/SmartTechBrewery/rover/issues/<dependent-N>/dependencies/blocked_by --jq '.[].number'`.
    If the endpoint is unavailable for this repository, say so in your report and fall back to
    prose plus `depends on: #N` in the body — don't silently drop the dependency.
-3. If the new issue is a prerequisite for existing board issues, review those and add their
+4. If the new issue is a prerequisite for existing board issues, review those and add their
    **Blocked by** relationships too.
-4. Recheck board ordering after any dependency change, so prerequisites stay ahead of what they
+5. Recheck board ordering after any dependency change, so prerequisites stay ahead of what they
    block.
+
+### 3a. Ordering to avoid a merge conflict
+
+A **Blocked by** may also exist because two issues would fight over the same code, with no logical
+dependency between them at all. Rover's work runs in parallel worktrees, so this is a real cost and
+the board is the only place it can be expressed.
+
+**Serialise when both issues restructure the same region** — the same Zod schema, the same method
+table, a registry or a barrel, one config object, one function's signature and its call sites. The
+symptom to look for is that both changes rewrite the *same lines* for different reasons, so the
+merge has no mechanical resolution and whoever loses re-derives their change against a file that
+moved underneath them.
+
+**Do not serialise for a shared file that everything touches.** `PROJECT.md`, `ai/RULES.md`,
+`README.md`, the docs, `.gitignore`, a lockfile, a design-token block — nearly every issue in this
+repository edits at least one of them, and treating that as a dependency would put the whole board
+in a single queue for no benefit. Those conflicts are append-shaped and resolve mechanically. The
+same goes for two issues merely living in the same directory, or touching the same file in places
+that do not overlap.
+
+Three rules when you do it:
+
+- **Say in the issue that this is why.** A bare "blocked by #N" reads as a functional prerequisite,
+  and the next person will wonder what they are waiting for. One sentence naming the file and what
+  each side does to it is enough.
+- **Put the smaller or more foundational change first**, so the larger one rebases onto a settled
+  shape rather than the reverse.
+- **First ask whether the seam is wrong.** If two issues both have to restructure one module, the
+  shared part may deserve to be its own issue that both then depend on. That is a better outcome
+  than a queue, and it is usually visible at filing time.
 
 ## 4. Report
 
