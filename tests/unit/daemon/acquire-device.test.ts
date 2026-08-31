@@ -227,6 +227,26 @@ describe('what a granted lease carries', () => {
 		expect(result.lease.expiresInMs).toBeLessThanOrEqual(LEASE_TTL_MS);
 	});
 
+	it('carries no slot and no port, because those are host state (R18)', async () => {
+		await serveReadyDevice();
+		const client = await connect();
+
+		const result = await acquire(client, 'issue-112');
+
+		if (result.outcome !== 'granted') throw new Error('expected a granted lease');
+		// `GrantedLeaseSchema` is `.strict()`, so this is belt and braces — and it is the
+		// assertion that says out loud that a lease's ports are the host's, told to the hooks
+		// the host runs and to nobody on the wire.
+		expect(Object.keys(result.lease).sort()).toEqual([
+			'expiresInMs',
+			'leaseId',
+			'owner',
+			'project',
+			'serial',
+			'testName',
+		]);
+	});
+
 	it('reports an omitted test name as null rather than leaving the key out', async () => {
 		await serveReadyDevice();
 		const client = await connect();

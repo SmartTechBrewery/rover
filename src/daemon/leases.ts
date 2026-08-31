@@ -43,6 +43,7 @@
 import { randomUUID } from 'node:crypto';
 import type { DeviceSerial, LeaseId } from '../core/ids.js';
 import { parseLeaseId } from '../core/ids.js';
+import type { Slot } from './slots.js';
 
 /**
  * Twenty minutes (D8). Long enough that an agent thinking between calls never loses its
@@ -75,6 +76,18 @@ export interface Lease {
 	 * the host, so what it is told is the remaining duration — see {@link LeaseStore.remainingMs}.
 	 */
 	readonly expiresAtMs: number;
+	/**
+	 * This lease's numbered position on the host, and the ports its hooks may use
+	 * (`./slots.ts`, R18). Host state that **never crosses the wire**, for
+	 * {@link Lease.expiresAtMs}'s reason and one more: a client neither binds these ports nor
+	 * runs anything that would.
+	 *
+	 * Carried and never read here, exactly like {@link Lease.owner} and {@link Lease.project}.
+	 * The caller allocates it inside the same straight-line section it acquires in — see
+	 * `./lease-handlers.ts` — and whoever allocated it gives it back once this lease's
+	 * restoration has finished (`./listen.ts`, `DeviceRestorerOptions.onRestored`).
+	 */
+	readonly slot: Slot;
 }
 
 /** What a caller asks for. The three strings arrive as given and are stored as given. */
@@ -83,6 +96,8 @@ export interface LeaseRequest {
 	readonly owner: string;
 	readonly project: string;
 	readonly testName: string | null;
+	/** Allocated by the caller, stored as given, interpreted by nothing here — see {@link Lease.slot}. */
+	readonly slot: Slot;
 }
 
 /**
@@ -227,6 +242,7 @@ export function createLeaseStore(options: LeaseStoreOptions = {}): LeaseStore {
 				owner: request.owner,
 				project: request.project,
 				testName: request.testName,
+				slot: request.slot,
 				createdAtMs: granted,
 				expiresAtMs: granted + ttlMs,
 			};

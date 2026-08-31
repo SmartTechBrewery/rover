@@ -544,10 +544,12 @@ operator who wants a shell makes the shell the program, as the example does. `cw
 optional, and so are both hooks: nothing is defaulted, because a default here would be Rover
 naming somebody's application. Helper services are named in D13 and are not in the file yet;
 adding a field before its consumer exists would be a row in this table describing something
-nothing reads.
+nothing reads — but the ports such services will bind are already handed out per lease, and the
+hooks above are already told them (see "Every lease gets a slot", below).
 
 The `install` hook runs only when a caller asks for it — never at grant time — and it gets
-`ROVER_PROJECT` and `ROVER_DEVICE_SERIAL` the way the teardown does, so what it builds is
+`ROVER_PROJECT`, `ROVER_DEVICE_SERIAL` and the slot's three variables (below) the way the
+teardown does, so what it builds is
 installed onto the device the lease names and never onto a neighbour's. It is bounded at **five
 minutes** rather than the teardown's eight seconds, because it is a build and not a stop: that is
 a quarter of the twenty-minute lease TTL, which a lease renewed at the start of the call cannot
@@ -560,12 +562,50 @@ non-zero is a **named** answer to that call (`project-not-registered`, `install-
 The **teardown** hook runs when a lease on that project **ends by either path — a `rover release`,
 and an expiry with the agent that held the device long gone** (`PROJECT.md` D9). Its child gets
 `ROVER_PROJECT` and `ROVER_DEVICE_SERIAL` in the environment, on top of the daemon's own and
-whatever `env` declares, so a teardown can name the device it is undoing. It is bounded: eight
+whatever `env` declares — along with the slot's three, below — so a teardown can name the device
+it is undoing and the ports it is freeing. It is bounded: eight
 seconds, then the hook's own process is killed and the failure — the exit code and the tail of its
 stderr — becomes a warning. The bound is on the hook and not on everything the hook started: a
 teardown that backgrounds a helper is finished the moment it exits, and what it left running is
 the operator's to manage. A hook that fails costs its own project's steps and nothing else; the
 device is still put back.
+
+#### Every lease gets a slot, and its own ports
+
+Two agents starting a helper service at the same moment would otherwise race for the same port
+number, which is the thing that stops more than a couple of devices being worked on in parallel
+(`PROJECT.md` D13, backlog R18). So **every lease is granted a *slot*** — its numbered parallel
+position on this host — and every hook the daemon runs for that lease is told it, on top of
+`ROVER_PROJECT` and `ROVER_DEVICE_SERIAL`:
+
+| Variable | What it is |
+|---|---|
+| `ROVER_SLOT` | The lease's 0-based slot index. Useful wherever a run needs a unique suffix, not just for a port. |
+| `ROVER_PORT_BASE` | The first port of this lease's block. |
+| `ROVER_PORT_COUNT` | How many consecutive ports from `ROVER_PORT_BASE` are this lease's. |
+
+Read `ROVER_PORT_COUNT` rather than assuming the block size, so a hook does not drift from the
+daemon if the number ever changes. The blocks are 8 consecutive ports each, starting at 26000,
+with 64 slots — 26000–26511, one contiguous range an operator can reserve or firewall in a single
+line. There is **no environment variable to move it**: these are values the daemon sets for a
+child, not configuration an operator supplies, and if the range ever collides on a real host that
+is a change to make deliberately rather than a knob to leave lying around.
+
+Two things Rover promises here, and one it does not:
+
+- **No two live leases are ever told the same numbers**, however many agents ask at the same
+  instant. The slot is taken in the same indivisible step that makes the lease exclusive.
+- **A slot comes back when the lease ends, by either path** — a `rover release` or an expiry with
+  the agent long gone — and it comes back *after* that lease's teardown has run, so the numbers a
+  hook is still shutting down are never handed to the next lessee. An agent that died leaks no
+  ports.
+- **Rover reserves the numbers; it never binds them and never probes them.** Nothing on the host
+  listens on a slot's ports — the project's own service does — so a hook that ignores what it was
+  told and hard-codes 3000 is on its own. A hook's declared `env` cannot override the three
+  variables above, for the same reason.
+
+If every slot on the host is in use, an `acquire_device` is **refused by name** (`no-slot`, with
+a message saying how many there are) rather than granted a lease with no ports.
 
 Four things worth being clear about, because this file's commands run with the daemon's
 privileges:

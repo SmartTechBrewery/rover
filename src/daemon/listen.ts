@@ -39,6 +39,7 @@ import { type NetworkListener, startNetworkListener } from './network-listen.js'
 import { createProjectInstall, type ProjectInstall } from './project-install.js';
 import { createProjectResolver } from './project-resolver.js';
 import { createDeviceRestorer, type DeviceRestorer } from './restore.js';
+import { createSlotAllocator, type SlotAllocator } from './slots.js';
 import { attemptConnect } from './socket-connect.js';
 import { assertValidSocketPath } from './socket-path.js';
 import { handleStatus } from './status.js';
@@ -184,11 +185,12 @@ export function createDaemonHandlers(
 	traffic: VerbTraffic,
 	archive: ArtifactArchive,
 	installProject: ProjectInstall,
+	slots: SlotAllocator,
 ): IpcHandlers {
 	return {
 		status: handleStatus,
 		...createListDevicesHandler(inventory, leases),
-		...createLeaseHandlers(inventory, leases, restorer),
+		...createLeaseHandlers(inventory, leases, restorer, slots),
 		...createVerbHandlers(inventory, leases, traffic, archive, installProject),
 	};
 }
@@ -215,6 +217,12 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartRes
 	// the store's end hook revokes the device from them. It holds nothing until a verb call
 	// arrives, so a loser of the bind leaves nothing behind here either.
 	const traffic = createVerbTraffic();
+	// One pool per daemon, and the only thing on this host that hands out helper-service ports
+	// (R18). Constructed before the restorer, which gives slots back, and before the handlers,
+	// which take them. It holds nothing until a grant, so a loser of the bind leaves nothing
+	// behind here either — and a slot is host state that dies with the host (D6): after a
+	// restart there are no leases, so there are no slots to reclaim from a predecessor.
+	const slots = createSlotAllocator();
 	// Constructed before the store, because the store's end hook calls into it. It starts
 	// nothing either: a restoration only ever begins when a lease ends, and a process that
 	// never granted one has nothing to undo.
@@ -224,6 +232,10 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartRes
 		// becomes that project's hook file, re-read every time a lease ends (D6).
 		resolveProject: createProjectResolver({ root: options.projectsRoot }),
 		settleTraffic: (serial) => traffic.settle(serial),
+		// The lease's ports go back into the pool here rather than in `onLeaseEnded` below,
+		// because the teardown that just ran was the thing using them — see
+		// `DeviceRestorerOptions.onRestored`.
+		onRestored: (lease) => slots.release(lease.slot),
 	});
 	// Built before the store for the restorer's reason: the store's end hook calls into it. It
 	// creates no directory until a verb call actually produces bytes, so a loser of the bind
@@ -252,6 +264,9 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartRes
 			// them because it undoes nothing on the device: it drops this lease's sequence
 			// counters so the daemon does not grow with the number of leases it has granted.
 			archive.forget(lease);
+			// The lease's slot is deliberately **not** a fourth line here: its ports are what the
+			// teardown queued above was told, so they come back at the tail of that restoration
+			// instead (`DeviceRestorerOptions.onRestored`, wired at the restorer above).
 		},
 	});
 	// Built once, for **both** transports. Not once per bind attempt and not once per
@@ -269,6 +284,7 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartRes
 			// lease's `project` string becomes that project's *install* command, re-read on every
 			// call for the reason the teardown's is (D6).
 			createProjectInstall({ root: options.projectsRoot }),
+			slots,
 		),
 	);
 

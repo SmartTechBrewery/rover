@@ -25,6 +25,11 @@
  * (`./verb-traffic.ts`, {@link DeviceRestorerOptions.settleTraffic}) rather than driving the
  * device alongside it. `acquire_device` inherits that wait through {@link DeviceRestorer.settle}.
  *
+ * **And the lease's slot comes back only once all of that has finished**
+ * ({@link DeviceRestorerOptions.onRestored}, R18). The teardown is what was told the slot's
+ * ports, so the numbers are reclaimed at the tail of this chain rather than when the lease
+ * record disappeared — same path, same clock, no second timer.
+ *
  * **The step order is the finding, not a preference** (PROJECT.md §6, verified 2026-08-29):
  * the airplane-mode step can move wifi underneath it in a direction no caller can predict,
  * while the wifi step never moves airplane mode. So both are set explicitly and **wifi is set
@@ -39,6 +44,7 @@ import type { DeviceBackend } from '../core/device.js';
 import type { AppId, DeviceSerial } from '../core/ids.js';
 import type { DeviceInventory } from './inventory.js';
 import type { Lease, LeaseEndReason } from './leases.js';
+import type { Slot } from './slots.js';
 
 /**
  * What one project asks to have undone when a lease on it ends: the applications it drove,
@@ -109,7 +115,9 @@ export const SETTLE_TIMEOUT_MS = 10_000;
  * down.
  *
  * **Given the serial** as well as the project, because a teardown that cannot name the device
- * it is undoing is the wrong shape to hand a hook, and this module has the serial in hand.
+ * it is undoing is the wrong shape to hand a hook, and this module has the serial in hand. And
+ * **given the lease's slot** for the same reason (R18, `./slots.ts`): a teardown stopping the
+ * helper services an install started has to be told the ports they were started on.
  *
  * `null` for a project nobody has described, which is the ordinary case rather than a failure
  * (ai/CODING_STANDARDS.md "Error handling").
@@ -124,6 +132,7 @@ export const SETTLE_TIMEOUT_MS = 10_000;
 export type ProjectResolver = (
 	project: string,
 	serial: DeviceSerial,
+	slot: Slot,
 ) => Promise<ProjectRestoration | null>;
 
 export interface DeviceRestorer {
@@ -190,6 +199,27 @@ export interface DeviceRestorerOptions {
 	 * to wait for, and nothing else in this module knows what a verb is.
 	 */
 	readonly settleTraffic?: (serial: DeviceSerial) => Promise<void>;
+	/**
+	 * Called once this lease's restoration has finished, whichever way the lease ended.
+	 * `./listen.ts` fills it with the one thing that must happen *after* a teardown rather than
+	 * with it: giving the lease's slot back to the pool (R18, `./slots.ts`).
+	 *
+	 * **Why last, and not at `onLeaseEnded`.** The teardown that is about to run was told the
+	 * slot's ports, and it is the thing still using them. Freeing the numbers the instant the
+	 * lease record disappeared would let the very next grant hand the same block to a new
+	 * service while the previous lessee's `stop` was still on it — and the allocator hands out
+	 * the lowest free index, so the freed slot is *the* next one out rather than an unlucky one.
+	 * The teardown's own {@link TEARDOWN_TIMEOUT_MS} and {@link SETTLE_TIMEOUT_MS} already bound
+	 * how long that can delay reclamation, and it is the same clock and the same path as the
+	 * restoration itself — never a second timer with its own idea of what is dead (D6, D9).
+	 *
+	 * Contained the way a step is: a listener that throws is a warning, never a chain that
+	 * rejects, because `settle` is awaited inside `acquire_device`. What is *not* covered is a
+	 * lease whose restoration was never started at all — a listener earlier in the store's end
+	 * hook that threw takes the ones after it with it — and that hazard is the existing one
+	 * `archive.forget` already has rather than a new one.
+	 */
+	readonly onRestored?: (lease: Lease) => void;
 }
 
 export function createDeviceRestorer(options: DeviceRestorerOptions): DeviceRestorer {
@@ -267,6 +297,24 @@ export function createDeviceRestorer(options: DeviceRestorerOptions): DeviceRest
 					`step — ${describe(error)}. The device may not have been restored.`,
 			);
 		}
+		// After the steps and inside the chain, so what the teardown was told is not handed to
+		// somebody else while it is still using it — see {@link DeviceRestorerOptions.onRestored}.
+		// Announced even when a step failed: a restoration that went wrong is still a lease that
+		// is over, and holding its slot back would leak ports for a device nobody is on.
+		announceRestored(lease);
+	};
+
+	/** The listener, contained: it must not reject the chain `acquire_device` awaits. */
+	const announceRestored = (lease: Lease): void => {
+		try {
+			options.onRestored?.(lease);
+		} catch (error) {
+			warn(
+				`Restoring device '${lease.serial}': the after-restoration listener threw — ` +
+					`${describe(error)}. The device was still restored; whatever that listener does ` +
+					`may not have happened.`,
+			);
+		}
 	};
 
 	/**
@@ -278,9 +326,10 @@ export function createDeviceRestorer(options: DeviceRestorerOptions): DeviceRest
 	const describeProject = async (
 		serial: DeviceSerial,
 		project: string,
+		slot: Slot,
 	): Promise<ProjectRestoration | null> => {
 		try {
-			return await resolveProject(project, serial);
+			return await resolveProject(project, serial, slot);
 		} catch (error) {
 			warn(
 				`Restoring device '${serial}': working out what project '${project}' asks to have ` +
@@ -298,7 +347,7 @@ export function createDeviceRestorer(options: DeviceRestorerOptions): DeviceRest
 		// the host on both ends. Bounded, because `acquire_device` waits on the whole chain —
 		// see {@link DeviceRestorerOptions.settleTraffic}.
 		await awaitSettled(serial);
-		const project = await describeProject(serial, lease.project);
+		const project = await describeProject(serial, lease.project, lease.slot);
 		const registered = await resolveDevice(serial, reason);
 
 		if (registered && project) {

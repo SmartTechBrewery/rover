@@ -29,6 +29,7 @@
 import { spawn } from 'node:child_process';
 import type { DeviceSerial } from '../core/ids.js';
 import type { HookCommand } from './project-hooks.js';
+import type { Slot } from './slots.js';
 
 /**
  * How long one hook command may run before it is killed and the failure says so.
@@ -53,6 +54,24 @@ export const HOOK_SERIAL_ENV_VAR = 'ROVER_DEVICE_SERIAL';
 
 /** The name of the environment variable telling a hook which project it is running for. */
 export const HOOK_PROJECT_ENV_VAR = 'ROVER_PROJECT';
+
+/**
+ * The name of the environment variable telling a hook this lease's slot index (R18,
+ * `./slots.ts`) — 0-based, and useful for anything needing a unique suffix, not only a port.
+ */
+export const HOOK_SLOT_ENV_VAR = 'ROVER_SLOT';
+
+/** The name of the environment variable telling a hook the first port of its lease's block. */
+export const HOOK_PORT_BASE_ENV_VAR = 'ROVER_PORT_BASE';
+
+/**
+ * The name of the environment variable telling a hook how many consecutive ports from
+ * {@link HOOK_PORT_BASE_ENV_VAR} are its lease's.
+ *
+ * It exists so a hook does not hard-code the block size and drift from the daemon when
+ * `PORTS_PER_SLOT` changes.
+ */
+export const HOOK_PORT_COUNT_ENV_VAR = 'ROVER_PORT_COUNT';
 
 /**
  * A hook ran and did not succeed — a non-zero exit, a signal, or a program that never started
@@ -104,6 +123,14 @@ export interface HookCommandContext {
 	readonly project: string;
 	readonly serial: DeviceSerial;
 	/**
+	 * The lease's slot, and the ports its helper services may use (R18, `./slots.ts`).
+	 *
+	 * **Required, not optional.** Every hook run belongs to a lease and every lease has a slot,
+	 * so a required field is what stops a future third call site from quietly starting a child
+	 * that was told nothing and hard-codes a port a neighbour is already on.
+	 */
+	readonly slot: Slot;
+	/**
 	 * Defaults to {@link HOOK_COMMAND_TIMEOUT_MS}. A test seam in the spirit of
 	 * `DeviceRestorerOptions.teardownTimeoutMs`, not a configuration surface — a real
 	 * eight-second bound and a unit test cannot both be in the same run.
@@ -129,10 +156,13 @@ export interface HookCommandContext {
  * Run one hook command to completion. Resolves on exit 0 and says nothing.
  *
  * The child's environment is the daemon's own, then the hook's declared `env` over it, then the
- * two values a hook cannot know for itself: {@link HOOK_PROJECT_ENV_VAR} and
- * {@link HOOK_SERIAL_ENV_VAR}. The serial is there from the first phase of this row deliberately
- * — a teardown that cannot name the device it is undoing is the wrong shape to hand the phases
- * that follow.
+ * values a hook cannot know for itself: {@link HOOK_PROJECT_ENV_VAR},
+ * {@link HOOK_SERIAL_ENV_VAR} and the slot's three ({@link HOOK_SLOT_ENV_VAR},
+ * {@link HOOK_PORT_BASE_ENV_VAR}, {@link HOOK_PORT_COUNT_ENV_VAR}). The serial is there from the
+ * first phase of this row deliberately — a teardown that cannot name the device it is undoing is
+ * the wrong shape to hand the phases that follow — and the slot's three come **last**, so a
+ * hook's own `env` cannot override the one thing the daemon has to be able to guarantee: that no
+ * two live leases were told the same ports.
  *
  * @throws HookCommandFailedError on a non-zero exit, a signal (the timeout's kill and
  *   {@link HookCommandContext.signal}'s included), or a program that could not be started.
@@ -155,6 +185,9 @@ export async function runHookCommand(
 				...hook.env,
 				[HOOK_PROJECT_ENV_VAR]: context.project,
 				[HOOK_SERIAL_ENV_VAR]: context.serial,
+				[HOOK_SLOT_ENV_VAR]: String(context.slot.index),
+				[HOOK_PORT_BASE_ENV_VAR]: String(context.slot.portBase),
+				[HOOK_PORT_COUNT_ENV_VAR]: String(context.slot.portCount),
 			},
 			// stdin closed: a hook is not interactive, and one that reads from it would otherwise
 			// wait for input nobody is going to send until its timeout fired.

@@ -10,20 +10,30 @@
  * in what reaches the agent. Both arrive with no exit code and the same signal, so the wording
  * is the only thing telling an operator whether to look at the build or at the caller.
  *
+ * The third suite is the environment one: an install is told its lease's slot and ports (R18)
+ * through the same runner the teardown goes through, and the two must not drift.
+ *
  * Real processes for `./hook-command.test.ts`'s reason: what is under test is a program being
  * killed, and a mocked `spawn` would assert an options object instead.
  */
 
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { parseDeviceSerial } from '@/core/ids.js';
 import { createProjectInstall } from '@/daemon/project-install.js';
+import { PORTS_PER_SLOT, SLOT_PORT_BASE, type Slot } from '@/daemon/slots.js';
 import { InstallHookFailedError } from '@/verbs/errors.js';
 
 const SERIAL = parseDeviceSerial('attached-1');
 const PROJECT = 'checkout-web';
+/** Not slot 0, so nothing here can pass by defaulting. */
+const SLOT: Slot = {
+	index: 2,
+	portBase: SLOT_PORT_BASE + 2 * PORTS_PER_SLOT,
+	portCount: PORTS_PER_SLOT,
+};
 
 /** A build that has started and will not stop on its own — every ending here comes from outside. */
 const NEVER_EXITS = ['-e', 'setInterval(() => {}, 1000)'];
@@ -63,7 +73,7 @@ describe('an install that outlives its budget', () => {
 		// minutes, and this is the one branch a real build is most likely to reach in anger.
 		const install = createProjectInstall({ root, hookTimeoutMs: 25 });
 
-		const failure = await failureOf(() => install(PROJECT, SERIAL));
+		const failure = await failureOf(() => install(PROJECT, SERIAL, SLOT));
 
 		// No exit code and a signal, which is what an agent has to be able to tell apart from a
 		// build that failed on its own merits — so `outcome` carries the runner's own words.
@@ -84,7 +94,7 @@ describe('an install whose lease ends underneath it', () => {
 		const install = createProjectInstall({ root });
 		const cancel = new AbortController();
 
-		const failing = failureOf(() => install(PROJECT, SERIAL, cancel.signal));
+		const failing = failureOf(() => install(PROJECT, SERIAL, SLOT, cancel.signal));
 		cancel.abort();
 		const failure = await failing;
 
@@ -100,8 +110,32 @@ describe('an install whose lease ends underneath it', () => {
 		await writeHookFile({ command: process.execPath, args: NEVER_EXITS });
 		const install = createProjectInstall({ root });
 
-		const failure = await failureOf(() => install(PROJECT, SERIAL, AbortSignal.abort()));
+		const failure = await failureOf(() => install(PROJECT, SERIAL, SLOT, AbortSignal.abort()));
 
 		expect(failure.outcome).toContain('the lease that asked for it ended');
+	});
+});
+
+describe('the install hook’s environment', () => {
+	it('tells the child the same slot and ports the teardown is told', async () => {
+		const marker = join(root, 'report.json');
+		await writeHookFile({
+			command: process.execPath,
+			args: [
+				'-e',
+				"require('node:fs').writeFileSync(process.argv[1], [process.env.ROVER_SLOT," +
+					"process.env.ROVER_PORT_BASE,process.env.ROVER_PORT_COUNT].join(' '))",
+				marker,
+			],
+		});
+		const install = createProjectInstall({ root });
+
+		await install(PROJECT, SERIAL, SLOT);
+
+		// The two hook families run through one runner, and this is what stops them drifting: a
+		// service the install started is stopped by a teardown told the same numbers.
+		await expect(readFile(marker, 'utf8')).resolves.toBe(
+			`${SLOT.index} ${SLOT.portBase} ${SLOT.portCount}`,
+		);
 	});
 });

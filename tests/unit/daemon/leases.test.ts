@@ -17,7 +17,7 @@ import {
 	type LeaseStore,
 	type LeaseStoreOptions,
 } from '@/daemon/leases.js';
-import { createMockLease } from '../../helpers/factories.js';
+import { createMockLease, createMockSlot } from '../../helpers/factories.js';
 
 const deviceA = parseDeviceSerial('device-a');
 const deviceB = parseDeviceSerial('device-b');
@@ -52,8 +52,18 @@ function createObservedStore(ttlMs = LEASE_TTL_MS) {
 	return { ...clocked, ended, warnings };
 }
 
-function request(serial: DeviceSerial, owner: string, testName: string | null = null) {
-	return { serial, owner, project: 'rover', testName };
+/**
+ * The slot is caller-supplied here the way the strings are (R18): the store allocates
+ * nothing and reads nothing out of it, so one stand-in serves every request that does not
+ * care which block it got.
+ */
+function request(
+	serial: DeviceSerial,
+	owner: string,
+	testName: string | null = null,
+	slot = createMockSlot(),
+) {
+	return { serial, owner, project: 'rover', testName, slot };
 }
 
 describe('a lease is per device', () => {
@@ -102,7 +112,13 @@ describe('the three attribution strings', () => {
 		const project = '../../etc/passwd';
 		const testName = 'ekran główny — before ✅';
 
-		const outcome = store.acquire({ serial: deviceA, owner, project, testName });
+		const outcome = store.acquire({
+			serial: deviceA,
+			owner,
+			project,
+			testName,
+			slot: createMockSlot(),
+		});
 
 		// Nothing is trimmed, sanitised or interpreted: these exist so the archive has a name
 		// to file results under (D22), and the core never reads them.
@@ -297,6 +313,20 @@ describe('use', () => {
 			project: 'rover',
 			testName: 'home screen',
 		});
+	});
+
+	it('carries the lease’s slot through a renewal untouched', () => {
+		const { store } = createClockedStore();
+		const slot = createMockSlot({ index: 3, portBase: 26_024 });
+		const granted = store.acquire(request(deviceA, 'issue-112', null, slot));
+		if (!granted.granted) throw new Error('the first acquire must be granted');
+
+		const renewed = store.use(granted.lease.id);
+
+		// A renewal that dropped the slot would silently unport every later hook this lease
+		// runs — the teardown included, which is where the reclamation hangs.
+		expect(renewed?.slot).toEqual(slot);
+		expect(store.holderOf(deviceA)?.slot).toEqual(slot);
 	});
 });
 
