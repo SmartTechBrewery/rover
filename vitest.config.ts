@@ -38,9 +38,10 @@ export default defineConfig({
 			},
 			// The panel's component tests, co-located beside what they render. jsdom for the
 			// whole project rather than Swarm's per-file `@vitest-environment` pragma, since
-			// everything under `panel/src` is a component. Deliberately no `tests/setup.ts`:
+			// everything under `panel/src` is a component. Deliberately not `tests/setup.ts`:
 			// its job is keeping a daemon out of the operator's own artifact tree, and the
-			// panel starts no daemon.
+			// panel starts no daemon. `tests/panel-setup.ts` is the panel's own, and it repairs
+			// one thing this environment gets wrong — see its header.
 			{
 				test: {
 					name: 'panel',
@@ -49,6 +50,7 @@ export default defineConfig({
 					environment: 'jsdom',
 					clearMocks: true,
 					unstubEnvs: true,
+					setupFiles: ['./tests/panel-setup.ts'],
 					pool: 'threads',
 				},
 				resolve,

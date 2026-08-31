@@ -1,3 +1,4 @@
+import { Wordmark } from '@panel/components/wordmark.js';
 import { Link, useRouterState } from '@tanstack/react-router';
 import { Archive, CircleUser, CircuitBoard, Terminal } from 'lucide-react';
 
@@ -41,9 +42,7 @@ export function Sidebar() {
 			<div aria-hidden="true" className="scanline absolute inset-0" />
 			<div className="relative flex flex-1 flex-col">
 				<div className="border-outline-variant border-b-2 px-4 py-6">
-					<span className="wordmark-chroma block font-display-lg text-display-lg text-secondary">
-						ROVER_OS
-					</span>
+					<Wordmark />
 				</div>
 
 				<ul className="flex-1 space-y-2 px-2 py-4">
