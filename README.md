@@ -11,6 +11,345 @@ It is **not** a test framework. Nothing asserts, nothing turns red on its own, n
 gate. Rover moves the device and reports what is on it; judging whether that is right is the
 agent's job.
 
+## Quick start
+
+Two runs, in this order: **take a device on this machine**, and — when the devices are on some
+other machine — **expose that machine as a host** and reach it from where the work happens. Every
+command below was actually run on the machine this section was written on, and the outputs shown
+are the ones it printed; what could not be run says so rather than being shown unrun
+(`ai/RULES.md` §6).
+
+There is no `bin/` launcher, so `rover` is typed `npm run rover --` — with `-s` in anything that
+reads the output, because `npm run` prints its own two-line banner on stdout ahead of the command.
+Why there is no launcher, and the one line that changes when there is, is `PROJECT.md` §9.4.
+
+### What you need
+
+- **Node 22 or newer**, and `npm install` in this checkout — that also installs the git hooks.
+- **`adb` on `PATH`, with a device in debug mode.** `adb devices` has to name it before Rover can:
+  Rover lends what is already attached and never starts an emulator or connects a phone itself
+  (`PROJECT.md` D21), and it never takes a device reached over `adb connect` into its inventory,
+  because that is not this machine's hardware (D18).
+- **`ffmpeg` on the host, and only for `record`.** The machine this was written on does not have
+  it, so `record` is not shown below — see [what this will not tell
+  you](#what-this-will-not-tell-you).
+
+The device everything below ran against: `emulator-5554`, an `sdk_gphone64_arm64` emulator on
+**API 35** (Android 15).
+
+### Take a device on this machine
+
+Nothing needs starting by hand — the first call brings the daemon up (`PROJECT.md` D5), and
+`status` is the call that says which host answered:
+
+```bash
+npm run -s rover -- status
+```
+
+```
+host: local
+pid: 96427
+uptime: 0s
+protocol version: 1
+```
+
+`list` is what is attached, what is free and who holds the rest:
+
+```bash
+npm run -s rover -- list
+```
+
+```
+SERIAL         PLATFORM  MODEL               STATE  HELD BY
+emulator-5554  android   sdk_gphone64_arm64  ready  free
+```
+
+`acquire` takes **one device**, not the machine. `--owner` and `--project` are required and
+neither is ever derived from who you are (D16, D20); `--test-name` is optional, opaque, and is
+what files two runs of the same check next to each other in the host's archive.
+
+```bash
+npm run -s rover -- acquire emulator-5554 --owner issue-20 --project rover --test-name "quick start"
+```
+
+```
+Acquired 'emulator-5554' for 'issue-20' (project rover, test quick start).
+Release it with: npm run rover -- release 2744ae37-aafd-4179-b02c-b353127a23b2
+Expires in 19m unless activity renews it.
+```
+
+That lease id is the credential every verb call carries, and it is printed once, to whoever was
+granted the lease. Ask for the same device again while it is held and the answer is a **refusal**
+rather than an error — naming the holder, and never the holder's lease id:
+
+```bash
+npm run -s rover -- acquire emulator-5554 --owner someone-else --project rover   # exits 1
+```
+
+```
+Not granted (held): Device 'emulator-5554' is held by 'issue-20' for another 1186855ms
+Held by issue-20 (project rover, test quick start) — 19m left.
+```
+
+Now drive it. The verb runs on the **host** and the bytes come back over the wire, so `--out` is a
+path on **this** machine, and it is required — there is no filename this CLI could invent that its
+caller could predict (D19):
+
+```bash
+npm run -s rover -- screenshot <lease-id> --out /tmp/rover-quickstart.png
+```
+
+```
+Wrote 1376820 bytes of image/png to /tmp/rover-quickstart.png
+```
+
+A transfer the host refused, or one that did not survive the trip, exits 1 and leaves **no** file
+at `--out` at all rather than a short one; an `--out` that names a directory is a usage error
+(exit 2) before anything is captured. `--json` is the form to script against — one document on
+stdout, every diagnostic on stderr:
+
+```bash
+npm run -s rover -- list --json
+```
+
+```json
+{
+  "host": "local",
+  "devices": [
+    {
+      "serial": "emulator-5554",
+      "platform": "android",
+      "model": "sdk_gphone64_arm64",
+      "state": "ready",
+      "attachment": "this-host",
+      "heldBy": {
+        "serial": "emulator-5554",
+        "owner": "issue-20",
+        "project": "rover",
+        "testName": "quick start",
+        "expiresInMs": 1191269
+      }
+    }
+  ],
+  "stale": false
+}
+```
+
+Hand the device back when you are done. A lease also ends on its own 20 minutes after the last
+call, and either way it is the **host** that restores the device (D9) — a caller is never asked to
+and cannot opt out:
+
+```bash
+npm run -s rover -- release <lease-id>
+```
+
+`npm run rover -- --help` lists every command, the global flags and the exit codes.
+
+### Wire up the MCP server
+
+The MCP server is one process per agent session, speaking MCP over stdio. An agent's server entry
+runs `node` directly and **never** `npm run mcp`: that banner would land in the protocol stream
+ahead of the first frame — `npm run mcp` really does write `> rover@0.1.0 mcp` and the command
+line to stdout before the server has said anything.
+
+```jsonc
+{
+  "mcpServers": {
+    "rover": {
+      "command": "node",
+      "args": ["--import", "tsx/esm", "/absolute/path/to/rover/src/mcp/index.ts"],
+      "env": {
+        "ROVER_PROJECT_FILE": "/absolute/path/to/your-project/your-project.json"
+      }
+    }
+  }
+}
+```
+
+The path is absolute because an MCP client picks its own working directory. `ROVER_PROJECT_FILE`
+is optional and buys one thing: `acquire_device` may then omit `project` (D22) — it is read for
+that single field and nothing the file declares is ever run by a client. **Which host an agent
+talks to is this `env` block's business and never a tool argument** (D17), which is what the pair
+of sections below is about; an agent cannot see or change the machine that answered.
+
+You can prove the wiring with no agent in the picture. Three frames in, two answers out:
+
+```bash
+printf '%s\n' \
+  '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"probe","version":"0"}}}' \
+  '{"jsonrpc":"2.0","method":"notifications/initialized"}' \
+  '{"jsonrpc":"2.0","id":2,"method":"tools/list"}' \
+  | node --import tsx/esm src/mcp/index.ts
+```
+
+The first answer is the handshake (`"protocolVersion":"2025-06-18"`, `"serverInfo":{"name":"rover"`
+…) and the second lists **22 tools**: the four device and lease rows, the sixteen verbs whose
+answer is plain data, and the two whose answer is bytes. Swap the last frame for a call to watch
+one run against the device:
+
+```bash
+printf '%s\n' \
+  '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"probe","version":"0"}}}' \
+  '{"jsonrpc":"2.0","method":"notifications/initialized"}' \
+  '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"list_devices","arguments":{}}}' \
+  | node --import tsx/esm src/mcp/index.ts
+```
+
+The two ways to mis-wire this fail at **startup**, on stderr, before one tool is advertised —
+rather than starting and breaking at the agent's first call:
+
+```bash
+ROVER_HOST_ADDRESS=1.2.3.4 node --import tsx/esm src/mcp/index.ts
+# ROVER_HOST_ADDRESS is set, so this client would ask a remote host, but ROVER_HOST_PORT,
+# ROVER_HOST_TOKEN are not set. …  (exits 1)
+
+ROVER_PROJECT_FILE=/nope.json node --import tsx/esm src/mcp/index.ts
+# There is no project hook file at /nope.json, and ROVER_PROJECT_FILE names it. …  (exits 1)
+```
+
+### Expose this machine as a host
+
+**The run below is one machine playing both parts**, over TLS on loopback, because there was no
+second machine to hand when this was written. On two machines not one command changes except the
+address: put the host's own address on the network in the certificate's `subjectAltName`, in
+`ROVER_LISTEN_ADDRESS` here and in `ROVER_HOST_ADDRESS` on the client, everywhere `127.0.0.1`
+appears below.
+
+A network host is a service its operator starts on purpose, never something a client brings up
+behind their back — `rover list` clears `ROVER_LISTEN_PORT` in any daemon it autostarts, so the
+listener only ever exists because somebody exported these variables and ran the daemon.
+
+```bash
+# A certificate for the host. Use your own CA in anything that matters; this is the shape.
+# The subjectAltName has to carry the address clients will put in ROVER_HOST_ADDRESS.
+mkdir -p /tmp/rover-net
+openssl req -x509 -newkey rsa:2048 -nodes -days 365 \
+  -keyout /tmp/rover-net/rover-key.pem -out /tmp/rover-net/rover-cert.pem \
+  -subj "/CN=rover-host" -addext "subjectAltName=DNS:rover-host,IP:127.0.0.1"
+
+export ROVER_TLS_CERT=/tmp/rover-net/rover-cert.pem
+export ROVER_TLS_KEY=/tmp/rover-net/rover-key.pem
+export ROVER_LISTEN_ADDRESS=127.0.0.1        # optional; 0.0.0.0 otherwise
+export ROVER_LISTEN_PORT=4711                # the switch — set it last
+npm run daemon
+```
+
+```
+Rover is listening on 127.0.0.1:4711 (TLS).
+```
+
+It runs in the foreground and serves the network and the local unix socket from one handler, so a
+plain `rover list` on this machine keeps working against the same host. Stopping it is `kill` on
+the pid `rover status` printed; it unlinks its socket on the way out. `.gitignore` refuses `*.pem`
+and `*.key`, so a certificate generated inside a checkout cannot be committed by accident —
+generating it outside one, as above, is better still.
+
+Then issue access, one token per person. `users` needs no daemon and asks no host at all: it reads
+and writes this machine's own `~/.rover/users.json` directly, before or after the daemon is up.
+
+```bash
+npm run -s rover -- users add alice --name "Alice Example"
+```
+
+```
+Created user 'alice'. Its token:
+Tba-…
+That token is stored only as a hash. It is not shown again and cannot be recovered — hand it over
+now, or mint a fresh one with `rover users rotate`.
+```
+
+Hand that value to the person and nothing else — the host keeps only its hash, and there is no
+shared secret beside it. `rover users revoke alice` takes it away, and because the daemon re-reads
+the store at **every connection attempt**, it bites on alice's very next call with nothing
+restarted: `list --host remote` was refused immediately after a `revoke`, with the same daemon
+still running.
+
+**What this deliberately does not do.** There is no host catalogue, no registration and no
+discovery. Rover is built for exactly one device host, and a client is configured with that host's
+address and nothing else (`PROJECT.md` §7, D18) — so there is no "connect to somebody else's host"
+story to go looking for, and the exports below are the whole of the client's configuration.
+
+### Take a device on another machine
+
+On the machine doing the work, point the client at that host and add `--host remote`. Nothing else
+about a command changes: the same method table, the same answers, the same exit codes.
+
+```bash
+export ROVER_HOST_ADDRESS=127.0.0.1                 # must be an address that certificate names
+export ROVER_HOST_PORT=4711
+export ROVER_HOST_TOKEN="…"                         # what that host's `rover users add` printed
+export ROVER_HOST_CA=/tmp/rover-net/rover-cert.pem  # optional; the system trust store otherwise
+
+npm run -s rover -- status --host remote
+npm run -s rover -- list --host remote
+npm run -s rover -- acquire emulator-5554 --host remote --owner issue-20 --project rover
+npm run -s rover -- screenshot <lease-id> --host remote --out /tmp/rover-remote.png
+npm run -s rover -- release <lease-id> --host remote
+```
+
+`status --host remote` answers with the **host's** pid and uptime, which is how you tell which
+machine you reached. `screenshot` still writes on **this** machine (D19), and `acquire`'s printed
+`Release it with: …` line does not carry `--host remote` — add it, or the release goes to the
+wrong host.
+
+An MCP server reaches a remote host the same way, through its `env` block rather than through a
+tool argument:
+
+```jsonc
+"env": {
+  "ROVER_HOST_ADDRESS": "127.0.0.1",
+  "ROVER_HOST_PORT": "4711",
+  "ROVER_HOST_TOKEN": "…",
+  "ROVER_HOST_CA": "/tmp/rover-net/rover-cert.pem"
+}
+```
+
+Four ways this goes wrong are four different messages, because they call for four different next
+moves. All four were run:
+
+| What is wrong | What comes back |
+|---|---|
+| Nothing is listening there | `ECONNREFUSED`, naming the address and the port, and saying that a client never starts a host |
+| The host rejected the token | "rejected `ROVER_HOST_TOKEN`" — unknown, revoked or rotated there; the value itself is never printed |
+| The certificate is not trusted | `DEPTH_ZERO_SELF_SIGNED_CERT` — name the certificate in `ROVER_HOST_CA`; verification is never turned off |
+| The certificate does not name that address | `ERR_TLS_CERT_ALTNAME_INVALID`, listing the names it does carry — `ROVER_HOST_CA` is not what fixes this one |
+
+None of them is ever an empty device list and none of them hangs; a peer that accepts the
+connection and then never finishes the handshake is given ten seconds and then named too. See
+[Connecting to a remote host](#connecting-to-a-remote-host) for the reasoning behind each.
+
+### What this will not tell you
+
+Worth naming out loud, because silence reads as "checked". `PROJECT.md` §8 is the full list; the
+short form:
+
+- **Nothing goes red on its own.** There is no assertion anywhere here. The quality of the result
+  depends on the agent's attention, not on the tool.
+- **Pixels are gone whenever an app blocks screen capture** — the system hands back a valid, all
+  black image and logs nothing. `read_screen` survives the block and answers in full, which is why
+  it is a first-class verb rather than a fallback.
+- **Motion is only ever sampled.** A recording and its frames can say something moved and roughly
+  when; "is this animation smooth" is a question neither answers.
+- **Measurement error is ±1–3 px**, worse on antialiased edges, and **one density per device** — a
+  result from one emulator is not a result for every phone (D14).
+
+And the gaps this quick start runs into today, rather than in principle:
+
+- **`record` was not run for this section**, because this machine has no `ffmpeg`. It was tried:
+  the call exits 1 with `frame-extraction-unavailable`, naming the program to install, and writes
+  no video either — never an empty frame list, which would read as a screen on which nothing
+  happened.
+- **One call carries one whole file, capped at 4 MiB**, so `install` moves a small package and
+  refuses a real APK by name. Chunked transfer is its own issue.
+- **`install_app`, `push_file` and `pull_file` are not MCP tools yet**, so an agent cannot push,
+  pull or install a file — only the CLI can.
+- **Nothing prunes the host's artifact archive** under `~/.rover/artifacts` (`PROJECT.md` §9.4).
+- **The remote pair above was exercised on one machine over loopback**, with a self-signed
+  certificate, one process playing host and one playing client. Two machines on a real network
+  were not available for this section.
+- **There is no `bin/` launcher**, which is why every command here starts `npm run rover --`
+  (`PROJECT.md` §9.4).
+
 ## Status
 
 Design and rules are settled. The toolchain and the device-backend contract — the device
@@ -415,30 +754,22 @@ naming the address, the port and `ECONNREFUSED`, and a peer that accepts the con
 says nothing is given ten seconds and then named too — never an empty device list, never a hang —
 and a token the host rejects says so, distinctly, without ever printing the token. The
 certificate is verified; a self-signed host is trusted by naming its certificate in
-`ROVER_HOST_CA`, never by turning verification off. The backlog is twenty issues in dependency
-order — see [`PROJECT.md`](PROJECT.md) §9.3.
+`ROVER_HOST_CA`, never by turning verification off. The backlog is in dependency order — see
+[`PROJECT.md`](PROJECT.md) §9.3.
 
-```bash
-npm run rover -- status              # start the daemon if it is not running, report which host answered
-npm run rover -- list                # what is attached, what is free, who holds the rest
-npm run rover -- acquire <serial> --owner issue-112 --project rover
-npm run rover -- release <lease-id>
-npm run rover -- pull <lease-id> /sdcard/report.bin --out ./report.bin   # onto this machine
-npm run rover -- push <lease-id> ./fixture.bin /data/local/tmp/fixture.bin
-npm run rover -- install <lease-id> ./app.apk
-npm run rover -- --help              # every command, the global flags and the exit codes
-npm run daemon                       # run the daemon in the foreground instead, to watch it start
-npm run -s mcp                       # the MCP server, on stdio, for one agent session
-```
+The commands are in the [quick start](#quick-start) above, each one with the output it printed;
+`npm run rover -- --help` is the full list, and `npm run daemon` runs the daemon in the foreground
+instead of letting the first call start it.
 
 `npm run` prints its own banner to stdout ahead of the command, so a script that parses the JSON
 uses `npm run -s rover -- list --json` or invokes `node --import tsx/esm src/cli/index.ts list
 --json` directly. **That banner matters more for `mcp` than anywhere else**: its stdout carries
 MCP protocol frames, so an agent's server entry runs `node --import tsx/esm src/mcp/index.ts`
 directly (`npm run -s mcp` is the by-hand equivalent) and a bare `npm run mcp` writes two lines
-into the stream before the first frame. Wiring an agent up properly is `PROJECT.md` R20's to
-settle; what exists today is the server, speaking stdio, declaring twenty-two tools under the
-`IPC_METHODS` names exactly: the four device and lease rows (`status`, `list_devices`,
+into the stream before the first frame. What that entry looks like in an MCP client's own
+configuration, and how to prove it handshakes, is [Wire up the MCP
+server](#wire-up-the-mcp-server) above. What exists today is the server, speaking stdio, declaring
+twenty-two tools under the `IPC_METHODS` names exactly: the four device and lease rows (`status`, `list_devices`,
 `acquire_device`, `release_device`), the sixteen verbs whose answer is plain data
 (`wait_for`, `wait_until_gone`, `tap`, `long_press`, `swipe`, `scroll`, `type_text`,
 `press_key`, `read_screen`, `device_info`, `launch_app`, `stop_app`, `clear_app_data`,
@@ -459,8 +790,8 @@ behind at all — never a truncated one.
 
 The three rows that move a whole file — `install_app`, `push_file` and `pull_file` — are not
 tools yet; how a client supplies and receives one is `PROJECT.md` R24 phase 2's, and no client
-has it. There is no `bin/` launcher yet — the published entry point is `PROJECT.md` R20's to
-settle.
+has it. There is no `bin/` launcher yet — a published entry point is outside the backlog
+deliberately, and `PROJECT.md` §9.4 records why and what changes when it lands.
 
 Exit codes: `0` success; `1` the operation did not succeed (a refused `acquire`, a `release` that
 found no live lease, an unreachable host, a request the host rejected); `2` usage error (unknown
@@ -767,21 +1098,13 @@ direction — a user created while the daemon is up can connect immediately.
 
 A network host is a **service its operator starts on purpose**, never something a client brings up
 behind their back — `rover list` clears `ROVER_LISTEN_PORT` in any daemon it autostarts, so the
-listener only ever exists because somebody exported these three variables and ran the daemon.
+listener only ever exists because somebody exported `ROVER_TLS_CERT`, `ROVER_TLS_KEY` and
+`ROVER_LISTEN_PORT` and ran the daemon.
 
-```bash
-# A certificate for the host. Use your own CA in anything that matters; this is the shape.
-openssl req -x509 -newkey rsa:2048 -nodes -days 365   -keyout rover-key.pem -out rover-cert.pem   -subj "/CN=rover-host" -addext "subjectAltName=DNS:rover-host,IP:10.0.0.4"
-
-export ROVER_TLS_CERT=/etc/rover/rover-cert.pem
-export ROVER_TLS_KEY=/etc/rover/rover-key.pem
-export ROVER_LISTEN_ADDRESS=10.0.0.4                # optional; 0.0.0.0 otherwise
-export ROVER_LISTEN_PORT=4711                       # the switch — set it last
-npm run daemon
-
-# Issue access, per person, before or after the daemon is up — it re-reads the store every time.
-npm run rover -- users add alice --name "Alice Example"
-```
+The commands — the certificate, the three exports, the daemon and the token — are in [expose this
+machine as a host](#expose-this-machine-as-a-host) above, with the output each one printed.
+Substitute the host's own address on the network for the `127.0.0.1` they were run against, in the
+certificate's `subjectAltName` and in `ROVER_LISTEN_ADDRESS` alike.
 
 **The host holds no secret of its own.** Access is one token per user, issued by `rover users add`
 and taken away by `rover users revoke` on this machine — so there is nothing here to copy to a
@@ -793,17 +1116,11 @@ unknown or revoked — and the connection is closed.
 
 ### Connecting to a remote host
 
-On the machine doing the work, point the client at that host and add `--host remote`:
+On the machine doing the work, point the client at that host and add `--host remote`.
 
-```bash
-export ROVER_HOST_ADDRESS=10.0.0.4                  # or the hostname on its certificate
-export ROVER_HOST_PORT=4711
-export ROVER_HOST_TOKEN="…"                         # the token `rover users add` printed on the host
-export ROVER_HOST_CA=/etc/rover/rover-cert.pem      # optional; the system trust store otherwise
-
-npm run rover -- list --host remote
-npm run rover -- acquire <serial> --host remote --owner issue-112 --project rover
-```
+The four exports and the commands that follow them are in [take a device on another
+machine](#take-a-device-on-another-machine) above, along with the `env` block an MCP server reaches
+the same host through.
 
 Copy the host's certificate to the client and name it in `ROVER_HOST_CA` — that is how a
 self-signed host is trusted, and there is no flag anywhere that skips the check instead. Omit
@@ -826,7 +1143,7 @@ naming the same address and port. A certificate that verifies but does not carry
 
 | Document | What it answers |
 |---|---|
-| [`PROJECT.md`](PROJECT.md) | Why this exists, the sixteen decisions and their reasoning, the verb set, verified adb recipes, the backlog |
+| [`PROJECT.md`](PROJECT.md) | Why this exists, the decisions and their reasoning, the verb set, verified adb recipes, the backlog |
 | [`ai/RULES.md`](ai/RULES.md) | The single source of truth for agents working in this repo — read it first |
 | [`ai/ARCHITECTURE.md`](ai/ARCHITECTURE.md) | The four components, the lease lifecycle, where the iOS seam runs |
 | [`ai/CODING_STANDARDS.md`](ai/CODING_STANDARDS.md) | Stack, Zod boundaries, error handling, module shape |
