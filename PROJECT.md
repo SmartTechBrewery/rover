@@ -978,6 +978,28 @@ attached to the host that ran these, which is the same limitation every capture 
   Verified with `od -c`. The parser strips a trailing `\r` per line anyway, because the
   `uiautomator dump` finding above is the same tool on the same host translating them.
 
+Checked on an **API 35** emulator (`sdk_gphone64_arm64`, Android 15) with `adb`
+37.0.1-15733141, 2026-08-31, answering the review of #108 — how long the read above may take:
+
+- **The read costs 0.07–0.11 s**, so it gets a budget of its own rather than the ten seconds
+  every other query here takes. Five `/usr/bin/time -p` runs of the recipe above measured
+  `real` 0.11, 0.07, 0.08, 0.09, 0.08 s. That matters because it is the only query on the
+  enumeration path, and `DeviceInventory.verifyForGrant` runs it on **every lease grant**, in
+  parallel across every attached device — so the slowest device on the host decides how long
+  a grant for a *healthy* one waits. A wedged handset that adb still reports as `device` used
+  to spend the full default on every grant; `OS_VERSION_ADB_TIMEOUT_MS` is 3 s, more than an
+  order of magnitude above the measurement and a thirtieth of that cost. Timing out is cheap
+  here in a way it is not for a capture or an install: the device is listed without a version
+  and asked again at the next enumeration.
+- **Nothing in the daemon re-enumerates on a timer**, which is what makes a failed read's
+  retry a design question rather than a detail. `adb track-devices` only emits on a *change*,
+  so a device set that sits still produces no further frame, and the only other enumeration
+  is the one a lease grant runs. So the version a watch could not read is announced by
+  whichever path does read it (`OsVersionCache.onLearned`) instead of being re-delivered only
+  by the frame that asked — otherwise a single transient failure leaves `list_devices`
+  answering `null` for a device an `acquire_device` on the same serial reports a version for,
+  until somebody unplugs it.
+
 ---
 
 ## 7. Scope

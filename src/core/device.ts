@@ -342,9 +342,18 @@ export interface DeviceWatch {
 /**
  * One backend's implementation of the device contract.
  *
- * Stateless, and every method takes the serial it acts on: a backend serves every
- * device of its platform attached to this host, and the lease layer above it decides
- * which serial a caller may name.
+ * Every method takes the serial it acts on: a backend serves every device of its platform
+ * attached to this host, and the lease layer above it decides which serial a caller may
+ * name.
+ *
+ * A backend holds **no state a caller has to manage, and none it cannot re-derive from its
+ * platform** — which is D6 one level down. It may memo a device fact that does not change
+ * while a device is attached — {@link DeviceSchema.shape.osVersion} is the one that is, and
+ * a backend whose platform charges a query for it need not pay that on every enumeration,
+ * a lease grant's re-verification among them. The price of the memo is fixed: it is
+ * re-derived at enumeration, and a serial that leaves the device set takes its entry with
+ * it. What a backend may never do is remember something a caller then has to invalidate, or
+ * answer from a memo a fresh enumeration would contradict.
  *
  * The methods are **primitives**. `tap` takes a point, not a target — resolving a
  * target from a freshly captured screen is D12 and belongs in the verb layer, which is

@@ -120,8 +120,8 @@ npm run -s rover -- list --json
       "serial": "emulator-5554",
       "platform": "android",
       "model": "sdk_gphone64_arm64",
-      "osVersion": "17",
-      "osApiLevel": 37,
+      "osVersion": "15",
+      "osApiLevel": 35,
       "state": "ready",
       "attachment": "this-host",
       "heldBy": {

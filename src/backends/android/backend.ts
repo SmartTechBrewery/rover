@@ -77,6 +77,7 @@ import {
 	type AdbStream,
 	describeBytes,
 	INSTALL_ADB_TIMEOUT_MS,
+	OS_VERSION_ADB_TIMEOUT_MS,
 	quoteStream,
 	RECORDING_FINISH_TIMEOUT_MS,
 	RECORDING_PULL_TIMEOUT_MS,
@@ -273,7 +274,7 @@ function toDevice(entry: AdbDevice, version: OsVersion | undefined): Device {
  * plugged in — so one read per attached device beats a read per enumeration, and it is never
  * on a verb's path at all.
  *
- * Four rules keep the cost where {@link DeviceBackend.listDevices}' callers can afford it,
+ * Five rules keep the cost where {@link DeviceBackend.listDevices}' callers can afford it,
  * a lease grant's re-verification among them (D6):
  *
  * 1. **Only a usable device is asked.** The state came from `adb devices -l` and is already
@@ -290,6 +291,17 @@ function toDevice(entry: AdbDevice, version: OsVersion | undefined): Device {
  *    adb that refused, output that would not parse — each is one device answering no
  *    version. Losing the whole device list because one device is waiting on an RSA prompt
  *    is the failure mode this class is shaped around.
+ * 5. **One read is bounded by {@link OS_VERSION_ADB_TIMEOUT_MS}, not by the query
+ *    default**, which is what bounds `listDevices`' own latency: rules 1–3 bound how *many*
+ *    reads a call may issue, and without this nothing bounded how long the slowest of them
+ *    could hold a lease grant. A device that adb reports as `device` but whose shell does
+ *    not answer costs three seconds, not ten.
+ *
+ * A version learned on **any** path is announced through {@link onLearned}. That seam is
+ * what stops two host surfaces disclosing different values for one fact: the enumeration a
+ * lease grant runs and a live `watchDevices` share this cache, so whichever of them gets an
+ * answer first hands it to the other, and a watcher whose own frame read failed does not
+ * have to wait for the device set to change to be told.
  */
 class OsVersionCache {
 	/** What each attached device answered. A serial absent from here has not answered. */
@@ -302,16 +314,35 @@ class OsVersionCache {
 	 */
 	private readonly reading = new Map<string, Promise<void>>();
 
+	/** Who to tell when a version lands — see {@link onLearned}. */
+	private readonly learned = new Set<(serial: string) => void>();
+
 	get(serial: string): OsVersion | undefined {
 		return this.known.get(serial);
 	}
 
 	/**
-	 * Bring this cache up to date for one enumerated set, and answer whether anything new
-	 * was learned — which is what tells a caller that already delivered the set whether it
-	 * is worth delivering again.
+	 * Be told, with the serial, whenever this cache records a version — on whichever path
+	 * read it — and answer with the way to stop being told.
+	 *
+	 * This exists for {@link AndroidDeviceBackend.watchDevices}. A watch delivers a frame
+	 * before the read that fills it in, so something has to deliver the frame *again* once
+	 * the version arrives; making that depend on the frame's own read is what leaves a
+	 * device permanently versionless after one transient failure, because nothing in this
+	 * host re-enumerates on a timer and an unchanged device set produces no further frame.
+	 * Announcing every version instead means the enumeration a lease grant runs also heals a
+	 * live watch, so `list_devices` and a granted lease cannot disclose different versions
+	 * for one device.
 	 */
-	async fill(entries: readonly AdbDevice[]): Promise<boolean> {
+	onLearned(listener: (serial: string) => void): () => void {
+		this.learned.add(listener);
+		return () => {
+			this.learned.delete(listener);
+		};
+	}
+
+	/** Bring this cache up to date for one enumerated set. */
+	async fill(entries: readonly AdbDevice[]): Promise<void> {
 		const attached = new Set(entries.map((entry) => entry.serial));
 		for (const serial of [...this.known.keys()]) {
 			if (!attached.has(serial)) this.known.delete(serial);
@@ -323,10 +354,8 @@ class OsVersionCache {
 				attachmentOfSerial(entry.serial) === 'this-host' &&
 				!this.known.has(entry.serial),
 		);
-		if (missing.length === 0) return false;
 
 		await Promise.all(missing.map((entry) => this.read(entry.serial)));
-		return missing.some((entry) => this.known.has(entry.serial));
 	}
 
 	/** One device's read, deduplicated against a read of the same device already running. */
@@ -334,21 +363,28 @@ class OsVersionCache {
 		const running = this.reading.get(serial);
 		if (running !== undefined) return running;
 
-		const attempt = this.ask(serial).then(
-			(version) => {
-				// Only a success is remembered. A failure is left absent rather than cached as a
-				// null, so the next enumeration asks again — a device that was still booting is
-				// the case that would otherwise stay versionless until it was unplugged.
-				if (version !== null) this.known.set(serial, version);
-			},
-			// {@link ask} answers `null` rather than throwing, so this is unreachable today; it
-			// is here because a caller of {@link fill} is a stdout handler with nothing above it
-			// to catch, and "never rejects" has to hold without depending on that.
-			() => undefined,
-		);
-		const settled = attempt.finally(() => {
-			if (this.reading.get(serial) === settled) this.reading.delete(serial);
+		const attempt = this.ask(serial).then((version) => {
+			// Only a success is remembered. A failure is left absent rather than cached as a
+			// null, so the next enumeration asks again — a device that was still booting is
+			// the case that would otherwise stay versionless until it was unplugged.
+			if (version === null) return;
+			this.known.set(serial, version);
+			// Copied first: a listener that unsubscribes itself must not shorten the walk.
+			for (const listener of [...this.learned]) listener(serial);
 		});
+		// Rule 4, and this is where it is actually enforced rather than assumed. `ask` answers
+		// `null` rather than throwing, but a listener above is somebody else's code running
+		// inside this chain — and a caller of {@link fill} is a stdout handler with nothing
+		// above it to catch. A watcher that throws surfaces on the watch's own synchronous
+		// delivery instead, where there is something to report it.
+		const settled = attempt
+			.then(
+				() => undefined,
+				() => undefined,
+			)
+			.finally(() => {
+				if (this.reading.get(serial) === settled) this.reading.delete(serial);
+			});
 		this.reading.set(serial, settled);
 		return settled;
 	}
@@ -356,7 +392,9 @@ class OsVersionCache {
 	/** The read itself. `null` for every way it can fail — see the class comment. */
 	private async ask(serial: string): Promise<OsVersion | null> {
 		try {
-			const result = await runAdbOnDevice(parseDeviceSerial(serial), [...OS_VERSION_ARGV]);
+			const result = await runAdbOnDevice(parseDeviceSerial(serial), [...OS_VERSION_ARGV], {
+				timeoutMs: OS_VERSION_ADB_TIMEOUT_MS,
+			});
 			const version = parseOsVersion(result.stdout);
 			// A read that came back with neither property told this host nothing, so it is a
 			// failure rather than an answer of "no version" — remembering it would be the one
@@ -713,11 +751,18 @@ export class AndroidDeviceBackend implements DeviceBackend {
 	 * for, so each decoded frame becomes an `onDevices` carrying that whole frame and
 	 * nothing here accumulates a device set between frames.
 	 *
-	 * A frame is delivered **twice** when it names a device whose OS version this host has
-	 * not read yet: once immediately, without the version, and again once the read answers.
-	 * The order is what buys it — this handler is how the host learns a device was
-	 * unplugged, so it may not wait on a query, and the contract already asks a watcher to
-	 * accept the full current set repeatedly. See {@link OsVersionCache}.
+	 * A frame is delivered **again** for every OS version this host learns while it is the
+	 * latest one decoded: once immediately without the versions, and then once more per
+	 * version that lands. The order is what buys it — this handler is how the host learns a
+	 * device was unplugged, so it may not wait on a query, and the contract already asks a
+	 * watcher to accept the full current set repeatedly.
+	 *
+	 * Deliberately *not* limited to what this frame's own read answered. A read that failed
+	 * is retried at the next enumeration, and that enumeration is usually somebody else's —
+	 * a lease grant's re-verification — so a watch that only re-delivered its own findings
+	 * would keep answering `null` for a device the host had already read, with no
+	 * self-correction short of unplugging it. {@link OsVersionCache.onLearned} is the seam
+	 * that makes any path's answer this watch's answer too.
 	 *
 	 * **An end of stream is never an empty device list.** Only a decoded frame produces
 	 * `onDevices`; an end — including the exit 0 a tracker gives when its adb server is
@@ -735,9 +780,30 @@ export class AndroidDeviceBackend implements DeviceBackend {
 		let current: AdbStream | null = null;
 		let restart: NodeJS.Timeout | null = null;
 		let backoffMs = TRACK_RESTART_MIN_DELAY_MS;
-		// Per watch, not per tracker: it exists to say whether a frame is still the latest one
-		// decoded, and a restart does not make an older frame current again.
-		let generation = 0;
+		// The latest frame decoded, with the way to ask whether the tracker that produced it is
+		// still the live one. Per watch, not per tracker: a version may land long after the
+		// frame that named the device, and a restart does not make an older frame current
+		// again. `null` until the first frame — there is nothing to re-deliver before then.
+		let latest: { readonly entries: AdbDevice[]; readonly live: () => boolean } | null = null;
+
+		/**
+		 * The latest frame, mapped onto the neutral vocabulary with whatever versions are known
+		 * *now*. Silent when there is no frame, when the watch has been stopped, or when the
+		 * tracker that produced the frame has ended — an `onDevices` after an `onInterrupted`
+		 * would tell an inventory its dead view had come back to life.
+		 */
+		const deliverLatest = (): void => {
+			const frame = latest;
+			if (frame === null || stopped || !frame.live()) return;
+			watcher.onDevices(frame.entries.map((entry) => toDevice(entry, versions.get(entry.serial))));
+		};
+
+		// A version learned on any path — this watch's own read, or the enumeration a lease
+		// grant runs — re-delivers the frame that names the device. Dropped in `stop()`, so a
+		// stopped watch cannot be woken by another caller's read.
+		const forgetLearned = versions.onLearned((serial) => {
+			if (latest?.entries.some((entry) => entry.serial === serial)) deliverLatest();
+		});
 
 		const scheduleRestart = (): void => {
 			const delayMs = backoffMs;
@@ -786,28 +852,23 @@ export class AndroidDeviceBackend implements DeviceBackend {
 					if (snapshots.length > 0) backoffMs = TRACK_RESTART_MIN_DELAY_MS;
 
 					for (const entries of snapshots) {
-						const frame = ++generation;
-						const deliver = (): void =>
-							watcher.onDevices(
-								entries.map((entry) => toDevice(entry, versions.get(entry.serial))),
-							);
+						latest = { entries, live: () => !over };
 
 						// Delivered the instant it is decoded, and never behind a query. This handler
 						// is how the host learns a device was unplugged, and holding it for a read
 						// that may take adb's whole timeout would be a regression in the one thing
 						// this watch exists for — so a device whose version is not known yet is
 						// delivered without one.
-						deliver();
+						deliverLatest();
 
-						// The version then arrives as a second **full** set, which is what a watcher
-						// is already written to accept (`DeviceWatcher.onDevices`: never a delta).
-						// Only while this frame is still the latest, though: re-delivering a
-						// superseded set would move an inventory backwards. `fill` never rejects, so
-						// nothing escapes into a stdout handler that has nothing above it to catch.
-						void (async (): Promise<void> => {
-							const learned = await versions.fill(entries);
-							if (learned && !stopped && !over && frame === generation) deliver();
-						})();
+						// The versions then arrive as further **full** sets, which is what a watcher
+						// is already written to accept (`DeviceWatcher.onDevices`: never a delta) —
+						// through `onLearned` above rather than from this call's own result, so a
+						// read that answers on another path counts too. Only while this frame is
+						// still the latest, though: re-delivering a superseded set would move an
+						// inventory backwards. `fill` never rejects, so nothing escapes into a
+						// stdout handler that has nothing above it to catch.
+						void versions.fill(entries);
 					}
 				},
 				onEnd(reason) {
@@ -822,6 +883,7 @@ export class AndroidDeviceBackend implements DeviceBackend {
 		return {
 			async stop(): Promise<void> {
 				stopped = true;
+				forgetLearned();
 				if (restart !== null) {
 					clearTimeout(restart);
 					restart = null;

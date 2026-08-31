@@ -131,6 +131,31 @@ describe('createDeviceInventory admission', () => {
 		expect(warn.mock.calls[0]?.[0]).toContain('not physically attached');
 	});
 
+	/**
+	 * The inventory half of the OS-version re-delivery (#108): a backend that has since read
+	 * a device fact delivers the **same set** again, and the snapshot has to take it. The
+	 * device set is deliberately identical between the two frames — an inventory that
+	 * short-circuited on "nothing changed" would leave `list_devices` answering `null` for a
+	 * device the host had already read, with nothing to change it short of an unplug.
+	 */
+	it('takes a re-delivered set that only differs in what the backend has since learned', () => {
+		const backend = createWatchableBackend('test-platform');
+		const { inventory } = inventoryOver([backend.registered]);
+		inventory.start();
+		const versionless = createMockDevice({
+			serial: parseDeviceSerial('local-1'),
+			osVersion: null,
+			osApiLevel: null,
+		});
+
+		backend.deliver([versionless]);
+		expect(inventory.snapshot().devices).toEqual([versionless]);
+
+		backend.deliver([local]);
+
+		expect(inventory.snapshot()).toEqual({ devices: [local], stale: false });
+	});
+
 	it("keeps one backend's devices when another backend reports its own set", () => {
 		const first = createWatchableBackend('platform-one');
 		const second = createWatchableBackend('platform-two');
