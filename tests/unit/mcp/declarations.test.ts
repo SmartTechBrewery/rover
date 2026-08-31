@@ -14,6 +14,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { afterEach, describe, expect, it } from 'vitest';
 import { IPC_METHODS } from '@/ipc/methods.js';
+import { ARGUMENT_CASING_NOTE } from '@/mcp/_shared/declaration.js';
 import { createRoverMcpServer, ROVER_MCP_NAME, ROVER_MCP_VERSION } from '@/mcp/server.js';
 
 /** The four device and lease rows. The verb rows have their own suite, `./verb-declarations`. */
@@ -118,6 +119,25 @@ describe('what tools/list advertises', () => {
 		// left to infer it from an argument that is suddenly optional.
 		expect(acquire?.description).toContain('checkout-web');
 		expect(acquire?.description).toContain('ROVER_PROJECT_FILE');
+	});
+
+	it('tells every tool’s reader that the arguments are camelCase (D26)', async () => {
+		const tools = await advertisedTools();
+
+		// The decision is to keep the wire's spelling (D26); the obligation that comes with it is
+		// that an agent reading only the tool surface is not left to infer the casing from the
+		// tool *name* and have its first call refused. `declaring()` is what makes this true of
+		// every row rather than of the rows somebody remembered, and this is the gate under it.
+		for (const tool of tools) {
+			expect(tool.description ?? '').toContain(ARGUMENT_CASING_NOTE);
+		}
+		// The note is only honest while it matches the schemas. `leaseId` is the field it names,
+		// and it is on every verb row.
+		expect(
+			Object.keys(
+				(tools.find((tool) => tool.name === 'tap')?.inputSchema.properties ?? {}) as object,
+			),
+		).toContain('leaseId');
 	});
 
 	it('takes no host parameter anywhere: where the hardware sits is configuration (D17)', async () => {

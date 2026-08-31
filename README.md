@@ -148,16 +148,17 @@ npm run -s rover -- release <lease-id>
 ### Wire up the MCP server
 
 The MCP server is one process per agent session, speaking MCP over stdio. An agent's server entry
-runs `node` directly and **never** `npm run mcp`: that banner would land in the protocol stream
-ahead of the first frame — `npm run mcp` really does write `> rover@0.1.0 mcp` and the command
-line to stdout before the server has said anything.
+runs `node` on **one absolute path** — `bin/rover-mcp.mjs` in this checkout — and **never**
+`npm run mcp`: that banner would land in the protocol stream ahead of the first frame, and
+`npm run mcp` really does write `> rover@0.1.0 mcp` and the command line to stdout before the
+server has said anything.
 
 ```jsonc
 {
   "mcpServers": {
     "rover": {
       "command": "node",
-      "args": ["--import", "tsx/esm", "/absolute/path/to/rover/src/mcp/index.ts"],
+      "args": ["/absolute/path/to/rover/bin/rover-mcp.mjs"],
       "env": {
         "ROVER_PROJECT_FILE": "/absolute/path/to/your-project/your-project.json"
       }
@@ -166,11 +167,31 @@ line to stdout before the server has said anything.
 }
 ```
 
-The path is absolute because an MCP client picks its own working directory. `ROVER_PROJECT_FILE`
-is optional and buys one thing: `acquire_device` may then omit `project` (D22) — it is read for
-that single field and nothing the file declares is ever run by a client. **Which host an agent
-talks to is this `env` block's business and never a tool argument** (D17), which is what the pair
-of sections below is about; an agent cannot see or change the machine that answered.
+Copy that from your own project's directory and it starts there. **This is the one line where the
+obvious form is wrong**: `node --import tsx/esm /absolute/path/to/rover/src/mcp/index.ts` looks
+equivalent and is not, because `tsx/esm` is a bare specifier and Node resolves a `--import`
+argument against the **client's working directory**, never against the script. An MCP client picks
+its own directory, so that form starts only inside this checkout and dies everywhere else with
+`Cannot find package 'tsx' imported from <your project>/` before a single frame. The launcher is a
+plain `.mjs` file whose own bare specifier resolves next to itself — inside the checkout, where
+the loader is — so there is one path to paste rather than a `node_modules` path as well.
+`tests/unit/mcp/entry.test.ts` spawns it from a temp directory with no `node_modules` above it,
+because that failure is a resolution question and no assertion on a string can see it. (This is
+not the published `rover` entry point `PROJECT.md` §9.4 leaves outside the backlog: nothing is on
+a `PATH`, `package.json` still has no `bin`, and every CLI line here is still `npm run rover --`.)
+
+`ROVER_PROJECT_FILE` is optional and buys one thing: `acquire_device` may then omit `project`
+(D22) — it is read for that single field and nothing the file declares is ever run by a client.
+**Which host an agent talks to is this `env` block's business and never a tool argument** (D17),
+which is what the pair of sections below is about; an agent cannot see or change the machine that
+answered.
+
+**The tool names are `snake_case` and their arguments are `camelCase`** — `launch_app` takes
+`leaseId` and `appId`, not `lease_id` and `app_id`. That is deliberate (D26): the input schema
+each tool advertises *is* the object the host parses the request with, so what the schema spells
+is what the host parses and what a refusal names. Copy the property names out of the schema
+rather than off the tool name; every tool's description says so, and a call that gets it wrong is
+refused loudly, naming both the missing camelCase key and the unrecognised snake_case one.
 
 You can prove the wiring with no agent in the picture. Three frames in, two answers out:
 
@@ -179,11 +200,11 @@ printf '%s\n' \
   '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"probe","version":"0"}}}' \
   '{"jsonrpc":"2.0","method":"notifications/initialized"}' \
   '{"jsonrpc":"2.0","id":2,"method":"tools/list"}' \
-  | node --import tsx/esm src/mcp/index.ts
+  | node bin/rover-mcp.mjs
 ```
 
 The first answer is the handshake (`"protocolVersion":"2025-06-18"`, `"serverInfo":{"name":"rover"`
-…) and the second lists **22 tools**: the four device and lease rows, the sixteen verbs whose
+…) and the second lists **23 tools**: the four device and lease rows, the seventeen verbs whose
 answer is plain data, and the two whose answer is bytes. Swap the last frame for a call to watch
 one run against the device:
 
@@ -192,18 +213,18 @@ printf '%s\n' \
   '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"probe","version":"0"}}}' \
   '{"jsonrpc":"2.0","method":"notifications/initialized"}' \
   '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"list_devices","arguments":{}}}' \
-  | node --import tsx/esm src/mcp/index.ts
+  | node bin/rover-mcp.mjs
 ```
 
 The two ways to mis-wire this fail at **startup**, on stderr, before one tool is advertised —
 rather than starting and breaking at the agent's first call:
 
 ```bash
-ROVER_HOST_ADDRESS=1.2.3.4 node --import tsx/esm src/mcp/index.ts
+ROVER_HOST_ADDRESS=1.2.3.4 node bin/rover-mcp.mjs
 # ROVER_HOST_ADDRESS is set, so this client would ask a remote host, but ROVER_HOST_PORT,
 # ROVER_HOST_TOKEN are not set. …  (exits 1)
 
-ROVER_PROJECT_FILE=/nope.json node --import tsx/esm src/mcp/index.ts
+ROVER_PROJECT_FILE=/nope.json node bin/rover-mcp.mjs
 # There is no project hook file at /nope.json, and ROVER_PROJECT_FILE names it. …  (exits 1)
 ```
 
@@ -339,16 +360,24 @@ And the gaps this quick start runs into today, rather than in principle:
   the call exits 1 with `frame-extraction-unavailable`, naming the program to install, and writes
   no video either — never an empty frame list, which would read as a screen on which nothing
   happened.
-- **One call carries one whole file, capped at 4 MiB**, so `install` moves a small package and
-  refuses a real APK by name. Chunked transfer is its own issue.
-- **`install_app`, `push_file` and `pull_file` are not MCP tools yet**, so an agent cannot push,
-  pull or install a file — only the CLI can.
+- **One call carries one whole file, capped at 4 MiB**, so `install <lease-id> <local-path>` moves
+  a small package and refuses a real APK by name. Chunked transfer is its own issue — and the way
+  a real APK reaches the device today is `install` with **no** path, which runs the project's own
+  install on the host instead of sending anything.
+- **`push_file` and `pull_file` are not MCP tools**, so an agent cannot push or pull a file —
+  only the CLI can. Neither has a form that carries no bytes, which is what `install_app` has and
+  what got it a tool; a whole file as a tool argument waits for `PROJECT.md` R24 phase 2.
+- **`install_app` as a tool can outlast an MCP client's own request timeout.** The host gives a
+  project's install five minutes, and some clients wait less than that for a tool call. The build
+  keeps running on the host when a client gives up, but the answer is lost — `rover install` from
+  a terminal is the form with no such limit.
 - **Nothing prunes the host's artifact archive** under `~/.rover/artifacts` (`PROJECT.md` §9.4).
 - **The remote pair above was exercised on one machine over loopback**, with a self-signed
   certificate, one process playing host and one playing client. Two machines on a real network
   were not available for this section.
-- **There is no `bin/` launcher**, which is why every command here starts `npm run rover --`
-  (`PROJECT.md` §9.4).
+- **There is no published `rover` command**, which is why every CLI line here starts
+  `npm run rover --` (`PROJECT.md` §9.4). `bin/rover-mcp.mjs` is not that: it is one file an MCP
+  config names by absolute path, and nothing is linked onto a `PATH`.
 
 ## Status
 
@@ -623,10 +652,12 @@ timeout, which a caller asking for one has to raise. The three ways it can go wr
 answers rather than `internal_error`: `project-not-registered` (this host has no hook file for
 that project), `install-hook-undeclared` (it has one and it declares no `install`), and
 `install-hook-failed`, carrying the exit code, the signal if there was one and the tail of the
-command's own stderr. A call that *does* carry bytes is unchanged in every respect. **No client
-asks for this yet**: `rover install` still requires a local package and the MCP server exposes no
-transfer tool at all, so the project install is reachable over the IPC surface and nowhere else
-until those rows land.
+command's own stderr. A call that *does* carry bytes is unchanged in every respect. **Both clients
+reach this shape.** `rover install <lease-id>` with no path is it — the CLI raises its own request
+timeout past the host's five minutes so a build that is merely compiling is never reported here as
+a hang — and `install_app` is an MCP tool in exactly this shape and no other: the declaration
+omits `packageBase64` altogether, so an agent has the project form and no way to paste an APK into
+a JSON argument.
 
 **`push_file` names the file to write, never a directory to put it in.** A push to a path that is
 already a directory is refused rather than transferred into, and that is a rule Rover states rather
@@ -670,7 +701,11 @@ on**: `rover pull <lease-id> <device-path> --out <path>` writes the device's fil
 same two modules `screenshot` uses and with the same guarantee — a refusal or a transfer that did
 not survive the trip exits 1 and leaves no file at `--out` at all. `rover push <lease-id>
 <local-path> <device-path>` and `rover install <lease-id> <local-path>` read a file from **this**
-machine and send its bytes; `src/cli/_shared/upload.ts` is the one place that happens. Everything
+machine and send its bytes; `src/cli/_shared/upload.ts` is the one place that happens. `rover
+install`'s path is **optional**, and leaving it off is the project form above: nothing is read
+here, nothing travels, and whether that form is available stays the host's answer — a project it
+has no hook file for, or one declaring no install, exits 1 with the host's own
+`project-not-registered` or `install-hook-undeclared` rather than a usage error this CLI invented. Everything
 those two can refuse, they refuse before a connection exists — a missing file, one this process
 cannot read, one that is not a regular file, and one over the byte cap, named with its real size
 and the limit — and the size comes off `stat` rather than off a buffer, so an over-sized file is
@@ -764,16 +799,21 @@ instead of letting the first call start it.
 `npm run` prints its own banner to stdout ahead of the command, so a script that parses the JSON
 uses `npm run -s rover -- list --json` or invokes `node --import tsx/esm src/cli/index.ts list
 --json` directly. **That banner matters more for `mcp` than anywhere else**: its stdout carries
-MCP protocol frames, so an agent's server entry runs `node --import tsx/esm src/mcp/index.ts`
-directly (`npm run -s mcp` is the by-hand equivalent) and a bare `npm run mcp` writes two lines
-into the stream before the first frame. What that entry looks like in an MCP client's own
-configuration, and how to prove it handshakes, is [Wire up the MCP
-server](#wire-up-the-mcp-server) above. What exists today is the server, speaking stdio, declaring
-twenty-two tools under the `IPC_METHODS` names exactly: the four device and lease rows (`status`, `list_devices`,
-`acquire_device`, `release_device`), the sixteen verbs whose answer is plain data
+MCP protocol frames, so an agent's server entry runs `node bin/rover-mcp.mjs` — an absolute path
+to that one file, from whatever directory the client happens to be in — and a bare `npm run mcp`
+writes two lines into the stream before the first frame. `npm run -s mcp` is the by-hand
+equivalent from inside this checkout; the launcher is what makes the same server start from
+outside it, because `--import tsx/esm` resolves against the caller's directory rather than against
+the script. What that entry looks like in an MCP client's own configuration, and how to prove it
+handshakes, is [Wire up the MCP server](#wire-up-the-mcp-server) above. What exists today is the
+server, speaking stdio, declaring
+twenty-three tools under the `IPC_METHODS` names exactly: the four device and lease rows (`status`, `list_devices`,
+`acquire_device`, `release_device`), the seventeen verbs whose answer is plain data
 (`wait_for`, `wait_until_gone`, `tap`, `long_press`, `swipe`, `scroll`, `type_text`,
 `press_key`, `read_screen`, `device_info`, `launch_app`, `stop_app`, `clear_app_data`,
-`read_logs`, `set_airplane_mode`, `set_wifi`), and the two whose answer is bytes.
+`read_logs`, `install_app`, `set_airplane_mode`, `set_wifi`), and the two whose answer is bytes.
+Every one of them takes **camelCase** arguments under a `snake_case` name (D26), and says so in
+its own description.
 
 Those two are `screenshot` and `record_video`, and how their bytes reach an agent is the point
 of the pair. **`screenshot` answers with the image inline** — an MCP `image` block the model
@@ -788,10 +828,15 @@ a host. A refusal (`artifact-too-large`, `unfinished-recording`,
 `frame-extraction-unavailable`, `frames-too-large`) is an error naming it and leaves no file
 behind at all — never a truncated one.
 
-The three rows that move a whole file — `install_app`, `push_file` and `pull_file` — are not
-tools yet; how a client supplies and receives one is `PROJECT.md` R24 phase 2's, and no client
-has it. There is no `bin/` launcher yet — a published entry point is outside the backlog
-deliberately, and `PROJECT.md` §9.4 records why and what changes when it lands.
+`install_app` is a tool in **one** of its two forms: it takes the lease id and nothing else, and
+the host runs what the lease's project declared as its install (D13). There is deliberately no
+package argument on it — the byte-carrying form stays the CLI's, because a whole file as a tool
+argument means an agent producing several megabytes of base64. That is what `push_file` and
+`pull_file` are still waiting for and why they are not tools: `PROJECT.md` R24 phase 2 owns how a
+client supplies and receives a file, and neither of those rows has a second form that carries
+none. There is no published `rover` command — a published entry point is outside the backlog
+deliberately, and `PROJECT.md` §9.4 records why and what changes when it lands; `bin/rover-mcp.mjs`
+is a path an MCP config states absolutely and not that.
 
 Exit codes: `0` success; `1` the operation did not succeed (a refused `acquire`, a `release` that
 found no live lease, an unreachable host, a request the host rejected); `2` usage error (unknown
@@ -1155,7 +1200,8 @@ and the waits described above, `src/ipc/` the
 wire protocol and the transport-agnostic client and server, `src/daemon/` the socket and the
 inventory and the leases — plus the host-side tools the verbs are handed, such as the frame
 extractor, the durable artifact archive (`src/daemon/archive.ts`) and the per-project hook files
-(`src/daemon/project-hooks.ts`) — and `src/cli/` the `rover` command.
+(`src/daemon/project-hooks.ts`) — `src/cli/` the `rover` command, and `src/mcp/` the MCP server,
+whose entry an agent's configuration names through `bin/rover-mcp.mjs`.
 
 ## Shape
 

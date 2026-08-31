@@ -1,5 +1,6 @@
 /**
- * The sixteen verb tools — every `IPC_METHODS` verb row whose answer is plain data.
+ * The seventeen verb tools — every `IPC_METHODS` verb row whose answer is plain data, minus
+ * the two file transfers that have no shape a tool argument could carry.
  *
  * **The schemas from `src/ipc/methods.ts` *are* the tool declarations**, exactly as
  * `./devices.ts` says for the four device rows (ai/CODING_STANDARDS.md, boundary #1): each
@@ -9,6 +10,13 @@
  * and two share another, because the underlying calls are identical — a near-copy per row is a
  * copy that drifts.
  *
+ * **One row narrows that schema, and it still *is* that schema.** `install_app` advertises
+ * `InstallAppParamsSchema` with `packageBase64` omitted (`.omit()`, the way `acquire_device`
+ * derives its variant with `.partial()`), so the tool offers the byte-less form — the one that
+ * runs the lease's project `install` hook (D13) — and no way to paste megabytes of base64 into
+ * a tool argument. Derived, never restated: the field is removed from the host's own object, so
+ * the row cannot come to declare a shape the host would refuse.
+ *
  * **The names are the `IPC_METHODS` keys**, with no platform suffix anywhere (D10): `tap`, not
  * `tap_android`. `tests/unit/mcp/verb-declarations.test.ts` holds both halves of that, and its
  * completeness gate is what stops a verb row landing later with no tool and no deliberate
@@ -17,7 +25,7 @@
  * **Zero verb logic.** Every handler is one {@link callHost} and one shared answer mapping
  * (`../_shared/verb-answer.ts`). Nothing here resolves a target, applies a default the host
  * does not already own, or branches on what a verb means — the host decided all of it and said
- * so in words that name the device (D16). That is why this is a table rather than sixteen
+ * so in words that name the device (D16). That is why this is a table rather than seventeen
  * hand-written blocks: the only thing that differs between rows is what the tool *says about
  * itself*, and a verb that later needs something of its own gets a field on its row.
  *
@@ -30,15 +38,18 @@
  */
 
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import type { z } from 'zod';
 import type { HostName } from '../../daemon/host.js';
 import { DEFAULT_REQUEST_TIMEOUT_MS, type IpcRequestOptions } from '../../ipc/client.js';
 import {
+	InstallAppParamsSchema,
 	IPC_METHODS,
 	type IpcMethodName,
 	type IpcParams,
 	type IpcResult,
 	type VerbCallResultOf,
 } from '../../ipc/methods.js';
+import { INSTALL_HOOK_TIMEOUT_MS } from '../../verbs/files.js';
 import {
 	LONG_PRESS_DURATION_MS,
 	SCROLL_DURATION_MS,
@@ -48,6 +59,7 @@ import type { ActionResult } from '../../verbs/result.js';
 import { DEFAULT_WAIT_TIMEOUT_MS } from '../../verbs/wait-for.js';
 import { guarded } from '../_shared/answer.js';
 import { callHost } from '../_shared/call.js';
+import { declaring } from '../_shared/declaration.js';
 import { verbToolResult } from '../_shared/verb-answer.js';
 
 /**
@@ -77,6 +89,14 @@ type VerbToolRow<Method extends VerbMethodName = VerbMethodName> = {
 		readonly method: Row;
 		readonly title: string;
 		readonly description: string;
+		/**
+		 * What this row advertises, when it is **not** its params schema whole.
+		 *
+		 * Only ever that schema with something taken off it — see the header — so there is still
+		 * one object behind the declaration and the host's parse. Absent for every row that
+		 * declares its params exactly as the host takes them, which is all but one.
+		 */
+		readonly declares?: z.ZodTypeAny;
 		/**
 		 * How long this client waits for the answer, from the call's own knob. Absent for a row
 		 * that cannot outrun {@link DEFAULT_REQUEST_TIMEOUT_MS} — see {@link requestOptionsFor}.
@@ -251,6 +271,27 @@ const VERB_TOOLS: readonly VerbToolRow[] = [
 			'and no filter — a tail that stays open is a wait with no condition.',
 	},
 	{
+		method: 'install_app',
+		title: 'Install this project’s application',
+		description:
+			'Install an application onto the leased device by running what **the lease’s project** ' +
+			'declares as its install — a build, a deploy script, whatever that project already has ' +
+			'— with the device’s serial in its environment. It takes the lease id and nothing else: ' +
+			'there is deliberately no package argument and no path, because the package lives on ' +
+			'neither this machine nor yours in a form a tool call could carry, and Rover never ' +
+			'learns which application this is. Which command runs is the operator’s own ' +
+			'configuration on the host, and it is named in no answer. A project the host has no ' +
+			'hook file for is a `project-not-registered` failure and one whose file declares no ' +
+			'install command is `install-hook-undeclared`, both carrying the project and the ' +
+			'serial — never an `ok` for an install that did not happen. **This call can take up to ' +
+			'five minutes**: it is a build, not a gesture. That is not a hang, but it is longer ' +
+			'than some MCP clients wait for a tool — if yours gives up, the host keeps building and ' +
+			'the state after it is what the next `read_screen` or `launch_app` will show.',
+		requestTimeoutMs: () => INSTALL_HOOK_TIMEOUT_MS + DEFAULT_REQUEST_TIMEOUT_MS,
+		// The one narrowed declaration, derived rather than restated — see the header.
+		declares: InstallAppParamsSchema.omit({ packageBase64: true }),
+	},
+	{
 		method: 'set_airplane_mode',
 		title: 'Set airplane mode',
 		description:
@@ -288,7 +329,7 @@ function registerVerbTool(server: McpServer, host: HostName, row: VerbToolRow): 
 	const { method, title, description } = row;
 	server.registerTool(
 		method,
-		{ title, description, inputSchema: IPC_METHODS[method].params },
+		declaring({ title, description, inputSchema: row.declares ?? IPC_METHODS[method].params }),
 		async (received: unknown) => {
 			// The one cast this table costs, and the only one in it. Each row's `method` and its
 			// `requestTimeoutMs` are checked against each other where the table is written;

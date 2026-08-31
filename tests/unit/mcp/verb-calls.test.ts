@@ -16,6 +16,8 @@
  * nothing in this layer is allowed to add to it.
  */
 
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import type { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
@@ -196,6 +198,91 @@ describe('a verb call over a lease the agent took itself', () => {
 		// The `ok` half of the D11 pair `./missing-capability.test.ts` owns the other half of.
 		expect(result.isError).toBeFalsy();
 		expect(result.structuredContent).toMatchObject({ outcome: 'ok', result: { verb: 'set_wifi' } });
+	});
+});
+
+/**
+ * `install_app`, which is the one tool whose whole subject is on the **host**: the lease's
+ * project declares what installing means, and the daemon runs it (D13).
+ *
+ * Both cases here are about what reaches the *agent*. An install that ran is an `ok` answer
+ * carrying the state after it, and the marker file is what says the host actually ran the
+ * project's own command rather than this layer doing something plausible. A project that
+ * declares none is the daemon's named failure, and it arrives as an **error** — a tool result
+ * an agent could read as success would be the worst possible answer to "did my app install".
+ */
+describe('install_app, over the project the lease was attributed to', () => {
+	/** Where the hook command leaves proof of having run, and of what it was told. */
+	function markerPath(): string {
+		return join(temp.dir, 'install-hook-ran');
+	}
+
+	/** A hook file for `acquire`'s project, `rover`. */
+	async function writeHookFile(hooks: unknown): Promise<void> {
+		await mkdir(temp.projectsRoot, { recursive: true });
+		await writeFile(join(temp.projectsRoot, 'rover.json'), JSON.stringify(hooks), 'utf8');
+	}
+
+	it('runs what the project declared and answers with the state after it', async () => {
+		await serve();
+		await writeHookFile({
+			project: 'rover',
+			install: {
+				command: process.execPath,
+				args: [
+					'-e',
+					"require('node:fs').writeFileSync(process.argv[1], process.env.ROVER_DEVICE_SERIAL)",
+					markerPath(),
+				],
+			},
+		});
+		const agent = await connectAgent();
+		const leaseId = await acquire(agent);
+
+		const result = await callTool(agent, 'install_app', { leaseId });
+
+		expect(result.isError).toBeFalsy();
+		expect(result.structuredContent).toMatchObject({
+			outcome: 'ok',
+			result: { verb: 'install_app', device: { serial: SERIAL }, target: null },
+		});
+		// The host ran the project's command, pointed at the device the lease names — and the
+		// answer names no command, because which one it was is the operator's configuration.
+		expect(await readFile(markerPath(), 'utf8')).toBe(SERIAL);
+		expect(textOf(result)).not.toContain(process.execPath);
+	});
+
+	it('reaches the agent as the daemon’s own named failure when none is declared', async () => {
+		await serve();
+		await writeHookFile({ project: 'rover', apps: [] });
+		const agent = await connectAgent();
+		const leaseId = await acquire(agent);
+
+		const result = await callTool(agent, 'install_app', { leaseId });
+
+		expect(result.isError).toBe(true);
+		// `install-hook-undeclared`, unchanged — the client neither renamed it nor pre-empted it
+		// with a refusal of its own (D16).
+		expect(result.structuredContent).toMatchObject({
+			outcome: 'failed',
+			failure: { kind: 'install-hook-undeclared', serial: SERIAL, project: 'rover' },
+		});
+	});
+
+	it('has no way to carry a package, so a caller that tries is refused', async () => {
+		await serve();
+		const agent = await connectAgent();
+		const leaseId = await acquire(agent);
+
+		const result = await callTool(agent, 'install_app', {
+			leaseId,
+			packageBase64: Buffer.from('an apk the agent typed out').toString('base64'),
+		});
+
+		// The declaration omits the payload, so the SDK refuses this before a handler runs. Bytes
+		// as a tool argument is R24 phase 2's question and is not settled here by accident.
+		expect(result.isError).toBe(true);
+		expect(textOf(result)).toContain('packageBase64');
 	});
 });
 

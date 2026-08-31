@@ -24,6 +24,7 @@ import type { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { DEFAULT_REQUEST_TIMEOUT_MS, type IpcRequestOptions } from '@/ipc/client.js';
 import { MAX_VERB_TIMEOUT_MS } from '@/ipc/methods.js';
+import { INSTALL_HOOK_TIMEOUT_MS } from '@/verbs/files.js';
 import { LONG_PRESS_DURATION_MS, SCROLL_DURATION_MS, SWIPE_DURATION_MS } from '@/verbs/input.js';
 import {
 	DEFAULT_RECORDING_MS,
@@ -189,6 +190,28 @@ describe('record_video, which records and then waits for the host to slice it', 
 		expect(request.options?.timeoutMs ?? 0).toBeGreaterThan(
 			MAX_RECORDING_MS + FRAME_EXTRACTION_TIMEOUT_MS,
 		);
+	});
+});
+
+describe('install_app, which runs a build on the host', () => {
+	it('waits out the host’s whole install budget plus the round trip', async () => {
+		const request = await requestFrom('install_app', {});
+
+		// The one row with no knob: the caller does not size a project's install, the host does
+		// (`INSTALL_HOOK_TIMEOUT_MS`), so both terms are imported and neither is a guess.
+		expect(request.options?.timeoutMs).toBe(INSTALL_HOOK_TIMEOUT_MS + DEFAULT_REQUEST_TIMEOUT_MS);
+		// The load-bearing inequality again: five minutes of compiling is not a hang, and this
+		// client's deadline sits outside the host's rather than inside it.
+		expect(request.options?.timeoutMs ?? 0).toBeGreaterThan(INSTALL_HOOK_TIMEOUT_MS);
+	});
+
+	it('sends the lease id and no payload — the tool has no way to carry one', async () => {
+		const request = await requestFrom('install_app', {});
+
+		// The declaration omits `packageBase64`, so the absence here is structural rather than a
+		// handler remembering not to send one: this is the byte-less form, and the host reads the
+		// missing key as "run what the project declared" (D13).
+		expect(request.params).toEqual({ leaseId: 'test-lease-1' });
 	});
 });
 

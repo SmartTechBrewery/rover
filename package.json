@@ -10,7 +10,7 @@
 		"typecheck": "tsc --noEmit -p tsconfig.typecheck.json",
 		"daemon": "node --import tsx/esm src/daemon/main.ts",
 		"rover": "node --import tsx/esm src/cli/index.ts",
-		"mcp": "node --import tsx/esm src/mcp/index.ts",
+		"mcp": "node bin/rover-mcp.mjs",
 		"test": "npm run test:unit",
 		"test:unit": "vitest run --project unit",
 		"test:device": "vitest run --project device",
