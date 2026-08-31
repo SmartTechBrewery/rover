@@ -10,7 +10,7 @@ disagree, this document is what the screen should have been.
 
 **This is a living document, and keeping it current is part of doing design work — not a follow-up.**
 Whenever a screen settles something, whenever a correction is made and the reason for it is worth
-keeping, whenever a Stitch screen is added or superseded, or whenever something moves out of §8's
+keeping, whenever a Stitch screen is added or superseded, or whenever something moves out of §9's
 "not designed yet" list, it is written down **here, in the same change**, exactly as `PROJECT.md`
 and `README.md` must stay current (`ai/RULES.md` §1). A design decision that lives only in a chat
 log will be re-litigated by the next agent, and usually decided the other way: pass/fail semantics
@@ -30,11 +30,15 @@ this sentence exists to prevent.
 
 | Screen | ID | State |
 | --- | --- | --- |
-| Home — Devices (V3) | `3458d89bda5e442d894ea54208230d4c` | **The reference.** Settled. |
-| Archive — Browsing (V2) | `f2de4344f7e347aa894b3054d9cf4098` | Not yet corrected — see §8 |
-| Run Detail — Artifacts (V2) | `36b54fbe032449d8a300ea0825bbf1c8` | Not yet corrected — see §8 |
-| Compare — Visual Diff (V2) | `897632dcadce44de9bdee74a94da14f5` | Not yet corrected — see §8 |
-| Sign In — Rover OS | `5035330b2c12401080263625ff564369` | Settled, **default state only** — see §7 |
+| Devices (Home) | `3458d89bda5e442d894ea54208230d4c` | **The reference.** Settled. |
+| Devices — Nothing Attached | `ccdef7834ab9470f9a653a47321998c9` | Settled |
+| Devices — Host Unreachable | `80d92a4a77b64f108f9b963636b076cd` | Being corrected |
+| Devices — Host View Stale | `769bdb0803d549f1bd575be0f9211043` | Being corrected |
+| Devices — Force Release Confirmation | `7ad98bceb768455b92b8abe8a06a148a` | Being corrected |
+| Archive — Browsing (V2) | `f2de4344f7e347aa894b3054d9cf4098` | Not yet corrected — see §9 |
+| Run Detail — Artifacts (V2) | `36b54fbe032449d8a300ea0825bbf1c8` | Not yet corrected — see §9 |
+| Compare — Visual Diff (V2) | `897632dcadce44de9bdee74a94da14f5` | Not yet corrected — see §9 |
+| Sign In — Rover OS | `5035330b2c12401080263625ff564369` | Settled, **default state only** — see §8 |
 
 Earlier versions of each still exist and **must not be built from**. There is no way to delete a
 screen through the API — only `delete_project`, which takes everything — so every iteration
@@ -202,7 +206,39 @@ agree with the cards below it.
 
 ---
 
-## 7. The sign-in screen, as settled
+## 7. The Devices screen's other states
+
+Each of these is **one state of the Devices screen, not a screen of its own.** The shell — sidebar,
+nav, `Profile` at the foot, breadcrumb, page title, margins — is copied verbatim from
+`Devices (Home)` and is not restyled, re-iconed or rebuilt per state. Every one of the first four
+attempts regenerated it and every one got it wrong the same way: a `v4.2.0-STABLE` version string
+under the wordmark, a `DEPLOY UPDATE` button for an action the product does not have, `Diagnostics`
+(which is `Analytics` under another name), `Log Out` promoted into the nav with `Profile` replaced
+by an avatar, and a top bar the reference screen does not have. **Say "reuse the shell from
+`3458d89bda5e442d894ea54208230d4c`, change only the content area" explicitly, every time.**
+
+A correction also tends to land as a **new screen with a new id** rather than in place — the empty
+state moved from `13e46314b3a249cb805fffe8557355d4` to `ccdef7834ab9470f9a653a47321998c9` that way,
+while `get_screen` was still serving the old file. Re-read the id from the project after every
+round; do not carry one forward on the assumption it was edited in place.
+
+### Nothing attached — settled
+
+No devices are plugged into the machine. It reads as normal, common and *finished*: no error
+colour, no warning icon, no spinner, nothing that suggests loading. Rover never starts an emulator
+and never plugs in a phone — a person does (D21) — so until they do, an empty machine is the
+correct state rather than a fault.
+
+- It says what would change it: attach a phone with USB debugging enabled, or start an emulator, on
+  the host machine.
+- **Not "standby".** That word was removed from the product's vocabulary once already: it describes
+  a machine waiting to do something, and this one is not waiting, it simply has nothing plugged in.
+- **No progress-shaped ornament.** A dot-and-lines rule under the message reads as a progress track
+  or a carousel indicator, which is the one impression this state must not give.
+- The `2 held · 1 free` counter is **absent**, not showing `0 held · 0 free` as though describing a
+  pool.
+
+## 8. The sign-in screen, as settled
 
 It is the one screen a person sees before they are authenticated, so it shares the design system
 and nothing else.
@@ -239,7 +275,7 @@ and effort spent polishing it beyond this list is spent twice.
   nothing. **This is a deliberate exception to the uniform-refusal rule above** — recorded here so
   it is not mistaken for an oversight and quietly "fixed".
 
-## 8. What is not designed yet
+## 9. What is not designed yet
 
 Two lists, and the difference between them matters. The first must exist as a Stitch design before
 anyone builds it, because getting it wrong is expensive and the mistakes are not obvious. The
@@ -248,11 +284,6 @@ more than it would settle.
 
 ### Design these first
 
-- **The empty state — "nothing is attached to this machine".** The single most important thing
-  still missing. A host with no devices is normal and common: Rover never starts an emulator or
-  plugs in a phone, a person does (D21). It must read as intentional, not as an error and not as a
-  spinner that never resolves. The current markup carries a `hidden` div with one line of plain
-  text, which is a placeholder, not a design.
 - **The "no view" state.** `list_devices` returns `stale: true` when the host's view was
   interrupted, has not arrived, or is not running — and its own schema says an empty list with that
   flag means *no view*, not *no devices* (D6). It must not render like the empty state, or the
@@ -270,7 +301,7 @@ uniform refusal, the vocabulary — and **write what you settled back into this 
 top of this file). Do not commission a Stitch screen for them.
 
 - **The sign-in screen's four other states** (R34): refused, checking, signed out, and access
-  ended. Only the default form is designed, and §7 says why polishing this screen is a poor
+  ended. Only the default form is designed, and §8 says why polishing this screen is a poor
   investment: it is a placeholder for email-and-password sign-in. An earlier revision faked these
   states with a `DEBUG // UI STATES` switcher whose buttons did nothing and whose states existed
   only as HTML comments — scaffolding, not a design, and it has been removed. Keep the single
@@ -288,7 +319,7 @@ label rather than as a path.
 
 ---
 
-## 9. Working with Stitch — what actually happens
+## 10. Working with Stitch — what actually happens
 
 - **Verify the markup; do not trust the report.** `edit_screens` returns a confident summary of
   what it changed, and it is sometimes wrong. Two edits to the free device card were reported as
