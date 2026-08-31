@@ -386,16 +386,8 @@ more than it would settle.
 
 ### Design these first
 
-- **The "no view" state with an *empty* list.** The variant with devices in it is settled (§7). The
-  empty one is the dangerous half and is still undesigned: it is visually identical to "nothing
-  attached" and means the opposite, so a person reading "nothing is attached" walks to the machine
-  and finds a phone sitting in the socket. `list_devices`'s own schema says it outright — an empty
-  list with `stale` set means *no view*, not *no devices* (D6).
-- **The force-release action's three outcomes.** The asking is settled (§7); what happens after it
-  is not. They are three different things and must not collapse into one: the card becoming free
-  without a reload; the lease having already ended on its own between the page loading and the
-  click, which is news rather than a failure; and the device having since vanished from the host,
-  so there is nothing left to release *or to show*.
+Nothing, at present. Everything the Devices screen needs has a design; what is left is below.
+
 
 ### Leave these to whoever implements them
 
@@ -410,6 +402,18 @@ top of this file). Do not commission a Stitch screen for them.
   only as HTML comments — scaffolding, not a design, and it has been removed. Keep the single
   uniform refusal and the deliberate exception for a revoked session; those two are decisions, not
   visual choices.
+- **The "no view" state with an *empty* list.** The variant with devices in it is settled (§7). The
+  empty one is the dangerous half and is still undesigned: it is visually identical to "nothing
+  attached" and means the opposite, so a person reading "nothing is attached" walks to the machine
+  and finds a phone sitting in the socket. `list_devices`'s own schema says it outright — an empty
+  list with `stale` set means *no view*, not *no devices* (D6). Design it as a state of the Devices
+  screen, in keeping with §7's settled ones — but the constraint above is not a visual preference,
+  it is the reason the state exists.
+- **The force-release action's three outcomes.** The asking is settled (§7); what happens after it
+  is not. They are three different things and must not collapse into one: the card becoming free
+  without a reload; the lease having already ended on its own between the page loading and the
+  click, which is news rather than a failure; and the device having since vanished from the host,
+  so there is nothing left to release *or to show*.
 - **Placeholders for `Archive` and `System`** while they lead nowhere (R33). They must say so
   rather than 404 — calmly, in the language of the empty states, not as an error.
 
