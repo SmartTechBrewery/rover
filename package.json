@@ -8,13 +8,18 @@
 		"lint": "biome check .",
 		"lint:fix": "biome check --write .",
 		"typecheck": "tsc --noEmit -p tsconfig.typecheck.json",
+		"typecheck:panel": "tsc --noEmit -p panel/tsconfig.json",
 		"daemon": "node --import tsx/esm src/daemon/main.ts",
 		"rover": "node --import tsx/esm src/cli/index.ts",
 		"mcp": "node bin/rover-mcp.mjs",
-		"test": "npm run test:unit",
+		"panel:dev": "vite --config panel/vite.config.ts",
+		"panel:build": "vite build --config panel/vite.config.ts",
+		"panel:preview": "vite preview --config panel/vite.config.ts",
+		"test": "npm run test:unit && npm run test:panel",
 		"test:unit": "vitest run --project unit",
+		"test:panel": "vitest run --project panel",
 		"test:device": "vitest run --project device",
-		"verify": "npm run lint && npm run typecheck && npm run test:unit",
+		"verify": "npm run lint && npm run typecheck && npm run typecheck:panel && npm run test",
 		"prepare": "lefthook install"
 	},
 	"keywords": [
@@ -32,15 +37,27 @@
 		"@biomejs/biome": "2.4.10",
 		"@commitlint/cli": "^20.1.0",
 		"@commitlint/config-conventional": "^20.0.0",
+		"@tailwindcss/vite": "^4.3.3",
+		"@testing-library/react": "^16.3.3",
 		"@types/node": "^22.10.2",
+		"@types/react": "^19.2.18",
+		"@types/react-dom": "^19.2.5",
+		"@vitejs/plugin-react": "^5.2.0",
+		"jsdom": "^29.1.1",
 		"lefthook": "^1.10.10",
+		"tailwindcss": "^4.3.3",
 		"tsx": "^4.19.2",
 		"typescript": "^5.7.2",
+		"vite": "^7.3.6",
 		"vitest": "^3.2.4"
 	},
 	"dependencies": {
 		"@modelcontextprotocol/sdk": "^1.30.0",
+		"@tanstack/react-router": "^1.170.32",
 		"fast-xml-parser": "^5.11.1",
+		"lucide-react": "^1.38.0",
+		"react": "^19.2.8",
+		"react-dom": "^19.2.8",
 		"zod": "^3.25.0"
 	}
 }

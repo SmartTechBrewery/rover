@@ -6,9 +6,10 @@ Note the double meaning of "test" in this repo and keep it straight: Rover *perf
 
 ## Test runner
 
-**Vitest**, not Jest. Split into two projects:
+**Vitest**, not Jest. Split into three projects:
 
 - **Unit tests** (`tests/unit/**/*.test.ts`) — mock every external call: `adb`, `simctl`, the filesystem, the socket. No real device, no real daemon. `vi.mock()` at the top of the file, before imports. One deliberate exception, below.
+- **Panel tests** (`panel/src/**/*.test.{ts,tsx}`) — the web panel's component tests, co-located beside what they render, run by the `panel` project in **jsdom**. The whole project is jsdom, so there is no per-file `// @vitest-environment` pragma to forget (Swarm's dashboard needs one because most of its tests are pure helpers in node). They mount a component with `@testing-library/react` and mock `@tanstack/react-router` so a `Link` renders as a plain anchor and `useRouterState` returns a pathname — a destination and an active route are then assertable with no router instance. The project deliberately does **not** load `tests/setup.ts`: that file's job is keeping a daemon out of the operator's own artifact tree, and the panel starts no daemon.
 - **Device tests** (`tests/device/**/*.test.ts`) — run against a **real attached device**, serially. They gate on `describe.skipIf(!process.env.ROVER_TEST_DEVICE)`, set by `tests/device/setup.ts` when it finds a usable device, so a machine with nothing attached **skips rather than fails**. Same pattern as Swarm's database gate. A suite that changes the device's own network gates on `ROVER_TEST_LOCAL_DEVICE` instead — the same probe, narrowed to a device physically attached to this host, since one reached over a network transport cannot be taken off the network it is reached over (D18). Gate on what the suite may actually touch: a suite that runs where it may not touch anything fails where it should have skipped.
 
   **A third flag gates on the host rather than on the device**: `ROVER_TEST_FRAME_EXTRACTION`, set when the program `record_video` slices its recording with is on `PATH` (`src/daemon/frames.ts`). Every one of these flags is warned about **loudly** when it is off, and that matters most for this one: the cases it gates are green on a developer's machine and silently absent on one without the program, which is the silence `ai/RULES.md` §6 says reads as "checked". Say in the PR when a gated case did not run.
@@ -70,6 +71,16 @@ The checks themselves live in `tests/helpers/backend-conformance.ts` and return 
 
 **A backend under construction registers nothing.** Build it phase by phase with tests constructing the class directly, and land its `index.ts` in the phase that removes the last stub. Registering a stub-bearing manifest early fails this suite and forces an exemption that disables the gate for the backend already passing it.
 
+## The panel's source-scan gates
+
+`tests/unit/panel/` — three scans over `panel/src`, in the family of the gates below and for the same reason: each is the executable half of a rule that a component library's defaults will otherwise reintroduce. They are plain `.ts` in the `unit` project, so they run in node with no jsdom and `tsconfig.typecheck.json` already covers them. The checks share `tests/helpers/panel-source-scan.ts`, which walks the tree and blanks comments before matching — the panel's comments have to stay free to *discuss* every word being forbidden, and the most valuable lines in `tokens.css` name the very traps it is scanning for.
+
+- **`tokens-are-the-source-of-truth.test.ts`** — both halves of issue #111's headline criterion. Every colour, type step, radius and spacing measure in `tests/fixtures/design/analog-horizon-tokens.json` appears in `panel/src/tokens.css` under its Tailwind v4 name (a token file that quietly lost half the palette would pass the second half trivially), **and** no hex, `rgb(`, `hsl(` or `oklch(` appears anywhere else under `panel/src`. The exemption list is asserted to be exactly one file, because the way a scan gate dies is somebody adding their own file to it. The fixture is `designMd` captured verbatim from the Stitch MCP server's `get_project` — the design system's own words rather than what somebody believed they said, which is the "fixtures come off a real device" rule applied to a design.
+- **`no-looping-animation.test.ts`** — no `@keyframes`, no `animation` declaration and no `animate-*` utility, and `panel/src/index.css` still carries a `prefers-reduced-motion` block. The reduced-motion block is stripped before matching, since suppressing an animation means naming the property.
+- **`no-test-framework-vocabulary.test.ts`** — no `PASS`/`FAIL`/`SUCCESS`/`COMPLETE` chip label, no `Analytics` or `Diagnostics`, no "success rate" and no "test result". `test name` is deliberately absent from the list: that is the field's real name (D22).
+
+The last two read `readShippedPanelSources()` rather than the whole tree, because a panel test has to be free to name what its gate forbids — `sidebar.test.tsx` asserts that `Analytics` does not appear in the navigation and would otherwise be its own violation. Same shape as `no-sleep-harness.test.ts`'s exemption, and the same limit: it exempts a *file*, so those two gates scan what ships rather than everything that exists. The colour gate has no such exemption.
+
 ## The no-sleep gate
 
 `tests/unit/no-sleep.test.ts` — the executable half of ai/RULES.md §2, rule 2: **there is not a single sleep in this repository.** The rule is the absolute one; the gate is a source scan over the shapes a sleep is actually written in, which is a floor under the rule rather than a proof of it. It walks every `.ts` file under `src/` and `tests/` and runs the checks in `tests/helpers/no-sleep-scan.ts`, which return violation strings rather than asserting, so the same checks serve the walk and the harness. `tests/unit/no-sleep-harness.test.ts` runs them over synthetic sources — one deliberate violation per rule, plus a passing sample for every timer shape the repo legitimately uses — so the gate is proved rather than vacuously green, exactly as `conformance-harness.test.ts` does for backend conformance.
@@ -114,8 +125,8 @@ Type your `vi.fn()` mocks with their real call signature rather than a bare `vi.
 
 `lefthook.yml`, installed via the npm `prepare` script:
 
-- **pre-commit** (parallel): Biome lint+format on staged files (auto-fix and re-stage), `tsc --noEmit -p tsconfig.typecheck.json`.
-- **pre-push**: the unit suite. Device tests are not in the push gate — they need hardware and would fail a push from a machine with nothing attached.
+- **pre-commit** (parallel): Biome lint+format on staged files (auto-fix and re-stage), `tsc --noEmit -p tsconfig.typecheck.json`, and the panel's own `tsc --noEmit -p panel/tsconfig.json` (a second config because the panel compiles JSX for a bundler, not ESM for node).
+- **pre-push**: `npm test` — the unit suite and the panel suite. Device tests are not in the push gate — they need hardware and would fail a push from a machine with nothing attached.
 - **commit-msg**: conventional-commit format via commitlint.
 
 The same unit gate runs again on every pull request — `.github/workflows/verify.yml` calls `npm run verify` on a runner, so a hook someone skipped locally still gets caught. Device tests stay out of it for the same reason they stay out of the push gate: no runner has hardware.

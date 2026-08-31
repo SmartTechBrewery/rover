@@ -1,0 +1,136 @@
+/*
+ * The Analog Horizon design system — the panel's single source of truth for colour, type,
+ * spacing and radius.
+ *
+ * Harvested from `get_project`'s `designTheme.designMd` on the Stitch project Rover
+ * (`636633385461686529`, asset `assets/0ceb612ce88e4adb9c88f8e4ff21e3d8`), captured verbatim
+ * beside this file's gate as `tests/fixtures/design/analog-horizon-tokens.json`.
+ * `ai/RULES.md` §8 and `docs/DESIGN.md` §1 are why it comes from there and not from a
+ * screenshot.
+ *
+ * NOT harvested from the Tailwind config the reference screen's emitted HTML carries: that
+ * config's `borderRadius` block is shifted one step down from `designMd`'s own `rounded` map
+ * and gives `full: 0.75rem`, which cannot be a pill. Its colour, type and spacing blocks do
+ * agree with `designMd`; the radii do not, and nothing in the markup says so.
+ *
+ * This is the only file in `panel/` allowed to write a colour value.
+ * `tests/unit/panel/tokens-are-the-source-of-truth.test.ts` enforces that.
+ */
+
+@theme static {
+	--color-surface: #111316;
+	--color-surface-dim: #111316;
+	--color-surface-bright: #37393d;
+	--color-surface-container-lowest: #0c0e11;
+	--color-surface-container-low: #1a1c1f;
+	--color-surface-container: #1e2023;
+	--color-surface-container-high: #282a2d;
+	--color-surface-container-highest: #333538;
+	--color-surface-variant: #333538;
+	--color-surface-tint: #b8c3ff;
+	--color-on-surface: #e2e2e6;
+	--color-on-surface-variant: #c4c5d9;
+	--color-inverse-surface: #e2e2e6;
+	--color-inverse-on-surface: #2f3034;
+	--color-background: #111316;
+	--color-on-background: #e2e2e6;
+	--color-outline: #8e90a2;
+	--color-outline-variant: #434656;
+	--color-primary: #b8c3ff;
+	--color-on-primary: #002388;
+	--color-primary-container: #2e5bff;
+	--color-on-primary-container: #efefff;
+	--color-inverse-primary: #124af0;
+	--color-primary-fixed: #dde1ff;
+	--color-primary-fixed-dim: #b8c3ff;
+	--color-on-primary-fixed: #001356;
+	--color-on-primary-fixed-variant: #0035be;
+	--color-secondary: #ffb59a;
+	--color-on-secondary: #5a1b00;
+	--color-secondary-container: #ff5e07;
+	--color-on-secondary-container: #531900;
+	--color-secondary-fixed: #ffdbce;
+	--color-secondary-fixed-dim: #ffb59a;
+	--color-on-secondary-fixed: #370e00;
+	--color-on-secondary-fixed-variant: #802a00;
+	--color-tertiary: #00e29d;
+	--color-on-tertiary: #003824;
+	--color-tertiary-container: #007d55;
+	--color-on-tertiary-container: #bdffdb;
+	--color-tertiary-fixed: #47ffb8;
+	--color-tertiary-fixed-dim: #00e29d;
+	--color-on-tertiary-fixed: #002113;
+	--color-on-tertiary-fixed-variant: #005236;
+	--color-error: #ffb4ab;
+	--color-on-error: #690005;
+	--color-error-container: #93000a;
+	--color-on-error-container: #ffdad6;
+
+	/*
+	 * The three-tier type system: `Archivo Narrow` for headlines, `DM Sans` for body and UI
+	 * labels, `Space Mono` for technical data. A family per step, exactly as the design
+	 * names them, so `font-code-md text-code-md` reads as the system's own vocabulary.
+	 */
+	--font-display-lg: 'Archivo Narrow', sans-serif;
+	--font-headline-md: 'Archivo Narrow', sans-serif;
+	--font-headline-sm: 'Archivo Narrow', sans-serif;
+	--font-body-lg: 'DM Sans', sans-serif;
+	--font-body-md: 'DM Sans', sans-serif;
+	--font-code-md: 'Space Mono', ui-monospace, monospace;
+	--font-label-caps: 'Space Mono', ui-monospace, monospace;
+
+	--text-display-lg: 48px;
+	--text-display-lg--line-height: 1.1;
+	--text-display-lg--font-weight: 700;
+	--text-display-lg--letter-spacing: -0.02em;
+	--text-headline-md: 32px;
+	--text-headline-md--line-height: 1.2;
+	--text-headline-md--font-weight: 600;
+	--text-headline-sm: 24px;
+	--text-headline-sm--line-height: 1.2;
+	--text-headline-sm--font-weight: 600;
+	--text-body-lg: 18px;
+	--text-body-lg--line-height: 1.6;
+	--text-body-lg--font-weight: 400;
+	--text-body-md: 16px;
+	--text-body-md--line-height: 1.5;
+	--text-body-md--font-weight: 400;
+	--text-code-md: 14px;
+	--text-code-md--line-height: 1.4;
+	--text-code-md--font-weight: 400;
+	--text-label-caps: 12px;
+	--text-label-caps--line-height: 1;
+	--text-label-caps--font-weight: 700;
+	--text-label-caps--letter-spacing: 0.1em;
+
+	/*
+	 * The design's `rounded` map under Tailwind v4's names. Same five values — v4 shifted its
+	 * radius scale one step, so the design's base radius (4px, buttons and inputs) is
+	 * `rounded-sm` here and its container radius (8px, cards and layout sections) is
+	 * `rounded-lg`. The design's `full` is v4's own built-in `rounded-full`.
+	 */
+	--radius-xs: 0.125rem;
+	--radius-sm: 0.25rem;
+	--radius-md: 0.375rem;
+	--radius-lg: 0.5rem;
+	--radius-xl: 0.75rem;
+
+	/*
+	 * The design's spacing `unit` is v4's entire spacing scale: every `p-`/`gap-`/`w-` number
+	 * is a multiple of it, so `p-4` is 16px and `gap-5` is 20px — the design's own gutter.
+	 */
+	--spacing: 4px;
+}
+
+/*
+ * The four named measures, deliberately outside `@theme`. `--container-max` would otherwise
+ * land in v4's `--container-*` namespace and emit a `max-w-max` shadowing the built-in
+ * `max-width: max-content`. Read them with v4's custom-property shorthand instead:
+ * `p-(--margin-desktop)`, `gap-(--gutter)`.
+ */
+:root {
+	--gutter: 20px;
+	--margin-mobile: 16px;
+	--margin-desktop: 40px;
+	--container-max: 1280px;
+}
