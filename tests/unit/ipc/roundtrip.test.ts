@@ -22,7 +22,7 @@ function statusHandlers(overrides: Partial<IpcHandlers> = {}): IpcHandlers {
 	return {
 		status: () => ({ protocolVersion: PROTOCOL_VERSION, pid: 4242, uptimeMs: 7 }),
 		list_devices: () => ({ devices: [], stale: false }),
-		// The lease rows exist so this table stays complete; the refusal is the cheapest
+		// The three lease rows exist so this table stays complete; the refusal is the cheapest
 		// answer that is still a real one, and one suite below sends it over the wire.
 		acquire_device: () => ({
 			outcome: 'refused',
@@ -31,6 +31,11 @@ function statusHandlers(overrides: Partial<IpcHandlers> = {}): IpcHandlers {
 			heldBy: null,
 		}),
 		release_device: () => ({ released: false }),
+		force_release_device: () => ({
+			outcome: 'refused',
+			reason: 'not-held',
+			message: 'no device host in these tests',
+		}),
 		// The verb rows, for the same reason and with the same cheapest real answer: these
 		// suites are about the surface, and a refusal is what a host with no device says.
 		wait_for: () => refusedWithoutAHost(),
