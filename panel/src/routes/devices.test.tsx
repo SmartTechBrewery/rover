@@ -110,6 +110,31 @@ function ready(devices: readonly ListedDevice[], stale = false): DeviceListState
 	return { status: 'ready', devices, stale, receivedAtMs: Date.now() };
 }
 
+/** The grid is the cards' one parent, so it is reached through a card rather than by class. */
+function gridOf(container: HTMLElement): HTMLElement {
+	return container.querySelector('article')?.parentElement as HTMLElement;
+}
+
+/**
+ * The three numbers §4's column ceiling is made of, read back out of the grid's class list: the
+ * track floor from its `minmax`, and the column count and card maximum from the `calc` its
+ * `max-w-` carries. Reading them rather than restating them is what makes the assertion that
+ * uses it about the rule and not about a string.
+ *
+ * The two shapes are written as regexes and never spelled out in prose here, because Tailwind
+ * scans this file too: a class-shaped example in a comment is a candidate like any other, and a
+ * placeholder inside one emits an unparseable declaration into the built stylesheet.
+ */
+function gridGeometry(grid: HTMLElement): { columns: number; cardMax: number; floor: number } {
+	const track = /minmax\((\d+)px,1fr\)/.exec(grid.className);
+	const cap = /max-w-\[calc\((\d+)\*(\d+)px\+/.exec(grid.className);
+	if (track === null || cap === null) {
+		throw new Error(`no track floor or grid maximum in '${grid.className}'`);
+	}
+
+	return { columns: Number(cap[1]), cardMax: Number(cap[2]), floor: Number(track[1]) };
+}
+
 /** The one line and the counter slot are the same shape in every state (`docs/DESIGN.md` §3). */
 function describing(): HTMLElement {
 	return screen.getByText('Monitoring attached physical and virtual devices.');
@@ -131,9 +156,47 @@ describe('with devices attached', () => {
 		const { container } = showing(ready([HELD, FREE]));
 
 		expect(container.querySelectorAll('article')).toHaveLength(2);
-		const grid = container.querySelector('article')?.parentElement as HTMLElement;
-		expect(grid.className).toContain('grid-cols-[repeat(auto-fit,minmax(300px,1fr))]');
-		expect(grid.className).not.toMatch(/\bmd:grid-cols-/);
+		expect(gridOf(container).className).toContain(
+			'grid-cols-[repeat(auto-fill,minmax(300px,1fr))]',
+		);
+		// A breakpoint reads the viewport, which includes the sidebar — the mistake §4 records as
+		// the worst bug of the first four iterations, in a second form.
+		expect(gridOf(container).className).not.toMatch(/\b(?:sm|md|lg|xl|2xl):grid-cols-/);
+	});
+
+	/*
+	 * One device is one card in a three-column grid, not a banner (#126). `auto-fit` collapses the
+	 * tracks it has no card for and stretches the survivor across the whole content width, where a
+	 * card carrying a serial, a model, a state and a lease block stops reading as one of a set;
+	 * `auto-fill` keeps them.
+	 */
+	it('gives a lone card one track rather than the whole content width', () => {
+		const { container } = showing(ready([HELD]));
+
+		expect(container.querySelectorAll('article')).toHaveLength(1);
+		expect(gridOf(container).className).toContain('auto-fill');
+		expect(gridOf(container).className).not.toContain('auto-fit');
+	});
+
+	/*
+	 * **The ceiling is arithmetic, so the arithmetic is what is pinned** (#126) — jsdom lays nothing
+	 * out, and a window width is not something this suite can vary anyway.
+	 *
+	 * A fourth track needs `4 × floor + 3 × gutter`; the grid's maximum is `3 × cardMax + 2 × gutter`.
+	 * The gutter appears on both sides and a wider one only ever makes the fourth track harder to
+	 * fit, so dropping it leaves the strictest form of the same question — `4 × floor ≥ 3 × cardMax`
+	 * — and no window width at which a fourth column can be laid out. No breakpoint is involved in
+	 * saying so. The numbers are read back out of the class list rather than repeated here, so
+	 * raising the card maximum past what the floor can hold fails in this suite rather than in a
+	 * browser on a 2560 px screen.
+	 */
+	it('leaves no room for a fourth column, however wide the window is', () => {
+		const { columns, cardMax, floor } = gridGeometry(gridOf(showing(ready([HELD])).container));
+
+		expect(columns).toBe(3);
+		expect(columns * cardMax).toBeLessThanOrEqual((columns + 1) * floor);
+		// And all three still fit inside that maximum, or the ceiling would quietly be two.
+		expect(floor).toBeLessThanOrEqual(cardMax);
 	});
 
 	// Derived from the very array the cards come from, so agreeing is structural.

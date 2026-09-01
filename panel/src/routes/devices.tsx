@@ -148,6 +148,25 @@ function Content({
 			 * (§4). 300 rather than 350 because three cards plus their gutters have to fit the
 			 * content width at the design's own size.
 			 *
+			 * The two halves of the ceiling, and neither works without the other (#126):
+			 *
+			 * `auto-fill` rather than `auto-fit` keeps the tracks a width can hold even when there
+			 * is no card for them, so one attached device occupies **one** track. `auto-fit`
+			 * collapses the empty ones and stretches that lone card across the whole content width,
+			 * where a card carrying a serial, a model, a state and a lease block reads as a banner
+			 * rather than as one of a set.
+			 *
+			 * The maximum is what caps the grid at three columns without a breakpoint anywhere: a
+			 * fourth 300 px track needs 1260 px with its gutters and the grid never gets past 1180,
+			 * so the fourth is arithmetically unreachable however wide the window is. Below that
+			 * ceiling the count still steps 3 → 2 → 1 on the content box, which is §4's rule intact.
+			 * 380 px is the implied card maximum: at the design's own size the content box is about
+			 * 1104 px and three cards already come out near 354 px, so the ceiling leaves the design
+			 * untouched at the size it was drawn for and only bites above it. Written as the
+			 * arithmetic rather than as 1180 so the three, the card maximum and the gutter token
+			 * stay legible — `--container-max` is not it, because 1280 has room for that fourth
+			 * track.
+			 *
 			 * A stale grid is quieted **as a set**, which is a treatment of the whole list — whether
 			 * these are still the attached devices — and never a rewriting of the data in it. The
 			 * countdown keeps ticking and every lease field stays exact: `stale` is about the host's
@@ -155,7 +174,7 @@ function Content({
 			 * bookkeeping with no view that could go stale (D6).
 			 */}
 			<div
-				className={`mt-8 grid grid-cols-[repeat(auto-fit,minmax(300px,1fr))] gap-(--gutter) ${
+				className={`mt-8 grid max-w-[calc(3*380px+2*var(--gutter))] grid-cols-[repeat(auto-fill,minmax(300px,1fr))] gap-(--gutter) ${
 					state.stale ? 'opacity-75' : ''
 				}`}
 			>

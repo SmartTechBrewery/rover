@@ -162,8 +162,29 @@ here.
   256 px dead band — and, because it starved the content box below the width two grid tracks
   needed, collapsed a three-column grid to one. Both symptoms, one cause.
 - **Grid columns follow the width available to the content, not a viewport breakpoint.**
-  `repeat(auto-fit, minmax(300px, 1fr))` is what the Devices grid uses; 300 rather than 350 because
-  three cards plus their gutters have to fit the content width at the design's own size.
+  `repeat(auto-fill, minmax(300px, 1fr))` is what the Devices grid uses; 300 rather than 350 because
+  three cards plus their gutters have to fit the content width at the design's own size. A
+  breakpoint would read the *viewport*, which includes the sidebar — the bug above in a second form.
+- **The track has a floor and a ceiling: at most three columns, and a card is never full-width**
+  (#126). The floor alone broke the layout at both ends. With one device attached, `auto-fit`
+  collapsed the empty tracks and stretched the single card across the whole content width, where a
+  card carrying a serial, a model, a state and a lease block reads as a banner rather than as one
+  of a set; and because `<main>` carries no maximum, a 2560 px monitor produced seven columns of a
+  screen this document only ever described at three. Both are the same missing constraint. The
+  grid therefore carries `auto-fill` — which keeps the tracks a width can hold whether or not
+  there is a card for them — and a maximum of `calc(3 × 380px + 2 × gutter)`, 1180 px. **The
+  ceiling is arithmetic, not a breakpoint**: a fourth 300 px track needs 1260 px with its gutters,
+  so it is unreachable at any window width, while below 1180 px the count still steps 3 → 2 → 1 on
+  the content box exactly as the rule above says. 380 px as the implied card maximum leaves the
+  design untouched at the size it was drawn for — the content box is about 1104 px there and three
+  cards already come out near 354 px — and only bites above it.
+  - `--container-max` (1280 px) is *not* this number and must not be repurposed as it: 1260 fits
+    inside 1280, so it permits the fourth column — and it is an Analog Horizon token whose value is
+    gated against the design fixture, so it is not a free parameter either.
+  - `minmax(300px, 380px)` was considered and set aside. It bounds the track directly but never
+    shares out the leftover space, leaving a ragged right edge at every width.
+  - **This is the grid only.** *No devices attached*, the `stale` banner and *No view* keep the
+    widths §7 gives them.
 - **Equal margins.** The gap between the sidebar's border and the content equals the gap between
   the content and the page edge. The breadcrumb, the page title and the first card share one left
   edge.
@@ -177,6 +198,13 @@ above: without it a flex item cannot shrink below its contents' intrinsic width,
 it loses tracks for reasons that look nothing like the sidebar. `app-shell.test.tsx` asserts both —
 that the sidebar's class list contains none of `fixed`, `sticky`, `absolute`, and that `<main>`
 carries no horizontal margin.
+
+The grid itself is one class list on the Devices screen (#126):
+`grid-cols-[repeat(auto-fill,minmax(300px,1fr))] max-w-[calc(3*380px+2*var(--gutter))]`, and
+`devices.test.tsx` reads the three numbers back out of it to assert that a fourth track cannot
+fit inside that maximum. jsdom lays nothing out, so the ceiling is pinned as arithmetic rather
+than as a measured width. Eight phones attached — the realistic host above — therefore lay out as
+three columns of bounded cards rather than as one very wide row.
 
 ---
 
