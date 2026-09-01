@@ -21,7 +21,13 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { invocationFor } from '@/cli/_shared/output.js';
 import { EXIT_OK, EXIT_USAGE, run } from '@/cli/index.js';
-import { agentSnippet, roverDocument, SNIPPET_BEGIN, withSnippet } from '@/cli/init/documents.js';
+import {
+	agentSnippet,
+	DOCUMENT_MARKER,
+	roverDocument,
+	SNIPPET_BEGIN,
+	withSnippet,
+} from '@/cli/init/documents.js';
 import { MCP_SERVER_KEY } from '@/cli/init/mcp-config.js';
 import { ProjectHooksSchema } from '@/daemon/project-hooks.js';
 import { IPC_METHODS } from '@/ipc/methods.js';
@@ -262,6 +268,98 @@ describe('rover init', () => {
 	});
 });
 
+describe('where the page goes', () => {
+	it('rewrites the page where a human moved it, rather than making a second one', async () => {
+		const directory = await createProject();
+		expect(await run(['init', directory])).toBe(EXIT_OK);
+		const moved = join(directory, 'docs', 'testing', 'ROVER.md');
+		await mkdirFor(moved);
+		await writeFile(moved, await read(join(directory, 'ROVER.md')), 'utf8');
+		await rm(join(directory, 'ROVER.md'));
+		logged = [];
+
+		expect(await run(['init', directory, '--write'])).toBe(EXIT_OK);
+
+		expect(await read(moved)).toContain(DOCUMENT_MARKER);
+		await expect(read(join(directory, 'ROVER.md'))).rejects.toThrow();
+		// And the snippet points an agent at where the page actually is.
+		expect(await read(join(directory, 'AGENTS.md'))).toContain('`docs/testing/ROVER.md`');
+	});
+
+	it('finds the page under a name it was never given', async () => {
+		const directory = await createProject();
+		expect(await run(['init', directory])).toBe(EXIT_OK);
+		const renamed = join(directory, 'ai', 'device-testing.md');
+		await mkdirFor(renamed);
+		await writeFile(renamed, await read(join(directory, 'ROVER.md')), 'utf8');
+		await rm(join(directory, 'ROVER.md'));
+		logged = [];
+
+		expect(await run(['init', directory])).toBe(EXIT_OK);
+
+		expect(await read(renamed)).toContain(DOCUMENT_MARKER);
+		expect(logged.join('\n')).toContain('found where you moved it');
+	});
+
+	it('writes nothing when two of its own pages are in one project', async () => {
+		const directory = await createProject();
+		expect(await run(['init', directory])).toBe(EXIT_OK);
+		const second = join(directory, 'docs', 'ROVER.md');
+		await mkdirFor(second);
+		await writeFile(second, await read(join(directory, 'ROVER.md')), 'utf8');
+		await rm(hookFile());
+		errored = [];
+
+		expect(await run(['init', directory])).toBe(EXIT_USAGE);
+
+		expect(errored.join('\n')).toContain('--document');
+		// Nothing was written: the refusal happens before the first write, not after two.
+		await expect(read(hookFile())).rejects.toThrow();
+	});
+
+	it('never overwrites a ROVER.md this command did not write', async () => {
+		const directory = await createProject({ 'ROVER.md': '# My own notes\n' });
+
+		expect(await run(['init', directory])).toBe(EXIT_USAGE);
+
+		expect(await read(join(directory, 'ROVER.md'))).toBe('# My own notes\n');
+		expect(errored.join('\n')).toContain('was not written by this command');
+	});
+
+	it('puts the page where --document says, creating the directory for it', async () => {
+		const directory = await createProject();
+
+		expect(await run(['init', directory, '--document', 'docs/rover/guide.md', '--write'])).toBe(
+			EXIT_OK,
+		);
+
+		expect(await read(join(directory, 'docs', 'rover', 'guide.md'))).toContain(DOCUMENT_MARKER);
+		expect(await read(join(directory, 'AGENTS.md'))).toContain('`docs/rover/guide.md`');
+	});
+
+	it('refuses a --document outside the project', async () => {
+		const directory = await createProject();
+
+		expect(await run(['init', directory, '--document', '../elsewhere.md'])).toBe(EXIT_USAGE);
+
+		expect(errored.join('\n')).toContain('outside');
+	});
+
+	it('does not go looking inside node_modules', async () => {
+		const directory = await createProject();
+		expect(await run(['init', directory])).toBe(EXIT_OK);
+		const vendored = join(directory, 'node_modules', 'somebody-else', 'ROVER.md');
+		await mkdirFor(vendored);
+		await writeFile(vendored, await read(join(directory, 'ROVER.md')), 'utf8');
+		logged = [];
+
+		// Two pages exist, one of them vendored — and the run is not ambiguous, because the
+		// walk never descends there.
+		expect(await run(['init', directory])).toBe(EXIT_OK);
+		expect(logged.join('\n')).toContain(join(directory, 'ROVER.md'));
+	});
+});
+
 describe('the generated ROVER.md', () => {
 	/**
 	 * The drift gate, and the reason this document is generated at all: a verb that lands with
@@ -304,7 +402,7 @@ describe('the generated ROVER.md', () => {
 
 	it('calls the MCP server what the server calls itself', () => {
 		expect(MCP_SERVER_KEY).toBe(ROVER_MCP_NAME);
-		expect(agentSnippet()).toContain(`\`${ROVER_MCP_NAME}\` MCP server`);
+		expect(agentSnippet('ROVER.md')).toContain(`\`${ROVER_MCP_NAME}\` MCP server`);
 	});
 
 	it('says what a project without an install will actually be told', () => {
@@ -323,13 +421,16 @@ describe('the generated ROVER.md', () => {
 
 describe('the snippet', () => {
 	it('replaces itself in place rather than stacking up', () => {
-		const first = withSnippet('# Rules\n', agentSnippet());
-		const second = withSnippet(first, agentSnippet());
+		const first = withSnippet('# Rules\n', agentSnippet('ROVER.md'));
+		const second = withSnippet(first, agentSnippet('ROVER.md'));
 		expect(second).toBe(first);
 	});
 
 	it('keeps what was written after it', () => {
-		const with_ = withSnippet(`# Rules\n\n${agentSnippet()}\n\n## Afterwards\n`, agentSnippet());
+		const with_ = withSnippet(
+			`# Rules\n\n${agentSnippet('ROVER.md')}\n\n## Afterwards\n`,
+			agentSnippet('ROVER.md'),
+		);
 		expect(with_).toContain('## Afterwards');
 		expect(with_.split(SNIPPET_BEGIN)).toHaveLength(2);
 	});

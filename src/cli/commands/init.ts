@@ -47,12 +47,12 @@ import {
 	AGENT_FILES,
 	agentSnippet,
 	DEFAULT_AGENT_FILE,
-	DOCUMENT_FILE,
 	hasSnippet,
 	pointerTarget,
 	roverDocument,
 	withSnippet,
 } from '../init/documents.js';
+import { type DocumentLocation, locateDocument } from '../init/locate.js';
 import {
 	MCP_CONFIG_FILE,
 	mcpServerEntry,
@@ -73,7 +73,10 @@ Writes four things, and reports what it did to each:
   <path>/.mcp.json         the 'rover' MCP server, merged into whatever is already there.
                            Other servers, and other keys in ours, are left alone
   <path>/ROVER.md          the page an agent reads before its first call. Generated: it is
-                           rewritten by every run, so re-run init rather than editing it
+                           rewritten by every run, so re-run init rather than editing it.
+                           **Move it wherever you like** — every run looks for the page it
+                           wrote last time, by a marker inside it rather than by its name,
+                           and rewrites it where it now lives
   the snippet              a few lines for CLAUDE.md, AGENTS.md or GEMINI.md saying that a
                            manual test means Rover. Printed, or inserted with --write
 
@@ -88,6 +91,10 @@ Options:
                     with ROVER_DEVICE_SERIAL naming the leased device. Detected from a
                     Gradle wrapper when omitted
   --no-install      Register no install at all, rather than the detected one
+  --document <path> Where the page goes, relative to the project. Only needed to move it
+                    somewhere init would not look, or to pick between two pages a project
+                    somehow ended up with — a page that was simply moved is found on its
+                    own. A markdown file this command did not write is never overwritten
   --write           Insert the snippet into every agent file the project already has,
                     between markers, so running init again replaces it instead of adding a
                     second copy. Creates ${DEFAULT_AGENT_FILE} only when there is no agent file at all
@@ -106,6 +113,7 @@ const OPTIONS = {
 	app: { type: 'string', multiple: true },
 	install: { type: 'string' },
 	'no-install': { type: 'boolean', default: false },
+	document: { type: 'string' },
 	write: { type: 'boolean', default: false },
 	force: { type: 'boolean', default: false },
 } as const;
@@ -144,10 +152,13 @@ export async function run(argv: string[]): Promise<number> {
 	const apps = await chooseApps(directory, values.app);
 	const install = await chooseInstall(directory, values.install, values['no-install'] === true);
 	const remote = (process.env[HOST_ADDRESS_ENV_VAR] ?? '') !== '';
+	// Before the first write: an ambiguous page, or one this command did not write, is a
+	// refusal with nothing done yet rather than three files written and then a failure.
+	const where = await locateDocument(directory, values.document);
 
 	const hookFile = await writeHookFile(project, apps.value, install?.value, values.force === true);
 	const mcpConfig = await writeMcpConfig(directory, hookFile.path);
-	const document = await writeDocument(directory, {
+	const document = await writeDocument(where, {
 		project,
 		apps: apps.value,
 		install: install === undefined ? undefined : describeCommand(install.value),
@@ -155,7 +166,7 @@ export async function run(argv: string[]): Promise<number> {
 		remote,
 		invocation: out.INVOCATION,
 	});
-	const agentFiles = await handleAgentFiles(directory, values.write === true);
+	const agentFiles = await handleAgentFiles(directory, where.relative, values.write === true);
 
 	if (values.json === true) {
 		out.printDocument({
@@ -163,15 +174,25 @@ export async function run(argv: string[]): Promise<number> {
 			directory,
 			hookFile,
 			mcpConfig,
-			document,
+			document: { ...document, how: where.how },
 			agentFiles,
 			apps: apps.value,
 			install: install === undefined ? null : describeCommand(install.value),
-			snippet: agentSnippet(),
+			snippet: agentSnippet(where.relative),
 		});
 	} else {
 		out.info(
-			report({ project, directory, apps, install, hookFile, mcpConfig, document, agentFiles }),
+			report({
+				project,
+				directory,
+				apps,
+				install,
+				hookFile,
+				mcpConfig,
+				document,
+				where,
+				agentFiles,
+			}),
 		);
 	}
 	reportCaveats(hookFile, remote, values.write === true, agentFiles);
@@ -295,18 +316,26 @@ async function writeMcpConfig(directory: string, hookFile: string): Promise<File
 	return { path: file, outcome: merged.outcome };
 }
 
+/**
+ * The page, written where {@link locateDocument} said it goes — which is where a previous run
+ * left it, wherever somebody has since moved that to.
+ *
+ * The directory is created because `--document docs/ROVER.md` in a project with no `docs/` is a
+ * request rather than a mistake; every other path here was found by walking a directory that
+ * therefore exists.
+ */
 async function writeDocument(
-	directory: string,
+	where: DocumentLocation,
 	facts: Parameters<typeof roverDocument>[0],
 ): Promise<FileReport> {
-	const file = path.join(directory, DOCUMENT_FILE);
-	const existing = await readIfPresent(file);
+	const existing = await readIfPresent(where.path);
 	const text = roverDocument(facts);
 	if (existing === text) {
-		return { path: file, outcome: 'unchanged' };
+		return { path: where.path, outcome: 'unchanged' };
 	}
-	await writeFile(file, text, 'utf8');
-	return { path: file, outcome: existing === undefined ? 'created' : 'updated' };
+	await mkdir(path.dirname(where.path), { recursive: true });
+	await writeFile(where.path, text, 'utf8');
+	return { path: where.path, outcome: existing === undefined ? 'created' : 'updated' };
 }
 
 /**
@@ -318,8 +347,12 @@ async function writeDocument(
  * (`../init/documents.ts`); and a project with no agent file at all gets one created, because
  * there is nothing there to be careful with.
  */
-async function handleAgentFiles(directory: string, write: boolean): Promise<AgentReport[]> {
-	const snippet = agentSnippet();
+async function handleAgentFiles(
+	directory: string,
+	documentPath: string,
+	write: boolean,
+): Promise<AgentReport[]> {
+	const snippet = agentSnippet(documentPath);
 	const reports: AgentReport[] = [];
 	for (const name of AGENT_FILES) {
 		const file = path.join(directory, name);
@@ -370,6 +403,7 @@ interface Report {
 	readonly hookFile: FileReport;
 	readonly mcpConfig: FileReport;
 	readonly document: FileReport;
+	readonly where: DocumentLocation;
 	readonly agentFiles: readonly AgentReport[];
 }
 
@@ -380,7 +414,12 @@ function report(what: Report): string {
 		field('directory', what.directory),
 		field('hook file', `${what.hookFile.path}  (${what.hookFile.outcome})`),
 		field('mcp server', `${what.mcpConfig.path}  (${what.mcpConfig.outcome})`),
-		field('document', `${what.document.path}  (${what.document.outcome})`),
+		field(
+			'document',
+			`${what.document.path}  (${what.document.outcome}${
+				what.where.how === 'found' ? ', found where you moved it' : ''
+			})`,
+		),
 		field(
 			'apps',
 			what.apps.value.length === 0
@@ -397,17 +436,17 @@ function report(what: Report): string {
 	for (const agent of what.agentFiles) {
 		lines.push(field(agent.name, describeAgentFile(agent)));
 	}
-	return [...lines, '', ...snippetSection(what.agentFiles)].join('\n');
+	return [...lines, '', ...snippetSection(what.where.relative, what.agentFiles)].join('\n');
 }
 
-function snippetSection(agentFiles: readonly AgentReport[]): string[] {
+function snippetSection(documentPath: string, agentFiles: readonly AgentReport[]): string[] {
 	const placed = agentFiles.some(
 		(agent) => agent.outcome === 'created' || agent.outcome === 'updated',
 	);
 	const heading = placed
 		? 'The block that went into the agent files above:'
 		: 'Add this to the file your agent reads, or run init again with --write:';
-	return [heading, '', agentSnippet(), ''];
+	return [heading, '', agentSnippet(documentPath), ''];
 }
 
 function describeAgentFile(agent: AgentReport): string {

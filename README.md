@@ -40,8 +40,8 @@ That writes four things and says what it did to each:
 | --- | --- |
 | `~/.rover/projects/my-app.json` | the project's hook file: what the host installs and stops for a lease on it (D13). The application id and the install command are detected from a Gradle wrapper where there is one, reported with the file they came from, and an existing hook file is **never** overwritten without `--force` |
 | `my-app/.mcp.json` | the `rover` MCP server, merged into whatever was already there. Other servers, and other variables in ours, are left alone |
-| `my-app/ROVER.md` | the page an agent reads before its first call — the lease loop, the verb set, and the rules. **Generated**: re-run `rover init` rather than editing it |
-| `CLAUDE.md`, `AGENTS.md`, `GEMINI.md` | a short block saying that a **manual test** means Rover and that `ROVER.md` comes first. `--write` inserts it between markers, so running init again replaces it instead of adding a second copy; without the flag it is printed for you to place |
+| `my-app/ROVER.md` | the page an agent reads before its first call — the lease loop, the verb set, and the rules. **Generated**: re-run `rover init` rather than editing it. **Move it wherever it belongs** — `docs/`, `ai/`, under another name — and the next run finds it there and rewrites it in place, by a marker inside the file rather than by its name. A markdown file init did not write is never overwritten, and `--document <path>` places the page by hand |
+| `CLAUDE.md`, `AGENTS.md`, `GEMINI.md` | a short block saying that a **manual test** means Rover and that the page comes first, by the path the page is actually at. `--write` inserts it between markers, so running init again replaces it instead of adding a second copy; without the flag it is printed for you to place |
 
 Nothing there asks a host, so none of it needs a daemon running or a device attached. Prove the
 wiring separately, once:
