@@ -180,6 +180,25 @@ const AUTH_TIMEOUT_MS = 5_000;
 const REQUEST_TIMEOUT_MS = 30_000;
 
 /**
+ * How long an idle keep-alive connection is kept before this listener closes it.
+ *
+ * **Not Node's default, and that is the point.** Node's is 5 000 ms — the same number the panel
+ * polls on (`panel/src/devices/device-list-provider.tsx`, `POLL_MS`), so the browser's next request
+ * went out on a socket this listener was within its response time of closing, every single poll,
+ * with the dev proxy's own reused sockets carrying a second copy of the race
+ * (`panel/vite.config.ts`). The loser of that race is a request the panel never gets an answer to,
+ * and #125 is what one of those used to cost: the poll's in-flight guard was unbounded, so one lost
+ * answer froze the grid for the life of the tab. Both halves are fixed; this is the one that stops
+ * manufacturing the lost answer.
+ *
+ * A number well clear of the poll rather than a tuning knob — there is nothing here for an operator
+ * to set, exactly as with the three deadlines around it. Holding an idle socket longer costs the
+ * daemon nothing on shutdown, because `close()` below calls `closeAllConnections()`: a host asked
+ * to go away still goes away at once, whatever this says.
+ */
+export const KEEP_ALIVE_TIMEOUT_MS = 65_000;
+
+/**
  * Cap on a request body. Deliberately **not** `MAX_FRAME_BYTES`: that 8 MiB is sized for a
  * screenshot travelling the other way, on an authenticated connection, and no method this
  * transport serves takes more than a few hundred bytes in. A body over this is answered — the
@@ -267,6 +286,10 @@ export async function startHttpListener(
 		headersTimeout: authTimeoutMs,
 		requestTimeout: Math.max(REQUEST_TIMEOUT_MS, authTimeoutMs),
 		connectionsCheckingInterval: connectionsCheckingIntervalFor(authTimeoutMs),
+		// The idle window between two requests on one connection. See {@link KEEP_ALIVE_TIMEOUT_MS}
+		// — this is the one number here that was left at a Node default, and the default collided
+		// with the panel's poll interval exactly (#125).
+		keepAliveTimeout: KEEP_ALIVE_TIMEOUT_MS,
 	};
 	const server: HttpServer | HttpsServer =
 		material === undefined

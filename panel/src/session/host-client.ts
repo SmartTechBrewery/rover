@@ -72,6 +72,11 @@ export type RpcEnvelope = z.infer<typeof ResponseEnvelopeSchema>;
  *   dress it up as more than that.
  * - `unanswered` — nothing usable came back: the request never reached a host, or what returned was
  *   not the shape this surface promises. A stored session survives one of these.
+ *
+ * **A request the caller abandoned is an `unanswered`** — a host that accepted the connection and
+ * said nothing inside the caller's own budget has told this browser exactly as much as one that was
+ * never there. Nothing here sets that budget: the caller that owns the deadline is the caller that
+ * passes the signal (#125).
  */
 export type HostRefusal = 'refused' | 'unanswered';
 
@@ -120,16 +125,22 @@ export async function signOut(session: string): Promise<HostAnswer<null>> {
  * here and not as a refusal: `HostAnswer`'s failure half is about the credential and the connection,
  * and the two vocabularies must not be collapsed into one (D29's "exactly two statuses — read the
  * envelope").
+ *
+ * `signal` is optional and there is deliberately no default: a repeating caller has an interval to
+ * spend and gives this request that budget, while a person waiting on one answer has none to give.
+ * The three `/session` verbs above take none for the same reason.
  */
 export async function rpc(
 	session: string,
 	method: string,
 	params: unknown,
+	signal?: AbortSignal,
 ): Promise<HostAnswer<RpcEnvelope>> {
 	return await ask(ResponseEnvelopeSchema, RPC_PATH, {
 		method: 'POST',
 		session,
 		body: { protocolVersion: 1, id: nextRequestId(), method, params },
+		...(signal === undefined ? {} : { signal }),
 	});
 }
 
@@ -137,6 +148,8 @@ interface HostRequest {
 	readonly method: 'GET' | 'POST' | 'DELETE';
 	readonly session?: string;
 	readonly body?: unknown;
+	/** Abandons the request. Its abort lands in the `catch` below as an `unanswered`. */
+	readonly signal?: AbortSignal;
 }
 
 /**
@@ -160,10 +173,12 @@ async function ask<S extends z.ZodTypeAny>(
 			body: request.body === undefined ? undefined : JSON.stringify(request.body),
 			cache: 'no-store',
 			credentials: 'omit',
+			...(request.signal === undefined ? {} : { signal: request.signal }),
 		});
 	} catch {
-		// No host answered — it is not running, not reachable, or the request was cut off. Says
-		// nothing at all about the credential, which is why it is not a `refused`.
+		// No host answered — it is not running, not reachable, the request was cut off, or the
+		// caller abandoned it on its own deadline. Says nothing at all about the credential, which
+		// is why it is not a `refused`.
 		return { ok: false, refusal: 'unanswered' };
 	}
 
