@@ -61,6 +61,7 @@ function showing(
 ) {
 	return render(
 		<RunPanel
+			back={false}
 			below={NO_LEVELS}
 			contents={contents}
 			device={device}
@@ -79,10 +80,15 @@ function levels(...read: readonly [readonly string[], ArchiveLevel][]): ArchiveL
 	return new Map(read.map(([path, level]) => [keyOf(path), level]));
 }
 
-/** The column beside an open artifact or folder — the state this run panel shares with a preview. */
-function beside(open: readonly string[], below: ArchiveLevels = NO_LEVELS) {
+/**
+ * The column with an address inside the run open, and **`back` is what tells the two apart**: a
+ * preview took the tree's place, so the arrow is the way out of it; a folder is open beside the tree
+ * and has no control at all (#143).
+ */
+function withOpen(open: readonly string[], below: ArchiveLevels, back: boolean) {
 	return render(
 		<RunPanel
+			back={back}
 			below={below}
 			contents={CONTENTS}
 			device={DEVICE}
@@ -91,6 +97,16 @@ function beside(open: readonly string[], below: ArchiveLevels = NO_LEVELS) {
 			serial={NAMED}
 		/>,
 	);
+}
+
+/** The column beside an open artifact — the preview state, where the tree is not there. */
+function beside(open: readonly string[], below: ArchiveLevels = NO_LEVELS) {
+	return withOpen(open, below, true);
+}
+
+/** The column beside the tree, with a folder of this run open in `CONTENTS` (#143). */
+function browsing(open: readonly string[], below: ArchiveLevels = NO_LEVELS) {
+	return withOpen(open, below, false);
 }
 
 describe('a run', () => {
@@ -380,21 +396,26 @@ describe('the run column while a file is open', () => {
 	};
 
 	/*
-	 * **One control heads the column, and it is the only thing in that strip.** Pressing it closes
-	 * the preview, which is the same act as navigating to the run — so the tree comes back exactly
-	 * when the preview closes, because the address is three components deep again.
+	 * **The arrow, then a left-aligned `Run Details`** — the approved markup's own header, restored
+	 * (#143): the arrow was alone and centred, which put the one control on the card off the axis
+	 * everything under it sits on. Pressing it closes the preview, which is the same act as navigating
+	 * to the run, so the tree comes back exactly when the preview closes.
 	 */
-	it('is headed by a back arrow alone, pointing at the run own address', () => {
+	it('is headed by the back arrow and a left-aligned `Run Details`', () => {
 		const { container } = beside(OPEN_FILE);
 
 		const strip = container.querySelector('section > div:first-child');
-		expect(strip?.textContent).toBe('');
+		expect(strip?.textContent).toBe('Run Details');
 		const back = screen.getByRole('link', {
 			name: 'Close the preview and go back to the directory',
 		});
 		expect(back.getAttribute('href')).toBe(`/archive/${RUN.join('/')}`);
 		expect(strip?.querySelectorAll('a')).toHaveLength(1);
-		expect(container.textContent).not.toContain('Run Details');
+		// The arrow first and the heading after it, on one axis and not centred in the strip.
+		const row = strip?.firstElementChild;
+		expect(row?.children[0]?.tagName).toBe('A');
+		expect(row?.children[1]?.tagName).toBe('H2');
+		expect(row?.className).not.toContain('justify-center');
 	});
 
 	it('is headed by `Run Details` and no back control when the tree is beside it instead', () => {
@@ -405,6 +426,17 @@ describe('the run column while a file is open', () => {
 			screen.queryByRole('link', { name: 'Close the preview and go back to the directory' }),
 		).toBeNull();
 		expect(container.querySelector('section > div:first-child')?.textContent).toBe('Run Details');
+	});
+
+	// A folder is open *beside* the tree, and the tree is the way back from it — so this column keeps
+	// the heading it has with nothing open and gains nothing (#143).
+	it('keeps that header, with no back control, while a folder of the run is open', () => {
+		const { container } = browsing(SCREENSHOTS, levels([SCREENSHOTS, SCREENSHOTS_LEVEL]));
+
+		expect(container.querySelector('section > div:first-child')?.textContent).toBe('Run Details');
+		expect(
+			screen.queryByRole('link', { name: 'Close the preview and go back to the directory' }),
+		).toBeNull();
 	});
 
 	/*
@@ -506,6 +538,28 @@ describe('the run column while a file is open', () => {
 		const open = screen.getByRole('link', { name: /001_screenshot.png/ });
 		expect(open.textContent).toBe('001_screenshot.png');
 		expect(open.textContent).not.toContain('KB');
+	});
+
+	/*
+	 * **The addressed folder expands under its own row** (#143), which reverses #133: a folder had a
+	 * column of its own then, so drawing its listing here as well would have been the same listing in
+	 * two places. It has no column now, and the folder a reader actually pointed at was the one thing
+	 * this card would not open where it was clicked.
+	 */
+	it('expands the addressed folder itself, and gives its own row the selected treatment', () => {
+		browsing(SCREENSHOTS, levels([SCREENSHOTS, SCREENSHOTS_LEVEL]));
+
+		const row = screen.getByRole('link', { name: /screenshots\// });
+		expect(row.getAttribute('aria-current')).toBe('page');
+		expect(row.className).toContain('bg-tertiary-container');
+		expect(row.className).toContain('border-tertiary');
+		// Its count stays on it, because it is still a top-level row saying what the run wrote.
+		expect(row.textContent).toContain('3 files');
+		// And what it holds is listed under it, name only.
+		expect(screen.getByRole('link', { name: /001_screenshot.png/ }).textContent).toBe(
+			'001_screenshot.png',
+		);
+		expect(screen.getByText('001_frames/')).toBeDefined();
 	});
 
 	// The settled sentences, indented and not reworded: the same three states one level up.

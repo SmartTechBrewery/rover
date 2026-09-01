@@ -16,10 +16,10 @@ import type { ReactNode } from 'react';
  * The card's shell.
  *
  * **`header` is a slot rather than a title** (#133). Three callers put three different things in
- * that strip — a level's name, `Run Details` or a back arrow alone, and a file's name beside `Open
- * in a new window` — and the strip's own padding, rule and surface are the thing that must not
- * differ between them. A `title: string` made the third of those impossible and would have grown a
- * second card component to hold it.
+ * that strip — a level's name, `Run Details` with the back arrow before it while a preview is open
+ * (#143), and a file's name beside `Open in a new window` — and the strip's own padding, rule and
+ * surface are the thing that must not differ between them. A `title: string` made the third of those
+ * impossible and would have grown a second card component to hold it.
  *
  * `min-w-0` beside `flex-1` is the other half of the equal-halves rule §9 settles: two `flex-1`
  * columns only stay equal while neither is allowed to be wider than its content. It is inert in the
@@ -108,27 +108,6 @@ export function NotReadableInCard() {
 		<div className="px-6 pb-6">
 			<ArchiveNotReadable />
 		</div>
-	);
-}
-
-/**
- * The card for an address inside a run whose parent has not answered yet — **neither a listing nor a
- * preview**, because which of the two it is, is the fact that has not arrived (#140 review).
- *
- * It is deliberately its own sentence. *Reading this level* would call a file a level and *Reading
- * this artifact* would call a directory a file, and the whole point of this state is that the screen
- * has not been told. One quiet `aria-live` line in the wording the rest of the screen uses, in the
- * same card the answer will replace it in, so nothing about the layout moves when it does.
- */
-export function ReadingThisAddress({ path }: { readonly path: readonly string[] }) {
-	return (
-		<ContentsCard header={<CardHeading>{path.at(-1) ?? ''}</CardHeading>}>
-			<div className="px-6 py-5">
-				<p aria-live="polite" className="font-code-md text-code-md text-on-surface-variant">
-					Reading this address.
-				</p>
-			</div>
-		</ContentsCard>
 	);
 }
 

@@ -1583,17 +1583,20 @@ is dressed up as a fault — the file is written the first time a lease produces
 without one is an ordinary thing to find.
 
 **Opening a file from a run's `CONTENTS` shows it beside that run.** The directory tree gives way to
-the run's own column and the artifact is previewed next to it, in two equal halves — so the thing you
-were pointing at is read where you found it rather than at a second address. One control heads that
-column, a back arrow that brings the tree back; the folder being browsed expands to its file names,
-because `CONTENTS` is now how the next file is chosen. An image is shown contained at its natural
-aspect ratio and never blown up past its own pixels; a recording is a plain video with the browser's
-own controls that does not start itself and does not loop; a log or a `device_info.json` is printed
+the run's own column and the artifact is previewed next to it, in two equal halves — so the thing
+you were pointing at is read where you found it rather than at a second address. That column is
+headed by a back arrow beside its `Run Details`, and the arrow brings the tree back; the folder
+being browsed expands to its file names, because `CONTENTS` is now how the next file is chosen.
+**Opening a *folder* from that same listing expands it where you clicked it** and leaves the tree
+where it is: a folder is a level of the run's own subtree rather than a second thing to preview, so
+it opens in place rather than crossing the screen. An image is shown contained at its natural aspect
+ratio and never blown up past its own pixels; a recording is a plain video with the browser's own
+controls that does not start itself and does not loop; a log or a `device_info.json` is printed
 verbatim in monospace with a line-number gutter and **no colour on the level** — `W` and `E` are the
-device's words about its own logs, not Rover's verdict on anything. Nothing is laid over or around the
-artifact: no scanline, no tint, no frame, no bezel. The one control over it is **Open in a new
-window**, and there is no download button anywhere in the panel — this is a view, not a transfer, and
-the machine holding the artifact is the one the archive is already browsable on.
+device's words about its own logs, not Rover's verdict on anything. Nothing is laid over or around
+the artifact: no scanline, no tint, no frame, no bezel. The one control over it is **Open in a new
+window**, and there is no download button anywhere in the panel — this is a view, not a transfer,
+and the machine holding the artifact is the one the archive is already browsable on.
 
 The path is in the URL, so a reload lands where you were and a link to a run — or to one file inside
 it — is shareable. Three states have nothing to browse and none of them reads as another: nothing has

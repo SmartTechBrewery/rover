@@ -52,16 +52,19 @@ export type RunSerial =
  * everything on it comes out of that file, with `docs/DESIGN.md` §6's three fallbacks and nothing
  * else. Its own three states are folded in {@link Device}.
  *
- * **This is also the column beside an open artifact** (#133), and it is this same column in less
- * space: the identity card and the device card do not change at all. Two things do, and both come
- * from `CONTENTS` having become how another file is chosen —
+ * **This is also the column beside whatever else the address opens** (#133, #143) — a preview, or
+ * the tree with a folder of this run open in `CONTENTS` — and it is this same column in less space:
+ * the identity card and the device card do not change at all. Two things do, and both come from
+ * `CONTENTS` having become how another address inside the run is chosen —
  *
- * - **one control heads the card: a back arrow, alone and centred.** Pressing it closes the preview
- *   and returns the screen to the tree beside this column. One button, one outcome.
- * - **the folder being browsed expands to its file names**, the open one carrying the selected
- *   treatment; every other folder stays summarised. That is the tree's own expansion rule
- *   (`directory-tree.tsx`) applied to the run's subtree, so there is no stored expansion state here
- *   either — a folder is expanded exactly when the open address is inside it.
+ * - **the header keeps its left-aligned `Run Details`, and gains the back arrow before it while an
+ *   *artifact* is open.** The arrow is there because a preview took the tree's place, so the column
+ *   is the only way back; a folder opens *beside* the tree, which is its own way back, so a folder
+ *   gets no control at all ({@link back}, `docs/DESIGN.md` §9).
+ * - **`CONTENTS` expands down to and including the open address**, the open one carrying the
+ *   selected treatment and every other folder staying summarised. That is the tree's own expansion
+ *   rule (`directory-tree.tsx`) applied to the run's subtree, so there is no stored expansion state
+ *   here either — a folder is expanded exactly when the open address is inside it, or is it.
  */
 export function RunPanel({
 	run,
@@ -70,6 +73,7 @@ export function RunPanel({
 	device,
 	open,
 	below,
+	back,
 }: {
 	readonly run: readonly string[];
 	/** The run directory's `onlyChild`, with the state of the answer it came from — {@link RunSerial}. */
@@ -78,22 +82,25 @@ export function RunPanel({
 	/** This run's own `device_info.json` — {@link ArchivedDeviceInfo}. */
 	readonly device: ArchivedDeviceInfo;
 	/**
-	 * The address open beside this column — an artifact or a folder — and `null` when the directory
-	 * tree is there instead. It is what decides the header and what `CONTENTS` expands.
+	 * The address open inside this run — an artifact or a folder — and `null` when nothing below the
+	 * `<serial>` is addressed. It is what `CONTENTS` marks and expands, and nothing else.
 	 */
 	readonly open: readonly string[] | null;
 	/** Every level below the `<serial>` directory that has been read — the expansions `CONTENTS` draws. */
 	readonly below: ArchiveLevels;
+	/**
+	 * Whether the back arrow heads the strip — **true exactly when a preview is what took the tree's
+	 * place**, which is the one state this column is the only way out of (#143). It is a fact about
+	 * what is beside the column rather than about {@link open}, which is why it is its own input: a
+	 * folder is marked and expanded in `CONTENTS` the same way and still has the tree to go back to.
+	 */
+	readonly back: boolean;
 }) {
 	const name = run.at(-1) ?? '';
 	const identity = decomposeRunName(name);
 
 	return (
-		<ContentsCard
-			header={
-				open === null ? <CardHeading>Run Details</CardHeading> : <BackToTheDirectory run={run} />
-			}
-		>
+		<ContentsCard header={<Header back={back} run={run} />}>
 			<div className="space-y-6 p-6">
 				<section className="rounded-lg border-2 border-outline-variant bg-surface p-5">
 					<h3 className="mb-4 break-words font-code-md font-bold text-code-md text-on-surface">
@@ -128,27 +135,45 @@ export function RunPanel({
 }
 
 /**
- * The one control that heads this column while a file is open — **a back arrow, alone and centred.**
+ * The strip at the top of this column — **the arrow, then a left-aligned `Run Details`** (#143).
+ *
+ * That is the approved markup's own header, restored: the arrow was alone and *centred*, which put
+ * the one control on the card off the axis every card under it sits on, while every other header on
+ * this screen is left-aligned. The heading is the same one in both states, so the arrow appearing is
+ * the whole of what changes when a preview opens — nothing in the strip is replaced by something
+ * else.
+ */
+function Header({ run, back }: { readonly run: readonly string[]; readonly back: boolean }) {
+	return (
+		<div className="flex items-center gap-3">
+			{back ? <BackToTheDirectory run={run} /> : null}
+			<CardHeading>Run Details</CardHeading>
+		</div>
+	);
+}
+
+/**
+ * The way out of a preview, and **the only state that has one**: a folder is open beside the tree,
+ * and the tree is the way back from it (#143).
  *
  * A `<Link>` and not a `<button>`, because the whole of this screen's state is its address
  * (`docs/DESIGN.md` §9): closing the preview *is* navigating to the run, so the control is the run's
  * own address and the tree comes back because the address is three components deep again. One
- * control, one outcome — and nothing else sits in this strip, so there is no second way to leave.
+ * control, one outcome — and nothing else in this strip navigates, so there is no second way to
+ * leave.
  *
  * The label is the design's own, because what the arrow does is not obvious from the glyph.
  */
 function BackToTheDirectory({ run }: { readonly run: readonly string[] }) {
 	return (
-		<div className="flex items-center justify-center">
-			<Link
-				aria-label="Close the preview and go back to the directory"
-				className="flex h-9 w-9 shrink-0 items-center justify-center rounded-sm border-2 border-outline-variant bg-surface text-on-surface-variant transition-colors hover:border-tertiary hover:text-tertiary"
-				params={{ _splat: splatFromComponents(run) }}
-				to="/archive/$"
-			>
-				<ArrowLeft aria-hidden="true" size={18} strokeWidth={2} />
-			</Link>
-		</div>
+		<Link
+			aria-label="Close the preview and go back to the directory"
+			className="flex h-9 w-9 shrink-0 items-center justify-center rounded-sm border-2 border-outline-variant bg-surface text-on-surface-variant transition-colors hover:border-tertiary hover:text-tertiary"
+			params={{ _splat: splatFromComponents(run) }}
+			to="/archive/$"
+		>
+			<ArrowLeft aria-hidden="true" size={18} strokeWidth={2} />
+		</Link>
 	);
 }
 
@@ -357,9 +382,10 @@ const ROW_CLOSED = 'border-transparent hover:bg-surface-container-high';
  * One entry, as a link to its own address, and its children when the open address is inside it.
  *
  * **Expansion is derived, never stored**: a folder is expanded exactly when the open address is
- * *inside* it. The addressed folder itself is not expanded here — when a folder is what is open, its
- * listing is the card beside this column, and drawing it twice would be the same listing in two
- * places (`archive.tsx`).
+ * *inside* it — or **is** it. The addressed folder expands under its own row (#143): a folder has no
+ * column of its own any more, so there is no second place its listing could be drawn in, and the one
+ * folder a reader actually pointed at is the last one that should refuse to open where it was
+ * clicked.
  *
  * `summarised` is what a top-level row carries and a nested one does not: a count for a directory
  * and a size for a file. A nested row is a name, because at that depth the row is a control for
@@ -403,10 +429,10 @@ function Entry({
 	);
 }
 
-/** Whether the open address is **inside** this directory — a proper prefix, not the address itself. */
+/** Whether the open address **is** this directory or is inside it — a prefix, the address included. */
 function holds(path: readonly string[], open: readonly string[] | null): boolean {
 	return (
-		open !== null && open.length > path.length && keyOf(open.slice(0, path.length)) === keyOf(path)
+		open !== null && open.length >= path.length && keyOf(open.slice(0, path.length)) === keyOf(path)
 	);
 }
 
