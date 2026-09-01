@@ -180,16 +180,23 @@ import { findUserByToken, type UserRecord } from './user-store.js';
  *
  * Typed against `IpcMethodName`, so renaming a method is a compile error here rather than a
  * surface that silently stops answering. `force_release_device` joined it with the screen that
- * calls it (R35, #122) and `list_archive` with the archive's own read side (R36, #130) — both
- * were on the table already, so what changed here is one transport's reach and not the surface.
- * That is the whole list: the panel reads the pool, ends a stuck lease in it, and reads the
- * artifact archive one directory level at a time, and D27 still keeps every acquire and every
- * verb off a browser.
+ * calls it (R35, #122), `list_archive` with the archive's own read side (R36, #130) and
+ * `search_archive` with the search of the archive (R38, #144) — every one of them was on the table
+ * already, so what changed here is one transport's reach and not the surface.
+ * That is the whole list: the panel reads the pool, ends a stuck lease in it, reads the artifact
+ * archive one directory level at a time and searches the whole of it, and D27 still keeps every
+ * acquire and every verb off a browser.
+ *
+ * `search_archive` is here and deliberately **not** an MCP tool, which is the same asymmetry
+ * `list_archive` and `force_release_device` already have: this transport serves the operator's own
+ * browser, and a search that is safe there would hand every agent the run names of every other
+ * agent on the host.
  */
 const PANEL_METHODS: readonly IpcMethodName[] = [
 	'list_devices',
 	'force_release_device',
 	'list_archive',
+	'search_archive',
 ];
 
 /**

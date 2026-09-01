@@ -88,6 +88,13 @@ const DEVICE_METHODS = ['status', 'list_devices', 'acquire_device', 'release_dev
  * in the verb's own answer (D19), so there is nothing here it needs and could not already have.
  * Advertising it would hand every agent a listing of every other agent's runs on the host.
  *
+ * `search_archive` is here for `list_archive`'s reason **with more force** (R38). It reads the same
+ * host archive, so an agent already has everything of its own as bytes in the verb's own answer
+ * (D19) and needs nothing here — but where `list_archive` at least made an agent walk to another
+ * agent's runs one level at a time, one `search_archive` call hands over the run names of every
+ * other agent on the host in a single answer. It is on `PANEL_METHODS` instead, which is the
+ * operator's own browser (D27, D29).
+ *
  * The list is short and named so the gate below can be exact: a verb row added later is either
  * a registered tool or a deliberate entry here, never a row that quietly has no tool.
  */
@@ -96,6 +103,7 @@ const NOT_YET_EXPOSED = [
 	'pull_file',
 	'force_release_device',
 	'list_archive',
+	'search_archive',
 ] as const satisfies readonly IpcMethodName[];
 
 /** The platform vocabulary `tests/unit/no-platform-names.test.ts` keeps out of `src/` (D10). */

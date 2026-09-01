@@ -480,12 +480,21 @@ the process with a registry.
 - **The archive's read side is `list_archive`'s own row, and it is a listing rather than
   a query** (R36). `src/daemon/list-archive.ts` answers **one directory level** of that tree —
   `{ path }`, the components a previous answer returned — with no filter, search, sort, recursion
-  or aggregate, because D24's whole point is that listing a directory *is* the query and a
-  parameter that made it one is how an index gets built by accident. It obeys the write side's
+  or aggregate, because a parameter that turned a listing into a query is how an index gets built
+  by accident (D24). It obeys the write side's
   rule about paths in the same structural way: no result field a host path would fit in, so the
   diagnosis for a level the host cannot read is a warning on the host (D19). Containment is the
   path schema *and* a resolved-root check in the handler, because a symlink inside the root
   escapes it without any character the schema refuses.
+- **The search is its own row beside it, not a parameter on it** (R38). `src/daemon/search-archive.ts`
+  answers `search_archive` — `{ text }`, and matching entries of the **whole** archive as the same
+  component arrays `list_archive` answers with, so the archive has one path vocabulary across all of
+  its reads. There is still **no index**: the answer is a bounded breadth-first walk of the
+  filesystem at request time, capped by depth, by match count and by directories read, and a bounded
+  answer says `truncated`. Half of D24 is reversed here and the no-index half is not, which is what
+  makes those bounds necessary. Containment needs no resolved-root check on this side, because there
+  is no caller-supplied path and `isDirectory()` is `false` for a symlink — so the walk never follows
+  one. Like `list_archive` it is on the panel's transport and deliberately not an MCP tool.
 - **A shared preamble, one row per verb.** `createVerbHandlers` does the renew / register /
   re-verify / resolve work once, so each further verb family is one `IPC_METHODS` row and one
   `runVerb` call rather than another copy of it — and inherits the rule above by construction rather
@@ -593,4 +602,4 @@ the same slot-aware runner, so concurrent leases receive separate port blocks.
 
 ## Not built, deliberately
 
-No database — the daemon's *operational* state (inventory, leases, ports) is per-host, ephemeral and re-derivable; a slot pool is the plainest case of it, since after a restart there are no leases and so there are no slots to reclaim from a predecessor. The artifact archive (`PROJECT.md` §10, D23) is a deliberate exception: files on disk, not daemon state, and nothing the daemon needs to survive a restart to keep working. Its directory shape is itself a stable contract, which the web panel reads over `list_archive` (`PROJECT.md` D24 and R36, `docs/WEB_PANEL.md`) — one directory level per call, because a browser reaches no host filesystem (D19) — with no index to build, since a directory listing is the whole query. **That panel is in scope and is not read-only** (D27, since 2026-08-31): its transport exists (D29, the HTTP row above), and so does the Devices screen — force-releasing a stuck lease is the one action it performs (R35). The archive is already shaped so building its own screens needs no redesign. No cloud half. Rover is nothing's CI gate — it asserts nothing about the app under test and turns nothing red on its own; the `verify` workflow on this repo's own pull requests (`PROJECT.md` §7, R26) runs Rover's unit suite and is not part of the product. No device farm, no host catalogue and no registration of hosts with one another: a client learns about hosts from its own configuration and nowhere else (`PROJECT.md` §7). No comparison against design renders: Rover supplies screenshots and measurements; judging them is the agent's job.
+No database — the daemon's *operational* state (inventory, leases, ports) is per-host, ephemeral and re-derivable; a slot pool is the plainest case of it, since after a restart there are no leases and so there are no slots to reclaim from a predecessor. The artifact archive (`PROJECT.md` §10, D23) is a deliberate exception: files on disk, not daemon state, and nothing the daemon needs to survive a restart to keep working. Its directory shape is itself a stable contract, which the web panel reads over `list_archive` (`PROJECT.md` D24 and R36, `docs/WEB_PANEL.md`) — one directory level per call, because a browser reaches no host filesystem (D19) — and searches over `search_archive` (R38), still with **no index to build**: that search is a bounded walk of the tree at request time, which is the same property spent differently rather than abandoned. **That panel is in scope and is not read-only** (D27, since 2026-08-31): its transport exists (D29, the HTTP row above), and so does the Devices screen — force-releasing a stuck lease is the one action it performs (R35). The archive is already shaped so building its own screens needs no redesign. No cloud half. Rover is nothing's CI gate — it asserts nothing about the app under test and turns nothing red on its own; the `verify` workflow on this repo's own pull requests (`PROJECT.md` §7, R26) runs Rover's unit suite and is not part of the product. No device farm, no host catalogue and no registration of hosts with one another: a client learns about hosts from its own configuration and nowhere else (`PROJECT.md` §7). No comparison against design renders: Rover supplies screenshots and measurements; judging them is the agent's job.

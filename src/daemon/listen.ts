@@ -44,6 +44,7 @@ import { createProjectInstall, type ProjectInstall } from './project-install.js'
 import { createProjectResolver } from './project-resolver.js';
 import { createProjectServices, type ProjectServices } from './project-services.js';
 import { createDeviceRestorer, type DeviceRestorer } from './restore.js';
+import { createSearchArchiveHandler } from './search-archive.js';
 import { createSlotAllocator, type SlotAllocator } from './slots.js';
 import { attemptConnect } from './socket-connect.js';
 import { assertValidSocketPath } from './socket-path.js';
@@ -197,12 +198,17 @@ export type StartResult = RunningDaemon | DaemonAlreadyRunning;
 
 /**
  * The method table the daemon serves — status, the device list, the three lease operations, the
- * verbs and one read of the artifact archive, on one surface (D19). A new verb family is one more
- * spread, or one more entry in `./verb-handlers.ts`; nothing about the connection lifecycle
+ * verbs and **two** reads of the artifact archive, on one surface (D19). A new verb family is one
+ * more spread, or one more entry in `./verb-handlers.ts`; nothing about the connection lifecycle
  * changes to carry it.
  *
+ * The two archive reads are one level at a time (`./list-archive.ts`, R36) and a bounded search of
+ * the whole tree (`./search-archive.ts`, R38). They are two methods rather than one with a
+ * parameter, for the reason both modules' headers give: a parameter that turned a listing into a
+ * query is how an index gets built by accident (D24).
+ *
  * `artifactsRoot` is a parameter rather than something read off `archive`: the archive writes the
- * tree and `./list-archive.ts` reads it, and widening the archive's interface to expose its own
+ * tree and those two modules read it, and widening the archive's interface to expose its own
  * root — so one more argument could be saved — is the bigger change of the two.
  */
 export function createDaemonHandlers(
@@ -222,6 +228,7 @@ export function createDaemonHandlers(
 		...createLeaseHandlers(inventory, leases, restorer, services, slots),
 		...createVerbHandlers(inventory, leases, traffic, archive, installProject),
 		...createListArchiveHandler({ root: artifactsRoot }),
+		...createSearchArchiveHandler({ root: artifactsRoot }),
 	};
 }
 

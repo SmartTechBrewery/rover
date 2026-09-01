@@ -36,9 +36,10 @@ function statusHandlers(overrides: Partial<IpcHandlers> = {}): IpcHandlers {
 			reason: 'not-held',
 			message: 'no device host in these tests',
 		}),
-		// The archive row: an empty listing is the cheapest real answer, and these suites have
-		// no archive root at all.
+		// The two archive rows: an empty listing and a search that matched nothing are the
+		// cheapest real answers, and these suites have no archive root at all.
 		list_archive: () => ({ outcome: 'listed', entries: [] }),
+		search_archive: () => ({ outcome: 'searched', matches: [], truncated: false }),
 		// The verb rows, for the same reason and with the same cheapest real answer: these
 		// suites are about the surface, and a refusal is what a host with no device says.
 		wait_for: () => refusedWithoutAHost(),
