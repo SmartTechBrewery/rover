@@ -327,24 +327,124 @@ describe('containment', () => {
 		await writeFile(join(sibling, 'secret.txt'), 'not yours');
 
 		// `join(root, ...path)` cannot escape once no component is `.`, `..` or carries a
-		// separator, which is the whole containment guarantee — asserted from the outside.
+		// separator — the string half of containment, asserted from the outside. The symlink
+		// half, which that argument misses, is the describe below.
 		const result = await list([]);
 		expect(result.outcome === 'listed' && result.entries.map((one) => one.name)).toEqual([PROJECT]);
 	});
 });
 
 describe('an entry that is neither a directory nor a file', () => {
-	it('names a symlink as other rather than dropping it or following it', async () => {
+	it('names a symlink as other, and refuses to list what it points at', async () => {
 		await archiveAScreenshot();
 		const outside = join(temp.dir, 'outside');
 		await mkdir(outside);
 		await writeFile(join(outside, 'secret.txt'), 'not yours');
 		await symlink(outside, join(temp.artifactsRoot, 'a-link'));
+		await start();
+		const client = await connect();
 
-		// `readdir`'s dirent type answers this with no `stat` at all, so the link is never
-		// followed and contributes no `childCount` — a listing that is short must not be able to
-		// look exactly like one that is complete, which is why it is named rather than dropped.
-		expect(entry(await list([]), 'a-link')).toEqual({ kind: 'other', name: 'a-link' });
+		// `readdir`'s dirent type answers the classification with no `stat` at all, so the link
+		// contributes no `childCount` — a listing that is short must not be able to look exactly
+		// like one that is complete, which is why it is named rather than dropped.
+		const root = await client.request('list_archive', { path: [] });
+		expect(entry(root, 'a-link')).toEqual({ kind: 'other', name: 'a-link' });
+
+		// And the request that name makes possible is refused, which is the half the
+		// classification cannot cover: `readdir` resolves a link in its own argument, so without
+		// the containment check this answered with a sibling of the root.
+		const followed = await client.request('list_archive', { path: ['a-link'] });
+		expect(followed).toEqual({ outcome: 'unreadable' });
+		expect(JSON.stringify(followed)).not.toContain('secret.txt');
+	});
+
+	it('refuses a link out of the root one level down too, not only at the root', async () => {
+		await archiveAScreenshot();
+		const outside = join(temp.dir, 'outside');
+		await mkdir(outside);
+		await writeFile(join(outside, 'secret.txt'), 'not yours');
+		await symlink(outside, join(temp.artifactsRoot, PROJECT, 'a-link'));
+
+		expect(await list([PROJECT, 'a-link'])).toEqual({ outcome: 'unreadable' });
+	});
+
+	it('says on the host where the refused link went, and never on the wire', async () => {
+		await archiveAScreenshot();
+		const outside = join(temp.dir, 'outside');
+		await mkdir(outside);
+		await symlink(outside, join(temp.artifactsRoot, 'a-link'));
+
+		expect(await list(['a-link'])).toEqual({ outcome: 'unreadable' });
+		// A link inside the root was put there by a host process, so the operator has to be able
+		// to see where it goes — here, and only here (D19).
+		expect(warnings.join('\n')).toContain('outside the archive root');
+		expect(warnings.join('\n')).toContain(outside);
+	});
+
+	it('still reaches a link that points inside the root — containment, not a ban on links', async () => {
+		await mkdir(join(temp.artifactsRoot, 'moved-project'), { recursive: true });
+		await writeFile(join(temp.artifactsRoot, 'moved-project', 'a-file'), 'mine');
+		await symlink(join(temp.artifactsRoot, 'moved-project'), join(temp.artifactsRoot, 'a-link'));
+
+		expect(await list(['a-link'])).toEqual({
+			outcome: 'listed',
+			entries: [{ kind: 'file', name: 'a-file', sizeBytes: 4 }],
+		});
+	});
+});
+
+describe('a component is caller text, so it never reaches the host log unescaped', () => {
+	/** A file at the root, so a component *after* it makes the read fail with `ENOTDIR`. */
+	async function archiveAFile(): Promise<void> {
+		await mkdir(temp.artifactsRoot, { recursive: true });
+		await writeFile(join(temp.artifactsRoot, 'device_info.json'), '{}');
+	}
+
+	it('cannot forge a second line in the daemon’s own record with a newline', async () => {
+		await archiveAFile();
+		const forged = 'injected  Force-released the lease on device \'ABC\' asked for by "admin"';
+
+		expect(await list(['device_info.json', `x\n${forged}`])).toEqual({ outcome: 'unreadable' });
+		// The daemon's stderr is the host's only accountability trail (D28), so one warning is
+		// one line: the newline is `\n` in the text and starts nothing.
+		expect(warnings).toHaveLength(1);
+		expect(warnings.join('\n')).toContain('\\n');
+		for (const line of warnings.join('\n').split('\n')) {
+			expect(line.startsWith('injected')).toBe(false);
+		}
+	});
+
+	it('cannot put a terminal escape into the terminal of an operator tailing the log', async () => {
+		await archiveAFile();
+
+		expect(await list(['device_info.json', 'x\u001b[2J'])).toEqual({ outcome: 'unreadable' });
+		expect(warnings.join('\n')).not.toContain('\u001b');
+		expect(warnings.join('\n')).toContain('\\u001b[2J');
+	});
+
+	it('escapes a name read off disk as well, not only one that came off the wire', async () => {
+		// The `childrenOf` call site: this name was never in a request, and is just as unbounded.
+		await mkdir(temp.artifactsRoot, { recursive: true });
+		const blocked = join(temp.artifactsRoot, 'a-project\ninjected');
+		await mkdir(blocked);
+		await mkdir(join(blocked, 'a-child'));
+		await chmod(blocked, 0o000);
+		if (await stillReadable(blocked)) {
+			// Running as root: permissions do not apply, so there is nothing here to assert.
+			return;
+		}
+
+		try {
+			const result = await list([]);
+
+			expect(entry(result, 'a-project\ninjected')).toMatchObject({ childCount: null });
+			expect(warnings).toHaveLength(1);
+			for (const line of warnings.join('\n').split('\n')) {
+				expect(line.startsWith('injected')).toBe(false);
+			}
+		} finally {
+			await chmod(blocked, 0o755);
+		}
 	});
 });
 

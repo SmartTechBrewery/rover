@@ -449,4 +449,26 @@ describe('rover archive, over the socket', () => {
 		expect(errored.join('\n')).toContain('rover archive —');
 		expect(logged).toEqual([]);
 	});
+
+	it('passes a component that is only whitespace to the host, which is the rule that governs', async () => {
+		// `ArchivePathSegmentSchema` accepts `' '` on purpose — it is a legal directory name, and a
+		// name the host answered with has to be addressable on the next request. So this command
+		// refuses the *empty* argument and nothing more: a second, stricter local rule would make
+		// such a directory un-listable through the CLI and is exactly the drift `componentsOf`
+		// imports the schema to avoid.
+		await archiveOneRun();
+		await start();
+
+		expect(await run(['archive', ' '])).toBe(EXIT_FAILED);
+
+		expect(errored.join('\n')).not.toContain('blank argument');
+		expect(errored.join('\n')).toContain('Nothing is at');
+	});
+
+	it('still refuses an empty argument with exit 2', async () => {
+		expect(await run(['archive', ''])).toBe(EXIT_USAGE);
+
+		expect(errored.join('\n')).toContain('blank argument');
+		expect(logged).toEqual([]);
+	});
 });

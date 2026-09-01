@@ -137,7 +137,13 @@ export async function run(argv: string[]): Promise<number> {
 	// `expectPositionals` is fixed-arity by design, and this command's arity is the depth being
 	// asked about — so the components are read straight off `positionals`, with the same refusal
 	// of a blank argument in the same words.
-	if (positionals.some((value) => value.trim().length === 0)) {
+	//
+	// The empty string only, never `.trim()`: the sibling commands' blank check guards `--owner`,
+	// a value a caller types, and this is a name the host produced. `ArchivePathSegmentSchema`
+	// accepts a component that is one space, so trimming here would make a directory the host
+	// itself answered with un-addressable on the next request — exactly what that schema refuses
+	// to do about a backslash. Every other rule is the schema's, in `componentsOf`.
+	if (positionals.some((value) => value.length === 0)) {
 		throw new UsageError('rover archive: expected [<component> ...], got a blank argument');
 	}
 	const path = componentsOf(positionals);

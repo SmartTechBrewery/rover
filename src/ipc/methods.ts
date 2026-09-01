@@ -475,15 +475,22 @@ export const MAX_ARCHIVE_PATH_DEPTH = 8;
 /**
  * One component of an archive path — a single directory name, as a previous listing named it.
  *
- * Five things here are decisions rather than details:
+ * Six things here are decisions rather than details:
  *
  * - **`.refine`, never `.transform`.** A throw inside a `.transform()` escapes `safeParse` past
  *   a caller that had every reason to expect a returned failure (ai/CODING_STANDARDS.md).
- * - **This is the whole containment guarantee.** `join(root, ...path)` cannot escape `root`
- *   once no component is `.`, `..`, or carries a separator, so there is deliberately no second
- *   runtime check in the handler — `src/daemon/archive-path.ts` makes the same call for the same
- *   reason ("two mechanisms for one class of collision is not worth it"), and the tests are what
- *   hold it.
+ * - **This bounds the path as a *string*, and that is not the whole containment guarantee.**
+ *   `join(root, ...path)` cannot escape `root` once no component is `.`, `..`, or carries a
+ *   separator — but a symlink resolves out of the root without any of those, and `readdir`
+ *   follows the one in its own argument. So `src/daemon/list-archive.ts` compares the resolved
+ *   directory against the resolved root before it reads anything, and that check, not this
+ *   schema, is what makes containment true.
+ * - **A component may carry a control character, so it must never reach host output
+ *   unescaped.** `\n`, `\r` and ESC are all legal in a filename and are all accepted here on
+ *   purpose, for the same reason a backslash is (below). Anything that renders one into a log
+ *   line or a table stringifies or escapes it first — `src/daemon/list-archive.ts` uses
+ *   `JSON.stringify` as `src/daemon/lease-handlers.ts` does, and the CLI uses
+ *   `escapeControlCharacters` — or a caller forges a line in the host's own record.
  * - **A backslash is deliberately not refused.** On the platforms Rover hosts devices on it is
  *   an ordinary filename character that `join` treats as one, so refusing it would make a name
  *   the host itself answered with un-addressable on the next request. The archive's *writer*

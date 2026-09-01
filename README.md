@@ -874,10 +874,15 @@ package argument on it — the byte-carrying form stays the CLI's, because a who
 argument means an agent producing several megabytes of base64. That is what `push_file` and
 `pull_file` are still waiting for and why they are not tools: `PROJECT.md` R24 phase 2 owns how a
 client supplies and receives a file, and neither of those rows has a second form that carries
-none. `force_release_device` is the third row with no tool, and its reason will not expire: **an
-agent must not be able to end another agent's lease.** It is authority over the shared pool rather
-than a step in one caller's work, which is what makes it an operator action (D27, D28) reached from
-the CLI and, later, the panel. `tests/unit/mcp/verb-declarations.test.ts` records all three as
+none. `force_release_device` is the third of four rows with no tool, and its reason will not expire:
+**an agent must not be able to end another agent's lease.** It is authority over the shared pool
+rather than a step in one caller's work, which is what makes it an operator action (D27, D28)
+reached from the CLI and, later, the panel. `list_archive` is the fourth, and its reason is
+different in kind from all three: it is not about a device at all. It reads the **host's** artifact
+archive (D24, R36), which is the operator's and the panel's surface — while an agent already
+receives its own artifacts as bytes in the verb's own answer (D19), so there is nothing there it
+needs and could not already have, and advertising it would hand every agent a listing of every
+other agent's runs on the host. `tests/unit/mcp/verb-declarations.test.ts` records all four as
 decisions, so no row can quietly land with no tool. There is no published `rover` command — a published entry point is outside the backlog
 deliberately, and `PROJECT.md` §9.4 records why and what changes when it lands; `bin/rover-mcp.mjs`
 is a path an MCP config states absolutely and not that.
