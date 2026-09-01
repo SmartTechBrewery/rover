@@ -1173,7 +1173,7 @@ Four rules when filing these issues:
 | R7 | Device inventory in the daemon | The `adb track-devices` stream plus **re-verification at every grant** (D6). A device that disappeared mid-lease is a named error, not an exception to the rule. **The host does not take into inventory a device reached through `adb connect` rather than physically attached** (D18) — the refusal is loud and names the reason | R5, R6 | M |
 | R8 | Leases | Granted per device (D7), the owner an explicit string (D16), a 20-minute TTL **renewed by activity**, not by a heartbeat (D8). **A test with five concurrent clients yields exactly one winner** — the predecessor let four through. Only devices physically attached to the host are ever granted a lease (D18). The lease additionally carries `project` and `test_name`, both required (D22) — two more explicit, caller-supplied strings, never inspected or defaulted by the core | R7 | L |
 | R9 | State restoration | Stop the app, airplane mode off, wifi back on, the project's helper services, the project hook. **A test proves the teardown runs on the expiry path too**, not only on `release` (D9). Split in two: the backend's network primitives landed first (#9) so the routine has something real to drive, and §6 records why it must set both radios explicitly with **wifi last** | R8 | M |
-| R10 | CLI: `list`, `acquire`, `release`, `status` | Readable by a human and scriptable. This is the interface everything above is debugged through (D4). The host is named by a flag; no flag means the local host | R8 | S |
+| R10 | CLI: `list`, `acquire`, `release`, `status` | Readable by a human and scriptable. This is the interface everything above is debugged through (D4). The host is named by a flag; no flag means the local host. **`rover init` was added later (2026-09-01) and is the one command that runs outside this checkout**: it onboards another repository — the project's hook file under `ROVER_PROJECTS_PATH`, the `rover` entry merged into that project's `.mcp.json`, a generated `ROVER.md`, and the snippet that tells an agent a manual test means Rover. Like `users` (D25) it asks no host: a hook file is host configuration that is never accepted over the wire (D13), and the other three files are the project's own. It **guesses nothing it cannot show you** — every detection is reported with the file it came from, an unrecognised project is registered with no install rather than a plausible one, and an existing hook file is kept rather than overwritten, because it may carry services and a teardown that cannot be reconstructed from the directory. It is also what made §9.4's `bin` decision worth reversing | R8 | S |
 | R11 | Verb layer foundation | Target resolution from a **fresh** read inside the verb, waiting on a condition with a timeout, returning the state after the action (D12). **There is not a single `sleep` in the repo** — enforced by a lint rule or a test. A timeout says what it waited for and what it found instead. A verb's result is serializable — the host will execute it, not the client (D19, R21) | R5, R8 | L |
 | R21 | Host-side verb execution | The daemon loads the core; the CLI and MCP call verbs over the same surface as leases (D19). **No adb in a client process** — checkable by a test. This row stands ahead of the verb families deliberately: changing the execution model after they are written is a rewrite of six files instead of one | R11 | L |
 | R22 | Host network listener and authentication | TCP with TLS alongside the local socket, **the same surface, a second transport** (D17). The host token authenticates, the owner string attributes — **two separate fields, and a test proves the token never becomes the owner nor reaches a log** (D20). A refusal does not reveal what the host has attached | R21 | L |
@@ -1225,9 +1225,11 @@ read as "checked":
   frames in, the handshake and **22 tools** back — 23 since #104 added `install_app` — plus a real
   `list_devices` call against the device and both startup guards (an incomplete `ROVER_HOST_*` set,
   and a `ROVER_PROJECT_FILE` naming no file).
-- **A published entry point is not part of this row** and was not added: the quick start ships
-  against `npm run rover --`, which is what works in a fresh checkout, and §9.4 below now carries
-  that decision along with the one line that changes if it is ever revisited.
+- **A published entry point was not part of this row** and was not added then: the quick start
+  shipped against `npm run rover --`, which is what works in a fresh checkout. §9.4 below reversed
+  that on 2026-09-01, when `rover init` gave the CLI a command that has to run outside this
+  checkout — and the quick start still works unlinked, because each pasteable line is now rendered
+  as the form the reader's own invocation proves.
 
 **R19 phase 3 is done** (#90). `screenshot` and `record_video` are MCP tools: screenshots return
 an inline image and write nothing, while recordings are written under the agent-local
@@ -1265,20 +1267,46 @@ byte-less form alone, leaving `push_file` and `pull_file` out.
   hosts and names any that did not answer — is the row to revive. Nothing in D17 (the one host
   reachable over the network) or D19 (verbs execute on the host) needs to change for that; it is
   simply not being built against a need that does not exist yet.
-- **A published `rover` entry point.** `package.json` is `"private": true` and has no `bin`, so
-  `rover` is typed `npm run rover --` and the CLI renders every pasteable line through one
-  constant, `INVOCATION` in `src/cli/_shared/output.ts`. R20 asked for a quick start whose commands
-  work, and a `bin` entry would have made it worse rather than better: a bare `rover list` is
-  `command not found` in every fresh clone until somebody globally links a private package that
-  runs TypeScript through `tsx`. Publishing one is its own decision — shipping through `tsx` versus
-  adding a build step, and what `npm link` means for a package marked private — and it is not
-  scheduled. When it is taken, that constant becomes `'rover'` and nothing else moves.
+- **A published `rover` entry point — taken, and the decision this bullet used to record
+  reversed (2026-09-01).** `package.json` now carries `"bin": { "rover": "bin/rover.mjs" }` and
+  stays `"private": true`. Nothing is linked automatically: a fresh clone still has no `rover` on
+  its `PATH` and still types `npm run rover --`; `npm link` in the checkout is what puts the
+  command there.
 
-  **`bin/rover-mcp.mjs` is not that, and the reasoning above is untouched by it** (#104). The
-  objection here is `command not found` for a name nobody put on a `PATH`; that file is named by
+  **What this said before, and why it was right at the time.** The objection was that a `bin`
+  entry makes a quick start *worse*: a bare `rover list` is `command not found` in every fresh
+  clone until somebody links a private package that runs TypeScript through `tsx`, and R20 had
+  just asked for a quick start whose commands actually work. Two questions were left open with
+  it — shipping through `tsx` versus adding a build step, and what `npm link` means for a package
+  marked private.
+
+  **What changed is that a command now has to run where this checkout is not.** `rover init`
+  onboards *another* repository — its hook file, its `.mcp.json`, its `ROVER.md`, its agent
+  file — and `npm run rover -- init` from that repository's directory runs whatever
+  `package.json` is sitting there. No form of the npm invocation does the job, which is a
+  different situation from the one this bullet was written about: every other command is run from
+  inside the checkout, by somebody who already has it open.
+
+  Both open questions turned out to have cheap answers. `npm link` works on a `"private": true`
+  package — private governs `npm publish` and nothing else — so no build step and no registry are
+  involved, and `bin/rover.mjs` ships through `tsx` exactly as `bin/rover-mcp.mjs` does, for the
+  same resolution reason (§6): a bare `--import` specifier resolves against the caller's working
+  directory, which is precisely what a linked command cannot rely on, while a bare specifier
+  inside the launcher resolves next to itself, in the checkout, where the loader is.
+
+  **The original objection is answered rather than accepted as a cost.** `INVOCATION`
+  (`src/cli/_shared/output.ts`) is no longer one constant that has to be right for everybody: it
+  answers from `process.argv[1]` — `rover` when the process came through the launcher, `npm run
+  rover --` when it did not — so every pasteable line names the form its own reader has just
+  proved works. A fresh clone reads `npm run rover -- status`, a linked checkout reads `rover
+  status`, and neither is ever told to type the other one's command.
+
+  **`bin/rover-mcp.mjs` was never that, and its own reasoning is untouched by the reversal**
+  (#104). The objection above was `command not found` for a name nobody put on a `PATH`; that
+  file is named by
   **absolute path** in an MCP client's own configuration, which is a path that config already had
-  to state, so there is no lookup to fail. Nothing is linked, `package.json` still has no `bin`,
-  and no CLI line changes. It exists because the MCP server's entry is the one Rover invocation
+  to state, so there is no lookup to fail. It needs no link, and it is unaffected by there now
+  being one. It exists because the MCP server's entry is the one Rover invocation
   with no `npm run` wrapper in front of it, and `node --import tsx/esm <absolute script>` resolves
   the loader against the *client's* working directory (§6) — so the documented configuration
   started in this checkout and nowhere else. A bare specifier inside the launcher resolves against

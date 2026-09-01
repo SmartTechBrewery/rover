@@ -21,19 +21,38 @@
  * escaping already contains a newline in the other mode.
  */
 
+import { basename } from 'node:path';
 import type { LeaseHolder } from '../../ipc/methods.js';
 
 /**
- * How `rover` is actually typed today.
+ * How `rover` is actually typed **by whoever is reading this line**.
  *
- * `package.json` has no `bin` entry — a published entry point is outside the backlog
- * deliberately (`PROJECT.md` §9.4) — so a bare `rover release <id>` is `command not found` in
- * every checkout that exists. Anything meant to be **pasted** is rendered through this; the
- * usage texts keep saying `rover <command>` and the dispatcher's usage says once what it
- * stands for. If one is ever published, this constant becomes `'rover'` and nothing else
- * moves.
+ * There are two answers and no way to pick one at authoring time. `package.json` now has a
+ * `bin`, so a checkout somebody ran `npm link` in has a real `rover` on its `PATH`; a fresh
+ * clone does not, and there a bare `rover release <id>` is still `command not found`
+ * (`PROJECT.md` §9.4, reversed 2026-09-01). Printing one form to both readers is wrong for one
+ * of them — which is the whole objection §9.4 recorded against publishing an entry point at
+ * all — so the constant answers from **how this process was started**: through `bin/rover.mjs`,
+ * which is what a linked command runs, or not.
+ *
+ * Anything meant to be **pasted** is rendered through this; the usage texts keep saying
+ * `rover <command>` and the dispatcher's usage says once what it stands for here.
  */
-export const INVOCATION = 'npm run rover --';
+export const INVOCATION = invocationFor(process.argv[1]);
+
+/**
+ * The form for one entry path, separately from the constant so a test can ask about both
+ * without spawning two processes.
+ *
+ * Both spellings of the launcher count: Node resolves a symlinked `bin` to its real path on
+ * most platforms, and hands back the link's own name on the rest, so the file is `rover.mjs`
+ * in one and `rover` in the other. Anything else — `src/cli/index.ts` under `npm run`, a test
+ * importing `run` — is the npm form.
+ */
+export function invocationFor(entry: string | undefined): string {
+	const name = entry === undefined ? '' : basename(entry);
+	return name === 'rover' || name === 'rover.mjs' ? 'rover' : 'npm run rover --';
+}
 
 export function info(message: string): void {
 	console.log(message);

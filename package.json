@@ -4,6 +4,9 @@
 	"private": true,
 	"description": "Hands and eyes on a real mobile device for coding agents, and a way to share devices between them",
 	"type": "module",
+	"bin": {
+		"rover": "bin/rover.mjs"
+	},
 	"scripts": {
 		"lint": "biome check .",
 		"lint:fix": "biome check --write .",

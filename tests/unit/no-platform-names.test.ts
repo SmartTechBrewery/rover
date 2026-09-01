@@ -21,12 +21,29 @@ import { describe, expect, it } from 'vitest';
  * Scoped to `src/`. `PROJECT.md`, everything under `ai/`, and this file itself must name
  * platforms to say anything at all; `src/` outside `src/backends/` is the shared code the
  * rule is about.
+ *
+ * **One file in `src/` is exempt, and it is exempt for that same reason rather than despite
+ * it.** `src/cli/init/documents.ts` contains no logic — it is the text of `ROVER.md` and of the
+ * agent-file snippet `rover init` writes into somebody else's repository, which is prose in the
+ * category `PROJECT.md` and `ai/` are in and happens to be stored as string literals so it can
+ * be interpolated and unit-tested. What it names the platform for is the **prohibition**: the
+ * whole force of that snippet is telling an agent not to reach past the lease for the device's
+ * own command-line tool, and an agent told to avoid "the platform's own tooling" routes around
+ * the vagueness the first time it is in a hurry. D10 is untouched by it — no verb is named after
+ * a platform there, nothing branches on one, and no capability is explained by one.
+ *
+ * Keep the hole this size. It is one path, not a directory: `src/cli/init/detect.ts` sits beside
+ * it recognising a build system and passes this gate unchanged, which is the evidence that the
+ * exemption is about prose rather than about the `init` command.
  */
 const PLATFORM_NAMES =
 	/\b(android|ios|iphone|ipad|adb|simctl|xcrun|uiautomator|emulator|espresso)\b/i;
 
 const SRC_ROOT = fileURLToPath(new URL('../../src', import.meta.url));
 const BACKENDS_ROOT = path.join(SRC_ROOT, 'backends');
+
+/** The one exempt file — see this module's header. `src/`-relative, and asserted to exist. */
+const PROSE = path.normalize('cli/init/documents.ts');
 
 function collectSharedSourceFiles(dir: string): string[] {
 	const found: string[] = [];
@@ -48,6 +65,9 @@ describe('shared code names no platform', () => {
 
 		for (const file of collectSharedSourceFiles(SRC_ROOT)) {
 			const relative = path.relative(SRC_ROOT, file);
+			if (relative === PROSE) {
+				continue;
+			}
 			for (const [index, line] of readFileSync(file, 'utf8').split('\n').entries()) {
 				const match = PLATFORM_NAMES.exec(line);
 				if (match) {
@@ -61,5 +81,13 @@ describe('shared code names no platform', () => {
 
 	it('scans something, so a broken walk cannot pass silently', () => {
 		expect(collectSharedSourceFiles(SRC_ROOT).length).toBeGreaterThan(0);
+	});
+
+	// An exemption for a file that has moved or gone is an exemption nobody is reading, and the
+	// next file to want one gets there by copying this list rather than by arguing for itself.
+	it('exempts a file that is really there', () => {
+		expect(
+			collectSharedSourceFiles(SRC_ROOT).map((file) => path.relative(SRC_ROOT, file)),
+		).toContain(PROSE);
 	});
 });

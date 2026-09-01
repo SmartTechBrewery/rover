@@ -20,6 +20,7 @@ import * as out from './_shared/output.js';
 import * as acquire from './commands/acquire.js';
 import * as archive from './commands/archive.js';
 import * as forceRelease from './commands/force-release.js';
+import * as init from './commands/init.js';
 import * as install from './commands/install.js';
 import * as list from './commands/list.js';
 import * as pull from './commands/pull.js';
@@ -69,6 +70,7 @@ const COMMANDS: Record<string, Command | undefined> = Object.assign(Object.creat
 	archive,
 	status,
 	users,
+	init,
 });
 
 export function usage(): string {
@@ -76,8 +78,9 @@ export function usage(): string {
 
 Usage: rover <command> [options]
 
-There is no \`bin/\` launcher yet (PROJECT.md §9.4), so \`rover\` below stands for
-\`${out.INVOCATION}\` — \`rover status\` is typed \`${out.INVOCATION} status\`.
+\`rover\` below stands for \`${out.INVOCATION}\`, which is how this invocation reached the
+CLI — \`rover status\` is typed \`${out.INVOCATION} status\`. A checkout somebody has run
+\`npm link\` in has the bare command; every other one runs it through npm (PROJECT.md §9.4).
 
 Commands:
   list                     What is attached to the host, what is free, and who holds it
@@ -99,6 +102,9 @@ Commands:
                            level at a time — the components a previous listing named,
                            never a path on the host
   status                   Which host answered, its pid, uptime and protocol version
+  init [<path>]            Set up a project so an agent working in it can drive a device:
+                           its hook file, its .mcp.json, a generated ROVER.md, and the
+                           snippet that tells an agent a manual test means Rover
   users <subcommand>       Who may use this host — add, list, rotate, revoke
 
 \`screenshot\`, \`record\` and \`pull\` write their bytes **here**: the verb runs on the host and
@@ -110,8 +116,10 @@ on this machine and never on the host. A source that is missing, is a directory,
 the bytes one call may carry is refused before anything is sent, naming the file, its real
 size and the limit — the host is never asked at all.
 
-\`users\` is the one command that asks no host: it reads and writes this machine's own
-\`~/.rover/users.json\` directly, works with no daemon running, and takes no --host.
+\`users\` and \`init\` are the two commands that ask no host. \`users\` reads and writes this
+machine's own \`~/.rover/users.json\` directly; \`init\` writes a project's hook file under
+\`~/.rover/projects\` and three files in the project's own directory. Both work with no daemon
+running and neither takes --host.
 
 Global options:
   --host <name>   Which host to ask: 'local' (the default) or 'remote', the machine

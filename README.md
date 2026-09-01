@@ -11,6 +11,53 @@ It is **not** a test framework. Nothing asserts, nothing turns red on its own, n
 gate. Rover moves the device and reports what is on it; judging whether that is right is the
 agent's job.
 
+## Quick installation
+
+Three steps, and the third is run **inside the project you want an agent to be able to test**.
+
+```bash
+git clone git@github.com:SmartTechBrewery/rover.git
+cd rover
+npm install     # also installs the git hooks
+npm link        # puts `rover` on your PATH, running this checkout
+```
+
+`npm link` is a symlink into your global `bin`, not a copy: the command keeps running the checkout
+you linked it from, so `git pull` updates it in place and `npm unlink -g rover` takes it away
+again. The package stays `"private": true` and nothing is published to a registry — linking a
+private package is what `npm link` is for.
+
+Then once per project, in that project's own directory:
+
+```bash
+cd ~/Projects/my-app
+rover init --write
+```
+
+That writes four things and says what it did to each:
+
+| Where | What |
+| --- | --- |
+| `~/.rover/projects/my-app.json` | the project's hook file: what the host installs and stops for a lease on it (D13). The application id and the install command are detected from a Gradle wrapper where there is one, reported with the file they came from, and an existing hook file is **never** overwritten without `--force` |
+| `my-app/.mcp.json` | the `rover` MCP server, merged into whatever was already there. Other servers, and other variables in ours, are left alone |
+| `my-app/ROVER.md` | the page an agent reads before its first call — the lease loop, the verb set, and the rules. **Generated**: re-run `rover init` rather than editing it |
+| `CLAUDE.md`, `AGENTS.md`, `GEMINI.md` | a short block saying that a **manual test** means Rover and that `ROVER.md` comes first. `--write` inserts it between markers, so running init again replaces it instead of adding a second copy; without the flag it is printed for you to place |
+
+Nothing there asks a host, so none of it needs a daemon running or a device attached. Prove the
+wiring separately, once:
+
+```bash
+rover status    # which host answered, its pid and uptime
+rover list      # what is attached, what is free, and who holds what
+```
+
+**Without `npm link` everything still works**, typed `npm run rover --` from inside this checkout;
+the CLI renders every pasteable line through one constant that answers from how the process was
+started, so its own output always names the form that works for its reader. The one thing that
+genuinely needs the link is `rover init` in *another* repository — `npm run` there would run that
+project's own `package.json`. `PROJECT.md` §9.4 carries that decision and the reasoning it
+reversed.
+
 ## Quick start
 
 Two runs, in this order: **take a device on this machine**, and — when the devices are on some
@@ -19,9 +66,9 @@ command below was actually run on the machine this section was written on, and t
 are the ones it printed; what could not be run says so rather than being shown unrun
 (`ai/RULES.md` §6).
 
-There is no `bin/` launcher, so `rover` is typed `npm run rover --` — with `-s` in anything that
-reads the output, because `npm run` prints its own two-line banner on stdout ahead of the command.
-Why there is no launcher, and the one line that changes when there is, is `PROJECT.md` §9.4.
+Every `rover` below is typed `npm run rover --` unless you ran `npm link` above — with `-s` in
+anything that reads the output, because `npm run` prints its own two-line banner on stdout ahead
+of the command. The CLI's own usage text says which of the two it is for you.
 
 ### What you need
 
@@ -198,9 +245,9 @@ its own directory, so that form starts only inside this checkout and dies everyw
 plain `.mjs` file whose own bare specifier resolves next to itself — inside the checkout, where
 the loader is — so there is one path to paste rather than a `node_modules` path as well.
 `tests/unit/mcp/entry.test.ts` spawns it from a temp directory with no `node_modules` above it,
-because that failure is a resolution question and no assertion on a string can see it. (This is
-not the published `rover` entry point `PROJECT.md` §9.4 leaves outside the backlog: nothing is on
-a `PATH`, `package.json` still has no `bin`, and every CLI line here is still `npm run rover --`.)
+because that failure is a resolution question and no assertion on a string can see it.
+(`rover init` writes this block into the project's own `.mcp.json` for you, both absolute paths
+already filled in — what follows is the shape it produces, and how to write one by hand.)
 
 `ROVER_PROJECT_FILE` is optional and buys one thing: `acquire_device` may then omit `project`
 (D22) — it is read for that single field and nothing the file declares is ever run by a client.
@@ -398,8 +445,9 @@ And the gaps this quick start runs into today, rather than in principle:
 - **The remote pair above was exercised on one machine over loopback**, with a self-signed
   certificate, one process playing host and one playing client. Two machines on a real network
   were not available for this section.
-- **There is no published `rover` command**, which is why every CLI line here starts
-  `npm run rover --` (`PROJECT.md` §9.4). `bin/rover-mcp.mjs` is not that: it is one file an MCP
+- **`rover` is on a `PATH` only where somebody ran `npm link`** (`PROJECT.md` §9.4, reversed
+  2026-09-01); nothing links it for you, and every CLI line here works either way because the
+  CLI renders them from how the process was started. `bin/rover-mcp.mjs` is not that: it is one file an MCP
   config names by absolute path, and nothing is linked onto a `PATH`.
 
 ## Status
@@ -836,7 +884,10 @@ certificate is verified; a self-signed host is trusted by naming its certificate
 
 The commands are in the [quick start](#quick-start) above, each one with the output it printed;
 `npm run rover -- --help` is the full list, and `npm run daemon` runs the daemon in the foreground
-instead of letting the first call start it.
+instead of letting the first call start it. `rover init` is the odd one among the commands: it
+asks no host, writes a project's hook file and three files in the project's own directory, and is
+the one command meant to be run from **outside** this checkout — see [Quick
+installation](#quick-installation).
 
 `npm run` prints its own banner to stdout ahead of the command, so a script that parses the JSON
 uses `npm run -s rover -- list --json` or invokes `node --import tsx/esm src/cli/index.ts list
@@ -885,8 +936,8 @@ archive (D24, R36), which is the operator's and the panel's surface — while an
 receives its own artifacts as bytes in the verb's own answer (D19), so there is nothing there it
 needs and could not already have, and advertising it would hand every agent a listing of every
 other agent's runs on the host. `tests/unit/mcp/verb-declarations.test.ts` records all four as
-decisions, so no row can quietly land with no tool. There is no published `rover` command — a published entry point is outside the backlog
-deliberately, and `PROJECT.md` §9.4 records why and what changes when it lands; `bin/rover-mcp.mjs`
+decisions, so no row can quietly land with no tool. The `rover` command is published through `package.json`'s `bin` and reaches a `PATH`
+only through `npm link`, which `PROJECT.md` §9.4 records the reasoning for; `bin/rover-mcp.mjs`
 is a path an MCP config states absolutely and not that.
 
 Exit codes: `0` success; `1` the operation did not succeed (a refused `acquire`, a `release` that
@@ -942,6 +993,12 @@ after it, under `ROVER_PROJECTS_PATH`:
   checkout-web.json
   storefront.json
 ```
+
+`rover init` writes one of these for a project it is pointed at, filling in what it can work out
+by reading the directory and reporting the file each detection came from — see [Quick
+installation](#quick-installation). Everything below is what one looks like written by hand, and
+what init cannot guess for you: `services`, `teardown`, and any install more involved than a
+build command.
 
 ```jsonc
 {
