@@ -14,6 +14,9 @@ const SCREENSHOT = [
 
 const URL_OF_BYTES = 'blob:rover-panel/1';
 
+/** The one height bound the three drawn bodies share — `artifact-preview.tsx`'s own constant. */
+const MAX_HEIGHT = 'max-h-[70vh]';
+
 function read(body: ArchivedArtifactState & { status: 'read' }): ArchivedArtifactState {
 	return body;
 }
@@ -97,16 +100,53 @@ describe('an artifact preview', () => {
 		expect(image.getAttribute('src')).toBe(URL_OF_BYTES);
 		// Contained rather than stretched or cropped, and never scaled up past its own pixels.
 		expect(image.className).toContain('object-contain');
-		expect(image.className).toContain('max-h-full');
+		expect(image.className).toContain(MAX_HEIGHT);
 		expect(image.className).toContain('max-w-full');
 		expect(image.className).toContain('border border-outline-variant');
 		expect(image.className).not.toContain('object-cover');
-		// Not stretched: `max-w-full` bounds it, `w-full` would fill — and `max-*` is also what keeps
-		// a screenshot from being scaled up past its own pixels.
+		// Not stretched: `max-w-full` bounds it, `w-full` would fill — and no dimension is set at all,
+		// which is what keeps a small screenshot at its own pixels.
 		const utilities = image.className.split(' ');
 		expect(utilities).not.toContain('w-full');
 		expect(utilities).not.toContain('h-full');
 		expect(region(container).className).toContain('items-center');
+	});
+
+	/*
+	 * **A percentage bound here is inert, and the class-presence assertion above could not tell the
+	 * difference** (#140 review). Nothing over the artifact has a definite height — the card's
+	 * `<section>` is `min-h-[400px]` at `height: auto` and its body is a stretching `flex-1` item —
+	 * so `max-height: 100%` computes to `none` while `max-width: 100%` resolves. Measured in headless
+	 * Chrome at 1400x900 on the built chain: a 1080x2400 screenshot under `max-h-full` was 576x1278
+	 * with the card 1372 px tall and its `overflow-y-auto` body never scrolling; under the bound below
+	 * it is 257x569 with the card 663 px. jsdom lays nothing out, so this pins the class the
+	 * measurement chose and nothing more — the measurement itself is in the module's own header.
+	 */
+	it('bounds the artifact’s height with something that resolves, not with a percentage', () => {
+		const { container } = showing(IMAGE);
+		const video = showing(RECORDING).container.querySelector('video');
+
+		for (const bounded of [screen.getByAltText('001_screenshot.png'), video]) {
+			const utilities = (bounded?.className ?? '').split(' ');
+			expect(utilities).toContain(MAX_HEIGHT);
+			expect(utilities).not.toContain('max-h-full');
+		}
+		// And the region it sits in carries no height of its own to be bounded against.
+		expect(region(container).className).not.toContain('h-[');
+	});
+
+	/*
+	 * The text body is the third one under the same bound, and the reason is `MAX_LOG_ENTRIES`: a
+	 * 5 000-line log grew the card instead of scrolling in it, because the card's own
+	 * `overflow-y-auto` has no definite height to overflow. Measured: 569 px over a 150 048 px
+	 * `scrollHeight`, card 614 px.
+	 */
+	it('scrolls a long text file inside the card rather than growing it', () => {
+		const { container } = showing(LOG);
+
+		const lines = container.querySelector('ol')?.parentElement;
+		expect(lines?.className).toContain(MAX_HEIGHT);
+		expect(lines?.className).toContain('overflow-y-auto');
 	});
 
 	/*

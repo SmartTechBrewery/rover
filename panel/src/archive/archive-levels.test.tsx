@@ -29,9 +29,16 @@ function listed(...names: readonly string[]) {
 	});
 }
 
-/** Renders one line per requested level, so the map is assertable as text. */
+/**
+ * Renders one line per requested level, so the map is assertable as text.
+ *
+ * The hook takes a **selector over the levels read so far** rather than an array (#140 review), so
+ * that a path derived from an answer and a path off the URL share one cache. A fixed list is the
+ * degenerate selector, which is what every case below wants; `asks for a level derived from an
+ * answer` is the one that exercises the derivation.
+ */
 function Levels({ paths }: { readonly paths: readonly (readonly string[])[] }) {
-	const levels: ArchiveLevels = useArchiveLevels(paths);
+	const levels: ArchiveLevels = useArchiveLevels(() => paths);
 	return (
 		<ul>
 			{paths.map((path) => (

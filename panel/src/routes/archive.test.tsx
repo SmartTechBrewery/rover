@@ -679,7 +679,12 @@ describe('an artifact open inside a run', () => {
 		expect(container.textContent).not.toContain('Nothing is filed at this address');
 	});
 
-	// A link into the archive at a depth nobody browsed to. The tree is never drawn on the way.
+	/*
+	 * A link into the archive at a depth nobody browsed to. The tree is never drawn on the way — and
+	 * **the first frame does not claim the address is a file** (#140 review): nobody has answered for
+	 * its parent yet, so the screen says it is reading the *address* and the header carries the run's
+	 * own line rather than *One artifact from this run*.
+	 */
 	it('renders the preview on a reload straight onto it, without ever drawing the tree', async () => {
 		host.artifact = PNG;
 		at.splat = AT_THE_FILE;
@@ -687,7 +692,9 @@ describe('an artifact open inside a run', () => {
 
 		const { container } = render(<ArchiveScreen />);
 		expect(screen.queryByText('DIRECTORY')).toBeNull();
-		expect(screen.getByText('Reading this artifact.')).toBeDefined();
+		expect(screen.getByText('Reading this address.')).toBeDefined();
+		expect(screen.queryByText('Reading this artifact.')).toBeNull();
+		expect(container.textContent).not.toContain('One artifact from this run');
 
 		for (let turn = 0; turn < 6; turn += 1) {
 			await act(async () => undefined);
@@ -695,6 +702,61 @@ describe('an artifact open inside a run', () => {
 
 		expect(screen.queryByText('DIRECTORY')).toBeNull();
 		expect(container.querySelector('aside')).toBeNull();
+		expect(screen.getByAltText('001_screenshot.png')).toBeDefined();
+	});
+
+	/*
+	 * **The same first frame for a folder, which is the case that made it wrong** (#140 review).
+	 * `openEntryOf` answers `unanswered` while the parent is loading, and folding that into `artifact`
+	 * meant a deep link into `screenshots/` said *One artifact from this run, as it was written.* and
+	 * *Reading this artifact.* about a directory for as long as the `<serial>` listing took.
+	 */
+	it('claims nothing about an address whose parent has not answered yet', async () => {
+		at.splat = SCREENSHOTS.join('/');
+		host.answers = new Map(Object.entries(withScreenshots()));
+
+		const { container } = render(<ArchiveScreen />);
+		expect(screen.getByText('Reading this address.')).toBeDefined();
+		expect(container.textContent).not.toContain('One artifact from this run');
+		expect(container.textContent).not.toContain('Reading this artifact.');
+		// Nothing is fetched for it either, which is the rule that first frame exists to keep.
+		expect(host.artifacts).toEqual([]);
+
+		for (let turn = 0; turn < 6; turn += 1) {
+			await act(async () => undefined);
+		}
+
+		expect(screen.getByText('Everything filed under this directory.')).toBeDefined();
+		expect(screen.queryByText('Reading this address.')).toBeNull();
+		expect(host.artifacts).toEqual([]);
+	});
+
+	/*
+	 * **One cache, so a level read at one depth is not read again at the next** (#140 review). The
+	 * `<serial>` level a selected run reads used to be held by a second `useArchiveLevels` instance,
+	 * so navigating from the run into one of its files re-`readdir`ed it — invisible to every test,
+	 * because no case walked that route.
+	 */
+	it('does not re-read the `<serial>` level when a run is left for one of its files', async () => {
+		host.artifact = PNG;
+		host.answers = new Map(Object.entries(withScreenshots()));
+		at.splat = `checkout-app/login-flow/${RUN}`;
+
+		const { rerender } = render(<ArchiveScreen />);
+		for (let turn = 0; turn < 6; turn += 1) {
+			await act(async () => undefined);
+		}
+		expect(host.asked).toContainEqual(SERIAL_LEVEL);
+		const readSoFar = host.asked.length;
+
+		at.splat = AT_THE_FILE;
+		rerender(<ArchiveScreen />);
+		for (let turn = 0; turn < 6; turn += 1) {
+			await act(async () => undefined);
+		}
+
+		// One further listing, and it is the open file's own folder — not the `<serial>` again.
+		expect(host.asked.slice(readSoFar)).toEqual([SCREENSHOTS]);
 		expect(screen.getByAltText('001_screenshot.png')).toBeDefined();
 	});
 });

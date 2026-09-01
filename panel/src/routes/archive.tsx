@@ -8,7 +8,7 @@ import { componentsFromSplat, levelsOf, splatFromComponents } from '@panel/archi
 import { useArchivedArtifact } from '@panel/archive/artifact.js';
 import { type ArchivedDeviceInfo, useArchivedDeviceInfo } from '@panel/archive/device-info.js';
 import { ArtifactPreview } from '@panel/components/archive/artifact-preview.js';
-import { ArchiveNotReadable } from '@panel/components/archive/contents-card.js';
+import { ArchiveNotReadable, ReadingThisAddress } from '@panel/components/archive/contents-card.js';
 import { DirectoryTree } from '@panel/components/archive/directory-tree.js';
 import { LevelContents } from '@panel/components/archive/level-contents.js';
 import { RunPanel, type RunSerial } from '@panel/components/archive/run-panel.js';
@@ -54,7 +54,15 @@ export function ArchiveScreen() {
 	// `strict: false` is what lets one component serve both `/archive` and `/archive/$`.
 	const params = useParams({ strict: false });
 	const selected = componentsFromSplat(params._splat);
-	const levels = useArchiveLevels(levelsFor(selected));
+	/*
+	 * **One cache, asked as a function of itself** (`archive-levels.ts`). Some of these levels are
+	 * addressed by a path *derived from* an answer — a run's `<serial>` is the level above's
+	 * `onlyChild`, and the open folder's own listing is only wanted once its parent says it is a
+	 * folder — and a second hook instance for those gave the screen two caches that each re-read what
+	 * the other held (#140 review). `levelsWanted` is that derivation, run against what has answered
+	 * so far.
+	 */
+	const levels = useArchiveLevels((known) => levelsWanted(selected, known));
 	const inRun = selected.length >= BELOW_THE_SERIAL;
 	/*
 	 * What the open address turned out to be, out of the listing of the level above it — and *not*
@@ -65,14 +73,11 @@ export function ArchiveScreen() {
 	const open = inRun ? openEntryOf(levels, selected) : 'unanswered';
 	/*
 	 * The one extra level a selected run needs, and it can only be asked for once the level above
-	 * has answered: the `<serial>` directory's name is that answer's `onlyChild`. A second call
-	 * rather than one array because the paths this one wants are *derived from* what the first
-	 * returned, which no single list of levels can express. Inside the run it is the open folder's
-	 * own listing instead, for the same reason: what to ask for is derived from an answer.
+	 * has answered: the `<serial>` directory's name is that answer's `onlyChild`. Inside the run the
+	 * serial is in the address instead, so the level is a slice of the URL.
 	 */
 	const serial = serialOf(levels, selected);
 	const serialLevel = inRun ? selected.slice(0, SERIAL_DEPTH) : serialPath(selected, serial);
-	const derived = useArchiveLevels(derivedFor(selected, serialLevel, open));
 	/*
 	 * The run's `device_info.json`, read out of that same `<serial>` directory — the one thing on
 	 * this screen that is a file's contents rather than a listing (#136, #131's byte route). It is
@@ -100,17 +105,12 @@ export function ArchiveScreen() {
 					below={levels}
 					contents={levelAt(levels, serialLevel ?? [])}
 					device={device}
-					folder={open === 'directory' ? levelAt(derived, selected) : null}
+					folder={levelAt(levels, selected)}
+					open={open}
 					selected={selected}
 				/>
 			) : (
-				<Content
-					device={device}
-					levels={levels}
-					runContents={derived}
-					selected={selected}
-					serial={serial}
-				/>
+				<Content device={device} levels={levels} selected={selected} serial={serial} />
 			)}
 		</>
 	);
@@ -127,13 +127,11 @@ function Content({
 	selected,
 	levels,
 	serial,
-	runContents,
 	device,
 }: {
 	readonly selected: readonly string[];
 	readonly levels: ArchiveLevels;
 	readonly serial: RunSerial;
-	readonly runContents: ArchiveLevels;
 	readonly device: ArchivedDeviceInfo;
 }) {
 	const root = levelAt(levels, []);
@@ -159,12 +157,12 @@ function Content({
 			{selected.length === RUN_DEPTH ? (
 				/*
 				 * With no serial there is no level to read and `RunPanel` says so from `serial` alone
-				 * without looking at `contents`; `[]` is a path `runContents` never holds, so it reads
-				 * as `loading` and goes unused.
+				 * without looking at `contents`; `[]` is a path this cache never holds, so it reads as
+				 * `loading` and goes unused.
 				 */
 				<RunPanel
 					below={NO_EXPANSIONS}
-					contents={levelAt(runContents, serialPath(selected, serial) ?? [])}
+					contents={levelAt(levels, serialPath(selected, serial) ?? [])}
 					device={device}
 					open={null}
 					run={selected}
@@ -185,6 +183,12 @@ function Content({
  * `basis-*`**: the approved markup pins the preview to `lg:w-[580px]`, which makes the *split*
  * depend on the window, so the same screen shows different proportions on different monitors. §9
  * records the reversal.
+ *
+ * **Three cards go in that second slot, not two** (#140 review). *Nobody has said what this address
+ * is yet* is a third answer, and folding it into `artifact` made the screen assert *One artifact from
+ * this run* and *Reading this artifact* about a directory somebody deep-linked into — before its
+ * parent listing arrived to flip the column. `ReadingThisAddress` is the one thing that is true then,
+ * in the wording every other level of this screen already uses for the same wait.
  */
 function InsideTheRun({
 	selected,
@@ -192,14 +196,17 @@ function InsideTheRun({
 	below,
 	device,
 	folder,
+	open,
 	artifact,
 }: {
 	readonly selected: readonly string[];
 	readonly contents: ArchiveLevel;
 	readonly below: ArchiveLevels;
 	readonly device: ArchivedDeviceInfo;
-	/** The listing of the folder the address names, or `null` when it names an artifact. */
-	readonly folder: ArchiveLevel | null;
+	/** The listing of the address, read only once {@link open} says it is a folder. */
+	readonly folder: ArchiveLevel;
+	/** Which of the three the address turned out to be — {@link OpenEntry}. */
+	readonly open: OpenEntry;
 	readonly artifact: ReturnType<typeof useArchivedArtifact>;
 }) {
 	return (
@@ -219,17 +226,37 @@ function InsideTheRun({
 				 */
 				serial={{ status: 'answered', serial: selected[RUN_DEPTH] ?? null }}
 			/>
-			{folder === null ? (
-				<ArtifactPreview artifact={artifact} path={selected} />
-			) : (
-				<LevelContents level={folder} path={selected} />
-			)}
+			<OpenAddress artifact={artifact} folder={folder} open={open} selected={selected} />
 		</div>
 	);
 }
 
-/** Stable, so the hook's effect does not see a new array on every render. */
-const NO_LEVELS: readonly (readonly string[])[] = [];
+/**
+ * The second column inside a run, and it says nothing about the address its parent has not said.
+ *
+ * The order is the order the answers arrive in: *not known yet*, then the listing or the preview.
+ * The two that are known render exactly as they did; the third is the branch this used to be missing.
+ */
+function OpenAddress({
+	selected,
+	folder,
+	open,
+	artifact,
+}: {
+	readonly selected: readonly string[];
+	readonly folder: ArchiveLevel;
+	readonly open: OpenEntry;
+	readonly artifact: ReturnType<typeof useArchivedArtifact>;
+}) {
+	if (open === 'unanswered') {
+		return <ReadingThisAddress path={selected} />;
+	}
+	return open === 'directory' ? (
+		<LevelContents level={folder} path={selected} />
+	) : (
+		<ArtifactPreview artifact={artifact} path={selected} />
+	);
+}
 
 /** No level below a `<serial>` has been read, which is every state with the tree beside the run. */
 const NO_EXPANSIONS: ArchiveLevels = new Map();
@@ -242,7 +269,7 @@ const SERIAL_DEPTH = 4;
 const BELOW_THE_SERIAL = 5;
 
 /**
- * Which levels a selection needs read.
+ * Which levels a selection needs read — **one list, over one cache** (`archive-levels.ts`).
  *
  * Above a run: the prefixes of the path — **minus the run's own level when a run is selected.** A
  * run's contents are its `<serial>` directory, and that directory's name comes off the level above
@@ -253,33 +280,30 @@ const BELOW_THE_SERIAL = 5;
  * is drawn — the first is `CONTENTS` and the rest are its expansions — and the root, the project and
  * the test level are **not fetched at all**, because the tree is not there to need them. *Each one a
  * level actually drawn* is held rather than weakened.
- */
-function levelsFor(selected: readonly string[]): readonly (readonly string[])[] {
-	if (selected.length >= BELOW_THE_SERIAL) {
-		return Array.from({ length: selected.length - SERIAL_DEPTH }, (_unused, index) =>
-			selected.slice(0, SERIAL_DEPTH + index),
-		);
-	}
-	const levels = levelsOf(selected);
-	return selected.length === RUN_DEPTH ? levels.slice(0, -1) : levels;
-}
-
-/**
- * The one level whose address is derived from an answer rather than from the URL: the run's
- * `<serial>` above a run, and the open folder's own listing inside one.
  *
- * Inside a run the `<serial>` level is already in the first call, so it is deliberately not asked
- * for twice — and an artifact is not a level, so an address that names one derives nothing.
+ * **Two of these addresses are derived from an answer rather than from the URL**, which is why this
+ * takes the levels read so far: the run's `<serial>` is the level above's `onlyChild`, and the open
+ * address's own listing is wanted only once its parent says it is a folder. They were a second
+ * `useArchiveLevels` instance until #140's review — which meant the `<serial>` level a selected run
+ * read was held by the *other* cache, so opening a file under that run re-`readdir`ed it. Derived
+ * here, against `known`, the same key is asked for once across both depths.
  */
-function derivedFor(
+function levelsWanted(
 	selected: readonly string[],
-	serialLevel: readonly string[] | null,
-	open: OpenEntry,
+	known: ArchiveLevels,
 ): readonly (readonly string[])[] {
 	if (selected.length >= BELOW_THE_SERIAL) {
-		return open === 'directory' ? [selected] : NO_LEVELS;
+		const below = Array.from({ length: selected.length - SERIAL_DEPTH }, (_unused, index) =>
+			selected.slice(0, SERIAL_DEPTH + index),
+		);
+		// An artifact is not a level, so an address that names one adds nothing — and an address
+		// nobody has answered for yet adds nothing either, which is the whole of D22 here.
+		return openEntryOf(known, selected) === 'directory' ? [...below, selected] : below;
 	}
-	return serialLevel === null ? NO_LEVELS : [serialLevel];
+	const levels = levelsOf(selected);
+	const own = selected.length === RUN_DEPTH ? levels.slice(0, -1) : levels;
+	const serial = serialPath(selected, serialOf(known, selected));
+	return serial === null ? own : [...own, serial];
 }
 
 /**
@@ -324,8 +348,20 @@ const DESCRIPTIONS = [
 /** The design's own line for one open artifact, and it says what the preview claims: nothing more. */
 const ONE_ARTIFACT = 'One artifact from this run, as it was written.';
 
+/**
+ * The line for one address inside a run, and **`unanswered` gets the run's own line rather than the
+ * artifact's** (#140 review).
+ *
+ * *One artifact from this run* is a claim about what the address is, and before the parent listing
+ * arrives nobody has made it — a deep link into a folder read that sentence about a directory for as
+ * long as the listing took. The run's line is true of everything under a run either way, so it is
+ * what the header says until the answer decides between the other two.
+ */
 function descriptionFor(selected: readonly string[], open: OpenEntry): string {
 	if (selected.length >= BELOW_THE_SERIAL) {
+		if (open === 'unanswered') {
+			return DESCRIPTIONS[RUN_DEPTH] ?? '';
+		}
 		return open === 'directory' ? (DESCRIPTIONS[4] ?? '') : ONE_ARTIFACT;
 	}
 	return DESCRIPTIONS[Math.min(selected.length, DESCRIPTIONS.length - 1)] ?? '';

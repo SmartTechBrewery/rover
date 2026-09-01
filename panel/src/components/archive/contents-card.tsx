@@ -111,6 +111,27 @@ export function NotReadableInCard() {
 	);
 }
 
+/**
+ * The card for an address inside a run whose parent has not answered yet — **neither a listing nor a
+ * preview**, because which of the two it is, is the fact that has not arrived (#140 review).
+ *
+ * It is deliberately its own sentence. *Reading this level* would call a file a level and *Reading
+ * this artifact* would call a directory a file, and the whole point of this state is that the screen
+ * has not been told. One quiet `aria-live` line in the wording the rest of the screen uses, in the
+ * same card the answer will replace it in, so nothing about the layout moves when it does.
+ */
+export function ReadingThisAddress({ path }: { readonly path: readonly string[] }) {
+	return (
+		<ContentsCard header={<CardHeading>{path.at(-1) ?? ''}</CardHeading>}>
+			<div className="px-6 py-5">
+				<p aria-live="polite" className="font-code-md text-code-md text-on-surface-variant">
+					Reading this address.
+				</p>
+			</div>
+		</ContentsCard>
+	);
+}
+
 /** One quiet line, `aria-live` and no spinner — `devices.tsx`'s precedent, and §5 has no exception. */
 export function ReadingLevel() {
 	return (

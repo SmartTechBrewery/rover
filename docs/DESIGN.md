@@ -1137,7 +1137,41 @@ The layout is a function of the **depth alone**:
   name at all *is* asked for, because *nothing is filed at this address* is the byte route's answer to
   give rather than the screen's to invent.
 - One artifact at depth 6 therefore costs **four requests**: two listings, the run's
-  `device_info.json`, and the artifact.
+  `device_info.json`, and the artifact. **And it is four however you arrive**, which took a second
+  pass to be true (#140 review): the `<serial>` level and the open folder's listing are addressed by
+  paths *derived from* an answer, and holding those in a second cache meant the run's `<serial>` was
+  read once for the run and again for a file under it. One cache, asked as a function of what it
+  already holds (`archive-levels.ts`).
+- **Nothing is claimed about the address until its parent has answered.** Until then the header
+  carries the run's own line and the second column says *Reading this address.* — not *One artifact
+  from this run* and not *Reading this artifact*, which is a claim the screen has not been given
+  (#140 review). A deep link into a folder read both of those about a directory for as long as the
+  listing took.
+
+**The artifact's height bound is `max-h-[70vh]`, and it is viewport-relative because a percentage
+one does not resolve here.** `max-h-full` was the first attempt and it is inert: nothing above the
+artifact has a definite height — the card's `<section>` is `min-h-[400px]` at `height: auto`, its body
+is a `flex-1` item that stretches to its content — so `max-height: 100%` computes to `none` while
+`max-width: 100%` resolves normally, and the artifact came out **bounded by width alone**. Measured in
+headless Chrome at 1400x900 on the built chain (#140 review): a 1080x2400 screenshot was **576x1278**
+with the card 1372 px tall, the whole screen page-scrolling and the run column stretched blank beside
+it; under `70vh` it is **257x569** with the card 663 px. The same class bounds the `<video>` and, with
+`overflow-y-auto`, the text body — where a 5 000-line log (`MAX_LOG_ENTRIES`) grew the card to tens of
+thousands of pixels instead of scrolling in it, because the card's own `overflow-y-auto` has no
+definite height to overflow. So *contained, scaled down to fit* above and *in the card body's own
+scrolling region* below are both this bound rather than the card's, and **`max-*` is not what keeps a
+small screenshot at its own pixels** — no dimension being set at all is.
+
+**`Open in a new window` opens a document in the panel's own origin, and `nosniff` does not reach
+it.** The address is a `blob:` URL of bytes this tab fetched, so a top-level navigation to it is a
+same-origin document; `x-content-type-options: nosniff` is a header on the *host's* response
+(`src/daemon/http-listen.ts`) and does not travel with the blob, which is the one thing R37's safety
+argument was written for a direct fetch and does not cover here (#140 review). Nothing is exploitable
+today — `CONTENT_TYPES` serves only `image/png`, `video/mp4`, `text/plain` and `application/json`, all
+inert when navigated to, and `opaque` creates no URL at all. What holds it that way is an **allowlist
+of media types the panel will open**, in `tests/unit/panel/artifact-bodies.test.ts` beside the
+draw-it-at-all check: `.svg` or `.html` added to the host's table would pass *can the panel draw it*
+as `image` and `text`, and both are scriptable as a document, so that gate is what turns red instead.
 
 **The three deviations from the approved markup**, recorded rather than made silently: the preview is
 `flex-1 min-w-0` and not `lg:w-[580px] shrink-0` (above); the run column's header is the back arrow

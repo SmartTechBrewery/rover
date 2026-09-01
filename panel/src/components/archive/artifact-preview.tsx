@@ -27,7 +27,29 @@ import { CardHeading, ContentsCard } from './contents-card.js';
  * rotate; no filmstrip and no next/previous arrows, because `CONTENTS` is how another file is
  * chosen; no annotation, measurement or comparison tooling, because comparison is a different
  * screen's question.
+ *
+ * **The artifact's height bound is {@link ARTIFACT_MAX_HEIGHT}, and it is viewport-relative because
+ * a percentage one does not resolve here** (#140 review). Nothing above the artifact has a definite
+ * height — the card's `<section>` is `min-h-[400px]` with `height: auto`, and its body is a `flex-1`
+ * item that stretches to whatever is in it — so a `max-height: 100%` computes to `none` while
+ * `max-width: 100%` resolves normally. Measured in headless Chrome at 1400x900 on the built card
+ * chain: a 1080x2400 screenshot under `max-h-full` came out **576x1278** with the card 1372 px tall
+ * and its `overflow-y-auto` body never scrolling; under `max-h-[70vh]` it comes out **257x569** with
+ * the card 663 px. §9 records it.
  */
+/**
+ * What bounds an artifact's height, and it is one class in one place because three bodies share it.
+ *
+ * **Viewport-relative rather than a percentage**, for the reason this module's header measures: the
+ * card chain has no definite height, so `max-h-full` is inert and the artifact is bounded by width
+ * alone — which grew the whole screen to the height of one portrait screenshot and stretched the run
+ * column blank beside it. `70vh` leaves the header, the breadcrumb and the card's own strip visible
+ * above it at the window heights the shell is built for.
+ *
+ * Written out rather than composed, because Tailwind reads these class names out of the source text.
+ */
+const ARTIFACT_MAX_HEIGHT = 'max-h-[70vh]';
+
 export function ArtifactPreview({
 	path,
 	artifact,
@@ -128,15 +150,15 @@ function Body({
 	if (body.kind === 'image') {
 		return (
 			/*
-			 * Contained, centred, at its natural aspect ratio — **never stretched and never cropped**,
-			 * and `max-*` is also what stops a screenshot being scaled *up* past its own pixels: an
-			 * enlarged screenshot is a blurrier version of the evidence somebody opened it to read
-			 * (§10). The hairline border is the whole of what is laid around it.
+			 * Contained, centred, at its natural aspect ratio — **never stretched and never cropped**.
+			 * `max-*` caps it and **no dimension is set at all**, which is what keeps a small screenshot
+			 * at its own pixels: an enlarged screenshot is a blurrier version of the evidence somebody
+			 * opened it to read (§10). The hairline border is the whole of what is laid around it.
 			 */
 			<Region>
 				<img
 					alt={name}
-					className="block max-h-full max-w-full border border-outline-variant object-contain"
+					className={`block ${ARTIFACT_MAX_HEIGHT} max-w-full border border-outline-variant object-contain`}
 					src={body.url}
 				/>
 			</Region>
@@ -155,7 +177,7 @@ function Body({
 				 * Rover has none to write. An empty `<track>` would claim captions this file does not
 				 * carry, which is worse for a screen reader than the honest absence.
 				 */}
-				<video className="max-h-full max-w-full" controls src={body.url} />
+				<video className={`${ARTIFACT_MAX_HEIGHT} max-w-full`} controls src={body.url} />
 			</Region>
 		);
 	}
@@ -206,10 +228,16 @@ function Plain({ children }: { readonly children: ReactNode }) {
  *
  * The line wraps rather than being truncated, and the gutter stays aligned with the **first** row of
  * a wrapped line, which is what `items-start` on the row buys.
+ *
+ * **The lines scroll inside the card rather than growing it**, under the same
+ * {@link ARTIFACT_MAX_HEIGHT} the image and the recording take (#140 review). The card's own
+ * `overflow-y-auto` body cannot do it — it has no definite height to overflow — so a 5 000-line log
+ * (`MAX_LOG_ENTRIES`) made the page tens of thousands of pixels tall and page-scrolled the run
+ * column away beside it. Measured: 569 px tall over a 150 048 px `scrollHeight`, card 614 px.
  */
 function Lines({ lines }: { readonly lines: readonly string[] }) {
 	return (
-		<div className="min-h-full bg-surface p-6">
+		<div className={`min-h-full ${ARTIFACT_MAX_HEIGHT} overflow-y-auto bg-surface p-6`}>
 			<ol className="font-code-md text-[13px] text-on-surface-variant">
 				{lines.map((line, index) => (
 					/*
