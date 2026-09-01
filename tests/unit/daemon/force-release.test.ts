@@ -148,7 +148,12 @@ function createHarness(options: HarnessOptions = {}): Harness {
 			nowMs = instant;
 		},
 		async acquire(owner: string, serial: DeviceSerial = SERIAL): Promise<LeaseId> {
-			const result = await this.handlers.acquire_device({ serial, owner, project: 'rover' });
+			const result = await this.handlers.acquire_device({
+				serial,
+				owner,
+				project: 'rover',
+				testName: 'checkout flow',
+			});
 			if (result.outcome !== 'granted') {
 				throw new Error(`the acquire must be granted, got '${result.message}'`);
 			}
@@ -219,7 +224,7 @@ describe('force-releasing a held device', () => {
 				serial: SERIAL,
 				owner: 'issue-112',
 				project: 'rover',
-				testName: null,
+				testName: 'checkout flow',
 				grantedAt: new Date(START_MS).toISOString(),
 				// What the holder would have had left, which is why the projection is taken
 				// before the release rather than after it.

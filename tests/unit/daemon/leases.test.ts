@@ -60,7 +60,7 @@ function createObservedStore(ttlMs = LEASE_TTL_MS) {
 function request(
 	serial: DeviceSerial,
 	owner: string,
-	testName: string | null = null,
+	testName = 'checkout flow',
 	slot = createMockSlot(),
 ) {
 	return { serial, owner, project: 'rover', testName, slot };
@@ -128,14 +128,6 @@ describe('the three attribution strings', () => {
 			expect(outcome.lease.project).toBe(project);
 			expect(outcome.lease.testName).toBe(testName);
 		}
-	});
-
-	it('keeps an absent test name as null rather than inventing one', () => {
-		const { store } = createClockedStore();
-
-		const outcome = store.acquire(request(deviceA, 'issue-112'));
-
-		expect(outcome.granted && outcome.lease.testName).toBeNull();
 	});
 
 	it('grants two leases carrying the same test name — it is not unique (D22)', () => {
@@ -318,7 +310,7 @@ describe('use', () => {
 	it('carries the lease’s slot through a renewal untouched', () => {
 		const { store } = createClockedStore();
 		const slot = createMockSlot({ index: 3, portBase: 26_024 });
-		const granted = store.acquire(request(deviceA, 'issue-112', null, slot));
+		const granted = store.acquire(request(deviceA, 'issue-112', 'home screen', slot));
 		if (!granted.granted) throw new Error('the first acquire must be granted');
 
 		const renewed = store.use(granted.lease.id);

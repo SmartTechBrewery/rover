@@ -85,6 +85,7 @@ export async function acquireLease(agent: Client): Promise<string> {
 		serial: ARTIFACT_SERIAL,
 		owner: 'issue-90',
 		project: 'rover',
+		testName: 'checkout flow',
 	});
 	const answer = granted.structuredContent as { outcome: string; lease?: { leaseId: string } };
 	if (answer.outcome !== 'granted' || !answer.lease) {

@@ -10,7 +10,14 @@
  * wrote down: the `project` identifier in the hook file `ROVER_PROJECT_FILE` names (D22,
  * `src/daemon/project-hooks.ts`). Nothing is inferred from context there either — the flag
  * wins when both are present, and with no file configured the flag is required exactly as it
- * was. A refusal is the host's answer, not an error — it is rendered and exits 1.
+ * was.
+ *
+ * `--test-name` is required as well, and — the distinction worth keeping — unlike `--project`
+ * it has **no** file to fall back on: a lease names what it is checking, and that name is this
+ * lease's directory in the host's artifact archive (D22, as amended #129). A missing one is
+ * exit 2 here, with this command's usage, rather than a round trip the host refuses.
+ *
+ * A refusal is the host's answer, not an error — it is rendered and exits 1.
  */
 
 import { parseDeviceSerial } from '../../core/ids.js';
@@ -20,7 +27,6 @@ import {
 	attributionWithDefault,
 	expectPositionals,
 	GLOBAL_OPTIONS,
-	optionalAttribution,
 	parseCommandArgs,
 	requireAttribution,
 } from '../_shared/flags.js';
@@ -30,7 +36,7 @@ import { configuredProject } from '../_shared/project-file.js';
 
 export const USAGE = `rover acquire — take a lease on one device
 
-Usage: rover acquire <serial> --owner <string> --project <string> [--test-name <string>]
+Usage: rover acquire <serial> --owner <string> --project <string> --test-name <string>
                      [--host <name>] [--json]
 
   --owner        Who the lease is for. Required and never derived: it attributes the lease
@@ -39,10 +45,11 @@ Usage: rover acquire <serial> --owner <string> --project <string> [--test-name <
   --project      Which project the lease belongs to. Required, for the same reason —
                  unless ${PROJECT_FILE_ENV_VAR} names a project hook file, in which case
                  that file's own 'project' is used and this flag overrides it.
-  --test-name    What is being checked. Optional, and deliberately not unique.
+  --test-name    What is being checked. Required, and deliberately not unique. Unlike
+                 --project, no file stands in for it.
 
 Both name directories in the host's artifact archive, so two runs of one test name sit
-side by side there; an absent --test-name files under 'unlabeled'.
+side by side there.
 
 ${PROJECT_FILE_ENV_VAR} is read on this machine and nothing else in it reaches the host: a
 lease still carries the project as a plain string. A file it names that is missing or will
@@ -132,7 +139,13 @@ export async function run(argv: string[]): Promise<number> {
 		`a lease names the project it belongs to, and that is yours to state — or ` +
 			`${PROJECT_FILE_ENV_VAR}'s, naming a project hook file to take it from`,
 	);
-	const testName = optionalAttribution('acquire', 'test-name', values['test-name']);
+	const testName = requireAttribution(
+		'acquire',
+		'test-name',
+		values['test-name'],
+		'a lease names what it is checking, and that name is its directory in the ' +
+			"host's artifact archive",
+	);
 	const host = resolveHost(values.host);
 
 	const client = await connectToHost(host);

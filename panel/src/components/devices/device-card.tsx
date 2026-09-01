@@ -91,9 +91,8 @@ export function DeviceCard({
 					{/*
 					 * A null `osVersion` is a real answer — commonly a device waiting on its
 					 * authorization prompt — so the field says `unknown` rather than disappearing.
-					 * `TEST NAME`'s rule does not transfer: that field is genuinely optional, while
-					 * this is one of the card's two fixed columns and dropping it leaves the row
-					 * lopsided.
+					 * This is one of the card's two fixed columns, and dropping it leaves the row
+					 * lopsided, so the gap is named rather than closed up (`docs/DESIGN.md` §6).
 					 */}
 					<Field label="OS version" value={device.osVersion ?? 'unknown'} />
 				</dl>
@@ -146,13 +145,11 @@ function LeasePanel({
 			</div>
 			<dl className="mt-3 grid grid-cols-2 gap-3">
 				{/*
-				 * Omitted entirely when absent — no empty label and no `—` placeholder, so the panel
-				 * simply starts with `OWNER`. And never shortened to `TEST`, which reads as a
-				 * category and makes the panel look like something it is not (§2, third recurrence).
+				 * Never shortened to `TEST`, which reads as a category and makes the panel look like
+				 * something it is not (§2, third recurrence). Always present: a lease cannot be taken
+				 * without a test name (D22, as amended #129).
 				 */}
-				{lease.testName === null ? null : (
-					<Field className="col-span-2" label="Test name" value={lease.testName} tone="lease" />
-				)}
+				<Field className="col-span-2" label="Test name" value={lease.testName} tone="lease" />
 				<Field label="Owner" value={lease.owner} />
 				<Field label="Project" value={lease.project} />
 				{/*

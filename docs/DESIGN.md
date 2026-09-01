@@ -305,8 +305,7 @@ Held — the lease panel, in this order and for this reason:
 
 1. **`TEST NAME`**, full width, first. It is the only field that says *what is happening on the
    phone right now*; owner and project say who to go and ask about it, and the person scanning the
-   screen wants the first before the second. It is optional and often absent — when it is, the
-   panel simply starts with `OWNER`, with no gap, no empty label and no `—` placeholder.
+   screen wants the first before the second.
 2. `OWNER` and `PROJECT`, side by side.
 3. `GRANTED`, last.
 
@@ -353,9 +352,8 @@ data never had to answer, settled here.
 - **`model: null` falls back to the serial** in the header. The header's job is to identify the
   device, and the serial always can.
 - **`osVersion: null` renders `unknown`.** It is a real answer for a device waiting on its
-  authorization prompt, and this field is one of the card's two fixed columns — `TEST NAME`'s
-  disappear-entirely rule does not transfer, because that field is genuinely optional while dropping
-  this one leaves the row lopsided.
+  authorization prompt, and this field is one of the card's two fixed columns — dropping it would
+  leave the row lopsided, so the gap is named rather than closed up.
 - **`platform` is rendered verbatim, so it reads `android` and not the mock's `Android`.** A display
   table mapping one to the other would be a platform branch in shared code, which is the thing
   `ai/RULES.md` §2 exists to prevent; the wire value is what the host said.

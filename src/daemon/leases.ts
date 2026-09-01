@@ -10,10 +10,12 @@
  * the lease — `issue-112`, `pr-127-review`, later a run identity — and is never derived
  * from a process, a connection or whoever authenticated (D20). `project` and `testName`
  * exist so the artifact archive has somewhere to file the results (PROJECT.md §10). All
- * three are stored exactly as given and read by nothing here: no trimming, no defaulting,
- * no meaning. `testName` is deliberately **not** unique — running the same named check
- * before and after a change is two leases with one name, which is the point rather than a
- * collision to reject.
+ * three are **required**: a lease always names who it is for, which project it belongs to and
+ * what it is checking, so the archive's tree never branches on whether a field was supplied
+ * (D22, as amended #129). All three are stored exactly as given and read by nothing here: no
+ * trimming, no defaulting, no meaning. `testName` is deliberately **not** unique — running the
+ * same named check before and after a change is two leases with one name, which is the point
+ * rather than a collision to reject.
  *
  * **The TTL is renewed by activity, not by a heartbeat** (D8). {@link LeaseStore.use} is
  * what every verb call goes through, and it pushes the expiry out; there is nothing for a
@@ -59,8 +61,8 @@ export interface Lease {
 	readonly owner: string;
 	/** Caller-supplied. Names the archive's top-level partition (D22, PROJECT.md §10). */
 	readonly project: string;
-	/** Caller-supplied and optional; `null` when it was not given. Not unique (D22). */
-	readonly testName: string | null;
+	/** Caller-supplied and **required** — see the module header. Not unique (D22). */
+	readonly testName: string;
 	/**
 	 * When this lease was granted. The one host-local instant that *does* reach a client —
 	 * `./lease-holder.ts` renders it as a UTC string on `LeaseHolderSchema`, because a
@@ -96,7 +98,7 @@ export interface LeaseRequest {
 	readonly serial: DeviceSerial;
 	readonly owner: string;
 	readonly project: string;
-	readonly testName: string | null;
+	readonly testName: string;
 	/** Allocated by the caller, stored as given, interpreted by nothing here — see {@link Lease.slot}. */
 	readonly slot: Slot;
 }

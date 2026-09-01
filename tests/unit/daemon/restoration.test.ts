@@ -189,6 +189,7 @@ function createHarness(options: HarnessOptions = {}): Harness {
 				serial,
 				owner,
 				project: options.projectName ?? 'rover',
+				testName: 'checkout flow',
 			});
 			if (result.outcome !== 'granted') {
 				throw new Error(`the acquire must be granted, got '${result.message}'`);
@@ -800,6 +801,7 @@ describe('a project hook file, on both paths a lease can end', () => {
 			serial: SERIAL,
 			owner: 'issue-112',
 			project: HOOK_PROJECT,
+			testName: 'checkout flow',
 		});
 
 		// A file the host cannot read is a file whose helper services it cannot start, and
@@ -1063,6 +1065,7 @@ describe('a project hook file, on both paths a lease can end', () => {
 				serial: SERIAL,
 				owner: 'issue-112',
 				project: HOOK_PROJECT,
+				testName: 'checkout flow',
 			});
 
 			if (result.outcome !== 'refused') throw new Error('the acquire must be refused');

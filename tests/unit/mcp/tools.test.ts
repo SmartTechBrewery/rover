@@ -164,6 +164,7 @@ describe('the device tools over a live host', () => {
 		const granted = await callTool(agent, 'acquire_device', {
 			serial: 'attached-1',
 			owner: 'issue-112',
+			testName: 'checkout flow',
 		});
 
 		expect(granted.isError).toBeFalsy();
@@ -187,6 +188,7 @@ describe('the device tools over a live host', () => {
 			serial: 'attached-1',
 			owner: 'issue-112',
 			project: 'storefront',
+			testName: 'checkout flow',
 		});
 
 		expect(granted.structuredContent).toMatchObject({ lease: { project: 'storefront' } });
@@ -200,12 +202,32 @@ describe('the device tools over a live host', () => {
 		const result = await callTool(agent, 'acquire_device', {
 			serial: 'attached-1',
 			owner: 'issue-112',
+			testName: 'checkout flow',
 		});
 
 		// Refused by the SDK against the declaration, before the handler runs — which is why
 		// the declaration is what changes when a default exists, and never the handler alone.
 		expect(result.isError).toBe(true);
 		expect(textOf(result)).toContain('project');
+	});
+
+	it('refuses a call that omits testName — nothing defaults it (D22, as amended #129)', async () => {
+		registerFakeBackend();
+		await startHost();
+		// With a project hook file configured, so the one thing that can be defaulted is, and
+		// the refusal is unambiguously about the field that cannot.
+		const agent = await connectAgent('local', 'checkout-web');
+
+		const result = await callTool(agent, 'acquire_device', {
+			serial: 'attached-1',
+			owner: 'issue-112',
+			project: 'rover',
+		});
+
+		// Refused by the SDK against the declaration, so the requirement is surfaced to the
+		// agent rather than sent to the host to be answered as `invalid_params`.
+		expect(result.isError).toBe(true);
+		expect(textOf(result)).toContain('testName');
 	});
 
 	it('makes a refused acquire an error naming the holder, never a plausible success', async () => {
@@ -216,12 +238,14 @@ describe('the device tools over a live host', () => {
 			serial: 'attached-1',
 			owner: 'issue-112',
 			project: 'rover',
+			testName: 'checkout flow',
 		});
 
 		const refused = await callTool(agent, 'acquire_device', {
 			serial: 'attached-1',
 			owner: 'pr-127-review',
 			project: 'rover',
+			testName: 'checkout flow',
 		});
 
 		expect(refused.isError).toBe(true);
@@ -257,6 +281,7 @@ describe('what a tool does when the answer is not an answer', () => {
 			serial: '   ',
 			owner: 'issue-112',
 			project: 'rover',
+			testName: 'checkout flow',
 		});
 
 		expect(result.isError).toBe(true);

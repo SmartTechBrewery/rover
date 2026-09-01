@@ -141,7 +141,17 @@ async function start(): Promise<void> {
 /** A live lease on the fake device, through the CLI, because that is the only way to get one. */
 async function acquireLease(): Promise<string> {
 	expect(
-		await run(['acquire', attached.serial, '--owner', 'issue-85', '--project', 'rover', '--json']),
+		await run([
+			'acquire',
+			attached.serial,
+			'--owner',
+			'issue-85',
+			'--project',
+			'rover',
+			'--json',
+			'--test-name',
+			'checkout flow',
+		]),
 	).toBe(EXIT_OK);
 	const parsed = JSON.parse(logged[0] ?? '') as { lease?: { leaseId?: string } };
 	const leaseId = parsed.lease?.leaseId;

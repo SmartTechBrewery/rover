@@ -262,6 +262,7 @@ describe('who holds what, in a list reply', () => {
 			serial: attached.serial,
 			owner: 'issue-112',
 			project: 'rover',
+			testName: 'checkout flow',
 		});
 		if (granted.outcome !== 'granted') throw new Error('expected a granted lease');
 
@@ -282,6 +283,7 @@ describe('who holds what, in a list reply', () => {
 			serial: attached.serial,
 			owner: 'issue-112',
 			project: 'rover',
+			testName: 'checkout flow',
 		});
 		if (granted.outcome !== 'granted') throw new Error('expected a granted lease');
 		await client.request('release_device', { leaseId: granted.lease.leaseId });
@@ -299,6 +301,7 @@ describe('who holds what, in a list reply', () => {
 			serial: attached.serial,
 			owner: 'issue-112',
 			project: 'rover',
+			testName: 'checkout flow',
 		});
 
 		// Polled on the condition, never slept on: the expiry is observed by the read itself —

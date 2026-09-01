@@ -29,7 +29,7 @@ describe("the panel's mirror of list_devices", () => {
 		expect(held?.heldBy?.expiresInMs).toBe(1186759);
 		expect(held?.state).toBe('ready');
 
-		expect(parsed.devices[1]?.heldBy?.testName).toBeNull();
+		expect(parsed.devices[1]?.heldBy?.testName).toBe('the checkout flow');
 		expect(parsed.devices[2]?.model).toBeNull();
 		expect(parsed.devices[2]?.osVersion).toBeNull();
 		expect(parsed.devices[2]?.heldBy).toBeNull();

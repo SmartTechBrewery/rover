@@ -153,6 +153,7 @@ describe('a slot per lease, over the grant path', () => {
 			serial,
 			owner: 'pr-127-review',
 			project: 'rover',
+			testName: 'checkout flow',
 		});
 
 		expect(refused).toMatchObject({ outcome: 'refused', reason: 'held' });
@@ -207,6 +208,7 @@ describe('a slot per lease, over the grant path', () => {
 			serial: parseDeviceSerial('device-b'),
 			owner: 'pr-127-review',
 			project: 'rover',
+			testName: 'checkout flow',
 		});
 
 		// A refusal an agent can act on — release something and ask again — rather than a lease
@@ -301,7 +303,12 @@ function createHarness(options: HarnessOptions = {}): Harness {
 			nowMs = instant;
 		},
 		async acquire(serial: DeviceSerial, owner: string): Promise<LeaseId> {
-			const result = await handlers.acquire_device({ serial, owner, project: 'rover' });
+			const result = await handlers.acquire_device({
+				serial,
+				owner,
+				project: 'rover',
+				testName: 'checkout flow',
+			});
 			if (result.outcome !== 'granted') {
 				throw new Error(`the acquire must be granted, got '${result.message}'`);
 			}

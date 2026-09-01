@@ -23,7 +23,6 @@ import {
 	MAX_SEGMENT_LENGTH,
 	pathSegment,
 	resolveArtifactsRoot,
-	UNLABELED,
 } from '@/daemon/archive-path.js';
 import { createMockLease } from '../../helpers/factories.js';
 
@@ -125,10 +124,14 @@ describe('leaseArchiveDirectory', () => {
 		expect(parts[3]).toBe(lease.serial);
 	});
 
-	it('files an absent test name under the one fixed name, so the shape never branches', () => {
-		const lease = createMockLease({ testName: null });
+	it('always names the second segment after the test name, sanitised', () => {
+		const lease = createMockLease({ project: 'rover', testName: 'home screen' });
 
-		expect(leaseArchiveDirectory(ROOT, lease).split(sep)).toContain(UNLABELED);
+		const parts = leaseArchiveDirectory(ROOT, lease)
+			.slice(ROOT.length + 1)
+			.split(sep);
+
+		expect(parts[1]).toMatch(/^home_screen-[0-9a-f]{8}$/);
 	});
 
 	it('stays inside the root for every hostile string a caller could send', () => {

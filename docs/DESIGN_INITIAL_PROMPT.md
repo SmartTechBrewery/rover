@@ -39,7 +39,7 @@ outcome, a scope boundary, dependencies and a size — before anything is built.
 ## What has since been superseded
 
 **The prompt below is a record of what was sent, and is reproduced verbatim — including the parts
-that are no longer true.** Two of its statements have been overtaken:
+that are no longer true.** Three of its statements have been overtaken:
 
 - **"The panel is READ-ONLY, with exactly one action in it."** It is not read-only. `PROJECT.md`
   D27 settles what it may do: actions that are an authority over the shared device pool, of which
@@ -48,6 +48,11 @@ that are no longer true.** Two of its statements have been overtaken:
 - **"whatever shared navigation ties the four screens together."** That navigation is settled now
   and is not open to reinvention per screen. [`DESIGN.md`](./DESIGN.md) carries it, along with
   everything else the Devices screen established.
+- **"an optional test name"**, and **"Runs with no test name are grouped under 'unlabeled'."**
+  There are no such runs. #129 reversed that half of `PROJECT.md` D22: a lease always carries a
+  `test_name`, nothing writes an `unlabeled` directory any more, and the Archive screens have no
+  such grouping to draw. An `unlabeled/` already on a host's disk is left where it is and lists
+  like any other folder.
 
 Everything else in the prompt still holds, in particular that **Rover is not a test framework** —
 no pass/fail badge, status colour or success rate belongs anywhere in this UI.

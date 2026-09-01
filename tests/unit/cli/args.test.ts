@@ -173,9 +173,9 @@ describe('rover acquire, on its required attribution', () => {
 		expect(errored.join('\n')).toContain('--owner is required');
 	});
 
-	// The optional attribution string has to fail the same way the required pair does. Left to
-	// the host it is a round trip that comes back naming `testName` — a key the caller never
-	// typed — at exit 1, the code reserved for a refused acquire or an unreachable host.
+	// The third attribution string has to fail the same way the other two do. Left to the host it
+	// is a round trip that comes back naming `testName` — a key the caller never typed — at exit
+	// 1, the code reserved for a refused acquire or an unreachable host.
 	it('exits 2 for a --test-name given with no value, without reaching a host', async () => {
 		expect(
 			await run([
@@ -190,7 +190,19 @@ describe('rover acquire, on its required attribution', () => {
 			]),
 		).toBe(EXIT_USAGE);
 
-		expect(errored.join('\n')).toContain('--test-name was given with no value');
+		expect(errored.join('\n')).toContain('--test-name is required');
+		expect(errored.join('\n')).toContain('Usage: rover acquire');
+	});
+
+	// The CLI surfaces the requirement itself rather than sending an absent field and letting
+	// the host answer `invalid_params` at exit 1 (D22, as amended #129). Unlike `--project`,
+	// nothing stands in for it — there is no file to fall back on.
+	it('exits 2 for a missing --test-name, without reaching a host', async () => {
+		expect(await run(['acquire', 'serial-1', '--owner', 'issue-112', '--project', 'rover'])).toBe(
+			EXIT_USAGE,
+		);
+
+		expect(errored.join('\n')).toContain('--test-name is required');
 		expect(errored.join('\n')).toContain('Usage: rover acquire');
 	});
 
@@ -199,7 +211,16 @@ describe('rover acquire, on its required attribution', () => {
 		'project',
 		'test-name',
 	])('exits 2 for a --%s past the length the host accepts, naming the flag as typed', async (flag) => {
-		const argv = ['acquire', 'serial-1', '--owner', 'issue-112', '--project', 'rover'];
+		const argv = [
+			'acquire',
+			'serial-1',
+			'--owner',
+			'issue-112',
+			'--project',
+			'rover',
+			'--test-name',
+			'home screen',
+		];
 		const tooLong = 'x'.repeat(ATTRIBUTION_MAX_LENGTH + 1);
 		const at = argv.indexOf(`--${flag}`);
 		if (at === -1) {

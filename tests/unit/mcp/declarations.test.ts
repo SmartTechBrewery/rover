@@ -102,6 +102,9 @@ describe('what tools/list advertises', () => {
 		const acquire = tools.find((tool) => tool.name === 'acquire_device');
 		expect(acquire?.inputSchema.required).toEqual(shapeOf('acquire_device').required);
 		expect(acquire?.inputSchema.required).toContain('project');
+		// And `testName`, which the SDK then refuses a call without — the requirement surfaced
+		// upstream of the handler rather than left for the host to answer (D22, as amended #129).
+		expect(acquire?.inputSchema.required).toContain('testName');
 	});
 
 	it('drops project from acquire_device’s required list when one is, and changes nothing else', async () => {
@@ -114,6 +117,7 @@ describe('what tools/list advertises', () => {
 		// survive, and exactly one key moves.
 		expect(Object.keys(acquire?.inputSchema.properties ?? {})).toEqual(keys);
 		expect(acquire?.inputSchema.required).toEqual(required.filter((key) => key !== 'project'));
+		expect(acquire?.inputSchema.required).toContain('testName');
 		expect(acquire?.inputSchema.additionalProperties).toBe(false);
 		// And the agent is told there is a default and where it came from, rather than being
 		// left to infer it from an argument that is suddenly optional.

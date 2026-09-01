@@ -183,9 +183,7 @@ export function createLeaseHandlers(
 				serial: device.serial,
 				owner: params.owner,
 				project: params.project,
-				// `undefined` does not survive JSON, so an omitted name is stored and reported as
-				// `null` rather than as an absent key a client would have to special-case.
-				testName: params.testName ?? null,
+				testName: params.testName,
 				slot,
 			});
 

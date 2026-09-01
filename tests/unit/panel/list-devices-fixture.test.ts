@@ -20,9 +20,15 @@ import fixture from '../../fixtures/panel/list-devices.json' with { type: 'json'
  * **Where it came from, exactly** (`ai/TESTING.md`, "A wire answer is a fixture too, and it is filed
  * differently" — which is where the two bends below are recorded against the rule they bend). It was
  * captured over the panel's own HTTP surface from a daemon on API 35 with an emulator attached
- * (`sdk_gphone64_arm64`), in three reads: a lease taken with a `testName`, one taken without, and
- * the device free after a `force-release`. The one machine had one device, so the second entry
- * carries a second emulator's serial rather than a second capture's.
+ * (`sdk_gphone64_arm64`), in three reads: two leases taken with a `testName` each, and the device
+ * free after a `force-release`. The one machine had one device, so the second entry carries a
+ * second emulator's serial rather than a second capture's.
+ *
+ * The second entry's `testName` is the **third bend**, and a narrow one: it was captured as `null`,
+ * back when a lease could be taken without one. #129 made `test_name` required, so a `null` there
+ * is no longer an answer the daemon could give and the first assertion below would fail on the
+ * captured bytes. No device was attached to re-capture from, so that one field was hand-edited to
+ * a second project's test name and nothing else in the entry was touched.
  *
  * The **third entry is the one part that was not captured**, and it is worth saying which: a device
  * with no `model` and no `osVersion` is one sitting on its authorization prompt, which needs a
@@ -38,13 +44,22 @@ describe("the panel's list_devices fixture", () => {
 		expect(parsed.success).toBe(true);
 	});
 
-	it('carries the three nullable cases the Devices screen has to render', () => {
+	it('carries the two nullable cases the Devices screen has to render', () => {
 		const parsed = ListDevicesResultSchema.parse(fixture);
 
-		expect(parsed.devices.some((device) => device.heldBy?.testName === null)).toBe(true);
 		expect(parsed.devices.some((device) => device.model === null)).toBe(true);
 		expect(parsed.devices.some((device) => device.osVersion === null)).toBe(true);
-		// And a held device with every lease field filled in, which is what the card is mostly for.
-		expect(parsed.devices.some((device) => device.heldBy?.testName !== null)).toBe(true);
+	});
+
+	it('carries no lease without a test name — the field is required (D22, as amended #129)', () => {
+		const parsed = ListDevicesResultSchema.parse(fixture);
+		const held = parsed.devices.flatMap((device) =>
+			device.heldBy === null ? [] : [device.heldBy],
+		);
+
+		expect(held.length).toBeGreaterThan(1);
+		for (const holder of held) {
+			expect(holder.testName.length).toBeGreaterThan(0);
+		}
 	});
 });

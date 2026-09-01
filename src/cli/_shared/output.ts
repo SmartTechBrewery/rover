@@ -136,15 +136,15 @@ export function formatDuration(ms: number): string {
 }
 
 /**
- * `project <p>` or `project <p>, test <t>` — the caller's own attribution strings, echoed
- * and never interpreted (D16, D22), but escaped: echoing one is not the same as letting it
- * carry a line break into output that is read a line at a time.
+ * `project <p>, test <t>` — the caller's own attribution strings, echoed and never
+ * interpreted (D16, D22), but escaped: echoing one is not the same as letting it carry a line
+ * break into output that is read a line at a time.
+ *
+ * Both halves are always there: a lease cannot be taken without either string (D22, as
+ * amended #129), so there is no shorter form to render.
  */
-export function formatAttribution(project: string, testName: string | null): string {
-	const safeProject = escapeControlCharacters(project);
-	return testName === null
-		? `project ${safeProject}`
-		: `project ${safeProject}, test ${escapeControlCharacters(testName)}`;
+export function formatAttribution(project: string, testName: string): string {
+	return `project ${escapeControlCharacters(project)}, test ${escapeControlCharacters(testName)}`;
 }
 
 /**

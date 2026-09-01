@@ -129,9 +129,12 @@ export function registerDeviceTools(
 			description:
 				'Take a lease on one device by serial, so no other agent drives it while you do. ' +
 				'The returned `lease.leaseId` is the credential every later call carries and the only ' +
-				'thing that releases the lease — keep it. `owner`, `project` and the optional ' +
-				'`testName` are attribution you supply and they authorize nothing: say who this lease ' +
-				'is for. `owner` is never derived from a branch, a process or whoever authenticated. ' +
+				'thing that releases the lease — keep it. `owner`, `project` and `testName` are ' +
+				'attribution you supply and they authorize nothing: say who this lease is for. ' +
+				'`owner` is never derived from a branch, a process or whoever authenticated. ' +
+				"`testName` is required and names this lease's directory in the host's artifact " +
+				'archive; it is deliberately not unique, so two runs of one check sit side by side ' +
+				'there. ' +
 				(defaultProject === undefined
 					? ''
 					: `\`project\` may be left out here: this server was pointed at a project hook ` +

@@ -200,7 +200,9 @@ describe('acquire, list, release', () => {
 		await writeFile(path, JSON.stringify({ project: 'checkout-web' }), 'utf8');
 		vi.stubEnv(PROJECT_FILE_ENV_VAR, path);
 
-		expect(await run(['acquire', 'attached-1', '--owner', 'issue-112'])).toBe(EXIT_OK);
+		expect(
+			await run(['acquire', 'attached-1', '--owner', 'issue-112', '--test-name', 'checkout flow']),
+		).toBe(EXIT_OK);
 
 		// The lease is attributed to the file's identifier — and the grant says so, because a
 		// caller who never typed a project would otherwise have to guess what it names.
@@ -208,7 +210,7 @@ describe('acquire, list, release', () => {
 		expect(logged.join('\n')).toContain(path);
 		logged = [];
 		expect(await run(['list'])).toBe(EXIT_OK);
-		expect(logged.join('\n')).toContain('issue-112 (project checkout-web)');
+		expect(logged.join('\n')).toContain('issue-112 (project checkout-web, test checkout flow)');
 	});
 
 	it('lets --project override the file, and then says nothing about the file', async () => {
@@ -218,9 +220,18 @@ describe('acquire, list, release', () => {
 		await writeFile(path, JSON.stringify({ project: 'checkout-web' }), 'utf8');
 		vi.stubEnv(PROJECT_FILE_ENV_VAR, path);
 
-		expect(await run(['acquire', 'attached-1', '--owner', 'issue-112', '--project', 'rover'])).toBe(
-			EXIT_OK,
-		);
+		expect(
+			await run([
+				'acquire',
+				'attached-1',
+				'--owner',
+				'issue-112',
+				'--project',
+				'rover',
+				'--test-name',
+				'checkout flow',
+			]),
+		).toBe(EXIT_OK);
 
 		expect(logged.join('\n')).toContain('project rover');
 		expect(logged.join('\n')).not.toContain(path);
@@ -233,7 +244,17 @@ describe('acquire, list, release', () => {
 		await writeFile(path, JSON.stringify({ project: 'checkout-web' }), 'utf8');
 		vi.stubEnv(PROJECT_FILE_ENV_VAR, path);
 
-		expect(await run(['acquire', 'attached-1', '--owner', 'issue-112', '--json'])).toBe(EXIT_OK);
+		expect(
+			await run([
+				'acquire',
+				'attached-1',
+				'--owner',
+				'issue-112',
+				'--json',
+				'--test-name',
+				'checkout flow',
+			]),
+		).toBe(EXIT_OK);
 
 		// The wire is untouched by any of this: the grant carries `project` as the plain string
 		// it always was, and where this client read it is not part of what a script parses.
@@ -248,13 +269,31 @@ describe('acquire, list, release', () => {
 		registerFakeBackend();
 		await start();
 
-		expect(await run(['acquire', 'attached-1', '--owner', 'issue-112', '--project', 'rover'])).toBe(
-			EXIT_OK,
-		);
+		expect(
+			await run([
+				'acquire',
+				'attached-1',
+				'--owner',
+				'issue-112',
+				'--project',
+				'rover',
+				'--test-name',
+				'checkout flow',
+			]),
+		).toBe(EXIT_OK);
 
 		logged = [];
 		expect(
-			await run(['acquire', 'attached-1', '--owner', 'pr-127-review', '--project', 'rover']),
+			await run([
+				'acquire',
+				'attached-1',
+				'--owner',
+				'pr-127-review',
+				'--project',
+				'rover',
+				'--test-name',
+				'checkout flow',
+			]),
 		).toBe(EXIT_FAILED);
 
 		// A refusal is the host's answer, not a broken CLI — so it says who has the device and
@@ -267,7 +306,16 @@ describe('acquire, list, release', () => {
 	it('still writes the refusal document to stdout in --json mode, and still exits 1', async () => {
 		registerFakeBackend();
 		await start();
-		await run(['acquire', 'attached-1', '--owner', 'issue-112', '--project', 'rover']);
+		await run([
+			'acquire',
+			'attached-1',
+			'--owner',
+			'issue-112',
+			'--project',
+			'rover',
+			'--test-name',
+			'checkout flow',
+		]);
 
 		logged = [];
 		expect(
@@ -279,6 +327,8 @@ describe('acquire, list, release', () => {
 				'--project',
 				'rover',
 				'--json',
+				'--test-name',
+				'checkout flow',
 			]),
 		).toBe(EXIT_FAILED);
 
@@ -307,7 +357,16 @@ describe('rover force-release, over the socket', () => {
 		registerFakeBackend();
 		await start();
 		expect(
-			await run(['acquire', 'attached-1', '--owner', 'stuck-agent', '--project', 'rover']),
+			await run([
+				'acquire',
+				'attached-1',
+				'--owner',
+				'stuck-agent',
+				'--project',
+				'rover',
+				'--test-name',
+				'checkout flow',
+			]),
 		).toBe(EXIT_OK);
 
 		logged = [];
@@ -363,6 +422,8 @@ describe('rover force-release, over the socket', () => {
 				'--project',
 				'rover',
 				'--json',
+				'--test-name',
+				'checkout flow',
 			]),
 		).toBe(EXIT_OK);
 		const leaseId = grantedLeaseId(logged[0] ?? '');

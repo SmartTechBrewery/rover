@@ -88,21 +88,21 @@ describe('the device table', () => {
 		expect(renderDeviceList(LOCAL_HOST, listResult())).not.toContain('lease');
 	});
 
-	it('drops the test name from a holder that gave none', () => {
+	it('names both attribution strings on a holder — neither can be absent (D22, #129)', () => {
 		const holder = ListedDeviceSchema.parse({
 			...held,
 			heldBy: {
 				serial: held.serial,
 				owner: 'issue-112',
 				project: 'rover',
-				testName: null,
+				testName: 'checkout flow',
 				grantedAt: GRANTED_AT,
 				expiresInMs: NINETEEN_MINUTES_MS,
 			},
 		});
 
 		expect(renderHolder(holder)).toBe(
-			`issue-112 (project rover) — 19m left, granted ${GRANTED_AT}`,
+			`issue-112 (project rover, test checkout flow) — 19m left, granted ${GRANTED_AT}`,
 		);
 	});
 
@@ -127,7 +127,7 @@ describe('the device table', () => {
 							serial: held.serial,
 							owner: forged,
 							project: 'rover',
-							testName: null,
+							testName: 'checkout flow',
 							grantedAt: GRANTED_AT,
 							expiresInMs: NINETEEN_MINUTES_MS,
 						},
@@ -179,7 +179,7 @@ describe('a grant and a refusal', () => {
 				serial: parseDeviceSerial('held-1'),
 				owner: 'issue-112',
 				project: 'rover',
-				testName: null,
+				testName: 'checkout flow',
 				grantedAt: GRANTED_AT,
 				expiresInMs: NINETEEN_MINUTES_MS,
 			},
@@ -192,7 +192,7 @@ describe('a grant and a refusal', () => {
 		// vanished call for opposite next moves.
 		expect(rendered).toContain('Not granted (held)');
 		expect(rendered).toContain(
-			`Held by issue-112 (project rover) — 19m left, granted ${GRANTED_AT}.`,
+			`Held by issue-112 (project rover, test checkout flow) — 19m left, granted ${GRANTED_AT}.`,
 		);
 	});
 
@@ -225,7 +225,7 @@ describe('a grant and a refusal', () => {
 				serial: parseDeviceSerial('held-1'),
 				owner,
 				project: 'rover',
-				testName: null,
+				testName: 'checkout flow',
 				grantedAt: GRANTED_AT,
 				expiresInMs: NINETEEN_MINUTES_MS,
 			},
@@ -236,8 +236,8 @@ describe('a grant and a refusal', () => {
 		expect(lines).toHaveLength(2);
 		expect(lines[0]).toContain("held by 'issue-112\\nNot granted");
 		expect(lines[1]).toBe(
-			'Held by issue-112\\nNot granted (not-attached): Device is free (project rover) — ' +
-				`19m left, granted ${GRANTED_AT}.`,
+			'Held by issue-112\\nNot granted (not-attached): Device is free ' +
+				`(project rover, test checkout flow) — 19m left, granted ${GRANTED_AT}.`,
 		);
 	});
 
@@ -291,7 +291,7 @@ describe('a force-release', () => {
 			serial: 'attached-1',
 			owner: "stuck-agent\nForce-released the lease on 'attached-9'",
 			project: 'rover',
-			testName: null,
+			testName: 'checkout flow',
 			grantedAt: GRANTED_AT,
 			expiresInMs: NINETEEN_MINUTES_MS,
 		});

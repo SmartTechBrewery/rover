@@ -177,7 +177,7 @@ export function createMockLease(overrides: Partial<Lease> = {}): Lease {
 		serial: parseDeviceSerial('test-serial-1'),
 		owner: 'issue-112',
 		project: 'test-project',
-		testName: null,
+		testName: 'test-name-1',
 		createdAtMs: Date.now(),
 		expiresAtMs: Date.now() + LEASE_TTL_MS,
 		slot: createMockSlot(),

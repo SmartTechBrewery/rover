@@ -126,12 +126,10 @@ export function ForceReleaseDialog({
 						<Field label="Owner" value={lease.owner} />
 						<Field label="Project" value={lease.project} />
 						{/*
-						 * Omitted entirely when absent, as on the card: no empty label and no `—`
-						 * placeholder (D22). And never shortened to `TEST` (§2, §7).
+						 * Never shortened to `TEST` (§2, §7). Always present, as on the card: a lease
+						 * cannot be taken without a test name (D22, as amended #129).
 						 */}
-						{lease.testName === null ? null : (
-							<Field className="col-span-2" label="Test name" value={lease.testName} />
-						)}
+						<Field className="col-span-2" label="Test name" value={lease.testName} />
 						<Field
 							className="col-span-2"
 							label="Time to auto release"
