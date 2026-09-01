@@ -551,6 +551,22 @@ describe('only the panel’s methods are reachable, and no table gained a row', 
 		});
 	});
 
+	it('reaches list_archive, the archive\u2019s own read side', async () => {
+		registerFakeBackend();
+		await withStore();
+		const daemon = await startWithHttp();
+
+		const answer = await call(daemon, 'list_archive', { path: [] });
+
+		// On the allowlist since #130, so a browser can walk the archive one level at a time
+		// (D24). Nothing archived on this host yet, which is `missing` and not a refusal.
+		expect(envelopeOf(answer)).toMatchObject({
+			type: 'result',
+			id: 'req-1',
+			result: { outcome: 'missing' },
+		});
+	});
+
 	it('runs nothing it refused — the device is still free over the socket', async () => {
 		registerFakeBackend();
 		await withStore();
