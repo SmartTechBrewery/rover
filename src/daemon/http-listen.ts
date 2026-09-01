@@ -17,6 +17,19 @@
  * `IPC_METHODS` does not already hold — and **one request is one frame**, which is what makes
  * the allowlist below see every method a request can run; see {@link frameFor}.
  *
+ * **`GET /artifact/<component>/…` is the one route that answers bytes** (R37), and it is a route
+ * for the same reason `/session` is one, taken one step further: an artifact is *bytes*, and an
+ * envelope carries JSON. A `read_artifact` method would hand a recording back as base64 inside a
+ * frame — several megabytes inflated by a third, buffered whole on both sides, in a layer whose
+ * cap is 8 MiB — and a browser cannot point an `<img>` or a `<video>` at a method call anyway.
+ * So the address is a plain, deterministic `GET` URL whose components are exactly the ones
+ * `list_archive` answered with; there is no second path vocabulary for the archive, and no host
+ * path is ever composed by a caller (D19). `PANEL_METHODS` is untouched, because this is not a
+ * method. **Pasted into a bare tab it gets the one `401`**, and that is the design rather than a
+ * gap: a top-level navigation sends no `Authorization` header, and the alternative — a credential
+ * in the URL — is what D20 forbids outright. The panel's *Open in a new window* fetches the URL
+ * with its session header and opens the object URL it gets back.
+ *
  * **The token is a request header, never a URL.** `Authorization: Bearer <token>` (D20). The
  * query string is not read by anything in this module — there is no token-in-a-URL path to
  * support by accident — and nothing here logs: not an attempt, not a refusal, not a path. A URL
@@ -75,12 +88,19 @@
  * Node would otherwise answer those with a `400`, a `408`, a `417` or a bare `100 Continue`,
  * every one of them a pre-auth answer that varies with the reason.
  *
- * **So there are exactly two statuses**, and neither carries information the envelope does not:
- * `401`, the uniform refusal, and `200`, meaning the surface answered — *read the envelope*.
- * Dispatch outcomes are never mapped onto status codes, because `IpcErrorCodeSchema` is already
- * the complete error vocabulary and a second one in the status line is two sources of truth that
- * can disagree. The `/session` verbs answer within that same pair: a `200` and a small object, or
- * the one refusal.
+ * **Wherever an envelope is the answer there are exactly two statuses**, and neither carries
+ * information the envelope does not: `401`, the uniform refusal, and `200`, meaning the surface
+ * answered — *read the envelope*. Dispatch outcomes are never mapped onto status codes, because
+ * `IpcErrorCodeSchema` is already the complete error vocabulary and a second one in the status
+ * line is two sources of truth that can disagree. The `/session` verbs answer within that same
+ * pair: a `200` and a small object, or the one refusal.
+ *
+ * **The byte route is where that rule runs out, and only there.** Its reason does not reach a
+ * response that is a file: there is no envelope, so the status line is the *only* vocabulary
+ * there is, and `200`/`206`/`400`/`404`/`500` say what a body of bytes cannot. Every one of those
+ * is **post-auth** — the pre-auth uniform refusal is untouched, so no status a stranger can reach
+ * varies with the reason, and none of those bodies carries a path or an errno (D19); the
+ * diagnosis is on the host's own log, exactly as `list_archive`'s is.
  *
  * **Only the panel's methods are reachable here** — {@link PANEL_METHODS}, an allowlist and never
  * a second table. Every method still runs on the host either way (D19), so what this protects is
@@ -127,9 +147,15 @@ import {
 } from 'node:http';
 import { createServer as createHttpsServer, type Server as HttpsServer } from 'node:https';
 import { Duplex, PassThrough } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
 import { z } from 'zod';
 import { encodeFrame } from '../ipc/framing.js';
-import { type IpcMethodName, isIpcMethodName } from '../ipc/methods.js';
+import {
+	ArchivePathSegmentSchema,
+	type IpcMethodName,
+	isIpcMethodName,
+	MAX_ARCHIVE_PATH_DEPTH,
+} from '../ipc/methods.js';
 import {
 	type ErrorResponse,
 	type IpcErrorCode,
@@ -140,6 +166,7 @@ import {
 	UNAUTHENTICATED_REFUSAL,
 } from '../ipc/protocol.js';
 import type { IpcServer } from '../ipc/server.js';
+import type { ArchiveByteRange, ArchiveFileReader, OpenedArchiveFile } from './archive-file.js';
 import { type HttpListenerConfig, TLS_CERT_ENV_VAR, TLS_KEY_ENV_VAR } from './network-config.js';
 import {
 	createPanelSessionStore,
@@ -227,6 +254,50 @@ const RPC_PATH = '/rpc';
 const SESSION_PATH = '/session';
 
 /**
+ * The byte route's prefix, everything after it being one archive path component per segment.
+ *
+ * **Singular, and `/artifact/` rather than `/archive/`.** The panel already owns the client route
+ * `/archive` (`panel/src/routes/archive.tsx`), which the preview screen extends with the path of
+ * the open file; the panel is same-origin in production — the daemon will serve `panel/dist` from
+ * this very listener — and is proxied per prefix in development, so a host route at `/archive/…`
+ * would shadow the screen that browses the archive. This one names one artifact.
+ */
+const ARTIFACT_PATH_PREFIX = '/artifact/';
+
+/**
+ * The whole address, as a schema, and **`ArchivePathSegmentSchema` is imported rather than
+ * copied**: the components this route takes are by construction the components `list_archive`
+ * answers with, and two schemas agreeing by hand is exactly what "one path vocabulary for the
+ * archive" forbids. `.min(1)` because this route addresses a *file*, so the root itself — which
+ * `list_archive` addresses as `[]` — is not an artifact.
+ */
+const ArtifactPathSchema = z.array(ArchivePathSegmentSchema).min(1).max(MAX_ARCHIVE_PATH_DEPTH);
+
+/**
+ * `Range: bytes=<a>-<b>` / `bytes=<a>-` / `bytes=-<n>`, and nothing else.
+ *
+ * A multi-range header, a malformed one and a unit that is not `bytes` all fail to match, and a
+ * non-match is **ignored** rather than answered — see {@link rangeIn}.
+ */
+const SINGLE_BYTE_RANGE = /^bytes=(\d*)-(\d*)$/;
+
+/** Headers every response from the byte route carries, whatever its status. See {@link serveArtifact}. */
+const ARTIFACT_HEADERS = {
+	// This route serves same-origin bytes whose *names* this host did not choose, and an
+	// `application/octet-stream` a browser is allowed to sniff can become HTML executing script in
+	// the panel's own origin. The extension allowlist plus this header is what closes that. A CSP
+	// was considered and dropped: `sandbox` governs a document and does nothing for an `<img>` or
+	// `<video>` subresource, which is what the preview actually is.
+	'x-content-type-options': 'nosniff',
+	// An artifact is immutable once written, but the tree it sits in is written to while it is read
+	// and a stale copy of somebody else's run in a shared cache is worth nothing to anyone.
+	'cache-control': 'no-store',
+	// Advertised on every answer, not only on a `206`: a browser reads it off the first response
+	// and it is what makes Safari attempt a `<video>` at all.
+	'accept-ranges': 'bytes',
+} as const;
+
+/**
  * The sign-in body, and the only thing this surface will read from a peer it has not
  * authenticated. `.strict()` so an unexpected key is a refusal rather than something ignored —
  * there is nothing else a browser has to send, and a body carrying more is not one this host
@@ -262,7 +333,13 @@ export interface HttpListenerOptions {
 
 /**
  * Read the TLS material if any was configured, bind `address:port`, and serve every
- * authenticated request through `ipcServer`.
+ * authenticated request through `ipcServer` — or, on the byte route, through `archiveFiles`.
+ *
+ * `archiveFiles` is positional like `ipcServer` and deliberately **not** on
+ * {@link HttpListenerOptions}: that is documented as a test seam rather than a configuration
+ * surface, and this is one of the two things the listener serves. The listener is handed the
+ * *reader* and not the archive root, which is what keeps every filesystem and path decision in
+ * `./archive-file.ts` and out of this module.
  *
  * Rejects rather than degrading, exactly as `startNetworkListener` does: unreadable certificate
  * material and a refused bind are both misconfigurations the operator has to see, and a host
@@ -272,6 +349,7 @@ export interface HttpListenerOptions {
 export async function startHttpListener(
 	config: HttpListenerConfig,
 	ipcServer: IpcServer,
+	archiveFiles: ArchiveFileReader,
 	options: HttpListenerOptions = {},
 ): Promise<HttpListener> {
 	const authTimeoutMs = options.authTimeoutMs ?? AUTH_TIMEOUT_MS;
@@ -314,7 +392,7 @@ export async function startHttpListener(
 		// The `.catch` is a backstop, not a path: everything below answers rather than throwing.
 		// Anything left is a bug, and a bug here must drop the connection rather than become an
 		// unhandled rejection that takes the whole daemon down.
-		void handleRequest(request, response, config, ipcServer, sessions).catch(() => {
+		void handleRequest(request, response, config, ipcServer, archiveFiles, sessions).catch(() => {
 			response.destroy();
 		});
 	});
@@ -418,6 +496,7 @@ async function handleRequest(
 	response: ServerResponse,
 	config: HttpListenerConfig,
 	ipcServer: IpcServer,
+	archiveFiles: ArchiveFileReader,
 	sessions: PanelSessionStore,
 ): Promise<void> {
 	// Only the path, never the query: a credential must never be readable out of a URL, so there
@@ -441,6 +520,11 @@ async function handleRequest(
 
 	if (path === SESSION_PATH) {
 		describeOrEndSession(request, response, sessions, authenticated);
+		return;
+	}
+
+	if (request.method === 'GET' && path.startsWith(ARTIFACT_PATH_PREFIX)) {
+		await serveArtifact(request, response, archiveFiles, path);
 		return;
 	}
 
@@ -729,6 +813,147 @@ function describeOrEndSession(
 	refuse(response);
 }
 
+/**
+ * `GET /artifact/<component>/…`: one archived file's bytes, behind the gate like everything else.
+ *
+ * Five statuses, and each says something a body of bytes cannot: `200` the file, `206` a
+ * satisfied `Range`, `400` an address no listing could have answered, `404` nothing is there,
+ * `500` something is there and this host will not serve it through this route. `missing` and
+ * `unreadable` are `list_archive`'s own words, so the archive answers with one vocabulary on both
+ * of its reads — and neither body carries a path or an errno, which is the rule
+ * `ListArchiveResultSchema` enforces by having no field one would fit in (D19).
+ *
+ * **Nothing is opened for a response nobody is on the other end of.** The writability check comes
+ * first, and the file is closed on every path that does not stream it — including the peer that
+ * hangs up mid-recording, which is an ordinary outcome here rather than an error.
+ */
+async function serveArtifact(
+	request: IncomingMessage,
+	response: ServerResponse,
+	archiveFiles: ArchiveFileReader,
+	path: string,
+): Promise<void> {
+	if (!response.writable) {
+		return;
+	}
+
+	const components = componentsOf(path);
+	if (components === undefined) {
+		writeOutcome(response, 400, 'invalid_path');
+		return;
+	}
+
+	const opened = await archiveFiles.open(components);
+	if (opened.outcome === 'missing') {
+		writeOutcome(response, 404, 'missing');
+		return;
+	}
+	if (opened.outcome === 'unreadable') {
+		writeOutcome(response, 500, 'unreadable');
+		return;
+	}
+
+	await streamArtifact(
+		response,
+		opened.file,
+		rangeIn(request.headers.range, opened.file.sizeBytes),
+	);
+}
+
+/** Head the response and pump the file into it, releasing the handle whatever happens. */
+async function streamArtifact(
+	response: ServerResponse,
+	file: OpenedArchiveFile,
+	range: ArchiveByteRange | undefined,
+): Promise<void> {
+	if (!response.writable) {
+		await file.close().catch(() => {});
+		return;
+	}
+
+	const length = range === undefined ? file.sizeBytes : range.end - range.start + 1;
+	response.writeHead(range === undefined ? 200 : 206, {
+		...ARTIFACT_HEADERS,
+		'content-type': file.contentType,
+		'content-length': length,
+		...(range === undefined
+			? {}
+			: { 'content-range': `bytes ${range.start}-${range.end}/${file.sizeBytes}` }),
+	});
+
+	try {
+		await pipeline(file.stream(range), response);
+	} catch {
+		// A browser navigating away mid-recording produces one of these on every seek, and the
+		// headers are already out, so there is nothing left to say on the wire. It must not become
+		// an unhandled rejection: `stream()` closes its own handle on a destroy, and the response is
+		// torn down so a half-sent body is not mistaken for a whole one.
+		response.destroy();
+	}
+}
+
+/**
+ * The archive path components in a request target, or `undefined` for an address no listing could
+ * have answered with.
+ *
+ * **Decoding happens before validation**, which is the whole point of doing it here: `%2F` and
+ * `%00` are then refused by `ArchivePathSegmentSchema` rather than smuggled past it as an
+ * already-encoded string. A malformed escape throws `URIError` out of `decodeURIComponent`, which
+ * is likewise an address no listing produced.
+ */
+function componentsOf(path: string): string[] | undefined {
+	const segments = path.slice(ARTIFACT_PATH_PREFIX.length).split('/');
+	let decoded: string[];
+	try {
+		decoded = segments.map((segment) => decodeURIComponent(segment));
+	} catch {
+		return undefined;
+	}
+	const parsed = ArtifactPathSchema.safeParse(decoded);
+	return parsed.success ? parsed.data : undefined;
+}
+
+/**
+ * The one byte range a `Range` header asks for, or `undefined` to serve the whole file.
+ *
+ * **Range is supported for one reason that is an acceptance criterion rather than a nicety:
+ * Safari will not play a `<video>` without it.** It issues `Range: bytes=0-1` first and a server
+ * that answers `200` gets no playback at all. Seeking in a long recording is the second reason.
+ *
+ * **Everything that is not one satisfiable `bytes=` range is ignored and the whole file served**
+ * — a multi-range header, a malformed one, an unsatisfiable one, a unit that is not `bytes`, and
+ * every range against an empty file. RFC 9110 says a server MAY ignore the header, and taking
+ * that permission removes `416` and every partial-content edge case from this route. A client
+ * that needed the slice reads `content-length` and gets the file it asked about either way.
+ */
+function rangeIn(header: string | undefined, sizeBytes: number): ArchiveByteRange | undefined {
+	if (header === undefined || sizeBytes === 0) {
+		return undefined;
+	}
+	const matched = SINGLE_BYTE_RANGE.exec(header.trim());
+	if (matched === null) {
+		return undefined;
+	}
+
+	const [, first = '', last = ''] = matched;
+	if (first === '') {
+		// `bytes=-<n>`: the last `n` bytes. `n` of 0 asks for nothing, which is not a range.
+		const suffix = Number(last);
+		return last === '' || suffix === 0
+			? undefined
+			: { start: Math.max(0, sizeBytes - suffix), end: sizeBytes - 1 };
+	}
+
+	const start = Number(first);
+	// `Number` cannot be `NaN` here — the pattern matched digits — but it can be past the end,
+	// which RFC 9110 calls unsatisfiable and this route serves whole rather than refusing.
+	if (start >= sizeBytes) {
+		return undefined;
+	}
+	const end = last === '' ? sizeBytes - 1 : Math.min(Number(last), sizeBytes - 1);
+	return end < start ? undefined : { start, end };
+}
+
 /** Which credential a request presented, once it has turned out to be a real one. */
 type Authenticated =
 	| { readonly kind: 'session'; readonly id: string; readonly identity: PanelSessionIdentity }
@@ -830,6 +1055,31 @@ function answer(
  */
 function answerJson(response: ServerResponse, value: unknown): void {
 	write(response, 200, JSON.stringify(value), { noStore: true });
+}
+
+/**
+ * The byte route's non-success answer: a status, and one word for what happened.
+ *
+ * `{"outcome": …}` and nothing else, deliberately: the word is the same vocabulary
+ * `ListArchiveResultSchema` uses, and there is no `message` field for a path or an errno to fit
+ * in (D19). {@link ARTIFACT_HEADERS} rides along so a refusal is as un-sniffable and as
+ * un-cacheable as an answer.
+ */
+function writeOutcome(
+	response: ServerResponse,
+	status: number,
+	outcome: 'invalid_path' | 'missing' | 'unreadable',
+): void {
+	if (!response.writable) {
+		return;
+	}
+	const body = JSON.stringify({ outcome });
+	response.writeHead(status, {
+		...ARTIFACT_HEADERS,
+		'content-type': 'application/json',
+		'content-length': Buffer.byteLength(body, 'utf8'),
+	});
+	response.end(body);
 }
 
 interface WriteOptions {

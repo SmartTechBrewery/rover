@@ -31,6 +31,7 @@ import type { IpcHandlers } from '../ipc/methods.js';
 import type { IpcServer } from '../ipc/server.js';
 import { createIpcServer } from '../ipc/server.js';
 import { type ArtifactArchive, createArtifactArchive } from './archive.js';
+import { type ArchiveFileReader, createArchiveFileReader } from './archive-file.js';
 import { type HttpListener, startHttpListener } from './http-listen.js';
 import { createDeviceInventory, type DeviceInventory } from './inventory.js';
 import { createLeaseHandlers } from './lease-handlers.js';
@@ -270,6 +271,11 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartRes
 	// creates no directory until a verb call actually produces bytes, so a loser of the bind
 	// leaves nothing behind here either — not even an empty root.
 	const archive = createArtifactArchive({ root: options.artifactsRoot });
+	// The byte half of the archive's read side (R37), built beside the writer and off the same
+	// root, so the reader can never be pointed at a different tree from the writer. It touches no
+	// disk on construction — not even to resolve the root, which it does on the first request that
+	// finds it — so a loser of the bind leaves nothing behind here either.
+	const archiveFiles = createArchiveFileReader({ root: options.artifactsRoot });
 	// And built before the store for the same reason: the store's end hook drops this lease's
 	// record of what the grant started. It starts nothing on construction — a project's services
 	// only ever come up for a lease that was granted — so a loser of the bind leaves nothing
@@ -333,6 +339,7 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartRes
 
 	const parts: DaemonParts = {
 		ipcServer,
+		archiveFiles,
 		inventory,
 		leases,
 		restorer,
@@ -359,6 +366,8 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartRes
  */
 interface DaemonParts {
 	readonly ipcServer: IpcServer;
+	/** Only the HTTP listener consumes this: an artifact's bytes are a route, not a method. */
+	readonly archiveFiles: ArchiveFileReader;
 	readonly inventory: DeviceInventory;
 	readonly leases: LeaseStore;
 	readonly restorer: DeviceRestorer;
@@ -457,7 +466,7 @@ async function running(
 	// degradation, one transport along. `close()` above already takes down whatever did come up.
 	if (parts.http !== undefined) {
 		try {
-			http = await startHttpListener(parts.http, parts.ipcServer);
+			http = await startHttpListener(parts.http, parts.ipcServer, parts.archiveFiles);
 		} catch (error) {
 			await close();
 			throw error;
