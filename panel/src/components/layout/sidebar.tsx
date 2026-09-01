@@ -1,15 +1,19 @@
 import { Wordmark } from '@panel/components/wordmark.js';
 import { Link, useRouterState } from '@tanstack/react-router';
-import { Archive, CircleUser, CircuitBoard, Terminal } from 'lucide-react';
+import { Archive, CircleUser, Smartphone, Terminal } from 'lucide-react';
 
 /**
  * The three destinations, in the order `docs/DESIGN.md` §3 settles them. `Archive`, not
  * `History` — it is a browsable tree rather than a chronological log — and `System` stands in
  * for settings. There is no `Analytics` item and there will not be one: Rover aggregates
  * nothing and scores nothing.
+ *
+ * `Devices` carries the same phone the device cards do. The design markup emits
+ * `developer_board` there, and §3 supersedes it on purpose (#141) — a circuit board reads as a
+ * dev board, and Rover leases phones.
  */
 const NAV_ITEMS = [
-	{ label: 'Devices', to: '/devices', Icon: CircuitBoard },
+	{ label: 'Devices', to: '/devices', Icon: Smartphone },
 	{ label: 'Archive', to: '/archive', Icon: Archive },
 	{ label: 'System', to: '/system', Icon: Terminal },
 ] as const;

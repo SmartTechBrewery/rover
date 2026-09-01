@@ -109,6 +109,22 @@ the main nav.
   whole page, not a widget beside the navigation.
 - The active item carries the green accent (`tertiary`, `#00e29d`).
 
+**The nav icons — settled (#141).** `Devices` is a **phone**, `Archive` a box, `System` a prompt
+and `Profile` a person: `Smartphone`, `Archive`, `Terminal` and `CircleUser` from `lucide-react`.
+The three main items are drawn at `size={20} strokeWidth={2}`; `Profile` is 18, matching the
+smaller label it sits beside at the foot.
+
+**`Devices` deliberately supersedes the screen here.** `Home — Devices (V3)` emits
+`data-icon="developer_board"` for that item, and `CircuitBoard` was a faithful translation of it —
+but a circuit board reads as "hardware in the abstract", or as a dev board, and Rover leases
+phones. The same markup already uses `smartphone` in four places, every one of them on a device
+card, and §5 settles the phone for the card header, the free panel and the stale-list body; the one
+place that *names* the destination was the only one using a different metaphor for it. The screen
+is not regenerated for a single glyph — per §0 this document is what it should have been, so an
+agent rebuilding the shell from that markup takes the phone from here, not `developer_board` from
+there. `Archive`, `System` and `Profile` are unchanged from the screen (`inventory_2`, `terminal`,
+`account_circle`).
+
 **Breadcrumb, and no page title.** There is no `<h1>`: the breadcrumb *is* the page's identity.
 Both said `Devices`, one line apart, and the breadcrumb already says it in the colour that means
 "you are here" — the heading repeated it and earned nothing. It states **depth in the current
