@@ -35,7 +35,8 @@ const IDENTITY = { identifier: 'panel', displayName: 'Panel' };
 
 /** Every state as one readable string, so a test asserts on the machine and not on a render. */
 function Probe() {
-	const { state, signIn, signOut, onRefusal, call, readArtifactText } = useSession();
+	const { state, signIn, signOut, onRefusal, call, readArtifactText, readArtifactBytes } =
+		useSession();
 	// What the last sign-out reported. `Profile` is the screen that has to say this out loud, and
 	// the outcome is the only way it can (`session-provider.tsx`, `SignOutOutcome`).
 	const [outcome, setOutcome] = useState('');
@@ -86,6 +87,16 @@ function Probe() {
 				type="button"
 			>
 				read
+			</button>
+			<button
+				onClick={() => {
+					void readArtifactBytes(['a-run', 'screenshots', '001_screenshot.png']).then((given) =>
+						setAnswer(given.ok ? `ok:${given.value.outcome}` : given.refusal),
+					);
+				}}
+				type="button"
+			>
+				fetch
 			</button>
 		</div>
 	);
@@ -488,5 +499,42 @@ describe('a call carrying the session', () => {
 		await waitFor(() => expect(answer()).toBe('unanswered'));
 
 		expect(fetchMock).not.toHaveBeenCalled();
+	});
+
+	/*
+	 * The bytes read is the same wrapper over the same route (#133), and it is the one the preview
+	 * uses — so the guarantee has to hold on it too: the session is a header this module attaches, a
+	 * refusal bounces here rather than at the call site, and with no id held nothing is asked.
+	 */
+	it('fetches no artifact at all with no session held', async () => {
+		mount();
+
+		press('fetch');
+		await waitFor(() => expect(answer()).toBe('unanswered'));
+
+		expect(fetchMock).not.toHaveBeenCalled();
+	});
+
+	it('fetches an artifact with the held session, and bounces on a refusal there too', async () => {
+		await signedIn();
+		fetchMock.mockResolvedValue({
+			status: 200,
+			ok: true,
+			headers: { get: () => 'image/png' },
+			blob: async () => new Blob(['the-png-bytes'], { type: 'image/png' }),
+		} as unknown as Response);
+
+		press('fetch');
+		await waitFor(() => expect(answer()).toBe('ok:read'));
+
+		const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+		expect(url).toBe('/artifact/a-run/screenshots/001_screenshot.png');
+		expect((init.headers as Record<string, string>).authorization).toBe('Bearer a-session-id');
+		expect(url).not.toContain('a-session-id');
+
+		fetchMock.mockResolvedValue({ status: 401, ok: false } as unknown as Response);
+		press('fetch');
+		await waitFor(() => expect(state()).toBe('access-ended'));
+		expect(stored()).toBeNull();
 	});
 });

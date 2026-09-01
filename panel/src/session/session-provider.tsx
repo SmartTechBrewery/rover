@@ -8,6 +8,7 @@ import {
 	useState,
 } from 'react';
 import {
+	type ArchivedArtifact,
 	type ArchivedFile,
 	signOut as endSession,
 	type HostAnswer,
@@ -15,6 +16,7 @@ import {
 	signIn as mintSession,
 	type RpcEnvelope,
 	readArtifactText as readArtifact,
+	readArtifactBytes as readBytes,
 	rpc,
 	whoAmI,
 } from './host-client.js';
@@ -116,6 +118,15 @@ export interface Session {
 	 * once on navigation, not a poll with an interval to spend (`host-client.ts`, `rpc`).
 	 */
 	readonly readArtifactText: (path: readonly string[]) => Promise<HostAnswer<ArchivedFile>>;
+	/**
+	 * One archived file's **bytes**, for the file a browser renders rather than one the panel parses
+	 * — {@link readArtifactText}'s sibling, wrapped for its reasons and with its rules (#133).
+	 *
+	 * It exists because an authenticated route cannot be an `<img src>`: a subresource fetch carries
+	 * no `Authorization` header and gets the host's uniform refusal, so the panel fetches the bytes
+	 * with the session header and hands the browser an object URL (`host-client.ts`).
+	 */
+	readonly readArtifactBytes: (path: readonly string[]) => Promise<HostAnswer<ArchivedArtifact>>;
 }
 
 const SessionContext = createContext<Session | undefined>(undefined);
@@ -279,7 +290,31 @@ export function SessionProvider({ children }: { readonly children: ReactNode }) 
 		[onRefusal],
 	);
 
-	const value: Session = { state, signIn, signOut, onRefusal, call, readArtifactText };
+	const readArtifactBytes = useCallback(
+		async (path: readonly string[]): Promise<HostAnswer<ArchivedArtifact>> => {
+			const live = session.current;
+			if (live === undefined) {
+				return { ok: false, refusal: 'unanswered' };
+			}
+			const answer = await readBytes(live, path);
+			if (!answer.ok && answer.refusal === 'refused') {
+				// `call`'s reason again, and the same one place that knows how to perform the bounce.
+				onRefusal();
+			}
+			return answer;
+		},
+		[onRefusal],
+	);
+
+	const value: Session = {
+		state,
+		signIn,
+		signOut,
+		onRefusal,
+		call,
+		readArtifactText,
+		readArtifactBytes,
+	};
 
 	return <SessionContext.Provider value={value}>{children}</SessionContext.Provider>;
 }

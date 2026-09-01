@@ -12,6 +12,15 @@ import { keyOf } from './archive-path.js';
  * time* is structural — at most four requests at the deepest point, each one a level on the screen,
  * and no shape here can express a walk.
  *
+ * **It asks as a function of what it already knows, which is why there is one instance of it and not
+ * two** (#140 review). Some of the Archive screen's levels are addressed by a path *derived from* an
+ * answer — a run's `<serial>` is the level above's `onlyChild` — and expressing that as a second
+ * `useArchiveLevels` call gave the screen two caches and two `asked` guards, so navigating from a run
+ * into a file made the first instance re-`readdir` a directory the second was already holding. The
+ * caller passes a **selector over the levels so far** instead: the URL-derived and the answer-derived
+ * paths are then one list against one cache, and a level asked for at one depth is not asked for
+ * again at the next.
+ *
  * **There is no polling and no refresh control** (`docs/DESIGN.md` §9). The archive is finished
  * data: a run directory is written while a lease is live and nothing is added once it ends, and
  * this screen makes no claim to show a run appearing. So a level is fetched once, on navigation,
@@ -51,7 +60,17 @@ export function levelAt(levels: ArchiveLevels, path: readonly string[]): Archive
 	return levels.get(keyOf(path)) ?? LOADING;
 }
 
-export function useArchiveLevels(paths: readonly (readonly string[])[]): ArchiveLevels {
+/**
+ * Which levels the caller wants read, given every level read so far.
+ *
+ * A function rather than an array because a path may be *derived from* an answer, and a caller
+ * holding its own copy of the answers to derive them from is the duplicate cache this signature
+ * exists to remove. It runs on every render and must be pure — it is only ever read for the paths it
+ * names.
+ */
+export type WantedLevels = (known: ArchiveLevels) => readonly (readonly string[])[];
+
+export function useArchiveLevels(want: WantedLevels): ArchiveLevels {
 	const { call } = useSession();
 	const [levels, setLevels] = useState<ArchiveLevels>(() => new Map());
 	/*
@@ -64,8 +83,9 @@ export function useArchiveLevels(paths: readonly (readonly string[])[]): Archive
 	const live = useRef(true);
 
 	// Keyed on the paths themselves rather than on the array's identity, which is rebuilt every
-	// render. `JSON.stringify` is injective over string arrays, which is all this needs to be.
-	const wanted = JSON.stringify(paths);
+	// render. `JSON.stringify` is injective over string arrays, which is all this needs to be — and
+	// it is what makes an answer that names no new path a no-op rather than a second effect run.
+	const wanted = JSON.stringify(want(levels));
 
 	useEffect(() => {
 		live.current = true;

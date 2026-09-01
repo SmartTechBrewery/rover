@@ -1,6 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { readArtifactText, rpc, signIn, signOut, whoAmI } from './host-client.js';
+import {
+	readArtifactBytes,
+	readArtifactText,
+	rpc,
+	signIn,
+	signOut,
+	whoAmI,
+} from './host-client.js';
 
 /**
  * The invariants this module exists to hold, rather than its plumbing: a credential never in a URL,
@@ -14,12 +21,19 @@ function answered(status: number, body: unknown): Response {
 	return { status, json: async () => body } as unknown as Response;
 }
 
-/** The byte route answers a body rather than JSON, and its status is read before its `ok`. */
-function served(status: number, text: string): Response {
+/**
+ * The byte route answers a body rather than JSON, and its status is read before its `ok`.
+ *
+ * It carries a `content-type` because the bytes read passes that header through verbatim — the
+ * panel's classifier is the one place a media type means anything (#133).
+ */
+function served(status: number, text: string, mediaType?: string): Response {
 	return {
 		status,
 		ok: status >= 200 && status < 300,
+		headers: { get: (name: string) => (name === 'content-type' ? (mediaType ?? null) : null) },
 		text: async () => text,
+		blob: async () => new Blob([text], mediaType === undefined ? {} : { type: mediaType }),
 	} as unknown as Response;
 }
 
@@ -235,6 +249,112 @@ describe('one archived file', () => {
 			},
 		} as unknown as Response);
 		expect(await readArtifactText('a-session-id', ['x.json'])).toEqual({
+			ok: false,
+			refusal: 'unanswered',
+		});
+	});
+});
+
+/**
+ * The same route read as **bytes** (#133) — the half the preview renders from.
+ *
+ * The status ladder is shared with the text read on purpose, so what is asserted here is what is
+ * this read's own: a `Blob` rather than a string, and the `content-type` passed through *verbatim*
+ * because classifying it is `panel/src/archive/artifact-body.ts`'s job and not this module's.
+ */
+describe('one archived artifact, as bytes', () => {
+	beforeEach(() => {
+		fetchMock.mockReset();
+		vi.stubGlobal('fetch', fetchMock);
+	});
+
+	it('addresses the file by its components, with the session in the header', async () => {
+		fetchMock.mockResolvedValue(served(200, 'the-png-bytes', 'image/png'));
+
+		const answer = await readArtifactBytes('a-session-id', [
+			'checkout-app',
+			'screenshots',
+			'001_screenshot.png',
+		]);
+
+		expect(answer.ok).toBe(true);
+		const { url, init } = lastRequest();
+		expect(url).toBe('/artifact/checkout-app/screenshots/001_screenshot.png');
+		expect(headersOf(init).authorization).toBe('Bearer a-session-id');
+		expect(init.credentials).toBe('omit');
+		expect(init.cache).toBe('no-store');
+		expect(url).not.toContain('a-session-id');
+	});
+
+	// Verbatim, parameters and case included: a second normalisation here would be a second
+	// media-type vocabulary in the panel, and there is deliberately only one.
+	it('hands back the bytes and the content type the host answered, unaltered', async () => {
+		fetchMock.mockResolvedValue(served(200, 'a log line\n', 'Text/Plain; charset=UTF-8'));
+
+		const answer = await readArtifactBytes('a-session-id', ['logs', '001_read_logs.txt']);
+
+		expect(answer.ok).toBe(true);
+		if (!answer.ok || answer.value.outcome !== 'read') throw new Error('expected a read file');
+		expect(answer.value.mediaType).toBe('Text/Plain; charset=UTF-8');
+		expect(await answer.value.bytes.text()).toBe('a log line\n');
+	});
+
+	// A route that answered bytes and named nothing is not a body the panel may guess at.
+	it('reports no media type at all as the empty string', async () => {
+		fetchMock.mockResolvedValue(served(200, 'bytes'));
+
+		const answer = await readArtifactBytes('a-session-id', ['x.bin']);
+
+		if (!answer.ok || answer.value.outcome !== 'read') throw new Error('expected a read file');
+		expect(answer.value.mediaType).toBe('');
+	});
+
+	it('encodes each component on its own, so nothing inside one becomes a separator', async () => {
+		fetchMock.mockResolvedValue(served(200, '', 'image/png'));
+
+		await readArtifactBytes('a-session-id', ['a b#c', 'x/y']);
+
+		expect(lastRequest().url).toBe('/artifact/a%20b%23c/x%2Fy');
+	});
+
+	it('gives the archive its own three words, and the credential its own two', async () => {
+		fetchMock.mockResolvedValue(served(404, ''));
+		expect(await readArtifactBytes('a-session-id', ['gone.png'])).toEqual({
+			ok: true,
+			value: { outcome: 'missing' },
+		});
+
+		for (const status of [400, 500]) {
+			fetchMock.mockResolvedValue(served(status, ''));
+			expect(await readArtifactBytes('a-session-id', ['x.png'])).toEqual({
+				ok: true,
+				value: { outcome: 'unreadable' },
+			});
+		}
+
+		fetchMock.mockResolvedValue(served(401, ''));
+		expect(await readArtifactBytes('a-session-id', ['x.png'])).toEqual({
+			ok: false,
+			refusal: 'refused',
+		});
+	});
+
+	it('reads a host that never answered, and a body that never arrived, as unanswered', async () => {
+		fetchMock.mockRejectedValue(new TypeError('Failed to fetch'));
+		expect(await readArtifactBytes('a-session-id', ['x.png'])).toEqual({
+			ok: false,
+			refusal: 'unanswered',
+		});
+
+		fetchMock.mockResolvedValue({
+			status: 200,
+			ok: true,
+			headers: { get: () => 'video/mp4' },
+			blob: async () => {
+				throw new TypeError('network error');
+			},
+		} as unknown as Response);
+		expect(await readArtifactBytes('a-session-id', ['001.mp4'])).toEqual({
 			ok: false,
 			refusal: 'unanswered',
 		});

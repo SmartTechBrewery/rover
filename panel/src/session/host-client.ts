@@ -113,6 +113,23 @@ export type ArchivedFile =
 	| { readonly outcome: 'unreadable' };
 
 /**
+ * The same three words about the same file, read as **bytes** rather than as text (#133).
+ *
+ * `mediaType` is the `content-type` the host answered, **verbatim** — parameters and case
+ * included. What the panel does with it is `panel/src/archive/artifact-body.ts`'s, which owns the
+ * one media-type vocabulary the preview has; this module reports what the host said and classifies
+ * nothing. An answer with no `content-type` at all carries the empty string, which no classifier
+ * may read as a body it can draw.
+ *
+ * `bytes` is a `Blob` because that is what a browser can be handed an address for
+ * (`URL.createObjectURL`), and an address is what an `<img>`, a `<video>` and a new tab all need.
+ */
+export type ArchivedArtifact =
+	| { readonly outcome: 'read'; readonly mediaType: string; readonly bytes: Blob }
+	| { readonly outcome: 'missing' }
+	| { readonly outcome: 'unreadable' };
+
+/**
  * Exchange the token an operator issued for a session this browser may hold (D30).
  *
  * The token is a request body and reaches nothing else here: it is not stored, not returned, not
@@ -172,12 +189,18 @@ export async function rpc(
 /**
  * One archived file, read as **text** — `GET /artifact/<component>/…`.
  *
- * **Text, and deliberately not bytes.** The one thing the panel reads the body of is a small JSON
- * file the archive writes itself (`device_info.json`, `PROJECT.md` §10); a screenshot or a
- * recording is never read here at all, because a browser renders those from the URL — an `<img>`
- * or a `<video>` fetches its own subresource, which is what the route's content type and its
- * `Range` support exist for. So there is no `ArrayBuffer` variant to keep in step, and nothing here
- * pulls a video into a string.
+ * **Text is for a file the panel *parses*.** The one such file is the small JSON the archive writes
+ * itself (`device_info.json`, `PROJECT.md` §10); {@link readArtifactBytes} is for a file the
+ * *browser* renders. Both exist because neither can do the other's job, and the reason there is a
+ * bytes half at all is worth stating where somebody will read it:
+ *
+ * **An authenticated byte route cannot be an `<img src>` or a `<video src>`.** A subresource fetch
+ * is the browser's own request and carries no `Authorization` header, so it gets the route's
+ * uniform `401` (D29, D30) — and a credential in the URL is what D20 forbids outright. So the panel
+ * fetches the bytes with the session header and hands the browser an object URL instead. An earlier
+ * version of this comment claimed the opposite; the consequence of the correction is recorded in
+ * `PROJECT.md` §6 and `docs/DESIGN.md` §9, because it is what makes the whole artifact arrive in
+ * memory before it is shown.
  *
  * **The address is the components a listing answered**, one per segment, each encoded — never a
  * path this browser composed and never anything resembling a host filesystem path (D19). The route
@@ -192,6 +215,72 @@ export async function readArtifactText(
 	session: string,
 	path: readonly string[],
 ): Promise<HostAnswer<ArchivedFile>> {
+	const opened = await openArtifact(session, path);
+	if (opened.outcome !== 'serving') {
+		return settled(opened);
+	}
+
+	try {
+		return { ok: true, value: { outcome: 'read', text: await opened.response.text() } };
+	} catch {
+		// The headers arrived and the body did not. Nothing was read, so this is the transport's
+		// failure rather than the archive's, and a half-read file must never be parsed as a whole one.
+		return { ok: false, refusal: 'unanswered' };
+	}
+}
+
+/**
+ * One archived file, read as **bytes** — the same route, the same three words, the same credential
+ * (#133).
+ *
+ * This is what the preview renders from: a `Blob` the browser can be given an address for, plus the
+ * `content-type` the host decided from the file's own extension (`src/daemon/archive-file.ts`). See
+ * {@link readArtifactText} for why a `<img src="/artifact/…">` is not an option and what that costs.
+ *
+ * **Nothing is classified here.** The media type is passed through verbatim; the panel's one
+ * media-type vocabulary is `panel/src/archive/artifact-body.ts`, so there is not a second extension
+ * table in the browser to keep in step with the host's.
+ */
+export async function readArtifactBytes(
+	session: string,
+	path: readonly string[],
+): Promise<HostAnswer<ArchivedArtifact>> {
+	const opened = await openArtifact(session, path);
+	if (opened.outcome !== 'serving') {
+		return settled(opened);
+	}
+
+	try {
+		return {
+			ok: true,
+			value: {
+				outcome: 'read',
+				mediaType: opened.response.headers.get('content-type') ?? '',
+				bytes: await opened.response.blob(),
+			},
+		};
+	} catch {
+		// {@link readArtifactText}'s reason: the headers arrived and the body did not, so nothing was
+		// read and a half-arrived recording must never be shown as a whole one.
+		return { ok: false, refusal: 'unanswered' };
+	}
+}
+
+/**
+ * What `GET /artifact/…` answered, before anything reads the body — the one status ladder the byte
+ * route has, written once because both reads of it have to agree.
+ *
+ * `missing` and `unreadable` are the archive's own words and arrive as *values*; `refused` and
+ * `unanswered` are {@link HostRefusal}'s, about the credential and the connection.
+ */
+type ArtifactOpening =
+	| { readonly outcome: 'serving'; readonly response: Response }
+	| { readonly outcome: 'missing' }
+	| { readonly outcome: 'unreadable' }
+	| { readonly outcome: 'refused' }
+	| { readonly outcome: 'unanswered' };
+
+async function openArtifact(session: string, path: readonly string[]): Promise<ArtifactOpening> {
 	let response: Response;
 	try {
 		response = await fetch(addressOf(path), {
@@ -201,30 +290,45 @@ export async function readArtifactText(
 			credentials: 'omit',
 		});
 	} catch {
-		return { ok: false, refusal: 'unanswered' };
+		return { outcome: 'unanswered' };
 	}
 
 	if (response.status === 401) {
-		return { ok: false, refusal: 'refused' };
+		return { outcome: 'refused' };
 	}
 	if (response.status === 404) {
-		return { ok: true, value: { outcome: 'missing' } };
+		return { outcome: 'missing' };
 	}
 	if (!response.ok) {
 		// A `400` (an address no listing could have answered) and a `500` (something is filed there
 		// and the host will not serve it) both land here. The panel can say *that* the file could
 		// not be read and never why — the reason and the path stay on the host by design, which is
 		// why neither of those bodies carries one to read.
-		return { ok: true, value: { outcome: 'unreadable' } };
+		return { outcome: 'unreadable' };
 	}
+	return { outcome: 'serving', response };
+}
 
-	try {
-		return { ok: true, value: { outcome: 'read', text: await response.text() } };
-	} catch {
-		// The headers arrived and the body did not. Nothing was read, so this is the transport's
-		// failure rather than the archive's, and a half-read file must never be parsed as a whole one.
-		return { ok: false, refusal: 'unanswered' };
+/**
+ * An opening that produced no body, as the answer either read of the route gives its caller.
+ *
+ * The two outcomes it can carry are members of {@link ArchivedFile} and of
+ * {@link ArchivedArtifact} alike, which is what lets one function answer for both without a cast:
+ * *missing* and *unreadable* are facts about the archive and say nothing about the body's shape.
+ */
+function settled(
+	opened: Exclude<ArtifactOpening, { outcome: 'serving' }>,
+):
+	| { readonly ok: false; readonly refusal: HostRefusal }
+	| { readonly ok: true; readonly value: { readonly outcome: 'missing' } }
+	| { readonly ok: true; readonly value: { readonly outcome: 'unreadable' } } {
+	if (opened.outcome === 'refused' || opened.outcome === 'unanswered') {
+		return { ok: false, refusal: opened.outcome };
 	}
+	if (opened.outcome === 'missing') {
+		return { ok: true, value: { outcome: 'missing' } };
+	}
+	return { ok: true, value: { outcome: 'unreadable' } };
 }
 
 /** `/artifact/a/b/c`, each component encoded on its own so a separator inside one cannot escape it. */

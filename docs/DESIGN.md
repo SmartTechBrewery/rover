@@ -38,8 +38,9 @@ this sentence exists to prevent.
 | Archive — Project Selection Refined | `b91c300db2d445b8a195a0bafd1aac76` | **Settled** — see §9 |
 | Archive — Test Runs Refined (login-flow) | `8dcd4330b9b94105a7ba289620dc84aa` | **Settled** — see §9 |
 | Archive — A run selected (Refined) | `d24d2c84e84041b28dfed67e92551d28` | **Settled** — see §9, all three cards built |
+| Archive — Artifact Preview (Shell Corrected) | `a843d32b7a414ac3a84fd7e80aa8a8bf` | **Settled** — see §9, built with three recorded deviations |
 | Archive — Browsing (V2) | `f2de4344f7e347aa894b3054d9cf4098` | **Superseded** by the three rows above; must not be built from |
-| Run Detail — Artifacts (V2) | `36b54fbe032449d8a300ea0825bbf1c8` | Not yet corrected — see §10 |
+| Run Detail — Artifacts (V2) | `36b54fbe032449d8a300ea0825bbf1c8` | **Retired by #133** — must not be built from; see §9 |
 | Compare — Visual Diff (V2) | `897632dcadce44de9bdee74a94da14f5` | Not yet corrected — see §10 |
 | Sign In — Rover OS | `5035330b2c12401080263625ff564369` | Settled, **default state only** — see §8 |
 
@@ -757,24 +758,26 @@ some of it the other way round.
 
 The one host method behind it is `list_archive` (#130, `src/daemon/list-archive.ts`), which answers
 **one directory level** at a time. Every rule here is downstream of that: a screen that could ask
-for a subtree would have been drawn differently. The one thing a level cannot answer is the run's
-device card, which reads a file's *contents* off #131's byte route — that is the whole of the
-screen's second data path, and it is settled below.
+for a subtree would have been drawn differently. The two things a level cannot answer both read a
+file's *contents* off #131's byte route — the run's device card (#136) and the artifact preview
+(#133) — and that is the whole of the screen's second data path. Both are settled below.
 
-### The three approved screens
+### The four approved screens
 
 | Screen | ID | What it settles |
 | --- | --- | --- |
 | Archive — Project Selection Refined | `b91c300db2d445b8a195a0bafd1aac76` | The shell, the header, the two-card content area, the tree |
 | Archive — Test Runs Refined (login-flow) | `8dcd4330b9b94105a7ba289620dc84aa` | The run list, `OWNER` / `GRANTED` |
 | Archive — A run selected (Refined) | `d24d2c84e84041b28dfed67e92551d28` | The run column: the identity card, the device card, `CONTENTS` |
+| Archive — Artifact Preview (Shell Corrected) | `a843d32b7a414ac3a84fd7e80aa8a8bf` | The preview beside the run's column (#133) |
 
 There is deliberately **no design for the root level** (a list of projects). It is the same component
 with one fewer column, and the issue's own instruction — *the three levels are one component with
 different rows* — is what makes that safe rather than a gap.
 
 **Three defects in the emitted markup are not reproduced**, and are recorded so nobody "fixes" the
-code back towards them:
+code back towards them. (The fourth screen's own three deviations are a different thing — decisions
+the acceptance criteria reversed rather than defects — and they are recorded with the preview below.)
 
 1. `8dcd4330…` uses **`break-all`** on tree rows and run names. It is **`break-words`** everywhere in
    the built screen: `break-all` splits `issue-112` across two lines, which makes an owner string
@@ -786,7 +789,7 @@ code back towards them:
    file id is what changes when a render catches up). Recorded anyway, because a row hidden by an
    inline style is the kind of thing a later reader copies without noticing.
 
-And one thing about all three that is portability rather than a defect: they carry Material Symbols
+And one thing about all four that is portability rather than a defect: they carry Material Symbols
 and a raw Tailwind CDN config. The panel uses `lucide-react` and `panel/src/tokens.css`, and the
 design's `rounded` is Tailwind v4's `rounded-sm` (§1's radius rename).
 
@@ -1022,10 +1025,171 @@ what the device *was*, not what it is.
   prefetch for a run nobody selected, and no caching across runs. A selected run therefore costs
   **four listings and one file**.
 
-### What waits on another issue
+### The artifact preview — settled (#133)
 
-- **Opening or previewing an artifact**, and any *Open in a new window* control, is **#133**. The
-  byte route the device card now reads through is the same one that will serve them.
+Opening a file from a run's `CONTENTS` **replaces the directory tree with a preview beside the run's
+own column**, so the artifact is read where it was found. This is a state of the Archive screen and
+not a second screen: the breadcrumb, the describing line and the header row's shape are the same in
+it as in every other.
+
+**`Run Detail — Artifacts (V2)` (`36b54fbe032449d8a300ea0825bbf1c8`) is retired by this, not
+deferred.** The first draft of §10 drew a boundary — *Archive lists; Run Detail opens* — and the
+boundary was the weaker half: sending a reader to a second address for the thing they are already
+pointing at is not an explorer. That screen has nothing left this does not do, and it is marked
+accordingly in §1.
+
+**Two columns, equal halves.** Both are `flex-1 min-w-0` inside `max-w-(--container-max)`, with **no
+fixed width, no percentage and no `basis-*` on either**. The approved markup pins the preview to
+`lg:w-[580px] shrink-0`; that was tried and **reversed**, because a pinned preview makes the *split*
+depend on the window, so the same screen shows different proportions on different monitors. The tree
+is **not shown** while a file is open — the run's column takes its place.
+
+**The run's column is the run screen's own second column, unchanged, in less space.** The identity
+card and the device card do not change at all (`run-panel.test.tsx` asserts they are byte-identical
+in both states). Two things do, and both follow from `CONTENTS` having become how another file is
+chosen:
+
+- **One control heads the card: a back arrow, alone and centred.** Pressing it closes the preview and
+  returns the screen to two columns with the tree back on the left. One control, one outcome — and it
+  is a `<Link>` to the run's own address rather than a `<button>`, because the whole of this screen's
+  state is its address: the tree returns *because* the address is three components deep again.
+- **The folder being browsed expands to its file names, and the open one carries the selected
+  treatment.** Every other folder stays summarised. That is the tree's own rule — *expansion is
+  derived from the URL* — applied to the run's subtree: a folder is expanded exactly when the open
+  address is **inside** it. The addressed folder itself is not expanded, because when a folder is what
+  is open its listing is the card beside the column, and drawing it twice is the same listing in two
+  places. A nested row carries the name only; the measures stay on the top-level rows, where the
+  card's job is to say what the run wrote.
+
+**The path bar grows one segment for the file, and the `<serial>` is in no segment of it.** The file
+is where you are: last, `text-tertiary`, not a link, shown in full and wrapping rather than
+shortening. The serial is not a tree level, so there is no address to link it to.
+
+**The header row's counter slot is empty, and that is the rule rather than an exception.** The badge
+is a counter and one file has nothing to count — exactly as §7 leaves the held/free counter absent
+rather than showing `0 held · 0 free`.
+
+**The preview region is clean, and this is the rule that must not be traded away.** Nothing is laid
+over or around the artifact: no scanline, no dotted pattern, no gradient, no tint, no
+`mix-blend-mode`, no vignette, no glow, no phone frame or device bezel, no drop shadow, no coloured
+frame, no watermark. **A hairline border is the most that is permitted**, and it is on the image
+alone. §5 wrote that rule before there was a screen to apply it to — *an overlay tints the exact
+thing the user opened the screen to look at* — and this is where it is cashed in;
+`artifact-preview.test.tsx` asserts the region's class list carries none of them, in all four bodies.
+
+**Three bodies share one frame** (`ContentsCard`), and only what sits inside it differs:
+
+- **An image** — a screenshot or an extracted frame — `max-h-full max-w-full object-contain`, centred
+  in the region. Contained, at its natural aspect ratio, never stretched and never cropped, and
+  **never scaled up past its own pixels**, which `max-*` gives for free.
+- **A recording** — a plain `<video controls>`, the browser's own controls, and **no `autoPlay`, no
+  `loop`, no `muted`**. §5 forbids anything that loops on its own; a video a person pressed play on is
+  a response to something real, exactly as the lease countdown is.
+- **A text file** — `logs/*_read_logs.txt` or `device_info.json` — monospace, in the card body's own
+  scrolling region, with a line-number gutter, **because those are the file's real lines**
+  (`artifact-body.ts`, `linesOf`: one trailing newline is dropped because `renderLogs` writes one; a
+  blank line inside the file is kept and numbered). **The level is rendered as plain text with no
+  colour.** `W` and `E` are the device's words about its own logs, not Rover's verdict on anything;
+  colouring them imports the pass/fail vocabulary §2 has already had to remove several times, on the
+  one region of the panel where a fabricated `PASS` line lived longest.
+
+**And an honest fourth: `opaque`.** The route serves bytes it cannot name as
+`application/octet-stream` rather than refusing them, so the panel says in one plain sentence that it
+has no way to show the file — `NothingFiledHere`'s language and weight, no alarm colour, no icon, no
+error code, no control. **No object URL is created for it either**, because an address for something a
+browser will not display is only ever an offer to download.
+
+**Which body a file gets comes from the host's own content type, and there is not a second extension
+table in the panel.** `src/daemon/archive-file.ts` owns that vocabulary; `panel/src/archive/artifact-body.ts`
+maps its answer onto a body, and `tests/unit/panel/artifact-bodies.test.ts` holds the two ends
+together across the trees — a host that learns `.webm` cannot leave the panel quietly unable to draw
+it. The glyph in `CONTENTS` is deliberately **not** per media type for the same reason.
+
+**One control in the preview header: `Open in a new window`**, recessive, and **it is a view rather
+than a transfer.** No download button, no `download` attribute, and it is absent for `opaque`. No
+zoom, pan, rotate, filmstrip or next/previous arrows over the image — `CONTENTS` is how another file
+is chosen. No annotation, measurement or comparison tooling; comparison is `Compare — Visual Diff`'s
+question and a different screen.
+
+**Routing — the open file is part of the path**, so a reload lands on it and the link is shareable.
+The layout is a function of the **depth alone**:
+
+| `selected.length` | State | Tree | Second column |
+| --- | --- | --- | --- |
+| 0–2 | a level | yes | that level's `LevelContents` |
+| 3 | a run | yes | `RunPanel`, headed `Run Details` |
+| 4 | the `<serial>` level, typed | yes | that level's `LevelContents` |
+| **≥ 5** | **inside the run** | **no** | **the preview, or that folder's `LevelContents`** |
+
+- **At depth ≥ 5 the root, the project and the test level are not fetched at all**, because the tree
+  is not there to need them: the levels read are the `<serial>` down, exclusive of the address itself
+  — each one drawn, the first as `CONTENTS` and the rest as its expansions. So the three root states
+  above gate the browsing layout **only**; a link to an artifact may not wait on the archive root.
+- **The `<serial>` comes from the URL there** (`selected[3]`), not from the level above the run's
+  `onlyChild`. The address was built from a listing, so that component *is* the directory's name; it
+  removes a dependency, means neither column waits on the level above the run, and collapses
+  `RunSerial` to `answered` — correctly, since *reading* and *not readable* cannot apply to a serial
+  the address already carries.
+- **What the address names is read off its parent's listing, never off its own name** (D22). Until
+  that listing answers, nothing is fetched and the preview says it is reading. **An artifact is
+  deliberately not fetched on a guess**: asking the byte route for a directory would put *not a
+  regular file* in the host's log on every folder a reader opens. An address the listing does not
+  name at all *is* asked for, because *nothing is filed at this address* is the byte route's answer to
+  give rather than the screen's to invent.
+- One artifact at depth 6 therefore costs **four requests**: two listings, the run's
+  `device_info.json`, and the artifact. **And it is four however you arrive**, which took a second
+  pass to be true (#140 review): the `<serial>` level and the open folder's listing are addressed by
+  paths *derived from* an answer, and holding those in a second cache meant the run's `<serial>` was
+  read once for the run and again for a file under it. One cache, asked as a function of what it
+  already holds (`archive-levels.ts`).
+- **Nothing is claimed about the address until its parent has answered.** Until then the header
+  carries the run's own line and the second column says *Reading this address.* — not *One artifact
+  from this run* and not *Reading this artifact*, which is a claim the screen has not been given
+  (#140 review). A deep link into a folder read both of those about a directory for as long as the
+  listing took.
+
+**The artifact's height bound is `max-h-[70vh]`, and it is viewport-relative because a percentage
+one does not resolve here.** `max-h-full` was the first attempt and it is inert: nothing above the
+artifact has a definite height — the card's `<section>` is `min-h-[400px]` at `height: auto`, its body
+is a `flex-1` item that stretches to its content — so `max-height: 100%` computes to `none` while
+`max-width: 100%` resolves normally, and the artifact came out **bounded by width alone**. Measured in
+headless Chrome at 1400x900 on the built chain (#140 review): a 1080x2400 screenshot was **576x1278**
+with the card 1372 px tall, the whole screen page-scrolling and the run column stretched blank beside
+it; under `70vh` it is **257x569** with the card 663 px. The same class bounds the `<video>` and, with
+`overflow-y-auto`, the text body — where a 5 000-line log (`MAX_LOG_ENTRIES`) grew the card to tens of
+thousands of pixels instead of scrolling in it, because the card's own `overflow-y-auto` has no
+definite height to overflow. So *contained, scaled down to fit* above and *in the card body's own
+scrolling region* below are both this bound rather than the card's, and **`max-*` is not what keeps a
+small screenshot at its own pixels** — no dimension being set at all is.
+
+**`Open in a new window` opens a document in the panel's own origin, and `nosniff` does not reach
+it.** The address is a `blob:` URL of bytes this tab fetched, so a top-level navigation to it is a
+same-origin document; `x-content-type-options: nosniff` is a header on the *host's* response
+(`src/daemon/http-listen.ts`) and does not travel with the blob, which is the one thing R37's safety
+argument was written for a direct fetch and does not cover here (#140 review). Nothing is exploitable
+today — `CONTENT_TYPES` serves only `image/png`, `video/mp4`, `text/plain` and `application/json`, all
+inert when navigated to, and `opaque` creates no URL at all. What holds it that way is an **allowlist
+of media types the panel will open**, in `tests/unit/panel/artifact-bodies.test.ts` beside the
+draw-it-at-all check: `.svg` or `.html` added to the host's table would pass *can the panel draw it*
+as `image` and `text`, and both are scriptable as a document, so that gate is what turns red instead.
+
+**The three deviations from the approved markup**, recorded rather than made silently: the preview is
+`flex-1 min-w-0` and not `lg:w-[580px] shrink-0` (above); the run column's header is the back arrow
+alone and centred, where the markup has `arrow_back` plus a left-aligned `Run Details` heading; and
+the arrow is a `<Link>` rather than a `<button>`, with `CONTENTS` keeping this screen's existing
+`FileText` glyph instead of the markup's per-media `image` one.
+
+**Two costs, stated rather than hidden.** **An authenticated byte route cannot be an `<img src>` or a
+`<video src>`** — a subresource fetch is the browser's own request and carries no `Authorization`
+header, so it gets the uniform `401`, and a credential in a URL is what D20 forbids. So the panel
+fetches with the session header and renders the object URL, which means **the whole artifact is
+buffered in the tab before it is shown**, and the host's `Range` support is not what makes a
+`<video>` seek here — a blob URL answers ranges in the browser, and the range stays useful for a bare
+`curl`. And **closing the preview revokes the URL**, so a tab opened from it that is still streaming a
+long recording will stop. The artifact is deliberately **not cached**, unlike every level and the
+device card: a recording is megabytes and its object URL is a live handle on them, so the URL's
+lifetime is the state that holds it. There is no cap on a text file's lines; `MAX_LOG_ENTRIES` bounds
+the ones Rover writes at about 5 000.
 
 ---
 
@@ -1063,10 +1227,13 @@ top of this file). Do not commission a Stitch screen for them.
 - **The Archive screen's root level, and its three states with nothing to browse — done** (#132).
   The three levels had approved screens; the root level and the empty-ish states did not, and were
   built from this document as this list intends. What they settled is written into §9 above.
-- **The Archive preview's rules, and what it deliberately does not offer — settled** (#131). The
-  host half that makes the preview possible is built (`GET /artifact/<component>/…`, `PROJECT.md`
-  R37), and settling these here rather than leaving them to the screen is deliberate: #131 is what
-  made them decisions about the *host's answer* rather than about one panel's markup.
+- **The Archive preview's rules, and what it deliberately does not offer — done** (#133). They were
+  settled here by #131, before there was a screen, and settling them at that point was deliberate:
+  #131 is what made them decisions about the *host's answer* rather than about one panel's markup.
+  The screen was then built from them, and **what it settled is written into §9 above** — the
+  equal-halves layout and why a pinned preview was reversed, the tree's absence, the back arrow, the
+  clean region, the honest fourth body, and the two costs of an authenticated byte route. The five
+  rules below stand as written and are what §9 implements.
 
   - **An image is shown at its natural aspect ratio**, scaled down to fit the panel and never up
     past its own pixels: a screenshot enlarged past 1:1 is a blurrier version of the evidence
@@ -1092,14 +1259,16 @@ top of this file). Do not commission a Stitch screen for them.
     to design around rather than hide: the address pasted into a bare tab gets the host's uniform
     refusal, exactly as every other unauthenticated request to it does.
 
-**The two remaining uncorrected screens are `Run Detail — Artifacts (V2)`
-(`36b54fbe032449d8a300ea0825bbf1c8`) and `Compare — Visual Diff (V2)`
+**The one remaining uncorrected screen is `Compare — Visual Diff (V2)`
 (`897632dcadce44de9bdee74a94da14f5`).** The Archive screens were corrected and are settled in §9;
-these two were not. Known problems, from a first pass: pass/fail semantics are back (a `SUCCESS`
-chip, `PASS` in a log, green ticks and red crosses beside runs in the tree, the words "Visual
-Regression"); they carry a **second navigation** — a top bar duplicating the sidebar — with a global
-`FORCE_RELEASE` button that has nothing to act on outside Devices; `Profile` sits mid-sidebar instead
-of pinned at the foot; and the breadcrumb is used as a label rather than as a path.
+this one was not. `Run Detail — Artifacts (V2)` (`36b54fbe032449d8a300ea0825bbf1c8`) was the other,
+and it is **retired by #133** rather than waiting for a correction: the preview beside the run does
+everything it was for (§9). Known problems with the remaining one, from a first pass: pass/fail
+semantics are back (a `SUCCESS` chip, `PASS` in a log, green ticks and red crosses beside runs in the
+tree, the words "Visual Regression"); it carries a **second navigation** — a top bar duplicating the
+sidebar — with a global `FORCE_RELEASE` button that has nothing to act on outside Devices; `Profile`
+sits mid-sidebar instead of pinned at the foot; and the breadcrumb is used as a label rather than as
+a path.
 
 ---
 

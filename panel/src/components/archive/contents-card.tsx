@@ -5,27 +5,54 @@ import type { ReactNode } from 'react';
 /**
  * The Archive screen's right-hand card, and the two things it says when there is nothing in it.
  *
- * One shell for all four levels (`docs/DESIGN.md` §9): the header strip names what is selected, and
- * the body is whatever that level turned out to be. The three levels are one component with
- * different rows rather than three screens, which is what keeps the header and the tree beside them
- * identical in every state.
+ * One shell for all four levels and for the artifact preview (`docs/DESIGN.md` §9): the header strip
+ * says what is in the card, and the body is whatever that turned out to be. The levels are one
+ * component with different rows rather than three screens, which is what keeps the header and the
+ * tree beside them identical in every state — and the preview is the same frame again, with only
+ * what sits inside it differing.
  */
 
+/**
+ * The card's shell.
+ *
+ * **`header` is a slot rather than a title** (#133). Three callers put three different things in
+ * that strip — a level's name, `Run Details` or a back arrow alone, and a file's name beside `Open
+ * in a new window` — and the strip's own padding, rule and surface are the thing that must not
+ * differ between them. A `title: string` made the third of those impossible and would have grown a
+ * second card component to hold it.
+ *
+ * `min-w-0` beside `flex-1` is the other half of the equal-halves rule §9 settles: two `flex-1`
+ * columns only stay equal while neither is allowed to be wider than its content. It is inert in the
+ * single-card layout and load-bearing in the preview's.
+ */
 export function ContentsCard({
-	title,
+	header,
 	children,
 }: {
-	readonly title: string;
+	readonly header: ReactNode;
 	readonly children: ReactNode;
 }) {
 	return (
-		<section className="flex min-h-[400px] flex-1 flex-col overflow-hidden rounded-lg border-2 border-outline-variant bg-surface-container">
+		<section className="flex min-h-[400px] min-w-0 flex-1 flex-col overflow-hidden rounded-lg border-2 border-outline-variant bg-surface-container">
 			<div className="border-outline-variant border-b-2 bg-surface-container-high px-4 py-3">
-				{/* Verbatim, and wrapping at its own separators: a run directory name is 40 characters. */}
-				<h2 className="break-words font-code-md font-bold text-[15px] text-on-surface">{title}</h2>
+				{header}
 			</div>
 			<div className="flex-1 overflow-y-auto">{children}</div>
 		</section>
+	);
+}
+
+/**
+ * What a name in that strip looks like — the design's own heading, in one place because three cards
+ * draw it.
+ *
+ * Verbatim, and wrapping at its own separators: a run directory name is 40 characters, and
+ * `break-words` rather than `break-all` for §9's reason — the latter splits `issue-112` across two
+ * lines.
+ */
+export function CardHeading({ children }: { readonly children: string }) {
+	return (
+		<h2 className="break-words font-code-md font-bold text-[15px] text-on-surface">{children}</h2>
 	);
 }
 
@@ -81,6 +108,27 @@ export function NotReadableInCard() {
 		<div className="px-6 pb-6">
 			<ArchiveNotReadable />
 		</div>
+	);
+}
+
+/**
+ * The card for an address inside a run whose parent has not answered yet — **neither a listing nor a
+ * preview**, because which of the two it is, is the fact that has not arrived (#140 review).
+ *
+ * It is deliberately its own sentence. *Reading this level* would call a file a level and *Reading
+ * this artifact* would call a directory a file, and the whole point of this state is that the screen
+ * has not been told. One quiet `aria-live` line in the wording the rest of the screen uses, in the
+ * same card the answer will replace it in, so nothing about the layout moves when it does.
+ */
+export function ReadingThisAddress({ path }: { readonly path: readonly string[] }) {
+	return (
+		<ContentsCard header={<CardHeading>{path.at(-1) ?? ''}</CardHeading>}>
+			<div className="px-6 py-5">
+				<p aria-live="polite" className="font-code-md text-code-md text-on-surface-variant">
+					Reading this address.
+				</p>
+			</div>
+		</ContentsCard>
 	);
 }
 

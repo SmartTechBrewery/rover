@@ -1,8 +1,30 @@
-import type { ArchiveLevel } from '@panel/archive/archive-levels.js';
+import type { ArchiveLevel, ArchiveLevels } from '@panel/archive/archive-levels.js';
+import { keyOf } from '@panel/archive/archive-path.js';
 import type { ArchivedDeviceInfo } from '@panel/archive/device-info.js';
 import { render, screen } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
+import type { AnchorHTMLAttributes, ReactNode } from 'react';
+import { describe, expect, it, vi } from 'vitest';
 import fixture from '../../../../tests/fixtures/panel/device-info.json';
+
+// `directory-tree.test.tsx`'s shape: a `Link` is a plain anchor, so the panel renders with no router
+// instance. The splat's own encoding is asserted against a real router in `archive-path.test.tsx`.
+vi.mock('@tanstack/react-router', () => ({
+	Link: ({
+		to,
+		params,
+		children,
+		...rest
+	}: {
+		to: string;
+		params?: { _splat?: string };
+		children: ReactNode;
+	} & AnchorHTMLAttributes<HTMLAnchorElement>) => (
+		<a href={`${to.replace('$', '')}${params?._splat ?? ''}`} {...rest}>
+			{children}
+		</a>
+	),
+}));
+
 import { RunPanel, type RunSerial } from './run-panel.js';
 
 const RUN = ['checkout-app', 'login-flow', '20260830T170501Z-issue-112-9f1c2ab4'] as const;
@@ -29,12 +51,46 @@ const DEVICE: ArchivedDeviceInfo = { status: 'read', info: fixture.files[0] };
 /** The same device, with the three facts it could not answer (`docs/DESIGN.md` §6). */
 const UNANSWERED: ArchivedDeviceInfo = { status: 'read', info: fixture.files[1] };
 
+/** No level below the `<serial>` has been read, which is every state with nothing open. */
+const NO_LEVELS: ArchiveLevels = new Map();
+
 function showing(
 	serial: RunSerial = NAMED,
 	contents: ArchiveLevel = CONTENTS,
 	device: ArchivedDeviceInfo = DEVICE,
 ) {
-	return render(<RunPanel contents={contents} device={device} run={RUN} serial={serial} />);
+	return render(
+		<RunPanel
+			below={NO_LEVELS}
+			contents={contents}
+			device={device}
+			open={null}
+			run={RUN}
+			serial={serial}
+		/>,
+	);
+}
+
+/** The `<serial>` directory every address below this run carries. */
+const SERIAL_PATH = [...RUN, 'R5CT30ABCDE'] as const;
+
+/** One level of the run's subtree, keyed the way `useArchiveLevels` keys them. */
+function levels(...read: readonly [readonly string[], ArchiveLevel][]): ArchiveLevels {
+	return new Map(read.map(([path, level]) => [keyOf(path), level]));
+}
+
+/** The column beside an open artifact or folder — the state this run panel shares with a preview. */
+function beside(open: readonly string[], below: ArchiveLevels = NO_LEVELS) {
+	return render(
+		<RunPanel
+			below={below}
+			contents={CONTENTS}
+			device={DEVICE}
+			open={open}
+			run={RUN}
+			serial={NAMED}
+		/>,
+	);
 }
 
 describe('a run', () => {
@@ -304,5 +360,165 @@ describe('contents that could not be read', () => {
 
 		expect(screen.getByText('Reading this level of the archive.')).toBeDefined();
 		expect(container.innerHTML).not.toContain('animate');
+	});
+});
+
+/**
+ * **The column beside an open artifact** (#133) — this same panel in less space, with the two things
+ * that change and the assertion that everything else does not.
+ */
+describe('the run column while a file is open', () => {
+	const SCREENSHOTS = [...SERIAL_PATH, 'screenshots'] as const;
+	const OPEN_FILE = [...SCREENSHOTS, '001_screenshot.png'] as const;
+	const SCREENSHOTS_LEVEL: ArchiveLevel = {
+		status: 'listed',
+		entries: [
+			{ kind: 'file', name: '001_screenshot.png', sizeBytes: 421_112 },
+			{ kind: 'file', name: '002_screenshot.png', sizeBytes: 398_004 },
+			{ kind: 'directory', name: '001_frames', childCount: 2, onlyChild: null },
+		],
+	};
+
+	/*
+	 * **One control heads the column, and it is the only thing in that strip.** Pressing it closes
+	 * the preview, which is the same act as navigating to the run — so the tree comes back exactly
+	 * when the preview closes, because the address is three components deep again.
+	 */
+	it('is headed by a back arrow alone, pointing at the run own address', () => {
+		const { container } = beside(OPEN_FILE);
+
+		const strip = container.querySelector('section > div:first-child');
+		expect(strip?.textContent).toBe('');
+		const back = screen.getByRole('link', {
+			name: 'Close the preview and go back to the directory',
+		});
+		expect(back.getAttribute('href')).toBe(`/archive/${RUN.join('/')}`);
+		expect(strip?.querySelectorAll('a')).toHaveLength(1);
+		expect(container.textContent).not.toContain('Run Details');
+	});
+
+	it('is headed by `Run Details` and no back control when the tree is beside it instead', () => {
+		const { container } = showing();
+
+		expect(screen.getByText('Run Details')).toBeDefined();
+		expect(
+			screen.queryByRole('link', { name: 'Close the preview and go back to the directory' }),
+		).toBeNull();
+		expect(container.querySelector('section > div:first-child')?.textContent).toBe('Run Details');
+	});
+
+	/*
+	 * **The identity and device cards do not change at all.** The column is the run screen's own
+	 * second column in less space, and what earns the one difference is `CONTENTS` becoming the
+	 * chooser — nothing else may take the opportunity.
+	 */
+	it('draws the identity and device cards exactly as it does with nothing open', () => {
+		const { container: withNothingOpen, unmount } = showing();
+		const cards = (root: HTMLElement) =>
+			Array.from(root.querySelectorAll('section > div > section'))
+				.slice(0, 2)
+				.map((card) => card.outerHTML);
+		const before = cards(withNothingOpen);
+		unmount();
+
+		const { container: withAFileOpen } = beside(OPEN_FILE);
+
+		expect(cards(withAFileOpen)).toEqual(before);
+	});
+
+	// The way in, and the way to the next file: every row addresses its own path, with the `<serial>`
+	// in it because the serial is part of the address and not a level of the tree.
+	it('makes every `CONTENTS` row a link to its own address, with nothing open too', () => {
+		showing();
+
+		expect(screen.getByRole('link', { name: /screenshots/ }).getAttribute('href')).toBe(
+			`/archive/${[...SERIAL_PATH, 'screenshots'].join('/')}`,
+		);
+		expect(screen.getByRole('link', { name: /device_info.json/ }).getAttribute('href')).toBe(
+			`/archive/${[...SERIAL_PATH, 'device_info.json'].join('/')}`,
+		);
+	});
+
+	it('expands the folder the open file is in, and leaves the others summarised', () => {
+		beside(OPEN_FILE, levels([SCREENSHOTS, SCREENSHOTS_LEVEL]));
+
+		// The folder being browsed, by its file names.
+		expect(screen.getByRole('link', { name: /001_screenshot.png/ })).toBeDefined();
+		expect(screen.getByRole('link', { name: /002_screenshot.png/ })).toBeDefined();
+		// And the others, still one row each with their counts.
+		expect(screen.getByText('logs/')).toBeDefined();
+		expect(screen.getByText('2 files')).toBeDefined();
+		expect(screen.queryByText('001.mp4')).toBeNull();
+	});
+
+	it('gives the open file the selected treatment, and says so to a screen reader', () => {
+		beside(OPEN_FILE, levels([SCREENSHOTS, SCREENSHOTS_LEVEL]));
+
+		const open = screen.getByRole('link', { name: /001_screenshot.png/ });
+		expect(open.getAttribute('aria-current')).toBe('page');
+		expect(open.className).toContain('bg-tertiary-container');
+		expect(open.className).toContain('border-tertiary');
+
+		const other = screen.getByRole('link', { name: /002_screenshot.png/ });
+		expect(other.getAttribute('aria-current')).toBeNull();
+		expect(other.className).not.toContain('bg-tertiary-container');
+		// Bordered transparent, so opening a row does not shift it by 2px.
+		expect(other.className).toContain('border-transparent');
+	});
+
+	// A top-level `device_info.json` is opened the same way as anything else, and reads as open.
+	it('applies the selected treatment to a top-level row too', () => {
+		beside([...SERIAL_PATH, 'device_info.json']);
+
+		const open = screen.getByRole('link', { name: /device_info.json/ });
+		expect(open.getAttribute('aria-current')).toBe('page');
+		expect(open.className).toContain('bg-tertiary-container');
+	});
+
+	// What makes `recordings/001_frames/0001.png` reachable at all, since the tree is not there.
+	it('expands a nested folder on the open path, recursively', () => {
+		const frames = [...SCREENSHOTS, '001_frames'] as const;
+		beside(
+			[...frames, '0001.png'],
+			levels(
+				[SCREENSHOTS, SCREENSHOTS_LEVEL],
+				[
+					frames,
+					{ status: 'listed', entries: [{ kind: 'file', name: '0001.png', sizeBytes: 900 }] },
+				],
+			),
+		);
+
+		expect(screen.getByText('001_frames/')).toBeDefined();
+		const open = screen.getByRole('link', { name: /0001.png/ });
+		expect(open.getAttribute('aria-current')).toBe('page');
+		expect(open.getAttribute('href')).toBe(`/archive/${[...frames, '0001.png'].join('/')}`);
+	});
+
+	/*
+	 * A nested row is a control for choosing another file, not a report of what is filed: the design's
+	 * own shape, and the measures stay on the top-level rows where the card's job is to say what the
+	 * run wrote.
+	 */
+	it('carries no size or count on an expanded folder’s rows', () => {
+		beside(OPEN_FILE, levels([SCREENSHOTS, SCREENSHOTS_LEVEL]));
+
+		const open = screen.getByRole('link', { name: /001_screenshot.png/ });
+		expect(open.textContent).toBe('001_screenshot.png');
+		expect(open.textContent).not.toContain('KB');
+	});
+
+	// The settled sentences, indented and not reworded: the same three states one level up.
+	it('reuses this screen’s own sentences for a folder whose level is not a listing', () => {
+		for (const [level, said] of [
+			[{ status: 'loading' } as ArchiveLevel, 'Reading this level of the archive.'],
+			[{ status: 'empty' } as ArchiveLevel, 'Nothing is filed under this directory'],
+			[{ status: 'unreadable' } as ArchiveLevel, 'ARCHIVE NOT READABLE'],
+		] as const) {
+			const { unmount } = beside(OPEN_FILE, levels([SCREENSHOTS, level]));
+
+			expect(screen.getByText(new RegExp(said))).toBeDefined();
+			unmount();
+		}
 	});
 });
