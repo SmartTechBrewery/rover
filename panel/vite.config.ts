@@ -9,7 +9,7 @@ import { defineConfig } from 'vite';
 const panelRoot = import.meta.dirname;
 
 /**
- * Where the dev server sends `/rpc` and `/session`.
+ * Where the dev server sends `/rpc`, `/session` and `/artifact`.
  *
  * **The panel is same-origin in production**, because the daemon will serve its files from the very
  * listener that serves the data — so `panel/src/session/host-client.ts` uses relative URLs only and
@@ -45,6 +45,10 @@ export default defineConfig({
 		proxy: {
 			'/rpc': { target: hostTarget },
 			'/session': { target: hostTarget },
+			// The archive's byte route (R37). Singular and `/artifact`, not `/archive`: the panel
+			// owns the client route `/archive`, and a proxied prefix that matched it would send the
+			// screen that browses the archive to the daemon instead of rendering it.
+			'/artifact': { target: hostTarget },
 		},
 	},
 	build: { outDir: 'dist', emptyOutDir: true },

@@ -43,8 +43,16 @@ Design work lives in [`DESIGN.md`](./DESIGN.md); the brief that produced the fir
    distinguishable answers, so the screen can render "nothing is filed here" differently from "this
    host cannot say what is filed here" — the same distinction §7's `stale` draws. It is on
    `PANEL_METHODS` and on the CLI (`rover archive [<component> ...]`), so the archive is debuggable
-   without a browser (D4). **The Archive screen itself is not built**, and neither is reading an
-   artifact's bytes: this answers *what is filed*, never *what is in it*.
+   without a browser (D4). **Reading an artifact's bytes landed next** (R37, #131): `GET
+   /artifact/<component>/…` serves one file per request, addressed by the same components the
+   listing answered with, behind the same per-request gate, with a content type from the extension
+   so a browser renders a PNG, plays an MP4 and shows a `.txt` as text. A missing file and an
+   unreadable one are distinguishable and neither is a success with empty bytes; nothing that
+   resolves outside the archive root is served; and one `bytes=` range is answered, which is what
+   makes a `<video>` play in Safari at all. **The Archive screen itself is not built** — what is
+   here is the whole host half of it, and `docs/DESIGN.md` §9 records the preview rules it must
+   support, including that there is **no download control anywhere in the panel**: this is a view,
+   not a transfer.
 6. **Live lease state** — **done** (#113). A held card carries the `owner`, the `project`, the
    `test_name` and the grant instant, with a countdown to the expiry that ticks once a second and
    **goes back up** when activity renews the lease (`PROJECT.md` D8) — verified against a running

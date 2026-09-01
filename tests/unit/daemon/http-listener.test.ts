@@ -37,6 +37,7 @@ import {
 } from '@/backends/registry.js';
 import type { Device, DeviceBackend, DeviceWatch, DeviceWatcher } from '@/core/device.js';
 import { parseDeviceSerial } from '@/core/ids.js';
+import type { ArchiveFileReader } from '@/daemon/archive-file.js';
 import { connectToLocalDaemon } from '@/daemon/connect.js';
 import { KEEP_ALIVE_TIMEOUT_MS, startHttpListener } from '@/daemon/http-listen.js';
 import { type RunningDaemon, startDaemon } from '@/daemon/listen.js';
@@ -320,6 +321,16 @@ function call(
 /** The parsed envelope of an answer, which is where every outcome on this surface lives. */
 function envelopeOf(answer: Answer): Record<string, unknown> {
 	return JSON.parse(answer.body) as Record<string, unknown>;
+}
+
+/**
+ * An archive reader for the two standalone listeners below, neither of which reaches the byte
+ * route: one asserts the pre-auth deadline and the other counts frames on `/rpc`. It answers
+ * `missing` so that a request which somehow did reach it would fail loudly as a `404` rather than
+ * as a thrown `undefined`.
+ */
+function noArchiveFiles(): ArchiveFileReader {
+	return { open: async () => ({ outcome: 'missing' }) };
 }
 
 /** A keep-alive agent pinned to one connection, released in `afterEach`. */
@@ -755,6 +766,106 @@ describe('the store is read per request, never per connection', () => {
 	});
 });
 
+/**
+ * The byte route's gate, pinned where the gate is pinned rather than in
+ * `artifact-route.test.ts`: the criterion is that `/artifact/…` is authenticated *exactly as the
+ * rest of the surface is*, and that is a property of this suite's subject. What the route answers
+ * once a caller is through it belongs in the other file.
+ */
+describe('the byte route is behind the same gate as everything else (R37)', () => {
+	/** A path whose components are shaped like a listing's, pointing at nothing. */
+	const ARTIFACT_PATH = '/artifact/rover/home-screen/nothing.png';
+
+	it('refuses a request with no credential, and one with a token nobody holds', async () => {
+		registerFakeBackend();
+		await withStore();
+		const daemon = await startWithHttp();
+
+		const anonymous = await send({ port: portOf(daemon), path: ARTIFACT_PATH, method: 'GET' });
+		const stranger = await send({
+			port: portOf(daemon),
+			path: ARTIFACT_PATH,
+			method: 'GET',
+			authorization: `Bearer ${UNISSUED_TOKEN}`,
+		});
+
+		for (const refused of [anonymous, stranger]) {
+			expect(refused.status).toBe(401);
+			// Byte-identical to every other refusal: a `404` here would tell a stranger the route
+			// exists, and a different body would tell them why they were refused.
+			expect(refused.body).toBe(REFUSAL_BODY);
+		}
+	});
+
+	it('lets a revoke bite on the very next request over a connection already open', async () => {
+		registerFakeBackend();
+		await withStore();
+		const daemon = await startWithHttp();
+		const agent = keepAlive();
+		const get = () =>
+			send({
+				port: portOf(daemon),
+				path: ARTIFACT_PATH,
+				method: 'GET',
+				authorization: `Bearer ${store.token}`,
+				agent,
+			});
+
+		// Through the gate: nothing is filed at that path, which is the route's own `404` and not
+		// the gate's refusal. That distinction is the whole point of the assertion below it.
+		const first = await get();
+		await revokeUser(store.path, store.identifier);
+		const second = await get();
+
+		expect(first.status).toBe(404);
+		expect(second.status).toBe(401);
+		expect(second.body).toBe(REFUSAL_BODY);
+		expect(second.socket).toBe(first.socket);
+	});
+
+	it('takes a session id exactly as it takes a raw token (D30)', async () => {
+		registerFakeBackend();
+		await withStore();
+		const daemon = await startWithHttp();
+
+		const signedIn = await send({
+			port: portOf(daemon),
+			path: '/session',
+			method: 'POST',
+			body: JSON.stringify({ token: store.token }),
+		});
+		const session = (JSON.parse(signedIn.body) as { session: string }).session;
+
+		expect(
+			(
+				await send({
+					port: portOf(daemon),
+					path: ARTIFACT_PATH,
+					method: 'GET',
+					authorization: `Bearer ${session}`,
+				})
+			).status,
+		).toBe(404);
+	});
+
+	it('refuses every method the route does not take, as an unrouted request', async () => {
+		registerFakeBackend();
+		await withStore();
+		const daemon = await startWithHttp();
+
+		for (const method of ['POST', 'DELETE', 'PUT']) {
+			const answer = await send({
+				port: portOf(daemon),
+				path: ARTIFACT_PATH,
+				method,
+				authorization: `Bearer ${store.token}`,
+			});
+			expect(answer.status).toBe(401);
+			expect(answer.body).toBe(REFUSAL_BODY);
+		}
+	});
+});
+
 describe('every pre-auth failure gets one byte-identical refusal', () => {
 	it('refuses all of them with the identical status, headers and body', async () => {
 		registerFakeBackend();
@@ -857,6 +968,7 @@ describe('every pre-auth failure gets one byte-identical refusal', () => {
 		const listener = await startHttpListener(
 			httpConfig(),
 			{ handleConnection: () => {} },
+			noArchiveFiles(),
 			{ authTimeoutMs: SHORT_AUTH_TIMEOUT_MS },
 		);
 
@@ -976,18 +1088,22 @@ describe('the body is bounded, and the server owns its own diagnosis', () => {
 		// A counting `IpcServer` rather than the real one: the property is about how many messages
 		// one HTTP request can become, which is invisible from the outside when the extra ones are
 		// answered on the same connection.
-		const listener = await startHttpListener(httpConfig(), {
-			handleConnection: (stream) => {
-				stream.on('data', (chunk: Buffer | string) => {
-					for (const frame of String(chunk).split('\n')) {
-						if (frame.trim().length > 0) {
-							frames.push(frame);
+		const listener = await startHttpListener(
+			httpConfig(),
+			{
+				handleConnection: (stream) => {
+					stream.on('data', (chunk: Buffer | string) => {
+						for (const frame of String(chunk).split('\n')) {
+							if (frame.trim().length > 0) {
+								frames.push(frame);
+							}
 						}
-					}
-					stream.write(`${JSON.stringify({ type: 'result', protocolVersion: 1, id: null })}\n`);
-				});
+						stream.write(`${JSON.stringify({ type: 'result', protocolVersion: 1, id: null })}\n`);
+					});
+				},
 			},
-		});
+			noArchiveFiles(),
+		);
 
 		try {
 			const bodies = [
