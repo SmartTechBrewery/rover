@@ -8,11 +8,13 @@ import {
 	useState,
 } from 'react';
 import {
+	type ArchivedFile,
 	signOut as endSession,
 	type HostAnswer,
 	type HostIdentity,
 	signIn as mintSession,
 	type RpcEnvelope,
+	readArtifactText as readArtifact,
 	rpc,
 	whoAmI,
 } from './host-client.js';
@@ -102,6 +104,18 @@ export interface Session {
 		params: unknown,
 		signal?: AbortSignal,
 	) => Promise<HostAnswer<RpcEnvelope>>;
+	/**
+	 * One archived file's text, from the components a listing answered — {@link call}'s sibling on
+	 * the byte route, and here for exactly {@link call}'s reason.
+	 *
+	 * The id lives in a ref and is never handed out, so a screen that needs a file's contents gets
+	 * a method rather than a credential, and the bounce to *access ended* happens by construction.
+	 * With no session held it answers `unanswered`: nothing was asked, so nothing came back.
+	 *
+	 * No `signal`, because the caller has no deadline to give. The archive is finished data read
+	 * once on navigation, not a poll with an interval to spend (`host-client.ts`, `rpc`).
+	 */
+	readonly readArtifactText: (path: readonly string[]) => Promise<HostAnswer<ArchivedFile>>;
 }
 
 const SessionContext = createContext<Session | undefined>(undefined);
@@ -247,7 +261,25 @@ export function SessionProvider({ children }: { readonly children: ReactNode }) 
 		[onRefusal],
 	);
 
-	const value: Session = { state, signIn, signOut, onRefusal, call };
+	const readArtifactText = useCallback(
+		async (path: readonly string[]): Promise<HostAnswer<ArchivedFile>> => {
+			const live = session.current;
+			if (live === undefined) {
+				return { ok: false, refusal: 'unanswered' };
+			}
+			const answer = await readArtifact(live, path);
+			if (!answer.ok && answer.refusal === 'refused') {
+				// The byte route is behind the same per-request gate as every method, so a session
+				// the host will not take is *access ended* here too — fired in the one place that
+				// knows how, exactly as `call` does.
+				onRefusal();
+			}
+			return answer;
+		},
+		[onRefusal],
+	);
+
+	const value: Session = { state, signIn, signOut, onRefusal, call, readArtifactText };
 
 	return <SessionContext.Provider value={value}>{children}</SessionContext.Provider>;
 }

@@ -45,6 +45,10 @@ const { host, HANGS } = vi.hoisted(() => ({
 	host: {
 		answers: new Map<string, unknown>(),
 		asked: [] as unknown[],
+		/** Every file the byte route was asked for — the run device card's one request (#136). */
+		files: [] as unknown[],
+		/** The archived file's own bytes, or the outcome the host answered instead. */
+		file: { outcome: 'missing' } as unknown,
 		/** Accepts every request and never answers it — the state before the first answer. */
 		hangs: false,
 	},
@@ -63,6 +67,13 @@ vi.mock('@panel/session/session-provider.js', () => ({
 			return answer === undefined
 				? { ok: true, value: { type: 'result', result: { outcome: 'missing' } } }
 				: { ok: true, value: { type: 'result', result: answer } };
+		},
+		readArtifactText: async (path: readonly string[]) => {
+			host.files.push(path);
+			if (host.hangs) {
+				return await new Promise(() => undefined);
+			}
+			return { ok: true, value: host.file };
 		},
 	}),
 }));
@@ -113,6 +124,8 @@ async function showing(splat: string | undefined, levels: Record<string, unknown
 
 beforeEach(() => {
 	host.asked = [];
+	host.files = [];
+	host.file = { outcome: 'missing' };
 	host.hangs = false;
 });
 
@@ -186,6 +199,88 @@ describe('what the screen asks the host for', () => {
 			['checkout-app', 'login-flow'],
 			['checkout-app', 'login-flow', RUN, 'R5CT30ABCDE'],
 		]);
+	});
+
+	/*
+	 * The one file the screen reads the contents of (#136). It is addressed inside the level the
+	 * listing answered — never a path this screen composed — and it is one request, not a listing.
+	 */
+	it('reads the run device_info.json out of that same level, once', async () => {
+		await showing(`checkout-app/login-flow/${RUN}`);
+
+		expect(host.files).toEqual([
+			['checkout-app', 'login-flow', RUN, 'R5CT30ABCDE', 'device_info.json'],
+		]);
+	});
+
+	// No serial, no address: a file is not fetched on a guess any more than a level is listed on one.
+	it('reads no file for a run whose level above named no serial', async () => {
+		await showing(`checkout-app/login-flow/${RUN}`, {
+			...archive(),
+			'["checkout-app","login-flow"]': listed(directory(RUN, 2, null)),
+		});
+
+		expect(host.files).toEqual([]);
+	});
+
+	it('reads no file at a level that is not a run', async () => {
+		await showing('checkout-app/login-flow');
+
+		expect(host.files).toEqual([]);
+	});
+});
+
+/**
+ * The run's device card end to end: the archive's own file, off the byte route, onto the six fields
+ * the design settles (#136, `docs/DESIGN.md` §9).
+ */
+describe('the device a run was recorded on', () => {
+	const DEVICE_INFO = {
+		outcome: 'read',
+		text: JSON.stringify({
+			serial: 'R5CT30ABCDE',
+			platform: 'android',
+			model: 'SM-G991B',
+			screen: {
+				widthPx: 1080,
+				heightPx: 2400,
+				density: 420,
+				densityScale: 2.625,
+				widthDp: 411.42857142857144,
+				heightDp: 914.2857142857143,
+			},
+			osVersion: '14',
+			osApiLevel: 34,
+		}),
+	};
+
+	it('reads its facts out of the run own file', async () => {
+		host.file = DEVICE_INFO;
+
+		await showing(`checkout-app/login-flow/${RUN}`);
+
+		expect(screen.getByText('DEVICE — FROM device_info.json')).toBeDefined();
+		expect(screen.getByText('SM-G991B')).toBeDefined();
+		expect(screen.getByText('android')).toBeDefined();
+		expect(screen.getByText('34')).toBeDefined();
+		expect(screen.getByText('2.625x — 411 x 914 dp')).toBeDefined();
+	});
+
+	it('says a file that is not there is not there, without alarm', async () => {
+		const { container } = await showing(`checkout-app/login-flow/${RUN}`);
+
+		expect(screen.getByText(/No device_info.json is filed for this run/)).toBeDefined();
+		expect(container.querySelectorAll('[role="alert"]')).toHaveLength(0);
+		expect(container.textContent).not.toContain('Rover cannot read this run');
+	});
+
+	it('says a file it cannot read differently again', async () => {
+		host.file = { outcome: 'unreadable' };
+
+		const { container } = await showing(`checkout-app/login-flow/${RUN}`);
+
+		expect(screen.getByText(/Rover cannot read this run's device_info.json/)).toBeDefined();
+		expect(container.textContent).not.toContain('No device_info.json is filed');
 	});
 });
 

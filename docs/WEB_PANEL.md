@@ -55,11 +55,16 @@ Design work lives in [`DESIGN.md`](./DESIGN.md); the brief that produced the fir
    with the run's serial read off the level above as `onlyChild` rather than as a level of its own.
    The path is in the URL, so a reload lands where you were and a link is shareable. Its three
    states with nothing to browse are settled in `docs/DESIGN.md` §9, including the one that matters:
-   *the archive cannot be read* never renders as *the archive is empty*. **What is still not built
-   is opening or previewing an artifact** (#133) — which is also why the run's `DEVICE — FROM
-   device_info.json` card is absent: the bytes have an address now, but nothing in the panel fetches
-   one yet. `docs/DESIGN.md` §10 records the preview rules it must support, including that there is
-   **no download control anywhere in the panel**: this is a view, not a transfer.
+   *the archive cannot be read* never renders as *the archive is empty*. **A selected run also names
+   the device it ran on** (#136): the `DEVICE — FROM device_info.json` card is the panel's first
+   read of a file's *contents* rather than a listing, off #131's byte route, and every value on it —
+   model, platform, OS version, API level, screen size and density — comes out of that run's own
+   file. A fact the file does not carry is named as `unknown`, `platform` is printed verbatim so it
+   reads `android` and never `Android`, and a file that is missing and one that cannot be read are
+   two different sentences, neither of them an alarm. **What is still not built is opening or
+   previewing an artifact** (#133). `docs/DESIGN.md` §10 records the preview rules it must support,
+   including that there is **no download control anywhere in the panel**: this is a view, not a
+   transfer.
 6. **Live lease state** — **done** (#113). A held card carries the `owner`, the `project`, the
    `test_name` and the grant instant, with a countdown to the expiry that ticks once a second and
    **goes back up** when activity renews the lease (`PROJECT.md` D8) — verified against a running

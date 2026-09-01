@@ -1,0 +1,34 @@
+{
+  "files": [
+    {
+      "serial": "emulator-5554",
+      "platform": "android",
+      "model": "sdk_gphone64_arm64",
+      "screen": {
+        "widthPx": 1080,
+        "heightPx": 2400,
+        "density": 420,
+        "densityScale": 2.625,
+        "widthDp": 411.42857142857144,
+        "heightDp": 914.2857142857143
+      },
+      "osVersion": "15",
+      "osApiLevel": 35
+    },
+    {
+      "serial": "emulator-5554",
+      "platform": "android",
+      "model": null,
+      "screen": {
+        "widthPx": 1080,
+        "heightPx": 2400,
+        "density": 420,
+        "densityScale": 2.625,
+        "widthDp": 411.42857142857144,
+        "heightDp": 914.2857142857143
+      },
+      "osVersion": null,
+      "osApiLevel": null
+    }
+  ]
+}

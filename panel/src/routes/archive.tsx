@@ -5,6 +5,7 @@ import {
 	useArchiveLevels,
 } from '@panel/archive/archive-levels.js';
 import { componentsFromSplat, levelsOf, splatFromComponents } from '@panel/archive/archive-path.js';
+import { type ArchivedDeviceInfo, useArchivedDeviceInfo } from '@panel/archive/device-info.js';
 import { ArchiveNotReadable } from '@panel/components/archive/contents-card.js';
 import { DirectoryTree } from '@panel/components/archive/directory-tree.js';
 import { LevelContents } from '@panel/components/archive/level-contents.js';
@@ -54,6 +55,13 @@ export function ArchiveScreen() {
 	const serial = serialOf(levels, selected);
 	const serialLevel = serialPath(selected, serial);
 	const runContents = useArchiveLevels(serialLevel === null ? NO_LEVELS : [serialLevel]);
+	/*
+	 * The run's `device_info.json`, read out of that same `<serial>` directory — the one thing on
+	 * this screen that is a file's contents rather than a listing (#136, #131's byte route). It is
+	 * addressed by the level, not by a path this screen composed, and it is not fetched at all for
+	 * a run whose serial nobody has answered for.
+	 */
+	const device = useArchivedDeviceInfo(serialLevel);
 
 	const level = levelAt(levels, selected);
 	const depth = selected.length;
@@ -65,7 +73,13 @@ export function ArchiveScreen() {
 				description={DESCRIPTIONS[Math.min(depth, DESCRIPTIONS.length - 1)] ?? ''}
 				aside={badgeFor(depth, level)}
 			/>
-			<Content levels={levels} runContents={runContents} selected={selected} serial={serial} />
+			<Content
+				device={device}
+				levels={levels}
+				runContents={runContents}
+				selected={selected}
+				serial={serial}
+			/>
 		</>
 	);
 }
@@ -82,11 +96,13 @@ function Content({
 	levels,
 	serial,
 	runContents,
+	device,
 }: {
 	readonly selected: readonly string[];
 	readonly levels: ArchiveLevels;
 	readonly serial: RunSerial;
 	readonly runContents: ArchiveLevels;
+	readonly device: ArchivedDeviceInfo;
 }) {
 	const root = levelAt(levels, []);
 
@@ -116,6 +132,7 @@ function Content({
 				 */
 				<RunPanel
 					contents={levelAt(runContents, serialPath(selected, serial) ?? [])}
+					device={device}
 					run={selected}
 					serial={serial}
 				/>

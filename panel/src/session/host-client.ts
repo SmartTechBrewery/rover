@@ -1,12 +1,13 @@
 import { z } from 'zod';
 
 /**
- * The browser's side of the host's HTTP surface: the three `/session` verbs and `POST /rpc`.
+ * The browser's side of the host's HTTP surface: the three `/session` verbs, `POST /rpc`, and the
+ * archive's byte route `GET /artifact/…`.
  *
- * **Relative URLs only, everywhere.** The panel is served by the machine it talks to, so `/session`
- * and `/rpc` are same-origin in production and there is nothing here to configure — no host field
+ * **Relative URLs only, everywhere.** The panel is served by the machine it talks to, so all three
+ * paths are same-origin in production and there is nothing here to configure — no host field
  * on the sign-in screen (`docs/DESIGN.md` §8), no base URL, no environment variable. In development
- * the panel's own dev server proxies those two paths (`panel/vite.config.ts`), which is what keeps
+ * the panel's own dev server proxies them (`panel/vite.config.ts`), which is what keeps
  * this file free of the one thing an absolute URL would bring with it: somewhere for a credential to
  * be attached to a request that is not this host's.
  *
@@ -88,6 +89,30 @@ const SESSION_PATH = '/session';
 const RPC_PATH = '/rpc';
 
 /**
+ * The archive's byte route (R37, #131), one archive path component per segment.
+ *
+ * Singular and `/artifact/`, not `/archive/`: the panel owns the client route `/archive`, and the
+ * host is same-origin in production — `src/daemon/http-listen.ts` says the same thing from the
+ * other side.
+ */
+const ARTIFACT_PATH_PREFIX = '/artifact/';
+
+/**
+ * What `GET /artifact/…` said about one file, in **`list_archive`'s own three words**.
+ *
+ * The archive answers with one vocabulary on both of its reads, which is why *missing* and
+ * *unreadable* are named here rather than folded into {@link HostRefusal}: a file that is not there
+ * and a file this host will not serve are facts about the archive, and the reader has to be told
+ * them apart (`docs/DESIGN.md` §9). `HostAnswer`'s failure half stays what it is everywhere else —
+ * about the credential and the connection — so a `404` arrives as a value, exactly as an `error`
+ * envelope does on `POST /rpc`.
+ */
+export type ArchivedFile =
+	| { readonly outcome: 'read'; readonly text: string }
+	| { readonly outcome: 'missing' }
+	| { readonly outcome: 'unreadable' };
+
+/**
  * Exchange the token an operator issued for a session this browser may hold (D30).
  *
  * The token is a request body and reaches nothing else here: it is not stored, not returned, not
@@ -142,6 +167,69 @@ export async function rpc(
 		body: { protocolVersion: 1, id: nextRequestId(), method, params },
 		...(signal === undefined ? {} : { signal }),
 	});
+}
+
+/**
+ * One archived file, read as **text** — `GET /artifact/<component>/…`.
+ *
+ * **Text, and deliberately not bytes.** The one thing the panel reads the body of is a small JSON
+ * file the archive writes itself (`device_info.json`, `PROJECT.md` §10); a screenshot or a
+ * recording is never read here at all, because a browser renders those from the URL — an `<img>`
+ * or a `<video>` fetches its own subresource, which is what the route's content type and its
+ * `Range` support exist for. So there is no `ArrayBuffer` variant to keep in step, and nothing here
+ * pulls a video into a string.
+ *
+ * **The address is the components a listing answered**, one per segment, each encoded — never a
+ * path this browser composed and never anything resembling a host filesystem path (D19). The route
+ * decodes per segment and re-validates with the archive's own `ArchivePathSegmentSchema`, so a `/`
+ * or a `..` inside a component is refused there rather than smuggled through as an already-encoded
+ * string.
+ *
+ * The credential is the same header everything else on this surface carries, for the same reasons:
+ * never in the URL, never a cookie, never logged.
+ */
+export async function readArtifactText(
+	session: string,
+	path: readonly string[],
+): Promise<HostAnswer<ArchivedFile>> {
+	let response: Response;
+	try {
+		response = await fetch(addressOf(path), {
+			method: 'GET',
+			headers: headersFor({ method: 'GET', session }),
+			cache: 'no-store',
+			credentials: 'omit',
+		});
+	} catch {
+		return { ok: false, refusal: 'unanswered' };
+	}
+
+	if (response.status === 401) {
+		return { ok: false, refusal: 'refused' };
+	}
+	if (response.status === 404) {
+		return { ok: true, value: { outcome: 'missing' } };
+	}
+	if (!response.ok) {
+		// A `400` (an address no listing could have answered) and a `500` (something is filed there
+		// and the host will not serve it) both land here. The panel can say *that* the file could
+		// not be read and never why — the reason and the path stay on the host by design, which is
+		// why neither of those bodies carries one to read.
+		return { ok: true, value: { outcome: 'unreadable' } };
+	}
+
+	try {
+		return { ok: true, value: { outcome: 'read', text: await response.text() } };
+	} catch {
+		// The headers arrived and the body did not. Nothing was read, so this is the transport's
+		// failure rather than the archive's, and a half-read file must never be parsed as a whole one.
+		return { ok: false, refusal: 'unanswered' };
+	}
+}
+
+/** `/artifact/a/b/c`, each component encoded on its own so a separator inside one cannot escape it. */
+function addressOf(path: readonly string[]): string {
+	return `${ARTIFACT_PATH_PREFIX}${path.map((component) => encodeURIComponent(component)).join('/')}`;
 }
 
 interface HostRequest {
