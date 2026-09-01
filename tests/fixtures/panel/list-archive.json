@@ -1,0 +1,185 @@
+{
+	"levels": [
+		{
+			"path": [],
+			"result": {
+				"outcome": "listed",
+				"entries": [
+					{
+						"kind": "directory",
+						"name": "checkout-app",
+						"childCount": 5,
+						"onlyChild": null
+					},
+					{
+						"kind": "directory",
+						"name": "payments-web",
+						"childCount": 1,
+						"onlyChild": "checkout-3ds"
+					}
+				]
+			}
+		},
+		{
+			"path": [
+				"checkout-app"
+			],
+			"result": {
+				"outcome": "listed",
+				"entries": [
+					{
+						"kind": "directory",
+						"name": "cart-abandonment",
+						"childCount": 1,
+						"onlyChild": "20260827T114012Z-issue-118-1a2b3c4d"
+					},
+					{
+						"kind": "directory",
+						"name": "login-flow",
+						"childCount": 5,
+						"onlyChild": null
+					},
+					{
+						"kind": "directory",
+						"name": "opaque-test",
+						"childCount": 2,
+						"onlyChild": null
+					},
+					{
+						"kind": "directory",
+						"name": "sealed-test",
+						"childCount": null,
+						"onlyChild": null
+					},
+					{
+						"kind": "directory",
+						"name": "unlabeled",
+						"childCount": 1,
+						"onlyChild": "20260825T090000Z-issue-99-0f0f0f0f"
+					}
+				]
+			}
+		},
+		{
+			"path": [
+				"checkout-app",
+				"login-flow"
+			],
+			"result": {
+				"outcome": "listed",
+				"entries": [
+					{
+						"kind": "directory",
+						"name": "20260826T101155Z-issue-104-2fd913c7",
+						"childCount": 1,
+						"onlyChild": "emulator-5554"
+					},
+					{
+						"kind": "directory",
+						"name": "20260827T163012Z-issue-104-7ae52b90",
+						"childCount": 1,
+						"onlyChild": "emulator-5554"
+					},
+					{
+						"kind": "directory",
+						"name": "20260828T091544Z-pr-127-review-c8d1a0f3",
+						"childCount": 1,
+						"onlyChild": "emulator-5554"
+					},
+					{
+						"kind": "directory",
+						"name": "20260829T142201Z-issue-112-4b0e7c15",
+						"childCount": 1,
+						"onlyChild": "emulator-5554"
+					},
+					{
+						"kind": "directory",
+						"name": "20260830T170501Z-issue-112-9f1c2ab4",
+						"childCount": 1,
+						"onlyChild": "R5CT30ABCDE"
+					}
+				]
+			}
+		},
+		{
+			"path": [
+				"checkout-app",
+				"login-flow",
+				"20260830T170501Z-issue-112-9f1c2ab4",
+				"R5CT30ABCDE"
+			],
+			"result": {
+				"outcome": "listed",
+				"entries": [
+					{
+						"kind": "file",
+						"name": "device_info.json",
+						"sizeBytes": 80
+					},
+					{
+						"kind": "other",
+						"name": "latest_recording"
+					},
+					{
+						"kind": "directory",
+						"name": "logs",
+						"childCount": 2,
+						"onlyChild": null
+					},
+					{
+						"kind": "directory",
+						"name": "recordings",
+						"childCount": 1,
+						"onlyChild": "001.mp4"
+					},
+					{
+						"kind": "directory",
+						"name": "screenshots",
+						"childCount": 3,
+						"onlyChild": null
+					}
+				]
+			}
+		},
+		{
+			"path": [
+				"checkout-app",
+				"opaque-test"
+			],
+			"result": {
+				"outcome": "listed",
+				"entries": [
+					{
+						"kind": "directory",
+						"name": "20260823T101010Z-issue-88-abcdabcd",
+						"childCount": null,
+						"onlyChild": null
+					},
+					{
+						"kind": "file",
+						"name": "notes.txt",
+						"sizeBytes": null
+					}
+				]
+			}
+		},
+		{
+			"path": [
+				"checkout-app",
+				"sealed-test"
+			],
+			"result": {
+				"outcome": "unreadable"
+			}
+		},
+		{
+			"path": [
+				"checkout-app",
+				"no-such-test"
+			],
+			"result": {
+				"outcome": "missing"
+			}
+		}
+	]
+}

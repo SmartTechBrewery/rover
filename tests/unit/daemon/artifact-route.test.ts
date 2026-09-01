@@ -375,7 +375,7 @@ describe('the response says what the file is, so a browser renders it', () => {
 
 		const answer = await fetchArtifact([...RUN, 'screenshots', '001_screenshot.png']);
 
-		// `docs/DESIGN.md` §9 records this as a choice rather than a limitation. A
+		// `docs/DESIGN.md` §10 records this as a choice rather than a limitation. A
 		// `content-disposition: attachment` here would make every preview a download.
 		expect(answer.headers['content-disposition']).toBeUndefined();
 		expect(answer.headers['cache-control']).toBe('no-store');

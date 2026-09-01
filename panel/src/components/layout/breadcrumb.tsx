@@ -5,6 +5,12 @@ export interface BreadcrumbSegment {
 	readonly label: string;
 	/** Absent on the last segment: where you are is not a link. */
 	readonly to?: string;
+	/**
+	 * The route params `to` needs, for a segment whose destination is a path parameter rather than
+	 * a literal address — the Archive screen's `/archive/$`, where every segment above the current
+	 * one is one level of a splat. Absent for a plain address.
+	 */
+	readonly params?: Record<string, string>;
 }
 
 /**
@@ -32,21 +38,34 @@ export function Breadcrumb({ trail }: { trail: readonly BreadcrumbSegment[] }) {
 				{trail.map((segment, index) => {
 					const isCurrent = index === trail.length - 1;
 					return (
-						<Fragment key={segment.label}>
+						/*
+						 * Keyed by the segment's **destination**, not by its label. A project and a test
+						 * name may be the same word (`checkout-app/checkout-app`), and React would
+						 * collide two segments of one path on a label key. The last segment has no
+						 * destination and is the only one that falls back to its label, so there is
+						 * nothing for it to collide with.
+						 */
+						<Fragment key={segment.params?._splat ?? segment.to ?? segment.label}>
 							{index > 0 && (
 								<li aria-hidden="true" className="text-outline">
 									&gt;
 								</li>
 							)}
-							<li>
+							<li className="min-w-0">
 								{isCurrent || !segment.to ? (
-									<span aria-current="page" className="text-tertiary">
+									/*
+									 * `break-words`, never `break-all`: a run directory name is 40
+									 * characters and has to wrap, but the latter splits `issue-112`
+									 * across two lines.
+									 */
+									<span aria-current="page" className="break-words text-tertiary">
 										{segment.label}
 									</span>
 								) : (
 									<Link
 										to={segment.to}
-										className="text-on-surface-variant transition-colors hover:text-on-surface"
+										params={segment.params}
+										className="break-words text-on-surface-variant transition-colors hover:text-on-surface"
 									>
 										{segment.label}
 									</Link>
