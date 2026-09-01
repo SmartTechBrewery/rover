@@ -16,27 +16,61 @@ function envelope(result: unknown): Response {
 	return answered(200, { protocolVersion: 1, id: '1', type: 'result', result });
 }
 
+/** One device the way the host lists it, with only what a count and a card need varied. */
+function device(serial: string, state = 'ready'): unknown {
+	return {
+		serial,
+		platform: 'android',
+		model: 'sdk_gphone64_arm64',
+		osVersion: '15',
+		osApiLevel: 35,
+		state,
+		attachment: 'this-host',
+		heldBy: null,
+	};
+}
+
+/**
+ * A host that accepts the request and never answers it — **and honours the abort**, which is the
+ * one contract a stub of `fetch` has to keep for #125 to be testable at all. A mock that ignored
+ * the signal would report the wedge as fixed while a browser still froze on it.
+ */
+const HANGS = Symbol('accepted, never answered');
+
+type ScriptedAnswer = Response | Error | typeof HANGS;
+
+function hangs(signal: AbortSignal | undefined): Promise<Response> {
+	return new Promise<Response>((_resolve, reject) => {
+		signal?.addEventListener('abort', () =>
+			reject(new DOMException('The operation was aborted.', 'AbortError')),
+		);
+	});
+}
+
 /**
  * A signed-in panel whose `/rpc` gives the listed answers in order, the last one repeating. Called
  * with none, `/rpc` never answers at all — which is how the state before the first answer is
- * reached.
+ * reached, and it abandons the request when the caller does.
  *
  * The real `SessionProvider` is driven rather than stubbed, because half of what this provider does
  * is hand a refusal back to it: the bounce to *access ended* is asserted through the machine that
  * performs it rather than against a spy on a private.
  */
-function hostAnswers(...answers: readonly (Response | Error)[]): void {
+function hostAnswers(...answers: readonly ScriptedAnswer[]): void {
 	window.localStorage.setItem(STORAGE_KEY, 'a-session-id');
 	let next = 0;
-	fetchMock.mockImplementation(async (path: string) => {
+	fetchMock.mockImplementation(async (path: string, init?: RequestInit) => {
 		if (path === '/session') {
 			return answered(200, { identifier: 'panel', displayName: 'Panel' });
 		}
 		if (answers.length === 0) {
-			return await new Promise<Response>(() => undefined);
+			return await hangs(init?.signal ?? undefined);
 		}
 		const answer = answers[Math.min(next, answers.length - 1)];
 		next += 1;
+		if (answer === HANGS) {
+			return await hangs(init?.signal ?? undefined);
+		}
 		if (answer instanceof Error) {
 			throw answer;
 		}
@@ -189,7 +223,18 @@ describe('the device poll', () => {
 		return fetchMock.mock.calls.filter(([path]) => path === '/rpc').length;
 	}
 
-	// The guard's own case: a host slower than the interval must not have requests stacked on it.
+	/*
+	 * The guard's own case: a host slower than the interval must not have requests stacked on it.
+	 * Never two outstanding at once, and — since #125 — never zero for longer than the deadline.
+	 *
+	 * Three asks over three intervals rather than four, and the missing one is the guard doing its
+	 * job: the deadline the *first* ask set is due at the same instant as the tick that would
+	 * replace it, and after that first pairing the interval is the older timer of the two and fires
+	 * while the request it would replace is still open. So a host that answers nothing at all is
+	 * asked on every other interval, which is the cost of releasing the guard in `finally` alone —
+	 * and a host that swallows **one** answer loses exactly one interval, which is the case that
+	 * matters and the one the next test pins.
+	 */
 	it('drops an interval tick that arrives while the last one is still outstanding', async () => {
 		vi.useFakeTimers();
 		hostAnswers();
@@ -202,7 +247,79 @@ describe('the device poll', () => {
 			await vi.advanceTimersByTimeAsync(POLL_MS * 3);
 		});
 
-		expect(asks()).toBe(1);
+		expect(asks()).toBe(3);
+	});
+
+	/*
+	 * #125, at the seam the update was lost on. One request the host accepted and never answered
+	 * used to hold the guard above for the life of the tab: the interval went on firing, every tick
+	 * was dropped, no further `/rpc` ever left the browser, and the grid froze on the last good
+	 * answer while the countdown went on ticking locally from `receivedAtMs`. Nothing on the screen
+	 * said so and only a reload corrected it.
+	 *
+	 * Without the deadline this ends on `ready 3` with `asks()` stuck at 2 forever, however far the
+	 * clock is advanced — which is the reported bug exactly.
+	 */
+	it('keeps polling after a request the host accepts and never answers', async () => {
+		vi.useFakeTimers();
+		hostAnswers(
+			envelope(fixture),
+			HANGS,
+			envelope({ devices: [device('emulator-5554')], stale: false }),
+		);
+
+		mount();
+		await settle();
+		expect(screen.getByText(/list: ready 3/)).toBeDefined();
+
+		// The tick that is swallowed. It goes out; nothing comes back.
+		await act(async () => {
+			await vi.advanceTimersByTimeAsync(POLL_MS);
+		});
+		expect(asks()).toBe(2);
+		expect(screen.getByText(/list: ready 3/)).toBeDefined();
+
+		// Its budget runs out: the request is abandoned, and the screen says it has nothing current
+		// rather than going on showing what it had.
+		await act(async () => {
+			await vi.advanceTimersByTimeAsync(POLL_MS);
+		});
+		expect(screen.getByText(/list: unreachable/)).toBeDefined();
+
+		// And the poll comes back on its own, with the host's new answer.
+		await act(async () => {
+			await vi.advanceTimersByTimeAsync(POLL_MS);
+		});
+		expect(asks()).toBe(3);
+		expect(screen.getByText(/list: ready 1/)).toBeDefined();
+	});
+
+	/*
+	 * And the acceptance criterion the screen is actually judged on: with nothing touched, the state
+	 * follows the host answer for answer. A detach is the middle step and an empty host the last —
+	 * `stale: false` throughout, so none of it is the *no view* state wearing a disguise.
+	 */
+	it('follows the host across a detach, with the screen untouched', async () => {
+		vi.useFakeTimers();
+		hostAnswers(
+			envelope({ devices: [device('emulator-5554'), device('emulator-5556')], stale: false }),
+			envelope({ devices: [device('emulator-5554')], stale: false }),
+			envelope({ devices: [], stale: false }),
+		);
+
+		mount();
+		await settle();
+		expect(screen.getByText(/list: ready 2/)).toBeDefined();
+
+		await act(async () => {
+			await vi.advanceTimersByTimeAsync(POLL_MS);
+		});
+		expect(screen.getByText(/list: ready 1/)).toBeDefined();
+
+		await act(async () => {
+			await vi.advanceTimersByTimeAsync(POLL_MS);
+		});
+		expect(screen.getByText(/list: ready 0/)).toBeDefined();
 	});
 
 	/*
@@ -215,7 +332,7 @@ describe('the device poll', () => {
 	it('asks on a deliberate refresh even with a request already outstanding', async () => {
 		vi.useFakeTimers();
 		window.localStorage.setItem(STORAGE_KEY, 'a-session-id');
-		fetchMock.mockImplementation(async (path: string) => {
+		fetchMock.mockImplementation(async (path: string, init?: RequestInit) => {
 			if (path === '/session') {
 				return answered(200, { identifier: 'panel', displayName: 'Panel' });
 			}
@@ -224,7 +341,7 @@ describe('the device poll', () => {
 			if (asks() === 1) {
 				throw new TypeError('Failed to fetch');
 			}
-			return await new Promise<Response>(() => undefined);
+			return await hangs(init?.signal ?? undefined);
 		});
 
 		mount();

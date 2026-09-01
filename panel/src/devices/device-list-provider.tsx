@@ -23,6 +23,14 @@ import { ListDevicesResultSchema, type ListedDevice } from './device-list.js';
  * device poll runs while `Profile` is open, and an unreachable host takes `Profile` down with
  * everything else — recorded in §7, because the panel has exactly one live data source and this
  * is it.
+ *
+ * **Every interval's request carries the interval as its deadline** (#125). Request/response with
+ * no push means the screen is only ever as current as its last answer, so an answer that does not
+ * arrive inside one {@link POLL_MS} has stopped being this screen's answer and is abandoned. Before
+ * that, one request the host accepted and never answered held the in-flight guard below for the
+ * life of the tab: the interval kept firing, every tick was dropped, and the grid froze on the last
+ * good answer while `countdown.ts` went on ticking from `receivedAtMs` — a screen that still looked
+ * alive and only a reload could correct.
  */
 
 export const POLL_MS = 5_000;
@@ -60,55 +68,76 @@ export function DeviceListProvider({ children }: { readonly children: ReactNode 
 
 	// A *tick* that arrives while the interval's own request is still out is dropped rather than
 	// queued, so a host slower than the interval cannot have requests stacked on it. The guard is
-	// on `tick` and not on `ask`, which is what keeps `refresh` out of it.
+	// on `tick` and not on `ask`, which is what keeps `refresh` out of it — and it is **bounded**,
+	// by the deadline `tick` gives the request it holds the guard for. An unbounded one is what
+	// #125 was: the guard is only ever as temporary as the request behind it.
 	const asking = useRef(false);
 	const live = useRef(true);
 
-	const ask = useCallback(async (): Promise<void> => {
-		const answer = await call('list_devices', {});
-		if (!live.current) {
-			return;
-		}
-		if (!answer.ok) {
-			// A `refused` needs nothing here: `Session.call` has already fired `onRefusal`, and the
-			// router is coming down. Saying "unreachable" over it would be the panel's last word being
-			// the wrong one.
-			if (answer.refusal === 'unanswered') {
-				setState({ status: 'unreachable' });
+	const ask = useCallback(
+		async (signal?: AbortSignal): Promise<void> => {
+			const answer = await call('list_devices', {}, signal);
+			if (!live.current) {
+				return;
 			}
-			return;
-		}
-		// An `error` envelope and a result this panel cannot parse are folded in with `unanswered` on
-		// purpose, and only here — `host-client.ts` keeps the two vocabularies apart because one is
-		// about the credential and the connection while the other is a value. What this screen has to
-		// decide is narrower: nothing usable came back, and §7's headline "must not claim to know
-		// which" covers a daemon answering something this panel cannot read just as it covers one that
-		// answered nothing.
-		const parsed =
-			answer.value.type === 'result'
-				? ListDevicesResultSchema.safeParse(answer.value.result)
-				: undefined;
-		if (parsed === undefined || !parsed.success) {
-			setState({ status: 'unreachable' });
-			return;
-		}
-		setState({
-			status: 'ready',
-			devices: parsed.data.devices,
-			stale: parsed.data.stale,
-			receivedAtMs: Date.now(),
-		});
-	}, [call]);
+			if (!answer.ok) {
+				// A `refused` needs nothing here: `Session.call` has already fired `onRefusal`, and the
+				// router is coming down. Saying "unreachable" over it would be the panel's last word being
+				// the wrong one.
+				if (answer.refusal === 'unanswered') {
+					setState({ status: 'unreachable' });
+				}
+				return;
+			}
+			// An `error` envelope and a result this panel cannot parse are folded in with `unanswered` on
+			// purpose, and only here — `host-client.ts` keeps the two vocabularies apart because one is
+			// about the credential and the connection while the other is a value. What this screen has to
+			// decide is narrower: nothing usable came back, and §7's headline "must not claim to know
+			// which" covers a daemon answering something this panel cannot read just as it covers one that
+			// answered nothing.
+			const parsed =
+				answer.value.type === 'result'
+					? ListDevicesResultSchema.safeParse(answer.value.result)
+					: undefined;
+			if (parsed === undefined || !parsed.success) {
+				setState({ status: 'unreachable' });
+				return;
+			}
+			setState({
+				status: 'ready',
+				devices: parsed.data.devices,
+				stale: parsed.data.stale,
+				receivedAtMs: Date.now(),
+			});
+		},
+		[call],
+	);
 
-	/** The interval's ask, and the only one the in-flight guard applies to. */
+	/**
+	 * The interval's ask, and the only one the in-flight guard applies to — **with the interval as
+	 * the request's budget** (#125).
+	 *
+	 * `setTimeout` rather than `AbortSignal.timeout`, so the panel suite's fake timers can advance
+	 * to the deadline instead of waiting it out (`tests/unit/no-sleep.test.ts`).
+	 *
+	 * The guard is released in `finally` and **nowhere else**. Releasing it when the deadline fires
+	 * would let the abandoned request's `unreachable` land after the next tick's good answer and
+	 * overwrite it; aborting is enough, because an aborted `fetch` rejects promptly. The cost is
+	 * that the tick coinciding with the abort is still dropped, so a host that stops answering is
+	 * asked again on the interval after the deadline rather than on the one at it — a hung poll
+	 * recovers by itself, which is the whole point, and it does so without a second timer.
+	 */
 	const tick = useCallback(async (): Promise<void> => {
 		if (asking.current) {
 			return;
 		}
 		asking.current = true;
+		const controller = new AbortController();
+		const deadline = setTimeout(() => controller.abort(), POLL_MS);
 		try {
-			await ask();
+			await ask(controller.signal);
 		} finally {
+			clearTimeout(deadline);
 			asking.current = false;
 		}
 	}, [ask]);
@@ -131,6 +160,10 @@ export function DeviceListProvider({ children }: { readonly children: ReactNode 
 	 * against a host that accepts the connection and never answers. Sharing the guard there would
 	 * swallow the press, and since the button is not a spinner (§5) a swallowed press leaves no trace
 	 * at all. Asking again unconditionally costs one request.
+	 *
+	 * It carries **no deadline** either, and for the same reason: the interval's budget is the
+	 * interval, and a press has no next press to be superseded by. It holds nothing, so an
+	 * unbounded one blocks nothing.
 	 */
 	const refresh = useCallback((): void => {
 		void ask();

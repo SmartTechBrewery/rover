@@ -38,7 +38,7 @@ import {
 import type { Device, DeviceBackend, DeviceWatch, DeviceWatcher } from '@/core/device.js';
 import { parseDeviceSerial } from '@/core/ids.js';
 import { connectToLocalDaemon } from '@/daemon/connect.js';
-import { startHttpListener } from '@/daemon/http-listen.js';
+import { KEEP_ALIVE_TIMEOUT_MS, startHttpListener } from '@/daemon/http-listen.js';
 import { type RunningDaemon, startDaemon } from '@/daemon/listen.js';
 import {
 	HTTP_ADDRESS_ENV_VAR,
@@ -79,6 +79,14 @@ const REFUSAL_BODY = JSON.stringify({
 	id: null,
 	error: { code: 'unauthenticated', message: 'Authentication failed.' },
 });
+
+/**
+ * `POLL_MS` from `panel/src/devices/device-list-provider.tsx`, restated rather than imported: the
+ * panel is a separate tree and `@panel` must never mean two of them (`vitest.config.ts`). What
+ * keeps the two copies honest is `tests/unit/panel/poll-outlives-keep-alive.test.ts`, which reads
+ * the panel's own source.
+ */
+const PANEL_POLL_MS = 5_000;
 
 /** Short enough that the pre-auth deadline lands inside a test, long enough not to race it. */
 const SHORT_AUTH_TIMEOUT_MS = 250;
@@ -128,6 +136,45 @@ function registerFakeBackend(devices: Device[] = [attached, second]) {
 			describeDevice: async (serial) => createMockDevice({ serial }),
 		}),
 	});
+}
+
+/**
+ * The same fake backend, with its watcher kept so a test can deliver a **second** device set — an
+ * attach or a detach after the daemon is already up, which is what #125 is about.
+ */
+function registerWatchedBackend(devices: Device[] = [attached, second]): {
+	deliver: (next: Device[]) => void;
+} {
+	let watching: DeviceWatcher | undefined;
+	const watchDevices = vi.fn<DeviceBackend['watchDevices']>((watcher: DeviceWatcher) => {
+		watching = watcher;
+		watcher.onDevices(devices);
+		return { stop: vi.fn<DeviceWatch['stop']>(async () => {}) };
+	});
+	registerDeviceBackend({
+		manifest: {
+			platform: 'test-platform',
+			label: 'Test',
+			capabilities: {
+				canReadScreen: true,
+				canInput: true,
+				canControlNetwork: true,
+				canRecordVideo: true,
+			},
+		},
+		backend: createMockDeviceBackend({
+			watchDevices,
+			describeDevice: async (serial) => createMockDevice({ serial }),
+		}),
+	});
+	return {
+		deliver: (next: Device[]) => {
+			if (watching === undefined) {
+				throw new Error('Nothing is watching this backend yet');
+			}
+			watching.onDevices(next);
+		},
+	};
 }
 
 function httpConfig(overrides: Partial<HttpListenerConfig> = {}): HttpListenerConfig {
@@ -596,6 +643,60 @@ describe('only the panel’s methods are reachable, and no table gained a row', 
 
 		expect(unknown).toMatchObject({ error: { code: 'unknown_method' } });
 		expect(disallowed).toMatchObject({ error: { code: 'unknown_method' } });
+	});
+});
+
+describe('the panel’s poll gets a live answer, on a connection it is already holding', () => {
+	/*
+	 * #125's host half. The panel polls `list_devices` every `POLL_MS` = 5 000 ms over one
+	 * keep-alive connection, and Node's **default** `server.keepAliveTimeout` is 5 000 ms — the
+	 * same number — so every poll went out on a socket this listener was within its own response
+	 * time of closing. The loser of that race is an answer the panel never receives, and an answer
+	 * the panel never receives used to freeze the grid for the life of the tab.
+	 *
+	 * The advertised window is the assertion because it is what a client actually reads: Node puts
+	 * `keepAliveTimeout` on the wire as `Keep-Alive: timeout=<seconds>`, so this pins the number the
+	 * browser and the dev proxy are told, not merely the property that was set.
+	 */
+	it('advertises an idle window far longer than the panel’s poll interval', async () => {
+		registerFakeBackend();
+		await withStore();
+		const daemon = await startWithHttp();
+
+		const answered = await call(daemon, 'list_devices');
+
+		expect(answered.headers.connection).toBe('keep-alive');
+		expect(answered.headers['keep-alive']).toBe(`timeout=${KEEP_ALIVE_TIMEOUT_MS / 1_000}`);
+		expect(KEEP_ALIVE_TIMEOUT_MS).toBeGreaterThan(PANEL_POLL_MS * 2);
+	});
+
+	/*
+	 * And the answer itself follows the host, over the very connection the browser is already
+	 * holding — a detach delivered between two polls is gone from the second one. The unix socket
+	 * is asked at the same moment because two transports may never disagree about one device
+	 * (#123): they read one `DeviceInventory` through one `IpcServer`, and this is what keeps that
+	 * structural rather than assumed.
+	 */
+	it('answers the current inventory on the next poll, and the socket agrees', async () => {
+		const watched = registerWatchedBackend();
+		await withStore();
+		const daemon = await startWithHttp();
+		const agent = keepAlive();
+
+		const before = envelopeOf(await call(daemon, 'list_devices', {}, { agent }));
+		watched.deliver([attached]);
+		const after = await call(daemon, 'list_devices', {}, { agent });
+		const overUnix = await (await overSocket()).request('list_devices', {});
+
+		expect(JSON.stringify(before.result)).toContain('attached-2');
+		expect(after.body).not.toContain('attached-2');
+		expect(envelopeOf(after).result).toEqual({
+			devices: [{ ...attached, heldBy: null }],
+			stale: false,
+		});
+		// One connection, two polls, the second current — the browser never reconnected to get it.
+		expect(after.socket).toBe((await call(daemon, 'list_devices', {}, { agent })).socket);
+		expect(envelopeOf(after).result).toEqual(overUnix);
 	});
 });
 

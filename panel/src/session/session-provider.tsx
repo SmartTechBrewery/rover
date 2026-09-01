@@ -92,8 +92,16 @@ export interface Session {
 	 * for, exactly as `rpc` argues: this module knows about credentials and transports and
 	 * deliberately not about any method's shape. With no session held it answers `unanswered` —
 	 * nothing was asked, so nothing came back.
+	 *
+	 * `signal` is the caller's own deadline, and optional because only a repeating caller has one
+	 * to give (`host-client.ts`, `rpc`). An abandoned request answers `unanswered`, so a caller
+	 * that sets a budget needs no third status to read.
 	 */
-	readonly call: (method: string, params: unknown) => Promise<HostAnswer<RpcEnvelope>>;
+	readonly call: (
+		method: string,
+		params: unknown,
+		signal?: AbortSignal,
+	) => Promise<HostAnswer<RpcEnvelope>>;
 }
 
 const SessionContext = createContext<Session | undefined>(undefined);
@@ -219,12 +227,16 @@ export function SessionProvider({ children }: { readonly children: ReactNode }) 
 	}, [forget]);
 
 	const call = useCallback(
-		async (method: string, params: unknown): Promise<HostAnswer<RpcEnvelope>> => {
+		async (
+			method: string,
+			params: unknown,
+			signal?: AbortSignal,
+		): Promise<HostAnswer<RpcEnvelope>> => {
 			const live = session.current;
 			if (live === undefined) {
 				return { ok: false, refusal: 'unanswered' };
 			}
-			const answer = await rpc(live, method, params);
+			const answer = await rpc(live, method, params, signal);
 			if (!answer.ok && answer.refusal === 'refused') {
 				// Fired here rather than at the call site so a screen cannot forget it: a session the
 				// host will not take is *access ended*, and `app.tsx` takes the router down with it.
