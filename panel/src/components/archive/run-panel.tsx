@@ -12,6 +12,20 @@ import {
 } from './contents-card.js';
 
 /**
+ * The run's `<serial>` **together with the state of the answer it was read out of**.
+ *
+ * The serial is the run directory's `onlyChild` on the level *above* the run, so *the host has not
+ * answered for that level yet* and *the host cannot read that level* are states of an answer, not
+ * the absence of a serial. Folding all three into `string | null` is what let a run whose parent
+ * level was still in flight — or permanently unreadable — render as a run that wrote nothing.
+ */
+export type RunSerial =
+	| { readonly status: 'loading' }
+	| { readonly status: 'unreadable' }
+	/** The host answered for the level above: `serial` is its `onlyChild`, `null` when it named none. */
+	| { readonly status: 'answered'; readonly serial: string | null };
+
+/**
  * One run: what it is, and everything it wrote (`docs/DESIGN.md` §9).
  *
  * **A run is the deepest level of the tree, and its `<serial>` is not a level.** One lease is one
@@ -36,8 +50,8 @@ export function RunPanel({
 	contents,
 }: {
 	readonly run: readonly string[];
-	/** The run directory's `onlyChild`, or `null` — see {@link Contents}. */
-	readonly serial: string | null;
+	/** The run directory's `onlyChild`, with the state of the answer it came from — {@link RunSerial}. */
+	readonly serial: RunSerial;
 	readonly contents: ArchiveLevel;
 }) {
 	const name = run.at(-1) ?? '';
@@ -58,7 +72,7 @@ export function RunPanel({
 						 */}
 						<Field label="OWNER">{identity.owner ?? UNKNOWN}</Field>
 						<Field label="GRANTED">{identity.grantedAt ?? UNKNOWN}</Field>
-						<Field label="SERIAL">{serial ?? UNKNOWN}</Field>
+						<Field label="SERIAL">{serialText(serial)}</Field>
 					</div>
 				</section>
 
@@ -72,22 +86,48 @@ export function RunPanel({
 }
 
 /**
+ * What `SERIAL` reads, and **`unknown` is reserved for a run the host has answered about.**
+ *
+ * A serial nobody has answered for yet is *not known yet*, and one on a level the host cannot read
+ * is *not readable* — neither is the run naming no single child, which is the only fact `unknown`
+ * may stand for here (`docs/DESIGN.md` §9). All three are lower case for the reason `UNKNOWN` is:
+ * it is the screen saying what it does not have, not a value the host sent.
+ */
+function serialText(serial: RunSerial): string {
+	if (serial.status === 'loading') {
+		return 'reading';
+	}
+	if (serial.status === 'unreadable') {
+		return 'not readable';
+	}
+	return serial.serial ?? UNKNOWN;
+}
+
+/**
  * What the lease wrote, from one listing of the run's `<serial>` directory.
  *
- * **A `null` `serial` is not worked around.** It means the run directory holds something other than
- * exactly one entry, or the host could not read into it; there is no second request to go looking,
- * because one lease is one device and a run directory that is not that shape is a fact to state.
- * `SERIAL` reads `unknown` above and this says there is nothing to list — never an invented `0` and
- * never a guessed serial.
+ * **The state of the level *above* is ordered before this level's own**, because the serial is read
+ * off that level: while it is in flight there is nothing to list *yet*, and when it cannot be read
+ * nobody can say whether there is. Only a level that answered and named no single child reaches
+ * {@link Nothing} — a run directory holding something other than exactly one entry, which is a fact
+ * to state rather than to go looking for with a second request, since one lease is one device.
+ *
+ * `SERIAL` above draws the same distinction, and neither ever invents a `0` or guesses a serial.
  */
 function Contents({
 	serial,
 	contents,
 }: {
-	readonly serial: string | null;
+	readonly serial: RunSerial;
 	readonly contents: ArchiveLevel;
 }) {
-	if (serial === null) {
+	if (serial.status === 'loading') {
+		return <ReadingLevel />;
+	}
+	if (serial.status === 'unreadable') {
+		return <NotReadableInCard />;
+	}
+	if (serial.serial === null) {
 		return <Nothing />;
 	}
 	if (contents.status === 'loading') {

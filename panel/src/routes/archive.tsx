@@ -8,7 +8,7 @@ import { componentsFromSplat, levelsOf, splatFromComponents } from '@panel/archi
 import { ArchiveNotReadable } from '@panel/components/archive/contents-card.js';
 import { DirectoryTree } from '@panel/components/archive/directory-tree.js';
 import { LevelContents } from '@panel/components/archive/level-contents.js';
-import { RunPanel } from '@panel/components/archive/run-panel.js';
+import { RunPanel, type RunSerial } from '@panel/components/archive/run-panel.js';
 import type { BreadcrumbSegment } from '@panel/components/layout/breadcrumb.js';
 import { PageHeader } from '@panel/components/layout/page-header.js';
 import { QuietPanel } from '@panel/components/quiet-panel.js';
@@ -52,7 +52,8 @@ export function ArchiveScreen() {
 	 * returned, which no single list of levels can express.
 	 */
 	const serial = serialOf(levels, selected);
-	const runContents = useArchiveLevels(serial === null ? NO_LEVELS : [[...selected, serial]]);
+	const serialLevel = serialPath(selected, serial);
+	const runContents = useArchiveLevels(serialLevel === null ? NO_LEVELS : [serialLevel]);
 
 	const level = levelAt(levels, selected);
 	const depth = selected.length;
@@ -84,7 +85,7 @@ function Content({
 }: {
 	readonly selected: readonly string[];
 	readonly levels: ArchiveLevels;
-	readonly serial: string | null;
+	readonly serial: RunSerial;
 	readonly runContents: ArchiveLevels;
 }) {
 	const root = levelAt(levels, []);
@@ -109,12 +110,12 @@ function Content({
 			<DirectoryTree levels={levels} selected={selected} />
 			{selected.length === 3 ? (
 				/*
-				 * With no serial there is no level to read and `RunPanel` says so without looking at
-				 * `contents`; `[]` is a path `runContents` never holds, so it reads as `loading` and
-				 * goes unused.
+				 * With no serial there is no level to read and `RunPanel` says so from `serial` alone
+				 * without looking at `contents`; `[]` is a path `runContents` never holds, so it reads
+				 * as `loading` and goes unused.
 				 */
 				<RunPanel
-					contents={levelAt(runContents, serial === null ? [] : [...selected, serial])}
+					contents={levelAt(runContents, serialPath(selected, serial) ?? [])}
 					run={selected}
 					serial={serial}
 				/>
@@ -198,20 +199,45 @@ function trailFor(selected: readonly string[]): readonly BreadcrumbSegment[] {
 /**
  * The run's `<serial>`, from the listing of the level above it — never a request of its own.
  *
- * `null` whenever the level above has not answered, does not name this run, or names it as
- * something other than a directory holding exactly one entry. Every one of those is a fact to
- * state rather than something to work around (see `RunPanel`).
+ * **The level above's own state is carried out with it, never collapsed into a missing serial.** A
+ * level still in flight and a level the host cannot read are answers the screen has not got, and
+ * folding them into the same `null` as a run that names no single child made the panel state *there
+ * is nothing to list for this run* about a run nobody had answered for yet — and, on the unreadable
+ * path, about one nobody ever will. Each of the three is a different sentence (see `RunPanel`).
+ *
+ * An `empty` level above is `answered` with no serial: it named no runs at all, so this run is not
+ * there, and *nothing to list* is the honest thing to say about it.
  */
-function serialOf(levels: ArchiveLevels, selected: readonly string[]): string | null {
+function serialOf(levels: ArchiveLevels, selected: readonly string[]): RunSerial {
 	if (selected.length !== 3) {
-		return null;
+		// Not a run, so nothing reads this — `answered` rather than a state that would draw one.
+		return NO_SERIAL;
 	}
 	const parent = levelAt(levels, selected.slice(0, 2));
-	if (parent.status !== 'listed') {
-		return null;
+	if (parent.status === 'loading' || parent.status === 'unreadable') {
+		return { status: parent.status };
+	}
+	if (parent.status === 'empty') {
+		return NO_SERIAL;
 	}
 	const run = parent.entries.find((entry) => entry.name === selected[2]);
-	return run !== undefined && run.kind === 'directory' ? run.onlyChild : null;
+	return {
+		status: 'answered',
+		serial: run !== undefined && run.kind === 'directory' ? run.onlyChild : null,
+	};
+}
+
+/** Answered, with no serial to give: the level above named no such run, or named nothing at all. */
+const NO_SERIAL: RunSerial = { status: 'answered', serial: null };
+
+/**
+ * The path of the run's `<serial>` level, or `null` when there is no serial to read one for — the
+ * one level whose address is derived from an answer rather than from the URL.
+ */
+function serialPath(selected: readonly string[], serial: RunSerial): readonly string[] | null {
+	return serial.status === 'answered' && serial.serial !== null
+		? [...selected, serial.serial]
+		: null;
 }
 
 /**

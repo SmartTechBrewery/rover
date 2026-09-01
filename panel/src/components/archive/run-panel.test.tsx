@@ -1,7 +1,7 @@
 import type { ArchiveLevel } from '@panel/archive/archive-levels.js';
 import { render, screen } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
-import { RunPanel } from './run-panel.js';
+import { RunPanel, type RunSerial } from './run-panel.js';
 
 const RUN = ['checkout-app', 'login-flow', '20260830T170501Z-issue-112-9f1c2ab4'] as const;
 
@@ -17,7 +17,12 @@ const CONTENTS: ArchiveLevel = {
 	],
 };
 
-function showing(serial: string | null = 'R5CT30ABCDE', contents: ArchiveLevel = CONTENTS) {
+/** The level above answered and named the run's one child — the ordinary case. */
+const NAMED: RunSerial = { status: 'answered', serial: 'R5CT30ABCDE' };
+/** It answered, and the run directory holds something other than exactly one entry. */
+const NO_SINGLE_CHILD: RunSerial = { status: 'answered', serial: null };
+
+function showing(serial: RunSerial = NAMED, contents: ArchiveLevel = CONTENTS) {
 	return render(<RunPanel contents={contents} run={RUN} serial={serial} />);
 }
 
@@ -44,11 +49,51 @@ describe('a run', () => {
 	 * and nothing to list — never an invented `0`, and never a second request to go looking.
 	 */
 	it('says `unknown` and lists nothing when the run holds no single child', () => {
-		const { container } = showing(null);
+		const { container } = showing(NO_SINGLE_CHILD);
 
 		expect(screen.getByText('unknown')).toBeDefined();
 		expect(screen.getByText('There is nothing to list for this run.')).toBeDefined();
 		expect(container.textContent).not.toContain('0 files');
+	});
+});
+
+/*
+ * **The pair that must never render alike, one level further up.** The serial comes off the level
+ * *above* the run, so *nobody has answered for that level yet* and *the host cannot read it* are not
+ * the run naming no single child — and *there is nothing to list for this run* is a definite claim
+ * about what a lease wrote. Both of these reach here with a fully listed `contents` on purpose: the
+ * state of the level above is ordered first, so a listing for some other level cannot leak in.
+ */
+describe('the level the serial is read from', () => {
+	it('says it is reading, rather than that the run wrote nothing', () => {
+		const { container } = showing({ status: 'loading' });
+
+		expect(screen.getByText('reading')).toBeDefined();
+		expect(screen.getByText('Reading this level of the archive.')).toBeDefined();
+		expect(container.textContent).not.toContain('There is nothing to list for this run.');
+		expect(container.textContent).not.toContain('device_info.json');
+		expect(container.innerHTML).not.toContain('animate');
+	});
+
+	it('says the host cannot read it, rather than that the run wrote nothing', () => {
+		const { container } = showing({ status: 'unreadable' });
+
+		expect(screen.getByText('not readable')).toBeDefined();
+		expect(screen.getByText('ARCHIVE NOT READABLE')).toBeDefined();
+		expect(screen.getByText(/runs may well be filed here/)).toBeDefined();
+		expect(container.textContent).not.toContain('There is nothing to list for this run.');
+		expect(container.textContent).not.toContain('device_info.json');
+	});
+
+	// `unknown` is the screen saying the host answered and had no serial to give, so neither state
+	// above may borrow it — that is the whole distinction these three sentences exist to draw.
+	it('never reads `unknown` for a level that has not answered or cannot be read', () => {
+		for (const serial of [{ status: 'loading' }, { status: 'unreadable' }] as const) {
+			const { container, unmount } = showing(serial);
+
+			expect(container.textContent).not.toContain('unknown');
+			unmount();
+		}
 	});
 });
 
@@ -71,7 +116,7 @@ describe('what the run wrote', () => {
 	});
 
 	it('says `unknown` for a size the host could not read', () => {
-		showing('R5CT30ABCDE', {
+		showing(NAMED, {
 			status: 'listed',
 			entries: [{ kind: 'file', name: 'notes.txt', sizeBytes: null }],
 		});
@@ -133,20 +178,20 @@ describe('what is not on this panel', () => {
 
 describe('contents that could not be read', () => {
 	it('says the host cannot see into the directory, apart from saying it is empty', () => {
-		showing('R5CT30ABCDE', { status: 'unreadable' });
+		showing(NAMED, { status: 'unreadable' });
 
 		expect(screen.getByText('ARCHIVE NOT READABLE')).toBeDefined();
 		expect(screen.getByText(/runs may well be filed here/)).toBeDefined();
 	});
 
 	it('says an empty one plainly', () => {
-		showing('R5CT30ABCDE', { status: 'empty' });
+		showing(NAMED, { status: 'empty' });
 
 		expect(screen.getByText(/Nothing is filed under this directory/)).toBeDefined();
 	});
 
 	it('says it is reading, with no spinner', () => {
-		const { container } = showing('R5CT30ABCDE', { status: 'loading' });
+		const { container } = showing(NAMED, { status: 'loading' });
 
 		expect(screen.getByText('Reading this level of the archive.')).toBeDefined();
 		expect(container.innerHTML).not.toContain('animate');

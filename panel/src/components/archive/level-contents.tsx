@@ -2,6 +2,7 @@ import type { ArchiveLevel } from '@panel/archive/archive-levels.js';
 import type { ArchiveEntry } from '@panel/archive/archive-listing.js';
 import { splatFromComponents } from '@panel/archive/archive-path.js';
 import { UNKNOWN } from '@panel/archive/file-size.js';
+import { orderedEntries } from '@panel/archive/level-order.js';
 import { decomposeRunName } from '@panel/archive/run-identity.js';
 import { Link } from '@tanstack/react-router';
 import {
@@ -69,25 +70,13 @@ function Body({ path, level }: { readonly path: readonly string[]; readonly leve
 	}
 	return (
 		<ul>
-			{ordered(level.entries, path.length).map((entry) => (
+			{orderedEntries(level.entries, path.length).map((entry) => (
 				<li key={entry.name}>
 					<Row depth={path.length} entry={entry} path={[...path, entry.name]} />
 				</li>
 			))}
 		</ul>
 	);
-}
-
-/**
- * The host's own fixed order, reversed at the run level so the most recent run is first.
- *
- * **Reversing is not parsing.** The order is chronological by construction, because a lease
- * directory leads with a UTC basic-format timestamp precisely so that it sorts chronologically as
- * text (`src/daemon/archive-path.ts`, `archiveTimestamp`), and the daemon sorts in code-unit order
- * for exactly that reason. Above the run level the order stays the host's, which is alphabetical.
- */
-function ordered(entries: readonly ArchiveEntry[], depth: number): readonly ArchiveEntry[] {
-	return depth === 2 ? [...entries].reverse() : entries;
 }
 
 /**

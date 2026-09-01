@@ -36,11 +36,16 @@ vi.mock('@tanstack/react-router', () => ({
  * The host, one answer per level. Driven through the real `useArchiveLevels` rather than a stub of
  * it, because half of what this screen does is decide which levels to ask for.
  */
-const { host } = vi.hoisted(() => ({
+const { host, HANGS } = vi.hoisted(() => ({
+	/**
+	 * One level's answer, when what the test needs is *no* answer for that level alone. The levels
+	 * are independent round trips, so which one has come back is half of what this screen renders.
+	 */
+	HANGS: '__hangs__',
 	host: {
 		answers: new Map<string, unknown>(),
 		asked: [] as unknown[],
-		/** Accepts the request and never answers it — the state before the first answer. */
+		/** Accepts every request and never answers it — the state before the first answer. */
 		hangs: false,
 	},
 }));
@@ -52,6 +57,9 @@ vi.mock('@panel/session/session-provider.js', () => ({
 				return await new Promise(() => undefined);
 			}
 			const answer = host.answers.get(JSON.stringify(params.path));
+			if (answer === HANGS) {
+				return await new Promise(() => undefined);
+			}
 			return answer === undefined
 				? { ok: true, value: { type: 'result', result: { outcome: 'missing' } } }
 				: { ok: true, value: { type: 'result', result: answer } };
@@ -70,14 +78,18 @@ function listed(...entries: readonly unknown[]) {
 }
 
 const RUN = '20260830T170501Z-issue-112-9f1c2ab4';
+/** The run filed the day before, and the one the host's own ascending order puts first. */
+const OLDER = '20260829T142201Z-issue-112-4b0e7c15';
 
 /** The archive every test below browses, unless it replaces a level. */
 function archive(): Record<string, unknown> {
 	return {
 		'[]': listed(directory('checkout-app'), directory('payments-web')),
 		'["checkout-app"]': listed(directory('login-flow', 42), directory('unlabeled', 1)),
+		// The host's own order: ascending code-unit over names that lead with a UTC timestamp, so
+		// oldest first (`src/daemon/list-archive.ts`). Both panes reverse it, and neither invents it.
 		'["checkout-app","login-flow"]': listed(
-			directory('20260829T142201Z-issue-112-4b0e7c15', 1, 'emulator-5554'),
+			directory(OLDER, 1, 'emulator-5554'),
 			directory(RUN, 1, 'R5CT30ABCDE'),
 		),
 		'["checkout-app","login-flow","20260830T170501Z-issue-112-9f1c2ab4","R5CT30ABCDE"]': listed(
@@ -297,6 +309,72 @@ describe('before the host has answered', () => {
 		expect(screen.getByText("Reading the host's artifact archive.")).toBeDefined();
 		expect(container.innerHTML).not.toContain('animate');
 		expect(screen.queryByText('DIRECTORY')).toBeNull();
+	});
+});
+
+/*
+ * **The two panes list the same run directories side by side**, so an order decided twice is an
+ * order they can disagree on — which is what `panel/src/archive/level-order.ts` exists to stop.
+ */
+describe('the order the runs are listed in', () => {
+	it('is most recent first in the tree and in the contents card alike', async () => {
+		const { container } = await showing('checkout-app/login-flow');
+
+		// By where each name first appears, because a tree row and a card row share no markup.
+		const order = (pane: Element | null) => {
+			const text = pane?.textContent ?? '';
+			return [OLDER, RUN].sort((first, second) => text.indexOf(first) - text.indexOf(second));
+		};
+
+		expect(order(container.querySelector('aside'))).toEqual([RUN, OLDER]);
+		expect(order(container.querySelector('section'))).toEqual([RUN, OLDER]);
+	});
+});
+
+/*
+ * **The state a shared link lands in.** The levels are independent round trips and the root is the
+ * smallest `readdir`, so it commonly answers first and the run panel renders with the level above it
+ * still in flight — or, when that level cannot be read, never coming. Neither is *this run wrote
+ * nothing*: that sentence is a definite claim about a lease, out of an answer the host has not given.
+ */
+describe('a run whose level above has not answered', () => {
+	it('says it is reading, and never that there is nothing to list', async () => {
+		const { container } = await showing(`checkout-app/login-flow/${RUN}`, {
+			...archive(),
+			'["checkout-app","login-flow"]': HANGS,
+		});
+
+		expect(screen.getByText('Reading this level of the archive.')).toBeDefined();
+		expect(screen.getByText('reading')).toBeDefined();
+		expect(container.textContent).not.toContain('There is nothing to list for this run.');
+		expect(container.textContent).not.toContain('unknown');
+		expect(container.innerHTML).not.toContain('animate');
+		// And no serial to ask for a level by, so the fourth request is not made on a guess.
+		expect(host.asked).toEqual([[], ['checkout-app'], ['checkout-app', 'login-flow']]);
+	});
+
+	it('says the host cannot read that level, and never that there is nothing to list', async () => {
+		const { container } = await showing(`checkout-app/login-flow/${RUN}`, {
+			...archive(),
+			'["checkout-app","login-flow"]': { outcome: 'unreadable' },
+		});
+
+		expect(screen.getByText('ARCHIVE NOT READABLE')).toBeDefined();
+		expect(screen.getByText(/runs may well be filed here/)).toBeDefined();
+		expect(screen.getByText('not readable')).toBeDefined();
+		expect(container.textContent).not.toContain('There is nothing to list for this run.');
+	});
+
+	// The one state that sentence is for: the host answered, and the run holds no single child.
+	it('says there is nothing to list only when the level above named no serial', async () => {
+		const { container } = await showing(`checkout-app/login-flow/${RUN}`, {
+			...archive(),
+			'["checkout-app","login-flow"]': listed(directory(RUN, 2, null)),
+		});
+
+		expect(screen.getByText('There is nothing to list for this run.')).toBeDefined();
+		expect(screen.getByText('unknown')).toBeDefined();
+		expect(container.textContent).not.toContain('ARCHIVE NOT READABLE');
 	});
 });
 

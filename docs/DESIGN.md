@@ -856,11 +856,14 @@ The depth decides what a row is; **no name is ever parsed to decide what a level
 - **`RUNS` reads `childCount`, and `null` is `unknown` — never `0`.** A `0` would say *no runs* about
   a directory the host could not read into, which is the exact distinction `childCount: null` exists
   on the wire to carry.
-- **Runs are listed most recent first**, which is the host's own fixed order reversed. Reversing is
-  not parsing: a lease directory leads with a UTC basic-format timestamp precisely so that it sorts
-  chronologically as text (`src/daemon/archive-path.ts`), and the daemon sorts in code-unit order for
-  that reason. The describing line says *most recent first* so the order is claimed rather than left
-  to be inferred.
+- **Runs are listed most recent first — in the tree and in the contents card alike**, which is the
+  host's own fixed order reversed. Reversing is not parsing: a lease directory leads with a UTC
+  basic-format timestamp precisely so that it sorts chronologically as text
+  (`src/daemon/archive-path.ts`), and the daemon sorts in code-unit order for that reason. The
+  describing line says *most recent first* so the order is claimed rather than left to be inferred.
+  **One helper decides it for both panes** (`panel/src/archive/level-order.ts`): they list the same
+  run directories side by side, and a pane that kept the host's order beside one that reversed read
+  as two different lists.
 - **A legacy `unlabeled/` directory lists like any other folder.** It was the fallback for a lease
   taken without a `test_name` before #129 required one (D22); nothing on this screen knows the word,
   and a run filed under it browses like any other.
@@ -881,6 +884,14 @@ The depth decides what a row is; **no name is ever parsed to decide what a level
 - **A `null` `onlyChild` is stated, not worked around.** `SERIAL` reads `unknown` and `CONTENTS` says
   there is nothing to list. There is no second request to go looking: a run directory that is not
   one-device shaped is a fact, and an invented `0` would be a claim.
+- **And *no serial yet* is a third thing again, never that one.** The serial is read off the level
+  *above* the run, and that level has its own three answers: while it is in flight `SERIAL` reads
+  `reading` and `CONTENTS` says it is reading, and when the host cannot read it `SERIAL` reads
+  `not readable` and `CONTENTS` carries the banner. Only a level that answered and named no single
+  child gets *there is nothing to list for this run* — a definite negative about what a lease wrote
+  is exactly what must not be rendered out of an answer nobody has given (D6, and the state table
+  below). This matters because the levels are four independent round trips: the root usually answers
+  first, so a link straight to a run renders the run panel before the level above it has come back.
 - **`CONTENTS`** lists the `<serial>` directory: a directory as `<name>/` with its count (`1 file`
   singular), a file with `formatBytes(sizeBytes)`, and a `kind: 'other'` entry by name with no
   measure. The design's footnote is kept — *A directory that is not listed does not exist — a verb

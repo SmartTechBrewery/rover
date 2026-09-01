@@ -1,5 +1,6 @@
 import { type ArchiveLevels, levelAt } from '@panel/archive/archive-levels.js';
 import { keyOf, splatFromComponents } from '@panel/archive/archive-path.js';
+import { orderedEntries } from '@panel/archive/level-order.js';
 import { Link } from '@tanstack/react-router';
 import { ChevronDown, ChevronRight, Folder, FolderOpen } from 'lucide-react';
 
@@ -66,6 +67,10 @@ export function DirectoryTree({
  * **Only a directory becomes a row.** The tree is the navigable structure; the complete listing —
  * including a file or a `kind: 'other'` entry the archive is not supposed to have at this level —
  * is the contents card's job, and it does say so rather than dropping it.
+ *
+ * **The order comes from `orderedEntries`, which is the contents card's too**: the two panes list
+ * the same run directories side by side, so *most recent first* is decided once for both rather
+ * than remembered separately by each.
  */
 function Branch({
 	path,
@@ -94,7 +99,7 @@ function Branch({
 
 	return (
 		<ul className="space-y-1">
-			{level.entries
+			{orderedEntries(level.entries, depth)
 				.filter((entry) => entry.kind === 'directory')
 				.map((entry) => {
 					const childPath = [...path, entry.name];

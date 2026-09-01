@@ -35,16 +35,21 @@ function listed(...entries: readonly ArchiveEntry[]): ArchiveLevel {
 }
 
 const RUN = '20260830T170501Z-issue-112-9f1c2ab4';
+/** The run filed the day before — the one the host's own ascending order puts first. */
+const OLDER = '20260829T142201Z-issue-112-4b0e7c15';
 
-/** The archive the tests below browse: two projects, two test names, two runs. */
+/**
+ * The archive the tests below browse: two projects, two test names, two runs.
+ *
+ * **The run level is seeded in the host's own order**, which is ascending code-unit over names that
+ * lead with a UTC basic-format timestamp, so oldest first (`src/daemon/list-archive.ts`). Seeding it
+ * already-descending is what let the tree and the contents card disagree unseen.
+ */
 function archive(overrides: Record<string, ArchiveLevel> = {}): ArchiveLevels {
 	const levels = new Map<string, ArchiveLevel>([
 		[keyOf([]), listed(directory('checkout-app'), directory('payments-web'))],
 		[keyOf(['checkout-app']), listed(directory('login-flow', 42), directory('unlabeled', 1))],
-		[
-			keyOf(['checkout-app', 'login-flow']),
-			listed(directory(RUN, 1), directory('20260829T142201Z-issue-112-4b0e7c15', 1)),
-		],
+		[keyOf(['checkout-app', 'login-flow']), listed(directory(OLDER, 1), directory(RUN, 1))],
 	]);
 	for (const [path, level] of Object.entries(overrides)) {
 		levels.set(path, level);
@@ -95,6 +100,17 @@ describe('the tree', () => {
 		expect(selected[0]?.getAttribute('aria-current')).toBe('page');
 	});
 
+	// Most recent first, out of the host's oldest-first order — and it is the contents card's order
+	// too, decided once in `level-order.ts` for both panes rather than by each of them.
+	it('lists the runs most recent first, as the contents card does', () => {
+		const { container } = showing(['checkout-app', 'login-flow']);
+
+		const runs = rows(container)
+			.map((row) => row.textContent ?? '')
+			.filter((name) => name.startsWith('2026'));
+		expect(runs).toEqual([RUN, OLDER]);
+	});
+
 	it('links every row to its own level', () => {
 		const { container } = showing(['checkout-app']);
 
@@ -112,15 +128,7 @@ describe('what a row may carry', () => {
 		// The card's heading and the names, and **nothing else at all** — asserted as the exact text
 		// rather than by searching for a digit, because a run's hash is full of digits.
 		expect(container.textContent).toBe(
-			[
-				'DIRECTORY',
-				'checkout-app',
-				'login-flow',
-				RUN,
-				'20260829T142201Z-issue-112-4b0e7c15',
-				'unlabeled',
-				'payments-web',
-			].join(''),
+			['DIRECTORY', 'checkout-app', 'login-flow', RUN, OLDER, 'unlabeled', 'payments-web'].join(''),
 		);
 	});
 
