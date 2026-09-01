@@ -445,6 +445,7 @@ describe('one surface, a third transport', () => {
 				serial: attached.serial,
 				owner: 'issue-113',
 				project: 'rover',
+				testName: 'checkout flow',
 			}),
 		).resolves.toMatchObject({ outcome: 'granted' });
 
@@ -559,6 +560,7 @@ describe('only the panel’s methods are reachable, and no table gained a row', 
 			serial: attached.serial,
 			owner: 'a-browser-tab',
 			project: 'panel',
+			testName: 'checkout flow',
 		});
 
 		// The allowlist is transport policy, not table surgery: nothing ran here, and the same
@@ -570,6 +572,7 @@ describe('only the panel’s methods are reachable, and no table gained a row', 
 				serial: attached.serial,
 				owner: 'a-real-client',
 				project: 'panel',
+				testName: 'checkout flow',
 			}),
 		).resolves.toMatchObject({ outcome: 'granted' });
 	});

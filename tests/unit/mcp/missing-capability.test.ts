@@ -103,6 +103,7 @@ async function acquire(agent: Client): Promise<string> {
 		serial: SERIAL,
 		owner: 'issue-89',
 		project: 'rover',
+		testName: 'checkout flow',
 	});
 	const answer = granted.structuredContent as {
 		outcome: string;
@@ -242,6 +243,7 @@ describe('what the agent was told before it asked', () => {
 			serial: SERIAL,
 			owner: 'issue-89',
 			project: 'rover',
+			testName: 'checkout flow',
 		});
 
 		// The other half of D11 being *readable*: an agent that reads this never has to discover

@@ -143,6 +143,7 @@ describe.skipIf(!process.env.ROVER_TEST_LOCAL_DEVICE)('the daemon restores a rea
 			serial: device.serial,
 			owner: 'device-suite',
 			project: 'rover',
+			testName: 'checkout flow',
 		});
 		if (granted.outcome !== 'granted') {
 			throw new Error(`the acquire must be granted, got '${granted.message}'`);
@@ -166,6 +167,7 @@ describe.skipIf(!process.env.ROVER_TEST_LOCAL_DEVICE)('the daemon restores a rea
 			serial: device.serial,
 			owner: 'device-suite',
 			project: 'rover',
+			testName: 'checkout flow',
 		});
 		if (granted.outcome !== 'granted') {
 			throw new Error(`the acquire must be granted, got '${granted.message}'`);

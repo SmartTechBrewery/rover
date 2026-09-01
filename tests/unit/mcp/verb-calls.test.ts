@@ -105,6 +105,7 @@ async function acquire(agent: Client): Promise<string> {
 		serial: SERIAL,
 		owner: 'issue-89',
 		project: 'rover',
+		testName: 'checkout flow',
 	});
 	const answer = granted.structuredContent as { outcome: string; lease?: { leaseId: string } };
 	if (answer.outcome !== 'granted' || !answer.lease) {

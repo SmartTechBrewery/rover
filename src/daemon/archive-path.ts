@@ -34,15 +34,6 @@ import type { Lease } from './leases.js';
 export const ARTIFACTS_PATH_ENV_VAR = 'ROVER_ARTIFACTS_PATH';
 
 /**
- * What an absent `test_name` files under (PROJECT.md §10).
- *
- * One fixed name rather than a missing level, so the tree shape never branches on whether
- * the field was supplied: `<project>/<test_name>/<lease>/<serial>` is always four levels,
- * and anything walking it counts on that.
- */
-export const UNLABELED = 'unlabeled';
-
-/**
  * The longest one path component may be, before the collision suffix.
  *
  * 255 bytes is the per-component limit every filesystem this runs on has, and the strings
@@ -110,6 +101,11 @@ export function leaseDirectoryName(lease: Lease): string {
  * The one directory this lease's artifacts for this device go in:
  * `<root>/<project>/<test_name>/<lease>/<device-serial>`.
  *
+ * **Always four levels**, and the shape never branches on whether a field was supplied: all
+ * three caller strings are required (D22, as amended #129), so there is no missing level to
+ * stand in for and no fixed directory name invented for a lease that named nothing. Anything
+ * walking this tree counts on that.
+ *
  * Every component goes through {@link pathSegment}, which is the whole of the containment
  * guarantee — no component can be `..`, contain a separator, or start with a `.`.
  */
@@ -117,7 +113,7 @@ export function leaseArchiveDirectory(root: string, lease: Lease): string {
 	return join(
 		root,
 		pathSegment(lease.project),
-		pathSegment(lease.testName ?? UNLABELED),
+		pathSegment(lease.testName),
 		leaseDirectoryName(lease),
 		pathSegment(lease.serial),
 	);

@@ -170,25 +170,3 @@ export function attributionWithDefault(
 	}
 	return requireAttribution(command, name, value, why);
 }
-
-/**
- * An optional attribution string. Absent is fine; present-but-blank is not — a flag typed
- * with nothing after it is a mistake, and omitting it is how you say there is nothing to
- * name.
- */
-export function optionalAttribution(
-	command: string,
-	name: string,
-	value: string | undefined,
-): string | undefined {
-	if (value === undefined) {
-		return undefined;
-	}
-	if (value.trim().length === 0) {
-		throw new UsageError(
-			`rover ${command}: --${name} was given with no value — omit the flag rather than ` +
-				`passing an empty one.`,
-		);
-	}
-	return boundAttribution(command, name, value);
-}

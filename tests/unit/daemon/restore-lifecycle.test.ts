@@ -156,6 +156,7 @@ describe('the sweep the daemon runs on its own', () => {
 			serial: SERIAL,
 			owner: 'issue-112',
 			project: 'rover',
+			testName: 'checkout flow',
 		});
 
 		// The row's headline criterion: the agent holding this device is gone. Nothing releases
@@ -177,6 +178,7 @@ describe('shutting the daemon down mid-restoration', () => {
 			serial: SERIAL,
 			owner: 'issue-112',
 			project: 'rover',
+			testName: 'checkout flow',
 		});
 		if (granted.outcome !== 'granted') throw new Error('expected a granted lease');
 		// Answers the moment the record is gone, deliberately — the restoration it started is
@@ -236,6 +238,7 @@ describe('restoring a device the previous holder is still driving', () => {
 			serial: SERIAL,
 			owner: 'issue-21',
 			project: 'rover',
+			testName: 'checkout flow',
 		});
 		if (granted.outcome !== 'granted') throw new Error('expected a granted lease');
 		const { leaseId } = granted.lease;

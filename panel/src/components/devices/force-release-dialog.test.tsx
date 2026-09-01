@@ -79,11 +79,12 @@ describe('what the confirmation says', () => {
 		expect(container.textContent).not.toMatch(/\bTest\b(?!\s*name)/i);
 	});
 
-	// Genuinely optional (D22), and absent means absent: no empty label, no `—`.
-	it('omits the test name when the lease has none', () => {
-		asking({ lease: { ...LEASE, testName: null } });
+	// Required (D22, as amended #129): the dialog always has one to show, and no `—` stands in.
+	it('renders the test name of the lease it would end', () => {
+		asking({ lease: { ...LEASE, testName: 'the checkout flow' } });
 
-		expect(screen.queryByText('Test name')).toBeNull();
+		expect(screen.getByText('Test name')).toBeDefined();
+		expect(screen.getByText('the checkout flow')).toBeDefined();
 		expect(screen.queryByText('—')).toBeNull();
 	});
 

@@ -150,7 +150,7 @@ export const LeaseHolderSchema = z
 		serial: DeviceSerialSchema,
 		owner: z.string(),
 		project: z.string(),
-		testName: z.string().nullable(),
+		testName: z.string(),
 		/**
 		 * When this lease was **granted**, as an ISO-8601 instant with a `Z`. The one field on
 		 * this schema that is an instant rather than a duration, and so the one deliberate
@@ -259,8 +259,12 @@ export const AttributionStringSchema = z.string().min(1).max(ATTRIBUTION_MAX_LEN
  * attribution string silently missing — which the archive would only discover later, with
  * the device already handed out.
  *
- * `testName` is optional and deliberately **not unique** (D22): the same named check run
- * before and after a change is two leases carrying one name, which is the expected shape.
+ * `testName` is **required** — a lease always names what it is checking, because that name is
+ * this lease's directory in the host's artifact archive and a fallback the approved designs do
+ * not have is a directory the code would invent for nobody (D22, as amended #129; PROJECT.md
+ * §10). It stays deliberately **not unique**: the same named check run before and after a
+ * change is two leases carrying one name, which is the expected shape and what puts the two
+ * runs side by side for the comparison (D24).
  */
 export const AcquireDeviceParamsSchema = z
 	.object({
@@ -273,7 +277,11 @@ export const AcquireDeviceParamsSchema = z
 		 * nothing: naming a project is not a claim to it.
 		 */
 		project: AttributionStringSchema,
-		testName: AttributionStringSchema.optional(),
+		/**
+		 * What this lease is checking. Attribution, and the name the archive files this lease's
+		 * artifacts under (D22, D24) — opaque here, parsed by nothing, and not unique.
+		 */
+		testName: AttributionStringSchema,
 	})
 	.strict();
 export type AcquireDeviceParams = z.infer<typeof AcquireDeviceParamsSchema>;
@@ -292,7 +300,7 @@ export const GrantedLeaseSchema = z
 		serial: DeviceSerialSchema,
 		owner: z.string(),
 		project: z.string(),
-		testName: z.string().nullable(),
+		testName: z.string(),
 		expiresInMs: z.number().int().nonnegative(),
 	})
 	.strict();

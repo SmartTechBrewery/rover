@@ -349,6 +349,7 @@ describe('one surface, two transports', () => {
 			serial: attached.serial,
 			owner: 'issue-112',
 			project: 'rover',
+			testName: 'checkout flow',
 		});
 		if (acquired.outcome !== 'granted') {
 			throw new Error(`The device was refused: ${acquired.message}`);
@@ -395,6 +396,7 @@ describe('the token authenticates, the owner string attributes (D20)', () => {
 			serial: attached.serial,
 			owner: 'pr-127-review',
 			project: 'rover',
+			testName: 'checkout flow',
 		});
 		if (acquired.outcome !== 'granted') {
 			throw new Error(`The device was refused: ${acquired.message}`);
@@ -404,6 +406,7 @@ describe('the token authenticates, the owner string attributes (D20)', () => {
 			serial: attached.serial,
 			owner: 'someone-else',
 			project: 'rover',
+			testName: 'checkout flow',
 		});
 
 		expect(acquired.lease.owner).toBe('pr-127-review');
@@ -699,6 +702,7 @@ describe('nothing is dispatched before the greeting is accepted', () => {
 					serial: attached.serial,
 					owner: 'attacker',
 					project: 'rover',
+					testName: 'checkout flow',
 				}),
 		);
 		const received = await readUntilClosed(socket);

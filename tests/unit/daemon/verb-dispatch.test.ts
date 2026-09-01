@@ -365,12 +365,12 @@ async function connect(): Promise<IpcClient> {
 }
 
 /** A held lease on the one device, taken over the same client the verbs then use. */
-async function acquire(client: IpcClient, testName?: string): Promise<LeaseId> {
+async function acquire(client: IpcClient, testName = 'home-screen'): Promise<LeaseId> {
 	const outcome = await client.request('acquire_device', {
 		serial: SERIAL,
 		owner: 'issue-21',
 		project: 'rover',
-		...(testName === undefined ? {} : { testName }),
+		testName,
 	});
 	if (outcome.outcome !== 'granted') {
 		throw new Error(`The test needs a lease and was refused: ${outcome.message}`);
@@ -1506,7 +1506,12 @@ describe('install_app runs the project’s own install command', () => {
 		// back — the sequence a caller reaches by simply retrying after a timeout.
 		const other = await connect();
 		await expect(
-			other.request('acquire_device', { serial: SERIAL, owner: 'pr-127-review', project: 'rover' }),
+			other.request('acquire_device', {
+				serial: SERIAL,
+				owner: 'pr-127-review',
+				project: 'rover',
+				testName: 'home-screen',
+			}),
 		).resolves.toMatchObject({ outcome: 'granted' });
 
 		// And the ex-holder gets the same answer every other revoked verb gives. A build stopped
@@ -2320,7 +2325,12 @@ describe('a verb never outlives the lease that authorised it', () => {
 		const other = await connect();
 		let answered = false;
 		const grant = other
-			.request('acquire_device', { serial: SERIAL, owner: 'pr-127-review', project: 'rover' })
+			.request('acquire_device', {
+				serial: SERIAL,
+				owner: 'pr-127-review',
+				project: 'rover',
+				testName: 'home-screen',
+			})
 			.then((outcome) => {
 				answered = true;
 				return outcome;
@@ -2359,7 +2369,7 @@ describe('an artifact-producing verb also writes the host-side archive', () => {
 		return join(under, only, SERIAL);
 	}
 
-	it('files a screenshot under <project>/unlabeled/<lease>/<serial>, byte for byte', async () => {
+	it('files a screenshot under <project>/<test_name>/<lease>/<serial>, byte for byte', async () => {
 		await serve();
 		const client = await connect();
 		const leaseId = await acquire(client);
@@ -2367,7 +2377,7 @@ describe('an artifact-producing verb also writes the host-side archive', () => {
 		const answer = await client.request('screenshot', { leaseId });
 
 		if (answer.outcome !== 'ok') throw new Error('the screenshot did not answer ok');
-		const directory = await leaseDirectory('rover', 'unlabeled');
+		const directory = await leaseDirectory('rover', 'home-screen');
 		// The same bytes the client decoded, so the archived file and the answer can never
 		// disagree about what was on the screen.
 		expect(await readFile(join(directory, 'screenshots', '001_screenshot.png'))).toEqual(
@@ -2387,7 +2397,7 @@ describe('an artifact-producing verb also writes the host-side archive', () => {
 		const answer = await client.request('record_video', { leaseId });
 
 		if (answer.outcome !== 'ok') throw new Error('the recording did not answer ok');
-		const directory = await leaseDirectory('rover', 'unlabeled');
+		const directory = await leaseDirectory('rover', 'home-screen');
 		expect(await readFile(join(directory, 'recordings', '001.mp4'))).toEqual(
 			Buffer.from(answer.result.artifact?.base64 ?? '', 'base64'),
 		);
@@ -2405,13 +2415,13 @@ describe('an artifact-producing verb also writes the host-side archive', () => {
 		const answer = await client.request('read_logs', { leaseId });
 
 		if (answer.outcome !== 'ok') throw new Error('the log read did not answer ok');
-		const directory = await leaseDirectory('rover', 'unlabeled');
+		const directory = await leaseDirectory('rover', 'home-screen');
 		expect((await readFile(join(directory, 'logs', '001_read_logs.txt'))).toString()).toContain(
 			crashed.message,
 		);
 	});
 
-	it("uses the lease's test name instead of the fallback when one was given", async () => {
+	it("sanitises the lease's test name into the one path component it names", async () => {
 		await serve();
 		const client = await connect();
 		const leaseId = await acquire(client, 'home screen before changes');
@@ -2419,8 +2429,8 @@ describe('an artifact-producing verb also writes the host-side archive', () => {
 		await client.request('screenshot', { leaseId });
 
 		// The caller's string, opaque and sanitised into one path component (D22) — never
-		// parsed, and never `unlabeled` once it was supplied. The spaces are what the
-		// sanitiser rewrote, which is what the suffix is there to disambiguate.
+		// parsed. The spaces are what the sanitiser rewrote, which is what the suffix is there
+		// to disambiguate.
 		expect(await readdir(join(temp.artifactsRoot, 'rover'))).toEqual([
 			expect.stringMatching(/^home_screen_before_changes-[0-9a-f]{8}$/),
 		]);

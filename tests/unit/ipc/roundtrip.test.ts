@@ -125,7 +125,7 @@ describe('request/response over a duplex pair', () => {
 						serial: parseDeviceSerial('attached-1'),
 						owner: 'issue-112',
 						project: 'rover',
-						testName: null,
+						testName: 'checkout flow',
 						grantedAt: '2026-08-31T09:14:07.512Z',
 						expiresInMs: 60_000,
 					},
@@ -140,6 +140,7 @@ describe('request/response over a duplex pair', () => {
 				serial: parseDeviceSerial('attached-1'),
 				owner: 'pr-127-review',
 				project: 'rover',
+				testName: 'checkout flow',
 			}),
 		).resolves.toMatchObject({
 			outcome: 'refused',

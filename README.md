@@ -64,8 +64,8 @@ SERIAL         PLATFORM  MODEL               STATE  HELD BY
 emulator-5554  android   sdk_gphone64_arm64  ready  free
 ```
 
-`acquire` takes **one device**, not the machine. `--owner` and `--project` are required and
-neither is ever derived from who you are (D16, D20); `--test-name` is optional, opaque, and is
+`acquire` takes **one device**, not the machine. `--owner`, `--project` and `--test-name` are all
+required and none is ever derived from who you are (D16, D20, D22); `--test-name` is opaque and is
 what files two runs of the same check next to each other in the host's archive.
 
 ```bash
@@ -83,7 +83,8 @@ granted the lease. Ask for the same device again while it is held and the answer
 rather than an error — naming the holder, and never the holder's lease id:
 
 ```bash
-npm run -s rover -- acquire emulator-5554 --owner someone-else --project rover   # exits 1
+npm run -s rover -- acquire emulator-5554 --owner someone-else --project rover \
+  --test-name 'quick start'   # exits 1
 ```
 
 ```
@@ -315,7 +316,8 @@ export ROVER_HOST_CA=/tmp/rover-net/rover-cert.pem  # optional; the system trust
 
 npm run -s rover -- status --host remote
 npm run -s rover -- list --host remote
-npm run -s rover -- acquire emulator-5554 --host remote --owner issue-20 --project rover
+npm run -s rover -- acquire emulator-5554 --host remote --owner issue-20 --project rover \
+  --test-name 'quick start'
 npm run -s rover -- screenshot <lease-id> --host remote --out /tmp/rover-remote.png
 npm run -s rover -- release <lease-id> --host remote
 ```
@@ -404,7 +406,7 @@ authority: a lease re-verifies its device against the backend at grant time (`PR
 and `list_devices` says `stale` whenever the list is not known to be current.
 
 **Leases work.** `acquire_device` grants one device — not the whole machine — to an explicit
-caller-supplied `owner` string, alongside a `project` and an optional `test_name` the host stores
+caller-supplied `owner` string, alongside a required `project` and `test_name` the host stores
 and never inspects. The lease runs on a 20-minute TTL **renewed by activity rather than by a
 heartbeat**, so an agent that pauses to think keeps its device and one that died lets go on its
 own. A busy device is a refusal that names who holds it and for how much longer, never an error,
@@ -1125,7 +1127,7 @@ runs of the same named check, taken at two different points in time, sit next to
 ```
 ~/.rover/artifacts/
   <project>/
-    <test_name-or-"unlabeled">/
+    <test_name>/
       20260830T170501Z-issue-112-9f1c2ab4/   # one lease: when it started, who held it
         <device-serial>/
           device_info.json                   # size, density, dp scale, OS version
@@ -1136,7 +1138,7 @@ runs of the same named check, taken at two different points in time, sit next to
 ```
 
 `project` and `--test-name` are the two strings you set on `rover acquire`; both are opaque —
-nothing parses them — and an absent test name files under `unlabeled`, so the shape never varies.
+nothing parses them — and both are required, so the shape never varies.
 The test name is deliberately **not** unique: run "home screen" before a refactor and again after
 it, `ls` that directory, and the two most recent lease folders are the two sides of the diff.
 

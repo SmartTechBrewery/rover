@@ -127,7 +127,7 @@ function acquire(
 		serial: extra.serial ?? SERIAL,
 		owner,
 		project: extra.project ?? 'rover',
-		...(extra.testName === undefined ? {} : { testName: extra.testName }),
+		testName: extra.testName ?? 'home screen',
 	});
 }
 
@@ -249,14 +249,14 @@ describe('what a granted lease carries', () => {
 		]);
 	});
 
-	it('reports an omitted test name as null rather than leaving the key out', async () => {
+	it("echoes the caller's test name back verbatim, unparsed", async () => {
 		await serveReadyDevice();
 		const client = await connect();
 
-		const result = await acquire(client, 'issue-112');
+		const result = await acquire(client, 'issue-112', { testName: 'home screen' });
 
 		if (result.outcome !== 'granted') throw new Error('expected a granted lease');
-		expect(result.lease.testName).toBeNull();
+		expect(result.lease.testName).toBe('home screen');
 	});
 
 	it('grants two devices at once — a lease is per device, not per host (D7)', async () => {
@@ -487,6 +487,22 @@ describe('the params gate', () => {
 			owner: 'issue-112',
 		} as never);
 
+		await expect(rejection).rejects.toMatchObject({ code: 'invalid_params' });
+	});
+
+	it('rejects a missing test name — it is refused, never defaulted (D22, as amended #129)', async () => {
+		await serveReadyDevice();
+		const client = await connect();
+
+		const rejection = client.request('acquire_device', {
+			serial: SERIAL,
+			owner: 'issue-112',
+			project: 'rover',
+		} as never);
+
+		// A refusal naming the field rather than a lease filed under a directory the code
+		// invented for a caller who named nothing.
+		await expect(rejection).rejects.toBeInstanceOf(IpcRequestError);
 		await expect(rejection).rejects.toMatchObject({ code: 'invalid_params' });
 	});
 

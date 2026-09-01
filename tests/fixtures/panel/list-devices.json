@@ -29,7 +29,7 @@
         "serial": "emulator-5556",
         "owner": "pr-127-review",
         "project": "checkout-app",
-        "testName": null,
+        "testName": "the checkout flow",
         "grantedAt": "2026-08-31T18:49:38.416Z",
         "expiresInMs": 1199974
       }

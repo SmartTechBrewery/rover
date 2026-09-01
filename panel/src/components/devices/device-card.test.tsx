@@ -76,12 +76,12 @@ describe('a held device card', () => {
 		expect(screen.getByText('2026-08-31T14:02:41.219Z')).toBeDefined();
 	});
 
-	// Optional and often absent (D22): no empty label and no `—`, so the panel starts with `OWNER`.
-	it('omits the test name entirely when the lease has none', () => {
-		card(device({ heldBy: { ...LEASE, testName: null } }));
+	// Required (D22, as amended #129), so every held card carries it — there is no gap to render.
+	it('renders the test name on every held card', () => {
+		card(device({ heldBy: { ...LEASE, testName: 'the checkout flow' } }));
 
-		expect(screen.queryByText('Test name')).toBeNull();
-		expect(screen.getByText('pr-127-review')).toBeDefined();
+		expect(screen.getByText('Test name')).toBeDefined();
+		expect(screen.getByText('the checkout flow')).toBeDefined();
 		expect(screen.queryByText('—')).toBeNull();
 	});
 

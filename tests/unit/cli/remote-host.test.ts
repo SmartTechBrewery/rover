@@ -188,6 +188,8 @@ async function acquireRemoteLease(): Promise<string> {
 			'--project',
 			'rover',
 			'--json',
+			'--test-name',
+			'checkout flow',
 		]),
 	).toBe(EXIT_OK);
 	const leaseId = (JSON.parse(logged[0] ?? '') as { lease: { leaseId: string } }).lease.leaseId;
@@ -272,6 +274,8 @@ describe('rover --host remote, against a live host', () => {
 				'--project',
 				'rover',
 				'--json',
+				'--test-name',
+				'checkout flow',
 			]),
 		).toBe(EXIT_OK);
 		const acquired = JSON.parse(logged[0] ?? '') as { lease: { leaseId: string } };

@@ -298,6 +298,7 @@ describe('the same surface over the network client', () => {
 			serial: attached.serial,
 			owner: 'issue-62',
 			project: 'rover',
+			testName: 'checkout flow',
 		});
 		if (acquired.outcome !== 'granted') {
 			throw new Error(`The device was refused: ${acquired.message}`);
@@ -332,6 +333,7 @@ describe('the same surface over the network client', () => {
 			serial: attached.serial,
 			owner: 'pr-127-review',
 			project: 'rover',
+			testName: 'checkout flow',
 		});
 		if (acquired.outcome !== 'granted') {
 			throw new Error(`The device was refused: ${acquired.message}`);

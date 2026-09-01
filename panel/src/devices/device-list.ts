@@ -33,8 +33,8 @@ export const LeaseHolderSchema = z.object({
 	serial: z.string(),
 	owner: z.string(),
 	project: z.string(),
-	/** Optional and often absent (D22). `null`, never a missing key. */
-	testName: z.string().nullable(),
+	/** Required (D22, as amended #129) — never null and never a missing key. */
+	testName: z.string(),
 	/**
 	 * When the lease was granted, as the host's own ISO-8601 instant.
 	 *
