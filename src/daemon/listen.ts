@@ -35,6 +35,7 @@ import { type HttpListener, startHttpListener } from './http-listen.js';
 import { createDeviceInventory, type DeviceInventory } from './inventory.js';
 import { createLeaseHandlers } from './lease-handlers.js';
 import { createLeaseStore, type LeaseStore } from './leases.js';
+import { createListArchiveHandler } from './list-archive.js';
 import { createListDevicesHandler } from './list-devices.js';
 import type { HttpListenerConfig, NetworkListenerConfig } from './network-config.js';
 import { type NetworkListener, startNetworkListener } from './network-listen.js';
@@ -194,9 +195,14 @@ export interface DaemonAlreadyRunning {
 export type StartResult = RunningDaemon | DaemonAlreadyRunning;
 
 /**
- * The method table the daemon serves — status, the device list, the three lease operations and
- * the verbs, on one surface (D19). A new verb family is one more spread, or one more entry in
- * `./verb-handlers.ts`; nothing about the connection lifecycle changes to carry it.
+ * The method table the daemon serves — status, the device list, the three lease operations, the
+ * verbs and one read of the artifact archive, on one surface (D19). A new verb family is one more
+ * spread, or one more entry in `./verb-handlers.ts`; nothing about the connection lifecycle
+ * changes to carry it.
+ *
+ * `artifactsRoot` is a parameter rather than something read off `archive`: the archive writes the
+ * tree and `./list-archive.ts` reads it, and widening the archive's interface to expose its own
+ * root — so one more argument could be saved — is the bigger change of the two.
  */
 export function createDaemonHandlers(
 	inventory: DeviceInventory,
@@ -207,12 +213,14 @@ export function createDaemonHandlers(
 	installProject: ProjectInstall,
 	services: ProjectServices,
 	slots: SlotAllocator,
+	artifactsRoot: string,
 ): IpcHandlers {
 	return {
 		status: handleStatus,
 		...createListDevicesHandler(inventory, leases),
 		...createLeaseHandlers(inventory, leases, restorer, services, slots),
 		...createVerbHandlers(inventory, leases, traffic, archive, installProject),
+		...createListArchiveHandler({ root: artifactsRoot }),
 	};
 }
 
@@ -316,6 +324,10 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartRes
 			createProjectInstall({ root: options.projectsRoot }),
 			services,
 			slots,
+			// The same root the archive writes under, so the reader can never be pointed at a
+			// different tree from the writer. A required `StartDaemonOptions` field, so no test can
+			// forget it and no daemon reads the environment for it behind `./main.ts`'s back.
+			options.artifactsRoot,
 		),
 	);
 

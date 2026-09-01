@@ -11,14 +11,14 @@
  * nobody in `src/cli/` named.
  */
 
-import { writeFile } from 'node:fs/promises';
+import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
 	_resetDeviceBackendRegistryForTesting,
 	registerDeviceBackend,
 } from '@/backends/registry.js';
-import { EXIT_FAILED, EXIT_OK, run } from '@/cli/index.js';
+import { EXIT_FAILED, EXIT_OK, EXIT_USAGE, run } from '@/cli/index.js';
 import type { DeviceBackend, DeviceWatch, DeviceWatcher } from '@/core/device.js';
 import { parseDeviceSerial } from '@/core/ids.js';
 import { type RunningDaemon, startDaemon } from '@/daemon/listen.js';
@@ -376,5 +376,77 @@ describe('rover force-release, over the socket', () => {
 		// a way to come by the credential for the next one.
 		expect(logged.join('\n')).not.toContain(leaseId);
 		expect(logged.join('\n')).not.toContain('leaseId');
+	});
+});
+
+describe('rover archive, over the socket', () => {
+	/** One project with one named check under it, which is two levels of the tree (§10). */
+	async function archiveOneRun(): Promise<void> {
+		await mkdir(join(temp.artifactsRoot, 'checkout-app', 'login-flow'), { recursive: true });
+	}
+
+	it('says the archive is empty rather than printing an empty table', async () => {
+		await mkdir(temp.artifactsRoot, { recursive: true });
+		await start();
+
+		expect(await run(['archive'])).toBe(EXIT_OK);
+
+		// Empty is a success: nothing is filed yet, and the host said so.
+		expect(logged.join('\n')).toContain('Nothing is filed under the top of the archive');
+		expect(errored).toEqual([]);
+	});
+
+	it('names each entry and what one look at it can say', async () => {
+		await archiveOneRun();
+		await start();
+
+		expect(await run(['archive'])).toBe(EXIT_OK);
+
+		const table = logged.join('\n');
+		expect(table).toContain('checkout-app');
+		expect(table).toContain('directory');
+		expect(table).toContain('1 entry (login-flow)');
+	});
+
+	it('takes the components a previous listing named, one level at a time', async () => {
+		await archiveOneRun();
+		await start();
+
+		expect(await run(['archive', 'checkout-app'])).toBe(EXIT_OK);
+
+		expect(logged.join('\n')).toContain('login-flow');
+		// No path on the answer and none in the output — the host's layout is not the caller's
+		// to know (D19).
+		expect(logged.join('\n')).not.toContain(temp.artifactsRoot);
+	});
+
+	it('writes one document in --json mode, carrying the outcome and the host', async () => {
+		await archiveOneRun();
+		await start();
+
+		expect(await run(['archive', '--json'])).toBe(EXIT_OK);
+
+		expect(logged).toHaveLength(1);
+		expect(JSON.parse(logged[0] ?? '')).toMatchObject({ host: 'local', outcome: 'listed' });
+	});
+
+	it('exits 1 for a level that is not there, on stderr', async () => {
+		await archiveOneRun();
+		await start();
+
+		expect(await run(['archive', 'no-such-project'])).toBe(EXIT_FAILED);
+
+		expect(errored.join('\n')).toContain('Nothing is at no-such-project');
+		expect(logged).toEqual([]);
+	});
+
+	it('refuses .. as a component with exit 2, before any host is asked', async () => {
+		// No daemon started, deliberately: a request that got as far as connecting would have
+		// autostarted one and come back with the host's answer at exit 1.
+		expect(await run(['archive', '..'])).toBe(EXIT_USAGE);
+
+		expect(errored.join('\n')).toContain('is not an archive path component');
+		expect(errored.join('\n')).toContain('rover archive —');
+		expect(logged).toEqual([]);
 	});
 });

@@ -155,6 +155,15 @@ it:
 npm run -s rover -- force-release <serial> --actor "$USER"
 ```
 
+Browse what the host has filed away. The archive grows a directory per project, per named check,
+per run (`PROJECT.md` §10), and this walks it one level at a time — each argument is a name the
+previous listing gave you, never a path on the host:
+
+```bash
+npm run -s rover -- archive
+npm run -s rover -- archive checkout-app login-flow
+```
+
 `npm run rover -- --help` lists every command, the global flags and the exit codes.
 
 ### Wire up the MCP server
@@ -440,14 +449,19 @@ resolver answers nothing and only the two network steps have work to do.
 
 **There is a CLI** (D4) — `rover list`, `acquire`, `release`, `force-release`, `screenshot`,
 `record`, `pull`, `push`,
-`install`, `status` and `users`, human-readable by default and one JSON document on stdout with `--json`, every diagnostic
+`install`, `archive`, `status` and `users`, human-readable by default and one JSON document on stdout with `--json`, every diagnostic
 on stderr. It holds no verb logic: each command parses flags, calls one IPC method, renders the
 answer and picks an exit code. `list` shows what is attached, what is free and who holds the rest —
 the owner, project and test name, and how much longer they have — and says out loud when the host
 does not know its own view to be current, rather than quietly printing a short list. `acquire`
 requires an explicit `--owner` and `--project` and derives neither, and `force-release` requires an
 explicit `--actor` for the same reason — it names the device, not a lease id, because it ends a
-lease this caller never took. `status` says which host
+lease this caller never took. `archive` reads the host's own artifact
+archive one directory level at a time: its arguments are components a previous listing named, never
+a path on the host (D19), and it filters, searches, sorts and descends into nothing, because listing
+the directory is the whole query the tree is shaped for (D24). An empty level, a level that is not
+there and a level the host cannot read are three different answers — the first exits 0, the other
+two exit 1. `status` says which host
 answered. The host is named by `--host`: no flag means the local one, `remote` is the machine
 `ROVER_HOST_ADDRESS`, `ROVER_HOST_PORT` and `ROVER_HOST_TOKEN` name, and anything else fails loudly
 instead of hanging. `screenshot`, `record` and `pull` are the three commands that bring bytes back:
@@ -869,7 +883,8 @@ deliberately, and `PROJECT.md` §9.4 records why and what changes when it lands;
 is a path an MCP config states absolutely and not that.
 
 Exit codes: `0` success; `1` the operation did not succeed (a refused `acquire`, a `release` that
-found no live lease, a `force-release` that found no lease on the device, an unreachable host, a
+found no live lease, a `force-release` that found no lease on the device, an `archive` level that is
+not there or that the host cannot read, an unreachable host, a
 request the host rejected); `2` usage error (unknown
 command or flag, a missing `--owner`/`--project`/`--actor`, an attribution string past the 256 characters
 the host accepts, a `--host` that is neither `local` nor `remote`, or `remote` with nothing in
@@ -1230,8 +1245,8 @@ Four things about that surface are worth knowing before pointing anything at it:
   query-string credential to fall back on, and `POST /rpc?token=…` with no header is refused like
   any other stranger. Nothing about a request or a refusal is logged.
 - **Only the panel's methods are reachable.** Every method still runs on the host either way, but
-  this transport serves an allowlist over the one table — the device list, and force-release — so a
-  browser tab cannot take a lease and then drive a phone with it:
+  this transport serves an allowlist over the one table — the device list, force-release, and the
+  archive listing — so a browser tab cannot take a lease and then drive a phone with it:
 
   ```json
   {"type":"error","protocolVersion":1,"id":"2","error":{"code":"unknown_method","message":"'acquire_device' is not served over this host's HTTP surface"}}

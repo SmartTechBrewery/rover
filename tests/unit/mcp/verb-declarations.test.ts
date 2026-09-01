@@ -82,6 +82,12 @@ const DEVICE_METHODS = ['status', 'list_devices', 'acquire_device', 'release_dev
  * for the two artifact rows. Both wait for R24 phase 2, which is a mechanism underneath these
  * verbs rather than a decision one adapter can take in passing.
  *
+ * `list_archive` is here for a reason of the same kind as `force_release_device`'s: it is not
+ * about a device at all. It reads the **host's** artifact archive (D24, R36), which is the
+ * operator's and the panel's surface — while an agent already receives its own artifacts as bytes
+ * in the verb's own answer (D19), so there is nothing here it needs and could not already have.
+ * Advertising it would hand every agent a listing of every other agent's runs on the host.
+ *
  * The list is short and named so the gate below can be exact: a verb row added later is either
  * a registered tool or a deliberate entry here, never a row that quietly has no tool.
  */
@@ -89,6 +95,7 @@ const NOT_YET_EXPOSED = [
 	'push_file',
 	'pull_file',
 	'force_release_device',
+	'list_archive',
 ] as const satisfies readonly IpcMethodName[];
 
 /** The platform vocabulary `tests/unit/no-platform-names.test.ts` keeps out of `src/` (D10). */

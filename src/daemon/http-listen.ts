@@ -153,11 +153,17 @@ import { findUserByToken, type UserRecord } from './user-store.js';
  *
  * Typed against `IpcMethodName`, so renaming a method is a compile error here rather than a
  * surface that silently stops answering. `force_release_device` joined it with the screen that
- * calls it (R35, #122) — it was on the table already (R31, #109), so what changed here is one
- * transport's reach and not the surface. Nothing else is expected to join: the panel reads the
- * pool and ends a stuck lease in it, and D27 keeps every acquire and every verb off a browser.
+ * calls it (R35, #122) and `list_archive` with the archive's own read side (R36, #130) — both
+ * were on the table already, so what changed here is one transport's reach and not the surface.
+ * That is the whole list: the panel reads the pool, ends a stuck lease in it, and reads the
+ * artifact archive one directory level at a time, and D27 still keeps every acquire and every
+ * verb off a browser.
  */
-const PANEL_METHODS: readonly IpcMethodName[] = ['list_devices', 'force_release_device'];
+const PANEL_METHODS: readonly IpcMethodName[] = [
+	'list_devices',
+	'force_release_device',
+	'list_archive',
+];
 
 /**
  * How long a peer gets to finish sending its request headers — and therefore its credential,

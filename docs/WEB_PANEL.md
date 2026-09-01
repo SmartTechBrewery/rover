@@ -32,9 +32,19 @@ Design work lives in [`DESIGN.md`](./DESIGN.md); the brief that produced the fir
    over the HTTP surface and renders every device the host reports as one card — model, serial,
    platform, OS version — in a grid whose column count follows the width available to the content.
 4. **List of jobs run** — global and per project, modeled on Swarm's own.
-5. **Access to historical test artifacts** — screenshots, recordings, reports — as a searchable
-   file tree. This is exactly what the artifact archive (`PROJECT.md` §10) is shaped to serve
-   directly off disk (D24): no index to build, a directory listing is the whole query.
+5. **Access to historical test artifacts** — screenshots, recordings, reports — as a file tree.
+   This is exactly what the artifact archive (`PROJECT.md` §10) is shaped to serve directly off
+   disk (D24): no index to build, a directory listing is the whole query. **The host half has
+   landed** (R36, #130): `list_archive` answers **one directory level** — it takes the components a
+   previous answer returned, never a path on the host, and answers that level's entries with what
+   one `readdir` plus a `stat` can honestly say. It is a **listing rather than a query**: no
+   filter, no search, no sort parameter, no recursion, because the parameter that would make it a
+   query is how an index gets built by accident. Empty, missing and unreadable are three
+   distinguishable answers, so the screen can render "nothing is filed here" differently from "this
+   host cannot say what is filed here" — the same distinction §7's `stale` draws. It is on
+   `PANEL_METHODS` and on the CLI (`rover archive [<component> ...]`), so the archive is debuggable
+   without a browser (D4). **The Archive screen itself is not built**, and neither is reading an
+   artifact's bytes: this answers *what is filed*, never *what is in it*.
 6. **Live lease state** — **done** (#113). A held card carries the `owner`, the `project`, the
    `test_name` and the grant instant, with a countdown to the expiry that ticks once a second and
    **goes back up** when activity renews the lease (`PROJECT.md` D8) — verified against a running

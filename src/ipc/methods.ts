@@ -455,6 +455,153 @@ export const ForceReleaseDeviceResultSchema = z.discriminatedUnion('outcome', [
 export type ForceReleaseDeviceResult = z.infer<typeof ForceReleaseDeviceResultSchema>;
 
 /**
+ * The longest one archive path component may be.
+ *
+ * 255 is the per-component limit of every filesystem this runs on, so a name `readdir` can
+ * actually produce is always inside it. On the way *in* it is allocation hygiene of the kind
+ * {@link ATTRIBUTION_MAX_LENGTH} already applies, not validation.
+ */
+export const MAX_ARCHIVE_PATH_SEGMENT_LENGTH = 255;
+
+/**
+ * How many levels one request may name.
+ *
+ * The archive is four levels plus a run's own contents
+ * (`<project>/<test_name>/<lease>/<serial>/recordings/<n>_frames`), so six is the deepest
+ * anything the archive writes reaches. Eight is headroom — a bound rather than a rule.
+ */
+export const MAX_ARCHIVE_PATH_DEPTH = 8;
+
+/**
+ * One component of an archive path — a single directory name, as a previous listing named it.
+ *
+ * Five things here are decisions rather than details:
+ *
+ * - **`.refine`, never `.transform`.** A throw inside a `.transform()` escapes `safeParse` past
+ *   a caller that had every reason to expect a returned failure (ai/CODING_STANDARDS.md).
+ * - **This is the whole containment guarantee.** `join(root, ...path)` cannot escape `root`
+ *   once no component is `.`, `..`, or carries a separator, so there is deliberately no second
+ *   runtime check in the handler — `src/daemon/archive-path.ts` makes the same call for the same
+ *   reason ("two mechanisms for one class of collision is not worth it"), and the tests are what
+ *   hold it.
+ * - **A backslash is deliberately not refused.** On the platforms Rover hosts devices on it is
+ *   an ordinary filename character that `join` treats as one, so refusing it would make a name
+ *   the host itself answered with un-addressable on the next request. The archive's *writer*
+ *   strips it (`pathSegment`) because it invents names; this reads names that already exist.
+ * - **Nothing is sanitised on the way in.** Not `pathSegment`, not `.trim()`: these came out of
+ *   a previous answer and are the on-disk names. Validate the shape and use them verbatim (D22)
+ *   — nothing here parses a component to infer anything about what it says.
+ * - `DevicePathSchema` is not reused: that is one absolute string naming a path on a *device*,
+ *   and this is one relative component on the *host*.
+ */
+export const ArchivePathSegmentSchema = z
+	.string()
+	.min(1)
+	.max(MAX_ARCHIVE_PATH_SEGMENT_LENGTH)
+	.refine(
+		(segment) =>
+			segment !== '.' && segment !== '..' && !segment.includes('/') && !segment.includes('\u0000'),
+		{
+			message:
+				"an archive path component is one directory name — never '.', '..', a separator or a NUL",
+		},
+	);
+
+/**
+ * `.strict()` so a typo'd key is `invalid_params` rather than the root listed for a caller who
+ * asked about something else, and `path` is required rather than optional so that promise holds
+ * for the only key there is.
+ *
+ * **There is deliberately no second key.** No `filter`, `search`, `sortBy`, `depth`, `limit` or
+ * `offset`: D24's point is that listing a directory *is* the query, and a parameter that turns
+ * this into a query is how an index gets built by accident.
+ */
+export const ListArchiveParamsSchema = z
+	.object({
+		/** The level to list, as the components a previous answer returned. `[]` is the root. */
+		path: z.array(ArchivePathSegmentSchema).max(MAX_ARCHIVE_PATH_DEPTH),
+	})
+	.strict();
+export type ListArchiveParams = z.infer<typeof ListArchiveParamsSchema>;
+
+/**
+ * One entry of one level — what a single `readdir`, plus a `stat` or one `readdir` of a child,
+ * can honestly answer, and nothing more.
+ *
+ * `name` reuses {@link ArchivePathSegmentSchema} on purpose: a name this method answers with is
+ * by construction a component the *next* request may carry, which is what "the path as the
+ * components a previous answer returned" means structurally rather than by convention.
+ */
+export const ArchiveEntrySchema = z.discriminatedUnion('kind', [
+	z
+		.object({
+			kind: z.literal('directory'),
+			name: ArchivePathSegmentSchema,
+			/**
+			 * How many entries this directory holds — one `readdir` of it and no deeper. `null`
+			 * when its own contents could not be read, which is the distinction `unreadable`
+			 * draws one level up: a `0` here would say *empty* about a directory the host cannot
+			 * see into.
+			 */
+			childCount: z.number().int().nonnegative().nullable(),
+			/**
+			 * The name of the one entry this directory holds, when it holds exactly one; `null`
+			 * otherwise. Free — it comes out of the very `readdir` that produced `childCount`.
+			 *
+			 * It is here for the `<serial>` level: one lease is one device
+			 * (`src/daemon/leases.ts` keeps `bySerial` one-to-one), so a run directory always
+			 * holds exactly one child, and that is a fact about the run rather than a level worth
+			 * a round trip. Nothing here knows it is a serial — a rule about shape, never about
+			 * what a component says (D22).
+			 */
+			onlyChild: ArchivePathSegmentSchema.nullable(),
+		})
+		.strict(),
+	z
+		.object({
+			kind: z.literal('file'),
+			name: ArchivePathSegmentSchema,
+			/** Its size in bytes, from one `stat`. `null` when the file could not be stat'd. */
+			sizeBytes: z.number().int().nonnegative().nullable(),
+		})
+		.strict(),
+	z
+		.object({
+			/**
+			 * Neither a directory nor a regular file — a symlink, a socket, a device node. Named
+			 * rather than dropped: silently omitting an entry would make a listing that is short
+			 * look exactly like one that is complete.
+			 */
+			kind: z.literal('other'),
+			name: ArchivePathSegmentSchema,
+		})
+		.strict(),
+]);
+export type ArchiveEntry = z.infer<typeof ArchiveEntrySchema>;
+
+/**
+ * Three answers, never two: the pair that must never render alike — *the archive is empty*
+ * versus *the host cannot say what is in the archive* — is two arms of a discriminated union
+ * rather than two readings of one array, which is the distinction `stale` already draws on the
+ * device list (D6, `docs/DESIGN.md` §7).
+ *
+ * **No `message` field anywhere, and that absence is load-bearing.** `messageOf(error)` — the
+ * helper every other daemon handler uses — would put `ENOENT: no such file or directory,
+ * scandir '/Users/…/artifacts/…'` on the wire, which is exactly the host path D19 forbids and
+ * which `src/ipc/server.ts` could not catch, because a `message: string` is a field a path fits
+ * in. Diagnosis for the operator goes where the path already belongs: a warning on the host.
+ */
+export const ListArchiveResultSchema = z.discriminatedUnion('outcome', [
+	/** The level was read. `entries: []` is **the archive is empty**, and is not a failure. */
+	z.object({ outcome: z.literal('listed'), entries: z.array(ArchiveEntrySchema) }).strict(),
+	/** Nothing is at that path. Never conflated with either of the other two. */
+	z.object({ outcome: z.literal('missing') }).strict(),
+	/** It is there and the host **cannot say what is in it** — no permission, or not a directory. */
+	z.object({ outcome: z.literal('unreadable') }).strict(),
+]);
+export type ListArchiveResult = z.infer<typeof ListArchiveResultSchema>;
+
+/**
  * `status` and `list_devices` exist in the *protocol* rather than in the MCP layer because
  * D16 requires daemon state to be answerable to something that is not an agent: whatever
  * Swarm asks, it asks here, the same way a local caller does. Nothing device-shaped may
@@ -469,6 +616,14 @@ export type ForceReleaseDeviceResult = z.infer<typeof ForceReleaseDeviceResultSc
  * never held, so there is no credential for it to present and the id must not be handed out to
  * make one — that is the disclosure {@link ListedDeviceSchema} exists to refuse. It is a third
  * trigger on the release path rather than a second release path: see `src/daemon/lease-handlers.ts`.
+ *
+ * **`list_archive` is the read side of the artifact archive** (`PROJECT.md` §10, D24), and the
+ * one row that is about the host's own disk rather than about a device. It answers **one
+ * directory level** at a time; its path is the components a previous answer returned and never
+ * a host path, and it is a **listing rather than a query** — there is no index to consult
+ * because listing the directory *is* the query, and a parameter that made it one is how an
+ * index gets built by accident. No result of it carries a path, and there is no field one
+ * would fit in (D19).
  *
  * The verb rows are the two waits, the six input verbs, the three read verbs, the three
  * app-lifecycle verbs, the log read, the screen recording, the two environment verbs and the
@@ -500,6 +655,7 @@ export const IPC_METHODS = {
 		params: ForceReleaseDeviceParamsSchema,
 		result: ForceReleaseDeviceResultSchema,
 	},
+	list_archive: { params: ListArchiveParamsSchema, result: ListArchiveResultSchema },
 	wait_for: { params: WaitForParamsSchema, result: VerbCallResultSchema },
 	wait_until_gone: { params: WaitUntilGoneParamsSchema, result: VerbCallResultSchema },
 	tap: { params: TapParamsSchema, result: VerbCallResultSchema },
