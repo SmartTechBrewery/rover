@@ -37,7 +37,7 @@ this sentence exists to prevent.
 | Devices — Force Release Confirmation | `d86e794af4de4639979bc65104e2ec57` | Settled, **the asking only** |
 | Archive — Project Selection Refined | `b91c300db2d445b8a195a0bafd1aac76` | **Settled** — see §9 |
 | Archive — Test Runs Refined (login-flow) | `8dcd4330b9b94105a7ba289620dc84aa` | **Settled** — see §9 |
-| Archive — A run selected (Refined) | `d24d2c84e84041b28dfed67e92551d28` | **Settled** — see §9, except its device card (#131) |
+| Archive — A run selected (Refined) | `d24d2c84e84041b28dfed67e92551d28` | **Settled** — see §9, except its device card (not built — see §9) |
 | Archive — Browsing (V2) | `f2de4344f7e347aa894b3054d9cf4098` | **Superseded** by the three rows above; must not be built from |
 | Run Detail — Artifacts (V2) | `36b54fbe032449d8a300ea0825bbf1c8` | Not yet corrected — see §10 |
 | Compare — Visual Diff (V2) | `897632dcadce44de9bdee74a94da14f5` | Not yet corrected — see §10 |
@@ -960,9 +960,11 @@ level's listing rather than nothing at all — names, addressable, no invented m
 ### What waits on another issue
 
 - **The `DEVICE — FROM device_info.json` card** (`d24d2c84…`'s second card) is **not built**. It needs
-  the *contents* of an archived file and `list_archive` answers directory listings only; reading an
-  artifact's bytes is **#131**. The gap is deliberate on the page rather than filled with a guess,
-  and `RunPanel` names the issue where the card would go.
+  the *contents* of an archived file, and `list_archive` answers directory listings only. The host
+  half is no longer what is missing — reading an artifact's bytes landed with **#131** (`GET
+  /artifact/<component>/…`, `PROJECT.md` R37) — but nothing in the panel fetches those bytes yet, so
+  the card waits on the preview (**#133**) that first does. The gap is deliberate on the page rather
+  than filled with a guess, and `RunPanel` names it where the card would go.
 - **Opening or previewing an artifact**, and any *Open in a new window* control, is **#133**.
 
 ---
@@ -1001,6 +1003,34 @@ top of this file). Do not commission a Stitch screen for them.
 - **The Archive screen's root level, and its three states with nothing to browse — done** (#132).
   The three levels had approved screens; the root level and the empty-ish states did not, and were
   built from this document as this list intends. What they settled is written into §9 above.
+- **The Archive preview's rules, and what it deliberately does not offer — settled** (#131). The
+  host half that makes the preview possible is built (`GET /artifact/<component>/…`, `PROJECT.md`
+  R37), and settling these here rather than leaving them to the screen is deliberate: #131 is what
+  made them decisions about the *host's answer* rather than about one panel's markup.
+
+  - **An image is shown at its natural aspect ratio**, scaled down to fit the panel and never up
+    past its own pixels: a screenshot enlarged past 1:1 is a blurrier version of the evidence
+    somebody opened it to read.
+  - **A video carries the browser's own controls, and it does not autoplay and does not loop.** Not
+    a styled player: the browser's controls already have a scrub bar, a keyboard and a volume, and
+    reimplementing them would be a second video UI to maintain for no gain. Autoplay and looping
+    are both forbidden for the reason §5 forbids a looping animation — a recording that starts
+    itself, or restarts forever, is motion nobody asked for beside data somebody is reading.
+  - **A text file is printed verbatim** in the monospace face, wrapped rather than truncated, with
+    nothing parsed out of it and nothing colourised. A log line is evidence; a renderer that
+    highlighted `ERROR` would be the pass/fail semantics this panel does not have (§2).
+  - **There is no download control anywhere in the panel. This is a view, not a transfer** — a
+    choice, and not a limitation of the route, which serves the bytes a `download` attribute would
+    save. Rover is the machine holding the artifact and the archive is browsable on that machine
+    already (`rover archive`, `PROJECT.md` D4); a download button in the panel invites copies of
+    somebody else's run onto laptops, and the one thing the preview genuinely needs — a full-size
+    look — is what **Open in a new window** is for. The choice stands until someone asks otherwise.
+  - **Open in a new window** opens the artifact's own address in a new tab, and it is the panel's
+    fetch that carries the credential: the address is a plain `GET` URL, but a top-level navigation
+    sends no `Authorization` header and a credential in a URL is what D20 forbids, so the control
+    fetches the URL with the session header and opens the object URL it gets back. The consequence
+    to design around rather than hide: the address pasted into a bare tab gets the host's uniform
+    refusal, exactly as every other unauthenticated request to it does.
 
 **The two remaining uncorrected screens are `Run Detail — Artifacts (V2)`
 (`36b54fbe032449d8a300ea0825bbf1c8`) and `Compare — Visual Diff (V2)`

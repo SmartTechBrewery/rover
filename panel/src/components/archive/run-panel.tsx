@@ -25,8 +25,10 @@ import {
  * decomposed from the directory's own name, and a fact the host does not have says `unknown`.
  *
  * **The `DEVICE — FROM device_info.json` card is deliberately absent.** It needs the *contents* of
- * an archived file and `list_archive` answers directory listings only; reading an artifact's bytes
- * is issue #131. The gap is on the page on purpose rather than closed with a guess.
+ * an archived file and `list_archive` answers directory listings only. The bytes have an address
+ * since #131 (`GET /artifact/<component>/…`), but nothing in the panel fetches one yet, so the card
+ * waits on the preview that first does — issue #133. The gap is on the page on purpose rather than
+ * closed with a guess.
  */
 export function RunPanel({
 	run,

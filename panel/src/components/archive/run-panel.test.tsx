@@ -110,8 +110,9 @@ describe('what is not on this panel', () => {
 		}
 	});
 
-	// Phase 2, blocked on #131: the card needs a file's *contents* and `list_archive` answers
-	// directory listings only. The gap is deliberate rather than filled with a guess.
+	// Phase 2, waiting on #133: the card needs a file's *contents*, `list_archive` answers directory
+	// listings only, and nothing in the panel fetches #131's artifact route yet. The gap is
+	// deliberate rather than filled with a guess.
 	it('carries no device card in this phase', () => {
 		const { container } = showing();
 		const text = container.textContent ?? '';

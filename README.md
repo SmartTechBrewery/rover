@@ -919,7 +919,7 @@ startup, naming the variable and the reason, rather than binding something surpr
 | `ROVER_TLS_CERT` | — (required with the port) | Path to the PEM certificate (chain) the listener presents. |
 | `ROVER_TLS_KEY` | — (required with the port) | Path to the matching PEM private key. Unreadable material is a startup failure naming the variable and the path, not a TLS mystery on the first connection. |
 | `ROVER_LISTEN_ADDRESS` | `0.0.0.0` | Which interface the network listener binds, so an operator can narrow it to a VPN or loopback interface instead of every one. Only read when the port is set. |
-| `ROVER_HTTP_PORT` | unset — **no HTTP listener** | The opt-in switch for the HTTP surface a browser reaches (`PROJECT.md` D29) — one route, `POST /rpc`, carrying the same envelopes and served by the same `IpcServer` as the local socket. Unset or empty and nothing binds and nothing else below is read, so upgrading a daemon never starts listening for browsers. Deliberately **separate from `ROVER_LISTEN_PORT`**: exposing this host to a team's Rover clients is not the same decision as opening a browser surface, and neither implies the other. Who may connect comes from the user store (`ROVER_USERS_PATH`), re-read on **every request** — so `rover users revoke` takes effect on the very next one, with the daemon still running. A client never sets this: `rover list` clears it in any daemon it autostarts. 1–65535. |
+| `ROVER_HTTP_PORT` | unset — **no HTTP listener** | The opt-in switch for the HTTP surface a browser reaches (`PROJECT.md` D29) — `POST /rpc`, carrying the same envelopes and served by the same `IpcServer` as the local socket, the `/session` verbs a browser signs in with, and `GET /artifact/<component>/…` for one archived file's bytes. Unset or empty and nothing binds and nothing else below is read, so upgrading a daemon never starts listening for browsers. Deliberately **separate from `ROVER_LISTEN_PORT`**: exposing this host to a team's Rover clients is not the same decision as opening a browser surface, and neither implies the other. Who may connect comes from the user store (`ROVER_USERS_PATH`), re-read on **every request** — so `rover users revoke` takes effect on the very next one, with the daemon still running. A client never sets this: `rover list` clears it in any daemon it autostarts. 1–65535. |
 | `ROVER_HTTP_ADDRESS` | `127.0.0.1` | Which interface the HTTP listener binds. **Loopback by default**, unlike `ROVER_LISTEN_ADDRESS`, because the ordinary first use of the panel is the operator's own browser on this machine. Set it to something a stranger can reach and `ROVER_TLS_CERT` and `ROVER_TLS_KEY` become **required**: every request carries a bearer token in a header, and an unencrypted listener off loopback would put it on the wire in the clear, so the daemon refuses to start rather than half-configuring. On loopback, plain HTTP needs no certificate. Only read when the port is set. |
 | `ROVER_HOST_ADDRESS` | unset — **no remote host** | The opt-in switch on the *client* side: the address of the host `--host remote` asks. Unset or empty and nothing below is read, `--host remote` is a usage error, and `rover` is a purely local client. Set it and `ROVER_HOST_PORT` and `ROVER_HOST_TOKEN` become **required together**, because a client cannot guess either — a missing one is a usage error naming every variable still missing. Exactly one remote host is configurable (`PROJECT.md` D18); there is no catalogue. **It is also what points an MCP server at a remote host** (`npm run mcp`), and there it is the *only* thing that can: an MCP client launches each server with its own `env` block, so this variable is that server's configuration, no tool takes a host parameter, and an agent can neither see nor change which host answered (`PROJECT.md` D17). An MCP server reads it at startup rather than at the first tool call, so a half-configured one fails on stderr before it advertises anything. |
 | `ROVER_HOST_TOKEN` | — (required with `ROVER_HOST_ADDRESS`) | **A client-side credential, and only that** — the value `rover users add` (or `users rotate`) printed on the host, pasted on the machine that borrows a device. The host itself no longer reads this variable: it authenticates against its user store, so a token is revocable and rotatable where it was issued rather than being a secret both machines hold forever (`PROJECT.md` D25). At least **32 characters**, checked locally so a truncated paste fails here naming the variable instead of coming back as an opaque refusal. It is a **host-level** setting and belongs in the environment, never in a file the repository tracks. The token **authenticates and attributes nothing**: a lease's owner is a separate, caller-supplied string (`PROJECT.md` D20). |
@@ -1218,8 +1218,9 @@ unknown or revoked — and the connection is closed.
 
 A browser cannot speak the framed NDJSON greeting the TCP listener consumes before dispatch, so
 the panel reaches the host through a third transport of the *same* surface (`PROJECT.md` D29):
-one route, `POST /rpc`, whose request and response bodies are the envelopes every other transport
-already carries. It is **off unless `ROVER_HTTP_PORT` is set** — a daemon that started listening
+`POST /rpc`, whose request and response bodies are the envelopes every other transport already
+carries, plus this transport's own two additions — the `/session` verbs a browser signs in with,
+and `GET /artifact/<component>/…`, which answers bytes rather than an envelope. It is **off unless `ROVER_HTTP_PORT` is set** — a daemon that started listening
 for browsers because somebody upgraded would be a change in exposure nobody chose — and `rover
 list` clears the switch in any daemon it autostarts, exactly as it clears `ROVER_LISTEN_PORT`.
 
@@ -1263,11 +1264,12 @@ Four things about that surface are worth knowing before pointing anything at it:
   rather than handed on, so a refused method cannot arrive on a second line of a body whose first
   line was allowed.
 
-- **There are exactly two statuses.** `200` means the surface answered — read the envelope, whose
-  `error.code` is the same vocabulary every Rover client already reads. `401` is the one refusal,
-  identical for a missing credential, a malformed one, an unknown token, a revoked user, an
-  unreadable store, an unknown path and the wrong HTTP method alike, because authentication happens
-  before routing and a refusal that varied would tell a stranger something:
+- **Wherever an envelope is the answer there are exactly two statuses.** `200` means the surface
+  answered — read the envelope, whose `error.code` is the same vocabulary every Rover client already
+  reads. `401` is the one refusal, identical for a missing credential, a malformed one, an unknown
+  token, a revoked user, an unreadable store, an unknown path and the wrong HTTP method alike,
+  because authentication happens before routing and a refusal that varied would tell a stranger
+  something:
 
   ```
   HTTP/1.1 401 Unauthorized
@@ -1279,7 +1281,66 @@ Four things about that surface are worth knowing before pointing anything at it:
 
 - **The store is read on every request.** `rover users revoke panel` on this machine makes the very
   next request `401`, with the daemon still running and nothing restarted — including on a
-  keep-alive connection the revoked user is already holding.
+  keep-alive connection the revoked user is already holding, and including a request for an
+  archived artifact's bytes.
+- **The artifact route is the one place that status pair widens**, because a response that is a
+  file has no envelope to read an outcome out of — see below. Every status it adds is behind the
+  gate, so nothing a stranger can reach varies with the reason.
+
+#### Reading one archived artifact's bytes
+
+`list_archive` says *what is filed*; this route says *what is in one of those files*. It takes the
+components that listing answered with — never a path on the host (`PROJECT.md` D19) — one component
+per URL segment, and answers the file:
+
+```bash
+RUN=rover/home-screen/20260901T091500Z-issue-131-75f240c8/emulator-5554
+
+# What is filed at this level.
+curl -sS -X POST http://127.0.0.1:4712/rpc \
+  -H "Authorization: Bearer $TOKEN" \
+  -d "{\"protocolVersion\":1,\"id\":\"1\",\"method\":\"list_archive\",\"params\":{\"path\":[\"rover\",\"home-screen\",\"20260901T091500Z-issue-131-75f240c8\",\"emulator-5554\",\"screenshots\"]}}"
+
+# And the bytes of one of them.
+curl -sS -D- -o screenshot.png \
+  "http://127.0.0.1:4712/artifact/$RUN/screenshots/001_screenshot.png" \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+```json
+{"type":"result","protocolVersion":1,"id":"1","result":{"outcome":"listed","entries":[{"kind":"file","name":"001_screenshot.png","sizeBytes":66}]}}
+```
+
+```
+HTTP/1.1 200 OK
+x-content-type-options: nosniff
+cache-control: no-store
+accept-ranges: bytes
+content-type: image/png
+content-length: 66
+```
+
+Five things about it:
+
+- **The content type comes from the extension** — `.png`, `.mp4`, `.txt`, `.json` — so a browser
+  renders the screenshot, plays the recording and shows the log as text rather than guessing.
+  Anything else is `application/octet-stream`, and `x-content-type-options: nosniff` is on every
+  response: a file the listing honestly answered with stays fetchable, and a browser is not invited
+  to sniff it into something executable.
+- **Nothing escapes the archive root.** A component that would traverse out of it is `400
+  {"outcome":"invalid_path"}`, and a symlink inside the root that resolves outside it is `500
+  {"outcome":"unreadable"}` — the containment `pathSegment` gives on the write side, checked again
+  here rather than assumed. Neither answer carries a path or a reason; those go to the daemon's own
+  log.
+- **A missing file and an unreadable one are told apart**, `404 {"outcome":"missing"}` against `500
+  {"outcome":"unreadable"}`, and neither is ever a `200` with no bytes.
+- **One `bytes=` range is answered** with `206` and a `content-range`, which is what makes a
+  `<video>` play in Safari at all — it probes with `bytes=0-1` before it will start. Anything else
+  in that header is ignored and the whole file is served.
+- **The address is not openable in a bare tab.** Pasting it into one gets the same `401` above,
+  because a top-level navigation sends no `Authorization` header and a credential in a URL is what
+  D20 forbids. The panel's **Open in a new window** fetches the URL with its session header and
+  opens the object URL it gets back.
 
 #### How a browser signs in
 
@@ -1469,9 +1530,9 @@ Its design comes from Stitch, not from this repository: `ai/RULES.md` §8 is how
 
 #### Pointing it at a host and signing in
 
-The panel talks to the host over **relative** URLs (`/session`, `/rpc`), because in production the
-daemon will serve it from the very listener that serves the data. In development the dev server
-proxies those two paths to `ROVER_HTTP_PORT` on loopback — the same variable that switches the
+The panel talks to the host over **relative** URLs (`/session`, `/rpc`, `/artifact`), because in
+production the daemon will serve it from the very listener that serves the data. In development the
+dev server proxies those three paths to `ROVER_HTTP_PORT` on loopback — the same variable that switches the
 listener on, so there is one number to keep in step rather than two. There is no host field on the
 sign-in screen and no base URL to configure; the host emits no CORS header on purpose
 (`PROJECT.md` D29), so the proxy is what makes two origins into one.
