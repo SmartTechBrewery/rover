@@ -578,6 +578,24 @@ describe('only the panel’s methods are reachable, and no table gained a row', 
 		});
 	});
 
+	it('reaches search_archive, the archive\u2019s search', async () => {
+		registerFakeBackend();
+		await withStore();
+		const daemon = await startWithHttp();
+
+		const answer = await call(daemon, 'search_archive', { text: 'checkout' });
+
+		// On the allowlist since #144, because the operator's browser is the surface a search of
+		// the archive is *for* (R38, D27) — and the one place it is safe, an agent's copy of it
+		// being every other agent's run names in one call. Nothing archived on this host yet,
+		// which is `missing` and not a refusal.
+		expect(envelopeOf(answer)).toMatchObject({
+			type: 'result',
+			id: 'req-1',
+			result: { outcome: 'missing' },
+		});
+	});
+
 	it('runs nothing it refused — the device is still free over the socket', async () => {
 		registerFakeBackend();
 		await withStore();

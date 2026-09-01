@@ -373,6 +373,9 @@ describe('the generated ROVER.md', () => {
 		// Deliberately not an MCP tool: it would hand every agent a listing of every other
 		// agent's runs on the host (R36).
 		'list_archive',
+		// The same reason with more force: one call, and an agent has every other agent's run
+		// names rather than having to walk to them a level at a time (R38).
+		'search_archive',
 		// Not MCP tools: neither has a form that carries no bytes (R19 phase 3, #104).
 		'push_file',
 		'pull_file',

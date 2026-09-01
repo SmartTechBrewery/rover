@@ -617,6 +617,110 @@ export const ListArchiveResultSchema = z.discriminatedUnion('outcome', [
 export type ListArchiveResult = z.infer<typeof ListArchiveResultSchema>;
 
 /**
+ * The longest needle {@link SearchArchiveParamsSchema} accepts.
+ *
+ * Mirrors {@link MAX_ARCHIVE_PATH_SEGMENT_LENGTH} because a component is what is matched: a
+ * needle longer than the longest component a filesystem can hold matches nothing, so this is
+ * allocation hygiene of the kind {@link ATTRIBUTION_MAX_LENGTH} already applies, not validation.
+ */
+export const MAX_ARCHIVE_SEARCH_TEXT_LENGTH = 255;
+
+/**
+ * How many matches one answer may carry.
+ *
+ * A structural bound rather than a caller's: it is in the schema, so an answer over it is
+ * `invalid_result` on the host (D19) rather than a large frame somebody has to notice. Two
+ * hundred is more than an operator reads and small enough that the frame stays ordinary; going
+ * over it is `truncated: true`, which is the whole reason that flag exists.
+ */
+export const MAX_ARCHIVE_SEARCH_MATCHES = 200;
+
+/**
+ * `.strict()` and one key, for {@link ListArchiveParamsSchema}'s reason — and here the closed
+ * shape is the decision rather than a habit.
+ *
+ * **There is deliberately no second key.** No `path` to start from, no `limit`, no `depth`, no
+ * `kind`, no `offset`, no `sortBy`. The bounds on this walk are the **host's** — depth, match
+ * count and directories read (`src/daemon/search-archive.ts`) — because a caller-settable bound
+ * is precisely the parameter D24 refused, and it is how an index gets built by accident. What the
+ * caller gets instead is `truncated`, so a bounded answer says it is bounded.
+ *
+ * **The matching rule, written down here because this is where the schema is.** A component is
+ * matched **whole and verbatim**: `text` is tested as a substring of an entire directory or file
+ * name, and nothing decomposes that name — no split on a hyphen, no timestamp, owner or hash read
+ * out of it, no inference about what a level *is* (D22). And matching is **case-insensitive**,
+ * folded with `toLowerCase` rather than `toLocaleLowerCase`, for the reason `list_archive` refuses
+ * `localeCompare`: a locale-dependent fold would make one host answer differently from another.
+ *
+ * **The answer is derived from the filesystem at request time.** There is no index, no database
+ * and no catalogue kept in sync with the files — that half of D23/D24 is not reversed, and it is
+ * what makes the bounds and `truncated` necessary rather than optional.
+ */
+export const SearchArchiveParamsSchema = z
+	.object({
+		/** The text to look for in a component. Never a path, never a pattern — see above. */
+		text: z.string().min(1).max(MAX_ARCHIVE_SEARCH_TEXT_LENGTH),
+	})
+	.strict();
+export type SearchArchiveParams = z.infer<typeof SearchArchiveParamsSchema>;
+
+/**
+ * One match — **where** in the archive the text appears, and nothing about what is in it.
+ *
+ * `path` is an array of {@link ArchivePathSegmentSchema}, so every match is by construction an
+ * address `list_archive` and `GET /artifact/…` already accept: the archive has **one path
+ * vocabulary** (R37's rule restated), and no host path is on any answer nor any field one would
+ * fit in (D19). The depth bound is {@link MAX_ARCHIVE_PATH_DEPTH}, the same one
+ * {@link ListArchiveParamsSchema} accepts, so a match is always addressable.
+ *
+ * `kind` is {@link ArchiveEntrySchema}'s own three words, and it is here because the alternative
+ * is a reader guessing from a name whether an address is a directory — which is exactly the
+ * parsing D22 forbids. It is free: the dirent that produced the match already says so. It is
+ * **not** a filter and there is no parameter to select on it.
+ *
+ * **Nothing a listing measures joins a match** — no `childCount`, no `onlyChild`, no `sizeBytes`.
+ * A search answers *where*; *what is in it* is `list_archive`'s question, and the address here is
+ * what to ask it about.
+ */
+export const ArchiveSearchMatchSchema = z
+	.object({
+		path: z.array(ArchivePathSegmentSchema).min(1).max(MAX_ARCHIVE_PATH_DEPTH),
+		kind: z.enum(['directory', 'file', 'other']),
+	})
+	.strict();
+export type ArchiveSearchMatch = z.infer<typeof ArchiveSearchMatchSchema>;
+
+/**
+ * Three answers, `list_archive`'s own three so the archive keeps one vocabulary across all of its
+ * reads, and **no `message` field anywhere** for {@link ListArchiveResultSchema}'s stated reason:
+ * a `message: string` is a field a host path fits in, and `src/ipc/server.ts` could not catch one
+ * put there.
+ *
+ * `matches: []` with `truncated: false` is **nothing matched**, and is not a failure.
+ *
+ * **`truncated` has exactly one meaning: at least one directory that exists was not fully
+ * examined**, so matches may be missing. Any of the host's three bounds does it — depth, match
+ * count, directories read — and so does a level the host could not read mid-walk. An unreadable level
+ * does not fail the search; the reason and the path stay in the host's own log, exactly as
+ * `list_archive` already warns, and this flag is what keeps a partial answer from rendering like
+ * a complete one.
+ */
+export const SearchArchiveResultSchema = z.discriminatedUnion('outcome', [
+	z
+		.object({
+			outcome: z.literal('searched'),
+			matches: z.array(ArchiveSearchMatchSchema).max(MAX_ARCHIVE_SEARCH_MATCHES),
+			truncated: z.boolean(),
+		})
+		.strict(),
+	/** Nothing has ever been archived on this host. Never conflated with an empty result set. */
+	z.object({ outcome: z.literal('missing') }).strict(),
+	/** The root is there and the host **cannot read it** — no permission, or not a directory. */
+	z.object({ outcome: z.literal('unreadable') }).strict(),
+]);
+export type SearchArchiveResult = z.infer<typeof SearchArchiveResultSchema>;
+
+/**
  * `status` and `list_devices` exist in the *protocol* rather than in the MCP layer because
  * D16 requires daemon state to be answerable to something that is not an agent: whatever
  * Swarm asks, it asks here, the same way a local caller does. Nothing device-shaped may
@@ -639,6 +743,20 @@ export type ListArchiveResult = z.infer<typeof ListArchiveResultSchema>;
  * because listing the directory *is* the query, and a parameter that made it one is how an
  * index gets built by accident. No result of it carries a path, and there is no field one
  * would fit in (D19).
+ *
+ * **`search_archive` is the archive's second read, and it reverses half of D24 at the operator's
+ * instruction** (R38). D24 said listing a directory *is* the whole query; that half is overruled,
+ * and this row answers *where in the whole archive does this text appear* — matching entries as
+ * component arrays, the same path vocabulary `list_archive` answers with, with no host path on any
+ * result and no field one would fit in. **The half that stands is the one that matters most**:
+ * there is still no index, no database and no catalogue kept in sync with the files, because the
+ * answer is derived from the filesystem at request time. That is what makes the walk bounded — by
+ * depth, by match count and by directories read — and what makes a truncated answer say so.
+ * `list_archive` keeps its shape exactly: a new capability is a new method, never a parameter
+ * bolted onto the one that exists, which is the form D24's warning about a parameter always
+ * pointed to. It is on `PANEL_METHODS` (D29) and is deliberately **not** an MCP tool, for
+ * `list_archive`'s reason with more force — a search would hand every agent the run names of every
+ * other agent on the host in one call.
  *
  * The verb rows are the two waits, the six input verbs, the three read verbs, the three
  * app-lifecycle verbs, the log read, the screen recording, the two environment verbs and the
@@ -671,6 +789,7 @@ export const IPC_METHODS = {
 		result: ForceReleaseDeviceResultSchema,
 	},
 	list_archive: { params: ListArchiveParamsSchema, result: ListArchiveResultSchema },
+	search_archive: { params: SearchArchiveParamsSchema, result: SearchArchiveResultSchema },
 	wait_for: { params: WaitForParamsSchema, result: VerbCallResultSchema },
 	wait_until_gone: { params: WaitUntilGoneParamsSchema, result: VerbCallResultSchema },
 	tap: { params: TapParamsSchema, result: VerbCallResultSchema },
