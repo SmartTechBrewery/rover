@@ -1060,6 +1060,18 @@ to behave the way its own option names read:
   "the poll is fine" because nothing on the screen says otherwise — the lease countdown keeps
   ticking locally from `receivedAtMs` (`panel/src/devices/countdown.ts`). The interval is now the
   request's budget; the guard is only ever as temporary as the request behind it.
+- **An authenticated byte route cannot be an `<img src>` or a `<video src>`.** A subresource fetch is
+  the browser's *own* request: it carries no `Authorization` header, so `GET /artifact/…` answers it
+  with the uniform `401` every unauthenticated request gets (D29, D30), and putting the credential in
+  the URL instead is what D20 forbids outright. `panel/src/session/host-client.ts` claimed the
+  opposite in a comment — "a browser renders those from the URL" — and the comment was corrected in
+  #133 along with the code it was wrong about: the panel fetches the bytes with the session header and
+  hands the browser the object URL. Two consequences worth knowing before designing around this
+  route. **The whole artifact is buffered in the tab** before it is shown, so a long recording arrives
+  in memory rather than streaming. And **the host's `Range` support is not what makes a `<video>` seek
+  in the panel** — a blob URL answers ranges in the browser — so that support stays useful for a bare
+  `curl` and for anything that fetches the address directly, which is a different set of clients from
+  the one it was assumed to serve.
 
 ---
 

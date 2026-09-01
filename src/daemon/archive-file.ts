@@ -102,8 +102,13 @@ export interface ArchiveFileReader {
  * the device gave it, and this one reads a name that already exists. Two small maps rather than
  * one inverted at runtime, because the writer's is not exhaustive over what the tree holds —
  * `.txt` and `.json` are written by other code paths entirely.
+ *
+ * **Exported for one cross-tree gate**, `tests/unit/panel/artifact-bodies.test.ts`: the web panel
+ * decides which of its three preview bodies a file gets from the type this table hands out, and a
+ * type added here that the panel cannot draw is a file the browser shows as *opaque* with nobody
+ * noticing (#133). Nothing on the host reads it from outside this module.
  */
-const CONTENT_TYPES: Record<string, string> = {
+export const CONTENT_TYPES: Record<string, string> = {
 	'.png': 'image/png',
 	'.mp4': 'video/mp4',
 	'.txt': 'text/plain; charset=utf-8',

@@ -1525,11 +1525,25 @@ run with no such file says so in different words from one whose file the host wi
 is dressed up as a fault — the file is written the first time a lease produces bytes, so a run
 without one is an ordinary thing to find.
 
-The path is in the URL, so a reload lands where you were and a link to a run is shareable. Three
-states have nothing to browse and none of them reads as another: nothing has ever been archived on
-this host; a directory deeper down with nothing in it, said plainly; and **the archive cannot be
-read**, which says in as many words that this is not the same as it being empty — runs may well be
-filed there, and the host simply will not say. Opening or previewing an artifact is not built yet.
+**Opening a file from a run's `CONTENTS` shows it beside that run.** The directory tree gives way to
+the run's own column and the artifact is previewed next to it, in two equal halves — so the thing you
+were pointing at is read where you found it rather than at a second address. One control heads that
+column, a back arrow that brings the tree back; the folder being browsed expands to its file names,
+because `CONTENTS` is now how the next file is chosen. An image is shown contained at its natural
+aspect ratio and never blown up past its own pixels; a recording is a plain video with the browser's
+own controls that does not start itself and does not loop; a log or a `device_info.json` is printed
+verbatim in monospace with a line-number gutter and **no colour on the level** — `W` and `E` are the
+device's words about its own logs, not Rover's verdict on anything. Nothing is laid over or around the
+artifact: no scanline, no tint, no frame, no bezel. The one control over it is **Open in a new
+window**, and there is no download button anywhere in the panel — this is a view, not a transfer, and
+the machine holding the artifact is the one the archive is already browsable on.
+
+The path is in the URL, so a reload lands where you were and a link to a run — or to one file inside
+it — is shareable. Three states have nothing to browse and none of them reads as another: nothing has
+ever been archived on this host; a directory deeper down with nothing in it, said plainly; and **the
+archive cannot be read**, which says in as many words that this is not the same as it being empty —
+runs may well be filed there, and the host simply will not say. A file is the same distinction one
+level down: nothing filed at that address, or something filed there that the host will not serve.
 
 Its design comes from Stitch, not from this repository: `ai/RULES.md` §8 is how to reach it and
 `docs/DESIGN.md` is what the screens settled. The Analog Horizon tokens live in

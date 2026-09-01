@@ -1,7 +1,7 @@
 import { beforeEach } from 'vitest';
 
 /**
- * The panel project's one piece of environment repair: a working `localStorage`.
+ * The panel project's two pieces of environment repair: a working `localStorage`, and object URLs.
  *
  * **The trap, observed on Node v25.8.2 with jsdom 29.** Node now ships Web Storage, and its
  * `localStorage` needs `--localstorage-file` to point somewhere real. Nothing here passes one, so
@@ -45,7 +45,34 @@ function installStorageIfBroken(): void {
 	});
 }
 
+/**
+ * The second repair: `URL.createObjectURL` and `URL.revokeObjectURL`, which **jsdom implements
+ * neither of** (#133).
+ *
+ * The artifact preview hands the browser an address for bytes it fetched with the session header,
+ * because an authenticated route cannot be an `<img src>` (`panel/src/session/host-client.ts`).
+ * Without these two functions every test that renders a preview throws inside the hook rather than
+ * failing an assertion, which reads as a bug in the hook.
+ *
+ * Each call returns a **distinct** `blob:` string, so a test can tell one artifact's URL from
+ * another's and see that a revoke matched its own create. A test that wants to assert on either
+ * uses `vi.spyOn`, which `clearMocks: true` already restores between tests.
+ */
+function installObjectUrlsIfMissing(): void {
+	if (typeof URL.createObjectURL === 'function' && typeof URL.revokeObjectURL === 'function') {
+		return;
+	}
+
+	let issued = 0;
+	URL.createObjectURL = () => {
+		issued += 1;
+		return `blob:rover-panel-test/${issued}`;
+	};
+	URL.revokeObjectURL = () => undefined;
+}
+
 installStorageIfBroken();
+installObjectUrlsIfMissing();
 
 // One test's stored session must never be another's starting state — the provider reads storage
 // while it renders, so a leftover id changes which state a fresh mount begins in.

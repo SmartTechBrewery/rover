@@ -6,6 +6,7 @@ import { orderedEntries } from '@panel/archive/level-order.js';
 import { decomposeRunName } from '@panel/archive/run-identity.js';
 import { Link } from '@tanstack/react-router';
 import {
+	CardHeading,
 	ContentsCard,
 	Field,
 	NothingFiledHere,
@@ -44,7 +45,7 @@ export function LevelContents({
 	readonly level: ArchiveLevel;
 }) {
 	return (
-		<ContentsCard title={path.at(-1) ?? 'Archive'}>
+		<ContentsCard header={<CardHeading>{path.at(-1) ?? 'Archive'}</CardHeading>}>
 			<Body level={level} path={path} />
 		</ContentsCard>
 	);

@@ -61,10 +61,21 @@ Design work lives in [`DESIGN.md`](./DESIGN.md); the brief that produced the fir
    model, platform, OS version, API level, screen size and density — comes out of that run's own
    file. A fact the file does not carry is named as `unknown`, `platform` is printed verbatim so it
    reads `android` and never `Android`, and a file that is missing and one that cannot be read are
-   two different sentences, neither of them an alarm. **What is still not built is opening or
-   previewing an artifact** (#133). `docs/DESIGN.md` §10 records the preview rules it must support,
-   including that there is **no download control anywhere in the panel**: this is a view, not a
-   transfer.
+   two different sentences, neither of them an alarm. **And opening an artifact is built too**
+   (#133): a file chosen from a run's `CONTENTS` replaces the directory tree with a preview beside the
+   run's own column, so the artifact is read where it was found — two equal halves, one back arrow
+   that brings the tree back, and the folder being browsed expanded to its file names because
+   `CONTENTS` is now how another file is chosen. An image is contained at its natural aspect ratio, a
+   recording is a plain video that neither autoplays nor loops, and a text file is printed verbatim
+   with a line-number gutter and **no colour on the log level** — `W` and `E` are the device's words
+   about its own logs, not a verdict. **Nothing is laid over or around the artifact**: no scanline, no
+   tint, no gradient, no frame, no bezel; a hairline border is the most that is permitted, which is
+   §5's rule cashed in on the one screen it was written for. The open file is part of the path, so a
+   reload lands on it and the link is shareable. The one control is **Open in a new window**, and
+   there is still **no download control anywhere in the panel**: this is a view, not a transfer.
+   `docs/DESIGN.md` §9 records what it settled, including the cost that shapes it — an authenticated
+   byte route cannot be an `<img src>`, so the panel fetches the bytes with the session header and
+   renders an object URL, and the whole artifact is therefore buffered in the tab.
 6. **Live lease state** — **done** (#113). A held card carries the `owner`, the `project`, the
    `test_name` and the grant instant, with a countdown to the expiry that ticks once a second and
    **goes back up** when activity renews the lease (`PROJECT.md` D8) — verified against a running

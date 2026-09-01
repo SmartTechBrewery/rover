@@ -49,6 +49,10 @@ const { host, HANGS } = vi.hoisted(() => ({
 		files: [] as unknown[],
 		/** The archived file's own bytes, or the outcome the host answered instead. */
 		file: { outcome: 'missing' } as unknown,
+		/** Every artifact the byte route was asked for as bytes — the preview's own request (#133). */
+		artifacts: [] as unknown[],
+		/** What the byte route answers for an artifact, media type included. */
+		artifact: { outcome: 'missing' } as unknown,
 		/** Accepts every request and never answers it — the state before the first answer. */
 		hangs: false,
 	},
@@ -74,6 +78,13 @@ vi.mock('@panel/session/session-provider.js', () => ({
 				return await new Promise(() => undefined);
 			}
 			return { ok: true, value: host.file };
+		},
+		readArtifactBytes: async (path: readonly string[]) => {
+			host.artifacts.push(path);
+			if (host.hangs) {
+				return await new Promise(() => undefined);
+			}
+			return { ok: true, value: host.artifact };
 		},
 	}),
 }));
@@ -125,7 +136,9 @@ async function showing(splat: string | undefined, levels: Record<string, unknown
 beforeEach(() => {
 	host.asked = [];
 	host.files = [];
+	host.artifacts = [];
 	host.file = { outcome: 'missing' };
+	host.artifact = { outcome: 'missing' };
 	host.hangs = false;
 });
 
@@ -484,5 +497,230 @@ describe('a legacy unlabeled directory', () => {
 
 		expect(screen.getByText('1 run archived')).toBeDefined();
 		expect(screen.getByText('Runs filed under this test name, most recent first.')).toBeDefined();
+	});
+});
+
+/**
+ * **The artifact preview** (#133) — the state that is not a state of the tree.
+ *
+ * One test is one address, as everywhere else on this screen: the whole of what decides this layout
+ * is the depth of the path, so a shared link lands on it and nothing has to be pressed to get here.
+ */
+describe('an artifact open inside a run', () => {
+	const SERIAL_LEVEL = ['checkout-app', 'login-flow', RUN, 'R5CT30ABCDE'];
+	const SCREENSHOTS = [...SERIAL_LEVEL, 'screenshots'];
+	const FILE = [...SCREENSHOTS, '001_screenshot.png'];
+	const AT_THE_FILE = FILE.join('/');
+
+	/** The archive above, plus the one level the open file's folder lists. */
+	function withScreenshots(): Record<string, unknown> {
+		return {
+			...archive(),
+			[JSON.stringify(SCREENSHOTS)]: listed(
+				{ kind: 'file', name: '001_screenshot.png', sizeBytes: 421_112 },
+				{ kind: 'file', name: '002_screenshot.png', sizeBytes: 398_004 },
+			),
+		};
+	}
+
+	const PNG = {
+		outcome: 'read',
+		mediaType: 'image/png',
+		bytes: new Blob(['the-png-bytes'], { type: 'image/png' }),
+	};
+
+	/*
+	 * **The root, the project and the test level are not fetched at all**, because the tree is not
+	 * there to need them: the levels read are the `<serial>` down, each one drawn in `CONTENTS`. And
+	 * the artifact is asked for only once its own folder's listing says it is a file — a byte read of
+	 * a directory would put a warning in the host's log on every folder a reader opens.
+	 */
+	it('reads the levels inside the run, the run’s own file, and the artifact — and nothing else', async () => {
+		host.artifact = PNG;
+
+		await showing(AT_THE_FILE, withScreenshots());
+
+		expect(host.asked).toEqual([SERIAL_LEVEL, SCREENSHOTS]);
+		expect(host.files).toEqual([[...SERIAL_LEVEL, 'device_info.json']]);
+		expect(host.artifacts).toEqual([FILE]);
+	});
+
+	// The one criterion the approved markup gets wrong: a pinned preview makes the *split* depend on
+	// the window, so the same screen shows different proportions on different monitors.
+	it('is two equal halves, with no width, percentage or basis on either', async () => {
+		host.artifact = PNG;
+
+		const { container } = await showing(AT_THE_FILE, withScreenshots());
+
+		const columns = container.querySelectorAll('div.lg\\:flex-row > section');
+		expect(columns).toHaveLength(2);
+		for (const column of columns) {
+			expect(column.className).toContain('flex-1');
+			expect(column.className).toContain('min-w-0');
+			expect(column.className).not.toMatch(/\bw-\[/);
+			expect(column.className).not.toMatch(/\bbasis-/);
+			expect(column.className).not.toMatch(/\bw-1\/2/);
+			expect(column.className).not.toContain('shrink-0');
+		}
+	});
+
+	it('replaces the directory tree with the run’s own column', async () => {
+		host.artifact = PNG;
+
+		const { container } = await showing(AT_THE_FILE, withScreenshots());
+
+		expect(screen.queryByText('DIRECTORY')).toBeNull();
+		expect(container.querySelector('aside')).toBeNull();
+		// The run's column, unchanged, in less space — its identity card names the run in full.
+		expect(screen.getByRole('heading', { level: 3, name: RUN })).toBeDefined();
+		expect(screen.getByText('DEVICE — FROM device_info.json')).toBeDefined();
+		expect(screen.getByText('CONTENTS')).toBeDefined();
+	});
+
+	it('shows the artifact, and one control over it', async () => {
+		host.artifact = PNG;
+
+		await showing(AT_THE_FILE, withScreenshots());
+
+		expect(screen.getByAltText('001_screenshot.png')).toBeDefined();
+		expect(screen.getByRole('link', { name: /Open in a new window/ })).toBeDefined();
+	});
+
+	/*
+	 * The path bar grows a segment for the file, and **the `<serial>` is in no segment**: it is not a
+	 * tree level, so there is no screen to link it to. The file is where you are, so it is last and
+	 * not a link.
+	 */
+	it('grows one breadcrumb segment for the file, in full and not a link', async () => {
+		host.artifact = PNG;
+
+		await showing(AT_THE_FILE, withScreenshots());
+
+		const trail = document.querySelector('nav[aria-label="Breadcrumb"]');
+		const last = trail?.querySelector('li:last-child > *');
+		expect(last?.textContent).toBe('screenshots/001_screenshot.png');
+		expect(last?.tagName).toBe('SPAN');
+		expect(last?.getAttribute('aria-current')).toBe('page');
+		expect(last?.className).toContain('text-tertiary');
+		expect(last?.className).toContain('break-words');
+		expect(trail?.textContent).not.toContain('R5CT30ABCDE');
+		// The levels above it are still links, so the way back up is the path bar as well as the arrow.
+		expect(trail?.querySelectorAll('a')).toHaveLength(4);
+	});
+
+	/*
+	 * **The counter slot is empty, and that is the rule rather than an exception**: the badge is a
+	 * counter and one file has nothing to count — exactly as §7 leaves the held/free counter absent
+	 * rather than showing `0 held · 0 free`.
+	 */
+	it('carries no badge, and describes itself as one artifact', async () => {
+		host.artifact = PNG;
+
+		const { container } = await showing(AT_THE_FILE, withScreenshots());
+
+		expect(screen.getByText('One artifact from this run, as it was written.')).toBeDefined();
+		expect(container.textContent).not.toContain('archived');
+	});
+
+	// One control, one outcome: the tree returns exactly when the preview closes.
+	it('offers one way back, to the run’s own address', async () => {
+		host.artifact = PNG;
+
+		await showing(AT_THE_FILE, withScreenshots());
+
+		const back = screen.getByRole('link', {
+			name: 'Close the preview and go back to the directory',
+		});
+		expect(back.getAttribute('href')).toBe(`/archive/checkout-app/login-flow/${RUN}`);
+	});
+
+	// `CONTENTS` is how another file is chosen, so the folder being browsed shows its file names.
+	it('expands the folder being browsed in `CONTENTS`, with the open file selected', async () => {
+		host.artifact = PNG;
+
+		await showing(AT_THE_FILE, withScreenshots());
+
+		const open = screen.getByRole('link', { name: /001_screenshot.png/ });
+		expect(open.getAttribute('aria-current')).toBe('page');
+		expect(screen.getByRole('link', { name: /002_screenshot.png/ }).getAttribute('href')).toBe(
+			`/archive/${[...SCREENSHOTS, '002_screenshot.png'].join('/')}`,
+		);
+	});
+
+	/*
+	 * A folder below the `<serial>` is the same two columns with that level's listing beside the run —
+	 * which is what makes `recordings/001_frames/` reachable now the tree is not there. Nothing is
+	 * read as an artifact, because the level above said it is a directory.
+	 */
+	it('renders a folder below the serial as that level’s contents, and fetches no artifact', async () => {
+		await showing(SCREENSHOTS.join('/'), withScreenshots());
+
+		expect(screen.getByText('Everything filed under this directory.')).toBeDefined();
+		expect(screen.getByText('DEVICE — FROM device_info.json')).toBeDefined();
+		expect(screen.queryByText('DIRECTORY')).toBeNull();
+		expect(host.artifacts).toEqual([]);
+		expect(host.asked).toEqual([SERIAL_LEVEL, SCREENSHOTS]);
+	});
+
+	// The address the host answers `missing` for. Said plainly, and not as the other one.
+	it('says nothing is filed at an address the host does not have', async () => {
+		const { container } = await showing(AT_THE_FILE, withScreenshots());
+
+		expect(screen.getByText(/Nothing is filed at this address/)).toBeDefined();
+		expect(container.textContent).not.toContain('Rover cannot read this artifact');
+	});
+
+	it('says a file it cannot read differently again', async () => {
+		host.artifact = { outcome: 'unreadable' };
+
+		const { container } = await showing(AT_THE_FILE, withScreenshots());
+
+		expect(screen.getByText(/Rover cannot read this artifact/)).toBeDefined();
+		expect(container.textContent).not.toContain('Nothing is filed at this address');
+	});
+
+	// A link into the archive at a depth nobody browsed to. The tree is never drawn on the way.
+	it('renders the preview on a reload straight onto it, without ever drawing the tree', async () => {
+		host.artifact = PNG;
+		at.splat = AT_THE_FILE;
+		host.answers = new Map(Object.entries(withScreenshots()));
+
+		const { container } = render(<ArchiveScreen />);
+		expect(screen.queryByText('DIRECTORY')).toBeNull();
+		expect(screen.getByText('Reading this artifact.')).toBeDefined();
+
+		for (let turn = 0; turn < 6; turn += 1) {
+			await act(async () => undefined);
+		}
+
+		expect(screen.queryByText('DIRECTORY')).toBeNull();
+		expect(container.querySelector('aside')).toBeNull();
+		expect(screen.getByAltText('001_screenshot.png')).toBeDefined();
+	});
+});
+
+/**
+ * The two addresses above the preview state, unchanged (#133 is a state of this screen, not a
+ * replacement for it).
+ */
+describe('the addresses that still browse', () => {
+	it('renders the `<serial>` level itself beside the tree, as it did before', async () => {
+		await showing(`checkout-app/login-flow/${RUN}/R5CT30ABCDE`);
+
+		expect(screen.getByText('DIRECTORY')).toBeDefined();
+		expect(screen.getByText('Everything filed under this directory.')).toBeDefined();
+		// The level's own card, listing what the run wrote — the tree's fourth level by typing only.
+		expect(screen.getByRole('link', { name: /device_info.json/ })).toBeDefined();
+	});
+
+	it('renders a selected run beside the tree, with no back control', async () => {
+		await showing(`checkout-app/login-flow/${RUN}`);
+
+		expect(screen.getByText('DIRECTORY')).toBeDefined();
+		expect(screen.getByText('Run Details')).toBeDefined();
+		expect(
+			screen.queryByRole('link', { name: 'Close the preview and go back to the directory' }),
+		).toBeNull();
+		expect(host.artifacts).toEqual([]);
 	});
 });
