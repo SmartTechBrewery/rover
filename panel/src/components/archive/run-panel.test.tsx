@@ -1,6 +1,8 @@
 import type { ArchiveLevel } from '@panel/archive/archive-levels.js';
+import type { ArchivedDeviceInfo } from '@panel/archive/device-info.js';
 import { render, screen } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
+import fixture from '../../../../tests/fixtures/panel/device-info.json';
 import { RunPanel, type RunSerial } from './run-panel.js';
 
 const RUN = ['checkout-app', 'login-flow', '20260830T170501Z-issue-112-9f1c2ab4'] as const;
@@ -22,8 +24,17 @@ const NAMED: RunSerial = { status: 'answered', serial: 'R5CT30ABCDE' };
 /** It answered, and the run directory holds something other than exactly one entry. */
 const NO_SINGLE_CHILD: RunSerial = { status: 'answered', serial: null };
 
-function showing(serial: RunSerial = NAMED, contents: ArchiveLevel = CONTENTS) {
-	return render(<RunPanel contents={contents} run={RUN} serial={serial} />);
+/** The run's own `device_info.json`, as the archive wrote it — the real capture's shape. */
+const DEVICE: ArchivedDeviceInfo = { status: 'read', info: fixture.files[0] };
+/** The same device, with the three facts it could not answer (`docs/DESIGN.md` §6). */
+const UNANSWERED: ArchivedDeviceInfo = { status: 'read', info: fixture.files[1] };
+
+function showing(
+	serial: RunSerial = NAMED,
+	contents: ArchiveLevel = CONTENTS,
+	device: ArchivedDeviceInfo = DEVICE,
+) {
+	return render(<RunPanel contents={contents} device={device} run={RUN} serial={serial} />);
 }
 
 describe('a run', () => {
@@ -71,7 +82,9 @@ describe('the level the serial is read from', () => {
 		expect(screen.getByText('reading')).toBeDefined();
 		expect(screen.getByText('Reading this level of the archive.')).toBeDefined();
 		expect(container.textContent).not.toContain('There is nothing to list for this run.');
-		expect(container.textContent).not.toContain('device_info.json');
+		// A `CONTENTS` entry rather than `device_info.json`, which card 2's heading names in every
+		// state: what must not leak in is the listing.
+		expect(container.textContent).not.toContain('latest_recording');
 		expect(container.innerHTML).not.toContain('animate');
 	});
 
@@ -82,7 +95,7 @@ describe('the level the serial is read from', () => {
 		expect(screen.getByText('ARCHIVE NOT READABLE')).toBeDefined();
 		expect(screen.getByText(/runs may well be filed here/)).toBeDefined();
 		expect(container.textContent).not.toContain('There is nothing to list for this run.');
-		expect(container.textContent).not.toContain('device_info.json');
+		expect(container.textContent).not.toContain('latest_recording');
 	});
 
 	// `unknown` is the screen saying the host answered and had no serial to give, so neither state
@@ -131,6 +144,104 @@ describe('what the run wrote', () => {
 	});
 });
 
+/**
+ * **`DEVICE — FROM device_info.json`** (#136) — the one card here that is a file's contents rather
+ * than a listing. Every value comes out of that file, with `docs/DESIGN.md` §6's three fallbacks
+ * and nothing else.
+ */
+describe('the device the lease held', () => {
+	it('names its six fields and reads every one out of the file', () => {
+		showing();
+
+		for (const label of ['MODEL', 'PLATFORM', 'OS VERSION', 'API LEVEL', 'SCREEN', 'DENSITY']) {
+			expect(screen.getByText(label)).toBeDefined();
+		}
+		expect(screen.getByText('sdk_gphone64_arm64')).toBeDefined();
+		expect(screen.getByText('15')).toBeDefined();
+		expect(screen.getByText('35')).toBeDefined();
+		expect(screen.getByText('1080 x 2400 px')).toBeDefined();
+		expect(screen.getByText('2.625x — 411 x 914 dp')).toBeDefined();
+	});
+
+	// The wire's own word. A display table mapping it onto `Android` would be a platform branch in
+	// shared code (`ai/RULES.md` §2), and the device card holds the same line.
+	it('prints the platform verbatim, so it reads `android` and never `Android`', () => {
+		const { container } = showing();
+
+		expect(screen.getByText('android')).toBeDefined();
+		expect(container.textContent).not.toContain('Android');
+	});
+
+	it('falls back to the serial for a model the device could not answer', () => {
+		showing(NAMED, CONTENTS, UNANSWERED);
+
+		// The serial the level above named — the card's job is to identify the device, and it always
+		// can. It is on the panel twice now, in `SERIAL` and here.
+		expect(screen.getAllByText('R5CT30ABCDE')).toHaveLength(2);
+	});
+
+	it('names an OS version and an API level it does not have, rather than closing the row up', () => {
+		showing(NAMED, CONTENTS, UNANSWERED);
+
+		expect(screen.getByText('OS VERSION')).toBeDefined();
+		expect(screen.getByText('API LEVEL')).toBeDefined();
+		expect(screen.getAllByText('unknown').length).toBeGreaterThanOrEqual(2);
+	});
+});
+
+/**
+ * **The pair that must never render alike**, one file down from the archive's own empty/unreadable
+ * pair (D6, `docs/DESIGN.md` §7). Neither is an alarm: no colour, no icon, no error code and no
+ * retry control — a file the archive does not carry is an ordinary answer.
+ */
+describe('a device_info.json that could not be read', () => {
+	it('says a missing one plainly, with nothing on it that reads as a fault', () => {
+		const { container } = showing(NAMED, CONTENTS, { status: 'missing' });
+
+		expect(screen.getByText(/No device_info.json is filed for this run/)).toBeDefined();
+		expect(container.querySelectorAll('[role="alert"]')).toHaveLength(0);
+		expect(container.querySelectorAll('button')).toHaveLength(0);
+		expect(container.innerHTML).not.toContain('error');
+	});
+
+	it('says an unreadable one differently, and says so in as many words', () => {
+		const { container } = showing(NAMED, CONTENTS, { status: 'unreadable' });
+
+		expect(screen.getByText(/Rover cannot read this run's device_info.json/)).toBeDefined();
+		expect(screen.getByText(/not the same as none being filed/)).toBeDefined();
+		expect(container.textContent).not.toContain('No device_info.json is filed');
+		expect(container.querySelectorAll('button')).toHaveLength(0);
+	});
+
+	it('says it is reading, with no spinner', () => {
+		const { container } = showing(NAMED, CONTENTS, { status: 'reading' });
+
+		expect(screen.getByText("Reading this run's device_info.json.")).toBeDefined();
+		expect(container.innerHTML).not.toContain('animate');
+	});
+
+	/*
+	 * The file is inside the run's `<serial>` directory, so the level above answers before this card
+	 * can: a serial nobody has answered for is *reading*, one the host cannot read is *not readable*,
+	 * and a run naming no single child has no directory for a file to be in. None of the three may
+	 * borrow another's sentence — the distinction `SERIAL` draws, applied to a file.
+	 */
+	it('never claims a file is missing on the strength of a level nobody answered for', () => {
+		for (const serial of [{ status: 'loading' }, { status: 'unreadable' }] as const) {
+			const { container, unmount } = showing(serial, CONTENTS, { status: 'read', info: {} });
+
+			expect(container.textContent).not.toContain('No device_info.json is filed');
+			unmount();
+		}
+	});
+
+	it('says a run with no `<serial>` directory has no file filed, rather than reading forever', () => {
+		showing(NO_SINGLE_CHILD, CONTENTS, { status: 'reading' });
+
+		expect(screen.getByText(/No device_info.json is filed for this run/)).toBeDefined();
+	});
+});
+
 /*
  * **The assertion this screen is most likely to lose.** The superseded design invented a run
  * duration, a trigger, an author, an environment panel, a network figure and file names nothing
@@ -155,16 +266,14 @@ describe('what is not on this panel', () => {
 		}
 	});
 
-	// Phase 2, waiting on #133: the card needs a file's *contents*, `list_archive` answers directory
-	// listings only, and nothing in the panel fetches #131's artifact route yet. The gap is
-	// deliberate rather than filled with a guess.
-	it('carries no device card in this phase', () => {
+	// The design's own mock data, which the card must never fall back to: every value on it comes
+	// out of the run's own file (#136).
+	it('draws no device the file did not name', () => {
 		const { container } = showing();
 		const text = container.textContent ?? '';
 
-		expect(text).not.toContain('DEVICE');
-		expect(text).not.toContain('API LEVEL');
 		expect(text).not.toContain('Pixel');
+		expect(text).not.toContain('2.75x');
 	});
 
 	// Rover has no verdicts to report (`docs/DESIGN.md` §2).

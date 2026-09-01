@@ -1,5 +1,10 @@
 import type { ArchiveLevel } from '@panel/archive/archive-levels.js';
 import type { ArchiveEntry } from '@panel/archive/archive-listing.js';
+import {
+	type ArchivedDeviceInfo,
+	type DeviceFacts,
+	deviceFactsFrom,
+} from '@panel/archive/device-info.js';
 import { formatBytes, formatChildCount, UNKNOWN } from '@panel/archive/file-size.js';
 import { decomposeRunName } from '@panel/archive/run-identity.js';
 import { FileQuestionMark, FileText, Folder } from 'lucide-react';
@@ -38,21 +43,23 @@ export type RunSerial =
  * network figure and no file name that was not in the listing. Every field is either on the wire or
  * decomposed from the directory's own name, and a fact the host does not have says `unknown`.
  *
- * **The `DEVICE — FROM device_info.json` card is deliberately absent.** It needs the *contents* of
- * an archived file and `list_archive` answers directory listings only. The bytes have an address
- * since #131 (`GET /artifact/<component>/…`), but nothing in the panel fetches one yet, so the card
- * waits on the preview that first does — issue #133. The gap is on the page on purpose rather than
- * closed with a guess.
+ * **`DEVICE — FROM device_info.json` is the one card here that is not a listing** (#136). It reads
+ * the *contents* of an archived file, which `list_archive` cannot answer and #131's byte route can;
+ * everything on it comes out of that file, with `docs/DESIGN.md` §6's three fallbacks and nothing
+ * else. Its own three states are folded in {@link Device}.
  */
 export function RunPanel({
 	run,
 	serial,
 	contents,
+	device,
 }: {
 	readonly run: readonly string[];
 	/** The run directory's `onlyChild`, with the state of the answer it came from — {@link RunSerial}. */
 	readonly serial: RunSerial;
 	readonly contents: ArchiveLevel;
+	/** This run's own `device_info.json` — {@link ArchivedDeviceInfo}. */
+	readonly device: ArchivedDeviceInfo;
 }) {
 	const name = run.at(-1) ?? '';
 	const identity = decomposeRunName(name);
@@ -74,6 +81,13 @@ export function RunPanel({
 						<Field label="GRANTED">{identity.grantedAt ?? UNKNOWN}</Field>
 						<Field label="SERIAL">{serialText(serial)}</Field>
 					</div>
+				</section>
+
+				<section className="rounded-lg border-2 border-outline-variant bg-surface p-5">
+					<h3 className="mb-4 font-label-caps text-[12px] text-on-surface uppercase">
+						DEVICE — FROM device_info.json
+					</h3>
+					<Device device={device} serial={serial} />
 				</section>
 
 				<section className="rounded-lg border-2 border-outline-variant bg-surface p-5">
@@ -101,6 +115,106 @@ function serialText(serial: RunSerial): string {
 		return 'not readable';
 	}
 	return serial.serial ?? UNKNOWN;
+}
+
+/**
+ * The device the lease held, entirely out of the run's own `device_info.json`.
+ *
+ * **The state of the level *above* is ordered first**, exactly as {@link Contents} orders it and for
+ * the same reason: this file lives inside the run's `<serial>` directory, whose name is that
+ * level's `onlyChild`, so with no serial there is no address to read it at. While that level is in
+ * flight the card is *reading*; when the host cannot read it the card cannot say whether a file is
+ * filed, which is *not readable*; and a run that names no single child has no `<serial>` directory
+ * for a file to be in, which is *none filed*. Only then does the file's own answer decide.
+ *
+ * **Nothing is invented.** Six fields, every value from the file, and a fact the file does not
+ * carry reads `unknown` (`device-info.ts`). No run duration, no trigger, no author, no environment
+ * panel and no network figure — the same absences `docs/DESIGN.md` §9 requires of the rest of this
+ * panel.
+ */
+function Device({
+	device,
+	serial,
+}: {
+	readonly device: ArchivedDeviceInfo;
+	readonly serial: RunSerial;
+}) {
+	if (serial.status === 'loading') {
+		return <ReadingDeviceInfo />;
+	}
+	if (serial.status === 'unreadable' || device.status === 'unreadable') {
+		return <DeviceInfoNotReadable />;
+	}
+	if (serial.serial === null || device.status === 'missing') {
+		return <NoDeviceInfo />;
+	}
+	if (device.status === 'reading') {
+		return <ReadingDeviceInfo />;
+	}
+	return <Facts facts={deviceFactsFrom(device.info, serial.serial)} />;
+}
+
+/** The design's six fields, in the design's own order and its two-then-three column grid. */
+function Facts({ facts }: { readonly facts: DeviceFacts }) {
+	return (
+		<div className="grid grid-cols-2 gap-x-4 gap-y-6 sm:grid-cols-3">
+			<Field label="MODEL">{facts.model}</Field>
+			{/*
+			 * Verbatim, so it reads `android` and never `Android`. A display table mapping one onto
+			 * the other would be a platform branch in shared code (`ai/RULES.md` §2), and the device
+			 * card holds the same line.
+			 */}
+			<Field label="PLATFORM">{facts.platform}</Field>
+			<Field label="OS VERSION">{facts.osVersion}</Field>
+			<Field label="API LEVEL">{facts.apiLevel}</Field>
+			<Field label="SCREEN">{facts.screen}</Field>
+			<Field label="DENSITY">{facts.density}</Field>
+		</div>
+	);
+}
+
+/** One quiet line, `aria-live` and no spinner — {@link ReadingLevel}'s rule, about a file. */
+function ReadingDeviceInfo() {
+	return (
+		<p aria-live="polite" className="font-code-md text-code-md text-on-surface-variant">
+			Reading this run's device_info.json.
+		</p>
+	);
+}
+
+/**
+ * Rover filed no `device_info.json` for this run — **said plainly, in {@link NothingFiledHere}'s
+ * language and with its weight.** One sentence where the rows would have been: no alarm colour, no
+ * warning icon, no error code and no retry control (`docs/DESIGN.md` §7).
+ *
+ * It says what would have produced one, so a reader can tell this from a device that answered
+ * nothing: the file is the archive's static snapshot of the device, written beside the first
+ * artifact a lease-device pair produces (D14, `src/daemon/archive.ts`).
+ */
+function NoDeviceInfo() {
+	return (
+		<p className="font-code-md text-code-md text-on-surface-variant">
+			No device_info.json is filed for this run. Rover writes one beside the first artifact a lease
+			produces, so this is an ordinary answer rather than a fault.
+		</p>
+	);
+}
+
+/**
+ * The file is there and this host will not read it — **the sentence that must never read like
+ * {@link NoDeviceInfo}'s**, which is the same pair *unreadable* and *empty* form one directory up
+ * (D6, `docs/DESIGN.md` §9).
+ *
+ * Grey and plain, for {@link NoDeviceInfo}'s reasons, and **no error code**: the reason and the
+ * path stay on the host by design (D19), so a code here would dress a refusal up as a diagnosis.
+ */
+function DeviceInfoNotReadable() {
+	return (
+		<p className="font-code-md text-code-md text-on-surface-variant">
+			Rover cannot read this run's device_info.json. This is not the same as none being filed —
+			there may well be one, and the host will not say what is in it.
+		</p>
+	);
 }
 
 /**

@@ -35,7 +35,7 @@ const IDENTITY = { identifier: 'panel', displayName: 'Panel' };
 
 /** Every state as one readable string, so a test asserts on the machine and not on a render. */
 function Probe() {
-	const { state, signIn, signOut, onRefusal, call } = useSession();
+	const { state, signIn, signOut, onRefusal, call, readArtifactText } = useSession();
 	// What the last sign-out reported. `Profile` is the screen that has to say this out loud, and
 	// the outcome is the only way it can (`session-provider.tsx`, `SignOutOutcome`).
 	const [outcome, setOutcome] = useState('');
@@ -76,6 +76,16 @@ function Probe() {
 				type="button"
 			>
 				ask
+			</button>
+			<button
+				onClick={() => {
+					void readArtifactText(['a-run', 'device_info.json']).then((given) =>
+						setAnswer(given.ok ? `ok:${given.value.outcome}` : given.refusal),
+					);
+				}}
+				type="button"
+			>
+				read
 			</button>
 		</div>
 	);
@@ -410,6 +420,32 @@ describe('a call carrying the session', () => {
 		await waitFor(() => expect(state()).toBe('access-ended'));
 
 		expect(answer()).toBe('refused');
+		expect(stored()).toBeNull();
+	});
+
+	/*
+	 * The byte route is behind the same per-request gate, so it gets the same guarantee: a screen
+	 * that reads an archived file gets a method rather than the credential, and the bounce happens
+	 * in the one place that knows how to perform it (#136, #131).
+	 */
+	it('reads an archived file with the held session, and bounces on a refusal there too', async () => {
+		await signedIn();
+		fetchMock.mockResolvedValue({
+			status: 200,
+			ok: true,
+			text: async () => '{"platform":"android"}',
+		} as unknown as Response);
+
+		press('read');
+		await waitFor(() => expect(answer()).toBe('ok:read'));
+
+		const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+		expect(url).toBe('/artifact/a-run/device_info.json');
+		expect((init.headers as Record<string, string>).authorization).toBe('Bearer a-session-id');
+
+		fetchMock.mockResolvedValue({ status: 401, ok: false } as unknown as Response);
+		press('read');
+		await waitFor(() => expect(state()).toBe('access-ended'));
 		expect(stored()).toBeNull();
 	});
 

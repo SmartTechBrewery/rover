@@ -37,7 +37,7 @@ this sentence exists to prevent.
 | Devices — Force Release Confirmation | `d86e794af4de4639979bc65104e2ec57` | Settled, **the asking only** |
 | Archive — Project Selection Refined | `b91c300db2d445b8a195a0bafd1aac76` | **Settled** — see §9 |
 | Archive — Test Runs Refined (login-flow) | `8dcd4330b9b94105a7ba289620dc84aa` | **Settled** — see §9 |
-| Archive — A run selected (Refined) | `d24d2c84e84041b28dfed67e92551d28` | **Settled** — see §9, except its device card (not built — see §9) |
+| Archive — A run selected (Refined) | `d24d2c84e84041b28dfed67e92551d28` | **Settled** — see §9, all three cards built |
 | Archive — Browsing (V2) | `f2de4344f7e347aa894b3054d9cf4098` | **Superseded** by the three rows above; must not be built from |
 | Run Detail — Artifacts (V2) | `36b54fbe032449d8a300ea0825bbf1c8` | Not yet corrected — see §10 |
 | Compare — Visual Diff (V2) | `897632dcadce44de9bdee74a94da14f5` | Not yet corrected — see §10 |
@@ -757,7 +757,9 @@ some of it the other way round.
 
 The one host method behind it is `list_archive` (#130, `src/daemon/list-archive.ts`), which answers
 **one directory level** at a time. Every rule here is downstream of that: a screen that could ask
-for a subtree would have been drawn differently.
+for a subtree would have been drawn differently. The one thing a level cannot answer is the run's
+device card, which reads a file's *contents* off #131's byte route — that is the whole of the
+screen's second data path, and it is settled below.
 
 ### The three approved screens
 
@@ -966,17 +968,64 @@ level's listing rather than nothing at all — names, addressable, no invented m
   walk D24 refuses; `list_archive` cannot answer it and must not grow a parameter that can.
 - **No aggregate of any kind** — no total size, no run count across projects, no retention figure.
 - **Nothing invented**: no duration, no trigger, no author, no environment panel, no network figure
-  and no file name that was not in a listing. `run-panel.test.tsx` asserts the absence of each.
+  and no file name that was not in a listing. `run-panel.test.tsx` asserts the absence of each. The
+  device card is held to the same rule from the other side — it may only say what its file says.
+
+### The device card — settled (#136)
+
+**`DEVICE — FROM device_info.json`** (`d24d2c84…`'s second card) is card 2 of three, between the
+run's identity card and `CONTENTS`, and it is **the one thing on this screen that is a file's
+contents rather than a listing**. `list_archive` answers directory levels; the bytes come from
+#131's byte route (`GET /artifact/<component>/…`, `PROJECT.md` R37), through
+`Session.readArtifactText`, which exists for `Session.call`'s reason — so a screen that needs a
+file's contents gets a method rather than the session id.
+
+The file is the archive's own static snapshot of the device the lease held, written once per
+lease-device pair beside the first artifact that pair produced and never rewritten (D14,
+`src/daemon/archive.ts`). That is what lets this card answer for a run that ended weeks ago: it says
+what the device *was*, not what it is.
+
+- **Six fields, in the design's own order** — `MODEL`, `PLATFORM`, `OS VERSION`, `API LEVEL`,
+  `SCREEN`, `DENSITY` — in its `grid-cols-2 sm:grid-cols-3` grid, reusing the same `Field` the
+  identity card uses. Every value comes out of that run's own file and **nothing is invented**: no
+  duration, no trigger, no author, no environment panel, no network figure.
+- **§6's three fallbacks hold, and they are the same three the device card implements.** `model:
+  null` falls back to **the serial** (the `<serial>` directory's own name, which the identity card
+  is already showing); `osVersion: null` renders **`unknown`**; `platform` is rendered **verbatim**,
+  so it reads **`android` and not `Android`** — a display table mapping one onto the other would be
+  a platform branch in shared code, which `ai/RULES.md` §2 exists to prevent. `API LEVEL` follows
+  `osVersion`'s rule for `osVersion`'s reason.
+- **A field the file does not carry is named as unknown**, not dropped and not a reason to call a
+  readable file unreadable. The panel's mirror is non-`.strict()` **and every field is optional**,
+  which is one step looser than the other two mirrors and is the criterion rather than laziness.
+- **`SCREEN` and `DENSITY` are composed**, `1080 x 2400 px` and `2.625x — 411 x 914 dp`, and **a
+  composition never invents a missing half**: without both pixel dimensions, or without all three of
+  scale and the two dp values, the field reads `unknown`. **The dp values are rounded here and
+  nowhere earlier** — the host stores exact quotients on purpose (`ScreenInfoSchema`) and rounding
+  is a presentation decision.
+- **`DENSITY` does not print the dpi.** The file carries `density` (420 on the capture); the
+  design's field is the scale and the dp size, and a number nothing draws is not a field the panel's
+  mirror pins.
+- **Three states, and the pair among them must never render alike.** *Rover filed none for this
+  run*, and *something is filed there and this host will not read it* — the same distinction the
+  archive's empty and unreadable levels draw one directory up (D6). Both are one plain sentence
+  where the rows would be: **no alarm colour, no warning icon, no error code and no retry control**
+  (§7). A `404` is the first; a `400`, a `500`, a body that is not JSON, one the mirror cannot parse
+  and a request nothing answered all fold into the second, which is the fold `archive-levels.tsx`
+  already makes. A **`refused`** sets nothing, because the router is already coming down.
+- **The level above is ordered before the file's own answer**, exactly as `CONTENTS` orders it and
+  for the same reason: the file lives inside the run's `<serial>` directory, whose name is that
+  level's `onlyChild`. With no serial there is no address, so nothing is fetched — a level in
+  flight is *reading*, one the host cannot read is *not readable*, and a run naming no single child
+  has no directory for a file to be in. None of the three may borrow another's sentence.
+- **One request per run, on navigation, cached for the life of the screen.** No interval, no
+  prefetch for a run nobody selected, and no caching across runs. A selected run therefore costs
+  **four listings and one file**.
 
 ### What waits on another issue
 
-- **The `DEVICE — FROM device_info.json` card** (`d24d2c84…`'s second card) is **not built**. It needs
-  the *contents* of an archived file, and `list_archive` answers directory listings only. The host
-  half is no longer what is missing — reading an artifact's bytes landed with **#131** (`GET
-  /artifact/<component>/…`, `PROJECT.md` R37) — but nothing in the panel fetches those bytes yet, so
-  the card waits on the preview (**#133**) that first does. The gap is deliberate on the page rather
-  than filled with a guess, and `RunPanel` names it where the card would go.
-- **Opening or previewing an artifact**, and any *Open in a new window* control, is **#133**.
+- **Opening or previewing an artifact**, and any *Open in a new window* control, is **#133**. The
+  byte route the device card now reads through is the same one that will serve them.
 
 ---
 

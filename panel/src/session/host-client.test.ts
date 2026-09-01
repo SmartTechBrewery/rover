@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { rpc, signIn, signOut, whoAmI } from './host-client.js';
+import { readArtifactText, rpc, signIn, signOut, whoAmI } from './host-client.js';
 
 /**
  * The invariants this module exists to hold, rather than its plumbing: a credential never in a URL,
@@ -12,6 +12,15 @@ const fetchMock = vi.fn();
 
 function answered(status: number, body: unknown): Response {
 	return { status, json: async () => body } as unknown as Response;
+}
+
+/** The byte route answers a body rather than JSON, and its status is read before its `ok`. */
+function served(status: number, text: string): Response {
+	return {
+		status,
+		ok: status >= 200 && status < 300,
+		text: async () => text,
+	} as unknown as Response;
 }
 
 function lastRequest(): { url: string; init: RequestInit } {
@@ -133,6 +142,101 @@ describe('the host client', () => {
 		expect(await rpc('a-session-id', 'acquire_device', {})).toEqual({
 			ok: true,
 			value: { type: 'error', error: { code: 'unknown_method', message: 'not served here' } },
+		});
+	});
+});
+
+/**
+ * The archive's byte route (#131, R37), and the three answers it gives about one file.
+ *
+ * What is in question here is the same thing as everywhere else on this surface — the credential is
+ * a header and never a URL — plus the one thing that is this route's own: *missing* and *unreadable*
+ * are **values**, in `list_archive`'s own words, so a file that is not there never reads as a
+ * credential that was refused.
+ */
+describe('one archived file', () => {
+	beforeEach(() => {
+		fetchMock.mockReset();
+		vi.stubGlobal('fetch', fetchMock);
+	});
+
+	it('addresses the file by its components, with the session in the header', async () => {
+		fetchMock.mockResolvedValue(served(200, '{"platform":"android"}'));
+
+		const answer = await readArtifactText('a-session-id', ['checkout-app', 'device_info.json']);
+
+		expect(answer).toEqual({
+			ok: true,
+			value: { outcome: 'read', text: '{"platform":"android"}' },
+		});
+		const { url, init } = lastRequest();
+		expect(url).toBe('/artifact/checkout-app/device_info.json');
+		expect(headersOf(init).authorization).toBe('Bearer a-session-id');
+		expect(init.credentials).toBe('omit');
+		expect(url).not.toContain('a-session-id');
+	});
+
+	/*
+	 * A directory name may legally carry a space, a `#` or a `%`, and the route decodes per segment
+	 * before re-validating — so a separator inside a component has to be encoded here rather than
+	 * joined in raw, where it would silently become one component more.
+	 */
+	it('encodes each component on its own, so nothing inside one becomes a separator', async () => {
+		fetchMock.mockResolvedValue(served(200, ''));
+
+		await readArtifactText('a-session-id', ['a b#c', 'x/y']);
+
+		expect(lastRequest().url).toBe('/artifact/a%20b%23c/x%2Fy');
+	});
+
+	it('reads a file that is not there as missing rather than as a refusal', async () => {
+		fetchMock.mockResolvedValue(served(404, '{"outcome":"missing"}'));
+
+		expect(await readArtifactText('a-session-id', ['gone.json'])).toEqual({
+			ok: true,
+			value: { outcome: 'missing' },
+		});
+	});
+
+	// A `400` (an address no listing could have answered) and a `500` (something is filed there and
+	// this host will not serve it) are one answer to the panel: it can say *that* and never why.
+	it('reads every other answer the route gives as unreadable', async () => {
+		for (const status of [400, 500]) {
+			fetchMock.mockResolvedValue(served(status, '{"outcome":"unreadable"}'));
+
+			expect(await readArtifactText('a-session-id', ['x.json'])).toEqual({
+				ok: true,
+				value: { outcome: 'unreadable' },
+			});
+		}
+	});
+
+	it('reads a refused session as a refusal, so the panel can bounce on it', async () => {
+		fetchMock.mockResolvedValue(served(401, ''));
+
+		expect(await readArtifactText('a-session-id', ['x.json'])).toEqual({
+			ok: false,
+			refusal: 'refused',
+		});
+	});
+
+	it('reads a host that never answered, and a body that never arrived, as unanswered', async () => {
+		fetchMock.mockRejectedValue(new TypeError('Failed to fetch'));
+		expect(await readArtifactText('a-session-id', ['x.json'])).toEqual({
+			ok: false,
+			refusal: 'unanswered',
+		});
+
+		fetchMock.mockResolvedValue({
+			status: 200,
+			ok: true,
+			text: async () => {
+				throw new TypeError('network error');
+			},
+		} as unknown as Response);
+		expect(await readArtifactText('a-session-id', ['x.json'])).toEqual({
+			ok: false,
+			refusal: 'unanswered',
 		});
 	});
 });

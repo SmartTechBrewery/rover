@@ -1516,12 +1516,20 @@ held, and everything the lease wrote with a size or a file count beside it. Noth
 duration, no trigger, no verdict, and no file that was not in the listing — Rover reports what is on
 disk and judging it is the agent's job.
 
+**A run also names the device it ran on**, out of the `device_info.json` the archive filed beside its
+first artifact — the one thing on the screen that is a file's contents rather than a directory
+listing, read through the same `/artifact` route a browser would open. Model, platform, OS version,
+API level, screen size and density, every one of them from that file and none of it guessed: a fact
+the file does not carry says `unknown`, the platform is printed exactly as the host wrote it, and a
+run with no such file says so in different words from one whose file the host will not read. Neither
+is dressed up as a fault — the file is written the first time a lease produces bytes, so a run
+without one is an ordinary thing to find.
+
 The path is in the URL, so a reload lands where you were and a link to a run is shareable. Three
 states have nothing to browse and none of them reads as another: nothing has ever been archived on
 this host; a directory deeper down with nothing in it, said plainly; and **the archive cannot be
 read**, which says in as many words that this is not the same as it being empty — runs may well be
-filed there, and the host simply will not say. Opening an artifact is not built yet, and neither is
-the run's device card, which needs a file's contents rather than a listing.
+filed there, and the host simply will not say. Opening or previewing an artifact is not built yet.
 
 Its design comes from Stitch, not from this repository: `ai/RULES.md` §8 is how to reach it and
 `docs/DESIGN.md` is what the screens settled. The Analog Horizon tokens live in
