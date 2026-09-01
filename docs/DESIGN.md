@@ -10,7 +10,7 @@ disagree, this document is what the screen should have been.
 
 **This is a living document, and keeping it current is part of doing design work — not a follow-up.**
 Whenever a screen settles something, whenever a correction is made and the reason for it is worth
-keeping, whenever a Stitch screen is added or superseded, or whenever something moves out of §9's
+keeping, whenever a Stitch screen is added or superseded, or whenever something moves out of §10's
 "not designed yet" list, it is written down **here, in the same change**, exactly as `PROJECT.md`
 and `README.md` must stay current (`ai/RULES.md` §1). A design decision that lives only in a chat
 log will be re-litigated by the next agent, and usually decided the other way: pass/fail semantics
@@ -35,9 +35,12 @@ this sentence exists to prevent.
 | Devices — Host Unreachable | `c60c5830d23e4a328e9d77b83c98f9fc` | Settled |
 | Devices — Host View Stale | `46f3a297fee047028f29c8958a926995` | Settled, **list variant only** — the empty variant has no Stitch screen and is settled in §7 |
 | Devices — Force Release Confirmation | `d86e794af4de4639979bc65104e2ec57` | Settled, **the asking only** |
-| Archive — Browsing (V2) | `f2de4344f7e347aa894b3054d9cf4098` | Not yet corrected — see §9 |
-| Run Detail — Artifacts (V2) | `36b54fbe032449d8a300ea0825bbf1c8` | Not yet corrected — see §9 |
-| Compare — Visual Diff (V2) | `897632dcadce44de9bdee74a94da14f5` | Not yet corrected — see §9 |
+| Archive — Project Selection Refined | `b91c300db2d445b8a195a0bafd1aac76` | **Settled** — see §9 |
+| Archive — Test Runs Refined (login-flow) | `8dcd4330b9b94105a7ba289620dc84aa` | **Settled** — see §9 |
+| Archive — A run selected (Refined) | `d24d2c84e84041b28dfed67e92551d28` | **Settled** — see §9, except its device card (#131) |
+| Archive — Browsing (V2) | `f2de4344f7e347aa894b3054d9cf4098` | **Superseded** by the three rows above; must not be built from |
+| Run Detail — Artifacts (V2) | `36b54fbe032449d8a300ea0825bbf1c8` | Not yet corrected — see §10 |
+| Compare — Visual Diff (V2) | `897632dcadce44de9bdee74a94da14f5` | Not yet corrected — see §10 |
 | Sign In — Rover OS | `5035330b2c12401080263625ff564369` | Settled, **default state only** — see §8 |
 
 Earlier versions of each still exist and **must not be built from**. There is no way to delete a
@@ -744,7 +747,227 @@ none and this reads none.
 
 ---
 
-## 9. What is not designed yet
+## 9. The Archive screen, as settled
+
+The panel's second screen against host data (#132) after Devices, and the first with any depth to
+it: **a file explorer over the artifact archive**, a lazily expanding directory tree beside the contents of whatever is
+selected. Everything below was settled while building it and is written down here for the same
+reason the Devices screen's rules are — the alternative is the next agent re-deriving it and getting
+some of it the other way round.
+
+The one host method behind it is `list_archive` (#130, `src/daemon/list-archive.ts`), which answers
+**one directory level** at a time. Every rule here is downstream of that: a screen that could ask
+for a subtree would have been drawn differently.
+
+### The three approved screens
+
+| Screen | ID | What it settles |
+| --- | --- | --- |
+| Archive — Project Selection Refined | `b91c300db2d445b8a195a0bafd1aac76` | The shell, the header, the two-card content area, the tree |
+| Archive — Test Runs Refined (login-flow) | `8dcd4330b9b94105a7ba289620dc84aa` | The run list, `OWNER` / `GRANTED` |
+| Archive — A run selected (Refined) | `d24d2c84e84041b28dfed67e92551d28` | The run column: the identity card, the device card, `CONTENTS` |
+
+There is deliberately **no design for the root level** (a list of projects). It is the same component
+with one fewer column, and the issue's own instruction — *the three levels are one component with
+different rows* — is what makes that safe rather than a gap.
+
+**Three defects in the emitted markup are not reproduced**, and are recorded so nobody "fixes" the
+code back towards them:
+
+1. `8dcd4330…` uses **`break-all`** on tree rows and run names. It is **`break-words`** everywhere in
+   the built screen: `break-all` splits `issue-112` across two lines, which makes an owner string
+   unreadable at exactly the width the tree is narrowest. `d24d2c84…` already had it right.
+2. `8dcd4330…`'s describing line reads *"Every test filed under this project, alphabetically."* over
+   a badge reading `42 runs archived`. That line is the project level's, left behind by an edit.
+3. `8dcd4330…` hid its fifth run row with an inline `opacity: 0`. **The file served on 2026-09-01 no
+   longer carried it** — either it was edited or an earlier reader saw a different render (§11: the
+   file id is what changes when a render catches up). Recorded anyway, because a row hidden by an
+   inline style is the kind of thing a later reader copies without noticing.
+
+And one thing about all three that is portability rather than a defect: they carry Material Symbols
+and a raw Tailwind CDN config. The panel uses `lucide-react` and `panel/src/tokens.css`, and the
+design's `rounded` is Tailwind v4's `rounded-sm` (§1's radius rename).
+
+### The shell and the two cards
+
+The header is `PageHeader`'s two rows unchanged (§3): the breadcrumb, then the describing line on the
+left and **one badge** on the right over the `border-b-2` rule. The content area is
+`max-w-(--container-max)`, a `lg:w-[320px] shrink-0` tree `<aside>` beside a `flex-1` contents
+`<section>`, both `bg-surface-container border-2 border-outline-variant rounded-lg` with a
+`bg-surface-container-high` header strip.
+
+**Every state below is a state of this one screen**, exactly as §7 requires of the Devices screen.
+The breadcrumb, the describing line and the header row's shape are the same in all of them; the
+badge is the only thing in the header that comes and goes, and it **goes rather than reading `0`**.
+
+### The tree — expansion is derived from the URL
+
+**A node is expanded exactly when it is a prefix of the selected path**, and the selected node is
+expanded too. Nothing else is, and there is no stored expansion state anywhere.
+
+Three of the issue's requirements fall out of that single rule rather than being implemented
+separately:
+
+- *the tree expands lazily, one `readdir` at a time* — the levels read are precisely the prefixes of
+  the selection, at most four requests at the deepest point, each one a level actually drawn. A
+  pre-walk is not avoided so much as unrepresentable;
+- *a reload lands where you were and a link is shareable* — the whole of the screen's state is the
+  address;
+- the tree and the URL cannot disagree, because there is only one of them.
+
+**The accepted cost**: a folder cannot be peeked at without selecting it. That is ordinary
+file-explorer behaviour, it buys the removal of a whole class of *the tree says one thing and the
+address says another* bugs, and a separate collapse control is a later change if anybody wants one.
+
+**What a tree row may carry, and nothing else:**
+
+- **A folder icon on every row, and a triangle only on an expandable one.** A run is a **leaf**: its
+  `<serial>` is a fact about the run rather than a level (below), so there is nothing under it to
+  open. `FolderOpen`/`Folder` and `ChevronDown`/`ChevronRight`, both `aria-hidden` — the triangle is
+  decoration meaning *this opens*, not a second control inside a link.
+- **No count.** `childCount` is on the wire and is deliberately not drawn here. The header badge
+  carries the one number for whatever is selected, which is what keeps the tree a tree rather than a
+  report. `directory-tree.test.tsx` asserts the tree's exact text, so a number cannot creep back in.
+- **No status icon of any kind** — no tick, no cross, no dot, no play glyph, no colour that means an
+  outcome. Rover has no verdicts to report (§2), and green ticks beside runs in the tree are exactly
+  what the superseded `Archive — Browsing (V2)` got wrong.
+- **The name, verbatim and `break-words`.** Nothing is truncated, ellipsised or lower-cased.
+
+**Every row is a `<Link>`**, and only a `directory` entry becomes one: the tree is the navigable
+structure, and the complete listing — including a file or a `kind: 'other'` entry the archive is not
+supposed to have at that level — is the contents card's job, which does name it rather than dropping
+it.
+
+**A level with nothing in it draws nothing under its node** — no `0`, no placeholder row, no icon. A
+directory that does not exist is not listed, and one the host cannot see into is said in the contents
+card, where there is room to say it properly.
+
+### The three levels, and the fourth thing a run is
+
+The depth decides what a row is; **no name is ever parsed to decide what a level *is*** (D22).
+
+| depth | the level | a row is | it carries | expandable |
+| --- | --- | --- | --- | --- |
+| 0 | the root | a project | its name | yes |
+| 1 | a project | a test name | its name, and `RUNS` from `childCount` | yes |
+| 2 | a test name | a run | its name, `OWNER`, `GRANTED` | **no — a leaf** |
+| 3 | a run | not a tree level | — | — |
+
+- **`RUNS` reads `childCount`, and `null` is `unknown` — never `0`.** A `0` would say *no runs* about
+  a directory the host could not read into, which is the exact distinction `childCount: null` exists
+  on the wire to carry.
+- **Runs are listed most recent first**, which is the host's own fixed order reversed. Reversing is
+  not parsing: a lease directory leads with a UTC basic-format timestamp precisely so that it sorts
+  chronologically as text (`src/daemon/archive-path.ts`), and the daemon sorts in code-unit order for
+  that reason. The describing line says *most recent first* so the order is claimed rather than left
+  to be inferred.
+- **A legacy `unlabeled/` directory lists like any other folder.** It was the fallback for a lease
+  taken without a `test_name` before #129 required one (D22); nothing on this screen knows the word,
+  and a run filed under it browses like any other.
+- **A run's identity is its directory name decomposed at the *first* and the *last* hyphen.**
+  `indexOf('-')` and `lastIndexOf('-')`, never `split('-')`: an owner string is free text and
+  `pr-127-review` is **one** owner, which a naive split turns into `pr`. A name that does not have
+  the shape gives `unknown` for both fields with the name itself still shown in full.
+- **`OWNER` is the directory's own text and is never presented as the caller's string.** It went
+  through `pathSegment` on the way in and that is not reversible, so what the screen can honestly say
+  is what the directory is called (D20, D22).
+- **`GRANTED` is reformatted textually**, `20260830T170501Z` → `2026-08-30 17:05:01 UTC`. No `Date`
+  and no `Intl`: the string is the host's own UTC instant and nothing may re-express it in the
+  reader's zone, which is §6's rule for `grantedAt` on a device card applied to a directory name.
+- **`SERIAL` is the parent listing's `onlyChild`, and the serial is not a tree level.** One lease is
+  one device, so a run directory holds exactly one child; the host publishes that name as a fact
+  about the run rather than as a level worth a round trip. A selected run therefore costs **four**
+  requests, not five — the run's own level is never listed.
+- **A `null` `onlyChild` is stated, not worked around.** `SERIAL` reads `unknown` and `CONTENTS` says
+  there is nothing to list. There is no second request to go looking: a run directory that is not
+  one-device shaped is a fact, and an invented `0` would be a claim.
+- **`CONTENTS`** lists the `<serial>` directory: a directory as `<name>/` with its count (`1 file`
+  singular), a file with `formatBytes(sizeBytes)`, and a `kind: 'other'` entry by name with no
+  measure. The design's footnote is kept — *A directory that is not listed does not exist — a verb
+  that produced no bytes wrote nothing* — because it is the sentence that stops a short listing
+  reading as a truncated one.
+- **A size the host could not `stat` is `unknown`**, for `childCount: null`'s reason.
+
+### The three states with nothing to browse
+
+| Where | The answer | What renders |
+| --- | --- | --- |
+| the root | empty, or not there | `QuietPanel` — **Nothing in the archive**. No badge, **no tree card**, no control. |
+| the root | unreadable | `QuietBanner` — **`ARCHIVE NOT READABLE`**. No badge, **no tree card**, no retry, no error code. |
+| deeper | empty, or not there | one plain line inside the contents card, tree still beside it. |
+| deeper | unreadable | the same banner inside the contents card, tree still beside it. |
+| anywhere | nothing yet | one quiet line, `aria-live="polite"`, **no spinner** (§5). |
+
+- *Nothing in the archive* takes §7's ***nothing attached*** treatment, because it is the same kind of
+  fact: normal, common and *finished*. It says what would change it — a run is filed the first time a
+  verb on a lease writes a screenshot, a recording or a log on this host — and **the counter is
+  absent** rather than reading `0 projects archived`, which would describe a set.
+- *`ARCHIVE NOT READABLE`* takes §7's **grey banner**, one clause, and carries on its own line
+  ***This is not the same as the archive being empty — runs may well be filed here.*** That sentence
+  is the whole point of the state, exactly as *a phone may well be plugged in* is for *no view*: the
+  pair must never render alike (D6). **No retry control** — this is host state the panel is not the
+  fixer of — and **no error code**, because the reason and the path stay on the host by design
+  (D19), so a code would dress a refusal up as a diagnosis.
+- The two deeper states keep the tree, because there **is** still an archive to browse. The two root
+  states take the whole content area, because **an empty tree beside a message is furniture**.
+- `panel/src/routes/archive.test.tsx` asserts that neither of the deeper two's copy ever appears in
+  the other, the way `devices.test.tsx` already does for *nothing attached* and *no view*.
+
+**Everything unusable folds into *not readable*.** An `error` envelope, a result the panel cannot
+parse and a request nothing answered all land there — the fold `device-list-provider.tsx` already
+makes and documents, for the same reason: what the screen has to decide is narrower than why, and
+*runs may well be filed here* is true either way. A **`refused`** sets nothing at all, because
+`Session.call` has already fired `onRefusal` and the router is coming down.
+
+### Routing, and no polling
+
+Two routes, `/archive` and `/archive/$`, one component, `useParams({ strict: false })`. Two rather
+than one optional splat because the splat route does not match `/archive`, which is the address the
+navigation points at. The components are joined with `/` and the router does the encoding — a
+directory name may legally carry a space, a `%` or a `#`, and `archive-path.test.tsx` proves the
+round trip against a **real** router rather than the mocked `Link` the screen tests use.
+
+**There is no polling and no refresh control.** The archive is finished data: a run directory is
+written while a lease is live and nothing is added once it ends, and this screen makes no claim to
+show a run appearing. A level is fetched on navigation and cached for the life of the screen. This is
+the one place the panel's data differs from the Devices screen's, which polls because *what is
+attached* changes under the reader.
+
+**A path deeper than a run is reachable only by typing it**, since a run is a leaf. It renders that
+level's listing rather than nothing at all — names, addressable, no invented measures.
+
+### Two deviations from the approved markup, made deliberately
+
+- **A contents row is a `<Link>`.** The approved screens have `cursor-default` on these rows, which
+  would leave the tree as the only way to move and make the larger half of a file explorer inert.
+  Nothing else about a row changes: it gains no control, no count the tree refuses to show, and no
+  status of any kind.
+- **A `kind: 'other'` entry gets `FileQuestionMark`.** The designs have no glyph for one, because
+  they never showed one. It says *the host could not classify this*, which is what the wire says; it
+  is not an alarm and there is no colour on it.
+
+### Deliberately absent, and why
+
+- **The `Filter this tree...` input** in `b91c300d…`. It appears on one of the three approved screens
+  and on neither of the other two, no acceptance criterion asks for it, and D24 spends a paragraph
+  refusing search. Dropped, and recorded here rather than silently omitted.
+- **The `LATEST` column** in `b91c300d…`'s contents table. One `readdir` per test row is exactly the
+  walk D24 refuses; `list_archive` cannot answer it and must not grow a parameter that can.
+- **No aggregate of any kind** — no total size, no run count across projects, no retention figure.
+- **Nothing invented**: no duration, no trigger, no author, no environment panel, no network figure
+  and no file name that was not in a listing. `run-panel.test.tsx` asserts the absence of each.
+
+### What waits on another issue
+
+- **The `DEVICE — FROM device_info.json` card** (`d24d2c84…`'s second card) is **not built**. It needs
+  the *contents* of an archived file and `list_archive` answers directory listings only; reading an
+  artifact's bytes is **#131**. The gap is deliberate on the page rather than filled with a guess,
+  and `RunPanel` names the issue where the card would go.
+- **Opening or previewing an artifact**, and any *Open in a new window* control, is **#133**.
+
+---
+
+## 10. What is not designed yet
 
 Two lists, and the difference between them matters. The first must exist as a Stitch design before
 anyone builds it, because getting it wrong is expensive and the mistakes are not obvious. The
@@ -775,17 +998,22 @@ top of this file). Do not commission a Stitch screen for them.
 - **The force-release action's three outcomes — done** (#122). Built from this document, and what
   they settled is written into §7 above, together with the fourth case the issue did not name: the
   request that reached nothing, which released nothing and says so.
+- **The Archive screen's root level, and its three states with nothing to browse — done** (#132).
+  The three levels had approved screens; the root level and the empty-ish states did not, and were
+  built from this document as this list intends. What they settled is written into §9 above.
 
-**Screens 2–4 have not been brought in line with any of this.** Known problems, from a first pass:
-pass/fail semantics are back (a `SUCCESS` chip, `PASS` in a log, green ticks and red crosses beside
-runs in the tree, the words "Visual Regression"); they carry a **second navigation** — a top bar
-duplicating the sidebar — with a global `FORCE_RELEASE` button that has nothing to act on outside
-Devices; `Profile` sits mid-sidebar instead of pinned at the foot; and the breadcrumb is used as a
-label rather than as a path.
+**The two remaining uncorrected screens are `Run Detail — Artifacts (V2)`
+(`36b54fbe032449d8a300ea0825bbf1c8`) and `Compare — Visual Diff (V2)`
+(`897632dcadce44de9bdee74a94da14f5`).** The Archive screens were corrected and are settled in §9;
+these two were not. Known problems, from a first pass: pass/fail semantics are back (a `SUCCESS`
+chip, `PASS` in a log, green ticks and red crosses beside runs in the tree, the words "Visual
+Regression"); they carry a **second navigation** — a top bar duplicating the sidebar — with a global
+`FORCE_RELEASE` button that has nothing to act on outside Devices; `Profile` sits mid-sidebar instead
+of pinned at the foot; and the breadcrumb is used as a label rather than as a path.
 
 ---
 
-## 10. Working with Stitch — what actually happens
+## 11. Working with Stitch — what actually happens
 
 - **Verify the markup; do not trust the report.** `edit_screens` returns a confident summary of
   what it changed, and it is sometimes wrong. Two edits to the free device card were reported as

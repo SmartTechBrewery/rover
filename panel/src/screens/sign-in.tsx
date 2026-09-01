@@ -23,7 +23,7 @@ import { type FormEvent, type ReactNode, useEffect, useRef, useState } from 'rea
  * Three things the emitted design markup does that are deliberately not reproduced: a fixed
  * full-viewport scanline layer (§5 forbids one — the texture is on the card, which is chrome), a
  * flex-centred container that clips the card from the top at short viewport heights (§8), and a
- * `DEBUG // UI STATES` switcher whose buttons did nothing (§9).
+ * `DEBUG // UI STATES` switcher whose buttons did nothing (§10).
  */
 
 /** What a state says on arrival, above the form. Not every state has something to say. */

@@ -262,7 +262,7 @@ describe('with the host view not current', () => {
 /*
  * **The criterion most worth pinning on this screen.** An empty list with `stale` set means *no
  * view*, not *no devices* — the two are visually identical and mean the opposite, so a person
- * reading "nothing is attached" walks to the machine and finds a phone in the socket (D6, §9).
+ * reading "nothing is attached" walks to the machine and finds a phone in the socket (D6, §10).
  */
 describe('the two empty states', () => {
 	it('do not say the same thing', () => {

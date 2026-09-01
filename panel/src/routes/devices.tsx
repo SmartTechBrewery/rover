@@ -5,6 +5,8 @@ import {
 } from '@panel/components/devices/force-release-notice.js';
 import { HeldFreeCounter } from '@panel/components/devices/held-free-counter.js';
 import { PageHeader } from '@panel/components/layout/page-header.js';
+import { QuietBanner } from '@panel/components/quiet-banner.js';
+import { QuietPanel } from '@panel/components/quiet-panel.js';
 import type { ListedDevice } from '@panel/devices/device-list.js';
 import { useDeviceList } from '@panel/devices/device-list-provider.js';
 import type { ForceReleaseAnswer } from '@panel/devices/force-release.js';
@@ -196,49 +198,20 @@ function Content({
  * emulator and never plugs in a phone; a person does, so until they do this is the correct state
  * rather than a fault.
  *
- * No error colour, no warning icon, no spinner and nothing that suggests loading. **Not
- * "standby"** — that word describes a machine waiting to do something, and this one simply has
- * nothing plugged in. The counter is absent rather than reading `0 held · 0 free`, which would
- * describe a pool.
+ * The treatment is `QuietPanel`'s, and the words are this screen's: it says what would change it,
+ * and the counter is absent rather than reading `0 held · 0 free`, which would describe a pool.
  */
 function NothingAttached() {
 	return (
-		<section className="mt-8 flex justify-center">
-			<div className="relative flex w-full max-w-2xl flex-col items-center border-2 border-outline-variant bg-surface-container-lowest p-12 text-center">
-				{/*
-				 * The design's corner accents. They are deliberately corners and not a dot-and-lines
-				 * rule under the message: that reads as a progress track, which is the one impression
-				 * this state must not give.
-				 */}
-				<span
-					aria-hidden="true"
-					className="absolute top-0 left-0 size-4 border-outline-variant border-t-2 border-l-2"
-				/>
-				<span
-					aria-hidden="true"
-					className="absolute top-0 right-0 size-4 border-outline-variant border-t-2 border-r-2"
-				/>
-				<span
-					aria-hidden="true"
-					className="absolute bottom-0 left-0 size-4 border-outline-variant border-b-2 border-l-2"
-				/>
-				<span
-					aria-hidden="true"
-					className="absolute right-0 bottom-0 size-4 border-outline-variant border-r-2 border-b-2"
-				/>
-
-				<h2 className="font-headline-sm text-headline-sm text-on-surface">No devices attached</h2>
-				<p className="mt-6 max-w-lg font-body-lg text-body-lg text-on-surface-variant">
-					To begin, attach a physical device with USB debugging enabled or start an emulator on the
-					host machine.
-				</p>
-			</div>
-		</section>
+		<QuietPanel heading="No devices attached">
+			To begin, attach a physical device with USB debugging enabled or start an emulator on the host
+			machine.
+		</QuietPanel>
 	);
 }
 
 /**
- * The dangerous half of `stale`, and the state this screen had to design (§9).
+ * The dangerous half of `stale`, and the state this screen had to design (§10).
  *
  * An empty list with `stale` set means *no view*, not *no devices* — it is visually identical to
  * *nothing attached* and means the opposite, so a person reading "nothing is attached" walks to the
@@ -268,7 +241,7 @@ function NoView() {
 
 /**
  * The grey block both `stale` states share: an uncertainty, not a fault. Nothing failed, so there
- * is no warning colour here and nothing near red (§7).
+ * is no warning colour here and nothing near red (§7) — see `QuietBanner`, which is that treatment.
  *
  * One heading, one clause. `HOST VIEW NOT CURRENT // DATA STALE` became `HOST VIEW NOT CURRENT` for
  * the same reason the unreachable page's second clause went: it is either a restatement or a claim
@@ -276,20 +249,9 @@ function NoView() {
  */
 function HostViewNotCurrent({ children }: { readonly children: ReactNode }) {
 	return (
-		<section className="mt-8 flex items-start gap-4 border-2 border-outline-variant bg-surface-variant p-4">
-			<RefreshCwOff
-				aria-hidden="true"
-				className="shrink-0 text-outline"
-				size={24}
-				strokeWidth={2}
-			/>
-			<div>
-				<h2 className="font-headline-sm text-headline-sm text-on-surface">HOST VIEW NOT CURRENT</h2>
-				<p className="mt-2 max-w-3xl font-body-md text-body-md text-on-surface-variant">
-					{children}
-				</p>
-			</div>
-		</section>
+		<QuietBanner Icon={RefreshCwOff} heading="HOST VIEW NOT CURRENT">
+			{children}
+		</QuietBanner>
 	);
 }
 

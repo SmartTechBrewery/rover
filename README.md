@@ -1446,6 +1446,22 @@ the panel says so rather than announcing an ending it never got. The call is att
 signed-in user's identifier, so
 `rover force-release`'s audit line on the host names a person and not a browser.
 
+**Archive is a file explorer over what past runs wrote.** A tree on the left expands one directory
+at a time as you go down it — a project, a test name, a run — beside the contents of whatever is
+selected. It never walks the archive: each level is one `list_archive` call for a level actually on
+the screen, so opening a project reads that project and nothing else. A run shows its own directory
+name in full, the owner and grant time read out of that name, the serial of the one device the lease
+held, and everything the lease wrote with a size or a file count beside it. Nothing is added: no
+duration, no trigger, no verdict, and no file that was not in the listing — Rover reports what is on
+disk and judging it is the agent's job.
+
+The path is in the URL, so a reload lands where you were and a link to a run is shareable. Three
+states have nothing to browse and none of them reads as another: nothing has ever been archived on
+this host; a directory deeper down with nothing in it, said plainly; and **the archive cannot be
+read**, which says in as many words that this is not the same as it being empty — runs may well be
+filed there, and the host simply will not say. Opening an artifact is not built yet, and neither is
+the run's device card, which needs a file's contents rather than a listing.
+
 Its design comes from Stitch, not from this repository: `ai/RULES.md` §8 is how to reach it and
 `docs/DESIGN.md` is what the screens settled. The Analog Horizon tokens live in
 `panel/src/tokens.css`, which is the only file in the panel allowed to write a colour value —
