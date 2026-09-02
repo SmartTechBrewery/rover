@@ -20,7 +20,7 @@
 import { z } from 'zod';
 import { CapabilitiesSchema } from '../core/capabilities.js';
 import { DeviceSchema } from '../core/device.js';
-import { DeviceSerialSchema, LeaseIdSchema } from '../core/ids.js';
+import { AppIdSchema, DeviceSerialSchema, LeaseIdSchema } from '../core/ids.js';
 import { ProtocolVersionSchema } from './protocol.js';
 import {
 	AppVerbParamsSchema,
@@ -768,6 +768,102 @@ export const SearchArchiveResultSchema = z.discriminatedUnion('outcome', [
 ]);
 export type SearchArchiveResult = z.infer<typeof SearchArchiveResultSchema>;
 
+/** `.strict()` and no key at all, for {@link ListDevicesParamsSchema}'s reason. */
+export const ListProjectsParamsSchema = z.object({}).strict();
+export type ListProjectsParams = z.infer<typeof ListProjectsParamsSchema>;
+
+/**
+ * One registration under the projects root — **either what the host read, or the fact that it
+ * could not**, as a discriminated union rather than one shape with empty fields.
+ *
+ * That is the load-bearing part. A project that declares nothing at all is the common, correct
+ * case (`apps: []`, `services: []`, no `install`, no `teardown` — `src/daemon/project-hooks.ts`),
+ * so a hook file that will not parse must not arrive as *a project declaring nothing*: the two
+ * render differently, and D13's whole cost today is that a file which stopped tearing a project
+ * down is invisible until somebody reads the daemon's stderr.
+ *
+ * **`env` is structurally absent, and so is every host path.** There is no field a `cwd`, a
+ * program name, an `args` entry or an `env` value would fit in — this answer reaches a browser
+ * and a hook file's `env` may hold anything an operator put there — which is the way
+ * {@link ListArchiveResultSchema} has no `message` for a path to arrive in (D19). `install` and
+ * `teardown` are therefore **booleans**: whether the host has one, never which program it is.
+ */
+export const ProjectRegistrationSchema = z.discriminatedUnion('kind', [
+	z
+		.object({
+			kind: z.literal('registered'),
+			/**
+			 * The identifier, which is the file's own name (`src/daemon/project-hooks.ts` refuses a
+			 * file whose `project` field disagrees with it, so for a registered entry the two are
+			 * the same string). {@link AttributionStringSchema} because that is the wire's existing
+			 * project vocabulary: what this answers is a string a lease may carry as its `project`
+			 * (D22). The identifier *shape* stays a property of the host's lookup, where the path
+			 * is built, and this method builds none from a caller's string — it takes none.
+			 */
+			project: AttributionStringSchema,
+			/** The applications a lease on this project drives, as the hook file declares them. */
+			apps: z.array(AppIdSchema),
+			/** Whether an `install` is declared — never what it runs. */
+			hasInstall: z.boolean(),
+			/**
+			 * Its helper services **by name**, in declaration order — the order the host starts
+			 * them in and the reverse of the order it stops them in. Names only: a `start`/`stop`
+			 * pair is a program, a `cwd` and an `env`, and none of the three is on this surface.
+			 *
+			 * Plain `z.string().min(1)` rather than the host's own service-name shape, for the
+			 * reason {@link ATTRIBUTION_MAX_LENGTH} is stated with: a bound is what matters on the
+			 * way *in*, and nothing comes in here — this method takes no parameter, so no answered
+			 * value ever comes back.
+			 */
+			services: z.array(z.string().min(1)),
+			/** Whether a `teardown` is declared — never what it runs. */
+			hasTeardown: z.boolean(),
+		})
+		.strict(),
+	z
+		.object({
+			/**
+			 * The file is there and the host **cannot say what this project declares** — it is not
+			 * JSON, it does not match the hook schema, its `project` field disagrees with its own
+			 * name, or it could not be read at all. `list_archive`'s own word, for the same meaning
+			 * one level down, so the host keeps one vocabulary across its reads.
+			 *
+			 * **Which of those it was is deliberately not here** (D19): the diagnosis names a path
+			 * and belongs in a warning on the host, which is where `src/daemon/list-projects.ts`
+			 * puts it. What a caller needs is that this registration will not parse — that is the
+			 * fact that is invisible today.
+			 */
+			kind: z.literal('unreadable'),
+			/** The file's own name, without `.json`. Never a field read out of a file that will not parse. */
+			project: AttributionStringSchema,
+		})
+		.strict(),
+]);
+export type ProjectRegistration = z.infer<typeof ProjectRegistrationSchema>;
+
+/**
+ * Three answers, `list_archive`'s own three, and the distinction is a criterion rather than
+ * tidiness: **a host where nobody has ever registered a project is the ordinary state**, and it
+ * must not render like a root the host cannot read (D6, `docs/DESIGN.md` §7).
+ *
+ * `projects: []` is *this host has no registrations*. `missing` is *there is no projects root* —
+ * also ordinary, and also not a failure. `unreadable` is *the root is there and the host cannot
+ * say what is in it*.
+ *
+ * **No `message` field anywhere**, for {@link ListArchiveResultSchema}'s stated reason: a
+ * `message: string` is a field a host path fits in, and `src/ipc/server.ts` could not catch one
+ * put there.
+ */
+export const ListProjectsResultSchema = z.discriminatedUnion('outcome', [
+	/** The root was read. `projects: []` is **nobody has registered one here**, and is not a failure. */
+	z.object({ outcome: z.literal('listed'), projects: z.array(ProjectRegistrationSchema) }).strict(),
+	/** There is no projects root. Ordinary on a host whose operator never made one. */
+	z.object({ outcome: z.literal('missing') }).strict(),
+	/** It is there and the host **cannot say what is in it** — no permission, or not a directory. */
+	z.object({ outcome: z.literal('unreadable') }).strict(),
+]);
+export type ListProjectsResult = z.infer<typeof ListProjectsResultSchema>;
+
 /**
  * `status` and `list_devices` exist in the *protocol* rather than in the MCP layer because
  * D16 requires daemon state to be answerable to something that is not an agent: whatever
@@ -806,6 +902,22 @@ export type SearchArchiveResult = z.infer<typeof SearchArchiveResultSchema>;
  * `list_archive`'s reason with more force — a search would hand every agent the run names of every
  * other agent on the host in one call.
  *
+ * **`list_projects` is the read side of D31**, and the one row that answers what the *host
+ * operator* configured rather than what is attached to the host or what a run left behind. It
+ * takes nothing and answers every registration under the projects root — the identifier, the
+ * `apps`, whether there is an `install`, the helper services by name, whether there is a
+ * `teardown` — and, for a file that will not parse, **that it will not parse** rather than
+ * nothing at all, because a hook file that stopped tearing a project down is invisible today
+ * until somebody reads the daemon's stderr. **Nothing about it writes**: no method creates,
+ * edits, renames or deletes a hook file, and none takes a path into that directory — D31 narrows
+ * D13's never-over-the-wire clause to the *write* and does not repeal it, because every command
+ * in such a file is a program the host spawns as the daemon's user. No `env` value and no host
+ * path is on any answer, and there is no field either would fit in (D19). It is on
+ * `PANEL_METHODS` (D29) and deliberately **not** an MCP tool, the asymmetry `list_archive`,
+ * `search_archive` and `force_release_device` already have: this surface serves the operator's
+ * own browser, and what the host is configured to run is not something every agent on it needs
+ * to enumerate.
+ *
  * The verb rows are the two waits, the six input verbs, the three read verbs, the three
  * app-lifecycle verbs, the log read, the screen recording, the two environment verbs and the
  * three file transfers; each further verb family is one more row beside them and one more
@@ -838,6 +950,7 @@ export const IPC_METHODS = {
 	},
 	list_archive: { params: ListArchiveParamsSchema, result: ListArchiveResultSchema },
 	search_archive: { params: SearchArchiveParamsSchema, result: SearchArchiveResultSchema },
+	list_projects: { params: ListProjectsParamsSchema, result: ListProjectsResultSchema },
 	wait_for: { params: WaitForParamsSchema, result: VerbCallResultSchema },
 	wait_until_gone: { params: WaitUntilGoneParamsSchema, result: VerbCallResultSchema },
 	tap: { params: TapParamsSchema, result: VerbCallResultSchema },

@@ -95,6 +95,12 @@ const DEVICE_METHODS = ['status', 'list_devices', 'acquire_device', 'release_dev
  * other agent on the host in a single answer. It is on `PANEL_METHODS` instead, which is the
  * operator's own browser (D27, D29).
  *
+ * `list_projects` is here for a reason of the same kind and not the same one: it is not about a
+ * device at all, and it is not about the archive either — it answers what the **host operator**
+ * configured this machine to run around a lease (R39, D31). An agent already gets everything its
+ * own lease implies without asking, and enumerating every other project registered on the host is
+ * an operator's question. It is on `PANEL_METHODS` instead (D27, D29).
+ *
  * The list is short and named so the gate below can be exact: a verb row added later is either
  * a registered tool or a deliberate entry here, never a row that quietly has no tool.
  */
@@ -104,6 +110,7 @@ const NOT_YET_EXPOSED = [
 	'force_release_device',
 	'list_archive',
 	'search_archive',
+	'list_projects',
 ] as const satisfies readonly IpcMethodName[];
 
 /** The platform vocabulary `tests/unit/no-platform-names.test.ts` keeps out of `src/` (D10). */

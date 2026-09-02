@@ -379,6 +379,9 @@ describe('the generated ROVER.md', () => {
 		// Not MCP tools: neither has a form that carries no bytes (R19 phase 3, #104).
 		'push_file',
 		'pull_file',
+		// Host-operator configuration rather than anything an agent calls: what this host is
+		// registered to run around a lease, on the panel's surface alone (R39, D31).
+		'list_projects',
 	]);
 
 	const page = roverDocument({
