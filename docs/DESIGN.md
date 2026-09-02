@@ -43,6 +43,8 @@ this sentence exists to prevent.
 | Run Detail — Artifacts (V2) | `36b54fbe032449d8a300ea0825bbf1c8` | **Retired by #133** — must not be built from; see §9 |
 | Compare — Visual Diff (V2) | `897632dcadce44de9bdee74a94da14f5` | Not yet corrected — see §10 |
 | Sign In — Rover OS | `5035330b2c12401080263625ff564369` | Settled, **default state only** — see §8 |
+| Projects | `74633a3b3d39445a8dedd0de97c2cc2b` | **Superseded** by the row below, and must not be built from — its shell was rebuilt from scratch and wrong in eight places (§11) |
+| Projects — Final Alignment | `89097f87f206419d91751655d67d5f2a` | **Being corrected**, one region per round. The **shell is settled** and matches the reference (§3); the content area is not settled and nothing about the card is recorded here yet |
 
 Earlier versions of each still exist and **must not be built from**. There is no way to delete a
 screen through the API — only `delete_project`, which takes everything — so every iteration
@@ -94,12 +96,29 @@ create/edit/delete anywhere.
 
 ## 3. The shell
 
+**The shell's one source is `Devices (Home)`, screen `3458d89bda5e442d894ea54208230d4c`.** Every
+screen in this panel is the same shell with a different content area, so a new screen does not get
+a shell of its own — it takes that one, markup and class lists included, and changes only what sits
+inside `<main>`. §7 says to state that by id in every prompt about a *state* of the Devices screen;
+it applies just as literally to a **new destination**, and the Projects screen is what proved it
+(§11): asked for without the id in front of it, Stitch rebuilt the shell and got it wrong in eight
+places at once. The three deliberate departures from that screen's own markup are recorded rather
+than left to be re-argued — the `Devices` glyph (below), the `md:hidden` mobile header (§11), and
+the radius rename (§1).
+
 **Sidebar**, in this order: the `ROVER_OS` wordmark, a divider, then the nav items `Devices`,
-`Archive`, `System` — and `Profile` **pinned at the foot, below its own divider**, separated from
-the main nav.
+`Archive`, `Projects`, `System` — and `Profile` **pinned at the foot, below its own divider**,
+separated from the main nav.
 
 - **`Archive`, not `History`.** It is a browsable tree of project → test name → run, not a
   chronological event log.
+- **`Projects` sits between `Archive` and `System`, and its screen is not designed yet** (§10). The
+  placement is the settled part and it is not arbitrary: `Devices` and `Archive` are what the host
+  *has* right now and what it *kept*, `System` and `Profile` are settings. A registered project is
+  the third thing the host holds, so it belongs with the first two rather than filed under
+  settings. It is **read-only when it arrives** — what is registered and what each project
+  declares, never an edit and never a delete (`PROJECT.md` D31), so nothing about this item
+  promises a control the screen does not have.
 - **`System` stands in for settings** and suits the aesthetic.
 - **There is no `Analytics` item and there will not be one.** Rover aggregates nothing and scores
   nothing; a nav entry with a trend-chart icon promises a reporting product that does not exist.
@@ -111,8 +130,9 @@ the main nav.
 
 **The nav icons — settled (#141).** `Devices` is a **phone**, `Archive` a box, `System` a prompt
 and `Profile` a person: `Smartphone`, `Archive`, `Terminal` and `CircleUser` from `lucide-react`.
-The three main items are drawn at `size={20} strokeWidth={2}`; `Profile` is 18, matching the
-smaller label it sits beside at the foot.
+The main items are drawn at `size={20} strokeWidth={2}`; `Profile` is 18, matching the
+smaller label it sits beside at the foot. `Projects`' own glyph is part of its design round and is
+not settled here — what is settled is that it is drawn like the other three and not like `Profile`.
 
 **`Devices` deliberately supersedes the screen here.** `Home — Devices (V3)` emits
 `data-icon="developer_board"` for that item, and `CircuitBoard` was a faithful translation of it —
@@ -1439,7 +1459,22 @@ more than it would settle.
 
 ### Design these first
 
-Nothing, at present. Everything the Devices screen needs has a design; what is left is below.
+- **The `Projects` screen.** The panel's fourth destination (§3), read-only in its first form: what
+  is registered on this host and what each project declares — `apps`, whether it has an `install`,
+  its helper services **by name**, whether it has a `teardown` — plus the one state a listing of
+  files has that a listing of devices does not, **a hook file that will not parse**. It is worth a
+  design round rather than this document's rules alone because it is the first screen whose rows
+  are *configuration* rather than hardware or artifacts, and the two mistakes available are
+  expensive: making a read-only screen look like a form, and making a broken file look like a
+  failure of the panel rather than a fact about the host. Its host half is `PROJECT.md` R39; **edit
+  and delete are not part of it and must not appear on it**, not even disabled, until the role
+  model D27 defers exists (D31) — a greyed-out `Delete` promises a permission tier that has not
+  been designed.
+
+  **The round is underway** and is being corrected **one region at a time** rather than regenerated
+  (§11). The first generation was `74633a3b3d39445a8dedd0de97c2cc2b`; the shell round produced
+  `89097f87f206419d91751655d67d5f2a`, where the shell now matches the reference. The card anatomy is
+  the next region and nothing about it is recorded here until it settles.
 
 
 ### Open, and not blocking anything
@@ -1512,6 +1547,38 @@ a path.
 
 ## 11. Working with Stitch — what actually happens
 
+- **One region per prompt, and iterate. A prompt that asks for a whole screen comes back partly
+  ignored, and it does not say which part it dropped.** The Projects screen's first generation
+  (`74633a3b3d39445a8dedd0de97c2cc2b`) was asked for in one prompt covering the shell, the card
+  anatomy, four cards' contents and a list of forbidden elements. The content area came back close
+  to what was asked; **the shell was rebuilt from scratch** and wrong in eight places at once — a
+  `fixed` sidebar with an `ml-64` on `<main>` (§4's single worst bug, reproduced verbatim), a
+  `memory` glyph for `Devices` and `settings` for `System`, an invented `memory` icon beside the
+  wordmark, the wordmark itself reduced from `display-lg` to a label-caps `<h1>`, every nav label
+  set in caps, the active item drawn as a left border bar instead of the tactile offset, the
+  describing line promoted to an `<h2>` the panel has no heading level for, and the header rule
+  moved off the header row onto a `<div>` of its own. **None of that was asked for**, and the
+  prompt's own instruction to reuse the reference shell verbatim did not survive the length of the
+  prompt. So: one region per round, the literal markup to replace (below), and re-read the file
+  before the next round.
+- **A correction lands as a new screen more often than in place, and `list_screens` is the only way
+  to find it.** §7 recorded this once, for the empty Devices state. The Projects shell round is the
+  second occurrence and it was cleaner evidence: `get_screen` on `74633a…` answered with the **same
+  `file id` and a byte-identical file** afterwards, so read on its own it looked like an edit that
+  had not landed — while the corrected screen was sitting beside it under a new id and the title
+  `Projects — Final Alignment`. **Check `list_screens` before concluding an edit was ignored**, and
+  do not carry an id forward on the assumption it was edited in place.
+- **A literal-markup prompt does land, and it is the form that does.** The same shell round replaced
+  the `<body>` classes, the whole `<nav>`, the whole header block, the `<main>` tag and one content
+  class, all in one prompt — every one of them applied, against the eight-way failure the prose
+  version produced. Two things came back anyway that the prompt asked it not to add: the reference's
+  own `md:hidden` mobile header, with its `settings` icon and its `FORCE RELEASE` button (§11 below
+  — it is not portable and #111 dropped it), and `pt-16 md:pt-0` on `<body>` to clear it. Both are
+  harmless in a desktop render and neither is reproduced in code.
+- **Stitch leaves `data-stitch-orig-*` attributes behind in the markup it edits** — the shell round
+  left `data-stitch-orig-opacity="0"` on the `Devices` icon it had just replaced. It is an
+  attribute rather than a style, so it renders nothing, but it is editing residue: strip every
+  `data-stitch-orig-*` when harvesting, and do not read one as a design intention.
 - **Verify the markup; do not trust the report.** `edit_screens` returns a confident summary of
   what it changed, and it is sometimes wrong. Two edits to the free device card were reported as
   applied, twice, with the file untouched both times.
