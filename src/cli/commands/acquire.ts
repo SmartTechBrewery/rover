@@ -17,10 +17,16 @@
  * lease's directory in the host's artifact archive (D22, as amended #129). A missing one is
  * exit 2 here, with this command's usage, rather than a round trip the host refuses.
  *
- * `--test-description` is the one **optional** string on this command (D22, as amended #148).
- * Absent is absent: no flag, no key on the wire, and nothing invented in its place. It is prose
- * rather than a directory name — nothing in the archive's tree is shaped from it — which is why
- * it may be left out where `--test-name` may not.
+ * `--test-description` and `--group-id` are the two **optional** strings on this command (D22, as
+ * amended #148 and #150). Absent is absent for both: no flag, no key on the wire, and nothing
+ * invented in their place. Neither is a directory name — nothing in the archive's tree is shaped
+ * from either — which is why they may be left out where `--test-name` may not.
+ *
+ * `--group-id` is the one flag on this command that is about **more than this lease**: pass the
+ * same one to two acquires and the two runs are one investigation, which is what makes a
+ * before/after comparison recoverable after both leases have ended. It is also what `--label` on
+ * `rover screenshot` and `rover record` needs — a labelled call on a lease with no group is
+ * refused by the host, naming both fields.
  *
  * A refusal is the host's answer, not an error — it is rendered and exits 1.
  */
@@ -32,6 +38,7 @@ import {
 	attributionWithDefault,
 	expectPositionals,
 	GLOBAL_OPTIONS,
+	optionalAttribution,
 	optionalDescription,
 	parseCommandArgs,
 	requireAttribution,
@@ -43,7 +50,8 @@ import { configuredProject } from '../_shared/project-file.js';
 export const USAGE = `rover acquire — take a lease on one device
 
 Usage: rover acquire <serial> --owner <string> --project <string> --test-name <string>
-                     [--test-description <string>] [--host <name>] [--json]
+                     [--test-description <string>] [--group-id <string>]
+                     [--host <name>] [--json]
 
   --owner        Who the lease is for. Required and never derived: it attributes the lease
                  and authorizes nothing, so a value guessed for you would attribute the
@@ -59,9 +67,16 @@ Usage: rover acquire <serial> --owner <string> --project <string> --test-name <s
                  carries none rather than a placeholder. It is not a directory name and
                  never becomes one; the host files it with the run so it outlives the
                  lease, and the web panel shows it live and in the archive.
+  --group-id     Which investigation this lease is part of. Optional, and the one string
+                 here that spans leases: give the run before a change and the run after it
+                 the same --group-id and the archive can still say they belong together
+                 once both leases are gone. Two runs is the common case; three or more is
+                 equally valid and nothing caps it. It is also what --label on
+                 \`rover screenshot\` and \`rover record\` requires — a label on a lease with
+                 no group is refused, because there would be nothing to compare it against.
 
 --project and --test-name name directories in the host's artifact archive, so two runs of
-one test name sit side by side there. --test-description names nothing.
+one test name sit side by side there. --test-description and --group-id name nothing.
 
 ${PROJECT_FILE_ENV_VAR} is read on this machine and nothing else in it reaches the host: a
 lease still carries the project as a plain string. A file it names that is missing or will
@@ -82,6 +97,7 @@ const OPTIONS = {
 	project: { type: 'string' },
 	'test-name': { type: 'string' },
 	'test-description': { type: 'string' },
+	'group-id': { type: 'string' },
 } as const;
 
 type Refusal = Extract<AcquireDeviceResult, { outcome: 'refused' }>;
@@ -106,6 +122,12 @@ export function renderGrant(lease: GrantedLease, projectFile?: string): string {
 		`Release it with: ${out.INVOCATION} release ${lease.leaseId}`,
 		`Expires in ${out.formatDuration(lease.expiresInMs)} unless activity renews it.`,
 	];
+	if (lease.groupId !== undefined) {
+		// Its own line and only when there is one, exactly as the description below. What it is
+		// **for** is being copied: it is the string the next acquire in this comparison is given,
+		// so it is printed on the grant the way the release command is.
+		lines.push(`Group: ${out.escapeControlCharacters(lease.groupId)}`);
+	}
 	if (lease.testDescription !== undefined) {
 		// **Its own line, and only when there is one** (D22, as amended #148). A grant is not a
 		// measured table, so this is the one human-mode rendering with room for a sentence — and a
@@ -174,6 +196,9 @@ export async function run(argv: string[]): Promise<number> {
 		'test-description',
 		values['test-description'],
 	);
+	// Optional on the same terms, and never derived: a group this CLI invented would put two
+	// unrelated runs in one investigation, which is the mirror of the failure `--owner` refuses.
+	const groupId = optionalAttribution('acquire', 'group-id', values['group-id']);
 	const host = resolveHost(values.host);
 
 	const client = await connectToHost(host);
@@ -184,6 +209,7 @@ export async function run(argv: string[]): Promise<number> {
 			project,
 			testName,
 			...(testDescription === undefined ? {} : { testDescription }),
+			...(groupId === undefined ? {} : { groupId }),
 		});
 
 		if (values.json === true) {

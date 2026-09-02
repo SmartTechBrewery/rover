@@ -66,6 +66,49 @@ const VerbCallBaseSchema = z.object({
 });
 
 /**
+ * The longest an artifact `label` may be.
+ *
+ * **Its own number rather than `ATTRIBUTION_MAX_LENGTH`'s 256** (`./methods.ts`), because the two
+ * bounds exist for different reasons. An attribution string is bounded because the host echoes it
+ * back inside a refusal *message* it allocates on a peer's behalf; nothing ever echoes a label
+ * into a message. What a label becomes is part of an archived file's **name**
+ * (`src/daemon/archive.ts`), and the archive truncates any path component past 64 characters and
+ * appends a collision hash to it (`MAX_SEGMENT_LENGTH`, `src/daemon/archive-path.ts`) — so a
+ * longer label buys a caller nothing but a filename nobody can read in a listing, which is the one
+ * thing the tree's shape exists to be. Bounded where a readable filename component is bounded,
+ * rather than where an identifier the host quotes back at you is.
+ *
+ * Stated here rather than imported from the module that owns that 64: `src/daemon/` is the host,
+ * and this module sits in every client's graph (`tests/unit/no-backend-in-a-client.test.ts`).
+ */
+export const ARTIFACT_LABEL_MAX_LENGTH = 64;
+
+/**
+ * What a caller may name **one artifact** with, so that artifacts produced across the several
+ * leases of one group can be recognised as the same thing at different moments (D22, as amended
+ * #150): the same screen, the same log read, the same recording.
+ *
+ * Attribution in D20's sense, exactly like the lease's own strings — opaque, stored as given,
+ * parsed by nothing, derived from nothing, authorizing nothing. Nothing enforces arity,
+ * uniqueness or membership either: one label may appear once, twice or seven times, and no
+ * count is required, capped or checked.
+ *
+ * **Per call rather than per lease**, which is the whole of why this is not a fifth string on
+ * `AcquireDeviceParamsSchema`. One lease takes several screenshots and they are not all the same
+ * screen: the lease's `groupId` says *these runs belong together*, a label says *this artifact
+ * and that one are the same thing*, and the two questions have different units.
+ *
+ * `.min(1)`, so **absent is the only way to say nothing** — an empty label is `invalid_params`
+ * rather than a file filed as `001__screenshot.png`, and nothing anywhere substitutes a
+ * placeholder for a caller who supplied none (#129's lesson).
+ *
+ * **A label on a lease with no `groupId` is refused**, and that check is on the host rather than
+ * here for the reason it cannot be here: this schema parses one call and never sees a lease
+ * (`src/daemon/verb-handlers.ts`, {@link VerbRefusalReasonSchema}'s `label-without-group`).
+ */
+export const ArtifactLabelSchema = z.string().min(1).max(ARTIFACT_LABEL_MAX_LENGTH);
+
+/**
  * The base for the two rows that actually wait, and only those.
  *
  * `timeoutMs` is **non-negative** rather than positive because zero is meaningful and the
@@ -249,9 +292,15 @@ export const MAX_LOG_ENTRIES = 5_000;
  * There is deliberately no `follow`, no `since` and no tag filter. A follow is a wait with
  * no condition and a stream over IPC; the other two are real requests and would each be a
  * row's worth of design rather than a flag smuggled in beside a bound.
+ *
+ * `label` is the second optional key and is one of the three the archive files
+ * ({@link ArtifactLabelSchema}): reading the same log at two moments of one investigation is
+ * exactly what it is for. Absent stays absent, and a label sent on a lease with no `groupId` is
+ * refused by name rather than dropped.
  */
 export const ReadLogsParamsSchema = VerbCallBaseSchema.extend({
 	maxEntries: z.number().int().positive().max(MAX_LOG_ENTRIES).optional(),
+	label: ArtifactLabelSchema.optional(),
 }).strict();
 export type ReadLogsParams = z.infer<typeof ReadLogsParamsSchema>;
 
@@ -505,8 +554,16 @@ export type DeviceInfoParams = z.infer<typeof DeviceInfoParamsSchema>;
  * either names nothing or names something on the wrong disk. What comes back is
  * `ActionResult.artifact` — the bytes, base64-encoded — and where they end up is the
  * client's own decision.
+ *
+ * **One optional key, and it is not about the bytes**: `label`
+ * ({@link ArtifactLabelSchema}) is what makes the before shot and the after shot recognisable
+ * as two views of one screen. It changes nothing about the capture or the answer — the host
+ * files it with the archived copy and no client is handed it back — so this row no longer
+ * carries "the lease id and nothing else", but it still carries nothing the device sees.
  */
-export const ScreenshotParamsSchema = VerbCallBaseSchema.strict();
+export const ScreenshotParamsSchema = VerbCallBaseSchema.extend({
+	label: ArtifactLabelSchema.optional(),
+}).strict();
 export type ScreenshotParams = z.infer<typeof ScreenshotParamsSchema>;
 
 /**
@@ -538,10 +595,15 @@ export type ScreenshotParams = z.infer<typeof ScreenshotParamsSchema>;
  * is deliberately no frame *width* and no format here: those are one bounded default the verb
  * owns (`FRAME_WIDTH_PX`, `src/verbs/record.ts`), not a configuration surface
  * (ai/RULES.md §7).
+ *
+ * `label` is the third optional key and the only one the device never hears about
+ * ({@link ArtifactLabelSchema}): it names the recording so the same flow recorded before and
+ * after a change is one thing filed twice rather than two unrelated videos.
  */
 export const RecordVideoParamsSchema = VerbCallBaseSchema.extend({
 	durationMs: z.number().int().positive().max(MAX_RECORDING_MS).optional(),
 	framesPerSecond: z.number().int().positive().max(MAX_FRAMES_PER_SECOND).optional(),
+	label: ArtifactLabelSchema.optional(),
 }).strict();
 export type RecordVideoParams = z.infer<typeof RecordVideoParamsSchema>;
 
@@ -566,6 +628,20 @@ export const VerbRefusalReasonSchema = z.enum([
 	'not-attached',
 	/** Attached, and in a state no verb could run against. */
 	'not-ready',
+	/**
+	 * The call carried a `label` and the lease carries no `groupId` (D22, as amended #150).
+	 *
+	 * The one reason here that is about the *call* rather than about the device or the lease's
+	 * liveness, and it is a refusal rather than an `invalid_params` because only the host can
+	 * see both halves: the schema parses one call, and whether that call's lease has a group is
+	 * a fact about a record living on the host ({@link ArtifactLabelSchema}).
+	 *
+	 * **Never a quiet drop.** A label means "this artifact and that one are the same thing",
+	 * and there is no *that one* outside a group — so an agent that supplied a label believing
+	 * it was recorded would be told nothing at all, which is the silent answer this protocol is
+	 * built to avoid. The message names both fields and what to do about it.
+	 */
+	'label-without-group',
 ]);
 export type VerbRefusalReason = z.infer<typeof VerbRefusalReasonSchema>;
 

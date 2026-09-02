@@ -236,6 +236,44 @@ describe('a grant and a refusal', () => {
 		expect(lines[3]).toContain('Checks the flow.\\nRelease it with:');
 	});
 
+	/*
+	 * The group, on its own line and only when there is one (D22, as amended #150). It sits
+	 * **before** the description because it is the shorter of the two and is the string a caller
+	 * copies into the next acquire — and after the release line, which is the one meant to be
+	 * pasted into a shell.
+	 */
+	it('shows the group on its own line, and both lines when a lease carries both', () => {
+		const rendered = renderGrant({
+			leaseId: parseLeaseId('lease-1'),
+			serial: parseDeviceSerial('held-1'),
+			owner: 'issue-150',
+			project: 'rover',
+			testName: 'checkout flow',
+			testDescription: 'Checks the checkout flow survives the second app bar row.',
+			groupId: 'app-bar-top-space',
+			expiresInMs: NINETEEN_MINUTES_MS,
+		});
+		const lines = rendered.split('\n');
+
+		expect(lines).toHaveLength(5);
+		expect(lines[1]).toBe('Release it with: npm run rover -- release lease-1');
+		expect(lines[3]).toBe('Group: app-bar-top-space');
+		expect(lines[4]).toContain('Description: Checks the checkout flow');
+	});
+
+	it('draws no group line for a lease that carries none', () => {
+		const rendered = renderGrant({
+			leaseId: parseLeaseId('lease-1'),
+			serial: parseDeviceSerial('held-1'),
+			owner: 'issue-150',
+			project: 'rover',
+			testName: 'checkout flow',
+			expiresInMs: NINETEEN_MINUTES_MS,
+		});
+
+		expect(rendered).not.toContain('Group');
+	});
+
 	// And no line at all without one: a grant carrying an empty label would be the CLI inventing
 	// the one thing the caller declined to say.
 	it('draws no description line for a lease that carries none', () => {

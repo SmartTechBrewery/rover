@@ -236,6 +236,48 @@ describe('the device tools over a live host', () => {
 		expect(JSON.stringify(granted.structuredContent)).not.toContain('testDescription');
 	});
 
+	/*
+	 * The lease half of #150 over a live host: it reaches the store, comes back on the grant, and
+	 * is on the holder every other agent sees — the same three places `testDescription` is, and for
+	 * the same reason it is on `LeaseHolder` rather than only on the grant.
+	 */
+	it('carries a groupId to the host, onto the grant and into the listing', async () => {
+		registerFakeBackend();
+		await startHost();
+		const agent = await connectAgent();
+		const groupId = 'app-bar-top-space';
+
+		const granted = await callTool(agent, 'acquire_device', {
+			serial: 'attached-1',
+			owner: 'issue-150',
+			project: 'rover',
+			testName: 'app bar top space',
+			groupId,
+		});
+
+		expect(granted.isError).toBeFalsy();
+		expect(granted.structuredContent).toMatchObject({ lease: { groupId } });
+		const listed = await callTool(agent, 'list_devices');
+		expect(listed.structuredContent).toMatchObject({ devices: [{ heldBy: { groupId } }] });
+	});
+
+	// Optional, so a call without one is granted — and carries no key rather than a blank.
+	it('grants a lease with no group at all when the call supplies none', async () => {
+		registerFakeBackend();
+		await startHost();
+		const agent = await connectAgent();
+
+		const granted = await callTool(agent, 'acquire_device', {
+			serial: 'attached-1',
+			owner: 'issue-150',
+			project: 'rover',
+			testName: 'app bar top space',
+		});
+
+		expect(granted.isError).toBeFalsy();
+		expect(JSON.stringify(granted.structuredContent)).not.toContain('groupId');
+	});
+
 	it('refuses a call that omits project when nothing is configured to default it', async () => {
 		registerFakeBackend();
 		await startHost();

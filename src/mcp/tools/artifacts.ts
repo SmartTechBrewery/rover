@@ -70,7 +70,15 @@ export function registerArtifactTools(server: McpServer, host: HostName): void {
 				'refused by name rather than returned cut short. **A black image is a true answer ' +
 				'rather than a failed capture**: some applications block screen capture, and ' +
 				'`read_screen` is the read that survives the block — reach for it when a capture ' +
-				'comes back blank, and when you need element ids or rectangles rather than pixels.',
+				'comes back blank, and when you need element ids or rectangles rather than pixels. ' +
+				'`label` is optional and is about the **host’s** archived copy rather than the image you ' +
+				'get back: give the same `label` to the capture of one screen in each run of a group and ' +
+				'the archive files them as one thing at two moments, which is what makes a before/after ' +
+				'comparison recoverable later. One label per thing being compared, and the lease’s ' +
+				'`groupId` is what says which run it was. Keep it short and identifier-shaped — ' +
+				'`home-screen` rather than `home screen` — because the host puts it in a file name and ' +
+				'rewrites anything outside `[A-Za-z0-9._-]`. It requires a group: a `label` on a lease ' +
+				'acquired without a `groupId` is refused by name, never accepted with the label dropped.',
 			inputSchema: IPC_METHODS.screenshot.params,
 		}),
 		async (received: unknown) =>
@@ -95,7 +103,10 @@ export function registerArtifactTools(server: McpServer, host: HostName): void {
 				'are each refused by name and leave no file behind. **Frames sample motion and ' +
 				'nothing finer**: they can say something moved and roughly when, never whether an ' +
 				'animation was smooth. This call can take half a minute; that is the recording and ' +
-				'the slicing, not a hang.',
+				'the slicing, not a hang. `label` is optional and is `screenshot`’s: it names the host’s ' +
+				'archived copy so the same flow recorded in two runs of one group is filed as one thing ' +
+				'at two moments, and it requires the lease to carry a `groupId` — without one the call is ' +
+				'refused by name rather than losing its label.',
 			inputSchema: IPC_METHODS.record_video.params,
 		}),
 		async (received: unknown) => {

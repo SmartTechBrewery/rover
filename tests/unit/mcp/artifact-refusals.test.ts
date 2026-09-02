@@ -183,6 +183,44 @@ describe('a recording the host will not hand over', () => {
 	});
 });
 
+/**
+ * **A label on a lease with no group is refused, loudly** (D22, as amended #150) — and it reaches
+ * the agent as `isError` naming the reason, like every other refusal here, rather than as a
+ * successful capture whose label nobody recorded.
+ */
+describe('a label on a lease that has no group', () => {
+	it('refuses both byte-carrying tools by name and leaves the directory alone', async () => {
+		await serve(recordsFine);
+		const agent = await connectAgent();
+		const leaseId = await acquireLease(agent);
+
+		for (const tool of ['screenshot', 'record_video']) {
+			const result = await callTool(agent, tool, { leaseId, label: 'home-screen' });
+
+			expect(result.isError).toBe(true);
+			expect(result.structuredContent).toMatchObject({
+				outcome: 'refused',
+				reason: 'label-without-group',
+			});
+			// The host's own words, naming both fields — an agent that reads only the text knows
+			// which call to change and how.
+			expect(textOf(result)).toContain("'groupId'");
+		}
+		expect(filesIn(artifactDir)).toEqual([]);
+	});
+
+	it('takes the same labelled call once the lease carries a group', async () => {
+		await serve(recordsFine);
+		const agent = await connectAgent();
+		const leaseId = await acquireLease(agent, 'app-bar-top-space');
+
+		const result = await callTool(agent, 'screenshot', { leaseId, label: 'home-screen' });
+
+		expect(result.isError).toBeFalsy();
+		expect(result.structuredContent).toMatchObject({ outcome: 'ok' });
+	});
+});
+
 describe('a lease that is not live', () => {
 	it('refuses both byte-carrying tools by name and leaves the directory alone', async () => {
 		await serve(recordsFine);

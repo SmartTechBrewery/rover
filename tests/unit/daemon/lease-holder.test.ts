@@ -33,13 +33,13 @@ function createClockedStore(): { store: LeaseStore; at: (instant: number) => voi
 	};
 }
 
-function grant(store: LeaseStore, testDescription?: string) {
+function grant(store: LeaseStore, optional: { testDescription?: string; groupId?: string } = {}) {
 	const outcome = store.acquire({
 		serial,
 		owner: 'pr-127-review',
 		project: 'rover',
 		testName: 'checkout flow',
-		...(testDescription === undefined ? {} : { testDescription }),
+		...optional,
 		slot: createMockSlot(),
 	});
 	if (!outcome.granted) throw new Error('expected a granted lease');
@@ -116,7 +116,10 @@ describe('the holder a stranger is shown', () => {
 	 */
 	it('projects the description a lease carries, and no key at all for a lease without one', () => {
 		const { store } = createClockedStore();
-		const described = toLeaseHolder(grant(store, 'Checks the app bar keeps its top space.'), store);
+		const described = toLeaseHolder(
+			grant(store, { testDescription: 'Checks the app bar keeps its top space.' }),
+			store,
+		);
 
 		expect(described.testDescription).toBe('Checks the app bar keeps its top space.');
 		expect(Object.keys(described)).toContain('testDescription');
@@ -129,5 +132,26 @@ describe('the holder a stranger is shown', () => {
 
 		expect('testDescription' in holder).toBe(false);
 		expect(JSON.stringify(holder)).not.toContain('testDescription');
+	});
+
+	/*
+	 * The group, on identical terms (D22, as amended #150). It is projected **here** rather than at
+	 * either caller for this module's whole reason: a refusal names the holder and so does a
+	 * listing, and the two must not disagree about whether the device is held by one half of a
+	 * comparison. It authorizes nothing — knowing which investigation holds a device is not a way
+	 * to join it — which is why disclosing it to a stranger is a decision this suite can make.
+	 */
+	it('projects the group a lease carries, and no key at all for a lease without one', () => {
+		// Two stores rather than two acquires: one device is one lease (D7), so the second grant
+		// on one store would be refused rather than granted.
+		const withGroup = createClockedStore().store;
+		const without = createClockedStore().store;
+
+		const grouped = toLeaseHolder(grant(withGroup, { groupId: 'app-bar-top-space' }), withGroup);
+		const ungrouped = toLeaseHolder(grant(without), without);
+
+		expect(grouped.groupId).toBe('app-bar-top-space');
+		expect('groupId' in ungrouped).toBe(false);
+		expect(JSON.stringify(ungrouped)).not.toContain('groupId');
 	});
 });

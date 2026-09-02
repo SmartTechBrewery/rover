@@ -126,6 +126,7 @@ function acquire(
 		project?: string;
 		testName?: string;
 		testDescription?: string;
+		groupId?: string;
 	} = {},
 ): Promise<AcquireDeviceResult> {
 	return client.request('acquire_device', {
@@ -135,6 +136,7 @@ function acquire(
 		testName: extra.testName ?? 'home screen',
 		// Left off entirely when the test names none, which is what absent means on this wire.
 		...(extra.testDescription === undefined ? {} : { testDescription: extra.testDescription }),
+		...(extra.groupId === undefined ? {} : { groupId: extra.groupId }),
 	});
 }
 
@@ -286,6 +288,46 @@ describe('what a granted lease carries', () => {
 		}
 		expect(described.lease.testDescription).toBe(testDescription);
 		expect('testDescription' in plain.lease).toBe(false);
+	});
+
+	/*
+	 * The fifth string (D22, as amended #150), echoed back on the grant — and echoed back for a
+	 * reason beyond symmetry: it is the string the caller passes to the *next* acquire in the
+	 * comparison, so a grant that swallowed it would leave an agent guessing at what it just sent.
+	 * Absent is an absent key, exactly as the description above.
+	 */
+	it("echoes the caller's group back, and answers no key without one", async () => {
+		await serveReadyDevice();
+		const client = await connect();
+
+		const grouped = await acquire(client, 'issue-150', { groupId: 'app-bar-top-space' });
+		const plain = await acquire(client, 'pr-127-review', {
+			serial: parseDeviceSerial('attached-2'),
+		});
+
+		if (grouped.outcome !== 'granted' || plain.outcome !== 'granted') {
+			throw new Error('expected two granted leases');
+		}
+		expect(grouped.lease.groupId).toBe('app-bar-top-space');
+		expect('groupId' in plain.lease).toBe(false);
+	});
+
+	/*
+	 * The holder a stranger is shown carries it too, so a refusal and a listing cannot disagree
+	 * (`src/daemon/lease-holder.ts`). Read off the **refusal**, which is the half a second agent
+	 * actually meets.
+	 */
+	it('names the holder’s group in the refusal a second caller gets', async () => {
+		await serveReadyDevice();
+		const client = await connect();
+		await acquire(client, 'issue-150', { groupId: 'app-bar-top-space' });
+
+		const refused = await acquire(client, 'someone-else');
+
+		if (refused.outcome !== 'refused' || refused.heldBy === null) {
+			throw new Error('expected a refusal naming the holder');
+		}
+		expect(refused.heldBy.groupId).toBe('app-bar-top-space');
 	});
 
 	it('grants two devices at once — a lease is per device, not per host (D7)', async () => {
@@ -553,6 +595,42 @@ describe('the params gate', () => {
 		} as never);
 
 		await expect(rejection).rejects.toBeInstanceOf(IpcRequestError);
+		await expect(rejection).rejects.toMatchObject({ code: 'invalid_params' });
+	});
+
+	/*
+	 * The same for the group (D22, as amended #150), and it is worth its own case rather than
+	 * being assumed from the one above: an optional key silently lost is a comparison that can
+	 * never be recovered, and the second lease would look fine.
+	 */
+	it('rejects a typo’d group key rather than dropping it', async () => {
+		await serveReadyDevice();
+		const client = await connect();
+
+		const rejection = client.request('acquire_device', {
+			serial: SERIAL,
+			owner: 'issue-150',
+			project: 'rover',
+			testName: 'home screen',
+			groupID: 'app-bar-top-space',
+		} as never);
+
+		await expect(rejection).rejects.toBeInstanceOf(IpcRequestError);
+		await expect(rejection).rejects.toMatchObject({ code: 'invalid_params' });
+	});
+
+	it('rejects an empty group id — absent is the only way to say nothing', async () => {
+		await serveReadyDevice();
+		const client = await connect();
+
+		const rejection = client.request('acquire_device', {
+			serial: SERIAL,
+			owner: 'issue-150',
+			project: 'rover',
+			testName: 'home screen',
+			groupId: '',
+		});
+
 		await expect(rejection).rejects.toMatchObject({ code: 'invalid_params' });
 	});
 

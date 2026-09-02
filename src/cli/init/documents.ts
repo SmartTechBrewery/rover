@@ -14,7 +14,11 @@
  * The **snippet** is deliberately tiny and says nothing `ROVER.md` says. It exists to be a
  * trigger — the words a human actually types when they want a manual test — and to name the
  * file that carries the rest. An agent file is a project's own prose, and the less of it Rover
- * occupies the more likely it is to survive.
+ * occupies the more likely it is to survive. It carries **two** triggers rather than one, and the
+ * second is the one this file exists to make discoverable: a manual test means Rover, and a
+ * *before and after* means the two fields that tie the runs together (D22, as amended #150). An
+ * agent that never learns those exist still does the comparison — and files four unrelated
+ * artifacts.
  *
  * Both are plain string builders with no IO, so the command owns every write.
  */
@@ -107,6 +111,11 @@ export function agentSnippet(documentPath: string): string {
 		'screenshot, a repro, walking through a flow — drive the device with those tools rather than',
 		'asking a human to tap something or shelling out to `adb`.',
 		'',
+		'When the ask is a **comparison** — "screenshot before and after", "prove the fix worked",',
+		'"show me what changed" — give every lease in it the same `groupId` and give the artifacts',
+		'being compared the same `label`. Without them the archive keeps the files and forgets they',
+		'were a pair.',
+		'',
 		`Read \`${documentPath}\` before the first call: it carries the lease loop, the verb set,`,
 		'and the rules that keep a run honest.',
 		SNIPPET_END,
@@ -119,6 +128,7 @@ export function roverDocument(facts: DocumentFacts): string {
 		...heading(facts),
 		...thisProject(facts),
 		...theLoop(facts),
+		...beforeAndAfter(),
 		...theVerbs(),
 		...theRules(),
 		...whenItDoesNotWork(facts),
@@ -268,14 +278,75 @@ function theLoop(facts: DocumentFacts): string[] {
 		"   this run's directory in the host's artifact archive). `testDescription` is optional and",
 		'   is where to say what this run is actually about, in a sentence or two: it names no',
 		'   directory, the operator sees it beside the device while you drive it, and the host files',
-		'   it with the run. The returned **`lease.leaseId` is the credential** every later call',
-		'   carries and the only thing that can release the lease.',
+		'   it with the run. `groupId` is optional too and is the one field here that spans leases:',
+		'   several leases sharing one are a single investigation, which is what "before and after"',
+		'   needs — see **Comparing two runs** below. The returned **`lease.leaseId` is the',
+		'   credential** every later call carries and the only thing that can release the lease.',
 		'3. **`install_app`** — takes the lease id and nothing else. There is no package argument by',
 		"   design: what installing means here is the host operator's own configuration.",
 		'4. **`launch_app`**, then drive and read.',
 		'5. **`release_device`** — **always**, including when the check failed, when you are',
 		'   interrupted, and when you gave up. The host restores what it changed on release and on',
 		'   expiry, but a lease you walk away from blocks the next agent until its TTL runs out.',
+		'',
+	];
+}
+
+/**
+ * The one worked example on the page, and the reason it is worked rather than described.
+ *
+ * An agent asked to *fix the gap above the app bar and screenshot before and after to prove it*
+ * will take two leases and two screenshots whether or not it knows these fields exist — and if it
+ * does not, the archive keeps four files with nothing tying them together (D22, as amended #150).
+ * A paragraph naming `groupId` and `label` would be read after the pattern had already been got
+ * wrong; two calls side by side, with the one string that repeats between them, is read before.
+ *
+ * **The trigger is stated in the words the ask actually arrives in** — "before and after", "prove
+ * it worked", "show me what changed" — for the reason {@link agentSnippet} is written the way it
+ * is: an agent matches on the request it was given, not on a field name it has never seen.
+ *
+ * Two runs because that is the common case, and the last line says three or more is equally
+ * normal, because a reader shown exactly two will believe two is the rule.
+ */
+function beforeAndAfter(): string[] {
+	return [
+		'## Comparing two runs — before and after',
+		'',
+		'When the ask is a **comparison** — "screenshot before and after", "prove the fix worked",',
+		'"show me what changed" — two optional strings are what keep the pieces together after the',
+		'leases have ended:',
+		'',
+		'- **`groupId` on `acquire_device`** — the runs. Every lease in one comparison gets the same',
+		'  one. You invent the string; nothing parses it.',
+		'- **`label` on `screenshot`, `record_video` and `read_logs`** — the things being compared.',
+		'  The same screen captured in each run gets the same label. Keep it short and',
+		'  identifier-shaped (`home-screen`, not `home screen`): it becomes part of a file name on',
+		'  the host, and anything outside `[A-Za-z0-9._-]` is rewritten.',
+		'',
+		'```jsonc',
+		'// before the change',
+		'acquire_device { "serial": "…", "owner": "issue-150", "testName": "app bar top space",',
+		'                 "groupId": "app-bar-top-space" }',
+		'screenshot     { "leaseId": "…", "label": "home-screen" }',
+		'release_device { "leaseId": "…" }',
+		'',
+		'// …make the change…',
+		'',
+		'// after it — a new lease, the same groupId, the same label',
+		'acquire_device { "serial": "…", "owner": "issue-150", "testName": "app bar top space",',
+		'                 "groupId": "app-bar-top-space" }',
+		'screenshot     { "leaseId": "…", "label": "home-screen" }',
+		'release_device { "leaseId": "…" }',
+		'```',
+		'',
+		'Both are optional and neither authorizes anything. Three points of comparison are as normal',
+		'as two — reuse the same `groupId` for as many runs as the investigation needs — and nothing',
+		'requires that a second run ever happens. **A `label` needs a `groupId`**: send one on a lease',
+		'that has no group and the call is refused, naming both fields, rather than accepted with the',
+		'label quietly dropped.',
+		'',
+		'Rover files this and nothing more. **It does not diff the images, score them, or decide',
+		'whether the fix worked** — that judgement is yours, from looking at what came back.',
 		'',
 	];
 }

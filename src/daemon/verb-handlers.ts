@@ -64,6 +64,21 @@
  * in every client's module graph, and host filesystem work under it would be host behaviour
  * inside a CLI (D19).
  *
+ * **And the archive's `label` is read off the call here, so no verb ever sees one** (D22, as
+ * amended #150). The three rows that carry one are exactly the three the archive files —
+ * `screenshot`, `record_video`, `read_logs` — and each hands its own string to {@link runVerb} as
+ * a third argument rather than into the verb's options: a label names the *filed copy*, and the
+ * device does not have one. That is the property R25 already had, kept: no verb signature, verb
+ * option or result schema changes to carry it.
+ *
+ * **A `label` on a lease with no `groupId` is refused here, before anything touches a device.**
+ * It is the one refusal in this file that is about the call rather than about the lease's
+ * liveness or the hardware, and it is here because here is the only place both halves are
+ * visible: the schema parses a call and cannot see a lease. A label means "this artifact and that
+ * one are the same thing", and outside a group there is no *that one* — so accepting it and
+ * dropping it would tell an agent nothing at all, which is precisely the silent answer this
+ * protocol refuses.
+ *
  * **None of `./lease-handlers.ts`'s await-ordering constraint applies here**, and that is
  * worth saying so nobody copies a rule that does not hold: nothing in this file takes
  * anything exclusive. The lease is already held, and holding it is what makes this call
@@ -230,6 +245,7 @@ export function createVerbHandlers(
 	function runVerb<Result extends ArchivableResult>(
 		leaseId: LeaseId,
 		run: (context: VerbContext, lease: Lease, call: VerbCall) => Promise<Result>,
+		label?: string,
 	): Promise<VerbCallResultOf<Result>> {
 		// First, and before any await: this is the renewal (D8).
 		const lease = leases.use(leaseId);
@@ -240,6 +256,23 @@ export function createVerbHandlers(
 				message:
 					'That lease id is not live on this host — it was never granted, it was already ' +
 					'released, or it expired. Acquire the device again to get a new one.',
+			});
+		}
+
+		// The one refusal in here about the call itself — see this module's header. Before the
+		// device is re-verified and before the traffic registration, because neither is needed to
+		// answer it: it is knowable from the lease already resolved above, and refusing it early
+		// costs the caller nothing beyond the round trip they had already spent.
+		if (label !== undefined && lease.groupId === undefined) {
+			return Promise.resolve({
+				outcome: 'refused',
+				reason: 'label-without-group',
+				message:
+					`This call carries a 'label' but its lease has no 'groupId', and a label only means ` +
+					`something inside a group: it says this artifact and one from another run are the ` +
+					`same thing at two moments, and there is no other run here to compare it against. ` +
+					`Acquire the device with a 'groupId' — the same one for every run in the ` +
+					`comparison — or leave the 'label' off this call. Nothing was recorded.`,
 			});
 		}
 
@@ -256,8 +289,10 @@ export function createVerbHandlers(
 				// The second effect of the call (D23) — awaited rather than fired and forgotten,
 				// because the bytes are already in memory and bounded, the lease is still held, and
 				// a write left running would race the restoration a `release_device` starts. It
-				// cannot fail this: `record` never throws.
-				await archive.record(lease, answered.result);
+				// cannot fail this: `record` never throws. The label travels with it and nowhere
+				// else: it is not on the answer, so no client is handed back the name of a file it
+				// was never told exists (D19).
+				await archive.record(lease, answered.result, label);
 			}
 			return answered;
 		});
@@ -390,8 +425,10 @@ export function createVerbHandlers(
 			return runVerb(params.leaseId, (context) => deviceInfo(context));
 		},
 
+		// The label is `runVerb`'s third argument rather than an option on the verb: it names the
+		// archived copy, and the capture itself is unchanged by it (D22, as amended #150).
 		screenshot(params: ScreenshotParams): Promise<VerbCallResult> {
-			return runVerb(params.leaseId, (context) => screenshot(context));
+			return runVerb(params.leaseId, (context) => screenshot(context), params.label);
 		},
 
 		// The three app rows. They call the *verb* of that name and never `context.backend.*`,
@@ -413,7 +450,11 @@ export function createVerbHandlers(
 		// same preamble as the rest — `runVerb` is generic in the `ActionResult` subtype the verb
 		// returns, so what it answers when no verb ran is word for word a gesture's.
 		read_logs(params: ReadLogsParams): Promise<ReadLogsCallResult> {
-			return runVerb(params.leaseId, (context) => readLogs(context, logOptions(params)));
+			return runVerb(
+				params.leaseId,
+				(context) => readLogs(context, logOptions(params)),
+				params.label,
+			);
 		},
 
 		// The three transfer rows. Two of them decode first and the decoding is **inside**
@@ -456,7 +497,11 @@ export function createVerbHandlers(
 		// Its `requires: ['canRecordVideo']` is what makes a backend that cannot record say so
 		// by name instead of answering with a null artifact that reads like a success (D11).
 		record_video(params: RecordVideoParams): Promise<RecordVideoCallResult> {
-			return runVerb(params.leaseId, (context) => recordVideo(context, recordOptions(params)));
+			return runVerb(
+				params.leaseId,
+				(context) => recordVideo(context, recordOptions(params)),
+				params.label,
+			);
 		},
 
 		// The two environment rows. Like the app rows they call the *verbs* rather than

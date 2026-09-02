@@ -19,6 +19,10 @@
  * on a condition for the recorder to be gone, checks the container index on the bytes that
  * actually arrived, and refuses them as `unfinished-recording` (#14). This end does not
  * re-derive that — it prints the refusal and writes nothing.
+ *
+ * `--label` is `rover screenshot`'s, word for word and for the same reason (D22, as amended
+ * #150): it names the host's archived copy so one flow recorded before and after a change reads
+ * as a pair, it names nothing here, and it is refused when the lease has no `--group-id`.
  */
 
 import { parseLeaseId } from '../../core/ids.js';
@@ -34,6 +38,7 @@ import { deliverArtifact, resolveDestination } from '../_shared/artifact.js';
 import {
 	expectPositionals,
 	GLOBAL_OPTIONS,
+	optionalLabel,
 	parseCommandArgs,
 	requireOption,
 	UsageError,
@@ -44,7 +49,7 @@ import * as out from '../_shared/output.js';
 export const USAGE = `rover record — record the screen to a file on this machine
 
 Usage: rover record <lease-id> --out <path> [--duration-ms <n>] [--frames-per-second <n>]
-                    [--host <name>] [--json]
+                    [--label <string>] [--host <name>] [--json]
 
   --out                Where to write the video, on the machine running this command.
                        Required, for the reason \`screenshot --out\` is.
@@ -54,6 +59,10 @@ Usage: rover record <lease-id> --out <path> [--duration-ms <n>] [--frames-per-se
   --frames-per-second  How densely the host samples the recording into frames. Omit it and
                        the host's own default applies (${DEFAULT_FRAMES_PER_SECOND}); the ceiling is ${MAX_FRAMES_PER_SECOND}. Past that
                        the frames stop being a sample and start being the recording again.
+  --label              What this recording is, in the host's archive. Optional, names
+                       nothing on this machine, and requires the lease to carry a
+                       --group-id — without one the host refuses the call by name rather
+                       than dropping the label, and nothing is recorded or written.
 
 The host also slices the recording into PNG frames, with the decoder it has rather than one
 this command carries. The answer is both or neither: on a host that cannot slice — no decoder
@@ -74,6 +83,7 @@ const OPTIONS = {
 	out: { type: 'string' },
 	'duration-ms': { type: 'string' },
 	'frames-per-second': { type: 'string' },
+	label: { type: 'string' },
 } as const;
 
 export async function run(argv: string[]): Promise<number> {
@@ -85,6 +95,9 @@ export async function run(argv: string[]): Promise<number> {
 	const [leaseId] = expectPositionals('record', positionals, ['<lease-id>']);
 	const durationMs = parseDurationMs(values['duration-ms']);
 	const framesPerSecond = parseFramesPerSecond(values['frames-per-second']);
+	// Bounded here for `parseDurationMs`'s reason: a label the host would refuse should not cost
+	// a recording, a frame extraction and a multi-megabyte transfer to find out about.
+	const label = optionalLabel('record', 'label', values.label);
 	const destination = await resolveDestination(
 		'record',
 		requireOption(
@@ -108,6 +121,7 @@ export async function run(argv: string[]): Promise<number> {
 				leaseId: parseLeaseId(leaseId ?? ''),
 				...(durationMs === undefined ? {} : { durationMs }),
 				...(framesPerSecond === undefined ? {} : { framesPerSecond }),
+				...(label === undefined ? {} : { label }),
 			},
 			{ timeoutMs: requestTimeoutFor(durationMs) },
 		);
@@ -117,6 +131,7 @@ export async function run(argv: string[]): Promise<number> {
 			answer,
 			destination,
 			json: values.json === true,
+			...(label === undefined ? {} : { label }),
 		});
 	} finally {
 		await client.close();

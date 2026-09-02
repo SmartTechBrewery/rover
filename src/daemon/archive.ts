@@ -31,11 +31,21 @@
  * lease dies with the host (D6), so a lease directory can never be reopened by a later daemon
  * and an in-memory counter is complete for that lease's whole life.
  *
- * **Two files here are about the lease rather than about the bytes** — `device_info.json` (D14)
- * and `test_description.json` (D22 as amended #148) — and both are written on exactly the same
- * terms: once, `wx`, never rewritten, and beside the *first* artifact the lease produced rather
- * than at grant time. Nothing indexes either of them, and a lease that produced no bytes files
- * neither.
+ * **Three files here are about the lease rather than about the bytes** — `device_info.json`
+ * (D14), `test_description.json` (D22 as amended #148) and `group_id.json` (D22 as amended #150)
+ * — and all three are written on exactly the same terms: once, `wx`, never rewritten, and beside
+ * the *first* artifact the lease produced rather than at grant time. Nothing indexes any of them,
+ * and a lease that produced no bytes files none.
+ *
+ * **This is where a grouping outlives the leases that made it** (D22, as amended #150), and it is
+ * split across those two halves on purpose. A lease's `groupId` spans leases and so cannot be a
+ * filename: it is filed as `group_id.json` in the run, and *which runs share a group* is then a
+ * walk, which is the query the tree is already shaped to serve (D24, R38). An artifact's `label`
+ * belongs to one file and is written **into that file's name**, beside the sequence number
+ * (`001_before_screenshot.png`), so *which artifacts are the same thing* is answered by listing a
+ * directory. **Neither branches the tree's shape**: `leaseArchiveDirectory` is always four levels
+ * whether or not either was supplied (`./archive-path.ts`, #129), so nothing walking this tree
+ * has to know that this feature exists.
  *
  * **Nothing here prunes.** Retention — a TTL, a size cap, who runs it — is explicitly out of
  * scope (PROJECT.md §9.4). This tree grows without bound, on purpose and for now.
@@ -46,7 +56,7 @@ import { dirname, join } from 'node:path';
 import type { LogRead } from '../core/device.js';
 import type { LeaseId } from '../core/ids.js';
 import type { ActionResult, Artifact } from '../verbs/result.js';
-import { leaseArchiveDirectory } from './archive-path.js';
+import { leaseArchiveDirectory, pathSegment } from './archive-path.js';
 import type { Lease } from './leases.js';
 
 /**
@@ -69,8 +79,16 @@ export interface ArtifactArchive {
 	 * **Never throws and never alters the result.** A verb that produced no bytes writes
 	 * nothing at all — not even a directory — so a lease that only ever tapped leaves no
 	 * empty scaffolding behind.
+	 *
+	 * `label` is the caller's own name for *this* artifact, off the call rather than off the
+	 * lease (`ArtifactLabelSchema`), and it reaches here without any verb having seen it — the
+	 * daemon holds the lease and the finished result together, which is why the archive still
+	 * needs no seam in the verb layer. Absent for a call that carried none, and by the time it
+	 * gets here it is only ever present on a lease that has a `groupId`: the pairing is refused
+	 * upstream (`./verb-handlers.ts`), so nothing below has to decide what an ungrouped label
+	 * would mean.
 	 */
-	record(lease: Lease, result: ArchivableResult): Promise<void>;
+	record(lease: Lease, result: ArchivableResult, label?: string): Promise<void>;
 	/**
 	 * The lease ended: drop its sequence counters, so the daemon does not grow with the
 	 * number of leases it has ever granted.
@@ -125,10 +143,10 @@ export function createArtifactArchive(options: ArtifactArchiveOptions): Artifact
 	}
 
 	return {
-		async record(lease: Lease, result: ArchivableResult): Promise<void> {
+		async record(lease: Lease, result: ArchivableResult, label?: string): Promise<void> {
 			// Every number this call needs, before the first await. A write still in flight when
 			// the lease ends therefore cannot recreate an entry `forget` has already dropped.
-			const files = plan(result, (kind) => next(lease, kind));
+			const files = plan(result, (kind) => next(lease, kind), label);
 			if (files.length === 0) {
 				return;
 			}
@@ -144,6 +162,8 @@ export function createArtifactArchive(options: ArtifactArchiveOptions): Artifact
 				// The lease's own description, on exactly the same terms and in the same place —
 				// see {@link writeTestDescription}. A lease that supplied none writes no file.
 				await writeTestDescription(directory, lease);
+				// And the group it belongs to, on those same terms again — see {@link writeGroupId}.
+				await writeGroupId(directory, lease);
 				for (const file of files) {
 					const path = join(directory, file.path);
 					// One `mkdir` per file rather than one per kind: a recording's frames sit in a
@@ -177,13 +197,24 @@ interface PlannedFile {
  *
  * A verb this does not name contributes nothing, deliberately: the row covers screenshots,
  * recordings and log pulls, and archiving a tap's after-state would fill the tree with
- * things nobody asked to keep.
+ * things nobody asked to keep. **Those three are exactly the calls that take a `label`**
+ * (`src/ipc/verb-methods.ts`), and the correspondence is not a coincidence: a label names a
+ * thing that was filed, so a call this switch drops has nothing to label.
+ *
+ * `label` is prefixed by {@link labelled} in every branch, so an artifact's name is
+ * `<sequence>_<label>_…` rather than the label being appended or replacing anything. The
+ * sequence still leads — it is what says *order* — and the label sits next to it because that
+ * is where a listing puts the two facts side by side.
  */
-function plan(result: ArchivableResult, take: (kind: keyof Counters) => number): PlannedFile[] {
+function plan(
+	result: ArchivableResult,
+	take: (kind: keyof Counters) => number,
+	label?: string,
+): PlannedFile[] {
 	switch (result.verb) {
 		case 'screenshot': {
 			if (!result.artifact) return [];
-			const n = sequence(take('screenshots'));
+			const n = labelled(sequence(take('screenshots')), label);
 			return [
 				{
 					path: join('screenshots', `${n}_${result.verb}${extensionFor(result.artifact)}`),
@@ -194,7 +225,7 @@ function plan(result: ArchivableResult, take: (kind: keyof Counters) => number):
 
 		case 'record_video': {
 			if (!result.artifact) return [];
-			const n = sequence(take('recordings'));
+			const n = labelled(sequence(take('recordings')), label);
 			// The frames go in a sibling of the recording they were cut from, named after it, so
 			// the pair stays obvious in a listing rather than needing an index to relate them.
 			const frames = (result.frames ?? []).map((frame, index) => ({
@@ -216,7 +247,7 @@ function plan(result: ArchivableResult, take: (kind: keyof Counters) => number):
 
 		case 'read_logs': {
 			if (!result.logs) return [];
-			const n = sequence(take('logs'));
+			const n = labelled(sequence(take('logs')), label);
 			return [
 				{
 					path: join('logs', `${n}_${result.verb}.txt`),
@@ -228,6 +259,24 @@ function plan(result: ArchivableResult, take: (kind: keyof Counters) => number):
 		default:
 			return [];
 	}
+}
+
+/**
+ * The sequence number with the call's label after it — `001` becomes `001_before` — or the
+ * sequence number exactly as it was for a call that carried none.
+ *
+ * **Through {@link pathSegment} like every other caller string that becomes part of a path**, so
+ * a label carrying a separator, a leading dot or anything outside `[A-Za-z0-9._-]` is one
+ * component and not an escape, and two labels that sanitise alike land on two names rather than
+ * one (the collision hash). It is the one place a label is looked at, and it is looked at for its
+ * *shape* and never for what it says (D22).
+ *
+ * **Absent adds nothing at all** — not an empty segment, not a placeholder — so an unlabelled
+ * screenshot is still `001_screenshot.png` and the tree of a caller who never used this feature
+ * is byte for byte the tree it was before (#129's lesson, applied to a file name).
+ */
+function labelled(ordinal: string, label: string | undefined): string {
+	return label === undefined ? ordinal : `${ordinal}_${pathSegment(label)}`;
 }
 
 /** `device_info.json` — a static copy of what the result already carries (D14). */
@@ -273,6 +322,39 @@ async function writeTestDescription(directory: string, lease: Lease): Promise<vo
 	await writeOnce(
 		join(directory, 'test_description.json'),
 		`${JSON.stringify({ testDescription: lease.testDescription }, null, 2)}\n`,
+	);
+}
+
+/**
+ * `group_id.json` — which investigation this run belongs to, filed so the grouping outlives every
+ * lease in it (D22 as amended #150, PROJECT.md §10).
+ *
+ * **`test_description.json`'s terms exactly**, and `device_info.json`'s before it: written once
+ * with `flag: 'wx'`, never rewritten, beside the first artifact the lease produced, inside the
+ * `<serial>` directory rather than beside it — see {@link writeTestDescription} for why that last
+ * one is not a matter of taste. A lease with no group writes no file, and a lease that produced no
+ * bytes writes nothing at all.
+ *
+ * **A file rather than a directory level, and that is the decision this whole feature turns on.**
+ * A `<group>/` level above `<project>/` would make "what else is in this group" free — and would
+ * break *always four levels*, which `run-identity.ts`, `list_archive` and the panel's three levels
+ * all count on, and which #129 removed the last branch from. So the group is filed as contents and
+ * *which runs share it* is a walk at request time, which is the same trade R38's `search_archive`
+ * already makes and the one D24's no-index half asks for.
+ *
+ * **This is not an index and nothing here builds one.** Nothing joins two runs, counts a group's
+ * members or checks that a second ever arrives; the host writes down what the lease claimed and a
+ * reader does the rest.
+ */
+async function writeGroupId(directory: string, lease: Lease): Promise<void> {
+	if (lease.groupId === undefined) {
+		return;
+	}
+	// The wire's own key again (D26), so a reader parses one spelling of this field wherever it
+	// meets it — on a grant, on a holder, or here weeks after the lease ended.
+	await writeOnce(
+		join(directory, 'group_id.json'),
+		`${JSON.stringify({ groupId: lease.groupId }, null, 2)}\n`,
 	);
 }
 
