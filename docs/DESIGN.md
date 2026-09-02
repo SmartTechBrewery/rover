@@ -44,7 +44,7 @@ this sentence exists to prevent.
 | Compare — Visual Diff (V2) | `897632dcadce44de9bdee74a94da14f5` | Not yet corrected — see §11 |
 | Sign In — Rover OS | `5035330b2c12401080263625ff564369` | Settled, **default state only** — see §8 |
 | Projects | `74633a3b3d39445a8dedd0de97c2cc2b` | **Superseded** by the row below, and must not be built from — its shell was rebuilt from scratch and wrong in eight places (§12) |
-| Projects — Final Alignment | `89097f87f206419d91751655d67d5f2a` | **Settled** — see §10 |
+| Projects — Final Alignment | `89097f87f206419d91751655d67d5f2a` | **Settled** — see §10, built with three recorded deviations (#157) |
 
 Earlier versions of each still exist and **must not be built from**. There is no way to delete a
 screen through the API — only `delete_project`, which takes everything — so every iteration
@@ -131,8 +131,17 @@ separated from the main nav.
 **The nav icons — settled (#141).** `Devices` is a **phone**, `Archive` a box, `System` a prompt
 and `Profile` a person: `Smartphone`, `Archive`, `Terminal` and `CircleUser` from `lucide-react`.
 The main items are drawn at `size={20} strokeWidth={2}`; `Profile` is 18, matching the
-smaller label it sits beside at the foot. `Projects`' own glyph is part of its design round and is
-not settled here — what is settled is that it is drawn like the other three and not like `Profile`.
+smaller label it sits beside at the foot.
+
+**`Projects` is `Boxes` — settled (#157).** It is drawn like the other three main items and not
+like `Profile`. The Stitch screen emits Material's `account_tree`, and its faithful translations
+(`FolderTree`, `Network`) are both wrong here: §10 settles that this screen has no tree, no
+expansion and nowhere to navigate to, and a tree glyph would collide with the `Archive`, which *is*
+one. A cog (`FolderCog`, `Settings`) is wrong for a different reason — it promises the write D31
+refuses, and settings are `System`'s and `Profile`'s — and `Package` names a field on the card
+(`apps`) rather than the destination. `Boxes`, a set of named things the host holds, is this
+section's own logic for the placement, and its three-cube silhouette is distinct from `Archive`'s
+lidded box.
 
 **`Devices` deliberately supersedes the screen here.** `Home — Devices (V3)` emits
 `data-icon="developer_board"` for that item, and `CircuitBoard` was a faithful translation of it —
@@ -1589,6 +1598,52 @@ something this screen makes a claim about seeing. It is fetched on navigation an
 life of the screen — the Archive's rule, not the Devices screen's, and for the Archive's reason:
 `list_devices` polls because *what is attached* changes under the reader, and nothing here does.
 
+### As built (#157)
+
+Only what the build settled that the rest of this section does not already say.
+
+**The nav glyph is `Boxes`**, and the reasoning is in §3 with the other three.
+
+**Three deviations from `89097f87f206419d91751655d67d5f2a`'s markup**, in §9's own form:
+
+1. **The scanline layers are dropped** — one in the badge and one in every card header. The texture
+   is confined to the navigation chrome (§5), which `app-shell.test.tsx` already asserts for the
+   whole of `<main>`, and `held-free-counter.tsx` is the precedent for dropping the badge's.
+2. **`md:grid-cols-2` becomes a plain `grid-cols-2`.** The two-across pairing *is* what the columns
+   are — `APPS` beside `SERVICES`, `INSTALL` beside `TEARDOWN` — so a breakpoint would make the
+   pairing a property of the viewport rather than of the card (§4).
+3. **The header row is `PageHeader`'s**, not a rebuilt one — the same reuse §9 records.
+
+And, as with every screen so far: the design's `rounded` is Tailwind v4's `rounded-sm` (§1's radius
+rename), and Material Symbols become `lucide-react`.
+
+**The card body is a `<dl>`** of four `<dt>`/`<dd>` pairs — `device-card.tsx`'s own pattern rather
+than the markup's spans. A list of identifiers is one `block` span per value in place of the
+design's `<br>`, because the values are separate identifiers rather than one string with breaks in
+it.
+
+**The badge counts every registration the host answered, an unreadable one included.** The file is
+there, so it is a registration, and a badge that left it out would disagree with the cards below
+it. There is no singular form — *registered* does not pluralise — and it is absent rather than `0`.
+
+**The copy for the four quiet states, as shipped.** This section settled the words for two of them
+and only the treatment for the others:
+
+| The state | What it says |
+| --- | --- |
+| nothing yet | *Reading what is registered on this host.* |
+| nothing registered, and no projects root | **No projects registered** — *A project is registered when someone runs `rover init` in its own directory on this host. Nothing is registered here yet.* |
+| the root cannot be read | **`PROJECTS ROOT NOT READABLE`** — *Rover cannot see into this host's projects directory. Something is there and the host will not read it.* + *This is not the same as no projects being registered — registrations may well be here.* |
+| a registration that will not parse | **`CONFIGURATION NOT READABLE`** — *This is not the same as a project that declares nothing — the file is there and the host cannot read it.* |
+
+The two root states share no phrase, and neither does the card pair, which is how D6 is held rather
+than hoped for: `projects.test.tsx` and `project-card.test.tsx` each assert that neither of a pair's
+copy ever appears in the other, the way `archive.test.tsx` and `devices.test.tsx` already do.
+
+**`PROJECTS ROOT NOT READABLE` takes `EyeOff`**, matching `ArchiveNotReadable`: it is the same fact
+one level up — a directory the host cannot see into — so it takes the same glyph rather than a new
+one. `rover init` is the one command in this copy and is set in the monospace face.
+
 ---
 
 ## 11. What is not designed yet
@@ -1621,11 +1676,13 @@ Build them in keeping with everything above — the palette and tokens, no loopi
 uniform refusal, the vocabulary — and **write what you settled back into this document** (see the
 top of this file). Do not commission a Stitch screen for them.
 
-- **The `Projects` screen's four states with nothing to list — done, in §10.** The populated screen
-  had a Stitch design and these did not, exactly as the Archive's root level and empty-ish states
-  did not (below), and they were settled from this document instead. What they settled is written
-  into §10 above: `listed`-but-empty and `missing` render **alike**, which is the Archive's own fold
-  one level up, while *nothing registered* and *root not readable* must never render alike (D6).
+- **The `Projects` screen's four states with nothing to list — done, in §10, and built** (#157).
+  The populated screen had a Stitch design and these did not, exactly as the Archive's root level
+  and empty-ish states did not (below), and they were settled from this document instead. What they
+  settled is written into §10 above: `listed`-but-empty and `missing` render **alike**, which is the
+  Archive's own fold one level up, while *nothing registered* and *root not readable* must never
+  render alike (D6). Their copy as shipped is in §10's *As built*, and `projects.test.tsx` asserts
+  that neither of the pair's words ever appears in the other.
 - **The "no view" state with an *empty* list — done** (#113). It was built from this document rather
   than from a Stitch screen, exactly as this list intends, and what it settled is written into §7
   above. Left named here so the next reader can see that the method worked once.

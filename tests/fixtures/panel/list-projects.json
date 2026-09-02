@@ -1,0 +1,32 @@
+{
+	"answers": [
+		{
+			"case": "a populated root",
+			"result": {
+				"outcome": "listed",
+				"projects": [
+					{
+						"kind": "registered",
+						"project": "checkout-web",
+						"apps": ["com.example.checkout", "com.example.checkout.debug"],
+						"hasInstall": true,
+						"services": ["mock-payments", "api"],
+						"hasTeardown": true
+					},
+					{ "kind": "unreadable", "project": "legacy-kiosk" },
+					{
+						"kind": "registered",
+						"project": "rover-sandbox",
+						"apps": [],
+						"hasInstall": false,
+						"services": [],
+						"hasTeardown": false
+					}
+				]
+			}
+		},
+		{ "case": "nothing registered", "result": { "outcome": "listed", "projects": [] } },
+		{ "case": "no projects root", "result": { "outcome": "missing" } },
+		{ "case": "the root cannot be read", "result": { "outcome": "unreadable" } }
+	]
+}
