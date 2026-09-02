@@ -1716,8 +1716,8 @@ a path.
   the `<body>` classes, the whole `<nav>`, the whole header block, the `<main>` tag and one content
   class, all in one prompt — every one of them applied, against the eight-way failure the prose
   version produced. Two things came back anyway that the prompt asked it not to add: the reference's
-  own `md:hidden` mobile header, with its `settings` icon and its `FORCE RELEASE` button (§12 below
-  — it is not portable and #111 dropped it), and `pt-16 md:pt-0` on `<body>` to clear it. Both are
+  own `md:hidden` mobile header, with its `settings` icon and its `FORCE RELEASE` button (below in
+  this section — it is not portable and #111 dropped it), and `pt-16 md:pt-0` on `<body>` to clear it. Both are
   harmless in a desktop render and neither is reproduced in code.
 - **Stitch leaves `data-stitch-orig-*` attributes behind in the markup it edits** — the shell round
   left `data-stitch-orig-opacity="0"` on the `Devices` icon it had just replaced. It is an
