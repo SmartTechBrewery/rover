@@ -365,12 +365,19 @@ async function connect(): Promise<IpcClient> {
 }
 
 /** A held lease on the one device, taken over the same client the verbs then use. */
-async function acquire(client: IpcClient, testName = 'home-screen'): Promise<LeaseId> {
+async function acquire(
+	client: IpcClient,
+	testName = 'home-screen',
+	groupId?: string,
+): Promise<LeaseId> {
 	const outcome = await client.request('acquire_device', {
 		serial: SERIAL,
 		owner: 'issue-21',
 		project: 'rover',
 		testName,
+		// Left off entirely when the test names none: that is what absent means on this wire, and
+		// it is the state a labelled call is refused against.
+		...(groupId === undefined ? {} : { groupId }),
 	});
 	if (outcome.outcome !== 'granted') {
 		throw new Error(`The test needs a lease and was refused: ${outcome.message}`);
@@ -2349,6 +2356,110 @@ describe('a verb never outlives the lease that authorised it', () => {
 });
 
 /**
+ * A `label` only means something inside a group, so a labelled call on an ungrouped lease is
+ * **refused, loudly, naming the rule** (D22, as amended #150).
+ *
+ * The one refusal in the verb layer that is about the call rather than the lease's liveness or the
+ * hardware, and the whole point of it is that it is neither a crash nor a silent drop: an agent
+ * that supplied a label believing it was recorded would otherwise be told nothing at all.
+ */
+describe('a label on a lease with no group', () => {
+	it('is refused by name, naming both fields and what to do about it', async () => {
+		await serve();
+		const client = await connect();
+		const leaseId = await acquire(client);
+
+		const answer = await client.request('screenshot', { leaseId, label: 'home-screen' });
+
+		expect(answer).toMatchObject({ outcome: 'refused', reason: 'label-without-group' });
+		if (answer.outcome !== 'refused') throw new Error('expected a refusal');
+		// The host's own words, naming both fields — an agent that reads only the sentence knows
+		// which call to change and how.
+		expect(answer.message).toContain("'label'");
+		expect(answer.message).toContain("'groupId'");
+	});
+
+	it('is refused for all three of the calls that carry one', async () => {
+		await serve();
+		const client = await connect();
+		const leaseId = await acquire(client);
+
+		const answers = [
+			await client.request('screenshot', { leaseId, label: 'home-screen' }),
+			await client.request('record_video', { leaseId, label: 'home-screen' }),
+			await client.request('read_logs', { leaseId, label: 'home-screen' }),
+		];
+
+		for (const answer of answers) {
+			expect(answer).toMatchObject({ outcome: 'refused', reason: 'label-without-group' });
+		}
+	});
+
+	// **Never a silent drop, and never a partial one either**: the verb did not run, so nothing
+	// reached the device and nothing was filed under the unlabelled name instead.
+	it('runs no verb and archives nothing at all', async () => {
+		await serve();
+		const client = await connect();
+		const leaseId = await acquire(client);
+
+		await client.request('screenshot', { leaseId, label: 'home-screen' });
+
+		// A `screenshot` that ran would have read the screen for its after-state, so an untouched
+		// counter is "the device was never asked" rather than "the capture was discarded".
+		expect(reads).toBe(0);
+		await expect(readdir(temp.artifactsRoot)).rejects.toMatchObject({ code: 'ENOENT' });
+	});
+
+	// The lease is still perfectly usable — the refusal is about the one call, not the lease.
+	it('leaves the same call without a label working', async () => {
+		await serve();
+		const client = await connect();
+		const leaseId = await acquire(client);
+
+		await client.request('screenshot', { leaseId, label: 'home-screen' });
+		const plain = await client.request('screenshot', { leaseId });
+
+		expect(plain).toMatchObject({ outcome: 'ok', result: { verb: 'screenshot' } });
+	});
+
+	// And a grouped lease takes exactly the same call. The pairing is the whole rule.
+	it('accepts the same call on a lease that was acquired with a group', async () => {
+		await serve();
+		const client = await connect();
+		const leaseId = await acquire(client, 'home-screen', 'app-bar-top-space');
+
+		const answer = await client.request('screenshot', { leaseId, label: 'home-screen' });
+
+		expect(answer).toMatchObject({ outcome: 'ok', result: { verb: 'screenshot' } });
+	});
+
+	/*
+	 * `.strict()` still covers the optional key on a verb row: `lable` is `invalid_params` at the
+	 * boundary rather than a screenshot that silently lost its grouping.
+	 */
+	it('rejects a typo’d label key rather than dropping it', async () => {
+		await serve();
+		const client = await connect();
+		const leaseId = await acquire(client, 'home-screen', 'app-bar-top-space');
+
+		const rejection = client.request('screenshot', { leaseId, lable: 'home-screen' } as never);
+
+		await expect(rejection).rejects.toBeInstanceOf(IpcRequestError);
+		await expect(rejection).rejects.toMatchObject({ code: 'invalid_params' });
+	});
+
+	it('rejects an empty label — absent is the only way to say nothing', async () => {
+		await serve();
+		const client = await connect();
+		const leaseId = await acquire(client, 'home-screen', 'app-bar-top-space');
+
+		const rejection = client.request('screenshot', { leaseId, label: '' });
+
+		await expect(rejection).rejects.toMatchObject({ code: 'invalid_params' });
+	});
+});
+
+/**
  * The archive R25 adds beside the answer (D23, PROJECT.md §10).
  *
  * Everything below asserts on the tree by **listing it**, which is the whole query a future
@@ -2484,6 +2595,85 @@ describe('an artifact-producing verb also writes the host-side archive', () => {
 		expect(new Uint8Array(Buffer.from(screenshot.result.artifact?.base64 ?? '', 'base64'))).toEqual(
 			CAPTURE,
 		);
+	});
+
+	/*
+	 * The artifact half of #150, end to end: the label rides on the call, no verb sees it, and it
+	 * lands in the **archived file's name** — beside the sequence number that already says the
+	 * order. Asserted by listing the directory, like everything else in here.
+	 */
+	it('names an archived artifact from the label the call carried, for all three verbs', async () => {
+		await serve();
+		const client = await connect();
+		const leaseId = await acquire(client, 'home-screen', 'app-bar-top-space');
+
+		const shot = await client.request('screenshot', { leaseId, label: 'home-screen' });
+		await client.request('record_video', { leaseId, label: 'home-screen' });
+		await client.request('read_logs', { leaseId, label: 'home-screen' });
+
+		expect(shot).toMatchObject({ outcome: 'ok' });
+		const directory = await leaseDirectory('rover', 'home-screen');
+		expect(await readdir(join(directory, 'screenshots'))).toEqual([
+			'001_home-screen_screenshot.png',
+		]);
+		expect(await readdir(join(directory, 'recordings'))).toEqual([
+			'001_home-screen.mp4',
+			'001_home-screen_frames',
+		]);
+		expect(await readdir(join(directory, 'logs'))).toEqual(['001_home-screen_read_logs.txt']);
+	});
+
+	/*
+	 * The lease half, end to end and after the lease has ended — which is the criterion the issue
+	 * turns on: **a reader can still recover which runs share a group**. Read off the tree with the
+	 * lease already released, so nothing in the daemon's memory is doing the answering.
+	 */
+	it('leaves the group recoverable in the tree once the lease has been released', async () => {
+		await serve();
+		const client = await connect();
+		const leaseId = await acquire(client, 'home-screen', 'app-bar-top-space');
+		await client.request('screenshot', { leaseId, label: 'home-screen' });
+
+		await client.request('release_device', { leaseId });
+
+		const directory = await leaseDirectory('rover', 'home-screen');
+		expect(JSON.parse((await readFile(join(directory, 'group_id.json'))).toString())).toEqual({
+			groupId: 'app-bar-top-space',
+		});
+	});
+
+	// **The tree's shape does not branch on either field**: always four levels, whether the lease
+	// was grouped and the call labelled or neither (`archive-path.ts`, #129).
+	it('files a grouped, labelled run at exactly the same four levels as a plain one', async () => {
+		await serve();
+		const client = await connect();
+		const leaseId = await acquire(client, 'home-screen', 'app-bar-top-space');
+
+		await client.request('screenshot', { leaseId, label: 'home-screen' });
+
+		// `<project>/<test_name>/<lease>/<serial>` and nothing above, between or beside it.
+		expect(await readdir(temp.artifactsRoot)).toEqual(['rover']);
+		expect(await readdir(join(temp.artifactsRoot, 'rover'))).toEqual(['home-screen']);
+		const runs = await readdir(join(temp.artifactsRoot, 'rover', 'home-screen'));
+		expect(runs).toHaveLength(1);
+		expect(await readdir(join(temp.artifactsRoot, 'rover', 'home-screen', runs[0] ?? ''))).toEqual([
+			SERIAL,
+		]);
+	});
+
+	// D19 is untouched by either field: neither reaches an answer, and the label the caller sent
+	// is not echoed back on one either — the file it names does not exist on the agent's machine.
+	it('puts neither the group nor the label on any answer', async () => {
+		await serve();
+		const client = await connect();
+		const leaseId = await acquire(client, 'home-screen', 'app-bar-top-space');
+
+		const answer = await client.request('screenshot', { leaseId, label: 'the-label' });
+
+		const encoded = JSON.stringify(answer);
+		expect(encoded).not.toContain('app-bar-top-space');
+		expect(encoded).not.toContain('the-label');
+		expect(encoded).not.toContain(temp.artifactsRoot);
 	});
 
 	it('writes nothing for a verb that produced no bytes', async () => {

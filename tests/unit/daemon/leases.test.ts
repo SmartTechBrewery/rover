@@ -105,7 +105,7 @@ describe('a lease is per device', () => {
 	});
 });
 
-describe('the four attribution strings', () => {
+describe('the five attribution strings', () => {
 	it('stores every one of them byte for byte, however awkward', () => {
 		const { store } = createClockedStore();
 		const owner = '  issue-112 / pr-127  ';
@@ -153,6 +153,41 @@ describe('the four attribution strings', () => {
 		expect(undescribed.granted && undescribed.lease.testDescription).toBeUndefined();
 	});
 
+	/*
+	 * The fifth string, and the only one that means anything **across** leases (D22, as amended
+	 * #150). Stored as given and read by nothing here — in particular nothing joins two leases
+	 * that share one, counts a group's members, or checks that a second member ever arrives.
+	 */
+	it('stores an optional group id as given, and absence as absence', () => {
+		const { store } = createClockedStore();
+		const groupId = '  app-bar/top space  ';
+
+		const grouped = store.acquire({
+			serial: deviceA,
+			owner: 'issue-112',
+			project: 'rover',
+			testName: 'home screen',
+			groupId,
+			slot: createMockSlot(),
+		});
+		const ungrouped = store.acquire(request(deviceB, 'issue-112'));
+
+		expect(grouped.granted && grouped.lease.groupId).toBe(groupId);
+		expect(ungrouped.granted && ungrouped.lease.groupId).toBeUndefined();
+	});
+
+	// Nothing enforces arity, uniqueness or membership: two leases may share one group id, and
+	// the store neither notices nor cares. That is the point rather than an omission.
+	it('lets two live leases share one group id without noticing', () => {
+		const { store } = createClockedStore();
+
+		const before = store.acquire({ ...request(deviceA, 'issue-150'), groupId: 'app-bar' });
+		const after = store.acquire({ ...request(deviceB, 'issue-150'), groupId: 'app-bar' });
+
+		expect(before.granted && before.lease.groupId).toBe('app-bar');
+		expect(after.granted && after.lease.groupId).toBe('app-bar');
+	});
+
 	it('carries the description through a renewal untouched', () => {
 		const { store } = createClockedStore();
 		const granted = store.acquire({
@@ -167,6 +202,16 @@ describe('the four attribution strings', () => {
 		expect(store.use(granted.lease.id)?.testDescription).toBe(
 			'Checks the app bar keeps its top space.',
 		);
+	});
+
+	// The same, for the same reason: the archive files `group_id.json` on the first artifact,
+	// which is very often after a renewal has already rebuilt the record.
+	it('carries the group id through a renewal untouched', () => {
+		const { store } = createClockedStore();
+		const granted = store.acquire({ ...request(deviceA, 'issue-150'), groupId: 'app-bar' });
+		if (!granted.granted) throw new Error('the first acquire must be granted');
+
+		expect(store.use(granted.lease.id)?.groupId).toBe('app-bar');
 	});
 
 	it('grants two leases carrying the same test name — it is not unique (D22)', () => {

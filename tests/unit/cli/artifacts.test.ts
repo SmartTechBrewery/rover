@@ -13,7 +13,7 @@
  */
 
 import { existsSync } from 'node:fs';
-import { mkdir, readFile } from 'node:fs/promises';
+import { mkdir, readdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
@@ -109,7 +109,7 @@ async function start(): Promise<void> {
 }
 
 /** A live lease on the fake device, through the CLI, because that is the only way to get one. */
-async function acquireLease(): Promise<string> {
+async function acquireLease(groupId?: string): Promise<string> {
 	expect(
 		await run([
 			'acquire',
@@ -121,6 +121,9 @@ async function acquireLease(): Promise<string> {
 			'--json',
 			'--test-name',
 			'checkout flow',
+			// Left off entirely when a test names none — that is the state `--label` is refused
+			// against (D22, as amended #150).
+			...(groupId === undefined ? [] : ['--group-id', groupId]),
 		]),
 	).toBe(EXIT_OK);
 	const parsed = JSON.parse(logged[0] ?? '') as { lease?: { leaseId?: string } };
@@ -206,6 +209,109 @@ describe('rover screenshot', () => {
 		expect(document).not.toContain('base64');
 	});
 
+	/*
+	 * `--label` end to end: it names the **host's** archived copy, so nothing about the local file
+	 * changes — and the archived name is what proves it arrived (D22, as amended #150).
+	 */
+	it('labels the host’s archived copy and leaves the local file exactly where --out said', async () => {
+		registerFakeBackend();
+		await start();
+		const leaseId = await acquireLease('app-bar-top-space');
+		const out = destination('capture.png');
+
+		expect(await run(['screenshot', leaseId, '--out', out, '--label', 'home-screen'])).toBe(
+			EXIT_OK,
+		);
+
+		expect(new Uint8Array(await readFile(out))).toEqual(CAPTURED_IMAGE);
+		const [project] = await readdir(temp.artifactsRoot);
+		const [testName] = await readdir(path.join(temp.artifactsRoot, project ?? ''));
+		const [run_] = await readdir(path.join(temp.artifactsRoot, project ?? '', testName ?? ''));
+		const shots = path.join(
+			temp.artifactsRoot,
+			project ?? '',
+			testName ?? '',
+			run_ ?? '',
+			attached.serial,
+			'screenshots',
+		);
+		expect(await readdir(shots)).toEqual(['001_home-screen_screenshot.png']);
+	});
+
+	// `--json` carries it, so a script that filed a before shot and an after shot has both halves
+	// of what it asked for in one document.
+	it('carries the label in the --json document, and no key without one', async () => {
+		registerFakeBackend();
+		await start();
+		const leaseId = await acquireLease('app-bar-top-space');
+
+		expect(
+			await run([
+				'screenshot',
+				leaseId,
+				'--out',
+				destination('labelled.png'),
+				'--label',
+				'home-screen',
+				'--json',
+			]),
+		).toBe(EXIT_OK);
+		const labelled = JSON.parse(logged[0] ?? '');
+		logged = [];
+		expect(await run(['screenshot', leaseId, '--out', destination('plain.png'), '--json'])).toBe(
+			EXIT_OK,
+		);
+
+		expect(labelled).toMatchObject({ outcome: 'ok', label: 'home-screen' });
+		expect(logged[0] ?? '').not.toContain('label');
+	});
+
+	/*
+	 * **A label on a lease with no group is refused, loudly** — and it renders as a human sentence
+	 * and as a document, like every other refusal. Nothing is written at `--out` either, which is
+	 * this file's standing negative assertion.
+	 */
+	it('exits 1 with the host’s own words when the lease has no group', async () => {
+		registerFakeBackend();
+		await start();
+		const leaseId = await acquireLease();
+		const out = destination('never-written.png');
+
+		expect(await run(['screenshot', leaseId, '--out', out, '--label', 'home-screen'])).toBe(
+			EXIT_FAILED,
+		);
+
+		expect(existsSync(out)).toBe(false);
+		const said = errored.join('\n');
+		expect(said).toContain('label-without-group');
+		expect(said).toContain("'groupId'");
+	});
+
+	it('renders that same refusal as a document under --json', async () => {
+		registerFakeBackend();
+		await start();
+		const leaseId = await acquireLease();
+
+		expect(
+			await run([
+				'screenshot',
+				leaseId,
+				'--out',
+				destination('never-written.png'),
+				'--label',
+				'home-screen',
+				'--json',
+			]),
+		).toBe(EXIT_FAILED);
+
+		expect(JSON.parse(logged[0] ?? '')).toMatchObject({
+			host: 'local',
+			outcome: 'refused',
+			reason: 'label-without-group',
+			label: 'home-screen',
+		});
+	});
+
 	it('exits 1 and writes nothing at all when the capture is too large for one answer', async () => {
 		registerFakeBackend({
 			screenshot: vi.fn<DeviceBackend['screenshot']>(
@@ -278,6 +384,41 @@ describe('rover record', () => {
 		// recording and nothing else, and the sampling happens on the bytes afterwards.
 		expect(recordVideo.mock.calls[0]?.[1]).toEqual({ durationMs: DEFAULT_RECORDING_MS });
 		expect(extractFramesMock.mock.calls[0]?.[2]).toEqual({ framesPerSecond: 3 });
+	});
+
+	/*
+	 * `--label` is `screenshot`'s flag on this command too, and it reaches the same place: the
+	 * host's archived copy, recording and frame directory alike (D22, as amended #150). Asserted
+	 * here rather than assumed from `screenshot`, because it is a second command file.
+	 */
+	it('labels the archived recording and the frames cut out of it', async () => {
+		registerFakeBackend({
+			recordVideo: vi.fn<NonNullable<DeviceBackend['recordVideo']>>(async () =>
+				createMockRecordingBytes(),
+			),
+		});
+		await start();
+		const leaseId = await acquireLease('app-bar-top-space');
+
+		expect(
+			await run(['record', leaseId, '--out', destination('r.mp4'), '--label', 'checkout-flow']),
+		).toBe(EXIT_OK);
+
+		const [project] = await readdir(temp.artifactsRoot);
+		const [testName] = await readdir(path.join(temp.artifactsRoot, project ?? ''));
+		const [run_] = await readdir(path.join(temp.artifactsRoot, project ?? '', testName ?? ''));
+		const recordings = path.join(
+			temp.artifactsRoot,
+			project ?? '',
+			testName ?? '',
+			run_ ?? '',
+			attached.serial,
+			'recordings',
+		);
+		expect(await readdir(recordings)).toEqual([
+			'001_checkout-flow.mp4',
+			'001_checkout-flow_frames',
+		]);
 	});
 
 	/**

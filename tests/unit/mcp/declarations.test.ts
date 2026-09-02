@@ -126,6 +126,50 @@ describe('what tools/list advertises', () => {
 		expect(acquire?.description).toContain('optional');
 	});
 
+	/*
+	 * The second optional argument on that row (D22, as amended #150), and the declaration is where
+	 * an agent discovers it: the whole issue turns on an agent asked to compare a before and an
+	 * after arriving at these fields **without a human naming them**, so the description has to
+	 * teach the pattern rather than merely announce the key.
+	 */
+	it('declares acquire_device’s groupId, never as a requirement, and teaches the pattern', async () => {
+		const tools = await advertisedTools();
+
+		const acquire = tools.find((tool) => tool.name === 'acquire_device');
+		expect(Object.keys(acquire?.inputSchema.properties ?? {})).toContain('groupId');
+		expect(acquire?.inputSchema.required ?? []).not.toContain('groupId');
+		// The pattern, not just the field: one group across the runs, more than two is normal, and
+		// what it unlocks on the artifact-producing calls.
+		expect(acquire?.description).toContain('groupId');
+		expect(acquire?.description).toContain('label');
+		expect(acquire?.description).toMatch(/before and an after/);
+		expect(acquire?.description).toMatch(/three or more/);
+	});
+
+	/*
+	 * The three calls the archive files, and only those (`src/daemon/archive.ts`'s `plan`). The
+	 * declarations come from the same schemas as everything else here — what this adds is that the
+	 * key is on the right three rows, on the right side of the required line, and that each row's
+	 * prose says a label needs a group rather than leaving an agent to find out by refusal.
+	 */
+	it('declares label on exactly the three calls the archive files, and never as a requirement', async () => {
+		const tools = await advertisedTools();
+		const labelled = ['screenshot', 'record_video', 'read_logs'];
+
+		for (const tool of tools) {
+			const properties = Object.keys(tool.inputSchema.properties ?? {});
+			expect({ tool: tool.name, label: properties.includes('label') }).toEqual({
+				tool: tool.name,
+				label: labelled.includes(tool.name),
+			});
+			if (!labelled.includes(tool.name)) {
+				continue;
+			}
+			expect(tool.inputSchema.required ?? []).not.toContain('label');
+			expect(tool.description).toContain('groupId');
+		}
+	});
+
 	it('drops project from acquire_device’s required list when one is, and changes nothing else', async () => {
 		const tools = await advertisedTools('checkout-web');
 

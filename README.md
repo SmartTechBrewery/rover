@@ -115,10 +115,16 @@ emulator-5554  android   sdk_gphone64_arm64  ready  free
 required and none is ever derived from who you are (D16, D20, D22); `--test-name` is opaque and is
 what files two runs of the same check next to each other in the host's archive.
 
-`--test-description` is the one optional string: a sentence or two saying what this run is about,
-which `--test-name` is too short to carry. Nothing parses it and it names no directory — the host
-stores it, shows it beside the test name on the web panel, and files it with the run so it outlives
-the lease. Leave it out and the lease carries none; nothing is invented in its place.
+`--test-description` is one of two optional strings: a sentence or two saying what this run is
+about, which `--test-name` is too short to carry. Nothing parses it and it names no directory — the
+host stores it, shows it beside the test name on the web panel, and files it with the run so it
+outlives the lease. Leave it out and the lease carries none; nothing is invented in its place.
+
+`--group-id` is the other, and the one that spans leases: give the run before a change and the run
+after it the same `--group-id` and the archive can still say they belong together once both leases
+are gone. Two members is the common case; three or more is equally valid and nothing caps it. It is
+also what `--label` on `screenshot` and `record` needs — see [comparing two
+runs](#comparing-two-runs-before-and-after).
 
 ```bash
 npm run -s rover -- acquire emulator-5554 --owner issue-20 --project rover \
@@ -158,6 +164,10 @@ npm run -s rover -- screenshot <lease-id> --out /tmp/rover-quickstart.png
 ```
 Wrote 1376820 bytes of image/png to /tmp/rover-quickstart.png
 ```
+
+`screenshot` and `record` also take an optional `--label`, which names the host's archived copy
+rather than this file — the other half of `--group-id`, and again see [comparing two
+runs](#comparing-two-runs-before-and-after).
 
 A transfer the host refused, or one that did not survive the trip, exits 1 and leaves **no** file
 at `--out` at all rather than a short one; an `--out` that names a directory is a usage error
@@ -473,7 +483,12 @@ and `list_devices` says `stale` whenever the list is not known to be current.
 
 **Leases work.** `acquire_device` grants one device — not the whole machine — to an explicit
 caller-supplied `owner` string, alongside a required `project` and `test_name`, and an optional
-`test_description`, all of which the host stores and never inspects. The lease runs on a 20-minute
+`test_description` and `group_id`, all of which the host stores and never inspects. Several leases
+sharing one `group_id` are one investigation — the run before a change and the run after it — and
+the artifact-producing calls take an optional `label` beside it, so the archive can still say which
+runs and which artifacts belonged together long after every lease in the group has ended. A
+labelled call on a lease with no group is refused by name rather than accepted with the label
+dropped. The lease runs on a 20-minute
 TTL **renewed by activity rather than by a heartbeat**, so an agent that pauses to think keeps its
 device and one that died lets go on its own. A busy device is a refusal that names who holds it and
 for how much longer, never an error, and never the holder's lease id; `release_device` hands it
@@ -1230,7 +1245,9 @@ runs of the same named check, taken at two different points in time, sit next to
         <device-serial>/
           device_info.json                   # size, density, dp scale, OS version
           test_description.json              # what the lease said the run was about, if anything
+          group_id.json                      # which investigation this run is part of, if any
           screenshots/001_screenshot.png
+          screenshots/002_home-screen_screenshot.png   # when the call carried a --label
           recordings/001.mp4
           recordings/001_frames/0001.png
           logs/001_read_logs.txt
@@ -1246,10 +1263,51 @@ as a directory name — written once beside the first artifact the lease produce
 absent altogether for a lease that supplied none. That is what lets the panel's Archive screen still
 say what a run weeks ago was about, long after the lease that knew is gone.
 
+`--group-id` shapes none of it either, for a sharper reason: a group spans *several* leases, so a
+directory for it would be a **fifth** level, and the tree is deliberately always four. It is filed
+as `group_id.json` on exactly the same terms, and "which runs share a group" is then a walk of the
+tree rather than an index — the same trade the panel's own archive search already makes. A
+`--label` is the one that does reach a name, and it is a **file** name: it sits right after the
+sequence number, so listing `screenshots/` shows you which captures are the same screen. Keep it
+short and identifier-shaped, because it is sanitised into one path component like everything else
+here.
+
 Two things worth knowing. The archive is never what a verb answers with — a path here means
 nothing on the machine the agent runs on, so you are handed the bytes and decide where they go.
 And **nothing prunes this tree**: retention is deliberately out of scope for now
 (`PROJECT.md` §9.4), so on a host that records video all day it is the directory to watch.
+
+### Comparing two runs, before and after
+
+Two screenshots of one screen, taken either side of a change, are the ordinary reason to want any of
+this. `--group-id` ties the runs together and `--label` ties the artifacts:
+
+```bash
+# before the change
+npm run -s rover -- acquire emulator-5554 --owner issue-150 --project rover \
+  --test-name "app bar top space" --group-id app-bar-top-space
+npm run -s rover -- screenshot <lease-id> --out /tmp/before.png --label home-screen
+npm run -s rover -- release <lease-id>
+
+# …make the change, then take a second lease with the same --group-id…
+npm run -s rover -- acquire emulator-5554 --owner issue-150 --project rover \
+  --test-name "app bar top space" --group-id app-bar-top-space
+npm run -s rover -- screenshot <lease-id> --out /tmp/after.png --label home-screen
+npm run -s rover -- release <lease-id>
+```
+
+The two runs are two sibling directories, each with a `group_id.json` naming the same group and a
+`screenshots/001_home-screen_screenshot.png` inside it. Three points of comparison are as normal as
+two, and nothing requires that a second run ever happens.
+
+**A `--label` requires a `--group-id`.** Send one on a lease that has no group and the host refuses
+the call by name, saying which two fields are involved and what to do — it is never accepted with
+the label quietly dropped, because a label with nothing to be compared against would be a string you
+supplied and nobody recorded. Nothing is written at `--out` on that path either.
+
+Rover files all of this and stops there. **It does not diff the two images, score them, or decide
+whether the fix worked** — Rover is not a test framework (`ai/RULES.md` §1); that judgement is
+yours.
 
 ### Managing host users
 

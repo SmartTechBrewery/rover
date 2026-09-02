@@ -141,6 +141,17 @@ export function registerDeviceTools(
 				'this run in the archive weeks from now. Leave it out if you have nothing to say ' +
 				'rather than repeating `testName` or inventing a placeholder — absent is a real ' +
 				'answer here and no default is substituted for it. ' +
+				'`groupId` is **optional and is how several runs become one investigation**: give every ' +
+				'lease in a comparison the same `groupId` and the host can still say, after all of them ' +
+				'have ended, that they belong together. Reach for it whenever you are asked to show a ' +
+				'before and an after — take one lease, capture, make the change, take a second lease ' +
+				'with the same `groupId`, capture again. Two members is the common case and nothing caps ' +
+				'it: three or more runs in one group is normal, and nothing requires that a second member ' +
+				'ever arrives. Invent the string yourself and reuse it exactly; nothing parses it and it ' +
+				'authorizes nothing. **It is also what `label` on `screenshot`, `record_video` and ' +
+				'`read_logs` requires** — a labelled call on a lease with no `groupId` is refused by name ' +
+				'rather than quietly stripped of its label, because a label claims two artifacts are the ' +
+				'same thing and there is no second one outside a group. ' +
 				(defaultProject === undefined
 					? ''
 					: `\`project\` may be left out here: this server was pointed at a project hook ` +

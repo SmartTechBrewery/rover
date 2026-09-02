@@ -268,7 +268,12 @@ const VERB_TOOLS: readonly VerbToolRow[] = [
 			'crashes in — the failure a screenshot will not show. A bounded read: `maxEntries` caps ' +
 			'it and is omitted for the host’s own default, and `logs.truncated` is what tells a read ' +
 			'that was cut short from a genuinely quiet device. There is deliberately no following ' +
-			'and no filter — a tail that stays open is a wait with no condition.',
+			'and no filter — a tail that stays open is a wait with no condition. `label` is optional ' +
+			'and names the host’s archived copy of this read, so the same log read taken in two runs ' +
+			'of one group is filed as one thing at two moments — one label per thing being compared, ' +
+			'short and identifier-shaped, because it becomes part of a file name. It requires the ' +
+			'lease to carry a `groupId`: a labelled call on a lease without one is refused by name ' +
+			'rather than accepted with the label dropped.',
 	},
 	{
 		method: 'install_app',

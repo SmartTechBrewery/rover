@@ -49,6 +49,8 @@ import {
 export {
 	type AppVerbParams,
 	AppVerbParamsSchema,
+	ARTIFACT_LABEL_MAX_LENGTH,
+	ArtifactLabelSchema,
 	Base64PayloadSchema,
 	type DeviceInfoParams,
 	DeviceInfoParamsSchema,
@@ -145,6 +147,9 @@ export type ListDevicesParams = z.infer<typeof ListDevicesParamsSchema>;
  * (`GrantedLeaseSchema`): it is what an operator reads before deciding a lease is worth ending,
  * and a refusal and a listing must not disagree about it — which is why there is one projection
  * that builds this shape (`src/daemon/lease-holder.ts`) rather than a field added at each caller.
+ * The holder's `groupId` rides on the same projection for the same reason: "this device is held
+ * by the other half of a before/after comparison" is a different thing to read than "this device
+ * is held", and a listing that said so where a refusal did not would be two answers.
  *
  * The grant instant is here and *not* on `GrantedLeaseSchema` for the opposite reason: the
  * winner of an acquire already knows when it was granted, because it asked. A stranger
@@ -158,6 +163,13 @@ export const LeaseHolderSchema = z
 		testName: z.string(),
 		/** As the holder supplied it, or absent. Optional for `GrantedLeaseSchema`'s reason. */
 		testDescription: z.string().optional(),
+		/**
+		 * The holder's group, or absent — carried here so a refusal and a listing cannot disagree
+		 * about it, which is the whole reason one projection builds this shape
+		 * (`src/daemon/lease-holder.ts`). It attributes and authorizes nothing: knowing which
+		 * investigation holds a device is not a way to join it.
+		 */
+		groupId: z.string().optional(),
 		/**
 		 * When this lease was **granted**, as an ISO-8601 instant with a `Z`. The one field on
 		 * this schema that is an instant rather than a duration, and so the one deliberate
@@ -288,10 +300,33 @@ export const TEST_DESCRIPTION_MAX_LENGTH = 1024;
 export const TestDescriptionSchema = z.string().min(1).max(TEST_DESCRIPTION_MAX_LENGTH);
 
 /**
+ * The lease's fifth caller-supplied string — `group_id` (D22, as amended #150) — and **the one
+ * that spans leases**. Several leases carrying one `groupId` are one investigation: the run
+ * before a change and the run after it, and nothing stops there being a third and a fourth.
+ *
+ * {@link AttributionStringSchema}'s bound and shape, because that is what it is: an identifier
+ * the caller chose, opaque, stored as given, parsed by nothing, derived from nothing and
+ * authorizing nothing (D20). It is deliberately **not** {@link TestDescriptionSchema}'s — this is
+ * a name to match on, not prose to read.
+ *
+ * **Nothing enforces arity, uniqueness or membership.** One lease may be the only member of its
+ * group and a group may have seven; nothing checks that a second member ever arrives, nothing
+ * refuses a group id another lease already used, and nothing anywhere counts them. A group is a
+ * claim the caller makes, and the host records it.
+ *
+ * **Optional, and absent stays absent** — no empty string standing in and no group invented for a
+ * caller who supplied none (#129's lesson). What it costs a caller to leave it out is stated
+ * exactly once, on the wire: an artifact `label` is then refused, because a label only means
+ * something inside a group (`ArtifactLabelSchema`, `src/daemon/verb-handlers.ts`).
+ */
+export const GroupIdSchema = AttributionStringSchema;
+
+/**
  * `.strict()` so a typo'd key is `invalid_params` rather than a lease granted with an
  * attribution string silently missing — which the archive would only discover later, with
- * the device already handed out. That holds for the optional key too: `testDescriptoin` is a
- * refusal, not a lease quietly granted with no description.
+ * the device already handed out. That holds for the optional keys too: `testDescriptoin` is a
+ * refusal, not a lease quietly granted with no description, and `groupID` is a refusal rather
+ * than a lease that silently lost its grouping and a comparison that can never be recovered.
  *
  * `testName` is **required** — a lease always names what it is checking, because that name is
  * this lease's directory in the host's artifact archive and a fallback the approved designs do
@@ -322,6 +357,12 @@ export const AcquireDeviceParamsSchema = z
 		 * {@link AcquireDeviceParams.testName} may not.
 		 */
 		testDescription: TestDescriptionSchema.optional(),
+		/**
+		 * Which investigation this lease is part of — optional, and shared with every other lease
+		 * that belongs to the same one. See {@link GroupIdSchema}; it is the field an artifact
+		 * `label` needs, and the only thing a caller gives up by leaving it out.
+		 */
+		groupId: GroupIdSchema.optional(),
 	})
 	.strict();
 export type AcquireDeviceParams = z.infer<typeof AcquireDeviceParamsSchema>;
@@ -349,6 +390,12 @@ export const GrantedLeaseSchema = z
 		testName: z.string(),
 		/** As the caller supplied it, or absent. Never derived and never defaulted. */
 		testDescription: z.string().optional(),
+		/**
+		 * The group this lease was put in, or absent — echoed back for `testDescription`'s reason
+		 * and one of its own: it is what the *next* lease in the comparison has to be given, so a
+		 * caller reading this answer is reading the string it will pass again.
+		 */
+		groupId: z.string().optional(),
 		expiresInMs: z.number().int().nonnegative(),
 	})
 	.strict();

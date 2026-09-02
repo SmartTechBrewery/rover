@@ -6,7 +6,7 @@
  * second agent blocked by hardware it was never going to touch. Here the unit is the
  * serial, and two devices are two independent leases that know nothing about each other.
  *
- * **Four caller-supplied strings, none of them inspected** (D16, D22). `owner` attributes
+ * **Five caller-supplied strings, none of them inspected** (D16, D22). `owner` attributes
  * the lease — `issue-112`, `pr-127-review`, later a run identity — and is never derived
  * from a process, a connection or whoever authenticated (D20). `project` and `testName`
  * exist so the artifact archive has somewhere to file the results (PROJECT.md §10). Those
@@ -14,11 +14,14 @@
  * what it is checking, so the archive's tree never branches on whether a field was supplied
  * (D22, as amended #129). `testDescription` is the fourth and the one that may be **absent**,
  * because it is prose rather than a directory name and the tree's shape does not depend on it
- * (D22, as amended #148) — absent is stored as absent, with nothing standing in for it. All
- * four are stored exactly as given and read by nothing here: no trimming, no defaulting, no
- * meaning. `testName` is deliberately **not** unique — running the same named check before and
- * after a change is two leases with one name, which is the point rather than a collision to
- * reject.
+ * (D22, as amended #148) — absent is stored as absent, with nothing standing in for it.
+ * `groupId` is the fifth and the only one that means anything **across** leases: several leases
+ * carrying one group id are one investigation, the before run and the after run (D22, as amended
+ * #150). It is optional on the same terms and nothing here counts, joins or validates a group —
+ * one lease may be its group's only member, and a group may have seven. All five are stored
+ * exactly as given and read by nothing here: no trimming, no defaulting, no meaning. `testName`
+ * is deliberately **not** unique — running the same named check before and after a change is two
+ * leases with one name, which is the point rather than a collision to reject.
  *
  * **The TTL is renewed by activity, not by a heartbeat** (D8). {@link LeaseStore.use} is
  * what every verb call goes through, and it pushes the expiry out; there is nothing for a
@@ -76,6 +79,20 @@ export interface Lease {
 	 */
 	readonly testDescription?: string;
 	/**
+	 * Caller-supplied and **optional** — which investigation this lease belongs to.
+	 *
+	 * The one string on this record whose meaning is about a *set* of leases rather than about
+	 * this one, and nothing here knows that: there is no index of groups, no membership check and
+	 * no arity rule. It is stored as given and read by nothing in this module, exactly like the
+	 * four above; what reads it is the archive, which files it with the run so the grouping
+	 * outlives every lease in it (`./archive.ts`), and `./verb-handlers.ts`, which refuses a
+	 * labelled call on a lease that has none.
+	 *
+	 * Like {@link Lease.testDescription} it is **never a path component** — `./archive-path.ts`
+	 * does not see it, and the tree stays four levels whether or not it was supplied.
+	 */
+	readonly groupId?: string;
+	/**
 	 * When this lease was granted. The one host-local instant that *does* reach a client —
 	 * `./lease-holder.ts` renders it as a UTC string on `LeaseHolderSchema`, because a
 	 * stranger cannot derive it from the remaining duration: {@link LeaseStore.use} moves the
@@ -105,7 +122,7 @@ export interface Lease {
 	readonly slot: Slot;
 }
 
-/** What a caller asks for. The four strings arrive as given and are stored as given. */
+/** What a caller asks for. The five strings arrive as given and are stored as given. */
 export interface LeaseRequest {
 	readonly serial: DeviceSerial;
 	readonly owner: string;
@@ -113,6 +130,8 @@ export interface LeaseRequest {
 	readonly testName: string;
 	/** Optional, and absent stays absent — see {@link Lease.testDescription}. */
 	readonly testDescription?: string;
+	/** Optional, and absent stays absent — see {@link Lease.groupId}. */
+	readonly groupId?: string;
 	/** Allocated by the caller, stored as given, interpreted by nothing here — see {@link Lease.slot}. */
 	readonly slot: Slot;
 }
@@ -260,6 +279,7 @@ export function createLeaseStore(options: LeaseStoreOptions = {}): LeaseStore {
 				project: request.project,
 				testName: request.testName,
 				testDescription: request.testDescription,
+				groupId: request.groupId,
 				slot: request.slot,
 				createdAtMs: granted,
 				expiresAtMs: granted + ttlMs,

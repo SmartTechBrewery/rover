@@ -411,6 +411,44 @@ describe('the generated ROVER.md', () => {
 		expect(agentSnippet('ROVER.md')).toContain(`\`${ROVER_MCP_NAME}\` MCP server`);
 	});
 
+	/**
+	 * **The criterion the whole of #150 turns on**: an agent asked to compare a before and an after
+	 * arrives at `groupId` and `label` without a human naming them, and this page is where it
+	 * reads. So the worked example is asserted to be a worked example — both calls, the string that
+	 * repeats between them, and the rule that ties the two fields together — rather than a mention.
+	 */
+	it('teaches the before/after pattern as a worked example, not as a field list', () => {
+		// The trigger, in the words the ask actually arrives in.
+		expect(page).toContain('before and after');
+		// Two `acquire_device` calls sharing one group, and a `screenshot` in each sharing a label.
+		expect(page.match(/acquire_device \{/g) ?? []).toHaveLength(2);
+		expect(page.match(/"groupId": "app-bar-top-space"/g) ?? []).toHaveLength(2);
+		expect(page.match(/"label": "home-screen"/g) ?? []).toHaveLength(2);
+		// The rule, and the one thing Rover deliberately does not do with the pair (ai/RULES.md §1).
+		expect(page).toContain('A `label` needs a `groupId`');
+		expect(page).toContain('does not diff');
+	});
+
+	// `theLoop`'s step 2 is the paragraph an agent reads before its first call, so it names the
+	// field and points at the example rather than leaving the two unconnected.
+	it('names groupId in the step that describes acquire_device', () => {
+		const step = page.slice(page.indexOf('2. **`acquire_device`**'), page.indexOf('3. **'));
+
+		expect(step).toContain('groupId');
+		expect(step).toContain('Comparing two runs');
+	});
+
+	// The snippet is the other place an agent reads, and it carries the trigger for the same
+	// reason it carries the manual-testing one: an agent that never learns these exist does the
+	// comparison anyway, and files four unrelated artifacts.
+	it('gives the agent-file snippet the comparison trigger beside the manual-test one', () => {
+		const snippet = agentSnippet('ROVER.md');
+
+		expect(snippet).toContain('before and after');
+		expect(snippet).toContain('`groupId`');
+		expect(snippet).toContain('`label`');
+	});
+
 	it('says what a project without an install will actually be told', () => {
 		const bare = roverDocument({
 			project: 'demo',

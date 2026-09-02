@@ -16,6 +16,7 @@ import { LOCAL_HOST, REMOTE_HOST, resolveHost } from '@/cli/_shared/host.js';
 import { EXIT_OK, EXIT_USAGE, run } from '@/cli/index.js';
 import { PROJECT_FILE_ENV_VAR } from '@/daemon/project-hooks.js';
 import {
+	ARTIFACT_LABEL_MAX_LENGTH,
 	ATTRIBUTION_MAX_LENGTH,
 	AttributionStringSchema,
 	TEST_DESCRIPTION_MAX_LENGTH,
@@ -350,6 +351,54 @@ describe('rover acquire, on its required attribution', () => {
 		).toBe(false);
 	});
 
+	/*
+	 * `--group-id` is optional the way `--test-description` is, so it has the same two typed-wrong
+	 * cases and no "is required" one (D22, as amended #150). Its bound is the *attribution* one,
+	 * because a group id is an identifier rather than prose.
+	 */
+	it('exits 2 for a --group-id typed with nothing in it', async () => {
+		expect(
+			await run([
+				'acquire',
+				'serial-1',
+				'--owner',
+				'issue-150',
+				'--project',
+				'rover',
+				'--test-name',
+				'home screen',
+				'--group-id',
+				'',
+			]),
+		).toBe(EXIT_USAGE);
+
+		expect(errored.join('\n')).toContain('--group-id was given nothing');
+		expect(errored.join('\n')).toContain('leave it out');
+	});
+
+	it('exits 2 for a --group-id past the length the host accepts', async () => {
+		const tooLong = 'x'.repeat(ATTRIBUTION_MAX_LENGTH + 1);
+
+		expect(
+			await run([
+				'acquire',
+				'serial-1',
+				'--owner',
+				'issue-150',
+				'--project',
+				'rover',
+				'--test-name',
+				'home screen',
+				'--group-id',
+				tooLong,
+			]),
+		).toBe(EXIT_USAGE);
+
+		expect(errored.join('\n')).toContain(`--group-id is ${tooLong.length} characters`);
+		// The flag as it was spelled, never the wire's key: the reader is looking at a terminal.
+		expect(errored.join('\n')).not.toContain('groupId');
+	});
+
 	it('takes its ceiling from the host schema rather than restating it', () => {
 		// One bound, in one place. A CLI carrying its own copy would start refusing values the
 		// host accepts — or waving through ones it does not — the moment the schema moves.
@@ -428,6 +477,42 @@ describe('rover screenshot and rover record, on --out, --duration-ms and --frame
 		).toBe(EXIT_USAGE);
 
 		expect(errored.join('\n')).toContain(String(MAX_FRAMES_PER_SECOND));
+	});
+
+	/*
+	 * `--label` is optional on both commands and is decided here for this whole file's reason: the
+	 * host would refuse a bad one too, but only after a lease renewal, a capture and — for a
+	 * recording — a frame extraction (D22, as amended #150).
+	 */
+	it.each([
+		'screenshot',
+		'record',
+	])('exits 2 for a --label typed with nothing in %s', async (command) => {
+		expect(await run([command, 'lease-1', '--out', 'out.bin', '--label', ''])).toBe(EXIT_USAGE);
+
+		expect(errored.join('\n')).toContain('--label was given nothing');
+		expect(errored.join('\n')).toContain('leave it out');
+	});
+
+	it.each([
+		'screenshot',
+		'record',
+	])('exits 2 for a --label past what a file name takes in %s', async (command) => {
+		const tooLong = 'x'.repeat(ARTIFACT_LABEL_MAX_LENGTH + 1);
+
+		expect(await run([command, 'lease-1', '--out', 'out.bin', '--label', tooLong])).toBe(
+			EXIT_USAGE,
+		);
+
+		expect(errored.join('\n')).toContain(`--label is ${tooLong.length} characters`);
+		expect(errored.join('\n')).toContain("file's name");
+	});
+
+	// A label is bounded where a readable *file name* component is, not where an attribution
+	// string echoed back inside a refusal message is. The two are asserted to be different numbers
+	// rather than one aliasing the other.
+	it('holds a label to its own bound and not to the attribution one', () => {
+		expect(ARTIFACT_LABEL_MAX_LENGTH).toBeLessThan(ATTRIBUTION_MAX_LENGTH);
 	});
 
 	it('exits 2 for a screenshot flag that does not exist', async () => {

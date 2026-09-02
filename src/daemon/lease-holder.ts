@@ -20,6 +20,11 @@
  * (D22, as amended #148). It is projected here rather than at either caller for this module's
  * whole reason: it is the sentence an operator reads before force-releasing a lease, and a field
  * a listing carried and a refusal did not would be missing exactly where the decision is made.
+ *
+ * `groupId` rides on exactly the same terms (D22, as amended #150). It says the device is held by
+ * one half of a comparison, which is a different thing to read than "held" — and a refusal that
+ * knew and a listing that did not would be the disagreement this module exists to make
+ * impossible.
  */
 
 import type { LeaseHolder } from '../ipc/methods.js';
@@ -37,6 +42,9 @@ export function toLeaseHolder(lease: Lease, leases: LeaseStore): LeaseHolder {
 		// own key set (`tests/unit/daemon/lease-holder.test.ts`, D20). Keeping that set exact is
 		// what makes the assertion worth making.
 		...(lease.testDescription === undefined ? {} : { testDescription: lease.testDescription }),
+		// Absent as absent, for the reason directly above: this projection's key set is what the
+		// disclosure test asserts, so an ungrouped lease must carry no `groupId` key at all.
+		...(lease.groupId === undefined ? {} : { groupId: lease.groupId }),
 		grantedAt: new Date(lease.createdAtMs).toISOString(),
 		expiresInMs: leases.remainingMs(lease),
 	};

@@ -8,7 +8,11 @@
  */
 
 import { type ParseArgsOptionsConfig, parseArgs } from 'node:util';
-import { ATTRIBUTION_MAX_LENGTH, TEST_DESCRIPTION_MAX_LENGTH } from '../../ipc/methods.js';
+import {
+	ARTIFACT_LABEL_MAX_LENGTH,
+	ATTRIBUTION_MAX_LENGTH,
+	TEST_DESCRIPTION_MAX_LENGTH,
+} from '../../ipc/methods.js';
 
 /**
  * The caller asked wrong — an unknown flag, a missing required option, an unsupported
@@ -172,23 +176,25 @@ export function attributionWithDefault(
 }
 
 /**
- * An **optional** free-text string: absent when the flag was not typed, and a usage error when
- * it was typed with nothing in it or with more than the host will take.
+ * An **optional** string: absent when the flag was not typed, and a usage error when it was typed
+ * with nothing in it or with more than the host will take.
  *
- * Only `--test-description` today (D22, as amended #148). Absent is returned as `undefined` and
- * never as an empty string, because that is what the wire means by absent: no key, and nothing
- * standing in for one (`TestDescriptionSchema`). `--test-description ''` is the same mistake
- * `--project ''` is, and gets the same answer rather than a lease carrying a blank sentence —
- * the host would refuse it anyway, and exit 2 naming the flag as it was spelled is the more
- * useful of the two failures ({@link boundAttribution} gives the argument at length).
+ * The shared half of the three optional strings below, because what differs between them is only
+ * the bound and the sentence explaining it — and both of those belong to the field rather than to
+ * this shape. Absent is returned as `undefined` and never as an empty string, because that is what
+ * the wire means by absent: no key, and nothing standing in for one. `--test-description ''` is
+ * the same mistake `--project ''` is, and gets the same answer rather than a lease carrying a
+ * blank sentence — the host would refuse it anyway, and exit 2 naming the flag as it was spelled
+ * is the more useful of the two failures ({@link boundAttribution} gives the argument at length).
  *
- * The bound is the host's, imported rather than restated. It is deliberately **not**
- * {@link ATTRIBUTION_MAX_LENGTH}: a description is prose and is not a path segment.
+ * Every bound is the host's own constant, imported rather than restated, so no two can drift.
  */
-export function optionalDescription(
+function optionalBounded(
 	command: string,
 	name: string,
 	value: string | undefined,
+	maxLength: number,
+	whyBounded: string,
 ): string | undefined {
 	if (value === undefined) {
 		return undefined;
@@ -199,11 +205,75 @@ export function optionalDescription(
 				`rather than passing an empty value.`,
 		);
 	}
-	if (value.length > TEST_DESCRIPTION_MAX_LENGTH) {
+	if (value.length > maxLength) {
 		throw new UsageError(
-			`rover ${command}: --${name} is ${value.length} characters — it is prose the host ` +
-				`stores and never reads, capped at ${TEST_DESCRIPTION_MAX_LENGTH}.`,
+			`rover ${command}: --${name} is ${value.length} characters — ${whyBounded}, capped at ` +
+				`${maxLength}.`,
 		);
 	}
 	return value;
+}
+
+/**
+ * `--test-description`, and only that (D22, as amended #148).
+ *
+ * Its bound is deliberately **not** {@link ATTRIBUTION_MAX_LENGTH}: a description is prose and is
+ * not a path segment.
+ */
+export function optionalDescription(
+	command: string,
+	name: string,
+	value: string | undefined,
+): string | undefined {
+	return optionalBounded(
+		command,
+		name,
+		value,
+		TEST_DESCRIPTION_MAX_LENGTH,
+		'it is prose the host stores and never reads',
+	);
+}
+
+/**
+ * An optional **attribution** string — `--group-id` today (D22, as amended #150).
+ *
+ * {@link requireAttribution}'s bound and {@link optionalDescription}'s absence: a group id is an
+ * identifier the host stores, echoes back and never parses, so it is capped where every other
+ * attribution string is — and a lease that names no group carries none rather than one this CLI
+ * invented, which is the same rule `--owner` is never derived under.
+ */
+export function optionalAttribution(
+	command: string,
+	name: string,
+	value: string | undefined,
+): string | undefined {
+	return optionalBounded(
+		command,
+		name,
+		value,
+		ATTRIBUTION_MAX_LENGTH,
+		'an attribution string is stored and echoed back by the host, never read',
+	);
+}
+
+/**
+ * An optional artifact **label** — `--label` on the two commands that write a file (D22, as
+ * amended #150).
+ *
+ * Its own bound again, and the shortest of the three: a label becomes part of the archived file's
+ * name, and the archive truncates any path component past that and appends a collision hash
+ * (`ArtifactLabelSchema`). A caller told here is told before the capture rather than after it.
+ */
+export function optionalLabel(
+	command: string,
+	name: string,
+	value: string | undefined,
+): string | undefined {
+	return optionalBounded(
+		command,
+		name,
+		value,
+		ARTIFACT_LABEL_MAX_LENGTH,
+		"it becomes part of the archived file's name on the host",
+	);
 }

@@ -99,6 +99,17 @@ export interface ArtifactDelivery {
 	/** Where the bytes go, already resolved by {@link resolveDestination}. */
 	readonly destination: string;
 	readonly json: boolean;
+	/**
+	 * What the caller labelled this artifact for the **host's** archive, when it labelled it
+	 * (D22, as amended #150).
+	 *
+	 * It reaches this module for one reason and does exactly one thing: `--json` carries it, so a
+	 * script that filed a before shot and an after shot has both halves of what it asked for in
+	 * one document. It is deliberately **not** on the human line, which reports the local file and
+	 * is about this machine, and it is deliberately not read off the answer — no answer carries
+	 * one, because a label names a copy no client is ever handed (D19).
+	 */
+	readonly label?: string;
 }
 
 /**
@@ -112,11 +123,17 @@ export interface ArtifactDelivery {
  * file, rather than a short one. Two copies of that ordering is one copy that can drift.
  */
 export async function deliverArtifact(delivery: ArtifactDelivery): Promise<number> {
-	const { host, verb, answer, destination, json } = delivery;
+	const { host, verb, answer, destination, json, label } = delivery;
+	// Absent stays absent in the document too — no key rather than a null, which is what the
+	// wire means by a label nobody supplied.
+	const labelled = label === undefined ? {} : { label };
 
 	if (answer.outcome !== 'ok') {
 		if (json) {
-			out.printJson(host, answer);
+			// On the refusal branch as well as the success one, and that is the branch it matters
+			// most on: `label-without-group` is the one refusal a label can cause, and a document
+			// naming what was refused beside the host's own reason is what a script reads.
+			out.printJson(host, { ...answer, ...labelled });
 		} else {
 			out.error(renderVerbAnswer(answer));
 		}
@@ -127,7 +144,7 @@ export async function deliverArtifact(delivery: ArtifactDelivery): Promise<numbe
 	const artifactPath = await writeArtifact(artifact, destination);
 
 	if (json) {
-		out.printJson(host, { ...describeWithoutBytes(answer), artifactPath });
+		out.printJson(host, { ...describeWithoutBytes(answer), ...labelled, artifactPath });
 	} else {
 		out.info(renderWritten(artifact, artifactPath));
 	}

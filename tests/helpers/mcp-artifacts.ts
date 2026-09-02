@@ -80,12 +80,15 @@ export async function serveDevice(
 }
 
 /** A held lease, taken through `acquire_device` because that is how an agent gets one. */
-export async function acquireLease(agent: Client): Promise<string> {
+export async function acquireLease(agent: Client, groupId?: string): Promise<string> {
 	const granted = await callTool(agent, 'acquire_device', {
 		serial: ARTIFACT_SERIAL,
 		owner: 'issue-90',
 		project: 'rover',
 		testName: 'checkout flow',
+		// Left off entirely when a caller names none: that is what absent means on this wire, and
+		// it is the state a labelled call is refused against (D22, as amended #150).
+		...(groupId === undefined ? {} : { groupId }),
 	});
 	const answer = granted.structuredContent as { outcome: string; lease?: { leaseId: string } };
 	if (answer.outcome !== 'granted' || !answer.lease) {

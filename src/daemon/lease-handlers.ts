@@ -69,13 +69,14 @@ import type {
 	AcquireRefusalReason,
 	ForceReleaseDeviceParams,
 	ForceReleaseDeviceResult,
+	GrantedLease,
 	IpcHandlers,
 	ReleaseDeviceParams,
 	ReleaseDeviceResult,
 } from '../ipc/methods.js';
 import type { DeviceInventory } from './inventory.js';
 import { toLeaseHolder } from './lease-holder.js';
-import type { LeaseStore } from './leases.js';
+import type { Lease, LeaseStore } from './leases.js';
 import type { ProjectServices } from './project-services.js';
 import type { DeviceRestorer } from './restore.js';
 import type { SlotAllocator } from './slots.js';
@@ -185,6 +186,7 @@ export function createLeaseHandlers(
 				project: params.project,
 				testName: params.testName,
 				testDescription: params.testDescription,
+				groupId: params.groupId,
 				slot,
 			});
 
@@ -222,20 +224,7 @@ export function createLeaseHandlers(
 
 			return {
 				outcome: 'granted',
-				lease: {
-					leaseId: outcome.lease.id,
-					serial: outcome.lease.serial,
-					owner: outcome.lease.owner,
-					project: outcome.lease.project,
-					testName: outcome.lease.testName,
-					// Absent when the caller supplied none, and the **key** is then absent too —
-					// `./lease-holder.ts` says why every wire object in the daemon is built this way
-					// (`GrantedLeaseSchema`, D22 as amended #148).
-					...(outcome.lease.testDescription === undefined
-						? {}
-						: { testDescription: outcome.lease.testDescription }),
-					expiresInMs: leases.remainingMs(outcome.lease),
-				},
+				lease: toGrantedLease(outcome.lease, leases),
 				device,
 				capabilities: manifest.capabilities,
 			};
@@ -309,6 +298,35 @@ export function createLeaseHandlers(
 					`so there was nothing to force-release`,
 			};
 		},
+	};
+}
+
+/**
+ * What the winner of an acquire is handed — the lease it was granted, as `GrantedLeaseSchema`.
+ *
+ * Its own function rather than an object literal inside the handler, for `./lease-holder.ts`'s
+ * reason applied to the other wire shape: the two optional strings are each present-or-absent, and
+ * a projection written inline is one that grows a third branch every time a field lands. What it
+ * is **not** is `toLeaseHolder`: this one carries the credential and no grant instant, because the
+ * winner already knows when it asked and a stranger reading a listing does not (`GrantedLeaseSchema`).
+ *
+ * **The keys of the two optional strings are absent, not present holding `undefined`.** `JSON`
+ * drops either, so the wire is the same — but this is the object the `.strict()` result parse in
+ * `src/ipc/server.ts` sees, and keeping the key set exact is what makes "a caller who supplied
+ * none gets none back" a fact rather than an encoding accident (D22, as amended #148 and #150).
+ */
+function toGrantedLease(lease: Lease, leases: LeaseStore): GrantedLease {
+	return {
+		leaseId: lease.id,
+		serial: lease.serial,
+		owner: lease.owner,
+		project: lease.project,
+		testName: lease.testName,
+		...(lease.testDescription === undefined ? {} : { testDescription: lease.testDescription }),
+		// Also the string the caller passes again to put the next run of this comparison in the
+		// same group, which is why it is echoed rather than merely stored (D22, as amended #150).
+		...(lease.groupId === undefined ? {} : { groupId: lease.groupId }),
+		expiresInMs: leases.remainingMs(lease),
 	};
 }
 

@@ -328,6 +328,61 @@ describe('acquire, list, release', () => {
 		expect(logged[0] ?? '').not.toContain('testDescription');
 	});
 
+	/*
+	 * The group, end to end (D22, as amended #150): typed on the command line, carried on the wire,
+	 * echoed on the grant's own line — because it is the string the *next* acquire in the
+	 * comparison is given — and on the holder every other agent sees in a listing.
+	 */
+	it('carries --group-id to the host, shows it on the grant, and lists it on the holder', async () => {
+		registerFakeBackend();
+		await start();
+
+		expect(
+			await run([
+				'acquire',
+				'attached-1',
+				'--owner',
+				'issue-150',
+				'--project',
+				'rover',
+				'--test-name',
+				'checkout flow',
+				'--group-id',
+				'app-bar-top-space',
+			]),
+		).toBe(EXIT_OK);
+
+		expect(logged.join('\n')).toContain('Group: app-bar-top-space');
+
+		logged = [];
+		expect(await run(['list', '--json'])).toBe(EXIT_OK);
+		expect(JSON.parse(logged[0] ?? '')).toMatchObject({
+			devices: [{ heldBy: { groupId: 'app-bar-top-space' } }],
+		});
+	});
+
+	// No flag, no key, no line — nothing invents a group for a caller who never named one.
+	it('carries no group at all when the flag is not typed', async () => {
+		registerFakeBackend();
+		await start();
+
+		expect(
+			await run([
+				'acquire',
+				'attached-1',
+				'--owner',
+				'issue-150',
+				'--project',
+				'rover',
+				'--test-name',
+				'checkout flow',
+				'--json',
+			]),
+		).toBe(EXIT_OK);
+
+		expect(logged[0] ?? '').not.toContain('groupId');
+	});
+
 	it('exits 1 and names the holder when the device is already held', async () => {
 		registerFakeBackend();
 		await start();

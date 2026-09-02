@@ -46,6 +46,16 @@ const described = createMockLease({
 	testDescription: DESCRIPTION,
 });
 
+/** What an agent would invent for one investigation, and reuse for every run in it (#150). */
+const GROUP = 'app-bar-top-space';
+/** The same lease again with a group, and again its own id so its directory is its own. */
+const grouped = createMockLease({
+	id: parseLeaseId('lease-grouped'),
+	project: 'rover',
+	testName: 'home-screen',
+	groupId: GROUP,
+});
+
 beforeEach(async () => {
 	root = join(await mkdtemp(join(tmpdir(), 'rover-')), 'artifacts');
 	warnings = [];
@@ -313,6 +323,171 @@ describe('createArtifactArchive', () => {
 		expect(warnings).toHaveLength(1);
 		expect(warnings[0]).toContain(blocked);
 		expect(warnings[0]).toContain('screenshot');
+	});
+
+	/*
+	 * The artifact half of #150: a `label` names the *file*, beside the sequence number that
+	 * already says the order. The names are pinned rather than derived, for the reason every other
+	 * name in this file is — the tree's shape is a stable contract a reader reads directly (D24).
+	 */
+	it('puts a screenshot label between the sequence number and the verb', async () => {
+		await archive().record(grouped, resultOf('screenshot', { artifact: CAPTURE }), 'before');
+
+		expect(await readdir(join(directoryFor(grouped), 'screenshots'))).toEqual([
+			'001_before_screenshot.png',
+		]);
+	});
+
+	it('labels a recording and the frame directory cut from it alike', async () => {
+		const frames = [artifactOf('image/png', [0x89, 0x50, 0x4e, 0x47, 0x11])];
+
+		await archive().record(
+			grouped,
+			resultOf('record_video', { artifact: RECORDING, frames }),
+			'checkout-flow',
+		);
+
+		// The pair stays obvious in a listing, which is the reason the frames are named after the
+		// recording in the first place — a label that reached only one of the two would break it.
+		expect(await readdir(join(directoryFor(grouped), 'recordings'))).toEqual([
+			'001_checkout-flow.mp4',
+			'001_checkout-flow_frames',
+		]);
+	});
+
+	it('labels a log read', async () => {
+		await archive().record(grouped, resultOf('read_logs', { logs: createMockLogRead() }), 'crash');
+
+		expect(await readdir(join(directoryFor(grouped), 'logs'))).toEqual(['001_crash_read_logs.txt']);
+	});
+
+	/*
+	 * A label is a path component like `project` and `test_name`, so it goes through `pathSegment`
+	 * — by shape and never by what it says (D22) — and a rewritten one carries the hash of the
+	 * caller's original, so two hostile labels cannot share one name.
+	 */
+	it('sanitises a label into one filename component rather than an escape', async () => {
+		await archive().record(grouped, resultOf('screenshot', { artifact: CAPTURE }), '../../escaped');
+
+		// Every separator gone, the leading `..` run stripped, and the caller's original hashed on
+		// the end — one component, and one that cannot be `..`.
+		const [written] = await readdir(join(directoryFor(grouped), 'screenshots'));
+		expect(written).toBe('001__.._escaped-ea03bc47_screenshot.png');
+		// And the tree above it is untouched: the label reached a file name and nothing else.
+		expect(await readdir(join(root, 'rover'))).toEqual(['home-screen']);
+	});
+
+	/*
+	 * The same rule seen from the ordinary side, and the reason every document here tells an agent
+	 * to keep a label identifier-shaped: a space is outside `[A-Za-z0-9._-]`, so it is rewritten —
+	 * and a rewritten segment carries the hash, which is what keeps two different labels apart but
+	 * is also what makes a listing harder to read than it needed to be. `test_name` has had exactly
+	 * this property since D22 and the advice is the same one.
+	 */
+	it('rewrites a label with a space, hash and all, rather than dropping the space', async () => {
+		await archive().record(grouped, resultOf('screenshot', { artifact: CAPTURE }), 'home screen');
+
+		const [written] = await readdir(join(directoryFor(grouped), 'screenshots'));
+		expect(written).toMatch(/^001_home_screen-[0-9a-f]{8}_screenshot\.png$/);
+	});
+
+	// Absent adds nothing at all — not an empty segment, not a placeholder. The tree of a caller
+	// who never labelled anything is the tree it was before this feature existed (#129's lesson).
+	it('names an unlabelled artifact exactly as it did before labels existed', async () => {
+		await archive().record(grouped, resultOf('screenshot', { artifact: CAPTURE }));
+
+		expect(await readdir(join(directoryFor(grouped), 'screenshots'))).toEqual([
+			'001_screenshot.png',
+		]);
+	});
+
+	// The sequence still leads, so two labelled captures on one lease still say which came first.
+	it('keeps the sequence number in front of the label', async () => {
+		const durable = archive();
+		await durable.record(grouped, resultOf('screenshot', { artifact: CAPTURE }), 'home-screen');
+		await durable.record(grouped, resultOf('screenshot', { artifact: CAPTURE }), 'home-screen');
+
+		expect(await readdir(join(directoryFor(grouped), 'screenshots'))).toEqual([
+			'001_home-screen_screenshot.png',
+			'002_home-screen_screenshot.png',
+		]);
+	});
+
+	/*
+	 * The lease half of #150, and the criterion the issue turns on: **after the leases have ended
+	 * a reader can still recover which runs share a group**. It is filed as contents rather than
+	 * as a directory level, on `test_description.json`'s exact terms.
+	 */
+	it('files the lease group beside the first artifact, under the wire own key', async () => {
+		await archive().record(grouped, resultOf('screenshot', { artifact: CAPTURE }));
+
+		const filed = JSON.parse((await readFor(grouped, 'group_id.json')).toString('utf8'));
+		expect(GrantedLeaseSchema.pick({ groupId: true }).parse(filed)).toEqual({ groupId: GROUP });
+	});
+
+	it('never rewrites the group once it is filed', async () => {
+		const durable = archive();
+		await durable.record(grouped, resultOf('screenshot', { artifact: CAPTURE }));
+		const first = await readFor(grouped, 'group_id.json');
+
+		await durable.record(
+			{ ...grouped, groupId: 'a different investigation' },
+			resultOf('screenshot', { artifact: CAPTURE }),
+		);
+
+		expect(await readFor(grouped, 'group_id.json')).toEqual(first);
+	});
+
+	it('files no group at all for a lease that supplied none', async () => {
+		await archive().record(lease, resultOf('screenshot', { artifact: CAPTURE }));
+
+		expect(await readdir(directoryFor())).not.toContain('group_id.json');
+		expect(await readdir(directoryFor())).toContain('device_info.json');
+	});
+
+	/*
+	 * **The tree's shape does not branch on either field** — `leaseArchiveDirectory` is always four
+	 * levels, which `run-identity.ts`, `list_archive` and the panel's three levels all count on. A
+	 * `groupId` level above `<project>` is the option that was considered and not taken (#129).
+	 */
+	it('shapes no directory from the group, however it is written', async () => {
+		const hostile: Lease = { ...lease, groupId: '../../escaped/and/../slashed' };
+
+		await archive().record(hostile, resultOf('screenshot', { artifact: CAPTURE }));
+
+		expect(leaseArchiveDirectory(root, hostile)).toBe(leaseArchiveDirectory(root, lease));
+		expect(await readdir(join(root, 'rover'))).toEqual(['home-screen']);
+		expect(await readdir(join(root, 'rover', 'home-screen'))).toHaveLength(1);
+	});
+
+	/*
+	 * Two runs of one investigation, filed as the archive would actually file them — and what a
+	 * reader recovers from the two directories afterwards. Nothing joins them at write time; the
+	 * grouping is a walk, which is what the tree is already shaped to serve (D24, R38).
+	 */
+	it('leaves two runs of one group recoverable after both leases have ended', async () => {
+		const before = createMockLease({ project: 'rover', testName: 'app bar', groupId: GROUP });
+		const after = createMockLease({
+			id: parseLeaseId('lease-after'),
+			project: 'rover',
+			testName: 'app bar',
+			groupId: GROUP,
+			createdAtMs: before.createdAtMs + 1_000,
+		});
+		const durable = archive();
+
+		await durable.record(before, resultOf('screenshot', { artifact: CAPTURE }), 'home-screen');
+		durable.forget(before);
+		await durable.record(after, resultOf('screenshot', { artifact: CAPTURE }), 'home-screen');
+		durable.forget(after);
+
+		for (const run of [before, after]) {
+			const filed = JSON.parse((await readFor(run, 'group_id.json')).toString('utf8'));
+			expect(filed).toEqual({ groupId: GROUP });
+			expect(await readdir(join(directoryFor(run), 'screenshots'))).toEqual([
+				'001_home-screen_screenshot.png',
+			]);
+		}
 	});
 
 	it('starts a forgotten lease over at 001', async () => {
