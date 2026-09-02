@@ -115,14 +115,22 @@ emulator-5554  android   sdk_gphone64_arm64  ready  free
 required and none is ever derived from who you are (D16, D20, D22); `--test-name` is opaque and is
 what files two runs of the same check next to each other in the host's archive.
 
+`--test-description` is the one optional string: a sentence or two saying what this run is about,
+which `--test-name` is too short to carry. Nothing parses it and it names no directory — the host
+stores it, shows it beside the test name on the web panel, and files it with the run so it outlives
+the lease. Leave it out and the lease carries none; nothing is invented in its place.
+
 ```bash
-npm run -s rover -- acquire emulator-5554 --owner issue-20 --project rover --test-name "quick start"
+npm run -s rover -- acquire emulator-5554 --owner issue-20 --project rover \
+  --test-name "quick start" \
+  --test-description "Walks the README's own quick start on a fresh emulator, to see it still works."
 ```
 
 ```
 Acquired 'emulator-5554' for 'issue-20' (project rover, test quick start).
 Release it with: npm run rover -- release 2744ae37-aafd-4179-b02c-b353127a23b2
 Expires in 19m unless activity renews it.
+Description: Walks the README's own quick start on a fresh emulator, to see it still works.
 ```
 
 That lease id is the credential every verb call carries, and it is printed once, to whoever was
@@ -177,6 +185,7 @@ npm run -s rover -- list --json
         "owner": "issue-20",
         "project": "rover",
         "testName": "quick start",
+        "testDescription": "Walks the README's own quick start on a fresh emulator, to see it still works.",
         "grantedAt": "2026-08-31T09:14:07.512Z",
         "expiresInMs": 1191269
       }
@@ -463,14 +472,15 @@ authority: a lease re-verifies its device against the backend at grant time (`PR
 and `list_devices` says `stale` whenever the list is not known to be current.
 
 **Leases work.** `acquire_device` grants one device — not the whole machine — to an explicit
-caller-supplied `owner` string, alongside a required `project` and `test_name` the host stores
-and never inspects. The lease runs on a 20-minute TTL **renewed by activity rather than by a
-heartbeat**, so an agent that pauses to think keeps its device and one that died lets go on its
-own. A busy device is a refusal that names who holds it and for how much longer, never an error,
-and never the holder's lease id; `release_device` hands it back. Five clients asking at once get
-exactly one winner. `list_devices` names each device's holder the same way — the owner, project and
-test name, and how much longer they have, or nothing at all for a free device — and never the lease
-id, which is what ends a lease and belongs only to whoever was granted it.
+caller-supplied `owner` string, alongside a required `project` and `test_name`, and an optional
+`test_description`, all of which the host stores and never inspects. The lease runs on a 20-minute
+TTL **renewed by activity rather than by a heartbeat**, so an agent that pauses to think keeps its
+device and one that died lets go on its own. A busy device is a refusal that names who holds it and
+for how much longer, never an error, and never the holder's lease id; `release_device` hands it
+back. Five clients asking at once get exactly one winner. `list_devices` names each device's holder
+the same way — the owner, project and test name, the description if the lease gave one, and how
+much longer they have, or nothing at all for a free device — and never the lease id, which is what
+ends a lease and belongs only to whoever was granted it.
 
 **A stuck lease can be ended by an operator** (`force_release_device`, D28) — and still without the
 lease id ever being handed out. That call is keyed on the device **serial**, which every listing
@@ -1212,6 +1222,7 @@ runs of the same named check, taken at two different points in time, sit next to
       20260830T170501Z-issue-112-9f1c2ab4/   # one lease: when it started, who held it
         <device-serial>/
           device_info.json                   # size, density, dp scale, OS version
+          test_description.json              # what the lease said the run was about, if anything
           screenshots/001_screenshot.png
           recordings/001.mp4
           recordings/001_frames/0001.png
@@ -1222,6 +1233,11 @@ runs of the same named check, taken at two different points in time, sit next to
 nothing parses them — and both are required, so the shape never varies.
 The test name is deliberately **not** unique: run "home screen" before a refactor and again after
 it, `ls` that directory, and the two most recent lease folders are the two sides of the diff.
+
+`--test-description` shapes **none** of that tree. It is prose, so it is filed as a file rather than
+as a directory name — written once beside the first artifact the lease produced, never rewritten, and
+absent altogether for a lease that supplied none. That is what lets the panel's Archive screen still
+say what a run weeks ago was about, long after the lease that knew is gone.
 
 Two things worth knowing. The archive is never what a verb answers with — a path here means
 nothing on the machine the agent runs on, so you are handed the bytes and decide where they go.

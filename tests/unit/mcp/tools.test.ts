@@ -194,6 +194,48 @@ describe('the device tools over a live host', () => {
 		expect(granted.structuredContent).toMatchObject({ lease: { project: 'storefront' } });
 	});
 
+	/*
+	 * The optional string an agent may supply (D22, as amended #148): it reaches the host, comes
+	 * back on the grant, and is on the holder every other agent sees in a listing — which is the
+	 * whole point of it being on `LeaseHolder` and not only on the grant.
+	 */
+	it('carries a testDescription to the host, onto the grant and into the listing', async () => {
+		registerFakeBackend();
+		await startHost();
+		const agent = await connectAgent();
+		const testDescription = 'Checking the checkout flow survives the second app bar row.';
+
+		const granted = await callTool(agent, 'acquire_device', {
+			serial: 'attached-1',
+			owner: 'issue-112',
+			project: 'rover',
+			testName: 'checkout flow',
+			testDescription,
+		});
+
+		expect(granted.isError).toBeFalsy();
+		expect(granted.structuredContent).toMatchObject({ lease: { testDescription } });
+		const listed = await callTool(agent, 'list_devices');
+		expect(listed.structuredContent).toMatchObject({ devices: [{ heldBy: { testDescription } }] });
+	});
+
+	// It is optional, so a call without one is granted — and carries no key rather than a blank.
+	it('grants a lease with no description at all when the call supplies none', async () => {
+		registerFakeBackend();
+		await startHost();
+		const agent = await connectAgent();
+
+		const granted = await callTool(agent, 'acquire_device', {
+			serial: 'attached-1',
+			owner: 'issue-112',
+			project: 'rover',
+			testName: 'checkout flow',
+		});
+
+		expect(granted.isError).toBeFalsy();
+		expect(JSON.stringify(granted.structuredContent)).not.toContain('testDescription');
+	});
+
 	it('refuses a call that omits project when nothing is configured to default it', async () => {
 		registerFakeBackend();
 		await startHost();

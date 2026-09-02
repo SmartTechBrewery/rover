@@ -17,6 +17,11 @@
  * lease's directory in the host's artifact archive (D22, as amended #129). A missing one is
  * exit 2 here, with this command's usage, rather than a round trip the host refuses.
  *
+ * `--test-description` is the one **optional** string on this command (D22, as amended #148).
+ * Absent is absent: no flag, no key on the wire, and nothing invented in its place. It is prose
+ * rather than a directory name — nothing in the archive's tree is shaped from it — which is why
+ * it may be left out where `--test-name` may not.
+ *
  * A refusal is the host's answer, not an error — it is rendered and exits 1.
  */
 
@@ -27,6 +32,7 @@ import {
 	attributionWithDefault,
 	expectPositionals,
 	GLOBAL_OPTIONS,
+	optionalDescription,
 	parseCommandArgs,
 	requireAttribution,
 } from '../_shared/flags.js';
@@ -37,7 +43,7 @@ import { configuredProject } from '../_shared/project-file.js';
 export const USAGE = `rover acquire — take a lease on one device
 
 Usage: rover acquire <serial> --owner <string> --project <string> --test-name <string>
-                     [--host <name>] [--json]
+                     [--test-description <string>] [--host <name>] [--json]
 
   --owner        Who the lease is for. Required and never derived: it attributes the lease
                  and authorizes nothing, so a value guessed for you would attribute the
@@ -47,9 +53,15 @@ Usage: rover acquire <serial> --owner <string> --project <string> --test-name <s
                  that file's own 'project' is used and this flag overrides it.
   --test-name    What is being checked. Required, and deliberately not unique. Unlike
                  --project, no file stands in for it.
+  --test-description
+                 What this run is about, in a sentence or two of your own — what
+                 --test-name is too short to say. Optional: leave it out and the lease
+                 carries none rather than a placeholder. It is not a directory name and
+                 never becomes one; the host files it with the run so it outlives the
+                 lease, and the web panel shows it live and in the archive.
 
-Both name directories in the host's artifact archive, so two runs of one test name sit
-side by side there.
+--project and --test-name name directories in the host's artifact archive, so two runs of
+one test name sit side by side there. --test-description names nothing.
 
 ${PROJECT_FILE_ENV_VAR} is read on this machine and nothing else in it reaches the host: a
 lease still carries the project as a plain string. A file it names that is missing or will
@@ -69,6 +81,7 @@ const OPTIONS = {
 	owner: { type: 'string' },
 	project: { type: 'string' },
 	'test-name': { type: 'string' },
+	'test-description': { type: 'string' },
 } as const;
 
 type Refusal = Extract<AcquireDeviceResult, { outcome: 'refused' }>;
@@ -93,6 +106,14 @@ export function renderGrant(lease: GrantedLease, projectFile?: string): string {
 		`Release it with: ${out.INVOCATION} release ${lease.leaseId}`,
 		`Expires in ${out.formatDuration(lease.expiresInMs)} unless activity renews it.`,
 	];
+	if (lease.testDescription !== undefined) {
+		// **Its own line, and only when there is one** (D22, as amended #148). A grant is not a
+		// measured table, so this is the one human-mode rendering with room for a sentence — and a
+		// lease that carries none draws no line at all rather than an empty label, which is the
+		// same rule the panel's cards hold. Escaped like every other echoed string, for the reason
+		// above: the line under it is meant to be pasted.
+		lines.push(`Description: ${out.escapeControlCharacters(lease.testDescription)}`);
+	}
 	if (projectFile !== undefined) {
 		lines.push(
 			`Project '${out.escapeControlCharacters(lease.project)}' came from ` +
@@ -146,6 +167,13 @@ export async function run(argv: string[]): Promise<number> {
 		'a lease names what it is checking, and that name is its directory in the ' +
 			"host's artifact archive",
 	);
+	// Optional, so `undefined` when the flag was not typed — and the key is then left off the
+	// request entirely rather than sent as `undefined`, which is what absent means on the wire.
+	const testDescription = optionalDescription(
+		'acquire',
+		'test-description',
+		values['test-description'],
+	);
 	const host = resolveHost(values.host);
 
 	const client = await connectToHost(host);
@@ -155,6 +183,7 @@ export async function run(argv: string[]): Promise<number> {
 			owner,
 			project,
 			testName,
+			...(testDescription === undefined ? {} : { testDescription }),
 		});
 
 		if (values.json === true) {

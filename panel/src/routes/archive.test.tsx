@@ -45,10 +45,16 @@ const { host, HANGS } = vi.hoisted(() => ({
 	host: {
 		answers: new Map<string, unknown>(),
 		asked: [] as unknown[],
-		/** Every file the byte route was asked for — the run device card's one request (#136). */
+		/** Every file the byte route was asked for — two per run since #148. */
 		files: [] as unknown[],
 		/** The archived file's own bytes, or the outcome the host answered instead. */
 		file: { outcome: 'missing' } as unknown,
+		/**
+		 * One answer for one file name, when a test needs the run's two files answered differently
+		 * — the device card's `device_info.json` and the identity card's `test_description.json`
+		 * (#136, #148). Anything not named here falls back to {@link host.file}.
+		 */
+		fileByName: {} as Record<string, unknown>,
 		/** Every artifact the byte route was asked for as bytes — the preview's own request (#133). */
 		artifacts: [] as unknown[],
 		/** What the byte route answers for an artifact, media type included. */
@@ -99,7 +105,7 @@ vi.mock('@panel/session/session-provider.js', () => {
 				if (host.hangs) {
 					return await new Promise(() => undefined);
 				}
-				return { ok: true, value: host.file };
+				return { ok: true, value: host.fileByName[path.at(-1) ?? ''] ?? host.file };
 			},
 			readArtifactBytes: async (path: readonly string[]) => {
 				host.artifacts.push(path);
@@ -164,6 +170,7 @@ beforeEach(() => {
 	host.searches = [];
 	host.search = { outcome: 'searched', matches: [], truncated: false };
 	host.file = { outcome: 'missing' };
+	host.fileByName = {};
 	host.artifact = { outcome: 'missing' };
 	host.hangs = false;
 });
@@ -244,16 +251,17 @@ describe('what the screen asks the host for', () => {
 	 * The one file the screen reads the contents of (#136). It is addressed inside the level the
 	 * listing answered — never a path this screen composed — and it is one request, not a listing.
 	 */
-	it('reads the run device_info.json out of that same level, once', async () => {
+	it('reads the run own two files out of that same level, once each', async () => {
 		await showing(`checkout-app/login-flow/${RUN}`);
 
 		expect(host.files).toEqual([
 			['checkout-app', 'login-flow', RUN, 'R5CT30ABCDE', 'device_info.json'],
+			['checkout-app', 'login-flow', RUN, 'R5CT30ABCDE', 'test_description.json'],
 		]);
 	});
 
 	// No serial, no address: a file is not fetched on a guess any more than a level is listed on one.
-	it('reads no file for a run whose level above named no serial', async () => {
+	it('reads no file at all for a run whose level above named no serial', async () => {
 		await showing(`checkout-app/login-flow/${RUN}`, {
 			...archive(),
 			'["checkout-app","login-flow"]': listed(directory(RUN, 2, null)),
@@ -320,6 +328,53 @@ describe('the device a run was recorded on', () => {
 
 		expect(screen.getByText(/Rover cannot read this run's device_info.json/)).toBeDefined();
 		expect(container.textContent).not.toContain('No device_info.json is filed');
+	});
+});
+
+/**
+ * The run's own description end to end: the archive's second file, off the same byte route, onto the
+ * identity card's `DESCRIPTION` field (#148, `docs/DESIGN.md` §9).
+ *
+ * The two files are scripted separately here, because a run whose device card reads and whose
+ * description does not is the ordinary state of every run filed before the field existed.
+ */
+describe('what the lease said the run was about', () => {
+	const DESCRIBED = {
+		outcome: 'read',
+		text: JSON.stringify({
+			testDescription: 'Checks the login form still fits above the keyboard on a short screen.',
+		}),
+	};
+
+	it('reads the sentence the lease filed with the run', async () => {
+		host.fileByName = { 'test_description.json': DESCRIBED };
+
+		await showing(`checkout-app/login-flow/${RUN}`);
+
+		expect(screen.getByText('DESCRIPTION')).toBeDefined();
+		expect(
+			screen.getByText('Checks the login form still fits above the keyboard on a short screen.'),
+		).toBeDefined();
+	});
+
+	// The default answer for both files is `missing`, which is a run that described nothing.
+	it('says none is filed, without alarm and not in the unreadable words', async () => {
+		const { container } = await showing(`checkout-app/login-flow/${RUN}`);
+
+		expect(screen.getByText('none filed')).toBeDefined();
+		expect(container.querySelectorAll('[role="alert"]')).toHaveLength(0);
+		expect(container.textContent).not.toContain('not readable');
+	});
+
+	it('says a description it cannot read differently again', async () => {
+		host.fileByName = { 'test_description.json': { outcome: 'unreadable' } };
+
+		const { container } = await showing(`checkout-app/login-flow/${RUN}`);
+
+		expect(screen.getByText('not readable')).toBeDefined();
+		expect(container.textContent).not.toContain('none filed');
+		// And the device card is unaffected: two files, two answers, one card each.
+		expect(screen.getByText(/No device_info.json is filed for this run/)).toBeDefined();
 	});
 });
 
@@ -479,7 +534,8 @@ describe('a run whose level above has not answered', () => {
 		});
 
 		expect(screen.getByText('Reading this level of the archive.')).toBeDefined();
-		expect(screen.getByText('reading')).toBeDefined();
+		// `SERIAL` and `DESCRIPTION` are both read off that level, so both say it (#148).
+		expect(screen.getAllByText('reading')).toHaveLength(2);
 		expect(container.textContent).not.toContain('There is nothing to list for this run.');
 		expect(container.textContent).not.toContain('unknown');
 		expect(container.innerHTML).not.toContain('animate');
@@ -495,7 +551,7 @@ describe('a run whose level above has not answered', () => {
 
 		expect(screen.getByText('ARCHIVE NOT READABLE')).toBeDefined();
 		expect(screen.getByText(/runs may well be filed here/)).toBeDefined();
-		expect(screen.getByText('not readable')).toBeDefined();
+		expect(screen.getAllByText('not readable')).toHaveLength(2);
 		expect(container.textContent).not.toContain('There is nothing to list for this run.');
 	});
 
@@ -569,7 +625,10 @@ describe('an artifact open inside a run', () => {
 		await showing(AT_THE_FILE, withScreenshots());
 
 		expect(host.asked).toEqual([SERIAL_LEVEL, SCREENSHOTS]);
-		expect(host.files).toEqual([[...SERIAL_LEVEL, 'device_info.json']]);
+		expect(host.files).toEqual([
+			[...SERIAL_LEVEL, 'device_info.json'],
+			[...SERIAL_LEVEL, 'test_description.json'],
+		]);
 		expect(host.artifacts).toEqual([FILE]);
 	});
 
@@ -734,7 +793,10 @@ describe('an artifact open inside a run', () => {
 			['checkout-app', 'login-flow'],
 			SCREENSHOTS,
 		]);
-		expect(host.files).toEqual([[...SERIAL_LEVEL, 'device_info.json']]);
+		expect(host.files).toEqual([
+			[...SERIAL_LEVEL, 'device_info.json'],
+			[...SERIAL_LEVEL, 'test_description.json'],
+		]);
 	});
 
 	// The address the host answers `missing` for. Said plainly, and not as the other one.

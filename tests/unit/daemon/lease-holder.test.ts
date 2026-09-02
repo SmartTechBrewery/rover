@@ -33,12 +33,13 @@ function createClockedStore(): { store: LeaseStore; at: (instant: number) => voi
 	};
 }
 
-function grant(store: LeaseStore) {
+function grant(store: LeaseStore, testDescription?: string) {
 	const outcome = store.acquire({
 		serial,
 		owner: 'pr-127-review',
 		project: 'rover',
 		testName: 'checkout flow',
+		...(testDescription === undefined ? {} : { testDescription }),
 		slot: createMockSlot(),
 	});
 	if (!outcome.granted) throw new Error('expected a granted lease');
@@ -106,5 +107,27 @@ describe('the holder a stranger is shown', () => {
 			'serial',
 			'testName',
 		]);
+	});
+
+	/*
+	 * The optional string, projected as given (D22, as amended #148) — and **absent as an absent
+	 * key**, which is what the assertion above is worth making about: a lease with no description
+	 * discloses nothing standing in for one, and a lease with one discloses exactly it.
+	 */
+	it('projects the description a lease carries, and no key at all for a lease without one', () => {
+		const { store } = createClockedStore();
+		const described = toLeaseHolder(grant(store, 'Checks the app bar keeps its top space.'), store);
+
+		expect(described.testDescription).toBe('Checks the app bar keeps its top space.');
+		expect(Object.keys(described)).toContain('testDescription');
+	});
+
+	it('discloses no description key for a lease that supplied none', () => {
+		const { store } = createClockedStore();
+
+		const holder = toLeaseHolder(grant(store), store);
+
+		expect('testDescription' in holder).toBe(false);
+		expect(JSON.stringify(holder)).not.toContain('testDescription');
 	});
 });

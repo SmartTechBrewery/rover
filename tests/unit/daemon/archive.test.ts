@@ -19,6 +19,7 @@ import { parseLeaseId } from '@/core/ids.js';
 import { type ArchivableResult, createArtifactArchive } from '@/daemon/archive.js';
 import { leaseArchiveDirectory } from '@/daemon/archive-path.js';
 import type { Lease } from '@/daemon/leases.js';
+import { GrantedLeaseSchema } from '@/ipc/methods.js';
 import type { Artifact } from '@/verbs/result.js';
 import {
 	createMockDeviceInfo,
@@ -30,6 +31,20 @@ import {
 let root: string;
 let warnings: string[];
 const lease = createMockLease({ project: 'rover', testName: 'home-screen' });
+
+/** What an agent would write, and long enough to be prose rather than a second label. */
+const DESCRIPTION =
+	'Checks the home screen keeps its top space after the app bar gained a second row.';
+/**
+ * The same lease with a description — a **different** lease id, so its directory is its own and the
+ * two cannot write over each other (`leaseDirectoryName` hashes the id).
+ */
+const described = createMockLease({
+	id: parseLeaseId('lease-described'),
+	project: 'rover',
+	testName: 'home-screen',
+	testDescription: DESCRIPTION,
+});
 
 beforeEach(async () => {
 	root = join(await mkdtemp(join(tmpdir(), 'rover-')), 'artifacts');
@@ -74,6 +89,11 @@ function directoryFor(of: Lease = lease): string {
 
 async function read(...parts: string[]): Promise<Buffer> {
 	return readFile(join(directoryFor(), ...parts));
+}
+
+/** The same, for a lease other than the default one — {@link described}. */
+async function readFor(of: Lease, ...parts: string[]): Promise<Buffer> {
+	return readFile(join(directoryFor(of), ...parts));
 }
 
 describe('createArtifactArchive', () => {
@@ -190,10 +210,69 @@ describe('createArtifactArchive', () => {
 	});
 
 	it('writes nothing at all for a verb that produced no bytes', async () => {
-		await archive().record(lease, resultOf('tap'));
+		await archive().record(described, resultOf('tap'));
 
-		// Not an empty directory: a lease that only ever tapped leaves no scaffolding behind.
+		// Not an empty directory: a lease that only ever tapped leaves no scaffolding behind, and
+		// that includes its description — nothing files one at grant time (D22, as amended #148).
 		await expect(readdir(root)).rejects.toMatchObject({ code: 'ENOENT' });
+	});
+
+	/**
+	 * The lease's own account of the run, beside the first artifact and on `device_info.json`'s
+	 * terms exactly (#148, PROJECT.md §10).
+	 *
+	 * The file's key is the wire's, which is what
+	 * `tests/unit/panel/test-description-fixture.test.ts` pins from the other side, and this is the
+	 * half that fails if the writer stops spelling it that way.
+	 */
+	it('files the lease description beside the first artifact, under the wire own key', async () => {
+		await archive().record(described, resultOf('screenshot', { artifact: CAPTURE }));
+
+		const filed = JSON.parse((await readFor(described, 'test_description.json')).toString('utf8'));
+		expect(GrantedLeaseSchema.pick({ testDescription: true }).parse(filed)).toEqual({
+			testDescription: DESCRIPTION,
+		});
+	});
+
+	// `wx`, so a second artifact leaves it exactly as the lease's own words — `device_info.json`'s
+	// rule, for `device_info.json`'s reason: it is a snapshot rather than a running total.
+	it('never rewrites the description once it is filed', async () => {
+		const durable = archive();
+		await durable.record(described, resultOf('screenshot', { artifact: CAPTURE }));
+		const first = await readFor(described, 'test_description.json');
+
+		await durable.record(
+			{ ...described, testDescription: 'something else entirely' },
+			resultOf('screenshot', { artifact: CAPTURE }),
+		);
+
+		expect(await readFor(described, 'test_description.json')).toEqual(first);
+	});
+
+	// Absent is absent all the way down: no file, and nothing standing in for one.
+	it('files no description at all for a lease that supplied none', async () => {
+		await archive().record(lease, resultOf('screenshot', { artifact: CAPTURE }));
+
+		expect(await readdir(directoryFor())).not.toContain('test_description.json');
+		expect(await readdir(directoryFor())).toContain('device_info.json');
+	});
+
+	/*
+	 * **It is not a path segment and never becomes one** (D22, as amended #148). The tree's shape
+	 * is `<project>/<test_name>/<lease>/<serial>` and the description is inside the last of those,
+	 * so a hostile one cannot reach a directory name — which is why `archive-path.ts` never sees it.
+	 */
+	it('shapes no directory from the description, however it is written', async () => {
+		// The default lease with a hostile description and **nothing else changed**, so the two
+		// paths are comparable: any difference between them would be the description leaking into
+		// one.
+		const hostile: Lease = { ...lease, testDescription: '../../escaped/and/../slashed' };
+
+		await archive().record(hostile, resultOf('screenshot', { artifact: CAPTURE }));
+
+		expect(leaseArchiveDirectory(root, hostile)).toBe(leaseArchiveDirectory(root, lease));
+		expect(await readdir(join(root, 'rover'))).toEqual(['home-screen']);
+		expect(await readdir(join(root, 'rover', 'home-screen'))).toHaveLength(1);
 	});
 
 	it('calls bytes nothing recognised .bin rather than guessing from the verb', async () => {

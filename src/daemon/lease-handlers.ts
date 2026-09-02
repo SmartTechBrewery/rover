@@ -184,6 +184,7 @@ export function createLeaseHandlers(
 				owner: params.owner,
 				project: params.project,
 				testName: params.testName,
+				testDescription: params.testDescription,
 				slot,
 			});
 
@@ -227,6 +228,12 @@ export function createLeaseHandlers(
 					owner: outcome.lease.owner,
 					project: outcome.lease.project,
 					testName: outcome.lease.testName,
+					// Absent when the caller supplied none, and the **key** is then absent too —
+					// `./lease-holder.ts` says why every wire object in the daemon is built this way
+					// (`GrantedLeaseSchema`, D22 as amended #148).
+					...(outcome.lease.testDescription === undefined
+						? {}
+						: { testDescription: outcome.lease.testDescription }),
 					expiresInMs: leases.remainingMs(outcome.lease),
 				},
 				device,

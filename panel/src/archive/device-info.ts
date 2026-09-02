@@ -1,9 +1,7 @@
 import { UNKNOWN } from '@panel/archive/file-size.js';
 import type { ArchivedFile, HostAnswer } from '@panel/session/host-client.js';
-import { useSession } from '@panel/session/session-provider.js';
-import { useEffect, useRef, useState } from 'react';
 import { z } from 'zod';
-import { keyOf } from './archive-path.js';
+import { useArchivedRunFile } from './archived-file.js';
 
 /**
  * The run's `device_info.json` — the one thing on the Archive screen that a directory listing
@@ -170,61 +168,14 @@ export type ArchivedDeviceInfo =
 const READING: ArchivedDeviceInfo = { status: 'reading' };
 
 /**
- * One run's `device_info.json`, read once when the run is opened.
+ * One run's `device_info.json`, read once when the run is opened — {@link useArchivedRunFile},
+ * which owns the address, the caching and the one-request-per-run rule.
  *
- * **The argument is the run's `<serial>` level**, the components a listing answered, and this hook
- * appends the archive's own file name — so no caller composes an address and there is nothing here
- * a host filesystem path would fit in (D19). `null` is *there is no address yet*, which is the
- * state of a run whose parent level has not answered: nothing is asked and nothing comes back.
- * A serial that will never arrive is not this hook's to describe — the caller holding that answer
- * says so instead, which is why `null` is not a fourth status here (`run-panel.tsx`).
- *
- * **One request per run, cached for the life of the screen** and never re-read on an interval, for
- * the reason `archive-levels.ts` gives: a run directory is written while a lease is live and
- * nothing is added once it ends, so there is nothing for a poll to notice. The `asked` guard is a
- * ref rather than state for that file's other reason — React 19's StrictMode runs an effect twice
- * on mount, and a guard written back on render would let one file be fetched twice.
+ * What is this module's is what the file *means*: the name the archive gives it, the shape it is
+ * parsed with, and {@link folded}'s mapping of one answer onto the card's four states.
  */
 export function useArchivedDeviceInfo(level: readonly string[] | null): ArchivedDeviceInfo {
-	const { readArtifactText } = useSession();
-	const [read, setRead] = useState<ReadonlyMap<string, ArchivedDeviceInfo>>(() => new Map());
-	const asked = useRef<Set<string>>(new Set());
-	const live = useRef(true);
-
-	// Keyed on the components themselves rather than on the array's identity, which the caller
-	// rebuilds every render — `archive-levels.ts`'s idiom, and `null` stringifies to a value no
-	// path can produce.
-	const wanted = JSON.stringify(level);
-
-	useEffect(() => {
-		live.current = true;
-		const components = JSON.parse(wanted) as string[] | null;
-		if (components !== null) {
-			const key = keyOf(components);
-			if (!asked.current.has(key)) {
-				asked.current.add(key);
-				void (async () => {
-					const answer = await readArtifactText([...components, DEVICE_INFO_FILE]);
-					if (!live.current) {
-						return;
-					}
-					const state = folded(answer);
-					if (state === undefined) {
-						return;
-					}
-					setRead((previous) => new Map(previous).set(key, state));
-				})();
-			}
-		}
-		return () => {
-			live.current = false;
-		};
-	}, [wanted, readArtifactText]);
-
-	if (level === null) {
-		return READING;
-	}
-	return read.get(keyOf(level)) ?? READING;
+	return useArchivedRunFile(level, DEVICE_INFO_FILE, folded, READING);
 }
 
 /**

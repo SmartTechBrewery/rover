@@ -8,6 +8,7 @@ import {
 } from '@panel/archive/device-info.js';
 import { formatBytes, formatChildCount, UNKNOWN } from '@panel/archive/file-size.js';
 import { decomposeRunName } from '@panel/archive/run-identity.js';
+import type { ArchivedTestDescription } from '@panel/archive/test-description.js';
 import { Link } from '@tanstack/react-router';
 import { ArrowLeft, FileQuestionMark, FileText, Folder, FolderOpen } from 'lucide-react';
 import {
@@ -52,6 +53,11 @@ export type RunSerial =
  * everything on it comes out of that file, with `docs/DESIGN.md` §6's three fallbacks and nothing
  * else. Its own three states are folded in {@link Device}.
  *
+ * **`DESCRIPTION` on the identity card is the second such read** (#148): the lease's own account of
+ * what this run was checking, filed with the run so it outlives the lease. Same route, same three
+ * states, folded in {@link descriptionText} — and still nothing invented, because every word of it
+ * was written by the lease that took the device.
+ *
  * **This is also the column beside whatever else the address opens** (#133, #143) — a preview, or
  * the tree with a folder of this run open in `CONTENTS` — and it is this same column in less space:
  * the identity card and the device card do not change at all. Two things do, and both come from
@@ -71,6 +77,7 @@ export function RunPanel({
 	serial,
 	contents,
 	device,
+	description,
 	open,
 	below,
 	back,
@@ -81,6 +88,8 @@ export function RunPanel({
 	readonly contents: ArchiveLevel;
 	/** This run's own `device_info.json` — {@link ArchivedDeviceInfo}. */
 	readonly device: ArchivedDeviceInfo;
+	/** This run's own `test_description.json` — {@link ArchivedTestDescription}. */
+	readonly description: ArchivedTestDescription;
 	/**
 	 * The address open inside this run — an artifact or a folder — and `null` when nothing below the
 	 * `<serial>` is addressed. It is what `CONTENTS` marks and expands, and nothing else.
@@ -115,6 +124,22 @@ export function RunPanel({
 						<Field label="OWNER">{identity.owner ?? UNKNOWN}</Field>
 						<Field label="GRANTED">{identity.grantedAt ?? UNKNOWN}</Field>
 						<Field label="SERIAL">{serialText(serial)}</Field>
+					</div>
+					{/*
+					 * **What the lease said it was about** (#148, `docs/DESIGN.md` §9) — the run's own
+					 * `test_description.json`, and the second file on this screen whose *contents* are
+					 * read rather than listed. Full width and below the three-column grid, because it
+					 * is a sentence rather than a measured value.
+					 *
+					 * **It is always drawn, which the live device card's field is not**, and the
+					 * asymmetry is the point: on a device card absence is a fact the answer carries —
+					 * no key, so nothing to draw — while here absence is a *file that is not there*,
+					 * and *reading* and *not readable* have to be tellable from it. There is nowhere
+					 * else on this card to say those, so the field says all four
+					 * ({@link descriptionText}).
+					 */}
+					<div className="mt-4">
+						<Field label="DESCRIPTION">{descriptionText(description, serial)}</Field>
 					</div>
 				</section>
 
@@ -193,6 +218,36 @@ function serialText(serial: RunSerial): string {
 		return 'not readable';
 	}
 	return serial.serial ?? UNKNOWN;
+}
+
+/**
+ * What `DESCRIPTION` reads, and **the three answers that are not a description share no phrase**
+ * (`docs/DESIGN.md` §9, `test-description.ts`).
+ *
+ * *none filed* is a lease that never described itself — ordinary, and the common case for every run
+ * filed before #148 — while *not readable* is the host declining to say what is in a file that is
+ * there. Reading them as the same thing is the mistake this vocabulary exists to prevent, one level
+ * up and here alike (D6).
+ *
+ * **The state of the level *above* is ordered first**, exactly as {@link Device} orders it and for
+ * the same reason: the file lives inside the run's `<serial>` directory, so with no serial there is
+ * no address to read it at. All three are lower case for the reason `UNKNOWN` is — it is the screen
+ * saying what it does not have, not a value the host sent.
+ */
+function descriptionText(description: ArchivedTestDescription, serial: RunSerial): string {
+	if (serial.status === 'loading') {
+		return 'reading';
+	}
+	if (serial.status === 'unreadable' || description.status === 'unreadable') {
+		return 'not readable';
+	}
+	if (serial.serial === null || description.status === 'missing') {
+		return 'none filed';
+	}
+	if (description.status === 'reading') {
+		return 'reading';
+	}
+	return description.description;
 }
 
 /**

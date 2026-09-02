@@ -122,7 +122,8 @@ export function DeviceCard({
 
 /**
  * The lease, in §6's order and for §6's reason: what is happening on the phone right now comes
- * before who to go and ask about it.
+ * before who to go and ask about it — `TEST NAME`, then the holder's own `DESCRIPTION` of the run
+ * when there is one (#148), then who to ask.
  */
 function LeasePanel({
 	device,
@@ -150,6 +151,23 @@ function LeasePanel({
 				 * without a test name (D22, as amended #129).
 				 */}
 				<Field className="col-span-2" label="Test name" value={lease.testName} tone="lease" />
+				{/*
+				 * **Directly under `TEST NAME`, and only when there is one** (#148,
+				 * `docs/DESIGN.md` §6). It is the same question that field answers — what is
+				 * happening on this phone right now — in the words `TEST NAME` is too short for, so
+				 * it sits with it rather than under `OWNER` and `PROJECT`, which say who to ask.
+				 *
+				 * A lease without one draws **no field and no placeholder row**: absent is absent on
+				 * the wire (`device-list.ts`), and an empty `DESCRIPTION` label would be the panel
+				 * inventing the one thing the host declined to send. It is not one of the card's
+				 * fixed columns, so nothing is left lopsided by its absence — which is why this is
+				 * a conditional field and `OS VERSION` is not.
+				 */}
+				{lease.testDescription === undefined ? null : (
+					/* Plain rather than the lease tone `TEST NAME` carries: the primary colour is what
+					   makes that field the first thing read, and a sentence in it would compete. */
+					<Field className="col-span-2" label="Description" value={lease.testDescription} />
+				)}
 				<Field label="Owner" value={lease.owner} />
 				<Field label="Project" value={lease.project} />
 				{/*

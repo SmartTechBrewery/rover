@@ -85,6 +85,40 @@ describe('a held device card', () => {
 		expect(screen.queryByText('—')).toBeNull();
 	});
 
+	/*
+	 * The optional field (#148, §6). It draws under `TEST NAME` because it answers the same
+	 * question in the words that field is too short for.
+	 */
+	it('renders the holder own description of the run, under the test name', () => {
+		card(
+			device({
+				heldBy: {
+					...LEASE,
+					testDescription: 'Checks the app bar keeps its top space after the theme change.',
+				},
+			}),
+		);
+
+		expect(screen.getByText('Description')).toBeDefined();
+		expect(
+			screen.getByText('Checks the app bar keeps its top space after the theme change.'),
+		).toBeDefined();
+	});
+
+	/*
+	 * And a lease without one draws **no field and no placeholder row** — absent is absent on the
+	 * wire, so there is nothing for the card to name. This is the assertion that fails if somebody
+	 * gives the field an `unknown` fallback, which is right for `OS VERSION` (a fixed column) and
+	 * wrong here.
+	 */
+	it('draws no description field at all for a lease that supplied none', () => {
+		const { container } = card(device({ heldBy: LEASE }));
+
+		expect(LEASE.testDescription).toBeUndefined();
+		expect(screen.queryByText('Description')).toBeNull();
+		expect(container.textContent).not.toContain('unknown');
+	});
+
 	// §6: there is no `STATE` field. The card already says a device is held three times over.
 	it('carries no state field', () => {
 		card(device({ heldBy: LEASE }));

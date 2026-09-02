@@ -8,6 +8,10 @@ import { componentsFromSplat, levelsOf, splatFromComponents } from '@panel/archi
 import { type ArchiveSearch, useArchiveSearch } from '@panel/archive/archive-search.js';
 import { useArchivedArtifact } from '@panel/archive/artifact.js';
 import { type ArchivedDeviceInfo, useArchivedDeviceInfo } from '@panel/archive/device-info.js';
+import {
+	type ArchivedTestDescription,
+	useArchivedTestDescription,
+} from '@panel/archive/test-description.js';
 import { ArtifactPreview } from '@panel/components/archive/artifact-preview.js';
 import { ArchiveNotReadable } from '@panel/components/archive/contents-card.js';
 import { DirectoryTree } from '@panel/components/archive/directory-tree.js';
@@ -96,6 +100,12 @@ export function ArchiveScreen() {
 	 * the card never waits on the level above the run.
 	 */
 	const device = useArchivedDeviceInfo(serialLevel);
+	/*
+	 * And the lease's own description of the run, out of the same directory and on the same terms
+	 * (#148). Two files per run rather than one; nothing else about the read changes, because both
+	 * go through the one hook that owns the address and the one-request rule (`archived-file.ts`).
+	 */
+	const description = useArchivedTestDescription(serialLevel);
 	/** The open artifact's own bytes. `null` while the address is a folder, or not yet classified. */
 	const artifact = useArchivedArtifact(open === 'artifact' ? selected : null);
 	/*
@@ -121,6 +131,7 @@ export function ArchiveScreen() {
 			{inRun ? (
 				<InsideTheRun
 					artifact={artifact}
+					description={description}
 					device={device}
 					levels={levels}
 					open={open}
@@ -129,6 +140,7 @@ export function ArchiveScreen() {
 				/>
 			) : (
 				<Content
+					description={description}
 					device={device}
 					levels={levels}
 					search={search}
@@ -152,12 +164,14 @@ function Content({
 	levels,
 	serial,
 	device,
+	description,
 	search,
 }: {
 	readonly selected: readonly string[];
 	readonly levels: ArchiveLevels;
 	readonly serial: RunSerial;
 	readonly device: ArchivedDeviceInfo;
+	readonly description: ArchivedTestDescription;
 	readonly search: ArchiveSearch;
 }) {
 	const root = levelAt(levels, []);
@@ -190,6 +204,7 @@ function Content({
 					back={false}
 					below={NO_EXPANSIONS}
 					contents={levelAt(levels, serialPath(selected, serial) ?? [])}
+					description={description}
 					device={device}
 					open={null}
 					run={selected}
@@ -250,6 +265,7 @@ function InsideTheRun({
 	selected,
 	levels,
 	device,
+	description,
 	open,
 	artifact,
 	search,
@@ -258,6 +274,7 @@ function InsideTheRun({
 	/** The one cache, holding whatever has answered — the `<serial>` level down, and the tree's own. */
 	readonly levels: ArchiveLevels;
 	readonly device: ArchivedDeviceInfo;
+	readonly description: ArchivedTestDescription;
 	/** Which of the three the address turned out to be — {@link OpenEntry}. */
 	readonly open: OpenEntry;
 	readonly artifact: ReturnType<typeof useArchivedArtifact>;
@@ -270,6 +287,7 @@ function InsideTheRun({
 			back={open === 'artifact'}
 			below={levels}
 			contents={levelAt(levels, selected.slice(0, SERIAL_DEPTH))}
+			description={description}
 			device={device}
 			key="the run"
 			open={selected}

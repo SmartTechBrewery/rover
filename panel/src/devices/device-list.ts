@@ -36,6 +36,17 @@ export const LeaseHolderSchema = z.object({
 	/** Required (D22, as amended #129) — never null and never a missing key. */
 	testName: z.string(),
 	/**
+	 * What the holder said this run is about, in its own sentences — **optional, and absent is
+	 * absent** (D22, as amended #148).
+	 *
+	 * `.optional()` and not `.nullable()`, because that is what the host sends: a lease taken
+	 * without one carries no key at all rather than a `null` or an empty string, so there is
+	 * nothing here for a card to mistake for a description (`src/ipc/methods.ts`). The card and
+	 * the force-release dialog draw no field when it is missing, and neither substitutes a
+	 * placeholder.
+	 */
+	testDescription: z.string().optional(),
+	/**
 	 * When the lease was granted, as the host's own ISO-8601 instant.
 	 *
 	 * Kept as the string it arrived as. It is the *host's* clock, so the panel renders it and never

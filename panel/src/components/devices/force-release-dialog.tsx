@@ -30,6 +30,10 @@ import { type ReactNode, useEffect, useRef } from 'react';
  *
  * It says in plain words what confirming does — the lease ends immediately, the device is restored
  * to a clean state, and the agent holding it fails on its next request. That is not softened.
+ *
+ * **One field is not in the approved markup: the holder's `DESCRIPTION`** (#148, and §7 records the
+ * deviation with its reason). This dialog exists so an operator can read what they are about to end,
+ * and a short `TEST NAME` is the field that turned out not to be enough for that.
  */
 export function ForceReleaseDialog({
 	device,
@@ -130,6 +134,20 @@ export function ForceReleaseDialog({
 						 * cannot be taken without a test name (D22, as amended #129).
 						 */}
 						<Field className="col-span-2" label="Test name" value={lease.testName} />
+						{/*
+						 * **The sentence this dialog exists to let an operator read** (#148). Ending
+						 * somebody else's lease is a judgement about what is running on that phone, and
+						 * `app-bar-top-space` is not enough to make it on — so the holder's own
+						 * description sits here, under `TEST NAME`, exactly as it does on the card behind
+						 * this dialog (`docs/DESIGN.md` §6, §7).
+						 *
+						 * A lease without one draws **no field and no placeholder row**: absent is absent
+						 * on the wire, and an empty label here would be the panel inventing something to
+						 * read at the one moment that matters.
+						 */}
+						{lease.testDescription === undefined ? null : (
+							<Field className="col-span-2" label="Description" value={lease.testDescription} />
+						)}
 						<Field
 							className="col-span-2"
 							label="Time to auto release"

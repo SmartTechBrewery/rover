@@ -121,13 +121,20 @@ async function serveReadyDevice(describeDevice?: DeviceBackend['describeDevice']
 function acquire(
 	client: IpcClient,
 	owner: string,
-	extra: { serial?: DeviceSerial; project?: string; testName?: string } = {},
+	extra: {
+		serial?: DeviceSerial;
+		project?: string;
+		testName?: string;
+		testDescription?: string;
+	} = {},
 ): Promise<AcquireDeviceResult> {
 	return client.request('acquire_device', {
 		serial: extra.serial ?? SERIAL,
 		owner,
 		project: extra.project ?? 'rover',
 		testName: extra.testName ?? 'home screen',
+		// Left off entirely when the test names none, which is what absent means on this wire.
+		...(extra.testDescription === undefined ? {} : { testDescription: extra.testDescription }),
 	});
 }
 
@@ -257,6 +264,28 @@ describe('what a granted lease carries', () => {
 
 		if (result.outcome !== 'granted') throw new Error('expected a granted lease');
 		expect(result.lease.testName).toBe('home screen');
+	});
+
+	/*
+	 * The optional fourth string (D22, as amended #148), echoed back verbatim on the grant — and
+	 * **absent as an absent key** for a caller who supplied none, which is the assertion the key
+	 * set above is worth making: there is no empty string and no invented placeholder.
+	 */
+	it("echoes the caller's description back, and answers no key without one", async () => {
+		await serveReadyDevice();
+		const client = await connect();
+		const testDescription = 'Checks the home screen keeps its top space after the theme change.';
+
+		const described = await acquire(client, 'issue-112', { testDescription });
+		const plain = await acquire(client, 'pr-127-review', {
+			serial: parseDeviceSerial('attached-2'),
+		});
+
+		if (described.outcome !== 'granted' || plain.outcome !== 'granted') {
+			throw new Error('expected two granted leases');
+		}
+		expect(described.lease.testDescription).toBe(testDescription);
+		expect('testDescription' in plain.lease).toBe(false);
 	});
 
 	it('grants two devices at once — a lease is per device, not per host (D7)', async () => {
@@ -503,6 +532,43 @@ describe('the params gate', () => {
 		// A refusal naming the field rather than a lease filed under a directory the code
 		// invented for a caller who named nothing.
 		await expect(rejection).rejects.toBeInstanceOf(IpcRequestError);
+		await expect(rejection).rejects.toMatchObject({ code: 'invalid_params' });
+	});
+
+	/*
+	 * `.strict()` still covers the optional key: a typo'd `testDescriptoin` is `invalid_params`
+	 * rather than a lease quietly granted with the description dropped, which is exactly the
+	 * failure an *optional* field would otherwise make silent (D22, as amended #148).
+	 */
+	it('rejects a typo’d description key rather than dropping it', async () => {
+		await serveReadyDevice();
+		const client = await connect();
+
+		const rejection = client.request('acquire_device', {
+			serial: SERIAL,
+			owner: 'issue-112',
+			project: 'rover',
+			testName: 'home screen',
+			testDescriptoin: 'Checks the home screen.',
+		} as never);
+
+		await expect(rejection).rejects.toBeInstanceOf(IpcRequestError);
+		await expect(rejection).rejects.toMatchObject({ code: 'invalid_params' });
+	});
+
+	// An empty one is not a description, so it is refused rather than stored and rendered blank.
+	it('rejects an empty description — absent is the only way to say nothing', async () => {
+		await serveReadyDevice();
+		const client = await connect();
+
+		const rejection = client.request('acquire_device', {
+			serial: SERIAL,
+			owner: 'issue-112',
+			project: 'rover',
+			testName: 'home screen',
+			testDescription: '',
+		});
+
 		await expect(rejection).rejects.toMatchObject({ code: 'invalid_params' });
 	});
 

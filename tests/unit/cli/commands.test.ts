@@ -265,6 +265,69 @@ describe('acquire, list, release', () => {
 		expect(logged.join('\n')).not.toContain(path);
 	});
 
+	/*
+	 * The optional string, end to end (D22, as amended #148): typed on the command line, carried on
+	 * the wire, echoed on the grant's own line, and in `--json`. It is deliberately **not** in
+	 * `rover list`'s `HELD BY` column — that cell is measured, and the reason is in
+	 * `src/cli/_shared/output.ts` — so the listing below asserts the summary is unchanged while the
+	 * `--json` document carries it.
+	 */
+	it('carries --test-description to the host, shows it on the grant, and keeps it out of the table', async () => {
+		registerFakeBackend();
+		await start();
+		const description = 'Checks the checkout flow survives the second app bar row.';
+
+		expect(
+			await run([
+				'acquire',
+				'attached-1',
+				'--owner',
+				'issue-112',
+				'--project',
+				'rover',
+				'--test-name',
+				'checkout flow',
+				'--test-description',
+				description,
+			]),
+		).toBe(EXIT_OK);
+
+		expect(logged.join('\n')).toContain(`Description: ${description}`);
+
+		logged = [];
+		expect(await run(['list'])).toBe(EXIT_OK);
+		expect(logged.join('\n')).toContain('issue-112 (project rover, test checkout flow)');
+		expect(logged.join('\n')).not.toContain(description);
+
+		logged = [];
+		expect(await run(['list', '--json'])).toBe(EXIT_OK);
+		expect(JSON.parse(logged[0] ?? '')).toMatchObject({
+			devices: [{ heldBy: { testDescription: description } }],
+		});
+	});
+
+	// No flag, no key, no line — nothing here invents one for a caller who said nothing.
+	it('carries no description at all when the flag is not typed', async () => {
+		registerFakeBackend();
+		await start();
+
+		expect(
+			await run([
+				'acquire',
+				'attached-1',
+				'--owner',
+				'issue-112',
+				'--project',
+				'rover',
+				'--test-name',
+				'checkout flow',
+				'--json',
+			]),
+		).toBe(EXIT_OK);
+
+		expect(logged[0] ?? '').not.toContain('testDescription');
+	});
+
 	it('exits 1 and names the holder when the device is already held', async () => {
 		registerFakeBackend();
 		await start();

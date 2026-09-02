@@ -134,7 +134,13 @@ export function registerDeviceTools(
 				'`owner` is never derived from a branch, a process or whoever authenticated. ' +
 				"`testName` is required and names this lease's directory in the host's artifact " +
 				'archive; it is deliberately not unique, so two runs of one check sit side by side ' +
-				'there. ' +
+				'there. `testDescription` is **optional** and is the one place to say what this run ' +
+				'is actually about — one or two sentences in your own words, where `testName` is a ' +
+				'short label. Nothing parses it and it names no directory, so write it for the person ' +
+				'who reads it: the operator watching the device while you drive it, and whoever opens ' +
+				'this run in the archive weeks from now. Leave it out if you have nothing to say ' +
+				'rather than repeating `testName` or inventing a placeholder — absent is a real ' +
+				'answer here and no default is substituted for it. ' +
 				(defaultProject === undefined
 					? ''
 					: `\`project\` may be left out here: this server was pointed at a project hook ` +
