@@ -6,16 +6,19 @@
  * second agent blocked by hardware it was never going to touch. Here the unit is the
  * serial, and two devices are two independent leases that know nothing about each other.
  *
- * **Three caller-supplied strings, none of them inspected** (D16, D22). `owner` attributes
+ * **Four caller-supplied strings, none of them inspected** (D16, D22). `owner` attributes
  * the lease — `issue-112`, `pr-127-review`, later a run identity — and is never derived
  * from a process, a connection or whoever authenticated (D20). `project` and `testName`
- * exist so the artifact archive has somewhere to file the results (PROJECT.md §10). All
+ * exist so the artifact archive has somewhere to file the results (PROJECT.md §10). Those
  * three are **required**: a lease always names who it is for, which project it belongs to and
  * what it is checking, so the archive's tree never branches on whether a field was supplied
- * (D22, as amended #129). All three are stored exactly as given and read by nothing here: no
- * trimming, no defaulting, no meaning. `testName` is deliberately **not** unique — running the
- * same named check before and after a change is two leases with one name, which is the point
- * rather than a collision to reject.
+ * (D22, as amended #129). `testDescription` is the fourth and the one that may be **absent**,
+ * because it is prose rather than a directory name and the tree's shape does not depend on it
+ * (D22, as amended #148) — absent is stored as absent, with nothing standing in for it. All
+ * four are stored exactly as given and read by nothing here: no trimming, no defaulting, no
+ * meaning. `testName` is deliberately **not** unique — running the same named check before and
+ * after a change is two leases with one name, which is the point rather than a collision to
+ * reject.
  *
  * **The TTL is renewed by activity, not by a heartbeat** (D8). {@link LeaseStore.use} is
  * what every verb call goes through, and it pushes the expiry out; there is nothing for a
@@ -64,6 +67,15 @@ export interface Lease {
 	/** Caller-supplied and **required** — see the module header. Not unique (D22). */
 	readonly testName: string;
 	/**
+	 * Caller-supplied and **optional** — what this run is about, in the caller's own sentences.
+	 *
+	 * Absent when the caller supplied none, and nothing here invents one. Carried and read by
+	 * nothing in this module, exactly like the three above; unlike {@link Lease.testName} it is
+	 * **never a path component** — `./archive-path.ts` does not see it, and the archive files it
+	 * as a file's contents instead (`./archive.ts`).
+	 */
+	readonly testDescription?: string;
+	/**
 	 * When this lease was granted. The one host-local instant that *does* reach a client —
 	 * `./lease-holder.ts` renders it as a UTC string on `LeaseHolderSchema`, because a
 	 * stranger cannot derive it from the remaining duration: {@link LeaseStore.use} moves the
@@ -93,12 +105,14 @@ export interface Lease {
 	readonly slot: Slot;
 }
 
-/** What a caller asks for. The three strings arrive as given and are stored as given. */
+/** What a caller asks for. The four strings arrive as given and are stored as given. */
 export interface LeaseRequest {
 	readonly serial: DeviceSerial;
 	readonly owner: string;
 	readonly project: string;
 	readonly testName: string;
+	/** Optional, and absent stays absent — see {@link Lease.testDescription}. */
+	readonly testDescription?: string;
 	/** Allocated by the caller, stored as given, interpreted by nothing here — see {@link Lease.slot}. */
 	readonly slot: Slot;
 }
@@ -245,6 +259,7 @@ export function createLeaseStore(options: LeaseStoreOptions = {}): LeaseStore {
 				owner: request.owner,
 				project: request.project,
 				testName: request.testName,
+				testDescription: request.testDescription,
 				slot: request.slot,
 				createdAtMs: granted,
 				expiresAtMs: granted + ttlMs,

@@ -161,6 +161,17 @@ export function formatDuration(ms: number): string {
  *
  * Both halves are always there: a lease cannot be taken without either string (D22, as
  * amended #129), so there is no shorter form to render.
+ *
+ * **`test_description` is deliberately not here, and that is a decision rather than an
+ * omission** (D22, as amended #148). This string and {@link formatHolder} below are one-line
+ * summaries, and one of the two places they are read is the `HELD BY` cell of `rover list`'s
+ * table — whose columns are measured against their own content ({@link renderTable}), so a
+ * prose sentence of up to a thousand characters in that cell sets the width of every row in the
+ * listing. A description reaches a CLI reader in the two places that have room for it instead:
+ * `renderGrant`'s own line on the grant, and `--json` in every mode, which carries the host's
+ * answer whole and so carries the holder's description in `rover list` too. Adding it here would
+ * either wreck the table or need a truncation, and a truncated sentence is the one rendering of
+ * an opaque caller string this CLI has never done.
  */
 export function formatAttribution(project: string, testName: string): string {
 	return `project ${escapeControlCharacters(project)}, test ${escapeControlCharacters(testName)}`;
@@ -180,6 +191,10 @@ export function formatAttribution(project: string, testName: string): string {
  * It is deliberately not passed through {@link escapeControlCharacters}. Every other string
  * here is caller-supplied and unvalidated; this one is `z.string().datetime()`, so its shape
  * is a parse rather than a convention, and escaping it would imply the schema is not trusted.
+ *
+ * The holder's `testDescription` is **not** rendered here, for the reason
+ * {@link formatAttribution} gives at length: this line is a table cell as well as a sentence in
+ * a refusal. `--json` carries it on both.
  */
 export function formatHolder(holder: LeaseHolder): string {
 	return (

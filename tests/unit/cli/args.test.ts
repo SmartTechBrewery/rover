@@ -15,7 +15,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { LOCAL_HOST, REMOTE_HOST, resolveHost } from '@/cli/_shared/host.js';
 import { EXIT_OK, EXIT_USAGE, run } from '@/cli/index.js';
 import { PROJECT_FILE_ENV_VAR } from '@/daemon/project-hooks.js';
-import { ATTRIBUTION_MAX_LENGTH, AttributionStringSchema } from '@/ipc/methods.js';
+import {
+	ATTRIBUTION_MAX_LENGTH,
+	AttributionStringSchema,
+	TEST_DESCRIPTION_MAX_LENGTH,
+	TestDescriptionSchema,
+} from '@/ipc/methods.js';
 import { MAX_FRAMES_PER_SECOND, MAX_RECORDING_MS } from '@/verbs/record.js';
 import {
 	connectWithoutStarting,
@@ -281,6 +286,68 @@ describe('rover acquire, on its required attribution', () => {
 		);
 
 		expect(errored.join('\n')).toContain('--project is required');
+	});
+
+	/*
+	 * `--test-description` is optional, so it has no "is required" case — what it does have is the
+	 * two ways a *typed* one can be wrong, both decided here rather than over a round trip that
+	 * would exit 1 (`optionalDescription`, D22 as amended #148).
+	 */
+	it('exits 2 for a --test-description typed with nothing in it', async () => {
+		expect(
+			await run([
+				'acquire',
+				'serial-1',
+				'--owner',
+				'issue-112',
+				'--project',
+				'rover',
+				'--test-name',
+				'home screen',
+				'--test-description',
+				'',
+			]),
+		).toBe(EXIT_USAGE);
+
+		// It says to leave the flag out, because that is what absent means here — not that the
+		// flag is required, which it is not.
+		expect(errored.join('\n')).toContain('--test-description was given nothing');
+		expect(errored.join('\n')).toContain('leave it out');
+	});
+
+	it('exits 2 for a --test-description past the length the host accepts', async () => {
+		const tooLong = 'x'.repeat(TEST_DESCRIPTION_MAX_LENGTH + 1);
+
+		expect(
+			await run([
+				'acquire',
+				'serial-1',
+				'--owner',
+				'issue-112',
+				'--project',
+				'rover',
+				'--test-name',
+				'home screen',
+				'--test-description',
+				tooLong,
+			]),
+		).toBe(EXIT_USAGE);
+
+		expect(errored.join('\n')).toContain(`--test-description is ${tooLong.length} characters`);
+		expect(errored.join('\n')).not.toContain('testDescription');
+	});
+
+	// A sentence that would be too long for an attribution string is an ordinary description, so
+	// the two bounds are asserted to be genuinely different rather than one aliasing the other.
+	it('holds the description to the prose bound and not to the attribution one', () => {
+		const prose = 'x'.repeat(ATTRIBUTION_MAX_LENGTH + 1);
+
+		expect(TEST_DESCRIPTION_MAX_LENGTH).toBeGreaterThan(ATTRIBUTION_MAX_LENGTH);
+		expect(TestDescriptionSchema.safeParse(prose).success).toBe(true);
+		expect(AttributionStringSchema.safeParse(prose).success).toBe(false);
+		expect(
+			TestDescriptionSchema.safeParse('x'.repeat(TEST_DESCRIPTION_MAX_LENGTH + 1)).success,
+		).toBe(false);
 	});
 
 	it('takes its ceiling from the host schema rather than restating it', () => {

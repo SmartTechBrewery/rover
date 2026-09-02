@@ -141,6 +141,11 @@ export type ListDevicesParams = z.infer<typeof ListDevicesParamsSchema>;
  * and take the device. The owner, project and test name are here because "held by
  * `pr-127-review` for another eleven minutes" is what makes a refusal actionable.
  *
+ * The holder's `testDescription` is here for the same reason and carries the same absence
+ * (`GrantedLeaseSchema`): it is what an operator reads before deciding a lease is worth ending,
+ * and a refusal and a listing must not disagree about it — which is why there is one projection
+ * that builds this shape (`src/daemon/lease-holder.ts`) rather than a field added at each caller.
+ *
  * The grant instant is here and *not* on `GrantedLeaseSchema` for the opposite reason: the
  * winner of an acquire already knows when it was granted, because it asked. A stranger
  * reading a list has no other way to find out.
@@ -151,6 +156,8 @@ export const LeaseHolderSchema = z
 		owner: z.string(),
 		project: z.string(),
 		testName: z.string(),
+		/** As the holder supplied it, or absent. Optional for `GrantedLeaseSchema`'s reason. */
+		testDescription: z.string().optional(),
 		/**
 		 * When this lease was **granted**, as an ISO-8601 instant with a `Z`. The one field on
 		 * this schema that is an instant rather than a duration, and so the one deliberate
@@ -255,9 +262,36 @@ export const ATTRIBUTION_MAX_LENGTH = 256;
 export const AttributionStringSchema = z.string().min(1).max(ATTRIBUTION_MAX_LENGTH);
 
 /**
+ * The lease's fourth caller-supplied string — `test_description` (D22, as amended #148) — and
+ * **the one that may be absent**. One or two sentences saying what this run is checking, in the
+ * agent's own words, beside the short identifier-shaped `testName` that names it.
+ *
+ * It is attribution like the other three: opaque, stored as given, parsed by nothing, derived
+ * from nothing and authorizing nothing (D20). What separates it is that **it is not a path
+ * segment and never becomes one** — `testName` remains the only caller string the archive tree
+ * is shaped from (`src/daemon/archive-path.ts`, untouched by this field) — which is also why
+ * absent is a legitimate answer here and is not one for `testName`: the tree's shape cannot
+ * depend on a field the tree does not use.
+ *
+ * **A separate bound rather than {@link ATTRIBUTION_MAX_LENGTH}, deliberately.** The 256 above
+ * exists because the host echoes those strings back inside a refusal *message* it allocates on a
+ * peer's behalf; nothing echoes a description into a message, and 256 characters is short for two
+ * sentences. 1024 is still allocation hygiene of the same kind — a bound, looked at for its length
+ * and never for its meaning — set where prose fits rather than where an identifier does.
+ *
+ * `.min(1)`, so **absent is the only way to say nothing**: an empty string is `invalid_params`
+ * rather than a description that renders as a blank field, which is #129's lesson applied to the
+ * field that is genuinely optional. Nothing anywhere substitutes a placeholder for a caller who
+ * supplied none.
+ */
+export const TEST_DESCRIPTION_MAX_LENGTH = 1024;
+export const TestDescriptionSchema = z.string().min(1).max(TEST_DESCRIPTION_MAX_LENGTH);
+
+/**
  * `.strict()` so a typo'd key is `invalid_params` rather than a lease granted with an
  * attribution string silently missing — which the archive would only discover later, with
- * the device already handed out.
+ * the device already handed out. That holds for the optional key too: `testDescriptoin` is a
+ * refusal, not a lease quietly granted with no description.
  *
  * `testName` is **required** — a lease always names what it is checking, because that name is
  * this lease's directory in the host's artifact archive and a fallback the approved designs do
@@ -282,6 +316,12 @@ export const AcquireDeviceParamsSchema = z
 		 * artifacts under (D22, D24) — opaque here, parsed by nothing, and not unique.
 		 */
 		testName: AttributionStringSchema,
+		/**
+		 * What this run is *about*, in the caller's own sentences — optional, and never a path
+		 * segment. See {@link TestDescriptionSchema} for why this one may be absent when
+		 * {@link AcquireDeviceParams.testName} may not.
+		 */
+		testDescription: TestDescriptionSchema.optional(),
 	})
 	.strict();
 export type AcquireDeviceParams = z.infer<typeof AcquireDeviceParamsSchema>;
@@ -293,6 +333,12 @@ export type AcquireDeviceParams = z.infer<typeof AcquireDeviceParamsSchema>;
  *
  * `expiresInMs` is a duration, not an instant, for the same reason `uptimeMs` is: the caller
  * may be on another machine and shares no clock with the host (D17).
+ *
+ * `testDescription` is `.optional()` and **absent is absent**: a caller who supplied none gets no
+ * key back rather than an empty string or an invented placeholder, so a client can tell "there is
+ * no description" from "the description is blank" without a convention. `undefined` does not
+ * survive JSON, which is exactly the encoding wanted here — unlike `heldBy`, where absence had to
+ * be a `null` because *free* is a state every client branches on.
  */
 export const GrantedLeaseSchema = z
 	.object({
@@ -301,6 +347,8 @@ export const GrantedLeaseSchema = z
 		owner: z.string(),
 		project: z.string(),
 		testName: z.string(),
+		/** As the caller supplied it, or absent. Never derived and never defaulted. */
+		testDescription: z.string().optional(),
 		expiresInMs: z.number().int().nonnegative(),
 	})
 	.strict();

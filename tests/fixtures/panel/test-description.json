@@ -1,0 +1,7 @@
+{
+  "files": [
+    {
+      "testDescription": "Checks the login form still fits above the keyboard on a short screen, after the app bar gained its second row."
+    }
+  ]
+}

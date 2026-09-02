@@ -13,6 +13,7 @@
         "owner": "issue-113",
         "project": "rover",
         "testName": "the devices grid",
+        "testDescription": "Checks the Devices screen draws a held card, a free card and the counter badge that has to agree with them.",
         "grantedAt": "2026-08-31T18:48:48.247Z",
         "expiresInMs": 1186759
       }

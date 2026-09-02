@@ -107,6 +107,25 @@ describe('what tools/list advertises', () => {
 		expect(acquire?.inputSchema.required).toContain('testName');
 	});
 
+	/*
+	 * The one **optional** argument on that row (D22, as amended #148), and the declaration is
+	 * where an agent learns both halves: that the key exists, and that it may be left out. It is
+	 * derived from `AcquireDeviceParamsSchema` like everything else here — the generic test above
+	 * already holds that the properties and the required list are the schema's own, so what this
+	 * adds is that the optional one is on the right side of that line.
+	 */
+	it('declares acquire_device’s testDescription, and never as a requirement', async () => {
+		const tools = await advertisedTools();
+
+		const acquire = tools.find((tool) => tool.name === 'acquire_device');
+		expect(Object.keys(acquire?.inputSchema.properties ?? {})).toContain('testDescription');
+		expect(acquire?.inputSchema.required ?? []).not.toContain('testDescription');
+		// And the description says what to put there and that it is optional, so an agent reading
+		// only the prose is not left guessing at a key it can see in the schema.
+		expect(acquire?.description).toContain('testDescription');
+		expect(acquire?.description).toContain('optional');
+	});
+
 	it('drops project from acquire_device’s required list when one is, and changes nothing else', async () => {
 		const tools = await advertisedTools('checkout-web');
 

@@ -1,6 +1,7 @@
 import type { ArchiveLevel, ArchiveLevels } from '@panel/archive/archive-levels.js';
 import { keyOf } from '@panel/archive/archive-path.js';
 import type { ArchivedDeviceInfo } from '@panel/archive/device-info.js';
+import type { ArchivedTestDescription } from '@panel/archive/test-description.js';
 import { render, screen } from '@testing-library/react';
 import type { AnchorHTMLAttributes, ReactNode } from 'react';
 import { describe, expect, it, vi } from 'vitest';
@@ -54,16 +55,26 @@ const UNANSWERED: ArchivedDeviceInfo = { status: 'read', info: fixture.files[1] 
 /** No level below the `<serial>` has been read, which is every state with nothing open. */
 const NO_LEVELS: ArchiveLevels = new Map();
 
+/** The run's own `test_description.json`, as the archive wrote it (#148). */
+const DESCRIBED: ArchivedTestDescription = {
+	status: 'read',
+	description: 'Checks the login form still fits above the keyboard on a short screen.',
+};
+/** The common case for a run filed before the field existed: no such file. */
+const UNDESCRIBED: ArchivedTestDescription = { status: 'missing' };
+
 function showing(
 	serial: RunSerial = NAMED,
 	contents: ArchiveLevel = CONTENTS,
 	device: ArchivedDeviceInfo = DEVICE,
+	description: ArchivedTestDescription = DESCRIBED,
 ) {
 	return render(
 		<RunPanel
 			back={false}
 			below={NO_LEVELS}
 			contents={contents}
+			description={description}
 			device={device}
 			open={null}
 			run={RUN}
@@ -91,6 +102,7 @@ function withOpen(open: readonly string[], below: ArchiveLevels, back: boolean) 
 			back={back}
 			below={below}
 			contents={CONTENTS}
+			description={DESCRIBED}
 			device={DEVICE}
 			open={open}
 			run={RUN}
@@ -151,7 +163,9 @@ describe('the level the serial is read from', () => {
 	it('says it is reading, rather than that the run wrote nothing', () => {
 		const { container } = showing({ status: 'loading' });
 
-		expect(screen.getByText('reading')).toBeDefined();
+		// `SERIAL` and `DESCRIPTION` both read off that level, so both say it — and saying the same
+		// thing is the point: neither may claim anything definite about a level nobody has answered.
+		expect(screen.getAllByText('reading')).toHaveLength(2);
 		expect(screen.getByText('Reading this level of the archive.')).toBeDefined();
 		expect(container.textContent).not.toContain('There is nothing to list for this run.');
 		// A `CONTENTS` entry rather than `device_info.json`, which card 2's heading names in every
@@ -163,7 +177,7 @@ describe('the level the serial is read from', () => {
 	it('says the host cannot read it, rather than that the run wrote nothing', () => {
 		const { container } = showing({ status: 'unreadable' });
 
-		expect(screen.getByText('not readable')).toBeDefined();
+		expect(screen.getAllByText('not readable')).toHaveLength(2);
 		expect(screen.getByText('ARCHIVE NOT READABLE')).toBeDefined();
 		expect(screen.getByText(/runs may well be filed here/)).toBeDefined();
 		expect(container.textContent).not.toContain('There is nothing to list for this run.');
@@ -319,6 +333,61 @@ describe('a device_info.json that could not be read', () => {
  * duration, a trigger, an author, an environment panel, a network figure and file names nothing
  * wrote; every one of them would look plausible and none of them is on the wire.
  */
+/**
+ * **`DESCRIPTION` — what the lease said it was about** (#148), out of the run's own
+ * `test_description.json` and off the same byte route the device card reads.
+ *
+ * Four answers and no two of them share a phrase: the sentence itself, *reading*, *none filed* and
+ * *not readable*. The pair that must never render alike is the last two — a lease that never
+ * described itself is the ordinary case, and a host that will not read the file is saying nothing
+ * about the lease at all (D6).
+ */
+describe('what the lease said the run was about', () => {
+	it('reads the sentence out of the run own file', () => {
+		showing(NAMED, CONTENTS, DEVICE, DESCRIBED);
+
+		expect(screen.getByText('DESCRIPTION')).toBeDefined();
+		expect(
+			screen.getByText('Checks the login form still fits above the keyboard on a short screen.'),
+		).toBeDefined();
+	});
+
+	// The common case for every run filed before the field existed, and said without alarm.
+	it('says none is filed, in words that are not the unreadable ones', () => {
+		const { container } = showing(NAMED, CONTENTS, DEVICE, UNDESCRIBED);
+
+		expect(screen.getByText('none filed')).toBeDefined();
+		expect(container.textContent).not.toContain('not readable');
+		expect(container.querySelectorAll('[role="alert"]')).toHaveLength(0);
+	});
+
+	it('says the host cannot read the file differently again', () => {
+		const { container } = showing(NAMED, CONTENTS, DEVICE, { status: 'unreadable' });
+
+		expect(screen.getByText('not readable')).toBeDefined();
+		expect(container.textContent).not.toContain('none filed');
+	});
+
+	it('says it is reading, with no spinner', () => {
+		const { container } = showing(NAMED, CONTENTS, DEVICE, { status: 'reading' });
+
+		expect(screen.getByText('reading')).toBeDefined();
+		expect(container.textContent).not.toContain('none filed');
+		expect(container.innerHTML).not.toContain('animate');
+	});
+
+	/*
+	 * A run with no `<serial>` directory has nowhere for the file to be, so *none filed* is the
+	 * honest answer — and the file is never asked for, which is why the state arrives as `reading`
+	 * and must not be rendered as such (`archive.tsx`, and the device card's own rule).
+	 */
+	it('says none is filed for a run with no `<serial>` directory, rather than reading forever', () => {
+		showing(NO_SINGLE_CHILD, CONTENTS, DEVICE, { status: 'reading' });
+
+		expect(screen.getByText('none filed')).toBeDefined();
+	});
+});
+
 describe('what is not on this panel', () => {
 	it('lists only what the host listed', () => {
 		const { container } = showing();

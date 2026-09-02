@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { ListDevicesResultSchema } from '@/ipc/methods.js';
+import {
+	ATTRIBUTION_MAX_LENGTH,
+	ListDevicesResultSchema,
+	TestDescriptionSchema,
+} from '@/ipc/methods.js';
 import fixture from '../../fixtures/panel/list-devices.json' with { type: 'json' };
 
 /**
@@ -18,11 +22,19 @@ import fixture from '../../fixtures/panel/list-devices.json' with { type: 'json'
  * the second.
  *
  * **Where it came from, exactly** (`ai/TESTING.md`, "A wire answer is a fixture too, and it is filed
- * differently" — which is where the two bends below are recorded against the rule they bend). It was
+ * differently" — which is where the bends below are recorded against the rule they bend). It was
  * captured over the panel's own HTTP surface from a daemon on API 35 with an emulator attached
  * (`sdk_gphone64_arm64`), in three reads: two leases taken with a `testName` each, and the device
  * free after a `force-release`. The one machine had one device, so the second entry carries a
  * second emulator's serial rather than a second capture's.
+ *
+ * The first entry's `testDescription` is the **fourth bend**, and it is an *addition* rather than a
+ * replacement: the field did not exist when this was captured (#148), so no capture of that vintage
+ * could carry one and the mirror's drift gate would have nothing to hold. One sentence of the shape
+ * an agent would write was added to that entry and nothing else in it was touched. The second
+ * entry deliberately keeps **no** description at all, because that is what a lease that supplied
+ * none looks like on this wire — no key, and nothing standing in for it — and both halves assert
+ * that difference rather than only the presence.
  *
  * The second entry's `testName` is the **third bend**, and a narrow one: it was captured as `null`,
  * back when a lease could be taken without one. #129 made `test_name` required, so a `null` there
@@ -61,5 +73,43 @@ describe("the panel's list_devices fixture", () => {
 		for (const holder of held) {
 			expect(holder.testName.length).toBeGreaterThan(0);
 		}
+	});
+
+	/*
+	 * Both sides of the field that is genuinely optional (D22, as amended #148). One holder describes
+	 * itself and one does not, and the absent one is an **absent key** rather than a `null` or an
+	 * empty string — which is the whole of what the panel's cards branch on, so a fixture carrying
+	 * only the present case would leave the interesting half unpinned.
+	 */
+	it('carries a lease with a description and one without, absence as an absent key', () => {
+		const parsed = ListDevicesResultSchema.parse(fixture);
+		const held = parsed.devices.flatMap((device) =>
+			device.heldBy === null ? [] : [device.heldBy],
+		);
+
+		expect(held[0]?.testDescription).toContain('Devices screen');
+		expect(held[1]?.testDescription).toBeUndefined();
+		// Against the bytes, not the parse: a `null` and an `""` both survive `.optional()` as
+		// something, and neither is what absent means here.
+		expect(JSON.stringify(fixture)).not.toContain('"testDescription":null');
+		expect(JSON.stringify(fixture)).not.toContain('"testDescription":""');
+	});
+
+	/*
+	 * It is prose rather than a second label, and the bound it is held to is the prose one — which
+	 * is the decision `TestDescriptionSchema` records and the reason it is not
+	 * `ATTRIBUTION_MAX_LENGTH`. A sentence longer than the whole attribution bound is a value this
+	 * wire has to carry and the older one would have refused.
+	 */
+	it('describes a run in prose, held to the prose bound', () => {
+		const parsed = ListDevicesResultSchema.parse(fixture);
+		const holder = parsed.devices[0]?.heldBy;
+		const described = holder?.testDescription ?? '';
+
+		expect(described.length).toBeGreaterThan((holder?.testName ?? '').length);
+		expect(TestDescriptionSchema.safeParse(described).success).toBe(true);
+		expect(TestDescriptionSchema.safeParse('x'.repeat(ATTRIBUTION_MAX_LENGTH + 1)).success).toBe(
+			true,
+		);
 	});
 });

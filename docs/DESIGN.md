@@ -326,8 +326,10 @@ Held — the lease panel, in this order and for this reason:
 1. **`TEST NAME`**, full width, first. It is the only field that says *what is happening on the
    phone right now*; owner and project say who to go and ask about it, and the person scanning the
    screen wants the first before the second.
-2. `OWNER` and `PROJECT`, side by side.
-3. `GRANTED`, last.
+2. **`DESCRIPTION`**, full width, directly under it — **and only when the lease carries one**
+   (#148). See below: it is a deviation from the approved markup.
+3. `OWNER` and `PROJECT`, side by side.
+4. `GRANTED`, last.
 
 The countdown sits in the panel header. **It goes back up**: the TTL is renewed by activity, not by
 a heartbeat (D8), so a countdown that only ever descends is wrong, and the screen must show the
@@ -382,6 +384,30 @@ data never had to answer, settled here.
   warning colour, and §7 already says this number is not dressed as urgent. It has no `aria-live`
   either — a region announcing once a second is a screen-reader firehose, and the digits are
   ordinary text.
+
+**`DESCRIPTION` is not in the approved markup, and that is a deliberate deviation** (#148,
+`636633385461686529`'s screens have no such field). It is recorded here rather than silently added,
+the way §9 records its own two.
+
+- **Why it is there at all.** `TEST NAME` is first because it is the only field that says what is
+  happening on the phone right now — and it is also the archive's directory name, so it goes through
+  `pathSegment`, is truncated at 64 characters and has every character outside `[A-Za-z0-9._-]`
+  replaced. Agents therefore keep it identifier-shaped: `app-bar-top-space`, `mvp_walkthrough`. That
+  names the check and does not say what the run is about, which is exactly what an operator deciding
+  whether to force-release needs to read. So a lease may carry one or two sentences beside it (D22,
+  as amended #148), and this is where they go.
+- **Directly under `TEST NAME`, not under `OWNER`.** It answers the same question that field
+  answers, in the words that field is too short for; owner and project answer a different one.
+- **A lease without one draws no field and no placeholder row.** The description is *optional on the
+  wire* — absent is an absent key, never `null` and never `""` — so there is nothing to name. This is
+  the opposite of `OS VERSION`, which says `unknown` because it is one of the card's two fixed
+  columns and dropping it would leave the row lopsided; a full-width conditional field leaves nothing
+  lopsided, and an empty `DESCRIPTION` label would be the panel inventing the one thing the host
+  declined to send.
+- **It is not `TEST DESCRIPTION`.** The label sits directly under `TEST NAME` and repeating the word
+  would read as a second name for the same field. `escapeControlCharacters`-style escaping is not the
+  panel's problem — React escapes what it renders — but the string is caller-supplied prose, so it
+  wraps like every other value on this card and nothing truncates it (§6's rule, unchanged).
 
 **The held card carries one control** (#122), and only the held card: one recessive button at the
 foot of the lease panel, below `GRANTED`, so what it would end is read before it is reached. The
@@ -450,6 +476,13 @@ working panel** — the rest of the panel still works, so by §7's rule it keeps
   recognises the run without going back to look. And it says in plain words what happens: the lease
   ends immediately, the device is restored to a clean state, and the agent holding it fails on its
   next request. That is not softened.
+- **And `DESCRIPTION` under `TEST NAME`, when the lease carries one** (#148) — **a deviation from
+  the approved markup**, recorded here as §6 records the same field on the card behind this dialog.
+  The reason is this dialog's own: it exists so an operator can read what they are about to end, and
+  `TEST NAME` is an identifier-shaped directory name (§6), which turned out not to be enough to make
+  that judgement on. Same rules as on the card — full width, directly under `TEST NAME`, and **no
+  field and no placeholder row** for a lease that supplied none, because absent is absent on the
+  wire and there is nothing to name at the one moment it would matter most.
 - An earlier revision carried an **"Outcome Snippets Reference"** strip — the same scaffolding
   mistake as the sign-in screen's `DEBUG // UI STATES`. Removed. The three outcomes it sketched are
   settled below, built from this document rather than from a screen.
@@ -899,10 +932,23 @@ The depth decides what a row is; **no name is ever parsed to decide what a level
 - **`GRANTED` is reformatted textually**, `20260830T170501Z` → `2026-08-30 17:05:01 UTC`. No `Date`
   and no `Intl`: the string is the host's own UTC instant and nothing may re-express it in the
   reader's zone, which is §6's rule for `grantedAt` on a device card applied to a directory name.
+- **`DESCRIPTION` is the run's own `test_description.json`, read off #131's byte route** (#148) —
+  full width, under the three-column `OWNER` / `GRANTED` / `SERIAL` grid, because it is a sentence
+  rather than a measured value. It is **not in the approved markup**: a third deliberate deviation,
+  recorded here with the two below. The reason is the one §6 gives for the same field on a live
+  device card — a run's identity is an owner and an instant decomposed out of a directory name, and
+  `app-bar-top-space` under `tb-rover-test-app` is otherwise all there is to say why anyone took the
+  phone. See *The run's description* below for its states.
+- **A run filed before #148, or by a lease that described nothing, reads `none filed`** — and that
+  is the common case rather than a gap. Nothing is invented for it and no row disappears.
 - **`SERIAL` is the parent listing's `onlyChild`, and the serial is not a tree level.** One lease is
   one device, so a run directory holds exactly one child; the host publishes that name as a fact
   about the run rather than as a level worth a round trip. A selected run therefore costs **four**
-  requests, not five — the run's own level is never listed.
+  listings, not five — the run's own level is never listed. **That a run directory holds exactly one
+  entry is load-bearing**, which is why the archive files a lease's description *inside* the
+  `<serial>` directory rather than beside it: a second entry at the run level would make `onlyChild`
+  `null` and blank this field, the device card and `CONTENTS` for every run that had one
+  (`PROJECT.md` §10).
 - **A `null` `onlyChild` is stated, not worked around.** `SERIAL` reads `unknown` and `CONTENTS` says
   there is nothing to list. There is no second request to go looking: a run directory that is not
   one-device shaped is a fact, and an invented `0` would be a claim.
@@ -969,8 +1015,12 @@ attached* changes under the reader.
 **A path deeper than a run is reachable only by typing it**, since a run is a leaf. It renders that
 level's listing rather than nothing at all — names, addressable, no invented measures.
 
-### Two deviations from the approved markup, made deliberately
+### Three deviations from the approved markup, made deliberately
 
+- **The identity card carries a `DESCRIPTION` field** (#148). The approved screens have no such
+  field, because the string it draws did not exist when they were drawn. Its reason, its states and
+  why it is always drawn are above, under *The run's description*; §6 records the same field on the
+  live device card and the force-release dialog.
 - **A contents row is a `<Link>`.** The approved screens have `cursor-default` on these rows, which
   would leave the tree as the only way to move and make the larger half of a file explorer inert.
   Nothing else about a row changes: it gains no control, no count the tree refuses to show, and no
@@ -1039,8 +1089,42 @@ what the device *was*, not what it is.
   flight is *reading*, one the host cannot read is *not readable*, and a run naming no single child
   has no directory for a file to be in. None of the three may borrow another's sentence.
 - **One request per run, on navigation, cached for the life of the screen.** No interval, no
-  prefetch for a run nobody selected, and no caching across runs. A selected run therefore costs
-  **four listings and one file**.
+  prefetch for a run nobody selected, and no caching across runs. Since #148 a run has **two** such
+  files — this one and `test_description.json` — so a selected run costs **four listings and two
+  files**, and both go through the one hook that owns the address and the read-once rule
+  (`panel/src/archive/archived-file.ts`).
+
+### The run's description — settled (#148)
+
+**`DESCRIPTION` on the identity card is the second thing on this screen that is a file's *contents*
+rather than a listing**, and it is read exactly as the device card above is: one `readArtifactText`
+per run, on navigation, cached for the life of the screen. **A selected run therefore costs four
+listings and two files.**
+
+The file is `test_description.json` in the run's `<serial>` directory, written once by the archive
+beside the first artifact the lease produced and never rewritten (`src/daemon/archive.ts`, D22 as
+amended #148). That is what lets this field answer for a run that ended weeks ago: it says what the
+lease said, not what anyone remembers.
+
+- **Four answers, and no two of them share a phrase.** The sentence itself; `reading`; `none filed`;
+  `not readable`. The pair that must never render alike is the last two — *no description was
+  written* is ordinary and common, and *the host cannot read the file* is the host saying nothing
+  about the lease at all (D6, and the same distinction the empty and unreadable levels draw).
+- **The level above is ordered before the file's own answer**, exactly as the device card orders it
+  and for the same reason: the file lives inside the `<serial>` directory, whose name is that level's
+  `onlyChild`, so with no serial there is no address and nothing is fetched. A level in flight reads
+  `reading`, one the host cannot read reads `not readable`, and a run naming no single child has no
+  directory for a file to be in, which is `none filed`.
+- **The field is always drawn, which the live device card's is not**, and the asymmetry is the point.
+  On a device card absence is a fact the answer carries — no key, so nothing to draw. Here absence is
+  a *file that is not there*, and *reading* and *not readable* have to be tellable from it; there is
+  nowhere else on the card to say those, so the field says all four.
+- **A readable file with no description in it reads `none filed`, not `not readable`.** The states
+  are about the *description*, not about the file: the host read what is there and it says nothing
+  about this run. Rover never writes such a file, so the case is not one it can produce — and calling
+  it unreadable would claim the host failed at something it did.
+- **Lower case, like `SERIAL`'s own three.** These are the screen saying what it does not have, not
+  values the host sent.
 
 ### The artifact preview — settled (#133, narrowed by #143)
 

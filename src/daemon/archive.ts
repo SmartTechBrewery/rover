@@ -31,6 +31,12 @@
  * lease dies with the host (D6), so a lease directory can never be reopened by a later daemon
  * and an in-memory counter is complete for that lease's whole life.
  *
+ * **Two files here are about the lease rather than about the bytes** — `device_info.json` (D14)
+ * and `test_description.json` (D22 as amended #148) — and both are written on exactly the same
+ * terms: once, `wx`, never rewritten, and beside the *first* artifact the lease produced rather
+ * than at grant time. Nothing indexes either of them, and a lease that produced no bytes files
+ * neither.
+ *
  * **Nothing here prunes.** Retention — a TTL, a size cap, who runs it — is explicitly out of
  * scope (PROJECT.md §9.4). This tree grows without bound, on purpose and for now.
  */
@@ -135,6 +141,9 @@ export function createArtifactArchive(options: ArtifactArchiveOptions): Artifact
 				// or is there and is already the same snapshot, which is stateless and self-healing
 				// across a write that failed half way.
 				await writeDeviceInfo(directory, result);
+				// The lease's own description, on exactly the same terms and in the same place —
+				// see {@link writeTestDescription}. A lease that supplied none writes no file.
+				await writeTestDescription(directory, lease);
 				for (const file of files) {
 					const path = join(directory, file.path);
 					// One `mkdir` per file rather than one per kind: a recording's frames sit in a
@@ -223,14 +232,61 @@ function plan(result: ArchivableResult, take: (kind: keyof Counters) => number):
 
 /** `device_info.json` — a static copy of what the result already carries (D14). */
 async function writeDeviceInfo(directory: string, result: ArchivableResult): Promise<void> {
+	await writeOnce(
+		join(directory, 'device_info.json'),
+		`${JSON.stringify(result.device, null, 2)}\n`,
+	);
+}
+
+/**
+ * `test_description.json` — the lease's own account of what this run was about, filed so it
+ * outlives the lease (D22 as amended #148, PROJECT.md §10).
+ *
+ * **`device_info.json` is the precedent and this follows it exactly**: written once with
+ * `flag: 'wx'`, never rewritten, and a failure warned about by the caller rather than turned into
+ * a failed verb — the archive is additive, never substitutive (D23).
+ *
+ * **A lease that produced no bytes files nothing**, description included. This is called from
+ * `record`, which returns before any directory exists when a verb contributed no files, so the
+ * description lands beside the first artifact and not before it. Nothing creates a run directory
+ * at grant time: a lease that only ever tapped would otherwise leave the one piece of empty
+ * scaffolding the tree has never had (PROJECT.md §10), and it would be created by a *grant* rather
+ * than by a verb, which is a second writer into the archive.
+ *
+ * **Inside the `<serial>` directory rather than beside it, and that is the one deliberate
+ * departure from what the field describes.** The description belongs to the lease, so the run
+ * level would read better — but `list_archive` publishes a run's `<serial>` to the Archive screen
+ * as the run directory's `onlyChild`, which is `null` for a directory holding anything other than
+ * exactly one entry (`./list-archive.ts`, `docs/DESIGN.md` §9). A second entry at the run level
+ * would therefore blank `SERIAL`, the run's device card and its `CONTENTS` listing for every run
+ * that has a description, and the alternative is changing what `onlyChild` means — which is the
+ * archive's read shape, out of scope here. One lease is one device (D7), so the `<serial>`
+ * directory is the lease-device pair's and is one-to-one with the lease anyway.
+ */
+async function writeTestDescription(directory: string, lease: Lease): Promise<void> {
+	if (lease.testDescription === undefined) {
+		return;
+	}
+	// The wire's own key, so the file is the shape a client already reads (D26) rather than a
+	// second spelling of it. A JSON object rather than the bare sentence: a file that can grow a
+	// key is one a later field does not need a second file for.
+	await writeOnce(
+		join(directory, 'test_description.json'),
+		`${JSON.stringify({ testDescription: lease.testDescription }, null, 2)}\n`,
+	);
+}
+
+/**
+ * One file written the first time and never again — `wx`, with an existing file left exactly as
+ * it is.
+ *
+ * A flag in memory would say the same thing less well: this is stateless, and self-healing across
+ * a write that failed half way. Every other error is thrown to `record`'s own handler, which warns
+ * and lets the verb's answer through untouched.
+ */
+async function writeOnce(path: string, contents: string): Promise<void> {
 	try {
-		await writeFile(
-			join(directory, 'device_info.json'),
-			`${JSON.stringify(result.device, null, 2)}\n`,
-			{
-				flag: 'wx',
-			},
-		);
+		await writeFile(path, contents, { flag: 'wx' });
 	} catch (error) {
 		if ((error as NodeJS.ErrnoException).code !== 'EEXIST') {
 			throw error;

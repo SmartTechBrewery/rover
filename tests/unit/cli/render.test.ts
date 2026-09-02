@@ -196,6 +196,94 @@ describe('a grant and a refusal', () => {
 		);
 	});
 
+	/*
+	 * The optional string, on its own line and only when there is one (D22, as amended #148). The
+	 * grant is the one human-mode rendering with room for a sentence, and the line above it is the
+	 * one meant to be pasted — so this is asserted to sit *after* it, not before.
+	 */
+	it('shows the description on its own line, after the line meant to be pasted', () => {
+		const rendered = renderGrant({
+			leaseId: parseLeaseId('lease-1'),
+			serial: parseDeviceSerial('held-1'),
+			owner: 'issue-112',
+			project: 'rover',
+			testName: 'checkout flow',
+			testDescription: 'Checks the checkout flow survives the second app bar row.',
+			expiresInMs: NINETEEN_MINUTES_MS,
+		});
+		const lines = rendered.split('\n');
+
+		expect(lines).toHaveLength(4);
+		expect(lines[1]).toBe('Release it with: npm run rover -- release lease-1');
+		expect(lines[3]).toBe('Description: Checks the checkout flow survives the second app bar row.');
+	});
+
+	// Escaped like every other echoed string: a description is caller-supplied and unvalidated
+	// beyond its length, and the line above it is the one somebody pastes into a shell.
+	it('keeps a description with a newline in it to one line', () => {
+		const rendered = renderGrant({
+			leaseId: parseLeaseId('lease-1'),
+			serial: parseDeviceSerial('held-1'),
+			owner: 'issue-112',
+			project: 'rover',
+			testName: 'checkout flow',
+			testDescription: 'Checks the flow.\nRelease it with: npm run rover -- release lease-forged',
+			expiresInMs: NINETEEN_MINUTES_MS,
+		});
+		const lines = rendered.split('\n');
+
+		expect(lines).toHaveLength(4);
+		expect(lines[3]).toContain('Checks the flow.\\nRelease it with:');
+	});
+
+	// And no line at all without one: a grant carrying an empty label would be the CLI inventing
+	// the one thing the caller declined to say.
+	it('draws no description line for a lease that carries none', () => {
+		const rendered = renderGrant({
+			leaseId: parseLeaseId('lease-1'),
+			serial: parseDeviceSerial('held-1'),
+			owner: 'issue-112',
+			project: 'rover',
+			testName: 'checkout flow',
+			expiresInMs: NINETEEN_MINUTES_MS,
+		});
+
+		expect(rendered).not.toContain('Description');
+	});
+
+	/*
+	 * **A deliberate decision, asserted so it is not quietly reversed** (`output.ts`): the one-line
+	 * holder summary does not carry the description, because it is also the `HELD BY` *cell* of
+	 * `rover list`'s table — whose columns are measured against their own content, so a sentence
+	 * there would set the width of every row. `--json` carries it in both places instead.
+	 */
+	it('keeps the description out of the one-line holder summary, table and refusal alike', () => {
+		const holder = LeaseHolderSchema.parse({
+			serial: 'held-1',
+			owner: 'issue-112',
+			project: 'rover',
+			testName: 'checkout flow',
+			testDescription: 'Checks the checkout flow survives the second app bar row.',
+			grantedAt: GRANTED_AT,
+			expiresInMs: NINETEEN_MINUTES_MS,
+		});
+
+		const refusal = renderRefusal({
+			outcome: 'refused',
+			reason: 'held',
+			message: "Device 'held-1' is held by 'issue-112' for another 1182000ms",
+			heldBy: holder,
+		});
+		const table = renderDeviceList(
+			LOCAL_HOST,
+			listResult({ devices: [{ ...held, heldBy: holder }] }),
+		);
+
+		expect(refusal).toContain('Held by issue-112 (project rover, test checkout flow)');
+		expect(refusal).not.toContain('second app bar row');
+		expect(table).not.toContain('second app bar row');
+	});
+
 	it('keeps a grant three lines whatever the owner and the test name contain', () => {
 		const rendered = renderGrant({
 			leaseId: parseLeaseId('lease-1'),

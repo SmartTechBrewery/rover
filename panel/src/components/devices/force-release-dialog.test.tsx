@@ -89,6 +89,34 @@ describe('what the confirmation says', () => {
 	});
 
 	/*
+	 * **The sentence an operator reads before ending somebody else's run** (#148, §7). This dialog
+	 * exists so what is about to end can be recognised, and a short `TEST NAME` turned out not to
+	 * be enough for that.
+	 */
+	it('renders the holder own description of the run it would end', () => {
+		asking({
+			lease: {
+				...LEASE,
+				testDescription: 'Recording the checkout flow end to end for the release notes.',
+			},
+		});
+
+		expect(screen.getByText('Description')).toBeDefined();
+		expect(
+			screen.getByText('Recording the checkout flow end to end for the release notes.'),
+		).toBeDefined();
+	});
+
+	// And no field at all when the lease supplied none: absent is absent, here as on the card.
+	it('draws no description field for a lease that supplied none', () => {
+		const { container } = asking();
+
+		expect(LEASE.testDescription).toBeUndefined();
+		expect(screen.queryByText('Description')).toBeNull();
+		expect(container.textContent).not.toContain('unknown');
+	});
+
+	/*
 	 * **`TIME TO AUTO RELEASE`, not "remaining time"**, and it is phase 1's countdown reading the
 	 * card's own `expiresInMs` and `receivedAtMs` — so the number here and the number on the card
 	 * cannot disagree, because there is only one of them. Never `00:00` either, which would say the

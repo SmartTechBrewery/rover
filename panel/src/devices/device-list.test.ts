@@ -76,6 +76,21 @@ describe("the panel's mirror of list_devices", () => {
 	});
 
 	/*
+	 * The optional field, both ways round (D22, as amended #148). The card and the force-release
+	 * dialog draw it when it is there and draw **nothing at all** when it is not, so a mirror that
+	 * dropped it would leave both silent and a mirror that turned absence into `''` would draw an
+	 * empty label — which is why the absent case is asserted to be `undefined` rather than falsy.
+	 */
+	it('reads a holder that described its run, and one that did not', () => {
+		const parsed = ListDevicesResultSchema.parse(fixture);
+
+		expect(parsed.devices[0]?.heldBy?.testDescription).toBe(
+			'Checks the Devices screen draws a held card, a free card and the counter badge that has to agree with them.',
+		);
+		expect(parsed.devices[1]?.heldBy?.testDescription).toBeUndefined();
+	});
+
+	/*
 	 * The one deliberate difference from the host's copy. A newer daemon adding a column must not
 	 * blank a working screen, so the mirror is not `.strict()` — it strips what it does not know.
 	 */

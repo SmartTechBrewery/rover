@@ -8,7 +8,7 @@
  */
 
 import { type ParseArgsOptionsConfig, parseArgs } from 'node:util';
-import { ATTRIBUTION_MAX_LENGTH } from '../../ipc/methods.js';
+import { ATTRIBUTION_MAX_LENGTH, TEST_DESCRIPTION_MAX_LENGTH } from '../../ipc/methods.js';
 
 /**
  * The caller asked wrong — an unknown flag, a missing required option, an unsupported
@@ -169,4 +169,41 @@ export function attributionWithDefault(
 		return fallback;
 	}
 	return requireAttribution(command, name, value, why);
+}
+
+/**
+ * An **optional** free-text string: absent when the flag was not typed, and a usage error when
+ * it was typed with nothing in it or with more than the host will take.
+ *
+ * Only `--test-description` today (D22, as amended #148). Absent is returned as `undefined` and
+ * never as an empty string, because that is what the wire means by absent: no key, and nothing
+ * standing in for one (`TestDescriptionSchema`). `--test-description ''` is the same mistake
+ * `--project ''` is, and gets the same answer rather than a lease carrying a blank sentence —
+ * the host would refuse it anyway, and exit 2 naming the flag as it was spelled is the more
+ * useful of the two failures ({@link boundAttribution} gives the argument at length).
+ *
+ * The bound is the host's, imported rather than restated. It is deliberately **not**
+ * {@link ATTRIBUTION_MAX_LENGTH}: a description is prose and is not a path segment.
+ */
+export function optionalDescription(
+	command: string,
+	name: string,
+	value: string | undefined,
+): string | undefined {
+	if (value === undefined) {
+		return undefined;
+	}
+	if (value.trim().length === 0) {
+		throw new UsageError(
+			`rover ${command}: --${name} was given nothing — it is optional, so leave it out ` +
+				`rather than passing an empty value.`,
+		);
+	}
+	if (value.length > TEST_DESCRIPTION_MAX_LENGTH) {
+		throw new UsageError(
+			`rover ${command}: --${name} is ${value.length} characters — it is prose the host ` +
+				`stores and never reads, capped at ${TEST_DESCRIPTION_MAX_LENGTH}.`,
+		);
+	}
+	return value;
 }

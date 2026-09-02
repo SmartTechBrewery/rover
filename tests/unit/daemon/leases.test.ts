@@ -105,7 +105,7 @@ describe('a lease is per device', () => {
 	});
 });
 
-describe('the three attribution strings', () => {
+describe('the four attribution strings', () => {
 	it('stores every one of them byte for byte, however awkward', () => {
 		const { store } = createClockedStore();
 		const owner = '  issue-112 / pr-127  ';
@@ -128,6 +128,45 @@ describe('the three attribution strings', () => {
 			expect(outcome.lease.project).toBe(project);
 			expect(outcome.lease.testName).toBe(testName);
 		}
+	});
+
+	/*
+	 * The fourth string, and the one that may be absent (D22, as amended #148). Stored as given
+	 * like the other three, read by nothing here — and **absent stored as absent**, because a store
+	 * that defaulted it would put a sentence the caller never wrote into the archive.
+	 */
+	it('stores an optional description as given, and absence as absence', () => {
+		const { store } = createClockedStore();
+		const testDescription = '  Checks the app bar keeps its top space.\nAnd nothing else.  ';
+
+		const described = store.acquire({
+			serial: deviceA,
+			owner: 'issue-112',
+			project: 'rover',
+			testName: 'home screen',
+			testDescription,
+			slot: createMockSlot(),
+		});
+		const undescribed = store.acquire(request(deviceB, 'issue-112'));
+
+		expect(described.granted && described.lease.testDescription).toBe(testDescription);
+		expect(undescribed.granted && undescribed.lease.testDescription).toBeUndefined();
+	});
+
+	it('carries the description through a renewal untouched', () => {
+		const { store } = createClockedStore();
+		const granted = store.acquire({
+			...request(deviceA, 'issue-112'),
+			testDescription: 'Checks the app bar keeps its top space.',
+		});
+		if (!granted.granted) throw new Error('the first acquire must be granted');
+
+		// A renewal builds a new record (D8), so a field dropped there would vanish partway
+		// through a lease — and the archive writes the description on the *first artifact*, which
+		// is very often after the first renewal.
+		expect(store.use(granted.lease.id)?.testDescription).toBe(
+			'Checks the app bar keeps its top space.',
+		);
 	});
 
 	it('grants two leases carrying the same test name — it is not unique (D22)', () => {
