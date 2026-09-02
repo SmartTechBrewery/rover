@@ -1,9 +1,12 @@
 /**
  * The Archive screen's URL contract — the one place a path is turned into components and back.
  *
- * **The whole of this screen's state is its URL** (`docs/DESIGN.md` §9). A reload lands where you
- * were, a link is shareable, and the tree's expansion is *derived* from the selected path rather
- * than stored beside it, so the tree and the address can never disagree.
+ * **Where you are is its URL, and the tree card's search text is the one deliberate exception**
+ * (`docs/DESIGN.md` §9, #146). A reload lands where you were, a link is shareable, and the tree's
+ * expansion is *derived* from the selected path rather than stored beside it, so the tree and the
+ * address can never disagree about *where you are*. The search text is component state and is
+ * deliberately not in the address (`archive-search.ts`): a shared link lands on the address without
+ * somebody else's search, and selecting a hit is a navigation to one of these paths like any other.
  *
  * A component is used **verbatim**. Nothing here trims it, lower-cases it or sanitises it: these
  * are the on-disk names a previous `list_archive` answer returned, `pathSegment` ran on the way in

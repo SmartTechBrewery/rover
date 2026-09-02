@@ -1570,12 +1570,18 @@ signed-in user's identifier, so
 
 **Archive is a file explorer over what past runs wrote.** A tree on the left expands one directory
 at a time as you go down it — a project, a test name, a run — beside the contents of whatever is
-selected. It never walks the archive: each level is one `list_archive` call for a level actually on
-the screen, so opening a project reads that project and nothing else. A run shows its own directory
-name in full, the owner and grant time read out of that name, the serial of the one device the lease
-held, and everything the lease wrote with a size or a file count beside it. Nothing is added: no
-duration, no trigger, no verdict, and no file that was not in the listing — Rover reports what is on
-disk and judging it is the agent's job.
+selected. Browsing reads one level at a time: each level is one `list_archive` call for a level
+actually on the screen, so opening a project reads that project and nothing else. **And the tree card
+has a field that searches the whole archive on the host** — one `search_archive` call for the text
+once it settles, never one per keystroke, with every match drawn in the tree in place: each matching
+entry visible, its ancestors expanded, and branches holding no match not drawn. Selecting a hit goes
+to its address and the screen carries on as it does when you browse there; clearing the field brings
+back the tree the address describes. The answer is bounded, because there is no index behind it — a
+walk of the files at the moment you ask — so an answer that had to stop early says so rather than
+looking complete. A run shows its own directory name in full, the owner and grant time read out of
+that name, the serial of the one device the lease held, and everything the lease wrote with a size or
+a file count beside it. Nothing is added: no duration, no trigger, no verdict, and no file that was
+not in the listing — Rover reports what is on disk and judging it is the agent's job.
 
 **A run also names the device it ran on**, out of the `device_info.json` the archive filed beside its
 first artifact — the one thing on the screen that is a file's contents rather than a directory

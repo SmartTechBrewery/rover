@@ -772,18 +772,23 @@ selected. Everything below was settled while building it and is written down her
 reason the Devices screen's rules are — the alternative is the next agent re-deriving it and getting
 some of it the other way round.
 
-The one host method behind it is `list_archive` (#130, `src/daemon/list-archive.ts`), which answers
-**one directory level** at a time. Every rule here is downstream of that: a screen that could ask
-for a subtree would have been drawn differently. The two things a level cannot answer both read a
-file's *contents* off #131's byte route — the run's device card (#136) and the artifact preview
-(#133) — and that is the whole of the screen's second data path. Both are settled below.
+The host method behind **browsing** it is `list_archive` (#130, `src/daemon/list-archive.ts`), which
+answers **one directory level** at a time. Every rule about the tree is downstream of that: a screen
+that could ask for a subtree would have been drawn differently. The two things a level cannot answer
+both read a file's *contents* off #131's byte route — the run's device card (#136) and the artifact
+preview (#133) — and that is the whole of the screen's second data path. Both are settled below.
+
+**And the tree card searches, over a second method** (#146): `search_archive` (R38) answers matching
+entries of the *whole* archive in one call, so the searched tree is one answer rather than a walk.
+Browsing still reads one level at a time, and nothing about the levels changed to make room for it —
+it is a new method beside `list_archive`, never a parameter on it.
 
 ### The four approved screens
 
 | Screen | ID | What it settles |
 | --- | --- | --- |
 | Archive — Project Selection Refined | `b91c300db2d445b8a195a0bafd1aac76` | The shell, the header, the two-card content area, the tree |
-| Archive — Test Runs Refined (login-flow) | `8dcd4330b9b94105a7ba289620dc84aa` | The run list, `OWNER` / `GRANTED` |
+| Archive — Test Runs Refined (login-flow) | `8dcd4330b9b94105a7ba289620dc84aa` | The run list, `OWNER` / `GRANTED`, and the tree card's search field (#146) |
 | Archive — A run selected (Refined) | `d24d2c84e84041b28dfed67e92551d28` | The run column: the identity card, the device card, `CONTENTS` |
 | Archive — Artifact Preview (Shell Corrected) | `a843d32b7a414ac3a84fd7e80aa8a8bf` | The preview beside the run's column (#133) |
 
@@ -833,13 +838,66 @@ separately:
 - *the tree expands lazily, one `readdir` at a time* — the levels read are precisely the prefixes of
   the selection, at most four requests at the deepest point, each one a level actually drawn. A
   pre-walk is not avoided so much as unrepresentable;
-- *a reload lands where you were and a link is shareable* — the whole of the screen's state is the
-  address;
-- the tree and the URL cannot disagree, because there is only one of them.
+- *a reload lands where you were and a link is shareable* — **where you are is the address, and the
+  tree card's search text is the one deliberate exception** (#146, amended in place). It is component
+  state and is deliberately not in the URL: a reload and a shared link land on the *address*, without
+  somebody else's search, and a hit is a navigation to an address like any other, so nothing about
+  following one needs a query parameter to survive. Putting the text in the URL was considered and
+  refused by the operator; what the address carries is still *where you are*, and that is what a
+  shared link has to reproduce;
+- the tree and the URL cannot disagree, because there is only one of them — and the searched tree
+  cannot either, since every row in it is an address the host answered with.
 
 **The accepted cost**: a folder cannot be peeked at without selecting it. That is ordinary
 file-explorer behaviour, it buys the removal of a whole class of *the tree says one thing and the
 address says another* bugs, and a separate collapse control is a later change if anybody wants one.
+
+#### And the card searches the whole archive — settled (#146)
+
+The field is the design's own, in `8dcd4330…`'s and `b91c300d…`'s `DIRECTORY` aside, **between the
+header strip and the scrolling tree**. The one host method behind it is `search_archive` (R38,
+`src/daemon/search-archive.ts`), which answers matching entries of the *whole* archive as component
+arrays — so the searched tree is derived from **one** answer, and re-deriving it with a
+`list_archive` call per level would be the walk that method exists to replace, paid for again in the
+browser.
+
+- **Every hit is visible, its ancestors are expanded, and a branch that holds no match is not
+  drawn.** All three fall out of building the tree from the matches themselves
+  (`panel/src/archive/search-tree.ts`): a node exists exactly when a match's path runs through it, so
+  there is nothing to filter out. A node with children is a directory by construction; a leaf takes
+  its match's own `kind`, which is the host's answer and never an inference from a name (D22).
+- **There is no `DEEPEST_EXPANDABLE_DEPTH` in the searched tree.** It draws exactly the addresses the
+  host answered, which is how a hit *below* a run becomes visible at all — a run is a leaf in the
+  URL's tree, and its `<serial>` is not a level there.
+- **A hit row is the same row.** The same `<Link>`, the same classes, and every extra a browsing row
+  is forbidden: no count, no status glyph, no colour that means an outcome, the name verbatim and
+  `break-words`. Only the two glyphs differ, and they say what the entry *is* — `FolderOpen`/`Folder`,
+  `FileText`, and `FileQuestionMark` for the host's own *unclassified*.
+- **Three states, and none borrows another's sentence** — nor one from *Nothing in the archive*,
+  `ARCHIVE NOT READABLE` or the tree's own *Reading this level.*: in flight is
+  ***Searching this host's archive.***, one quiet line with `aria-live="polite"` and **no spinner**
+  (§5); nothing matched is ***No name in the archive contains that text.***; and a search that could
+  not be run is ***The host could not search the archive.*** Everything unusable folds into that last
+  one — an `error` envelope, an unparsable result, a request nothing answered, and the host's own
+  `unreadable` — while a host that has archived nothing folds into *nothing matched*, because nothing
+  filed is nothing matched. A `refused` sets nothing at all (`archive-levels.ts`'s fold, again).
+- **A truncated answer says so**, ***More names match than are shown. Narrow the text.***, and it is
+  drawn **above** the hits: a line under a long list is one a reader reaches only by scrolling to the
+  end of it, and until then a partial list reads exactly like a complete one.
+- **No request per keystroke.** The text is debounced (300 ms), one request is in flight at a time,
+  and an answer to text that is no longer in the field is dropped rather than rendered
+  (`panel/src/archive/archive-search.ts`). There is no polling and no refresh, for the same reason a
+  level has none: the archive is finished data.
+- **The accepted cost, checked against a real answer**: the searched tree reuses the browsing tree's
+  own indent (`pl-5 ml-2.5 border-l-2` per level), and a hit six levels down therefore has little of
+  the 320px column left for its name, which wraps. That is `break-words` doing what it is there for
+  rather than `break-all` — and a *shorter* indent for the searched tree would be a second tree
+  idiom, invented at the keyboard, for a column the approved markup already settled.
+- **The field is absent in every state that draws no tree** — the two states with nothing to browse
+  and an open artifact — and that needs saying nowhere in the code: it is part of the tree card, so
+  it goes wherever the card goes. The *state* lives above the card
+  (`panel/src/routes/archive.tsx`), because the card remounts when the screen changes arrangement and
+  state held inside it would be lost on the very navigation a hit performs.
 
 **What a tree row may carry, and nothing else:**
 
@@ -969,8 +1027,15 @@ attached* changes under the reader.
 **A path deeper than a run is reachable only by typing it**, since a run is a leaf. It renders that
 level's listing rather than nothing at all — names, addressable, no invented measures.
 
-### Two deviations from the approved markup, made deliberately
+### Three deviations from the approved markup, made deliberately
 
+- **The search field's placeholder says what the field does.** The design's *Filter this tree...*
+  describes a client-side filter over rows already drawn, and this is not that: typing asks the host
+  to search the *whole* archive, including levels this tree has never read. It reads
+  ***Search the whole archive...*** instead (#146). Nothing else about the field deviates — the
+  wrapper, the classes and the leading glyph's position are the approved markup's, and
+  `lucide-react`'s `Search` in place of the Material Symbols glyph and `rounded-sm` for the design's
+  `rounded` are the standing portability note above rather than deviations of their own.
 - **A contents row is a `<Link>`.** The approved screens have `cursor-default` on these rows, which
   would leave the tree as the only way to move and make the larger half of a file explorer inert.
   Nothing else about a row changes: it gains no control, no count the tree refuses to show, and no
@@ -981,9 +1046,17 @@ level's listing rather than nothing at all — names, addressable, no invented m
 
 ### Deliberately absent, and why
 
-- **The `Filter this tree...` input** in `b91c300d…`. It appears on one of the three approved screens
-  and on neither of the other two, no acceptance criterion asks for it, and D24 spends a paragraph
-  refusing search. Dropped, and recorded here rather than silently omitted.
+- **The `Filter this tree...` input is no longer absent** (#146), and this entry is amended in place
+  rather than deleted, because what it refused is worth keeping. It said: the input appears on one of
+  the approved screens and on neither of the others, no acceptance criterion asks for it, and D24
+  spends a paragraph refusing search. **Both halves of that are now corrected.** The claim was
+  factually wrong — the input is in `8dcd4330…` as well as in `b91c300d…`, verified against the file
+  the server returned on 2026-09-01, whose `DIRECTORY` aside carries it between the header strip and
+  the tree — and **D24's refusal of search is reversed at the operator's instruction** (`PROJECT.md`
+  D24, R38). What survives of that refusal is the load-bearing half: there is still no index, no
+  catalogue and no cache, so the answer is a bounded walk of the filesystem at request time, which is
+  why a truncated one says so. The field is built, and it is *the card searches the whole archive*
+  above.
 - **The `LATEST` column** in `b91c300d…`'s contents table. One `readdir` per test row is exactly the
   walk D24 refuses; `list_archive` cannot answer it and must not grow a parameter that can.
 - **No aggregate of any kind** — no total size, no run count across projects, no retention figure.

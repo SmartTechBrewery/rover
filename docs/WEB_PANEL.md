@@ -39,7 +39,8 @@ Design work lives in [`DESIGN.md`](./DESIGN.md); the brief that produced the fir
    previous answer returned, never a path on the host, and answers that level's entries with what
    one `readdir` plus a `stat` can honestly say. It is a **listing rather than a query**: no
    filter, no search, no sort parameter, no recursion, because the parameter that would make it a
-   query is how an index gets built by accident. Empty, missing and unreadable are three
+   query is how an index gets built by accident. **Searching is a second method rather than that
+   parameter** (R38, #144), and the tree card is what asks it (#146) — see the end of this entry. Empty, missing and unreadable are three
    distinguishable answers, so the screen can render "nothing is filed here" differently from "this
    host cannot say what is filed here" — the same distinction §7's `stale` draws. It is on
    `PANEL_METHODS` and on the CLI (`rover archive [<component> ...]`), so the archive is debuggable
@@ -73,6 +74,14 @@ Design work lives in [`DESIGN.md`](./DESIGN.md); the brief that produced the fir
    §5's rule cashed in on the one screen it was written for. The open file is part of the path, so a
    reload lands on it and the link is shareable. The one control is **Open in a new window**, and
    there is still **no download control anywhere in the panel**: this is a view, not a transfer.
+   **And the tree is searchable** (R38, #144 the host's method and #146 the panel's field): the
+   `DIRECTORY` card carries a field between its header strip and the tree, and typing in it asks the
+   host to search the *whole* archive once the text settles — never per keystroke — with every match
+   drawn in the tree in place, ancestors expanded and branches holding no match not drawn. It is
+   still **no index**: the answer is a bounded walk of the files at request time, and a truncated one
+   says so rather than looking complete. The text is component state and deliberately not in the
+   URL, so a shared link still lands on the *address*; selecting a hit navigates there and the screen
+   carries on exactly as it does when you browse to it.
    `docs/DESIGN.md` §9 records what it settled, including the cost that shapes it — an authenticated
    byte route cannot be an `<img src>`, so the panel fetches the bytes with the session header and
    renders an object URL, and the whole artifact is therefore buffered in the tab.

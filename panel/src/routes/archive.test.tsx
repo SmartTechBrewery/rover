@@ -1,6 +1,6 @@
-import { act, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import type { AnchorHTMLAttributes, ReactNode } from 'react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 /*
  * `devices.test.tsx`'s shape: a `Link` is a plain anchor and `createRoute` is here because this
@@ -53,42 +53,66 @@ const { host, HANGS } = vi.hoisted(() => ({
 		artifacts: [] as unknown[],
 		/** What the byte route answers for an artifact, media type included. */
 		artifact: { outcome: 'missing' } as unknown,
+		/** Every text `search_archive` was asked about — one per settled text, never per keystroke. */
+		searches: [] as unknown[],
+		/** What the host answers a search with. */
+		search: { outcome: 'searched', matches: [], truncated: false } as unknown,
 		/** Accepts every request and never answers it — the state before the first answer. */
 		hangs: false,
 	},
 }));
-vi.mock('@panel/session/session-provider.js', () => ({
-	useSession: () => ({
-		call: async (_method: string, params: { path: readonly string[] }) => {
-			host.asked.push(params.path);
-			if (host.hangs) {
-				return await new Promise(() => undefined);
-			}
-			const answer = host.answers.get(JSON.stringify(params.path));
-			if (answer === HANGS) {
-				return await new Promise(() => undefined);
-			}
-			return answer === undefined
-				? { ok: true, value: { type: 'result', result: { outcome: 'missing' } } }
-				: { ok: true, value: { type: 'result', result: answer } };
-		},
-		readArtifactText: async (path: readonly string[]) => {
-			host.files.push(path);
-			if (host.hangs) {
-				return await new Promise(() => undefined);
-			}
-			return { ok: true, value: host.file };
-		},
-		readArtifactBytes: async (path: readonly string[]) => {
-			host.artifacts.push(path);
-			if (host.hangs) {
-				return await new Promise(() => undefined);
-			}
-			return { ok: true, value: host.artifact };
-		},
-	}),
-}));
+vi.mock('@panel/session/session-provider.js', () => {
+	/** One level's listing, logged as asked for. */
+	const listing = async (path: readonly string[]) => {
+		host.asked.push(path);
+		if (host.hangs) {
+			return await new Promise(() => undefined);
+		}
+		const answer = host.answers.get(JSON.stringify(path));
+		if (answer === HANGS) {
+			return await new Promise(() => undefined);
+		}
+		return answer === undefined
+			? { ok: true, value: { type: 'result', result: { outcome: 'missing' } } }
+			: { ok: true, value: { type: 'result', result: answer } };
+	};
+	/** One search of the whole archive, logged apart — see `call` below. */
+	const search = async (text: string | undefined) => {
+		host.searches.push(text);
+		if (host.hangs) {
+			return await new Promise(() => undefined);
+		}
+		return { ok: true, value: { type: 'result', result: host.search } };
+	};
 
+	return {
+		useSession: () => ({
+			/*
+			 * Two methods now (#146), so this reads `method` rather than assuming a listing: the tree
+			 * card's field asks `search_archive`, and *searching issues no extra `list_archive`* is
+			 * assertable only because the two are logged apart.
+			 */
+			call: async (method: string, params: { path: readonly string[]; text?: string }) =>
+				method === 'search_archive' ? await search(params.text) : await listing(params.path),
+			readArtifactText: async (path: readonly string[]) => {
+				host.files.push(path);
+				if (host.hangs) {
+					return await new Promise(() => undefined);
+				}
+				return { ok: true, value: host.file };
+			},
+			readArtifactBytes: async (path: readonly string[]) => {
+				host.artifacts.push(path);
+				if (host.hangs) {
+					return await new Promise(() => undefined);
+				}
+				return { ok: true, value: host.artifact };
+			},
+		}),
+	};
+});
+
+import { SEARCH_DEBOUNCE_MS } from '@panel/archive/archive-search.js';
 import { ArchiveScreen } from './archive.js';
 
 function directory(name: string, childCount: number | null = 3, onlyChild: string | null = null) {
@@ -137,6 +161,8 @@ beforeEach(() => {
 	host.asked = [];
 	host.files = [];
 	host.artifacts = [];
+	host.searches = [];
+	host.search = { outcome: 'searched', matches: [], truncated: false };
 	host.file = { outcome: 'missing' };
 	host.artifact = { outcome: 'missing' };
 	host.hangs = false;
@@ -843,5 +869,168 @@ describe('the addresses that still browse', () => {
 			screen.queryByRole('link', { name: 'Close the preview and go back to the directory' }),
 		).toBeNull();
 		expect(host.artifacts).toEqual([]);
+	});
+});
+
+/**
+ * The tree card's search, at the level of the screen that holds it (#146).
+ *
+ * **The state is held above the card on purpose**, so the cases here are the ones the card's own
+ * suite cannot reach: that the field is absent wherever no tree is drawn, that the text survives the
+ * navigation a hit performs, and that a search costs no listing.
+ */
+describe('searching the archive from the tree card', () => {
+	const SERIAL_LEVEL = ['checkout-app', 'login-flow', RUN, 'R5CT30ABCDE'];
+	const SCREENSHOTS = [...SERIAL_LEVEL, 'screenshots'];
+
+	function answered(matches: readonly { path: readonly string[]; kind: string }[]) {
+		return { outcome: 'searched', matches, truncated: false };
+	}
+
+	function field(): HTMLInputElement {
+		return screen.getByRole('textbox') as HTMLInputElement;
+	}
+
+	/** Type, then let the debounce fire and the answer land. */
+	async function type(text: string): Promise<void> {
+		fireEvent.change(field(), { target: { value: text } });
+		await act(async () => {
+			await vi.advanceTimersByTimeAsync(SEARCH_DEBOUNCE_MS);
+			await vi.advanceTimersByTimeAsync(0);
+		});
+	}
+
+	beforeEach(() => {
+		vi.useFakeTimers();
+	});
+
+	afterEach(() => {
+		vi.useRealTimers();
+	});
+
+	it('draws the field wherever the tree is', async () => {
+		await showing('checkout-app');
+
+		expect(field().getAttribute('placeholder')).toBe('Search the whole archive...');
+	});
+
+	/*
+	 * **Absent in every state that draws no tree**, and it falls out of the field being part of the
+	 * tree card rather than of the header: nothing here says so a second time.
+	 */
+	it('draws no field where there is nothing to browse', async () => {
+		for (const levels of [
+			{ '[]': { outcome: 'listed', entries: [] } },
+			{ '[]': { outcome: 'unreadable' } },
+		]) {
+			const { unmount } = await showing(undefined, levels);
+
+			expect(screen.queryByRole('textbox')).toBeNull();
+			unmount();
+		}
+	});
+
+	it('draws no field with an artifact open', async () => {
+		host.artifact = { outcome: 'read', mediaType: 'image/png', bytes: new Blob(['png']) };
+
+		await showing([...SCREENSHOTS, '001_screenshot.png'].join('/'), {
+			...archive(),
+			[JSON.stringify(SCREENSHOTS)]: listed({
+				kind: 'file',
+				name: '001_screenshot.png',
+				sizeBytes: 4,
+			}),
+		});
+
+		expect(screen.queryByRole('textbox')).toBeNull();
+	});
+
+	// One request for the settled text, and **no listing at all**: the matched tree is derived from
+	// the one search answer rather than re-walked a level at a time.
+	it('asks the host once and issues no extra listing', async () => {
+		host.search = answered([{ path: ['checkout-app', 'login-flow'], kind: 'directory' }]);
+		await showing('checkout-app');
+		const listings = [...host.asked];
+
+		await type('login');
+
+		expect(host.searches).toEqual(['login']);
+		expect(host.asked).toEqual(listings);
+	});
+
+	it('draws the hits in place of the URL’s own levels', async () => {
+		host.search = answered([{ path: [...SCREENSHOTS, '001_screenshot.png'], kind: 'file' }]);
+		await showing('checkout-app');
+
+		await type('screenshot');
+
+		expect(screen.getByRole('link', { name: /001_screenshot.png/ })).toBeDefined();
+		expect(screen.queryByRole('link', { name: /payments-web/ })).toBeNull();
+	});
+
+	it('restores the URL’s own tree when the field is cleared', async () => {
+		host.search = answered([{ path: ['checkout-app', 'login-flow'], kind: 'directory' }]);
+		await showing('checkout-app');
+
+		await type('login');
+		await type('');
+
+		expect(screen.getByRole('link', { name: /payments-web/ })).toBeDefined();
+		expect(host.searches).toEqual(['login']);
+	});
+
+	/*
+	 * **The text is not in the address**, so the mocked `useParams` — the whole of the address bar
+	 * as far as this screen is concerned — is never asked to carry it, and no row links to it.
+	 */
+	it('never puts the text in the address', async () => {
+		host.search = answered([{ path: ['checkout-app', 'login-flow'], kind: 'directory' }]);
+		const { container } = await showing('checkout-app');
+
+		await type('login');
+
+		expect(at.splat).toBe('checkout-app');
+		for (const link of container.querySelectorAll('a')) {
+			expect(link.getAttribute('href')).not.toContain('login&');
+			expect(link.getAttribute('href')).not.toContain('?');
+		}
+	});
+
+	/*
+	 * **The hits survive following one**, which is what holding the state above the card buys: the
+	 * card remounts on this very navigation — a folder inside a run is a different arrangement, and
+	 * the tree carries `key="the tree"` there — so state held inside it would have been lost.
+	 */
+	it('keeps the text and the hits when a hit is navigated to', async () => {
+		host.search = answered([{ path: SCREENSHOTS, kind: 'directory' }]);
+		const { rerender } = await showing('checkout-app');
+		await type('screenshots');
+		expect(screen.getByRole('link', { name: /screenshots/ })).toBeDefined();
+
+		// Following the hit's own row: the address changes and the screen re-renders in the folder
+		// arrangement, where the tree card is drawn again.
+		at.splat = SCREENSHOTS.join('/');
+		host.answers.set(
+			JSON.stringify(SCREENSHOTS),
+			listed({ kind: 'file', name: 'a.png', sizeBytes: 4 }),
+		);
+		await act(async () => {
+			rerender(<ArchiveScreen />);
+		});
+		for (let turn = 0; turn < 6; turn += 1) {
+			await act(async () => undefined);
+		}
+
+		expect(field().value).toBe('screenshots');
+		// The hit list itself, inside the tree card — the run's column names the folder too.
+		const tree = document.querySelector('aside');
+		expect([...(tree?.querySelectorAll('a') ?? [])].map((row) => row.textContent)).toEqual([
+			'checkout-app',
+			'login-flow',
+			RUN,
+			'R5CT30ABCDE',
+			'screenshots',
+		]);
+		expect(host.searches).toEqual(['screenshots']);
 	});
 });
