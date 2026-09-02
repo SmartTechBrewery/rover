@@ -5,6 +5,7 @@ import {
 	useArchiveLevels,
 } from '@panel/archive/archive-levels.js';
 import { componentsFromSplat, levelsOf, splatFromComponents } from '@panel/archive/archive-path.js';
+import { type ArchiveSearch, useArchiveSearch } from '@panel/archive/archive-search.js';
 import { useArchivedArtifact } from '@panel/archive/artifact.js';
 import { type ArchivedDeviceInfo, useArchivedDeviceInfo } from '@panel/archive/device-info.js';
 import { ArtifactPreview } from '@panel/components/archive/artifact-preview.js';
@@ -22,10 +23,13 @@ import { rootRoute } from './__root.js';
 /**
  * The archive, as a file explorer over what past leases wrote (`docs/DESIGN.md` §9).
  *
- * **The path is in the URL and the screen has no other state.** A reload lands where you were, a
- * link is shareable, and the tree's expansion is *derived* from the selection rather than stored
- * beside it — so the tree and the address bar cannot disagree, and the levels read are exactly the
- * prefixes of the path (`archive-levels.ts`).
+ * **The path is in the URL, and the tree card's search text is the one piece of state that is
+ * deliberately not** (#146). A reload lands where you were, a link is shareable, and the tree's
+ * expansion is *derived* from the selection rather than stored beside it — so the tree and the
+ * address bar cannot disagree about *where you are*, and the levels read are exactly the prefixes
+ * of the path (`archive-levels.ts`). The search text is component state on purpose: a reload and a
+ * shared link land on the **address**, without somebody else's search, and a hit is a navigation to
+ * an address like any other, so nothing about it needs to be in the URL to survive being followed.
  *
  * **Every state below is a state of this one screen** (§7's rule, applied to a second screen). The
  * breadcrumb, the describing line and the header row's shape are the same in all of them; the badge
@@ -94,6 +98,15 @@ export function ArchiveScreen() {
 	const device = useArchivedDeviceInfo(serialLevel);
 	/** The open artifact's own bytes. `null` while the address is a folder, or not yet classified. */
 	const artifact = useArchivedArtifact(open === 'artifact' ? selected : null);
+	/*
+	 * **The tree card's search, held here rather than in the card** (#146). `DirectoryTree` remounts
+	 * when the screen changes arrangement — it carries `key="the tree"` and appears in only one of
+	 * {@link InsideTheRun}'s three arrangements — so state held inside it would be silently lost on
+	 * the very navigation a hit performs. Held here, the hits survive clicking one, and the input is
+	 * still absent wherever the card is: the two states with nothing to browse and an open artifact
+	 * draw no tree, so they draw no field either, without anything having to say so twice.
+	 */
+	const search = useArchiveSearch();
 
 	const level = levelAt(levels, selected);
 	const depth = selected.length;
@@ -111,10 +124,17 @@ export function ArchiveScreen() {
 					device={device}
 					levels={levels}
 					open={open}
+					search={search}
 					selected={selected}
 				/>
 			) : (
-				<Content device={device} levels={levels} selected={selected} serial={serial} />
+				<Content
+					device={device}
+					levels={levels}
+					search={search}
+					selected={selected}
+					serial={serial}
+				/>
 			)}
 		</>
 	);
@@ -132,11 +152,13 @@ function Content({
 	levels,
 	serial,
 	device,
+	search,
 }: {
 	readonly selected: readonly string[];
 	readonly levels: ArchiveLevels;
 	readonly serial: RunSerial;
 	readonly device: ArchivedDeviceInfo;
+	readonly search: ArchiveSearch;
 }) {
 	const root = levelAt(levels, []);
 
@@ -157,7 +179,7 @@ function Content({
 
 	return (
 		<Columns>
-			<DirectoryTree levels={levels} selected={selected} />
+			<DirectoryTree levels={levels} search={search} selected={selected} />
 			{selected.length === RUN_DEPTH ? (
 				/*
 				 * With no serial there is no level to read and `RunPanel` says so from `serial` alone
@@ -230,6 +252,7 @@ function InsideTheRun({
 	device,
 	open,
 	artifact,
+	search,
 }: {
 	readonly selected: readonly string[];
 	/** The one cache, holding whatever has answered — the `<serial>` level down, and the tree's own. */
@@ -238,6 +261,8 @@ function InsideTheRun({
 	/** Which of the three the address turned out to be — {@link OpenEntry}. */
 	readonly open: OpenEntry;
 	readonly artifact: ReturnType<typeof useArchivedArtifact>;
+	/** The tree card's search, for the one arrangement that draws a tree. */
+	readonly search: ArchiveSearch;
 }) {
 	const run = selected.slice(0, RUN_DEPTH);
 	const column = (
@@ -271,7 +296,7 @@ function InsideTheRun({
 				 * deepest level of the tree and where you are in it, and where you are inside the run is
 				 * what the column beside it says.
 				 */}
-				<DirectoryTree key="the tree" levels={levels} selected={run} />
+				<DirectoryTree key="the tree" levels={levels} search={search} selected={run} />
 				{column}
 			</Columns>
 		);
