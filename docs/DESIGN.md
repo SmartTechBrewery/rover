@@ -1107,18 +1107,27 @@ answered and has no depth bound of its own, so a hit below a run is a row you ca
 *And the card searches the whole archive*). What stays true either way is why a run is a leaf here —
 browsing derives its levels from the address, and the address stops at the run.
 
-### Four deviations from the approved markup, made deliberately
+### Five deviations from the approved markup, made deliberately
 
 - **The search field's placeholder says what the field does.** The design's *Filter this tree...*
   describes a client-side filter over rows already drawn, and this is not that: typing asks the host
   to search the *whole* archive, including levels this tree has never read. It reads
-  ***Search the whole archive...*** instead (#146). Nothing else about the field deviates — the
-  wrapper, the classes and the leading glyph's position are the approved markup's, and
-  `lucide-react`'s `Search` in place of the Material Symbols glyph and `rounded-sm` for the design's
-  `rounded` are the standing portability note above rather than deviations of their own. It carries
-  two attributes that draw nothing and that no design would have shown: an `aria-label`, because a
-  placeholder is not a name, and a `maxLength` mirroring the host's own text bound, so a long paste
-  stops at the field instead of spending a request to be refused.
+  ***Search the whole archive...*** instead (#146). Nothing else about the field's markup deviates
+  except the clear action below — the wrapper, the classes and the leading glyph's position are the
+  approved markup's, and `lucide-react`'s `Search` in place of the Material Symbols glyph and
+  `rounded-sm` for the design's `rounded` are the standing portability note above rather than
+  deviations of their own. It carries two attributes that draw nothing and that no design would have
+  shown: an `aria-label`, because a placeholder is not a name, and a `maxLength` mirroring the host's
+  own text bound, so a long paste stops at the field instead of spending a request to be refused.
+- **The leading glyph becomes a clear action while the field holds a query** (#154). The approved
+  screens draw the magnifying glass and nothing else, and no acceptance criterion asks for a way to
+  empty the field — but they only ever draw that field *empty*, so what its glyph position does with
+  a query in it was never designed. Empty, it is the approved glyph, unchanged. With text in it, the
+  same corner and the same 18px is a `lucide-react` `X` button whose `aria-label` names the action,
+  because the glyph draws it and cannot say it. Clicking it calls the field's own `setText('')` — the
+  setter a keystroke already uses — so clearing is the ordinary empty-text path (`idle`, nothing
+  asked of the host, straight back to the URL's levels) rather than a second one, and it puts the
+  caret back in the field, since the control it was on stops existing the instant the text is empty.
 - **The identity card carries a `DESCRIPTION` field** (#148). The approved screens have no such
   field, because the string it draws did not exist when they were drawn. Its reason, its states and
   why it is always drawn are above, under *The run's description*; §6 records the same field on the
