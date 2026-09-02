@@ -1,6 +1,6 @@
 import type { ArchiveLevel, ArchiveLevels } from '@panel/archive/archive-levels.js';
 import type { ArchiveEntry, ArchiveSearchMatch } from '@panel/archive/archive-listing.js';
-import { keyOf } from '@panel/archive/archive-path.js';
+import { keyOf, MAX_ARCHIVE_SEARCH_TEXT_LENGTH } from '@panel/archive/archive-path.js';
 import type { ArchiveSearch, ArchiveSearchState } from '@panel/archive/archive-search.js';
 import { fireEvent, render, screen } from '@testing-library/react';
 import type { AnchorHTMLAttributes, ReactNode } from 'react';
@@ -296,6 +296,16 @@ describe('the search field', () => {
 
 		expect((screen.getByRole('textbox') as HTMLInputElement).value).toBe('checkout');
 	});
+
+	// The host refuses text past its own bound, so the field stops there rather than spending a
+	// request to be refused and reporting it as a host that could not search.
+	it('stops at the host’s own text bound rather than sending a paste to be refused', () => {
+		showing([]);
+
+		expect((screen.getByRole('textbox') as HTMLInputElement).maxLength).toBe(
+			MAX_ARCHIVE_SEARCH_TEXT_LENGTH,
+		);
+	});
 });
 
 /**
@@ -442,14 +452,38 @@ describe('the hits a search draws', () => {
 		expect(container.innerHTML).not.toContain('break-all');
 	});
 
-	// A truncated answer must never render like a complete one.
+	// A truncated answer must never render like a complete one — in either of its hit counts, since
+	// the host sets the flag without recording a match whenever a bound or an unreadable subtree
+	// stops a descent, and an empty hit list is the one a reader acts on by giving up.
 	it('says a truncated answer is truncated, and says nothing when it is not', () => {
 		const { unmount } = showing(['checkout-app'], archive(), hits(true));
 		expect(screen.getByText('More names match than are shown. Narrow the text.')).toBeDefined();
 		unmount();
 
-		const { container } = showing(['checkout-app'], archive(), hits());
-		expect(container.textContent).not.toContain('More names match');
+		const complete = showing(['checkout-app'], archive(), hits());
+		expect(complete.container.textContent).not.toContain('More names match');
+		complete.unmount();
+
+		const empty = showing(['checkout-app'], archive(), searching(found([], true)));
+		expect(empty.container.textContent).toContain('the part of the archive that could be examined');
+		empty.unmount();
+
+		const { container } = showing(['checkout-app'], archive(), searching(found([])));
+		expect(container.textContent).not.toContain('the part of the archive that could be examined');
+	});
+
+	// The failure this replaced: a search the host cut short, matching nothing, read as a complete
+	// and definitive *it is not in the archive*.
+	it('never says nothing matched definitively about a search that was cut short', () => {
+		const { container } = showing(['checkout-app'], archive(), searching(found([], true)));
+
+		expect(
+			screen.getByText(
+				'Nothing in the part of the archive that could be examined contains that text.',
+			),
+		).toBeDefined();
+		expect(container.textContent).not.toContain('No name in the archive contains that text.');
+		expect(rows(container)).toHaveLength(0);
 	});
 
 	it('marks a hit that is where you already are', () => {

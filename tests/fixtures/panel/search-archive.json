@@ -91,6 +91,14 @@
 			}
 		},
 		{
+			"text": "no-such-name-anywhere",
+			"result": {
+				"outcome": "searched",
+				"matches": [],
+				"truncated": true
+			}
+		},
+		{
 			"text": "login",
 			"result": {
 				"outcome": "missing"

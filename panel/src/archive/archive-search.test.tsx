@@ -173,6 +173,39 @@ describe('an answer to text nobody is asking about any more', () => {
 		expect(state()).toBe('state: searched:checkout-app/login-flow');
 	});
 
+	/*
+	 * And it is dropped **before the second request is even issued**, which is what moving the id
+	 * with the text rather than with the timer buys: the change to `login` has no timer left to
+	 * clear, so if `log`'s request were still the current one its answer would land under the new
+	 * text for the whole of the debounce window.
+	 */
+	it('is dropped as soon as the text changes, not once its replacement goes out', async () => {
+		let answerFirst: ((value: unknown) => void) | undefined;
+		host.call
+			.mockImplementationOnce(async () => await new Promise((resolve) => (answerFirst = resolve)))
+			.mockResolvedValue(searched(['checkout-app/login-flow']));
+		mount();
+
+		type('log');
+		await settle();
+		expect(state()).toBe('state: searching');
+
+		// The text moves on, and `login`'s own request is still inside its debounce window.
+		type('login');
+		await act(async () => {
+			await vi.advanceTimersByTimeAsync(SEARCH_DEBOUNCE_MS / 3);
+			answerFirst?.(searched(['payments-web']));
+			await vi.advanceTimersByTimeAsync(0);
+		});
+
+		// `log`'s hits never appear under `login`. The card stays on the previous state.
+		expect(state()).toBe('state: searching');
+		expect(host.call).toHaveBeenCalledTimes(1);
+
+		await settle();
+		expect(state()).toBe('state: searched:checkout-app/login-flow');
+	});
+
 	it('is dropped when the field was cleared while it was out', async () => {
 		host.call.mockResolvedValue(searched(['checkout-app']));
 		let answer: ((value: unknown) => void) | undefined;

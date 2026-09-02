@@ -22,6 +22,14 @@
 export const MAX_ARCHIVE_PATH_DEPTH = 8;
 
 /**
+ * How long the tree card's search text may be — mirrored from `MAX_ARCHIVE_SEARCH_TEXT_LENGTH` in
+ * `src/ipc/methods.ts`, which the panel deliberately does not import from, exactly as the depth
+ * above is. The host answers `invalid_params` past it, so the field stops there rather than
+ * spending a request to be refused and reporting it as a host that could not search.
+ */
+export const MAX_ARCHIVE_SEARCH_TEXT_LENGTH = 255;
+
+/**
  * The components a `/archive/$` splat names.
  *
  * An absent or empty splat is the **root**, `[]` — the address `/archive` and the address

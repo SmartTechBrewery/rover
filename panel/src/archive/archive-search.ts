@@ -14,11 +14,15 @@ import { type ArchiveSearchMatch, SearchArchiveResultSchema } from './archive-li
  * to.
  *
  * **One request per settled text.** The debounce is a {@link SEARCH_DEBOUNCE_MS} timer in an
- * effect, so typing inside the window issues nothing; when it fires, the request that goes out
- * carries an id, and an answer whose id is no longer the current one is **dropped** rather than
- * rendered. That is `archive-levels.ts`'s `live` ref discipline with a counter instead of a
- * boolean, and it is the whole of *answers to superseded text are dropped*: a slow answer for `log`
- * must not land on top of a fast one for `login`.
+ * effect, so typing inside the window issues nothing; the id is taken when the text changes and the
+ * request the timer issues carries it, so an answer whose id is no longer the current one is
+ * **dropped** rather than rendered. That is `archive-levels.ts`'s `live` ref discipline with a
+ * counter instead of a boolean, and it is the whole of *answers to superseded text are dropped*: a
+ * slow answer for `log` must not land on top of a fast one for `login`.
+ *
+ * **The id moves with the text, not with the timer.** That is the load-bearing half: once the timer
+ * has fired there is no timer left to clear, so a request already out is invalidated only by the id
+ * having moved when the text under it changed.
  *
  * **Empty text is `idle` and issues nothing**, which is also what clearing the field does — the
  * tree goes straight back to the levels the URL describes, with no request spent saying so.
@@ -31,9 +35,10 @@ import { type ArchiveSearchMatch, SearchArchiveResultSchema } from './archive-li
  * arrival instead, which is what the id is for.
  *
  * **And no `live` ref beside it**, which is the one thing here that `archive-levels.ts` has and this
- * does not: the id already subsumes it. Unmounting clears the pending timer, and an answer that
- * outlives its own text is dropped whether the text moved on or the screen did. StrictMode's double
- * mount costs nothing either — the text starts empty, and the empty branch asks for nothing.
+ * does not: the id already subsumes it, because the cleanup moves the id as well as clearing the
+ * pending timer. So an answer that outlives its own text is dropped whether the text moved on or the
+ * screen did — one counter, two reasons to stop caring about an answer. StrictMode's double mount
+ * costs nothing either: the text starts empty, and the empty branch asks for nothing.
  */
 
 /**
@@ -91,10 +96,17 @@ export function useArchiveSearch(): ArchiveSearch {
 	const asked = useRef(0);
 
 	useEffect(() => {
+		/*
+		 * **The id moves here, when the text changes** — not in the timer callback. A change that
+		 * arrives *after* the timer has already fired has no timer left to clear, so moving the id
+		 * with the timer would leave that request current and let a slow answer for `log` render
+		 * under the `login` that replaced it. Every text change invalidates whatever is in flight.
+		 */
+		asked.current += 1;
+		const id = asked.current;
 		// Clearing the field is not a search: back to the URL's own tree, with nothing asked. The
-		// id still moves, so an answer already in flight lands on nothing.
+		// id has already moved, so an answer already in flight lands on nothing.
 		if (text === '') {
-			asked.current += 1;
 			setState(IDLE);
 			return;
 		}
@@ -105,14 +117,13 @@ export function useArchiveSearch(): ArchiveSearch {
 		 * sleep (`tests/unit/no-sleep.test.ts`).
 		 */
 		const debounce = setTimeout(() => {
-			asked.current += 1;
-			const id = asked.current;
 			setState({ status: 'searching' });
 			void (async () => {
 				const answer = await call('search_archive', { text });
 				if (asked.current !== id) {
-					// The text moved on while this was out. Its answer is about something nobody is
-					// asking any more, and rendering it would put a stale hit list under new text.
+					// The text moved on — or the screen did — while this was out. Its answer is about
+					// something nobody is asking any more, and rendering it would put a stale hit list
+					// under new text.
 					return;
 				}
 				const next = read(answer);
@@ -123,6 +134,10 @@ export function useArchiveSearch(): ArchiveSearch {
 		}, SEARCH_DEBOUNCE_MS);
 		return () => {
 			clearTimeout(debounce);
+			// And unmounting moves the id too, which is the whole of this hook's missing `live` ref:
+			// an answer that outlives the screen lands on nothing rather than on a `setState` for a
+			// component that is gone.
+			asked.current += 1;
 		};
 	}, [text, call]);
 

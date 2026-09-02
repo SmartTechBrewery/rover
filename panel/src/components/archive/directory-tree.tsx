@@ -1,5 +1,9 @@
 import { type ArchiveLevels, levelAt } from '@panel/archive/archive-levels.js';
-import { keyOf, splatFromComponents } from '@panel/archive/archive-path.js';
+import {
+	keyOf,
+	MAX_ARCHIVE_SEARCH_TEXT_LENGTH,
+	splatFromComponents,
+} from '@panel/archive/archive-path.js';
 import type { ArchiveSearch, ArchiveSearchState } from '@panel/archive/archive-search.js';
 import { orderedEntries } from '@panel/archive/level-order.js';
 import { type HitNode, hitTree } from '@panel/archive/search-tree.js';
@@ -59,7 +63,8 @@ import {
  * - **a hit row gains nothing a browsing row is forbidden.** It is the same {@link Row}: the same
  *   `<Link>`, the same classes, no count, no status glyph, no colour that means an outcome.
  * - **a truncated answer says so**, above the hits and not below them, so a partial list cannot
- *   read like a complete one for as long as it takes to scroll to the end of it.
+ *   read like a complete one for as long as it takes to scroll to the end of it — and it says so
+ *   whether or not anything matched, because an empty hit list is still a hit list ({@link Searched}).
  */
 
 /** A run is a leaf — depth 0 is a project, 1 a test name, 2 a run. */
@@ -102,6 +107,10 @@ export function DirectoryTree({
 					 * `aria-label` rather than a visible label: the design has none, and a placeholder
 					 * is not a name. It is the one thing here that is not in the approved markup and it
 					 * draws nothing — assistive technology has to be able to say what this field is.
+					 *
+					 * `maxLength` is the host's own bound, mirrored in `archive-path.ts` beside the path
+					 * depth: a paste longer than the host accepts stops at the field rather than being
+					 * sent to be refused and reported as a host that could not search.
 					 */}
 					<input
 						aria-label="Search the whole archive"
@@ -109,6 +118,7 @@ export function DirectoryTree({
 						autoComplete="off"
 						autoCorrect="off"
 						className="w-full rounded-sm border-2 border-outline-variant bg-surface px-3 py-2 pl-9 font-code-md text-code-md text-on-surface transition-colors placeholder:text-outline focus:border-tertiary focus:ring-0"
+						maxLength={MAX_ARCHIVE_SEARCH_TEXT_LENGTH}
 						onChange={(event) => search.setText(event.target.value)}
 						placeholder={PLACEHOLDER}
 						spellCheck={false}
@@ -140,6 +150,13 @@ export function DirectoryTree({
  * and none of them borrows one from *Nothing in the archive* or `ARCHIVE NOT READABLE` either.
  *
  * In flight is one quiet line and no spinner (§5), exactly as a level in flight is.
+ *
+ * **Truncation is reported independently of whether anything matched**, and is not a fourth state.
+ * The host's flag means *a directory that exists was not fully examined*, which it can set without
+ * recording a single match — an unreadable subtree, or a bound reached before any name matched. So
+ * `matches: []` with `truncated: true` is a reachable answer, and it is the one a reader is most
+ * likely to act on by giving up: *no name in the archive contains that text* would be a definitive
+ * negative about a search that was cut short, so the empty answer says which of the two it is.
  */
 function Searched({
 	state,
@@ -155,7 +172,13 @@ function Searched({
 		return <Quiet>The host could not search the archive.</Quiet>;
 	}
 	if (state.matches.length === 0) {
-		return <Quiet>No name in the archive contains that text.</Quiet>;
+		return (
+			<Quiet>
+				{state.truncated
+					? 'Nothing in the part of the archive that could be examined contains that text.'
+					: 'No name in the archive contains that text.'}
+			</Quiet>
+		);
 	}
 	return (
 		<>

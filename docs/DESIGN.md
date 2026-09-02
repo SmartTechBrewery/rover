@@ -884,6 +884,15 @@ browser.
 - **A truncated answer says so**, ***More names match than are shown. Narrow the text.***, and it is
   drawn **above** the hits: a line under a long list is one a reader reaches only by scrolling to the
   end of it, and until then a partial list reads exactly like a complete one.
+- **And truncation is orthogonal to the three states, not a fourth one** (amended in place, #146).
+  The host's flag means *a directory that exists was not fully examined*, which it sets without
+  recording a match whenever an unreadable subtree or one of its three bounds stops a descent before
+  any name matches — so `matches: []` with `truncated: true` is reachable, and it is the answer a
+  reader is most likely to act on by giving up. *Nothing matched* therefore has two sentences rather
+  than one: ***No name in the archive contains that text.*** when the whole archive was examined, and
+  ***Nothing in the part of the archive that could be examined contains that text.*** when it was
+  not. The definitive negative is never said about a search that was cut short — which is what the
+  flag exists for, and the operator with a permissions problem is the one who would otherwise get it.
 - **No request per keystroke.** The text is debounced (300 ms), one request is in flight at a time,
   and an answer to text that is no longer in the field is dropped rather than rendered
   (`panel/src/archive/archive-search.ts`). There is no polling and no refresh, for the same reason a
@@ -1024,8 +1033,13 @@ show a run appearing. A level is fetched on navigation and cached for the life o
 the one place the panel's data differs from the Devices screen's, which polls because *what is
 attached* changes under the reader.
 
-**A path deeper than a run is reachable only by typing it**, since a run is a leaf. It renders that
-level's listing rather than nothing at all — names, addressable, no invented measures.
+**A path deeper than a run is reachable only by typing it *while browsing*** (amended in place,
+#146), since a run is a leaf in the URL's tree and its `<serial>` is not a level there. It renders
+that level's listing rather than nothing at all — names, addressable, no invented measures.
+**Following a search hit is the second way**: the searched tree draws exactly the addresses the host
+answered and has no depth bound of its own, so a hit below a run is a row you can click (§9's
+*And the card searches the whole archive*). What stays true either way is why a run is a leaf here —
+browsing derives its levels from the address, and the address stops at the run.
 
 ### Three deviations from the approved markup, made deliberately
 
@@ -1035,7 +1049,10 @@ level's listing rather than nothing at all — names, addressable, no invented m
   ***Search the whole archive...*** instead (#146). Nothing else about the field deviates — the
   wrapper, the classes and the leading glyph's position are the approved markup's, and
   `lucide-react`'s `Search` in place of the Material Symbols glyph and `rounded-sm` for the design's
-  `rounded` are the standing portability note above rather than deviations of their own.
+  `rounded` are the standing portability note above rather than deviations of their own. It carries
+  two attributes that draw nothing and that no design would have shown: an `aria-label`, because a
+  placeholder is not a name, and a `maxLength` mirroring the host's own text bound, so a long paste
+  stops at the field instead of spending a request to be refused.
 - **A contents row is a `<Link>`.** The approved screens have `cursor-default` on these rows, which
   would leave the tree as the only way to move and make the larger half of a file explorer inert.
   Nothing else about a row changes: it gains no control, no count the tree refuses to show, and no

@@ -96,7 +96,8 @@ describe("the panel's mirror of list_archive", () => {
 /**
  * The panel's half of the drift gate `tests/unit/panel/search-archive-fixture.test.ts` opens (#146).
  *
- * The same six captured searches, parsed here by the mirror and there by the daemon's own schemas.
+ * The same seven captured searches, parsed here by the mirror and there by the daemon's own
+ * schemas.
  * The other half proves the file is a set of answers the daemon could really give, and that every
  * match is an address a listing would accept; this half proves every field the tree card draws a
  * hit from survives the parse.
@@ -144,14 +145,20 @@ describe("the panel's mirror of search_archive", () => {
 		expect(outcomes).toContain('unreadable');
 	});
 
-	// The flag the truncation line is drawn from, in both of its states.
+	// The flag the truncation line is drawn from, in both of its states — and in both of its hit
+	// counts, since `matches: []` with `truncated: true` is what the card must not draw as a
+	// complete negative.
 	it('reads a truncated answer as truncated and a complete one as complete', () => {
 		const flags = searches.searches.flatMap((search) => {
 			const parsed = SearchArchiveResultSchema.parse(search.result);
-			return parsed.outcome === 'searched' ? [parsed.truncated] : [];
+			return parsed.outcome === 'searched'
+				? [`${parsed.matches.length > 0}:${parsed.truncated}`]
+				: [];
 		});
 
-		expect(new Set(flags)).toEqual(new Set([true, false]));
+		expect(new Set(flags)).toEqual(
+			new Set(['true:true', 'true:false', 'false:true', 'false:false']),
+		);
 	});
 
 	/*

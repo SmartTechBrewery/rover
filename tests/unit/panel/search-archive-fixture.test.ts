@@ -17,15 +17,17 @@ import fixture from '../../fixtures/panel/search-archive.json' with { type: 'jso
  * host's own schemas, and in `panel/src/archive/archive-listing.test.ts` by the panel's mirror.
  *
  * **It is a search list**, the shape `list-archive.json`'s level list already extended once:
- * `{ "searches": [ { "text": …, "result": … } ] }`. One answer per file would have been six files
- * pinning one schema, and the search field renders every one of these six differently.
+ * `{ "searches": [ { "text": …, "result": … } ] }`. One answer per file would have been seven files
+ * pinning one schema, and the search field renders every one of these seven differently.
  *
  * **Every search was captured and none was hand-edited.** Like `list_archive`, this method needs no
- * device — it reads the host's own disk — so the whole file is a daemon's own bytes off the panel's
- * HTTP surface (`ROVER_HTTP_PORT`) against a seeded `ROVER_ARTIFACTS_PATH`. The three outcomes came
- * from the filesystem rather than from a text editor, which is `list-archive.json`'s own trick: a
- * subdirectory with mode `000` is walked past and makes the answer `truncated`, the root with mode
- * `000` answers `unreadable`, and the root moved aside answers `missing`.
+ * device — it reads the host's own disk — so the whole file is a daemon's own bytes off a seeded
+ * `ROVER_ARTIFACTS_PATH`. The three outcomes came from the filesystem rather than from a text
+ * editor, which is `list-archive.json`'s own trick: a subdirectory with mode `000` is walked past
+ * and makes the answer `truncated`, the root with mode `000` answers `unreadable`, and the root
+ * moved aside answers `missing`. **`truncated` with no matches at all** comes off the same seeding,
+ * searched for a text nothing in the readable half contains — the reachable answer the tree card
+ * used to draw as a complete negative (#149 review).
  *
  * **Every match's `path` is parsed by `ListArchiveParamsSchema`.** That is what makes *the archive
  * has one path vocabulary* assertable rather than merely claimed: a match is an address the listing
@@ -68,14 +70,30 @@ describe("the panel's search_archive fixture", () => {
 	});
 
 	// *Nothing matched* is a `searched` with an empty array and is not a failure — the distinction
-	// the field's three states rest on.
+	// the field's three states rest on. There are two of them, and the pair is the point: see below.
 	it('carries a search that matched nothing apart from one that could not be run', () => {
 		const empty = searches.filter((search) => {
 			const parsed = SearchArchiveResultSchema.parse(search.result);
 			return parsed.outcome === 'searched' && parsed.matches.length === 0;
 		});
 
-		expect(empty).toHaveLength(1);
+		expect(empty).toHaveLength(2);
+	});
+
+	/*
+	 * **Nothing matched and truncated at once**, which is the answer the card used to render as a
+	 * definitive *no name in the archive contains that text*. It is reachable and it is on the wire:
+	 * the host sets the flag without recording a match whenever a bound or an unreadable subtree
+	 * stops a descent before any name matches. Captured, not written: a root holding one readable
+	 * project and one mode `000` sibling, searched for a text nothing in the readable half contains.
+	 */
+	it('carries an answer that matched nothing and was truncated all the same', () => {
+		const empty = searches.flatMap((search) => {
+			const parsed = SearchArchiveResultSchema.parse(search.result);
+			return parsed.outcome === 'searched' && parsed.matches.length === 0 ? [parsed.truncated] : [];
+		});
+
+		expect(new Set(empty)).toEqual(new Set([true, false]));
 	});
 
 	// A partial answer must never render like a complete one, so the flag has to be on the wire in
