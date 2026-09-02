@@ -1,7 +1,8 @@
 import { z } from 'zod';
 
 /**
- * `list_archive`' answer, as much of it as the Archive screen reads.
+ * The archive's two reads, as much of them as the Archive screen needs — `list_archive`'s answer
+ * one level at a time, and `search_archive`'s matching entries of the whole of it (R38, #146).
  *
  * **Deliberately re-declared rather than imported from `src/ipc/methods.ts`**, for the reason
  * `panel/src/devices/device-list.ts` gives at length: the panel is a separate tree with its own
@@ -9,10 +10,11 @@ import { z } from 'zod';
  * (`vitest.config.ts`) — and the daemon's method table drags `core/device.ts`,
  * `core/capabilities.ts` and the whole verb schema neighbourhood into a browser bundle behind it.
  *
- * The drift that buys is pinned rather than hoped for: `tests/fixtures/panel/list-archive.json` is
- * parsed by the **daemon's** `ListArchiveResultSchema` in
- * `tests/unit/panel/list-archive-fixture.test.ts` and by the mirror below in
- * `archive-listing.test.ts`. One fixture, two projects, no cross-tree import.
+ * The drift that buys is pinned rather than hoped for, once per method:
+ * `tests/fixtures/panel/list-archive.json` is parsed by the **daemon's**
+ * `ListArchiveResultSchema` in `tests/unit/panel/list-archive-fixture.test.ts` and by the mirror
+ * below in `archive-listing.test.ts`, and `tests/fixtures/panel/search-archive.json` is parsed the
+ * same way twice for the search. One fixture, two projects, no cross-tree import.
  *
  * **Nothing here is `.strict()`**, and that is the same deliberate difference from the host's copy
  * the device mirror makes: a browser that blanks a working screen because a newer daemon added a
@@ -80,3 +82,47 @@ export const ListArchiveResultSchema = z.discriminatedUnion('outcome', [
 	z.object({ outcome: z.literal('unreadable') }),
 ]);
 export type ListArchiveResult = z.infer<typeof ListArchiveResultSchema>;
+
+/**
+ * One `search_archive` match — **where** in the archive the text appears, and nothing about what
+ * is in it (R38, #144).
+ *
+ * `path` is the components a `list_archive` walk would have reached it by, so a match is by
+ * construction an address the tree can link to and the byte route already accepts: the archive has
+ * **one path vocabulary** across all of its reads. `kind` is the entry kinds above, and it is here
+ * because the alternative is the panel guessing from a name whether an address is a directory —
+ * which is exactly the parsing D22 forbids.
+ *
+ * **Nothing a listing measures is on a match** — no `childCount`, no `onlyChild`, no `sizeBytes`.
+ * A search answers *where*; *what is in it* is `list_archive`'s question, and the address here is
+ * what to ask it about.
+ */
+const ArchiveSearchMatchSchema = z.object({
+	path: z.array(z.string()),
+	kind: z.enum(['directory', 'file', 'other']),
+});
+export type ArchiveSearchMatch = z.infer<typeof ArchiveSearchMatchSchema>;
+
+/**
+ * `search_archive`'s answer — the archive's own three words again, so both of its reads speak one
+ * vocabulary.
+ *
+ * `matches: []` with `truncated: false` is **nothing matched**, and is not a failure; `missing` is
+ * *nothing has ever been archived on this host*, which the search field reads as nothing matched
+ * for the reason `archive-search.ts` gives.
+ *
+ * **`truncated` has exactly one meaning**: at least one directory that exists was not fully
+ * examined, so matches may be missing. Any of the host's three bounds does it, and so does a level
+ * the host could not read mid-walk. It is what keeps a partial hit list from rendering like a
+ * complete one, which is why the tree card says so beside the hits.
+ */
+export const SearchArchiveResultSchema = z.discriminatedUnion('outcome', [
+	z.object({
+		outcome: z.literal('searched'),
+		matches: z.array(ArchiveSearchMatchSchema),
+		truncated: z.boolean(),
+	}),
+	z.object({ outcome: z.literal('missing') }),
+	z.object({ outcome: z.literal('unreadable') }),
+]);
+export type SearchArchiveResult = z.infer<typeof SearchArchiveResultSchema>;

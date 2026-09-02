@@ -1,0 +1,114 @@
+{
+	"searches": [
+		{
+			"text": "login",
+			"result": {
+				"outcome": "searched",
+				"matches": [
+					{
+						"path": [
+							"checkout-app",
+							"login-flow"
+						],
+						"kind": "directory"
+					},
+					{
+						"path": [
+							"checkout-app",
+							"login-flow",
+							"20260830T170501Z-issue-112-9f1c2ab4",
+							"R5CT30ABCDE",
+							"screenshots",
+							"login-error.png"
+						],
+						"kind": "file"
+					},
+					{
+						"path": [
+							"checkout-app",
+							"login-flow",
+							"20260830T170501Z-issue-112-9f1c2ab4",
+							"R5CT30ABCDE",
+							"screenshots",
+							"login-screen.png"
+						],
+						"kind": "file"
+					}
+				],
+				"truncated": false
+			}
+		},
+		{
+			"text": "latest",
+			"result": {
+				"outcome": "searched",
+				"matches": [
+					{
+						"path": [
+							"checkout-app",
+							"login-flow",
+							"20260829T142201Z-issue-112-4b0e7c15",
+							"emulator-5554",
+							"latest_recording"
+						],
+						"kind": "other"
+					}
+				],
+				"truncated": false
+			}
+		},
+		{
+			"text": "issue-112",
+			"result": {
+				"outcome": "searched",
+				"matches": [
+					{
+						"path": [
+							"checkout-app",
+							"login-flow",
+							"20260829T142201Z-issue-112-4b0e7c15"
+						],
+						"kind": "directory"
+					},
+					{
+						"path": [
+							"checkout-app",
+							"login-flow",
+							"20260830T170501Z-issue-112-9f1c2ab4"
+						],
+						"kind": "directory"
+					}
+				],
+				"truncated": true
+			}
+		},
+		{
+			"text": "no-such-name",
+			"result": {
+				"outcome": "searched",
+				"matches": [],
+				"truncated": false
+			}
+		},
+		{
+			"text": "no-such-name-anywhere",
+			"result": {
+				"outcome": "searched",
+				"matches": [],
+				"truncated": true
+			}
+		},
+		{
+			"text": "login",
+			"result": {
+				"outcome": "missing"
+			}
+		},
+		{
+			"text": "login",
+			"result": {
+				"outcome": "unreadable"
+			}
+		}
+	]
+}
