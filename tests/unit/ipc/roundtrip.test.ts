@@ -40,6 +40,9 @@ function statusHandlers(overrides: Partial<IpcHandlers> = {}): IpcHandlers {
 		// cheapest real answers, and these suites have no archive root at all.
 		list_archive: () => ({ outcome: 'listed', entries: [] }),
 		search_archive: () => ({ outcome: 'searched', matches: [], truncated: false }),
+		// And the projects row, for the same reason: these suites have no projects root either,
+		// and `missing` is the honest answer of a host that has none.
+		list_projects: () => ({ outcome: 'missing' }),
 		// The verb rows, for the same reason and with the same cheapest real answer: these
 		// suites are about the surface, and a refusal is what a host with no device says.
 		wait_for: () => refusedWithoutAHost(),

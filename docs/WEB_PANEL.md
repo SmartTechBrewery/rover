@@ -26,7 +26,17 @@ Design work lives in [`DESIGN.md`](./DESIGN.md); the brief that produced the fir
    it, are both settled below, and both halves are built: the panel presents an `rover users` token
    once, holds the session id it is given, and signs out in a way that ends the session on the
    host.
-2. **Project registration** — modeled on Swarm's own.
+2. **Project registration** — modeled on Swarm's own, and **split in two on 2026-09-02**
+   (`PROJECT.md` D31). The half that is scheduled is the **read**: a `Projects` destination
+   between `Archive` and `System` showing what is registered on this host and what each project
+   declares. **The host half has landed** (R39, #152): `list_projects` answers the identifier,
+   `apps`, whether there is an `install`, the services by name, whether there is a `teardown`, and
+   for a hook file that will not parse **that it will not parse** — with no `env` value and no host
+   path on any answer. The screen itself is being designed (`docs/DESIGN.md` §10).
+   **Editing and deleting a registration wait on the role model** D27 defers — a hook file names programs the host spawns, so writing one over the
+   wire is a far larger privilege than force-releasing a lease, and today every named user holds
+   every panel privilege. Registering stays `rover init`'s job; R40 is the open question of it
+   doing that against a host it is not running on.
 3. **List of devices available in the system** — **done** (#113). Android only for now, whatever the
    host's `adb` reports (`PROJECT.md` §4 `list_devices`): the Devices screen polls `list_devices`
    over the HTTP surface and renders every device the host reports as one card — model, serial,
