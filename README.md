@@ -927,7 +927,7 @@ package argument on it — the byte-carrying form stays the CLI's, because a who
 argument means an agent producing several megabytes of base64. That is what `push_file` and
 `pull_file` are still waiting for and why they are not tools: `PROJECT.md` R24 phase 2 owns how a
 client supplies and receives a file, and neither of those rows has a second form that carries
-none. `force_release_device` is the third of five rows with no tool, and its reason will not expire:
+none. `force_release_device` is the third of six rows with no tool, and its reason will not expire:
 **an agent must not be able to end another agent's lease.** It is authority over the shared pool
 rather than a step in one caller's work, which is what makes it an operator action (D27, D28)
 reached from the CLI and, later, the panel. `list_archive` is the fourth, and its reason is
@@ -939,7 +939,12 @@ other agent's runs on the host. `search_archive` is the fifth, for that reason w
 (R38): it reads the same archive, and where `list_archive` at least made an agent walk to another
 agent's runs one level at a time, one search hands over the run names of every other agent on the
 host in a single answer. It is on the panel's surface instead, which is the operator's own browser.
-`tests/unit/mcp/verb-declarations.test.ts` records all five as
+`list_projects` is the sixth, and its reason is the same asymmetry in a different key (R39): it
+answers what the **host operator** configured this machine to run around a lease, which is an
+operator's question rather than an agent's — an agent already gets everything its own lease implies
+without asking, and enumerating every other project registered on the host is not something it
+needs. It is on the panel's surface too.
+`tests/unit/mcp/verb-declarations.test.ts` records all six as
 decisions, so no row can quietly land with no tool. The `rover` command is published through `package.json`'s `bin` and reaches a `PATH`
 only through `npm link`, which `PROJECT.md` §9.4 records the reasoning for; `bin/rover-mcp.mjs`
 is a path an MCP config states absolutely and not that.
@@ -968,7 +973,7 @@ startup, naming the variable and the reason, rather than binding something surpr
 | `ROVER_SOCKET_PATH` | `~/.rover/rover.sock` | Absolute path of the unix socket the local daemon binds and a local client connects to. **Empty counts as unset** — an exported-but-blank variable is what a shell leaves behind, and reading it as a real setting would point the daemon at the current directory. At most **103 bytes of UTF-8**: a unix socket address is a fixed-size struct (104 bytes on macOS, 108 on Linux, NUL included), and over the cap `bind` truncates or answers `EINVAL` instead of naming the length, so a longer path is rejected at startup with the byte count and the path. |
 | `ROVER_USERS_PATH` | `~/.rover/users.json` | Absolute path of the host's own user store — one record per user: identifier, display name, the **hash** of that user's token, and when it was created. Never a token: `rover users add` and `rover users rotate` print the raw value once and store only its hash. **Empty counts as unset**, as it is for the socket. Read by `rover users`, which touches the file directly and never goes over the network (`PROJECT.md` D25), **and by the network listener**, which is the host's entire authentication surface: the token in a caller's greeting is hashed and looked up here, re-read at every connection attempt and never cached, so `revoke` and `rotate` take effect on the very next attempt with the daemon still running. |
 | `ROVER_ARTIFACTS_PATH` | `~/.rover/artifacts` | Root of the durable artifact archive: every `screenshot`, `record_video` and `read_logs` call additionally writes its output here, on the host, **in addition to** returning the bytes to the client (`PROJECT.md` D23, §10). **Empty counts as unset**, as it is for the socket. Read only by the daemon — a client never resolves it, and the archive path is never the one an agent is given. **Nothing prunes it**: retention is deliberately undecided (`PROJECT.md` §9.4), so this grows without bound until an operator removes what they no longer want. |
-| `ROVER_PROJECTS_PATH` | `~/.rover/projects` | Directory holding the **per-project hook files** — one `<project>.json` per project, selected by the `project` string a lease carries (`PROJECT.md` D13, and see below). **Empty counts as unset**, as it is for the socket. Read only by the daemon, on the machine the devices are attached to: a hook file names a program the host runs with the daemon's own privileges, and nothing about it is ever accepted over the wire. Files are **re-read at every use and never cached** (`PROJECT.md` D6) — when a lease ends, and when an `install_app` carrying no package asks for the project's own install — so editing one takes effect on the very next call with nothing restarted. A `project` string that is not a valid identifier — anything with a separator, a leading `-`, whitespace or over 64 characters — resolves to **no hooks at all**, because no path is ever built from it. |
+| `ROVER_PROJECTS_PATH` | `~/.rover/projects` | Directory holding the **per-project hook files** — one `<project>.json` per project, selected by the `project` string a lease carries (`PROJECT.md` D13, and see below). **Empty counts as unset**, as it is for the socket. Read only by the daemon, on the machine the devices are attached to: a hook file names a program the host runs with the daemon's own privileges, and nothing about it is ever **accepted** over the wire. What *is* on the wire is one read: `list_projects` answers which projects are registered here — by name, with `apps`, the helper services by name, and whether there is an `install` and a `teardown` — over the panel's HTTP surface alone (`PROJECT.md` D31, R39). **No `env` value and no host path is on that answer** and there is no field either would fit in, and no method writes a hook file or takes a path into this directory. Files are **re-read at every use and never cached** (`PROJECT.md` D6) — when a lease ends, and when an `install_app` carrying no package asks for the project's own install — so editing one takes effect on the very next call with nothing restarted. A `project` string that is not a valid identifier — anything with a separator, a leading `-`, whitespace or over 64 characters — resolves to **no hooks at all**, because no path is ever built from it. |
 | `ROVER_PROJECT_FILE` | unset — **no default project** | The opt-in switch on the *client* side, and the counterpart of `ROVER_PROJECTS_PATH` above: the path of **one** project hook file on the machine running the client, whose `project` identifier becomes the default for `rover acquire`'s `--project` and for the MCP `acquire_device` tool's `project` argument (`PROJECT.md` D22). Unset or empty and nothing is read, `--project` is required exactly as it was, and the tool still declares the argument — **empty counts as unset**, as it is for the socket. Given both, the flag or the argument wins. It is one explicit path and there is no search: nothing walks up from the working directory and no `.rover/` convention exists, so the file a client reads is the file you named. A path naming a file that is missing or will not parse is a **loud client-side failure naming it** — exit 2 from the CLI, and an MCP server that dies on stderr at startup rather than advertising a tool it cannot fill in — never a silent fallback to attributing the lease to nothing. Convenience only: nothing else in the file is read here, no client ever runs what one declares, and the wire is unchanged — `project` stays a required, opaque string the host stores and never interprets. `owner` is **never** defaulted from this or from anything else (`PROJECT.md` D16, D20). |
 | `ROVER_LISTEN_PORT` | unset — **no network listener** | The opt-in switch for the TCP+TLS listener that serves the same IPC surface as the local socket. Unset or empty and nothing binds, nothing else below is read, and the daemon is a purely local host. Set it and the next two become **required together**: a port with no TLS material would be a listener nobody could trust, so a missing one is a startup failure naming every variable still missing rather than a half-configured host. Who may connect is not a variable at all — it comes from the user store (`ROVER_USERS_PATH`), which always resolves, so a host with no users yet starts and refuses everyone. 1–65535. |
 | `ROVER_TLS_CERT` | — (required with the port) | Path to the PEM certificate (chain) the listener presents. |
@@ -1166,8 +1171,10 @@ privileges:
 
 - **It lives on the host, never on the client.** Verbs run where the hardware is (`PROJECT.md`
   D19), and a teardown stranded on the far side of the network could not stop what it started. No
-  IPC method reads a hook file, writes one, or takes a path into this directory — a lease carries
-  a `project` *string* and nothing else.
+  IPC method writes a hook file or takes a path into this directory — a lease carries a `project`
+  *string* and nothing else. One method **reads** the directory, `list_projects`, and answers what
+  is registered here without an `env` value or a host path on the answer (`PROJECT.md` D31); the
+  write stays off the wire entirely, because every command in the file runs as the daemon's user.
 - **It is the host operator's file.** Whoever can write into `ROVER_PROJECTS_PATH` can run
   programs as the user the daemon runs as. That is the same trust the daemon already has, and it
   is why the directory is host-side configuration rather than anything a borrower supplies.
@@ -1314,8 +1321,9 @@ Four things about that surface are worth knowing before pointing anything at it:
   query-string credential to fall back on, and `POST /rpc?token=…` with no header is refused like
   any other stranger. Nothing about a request or a refusal is logged.
 - **Only the panel's methods are reachable.** Every method still runs on the host either way, but
-  this transport serves an allowlist over the one table — the device list, force-release, and the
-  archive listing — so a browser tab cannot take a lease and then drive a phone with it:
+  this transport serves an allowlist over the one table — the device list, force-release, the
+  archive listing, the archive search and the registered projects — so a browser tab cannot take a
+  lease and then drive a phone with it:
 
   ```json
   {"type":"error","protocolVersion":1,"id":"2","error":{"code":"unknown_method","message":"'acquire_device' is not served over this host's HTTP surface"}}

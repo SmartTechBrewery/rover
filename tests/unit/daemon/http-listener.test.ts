@@ -596,6 +596,24 @@ describe('only the panel’s methods are reachable, and no table gained a row', 
 		});
 	});
 
+	it('reaches list_projects, what this host has registered', async () => {
+		registerFakeBackend();
+		await withStore();
+		const daemon = await startWithHttp();
+
+		const answer = await call(daemon, 'list_projects', {});
+
+		// On the allowlist since #152, because the panel's *Projects* screen is the surface D31's
+		// read side is *for* — and it is a read alone: nothing on this transport writes a hook
+		// file. Nothing pre-creates `temp.projectsRoot`, so `missing` and not a refusal is what
+		// proves it reached the handler.
+		expect(envelopeOf(answer)).toMatchObject({
+			type: 'result',
+			id: 'req-1',
+			result: { outcome: 'missing' },
+		});
+	});
+
 	it('runs nothing it refused — the device is still free over the socket', async () => {
 		registerFakeBackend();
 		await withStore();

@@ -5,8 +5,16 @@
  * D19's own reasoning names the project hooks as the thing that must not end up stranded on the
  * far side of the network from the device they exist to serve. So this is host-operator
  * configuration sitting in the host's own `~/.rover`, beside `rover.sock`, `users.json` and
- * `artifacts/` — and it is **never accepted over the wire**: no IPC method reads one, writes one,
- * or takes a path into this directory. A lease carries a `project` *string* and nothing else.
+ * `artifacts/` — and it is **never accepted over the wire**: no IPC method writes one, and none
+ * takes a path into this directory. A lease carries a `project` *string* and nothing else.
+ *
+ * **One method reads the root, and D31 is where that clause was narrowed rather than repealed.**
+ * `list_projects` (`./list-projects.ts`, R39) answers which projects are registered here — by
+ * name, with `apps`, the helper services by name, and whether there is an `install` and a
+ * `teardown` — so an operator can see a hook file that will not parse instead of finding out
+ * when a project stops being torn down. **No `env` value and no host path is on that answer**,
+ * and there is no field either would fit in (D19); the write stays off the wire entirely,
+ * because every command in this file is a program the host spawns as the daemon's own user.
  *
  * **A hook declares a program and its arguments, never a shell line.** The runner spawns with
  * `shell: false` (`./hook-command.ts`), so nothing a hook declares is word-split, glob-expanded,

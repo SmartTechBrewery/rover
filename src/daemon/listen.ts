@@ -38,6 +38,7 @@ import { createLeaseHandlers } from './lease-handlers.js';
 import { createLeaseStore, type LeaseStore } from './leases.js';
 import { createListArchiveHandler } from './list-archive.js';
 import { createListDevicesHandler } from './list-devices.js';
+import { createListProjectsHandler } from './list-projects.js';
 import type { HttpListenerConfig, NetworkListenerConfig } from './network-config.js';
 import { type NetworkListener, startNetworkListener } from './network-listen.js';
 import { createProjectInstall, type ProjectInstall } from './project-install.js';
@@ -207,9 +208,17 @@ export type StartResult = RunningDaemon | DaemonAlreadyRunning;
  * parameter, for the reason both modules' headers give: a parameter that turned a listing into a
  * query is how an index gets built by accident (D24).
  *
- * `artifactsRoot` is a parameter rather than something read off `archive`: the archive writes the
- * tree and those two modules read it, and widening the archive's interface to expose its own
- * root — so one more argument could be saved — is the bigger change of the two.
+ * It also answers **what this host is configured to do** around a lease: `./list-projects.ts`
+ * (R39) reads the projects root and says which projects are registered, which is the read half of
+ * D31 and the only row that is about host-operator configuration. Nothing on this surface writes
+ * one.
+ *
+ * `artifactsRoot` and `projectsRoot` are parameters rather than things read off `archive` or off
+ * a resolver: the archive writes the tree and those two modules read it, and widening the
+ * archive's interface to expose its own root — so one more argument could be saved — is the
+ * bigger change of the two. `projectsRoot` follows the same rule for a sharper reason: the
+ * listing must not be able to name a different directory from the one the restoration and the
+ * install actually read.
  */
 export function createDaemonHandlers(
 	inventory: DeviceInventory,
@@ -221,6 +230,7 @@ export function createDaemonHandlers(
 	services: ProjectServices,
 	slots: SlotAllocator,
 	artifactsRoot: string,
+	projectsRoot: string,
 ): IpcHandlers {
 	return {
 		status: handleStatus,
@@ -229,6 +239,7 @@ export function createDaemonHandlers(
 		...createVerbHandlers(inventory, leases, traffic, archive, installProject),
 		...createListArchiveHandler({ root: artifactsRoot }),
 		...createSearchArchiveHandler({ root: artifactsRoot }),
+		...createListProjectsHandler({ root: projectsRoot }),
 	};
 }
 
@@ -341,6 +352,10 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartRes
 			// different tree from the writer. A required `StartDaemonOptions` field, so no test can
 			// forget it and no daemon reads the environment for it behind `./main.ts`'s back.
 			options.artifactsRoot,
+			// And the same root the restorer, the install and the services resolve against above,
+			// so what `list_projects` reports and what the host will actually run at lease end are
+			// the same files (R39).
+			options.projectsRoot,
 		),
 	);
 

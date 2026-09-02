@@ -495,6 +495,17 @@ the process with a registry.
   makes those bounds necessary. Containment needs no resolved-root check on this side, because there
   is no caller-supplied path and `isDirectory()` is `false` for a symlink — so the walk never follows
   one. Like `list_archive` it is on the panel's transport and deliberately not an MCP tool.
+- **What this host is *configured* to do is its own read, beside those two** (R39, D31).
+  `src/daemon/list-projects.ts` answers `list_projects` — no parameter at all — with every
+  registration under `ROVER_PROJECTS_PATH`: the identifier, `apps`, whether there is an `install`,
+  the helper services by name, whether there is a `teardown`, and for a file that will not parse
+  **that it will not parse**, which is a different arm of the union from a project that declares
+  nothing. The root's three outcomes are `list_archive`'s own, for the same reason. It reuses
+  `readProjectHooks` rather than reading the files itself, so the listing and the teardown cannot
+  diverge and nothing is cached (D6); no `env` value and no host path is on any answer and there is
+  no field either would fit in (D19), so `install` and `teardown` are booleans. It is on the panel's
+  transport and deliberately not an MCP tool. **It is a read and there is no write beside it** —
+  see *Project hooks* below.
 - **A shared preamble, one row per verb.** `createVerbHandlers` does the renew / register /
   re-verify / resolve work once, so each further verb family is one `IPC_METHODS` row and one
   `runVerb` call rather than another copy of it — and inherits the rule above by construction rather
@@ -578,7 +589,7 @@ exactly as the CLI is: it holds no verb logic and reaches no backend, which
 
 Everything application-specific is a hook in the project's configuration file (D13): how to install, what helper services to start and stop, what teardown means beyond the device defaults. The core knows no application's name, and a default that mentions one is a bug.
 
-**Where it lives.** One file per project, `<project>.json` under `ROVER_PROJECTS_PATH` (`~/.rover/projects` by default), beside `rover.sock`, `users.json` and `artifacts/`. It is **host-side operator configuration**: verbs run where the hardware is (D19), and a teardown stranded on the client's machine could not stop the helper service it started. Nothing about it crosses the wire — a lease carries an opaque `project` *string* (D22), and no IPC method reads a hook file, writes one, or accepts a path into that directory. The file is selected by that string, **re-read at every use and never cached** (D6), and a string that is not a valid identifier resolves to no hooks at all — which is also the traversal guard, since no path is ever built from one that failed the shape.
+**Where it lives.** One file per project, `<project>.json` under `ROVER_PROJECTS_PATH` (`~/.rover/projects` by default), beside `rover.sock`, `users.json` and `artifacts/`. It is **host-side operator configuration**: verbs run where the hardware is (D19), and a teardown stranded on the client's machine could not stop the helper service it started. A lease carries an opaque `project` *string* (D22), and **no IPC method writes a hook file or accepts a path into that directory** — D31 narrows D13's never-over-the-wire clause to the write and does not repeal it, because every command in the file is a program the host spawns as the daemon's own user, and D27 records that until a role model exists every named user may perform every panel action. **One method reads the root**: `list_projects` (R39, `src/daemon/list-projects.ts`) answers which projects are registered here, by name, with no `env` value and no host path on the answer and no field either would fit in (D19). The file is selected by that string, **re-read at every use and never cached** (D6), and a string that is not a valid identifier resolves to no hooks at all — which is also the traversal guard, since no path is ever built from one that failed the shape.
 
 **What it carries.** `project` (which must equal the file's own name), `apps` — the applications a lease on this project drove — two commands, `install` and `teardown`, and `services`, the named helper processes a lease on this project brings up. Every command is declared as a program and its arguments rather than a shell line. Nothing is defaulted and `services` defaults to empty: a default here would be the core naming an application, which is the bug D13 exists to rule out. `src/daemon/project-hooks.ts` is the Zod schema and the reader; `README.md`'s configuration section mirrors it. **No port field, deliberately** — allocating one per lease is R18, and a field ahead of its consumer is a catalogue row describing something nothing reads (`ai/RULES.md` §7).
 
