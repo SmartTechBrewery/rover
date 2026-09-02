@@ -29,12 +29,15 @@ function renderSidebar(at = '/devices') {
 }
 
 describe('Sidebar', () => {
-	it('carries the wordmark and the three nav items, in order', () => {
+	// `Projects` goes between `Archive` and `System` (docs/DESIGN.md §3, #157): `Devices` is what
+	// the host has and `Archive` what it kept, so a registered project is the third thing it holds
+	// rather than a setting.
+	it('carries the wordmark and the four nav items, in order', () => {
 		renderSidebar();
 
 		expect(screen.getByText('ROVER_OS')).toBeDefined();
 		const items = screen.getAllByRole('listitem').map((li) => li.textContent);
-		expect(items).toEqual(['Devices', 'Archive', 'System']);
+		expect(items).toEqual(['Devices', 'Archive', 'Projects', 'System']);
 	});
 
 	it('gives the current destination the green accent and no other one', () => {
@@ -44,11 +47,21 @@ describe('Sidebar', () => {
 		expect(active.className).toContain('border-tertiary');
 		expect(active.className).toContain('bg-tertiary-container');
 
-		for (const label of ['Archive', 'System']) {
+		for (const label of ['Archive', 'Projects', 'System']) {
 			const inactive = screen.getByRole('link', { name: label });
 			expect(inactive.className).not.toContain('border-tertiary');
 			expect(inactive.className).not.toContain('bg-tertiary-container');
 		}
+	});
+
+	it('gives Projects the accent when that is where you are', () => {
+		renderSidebar('/projects');
+
+		const active = screen.getByRole('link', { name: 'Projects' });
+		expect(active.className).toContain('border-tertiary');
+		expect(screen.getByRole('link', { name: 'Archive' }).className).not.toContain(
+			'border-tertiary',
+		);
 	});
 
 	it('pins Profile at the foot, below its own divider', () => {

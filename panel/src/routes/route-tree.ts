@@ -3,6 +3,7 @@ import { archivePathRoute, archiveRoute } from './archive.js';
 import { devicesRoute } from './devices.js';
 import { indexRoute } from './index.js';
 import { profileRoute } from './profile.js';
+import { projectsRoute } from './projects.js';
 import { systemRoute } from './system.js';
 
 export const routeTree = rootRoute.addChildren([
@@ -10,6 +11,7 @@ export const routeTree = rootRoute.addChildren([
 	devicesRoute,
 	archiveRoute,
 	archivePathRoute,
+	projectsRoute,
 	systemRoute,
 	profileRoute,
 ]);

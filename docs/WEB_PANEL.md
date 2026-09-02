@@ -27,12 +27,14 @@ Design work lives in [`DESIGN.md`](./DESIGN.md); the brief that produced the fir
    once, holds the session id it is given, and signs out in a way that ends the session on the
    host.
 2. **Project registration** — modeled on Swarm's own, and **split in two on 2026-09-02**
-   (`PROJECT.md` D31). The half that is scheduled is the **read**: a `Projects` destination
-   between `Archive` and `System` showing what is registered on this host and what each project
-   declares. **The host half has landed** (R39, #152): `list_projects` answers the identifier,
-   `apps`, whether there is an `install`, the services by name, whether there is a `teardown`, and
-   for a hook file that will not parse **that it will not parse** — with no `env` value and no host
-   path on any answer. The screen itself is being designed (`docs/DESIGN.md` §10).
+   (`PROJECT.md` D31). The **read half is done** (R39, #152 for the host; R42, #157 for the
+   screen): a `Projects` destination between `Archive` and `System` showing what is registered on
+   this host and what each project declares. `list_projects` answers the identifier, `apps`,
+   whether there is an `install`, the services by name, whether there is a `teardown`, and for a
+   hook file that will not parse **that it will not parse** — with no `env` value and no host path
+   on any answer — and the screen draws one card per registration in the host's own order, with a
+   registration it cannot read drawn as *that* rather than as a project declaring nothing
+   (`docs/DESIGN.md` §10). Nothing on it writes, and it does not poll.
    **Editing and deleting a registration wait on the role model** D27 defers — a hook file names programs the host spawns, so writing one over the
    wire is a far larger privilege than force-releasing a lease, and today every named user holds
    every panel privilege. Registering stays `rover init`'s job; R40 is the open question of it
