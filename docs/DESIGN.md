@@ -1473,8 +1473,11 @@ more than it would settle.
 
   **The round is underway** and is being corrected **one region at a time** rather than regenerated
   (§11). The first generation was `74633a3b3d39445a8dedd0de97c2cc2b`; the shell round produced
-  `89097f87f206419d91751655d67d5f2a`, where the shell now matches the reference. The card anatomy is
-  the next region and nothing about it is recorded here until it settles.
+  `89097f87f206419d91751655d67d5f2a`, where the shell now matches the reference, and the content
+  round then landed in place on that same screen — one card per row, the identifier labelled
+  `PROJECT` in the header strip, and the four declared fields two across. **The card anatomy is not
+  written into this document yet**, deliberately: it is recorded here only once the screen is
+  approved, and until then this list entry is the whole of what is claimed.
 
 
 ### Open, and not blocking anything
@@ -1561,13 +1564,21 @@ a path.
   prompt's own instruction to reuse the reference shell verbatim did not survive the length of the
   prompt. So: one region per round, the literal markup to replace (below), and re-read the file
   before the next round.
-- **A correction lands as a new screen more often than in place, and `list_screens` is the only way
-  to find it.** §7 recorded this once, for the empty Devices state. The Projects shell round is the
-  second occurrence and it was cleaner evidence: `get_screen` on `74633a…` answered with the **same
-  `file id` and a byte-identical file** afterwards, so read on its own it looked like an edit that
-  had not landed — while the corrected screen was sitting beside it under a new id and the title
-  `Projects — Final Alignment`. **Check `list_screens` before concluding an edit was ignored**, and
-  do not carry an id forward on the assumption it was edited in place.
+- **Whether a correction lands in place or as a new screen is not predictable, so check both.** §7
+  recorded the new-screen case once, for the empty Devices state. The Projects rounds gave one of
+  each, back to back. The **shell** round landed as a new screen: `get_screen` on `74633a…`
+  answered with the **same `file id` and a byte-identical file** afterwards, so read on its own it
+  looked like an edit that had never happened — while the corrected screen sat beside it under a
+  new id and the title `Projects — Final Alignment`. The **content** round on that same screen then
+  landed **in place**, with a new `file id` under the id it was asked for. So: after every round,
+  re-read the id *and* look for a new screen, and never carry an id forward on the assumption it
+  was edited in place.
+- **`list_screens` is not a complete inventory.** `74633a3b3d39445a8dedd0de97c2cc2b` is absent from
+  it — in the listing taken right after that screen was superseded and in the next one — while
+  `get_screen` on that same id still answers with the file and the title. So a screen omitted from
+  the listing is not proof it is gone, and the listing is not the place to learn what this project
+  holds: **the id written down in §1 is the durable reference**, which is most of why §1's table
+  exists. Use `list_screens` to *discover* an id nobody recorded, never to conclude one is dead.
 - **A literal-markup prompt does land, and it is the form that does.** The same shell round replaced
   the `<body>` classes, the whole `<nav>`, the whole header block, the `<main>` tag and one content
   class, all in one prompt — every one of them applied, against the eight-way failure the prose
