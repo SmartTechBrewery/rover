@@ -17,7 +17,9 @@ import {
 	FolderOpen,
 	type LucideIcon,
 	Search,
+	X,
 } from 'lucide-react';
+import { type RefObject, useRef } from 'react';
 
 /**
  * The archive as a directory tree — `docs/DESIGN.md` §9's left column.
@@ -65,6 +67,13 @@ import {
  * - **a truncated answer says so**, above the hits and not below them, so a partial list cannot
  *   read like a complete one for as long as it takes to scroll to the end of it — and it says so
  *   whether or not anything matched, because an empty hit list is still a hit list ({@link Searched}).
+ *
+ * **And while there is text in it, that field's leading glyph is a clear action** (#154) — a
+ * *further* **deliberate deviation from the approved markup**, recorded in `docs/DESIGN.md` §9
+ * beside the placeholder's. The approved screens draw the magnifying glass and nothing else, and no
+ * acceptance criterion asks for a way to empty the field — but they only ever draw the field
+ * *empty*, so what that position does with a query in it was never designed. Empty, it is the
+ * approved glyph, unchanged; with text in it, it is the {@link Clear} button.
  */
 
 /** A run is a leaf — depth 0 is a project, 1 a test name, 2 a run. */
@@ -80,6 +89,9 @@ const DEEPEST_EXPANDABLE_DEPTH = 1;
  */
 const PLACEHOLDER = 'Search the whole archive...';
 
+/** The leading glyph's corner, shared so the two things that sit in it cannot drift apart. */
+const GLYPH = 'absolute top-2.5 left-2.5';
+
 export function DirectoryTree({
 	selected,
 	levels,
@@ -94,6 +106,9 @@ export function DirectoryTree({
 	 */
 	readonly search: ArchiveSearch;
 }) {
+	// Where {@link Clear} puts the caret back, for the reason given there.
+	const field = useRef<HTMLInputElement>(null);
+
 	return (
 		<aside className="flex w-full shrink-0 flex-col overflow-hidden rounded-lg border-2 border-outline-variant bg-surface-container lg:w-[320px]">
 			<div className="border-outline-variant border-b-2 bg-surface-container-high px-4 py-3">
@@ -121,17 +136,22 @@ export function DirectoryTree({
 						maxLength={MAX_ARCHIVE_SEARCH_TEXT_LENGTH}
 						onChange={(event) => search.setText(event.target.value)}
 						placeholder={PLACEHOLDER}
+						ref={field}
 						spellCheck={false}
 						type="text"
 						value={search.text}
 					/>
-					{/* `lucide-react`'s own glyph, not the design's Material Symbols one (§9). */}
-					<Search
-						aria-hidden="true"
-						className="absolute top-2.5 left-2.5 text-outline"
-						size={18}
-						strokeWidth={2}
-					/>
+					{search.text === '' ? (
+						/* `lucide-react`'s own glyph, not the design's Material Symbols one (§9). */
+						<Search
+							aria-hidden="true"
+							className={`${GLYPH} text-outline`}
+							size={18}
+							strokeWidth={2}
+						/>
+					) : (
+						<Clear field={field} setText={search.setText} />
+					)}
 				</div>
 			</div>
 			<div className="flex-1 overflow-y-auto p-4 font-code-md text-code-md">
@@ -142,6 +162,41 @@ export function DirectoryTree({
 				)}
 			</div>
 		</aside>
+	);
+}
+
+/**
+ * The clear action that stands where the `Search` glyph stands while the field holds a query (#154,
+ * `docs/DESIGN.md` §9) — the same corner, the same size, so nothing in the approved markup moves.
+ *
+ * **It empties the field through the field's own setter**, so clearing is not a second path: an
+ * empty text is `idle` in `archive-search.ts` whether it arrived by a keystroke or by this, the
+ * tree goes straight back to the levels the URL describes, and no request is spent saying so.
+ *
+ * **The caret goes back to the field**, because this control stops existing the instant the text is
+ * empty — leaving focus on it would drop a keyboard reader onto the document body mid-search. And
+ * `aria-label` rather than a title or a bare glyph, the way the field itself carries one: the `X`
+ * draws the action and cannot say it.
+ */
+function Clear({
+	field,
+	setText,
+}: {
+	readonly field: RefObject<HTMLInputElement | null>;
+	readonly setText: (text: string) => void;
+}) {
+	return (
+		<button
+			aria-label="Clear the search text"
+			className={`${GLYPH} flex text-outline transition-colors hover:text-tertiary`}
+			onClick={() => {
+				setText('');
+				field.current?.focus();
+			}}
+			type="button"
+		>
+			<X aria-hidden="true" size={18} strokeWidth={2} />
+		</button>
 	);
 }
 

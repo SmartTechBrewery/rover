@@ -270,7 +270,11 @@ describe('the search field', () => {
 		expect(field.getAttribute('placeholder')).not.toContain('Filter');
 	});
 
-	// `lucide-react`'s glyph, not the design's Material Symbols one — and decoration, not a control.
+	/*
+	 * `lucide-react`'s glyph, not the design's Material Symbols one — and decoration, not a control.
+	 * It is also the empty half of #154's swap: with nothing in the field this is the approved glyph
+	 * and nothing else, so the clear action cannot be reached before there is a query to clear.
+	 */
 	it('carries one leading glyph, hidden from assistive technology', () => {
 		showing([]);
 
@@ -279,6 +283,46 @@ describe('the search field', () => {
 		expect(glyph?.getAttribute('width')).toBe('18');
 		expect(glyph?.className.baseVal).toContain('absolute');
 		expect(screen.queryByRole('button')).toBeNull();
+	});
+
+	/*
+	 * The other half (#154), a further deliberate deviation recorded in `docs/DESIGN.md` §9 — the
+	 * approved screens only ever draw this field empty, so what the glyph position does with a query
+	 * in it was never designed. It replaces the glyph rather than standing beside it, in the same
+	 * corner at the same size, so nothing in the approved markup moves.
+	 */
+	it('replaces the glyph with a named clear control once there is text', () => {
+		showing(['checkout-app'], archive(), searching(found([]), 'checkout'));
+
+		const clear = screen.getByRole('button', { name: 'Clear the search text' });
+		// A real `button`, so Enter and Space work it without a key handler of this card's own.
+		expect(clear.getAttribute('type')).toBe('button');
+		expect(clear.className).toContain('absolute top-2.5 left-2.5');
+		const glyph = clear.querySelector('svg');
+		expect(glyph?.getAttribute('aria-hidden')).toBe('true');
+		expect(glyph?.getAttribute('width')).toBe('18');
+		// One thing in that corner, not two.
+		expect(screen.getByRole('textbox').parentElement?.querySelectorAll('svg')).toHaveLength(1);
+	});
+
+	// Through the setter a keystroke already uses, so an emptied field is `idle` by the one path
+	// `archive-search.ts` has for it rather than a second one this control invents.
+	it('empties the field through the screen’s own setter', () => {
+		showing(['checkout-app'], archive(), searching(found([]), 'checkout'));
+
+		fireEvent.click(screen.getByRole('button', { name: 'Clear the search text' }));
+
+		expect(typed).toEqual(['']);
+	});
+
+	// The control stops existing the instant the text is empty, so leaving focus on it would drop a
+	// keyboard reader onto the document body mid-search.
+	it('takes the caret back to the field after clearing', () => {
+		showing(['checkout-app'], archive(), searching(found([]), 'checkout'));
+
+		fireEvent.click(screen.getByRole('button', { name: 'Clear the search text' }));
+
+		expect(document.activeElement).toBe(screen.getByRole('textbox'));
 	});
 
 	it('reports what was typed and holds nothing itself', () => {
