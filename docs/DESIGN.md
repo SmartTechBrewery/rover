@@ -10,7 +10,7 @@ disagree, this document is what the screen should have been.
 
 **This is a living document, and keeping it current is part of doing design work — not a follow-up.**
 Whenever a screen settles something, whenever a correction is made and the reason for it is worth
-keeping, whenever a Stitch screen is added or superseded, or whenever something moves out of §10's
+keeping, whenever a Stitch screen is added or superseded, or whenever something moves out of §11's
 "not designed yet" list, it is written down **here, in the same change**, exactly as `PROJECT.md`
 and `README.md` must stay current (`ai/RULES.md` §1). A design decision that lives only in a chat
 log will be re-litigated by the next agent, and usually decided the other way: pass/fail semantics
@@ -41,10 +41,10 @@ this sentence exists to prevent.
 | Archive — Artifact Preview (Shell Corrected) | `a843d32b7a414ac3a84fd7e80aa8a8bf` | **Settled** — see §9, built with two recorded deviations; #143 restored the third |
 | Archive — Browsing (V2) | `f2de4344f7e347aa894b3054d9cf4098` | **Superseded** by the three rows above; must not be built from |
 | Run Detail — Artifacts (V2) | `36b54fbe032449d8a300ea0825bbf1c8` | **Retired by #133** — must not be built from; see §9 |
-| Compare — Visual Diff (V2) | `897632dcadce44de9bdee74a94da14f5` | Not yet corrected — see §10 |
+| Compare — Visual Diff (V2) | `897632dcadce44de9bdee74a94da14f5` | Not yet corrected — see §11 |
 | Sign In — Rover OS | `5035330b2c12401080263625ff564369` | Settled, **default state only** — see §8 |
-| Projects | `74633a3b3d39445a8dedd0de97c2cc2b` | **Superseded** by the row below, and must not be built from — its shell was rebuilt from scratch and wrong in eight places (§11) |
-| Projects — Final Alignment | `89097f87f206419d91751655d67d5f2a` | **Being corrected**, one region per round. The **shell is settled** and matches the reference (§3); the content area is not settled and nothing about the card is recorded here yet |
+| Projects | `74633a3b3d39445a8dedd0de97c2cc2b` | **Superseded** by the row below, and must not be built from — its shell was rebuilt from scratch and wrong in eight places (§12) |
+| Projects — Final Alignment | `89097f87f206419d91751655d67d5f2a` | **Settled** — see §10 |
 
 Earlier versions of each still exist and **must not be built from**. There is no way to delete a
 screen through the API — only `delete_project`, which takes everything — so every iteration
@@ -101,9 +101,9 @@ screen in this panel is the same shell with a different content area, so a new s
 a shell of its own — it takes that one, markup and class lists included, and changes only what sits
 inside `<main>`. §7 says to state that by id in every prompt about a *state* of the Devices screen;
 it applies just as literally to a **new destination**, and the Projects screen is what proved it
-(§11): asked for without the id in front of it, Stitch rebuilt the shell and got it wrong in eight
+(§12): asked for without the id in front of it, Stitch rebuilt the shell and got it wrong in eight
 places at once. The three deliberate departures from that screen's own markup are recorded rather
-than left to be re-argued — the `Devices` glyph (below), the `md:hidden` mobile header (§11), and
+than left to be re-argued — the `Devices` glyph (below), the `md:hidden` mobile header (§12), and
 the radius rename (§1).
 
 **Sidebar**, in this order: the `ROVER_OS` wordmark, a divider, then the nav items `Devices`,
@@ -112,8 +112,8 @@ separated from the main nav.
 
 - **`Archive`, not `History`.** It is a browsable tree of project → test name → run, not a
   chronological event log.
-- **`Projects` sits between `Archive` and `System`, and its screen is not designed yet** (§10). The
-  placement is the settled part and it is not arbitrary: `Devices` and `Archive` are what the host
+- **`Projects` sits between `Archive` and `System`** (its screen is settled in §10). The placement
+  is not arbitrary: `Devices` and `Archive` are what the host
   *has* right now and what it *kept*, `System` and `Profile` are settings. A registered project is
   the third thing the host holds, so it belongs with the first two rather than filed under
   settings. It is **read-only when it arrives** — what is registered and what each project
@@ -860,7 +860,7 @@ preview below, together with the third, which #143 handed back to the markup.)
 2. `8dcd4330…`'s describing line reads *"Every test filed under this project, alphabetically."* over
    a badge reading `42 runs archived`. That line is the project level's, left behind by an edit.
 3. `8dcd4330…` hid its fifth run row with an inline `opacity: 0`. **The file served on 2026-09-01 no
-   longer carried it** — either it was edited or an earlier reader saw a different render (§11: the
+   longer carried it** — either it was edited or an earlier reader saw a different render (§12: the
    file id is what changes when a render catches up). Recorded anyway, because a row hidden by an
    inline style is the kind of thing a later reader copies without noticing.
 
@@ -1259,7 +1259,7 @@ what a selected run already renders. Everything below is about an open **file**,
 says otherwise; the two places this reverses #133 say so where the reversed rule was written.
 
 **`Run Detail — Artifacts (V2)` (`36b54fbe032449d8a300ea0825bbf1c8`) is retired by this, not
-deferred.** The first draft of §10 drew a boundary — *Archive lists; Run Detail opens* — and the
+deferred.** The first draft of §11 drew a boundary — *Archive lists; Run Detail opens* — and the
 boundary was the weaker half: sending a reader to a second address for the thing they are already
 pointing at is not an explorer. That screen has nothing left this does not do, and it is marked
 accordingly in §1.
@@ -1459,7 +1459,139 @@ the ones Rover writes at about 5 000.
 
 ---
 
-## 10. What is not designed yet
+## 10. The Projects screen, as settled
+
+The panel's fourth destination, between `Archive` and `System` (§3), answering one question: **what
+is registered on this host, and what does each project ask the host to do around a lease on it.**
+Everything below was settled over two Stitch rounds and is written down for the reason §9 is — the
+alternative is the next agent re-deriving it and getting some of it the other way round.
+
+**The approved screen is `89097f87f206419d91751655d67d5f2a`** (`Projects — Final Alignment`). Its
+predecessor `74633a3b3d39445a8dedd0de97c2cc2b` is superseded and must not be built from; §12
+records what the two rounds cost and why the second worked.
+
+**The one host method behind it is `list_projects`** (R39, #152, `src/daemon/list-projects.ts`), and
+the shape of this screen is downstream of one difference from the Archive's: it answers the **whole
+root in a single call**, not one level at a time. So there is no tree, no expansion, no second
+column and no navigation on this screen — there is nowhere to navigate to. A registration is a
+leaf, and the screen is the list of them.
+
+### The shell and the header
+
+The shell is the reference's, unchanged (§3). The breadcrumb reads `Projects`, one segment, in the
+active colour, with no heading under it. The describing line is *Projects registered on this host.*
+and the header carries **one badge**, `4 registered`, which **goes rather than reading `0`**.
+
+### The card, as settled
+
+**One card per row, never a grid.** A registration is a row of facts about one project rather than a
+tile, and unlike the Devices screen there is no second thing for a card to sit beside — no hardware
+to compare at a glance, and nothing that changes under the reader.
+
+**The header strip carries the label `PROJECT` and then the identifier.** The device card's header
+needs no label because a phone model is self-evidently one; `checkout-web` on its own reads as a
+title, and it is not — it is the hook file's own name, the identifier the host looked the project up
+by, and **the exact string a lease carries as its `project`** (D22). Monospace, verbatim, wrapping
+on whole words: never truncated, never ellipsised, never lower-cased. Nothing sits on the right of
+the strip, because a registration has no status to put there.
+
+**Four fields, two across, paired like with like:**
+
+- **`APPS` beside `SERVICES`** — the two lists, **one value per line**, in the monospace face
+  because their values are identifiers.
+- **`INSTALL` beside `TEARDOWN`** — the two that are only ever `declared` or `none declared`, in the
+  ordinary body face. The face is what separates a list from an answer, so the pairing reads without
+  a rule between them.
+
+**No per-field rules.** The gutter separates the fields now that they are a grid; a rule under one
+cell reads as a line across the whole card.
+
+**`none declared` is a complete answer, not missing data.** A project that asks the host to do
+nothing is the common, correct case — `apps: []`, `services: []`, no `install`, no `teardown`
+(`src/daemon/project-hooks.ts`, and no default there ever names an application, D13) — so a card of
+four `none declared`s must not look faded, empty, unloaded or pending. It is the same rule §7's
+***nothing attached*** rests on: normal, common and *finished*.
+
+**`SERVICES` is in declaration order and must never be alphabetised.** That order is the order the
+host starts them in and its reverse is the order it stops them in (`src/ipc/methods.ts`), so
+re-sorting the list would state something false about the host.
+
+**No LED, no dot, no status glyph and no colour on any field.** The device card's LED means
+*held or free* — a live fact about hardware. A registration has no such state, and borrowing that
+vocabulary here would invent one.
+
+**No control of any kind, and no disabled one.** No `Add`, no `Edit`, no `Delete`, no overflow menu,
+and the cards are not links. A greyed-out `Delete` promises a permission tier that does not exist:
+editing and deleting a registration wait on the role model D27 defers (D31).
+
+**The five fields are everything the host answers, and a sixth cannot be added from this side.**
+`ProjectRegistrationSchema` carries the identifier, `apps`, `hasInstall`, the service names and
+`hasTeardown` — and **`env` values and every host path are structurally absent**, with no field
+either would fit in (D19), because this answer reaches a browser and a hook file's `env` may hold
+anything an operator put there. So a card cannot grow a command, a `cwd`, a port or an environment
+value without changing the wire first.
+
+### The card order is the host's order
+
+Ascending identifier, in **code-unit order** (`src/daemon/list-projects.ts`) — not `localeCompare`,
+for the reason `list_archive` refuses it: a locale-dependent order would make one host answer
+differently from another. Two consequences the screen must show rather than tidy away:
+
+- **A registration the host cannot read sorts where its name puts it**, in among the others.
+  Nothing groups broken registrations at the end, and a screen that did would be inventing an order
+  the host does not answer in.
+- There is no other ordering available. `list_projects` takes **no parameter at all**, so there is
+  no sort control to build and none to be asked for.
+
+### The registration the host cannot read
+
+It is **an arm of the union, not a project with empty fields** — which is the whole of what D31's
+read buys. Today a hook file that will not parse costs a project its teardown and says so only in
+one warning on the daemon's stderr; this card is where that becomes visible.
+
+- A quiet grey banner, **`CONFIGURATION NOT READABLE`**, at its own width and left-aligned — not a
+  slab across a full-width card — with the identifier still heading the card as on every other.
+- One line under it: ***This is not the same as a project that declares nothing — the file is there
+  and the host cannot read it.*** That sentence is the whole point of the state, exactly as *a phone
+  may well be plugged in* is for *no view* (§7): the pair must never render alike (D6).
+- **No error code, no path, no retry control**, and §5's no-red rule holds. Which of the four causes
+  it was — not JSON, not the hook schema, a `project` field disagreeing with its own name, or
+  unreadable outright — is deliberately not on the wire (D19), so a code here would dress a refusal
+  up as a diagnosis.
+
+### The three states with nothing to list — settled here, not drawn
+
+| The answer | What it means | What renders |
+| --- | --- | --- |
+| `listed`, `projects: []` | nobody has registered one here | `QuietPanel` — **No projects registered**. No badge, no card. |
+| `missing` | there is no projects root | the same panel and the same words |
+| `unreadable` | the root is there and the host **cannot say what is in it** | `QuietBanner` — **`PROJECTS ROOT NOT READABLE`**. No badge, no retry, no error code. |
+| nothing yet | the request has not answered | one quiet line, `aria-live="polite"`, **no spinner** (§5) |
+
+- **Empty and missing render alike deliberately**, which is the fold §9 already makes at the
+  Archive's root: both are the ordinary state of a host whose operator has not done a thing yet, and
+  a reader has the same next step either way. *No projects registered* takes §7's ***nothing
+  attached*** treatment and **says what would change it** — `rover init` in a project's own
+  directory — and **the badge is absent** rather than reading `0 registered`, which would describe a
+  set.
+- **`PROJECTS ROOT NOT READABLE` carries its own second line**, ***This is not the same as no
+  projects being registered — registrations may well be here.*** It is the same pairing the card
+  above draws one level down, and for the same reason: D6.
+- **Everything unusable folds into *not readable*** — an `error` envelope, a result the panel cannot
+  parse, a request nothing answered — the fold `device-list-provider.tsx` and the Archive screen
+  both already make. A `refused` sets nothing, because `Session.call` has fired `onRefusal` and the
+  router is coming down.
+
+### No polling, and no refresh control
+
+A registration changes when a person runs `rover init` or edits a file on the host, which is not
+something this screen makes a claim about seeing. It is fetched on navigation and cached for the
+life of the screen — the Archive's rule, not the Devices screen's, and for the Archive's reason:
+`list_devices` polls because *what is attached* changes under the reader, and nothing here does.
+
+---
+
+## 11. What is not designed yet
 
 Two lists, and the difference between them matters. The first must exist as a Stitch design before
 anyone builds it, because getting it wrong is expensive and the mistakes are not obvious. The
@@ -1468,26 +1600,13 @@ more than it would settle.
 
 ### Design these first
 
-- **The `Projects` screen.** The panel's fourth destination (§3), read-only in its first form: what
-  is registered on this host and what each project declares — `apps`, whether it has an `install`,
-  its helper services **by name**, whether it has a `teardown` — plus the one state a listing of
-  files has that a listing of devices does not, **a hook file that will not parse**. It is worth a
-  design round rather than this document's rules alone because it is the first screen whose rows
-  are *configuration* rather than hardware or artifacts, and the two mistakes available are
-  expensive: making a read-only screen look like a form, and making a broken file look like a
-  failure of the panel rather than a fact about the host. Its host half is `PROJECT.md` R39; **edit
-  and delete are not part of it and must not appear on it**, not even disabled, until the role
-  model D27 defers exists (D31) — a greyed-out `Delete` promises a permission tier that has not
-  been designed.
-
-  **The round is underway** and is being corrected **one region at a time** rather than regenerated
-  (§11). The first generation was `74633a3b3d39445a8dedd0de97c2cc2b`; the shell round produced
-  `89097f87f206419d91751655d67d5f2a`, where the shell now matches the reference, and the content
-  round then landed in place on that same screen — one card per row, the identifier labelled
-  `PROJECT` in the header strip, and the four declared fields two across. **The card anatomy is not
-  written into this document yet**, deliberately: it is recorded here only once the screen is
-  approved, and until then this list entry is the whole of what is claimed.
-
+Nothing, at present. The `Projects` screen was the one entry here and it is **done** — two rounds,
+shell then content, settled in §10. It earned a design round for a reason worth keeping, because it
+is the test to apply to the next candidate: it was the first screen whose rows are *configuration*
+rather than hardware or artifacts, and the two mistakes available were expensive and not obvious —
+making a read-only screen look like a form, and making a broken file look like a failure of the
+panel rather than a fact about the host. A screen with no such pair of traps belongs in the third
+list, not this one.
 
 ### Open, and not blocking anything
 
@@ -1502,6 +1621,11 @@ Build them in keeping with everything above — the palette and tokens, no loopi
 uniform refusal, the vocabulary — and **write what you settled back into this document** (see the
 top of this file). Do not commission a Stitch screen for them.
 
+- **The `Projects` screen's four states with nothing to list — done, in §10.** The populated screen
+  had a Stitch design and these did not, exactly as the Archive's root level and empty-ish states
+  did not (below), and they were settled from this document instead. What they settled is written
+  into §10 above: `listed`-but-empty and `missing` render **alike**, which is the Archive's own fold
+  one level up, while *nothing registered* and *root not readable* must never render alike (D6).
 - **The "no view" state with an *empty* list — done** (#113). It was built from this document rather
   than from a Stitch screen, exactly as this list intends, and what it settled is written into §7
   above. Left named here so the next reader can see that the method worked once.
@@ -1557,7 +1681,7 @@ a path.
 
 ---
 
-## 11. Working with Stitch — what actually happens
+## 12. Working with Stitch — what actually happens
 
 - **One region per prompt, and iterate. A prompt that asks for a whole screen comes back partly
   ignored, and it does not say which part it dropped.** The Projects screen's first generation
@@ -1592,7 +1716,7 @@ a path.
   the `<body>` classes, the whole `<nav>`, the whole header block, the `<main>` tag and one content
   class, all in one prompt — every one of them applied, against the eight-way failure the prose
   version produced. Two things came back anyway that the prompt asked it not to add: the reference's
-  own `md:hidden` mobile header, with its `settings` icon and its `FORCE RELEASE` button (§11 below
+  own `md:hidden` mobile header, with its `settings` icon and its `FORCE RELEASE` button (§12 below
   — it is not portable and #111 dropped it), and `pt-16 md:pt-0` on `<body>` to clear it. Both are
   harmless in a desktop render and neither is reproduced in code.
 - **Stitch leaves `data-stitch-orig-*` attributes behind in the markup it edits** — the shell round
