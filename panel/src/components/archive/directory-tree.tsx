@@ -333,6 +333,10 @@ function glyphFor(kind: ArchiveEntry['kind'], expanded: boolean): LucideIcon {
  * ({@link runContentsLevel}), so the recursion hops that one address at {@link RUN_ROW_DEPTH} and
  * descends ordinarily either side of it.
  *
+ * **A level with nothing in it draws nothing under its node — except the run's own** (#161). Every
+ * other level's card is that level's listing and says *empty* or *unreadable* itself; the run's card
+ * lists nothing, so the pair is said here, in one quiet line and never as a row.
+ *
  * **The order comes from `orderedEntries`, which is the contents card's too**: the two panes list
  * the same run directories side by side, so *most recent first* is decided once for both rather
  * than remembered separately by each.
@@ -357,8 +361,25 @@ function Branch({
 	 * An empty or unreadable level draws **nothing** under its node — no `0`, no placeholder row,
 	 * no icon. A directory that does not exist is not listed, and one the host cannot see into is
 	 * said where there is room to say it: the contents card, whose whole area is the message.
+	 *
+	 * **The run's own `<serial>` level is the exception, and it is the only one** (#161). The card
+	 * beside every other node *is* that level's listing, so the card is where its two empty-handed
+	 * answers are already said; a run's card is the run's identity and its device and lists nothing
+	 * at all since `CONTENTS` went, which leaves nowhere else to draw *empty* and *unreadable*
+	 * apart — and they may never render alike (D6, `docs/DESIGN.md` §9). So this one level says
+	 * which it is, in the line the tree already uses for a level in flight and in nothing that is a
+	 * row.
 	 */
 	if (level.status !== 'listed') {
+		if (depth === SERIAL_DEPTH) {
+			return (
+				<Quiet>
+					{level.status === 'empty'
+						? 'This run wrote nothing.'
+						: "This run's contents are not readable."}
+				</Quiet>
+			);
+		}
 		return null;
 	}
 

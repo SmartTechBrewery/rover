@@ -205,7 +205,7 @@ describe('an artifact preview', () => {
 /**
  * **One control, and it is a view rather than a transfer** (`docs/DESIGN.md` §10). There is no
  * download control anywhere in the panel, and no second way to move through the artifacts: another
- * file is chosen in `CONTENTS`.
+ * file is chosen in the tree beside this card (#160, #161).
  */
 describe('the preview’s one control', () => {
 	it('opens the artifact in a new window, and offers no download', () => {
@@ -236,7 +236,7 @@ describe('the preview’s one control', () => {
 	});
 
 	/*
-	 * The absences the issue is explicit about: `CONTENTS` is how another file is chosen, and
+	 * The absences the issue is explicit about: the tree is how another file is chosen, and
 	 * comparison is `Compare — Visual Diff`'s question on a different screen.
 	 */
 	it('offers no zoom, no filmstrip, no next or previous, and no annotation', () => {

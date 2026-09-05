@@ -254,19 +254,11 @@ function Preview({
 	}
 	if (selected.length === RUN_DEPTH) {
 		/*
-		 * With no serial there is no level to read and `RunPanel` says so from `serial` alone
-		 * without looking at `contents`; `[]` is a path this cache never holds, so it reads as
-		 * `loading` and goes unused.
+		 * **The run's own `<serial>` listing is not passed to it** (#161). It was `CONTENTS`, and the
+		 * tree draws those entries under the run's node; what the card says about that level is what
+		 * `serial` already carries, which is a fact about the run rather than a listing of it.
 		 */
-		return (
-			<RunPanel
-				contents={levelAt(levels, runContents(levels, selected) ?? [])}
-				description={description}
-				device={device}
-				run={selected}
-				serial={serial}
-			/>
-		);
+		return <RunPanel description={description} device={device} run={selected} serial={serial} />;
 	}
 	return <LevelContents level={levelAt(levels, selected)} path={selected} />;
 }
@@ -383,7 +375,7 @@ function levelsWanted(
  * What the address inside a run names, as far as anything can honestly say yet.
  *
  * - `unanswered` — the level above has not answered, so nothing is known and nothing is fetched.
- * - `directory` — its parent's listing says so, and it expands under its own row in `CONTENTS`.
+ * - `directory` — its parent's listing says so, and the card draws that level's own listing.
  * - `artifact` — anything else, including an address no listing names: the byte route is then what
  *   answers, and *nothing is filed at this address* is its answer to give rather than this
  *   function's to guess.
@@ -407,8 +399,8 @@ function openEntryOf(levels: ArchiveLevels, selected: readonly string[]): OpenEn
 /**
  * One line per depth, and the deepest one covers a folder below a run.
  *
- * A path deeper than a run is reachable through the tree (#159), from `CONTENTS` and by typing, and
- * it renders what it names at every depth the archive can hold.
+ * A path deeper than a run is reachable through the tree (#159), by typing and by following a
+ * search hit, and it renders what it names at every depth the archive can hold.
  */
 const DESCRIPTIONS = [
 	'Projects with runs filed on this host.',

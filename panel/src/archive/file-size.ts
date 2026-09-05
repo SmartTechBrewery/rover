@@ -1,5 +1,9 @@
 /**
- * A file's size, as the `CONTENTS` card says it — and `unknown` when the host could not `stat` it.
+ * A file's size in words, and `unknown` when the host could not `stat` it.
+ *
+ * **Nothing on the Archive screen draws a measure since #161**: `CONTENTS` was where a size and a
+ * child count were said, and the tree that replaced it carries neither (`docs/DESIGN.md` §9). What
+ * the screen still uses from here is {@link UNKNOWN}.
  *
  * **`null` is named, never closed up.** A size the host could not read is a real gap, and the
  * screen says so rather than printing `0 B`, which is a claim about an empty file. That is the same

@@ -1,26 +1,7 @@
 import type { ArchiveLevel } from '@panel/archive/archive-levels.js';
 import type { ArchiveEntry } from '@panel/archive/archive-listing.js';
 import { render, screen } from '@testing-library/react';
-import type { AnchorHTMLAttributes, ReactNode } from 'react';
-import { describe, expect, it, vi } from 'vitest';
-
-vi.mock('@tanstack/react-router', () => ({
-	Link: ({
-		to,
-		params,
-		children,
-		...rest
-	}: {
-		to: string;
-		params?: { _splat?: string };
-		children: ReactNode;
-	} & AnchorHTMLAttributes<HTMLAnchorElement>) => (
-		<a href={`${to.replace('$', '')}${params?._splat ?? ''}`} {...rest}>
-			{children}
-		</a>
-	),
-}));
-
+import { describe, expect, it } from 'vitest';
 import { LevelContents } from './level-contents.js';
 
 function directory(name: string, childCount: number | null = 3): ArchiveEntry {
@@ -41,8 +22,19 @@ function showing(path: readonly string[], level: ArchiveLevel) {
 	return render(<LevelContents level={level} path={path} />);
 }
 
+/**
+ * The rows, and **queried as the `<li>`'s own content rather than as anchors** (#161). They stopped
+ * being links when the tree reached every address: what a row carries is unchanged, and that it is
+ * no longer followable is what {@link readOnly} asserts per level.
+ */
 function rows(container: HTMLElement): readonly HTMLElement[] {
-	return [...container.querySelectorAll('a')];
+	return [...container.querySelectorAll<HTMLElement>('li > div')];
+}
+
+/** The card holds no clickable element at all while it is showing a level (#161). */
+function readOnly(container: HTMLElement): void {
+	expect(container.querySelectorAll('a')).toHaveLength(0);
+	expect(container.querySelectorAll('button')).toHaveLength(0);
 }
 
 describe('the root', () => {
@@ -51,6 +43,19 @@ describe('the root', () => {
 
 		expect(screen.getByRole('heading', { name: 'Archive' })).toBeDefined();
 		expect(rows(container).map((row) => row.textContent)).toEqual(['checkout-app', 'payments-web']);
+	});
+
+	/*
+	 * **No link affordance, and no hover treatment that promises one** (#161). The tree beside this
+	 * card reaches every address in the archive (#159), so the approved markup's `cursor-default` is
+	 * right after all and these rows are read rather than followed.
+	 */
+	it('lists its projects as read-only rows, with nothing to click and nothing to hover', () => {
+		const { container } = showing([], listed(directory('checkout-app')));
+
+		readOnly(container);
+		expect(container.innerHTML).not.toContain('hover:');
+		expect(container.innerHTML).not.toContain('cursor-pointer');
 	});
 });
 
@@ -74,13 +79,21 @@ describe('a project', () => {
 		expect(container.textContent).not.toContain('0');
 	});
 
+	it('lists its test names as read-only rows, keeping every field they carried as links', () => {
+		const { container } = showing(['checkout-app'], listed(directory('login-flow', 42)));
+
+		expect(rows(container).map((row) => row.textContent)).toEqual(['login-flowRUNS42']);
+		readOnly(container);
+		expect(container.innerHTML).not.toContain('hover:');
+	});
+
 	// A legacy directory from before `test_name` was required is an ordinary row (D22, #129).
 	it('lists a legacy unlabeled directory like any other test name', () => {
 		const { container } = showing(['checkout-app'], listed(directory('unlabeled', 4)));
 
 		const [row] = rows(container);
 		expect(row?.textContent).toBe('unlabeled' + 'RUNS' + '4');
-		expect(row?.getAttribute('href')).toBe('/archive/checkout-app/unlabeled');
+		readOnly(container);
 	});
 });
 
@@ -115,6 +128,14 @@ describe('a test name', () => {
 		expect(screen.getByText('handwritten')).toBeDefined();
 		expect(screen.getAllByText('unknown')).toHaveLength(2);
 	});
+
+	it('lists its runs as read-only rows, keeping `OWNER` and `GRANTED`', () => {
+		const { container } = showing(['checkout-app', 'login-flow'], listed(...RUNS));
+
+		readOnly(container);
+		expect(container.innerHTML).not.toContain('hover:');
+		expect(screen.getAllByText('OWNER')).toHaveLength(3);
+	});
 });
 
 describe('an entry the archive is not supposed to have here', () => {
@@ -131,6 +152,9 @@ describe('an entry the archive is not supposed to have here', () => {
 
 		expect(rows(container).map((row) => row.textContent)).toEqual(['stray.txt', 'a-socket']);
 		expect(container.textContent).not.toContain('12');
+		// It is named rather than reachable: the tree beside the card is what takes a reader into an
+		// address, and it draws no row for a stray file above a run either.
+		readOnly(container);
 	});
 });
 

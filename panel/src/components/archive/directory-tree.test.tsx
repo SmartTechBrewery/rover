@@ -366,6 +366,87 @@ describe('a level with nothing to draw', () => {
 	});
 });
 
+/**
+ * **What the run's own `<serial>` level says when it holds nothing** (#161) — the one level in this
+ * tree that says it here rather than in the card beside it.
+ *
+ * `CONTENTS` drew *empty* and *unreadable* apart until this phase, and the pair may never render
+ * alike (D6). Every other node's card **is** that level's listing and says both itself; a run's card
+ * is its identity and its device and lists nothing at all, so the tree is the only place left.
+ */
+describe('a run that wrote nothing, and one nobody can read', () => {
+	const SENTENCES = {
+		empty: 'This run wrote nothing.',
+		unreadable: "This run's contents are not readable.",
+	} as const;
+
+	function withSerialLevel(status: 'empty' | 'unreadable') {
+		return archive({ [keyOf(SERIAL_LEVEL)]: { status } });
+	}
+
+	it('says which of the two it is, under the expanded run', () => {
+		for (const status of ['empty', 'unreadable'] as const) {
+			const { unmount } = showing(RUN_PATH, withSerialLevel(status));
+
+			expect(screen.getByText(SENTENCES[status])).toBeDefined();
+			unmount();
+		}
+	});
+
+	// The pair that must never render alike, and neither may borrow a sentence from the card one
+	// level up — which still says *Nothing is filed under this directory* and `ARCHIVE NOT READABLE`
+	// about a level of its own.
+	it('shares no sentence with the other, or with the card', () => {
+		for (const status of ['empty', 'unreadable'] as const) {
+			const { container, unmount } = showing(RUN_PATH, withSerialLevel(status));
+			const text = container.textContent ?? '';
+
+			expect(text).toContain(SENTENCES[status]);
+			expect(text).not.toContain(SENTENCES[status === 'empty' ? 'unreadable' : 'empty']);
+			expect(text).not.toContain('Nothing is filed under this directory');
+			expect(text).not.toContain('ARCHIVE NOT READABLE');
+			expect(text).not.toContain('runs may well be filed here');
+			expect(text).not.toContain('Reading this level.');
+			unmount();
+		}
+	});
+
+	/*
+	 * **One quiet line, and nothing that is a row** (AC 9): no `<a>`, no glyph, no triangle, no `0`
+	 * — the same refusal to draw something over nothing the rest of this tree makes.
+	 */
+	it('draws it as a line rather than as a row, with no spinner', () => {
+		const { container } = showing(RUN_PATH, withSerialLevel('empty'));
+
+		const line = [...container.querySelectorAll('p')].find(
+			(paragraph) => paragraph.textContent === SENTENCES.empty,
+		);
+		expect(line?.querySelectorAll('svg')).toHaveLength(0);
+		expect(line?.closest('a')).toBeNull();
+		expect(rows(container).map((row) => row.textContent)).toEqual([
+			'checkout-app',
+			'login-flow',
+			RUN,
+			OLDER,
+			'unlabeled',
+			'payments-web',
+		]);
+		expect(container.innerHTML).not.toContain('animate');
+	});
+
+	// Every other level still draws nothing under its node, because the card beside it **is** that
+	// level's own listing — the line is this one level's, keyed on its depth and on nothing else.
+	it('says neither about a level above a run', () => {
+		for (const status of ['empty', 'unreadable'] as const) {
+			const levels = archive({ [keyOf(['checkout-app'])]: { status } });
+			const { container, unmount } = showing(['checkout-app'], levels);
+
+			expect(container.textContent).not.toContain('This run');
+			unmount();
+		}
+	});
+});
+
 describe('the search field', () => {
 	beforeEach(() => {
 		typed.length = 0;

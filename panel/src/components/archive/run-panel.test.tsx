@@ -1,45 +1,11 @@
-import type { ArchiveLevel } from '@panel/archive/archive-levels.js';
 import type { ArchivedDeviceInfo } from '@panel/archive/device-info.js';
 import type { ArchivedTestDescription } from '@panel/archive/test-description.js';
 import { render, screen } from '@testing-library/react';
-import type { AnchorHTMLAttributes, ReactNode } from 'react';
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import fixture from '../../../../tests/fixtures/panel/device-info.json';
-
-// `directory-tree.test.tsx`'s shape: a `Link` is a plain anchor, so the panel renders with no router
-// instance. The splat's own encoding is asserted against a real router in `archive-path.test.tsx`.
-vi.mock('@tanstack/react-router', () => ({
-	Link: ({
-		to,
-		params,
-		children,
-		...rest
-	}: {
-		to: string;
-		params?: { _splat?: string };
-		children: ReactNode;
-	} & AnchorHTMLAttributes<HTMLAnchorElement>) => (
-		<a href={`${to.replace('$', '')}${params?._splat ?? ''}`} {...rest}>
-			{children}
-		</a>
-	),
-}));
-
 import { RunPanel, type RunSerial } from './run-panel.js';
 
 const RUN = ['checkout-app', 'login-flow', '20260830T170501Z-issue-112-9f1c2ab4'] as const;
-
-/** The run's own `<serial>` directory, as the host listed it — the real capture's shape. */
-const CONTENTS: ArchiveLevel = {
-	status: 'listed',
-	entries: [
-		{ kind: 'file', name: 'device_info.json', sizeBytes: 80 },
-		{ kind: 'other', name: 'latest_recording' },
-		{ kind: 'directory', name: 'logs', childCount: 2, onlyChild: null },
-		{ kind: 'directory', name: 'recordings', childCount: 1, onlyChild: '001.mp4' },
-		{ kind: 'directory', name: 'screenshots', childCount: 3, onlyChild: null },
-	],
-};
 
 /** The level above answered and named the run's one child — the ordinary case. */
 const NAMED: RunSerial = { status: 'answered', serial: 'R5CT30ABCDE' };
@@ -61,23 +27,11 @@ const UNDESCRIBED: ArchivedTestDescription = { status: 'missing' };
 
 function showing(
 	serial: RunSerial = NAMED,
-	contents: ArchiveLevel = CONTENTS,
 	device: ArchivedDeviceInfo = DEVICE,
 	description: ArchivedTestDescription = DESCRIBED,
 ) {
-	return render(
-		<RunPanel
-			contents={contents}
-			description={description}
-			device={device}
-			run={RUN}
-			serial={serial}
-		/>,
-	);
+	return render(<RunPanel description={description} device={device} run={RUN} serial={serial} />);
 }
-
-/** The `<serial>` directory every address below this run carries. */
-const SERIAL_PATH = [...RUN, 'R5CT30ABCDE'] as const;
 
 describe('a run', () => {
 	it('names itself in full, and reads its owner and time out of that name', () => {
@@ -99,13 +53,13 @@ describe('a run', () => {
 
 	/*
 	 * A run directory that is not one-device shaped, or one the host could not read into. `unknown`
-	 * and nothing to list — never an invented `0`, and never a second request to go looking.
+	 * — never an invented `0`, and never a second request to go looking. The tree draws nothing
+	 * under such a run for the same reason (`directory-tree.test.tsx`).
 	 */
-	it('says `unknown` and lists nothing when the run holds no single child', () => {
+	it('says `unknown` when the run holds no single child', () => {
 		const { container } = showing(NO_SINGLE_CHILD);
 
 		expect(screen.getByText('unknown')).toBeDefined();
-		expect(screen.getByText('There is nothing to list for this run.')).toBeDefined();
 		expect(container.textContent).not.toContain('0 files');
 	});
 });
@@ -113,33 +67,26 @@ describe('a run', () => {
 /*
  * **The pair that must never render alike, one level further up.** The serial comes off the level
  * *above* the run, so *nobody has answered for that level yet* and *the host cannot read it* are not
- * the run naming no single child — and *there is nothing to list for this run* is a definite claim
- * about what a lease wrote. Both of these reach here with a fully listed `contents` on purpose: the
- * state of the level above is ordered first, so a listing for some other level cannot leak in.
+ * the run naming no single child, which is the one fact `unknown` stands for here. The card lists
+ * nothing since #161, so what draws the three apart is `SERIAL`, `DESCRIPTION` and the device card
+ * — every one of which orders the state of the level above before its own answer.
  */
 describe('the level the serial is read from', () => {
-	it('says it is reading, rather than that the run wrote nothing', () => {
+	it('says it is reading, rather than that the run holds no single child', () => {
 		const { container } = showing({ status: 'loading' });
 
 		// `SERIAL` and `DESCRIPTION` both read off that level, so both say it — and saying the same
 		// thing is the point: neither may claim anything definite about a level nobody has answered.
 		expect(screen.getAllByText('reading')).toHaveLength(2);
-		expect(screen.getByText('Reading this level of the archive.')).toBeDefined();
-		expect(container.textContent).not.toContain('There is nothing to list for this run.');
-		// A `CONTENTS` entry rather than `device_info.json`, which card 2's heading names in every
-		// state: what must not leak in is the listing.
-		expect(container.textContent).not.toContain('latest_recording');
+		expect(screen.getByText("Reading this run's device_info.json.")).toBeDefined();
 		expect(container.innerHTML).not.toContain('animate');
 	});
 
-	it('says the host cannot read it, rather than that the run wrote nothing', () => {
-		const { container } = showing({ status: 'unreadable' });
+	it('says the host cannot read it, rather than that the run holds no single child', () => {
+		showing({ status: 'unreadable' });
 
 		expect(screen.getAllByText('not readable')).toHaveLength(2);
-		expect(screen.getByText('ARCHIVE NOT READABLE')).toBeDefined();
-		expect(screen.getByText(/runs may well be filed here/)).toBeDefined();
-		expect(container.textContent).not.toContain('There is nothing to list for this run.');
-		expect(container.textContent).not.toContain('latest_recording');
+		expect(screen.getByText(/Rover cannot read this run's device_info.json/)).toBeDefined();
 	});
 
 	// `unknown` is the screen saying the host answered and had no serial to give, so neither state
@@ -151,40 +98,6 @@ describe('the level the serial is read from', () => {
 			expect(container.textContent).not.toContain('unknown');
 			unmount();
 		}
-	});
-});
-
-describe('what the run wrote', () => {
-	it('lists a directory with its count and a file with its size', () => {
-		showing();
-
-		expect(screen.getByText('screenshots/')).toBeDefined();
-		expect(screen.getByText('3 files')).toBeDefined();
-		// Singular at one, because a run with one recording is the common case.
-		expect(screen.getByText('1 file')).toBeDefined();
-		expect(screen.getByText('device_info.json')).toBeDefined();
-		expect(screen.getByText('80 B')).toBeDefined();
-	});
-
-	it('names an entry that is neither a directory nor a file, with no measure', () => {
-		showing();
-
-		expect(screen.getByText('latest_recording')).toBeDefined();
-	});
-
-	it('says `unknown` for a size the host could not read', () => {
-		showing(NAMED, {
-			status: 'listed',
-			entries: [{ kind: 'file', name: 'notes.txt', sizeBytes: null }],
-		});
-
-		expect(screen.getByText('unknown')).toBeDefined();
-	});
-
-	it('keeps the footnote that stops a short listing reading as a truncated one', () => {
-		showing();
-
-		expect(screen.getByText(/A directory that is not listed does not exist/)).toBeDefined();
 	});
 });
 
@@ -217,7 +130,7 @@ describe('the device the lease held', () => {
 	});
 
 	it('falls back to the serial for a model the device could not answer', () => {
-		showing(NAMED, CONTENTS, UNANSWERED);
+		showing(NAMED, UNANSWERED);
 
 		// The serial the level above named — the card's job is to identify the device, and it always
 		// can. It is on the panel twice now, in `SERIAL` and here.
@@ -225,7 +138,7 @@ describe('the device the lease held', () => {
 	});
 
 	it('names an OS version and an API level it does not have, rather than closing the row up', () => {
-		showing(NAMED, CONTENTS, UNANSWERED);
+		showing(NAMED, UNANSWERED);
 
 		expect(screen.getByText('OS VERSION')).toBeDefined();
 		expect(screen.getByText('API LEVEL')).toBeDefined();
@@ -240,7 +153,7 @@ describe('the device the lease held', () => {
  */
 describe('a device_info.json that could not be read', () => {
 	it('says a missing one plainly, with nothing on it that reads as a fault', () => {
-		const { container } = showing(NAMED, CONTENTS, { status: 'missing' });
+		const { container } = showing(NAMED, { status: 'missing' });
 
 		expect(screen.getByText(/No device_info.json is filed for this run/)).toBeDefined();
 		expect(container.querySelectorAll('[role="alert"]')).toHaveLength(0);
@@ -249,7 +162,7 @@ describe('a device_info.json that could not be read', () => {
 	});
 
 	it('says an unreadable one differently, and says so in as many words', () => {
-		const { container } = showing(NAMED, CONTENTS, { status: 'unreadable' });
+		const { container } = showing(NAMED, { status: 'unreadable' });
 
 		expect(screen.getByText(/Rover cannot read this run's device_info.json/)).toBeDefined();
 		expect(screen.getByText(/not the same as none being filed/)).toBeDefined();
@@ -258,7 +171,7 @@ describe('a device_info.json that could not be read', () => {
 	});
 
 	it('says it is reading, with no spinner', () => {
-		const { container } = showing(NAMED, CONTENTS, { status: 'reading' });
+		const { container } = showing(NAMED, { status: 'reading' });
 
 		expect(screen.getByText("Reading this run's device_info.json.")).toBeDefined();
 		expect(container.innerHTML).not.toContain('animate');
@@ -272,7 +185,7 @@ describe('a device_info.json that could not be read', () => {
 	 */
 	it('never claims a file is missing on the strength of a level nobody answered for', () => {
 		for (const serial of [{ status: 'loading' }, { status: 'unreadable' }] as const) {
-			const { container, unmount } = showing(serial, CONTENTS, { status: 'read', info: {} });
+			const { container, unmount } = showing(serial, { status: 'read', info: {} });
 
 			expect(container.textContent).not.toContain('No device_info.json is filed');
 			unmount();
@@ -280,7 +193,7 @@ describe('a device_info.json that could not be read', () => {
 	});
 
 	it('says a run with no `<serial>` directory has no file filed, rather than reading forever', () => {
-		showing(NO_SINGLE_CHILD, CONTENTS, { status: 'reading' });
+		showing(NO_SINGLE_CHILD, { status: 'reading' });
 
 		expect(screen.getByText(/No device_info.json is filed for this run/)).toBeDefined();
 	});
@@ -302,7 +215,7 @@ describe('a device_info.json that could not be read', () => {
  */
 describe('what the lease said the run was about', () => {
 	it('reads the sentence out of the run own file', () => {
-		showing(NAMED, CONTENTS, DEVICE, DESCRIBED);
+		showing(NAMED, DEVICE, DESCRIBED);
 
 		expect(screen.getByText('DESCRIPTION')).toBeDefined();
 		expect(
@@ -312,7 +225,7 @@ describe('what the lease said the run was about', () => {
 
 	// The common case for every run filed before the field existed, and said without alarm.
 	it('says none is filed, in words that are not the unreadable ones', () => {
-		const { container } = showing(NAMED, CONTENTS, DEVICE, UNDESCRIBED);
+		const { container } = showing(NAMED, DEVICE, UNDESCRIBED);
 
 		expect(screen.getByText('none filed')).toBeDefined();
 		expect(container.textContent).not.toContain('not readable');
@@ -320,14 +233,14 @@ describe('what the lease said the run was about', () => {
 	});
 
 	it('says the host cannot read the file differently again', () => {
-		const { container } = showing(NAMED, CONTENTS, DEVICE, { status: 'unreadable' });
+		const { container } = showing(NAMED, DEVICE, { status: 'unreadable' });
 
 		expect(screen.getByText('not readable')).toBeDefined();
 		expect(container.textContent).not.toContain('none filed');
 	});
 
 	it('says it is reading, with no spinner', () => {
-		const { container } = showing(NAMED, CONTENTS, DEVICE, { status: 'reading' });
+		const { container } = showing(NAMED, DEVICE, { status: 'reading' });
 
 		expect(screen.getByText('reading')).toBeDefined();
 		expect(container.textContent).not.toContain('none filed');
@@ -340,14 +253,16 @@ describe('what the lease said the run was about', () => {
 	 * and must not be rendered as such (`archive.tsx`, and the device card's own rule).
 	 */
 	it('says none is filed for a run with no `<serial>` directory, rather than reading forever', () => {
-		showing(NO_SINGLE_CHILD, CONTENTS, DEVICE, { status: 'reading' });
+		showing(NO_SINGLE_CHILD, DEVICE, { status: 'reading' });
 
 		expect(screen.getByText('none filed')).toBeDefined();
 	});
 });
 
 describe('what is not on this panel', () => {
-	it('lists only what the host listed', () => {
+	// The superseded design's own file names. The card lists nothing at all since #161, and the one
+	// file it may name is the one whose contents the device card reads.
+	it('names no file the run did not write', () => {
 		const { container } = showing();
 		const text = container.textContent ?? '';
 
@@ -384,38 +299,14 @@ describe('what is not on this panel', () => {
 	});
 });
 
-describe('contents that could not be read', () => {
-	it('says the host cannot see into the directory, apart from saying it is empty', () => {
-		showing(NAMED, { status: 'unreadable' });
-
-		expect(screen.getByText('ARCHIVE NOT READABLE')).toBeDefined();
-		expect(screen.getByText(/runs may well be filed here/)).toBeDefined();
-	});
-
-	it('says an empty one plainly', () => {
-		showing(NAMED, { status: 'empty' });
-
-		expect(screen.getByText(/Nothing is filed under this directory/)).toBeDefined();
-	});
-
-	it('says it is reading, with no spinner', () => {
-		const { container } = showing(NAMED, { status: 'loading' });
-
-		expect(screen.getByText('Reading this level of the archive.')).toBeDefined();
-		expect(container.innerHTML).not.toContain('animate');
-	});
-});
-
 /**
- * **The column, and it is one column in every state that draws it** (#160).
+ * **The column, and nothing on it navigates** (#160, #161).
  *
  * It stood beside a preview, beside the tree with a folder of the run open in `CONTENTS`, and alone
  * while nobody had answered for the address — three arrangements, with a back arrow in one of them
  * and `CONTENTS` expanded down to the open address in two. The tree is beside the card at every
- * depth now, so this column is what a **selected run** is and nothing else opens it: there is no
- * address below it to mark, nothing to expand, and nowhere to come back from. The three props that
- * carried all of that are gone with it, which is what makes *the same column* a fact about this
- * component's shape rather than a state it has to be put into.
+ * depth now and reaches every address in the archive, so this column is what a **selected run** is:
+ * two cards, no listing, and no way in or out of it at all.
  */
 describe('the run column', () => {
 	it('is headed by `Run Details`, and the strip carries no control', () => {
@@ -430,37 +321,41 @@ describe('the run column', () => {
 		).toBeNull();
 	});
 
-	// The way in: every row addresses its own path, with the `<serial>` in it because the serial is
-	// part of the address and not a level of the tree.
-	it('makes every `CONTENTS` row a link to its own address', () => {
-		showing();
+	/*
+	 * **Two cards, and the third is deliberately not built** (#161, `docs/DESIGN.md` §1 and §9).
+	 * `d24d2c84…` draws the identity card, the device card and `CONTENTS`; listing what the run
+	 * wrote is the tree's job, and a second explorer of the addresses the tree already draws is what
+	 * this phase removes rather than what it keeps.
+	 */
+	it('draws the identity card and the device card, and no listing at all', () => {
+		const { container } = showing();
 
-		expect(screen.getByRole('link', { name: /screenshots/ }).getAttribute('href')).toBe(
-			`/archive/${[...SERIAL_PATH, 'screenshots'].join('/')}`,
-		);
-		expect(screen.getByRole('link', { name: /device_info.json/ }).getAttribute('href')).toBe(
-			`/archive/${[...SERIAL_PATH, 'device_info.json'].join('/')}`,
-		);
+		const cards = [...container.querySelectorAll('div.space-y-6 > section')];
+		expect(cards.map((card) => card.querySelector('h3')?.textContent)).toEqual([
+			'20260830T170501Z-issue-112-9f1c2ab4',
+			'DEVICE — FROM device_info.json',
+		]);
+		expect(container.textContent).not.toContain('CONTENTS');
+		expect(container.querySelectorAll('ul')).toHaveLength(0);
 	});
 
 	/*
-	 * **A flat listing of the `<serial>` level again** (#160). One row per entry the host listed,
-	 * each keeping the measure that is this card's job — a count for a directory, a size for a file
-	 * — and none of them marked, selected or drawing children. Reaching an address below the run is
-	 * the tree's now.
+	 * **Nothing on this card is clickable**, which is the whole of #159's third phase from this
+	 * side: the tree is the one navigation surface, and `Open in a new window` on an artifact is the
+	 * only interactive control the card beside it may carry.
 	 */
-	it('draws one summarised row per entry, marking none and expanding none', () => {
-		const { container } = showing();
-		const contents = screen.getByText('CONTENTS').closest('section') as HTMLElement;
+	it('carries no link and no button in any state', () => {
+		for (const serial of [
+			NAMED,
+			NO_SINGLE_CHILD,
+			{ status: 'loading' },
+			{ status: 'unreadable' },
+		] as const) {
+			const { container, unmount } = showing(serial);
 
-		expect([...contents.querySelectorAll('a')].map((row) => row.textContent)).toEqual([
-			'device_info.json80 B',
-			'latest_recording',
-			'logs/2 files',
-			'recordings/1 file',
-			'screenshots/3 files',
-		]);
-		expect(container.querySelectorAll('[aria-current]')).toHaveLength(0);
-		expect(container.querySelectorAll('.bg-tertiary-container')).toHaveLength(0);
+			expect(container.querySelectorAll('a')).toHaveLength(0);
+			expect(container.querySelectorAll('button')).toHaveLength(0);
+			unmount();
+		}
 	});
 });

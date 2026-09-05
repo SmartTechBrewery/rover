@@ -167,9 +167,10 @@ async function showing(splat: string | undefined, levels: Record<string, unknown
  * Queries scoped to the **one card** beside the tree — a level's own listing, the run's column, the
  * preview, or the quiet line for an address nobody has answered for (#160).
  *
- * The tree reaches every address in the archive now (#159), so it and a card that lists a level name
- * the same entries for as long as both are drawn; a bare `getByRole` for one of those names finds
- * two rows. That duplication is knowingly temporary and is what #159's third phase removes.
+ * The tree reaches every address in the archive now (#159) and it and a card that lists a level name
+ * the same entries, so a bare `getByText` for one of those names finds it twice. Only the tree's is
+ * a `link` since #161 — the card's rows are read-only — and scoping is what says which pane a case
+ * is about rather than relying on that.
  */
 function besideTheTree(container: HTMLElement) {
 	const card = container.querySelector('div.lg\\:flex-row > section');
@@ -539,48 +540,52 @@ describe('the order the runs are listed in', () => {
 /*
  * **The state a shared link lands in.** The levels are independent round trips and the root is the
  * smallest `readdir`, so it commonly answers first and the run panel renders with the level above it
- * still in flight — or, when that level cannot be read, never coming. Neither is *this run wrote
- * nothing*: that sentence is a definite claim about a lease, out of an answer the host has not given.
+ * still in flight — or, when that level cannot be read, never coming. Neither is the run naming no
+ * single child, which is `unknown`: that is a definite claim about a lease, out of an answer the
+ * host has not given (D6).
  */
 describe('a run whose level above has not answered', () => {
-	it('says it is reading, and never that there is nothing to list', async () => {
+	it('says it is reading, and never that the run named no single child', async () => {
 		const { container } = await showing(`checkout-app/login-flow/${RUN}`, {
 			...archive(),
 			'["checkout-app","login-flow"]': HANGS,
 		});
 
-		expect(screen.getByText('Reading this level of the archive.')).toBeDefined();
-		// `SERIAL` and `DESCRIPTION` are both read off that level, so both say it (#148).
+		// `SERIAL` and `DESCRIPTION` are both read off that level, so both say it (#148), and the
+		// device card says it about the file it cannot address without a serial.
 		expect(screen.getAllByText('reading')).toHaveLength(2);
-		expect(container.textContent).not.toContain('There is nothing to list for this run.');
+		expect(screen.getByText("Reading this run's device_info.json.")).toBeDefined();
 		expect(container.textContent).not.toContain('unknown');
 		expect(container.innerHTML).not.toContain('animate');
 		// And no serial to ask for a level by, so the fourth request is not made on a guess.
 		expect(host.asked).toEqual([[], ['checkout-app'], ['checkout-app', 'login-flow']]);
 	});
 
-	it('says the host cannot read that level, and never that there is nothing to list', async () => {
+	it('says the host cannot read that level, and never that the run named no single child', async () => {
 		const { container } = await showing(`checkout-app/login-flow/${RUN}`, {
 			...archive(),
 			'["checkout-app","login-flow"]': { outcome: 'unreadable' },
 		});
 
-		expect(screen.getByText('ARCHIVE NOT READABLE')).toBeDefined();
-		expect(screen.getByText(/runs may well be filed here/)).toBeDefined();
 		expect(screen.getAllByText('not readable')).toHaveLength(2);
-		expect(container.textContent).not.toContain('There is nothing to list for this run.');
+		expect(screen.getByText(/Rover cannot read this run's device_info.json/)).toBeDefined();
+		expect(container.textContent).not.toContain('unknown');
 	});
 
-	// The one state that sentence is for: the host answered, and the run holds no single child.
-	it('says there is nothing to list only when the level above named no serial', async () => {
+	/*
+	 * The one state `unknown` is for: the host answered, and the run holds no single child. **The
+	 * tree draws nothing under such a run either** — there is no level to open, so no triangle and
+	 * no line, which is the same refusal to draw over nothing (#161, `directory-tree.tsx`).
+	 */
+	it('says `unknown` only when the level above named no serial', async () => {
 		const { container } = await showing(`checkout-app/login-flow/${RUN}`, {
 			...archive(),
 			'["checkout-app","login-flow"]': listed(directory(RUN, 2, null)),
 		});
 
-		expect(screen.getByText('There is nothing to list for this run.')).toBeDefined();
 		expect(screen.getByText('unknown')).toBeDefined();
 		expect(container.textContent).not.toContain('ARCHIVE NOT READABLE');
+		expect(container.textContent).not.toContain('This run wrote nothing.');
 	});
 });
 
@@ -791,10 +796,19 @@ describe('an artifact open inside a run', () => {
 		const columns = container.querySelector('div.lg\\:flex-row');
 		expect(columns?.children).toHaveLength(2);
 		expect(columns?.children[0]?.tagName).toBe('ASIDE');
-		// The card is the folder's own read-only listing, headed by its name.
+		// The card is the folder's own read-only listing, headed by its name — and read-only is now
+		// literal: its rows name the files and lead nowhere (#161).
 		const card = besideTheTree(container);
 		expect(card.getByRole('heading', { level: 2, name: 'screenshots' })).toBeDefined();
-		expect(card.getByRole('link', { name: /001_screenshot.png/ })).toBeDefined();
+		expect(card.getByText('001_screenshot.png')).toBeDefined();
+		expect(card.queryAllByRole('link')).toHaveLength(0);
+		expect(card.queryAllByRole('button')).toHaveLength(0);
+		// The way into the file is the row beside it, in the one pane that navigates.
+		expect(
+			within(container.querySelector('aside') as HTMLElement)
+				.getByRole('link', { name: /001_screenshot.png/ })
+				.getAttribute('href'),
+		).toBe(`/archive/${[...SCREENSHOTS, '001_screenshot.png'].join('/')}`);
 		expect(
 			screen.queryByRole('link', { name: 'Close the preview and go back to the directory' }),
 		).toBeNull();
@@ -908,9 +922,7 @@ describe('an artifact open inside a run', () => {
 		expect(screen.getByText('DIRECTORY')).toBeDefined();
 		expect(screen.getByText('Everything filed under this directory.')).toBeDefined();
 		expect(container.querySelector('div.lg\\:flex-row')?.children).toHaveLength(2);
-		expect(
-			besideTheTree(container).getByRole('link', { name: /001_screenshot.png/ }),
-		).toBeDefined();
+		expect(besideTheTree(container).getByText('001_screenshot.png')).toBeDefined();
 		expect(host.artifacts).toEqual([]);
 	});
 
@@ -954,9 +966,20 @@ describe('the addresses that still browse', () => {
 
 		expect(screen.getByText('DIRECTORY')).toBeDefined();
 		expect(screen.getByText('Everything filed under this directory.')).toBeDefined();
-		// The level's own card, listing what the run wrote — and the tree beside it lists the same
-		// names now (#159), so this is scoped to the card rather than to the screen.
-		expect(besideTheTree(container).getByRole('link', { name: /device_info.json/ })).toBeDefined();
+		/*
+		 * The level's own card, listing what the run wrote — and the tree beside it lists the same
+		 * names (#159), so this is scoped to the card. **The card's rows are read-only** and the
+		 * tree's row is the way into the file (#161): one listing that navigates, one that does not.
+		 */
+		const card = besideTheTree(container);
+		expect(card.getByText('device_info.json')).toBeDefined();
+		expect(card.queryAllByRole('link')).toHaveLength(0);
+		expect(card.queryAllByRole('button')).toHaveLength(0);
+		expect(
+			within(container.querySelector('aside') as HTMLElement)
+				.getByRole('link', { name: /device_info.json/ })
+				.getAttribute('href'),
+		).toBe(`/archive/checkout-app/login-flow/${RUN}/R5CT30ABCDE/device_info.json`);
 		// The serial is not a level of the tree, so the run's own row is what the address marks.
 		const marked = container.querySelectorAll('aside a[aria-current="page"]');
 		expect([...marked].map((row) => row.textContent)).toEqual([RUN]);

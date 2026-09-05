@@ -1366,8 +1366,9 @@ host-local effect of the same call, never a substitute for it and never a path h
   **It sits *inside* the `<serial>` directory rather than beside it**, which is one level deeper
   than what it describes, and the reason is the read side: `list_archive` publishes a run's serial
   to the panel as the run directory's `onlyChild`, which is `null` for a directory holding anything
-  other than exactly one entry, so a second entry at the run level would blank `SERIAL`, the run's
-  device card and its `CONTENTS` listing for every run that has a description. One lease is one
+  other than exactly one entry, so a second entry at the run level would blank `SERIAL` and the run's
+  device card for every run that has a description, and leave the tree with no level to open under
+  the run. One lease is one
   device (D7), so the `<serial>` directory is the lease-device pair's and is one-to-one with the
   lease in any case. Nothing indexes it and nothing searches it: `search_archive` searches **names**
   (R38), and widening it to file contents is a different decision.
