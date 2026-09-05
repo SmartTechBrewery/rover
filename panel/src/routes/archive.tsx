@@ -22,11 +22,13 @@ import {
 import { DirectoryTree } from '@panel/components/archive/directory-tree.js';
 import { LevelContents } from '@panel/components/archive/level-contents.js';
 import { RunPanel, type RunSerial } from '@panel/components/archive/run-panel.js';
+import { type ArchiveView, ArchiveViewToggle } from '@panel/components/archive/view-toggle.js';
+import { CalmNotice, NOT_BUILT_YET } from '@panel/components/calm-notice.js';
 import type { BreadcrumbSegment } from '@panel/components/layout/breadcrumb.js';
 import { PageHeader } from '@panel/components/layout/page-header.js';
 import { QuietPanel } from '@panel/components/quiet-panel.js';
 import { createRoute, useParams } from '@tanstack/react-router';
-import type { ReactNode } from 'react';
+import { type ReactNode, useState } from 'react';
 import { rootRoute } from './__root.js';
 
 /**
@@ -43,6 +45,11 @@ import { rootRoute } from './__root.js';
  * **Every state below is a state of this one screen** (§7's rule, applied to a second screen). The
  * breadcrumb, the describing line and the header row's shape are the same in all of them; the badge
  * is the only thing in the header that comes and goes, and it goes rather than reading `0`.
+ *
+ * **The screen has two views, and everything below describes the first of them** (#165). *All* is
+ * the file explorer; *Testing groups* is the archive arranged by the group a lease named
+ * (`PROJECT.md` R41) and is a placeholder — see {@link viewOf} for where that choice is held and
+ * why the address is not where it lives.
  *
  * **And there is one arrangement at every depth** (#160): the tree, then one card. What the parent
  * listing says the selection is decides what that card *draws* and nothing about whether the tree
@@ -118,6 +125,15 @@ export function ArchiveScreen() {
 	 * tree, so they draw no field either, without anything having to say so twice.
 	 */
 	const search = useArchiveSearch();
+	/*
+	 * **Which of the two views is drawn, and it is held against the address rather than beside it**
+	 * (#165, {@link viewOf}). Every hook above stays mounted in either view, which is what makes
+	 * *All* a return rather than a reload: switching costs no request and lands back on exactly the
+	 * address the breadcrumb still names. The groups view asks for nothing of its own.
+	 */
+	const [groupsAt, setGroupsAt] = useState<string | null>(null);
+	const here = splatFromComponents(selected);
+	const view = viewOf(groupsAt, here);
 
 	const level = levelAt(levels, selected);
 	const depth = selected.length;
@@ -126,20 +142,81 @@ export function ArchiveScreen() {
 		<>
 			<PageHeader
 				trail={trailFor(selected)}
-				description={descriptionFor(selected, open)}
-				aside={badgeFor(depth, level)}
+				description={view === 'groups' ? TESTING_GROUPS : descriptionFor(selected, open)}
+				aside={
+					/*
+					 * The toggle is the one thing in this row that is always there; the badge still comes
+					 * and goes beside it, and it is absent in the groups view for the reason it is absent
+					 * at a run — there is nothing there to count. The toggle sits last so a badge
+					 * appearing does not move it.
+					 */
+					<div className="flex items-center gap-3">
+						{view === 'all' ? badgeFor(depth, level) : undefined}
+						<ArchiveViewToggle
+							onSelect={(next) => setGroupsAt(next === 'groups' ? here : null)}
+							view={view}
+						/>
+					</div>
+				}
 			/>
-			<Content
-				artifact={artifact}
-				description={description}
-				device={device}
-				levels={levels}
-				open={open}
-				search={search}
-				selected={selected}
-				serial={serial}
-			/>
+			{view === 'groups' ? (
+				<TestingGroupsNotBuilt />
+			) : (
+				<Content
+					artifact={artifact}
+					description={description}
+					device={device}
+					levels={levels}
+					open={open}
+					search={search}
+					selected={selected}
+					serial={serial}
+				/>
+			)}
 		</>
+	);
+}
+
+/**
+ * The view, out of the address the groups view was chosen at — **`all` everywhere else, which is
+ * how a navigation lands back in the tree** (#165).
+ *
+ * The toggle is not in the URL, and that is the same call `useArchiveSearch` made and for a sharper
+ * reason: the groups arrangement has no addresses of its own yet, so there is nothing about it to
+ * share or to reload onto, and a link to a placeholder is a link to nothing. Whoever builds the
+ * arrangement gets to settle that question with content in front of them.
+ *
+ * Holding it against the address rather than in a bare `useState` is what keeps the two halves of
+ * the header honest. The breadcrumb still names where you are while the placeholder is up — the
+ * toggle changes what is *drawn*, never where you are — so its links have to work, and every one of
+ * them is an address of the file explorer. A plain flag would have left them navigating underneath
+ * a placeholder that never gave way, since `/archive/$` serves every depth from one component and
+ * nothing about moving inside it remounts this.
+ */
+function viewOf(groupsAt: string | null, here: string): ArchiveView {
+	return groupsAt === here ? 'groups' : 'all';
+}
+
+/**
+ * The describing line for the second view: what the view is *for*, exactly as `System`'s says what
+ * that screen is for. The panel below it is what says it is not built.
+ */
+const TESTING_GROUPS = 'Runs arranged by the testing group their lease named.';
+
+/**
+ * The second view, in the words every unbuilt destination in the panel uses (`CalmNotice`,
+ * `docs/DESIGN.md` §7) — normal and *finished*, not a fault and not a wait.
+ *
+ * It reads nothing. No `group_id` is fetched, no listing is asked for and nothing is grouped: what
+ * this issue settles is that the arrangement is reachable and says so, and the arrangement itself
+ * is the work after it.
+ */
+function TestingGroupsNotBuilt() {
+	return (
+		<CalmNotice
+			{...NOT_BUILT_YET}
+			detail="Runs whose leases named the same testing group will be arranged here, instead of by project and test name."
+		/>
 	);
 }
 

@@ -880,7 +880,8 @@ design's `rounded` is Tailwind v4's `rounded-sm` (§1's radius rename).
 ### The shell and the two cards
 
 The header is `PageHeader`'s two rows unchanged (§3): the breadcrumb, then the describing line on the
-left and **one badge** on the right over the `border-b-2` rule. The content area is
+left and **one badge** on the right over the `border-b-2` rule — with the view toggle beside that
+badge since #165, below. The content area is
 `max-w-(--container-max)`, a `lg:w-[320px] shrink-0` tree `<aside>` beside a `flex-1` contents
 `<section>`, both `bg-surface-container border-2 border-outline-variant rounded-lg` with a
 `bg-surface-container-high` header strip.
@@ -888,6 +889,53 @@ left and **one badge** on the right over the `border-b-2` rule. The content area
 **Every state below is a state of this one screen**, exactly as §7 requires of the Devices screen.
 The breadcrumb, the describing line and the header row's shape are the same in all of them; the
 badge is the only thing in the header that comes and goes, and it **goes rather than reading `0`**.
+
+### The two views — settled here, not designed (#165)
+
+The screen has **two views**, and everything else in §9 describes the first of them:
+
+| Segment | What it draws |
+| --- | --- |
+| `All` | the file explorer — the tree beside one card, at every depth. Unchanged in every particular |
+| `Testing groups` | a placeholder. Runs arranged by the `group_id` a lease named (`PROJECT.md` R41) is separate work; what landed here is that the arrangement is reachable and says it is not built |
+
+**No approved Stitch screen shows this control**, and none was commissioned for it (§1, §11's third
+list). So nothing about it is invented: the frame is the header badge's own — `rounded-sm border-2
+border-outline-variant bg-surface-container`, with the padding moved onto each segment so the two
+divide one block rather than sitting as two chips — the current segment carries the breadcrumb's
+*you are here* green over the card header strip's `bg-surface-container-high`, and the other carries
+the breadcrumb's inactive link treatment. Twelve pixels in the code face, matching the badge.
+Deliberately **not** the active nav item's filled `bg-tertiary-container`: this is furniture in a
+header row, and §5 keeps the emphasis on the data. That is what keeps the deviation small enough to
+reconcile in one edit once a design for it exists.
+
+**It is text and nothing else.** No glyph on either segment — neither arrangement has a symbol that
+says more than its name — and the two are `<button>`s in a `<fieldset>` named *Archive view*, with
+`aria-pressed` saying which one you are on, since the colour cannot. Buttons rather than links
+because the toggle changes what the screen *draws* and never where you are.
+
+**The badge still comes and goes beside it, and is absent in the groups view** — the same rule that
+makes it absent at a run: a placeholder lists nothing, and `0` would describe a set. The toggle
+itself is always there, so the header row's shape is still the same in every state. The describing
+line becomes *Runs arranged by the testing group their lease named.*, which says what the view is
+for; the panel below is the `CalmNotice` every unbuilt destination in the panel uses (§7).
+
+**The choice is not in the URL, and it is held against the address rather than beside it.** Two
+things follow, and both were the point:
+
+- The groups arrangement has **no addresses of its own yet**, so there is nothing about it to share
+  or to reload onto — a link to a placeholder is a link to nothing. Whoever builds the arrangement
+  settles that question with content in front of them. This is `archive-search.ts`'s call, for a
+  sharper reason.
+- **Any navigation lands back in the file explorer.** The breadcrumb still names where you are while
+  the placeholder is up — the toggle moved nothing — so its links have to work, and every address in
+  the panel is an address of that explorer. A plain flag would have left them navigating underneath a
+  placeholder that never gave way, since `/archive/$` serves every depth from one component and
+  moving inside it remounts nothing.
+
+And **switching is a return, not a reload**: every hook stays mounted in either view, so `All` costs
+no request and lands on exactly the address it left. The groups view asks the host for nothing —
+no `group_id` is read and nothing is grouped.
 
 ### The tree — expansion is derived from the URL
 
@@ -1316,7 +1364,9 @@ describing line and the header row's shape are the same in it as in every other.
 
 **There is one arrangement at every depth — the tree, then one card** (#160). What the parent
 listing says the selection is decides what that card *draws* and nothing at all about whether the
-tree is beside it, so the screen has one navigation surface instead of four layouts to be in.
+tree is beside it, so the screen has one navigation surface instead of four layouts to be in. This
+is the whole of the `All` view; the second view (#165, above) draws no tree and no card and nothing
+about it reaches here.
 Three of #133's and #143's rules are reversed by that and are rewritten in place below rather than
 deleted, each where it was written: *the tree is not shown while a file is open*, *the back arrow*,
 and *the wait is its own arrangement*. Opening a **folder** was already not a preview (#143); it now

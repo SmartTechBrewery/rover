@@ -94,7 +94,12 @@ Design work lives in [`DESIGN.md`](./DESIGN.md); the brief that produced the fir
    still **no index**: the answer is a bounded walk of the files at request time, and a truncated one
    says so rather than looking complete. The text is component state and deliberately not in the
    URL, so a shared link still lands on the *address*; selecting a hit navigates there and the screen
-   carries on exactly as it does when you browse to it.
+   carries on exactly as it does when you browse to it. **And the screen now has two views** (#165):
+   a text-only `All` / `Testing groups` toggle beside the header badge, where `All` is everything
+   above, unchanged, and `Testing groups` — runs arranged by the `group_id` a lease named
+   (`PROJECT.md` R41) — is an explicit *not built yet*. It reads no `group_id` and groups nothing;
+   the arrangement itself is the work after this, and `docs/DESIGN.md` §9 records what the toggle
+   settled.
    `docs/DESIGN.md` §9 records what it settled, including the cost that shapes it — an authenticated
    byte route cannot be an `<img src>`, so the panel fetches the bytes with the session header and
    renders an object URL, and the whole artifact is therefore buffered in the tab.
