@@ -180,6 +180,21 @@ function besideTheTree(container: HTMLElement) {
 	return within(card as HTMLElement);
 }
 
+/**
+ * The content area — whatever the screen draws directly below its header.
+ *
+ * The header is chrome: the breadcrumb, the describing line, the badge, and the view toggle since
+ * #165. A state's claim to offer *no control* is a claim about the content area, so the assertions
+ * that check for one say so rather than counting every button on the screen.
+ */
+function contentArea(container: HTMLElement) {
+	const content = container.querySelector('header + *');
+	if (content === null) {
+		throw new Error('the screen drew nothing below its header');
+	}
+	return content as HTMLElement;
+}
+
 beforeEach(() => {
 	host.asked = [];
 	host.files = [];
@@ -440,7 +455,7 @@ describe('the two states with nothing to browse', () => {
 		for (const levels of [EMPTY_DEEPER, UNREADABLE_DEEPER]) {
 			const { container, unmount } = await showing('checkout-app/login-flow', levels);
 
-			expect(container.querySelectorAll('button')).toHaveLength(0);
+			expect(contentArea(container).querySelectorAll('button')).toHaveLength(0);
 			expect(container.innerHTML).not.toContain('error');
 			unmount();
 		}
@@ -457,7 +472,7 @@ describe('nothing in the archive', () => {
 		expect(screen.getByText(/writes a screenshot, a recording or a log/)).toBeDefined();
 		expect(container.textContent).not.toContain('archived');
 		expect(screen.queryByText('DIRECTORY')).toBeNull();
-		expect(container.querySelectorAll('button')).toHaveLength(0);
+		expect(contentArea(container).querySelectorAll('button')).toHaveLength(0);
 		expect(container.innerHTML).not.toContain('error');
 	});
 
@@ -486,7 +501,7 @@ describe('the archive cannot be read', () => {
 		expect(screen.getByText(/This is not the same as the archive being empty/)).toBeDefined();
 		expect(container.textContent).not.toContain('Nothing in the archive');
 		expect(screen.queryByText('DIRECTORY')).toBeNull();
-		expect(container.querySelectorAll('button')).toHaveLength(0);
+		expect(contentArea(container).querySelectorAll('button')).toHaveLength(0);
 		expect(container.innerHTML).not.toContain('error');
 	});
 
@@ -1172,5 +1187,140 @@ describe('searching the archive from the tree card', () => {
 			'screenshots',
 		]);
 		expect(host.searches).toEqual(['screenshots']);
+	});
+});
+
+/**
+ * The screen's two views (#165). *All* is everything above; *Testing groups* is a placeholder, and
+ * what is settled here is that it is reachable, that it says it is not built, and that reaching it
+ * costs the host nothing.
+ */
+describe('the two views', () => {
+	function toggle() {
+		return screen.getByRole('group', { name: 'Archive view' });
+	}
+
+	function segment(label: string) {
+		return screen.getByRole('button', { name: label });
+	}
+
+	it('offers both, in text, with no icon on either', async () => {
+		await showing(undefined);
+
+		expect([...toggle().querySelectorAll('button')].map((one) => one.textContent)).toEqual([
+			'All',
+			'Testing groups',
+		]);
+		expect(toggle().querySelectorAll('svg')).toHaveLength(0);
+	});
+
+	it('starts on All, which is the screen as it was', async () => {
+		await showing(undefined);
+
+		expect(segment('All').getAttribute('aria-pressed')).toBe('true');
+		expect(segment('Testing groups').getAttribute('aria-pressed')).toBe('false');
+		expect(screen.getByText('DIRECTORY')).toBeDefined();
+		expect(screen.getByText('2 projects archived')).toBeDefined();
+	});
+
+	it('says the testing groups view is not built yet, and shows nothing of the tree', async () => {
+		await showing(undefined);
+
+		fireEvent.click(segment('Testing groups'));
+
+		expect(segment('Testing groups').getAttribute('aria-pressed')).toBe('true');
+		expect(screen.getByText('Not built yet')).toBeDefined();
+		expect(screen.getByText(/named the same testing group will be arranged here/)).toBeDefined();
+		expect(screen.getByText('Runs arranged by the testing group their lease named.')).toBeDefined();
+		expect(screen.queryByText('DIRECTORY')).toBeNull();
+		// The badge counts what is listed, and a placeholder lists nothing — absent, never `0`.
+		expect(screen.queryByText('2 projects archived')).toBeNull();
+	});
+
+	// No grouping logic, no new host call, no new data read: the view draws one panel and asks for
+	// nothing. The reads already made are the ones the All view made before the toggle was touched.
+	it('asks the host for nothing at all when it is selected', async () => {
+		await showing('checkout-app/login-flow');
+		const asked = [...host.asked];
+
+		fireEvent.click(segment('Testing groups'));
+
+		expect(host.asked).toEqual(asked);
+		expect(host.files).toEqual([]);
+		expect(host.searches).toEqual([]);
+	});
+
+	// Switching is not a navigation, so All is a return: the same address, and no request to get
+	// back to it.
+	it('returns to exactly the address it left, without re-reading it', async () => {
+		await showing(`checkout-app/login-flow/${RUN}`);
+		const asked = [...host.asked];
+
+		fireEvent.click(segment('Testing groups'));
+		fireEvent.click(segment('All'));
+
+		expect(host.asked).toEqual(asked);
+		expect(screen.getByText('R5CT30ABCDE')).toBeDefined();
+		expect(document.querySelector('nav[aria-label="Breadcrumb"]')?.textContent).toContain(
+			'login-flow',
+		);
+	});
+
+	// The breadcrumb still names where you are while the placeholder is up, so its links have to
+	// work — and every address in the panel is an address of the file explorer.
+	it('lands back in the tree at any other address', async () => {
+		const { rerender } = await showing('checkout-app/login-flow');
+
+		fireEvent.click(segment('Testing groups'));
+		expect(screen.getByText('Not built yet')).toBeDefined();
+
+		at.splat = 'checkout-app';
+		rerender(<ArchiveScreen />);
+
+		expect(screen.queryByText('Not built yet')).toBeNull();
+		expect(segment('All').getAttribute('aria-pressed')).toBe('true');
+		expect(screen.getByText('DIRECTORY')).toBeDefined();
+	});
+
+	// The navigation *ended* the groups view; it did not park it at that address. Walking back in —
+	// a tree row, a breadcrumb segment, the browser's Back — is a navigation like any other, and
+	// only the toggle ever puts the placeholder back up (#166 review).
+	it('does not come back when you return to the address it was chosen at', async () => {
+		const { rerender } = await showing('checkout-app');
+
+		fireEvent.click(segment('Testing groups'));
+		expect(screen.getByText('Not built yet')).toBeDefined();
+
+		at.splat = undefined;
+		rerender(<ArchiveScreen />);
+		expect(screen.getByText('DIRECTORY')).toBeDefined();
+
+		at.splat = 'checkout-app';
+		rerender(<ArchiveScreen />);
+
+		expect(screen.queryByText('Not built yet')).toBeNull();
+		expect(screen.getByText('DIRECTORY')).toBeDefined();
+		expect(segment('All').getAttribute('aria-pressed')).toBe('true');
+	});
+
+	// The same case at the root, where it is worst: the placeholder takes the whole content area,
+	// so there would be no tree left to navigate out with.
+	it('does not come back at the root either', async () => {
+		const { rerender } = await showing(undefined);
+
+		fireEvent.click(segment('Testing groups'));
+		expect(screen.getByText('Not built yet')).toBeDefined();
+
+		at.splat = 'checkout-app';
+		// Walking in asks for that project's own listing, so let it answer before walking back out.
+		await act(async () => {
+			rerender(<ArchiveScreen />);
+		});
+		at.splat = undefined;
+		rerender(<ArchiveScreen />);
+
+		expect(screen.queryByText('Not built yet')).toBeNull();
+		expect(screen.getByText('DIRECTORY')).toBeDefined();
+		expect(screen.getByText('2 projects archived')).toBeDefined();
 	});
 });
