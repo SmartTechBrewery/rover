@@ -19,7 +19,12 @@ import {
 	registerDeviceBackend,
 } from '@/backends/registry.js';
 import { EXIT_FAILED, EXIT_OK, EXIT_USAGE, run } from '@/cli/index.js';
-import type { DeviceBackend, DeviceWatch, DeviceWatcher } from '@/core/device.js';
+import type {
+	DeviceBackend,
+	DeviceWatch,
+	DeviceWatcher,
+	InterruptionCause,
+} from '@/core/device.js';
 import { parseDeviceSerial } from '@/core/ids.js';
 import { type RunningDaemon, startDaemon } from '@/daemon/listen.js';
 import { PROJECT_FILE_ENV_VAR } from '@/daemon/project-hooks.js';
@@ -38,11 +43,13 @@ let logged: string[];
 let errored: string[];
 
 /** Registers a backend reporting one attached device, optionally with no view of it. */
-function registerFakeBackend(options: { interrupted?: boolean } = {}): void {
+function registerFakeBackend(
+	options: { interrupted?: boolean; cause?: InterruptionCause } = {},
+): void {
 	const watchDevices = vi.fn<DeviceBackend['watchDevices']>((watcher: DeviceWatcher) => {
 		watcher.onDevices([attached]);
 		if (options.interrupted === true) {
-			watcher.onInterrupted('the test asked for a host that cannot see');
+			watcher.onInterrupted('the test asked for a host that cannot see', options.cause ?? null);
 		}
 		return { stop: vi.fn<DeviceWatch['stop']>(async () => {}) };
 	});
@@ -157,6 +164,30 @@ describe('rover list, over the socket', () => {
 		expect(logged).toHaveLength(1);
 		expect(JSON.parse(logged[0] ?? '')).toMatchObject({ stale: true });
 		expect(errored.join('\n')).toContain('does not know this list to be current');
+	});
+
+	/*
+	 * End to end for #168: the backend classifies, the inventory carries it, the wire publishes it
+	 * and the warning reads differently — telling somebody to check back shortly is advice that
+	 * never comes good on a host whose device tooling is not installed.
+	 */
+	it('says what will not clear on its own, rather than telling a reader to check back', async () => {
+		registerFakeBackend({
+			interrupted: true,
+			cause: { cause: 'tooling-missing', tool: 'adb' },
+		});
+		await start();
+
+		expect(await run(['list', '--json'])).toBe(EXIT_OK);
+
+		expect(JSON.parse(logged[0] ?? '')).toMatchObject({
+			stale: true,
+			staleReason: { cause: 'tooling-missing', tool: 'adb', platform: 'test-platform' },
+		});
+		const said = errored.join('\n');
+		expect(said).toContain("could not run 'adb'");
+		expect(said).toContain('will not clear on its own');
+		expect(said).not.toContain('does not know this list to be current');
 	});
 });
 

@@ -21,7 +21,7 @@ const save = createMockScreenElement({ id: 'save', text: 'Save' });
 function statusHandlers(overrides: Partial<IpcHandlers> = {}): IpcHandlers {
 	return {
 		status: () => ({ protocolVersion: PROTOCOL_VERSION, pid: 4242, uptimeMs: 7 }),
-		list_devices: () => ({ devices: [], stale: false }),
+		list_devices: () => ({ devices: [], stale: false, staleReason: null }),
 		// The three lease rows exist so this table stays complete; the refusal is the cheapest
 		// answer that is still a real one, and one suite below sends it over the wire.
 		acquire_device: () => ({

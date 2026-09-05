@@ -50,6 +50,7 @@ import {
 	type DeviceState,
 	type DeviceWatch,
 	type DeviceWatcher,
+	type InterruptionCause,
 	type LogRead,
 	type Point,
 	type PullFileOptions,
@@ -201,6 +202,15 @@ const TRACK_DEVICES_ARGV = ['track-devices', '-l'] as const;
  */
 const TRACK_RESTART_MIN_DELAY_MS = 250;
 const TRACK_RESTART_MAX_DELAY_MS = 5_000;
+
+/**
+ * The one interruption this backend classifies: `adb` could not be run at all (#168).
+ *
+ * It names the program rather than the platform, because that is the half a client cannot
+ * work out for itself and the half a person can act on — shared code renders the name this
+ * supplies and never learns what `adb` is (ai/RULES.md §2).
+ */
+const ADB_NOT_INSTALLED: InterruptionCause = { cause: 'tooling-missing', tool: 'adb' };
 
 /**
  * What each device is asked for its OS version with — one round trip for both properties.
@@ -773,6 +783,15 @@ export class AndroidDeviceBackend implements DeviceBackend {
 	 * A payload that will not parse is treated the same way: reported through
 	 * `onInterrupted` and the tracker restarted, never thrown. There is nothing above a
 	 * stdout handler to catch a throw from it.
+	 *
+	 * **One end is not transient, and it says so** (#168). Every other reason a tracker ends
+	 * is expected to clear on the next restart, which is why the restart is unconditional and
+	 * why nothing else here is classified. `adb` absent from `PATH` is not: the tracker will
+	 * be restarted forever and fail identically every time, and without a cause on the
+	 * interruption every surface repeats "the host's view was interrupted" about a host that
+	 * needs somebody to install something. So that end — and only that end — carries
+	 * {@link ADB_NOT_INSTALLED}. It keeps restarting anyway: `adb` appearing on the `PATH`
+	 * of a running daemon is exactly the case the restart loop exists to pick up.
 	 */
 	watchDevices(watcher: DeviceWatcher): DeviceWatch {
 		const versions = this.osVersions;
@@ -820,7 +839,7 @@ export class AndroidDeviceBackend implements DeviceBackend {
 			// one that replaced it.
 			let over = false;
 
-			const end = (reason: string): void => {
+			const end = (reason: string, cause: InterruptionCause | null = null): void => {
 				if (over || stopped) return;
 				over = true;
 				current = null;
@@ -828,7 +847,7 @@ export class AndroidDeviceBackend implements DeviceBackend {
 				// already stopped, where this resolves at once. Not awaited: the caller of this
 				// path is a stdout handler, and the restart is scheduled either way.
 				void handle?.stop();
-				watcher.onInterrupted(reason);
+				watcher.onInterrupted(reason, cause);
 				scheduleRestart();
 			};
 
@@ -871,8 +890,8 @@ export class AndroidDeviceBackend implements DeviceBackend {
 						void versions.fill(entries);
 					}
 				},
-				onEnd(reason) {
-					end(reason);
+				onEnd(reason, notInstalled) {
+					end(reason, notInstalled ? ADB_NOT_INSTALLED : null);
 				},
 			});
 			current = handle;

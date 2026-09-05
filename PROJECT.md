@@ -1073,6 +1073,32 @@ to behave the way its own option names read:
   in the panel** — a blob URL answers ranges in the browser — so that support stays useful for a bare
   `curl` and for anything that fetches the address directly, which is a different set of clients from
   the one it was assumed to serve.
+- **A host with no `adb` on its `PATH` looked exactly like one whose adb server had just been
+  killed, forever.** Both ended the tracker, both set `stale`, and every surface said the same "the
+  host's view was interrupted, check back shortly" — but one clears in 250 ms and the other never
+  does: `adb track-devices -l` is restarted on the backoff, fails with `spawn adb ENOENT` every
+  time, and nothing anywhere ever says the binary was not found. The information was already
+  arriving and being discarded — `DeviceWatcher.onInterrupted` takes a `reason`, and
+  `DeviceInventory.markInterrupted` kept only a boolean. Fixed in #168 by classifying that one end
+  from the **`ENOENT` error code** Node reports on the spawn (never by matching the message, which
+  is written for a person) and carrying it as `staleReason` beside `stale` on `list_devices`. The
+  lesson generalises past adb: **a permanent failure presented in the vocabulary of a transient one
+  is worse than an error**, because the surface actively tells the reader to wait for something
+  that is not coming. `stale` is unchanged and still means "not known to be current" (D6, R35) —
+  the reason is additive, and `null` is the ordinary answer.
+- **A new *required* field on a method result breaks the new client against the running daemon,
+  not the other way round.** `staleReason` was added to `ListDevicesResultSchema` as
+  `.nullable()`, which is this repo's usual house style — and `rover list` then answered
+  `Host returned an invalid result for 'list_devices': staleReason: Required` against a daemon
+  that had been up since before the change (#168, hit on 2026-09-05). That is the *ordinary* case
+  rather than an edge one: the daemon starts itself on the first call and then stays up for days
+  while every client is re-run from the working tree, so client and host routinely differ by
+  whatever landed since. `PROTOCOL_VERSION` does not catch it — it governs the envelope, and the
+  rule there already says an added optional field is not an incompatible change. So: **a result
+  field added to an existing method is written required and read optional.**
+  `StaleReasonSchema.nullish().default(null)` does both from one schema — the host still cannot
+  omit it, because the inferred result type is the *output* type, and an older daemon's answer
+  still parses, folding absent into the `null` that daemon meant anyway.
 
 ---
 

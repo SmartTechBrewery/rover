@@ -51,6 +51,11 @@ export function createListDevicesHandler(
 				// "not known to be current" means: it is still about the host's view of the
 				// hardware, and a lease is host state that has no view to be stale.
 				stale: snapshot.stale,
+				// And the same for why, which the inventory has already reduced to the one
+				// actionable cause a backend named (#168). Nothing here re-derives it, and
+				// nothing here asks a backend anything: the whole point of the field is that the
+				// information was already arriving and was being thrown away.
+				staleReason: snapshot.staleReason,
 			};
 		},
 	};

@@ -100,7 +100,14 @@ export function registerDeviceTools(
 				'the grant time does not. Only hardware physically attached to ' +
 				'the host is ever listed. `stale: true` means the host is not in a position to know ' +
 				'what is attached — with it set, an empty list means *no view*, not *no devices*, so ' +
-				'do not read it as "nothing is connected".',
+				'do not read it as "nothing is connected". `staleReason` says **why**, in the one ' +
+				'case the host can name a cause that will not clear on its own: `tooling-missing` ' +
+				'means the host could not run the program it watches devices with, and it names that ' +
+				'program and the platform whose devices are therefore invisible. Retrying will not ' +
+				'help there — say so, because somebody has to install it on that machine or put it ' +
+				'on the PATH the host runs with. A `null` is the ordinary case: the view was ' +
+				'interrupted and the host is already re-establishing it, so asking again shortly is ' +
+				'the right move.',
 			inputSchema: ListDevicesParamsSchema,
 		}),
 		async () =>

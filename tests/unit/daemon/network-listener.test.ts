@@ -336,6 +336,7 @@ describe('one surface, two transports', () => {
 				{ ...second, heldBy: null },
 			],
 			stale: false,
+			staleReason: null,
 		});
 	});
 

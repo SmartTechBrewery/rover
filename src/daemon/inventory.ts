@@ -20,9 +20,9 @@
 
 import type { RegisteredDeviceBackend } from '../backends/manifest.js';
 import { listDeviceBackends } from '../backends/registry.js';
-import type { Device, DeviceWatch } from '../core/device.js';
+import type { Device, DeviceWatch, InterruptionCause, StaleReason } from '../core/device.js';
 import { DeviceVanishedError, ForeignDeviceError } from '../core/errors.js';
-import type { DeviceSerial } from '../core/ids.js';
+import type { DeviceSerial, PlatformId } from '../core/ids.js';
 
 /** What the host last saw, and whether that view is still live. */
 export interface DeviceSnapshot {
@@ -40,6 +40,24 @@ export interface DeviceSnapshot {
 	 * unless somebody says so.
 	 */
 	readonly stale: boolean;
+	/**
+	 * Why the view above is not current, **when a backend named a cause that will not clear
+	 * on its own** (#168) — and `null` otherwise, which is the transient interruption D6 and
+	 * R35 already settled and every other reason `stale` is set.
+	 *
+	 * This is additive: `stale` still means exactly what it meant, and a client that reads
+	 * only `stale` keeps behaving as it did. What it buys is the case where nothing self-heals
+	 * — a host missing the program a backend drives retries forever and fails the same way —
+	 * so a surface can say what is actually wrong instead of repeating "check back shortly"
+	 * about a machine that needs somebody to install something.
+	 *
+	 * **One cause, even when two backends are blind.** `stale` is already an OR across every
+	 * subscription, and a caller acting on this needs one actionable sentence rather than an
+	 * inventory of them. The first backend that named a cause is the one reported; it names
+	 * its own platform, so a second one going the same way is still findable from the host's
+	 * own warnings.
+	 */
+	readonly staleReason: StaleReason | null;
 }
 
 export interface DeviceInventory {
@@ -74,6 +92,13 @@ export interface DeviceInventoryOptions {
 /** One backend's subscription: its handle, what it last reported, and whether it is live. */
 interface Subscription {
 	/**
+	 * Which platform this subscription is of. Carried on the entry rather than read back out
+	 * of the map's key, because {@link DeviceSnapshot.staleReason} publishes it and the key
+	 * is a plain string — the registry's key space is open (`../backends/registry.ts`), so
+	 * the branded value has to be kept rather than re-parsed.
+	 */
+	readonly platform: PlatformId;
+	/**
 	 * Assigned *after* `watchDevices` returns, and undefined until then. The contract has a
 	 * backend deliver the full current set "once on subscription" (`DeviceWatcher.onDevices`),
 	 * and a backend that already knows it does so synchronously — before the call it was made
@@ -90,6 +115,12 @@ interface Subscription {
 	 */
 	live: boolean;
 	interrupted: boolean;
+	/**
+	 * What the backend said about the interruption beyond its message, or `null` when it said
+	 * nothing — see {@link DeviceSnapshot.staleReason}. Cleared by the next frame along with
+	 * `interrupted`, because a view that came back was never permanent after all.
+	 */
+	cause: InterruptionCause | null;
 }
 
 export function createDeviceInventory(options: DeviceInventoryOptions = {}): DeviceInventory {
@@ -115,6 +146,7 @@ export function createDeviceInventory(options: DeviceInventoryOptions = {}): Dev
 		subscription.devices = devices.filter((device) => admits(device, warn, warnedSerials));
 		subscription.live = true;
 		subscription.interrupted = false;
+		subscription.cause = null;
 	};
 
 	return {
@@ -125,16 +157,27 @@ export function createDeviceInventory(options: DeviceInventoryOptions = {}): Dev
 			watching = true;
 			for (const { manifest, backend } of resolveBackends()) {
 				const platform = manifest.platform;
-				const subscription: Subscription = { devices: [], live: false, interrupted: false };
+				const subscription: Subscription = {
+					platform,
+					devices: [],
+					live: false,
+					interrupted: false,
+					cause: null,
+				};
 				subscriptions.set(platform, subscription);
 				subscription.watch = backend.watchDevices({
 					onDevices: (devices) => admit(platform, devices),
-					onInterrupted: () => {
+					onInterrupted: (_reason, cause) => {
 						// The last snapshot is kept on purpose. Clearing it would say every device
 						// went away at the moment the host lost the ability to know anything, which
 						// for a lease layer means releasing devices that never moved; presenting it
 						// silently would sell a dead view as a live one. So: keep it, and say so.
-						markInterrupted(subscriptions.get(platform));
+						//
+						// The message is deliberately dropped and the classification is not (#168):
+						// `reason` is written for whoever reads the host's own log, and a client
+						// rendering one backend's sentence would be branching on a string. `cause`
+						// is the half that was designed to cross the wire.
+						markInterrupted(subscriptions.get(platform), cause);
 					},
 				});
 			}
@@ -172,14 +215,21 @@ export function createDeviceInventory(options: DeviceInventoryOptions = {}): Dev
 			// Reading the cleared map as "zero backends, nothing interrupted" would answer the
 			// whole shutdown window with an authoritative empty list.
 			let stale = !watching;
+			let staleReason: StaleReason | null = null;
 			for (const subscription of subscriptions.values()) {
 				devices.push(...subscription.devices);
 				// A backend that has never delivered a frame is as unknown as one that was cut off.
 				stale ||= !subscription.live || subscription.interrupted;
+				// The first backend that named one wins — see `staleReason` on the snapshot. A
+				// stopped inventory never reaches here at all: `stop()` clears the subscriptions,
+				// so the shutdown window is stale for its own reason and blames no backend for it.
+				if (staleReason === null && subscription.cause !== null) {
+					staleReason = { ...subscription.cause, platform: subscription.platform };
+				}
 			}
 			// A *running* inventory over an empty registry is the one honest empty answer: there is
 			// no backend to have a view, so there is nothing this host has failed to hear.
-			return { devices, stale };
+			return { devices, stale, staleReason };
 		},
 
 		async verifyForGrant(serial: DeviceSerial): Promise<Device> {
@@ -204,9 +254,13 @@ export function createDeviceInventory(options: DeviceInventoryOptions = {}): Dev
 	};
 }
 
-function markInterrupted(subscription: Subscription | undefined): void {
+function markInterrupted(
+	subscription: Subscription | undefined,
+	cause: InterruptionCause | null,
+): void {
 	if (subscription) {
 		subscription.interrupted = true;
+		subscription.cause = cause;
 	}
 }
 

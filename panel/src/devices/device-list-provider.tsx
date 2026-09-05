@@ -8,7 +8,7 @@ import {
 	useRef,
 	useState,
 } from 'react';
-import { ListDevicesResultSchema, type ListedDevice } from './device-list.js';
+import { ListDevicesResultSchema, type ListedDevice, type StaleReason } from './device-list.js';
 
 /**
  * The panel's one live data source: `list_devices`, polled.
@@ -42,6 +42,11 @@ export type DeviceListState =
 			readonly status: 'ready';
 			readonly devices: readonly ListedDevice[];
 			readonly stale: boolean;
+			/**
+			 * Why the view is stale, when the host named a cause that will not clear on its own —
+			 * `null` for the transient interruption, which is every other stale answer (#168).
+			 */
+			readonly staleReason: StaleReason | null;
 			/**
 			 * This browser's clock when the answer was parsed. The countdown's base, and the only
 			 * place local time touches host data (`countdown.ts`).
@@ -107,6 +112,7 @@ export function DeviceListProvider({ children }: { readonly children: ReactNode 
 				status: 'ready',
 				devices: parsed.data.devices,
 				stale: parsed.data.stale,
+				staleReason: parsed.data.staleReason,
 				receivedAtMs: Date.now(),
 			});
 		},

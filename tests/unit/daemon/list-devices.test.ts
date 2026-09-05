@@ -128,8 +128,12 @@ describe('list_devices over the socket', () => {
 		const result = await client?.request('list_devices', {});
 
 		// `heldBy: null` is part of the reply's shape, not an extra a client may find missing —
-		// so this stays one assertion over the whole thing, `stale` included.
-		expect(result).toEqual({ devices: [{ ...attached, heldBy: null }], stale: false });
+		// so this stays one assertion over the whole thing, `stale` and its reason included.
+		expect(result).toEqual({
+			devices: [{ ...attached, heldBy: null }],
+			stale: false,
+			staleReason: null,
+		});
 		await client?.close();
 	});
 
@@ -201,6 +205,7 @@ describe('list_devices over the socket', () => {
 		await expect(client?.request('list_devices', {})).resolves.toEqual({
 			devices: [],
 			stale: false,
+			staleReason: null,
 		});
 		await client?.close();
 	});

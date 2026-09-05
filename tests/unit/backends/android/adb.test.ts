@@ -420,6 +420,13 @@ function spawns(): FakeChild {
 	return child;
 }
 
+/** The spawn failure Node reports when the executable itself is not on `PATH`. */
+function enoent(message: string): NodeJS.ErrnoException {
+	const error: NodeJS.ErrnoException = new Error(message);
+	error.code = 'ENOENT';
+	return error;
+}
+
 /** Lets every pending stream event land before the assertions read what arrived. */
 async function settled(): Promise<void> {
 	await new Promise((resolve) => setImmediate(resolve));
@@ -490,11 +497,52 @@ describe('streamAdb', () => {
 		const onEnd = vi.fn();
 		streamAdb(['track-devices'], { onStdout: vi.fn(), onEnd });
 
-		child.emit('error', new Error('spawn adb ENOENT'));
+		child.emit('error', enoent('spawn adb ENOENT'));
 		await settled();
 
 		expect(onEnd).toHaveBeenCalledTimes(1);
 		expect(onEnd.mock.calls[0]?.[0]).toContain('failed to run: spawn adb ENOENT');
+	});
+
+	/**
+	 * The one end a caller can act on rather than wait out (#168), and the flag is what carries
+	 * it: the message above is written for a person and nothing may branch on it.
+	 */
+	it('flags the end as adb not being installed, from the error code and not the message', async () => {
+		const child = spawns();
+		const onEnd = vi.fn();
+		streamAdb(['track-devices'], { onStdout: vi.fn(), onEnd });
+
+		// The message deliberately says nothing about ENOENT: what classifies this is the code.
+		child.emit('error', enoent('spawn failed'));
+		await settled();
+
+		expect(onEnd.mock.calls[0]?.[1]).toBe(true);
+	});
+
+	it('leaves the flag off for a failure that is not the executable being missing', async () => {
+		const child = spawns();
+		const onEnd = vi.fn();
+		streamAdb(['track-devices'], { onStdout: vi.fn(), onEnd });
+
+		const denied: NodeJS.ErrnoException = new Error('spawn adb EACCES');
+		denied.code = 'EACCES';
+		child.emit('error', denied);
+		await settled();
+
+		expect(onEnd.mock.calls[0]?.[1]).toBe(false);
+	});
+
+	// An adb that ran and exited is an adb that exists, however it ended.
+	it('leaves the flag off when the run started and then ended', async () => {
+		const child = spawns();
+		const onEnd = vi.fn();
+		streamAdb(['track-devices'], { onStdout: vi.fn(), onEnd });
+
+		child.emit('close', 0, null);
+		await settled();
+
+		expect(onEnd.mock.calls[0]?.[1]).toBe(false);
 	});
 
 	it('ends exactly once when the run both errors and closes', async () => {

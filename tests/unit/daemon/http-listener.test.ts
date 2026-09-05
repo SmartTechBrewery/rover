@@ -440,6 +440,7 @@ describe('one surface, a third transport', () => {
 				{ ...second, heldBy: null },
 			],
 			stale: false,
+			staleReason: null,
 		});
 	});
 
@@ -759,6 +760,7 @@ describe('the panel’s poll gets a live answer, on a connection it is already h
 		expect(envelopeOf(after).result).toEqual({
 			devices: [{ ...attached, heldBy: null }],
 			stale: false,
+			staleReason: null,
 		});
 		// One connection, two polls, the second current — the browser never reconnected to get it.
 		expect(after.socket).toBe((await call(daemon, 'list_devices', {}, { agent })).socket);
