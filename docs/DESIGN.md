@@ -920,18 +920,22 @@ itself is always there, so the header row's shape is still the same in every sta
 line becomes *Runs arranged by the testing group their lease named.*, which says what the view is
 for; the panel below is the `CalmNotice` every unbuilt destination in the panel uses (§7).
 
-**The choice is not in the URL, and it is held against the address rather than beside it.** Two
-things follow, and both were the point:
+**The choice is not in the URL, and a change of address ends it.** Two things follow, and both were
+the point:
 
 - The groups arrangement has **no addresses of its own yet**, so there is nothing about it to share
   or to reload onto — a link to a placeholder is a link to nothing. Whoever builds the arrangement
   settles that question with content in front of them. This is `archive-search.ts`'s call, for a
   sharper reason.
-- **Any navigation lands back in the file explorer.** The breadcrumb still names where you are while
-  the placeholder is up — the toggle moved nothing — so its links have to work, and every address in
-  the panel is an address of that explorer. A plain flag would have left them navigating underneath a
-  placeholder that never gave way, since `/archive/$` serves every depth from one component and
-  moving inside it remounts nothing.
+- **Any navigation lands back in the file explorer, and only the toggle ever leaves it.** The
+  breadcrumb still names where you are while the placeholder is up — the toggle moved nothing — so
+  its links have to work, and every address in the panel is an address of that explorer. A plain
+  flag would have left them navigating underneath a placeholder that never gave way, since
+  `/archive/$` serves every depth from one component and moving inside it remounts nothing. So the
+  screen remembers the address the view was chosen at and clears the view when it changes — a reset,
+  not a key. Keying the view *to* that address would have been symmetric, and the other half of that
+  symmetry is a bug: walking back in, by a tree row or the browser's Back, would have raised the
+  placeholder again with nobody having asked for it (#166 review).
 
 And **switching is a return, not a reload**: every hook stays mounted in either view, so `All` costs
 no request and lands on exactly the address it left. The groups view asks the host for nothing —

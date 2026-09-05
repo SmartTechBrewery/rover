@@ -1675,7 +1675,16 @@ run with no such file says so in different words from one whose file the host wi
 is dressed up as a fault — the file is written the first time a lease produces bytes, so a run
 without one is an ordinary thing to find.
 
-**There is one arrangement at every depth: the tree, then one card.** What the parent listing says
+**The screen carries two views, and everything above and below describes the first of them.** A
+text-only `All` / `Testing groups` toggle sits beside the header badge: `All` is the file explorer,
+unchanged at every depth, and `Testing groups` is the archive arranged by the group a lease named
+(`PROJECT.md` R41). That second view is **an explicit not-built-yet placeholder** — it reads no
+`group_id`, asks the host for nothing and groups nothing; the arrangement itself is the work after
+this. The badge is absent there for the reason it is absent at a run: a placeholder lists nothing.
+The choice is not in the URL, and **any navigation lands back in the file explorer** — the
+breadcrumb still names where you are while the placeholder is up, so only the toggle ever leaves it.
+
+**In the `All` view there is one arrangement at every depth: the tree, then one card.** What the parent listing says
 the selected address is decides what that card draws, and nothing about it decides whether the tree
 is there — a level draws its own listing, a run draws its details, a folder below the run's
 `<serial>` draws that folder's listing, an artifact draws the preview **alone**, and an address

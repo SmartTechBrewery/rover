@@ -1281,4 +1281,46 @@ describe('the two views', () => {
 		expect(segment('All').getAttribute('aria-pressed')).toBe('true');
 		expect(screen.getByText('DIRECTORY')).toBeDefined();
 	});
+
+	// The navigation *ended* the groups view; it did not park it at that address. Walking back in —
+	// a tree row, a breadcrumb segment, the browser's Back — is a navigation like any other, and
+	// only the toggle ever puts the placeholder back up (#166 review).
+	it('does not come back when you return to the address it was chosen at', async () => {
+		const { rerender } = await showing('checkout-app');
+
+		fireEvent.click(segment('Testing groups'));
+		expect(screen.getByText('Not built yet')).toBeDefined();
+
+		at.splat = undefined;
+		rerender(<ArchiveScreen />);
+		expect(screen.getByText('DIRECTORY')).toBeDefined();
+
+		at.splat = 'checkout-app';
+		rerender(<ArchiveScreen />);
+
+		expect(screen.queryByText('Not built yet')).toBeNull();
+		expect(screen.getByText('DIRECTORY')).toBeDefined();
+		expect(segment('All').getAttribute('aria-pressed')).toBe('true');
+	});
+
+	// The same case at the root, where it is worst: the placeholder takes the whole content area,
+	// so there would be no tree left to navigate out with.
+	it('does not come back at the root either', async () => {
+		const { rerender } = await showing(undefined);
+
+		fireEvent.click(segment('Testing groups'));
+		expect(screen.getByText('Not built yet')).toBeDefined();
+
+		at.splat = 'checkout-app';
+		// Walking in asks for that project's own listing, so let it answer before walking back out.
+		await act(async () => {
+			rerender(<ArchiveScreen />);
+		});
+		at.splat = undefined;
+		rerender(<ArchiveScreen />);
+
+		expect(screen.queryByText('Not built yet')).toBeNull();
+		expect(screen.getByText('DIRECTORY')).toBeDefined();
+		expect(screen.getByText('2 projects archived')).toBeDefined();
+	});
 });

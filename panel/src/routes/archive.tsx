@@ -48,8 +48,8 @@ import { rootRoute } from './__root.js';
  *
  * **The screen has two views, and everything below describes the first of them** (#165). *All* is
  * the file explorer; *Testing groups* is the archive arranged by the group a lease named
- * (`PROJECT.md` R41) and is a placeholder — see {@link viewOf} for where that choice is held and
- * why the address is not where it lives.
+ * (`PROJECT.md` R41) and is a placeholder — see `view` below for where that choice is held, why the
+ * address is not where it lives, and why any navigation ends it.
  *
  * **And there is one arrangement at every depth** (#160): the tree, then one card. What the parent
  * listing says the selection is decides what that card *draws* and nothing about whether the tree
@@ -126,14 +126,38 @@ export function ArchiveScreen() {
 	 */
 	const search = useArchiveSearch();
 	/*
-	 * **Which of the two views is drawn, and it is held against the address rather than beside it**
-	 * (#165, {@link viewOf}). Every hook above stays mounted in either view, which is what makes
-	 * *All* a return rather than a reload: switching costs no request and lands back on exactly the
-	 * address the breadcrumb still names. The groups view asks for nothing of its own.
+	 * **Which of the two views is drawn, and a change of address puts it back to *All*** (#165).
+	 * Every hook above stays mounted in either view, which is what makes *All* a return rather than
+	 * a reload: switching costs no request and lands back on exactly the address the breadcrumb
+	 * still names. The groups view asks for nothing of its own.
+	 *
+	 * The toggle is not in the URL, and that is the same call `useArchiveSearch` made and for a
+	 * sharper reason: the groups arrangement has no addresses of its own yet, so there is nothing
+	 * about it to share or to reload onto, and a link to a placeholder is a link to nothing. Whoever
+	 * builds the arrangement gets to settle that question with content in front of them.
+	 *
+	 * **So the address is what ends it, and it has to end it in one direction only** (#166 review).
+	 * The breadcrumb still names where you are while the placeholder is up — the toggle changes what
+	 * is *drawn*, never where you are — so its links have to work, and every one of them is an
+	 * address of the file explorer. A plain flag would have left them navigating underneath a
+	 * placeholder that never gave way, since `/archive/$` serves every depth from one component and
+	 * nothing about moving inside it remounts this. But *keying* the view to the address it was
+	 * chosen at is symmetric, and the wrong half of that symmetry is a bug: coming back to that
+	 * address — a tree row, a breadcrumb segment, the browser's Back — would have raised the
+	 * placeholder again with nobody having asked for it. Storing the address and clearing the view
+	 * when it changes is the same reset in one direction: any navigation lands back in the tree, and
+	 * only the toggle ever chooses the placeholder.
 	 */
-	const [groupsAt, setGroupsAt] = useState<string | null>(null);
 	const here = splatFromComponents(selected);
-	const view = viewOf(groupsAt, here);
+	const [view, setView] = useState<ArchiveView>('all');
+	const [viewChosenAt, setViewChosenAt] = useState(here);
+	if (viewChosenAt !== here) {
+		// React's own way to reset state on a prop change: set during render, and it re-runs this
+		// component with the new values before anything is committed. No effect, so no flash of the
+		// placeholder at an address that never asked for one.
+		setViewChosenAt(here);
+		setView('all');
+	}
 
 	const level = levelAt(levels, selected);
 	const depth = selected.length;
@@ -152,10 +176,7 @@ export function ArchiveScreen() {
 					 */
 					<div className="flex items-center gap-3">
 						{view === 'all' ? badgeFor(depth, level) : undefined}
-						<ArchiveViewToggle
-							onSelect={(next) => setGroupsAt(next === 'groups' ? here : null)}
-							view={view}
-						/>
+						<ArchiveViewToggle onSelect={setView} view={view} />
 					</div>
 				}
 			/>
@@ -175,26 +196,6 @@ export function ArchiveScreen() {
 			)}
 		</>
 	);
-}
-
-/**
- * The view, out of the address the groups view was chosen at — **`all` everywhere else, which is
- * how a navigation lands back in the tree** (#165).
- *
- * The toggle is not in the URL, and that is the same call `useArchiveSearch` made and for a sharper
- * reason: the groups arrangement has no addresses of its own yet, so there is nothing about it to
- * share or to reload onto, and a link to a placeholder is a link to nothing. Whoever builds the
- * arrangement gets to settle that question with content in front of them.
- *
- * Holding it against the address rather than in a bare `useState` is what keeps the two halves of
- * the header honest. The breadcrumb still names where you are while the placeholder is up — the
- * toggle changes what is *drawn*, never where you are — so its links have to work, and every one of
- * them is an address of the file explorer. A plain flag would have left them navigating underneath
- * a placeholder that never gave way, since `/archive/$` serves every depth from one component and
- * nothing about moving inside it remounts this.
- */
-function viewOf(groupsAt: string | null, here: string): ArchiveView {
-	return groupsAt === here ? 'groups' : 'all';
 }
 
 /**
