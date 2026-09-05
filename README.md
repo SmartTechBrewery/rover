@@ -18,7 +18,7 @@ Three steps, and the third is run **inside the project you want an agent to be a
 ```bash
 git clone git@github.com:SmartTechBrewery/rover.git
 cd rover
-npm install     # also installs the git hooks
+npm install     # installs the git hooks, and checks adb is on PATH
 npm link        # puts `rover` on your PATH, running this checkout
 ```
 
@@ -76,7 +76,9 @@ of the command. The CLI's own usage text says which of the two it is for you.
 - **`adb` on `PATH`, with a device in debug mode.** `adb devices` has to name it before Rover can:
   Rover lends what is already attached and never starts an emulator or connects a phone itself
   (`PROJECT.md` D21), and it never takes a device reached over `adb connect` into its inventory,
-  because that is not this machine's hardware (D18).
+  because that is not this machine's hardware (D18). `npm install` says so when it cannot find
+  `adb`, and changes nothing about your `PATH` or your shell configuration itself: what is on this
+  machine's `PATH` is the operator's, the same way the devices are.
 - **`ffmpeg` on the host, and only for `record`.** The machine this was written on does not have
   it, so `record` is not shown below — see [what this will not tell
   you](#what-this-will-not-tell-you).
@@ -1603,7 +1605,8 @@ one agent screenshots the other's build.
 
 ## Working on this repo
 
-Read `ai/RULES.md` in full first. `npm install` sets up the toolchain and installs the git hooks;
+Read `ai/RULES.md` in full first. `npm install` sets up the toolchain, installs the git hooks, and
+warns when `adb` is not on `PATH`;
 `npm run verify` (lint, typecheck of both the Node tree and the panel, then the unit and panel test
 projects) is the one command that says whether the tree is healthy — it needs no device and no host
 tool. `npm run test:device` needs a device on `adb`, and
