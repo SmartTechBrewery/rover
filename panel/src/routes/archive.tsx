@@ -2,6 +2,7 @@ import {
 	type ArchiveLevel,
 	type ArchiveLevels,
 	levelAt,
+	runContentsLevel,
 	useArchiveLevels,
 } from '@panel/archive/archive-levels.js';
 import { componentsFromSplat, levelsOf, splatFromComponents } from '@panel/archive/archive-path.js';
@@ -91,7 +92,7 @@ export function ArchiveScreen() {
 	 * serial is in the address instead, so the level is a slice of the URL.
 	 */
 	const serial = serialOf(levels, selected);
-	const serialLevel = inRun ? selected.slice(0, SERIAL_DEPTH) : serialPath(selected, serial);
+	const serialLevel = inRun ? selected.slice(0, SERIAL_DEPTH) : runContents(levels, selected);
 	/*
 	 * The run's `device_info.json`, read out of that same `<serial>` directory — the one thing on
 	 * this screen that is a file's contents rather than a listing (#136, #131's byte route). It is
@@ -203,7 +204,7 @@ function Content({
 				<RunPanel
 					back={false}
 					below={NO_EXPANSIONS}
-					contents={levelAt(levels, serialPath(selected, serial) ?? [])}
+					contents={levelAt(levels, runContents(levels, selected) ?? [])}
 					description={description}
 					device={device}
 					open={null}
@@ -310,11 +311,11 @@ function InsideTheRun({
 		return (
 			<Columns>
 				{/*
-				 * The tree of the *run*, which is what a run at depth 3 already renders: the run is the
-				 * deepest level of the tree and where you are in it, and where you are inside the run is
-				 * what the column beside it says.
+				 * **The whole selection, not the run** (#159). The tree reaches every address in the
+				 * archive now, so the folder is where you are and the tree is what says so; passing the
+				 * run was right only while the run was the deepest thing the tree could draw.
 				 */}
-				<DirectoryTree key="the tree" levels={levels} search={search} selected={run} />
+				<DirectoryTree key="the tree" levels={levels} search={search} selected={selected} />
 				{column}
 			</Columns>
 		);
@@ -343,7 +344,9 @@ const BELOW_THE_SERIAL = 5;
  * Above a run: the prefixes of the path — **minus the run's own level when a run is selected.** A
  * run's contents are its `<serial>` directory, and that directory's name comes off the level above
  * as `onlyChild`; listing the run itself would be a fifth `readdir` that draws nothing. So a
- * selected run costs four requests, which is what `archive.test.tsx` pins.
+ * selected run costs four requests, which is what `archive.test.tsx` pins — and the tree drawing
+ * the run expanded into those contents (#159) adds none of its own, because that `<serial>` level
+ * is the one a selected run already reads.
  *
  * **Inside a run: the levels from the `<serial>` down, exclusive of the address itself** — each one
  * drawn, the first as `CONTENTS` and the rest as its expansions.
@@ -378,16 +381,18 @@ function levelsWanted(
 		}
 		/*
 		 * A folder, so the tree is beside it: its levels are the ones a selected run reads — the run's
-		 * own excluded, because a run is a leaf and listing it would draw nothing — and the folder's own
-		 * listing is what its row in `CONTENTS` expands to. Shallowest first, which is the order they
-		 * are drawn in.
+		 * own excluded, because a run's contents are its `<serial>`'s and listing the run itself would
+		 * draw nothing — and the folder's own listing is what its row in `CONTENTS` expands to.
+		 * Shallowest first, which is the order they are drawn in. The tree expands down to the folder
+		 * out of exactly these, so reaching it by clicking costs no request the address did not
+		 * already pay for.
 		 */
 		const above = levelsOf(selected.slice(0, RUN_DEPTH)).slice(0, -1);
 		return [...above, ...below, selected];
 	}
 	const levels = levelsOf(selected);
 	const own = selected.length === RUN_DEPTH ? levels.slice(0, -1) : levels;
-	const serial = serialPath(selected, serialOf(known, selected));
+	const serial = runContents(known, selected);
 	return serial === null ? own : [...own, serial];
 }
 
@@ -419,8 +424,8 @@ function openEntryOf(levels: ArchiveLevels, selected: readonly string[]): OpenEn
 /**
  * One line per depth, and the deepest one covers a folder below a run.
  *
- * A path deeper than a run is not reachable through the tree — a run is a leaf — but it is reachable
- * from `CONTENTS` and by typing, so it renders what it names rather than nothing at all.
+ * A path deeper than a run is reachable through the tree (#159), from `CONTENTS` and by typing, and
+ * it renders what it names at every depth the archive can hold.
  */
 const DESCRIPTIONS = [
 	'Projects with runs filed on this host.',
@@ -540,13 +545,17 @@ function serialOf(levels: ArchiveLevels, selected: readonly string[]): RunSerial
 const NO_SERIAL: RunSerial = { status: 'answered', serial: null };
 
 /**
- * The path of the run's `<serial>` level, or `null` when there is no serial to read one for — the
- * one level whose address is derived from an answer rather than from the URL.
+ * The path of a **selected run's** `<serial>` level, or `null` at any other depth and for a run
+ * with no serial to read one for — the one level whose address is derived from an answer rather
+ * than from the URL.
+ *
+ * The depth guard is this function's whole reason for existing beside {@link runContentsLevel}:
+ * every level above a run may hold exactly one child too, so calling that helper at the wrong depth
+ * composes an address nothing draws — and, through `serialLevel`, reads two files out of it. The
+ * tree makes the same hop through the same helper, so one place knows a run holds one child.
  */
-function serialPath(selected: readonly string[], serial: RunSerial): readonly string[] | null {
-	return serial.status === 'answered' && serial.serial !== null
-		? [...selected, serial.serial]
-		: null;
+function runContents(levels: ArchiveLevels, selected: readonly string[]): readonly string[] | null {
+	return selected.length === RUN_DEPTH ? runContentsLevel(levels, selected) : null;
 }
 
 /**

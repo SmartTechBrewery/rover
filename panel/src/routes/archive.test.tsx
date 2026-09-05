@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import type { AnchorHTMLAttributes, ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -161,6 +161,21 @@ async function showing(splat: string | undefined, levels: Record<string, unknown
 		await act(async () => undefined);
 	}
 	return rendered;
+}
+
+/**
+ * Queries scoped to the card **beside** the tree — the level's own, or the run's column.
+ *
+ * The tree reaches every address in the archive now (#159), so it and `CONTENTS` list the same
+ * names for as long as both are drawn; a bare `getByRole` for one of those names finds two rows.
+ * That duplication is knowingly temporary and is what #159's third phase removes.
+ */
+function besideTheTree(container: HTMLElement) {
+	const card = container.querySelector('div.lg\\:flex-row > section');
+	if (card === null) {
+		throw new Error('no card is drawn beside the tree');
+	}
+	return within(card as HTMLElement);
 }
 
 beforeEach(() => {
@@ -761,20 +776,35 @@ describe('an artifact open inside a run', () => {
 			screen.queryByRole('link', { name: 'Close the preview and go back to the directory' }),
 		).toBeNull();
 		expect(host.artifacts).toEqual([]);
+		// The tree is expanded down to the folder, which is where you are (#159) — and it asks for
+		// nothing of its own: the five listings below are the ones this address already paid for.
+		const tree = container.querySelector('aside') as HTMLElement;
+		const drawn = [...tree.querySelectorAll('a')];
+		expect(drawn.map((row) => row.textContent)).toContain('screenshots');
+		expect(drawn.filter((row) => row.getAttribute('aria-current') === 'page')).toHaveLength(1);
+		expect(host.asked).toEqual([
+			SERIAL_LEVEL,
+			[],
+			['checkout-app'],
+			['checkout-app', 'login-flow'],
+			SCREENSHOTS,
+		]);
 	});
 
 	// The folder opens under its own row, keeping the count that says what the run wrote, with what it
 	// holds listed under it by name.
 	it('expands that folder under its own `CONTENTS` row, selected and still counted', async () => {
-		await showing(SCREENSHOTS.join('/'), withScreenshots());
+		const { container } = await showing(SCREENSHOTS.join('/'), withScreenshots());
 
 		const row = screen.getByRole('link', { name: /screenshots\// });
 		expect(row.getAttribute('aria-current')).toBe('page');
 		expect(row.className).toContain('bg-tertiary-container');
 		expect(row.textContent).toContain('3 files');
-		expect(screen.getByRole('link', { name: /001_screenshot.png/ }).textContent).toBe(
-			'001_screenshot.png',
-		);
+		// Scoped to the run's column: the tree lists the same file now, which is the duplication
+		// #159's third phase removes by taking this listing off the card.
+		expect(
+			besideTheTree(container).getByRole('link', { name: /001_screenshot.png/ }).textContent,
+		).toBe('001_screenshot.png');
 	});
 
 	/*
@@ -874,7 +904,9 @@ describe('an artifact open inside a run', () => {
 		// The tree arrived beside the column that was already there: a card added, and none replaced.
 		expect(screen.getByText('DIRECTORY')).toBeDefined();
 		expect(screen.getByText('Everything filed under this directory.')).toBeDefined();
-		expect(screen.getByRole('link', { name: /001_screenshot.png/ })).toBeDefined();
+		expect(
+			besideTheTree(container).getByRole('link', { name: /001_screenshot.png/ }),
+		).toBeDefined();
 		expect(host.artifacts).toEqual([]);
 	});
 
@@ -914,16 +946,20 @@ describe('an artifact open inside a run', () => {
  */
 describe('the addresses that still browse', () => {
 	it('renders the `<serial>` level itself beside the tree, as it did before', async () => {
-		await showing(`checkout-app/login-flow/${RUN}/R5CT30ABCDE`);
+		const { container } = await showing(`checkout-app/login-flow/${RUN}/R5CT30ABCDE`);
 
 		expect(screen.getByText('DIRECTORY')).toBeDefined();
 		expect(screen.getByText('Everything filed under this directory.')).toBeDefined();
-		// The level's own card, listing what the run wrote — the tree's fourth level by typing only.
-		expect(screen.getByRole('link', { name: /device_info.json/ })).toBeDefined();
+		// The level's own card, listing what the run wrote — and the tree beside it lists the same
+		// names now (#159), so this is scoped to the card rather than to the screen.
+		expect(besideTheTree(container).getByRole('link', { name: /device_info.json/ })).toBeDefined();
+		// The serial is not a level of the tree, so the run's own row is what the address marks.
+		const marked = container.querySelectorAll('aside a[aria-current="page"]');
+		expect([...marked].map((row) => row.textContent)).toEqual([RUN]);
 	});
 
 	it('renders a selected run beside the tree, with no back control', async () => {
-		await showing(`checkout-app/login-flow/${RUN}`);
+		const { container } = await showing(`checkout-app/login-flow/${RUN}`);
 
 		expect(screen.getByText('DIRECTORY')).toBeDefined();
 		expect(screen.getByText('Run Details')).toBeDefined();
@@ -931,6 +967,18 @@ describe('the addresses that still browse', () => {
 			screen.queryByRole('link', { name: 'Close the preview and go back to the directory' }),
 		).toBeNull();
 		expect(host.artifacts).toEqual([]);
+		// The tree lists what the run wrote, out of the `<serial>` level the run already reads.
+		const tree = container.querySelector('aside') as HTMLElement;
+		expect([...tree.querySelectorAll('a')].map((row) => row.textContent)).toContain(
+			'device_info.json',
+		);
+		// **And it costs no request.** The four a selected run has always asked for, unchanged.
+		expect(host.asked).toEqual([
+			[],
+			['checkout-app'],
+			['checkout-app', 'login-flow'],
+			['checkout-app', 'login-flow', RUN, 'R5CT30ABCDE'],
+		]);
 	});
 });
 
