@@ -14,7 +14,11 @@ import {
 	useArchivedTestDescription,
 } from '@panel/archive/test-description.js';
 import { ArtifactPreview } from '@panel/components/archive/artifact-preview.js';
-import { ArchiveNotReadable } from '@panel/components/archive/contents-card.js';
+import {
+	ArchiveNotReadable,
+	CardHeading,
+	ContentsCard,
+} from '@panel/components/archive/contents-card.js';
 import { DirectoryTree } from '@panel/components/archive/directory-tree.js';
 import { LevelContents } from '@panel/components/archive/level-contents.js';
 import { RunPanel, type RunSerial } from '@panel/components/archive/run-panel.js';
@@ -40,27 +44,21 @@ import { rootRoute } from './__root.js';
  * breadcrumb, the describing line and the header row's shape are the same in all of them; the badge
  * is the only thing in the header that comes and goes, and it goes rather than reading `0`.
  *
+ * **And there is one arrangement at every depth** (#160): the tree, then one card. What the parent
+ * listing says the selection is decides what that card *draws* and nothing about whether the tree
+ * is there —
+ *
  * | The host's answer for the root | What the content area is |
  * | --- | --- |
  * | nothing yet | one quiet line, no spinner |
- * | a listing | the tree, beside the selected level's own card |
+ * | a listing | the tree, beside the selected address's own card |
  * | an empty listing, or nothing there | *Nothing in the archive* — and **no tree card** |
  * | unreadable | `ARCHIVE NOT READABLE` — and **no tree card** |
  *
  * The last two take the whole content area because **an empty tree beside a message is furniture**:
- * there is nothing to browse, so there is nothing for a tree to be a way into.
- *
- * **And one state is not a state of the tree at all** (#133, narrowed by #143): an **artifact** open
- * inside a run replaces the tree with the run's own column and puts the preview beside it. A
- * **folder** inside a run does not — it is a level of the run's own subtree, so it expands inside
- * `CONTENTS` where it was clicked and the screen stays in the browsing layout, the tree beside the
- * run's column exactly as a selected run renders (§9, #143).
- *
- * So the layout is no longer the depth alone, and {@link InsideTheRun} is where that is paid for
- * honestly: below the `<serial>` it is the depth **and** what the parent listing says the address is
- * — which is a fact the screen may have to wait for, and may not guess at from a name (D22). The
- * three root states above gate the browsing layout **above** a run only: neither column of an
- * address inside a run may wait on the archive root.
+ * there is nothing to browse, so there is nothing for a tree to be a way into. They are the only
+ * two states without a tree, and they gate the browsing layout **above the `<serial>` only** —
+ * no address inside a run ever waits on the archive root.
  *
  * Exported for `archive.test.tsx`, as `DevicesScreen` is: a route's component is otherwise
  * reachable only through a router instance, and what is worth asserting is which state renders what.
@@ -88,34 +86,36 @@ export function ArchiveScreen() {
 	const open = inRun ? openEntryOf(levels, selected) : 'unanswered';
 	/*
 	 * The one extra level a selected run needs, and it can only be asked for once the level above
-	 * has answered: the `<serial>` directory's name is that answer's `onlyChild`. Inside the run the
-	 * serial is in the address instead, so the level is a slice of the URL.
+	 * has answered: the `<serial>` directory's name is that answer's `onlyChild`.
 	 */
 	const serial = serialOf(levels, selected);
-	const serialLevel = inRun ? selected.slice(0, SERIAL_DEPTH) : runContents(levels, selected);
+	const runLevel = runContents(levels, selected);
 	/*
 	 * The run's `device_info.json`, read out of that same `<serial>` directory — the one thing on
 	 * this screen that is a file's contents rather than a listing (#136, #131's byte route). It is
 	 * addressed by the level, not by a path this screen composed, and it is not fetched at all for
-	 * a run whose serial nobody has answered for. Inside the run the serial is in the address, so
-	 * the card never waits on the level above the run.
+	 * a run whose serial nobody has answered for.
+	 *
+	 * **And it is wanted at the run's own depth and nowhere else** (#160). The run's cards used to
+	 * stand beside an open artifact, so both files were read for every address inside the run; the
+	 * tree stands there now and nothing below the `<serial>` draws either of them, so a deep address
+	 * reads neither. `runContents` is already guarded on the run's depth, so `null` is *there is no
+	 * address yet* for both hooks (`archived-file.ts`).
 	 */
-	const device = useArchivedDeviceInfo(serialLevel);
+	const device = useArchivedDeviceInfo(runLevel);
 	/*
 	 * And the lease's own description of the run, out of the same directory and on the same terms
 	 * (#148). Two files per run rather than one; nothing else about the read changes, because both
 	 * go through the one hook that owns the address and the one-request rule (`archived-file.ts`).
 	 */
-	const description = useArchivedTestDescription(serialLevel);
+	const description = useArchivedTestDescription(runLevel);
 	/** The open artifact's own bytes. `null` while the address is a folder, or not yet classified. */
 	const artifact = useArchivedArtifact(open === 'artifact' ? selected : null);
 	/*
-	 * **The tree card's search, held here rather than in the card** (#146). `DirectoryTree` remounts
-	 * when the screen changes arrangement — it carries `key="the tree"` and appears in only one of
-	 * {@link InsideTheRun}'s three arrangements — so state held inside it would be silently lost on
-	 * the very navigation a hit performs. Held here, the hits survive clicking one, and the input is
-	 * still absent wherever the card is: the two states with nothing to browse and an open artifact
-	 * draw no tree, so they draw no field either, without anything having to say so twice.
+	 * **The tree card's search, held here rather than in the card** (#146). It stays here now that
+	 * there is one arrangement (#160): the state outlives an address change either way, and the
+	 * input is still absent wherever the card is — the two states with nothing to browse draw no
+	 * tree, so they draw no field either, without anything having to say so twice.
 	 */
 	const search = useArchiveSearch();
 
@@ -129,36 +129,30 @@ export function ArchiveScreen() {
 				description={descriptionFor(selected, open)}
 				aside={badgeFor(depth, level)}
 			/>
-			{inRun ? (
-				<InsideTheRun
-					artifact={artifact}
-					description={description}
-					device={device}
-					levels={levels}
-					open={open}
-					search={search}
-					selected={selected}
-				/>
-			) : (
-				<Content
-					description={description}
-					device={device}
-					levels={levels}
-					search={search}
-					selected={selected}
-					serial={serial}
-				/>
-			)}
+			<Content
+				artifact={artifact}
+				description={description}
+				device={device}
+				levels={levels}
+				open={open}
+				search={search}
+				selected={selected}
+				serial={serial}
+			/>
 		</>
 	);
 }
 
 /**
- * The content area, and the three answers for the **root** that decide whether there is anything to
- * browse at all.
+ * The content area — **one arrangement, and the two root answers that mean there is nothing to
+ * browse at all** (#160).
  *
  * The two states with nothing in them take the whole area, because an empty tree beside a message is
- * furniture. Everything else is the tree beside one card.
+ * furniture. Everything else is the tree beside one card, at every depth.
+ *
+ * **The root gate is above the `<serial>` only.** An address inside a run draws the tree from the
+ * first frame and the tree fills its own levels in as they arrive (`directory-tree.tsx`); gating it
+ * on the root would make a deep link wait on a level it is not waiting for anything else from.
  */
 function Content({
 	selected,
@@ -166,60 +160,143 @@ function Content({
 	serial,
 	device,
 	description,
+	open,
+	artifact,
 	search,
+}: {
+	readonly selected: readonly string[];
+	/** The one cache, holding whatever has answered — the tree's levels and the run's `<serial>`. */
+	readonly levels: ArchiveLevels;
+	readonly serial: RunSerial;
+	readonly device: ArchivedDeviceInfo;
+	readonly description: ArchivedTestDescription;
+	/** Which of the three the address turned out to be — {@link OpenEntry}. */
+	readonly open: OpenEntry;
+	readonly artifact: ReturnType<typeof useArchivedArtifact>;
+	readonly search: ArchiveSearch;
+}) {
+	const root = levelAt(levels, []);
+
+	if (selected.length < BELOW_THE_SERIAL) {
+		if (root.status === 'loading') {
+			// One line, and no spinner (§5). It is not an empty archive and must not read as one.
+			return (
+				<p aria-live="polite" className="mt-8 font-code-md text-code-md text-on-surface-variant">
+					Reading the host's artifact archive.
+				</p>
+			);
+		}
+		if (root.status === 'empty') {
+			return <NothingArchived />;
+		}
+		if (root.status === 'unreadable') {
+			return <ArchiveNotReadable />;
+		}
+	}
+
+	return (
+		<Columns>
+			<DirectoryTree levels={levels} search={search} selected={selected} />
+			<Preview
+				artifact={artifact}
+				description={description}
+				device={device}
+				levels={levels}
+				open={open}
+				selected={selected}
+				serial={serial}
+			/>
+		</Columns>
+	);
+}
+
+/**
+ * The one card beside the tree, and **what it draws is the depth and what the parent listing says
+ * the selection is — never whether the tree is there** (#160).
+ *
+ * | the selection | the card |
+ * | --- | --- |
+ * | a level above a run | that level's `LevelContents` |
+ * | a run | `RunPanel` |
+ * | a directory below the `<serial>` | that level's `LevelContents`, which is what depth 4 already draws |
+ * | an artifact | `ArtifactPreview` **alone** — the run's identity and device cards are not beside it |
+ * | an address nobody has answered for | {@link ReadingThisAddress}, claiming neither |
+ *
+ * **The preview holds one thing at a time, and the tree is what keeps the reader placed.** The run's
+ * two cards used to stand beside it, from a layout where opening a file took the tree away; the tree
+ * is there now, so the column beside it is the artifact and nothing else.
+ */
+function Preview({
+	selected,
+	levels,
+	serial,
+	device,
+	description,
+	open,
+	artifact,
 }: {
 	readonly selected: readonly string[];
 	readonly levels: ArchiveLevels;
 	readonly serial: RunSerial;
 	readonly device: ArchivedDeviceInfo;
 	readonly description: ArchivedTestDescription;
-	readonly search: ArchiveSearch;
+	readonly open: OpenEntry;
+	readonly artifact: ReturnType<typeof useArchivedArtifact>;
 }) {
-	const root = levelAt(levels, []);
-
-	if (root.status === 'loading') {
-		// One line, and no spinner (§5). It is not an empty archive and must not read as one.
+	if (selected.length >= BELOW_THE_SERIAL) {
+		if (open === 'artifact') {
+			return <ArtifactPreview artifact={artifact} path={selected} />;
+		}
+		if (open === 'unanswered') {
+			return <ReadingThisAddress path={selected} />;
+		}
+	}
+	if (selected.length === RUN_DEPTH) {
+		/*
+		 * With no serial there is no level to read and `RunPanel` says so from `serial` alone
+		 * without looking at `contents`; `[]` is a path this cache never holds, so it reads as
+		 * `loading` and goes unused.
+		 */
 		return (
-			<p aria-live="polite" className="mt-8 font-code-md text-code-md text-on-surface-variant">
-				Reading the host's artifact archive.
-			</p>
+			<RunPanel
+				contents={levelAt(levels, runContents(levels, selected) ?? [])}
+				description={description}
+				device={device}
+				run={selected}
+				serial={serial}
+			/>
 		);
 	}
-	if (root.status === 'empty') {
-		return <NothingArchived />;
-	}
-	if (root.status === 'unreadable') {
-		return <ArchiveNotReadable />;
-	}
+	return <LevelContents level={levelAt(levels, selected)} path={selected} />;
+}
 
+/**
+ * The card for an address whose parent listing has not answered — **and it claims neither of the
+ * two things the answer will decide between** (#160, replacing #143's wait-shaped arrangement).
+ *
+ * A name never says what an address is (D22), so until that listing arrives the screen does not know
+ * whether this is a level or a file. The tree is beside it either way now, so the wait is no longer
+ * a *layout* the screen could be caught in the wrong half of — what remains is that this card may
+ * say nothing definite, which is the whole of this sentence. It says neither *level* nor *artifact*,
+ * nothing is fetched for the address, and no spinner turns (§5).
+ *
+ * The header is the address's own last component, which is the one thing that is true of it whatever
+ * it turns out to be.
+ */
+function ReadingThisAddress({ path }: { readonly path: readonly string[] }) {
 	return (
-		<Columns>
-			<DirectoryTree levels={levels} search={search} selected={selected} />
-			{selected.length === RUN_DEPTH ? (
-				/*
-				 * With no serial there is no level to read and `RunPanel` says so from `serial` alone
-				 * without looking at `contents`; `[]` is a path this cache never holds, so it reads as
-				 * `loading` and goes unused.
-				 */
-				<RunPanel
-					back={false}
-					below={NO_EXPANSIONS}
-					contents={levelAt(levels, runContents(levels, selected) ?? [])}
-					description={description}
-					device={device}
-					open={null}
-					run={selected}
-					serial={serial}
-				/>
-			) : (
-				<LevelContents level={levelAt(levels, selected)} path={selected} />
-			)}
-		</Columns>
+		<ContentsCard header={<CardHeading>{path.at(-1) ?? ''}</CardHeading>}>
+			<div className="px-6 py-5">
+				<p aria-live="polite" className="font-code-md text-code-md text-on-surface-variant">
+					Reading this address.
+				</p>
+			</div>
+		</ContentsCard>
 	);
 }
 
 /**
- * The content area's row, in one place because four arrangements share it.
+ * The content area's row, in one place because every state that browses shares it.
  *
  * **Equal halves are a property of this row rather than of any card in it** (§9): every card is
  * `flex-1 min-w-0` and none carries a width, a percentage or a `basis-*`, so the split does not
@@ -233,167 +310,71 @@ function Columns({ children }: { readonly children: ReactNode }) {
 	);
 }
 
-/**
- * An address inside a run — **three arrangements, and which of them is right is a fact the screen
- * may have to wait for** (#133, #143).
- *
- * | the address turned out to be | the row is |
- * | --- | --- |
- * | an **artifact** | the run's column and the preview, two equal halves, no tree |
- * | a **folder** | the tree and the run's column — the browsing layout, the folder expanded in `CONTENTS` |
- * | **nothing yet** | the run's column alone |
- *
- * **The wait is its own arrangement, and that is the whole difficulty of #143.** A name never decides
- * what an address is (D22), so until the parent listing answers the screen does not know which of the
- * two layouts it is in — and #140's review settled that it may not *guess*, because a shared link
- * that renders one layout and then flips into the other moves everything the reader is looking at. So
- * the wait draws **neither**: the run's column, which is in both, and nothing that would have to be
- * taken away again. Each answer then *adds* a card — the preview on the right, or the tree on the
- * left — and nothing drawn is ever replaced. `ReadingThisAddress` is retired with that second column
- * (#140's card for this state): the level in flight is the parent listing, which this column already
- * draws as `CONTENTS`, so the wait is now shown exactly where the answer lands rather than in a card
- * beside it.
- *
- * **Neither column waits on the archive root**, and the folder arrangement does not either: the tree
- * draws its own levels as they arrive (`directory-tree.tsx`), and gating on the root would take the
- * run's column back off the screen after it had been drawn.
- *
- * **The keys are load-bearing.** The run's column moves between the first and the second slot when
- * the tree arrives, and without a key React would match children by position and remount it — which
- * is the one thing the arrangement above exists to avoid.
- */
-function InsideTheRun({
-	selected,
-	levels,
-	device,
-	description,
-	open,
-	artifact,
-	search,
-}: {
-	readonly selected: readonly string[];
-	/** The one cache, holding whatever has answered — the `<serial>` level down, and the tree's own. */
-	readonly levels: ArchiveLevels;
-	readonly device: ArchivedDeviceInfo;
-	readonly description: ArchivedTestDescription;
-	/** Which of the three the address turned out to be — {@link OpenEntry}. */
-	readonly open: OpenEntry;
-	readonly artifact: ReturnType<typeof useArchivedArtifact>;
-	/** The tree card's search, for the one arrangement that draws a tree. */
-	readonly search: ArchiveSearch;
-}) {
-	const run = selected.slice(0, RUN_DEPTH);
-	const column = (
-		<RunPanel
-			back={open === 'artifact'}
-			below={levels}
-			contents={levelAt(levels, selected.slice(0, SERIAL_DEPTH))}
-			description={description}
-			device={device}
-			key="the run"
-			open={selected}
-			run={run}
-			/*
-			 * **The serial comes from the URL here**, not from the level above the run. The address
-			 * was built from a listing, so `selected[3]` *is* that directory's name — which removes
-			 * a dependency, means this column never waits on the level above the run, and collapses
-			 * `RunSerial` to `answered`, correctly: `reading` and `not readable` cannot apply to a
-			 * serial the address already carries.
-			 */
-			serial={{ status: 'answered', serial: selected[RUN_DEPTH] ?? null }}
-		/>
-	);
-
-	if (open === 'unanswered') {
-		return <Columns>{column}</Columns>;
-	}
-	if (open === 'directory') {
-		return (
-			<Columns>
-				{/*
-				 * **The whole selection, not the run** (#159). The tree reaches every address in the
-				 * archive now, so the folder is where you are and the tree is what says so; passing the
-				 * run was right only while the run was the deepest thing the tree could draw.
-				 */}
-				<DirectoryTree key="the tree" levels={levels} search={search} selected={selected} />
-				{column}
-			</Columns>
-		);
-	}
-	return (
-		<Columns>
-			{column}
-			<ArtifactPreview artifact={artifact} key="the preview" path={selected} />
-		</Columns>
-	);
-}
-
-/** No level below a `<serial>` has been read, which is a selected run: nothing under it is open. */
-const NO_EXPANSIONS: ArchiveLevels = new Map();
-
 /** A run is three components deep: a project, a test name, a run. */
 const RUN_DEPTH = 3;
 /** And its `<serial>` is the fourth, which is part of an address and not a level of the tree. */
 const SERIAL_DEPTH = 4;
-/** The first depth that is *inside* a run — the shallowest address {@link InsideTheRun} renders. */
+/** The first depth that is *inside* a run — the shallowest address the parent listing classifies. */
 const BELOW_THE_SERIAL = 5;
 
 /**
- * Which levels a selection needs read — **one list, over one cache** (`archive-levels.ts`).
+ * Which levels a selection needs read — **the prefixes of it with the run's `<serial>` substituted
+ * at that one depth**, over one cache (`archive-levels.ts`).
  *
- * Above a run: the prefixes of the path — **minus the run's own level when a run is selected.** A
- * run's contents are its `<serial>` directory, and that directory's name comes off the level above
- * as `onlyChild`; listing the run itself would be a fifth `readdir` that draws nothing. So a
- * selected run costs four requests, which is what `archive.test.tsx` pins — and the tree drawing
- * the run expanded into those contents (#159) adds none of its own, because that `<serial>` level
- * is the one a selected run already reads.
+ * Above a run they are the prefixes and nothing else. At and below one the run's own level drops
+ * out and its `<serial>` takes its place: a run's contents are that directory's, and its name comes
+ * off the level above as `onlyChild`, so listing the run itself would be a `readdir` that draws
+ * nothing. Below the `<serial>` the address already carries the serial, so it is a slice of the URL
+ * rather than an answer — and the intermediate directories between it and the selection are each a
+ * level the tree draws. The selection's **own** listing is added once its parent says it is a
+ * folder, and never before (D22).
  *
- * **Inside a run: the levels from the `<serial>` down, exclusive of the address itself** — each one
- * drawn, the first as `CONTENTS` and the rest as its expansions.
+ * **Every path here is a level the tree actually draws**, which is what makes the counts what they
+ * are: a run **4**, the `<serial>` level **4**, a folder at depth 5 **5**, an artifact at depth 6
+ * **5** listings and the artifact.
  *
- * **And the tree's own three levels back again, but only once the address is known to be a folder**
- * (#143). A folder renders beside the tree, and a tree needs the root, the project and the test
- * level, which an artifact address deliberately never asks for. Asking for them while nobody has
- * answered what the address *is* would put those three requests on the way to every preview — the
- * cost #133 removed — so they are wanted by the answer rather than by the depth. *Each one a level
- * actually drawn* is held rather than weakened either way.
+ * **#133's saving is knowingly given up** (#160). The root, the project and the test level used not
+ * to be read for an artifact, because the tree was not there to need them; the tree is there at
+ * every depth now, so they are read for every address. Against it, the run's two files are read
+ * only for a selected run, since nothing below the `<serial>` draws them any more.
  *
  * **Two of these addresses are derived from an answer rather than from the URL**, which is why this
- * takes the levels read so far: the run's `<serial>` is the level above's `onlyChild`, and the open
- * address's own listing is wanted only once its parent says it is a folder. They were a second
- * `useArchiveLevels` instance until #140's review — which meant the `<serial>` level a selected run
- * read was held by the *other* cache, so opening a file under that run re-`readdir`ed it. Derived
- * here, against `known`, the same key is asked for once across both depths.
+ * takes the levels read so far: a selected run's `<serial>` is the level above's `onlyChild`, and
+ * the open address's own listing is wanted only once its parent says it is a folder. They were a
+ * second `useArchiveLevels` instance until #140's review — which meant the `<serial>` level a
+ * selected run read was held by the *other* cache, so opening a file under that run re-`readdir`ed
+ * it. Derived here, against `known`, the same key is asked for once across both depths.
  */
 function levelsWanted(
 	selected: readonly string[],
 	known: ArchiveLevels,
 ): readonly (readonly string[])[] {
-	if (selected.length >= BELOW_THE_SERIAL) {
-		const below = Array.from({ length: selected.length - SERIAL_DEPTH }, (_unused, index) =>
-			selected.slice(0, SERIAL_DEPTH + index),
-		);
-		if (openEntryOf(known, selected) !== 'directory') {
-			// An artifact is not a level, so an address that names one adds nothing — and an address
-			// nobody has answered for yet adds nothing either, which is the whole of D22 here. Neither
-			// draws a tree, so neither pays for one.
-			return below;
-		}
-		/*
-		 * A folder, so the tree is beside it: its levels are the ones a selected run reads — the run's
-		 * own excluded, because a run's contents are its `<serial>`'s and listing the run itself would
-		 * draw nothing — and the folder's own listing is what its row in `CONTENTS` expands to.
-		 * Shallowest first, which is the order they are drawn in. The tree expands down to the folder
-		 * out of exactly these, so reaching it by clicking costs no request the address did not
-		 * already pay for.
-		 */
-		const above = levelsOf(selected.slice(0, RUN_DEPTH)).slice(0, -1);
-		return [...above, ...below, selected];
+	const depth = selected.length;
+	if (depth < RUN_DEPTH) {
+		return levelsOf(selected);
 	}
-	const levels = levelsOf(selected);
-	const own = selected.length === RUN_DEPTH ? levels.slice(0, -1) : levels;
-	const serial = runContents(known, selected);
-	return serial === null ? own : [...own, serial];
+	// The run's own level is never one of them, at any depth at or below it.
+	const above = levelsOf(selected.slice(0, RUN_DEPTH)).slice(0, -1);
+	const serial =
+		depth > RUN_DEPTH ? selected.slice(0, SERIAL_DEPTH) : runContentsLevel(known, selected);
+	if (serial === null) {
+		// The level above has not answered, or the run names no single child: there is no address to
+		// hop to, so nothing under it is asked for on a guess.
+		return above;
+	}
+	// Each intermediate directory between the `<serial>` and the selection — a node the tree expands
+	// through, and the address itself is not one of them.
+	const below = Array.from({ length: Math.max(depth - BELOW_THE_SERIAL, 0) }, (_unused, index) =>
+		selected.slice(0, BELOW_THE_SERIAL + index),
+	);
+	/*
+	 * And the selection's own listing, once its parent has said it is a folder. Guarded on the depth
+	 * as well as on the answer: at and above the `<serial>` the address is already covered above, and
+	 * a *run* is a directory its parent names — which would put the run's own level back.
+	 */
+	const own =
+		depth >= BELOW_THE_SERIAL && openEntryOf(known, selected) === 'directory' ? [selected] : [];
+	return [...above, serial, ...below, ...own];
 }
 
 /**
@@ -520,7 +501,8 @@ function trailFor(selected: readonly string[]): readonly BreadcrumbSegment[] {
  * An `empty` level above is `answered` with no serial: it named no runs at all, so this run is not
  * there, and *nothing to list* is the honest thing to say about it.
  *
- * Inside the run this is not consulted at all: the serial is in the address (see `InsideTheRun`).
+ * Below the run this is not consulted at all: `RunPanel` is drawn at the run's own depth and
+ * nowhere else, and the serial is in the address there anyway.
  */
 function serialOf(levels: ArchiveLevels, selected: readonly string[]): RunSerial {
 	if (selected.length !== RUN_DEPTH) {
@@ -551,8 +533,8 @@ const NO_SERIAL: RunSerial = { status: 'answered', serial: null };
  *
  * The depth guard is this function's whole reason for existing beside {@link runContentsLevel}:
  * every level above a run may hold exactly one child too, so calling that helper at the wrong depth
- * composes an address nothing draws — and, through `serialLevel`, reads two files out of it. The
- * tree makes the same hop through the same helper, so one place knows a run holds one child.
+ * composes an address nothing draws — and, through the two file hooks, reads two files out of it.
+ * The tree makes the same hop through the same helper, so one place knows a run holds one child.
  */
 function runContents(levels: ArchiveLevels, selected: readonly string[]): readonly string[] | null {
 	return selected.length === RUN_DEPTH ? runContentsLevel(levels, selected) : null;

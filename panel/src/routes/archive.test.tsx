@@ -164,11 +164,12 @@ async function showing(splat: string | undefined, levels: Record<string, unknown
 }
 
 /**
- * Queries scoped to the card **beside** the tree — the level's own, or the run's column.
+ * Queries scoped to the **one card** beside the tree — a level's own listing, the run's column, the
+ * preview, or the quiet line for an address nobody has answered for (#160).
  *
- * The tree reaches every address in the archive now (#159), so it and `CONTENTS` list the same
- * names for as long as both are drawn; a bare `getByRole` for one of those names finds two rows.
- * That duplication is knowingly temporary and is what #159's third phase removes.
+ * The tree reaches every address in the archive now (#159), so it and a card that lists a level name
+ * the same entries for as long as both are drawn; a bare `getByRole` for one of those names finds
+ * two rows. That duplication is knowingly temporary and is what #159's third phase removes.
  */
 function besideTheTree(container: HTMLElement) {
 	const card = container.querySelector('div.lg\\:flex-row > section');
@@ -598,12 +599,13 @@ describe('a legacy unlabeled directory', () => {
 });
 
 /**
- * **The artifact preview** (#133) — the state that is not a state of the tree.
+ * **The artifact preview** (#133) — and since #160 it is a state of the tree like any other.
  *
- * One test is one address, as everywhere else on this screen. What decides the layout below the
- * `<serial>` is the depth **and** what the parent listing says the address is (#143): an artifact
- * replaces the tree with the preview, a folder stays in the browsing layout and expands where it was
- * clicked, and until that listing answers the screen draws neither.
+ * One test is one address, as everywhere else on this screen. There is **one arrangement at every
+ * depth** now — the tree, then one card — and what the parent listing says the address is decides
+ * what that card *draws* and nothing about whether the tree is beside it: an artifact draws the
+ * preview alone, a folder draws its own listing, and an address nobody has answered for draws one
+ * quiet line claiming neither.
  */
 describe('an artifact open inside a run', () => {
 	const SERIAL_LEVEL = ['checkout-app', 'login-flow', RUN, 'R5CT30ABCDE'];
@@ -629,54 +631,69 @@ describe('an artifact open inside a run', () => {
 	};
 
 	/*
-	 * **The root, the project and the test level are not fetched at all**, because the tree is not
-	 * there to need them: the levels read are the `<serial>` down, each one drawn in `CONTENTS`. And
-	 * the artifact is asked for only once its own folder's listing says it is a file — a byte read of
-	 * a directory would put a warning in the host's log on every folder a reader opens.
+	 * **The levels the tree draws, and nothing else** (#160). The root, the project and the test level
+	 * are read now, because the tree is there to draw them — #133's saving, knowingly given up. The
+	 * run's own level is still never listed, and the run's **two files are not read at all**: nothing
+	 * beside the preview draws them any more. And the artifact is asked for only once its own folder's
+	 * listing says it is a file — a byte read of a directory would put a warning in the host's log on
+	 * every folder a reader opens.
 	 */
-	it('reads the levels inside the run, the run’s own file, and the artifact — and nothing else', async () => {
+	it('reads the levels the tree draws and the artifact — and neither of the run’s files', async () => {
 		host.artifact = PNG;
 
 		await showing(AT_THE_FILE, withScreenshots());
 
-		expect(host.asked).toEqual([SERIAL_LEVEL, SCREENSHOTS]);
-		expect(host.files).toEqual([
-			[...SERIAL_LEVEL, 'device_info.json'],
-			[...SERIAL_LEVEL, 'test_description.json'],
+		expect(host.asked).toEqual([
+			[],
+			['checkout-app'],
+			['checkout-app', 'login-flow'],
+			SERIAL_LEVEL,
+			SCREENSHOTS,
 		]);
+		expect(host.files).toEqual([]);
 		expect(host.artifacts).toEqual([FILE]);
 	});
 
-	// The one criterion the approved markup gets wrong: a pinned preview makes the *split* depend on
-	// the window, so the same screen shows different proportions on different monitors.
-	it('is two equal halves, with no width, percentage or basis on either', async () => {
+	/*
+	 * The one criterion the approved markup gets wrong: a pinned preview makes the *split* depend on
+	 * the window, so the same screen shows different proportions on different monitors. **The tree is
+	 * the one sized child** and the card beside it takes the rest, which is what every other depth
+	 * already does — one row, one shape (#160).
+	 */
+	it('takes the rest of the row beside the sized tree, with no width, percentage or basis', async () => {
 		host.artifact = PNG;
 
 		const { container } = await showing(AT_THE_FILE, withScreenshots());
 
 		const columns = container.querySelectorAll('div.lg\\:flex-row > section');
-		expect(columns).toHaveLength(2);
-		for (const column of columns) {
-			expect(column.className).toContain('flex-1');
-			expect(column.className).toContain('min-w-0');
-			expect(column.className).not.toMatch(/\bw-\[/);
-			expect(column.className).not.toMatch(/\bbasis-/);
-			expect(column.className).not.toMatch(/\bw-1\/2/);
-			expect(column.className).not.toContain('shrink-0');
-		}
+		expect(columns).toHaveLength(1);
+		const preview = columns[0] as HTMLElement;
+		expect(preview.className).toContain('flex-1');
+		expect(preview.className).toContain('min-w-0');
+		expect(preview.className).not.toMatch(/\bw-\[/);
+		expect(preview.className).not.toMatch(/\bbasis-/);
+		expect(preview.className).not.toMatch(/\bw-1\/2/);
+		expect(preview.className).not.toContain('shrink-0');
+		// And the tree is the sized one, exactly as it is at every other depth.
+		expect(container.querySelector('aside')?.className).toContain('shrink-0');
 	});
 
-	it('replaces the directory tree with the run’s own column', async () => {
+	/*
+	 * **The tree beside the preview, and the run's cards nowhere** (#160, reversing #133). The preview
+	 * column holds one thing at a time and the tree is what keeps the reader placed, so the run's
+	 * identity and device cards are not beside an open file — they are what a *selected run* is.
+	 */
+	it('draws the tree beside the preview, and the run’s cards nowhere', async () => {
 		host.artifact = PNG;
 
 		const { container } = await showing(AT_THE_FILE, withScreenshots());
 
-		expect(screen.queryByText('DIRECTORY')).toBeNull();
-		expect(container.querySelector('aside')).toBeNull();
-		// The run's column, unchanged, in less space — its identity card names the run in full.
-		expect(screen.getByRole('heading', { level: 3, name: RUN })).toBeDefined();
-		expect(screen.getByText('DEVICE — FROM device_info.json')).toBeDefined();
-		expect(screen.getByText('CONTENTS')).toBeDefined();
+		expect(screen.getByText('DIRECTORY')).toBeDefined();
+		expect(container.querySelector('aside')).toBeDefined();
+		expect(screen.queryByRole('heading', { level: 3, name: RUN })).toBeNull();
+		expect(container.textContent).not.toContain('DEVICE — FROM device_info.json');
+		expect(container.textContent).not.toContain('CONTENTS');
+		expect(container.textContent).not.toContain('Run Details');
 	});
 
 	it('shows the artifact, and one control over it', async () => {
@@ -724,109 +741,90 @@ describe('an artifact open inside a run', () => {
 		expect(container.textContent).not.toContain('archived');
 	});
 
-	// One control, one outcome: the tree returns exactly when the preview closes. It heads the column
-	// beside the markup's own left-aligned `Run Details` (#143).
-	it('offers one way back, to the run’s own address, beside a left-aligned `Run Details`', async () => {
+	/*
+	 * **There is no way back, because nothing was taken away** (#160). The back arrow existed for the
+	 * one state the run's column was the only exit from — a preview standing where the tree had been —
+	 * and the tree stands beside the preview now, so the card's strip is the file's own name and the
+	 * one control over it.
+	 */
+	it('offers no way back, and heads the card with the file’s own name', async () => {
 		host.artifact = PNG;
 
 		const { container } = await showing(AT_THE_FILE, withScreenshots());
 
-		const back = screen.getByRole('link', {
-			name: 'Close the preview and go back to the directory',
-		});
-		expect(back.getAttribute('href')).toBe(`/archive/checkout-app/login-flow/${RUN}`);
-		const strip = container.querySelector('section > div:first-child');
-		expect(strip?.textContent).toBe('Run Details');
-		expect(strip?.firstElementChild?.className).not.toContain('justify-center');
+		expect(
+			screen.queryByRole('link', { name: 'Close the preview and go back to the directory' }),
+		).toBeNull();
+		const strip = container.querySelector('div.lg\\:flex-row > section > div:first-child');
+		expect(strip?.textContent).toBe('001_screenshot.pngOpen in a new window');
 	});
 
-	// `CONTENTS` is how another file is chosen, so the folder being browsed shows its file names.
-	it('expands the folder being browsed in `CONTENTS`, with the open file selected', async () => {
+	// The tree is how another file is chosen now (#160), so it draws the open file's siblings and
+	// marks the one that is open.
+	it('draws the folder’s file names in the tree, with the open one selected', async () => {
 		host.artifact = PNG;
 
-		await showing(AT_THE_FILE, withScreenshots());
+		const { container } = await showing(AT_THE_FILE, withScreenshots());
 
-		const open = screen.getByRole('link', { name: /001_screenshot.png/ });
+		const tree = within(container.querySelector('aside') as HTMLElement);
+		const open = tree.getByRole('link', { name: /001_screenshot.png/ });
 		expect(open.getAttribute('aria-current')).toBe('page');
-		expect(screen.getByRole('link', { name: /002_screenshot.png/ }).getAttribute('href')).toBe(
+		expect(tree.getByRole('link', { name: /002_screenshot.png/ }).getAttribute('href')).toBe(
 			`/archive/${[...SCREENSHOTS, '002_screenshot.png'].join('/')}`,
 		);
 	});
 
 	/*
-	 * **A folder below the `<serial>` stays in the browsing layout and expands where it was clicked**
-	 * (#143, reversing #133's second column for it). A folder is a level of the run's own subtree
-	 * rather than a second artifact, so the tree comes back beside the run's column — which is what a
-	 * run at depth 3 already renders — and the folder's listing is drawn in `CONTENTS` and nowhere
-	 * else. Nothing is read as an artifact, because the level above said it is a directory.
+	 * **A folder below the `<serial>` draws its own listing beside the tree** (#160) — which is what
+	 * depth 4 already did, and what every level above a run does. The run's cards are not beside it
+	 * either: what the parent listing says the address is decides what the card draws, and it said
+	 * *directory*. Nothing is read as an artifact, for the same reason.
 	 */
-	it('renders a folder below the serial as the tree beside the run’s column', async () => {
+	it('renders a folder below the serial as the tree beside that folder’s own listing', async () => {
 		const { container } = await showing(SCREENSHOTS.join('/'), withScreenshots());
 
 		expect(screen.getByText('Everything filed under this directory.')).toBeDefined();
-		expect(screen.getByText('DEVICE — FROM device_info.json')).toBeDefined();
 		expect(screen.getByText('DIRECTORY')).toBeDefined();
-		// Two columns, and the second one is the run's: no `LevelContents` for the folder anywhere.
+		expect(container.textContent).not.toContain('DEVICE — FROM device_info.json');
+		expect(container.textContent).not.toContain('Run Details');
+		// The tree, then one card — the row every depth draws.
 		const columns = container.querySelector('div.lg\\:flex-row');
 		expect(columns?.children).toHaveLength(2);
 		expect(columns?.children[0]?.tagName).toBe('ASIDE');
-		expect(columns?.children[1]?.textContent).toContain('Run Details');
-		// The tree is the way back, so the column carries no control of its own.
+		// The card is the folder's own read-only listing, headed by its name.
+		const card = besideTheTree(container);
+		expect(card.getByRole('heading', { level: 2, name: 'screenshots' })).toBeDefined();
+		expect(card.getByRole('link', { name: /001_screenshot.png/ })).toBeDefined();
 		expect(
 			screen.queryByRole('link', { name: 'Close the preview and go back to the directory' }),
 		).toBeNull();
 		expect(host.artifacts).toEqual([]);
-		// The tree is expanded down to the folder, which is where you are (#159) — and it asks for
-		// nothing of its own: the five listings below are the ones this address already paid for.
+		// The tree is expanded down to the folder, which is where you are (#159).
 		const tree = container.querySelector('aside') as HTMLElement;
 		const drawn = [...tree.querySelectorAll('a')];
 		expect(drawn.map((row) => row.textContent)).toContain('screenshots');
 		expect(drawn.filter((row) => row.getAttribute('aria-current') === 'page')).toHaveLength(1);
-		expect(host.asked).toEqual([
-			SERIAL_LEVEL,
-			[],
-			['checkout-app'],
-			['checkout-app', 'login-flow'],
-			SCREENSHOTS,
-		]);
-	});
-
-	// The folder opens under its own row, keeping the count that says what the run wrote, with what it
-	// holds listed under it by name.
-	it('expands that folder under its own `CONTENTS` row, selected and still counted', async () => {
-		const { container } = await showing(SCREENSHOTS.join('/'), withScreenshots());
-
-		const row = screen.getByRole('link', { name: /screenshots\// });
-		expect(row.getAttribute('aria-current')).toBe('page');
-		expect(row.className).toContain('bg-tertiary-container');
-		expect(row.textContent).toContain('3 files');
-		// Scoped to the run's column: the tree lists the same file now, which is the duplication
-		// #159's third phase removes by taking this listing off the card.
-		expect(
-			besideTheTree(container).getByRole('link', { name: /001_screenshot.png/ }).textContent,
-		).toBe('001_screenshot.png');
 	});
 
 	/*
-	 * **The tree's own three levels, wanted by the answer and not by the depth** (#143). A folder
-	 * draws the tree, so the root, the project and the test level are needed again — and they are
-	 * asked for only once the `<serial>` listing has said the address is a folder, which is what keeps
-	 * an artifact at four requests however deep the link is.
+	 * **The tree's own levels are wanted from the start now** (#160). They were asked for only once
+	 * the `<serial>` listing had said the address was a folder, because an artifact drew no tree and
+	 * was not to pay for one; the tree is drawn at every depth now, so the three are wanted by the
+	 * depth again — and the folder's own listing is still wanted by the answer, never by its name
+	 * (D22).
 	 */
-	it('asks for the tree’s levels once the folder is known to be one, and not before', async () => {
+	it('asks for the tree’s levels from the start, and the folder’s own once it is known to be one', async () => {
 		await showing(SCREENSHOTS.join('/'), withScreenshots());
 
 		expect(host.asked).toEqual([
-			SERIAL_LEVEL,
 			[],
 			['checkout-app'],
 			['checkout-app', 'login-flow'],
+			SERIAL_LEVEL,
 			SCREENSHOTS,
 		]);
-		expect(host.files).toEqual([
-			[...SERIAL_LEVEL, 'device_info.json'],
-			[...SERIAL_LEVEL, 'test_description.json'],
-		]);
+		// And neither of the run's two files, which nothing at this depth draws.
+		expect(host.files).toEqual([]);
 	});
 
 	// The address the host answers `missing` for. Said plainly, and not as the other one.
@@ -847,53 +845,58 @@ describe('an artifact open inside a run', () => {
 	});
 
 	/*
-	 * A link into the archive at a depth nobody browsed to. **The tree is never drawn on the way**, and
-	 * the first frame claims nothing either (#140 review, #143): nobody has answered for the parent
-	 * yet, so the screen draws the run's column *alone* — neither layout — and the header carries the
-	 * run's own line rather than *One artifact from this run*.
+	 * A link into the archive at a depth nobody browsed to. **The tree is there from the first frame**
+	 * (#160), and the card still claims nothing until the parent listing answers (#140 review): the
+	 * header carries the run's own line rather than *One artifact from this run*, and the card says
+	 * *Reading this address.* Nothing that is drawn is ever replaced — the preview lands in the card
+	 * the quiet line was in, and the tree fills its own levels in beside it.
 	 */
-	it('renders the preview on a reload straight onto it, without ever drawing the tree', async () => {
+	it('renders the preview on a reload straight onto it, with the tree beside it throughout', async () => {
 		host.artifact = PNG;
 		at.splat = AT_THE_FILE;
 		host.answers = new Map(Object.entries(withScreenshots()));
 
 		const { container } = render(<ArchiveScreen />);
-		expect(screen.queryByText('DIRECTORY')).toBeNull();
+		expect(screen.getByText('DIRECTORY')).toBeDefined();
 		expect(container.querySelectorAll('div.lg\\:flex-row > section')).toHaveLength(1);
-		expect(screen.getByText('Run Details')).toBeDefined();
+		expect(screen.getByText('Reading this address.')).toBeDefined();
 		expect(screen.queryByText('Reading this artifact.')).toBeNull();
 		expect(container.textContent).not.toContain('One artifact from this run');
+		expect(container.textContent).not.toContain('Run Details');
 
 		for (let turn = 0; turn < 6; turn += 1) {
 			await act(async () => undefined);
 		}
 
-		expect(screen.queryByText('DIRECTORY')).toBeNull();
-		expect(container.querySelector('aside')).toBeNull();
+		expect(screen.getByText('DIRECTORY')).toBeDefined();
+		expect(container.querySelectorAll('div.lg\\:flex-row > section')).toHaveLength(1);
 		expect(screen.getByAltText('001_screenshot.png')).toBeDefined();
 	});
 
 	/*
-	 * **The same first frame for a folder, which is the case that decides the whole of #143.** A name
+	 * **The same first frame for a folder** — and the wait is no longer an arrangement (#160). A name
 	 * never says what an address is (D22), so until the `<serial>` listing answers the screen does not
-	 * know whether it is in the preview layout or the browsing one — and it may neither guess nor draw
-	 * one and flip into the other, which is what moves everything a reader is looking at. So the wait
-	 * is the run's column *alone*: what is in both layouts, and nothing that would be taken away
-	 * again. The level in flight is the parent listing, which that column draws as `CONTENTS`, so the
-	 * wait is shown exactly where the answer lands.
+	 * know whether the card is a preview or a listing; what it may not do is *claim* one. It is the
+	 * card that says so, in one quiet line that is neither, while the tree is beside it from the
+	 * first frame — so nothing that is drawn has to be taken away when the answer lands.
 	 */
 	it('claims nothing about an address whose parent has not answered, and flips nothing', async () => {
 		at.splat = SCREENSHOTS.join('/');
 		host.answers = new Map(Object.entries(withScreenshots()));
 
 		const { container } = render(<ArchiveScreen />);
-		expect(screen.queryByText('DIRECTORY')).toBeNull();
+		expect(screen.getByText('DIRECTORY')).toBeDefined();
 		const columns = container.querySelector('div.lg\\:flex-row');
-		expect(columns?.children).toHaveLength(1);
-		expect(columns?.children[0]?.textContent).toContain('Run Details');
-		expect(screen.getByText('Reading this level of the archive.')).toBeDefined();
+		expect(columns?.children).toHaveLength(2);
+		expect(columns?.children[0]?.tagName).toBe('ASIDE');
+		// The card is headed by the address's last component and says neither *level* nor *artifact*.
+		const card = besideTheTree(container);
+		expect(card.getByRole('heading', { level: 2, name: 'screenshots' })).toBeDefined();
+		expect(card.getByText('Reading this address.')).toBeDefined();
 		expect(container.textContent).not.toContain('One artifact from this run');
 		expect(container.textContent).not.toContain('Reading this artifact.');
+		expect(container.textContent).not.toContain('Run Details');
+		expect(container.innerHTML).not.toContain('animate');
 		// Nothing is fetched for it either, which is the rule that first frame exists to keep.
 		expect(host.artifacts).toEqual([]);
 
@@ -901,9 +904,10 @@ describe('an artifact open inside a run', () => {
 			await act(async () => undefined);
 		}
 
-		// The tree arrived beside the column that was already there: a card added, and none replaced.
+		// The listing landed in the card the quiet line was in: nothing added, and none replaced.
 		expect(screen.getByText('DIRECTORY')).toBeDefined();
 		expect(screen.getByText('Everything filed under this directory.')).toBeDefined();
+		expect(container.querySelector('div.lg\\:flex-row')?.children).toHaveLength(2);
 		expect(
 			besideTheTree(container).getByRole('link', { name: /001_screenshot.png/ }),
 		).toBeDefined();
@@ -1040,7 +1044,9 @@ describe('searching the archive from the tree card', () => {
 		}
 	});
 
-	it('draws no field with an artifact open', async () => {
+	// And it is drawn with an artifact open too, because the tree is (#160). The field goes wherever
+	// the card goes, and there is one arrangement now.
+	it('draws the field with an artifact open, because the tree is there', async () => {
 		host.artifact = { outcome: 'read', mediaType: 'image/png', bytes: new Blob(['png']) };
 
 		await showing([...SCREENSHOTS, '001_screenshot.png'].join('/'), {
@@ -1052,7 +1058,7 @@ describe('searching the archive from the tree card', () => {
 			}),
 		});
 
-		expect(screen.queryByRole('textbox')).toBeNull();
+		expect(field().getAttribute('placeholder')).toBe('Search the whole archive...');
 	});
 
 	// One request for the settled text, and **no listing at all**: the matched tree is derived from
@@ -1107,9 +1113,10 @@ describe('searching the archive from the tree card', () => {
 	});
 
 	/*
-	 * **The hits survive following one**, which is what holding the state above the card buys: the
-	 * card remounts on this very navigation — a folder inside a run is a different arrangement, and
-	 * the tree carries `key="the tree"` there — so state held inside it would have been lost.
+	 * **The hits survive following one**, which is what holding the state above the card buys. There
+	 * is one arrangement now, so the card is no longer remounted by the navigation itself (#160) —
+	 * what the state still has to outlive is the address changing under it, which is what this
+	 * asserts.
 	 */
 	it('keeps the text and the hits when a hit is navigated to', async () => {
 		host.search = answered([{ path: SCREENSHOTS, kind: 'directory' }]);
@@ -1117,8 +1124,8 @@ describe('searching the archive from the tree card', () => {
 		await type('screenshots');
 		expect(screen.getByRole('link', { name: /screenshots/ })).toBeDefined();
 
-		// Following the hit's own row: the address changes and the screen re-renders in the folder
-		// arrangement, where the tree card is drawn again.
+		// Following the hit's own row: the address changes and the screen re-renders at that folder,
+		// with the same tree card still beside it.
 		at.splat = SCREENSHOTS.join('/');
 		host.answers.set(
 			JSON.stringify(SCREENSHOTS),

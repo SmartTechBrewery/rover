@@ -38,7 +38,7 @@ this sentence exists to prevent.
 | Archive — Project Selection Refined | `b91c300db2d445b8a195a0bafd1aac76` | **Settled** — see §9 |
 | Archive — Test Runs Refined (login-flow) | `8dcd4330b9b94105a7ba289620dc84aa` | **Settled** — see §9 |
 | Archive — A run selected (Refined) | `d24d2c84e84041b28dfed67e92551d28` | **Settled** — see §9, all three cards built |
-| Archive — Artifact Preview (Shell Corrected) | `a843d32b7a414ac3a84fd7e80aa8a8bf` | **Settled** — see §9, built with two recorded deviations; #143 restored the third |
+| Archive — Artifact Preview (Shell Corrected) | `a843d32b7a414ac3a84fd7e80aa8a8bf` | **Settled** — see §9, built with three recorded deviations, the **arrangement itself** among them: #160 stands the preview beside the tree rather than beside the run's column |
 | Archive — Browsing (V2) | `f2de4344f7e347aa894b3054d9cf4098` | **Superseded** by the three rows above; must not be built from |
 | Run Detail — Artifacts (V2) | `36b54fbe032449d8a300ea0825bbf1c8` | **Retired by #133** — must not be built from; see §9 |
 | Compare — Visual Diff (V2) | `897632dcadce44de9bdee74a94da14f5` | Not yet corrected — see §11 |
@@ -852,7 +852,7 @@ it is a new method beside `list_archive`, never a parameter on it.
 | Archive — Project Selection Refined | `b91c300db2d445b8a195a0bafd1aac76` | The shell, the header, the two-card content area, the tree |
 | Archive — Test Runs Refined (login-flow) | `8dcd4330b9b94105a7ba289620dc84aa` | The run list, `OWNER` / `GRANTED`, and the tree card's search field (#146) |
 | Archive — A run selected (Refined) | `d24d2c84e84041b28dfed67e92551d28` | The run column: the identity card, the device card, `CONTENTS` |
-| Archive — Artifact Preview (Shell Corrected) | `a843d32b7a414ac3a84fd7e80aa8a8bf` | The preview beside the run's column (#133) |
+| Archive — Artifact Preview (Shell Corrected) | `a843d32b7a414ac3a84fd7e80aa8a8bf` | The preview's own frame, region and control (#133) — it stands beside the **tree**, not beside the run's column (#160) |
 
 There is deliberately **no design for the root level** (a list of projects). It is the same component
 with one fewer column, and the issue's own instruction — *the three levels are one component with
@@ -860,8 +860,8 @@ different rows* — is what makes that safe rather than a gap.
 
 **Three defects in the emitted markup are not reproduced**, and are recorded so nobody "fixes" the
 code back towards them. (The fourth screen's own deviations are a different thing — decisions the
-acceptance criteria reversed rather than defects — and the two that stand are recorded with the
-preview below, together with the third, which #143 handed back to the markup.)
+acceptance criteria reversed rather than defects — and the three that stand are recorded with the
+preview below, together with the two that no longer do.)
 
 1. `8dcd4330…` uses **`break-all`** on tree rows and run names. It is **`break-words`** everywhere in
    the built screen: `break-all` splits `issue-112` across two lines, which makes an owner string
@@ -966,11 +966,11 @@ browser.
   the 320px column left for its name, which wraps. That is `break-words` doing what it is there for
   rather than `break-all` — and a *shorter* indent for the searched tree would be a second tree
   idiom, invented at the keyboard, for a column the approved markup already settled.
-- **The field is absent in every state that draws no tree** — the two states with nothing to browse
-  and an open artifact — and that needs saying nowhere in the code: it is part of the tree card, so
-  it goes wherever the card goes. The *state* lives above the card
-  (`panel/src/routes/archive.tsx`), because the card remounts when the screen changes arrangement and
-  state held inside it would be lost on the very navigation a hit performs.
+- **The field is absent in exactly the two states that draw no tree** — *Nothing in the archive* and
+  `ARCHIVE NOT READABLE` — and that needs saying nowhere in the code: it is part of the tree card, so
+  it goes wherever the card goes. It is **present with an artifact open** since #160, because the
+  tree is. The *state* lives above the card (`panel/src/routes/archive.tsx`), where it outlives the
+  address changing under it.
 
 **What a tree row may carry, and nothing else:**
 
@@ -1277,18 +1277,19 @@ lease said, not what anyone remembers.
 - **Lower case, like `SERIAL`'s own three.** These are the screen saying what it does not have, not
   values the host sent.
 
-### The artifact preview — settled (#133, narrowed by #143)
+### The artifact preview — settled (#133, narrowed by #143, one arrangement since #160)
 
-Opening a file from a run's `CONTENTS` **replaces the directory tree with a preview beside the run's
-own column**, so the artifact is read where it was found. This is a state of the Archive screen and
-not a second screen: the breadcrumb, the describing line and the header row's shape are the same in
-it as in every other.
+Opening a file **draws the preview in the one card beside the tree**, so the artifact is read where
+it was found. This is a state of the Archive screen and not a second screen: the breadcrumb, the
+describing line and the header row's shape are the same in it as in every other.
 
-**Opening a *folder* from that same `CONTENTS` does not** (#143). A folder is a level of the run's
-own subtree rather than a second artifact, so it expands under the row it was clicked from and the
-screen stays in the browsing layout — the tree on the left, the run's column on the right, which is
-what a selected run already renders. Everything below is about an open **file**, except where it
-says otherwise; the two places this reverses #133 say so where the reversed rule was written.
+**There is one arrangement at every depth — the tree, then one card** (#160). What the parent
+listing says the selection is decides what that card *draws* and nothing at all about whether the
+tree is beside it, so the screen has one navigation surface instead of four layouts to be in.
+Three of #133's and #143's rules are reversed by that and are rewritten in place below rather than
+deleted, each where it was written: *the tree is not shown while a file is open*, *the back arrow*,
+and *the wait is its own arrangement*. Opening a **folder** was already not a preview (#143); it now
+draws that folder's own listing, which is what depth 4 and every level above a run already draw.
 
 **`Run Detail — Artifacts (V2)` (`36b54fbe032449d8a300ea0825bbf1c8`) is retired by this, not
 deferred.** The first draft of §11 drew a boundary — *Archive lists; Run Detail opens* — and the
@@ -1296,38 +1297,39 @@ boundary was the weaker half: sending a reader to a second address for the thing
 pointing at is not an explorer. That screen has nothing left this does not do, and it is marked
 accordingly in §1.
 
-**Two columns, equal halves.** Both are `flex-1 min-w-0` inside `max-w-(--container-max)`, with **no
-fixed width, no percentage and no `basis-*` on either**. The approved markup pins the preview to
-`lg:w-[580px] shrink-0`; that was tried and **reversed**, because a pinned preview makes the *split*
-depend on the window, so the same screen shows different proportions on different monitors. The tree
-is **not shown while a file is open** — the run's column takes its place. A folder keeps it (#143).
+**The card is `flex-1 min-w-0` inside `max-w-(--container-max)`, with no fixed width, no percentage
+and no `basis-*` on it.** The approved markup pins the preview to `lg:w-[580px] shrink-0`; that was
+tried and **reversed**, because a pinned preview makes the *split* depend on the window, so the same
+screen shows different proportions on different monitors. The tree is the one sized child of the
+row — `lg:w-[320px] shrink-0` — exactly as it is at every other depth, and equal halves are a
+property of the row rather than of any card in it.
 
-**The run's column is the run screen's own second column, unchanged** — in less space beside a
-preview, and in exactly the same space beside the tree. The identity card and the device card do not
-change at all (`run-panel.test.tsx` asserts they are byte-identical in both states). Two things do,
-and both follow from `CONTENTS` having become how another address inside the run is chosen:
+***The tree is not shown while a file is open* is reversed** (#160, edited in place). The rule was
+the answer to a real constraint rather than a preference: the run's column stood beside the preview,
+and a 320px tree plus two cards left neither of the two enough width to be read at, so the tree gave
+up its place to the column that had to be there. **The run's column is not beside a preview any
+more**, so there is nothing left to make room for — and the tree is what keeps a reader placed while
+a file is open, which is the job the run's column was standing in for.
 
-- **The card is headed by the back arrow and a left-aligned `Run Details`** — the markup's own
-  header, which #143 restored. It was built as *the arrow alone, and centred*; every other header on
-  this screen is left-aligned, so that put the one control on the card off the axis of everything
-  under it, and a heading that stays put means the arrow **appearing** is the whole of what changes
-  when a preview opens. Pressing it closes the preview and returns the screen to two columns with
-  the tree back on the left. One control, one outcome — nothing else in that strip navigates — and
-  it is a `<Link>` to the run's own address rather than a `<button>`, because the whole of this
-  screen's state is its address: the tree returns *because* the address is three components deep
-  again. **A folder open in `CONTENTS` has no back control at all**: the tree is beside it, and the
-  tree is the way back.
-- **The folder being browsed expands to its file names, and the open one carries the selected
-  treatment.** Every other folder stays summarised. That is the tree's own rule — *expansion is
-  derived from the URL* — applied to the run's subtree: a folder is expanded exactly when the open
-  address is **inside** it, **or is it** (#143). The addressed folder itself used **not** to be
-  expanded, and the reason was sound while it held: when a folder was what is open, its listing was
-  the card beside this column, and drawing it here as well would have been the same listing in two
-  places. #143 took that column away — a folder is a level of this subtree, not a second artifact —
-  so there is no second place left to draw it in, and the one folder a reader actually pointed at
-  was the last thing this card should have refused to open where it was clicked. A nested row
-  carries the name only and an expanded top-level row keeps its count: the measures stay on the
-  top-level rows, where the card's job is to say what the run wrote.
+**The preview column holds one thing at a time.** The run's identity and device cards are what a
+*selected run* is; they are **not** drawn beside an artifact, and the two files behind them are not
+read for one (below).
+
+**The run's column is drawn for a selected run and nowhere else** (#160). It stood beside a preview,
+beside the tree with a folder of the run open, and alone while nobody had answered — three
+arrangements, and two things on it existed only inside them:
+
+- **The back arrow is removed**, and the reason it existed is what no longer happens. It was there
+  because the preview took the tree's place, which left this column as the only way back; the tree
+  is beside the preview now and is the way back from everything, so a second control would be one
+  with nothing of its own to do (§3). The strip is the markup's left-aligned `Run Details` heading
+  and nothing else — one fewer thing in it than #143 left, and nothing in it that comes and goes.
+- **`CONTENTS` is a flat listing of the `<serial>` level again.** It expanded down to and including
+  the open address — the tree's own derived-expansion rule applied to the run's subtree — because a
+  file below the run was reachable from this card and from nowhere else. The tree reaches every
+  address now (#159) and this card is only ever drawn for the run itself, so there is no open
+  address below it to mark and nothing to expand. Every row keeps its measure, which is this card's
+  remaining job: saying what the run wrote. **#159's third phase takes the listing off it entirely.**
 
 **The path bar grows one segment for the open address, and the `<serial>` is in no segment of it.**
 That address is where you are, file or folder alike: last, `text-tertiary`, not a link, shown in
@@ -1376,69 +1378,80 @@ it. The glyph in `CONTENTS` is deliberately **not** per media type for the same 
 
 **One control in the preview header: `Open in a new window`**, recessive, and **it is a view rather
 than a transfer.** No download button, no `download` attribute, and it is absent for `opaque`. No
-zoom, pan, rotate, filmstrip or next/previous arrows over the image — `CONTENTS` is how another file
-is chosen. No annotation, measurement or comparison tooling; comparison is `Compare — Visual Diff`'s
-question and a different screen.
+zoom, pan, rotate, filmstrip or next/previous arrows over the image — **the tree** is how another
+file is chosen (#160; it was `CONTENTS` while the tree was not there). No annotation, measurement or
+comparison tooling; comparison is `Compare — Visual Diff`'s question and a different screen.
 
 **Routing — the open address is part of the path**, so a reload lands on it and the link is
-shareable. Above the `<serial>` the layout is a function of the **depth alone**; below it, it is the
-depth **and what the parent listing says the address is** — a dependency #133 did not have and #143
-reintroduced knowingly, because a folder and a file are not the same kind of thing to open. The
-bullets under the table are what that costs and how it is paid:
+shareable. **The layout is no longer a function of anything** (#160): there is one row at every
+depth. What the parent listing says the address is still decides what is drawn — it may not be
+guessed at from a name (D22) — but it decides the **contents** of the card rather than the presence
+of the tree, which is why the table below has one column fewer than the state table it replaces:
 
-| `selected.length` | State | Tree | Second column |
+| `selected.length` | The selection is | The tree | The card |
 | --- | --- | --- | --- |
 | 0–2 | a level | yes | that level's `LevelContents` |
 | 3 | a run | yes | `RunPanel`, headed `Run Details` |
 | 4 | the `<serial>` level, typed | yes | that level's `LevelContents` |
-| **≥ 5, an artifact** | **inside the run** | **no** | **the preview** |
-| **≥ 5, a folder** | inside the run | **yes** | **`RunPanel`**, with the folder expanded in its `CONTENTS` |
-| **≥ 5, nobody has said which** | inside the run | no | **nothing — the run's column alone** |
+| ≥ 5, a directory | a level of the run's subtree | yes | that level's `LevelContents` |
+| ≥ 5, an artifact | a file | yes | the preview, **alone** |
+| ≥ 5, nobody has said which | not yet known | yes | one quiet line — ***Reading this address.*** |
 
-The `≥ 5, a folder` row is #143's reversal of the single `≥ 5` row it replaces, which read *the
-preview, **or that folder's `LevelContents`***. A folder no longer takes a column of its own: it is
-a level of the run's own subtree, the card already draws a little tree for every ancestor folder on
-the open path, and sending the one folder a reader pointed at to the other side of the screen was
-the one thing that subtree would not open in place.
+The last three rows are #160's collapse of #143's three, which had the tree absent in two of them
+and the run's column in all three. The `≥ 5, a directory` row reverses #143 in place: a folder had
+no column of its own then, because `CONTENTS` was the only thing that could draw one, and it takes
+the one card now — the same `LevelContents` depth 4 already drew, at a deeper address.
 
-- **The levels read below the `<serial>` are the `<serial>` down, exclusive of the address itself**
-  — each one drawn, the first as `CONTENTS` and the rest as its expansions. The root, the project
-  and the test level are **not fetched for an artifact**, because the tree is not there to need
-  them; a **folder** brings the tree back, so it needs those three again and asks for them **only
-  once the parent listing has said it is a folder** (#143). Wanting them from the depth instead
-  would put three requests on the way to every preview, which is exactly the cost #133 removed. So
-  the three root states above gate the browsing layout **above a run only**: no column of an address
-  inside a run may wait on the archive root, and the tree fills its own levels in as they arrive.
+**And the two states with nothing to browse are the only two without a tree.** They gate the
+browsing layout **above the `<serial>` only**: no address inside a run waits on the archive root,
+and the tree fills its own levels in as they arrive (`directory-tree.tsx`).
+
+- **The levels read are the prefixes of the selection with the run's `<serial>` substituted at that
+  one depth**, and every one of them is a level the tree draws (`levelsWanted`,
+  `panel/src/routes/archive.tsx`). The run's own level is never among them — a run's contents are
+  its `<serial>`'s — and the selection's own listing is added only once its parent has said it is a
+  directory, never on the strength of its name (D22).
 - **The `<serial>` comes from the URL there** (`selected[3]`), not from the level above the run's
   `onlyChild`. The address was built from a listing, so that component *is* the directory's name; it
-  removes a dependency, means neither column waits on the level above the run, and collapses
+  removes a dependency, means the card never waits on the level above the run, and collapses
   `RunSerial` to `answered` — correctly, since *reading* and *not readable* cannot apply to a serial
   the address already carries.
 - **What the address names is read off its parent's listing, never off its own name** (D22). Until
-  that listing answers, nothing is fetched for the address and neither layout is drawn (last
-  bullet). **An artifact is deliberately not fetched on a guess**: asking the byte route for a
+  that listing answers, nothing is fetched for the address and the card claims neither of the two
+  things it might be (last bullet). **An artifact is deliberately not fetched on a guess**: asking the byte route for a
   directory would put *not a regular file* in the host's log on every folder a reader opens. An
   address the listing does not name at all *is* asked for, because *nothing is filed at this
   address* is the byte route's answer to give rather than the screen's to invent.
-- One artifact at depth 6 therefore costs **four requests**: two listings, the run's
-  `device_info.json`, and the artifact. A **folder** at depth 5 costs **six**: its parent listing,
-  its own, the run's `device_info.json`, and the tree's three, which are asked for after the answer
-  that wants them. **And the artifact's four are four however you arrive**, which took a second pass
-  to be true (#140 review): the `<serial>` level and the open folder's listing are addressed by
-  paths *derived from* an answer, and holding those in a second cache meant the run's `<serial>` was
-  read once for the run and again for a file under it. One cache, asked as a function of what it
-  already holds (`archive-levels.ts`).
-- **Nothing is claimed about the address until its parent has answered — and no layout is drawn that
-  would then have to be flipped.** Until then the header carries the run's own line, not *One
-  artifact from this run* and not *Reading this artifact*, which are claims the screen has not been
-  given (#140 review): a deep link into a folder read both of those about a directory for as long as
-  the listing took. And what the content area draws is **the run's column alone** (#143) — the one
-  card both layouts have, and nothing that would have to be taken away again. Each answer then
-  *adds* a card, the preview on the right or the tree on the left, so a shared link never moves what
-  the reader is already looking at, which is the guarantee #140's review bought when the layout was
-  the depth alone. *Reading this address.* is retired with the second column it filled: the level in
-  flight is the parent listing, which the run's column already draws as `CONTENTS`, so the wait is
-  now shown where the answer lands rather than in a card beside it.
+- **The counts, all of them levels the tree actually draws**: a run **4** listings; the `<serial>`
+  level **4**, one fewer than before #160 because the run's own level is no longer listed under it;
+  a folder at depth 5 **5**; an artifact at depth 6 **5** listings and the artifact, so **6**
+  requests.
+- **#133's request saving is knowingly given up** (#160). The root, the project and the test level
+  used not to be fetched for an artifact, because the tree was not there to need them, and a folder
+  asked for them only after the answer that wanted them; the tree is drawn at every depth now, so a
+  deep artifact address reads its ancestor levels **because they are drawn**. Against it, **the
+  run's two files are read only for a selected run** — `device_info.json` and
+  `test_description.json` are on the run's own column, and nothing below the `<serial>` draws either
+  of them any more — so what a deep address gained in listings it gave back in file reads.
+- **And the counts are the counts however you arrive**, which took a second pass to be true (#140
+  review): the `<serial>` level and the open folder's listing are addressed by paths *derived from*
+  an answer, and holding those in a second cache meant the run's `<serial>` was read once for the
+  run and again for a file under it. One cache, asked as a function of what it already holds
+  (`archive-levels.ts`).
+- **Nothing is claimed about the address until its parent has answered.** Until then the header
+  carries the run's own line, not *One artifact from this run* and not *Reading this artifact*,
+  which are claims the screen has not been given (#140 review): a deep link into a folder read both
+  of those about a directory for as long as the listing took.
+- ***The wait is its own arrangement* is reversed** (#143's rule, #160, recorded rather than
+  deleted). What it bought is worth restating, because it is the reason it existed: a shared link
+  may not render one layout and then flip into the other, because that moves everything the reader
+  is already looking at. **One layout buys that for free**, so the rule has nothing left to do —
+  there is no second arrangement to be caught in the wrong half of, and the tree is drawn from the
+  first frame at every depth. What survives is the half that was never about layout: the **card**
+  may claim nothing until the parent listing answers. So it says ***Reading this address.*** — one
+  `aria-live="polite"` line under the address's own last component, **no spinner** (§5), and
+  neither the word *level* nor the word *artifact*, which is the whole point. `ReadingThisAddress`
+  is back, and it is back as a card rather than as an arrangement.
 
 **The artifact's height bound is `max-h-[70vh]`, and it is viewport-relative because a percentage
 one does not resolve here.** `max-h-full` was the first attempt and it is inert: nothing above the
@@ -1465,17 +1478,21 @@ of media types the panel will open**, in `tests/unit/panel/artifact-bodies.test.
 draw-it-at-all check: `.svg` or `.html` added to the host's table would pass *can the panel draw it*
 as `image` and `text`, and both are scriptable as a document, so that gate is what turns red instead.
 
-**The two deviations from the approved markup**, recorded rather than made silently: the preview is
-`flex-1 min-w-0` and not `lg:w-[580px] shrink-0` (above); and the arrow is a `<Link>` rather than a
-`<button>`, with `CONTENTS` keeping this screen's existing `FileText` glyph instead of the markup's
-per-media `image` one.
+**The three deviations from the approved markup**, recorded rather than made silently:
 
-**There was a third, and #143 gave it back to the markup**: the run column's header was the back
-arrow *alone and centred*, where the markup has `arrow_back` plus a left-aligned `Run Details`
-heading. What that was for survives — the strip holds one control and nothing else navigates — but
-the centring did not: every other header on this screen is left-aligned, so the card's one control
-sat off the axis of everything under it, and with the heading always there the arrow can appear
-without the strip's contents changing.
+- the preview is `flex-1 min-w-0` and not `lg:w-[580px] shrink-0` (above);
+- `CONTENTS` keeps this screen's existing `FileText` glyph instead of the markup's per-media `image`
+  one;
+- and **the arrangement itself is departed from** (#160). `a843d32b7a414ac3a84fd7e80aa8a8bf` draws
+  the preview beside the **run's column**; it stands beside the **tree**. That markup is where *the
+  tree is not shown while a file is open* came from, and the screen is one explorer with one
+  navigation surface — a file explorer that hides its tree at the moment a file is opened makes the
+  reader's place the one thing they lose by looking at something.
+
+**Two earlier ones no longer stand.** #143 handed back the run column's centred, arrow-only header,
+because every other header on this screen is left-aligned and the card's one control sat off the
+axis of everything under it. #160 then removed the arrow itself, which takes the last of that
+strip's difference with it: it is the markup's `Run Details` heading and nothing else.
 
 **Two costs, stated rather than hidden.** **An authenticated byte route cannot be an `<img src>` or a
 `<video src>`** — a subresource fetch is the browser's own request and carries no `Authorization`
@@ -1719,10 +1736,10 @@ top of this file). Do not commission a Stitch screen for them.
   settled here by #131, before there was a screen, and settling them at that point was deliberate:
   #131 is what made them decisions about the *host's answer* rather than about one panel's markup.
   The screen was then built from them, and **what it settled is written into §9 above** — the
-  equal-halves layout and why a pinned preview was reversed, the tree's absence while a **file** is
-  open (a folder keeps it, #143), the back arrow, the clean region, the honest fourth body, and the
-  two costs of an authenticated byte route. The five rules below stand as written and are what §9
-  implements.
+  equal-halves layout and why a pinned preview was reversed, the clean region, the honest fourth
+  body, and the two costs of an authenticated byte route. **The tree's absence while a file is open,
+  and the back arrow it made necessary, were both reversed by #160** and are recorded there in
+  place. The five rules below stand as written and are what §9 implements.
 
   - **An image is shown at its natural aspect ratio**, scaled down to fit the panel and never up
     past its own pixels: a screenshot enlarged past 1:1 is a blurrier version of the evidence

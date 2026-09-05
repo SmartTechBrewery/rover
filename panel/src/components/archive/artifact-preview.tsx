@@ -4,8 +4,9 @@ import type { ReactNode } from 'react';
 import { CardHeading, ContentsCard } from './contents-card.js';
 
 /**
- * One artifact, read where it was found — the Archive screen's second column while a file is open
- * (#133, `docs/DESIGN.md` §9; Stitch `a843d32b7a414ac3a84fd7e80aa8a8bf`).
+ * One artifact, read where it was found — the Archive screen's card beside the tree while a file is
+ * open (#133, #160; `docs/DESIGN.md` §9; Stitch `a843d32b7a414ac3a84fd7e80aa8a8bf`, deliberately
+ * departed from in that the preview stands beside the **tree** rather than beside the run's column).
  *
  * **The region around the artifact is clean, and that is the rule that is not traded away.** Nothing
  * is laid over or around it: no scanline, no dotted pattern, no gradient, no tint, no
@@ -24,8 +25,8 @@ import { CardHeading, ContentsCard } from './contents-card.js';
  * the artifact and the archive is browsable there already (D4).
  *
  * **What is deliberately not here**, all of it from the issue's binding rules: no zoom, pan or
- * rotate; no filmstrip and no next/previous arrows, because `CONTENTS` is how another file is
- * chosen; no annotation, measurement or comparison tooling, because comparison is a different
+ * rotate; no filmstrip and no next/previous arrows, because the tree is how another file is chosen
+ * (#160); no annotation, measurement or comparison tooling, because comparison is a different
  * screen's question.
  *
  * **The artifact's height bound is {@link ARTIFACT_MAX_HEIGHT}, and it is viewport-relative because
