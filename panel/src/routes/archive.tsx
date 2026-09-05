@@ -57,8 +57,8 @@ import { rootRoute } from './__root.js';
  *
  * The last two take the whole content area because **an empty tree beside a message is furniture**:
  * there is nothing to browse, so there is nothing for a tree to be a way into. They are the only
- * two states without a tree, and they gate the browsing layout **above the `<serial>` only** —
- * no address inside a run ever waits on the archive root.
+ * two states without a tree, and they gate the browsing layout **at and above the `<serial>`** —
+ * no address *below* the `<serial>` ever waits on the archive root.
  *
  * Exported for `archive.test.tsx`, as `DevicesScreen` is: a route's component is otherwise
  * reachable only through a router instance, and what is worth asserting is which state renders what.
@@ -150,9 +150,10 @@ export function ArchiveScreen() {
  * The two states with nothing in them take the whole area, because an empty tree beside a message is
  * furniture. Everything else is the tree beside one card, at every depth.
  *
- * **The root gate is above the `<serial>` only.** An address inside a run draws the tree from the
- * first frame and the tree fills its own levels in as they arrive (`directory-tree.tsx`); gating it
- * on the root would make a deep link wait on a level it is not waiting for anything else from.
+ * **The root gate reaches the `<serial>` and no deeper.** An address below the `<serial>` draws the
+ * tree from the first frame and the tree fills its own levels in as they arrive
+ * (`directory-tree.tsx`); gating it on the root would make a deep link wait on a level it is not
+ * waiting for anything else from.
  */
 function Content({
 	selected,
@@ -298,9 +299,10 @@ function ReadingThisAddress({ path }: { readonly path: readonly string[] }) {
 /**
  * The content area's row, in one place because every state that browses shares it.
  *
- * **Equal halves are a property of this row rather than of any card in it** (§9): every card is
- * `flex-1 min-w-0` and none carries a width, a percentage or a `basis-*`, so the split does not
- * depend on the window. The tree is the one child that is sized, and it is `shrink-0` beside them.
+ * **The split is a property of this row rather than of any card in it** (§9, whose equal halves
+ * #160 collapsed to one card): the card is `flex-1 min-w-0` and carries no width, no percentage and
+ * no `basis-*`, so what it is given does not depend on the window. The tree is the one child that is
+ * sized, and it is `shrink-0` beside it.
  */
 function Columns({ children }: { readonly children: ReactNode }) {
 	return (

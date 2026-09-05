@@ -966,9 +966,8 @@ browser.
   the 320px column left for its name, which wraps. That is `break-words` doing what it is there for
   rather than `break-all` — and a *shorter* indent for the searched tree would be a second tree
   idiom, invented at the keyboard, for a column the approved markup already settled.
-- **The field is absent in exactly the two states that draw no tree** — *Nothing in the archive* and
-  `ARCHIVE NOT READABLE` — and that needs saying nowhere in the code: it is part of the tree card, so
-  it goes wherever the card goes. It is **present with an artifact open** since #160, because the
+- **The field is absent in every state that draws no tree** — and that needs saying nowhere in the
+  code: it is part of the tree card, so it goes wherever the card goes. It is **present with an artifact open** since #160, because the
   tree is. The *state* lives above the card (`panel/src/routes/archive.tsx`), where it outlives the
   address changing under it.
 
@@ -1403,8 +1402,10 @@ no column of its own then, because `CONTENTS` was the only thing that could draw
 the one card now — the same `LevelContents` depth 4 already drew, at a deeper address.
 
 **And the two states with nothing to browse are the only two without a tree.** They gate the
-browsing layout **above the `<serial>` only**: no address inside a run waits on the archive root,
-and the tree fills its own levels in as they arrive (`directory-tree.tsx`).
+browsing layout **at and above the `<serial>`** — so the `yes` in the first three rows above is the
+root's answer being a listing, and only the `≥ 5` rows draw their tree unconditionally. No address
+*below* the `<serial>` waits on the archive root, and the tree fills its own levels in as they
+arrive (`directory-tree.tsx`).
 
 - **The levels read are the prefixes of the selection with the run's `<serial>` substituted at that
   one depth**, and every one of them is a level the tree draws (`levelsWanted`,

@@ -1651,8 +1651,8 @@ signed-in user's identifier, so
 `rover force-release`'s audit line on the host names a person and not a browser.
 
 **Archive is a file explorer over what past runs wrote.** A tree on the left expands one directory
-at a time as you go down it — a project, a test name, a run — beside the contents of whatever is
-selected. Browsing reads one level at a time: each level is one `list_archive` call for a level
+at a time as you go down it and reaches every address in the archive — a project, a test name, a
+run, and every level below that run — beside the contents of whatever is selected. Browsing reads one level at a time: each level is one `list_archive` call for a level
 actually on the screen, so opening a project reads that project and nothing else. **And the tree card
 has a field that searches the whole archive on the host** — one `search_archive` call for the text
 once it settles, never one per keystroke, with every match drawn in the tree in place: each matching
@@ -1675,14 +1675,13 @@ run with no such file says so in different words from one whose file the host wi
 is dressed up as a fault — the file is written the first time a lease produces bytes, so a run
 without one is an ordinary thing to find.
 
-**Opening a file from a run's `CONTENTS` shows it beside that run.** The directory tree gives way to
-the run's own column and the artifact is previewed next to it, in two equal halves — so the thing
-you were pointing at is read where you found it rather than at a second address. That column is
-headed by a back arrow beside its `Run Details`, and the arrow brings the tree back; the folder
-being browsed expands to its file names, because `CONTENTS` is now how the next file is chosen.
-**Opening a *folder* from that same listing expands it where you clicked it** and leaves the tree
-where it is: a folder is a level of the run's own subtree rather than a second thing to preview, so
-it opens in place rather than crossing the screen. An image is shown contained at its natural aspect
+**There is one arrangement at every depth: the tree, then one card.** What the parent listing says
+the selected address is decides what that card draws, and nothing about it decides whether the tree
+is there — a level draws its own listing, a run draws its details, a folder below the run's
+`<serial>` draws that folder's listing, an artifact draws the preview **alone**, and an address
+nobody has answered for yet draws one quiet line that claims neither. The tree stays where it is at
+every depth, an open file included, so **the tree is how another file is chosen** and there is
+nothing to bring it back with. An image is shown contained at its natural aspect
 ratio and never blown up past its own pixels; a recording is a plain video with the browser's own
 controls that does not start itself and does not loop; a log or a `device_info.json` is printed
 verbatim in monospace with a line-number gutter and **no colour on the level** — `W` and `E` are the
