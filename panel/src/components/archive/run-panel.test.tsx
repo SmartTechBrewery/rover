@@ -1,5 +1,4 @@
-import type { ArchiveLevel, ArchiveLevels } from '@panel/archive/archive-levels.js';
-import { keyOf } from '@panel/archive/archive-path.js';
+import type { ArchiveLevel } from '@panel/archive/archive-levels.js';
 import type { ArchivedDeviceInfo } from '@panel/archive/device-info.js';
 import type { ArchivedTestDescription } from '@panel/archive/test-description.js';
 import { render, screen } from '@testing-library/react';
@@ -52,9 +51,6 @@ const DEVICE: ArchivedDeviceInfo = { status: 'read', info: fixture.files[0] };
 /** The same device, with the three facts it could not answer (`docs/DESIGN.md` §6). */
 const UNANSWERED: ArchivedDeviceInfo = { status: 'read', info: fixture.files[1] };
 
-/** No level below the `<serial>` has been read, which is every state with nothing open. */
-const NO_LEVELS: ArchiveLevels = new Map();
-
 /** The run's own `test_description.json`, as the archive wrote it (#148). */
 const DESCRIBED: ArchivedTestDescription = {
 	status: 'read',
@@ -71,12 +67,9 @@ function showing(
 ) {
 	return render(
 		<RunPanel
-			back={false}
-			below={NO_LEVELS}
 			contents={contents}
 			description={description}
 			device={device}
-			open={null}
 			run={RUN}
 			serial={serial}
 		/>,
@@ -85,41 +78,6 @@ function showing(
 
 /** The `<serial>` directory every address below this run carries. */
 const SERIAL_PATH = [...RUN, 'R5CT30ABCDE'] as const;
-
-/** One level of the run's subtree, keyed the way `useArchiveLevels` keys them. */
-function levels(...read: readonly [readonly string[], ArchiveLevel][]): ArchiveLevels {
-	return new Map(read.map(([path, level]) => [keyOf(path), level]));
-}
-
-/**
- * The column with an address inside the run open, and **`back` is what tells the two apart**: a
- * preview took the tree's place, so the arrow is the way out of it; a folder is open beside the tree
- * and has no control at all (#143).
- */
-function withOpen(open: readonly string[], below: ArchiveLevels, back: boolean) {
-	return render(
-		<RunPanel
-			back={back}
-			below={below}
-			contents={CONTENTS}
-			description={DESCRIBED}
-			device={DEVICE}
-			open={open}
-			run={RUN}
-			serial={NAMED}
-		/>,
-	);
-}
-
-/** The column beside an open artifact — the preview state, where the tree is not there. */
-function beside(open: readonly string[], below: ArchiveLevels = NO_LEVELS) {
-	return withOpen(open, below, true);
-}
-
-/** The column beside the tree, with a folder of this run open in `CONTENTS` (#143). */
-function browsing(open: readonly string[], below: ArchiveLevels = NO_LEVELS) {
-	return withOpen(open, below, false);
-}
 
 describe('a run', () => {
 	it('names itself in full, and reads its owner and time out of that name', () => {
@@ -449,87 +407,32 @@ describe('contents that could not be read', () => {
 });
 
 /**
- * **The column beside an open artifact** (#133) — this same panel in less space, with the two things
- * that change and the assertion that everything else does not.
+ * **The column, and it is one column in every state that draws it** (#160).
+ *
+ * It stood beside a preview, beside the tree with a folder of the run open in `CONTENTS`, and alone
+ * while nobody had answered for the address — three arrangements, with a back arrow in one of them
+ * and `CONTENTS` expanded down to the open address in two. The tree is beside the card at every
+ * depth now, so this column is what a **selected run** is and nothing else opens it: there is no
+ * address below it to mark, nothing to expand, and nowhere to come back from. The three props that
+ * carried all of that are gone with it, which is what makes *the same column* a fact about this
+ * component's shape rather than a state it has to be put into.
  */
-describe('the run column while a file is open', () => {
-	const SCREENSHOTS = [...SERIAL_PATH, 'screenshots'] as const;
-	const OPEN_FILE = [...SCREENSHOTS, '001_screenshot.png'] as const;
-	const SCREENSHOTS_LEVEL: ArchiveLevel = {
-		status: 'listed',
-		entries: [
-			{ kind: 'file', name: '001_screenshot.png', sizeBytes: 421_112 },
-			{ kind: 'file', name: '002_screenshot.png', sizeBytes: 398_004 },
-			{ kind: 'directory', name: '001_frames', childCount: 2, onlyChild: null },
-		],
-	};
-
-	/*
-	 * **The arrow, then a left-aligned `Run Details`** — the approved markup's own header, restored
-	 * (#143): the arrow was alone and centred, which put the one control on the card off the axis
-	 * everything under it sits on. Pressing it closes the preview, which is the same act as navigating
-	 * to the run, so the tree comes back exactly when the preview closes.
-	 */
-	it('is headed by the back arrow and a left-aligned `Run Details`', () => {
-		const { container } = beside(OPEN_FILE);
+describe('the run column', () => {
+	it('is headed by `Run Details`, and the strip carries no control', () => {
+		const { container } = showing();
 
 		const strip = container.querySelector('section > div:first-child');
 		expect(strip?.textContent).toBe('Run Details');
-		const back = screen.getByRole('link', {
-			name: 'Close the preview and go back to the directory',
-		});
-		expect(back.getAttribute('href')).toBe(`/archive/${RUN.join('/')}`);
-		expect(strip?.querySelectorAll('a')).toHaveLength(1);
-		// The arrow first and the heading after it, on one axis and not centred in the strip.
-		const row = strip?.firstElementChild;
-		expect(row?.children[0]?.tagName).toBe('A');
-		expect(row?.children[1]?.tagName).toBe('H2');
-		expect(row?.className).not.toContain('justify-center');
-	});
-
-	it('is headed by `Run Details` and no back control when the tree is beside it instead', () => {
-		const { container } = showing();
-
-		expect(screen.getByText('Run Details')).toBeDefined();
-		expect(
-			screen.queryByRole('link', { name: 'Close the preview and go back to the directory' }),
-		).toBeNull();
-		expect(container.querySelector('section > div:first-child')?.textContent).toBe('Run Details');
-	});
-
-	// A folder is open *beside* the tree, and the tree is the way back from it — so this column keeps
-	// the heading it has with nothing open and gains nothing (#143).
-	it('keeps that header, with no back control, while a folder of the run is open', () => {
-		const { container } = browsing(SCREENSHOTS, levels([SCREENSHOTS, SCREENSHOTS_LEVEL]));
-
-		expect(container.querySelector('section > div:first-child')?.textContent).toBe('Run Details');
+		expect(strip?.querySelectorAll('a')).toHaveLength(0);
+		expect(strip?.querySelectorAll('button')).toHaveLength(0);
 		expect(
 			screen.queryByRole('link', { name: 'Close the preview and go back to the directory' }),
 		).toBeNull();
 	});
 
-	/*
-	 * **The identity and device cards do not change at all.** The column is the run screen's own
-	 * second column in less space, and what earns the one difference is `CONTENTS` becoming the
-	 * chooser — nothing else may take the opportunity.
-	 */
-	it('draws the identity and device cards exactly as it does with nothing open', () => {
-		const { container: withNothingOpen, unmount } = showing();
-		const cards = (root: HTMLElement) =>
-			Array.from(root.querySelectorAll('section > div > section'))
-				.slice(0, 2)
-				.map((card) => card.outerHTML);
-		const before = cards(withNothingOpen);
-		unmount();
-
-		const { container: withAFileOpen } = beside(OPEN_FILE);
-
-		expect(cards(withAFileOpen)).toEqual(before);
-	});
-
-	// The way in, and the way to the next file: every row addresses its own path, with the `<serial>`
-	// in it because the serial is part of the address and not a level of the tree.
-	it('makes every `CONTENTS` row a link to its own address, with nothing open too', () => {
+	// The way in: every row addresses its own path, with the `<serial>` in it because the serial is
+	// part of the address and not a level of the tree.
+	it('makes every `CONTENTS` row a link to its own address', () => {
 		showing();
 
 		expect(screen.getByRole('link', { name: /screenshots/ }).getAttribute('href')).toBe(
@@ -540,108 +443,24 @@ describe('the run column while a file is open', () => {
 		);
 	});
 
-	it('expands the folder the open file is in, and leaves the others summarised', () => {
-		beside(OPEN_FILE, levels([SCREENSHOTS, SCREENSHOTS_LEVEL]));
-
-		// The folder being browsed, by its file names.
-		expect(screen.getByRole('link', { name: /001_screenshot.png/ })).toBeDefined();
-		expect(screen.getByRole('link', { name: /002_screenshot.png/ })).toBeDefined();
-		// And the others, still one row each with their counts.
-		expect(screen.getByText('logs/')).toBeDefined();
-		expect(screen.getByText('2 files')).toBeDefined();
-		expect(screen.queryByText('001.mp4')).toBeNull();
-	});
-
-	it('gives the open file the selected treatment, and says so to a screen reader', () => {
-		beside(OPEN_FILE, levels([SCREENSHOTS, SCREENSHOTS_LEVEL]));
-
-		const open = screen.getByRole('link', { name: /001_screenshot.png/ });
-		expect(open.getAttribute('aria-current')).toBe('page');
-		expect(open.className).toContain('bg-tertiary-container');
-		expect(open.className).toContain('border-tertiary');
-
-		const other = screen.getByRole('link', { name: /002_screenshot.png/ });
-		expect(other.getAttribute('aria-current')).toBeNull();
-		expect(other.className).not.toContain('bg-tertiary-container');
-		// Bordered transparent, so opening a row does not shift it by 2px.
-		expect(other.className).toContain('border-transparent');
-	});
-
-	// A top-level `device_info.json` is opened the same way as anything else, and reads as open.
-	it('applies the selected treatment to a top-level row too', () => {
-		beside([...SERIAL_PATH, 'device_info.json']);
-
-		const open = screen.getByRole('link', { name: /device_info.json/ });
-		expect(open.getAttribute('aria-current')).toBe('page');
-		expect(open.className).toContain('bg-tertiary-container');
-	});
-
-	// What makes `recordings/001_frames/0001.png` reachable at all, since the tree is not there.
-	it('expands a nested folder on the open path, recursively', () => {
-		const frames = [...SCREENSHOTS, '001_frames'] as const;
-		beside(
-			[...frames, '0001.png'],
-			levels(
-				[SCREENSHOTS, SCREENSHOTS_LEVEL],
-				[
-					frames,
-					{ status: 'listed', entries: [{ kind: 'file', name: '0001.png', sizeBytes: 900 }] },
-				],
-			),
-		);
-
-		expect(screen.getByText('001_frames/')).toBeDefined();
-		const open = screen.getByRole('link', { name: /0001.png/ });
-		expect(open.getAttribute('aria-current')).toBe('page');
-		expect(open.getAttribute('href')).toBe(`/archive/${[...frames, '0001.png'].join('/')}`);
-	});
-
 	/*
-	 * A nested row is a control for choosing another file, not a report of what is filed: the design's
-	 * own shape, and the measures stay on the top-level rows where the card's job is to say what the
-	 * run wrote.
+	 * **A flat listing of the `<serial>` level again** (#160). One row per entry the host listed,
+	 * each keeping the measure that is this card's job — a count for a directory, a size for a file
+	 * — and none of them marked, selected or drawing children. Reaching an address below the run is
+	 * the tree's now.
 	 */
-	it('carries no size or count on an expanded folder’s rows', () => {
-		beside(OPEN_FILE, levels([SCREENSHOTS, SCREENSHOTS_LEVEL]));
+	it('draws one summarised row per entry, marking none and expanding none', () => {
+		const { container } = showing();
+		const contents = screen.getByText('CONTENTS').closest('section') as HTMLElement;
 
-		const open = screen.getByRole('link', { name: /001_screenshot.png/ });
-		expect(open.textContent).toBe('001_screenshot.png');
-		expect(open.textContent).not.toContain('KB');
-	});
-
-	/*
-	 * **The addressed folder expands under its own row** (#143), which reverses #133: a folder had a
-	 * column of its own then, so drawing its listing here as well would have been the same listing in
-	 * two places. It has no column now, and the folder a reader actually pointed at was the one thing
-	 * this card would not open where it was clicked.
-	 */
-	it('expands the addressed folder itself, and gives its own row the selected treatment', () => {
-		browsing(SCREENSHOTS, levels([SCREENSHOTS, SCREENSHOTS_LEVEL]));
-
-		const row = screen.getByRole('link', { name: /screenshots\// });
-		expect(row.getAttribute('aria-current')).toBe('page');
-		expect(row.className).toContain('bg-tertiary-container');
-		expect(row.className).toContain('border-tertiary');
-		// Its count stays on it, because it is still a top-level row saying what the run wrote.
-		expect(row.textContent).toContain('3 files');
-		// And what it holds is listed under it, name only.
-		expect(screen.getByRole('link', { name: /001_screenshot.png/ }).textContent).toBe(
-			'001_screenshot.png',
-		);
-		expect(screen.getByText('001_frames/')).toBeDefined();
-	});
-
-	// The settled sentences, indented and not reworded: the same three states one level up.
-	it('reuses this screen’s own sentences for a folder whose level is not a listing', () => {
-		for (const [level, said] of [
-			[{ status: 'loading' } as ArchiveLevel, 'Reading this level of the archive.'],
-			[{ status: 'empty' } as ArchiveLevel, 'Nothing is filed under this directory'],
-			[{ status: 'unreadable' } as ArchiveLevel, 'ARCHIVE NOT READABLE'],
-		] as const) {
-			const { unmount } = beside(OPEN_FILE, levels([SCREENSHOTS, level]));
-
-			expect(screen.getByText(new RegExp(said))).toBeDefined();
-			unmount();
-		}
+		expect([...contents.querySelectorAll('a')].map((row) => row.textContent)).toEqual([
+			'device_info.json80 B',
+			'latest_recording',
+			'logs/2 files',
+			'recordings/1 file',
+			'screenshots/3 files',
+		]);
+		expect(container.querySelectorAll('[aria-current]')).toHaveLength(0);
+		expect(container.querySelectorAll('.bg-tertiary-container')).toHaveLength(0);
 	});
 });

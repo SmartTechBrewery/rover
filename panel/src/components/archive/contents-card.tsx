@@ -15,15 +15,16 @@ import type { ReactNode } from 'react';
 /**
  * The card's shell.
  *
- * **`header` is a slot rather than a title** (#133). Three callers put three different things in
- * that strip — a level's name, `Run Details` with the back arrow before it while a preview is open
- * (#143), and a file's name beside `Open in a new window` — and the strip's own padding, rule and
- * surface are the thing that must not differ between them. A `title: string` made the third of those
- * impossible and would have grown a second card component to hold it.
+ * **`header` is a slot rather than a title** (#133). Four callers put four different things in that
+ * strip — a level's name, a run's `Run Details`, a file's name beside `Open in a new window`, and
+ * the last component of an address nobody has classified yet (#160) — and the strip's own padding,
+ * rule and surface are the thing that must not differ between them. A `title: string` made the third
+ * of those impossible and would have grown a second card component to hold it.
  *
- * `min-w-0` beside `flex-1` is the other half of the equal-halves rule §9 settles: two `flex-1`
- * columns only stay equal while neither is allowed to be wider than its content. It is inert in the
- * single-card layout and load-bearing in the preview's.
+ * `min-w-0` beside `flex-1` is what stops the card being widened by what is in it. Now that the one
+ * arrangement is the `shrink-0` tree beside this one `flex-1` card (#160), a long path or an
+ * unbroken log line would otherwise hold the card at its content's width and push the row past the
+ * window instead of scrolling inside the card.
  */
 export function ContentsCard({
 	header,

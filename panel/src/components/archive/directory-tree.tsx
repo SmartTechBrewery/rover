@@ -118,9 +118,10 @@ export function DirectoryTree({
 	readonly selected: readonly string[];
 	readonly levels: ArchiveLevels;
 	/**
-	 * The search, held **above this card** (`routes/archive.tsx`) — this component remounts when
-	 * the screen changes arrangement, and state held here would be lost on the very navigation a
-	 * hit performs.
+	 * The search, held **above this card** (`routes/archive.tsx`, which gives the reason) — the
+	 * state outlives an address changing under it, and the field is absent wherever this card is
+	 * without anything having to say so twice, because it is part of the card. It stays above now
+	 * that #160 left one arrangement and this component no longer remounts under one.
 	 */
 	readonly search: ArchiveSearch;
 }) {

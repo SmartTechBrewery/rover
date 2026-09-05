@@ -1,6 +1,6 @@
-import { type ArchiveLevel, type ArchiveLevels, levelAt } from '@panel/archive/archive-levels.js';
+import type { ArchiveLevel } from '@panel/archive/archive-levels.js';
 import type { ArchiveEntry } from '@panel/archive/archive-listing.js';
-import { keyOf, splatFromComponents } from '@panel/archive/archive-path.js';
+import { splatFromComponents } from '@panel/archive/archive-path.js';
 import {
 	type ArchivedDeviceInfo,
 	type DeviceFacts,
@@ -10,9 +10,8 @@ import { formatBytes, formatChildCount, UNKNOWN } from '@panel/archive/file-size
 import { decomposeRunName } from '@panel/archive/run-identity.js';
 import type { ArchivedTestDescription } from '@panel/archive/test-description.js';
 import { Link } from '@tanstack/react-router';
-import { ArrowLeft, FileQuestionMark, FileText, Folder, FolderOpen } from 'lucide-react';
+import { FileQuestionMark, FileText, Folder } from 'lucide-react';
 import {
-	ArchiveNotReadable,
 	CardHeading,
 	ContentsCard,
 	Field,
@@ -58,19 +57,13 @@ export type RunSerial =
  * states, folded in {@link descriptionText} — and still nothing invented, because every word of it
  * was written by the lease that took the device.
  *
- * **This is also the column beside whatever else the address opens** (#133, #143) — a preview, or
- * the tree with a folder of this run open in `CONTENTS` — and it is this same column in less space:
- * the identity card and the device card do not change at all. Two things do, and both come from
- * `CONTENTS` having become how another address inside the run is chosen —
- *
- * - **the header keeps its left-aligned `Run Details`, and gains the back arrow before it while an
- *   *artifact* is open.** The arrow is there because a preview took the tree's place, so the column
- *   is the only way back; a folder opens *beside* the tree, which is its own way back, so a folder
- *   gets no control at all ({@link back}, `docs/DESIGN.md` §9).
- * - **`CONTENTS` expands down to and including the open address**, the open one carrying the
- *   selected treatment and every other folder staying summarised. That is the tree's own expansion
- *   rule (`directory-tree.tsx`) applied to the run's subtree, so there is no stored expansion state
- *   here either — a folder is expanded exactly when the open address is inside it, or is it.
+ * **This card is drawn at the run's own depth and nowhere else** (#160). It stood beside an open
+ * artifact and beside a folder of the run while the tree came and went; the tree is beside the card
+ * at every depth now, so the run's column is what a *selected run* is and nothing else opens it. Two
+ * things went with that arrangement — the back arrow, which existed because a preview took the
+ * tree's place, and `CONTENTS`' expansion of the open address, which existed because the tree could
+ * not reach a file. `CONTENTS` is a flat listing of the `<serial>` level again (`docs/DESIGN.md`
+ * §9), and #159's third phase is what takes it off this card altogether.
  */
 export function RunPanel({
 	run,
@@ -78,9 +71,6 @@ export function RunPanel({
 	contents,
 	device,
 	description,
-	open,
-	below,
-	back,
 }: {
 	readonly run: readonly string[];
 	/** The run directory's `onlyChild`, with the state of the answer it came from — {@link RunSerial}. */
@@ -90,26 +80,12 @@ export function RunPanel({
 	readonly device: ArchivedDeviceInfo;
 	/** This run's own `test_description.json` — {@link ArchivedTestDescription}. */
 	readonly description: ArchivedTestDescription;
-	/**
-	 * The address open inside this run — an artifact or a folder — and `null` when nothing below the
-	 * `<serial>` is addressed. It is what `CONTENTS` marks and expands, and nothing else.
-	 */
-	readonly open: readonly string[] | null;
-	/** Every level below the `<serial>` directory that has been read — the expansions `CONTENTS` draws. */
-	readonly below: ArchiveLevels;
-	/**
-	 * Whether the back arrow heads the strip — **true exactly when a preview is what took the tree's
-	 * place**, which is the one state this column is the only way out of (#143). It is a fact about
-	 * what is beside the column rather than about {@link open}, which is why it is its own input: a
-	 * folder is marked and expanded in `CONTENTS` the same way and still has the tree to go back to.
-	 */
-	readonly back: boolean;
 }) {
 	const name = run.at(-1) ?? '';
 	const identity = decomposeRunName(name);
 
 	return (
-		<ContentsCard header={<Header back={back} run={run} />}>
+		<ContentsCard header={<CardHeading>Run Details</CardHeading>}>
 			<div className="space-y-6 p-6">
 				<section className="rounded-lg border-2 border-outline-variant bg-surface p-5">
 					<h3 className="mb-4 break-words font-code-md font-bold text-code-md text-on-surface">
@@ -152,53 +128,10 @@ export function RunPanel({
 
 				<section className="rounded-lg border-2 border-outline-variant bg-surface p-5">
 					<h3 className="mb-4 font-label-caps text-[12px] text-on-surface uppercase">CONTENTS</h3>
-					<Contents below={below} contents={contents} open={open} run={run} serial={serial} />
+					<Contents contents={contents} run={run} serial={serial} />
 				</section>
 			</div>
 		</ContentsCard>
-	);
-}
-
-/**
- * The strip at the top of this column — **the arrow, then a left-aligned `Run Details`** (#143).
- *
- * That is the approved markup's own header, restored: the arrow was alone and *centred*, which put
- * the one control on the card off the axis every card under it sits on, while every other header on
- * this screen is left-aligned. The heading is the same one in both states, so the arrow appearing is
- * the whole of what changes when a preview opens — nothing in the strip is replaced by something
- * else.
- */
-function Header({ run, back }: { readonly run: readonly string[]; readonly back: boolean }) {
-	return (
-		<div className="flex items-center gap-3">
-			{back ? <BackToTheDirectory run={run} /> : null}
-			<CardHeading>Run Details</CardHeading>
-		</div>
-	);
-}
-
-/**
- * The way out of a preview, and **the only state that has one**: a folder is open beside the tree,
- * and the tree is the way back from it (#143).
- *
- * A `<Link>` and not a `<button>`, because the whole of this screen's state is its address
- * (`docs/DESIGN.md` §9): closing the preview *is* navigating to the run, so the control is the run's
- * own address and the tree comes back because the address is three components deep again. One
- * control, one outcome — and nothing else in this strip navigates, so there is no second way to
- * leave.
- *
- * The label is the design's own, because what the arrow does is not obvious from the glyph.
- */
-function BackToTheDirectory({ run }: { readonly run: readonly string[] }) {
-	return (
-		<Link
-			aria-label="Close the preview and go back to the directory"
-			className="flex h-9 w-9 shrink-0 items-center justify-center rounded-sm border-2 border-outline-variant bg-surface text-on-surface-variant transition-colors hover:border-tertiary hover:text-tertiary"
-			params={{ _splat: splatFromComponents(run) }}
-			to="/archive/$"
-		>
-			<ArrowLeft aria-hidden="true" size={18} strokeWidth={2} />
-		</Link>
 	);
 }
 
@@ -371,14 +304,10 @@ function Contents({
 	serial,
 	contents,
 	run,
-	open,
-	below,
 }: {
 	readonly serial: RunSerial;
 	readonly contents: ArchiveLevel;
 	readonly run: readonly string[];
-	readonly open: readonly string[] | null;
-	readonly below: ArchiveLevels;
 }) {
 	if (serial.status === 'loading') {
 		return <ReadingLevel />;
@@ -406,13 +335,7 @@ function Contents({
 			<ul className="mb-6 space-y-3 font-code-md text-[13px] text-on-surface-variant">
 				{contents.entries.map((entry) => (
 					<li className="min-w-0" key={entry.name}>
-						<Entry
-							below={below}
-							entry={entry}
-							open={open}
-							path={[...base, entry.name]}
-							summarised
-						/>
+						<Entry entry={entry} path={[...base, entry.name]} />
 					</li>
 				))}
 			</ul>
@@ -427,104 +350,47 @@ function Contents({
 	);
 }
 
-const ROW = 'flex items-start gap-2 rounded-sm border-2 px-2 py-1 transition-colors';
-const ROW_OPEN = 'border-tertiary bg-tertiary-container text-on-tertiary-container';
-// Bordered transparent rather than unbordered, so opening a row does not shift it by 2px — the
+const ROW =
+	'flex items-start justify-between gap-2 rounded-sm border-2 px-2 py-1 transition-colors';
+// Bordered transparent rather than unbordered, so hovering a row does not shift it by 2px — the
 // tree's own trick, and the sidebar's before it.
-const ROW_CLOSED = 'border-transparent hover:bg-surface-container-high';
+const ROW_RESTING = 'border-transparent hover:bg-surface-container-high';
 
 /**
- * One entry, as a link to its own address, and its children when the open address is inside it.
+ * One entry of the `<serial>` level, as a link to its own address — **a flat listing again** (#160).
  *
- * **Expansion is derived, never stored**: a folder is expanded exactly when the open address is
- * *inside* it — or **is** it. The addressed folder expands under its own row (#143): a folder has no
- * column of its own any more, so there is no second place its listing could be drawn in, and the one
- * folder a reader actually pointed at is the last one that should refuse to open where it was
- * clicked.
+ * It expanded down to and including whatever address was open, which is the tree's own rule applied
+ * to the run's subtree; that existed because a file was reachable from this card and nowhere else.
+ * The tree reaches every address now (#159) and this card is drawn only for a *selected* run, so
+ * there is no open address below it to mark and nothing to expand — and no stored expansion state
+ * went away with it, because there never was any.
  *
- * `summarised` is what a top-level row carries and a nested one does not: a count for a directory
- * and a size for a file. A nested row is a name, because at that depth the row is a control for
- * choosing another file rather than a report of what is filed — the design's own shape.
+ * Every row keeps its measure: a count for a directory and a size for a file, which is this card's
+ * job — saying what the run wrote.
  */
 function Entry({
 	entry,
 	path,
-	open,
-	below,
-	summarised,
 }: {
 	readonly entry: ArchiveEntry;
 	readonly path: readonly string[];
-	readonly open: readonly string[] | null;
-	readonly below: ArchiveLevels;
-	readonly summarised?: boolean;
 }) {
-	const expanded = entry.kind === 'directory' && holds(path, open);
-	const isOpen = open !== null && keyOf(open) === keyOf(path);
 	return (
-		<>
-			<Link
-				aria-current={isOpen ? 'page' : undefined}
-				className={`${ROW} ${isOpen ? ROW_OPEN : ROW_CLOSED} ${summarised === true ? 'justify-between' : ''}`}
-				params={{ _splat: splatFromComponents(path) }}
-				to="/archive/$"
-			>
-				<span className="flex min-w-0 items-start gap-2">
-					<Glyph entry={entry} expanded={expanded} />
-					{/* A directory keeps its trailing separator; the name itself is verbatim. */}
-					<span className="min-w-0 break-words">
-						{entry.name}
-						{entry.kind === 'directory' ? '/' : ''}
-					</span>
+		<Link
+			className={`${ROW} ${ROW_RESTING}`}
+			params={{ _splat: splatFromComponents(path) }}
+			to="/archive/$"
+		>
+			<span className="flex min-w-0 items-start gap-2">
+				<Glyph entry={entry} />
+				{/* A directory keeps its trailing separator; the name itself is verbatim. */}
+				<span className="min-w-0 break-words">
+					{entry.name}
+					{entry.kind === 'directory' ? '/' : ''}
 				</span>
-				{summarised === true ? <span className="shrink-0">{measure(entry)}</span> : null}
-			</Link>
-			{expanded ? <Expansion below={below} open={open} path={path} /> : null}
-		</>
-	);
-}
-
-/** Whether the open address **is** this directory or is inside it — a prefix, the address included. */
-function holds(path: readonly string[], open: readonly string[] | null): boolean {
-	return (
-		open !== null && open.length >= path.length && keyOf(open.slice(0, path.length)) === keyOf(path)
-	);
-}
-
-/**
- * A folder on the open path, expanded to its own entries — and it recurses, which is what makes
- * `recordings/001_frames/0001.png` reachable without the tree.
- *
- * A level that is not a listing reuses the screen's settled sentences, **indented and not
- * reworded**: the same three states this card draws one level up mean the same thing here.
- */
-function Expansion({
-	path,
-	open,
-	below,
-}: {
-	readonly path: readonly string[];
-	readonly open: readonly string[] | null;
-	readonly below: ArchiveLevels;
-}) {
-	const level = levelAt(below, path);
-	if (level.status !== 'listed') {
-		return (
-			<div className="mt-1 pl-6">
-				{level.status === 'loading' ? <ReadingLevel /> : null}
-				{level.status === 'empty' ? <NothingFiledHere /> : null}
-				{level.status === 'unreadable' ? <ArchiveNotReadable /> : null}
-			</div>
-		);
-	}
-	return (
-		<ul className="mt-1 space-y-1 pl-6">
-			{level.entries.map((entry) => (
-				<li className="min-w-0" key={entry.name}>
-					<Entry below={below} entry={entry} open={open} path={[...path, entry.name]} />
-				</li>
-			))}
-		</ul>
+			</span>
+			<span className="shrink-0">{measure(entry)}</span>
+		</Link>
 	);
 }
 
@@ -540,20 +406,15 @@ function Nothing() {
  * A folder, a file, or something the host could not classify (a symlink, a socket, a device
  * node). **No status glyph of any kind** — this says what an entry *is*, never how it went.
  *
- * An expanded folder is `FolderOpen` and a summarised one `Folder`, which is the tree's own idiom
- * for the same fact. The glyph is **not** per media type: a table mapping `.png` to a picture icon
+ * A folder is `Folder` and never `FolderOpen`: nothing on this listing opens in place any more
+ * (#160), so there is no expanded state for a glyph to say. The glyph is **not** per media type: a
+ * table mapping `.png` to a picture icon
  * would be a second extension vocabulary in the panel, and there is deliberately only one — the
  * host's (`panel/src/archive/artifact-body.ts`).
  */
-function Glyph({ entry, expanded }: { readonly entry: ArchiveEntry; readonly expanded: boolean }) {
+function Glyph({ entry }: { readonly entry: ArchiveEntry }) {
 	const Icon =
-		entry.kind === 'directory'
-			? expanded
-				? FolderOpen
-				: Folder
-			: entry.kind === 'file'
-				? FileText
-				: FileQuestionMark;
+		entry.kind === 'directory' ? Folder : entry.kind === 'file' ? FileText : FileQuestionMark;
 	return (
 		<Icon aria-hidden="true" className="mt-0.5 shrink-0 text-outline" size={16} strokeWidth={2} />
 	);

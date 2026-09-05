@@ -199,7 +199,7 @@ describe('the address handed to the browser', () => {
 	});
 
 	/*
-	 * Open a file, press the back arrow, open the same file again. The URL went with the first close,
+	 * Open a file, navigate off it, open the same file again. The URL went with the first close,
 	 * so the state cannot be reused: the address has to be read again rather than rendered from a
 	 * handle the browser has already forgotten.
 	 */
