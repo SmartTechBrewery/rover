@@ -23,6 +23,7 @@
 		"test:panel": "vitest run --project panel",
 		"test:device": "vitest run --project device",
 		"verify": "npm run lint && npm run typecheck && npm run typecheck:panel && npm run test",
+		"postinstall": "node scripts/check-adb.mjs",
 		"prepare": "lefthook install"
 	},
 	"keywords": [
