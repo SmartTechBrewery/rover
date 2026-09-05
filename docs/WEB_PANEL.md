@@ -77,8 +77,9 @@ Design work lives in [`DESIGN.md`](./DESIGN.md); the brief that produced the fir
    two different sentences, neither of them an alarm. **And opening an artifact is built too**
    (#133, its arrangement reversed in place by #160): a file draws the preview **alone** in the one
    card beside the tree, and the tree is there at every depth an open file included — so there is no
-   back arrow, nothing gives way to a second column, and **the tree** rather than `CONTENTS` is how
-   another file is chosen. An image is contained at its natural aspect ratio, a
+   back arrow, nothing gives way to a second column, and **the tree** is how another file is chosen.
+   The run's own `CONTENTS` listing, which used to be, is gone with it (#161): a selected run is its
+   identity card and its device card, and nothing on either navigates. An image is contained at its natural aspect ratio, a
    recording is a plain video that neither autoplays nor loops, and a text file is printed verbatim
    with a line-number gutter and **no colour on the log level** — `W` and `E` are the device's words
    about its own logs, not a verdict. **Nothing is laid over or around the artifact**: no scanline, no

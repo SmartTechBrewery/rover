@@ -1,24 +1,12 @@
-import type { ArchiveLevel } from '@panel/archive/archive-levels.js';
-import type { ArchiveEntry } from '@panel/archive/archive-listing.js';
-import { splatFromComponents } from '@panel/archive/archive-path.js';
 import {
 	type ArchivedDeviceInfo,
 	type DeviceFacts,
 	deviceFactsFrom,
 } from '@panel/archive/device-info.js';
-import { formatBytes, formatChildCount, UNKNOWN } from '@panel/archive/file-size.js';
+import { UNKNOWN } from '@panel/archive/file-size.js';
 import { decomposeRunName } from '@panel/archive/run-identity.js';
 import type { ArchivedTestDescription } from '@panel/archive/test-description.js';
-import { Link } from '@tanstack/react-router';
-import { FileQuestionMark, FileText, Folder } from 'lucide-react';
-import {
-	CardHeading,
-	ContentsCard,
-	Field,
-	NothingFiledHere,
-	NotReadableInCard,
-	ReadingLevel,
-} from './contents-card.js';
+import { CardHeading, ContentsCard, Field } from './contents-card.js';
 
 /**
  * The run's `<serial>` **together with the state of the answer it was read out of**.
@@ -35,47 +23,52 @@ export type RunSerial =
 	| { readonly status: 'answered'; readonly serial: string | null };
 
 /**
- * One run: what it is, and everything it wrote (`docs/DESIGN.md` §9).
+ * One run: what it is, and the device it was recorded on (`docs/DESIGN.md` §9).
  *
- * **A run is the deepest level of the tree, and its `<serial>` is not a level.** One lease is one
- * device, so a run directory holds exactly one child, and the host publishes that name as
- * `onlyChild` on the run's own entry in the level above — a fact about the run rather than a round
- * trip (`src/ipc/methods.ts`). `SERIAL` reads that, and `CONTENTS` is the listing of
- * `[…run, serial]`, which is the one extra level a selected run needs read.
+ * **Two cards, and neither of them is a listing** (#161). What the run wrote is the tree's to say:
+ * it reaches every address inside a run since #159 and stands beside this card at every depth since
+ * #160, so `CONTENTS` was a second explorer of the addresses the tree had just been given. **Nothing
+ * on this card navigates** while it is showing a level — it says what this run *is*, and moving is
+ * done in the one place that is for it.
+ *
+ * **A run is not the deepest level of the tree, and its `<serial>` is still not a level of it.** One
+ * lease is one device, so a run directory holds exactly one child, and the host publishes that name
+ * as `onlyChild` on the run's own entry in the level above — a fact about the run rather than a
+ * round trip (`src/ipc/methods.ts`). `SERIAL` reads it, and the tree hops it to draw the run's own
+ * entries under the run's node.
  *
  * **Nothing here is invented.** No duration, no trigger, no author, no environment panel, no
- * network figure and no file name that was not in the listing. Every field is either on the wire or
+ * network figure and no file name that was not in a listing. Every field is either on the wire or
  * decomposed from the directory's own name, and a fact the host does not have says `unknown`.
  *
- * **`DEVICE — FROM device_info.json` is the one card here that is not a listing** (#136). It reads
- * the *contents* of an archived file, which `list_archive` cannot answer and #131's byte route can;
- * everything on it comes out of that file, with `docs/DESIGN.md` §6's three fallbacks and nothing
- * else. Its own three states are folded in {@link Device}.
+ * **`DEVICE — FROM device_info.json` is a file's contents rather than a listing** (#136). It reads
+ * an archived file, which `list_archive` cannot answer and #131's byte route can; everything on it
+ * comes out of that file, with `docs/DESIGN.md` §6's three fallbacks and nothing else. Its own three
+ * states are folded in {@link Device}.
  *
  * **`DESCRIPTION` on the identity card is the second such read** (#148): the lease's own account of
  * what this run was checking, filed with the run so it outlives the lease. Same route, same three
  * states, folded in {@link descriptionText} — and still nothing invented, because every word of it
  * was written by the lease that took the device.
  *
+ * **Whether the run's `<serial>` level is empty or unreadable is said in the tree** (#161,
+ * `directory-tree.tsx`). `CONTENTS` was where that pair was drawn apart, and it may never render
+ * alike (D6); this card is not a listing any more, so the one quiet line under the run's node is
+ * where it is said instead.
+ *
  * **This card is drawn at the run's own depth and nowhere else** (#160). It stood beside an open
  * artifact and beside a folder of the run while the tree came and went; the tree is beside the card
- * at every depth now, so the run's column is what a *selected run* is and nothing else opens it. Two
- * things went with that arrangement — the back arrow, which existed because a preview took the
- * tree's place, and `CONTENTS`' expansion of the open address, which existed because the tree could
- * not reach a file. `CONTENTS` is a flat listing of the `<serial>` level again (`docs/DESIGN.md`
- * §9), and #159's third phase is what takes it off this card altogether.
+ * at every depth now, so the run's column is what a *selected run* is and nothing else opens it.
  */
 export function RunPanel({
 	run,
 	serial,
-	contents,
 	device,
 	description,
 }: {
 	readonly run: readonly string[];
 	/** The run directory's `onlyChild`, with the state of the answer it came from — {@link RunSerial}. */
 	readonly serial: RunSerial;
-	readonly contents: ArchiveLevel;
 	/** This run's own `device_info.json` — {@link ArchivedDeviceInfo}. */
 	readonly device: ArchivedDeviceInfo;
 	/** This run's own `test_description.json` — {@link ArchivedTestDescription}. */
@@ -124,11 +117,6 @@ export function RunPanel({
 						DEVICE — FROM device_info.json
 					</h3>
 					<Device device={device} serial={serial} />
-				</section>
-
-				<section className="rounded-lg border-2 border-outline-variant bg-surface p-5">
-					<h3 className="mb-4 font-label-caps text-[12px] text-on-surface uppercase">CONTENTS</h3>
-					<Contents contents={contents} run={run} serial={serial} />
 				</section>
 			</div>
 		</ContentsCard>
@@ -186,8 +174,8 @@ function descriptionText(description: ArchivedTestDescription, serial: RunSerial
 /**
  * The device the lease held, entirely out of the run's own `device_info.json`.
  *
- * **The state of the level *above* is ordered first**, exactly as {@link Contents} orders it and for
- * the same reason: this file lives inside the run's `<serial>` directory, whose name is that
+ * **The state of the level *above* is ordered first**, exactly as {@link descriptionText} orders it
+ * and for the same reason: this file lives inside the run's `<serial>` directory, whose name is that
  * level's `onlyChild`, so with no serial there is no address to read it at. While that level is in
  * flight the card is *reading*; when the host cannot read it the card cannot say whether a file is
  * filed, which is *not readable*; and a run that names no single child has no `<serial>` directory
@@ -281,149 +269,4 @@ function DeviceInfoNotReadable() {
 			there may well be one, and the host will not say what is in it.
 		</p>
 	);
-}
-
-/**
- * What the lease wrote, from one listing of the run's `<serial>` directory — **and how another file
- * is chosen** (#133).
- *
- * **The state of the level *above* is ordered before this level's own**, because the serial is read
- * off that level: while it is in flight there is nothing to list *yet*, and when it cannot be read
- * nobody can say whether there is. Only a level that answered and named no single child reaches
- * {@link Nothing} — a run directory holding something other than exactly one entry, which is a fact
- * to state rather than to go looking for with a second request, since one lease is one device.
- *
- * `SERIAL` above draws the same distinction, and neither ever invents a `0` or guesses a serial.
- *
- * **Every row is a `<Link>`** — `level-contents.tsx`'s already-recorded deviation from the approved
- * markup (`cursor-default` there), for its own reason: this is the only way into a file, so rows
- * that did nothing would make the larger half of a file explorer inert. Nothing else about a row
- * changes; it gains no control, no status and no count the listing did not carry.
- */
-function Contents({
-	serial,
-	contents,
-	run,
-}: {
-	readonly serial: RunSerial;
-	readonly contents: ArchiveLevel;
-	readonly run: readonly string[];
-}) {
-	if (serial.status === 'loading') {
-		return <ReadingLevel />;
-	}
-	if (serial.status === 'unreadable') {
-		return <NotReadableInCard />;
-	}
-	if (serial.serial === null) {
-		return <Nothing />;
-	}
-	if (contents.status === 'loading') {
-		return <ReadingLevel />;
-	}
-	if (contents.status === 'unreadable') {
-		return <NotReadableInCard />;
-	}
-	if (contents.status === 'empty') {
-		return <NothingFiledHere />;
-	}
-	// The addresses of this listing's entries. The `<serial>` is in the path and not in the tree,
-	// which is why every address below a run carries it (`docs/DESIGN.md` §9).
-	const base = [...run, serial.serial];
-	return (
-		<>
-			<ul className="mb-6 space-y-3 font-code-md text-[13px] text-on-surface-variant">
-				{contents.entries.map((entry) => (
-					<li className="min-w-0" key={entry.name}>
-						<Entry entry={entry} path={[...base, entry.name]} />
-					</li>
-				))}
-			</ul>
-			{/*
-			 * The design's own footnote, kept: it is the sentence that stops a reader taking a short
-			 * listing for a truncated one.
-			 */}
-			<p className="font-code-md text-[11px] text-outline italic">
-				A directory that is not listed does not exist — a verb that produced no bytes wrote nothing.
-			</p>
-		</>
-	);
-}
-
-const ROW =
-	'flex items-start justify-between gap-2 rounded-sm border-2 px-2 py-1 transition-colors';
-// Bordered transparent rather than unbordered, so hovering a row does not shift it by 2px — the
-// tree's own trick, and the sidebar's before it.
-const ROW_RESTING = 'border-transparent hover:bg-surface-container-high';
-
-/**
- * One entry of the `<serial>` level, as a link to its own address — **a flat listing again** (#160).
- *
- * It expanded down to and including whatever address was open, which is the tree's own rule applied
- * to the run's subtree; that existed because a file was reachable from this card and nowhere else.
- * The tree reaches every address now (#159) and this card is drawn only for a *selected* run, so
- * there is no open address below it to mark and nothing to expand — and no stored expansion state
- * went away with it, because there never was any.
- *
- * Every row keeps its measure: a count for a directory and a size for a file, which is this card's
- * job — saying what the run wrote.
- */
-function Entry({
-	entry,
-	path,
-}: {
-	readonly entry: ArchiveEntry;
-	readonly path: readonly string[];
-}) {
-	return (
-		<Link
-			className={`${ROW} ${ROW_RESTING}`}
-			params={{ _splat: splatFromComponents(path) }}
-			to="/archive/$"
-		>
-			<span className="flex min-w-0 items-start gap-2">
-				<Glyph entry={entry} />
-				{/* A directory keeps its trailing separator; the name itself is verbatim. */}
-				<span className="min-w-0 break-words">
-					{entry.name}
-					{entry.kind === 'directory' ? '/' : ''}
-				</span>
-			</span>
-			<span className="shrink-0">{measure(entry)}</span>
-		</Link>
-	);
-}
-
-function Nothing() {
-	return (
-		<p className="font-code-md text-code-md text-on-surface-variant">
-			There is nothing to list for this run.
-		</p>
-	);
-}
-
-/**
- * A folder, a file, or something the host could not classify (a symlink, a socket, a device
- * node). **No status glyph of any kind** — this says what an entry *is*, never how it went.
- *
- * A folder is `Folder` and never `FolderOpen`: nothing on this listing opens in place any more
- * (#160), so there is no expanded state for a glyph to say. The glyph is **not** per media type: a
- * table mapping `.png` to a picture icon
- * would be a second extension vocabulary in the panel, and there is deliberately only one — the
- * host's (`panel/src/archive/artifact-body.ts`).
- */
-function Glyph({ entry }: { readonly entry: ArchiveEntry }) {
-	const Icon =
-		entry.kind === 'directory' ? Folder : entry.kind === 'file' ? FileText : FileQuestionMark;
-	return (
-		<Icon aria-hidden="true" className="mt-0.5 shrink-0 text-outline" size={16} strokeWidth={2} />
-	);
-}
-
-/** A count for a directory, a size for a file, and nothing at all for an entry that is neither. */
-function measure(entry: ArchiveEntry): string {
-	if (entry.kind === 'directory') {
-		return formatChildCount(entry.childCount);
-	}
-	return entry.kind === 'file' ? formatBytes(entry.sizeBytes) : '';
 }

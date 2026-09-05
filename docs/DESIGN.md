@@ -37,7 +37,7 @@ this sentence exists to prevent.
 | Devices — Force Release Confirmation | `d86e794af4de4639979bc65104e2ec57` | Settled, **the asking only** |
 | Archive — Project Selection Refined | `b91c300db2d445b8a195a0bafd1aac76` | **Settled** — see §9 |
 | Archive — Test Runs Refined (login-flow) | `8dcd4330b9b94105a7ba289620dc84aa` | **Settled** — see §9 |
-| Archive — A run selected (Refined) | `d24d2c84e84041b28dfed67e92551d28` | **Settled** — see §9, all three cards built |
+| Archive — A run selected (Refined) | `d24d2c84e84041b28dfed67e92551d28` | **Settled** — see §9, built as **two** cards: its third, `CONTENTS`, is deliberately not built (#161) |
 | Archive — Artifact Preview (Shell Corrected) | `a843d32b7a414ac3a84fd7e80aa8a8bf` | **Settled** — see §9, built with three recorded deviations, the **arrangement itself** among them: #160 stands the preview beside the tree rather than beside the run's column |
 | Archive — Browsing (V2) | `f2de4344f7e347aa894b3054d9cf4098` | **Superseded** by the three rows above; must not be built from |
 | Run Detail — Artifacts (V2) | `36b54fbe032449d8a300ea0825bbf1c8` | **Retired by #133** — must not be built from; see §9 |
@@ -851,7 +851,7 @@ it is a new method beside `list_archive`, never a parameter on it.
 | --- | --- | --- |
 | Archive — Project Selection Refined | `b91c300db2d445b8a195a0bafd1aac76` | The shell, the header, the two-card content area, the tree |
 | Archive — Test Runs Refined (login-flow) | `8dcd4330b9b94105a7ba289620dc84aa` | The run list, `OWNER` / `GRANTED`, and the tree card's search field (#146) |
-| Archive — A run selected (Refined) | `d24d2c84e84041b28dfed67e92551d28` | The run column: the identity card, the device card, `CONTENTS` |
+| Archive — A run selected (Refined) | `d24d2c84e84041b28dfed67e92551d28` | The run column: the identity card and the device card — its third card, `CONTENTS`, is deliberately not built (#161) |
 | Archive — Artifact Preview (Shell Corrected) | `a843d32b7a414ac3a84fd7e80aa8a8bf` | The preview's own frame, region and control (#133) — it stands beside the **tree**, not beside the run's column (#160) |
 
 There is deliberately **no design for the root level** (a list of projects). It is the same component
@@ -1002,6 +1002,17 @@ second card was there to name the rest.
 directory that does not exist is not listed, and one the host cannot see into is said in the contents
 card, where there is room to say it properly.
 
+**Except the run's own `<serial>` level, which says which of the two it is, here** (amended in place,
+#161). Every other node has a card beside it that **is** that level's listing, so *empty* and
+*unreadable* are already drawn apart there; a run's card is its identity and its device and lists
+nothing at all since `CONTENTS` went, which left the pair with nowhere to be told apart — and they
+may never render alike (D6). So that one level draws ***This run wrote nothing.*** or
+***This run's contents are not readable.***, in the quiet line the tree already uses for *Reading
+this level.* and in **nothing that is a row**: no glyph, no triangle, no link, no count. The two
+share no phrase with each other, nor with *Nothing is filed under this directory* or
+`ARCHIVE NOT READABLE`, which the card beside the tree still says about whichever level it is
+showing — including this one, when it is what the address names.
+
 ### The three levels, and the fourth thing a run is
 
 Above a run the depth decides what a row is; below one the entry's own `kind` does. **No name is
@@ -1017,7 +1028,8 @@ ever parsed to decide either** (D22).
 
 - **`RUNS` reads `childCount`, and `null` is `unknown` — never `0`.** A `0` would say *no runs* about
   a directory the host could not read into, which is the exact distinction `childCount: null` exists
-  on the wire to carry.
+  on the wire to carry. It is **the only measure left on this screen** since `CONTENTS` went (#161),
+  and it is the rule a size the host could not `stat` followed on the way out.
 - **Runs are listed most recent first — in the tree and in the contents card alike**, which is the
   host's own fixed order reversed. Reversing is not parsing: a lease directory leads with a UTC
   basic-format timestamp precisely so that it sorts chronologically as text
@@ -1058,25 +1070,35 @@ ever parsed to decide either** (D22).
   listings, not five — the run's own level is never listed. **That a run directory holds exactly one
   entry is load-bearing**, which is why the archive files a lease's description *inside* the
   `<serial>` directory rather than beside it: a second entry at the run level would make `onlyChild`
-  `null` and blank this field, the device card and `CONTENTS` for every run that had one
-  (`PROJECT.md` §10).
-- **A `null` `onlyChild` is stated, not worked around.** `SERIAL` reads `unknown` and `CONTENTS` says
-  there is nothing to list. There is no second request to go looking: a run directory that is not
-  one-device shaped is a fact, and an invented `0` would be a claim.
+  `null` and blank this field and the device card for every run that had one, and leave the tree
+  with no level to open under the run (`PROJECT.md` §10).
+- **A `null` `onlyChild` is stated, not worked around.** `SERIAL` reads `unknown`, and the tree draws
+  the run no triangle and nothing under its node. There is no second request to go looking: a run
+  directory that is not one-device shaped is a fact, and an invented `0` would be a claim.
 - **And *no serial yet* is a third thing again, never that one.** The serial is read off the level
   *above* the run, and that level has its own three answers: while it is in flight `SERIAL` reads
-  `reading` and `CONTENTS` says it is reading, and when the host cannot read it `SERIAL` reads
-  `not readable` and `CONTENTS` carries the banner. Only a level that answered and named no single
-  child gets *there is nothing to list for this run* — a definite negative about what a lease wrote
-  is exactly what must not be rendered out of an answer nobody has given (D6, and the state table
-  below). This matters because the levels are four independent round trips: the root usually answers
-  first, so a link straight to a run renders the run panel before the level above it has come back.
-- **`CONTENTS`** lists the `<serial>` directory: a directory as `<name>/` with its count (`1 file`
-  singular), a file with `formatBytes(sizeBytes)`, and a `kind: 'other'` entry by name with no
-  measure. The design's footnote is kept — *A directory that is not listed does not exist — a verb
-  that produced no bytes wrote nothing* — because it is the sentence that stops a short listing
-  reading as a truncated one.
-- **A size the host could not `stat` is `unknown`**, for `childCount: null`'s reason.
+  `reading`, and when the host cannot read it `SERIAL` reads `not readable` — with `DESCRIPTION` and
+  the device card ordering that same state before their own, because both files live at an address
+  the serial is half of. Only a level that answered and named no single child gets `unknown`, which
+  is a definite claim about a run and exactly what must not be rendered out of an answer nobody has
+  given (D6, and the state table below). This matters because the levels are four independent round
+  trips: the root usually answers first, so a link straight to a run renders the run panel before the
+  level above it has come back.
+- **`CONTENTS` is removed, and its reason is reversed with it** (#161, rewritten in place). It was
+  ***how another address inside the run is chosen***, which was the answer to the tree stopping at a
+  run — the run's own entries were reachable from this card and from nowhere else. The tree does not
+  stop at a run any more (#159) and stands beside this card at every depth (#160), so `CONTENTS` was
+  a second explorer of the addresses the tree had just been given, and **a selected run's preview is
+  the identity card and the device card and nothing else**. Three things go with it:
+  - **the design's footnote goes with the card that carried it** — *A directory that is not listed
+    does not exist — a verb that produced no bytes wrote nothing*. It is recorded here rather than
+    left to be noticed: a tree of rows has nowhere to put a sentence, and a tree row may carry
+    nothing but a name;
+  - **whether a run's `<serial>` level is empty or unreadable moves into the tree**, because the pair
+    may never render alike (D6) and this card was where it was said (above, under the tree);
+  - **no measure is drawn anywhere on this screen any more.** The tree has never drawn a count or a
+    size, and the levels' own listings draw `RUNS` and nothing else, so a directory's `1 file` and a
+    file's `formatBytes(sizeBytes)` left with the card that showed them.
 
 ### The three states with nothing to browse
 
@@ -1158,16 +1180,26 @@ phases that would otherwise each renumber it.
   field, because the string it draws did not exist when they were drawn. Its reason, its states and
   why it is always drawn are above, under *The run's description*; §6 records the same field on the
   live device card and the force-release dialog.
-- **A contents row is a `<Link>`.** The approved screens have `cursor-default` on these rows, which
-  would leave the tree as the only way to move and make the larger half of a file explorer inert.
-  Nothing else about a row changes: it gains no control, no count the tree refuses to show, and no
-  status of any kind.
+- ***A contents row is a `<Link>`* is reversed** (#161, rewritten in place rather than deleted). The
+  approved screens have `cursor-default` on these rows, and the deviation's objection was that it
+  *would leave the tree as the only way to move and make the larger half of a file explorer inert*.
+  The tree **is** the only way to move now, deliberately: it reaches every address in the archive
+  (#159) and stands beside the card at every depth (#160), so what was the objection is the
+  arrangement, and the approved markup was right. The rows keep every field they carried as links —
+  the name, `RUNS`, `OWNER` / `GRANTED`, a `kind: 'other'` entry named with no measure — with **no
+  link affordance and no hover treatment that promises one**, which is the `transition-colors
+  hover:bg-surface-container-highest` pair gone and no `cursor-*` in its place.
+- **The run column's third card is deliberately not built.** `d24d2c84…` draws `CONTENTS` under the
+  identity and device cards; the built screen has two cards, for the reason recorded under the three
+  levels above, and §1's row for that screen says so. **The preview card therefore carries no
+  clickable element at all while it is showing a level**, and `Open in a new window` on an artifact
+  is the only interactive control it may carry.
 - **A `kind: 'other'` entry gets `FileQuestionMark`.** The designs have no glyph for one, because
   they never showed one. It says *the host could not classify this*, which is what the wire says; it
   is not an alarm and there is no colour on it.
 - **The tree draws file rows** (#159). No approved screen shows one — the tree stops at a run in all
-  four of them, because the card beside it was where what a run wrote was named. The tree is becoming
-  the only way to reach a file, so it has to be able to draw one. A file row is the row every other
+  four of them, because the card beside it was where what a run wrote was named. The tree is the only
+  way to reach a file (#161), so it has to be able to draw one. A file row is the row every other
   row is: the name, one glyph saying what the entry is, no triangle, and no count, status glyph or
   outcome colour.
 
@@ -1193,9 +1225,9 @@ phases that would otherwise each renumber it.
 
 ### The device card — settled (#136)
 
-**`DEVICE — FROM device_info.json`** (`d24d2c84…`'s second card) is card 2 of three, between the
-run's identity card and `CONTENTS`, and it is **the one thing on this screen that is a file's
-contents rather than a listing**. `list_archive` answers directory levels; the bytes come from
+**`DEVICE — FROM device_info.json`** (`d24d2c84…`'s second card) is the second of the run column's
+**two** cards, under the run's identity card, and it is **the one thing on this screen that is a
+file's contents rather than a listing**. `list_archive` answers directory levels; the bytes come from
 #131's byte route (`GET /artifact/<component>/…`, `PROJECT.md` R37), through
 `Session.readArtifactText`, which exists for `Session.call`'s reason — so a screen that needs a
 file's contents gets a method rather than the session id.
@@ -1233,7 +1265,7 @@ what the device *was*, not what it is.
   (§7). A `404` is the first; a `400`, a `500`, a body that is not JSON, one the mirror cannot parse
   and a request nothing answered all fold into the second, which is the fold `archive-levels.tsx`
   already makes. A **`refused`** sets nothing, because the router is already coming down.
-- **The level above is ordered before the file's own answer**, exactly as `CONTENTS` orders it and
+- **The level above is ordered before the file's own answer**, exactly as `DESCRIPTION` orders it and
   for the same reason: the file lives inside the run's `<serial>` directory, whose name is that
   level's `onlyChild`. With no serial there is no address, so nothing is fetched — a level in
   flight is *reading*, one the host cannot read is *not readable*, and a run naming no single child
@@ -1323,12 +1355,13 @@ arrangements, and two things on it existed only inside them:
   is beside the preview now and is the way back from everything, so a second control would be one
   with nothing of its own to do (§3). The strip is the markup's left-aligned `Run Details` heading
   and nothing else — one fewer thing in it than #143 left, and nothing in it that comes and goes.
-- **`CONTENTS` is a flat listing of the `<serial>` level again.** It expanded down to and including
-  the open address — the tree's own derived-expansion rule applied to the run's subtree — because a
-  file below the run was reachable from this card and from nowhere else. The tree reaches every
-  address now (#159) and this card is only ever drawn for the run itself, so there is no open
-  address below it to mark and nothing to expand. Every row keeps its measure, which is this card's
-  remaining job: saying what the run wrote. **#159's third phase takes the listing off it entirely.**
+- **`CONTENTS` is gone** (#161, and this is the last of #159's three phases). It expanded down to and
+  including the open address — the tree's own derived-expansion rule applied to the run's subtree —
+  because a file below the run was reachable from this card and from nowhere else; #160 flattened it
+  back to one listing of the `<serial>` level, and there is nothing left for even that to be for. The
+  tree draws those entries under the run's node, so the card said the same names twice and only one
+  of the two could be followed. What the run wrote is the tree's, and this column is the run's
+  identity and its device.
 
 **The path bar grows one segment for the open address, and the `<serial>` is in no segment of it.**
 That address is where you are, file or folder alike: last, `text-tertiary`, not a link, shown in
@@ -1373,7 +1406,7 @@ browser will not display is only ever an offer to download.
 table in the panel.** `src/daemon/archive-file.ts` owns that vocabulary; `panel/src/archive/artifact-body.ts`
 maps its answer onto a body, and `tests/unit/panel/artifact-bodies.test.ts` holds the two ends
 together across the trees — a host that learns `.webm` cannot leave the panel quietly unable to draw
-it. The glyph in `CONTENTS` is deliberately **not** per media type for the same reason.
+it. The tree's glyph is deliberately **not** per media type for the same reason.
 
 **One control in the preview header: `Open in a new window`**, recessive, and **it is a view rather
 than a transfer.** No download button, no `download` attribute, and it is absent for `opaque`. No
@@ -1482,8 +1515,8 @@ as `image` and `text`, and both are scriptable as a document, so that gate is wh
 **The three deviations from the approved markup**, recorded rather than made silently:
 
 - the preview is `flex-1 min-w-0` and not `lg:w-[580px] shrink-0` (above);
-- `CONTENTS` keeps this screen's existing `FileText` glyph instead of the markup's per-media `image`
-  one;
+- one `FileText` glyph for every file instead of the markup's per-media `image` one — `CONTENTS`
+  kept it while it existed, and the tree keeps it now (#161);
 - and **the arrangement itself is departed from** (#160). `a843d32b7a414ac3a84fd7e80aa8a8bf` draws
   the preview beside the **run's column**; it stands beside the **tree**. That markup is where *the
   tree is not shown while a file is open* came from, and the screen is one explorer with one
