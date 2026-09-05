@@ -61,6 +61,36 @@ export function levelAt(levels: ArchiveLevels, path: readonly string[]): Archive
 }
 
 /**
+ * Where a run's contents are listed — `[…run, onlyChild]`, and `null` when the level above has not
+ * answered or the run names no single child.
+ *
+ * **The `<serial>` is a fact about the run rather than a level of the tree** (`docs/DESIGN.md` §9):
+ * one lease is one device, so a run directory holds exactly one child and the host publishes its
+ * name as `onlyChild` on the run's own entry. This is the one place that knows it — the tree hops
+ * it at the run's depth and the screen composes the same address for the run's own card, so the two
+ * cannot disagree about where a run's contents are and neither of them re-derives it.
+ *
+ * **It must only ever be called on a run's path.** Every level above a run may hold exactly one
+ * child too — a project with one test name, a test name with one run — and each of those carries an
+ * `onlyChild` this would happily compose an address out of. That address is a level nothing draws
+ * and a file nobody asked for, so every call site guards on the depth first.
+ */
+export function runContentsLevel(
+	levels: ArchiveLevels,
+	run: readonly string[],
+): readonly string[] | null {
+	const parent = levelAt(levels, run.slice(0, -1));
+	if (parent.status !== 'listed') {
+		return null;
+	}
+	const entry = parent.entries.find((candidate) => candidate.name === run.at(-1));
+	if (entry === undefined || entry.kind !== 'directory' || entry.onlyChild === null) {
+		return null;
+	}
+	return [...run, entry.onlyChild];
+}
+
+/**
  * Which levels the caller wants read, given every level read so far.
  *
  * A function rather than an array because a path may be *derived from* an answer, and a caller

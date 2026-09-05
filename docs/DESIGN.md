@@ -928,9 +928,11 @@ browser.
   (`panel/src/archive/search-tree.ts`): a node exists exactly when a match's path runs through it, so
   there is nothing to filter out. A node with children is a directory by construction; a leaf takes
   its match's own `kind`, which is the host's answer and never an inference from a name (D22).
-- **There is no `DEEPEST_EXPANDABLE_DEPTH` in the searched tree.** It draws exactly the addresses the
-  host answered, which is how a hit *below* a run becomes visible at all — a run is a leaf in the
-  URL's tree, and its `<serial>` is not a level there.
+- **There is no depth bound in either tree** (amended in place, #159). This was the contrast that
+  made a hit below a run visible at all while the browsing tree stopped at one; the browsing tree
+  reaches those addresses too now, and what stays true of this one is the reason rather than the
+  contrast — it draws exactly the addresses the host answered, so there is no depth at which to
+  stop. The `<serial>` *is* a row here, because the host answered with it.
 - **A hit row is the same row.** The same `<Link>`, the same classes, and every extra a browsing row
   is forbidden: no count, no status glyph, no colour that means an outcome, the name verbatim and
   `break-words`. Only the two glyphs differ, and they say what the entry *is* — `FolderOpen`/`Folder`,
@@ -972,10 +974,17 @@ browser.
 
 **What a tree row may carry, and nothing else:**
 
-- **A folder icon on every row, and a triangle only on an expandable one.** A run is a **leaf**: its
-  `<serial>` is a fact about the run rather than a level (below), so there is nothing under it to
-  open. `FolderOpen`/`Folder` and `ChevronDown`/`ChevronRight`, both `aria-hidden` — the triangle is
-  decoration meaning *this opens*, not a second control inside a link.
+- **A glyph on every row saying what the entry is, and a triangle on every row there is a level
+  under.** **A run is no longer a leaf** (#159, reversed in place). It was one because the card
+  beside the tree was a second explorer that named what the run wrote; that card is going, so the
+  tree has to reach the file itself, and a run expands into the entries of its `<serial>` — which is
+  still not a level of the tree and still in every address below the run. The glyph is
+  `FolderOpen`/`Folder`, `FileText`, or `FileQuestionMark` for the host's own *unclassified*, taken
+  from the entry's `kind` and never from its name (D22); the triangle is `ChevronDown`/`ChevronRight`.
+  Both are `aria-hidden` — the triangle is decoration meaning *this opens*, not a second control
+  inside a link. **A run whose parent named no single child gets neither an open folder nor a
+  triangle**: there is no level to open, and drawing one over nothing is the same class of claim as
+  an invented `0`.
 - **No count.** `childCount` is on the wire and is deliberately not drawn here. The header badge
   carries the one number for whatever is selected, which is what keeps the tree a tree rather than a
   report. `directory-tree.test.tsx` asserts the tree's exact text, so a number cannot creep back in.
@@ -984,10 +993,11 @@ browser.
   what the superseded `Archive — Browsing (V2)` got wrong.
 - **The name, verbatim and `break-words`.** Nothing is truncated, ellipsised or lower-cased.
 
-**Every row is a `<Link>`**, and only a `directory` entry becomes one: the tree is the navigable
-structure, and the complete listing — including a file or a `kind: 'other'` entry the archive is not
-supposed to have at that level — is the contents card's job, which does name it rather than dropping
-it.
+**Every row is a `<Link>`**, and **below a run every entry becomes one** (#159, amended in place).
+Above a run only a `directory` does: a stray file at a project or a test-name level is not something
+the tree can take you into, so naming it stays the contents card's job. Inside a run a file is
+precisely what a reader selects — in order to preview it — and the old rule was true only while a
+second card was there to name the rest.
 
 **A level with nothing in it draws nothing under its node** — no `0`, no placeholder row, no icon. A
 directory that does not exist is not listed, and one the host cannot see into is said in the contents
@@ -995,14 +1005,16 @@ card, where there is room to say it properly.
 
 ### The three levels, and the fourth thing a run is
 
-The depth decides what a row is; **no name is ever parsed to decide what a level *is*** (D22).
+Above a run the depth decides what a row is; below one the entry's own `kind` does. **No name is
+ever parsed to decide either** (D22).
 
 | depth | the level | a row is | it carries | expandable |
 | --- | --- | --- | --- | --- |
 | 0 | the root | a project | its name | yes |
 | 1 | a project | a test name | its name, and `RUNS` from `childCount` | yes |
-| 2 | a test name | a run | its name, `OWNER`, `GRANTED` | **no — a leaf** |
-| 3 | a run | not a tree level | — | — |
+| 2 | a test name | a run | its name, `OWNER`, `GRANTED` | **yes — its children are its `<serial>`'s entries** |
+| 3 | a run | not a tree level — hopped, never descended into | — | — |
+| 4 and below | inside the run | **any entry**, whatever its `kind` | its name | a directory is, a file is not |
 
 - **`RUNS` reads `childCount`, and `null` is `unknown` — never `0`.** A `0` would say *no runs* about
   a directory the host could not read into, which is the exact distinction `childCount: null` exists
@@ -1039,7 +1051,11 @@ The depth decides what a row is; **no name is ever parsed to decide what a level
   is the common case rather than a gap. Nothing is invented for it and no row disappears.
 - **`SERIAL` is the parent listing's `onlyChild`, and the serial is not a tree level.** One lease is
   one device, so a run directory holds exactly one child; the host publishes that name as a fact
-  about the run rather than as a level worth a round trip. A selected run therefore costs **four**
+  about the run rather than as a level worth a round trip. **The tree makes the same hop through the
+  same helper** (`runContentsLevel`, `panel/src/archive/archive-levels.ts`), so exactly one place
+  knows a run holds one child and the two halves of the screen cannot disagree about where a run's
+  contents are — and it is guarded on the run's own depth at every call site, because a project with
+  one test name carries an `onlyChild` too. A selected run therefore costs **four**
   listings, not five — the run's own level is never listed. **That a run directory holds exactly one
   entry is load-bearing**, which is why the archive files a lease's description *inside* the
   `<serial>` directory rather than beside it: a second entry at the run level would make `onlyChild`
@@ -1108,15 +1124,17 @@ show a run appearing. A level is fetched on navigation and cached for the life o
 the one place the panel's data differs from the Devices screen's, which polls because *what is
 attached* changes under the reader.
 
-**A path deeper than a run is reachable only by typing it *while browsing*** (amended in place,
-#146), since a run is a leaf in the URL's tree and its `<serial>` is not a level there. It renders
-that level's listing rather than nothing at all — names, addressable, no invented measures.
-**Following a search hit is the second way**: the searched tree draws exactly the addresses the host
-answered and has no depth bound of its own, so a hit below a run is a row you can click (§9's
-*And the card searches the whole archive*). What stays true either way is why a run is a leaf here —
-browsing derives its levels from the address, and the address stops at the run.
+**A path deeper than a run is no longer reachable only by typing it or by following a search hit**
+(amended in place, #146 and #159): **the tree draws it**, to any depth the archive holds, so a file
+is selectable by clicking alone. Typing one still works and still renders that level's listing rather
+than nothing at all — names, addressable, no invented measures — and a search hit still lands where
+it lands. What stays true through all three is the rule underneath them: browsing derives its levels
+from the address, so the tree can only ever draw what the address has already paid to read.
 
-### Five deviations from the approved markup, made deliberately
+### Deviations from the approved markup, made deliberately
+
+The count is deliberately out of this heading: the list is what matters, and #159 lands in three
+phases that would otherwise each renumber it.
 
 - **The search field's placeholder says what the field does.** The design's *Filter this tree...*
   describes a client-side filter over rows already drawn, and this is not that: typing asks the host
@@ -1148,6 +1166,11 @@ browsing derives its levels from the address, and the address stops at the run.
 - **A `kind: 'other'` entry gets `FileQuestionMark`.** The designs have no glyph for one, because
   they never showed one. It says *the host could not classify this*, which is what the wire says; it
   is not an alarm and there is no colour on it.
+- **The tree draws file rows** (#159). No approved screen shows one — the tree stops at a run in all
+  four of them, because the card beside it was where what a run wrote was named. The tree is becoming
+  the only way to reach a file, so it has to be able to draw one. A file row is the row every other
+  row is: the name, one glyph saying what the entry is, no triangle, and no count, status glyph or
+  outcome colour.
 
 ### Deliberately absent, and why
 

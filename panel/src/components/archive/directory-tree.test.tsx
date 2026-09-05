@@ -27,8 +27,21 @@ vi.mock('@tanstack/react-router', () => ({
 
 import { DirectoryTree } from './directory-tree.js';
 
-function directory(name: string, childCount: number | null = 3): ArchiveEntry {
-	return { kind: 'directory', name, childCount, onlyChild: null };
+function directory(
+	name: string,
+	childCount: number | null = 3,
+	onlyChild: string | null = null,
+): ArchiveEntry {
+	return { kind: 'directory', name, childCount, onlyChild };
+}
+
+function file(name: string, sizeBytes: number | null = 80): ArchiveEntry {
+	return { kind: 'file', name, sizeBytes };
+}
+
+/** Neither a directory nor a regular file — what the host could not classify. */
+function other(name: string): ArchiveEntry {
+	return { kind: 'other', name };
 }
 
 function listed(...entries: readonly ArchiveEntry[]): ArchiveLevel {
@@ -38,9 +51,17 @@ function listed(...entries: readonly ArchiveEntry[]): ArchiveLevel {
 const RUN = '20260830T170501Z-issue-112-9f1c2ab4';
 /** The run filed the day before — the one the host's own ascending order puts first. */
 const OLDER = '20260829T142201Z-issue-112-4b0e7c15';
+/** The one child a run directory holds, which is a fact about the run and not a level (§9). */
+const SERIAL = 'R5CT30ABCDE';
+const RUN_PATH = ['checkout-app', 'login-flow', RUN];
+/** Where the run's own contents are listed — hopped to at the run's depth, never descended into. */
+const SERIAL_LEVEL = [...RUN_PATH, SERIAL];
+const FRAMES = [...SERIAL_LEVEL, 'recordings', '001_frames'];
 
 /**
- * The archive the tests below browse: two projects, two test names, two runs.
+ * The archive the tests below browse: two projects, two test names, two runs — and, under the run,
+ * the levels a selected run already reads (#159), so the deep tree is drawn out of exactly what the
+ * screen fetches today rather than out of a listing invented for the test.
  *
  * **The run level is seeded in the host's own order**, which is ascending code-unit over names that
  * lead with a UTC basic-format timestamp, so oldest first (`src/daemon/list-archive.ts`). Seeding it
@@ -50,7 +71,21 @@ function archive(overrides: Record<string, ArchiveLevel> = {}): ArchiveLevels {
 	const levels = new Map<string, ArchiveLevel>([
 		[keyOf([]), listed(directory('checkout-app'), directory('payments-web'))],
 		[keyOf(['checkout-app']), listed(directory('login-flow', 42), directory('unlabeled', 1))],
-		[keyOf(['checkout-app', 'login-flow']), listed(directory(OLDER, 1), directory(RUN, 1))],
+		[
+			keyOf(['checkout-app', 'login-flow']),
+			listed(directory(OLDER, 1, 'emulator-5554'), directory(RUN, 1, SERIAL)),
+		],
+		[
+			keyOf(SERIAL_LEVEL),
+			listed(
+				file('device_info.json'),
+				other('latest_recording'),
+				directory('recordings', 1),
+				directory('screenshots', 3),
+			),
+		],
+		[keyOf([...SERIAL_LEVEL, 'recordings']), listed(directory('001_frames', 1))],
+		[keyOf(FRAMES), listed(file('0001.png', 1024))],
 	]);
 	for (const [path, level] of Object.entries(overrides)) {
 		levels.set(path, level);
@@ -164,23 +199,119 @@ describe('what a row may carry', () => {
 	 * green ticks and red crosses beside runs in the tree are exactly what the superseded design got
 	 * wrong. The two icons a row may carry are a folder and, if it opens, a triangle.
 	 */
-	it('carries a folder on every row and a triangle only on an expandable one', () => {
-		const { container } = showing(['checkout-app', 'login-flow']);
+	it('carries a glyph on every row and a triangle only where there is a level under it', () => {
+		const { container } = showing(RUN_PATH);
 
 		for (const row of rows(container)) {
 			const icons = row.querySelectorAll('svg');
-			const isRun = row.textContent?.startsWith('2026') === true;
-			expect(icons).toHaveLength(isRun ? 1 : 2);
+			// Every row here is a directory with a level under it — including the run, whose level is
+			// its `<serial>`'s — except the two entries inside the run that open nothing.
+			const opens = !['device_info.json', 'latest_recording'].includes(row.textContent ?? '');
+			expect(icons).toHaveLength(opens ? 2 : 1);
 		}
 	});
 
-	it('gives a run no triangle, because a run is a leaf', () => {
-		const { container } = showing(['checkout-app', 'login-flow', RUN]);
+	/*
+	 * **A run is no longer a leaf** (#159). Its children are the entries of its `<serial>` directory,
+	 * which stays out of the tree as a level and stays in every address below the run — so the tree
+	 * reaches a file by clicking, which is what the card beside it used to be for.
+	 */
+	it('expands a selected run into its own contents, and the `<serial>` is not a row', () => {
+		const { container } = showing(RUN_PATH);
+
+		const run = rows(container).find((row) => row.textContent === RUN);
+		expect(run?.querySelectorAll('svg')).toHaveLength(2);
+		const names = rows(container).map((row) => row.textContent);
+		expect(names).toContain('screenshots');
+		expect(names).toContain('device_info.json');
+		// The serial names no row of its own...
+		expect(names).not.toContain(SERIAL);
+		// ...and is in every address under the run all the same.
+		expect(
+			rows(container)
+				.find((row) => row.textContent === 'screenshots')
+				?.getAttribute('href'),
+		).toBe(`/archive/${[...SERIAL_LEVEL, 'screenshots'].join('/')}`);
+	});
+
+	/*
+	 * Below a run every entry is a row, and what it *is* comes from the host's own `kind` and never
+	 * from its name (D22) — the rule the searched tree already keeps, now kept by both of them.
+	 */
+	it('draws a file below a run as a row, with the host’s own glyph and no measure', () => {
+		const { container } = showing(RUN_PATH);
+
+		const glyphOf = (name: string) => {
+			const row = rows(container).find((candidate) => candidate.textContent === name);
+			expect(row?.querySelectorAll('svg')).toHaveLength(1);
+			return row?.querySelector('svg')?.className.baseVal ?? '';
+		};
+		expect(glyphOf('device_info.json')).toContain('lucide-file-text');
+		// The host's own *unclassified*, and it is not an alarm.
+		expect(glyphOf('latest_recording')).toContain('lucide-file-question-mark');
+		// No size and no count: a row's text is exactly its name, as it is above a run — and both of
+		// these entries are seeded with one the row could have drawn.
+		expect(rows(container).map((row) => row.textContent)).toContain('device_info.json');
+	});
+
+	it('recurses below a run to any depth', () => {
+		const { container } = showing([...FRAMES, '0001.png']);
+
+		const leaf = rows(container).find((row) => row.textContent === '0001.png');
+		expect(leaf?.getAttribute('href')).toBe(`/archive/${[...FRAMES, '0001.png'].join('/')}`);
+		expect(leaf?.getAttribute('aria-current')).toBe('page');
+		// Every ancestor is drawn expanded, and the serial is a row at none of those depths.
+		expect(rows(container).map((row) => row.textContent)).toEqual([
+			'checkout-app',
+			'login-flow',
+			RUN,
+			'device_info.json',
+			'latest_recording',
+			'recordings',
+			'001_frames',
+			'0001.png',
+			'screenshots',
+			OLDER,
+			'unlabeled',
+			'payments-web',
+		]);
+	});
+
+	// The serial is not a level here, so `/…/<run>` and `/…/<run>/<serial>` are the same place in
+	// this tree — an address typed, or followed from a search hit, marks the run's own row.
+	it('marks the run’s row when the selection is its `<serial>` level', () => {
+		const { container } = showing(SERIAL_LEVEL);
+
+		const marked = rows(container).filter((row) => row.getAttribute('aria-current') === 'page');
+		expect(marked.map((row) => row.textContent)).toEqual([RUN]);
+	});
+
+	// No level to open, so no triangle and nothing under it — the same refusal to invent a `0` the
+	// rest of this screen makes about a run that is not one-device shaped.
+	it('draws nothing under a run whose parent named no single child', () => {
+		const levels = archive({
+			[keyOf(['checkout-app', 'login-flow'])]: listed(
+				directory(OLDER, 1, 'emulator-5554'),
+				directory(RUN, 1, null),
+			),
+		});
+		const { container } = showing(RUN_PATH, levels);
 
 		const run = rows(container).find((row) => row.textContent === RUN);
 		expect(run?.querySelectorAll('svg')).toHaveLength(1);
-		// And nothing is drawn under it: the `<serial>` is a fact about the run, not a level.
-		expect(container.textContent).not.toContain('R5CT30ABCDE');
+		expect(container.textContent).not.toContain(SERIAL);
+		expect(container.textContent).not.toContain('device_info.json');
+		expect(container.textContent).not.toContain('0 ');
+	});
+
+	// The tree's own quiet line, one level deeper: the run is expanded, and what is under it has not
+	// answered yet. Not a spinner, and not an empty run.
+	it('says it is reading under an expanded run whose `<serial>` level has not answered', () => {
+		const levels = archive({ [keyOf(SERIAL_LEVEL)]: { status: 'loading' } });
+		const { container } = showing(RUN_PATH, levels);
+
+		expect(screen.getByText('Reading this level.')).toBeDefined();
+		expect(container.innerHTML).not.toContain('animate');
 	});
 
 	it('wraps a name at its own separators — `break-words`, never `break-all`', () => {
@@ -432,8 +563,9 @@ describe('the hits a search draws', () => {
 	}
 
 	/*
-	 * The criterion: a hit under a run is drawn, ancestors expanded — which the URL's own tree
-	 * cannot do, because a run is a leaf there and its `<serial>` is not a level at all.
+	 * The criterion: a hit under a run is drawn, ancestors expanded — out of the one answer, and
+	 * with the `<serial>` a row of its own here, because the searched tree draws exactly the
+	 * addresses the host answered rather than the levels the URL describes.
 	 */
 	it('draws every hit with its ancestors expanded, below a run’s `<serial>` included', () => {
 		const { container } = showing(['checkout-app'], archive(), hits());

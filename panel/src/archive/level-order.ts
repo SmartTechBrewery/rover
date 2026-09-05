@@ -22,5 +22,11 @@ export function orderedEntries(
 	return depth === RUN_LEVEL_DEPTH ? [...entries].reverse() : entries;
 }
 
-/** Whose rows are runs: 0 is the root, 1 a project, 2 a test name — and a run is a leaf. */
+/**
+ * Whose rows are runs: 0 is the root, 1 a project, 2 a test name.
+ *
+ * **This is the only depth anything is reversed at, and that is unchanged by a run expanding**
+ * (#159): below a run the host's own order stands, because the names in there are a verb's and
+ * nothing about them is chronological the way a lease directory's leading timestamp is.
+ */
 const RUN_LEVEL_DEPTH = 2;

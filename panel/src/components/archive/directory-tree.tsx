@@ -1,4 +1,5 @@
-import { type ArchiveLevels, levelAt } from '@panel/archive/archive-levels.js';
+import { type ArchiveLevels, levelAt, runContentsLevel } from '@panel/archive/archive-levels.js';
+import type { ArchiveEntry } from '@panel/archive/archive-listing.js';
 import {
 	keyOf,
 	MAX_ARCHIVE_SEARCH_TEXT_LENGTH,
@@ -46,8 +47,14 @@ import { type RefObject, useRef } from 'react';
  * - **no status icon of any kind** — no tick, no cross, no dot, no play glyph, no colour that means
  *   an outcome. Rover has no verdicts to report (`docs/DESIGN.md` §2), and green ticks beside runs
  *   in the tree are exactly what the earlier design got wrong.
- * - **a folder on every row, a triangle only on an expandable one.** A run is a leaf: its `<serial>`
- *   is a fact about the run rather than a level (`onlyChild`), so there is nothing under it to open.
+ * - **a glyph on every row saying what the entry is, and a triangle only where there is a level
+ *   under it.** **A run is no longer a leaf** (#159, reversed in place in `docs/DESIGN.md` §9): it
+ *   was one because the card beside this tree was a second explorer that named what the run wrote,
+ *   and with that card going the tree has to reach the file itself. Its children are the entries of
+ *   its `<serial>` directory, which is still **not a level of this tree** ({@link runContentsLevel})
+ *   and still in every address below the run — so a run whose parent named no single child has no
+ *   triangle, because there is no level to open and drawing one over nothing is the same class of
+ *   claim as an invented `0`.
  * - **`break-words`, never `break-all`.** The latter splits `issue-112` across two lines.
  *
  * Every row is a `<Link>` and there is no nested interactive element: the triangle is `aria-hidden`
@@ -59,9 +66,10 @@ import { type RefObject, useRef } from 'react';
  *
  * - **every hit is visible and its ancestors are expanded, and a branch holding no match is not
  *   drawn** — all three fall out of `search-tree.ts` building the tree from the matches themselves;
- * - **there is no `DEEPEST_EXPANDABLE_DEPTH` in the searched tree.** It draws exactly the paths the
- *   host answered, so a hit under a run is drawn — which is how a name below the tree's own leaf
- *   becomes reachable at all;
+ * - **there is no depth bound in either tree now** (#159, amended in place). This one drew exactly
+ *   the paths the host answered, which was how a name below a run became reachable at all while the
+ *   browsing tree stopped at one; the browsing tree reaches it too now, and this one still draws
+ *   exactly the addresses the host answered and nothing else;
  * - **a hit row gains nothing a browsing row is forbidden.** It is the same {@link Row}: the same
  *   `<Link>`, the same classes, no count, no status glyph, no colour that means an outcome.
  * - **a truncated answer says so**, above the hits and not below them, so a partial list cannot
@@ -76,8 +84,18 @@ import { type RefObject, useRef } from 'react';
  * approved glyph, unchanged; with text in it, it is the {@link Clear} button.
  */
 
-/** A run is a leaf — depth 0 is a project, 1 a test name, 2 a run. */
-const DEEPEST_EXPANDABLE_DEPTH = 1;
+/** The level whose rows are runs — 0 is a project, 1 a test name, 2 a run. */
+const RUN_ROW_DEPTH = 2;
+
+/**
+ * The first level whose listing is a run's **own** — `[…run, <serial>]`, reached by hopping the
+ * serial at {@link RUN_ROW_DEPTH} rather than by descending into it.
+ *
+ * At and below it every entry is a row, whatever its `kind`: a file is what a reader selects in
+ * order to preview it. Above it only a directory is a row, because a stray file at a project or a
+ * test-name level is not something this tree can take you into.
+ */
+const SERIAL_DEPTH = 4;
 
 /**
  * The placeholder, and it is a **deliberate deviation from the approved markup** recorded in
@@ -270,7 +288,7 @@ function Hits({
 				return (
 					<li className="min-w-0" key={keyOf(node.path)}>
 						<Row
-							Icon={iconFor(node, opens)}
+							Icon={glyphFor(node.kind, opens)}
 							name={node.name}
 							path={node.path}
 							selected={keyOf(node.path) === keyOf(selected)}
@@ -288,20 +306,31 @@ function Hits({
 	);
 }
 
-/** A folder open or shut, a file, or something the host could not classify. No status glyph. */
-function iconFor(node: HitNode, opens: boolean): LucideIcon {
-	if (node.kind === 'directory') {
-		return opens ? FolderOpen : Folder;
+/**
+ * A folder open or shut, a file, or something the host could not classify. No status glyph.
+ *
+ * **One helper for both trees**, and it takes the host's own `kind` in both: a name never decides
+ * what an entry is (D22), and the two trees drawing a `.png` differently would be exactly that
+ * inference sneaking in on one side of the card.
+ */
+function glyphFor(kind: ArchiveEntry['kind'], expanded: boolean): LucideIcon {
+	if (kind === 'directory') {
+		return expanded ? FolderOpen : Folder;
 	}
-	return node.kind === 'file' ? FileText : FileQuestionMark;
+	return kind === 'file' ? FileText : FileQuestionMark;
 }
 
 /**
  * One level's rows, and the children of whichever of them is on the selected path.
  *
- * **Only a directory becomes a row.** The tree is the navigable structure; the complete listing —
- * including a file or a `kind: 'other'` entry the archive is not supposed to have at this level —
- * is the contents card's job, and it does say so rather than dropping it.
+ * **Above a run only a directory becomes a row; at and below the `<serial>` every entry is one**
+ * ({@link SERIAL_DEPTH}). A stray file at a project or a test-name level is still the contents
+ * card's to name — this tree cannot take you into it — but inside a run a file is precisely what a
+ * reader selects, so refusing it a row would leave the tree unable to reach most of the archive.
+ *
+ * **And a run's children are not its own level.** They are the entries of its `<serial>` directory
+ * ({@link runContentsLevel}), so the recursion hops that one address at {@link RUN_ROW_DEPTH} and
+ * descends ordinarily either side of it.
  *
  * **The order comes from `orderedEntries`, which is the contents card's too**: the two panes list
  * the same run directories side by side, so *most recent first* is decided once for both rather
@@ -317,7 +346,7 @@ function Branch({
 	readonly levels: ArchiveLevels;
 }) {
 	const level = levelAt(levels, path);
-	// The row's own level: 0 is a project, 1 a test name, 2 a run.
+	// The rows' own level: 0 is a project, 1 a test name, 2 a run, and 4 and below are inside one.
 	const depth = path.length;
 
 	if (level.status === 'loading') {
@@ -335,24 +364,35 @@ function Branch({
 	return (
 		<ul className="space-y-1">
 			{orderedEntries(level.entries, depth)
-				.filter((entry) => entry.kind === 'directory')
+				.filter((entry) => depth >= SERIAL_DEPTH || entry.kind === 'directory')
 				.map((entry) => {
 					const childPath = [...path, entry.name];
-					const expanded = keyOf(selected.slice(0, childPath.length)) === keyOf(childPath);
+					const below = levelUnder(levels, path, entry);
+					// Expanded is *has a level under it* and *is on the selected path* — so nothing is
+					// ever drawn open over a level that does not exist.
+					const expanded =
+						below !== null && keyOf(selected.slice(0, childPath.length)) === keyOf(childPath);
 					return (
 						<li className="min-w-0" key={entry.name}>
 							<Row
-								Icon={expanded ? FolderOpen : Folder}
+								Icon={glyphFor(entry.kind, expanded)}
 								name={entry.name}
 								path={childPath}
-								selected={keyOf(childPath) === keyOf(selected)}
-								Triangle={
-									depth <= DEEPEST_EXPANDABLE_DEPTH ? (expanded ? ChevronDown : ChevronRight) : null
+								/*
+								 * The serial is not a level, so `/…/<run>` and `/…/<run>/<serial>` are the
+								 * same place in this tree and the run's row is what marks it. Without the
+								 * second clause a depth-4 address — typed, or followed from a search hit —
+								 * would mark no row at all.
+								 */
+								selected={
+									keyOf(childPath) === keyOf(selected) ||
+									(depth === RUN_ROW_DEPTH && below !== null && keyOf(below) === keyOf(selected))
 								}
+								Triangle={below === null ? null : expanded ? ChevronDown : ChevronRight}
 							/>
-							{expanded && depth <= DEEPEST_EXPANDABLE_DEPTH ? (
+							{below !== null && expanded ? (
 								<div className="mt-1 ml-2.5 space-y-1 border-outline-variant border-l-2 py-1 pl-5">
-									<Branch levels={levels} path={childPath} selected={selected} />
+									<Branch levels={levels} path={below} selected={selected} />
 								</div>
 							) : null}
 						</li>
@@ -360,6 +400,27 @@ function Branch({
 				})}
 		</ul>
 	);
+}
+
+/**
+ * The level a row opens, or `null` when it opens nothing — a file, and **a run whose parent named
+ * no single child**.
+ *
+ * A run's is the entries of its `<serial>` directory, which is not a level of this tree
+ * ({@link runContentsLevel}); everywhere else a directory's is its own. This is the whole of the
+ * hop, and it is what makes the recursion below a run ordinary rather than special-cased at every
+ * depth under it.
+ */
+function levelUnder(
+	levels: ArchiveLevels,
+	path: readonly string[],
+	entry: ArchiveEntry,
+): readonly string[] | null {
+	if (entry.kind !== 'directory') {
+		return null;
+	}
+	const childPath = [...path, entry.name];
+	return path.length === RUN_ROW_DEPTH ? runContentsLevel(levels, childPath) : childPath;
 }
 
 const ROW_BASE = 'flex items-start gap-2 rounded-sm border-2 px-3 py-1.5';
@@ -372,11 +433,12 @@ const ROW_UNSELECTED =
 /**
  * One row, and it is the same row in both trees.
  *
- * **The two glyphs are inputs and nothing else is** (#146): the browsing tree derives them from the
- * depth and the expansion, the searched tree from the host's `kind` and whether the answer put
- * anything under it. Everything that makes a row a row is here and unconditional — the `<Link>`,
- * the classes, and every extra it refuses to carry — so a hit cannot acquire a count, a status
- * glyph or an outcome colour by being drawn from a different tree.
+ * **The two glyphs are inputs and nothing else is** (#146): both trees take what a row *is* from the
+ * host's own `kind` and never from a name (D22), and differ only in what they call expanded — a
+ * level drawn under it here, an answer with something under it there. Everything that makes a row a
+ * row is here and unconditional — the `<Link>`, the classes, and every extra it refuses to carry —
+ * so a hit cannot acquire a count, a status glyph or an outcome colour by being drawn from a
+ * different tree.
  *
  * `Triangle` is `null` on a row nothing opens. It is `aria-hidden` decoration meaning *this opens*,
  * never a second control inside the link.

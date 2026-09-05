@@ -16,7 +16,15 @@ vi.mock('@panel/session/session-provider.js', () => ({
 	useSession: () => ({ call: host.call }),
 }));
 
-import { type ArchiveLevels, levelAt, useArchiveLevels } from './archive-levels.js';
+import {
+	type ArchiveLevel,
+	type ArchiveLevels,
+	levelAt,
+	runContentsLevel,
+	useArchiveLevels,
+} from './archive-levels.js';
+import type { ArchiveEntry } from './archive-listing.js';
+import { keyOf } from './archive-path.js';
 
 function result(value: unknown) {
 	return { ok: true as const, value: { type: 'result' as const, result: value } };
@@ -187,5 +195,48 @@ describe('what one answer becomes', () => {
 	// would be the panel's last word being the wrong one.
 	it('sets nothing at all on a refused session', async () => {
 		expect(await levelFrom({ ok: false, refusal: 'refused' })).toBe('loading');
+	});
+});
+
+/**
+ * The one place that knows a run holds one child (#159), tested directly because both halves of the
+ * Archive screen compose an address out of it — the tree at the run's depth, and the screen for the
+ * run's own card.
+ */
+describe('where a run’s contents are listed', () => {
+	const RUN_NAME = '20260830T170501Z-issue-112-9f1c2ab4';
+	const RUN = ['checkout-app', 'login-flow', RUN_NAME];
+
+	function above(entry: ArchiveEntry): ArchiveLevels {
+		const level: ArchiveLevel = { status: 'listed', entries: [entry] };
+		return new Map([[keyOf(RUN.slice(0, -1)), level]]);
+	}
+
+	function run(onlyChild: string | null): ArchiveEntry {
+		return { kind: 'directory', name: RUN_NAME, childCount: 1, onlyChild };
+	}
+
+	it('is the run’s own path plus the `onlyChild` the level above named', () => {
+		expect(runContentsLevel(above(run('R5CT30ABCDE')), RUN)).toEqual([...RUN, 'R5CT30ABCDE']);
+	});
+
+	// No level to compose, and no guess to make: a run directory that is not one-device shaped is a
+	// fact, and an address invented for it would be fetched and drawn as if it were one.
+	it('is `null` for a run that names no single child', () => {
+		expect(runContentsLevel(above(run(null)), RUN)).toBeNull();
+	});
+
+	it('is `null` until the level above has answered, and for one that cannot be read', () => {
+		expect(runContentsLevel(new Map(), RUN)).toBeNull();
+		const unreadable: ArchiveLevels = new Map<string, ArchiveLevel>([
+			[keyOf(RUN.slice(0, -1)), { status: 'unreadable' }],
+		]);
+		expect(runContentsLevel(unreadable, RUN)).toBeNull();
+	});
+
+	// The level above lists it, but not as a directory — so there is nothing under it to address.
+	it('is `null` for a name the level above lists as something other than a directory', () => {
+		const file: ArchiveEntry = { kind: 'file', name: RUN_NAME, sizeBytes: 12 };
+		expect(runContentsLevel(above(file), RUN)).toBeNull();
 	});
 });
