@@ -15,6 +15,7 @@ describe("the panel's mirror of list_devices", () => {
 		const parsed = ListDevicesResultSchema.parse(fixture);
 
 		expect(parsed.stale).toBe(false);
+		expect(parsed.staleReason).toBeNull();
 		expect(parsed.devices).toHaveLength(3);
 
 		const held = parsed.devices[0];
@@ -130,6 +131,35 @@ describe("the panel's mirror of list_devices", () => {
 		});
 
 		expect(parsed.success).toBe(false);
+	});
+
+	/*
+	 * The reason a stale view will not clear on its own (#168), and the two halves the screen
+	 * branches on: the program the host could not run, and the platform it therefore cannot see.
+	 */
+	it('reads the reason a view is stale, with the program and the platform it names', () => {
+		const parsed = ListDevicesResultSchema.parse({
+			devices: [],
+			stale: true,
+			staleReason: { cause: 'tooling-missing', tool: 'adb', platform: 'android' },
+		});
+
+		expect(parsed.staleReason).toEqual({
+			cause: 'tooling-missing',
+			tool: 'adb',
+			platform: 'android',
+		});
+	});
+
+	/*
+	 * An *older* daemon sends no such key, and a browser that refused its answer would blank a
+	 * working screen over a compatible difference — the mirror's own rule, read the other way
+	 * round. Absent and `null` mean the same thing, so the parse folds them together.
+	 */
+	it('reads an answer from a daemon that has no reason to send, as no reason', () => {
+		const parsed = ListDevicesResultSchema.parse({ devices: [], stale: true });
+
+		expect(parsed.staleReason).toBeNull();
 	});
 
 	// Including the state itself. Tolerating its absence would put the card back to guessing that a

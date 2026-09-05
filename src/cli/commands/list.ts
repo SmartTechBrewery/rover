@@ -5,6 +5,7 @@
  * verbatim (D16, D22) and never carries the lease id (D20).
  */
 
+import type { StaleReason } from '../../core/device.js';
 import type { ListDevicesResult, ListedDevice } from '../../ipc/methods.js';
 import { expectPositionals, GLOBAL_OPTIONS, parseCommandArgs } from '../_shared/flags.js';
 import { connectToHost, resolveHost } from '../_shared/host.js';
@@ -27,12 +28,27 @@ const HEADINGS = ['SERIAL', 'PLATFORM', 'MODEL', 'STATE', 'HELD BY'] as const;
  * modes: `--json` already carries the `stale` flag, but a human piping the document through
  * a formatter still has to be told, and quietly showing a possibly-short list is the
  * failure this exists to prevent.
+ *
+ * Two wordings, because the two states ask different things of whoever is reading (#168).
+ * The transient one is unchanged and says "check back": the host re-establishes its view on
+ * its own. The other one never will — the host cannot run the program it watches devices
+ * with — so it names the program and what to do about it instead of implying a wait that
+ * would never end. Both keep the sentence the warning exists for: an empty list is no view,
+ * not no devices.
  */
-export function staleWarning(host: string): string {
+export function staleWarning(host: string, reason: StaleReason | null): string {
+	if (reason === null) {
+		return (
+			`Warning: host '${host}' does not know this list to be current — it is the last thing ` +
+			`the host saw, not what is attached now. An empty list here means no view, not no ` +
+			`devices.`
+		);
+	}
 	return (
-		`Warning: host '${host}' does not know this list to be current — it is the last thing ` +
-		`the host saw, not what is attached now. An empty list here means no view, not no ` +
-		`devices.`
+		`Warning: host '${host}' could not run '${reason.tool}', so it cannot see its ` +
+		`'${reason.platform}' devices at all — this will not clear on its own. Install ` +
+		`'${reason.tool}' on that host, or put it on the PATH the host runs with. An empty list ` +
+		`here means no view, not no devices.`
 	);
 }
 
@@ -70,7 +86,7 @@ export async function run(argv: string[]): Promise<number> {
 	try {
 		const result = await client.request('list_devices', {});
 		if (result.stale) {
-			out.warn(staleWarning(host));
+			out.warn(staleWarning(host, result.staleReason));
 		}
 		if (values.json === true) {
 			out.printJson(host, result);

@@ -599,6 +599,33 @@ Two more things this state fixed, both of which will recur:
 **This is an uncertainty, not a fault.** Nothing failed. Grey, not a warning colour, and nowhere
 near red.
 
+### …and the half of it that will never clear — settled (#168)
+
+`list_devices` now answers a `staleReason` beside `stale`, and it is `null` for every transient
+interruption — which is the state above, unchanged in every particular. It is **not** `null` in one
+case: `tooling-missing`, meaning the host could not run the program it watches devices with at all.
+A machine with no `adb` on its `PATH` retries forever and fails identically every time, so the
+wording above — the last thing seen, check back — is advice that never comes good.
+
+This is a **variant of both stale states, not a fifth state**, and the distinction is what keeps the
+screen from growing a state per cause:
+
+- **The heading does not move.** `HOST VIEW NOT CURRENT` is still true and is still one clause. A
+  second heading would be the `//` clause §7 already trimmed twice, in a different shape.
+- **The treatment does not move either.** Still grey, still `QuietBanner`, still nothing near red.
+  Nothing failed here in the sense that would earn a warning colour — a program is not installed.
+- **One clause changes**, and it is the one that implies a wait. Over a list: *…and it will not
+  correct itself: this host could not run adb, so it cannot see its android devices at all until
+  somebody installs it there or puts it on the PATH the host runs with.* Over an empty list, the
+  same clause replaces *interrupted, has not arrived yet, or is not running*.
+- **The sentence that keeps the empty case apart from *nothing attached* stays**, word for word.
+  That is the state's whole reason to exist and no cause makes it less true.
+- **The panel knows nothing about adb.** The program's name and the platform arrive on the wire and
+  are rendered as they came (`ai/RULES.md` §2). A `cause` this screen does not recognise — a newer
+  daemon naming a second permanent one — falls back to the ordinary wording rather than inventing a
+  sentence for it.
+- **Still no retry control**, and now for a second reason: retrying is precisely what will not help.
+
 ### Host view not current, with an *empty* list — settled (#113)
 
 The dangerous half, and the one state here designed from this document rather than commissioned as

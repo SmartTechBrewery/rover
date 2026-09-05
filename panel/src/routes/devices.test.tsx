@@ -1,4 +1,4 @@
-import type { ListedDevice } from '@panel/devices/device-list.js';
+import type { ListedDevice, StaleReason } from '@panel/devices/device-list.js';
 import type { DeviceList, DeviceListState } from '@panel/devices/device-list-provider.js';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { AnchorHTMLAttributes, ReactNode } from 'react';
@@ -106,8 +106,12 @@ function showing(state: DeviceListState, refresh: () => void = () => undefined) 
 	return render(<DevicesScreen />);
 }
 
-function ready(devices: readonly ListedDevice[], stale = false): DeviceListState {
-	return { status: 'ready', devices, stale, receivedAtMs: Date.now() };
+function ready(
+	devices: readonly ListedDevice[],
+	stale = false,
+	staleReason: StaleReason | null = null,
+): DeviceListState {
+	return { status: 'ready', devices, stale, staleReason, receivedAtMs: Date.now() };
 }
 
 /** The grid is the cards' one parent, so it is reached through a card rather than by class. */
@@ -300,6 +304,48 @@ describe('nothing attached', () => {
 		expect(container.querySelectorAll('button')).toHaveLength(0);
 		expect(container.innerHTML).not.toContain('error');
 		expect(container.textContent).not.toContain('standby');
+	});
+});
+
+/**
+ * The distinction #168 adds on this screen: a view that is coming back and one that never will
+ * read identically otherwise, and only one of them is worth walking to the machine about.
+ *
+ * The heading does not move — it is still true and still one clause (`docs/DESIGN.md` §7) — and
+ * neither does the sentence that keeps *no view* apart from *nothing attached*. What changes is
+ * the clause in between, which stops implying a wait that would never end.
+ */
+describe('a stale view the host says will not clear on its own', () => {
+	const missingAdb = { cause: 'tooling-missing', tool: 'adb', platform: 'android' };
+
+	it('names the program and what to do, over an empty list', () => {
+		showing(ready([], true, missingAdb));
+
+		expect(screen.getByText('HOST VIEW NOT CURRENT')).toBeDefined();
+		expect(screen.getByText(/could not run adb/)).toBeDefined();
+		expect(screen.getByText(/puts it on the PATH/)).toBeDefined();
+		expect(screen.getByText(/a phone may well be plugged in/)).toBeDefined();
+		// The wording that invites a wait is the one this state exists to replace.
+		expect(screen.queryByText(/has not arrived yet, or is not running/)).toBeNull();
+	});
+
+	it('names it in the banner over a list, and still vouches for the leases', () => {
+		showing(ready([HELD], true, missingAdb));
+
+		expect(screen.getByText(/could not run adb/)).toBeDefined();
+		expect(screen.getByText(/The lease details below are still accurate/)).toBeDefined();
+	});
+
+	/*
+	 * A newer daemon naming a second permanent cause must not blank this screen or invent a
+	 * sentence for something it has never heard of — it falls back to the wording every stale view
+	 * already had, which is the safe direction to be wrong in.
+	 */
+	it('falls back to the ordinary wording for a cause it does not recognise', () => {
+		showing(ready([], true, { cause: 'something-later', tool: 'adb', platform: 'android' }));
+
+		expect(screen.getByText(/has not arrived yet, or is not running/)).toBeDefined();
+		expect(screen.queryByText(/could not run adb/)).toBeNull();
 	});
 });
 

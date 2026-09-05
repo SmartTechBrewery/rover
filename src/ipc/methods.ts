@@ -19,7 +19,7 @@
 
 import { z } from 'zod';
 import { CapabilitiesSchema } from '../core/capabilities.js';
-import { DeviceSchema } from '../core/device.js';
+import { DeviceSchema, StaleReasonSchema } from '../core/device.js';
 import { AppIdSchema, DeviceSerialSchema, LeaseIdSchema } from '../core/ids.js';
 import { ProtocolVersionSchema } from './protocol.js';
 import {
@@ -245,6 +245,30 @@ export const ListDevicesResultSchema = z
 		 * attached"; an empty list with this set means *no view*, not *no devices*.
 		 */
 		stale: z.boolean(),
+		/**
+		 * Why, in the one case the host can name a cause that will **not** clear on its own
+		 * (#168): `tooling-missing` says the program a backend drives could not be run at all,
+		 * and carries the program's name and the platform whose devices are therefore invisible.
+		 *
+		 * `null` is the ordinary answer and covers every transient interruption, which is the
+		 * state D6 and R35 settled and the one that self-heals. A client that reads only `stale`
+		 * is still correct; this exists so the ones that want to can stop telling somebody to
+		 * check back shortly when nothing is going to change until somebody installs something.
+		 *
+		 * **Never a substitute for `stale`.** A host may be stale with no reason to give, and a
+		 * reason without `stale` is not an answer this host produces.
+		 *
+		 * `.nullish().default(null)` rather than `.nullable()`, and the asymmetry is deliberate:
+		 * the host always **sends** the key, because the inferred result type is the output type
+		 * and a handler that left it out would not compile — but a client parsing an answer from a
+		 * daemon older than this field must not fail on its absence. A long-running daemon
+		 * predating the client that connects to it is the ordinary case here, since the daemon
+		 * starts itself on the first call and then stays up; refusing its whole answer over a
+		 * field that means "no cause to report", which is exactly what that daemon meant, would
+		 * turn an addition into an outage. Absent and `null` are folded together so nothing
+		 * downstream has a third case.
+		 */
+		staleReason: StaleReasonSchema.nullish().default(null),
 	})
 	.strict();
 export type ListDevicesResult = z.infer<typeof ListDevicesResultSchema>;

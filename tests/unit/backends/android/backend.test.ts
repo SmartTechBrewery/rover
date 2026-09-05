@@ -491,16 +491,52 @@ describe('watchDevices', () => {
 
 		trackers[0]?.onStdout(TRACK);
 		listener.onDevices.mockClear();
-		trackers[0]?.onEnd('adb track-devices -l ended with exit 0');
+		trackers[0]?.onEnd('adb track-devices -l ended with exit 0', false);
 
-		expect(listener.onInterrupted).toHaveBeenCalledWith('adb track-devices -l ended with exit 0');
+		expect(listener.onInterrupted).toHaveBeenCalledWith(
+			'adb track-devices -l ended with exit 0',
+			// No cause: an exit is expected to clear on the restart, which is every end but one.
+			null,
+		);
 		expect(listener.onDevices).not.toHaveBeenCalled();
+	});
+
+	/**
+	 * The distinction #168 exists to make: an end that will clear on its own and one that never
+	 * will read identically on every surface unless the backend says which it is. `adb` absent
+	 * from `PATH` is the second kind, and the name of the program is what makes a client's
+	 * message actionable without the client knowing anything about adb.
+	 */
+	it('names adb as the cause when the tracker could not be run at all', () => {
+		const listener = watcher();
+		backend.watchDevices(listener);
+
+		trackers[0]?.onEnd('adb track-devices -l failed to run: spawn adb ENOENT', true);
+
+		expect(listener.onInterrupted).toHaveBeenCalledWith(expect.any(String), {
+			cause: 'tooling-missing',
+			tool: 'adb',
+		});
+	});
+
+	/*
+	 * It is not a reason to stop trying. `adb` arriving on the `PATH` of a running daemon — an SDK
+	 * installed, an env var fixed — is exactly what the restart loop is for, and the next frame
+	 * clears the cause with the staleness.
+	 */
+	it('keeps restarting a tracker that could not be run at all', () => {
+		backend.watchDevices(watcher());
+
+		trackers[0]?.onEnd('spawn adb ENOENT', true);
+		vi.advanceTimersByTime(250);
+
+		expect(streamAdb).toHaveBeenCalledTimes(2);
 	});
 
 	it('restarts the tracker after a bounded wait', () => {
 		backend.watchDevices(watcher());
 
-		trackers[0]?.onEnd('ended');
+		trackers[0]?.onEnd('ended', false);
 		expect(streamAdb).toHaveBeenCalledTimes(1);
 
 		vi.advanceTimersByTime(250);
@@ -513,7 +549,7 @@ describe('watchDevices', () => {
 		backend.watchDevices(watcher());
 
 		for (const delay of [250, 500, 1000, 2000, 4000, 5000, 5000]) {
-			trackers.at(-1)?.onEnd('ended');
+			trackers.at(-1)?.onEnd('ended', false);
 			vi.advanceTimersByTime(delay - 1);
 			const started = streamAdb.mock.calls.length;
 			vi.advanceTimersByTime(1);
@@ -524,13 +560,13 @@ describe('watchDevices', () => {
 	it('goes back to the short wait once a tracker delivered a snapshot', () => {
 		backend.watchDevices(watcher());
 
-		trackers[0]?.onEnd('ended');
+		trackers[0]?.onEnd('ended', false);
 		vi.advanceTimersByTime(250);
-		trackers[1]?.onEnd('ended');
+		trackers[1]?.onEnd('ended', false);
 		vi.advanceTimersByTime(500);
 		// The third tracker works, so the fourth restart is a first failure again.
 		trackers[2]?.onStdout(TRACK);
-		trackers[2]?.onEnd('ended');
+		trackers[2]?.onEnd('ended', false);
 
 		vi.advanceTimersByTime(250);
 		expect(streamAdb).toHaveBeenCalledTimes(4);
@@ -560,7 +596,7 @@ describe('watchDevices', () => {
 		backend.watchDevices(listener);
 
 		trackers[0]?.onStdout(TRACK.subarray(0, 30));
-		trackers[0]?.onEnd('ended');
+		trackers[0]?.onEnd('ended', false);
 		vi.advanceTimersByTime(250);
 		trackers[1]?.onStdout(TRACK.subarray(0, 4 + 0x74));
 
@@ -574,7 +610,7 @@ describe('watchDevices', () => {
 		await watch.stop();
 
 		expect(stops[0]).toHaveBeenCalledTimes(1);
-		trackers[0]?.onEnd('ended');
+		trackers[0]?.onEnd('ended', false);
 		vi.advanceTimersByTime(60_000);
 		expect(streamAdb).toHaveBeenCalledTimes(1);
 		expect(listener.onInterrupted).not.toHaveBeenCalled();
@@ -583,7 +619,7 @@ describe('watchDevices', () => {
 	it('cancels a restart that was already scheduled', async () => {
 		const watch = backend.watchDevices(watcher());
 
-		trackers[0]?.onEnd('ended');
+		trackers[0]?.onEnd('ended', false);
 		await watch.stop();
 		vi.advanceTimersByTime(60_000);
 

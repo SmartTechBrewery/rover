@@ -14,7 +14,7 @@ import { renderForceRelease, renderForceReleaseRefusal } from '@/cli/commands/fo
 import { renderDeviceList, renderHolder, staleWarning } from '@/cli/commands/list.js';
 import { renderRelease } from '@/cli/commands/release.js';
 import { renderStatus } from '@/cli/commands/status.js';
-import { parseDeviceSerial, parseLeaseId } from '@/core/ids.js';
+import { parseDeviceSerial, parseLeaseId, parsePlatformId } from '@/core/ids.js';
 import {
 	type AcquireDeviceResult,
 	ForceReleaseDeviceResultSchema,
@@ -53,6 +53,7 @@ function listResult(overrides: Partial<ListDevicesResult> = {}): ListDevicesResu
 			},
 		],
 		stale: false,
+		staleReason: null,
 		...overrides,
 	});
 }
@@ -107,7 +108,11 @@ describe('the device table', () => {
 	});
 
 	it('says plainly that nothing is attached rather than printing an empty table', () => {
-		const empty = ListDevicesResultSchema.parse({ devices: [], stale: false });
+		const empty = ListDevicesResultSchema.parse({
+			devices: [],
+			stale: false,
+			staleReason: null,
+		});
 
 		expect(renderDeviceList(LOCAL_HOST, empty)).toBe("No devices are attached to host 'local'.");
 	});
@@ -145,10 +150,31 @@ describe('the device table', () => {
 	});
 
 	it('says an empty list means no view, not no devices, when the host is stale', () => {
-		const said = staleWarning(LOCAL_HOST);
+		const said = staleWarning(LOCAL_HOST, null);
 
 		expect(said).toContain('not know this list to be current');
 		expect(said).toContain('no view, not no devices');
+	});
+
+	/*
+	 * The transient wording tells a reader to check back, and for a host with no `adb` that is
+	 * advice which never comes good (#168). So the second wording names the program, says it will
+	 * not clear on its own, and still carries the clause the warning exists for.
+	 */
+	it('names the program and says it will not clear when the host cannot run its tooling', () => {
+		const said = staleWarning(LOCAL_HOST, {
+			cause: 'tooling-missing',
+			tool: 'adb',
+			platform: parsePlatformId('android'),
+		});
+
+		expect(said).toContain("could not run 'adb'");
+		expect(said).toContain('will not clear on its own');
+		expect(said).toContain('PATH');
+		expect(said).toContain('no view, not no devices');
+		// The wording the transient case keeps must not be the one a permanent cause gets: it
+		// invites a wait that would never end.
+		expect(said).not.toContain('the last thing the host saw');
 	});
 });
 

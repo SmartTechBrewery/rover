@@ -304,6 +304,52 @@ export interface RecordVideoOptions {
 }
 
 /**
+ * Why a backend's view of its device set was interrupted, in the cases where the backend
+ * can say something a caller can **act on**.
+ *
+ * An interruption is normally transient and self-healing: whatever the backend was watching
+ * through went away, and the backend re-establishes the view on its own within seconds
+ * (PROJECT.md §6). That case has no cause here and is `null` — it is the one every client
+ * already renders, and nothing about it changes.
+ *
+ * `tooling-missing` is the case that will **never** clear on its own: the program a backend
+ * drives is not installed on this host, or is not on the `PATH` it runs with, so every
+ * attempt fails identically forever behind a generic "the view was interrupted" message on
+ * every surface. It is classified from the error code the platform reports, never from
+ * matching a message written for a human to read.
+ *
+ * One member today. It is an enum rather than a literal because the next permanent cause
+ * worth naming joins it here, and a client written against the enum keeps working: an
+ * unrecognised member means "the host named a cause this client does not know", which is
+ * still more than `null` says.
+ */
+export const InterruptionCauseSchema = z
+	.object({
+		cause: z.enum(['tooling-missing']),
+		/**
+		 * The program the backend could not run. It is what makes a client's message actionable
+		 * without any client knowing one platform's tooling: shared code renders the name the
+		 * backend supplied and never learns what it is for (ai/RULES.md §2).
+		 */
+		tool: z.string().min(1),
+	})
+	.strict();
+export type InterruptionCause = z.infer<typeof InterruptionCauseSchema>;
+
+/**
+ * The same cause, told by the host rather than by one backend: which platform's view is
+ * the one that cannot be established.
+ *
+ * Derived rather than restated, so a field added to what a backend reports reaches the wire
+ * without a second edit. The host supplies `platform` because the host is what knows which
+ * backend it subscribed to — a backend never names its own platform to its watcher.
+ */
+export const StaleReasonSchema = InterruptionCauseSchema.extend({
+	platform: PlatformIdSchema,
+});
+export type StaleReason = z.infer<typeof StaleReasonSchema>;
+
+/**
  * What a {@link DeviceBackend.watchDevices} caller is told, as the set it watches changes.
  *
  * Neither method may throw. Both are called from inside the backend's own read path,
@@ -326,8 +372,15 @@ export interface DeviceWatcher {
 	 * gone away, which for an inventory means releasing devices that never moved. The
 	 * backend re-establishes the view on its own; the next {@link onDevices} supersedes
 	 * this and needs no request from the caller.
+	 *
+	 * `reason` is a message written for a person to read and nothing may branch on it.
+	 * `cause` is the machine-readable half — `null` for the transient case above, which is
+	 * most of them, and otherwise the one thing a caller can do something about
+	 * ({@link InterruptionCauseSchema}). It is a required argument rather than an optional
+	 * one so that a backend answers the question deliberately: `null` says "this is expected
+	 * to clear", which is a claim, not an omission.
 	 */
-	onInterrupted(reason: string): void;
+	onInterrupted(reason: string, cause: InterruptionCause | null): void;
 }
 
 /** The handle {@link DeviceBackend.watchDevices} answers with. */

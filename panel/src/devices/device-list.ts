@@ -87,6 +87,25 @@ const ListedDeviceSchema = z.object({
 });
 export type ListedDevice = z.infer<typeof ListedDeviceSchema>;
 
+/**
+ * Why the host's view is not current, when the host can name a cause that will **not** clear on
+ * its own (#168) — the `staleReason` below.
+ *
+ * `cause` is a **string rather than an enum**, on the same reasoning as `state` above: this is a
+ * reader, and a newer daemon naming a second permanent cause must not blank a working screen.
+ * Anything the screen does not recognise falls back to the wording every stale view already had,
+ * which is the safe direction to be wrong in.
+ *
+ * `tool` is what makes the message actionable — the program the host could not run, `adb` on an
+ * Android host. The panel renders the name the host supplied and knows nothing about adb itself.
+ */
+const StaleReasonSchema = z.object({
+	cause: z.string(),
+	tool: z.string(),
+	platform: z.string(),
+});
+export type StaleReason = z.infer<typeof StaleReasonSchema>;
+
 export const ListDevicesResultSchema = z.object({
 	devices: z.array(ListedDeviceSchema),
 	/**
@@ -95,5 +114,16 @@ export const ListDevicesResultSchema = z.object({
 	 * opposite, which is why the screen renders them differently on purpose.
 	 */
 	stale: z.boolean(),
+	/**
+	 * Why, when the host can say — and `null` for every transient interruption, which is the
+	 * ordinary case and the one R35 settled.
+	 *
+	 * `.nullish().default(null)` rather than `.nullable()`, and that is this mirror's rule read
+	 * the other way round: an *older* daemon sends no such key at all, and a browser that refused
+	 * its answer would blank a working screen over a compatible difference exactly as one
+	 * refusing a newer daemon's extra column would. Absent and `null` mean the same thing here,
+	 * so the parse folds them together and the screen branches on one value.
+	 */
+	staleReason: StaleReasonSchema.nullish().default(null),
 });
 export type ListDevicesResult = z.infer<typeof ListDevicesResultSchema>;

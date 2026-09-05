@@ -42,6 +42,12 @@ import fixture from '../../fixtures/panel/list-devices.json' with { type: 'json'
  * captured bytes. No device was attached to re-capture from, so that one field was hand-edited to
  * a second project's test name and nothing else in the entry was touched.
  *
+ * `staleReason` is the **fifth bend**, and it is the `testDescription` one again: the field did not
+ * exist when this was captured (#168), and the host's schema is `.strict()`, so the captured bytes
+ * would no longer parse without it. `null` was added and nothing else was touched — which is what
+ * a host that can see its devices answers, and the value every capture of this vintage would have
+ * carried.
+ *
  * The **third entry is the one part that was not captured**, and it is worth saying which: a device
  * with no `model` and no `osVersion` is one sitting on its authorization prompt, which needs a
  * physical phone being plugged in for the first time. Its shape is the free capture with those two
@@ -54,6 +60,32 @@ describe("the panel's list_devices fixture", () => {
 		const parsed = ListDevicesResultSchema.safeParse(fixture);
 
 		expect(parsed.success).toBe(true);
+	});
+
+	/*
+	 * A view the host *can* vouch for names no reason, and the key is there saying so rather than
+	 * absent (#168). Against the bytes as well as the parse: `.nullable()` and an absent key both
+	 * survive a `.optional()` reader, and only one of them is what this wire sends.
+	 */
+	it('says the view is current and names no reason for it not being', () => {
+		const parsed = ListDevicesResultSchema.parse(fixture);
+
+		expect(parsed.stale).toBe(false);
+		expect(parsed.staleReason).toBeNull();
+		expect(Object.keys(fixture)).toContain('staleReason');
+	});
+
+	/*
+	 * A daemon older than the field sends no key at all, and the client that connects to it is
+	 * routinely newer — the daemon starts itself on the first call and then stays up for days
+	 * (#168). Refusing its whole answer over a field whose absence *means* "no cause to report"
+	 * would turn an addition into an outage, so absent and `null` are one case on the way in.
+	 * Reproduced against a daemon that predated the field before this was written.
+	 */
+	it('reads an answer from a daemon that predates the field, as no reason', () => {
+		const { staleReason: _dropped, ...older } = fixture;
+
+		expect(ListDevicesResultSchema.parse(older).staleReason).toBeNull();
 	});
 
 	it('carries the two nullable cases the Devices screen has to render', () => {

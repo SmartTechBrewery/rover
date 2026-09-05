@@ -13,7 +13,13 @@
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { RegisteredDeviceBackend } from '@/backends/manifest.js';
-import type { Device, DeviceBackend, DeviceWatch, DeviceWatcher } from '@/core/device.js';
+import type {
+	Device,
+	DeviceBackend,
+	DeviceWatch,
+	DeviceWatcher,
+	InterruptionCause,
+} from '@/core/device.js';
 import { DeviceVanishedError, ForeignDeviceError } from '@/core/errors.js';
 import { parseDeviceSerial, parsePlatformId } from '@/core/ids.js';
 import { createDeviceInventory } from '@/daemon/inventory.js';
@@ -36,7 +42,7 @@ function createWatchableBackend(
 	readonly backend: DeviceBackend;
 	readonly stopWatch: ReturnType<typeof vi.fn<DeviceWatch['stop']>>;
 	deliver(devices: Device[]): void;
-	interrupt(reason: string): void;
+	interrupt(reason: string, cause?: InterruptionCause): void;
 } {
 	let watcher: DeviceWatcher | undefined;
 	const stopWatch = vi.fn<DeviceWatch['stop']>(async () => {});
@@ -63,7 +69,7 @@ function createWatchableBackend(
 		backend,
 		stopWatch,
 		deliver: (devices) => listener().onDevices(devices),
-		interrupt: (reason) => listener().onInterrupted(reason),
+		interrupt: (reason, cause) => listener().onInterrupted(reason, cause ?? null),
 	};
 }
 
@@ -112,7 +118,7 @@ describe('createDeviceInventory admission', () => {
 
 		backend.deliver([local, foreign]);
 
-		expect(inventory.snapshot()).toEqual({ devices: [local], stale: false });
+		expect(inventory.snapshot()).toEqual({ devices: [local], stale: false, staleReason: null });
 	});
 
 	it('warns exactly once about a refused serial, however many snapshots repeat it', () => {
@@ -153,7 +159,7 @@ describe('createDeviceInventory admission', () => {
 
 		backend.deliver([local]);
 
-		expect(inventory.snapshot()).toEqual({ devices: [local], stale: false });
+		expect(inventory.snapshot()).toEqual({ devices: [local], stale: false, staleReason: null });
 	});
 
 	it("keeps one backend's devices when another backend reports its own set", () => {
@@ -183,11 +189,11 @@ describe('createDeviceInventory staleness', () => {
 		// Subscribed but not yet told anything. An empty list presented as current here would
 		// say "no devices attached" about a platform nobody has heard from — the exact answer
 		// `stale` exists to keep apart from a genuinely empty host.
-		expect(inventory.snapshot()).toEqual({ devices: [], stale: true });
+		expect(inventory.snapshot()).toEqual({ devices: [], stale: true, staleReason: null });
 
 		backend.deliver([local]);
 
-		expect(inventory.snapshot()).toEqual({ devices: [local], stale: false });
+		expect(inventory.snapshot()).toEqual({ devices: [local], stale: false, staleReason: null });
 	});
 
 	it('reports the view as stale once it has been stopped', async () => {
@@ -201,7 +207,7 @@ describe('createDeviceInventory staleness', () => {
 		// `stop()` drops the subscriptions while the socket is still being served, so the map
 		// reading as "zero backends, nothing interrupted" would answer the whole shutdown
 		// window with an authoritative empty list.
-		expect(inventory.snapshot()).toEqual({ devices: [], stale: true });
+		expect(inventory.snapshot()).toEqual({ devices: [], stale: true, staleReason: null });
 	});
 
 	it('keeps the last devices and says the view is stale when it is interrupted', () => {
@@ -214,7 +220,7 @@ describe('createDeviceInventory staleness', () => {
 
 		// Not an empty list: that would tell a lease layer every device vanished at the moment
 		// the host lost the ability to know anything.
-		expect(inventory.snapshot()).toEqual({ devices: [local], stale: true });
+		expect(inventory.snapshot()).toEqual({ devices: [local], stale: true, staleReason: null });
 	});
 
 	it('clears staleness on the next snapshot from the backend', () => {
@@ -239,6 +245,87 @@ describe('createDeviceInventory staleness', () => {
 		second.deliver([local]);
 
 		expect(inventory.snapshot().stale).toBe(true);
+	});
+});
+
+/**
+ * The distinction #168 adds, and the reason it is additive: `stale` still means "not known to be
+ * current" and nothing about the transient case moves. What the reason buys is the case that never
+ * self-heals — a host with no `adb` retries forever and fails identically — which without it is
+ * indistinguishable from the one that clears in a few seconds.
+ */
+describe('createDeviceInventory stale reasons', () => {
+	const missingAdb = { cause: 'tooling-missing', tool: 'adb' } as const;
+
+	it('names no reason for the transient interruption every backend reports', () => {
+		const backend = createWatchableBackend('test-platform');
+		const { inventory } = inventoryOver([backend.registered]);
+		inventory.start();
+		backend.deliver([local]);
+
+		backend.interrupt('the source went away');
+
+		expect(inventory.snapshot().staleReason).toBeNull();
+	});
+
+	// The backend names the program; the host names the platform, because a backend is never told
+	// which one it was registered as.
+	it("carries the backend's cause and the platform it was subscribed as", () => {
+		const backend = createWatchableBackend('test-platform');
+		const { inventory } = inventoryOver([backend.registered]);
+		inventory.start();
+
+		backend.interrupt('adb track-devices -l failed to run: spawn adb ENOENT', missingAdb);
+
+		expect(inventory.snapshot()).toEqual({
+			devices: [],
+			stale: true,
+			staleReason: { cause: 'tooling-missing', tool: 'adb', platform: 'test-platform' },
+		});
+	});
+
+	// A view that came back was never permanent, so the reason goes with the staleness rather
+	// than outliving it — `adb` appearing on a running host's PATH is exactly this path.
+	it('drops the reason on the next frame, along with the staleness', () => {
+		const backend = createWatchableBackend('test-platform');
+		const { inventory } = inventoryOver([backend.registered]);
+		inventory.start();
+		backend.interrupt('spawn adb ENOENT', missingAdb);
+
+		backend.deliver([local]);
+
+		expect(inventory.snapshot()).toEqual({ devices: [local], stale: false, staleReason: null });
+	});
+
+	// One actionable sentence rather than an inventory of them: a caller acting on this needs the
+	// first cause a backend named, and it names its own platform.
+	it('reports one reason when one backend can say why and another cannot', () => {
+		const quiet = createWatchableBackend('platform-one');
+		const named = createWatchableBackend('platform-two');
+		const { inventory } = inventoryOver([quiet.registered, named.registered]);
+		inventory.start();
+
+		quiet.interrupt('the source went away');
+		named.interrupt('spawn adb ENOENT', missingAdb);
+
+		expect(inventory.snapshot().staleReason).toEqual({
+			cause: 'tooling-missing',
+			tool: 'adb',
+			platform: 'platform-two',
+		});
+	});
+
+	// Being on the way down is the inventory's own reason to be stale, and it is not a backend's
+	// fault — an operator sent looking for something to install would find nothing wrong.
+	it('blames no backend for the staleness of a stopped inventory', async () => {
+		const backend = createWatchableBackend('test-platform');
+		const { inventory } = inventoryOver([backend.registered]);
+		inventory.start();
+		backend.interrupt('spawn adb ENOENT', missingAdb);
+
+		await inventory.stop();
+
+		expect(inventory.snapshot()).toEqual({ devices: [], stale: true, staleReason: null });
 	});
 });
 
@@ -363,6 +450,6 @@ describe('createDeviceInventory lifecycle', () => {
 		expect(backend.backend.watchDevices).not.toHaveBeenCalled();
 		// Stale rather than empty-and-current: an inventory that was never started has not
 		// failed to find devices, it has not looked.
-		expect(inventory.snapshot()).toEqual({ devices: [], stale: true });
+		expect(inventory.snapshot()).toEqual({ devices: [], stale: true, staleReason: null });
 	});
 });

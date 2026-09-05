@@ -46,5 +46,6 @@
       "heldBy": null
     }
   ],
-  "stale": false
+  "stale": false,
+  "staleReason": null
 }

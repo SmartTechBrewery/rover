@@ -493,8 +493,14 @@ export interface AdbStreamHandlers {
 	 * The run ended, for any reason at all, or never started. Called **exactly once**, and
 	 * never after {@link AdbStream.stop}. `reason` is a message ready to be shown to a
 	 * caller: the argv, how it ended, and the stderr tail.
+	 *
+	 * `notInstalled` is the one end a caller can act on rather than wait out: `adb` itself
+	 * could not be found, so nothing ran and nothing will until it is installed or put on
+	 * this host's `PATH`. Taken from the `ENOENT` Node reports on the spawn — the error
+	 * *code*, never the message, which is written for a person and may be reworded by any
+	 * runtime release.
 	 */
-	onEnd(reason: string): void;
+	onEnd(reason: string, notInstalled: boolean): void;
 }
 
 /** The handle {@link streamAdb} answers with. */
@@ -536,10 +542,10 @@ export function streamAdb(args: readonly string[], handlers: AdbStreamHandlers):
 	/** Set by the first of `close`/`error`, and by `stop()`; suppresses every handler call. */
 	let finished = false;
 
-	const finish = (reason: string): void => {
+	const finish = (reason: string, notInstalled = false): void => {
 		if (finished) return;
 		finished = true;
-		handlers.onEnd(reason);
+		handlers.onEnd(reason, notInstalled);
 	};
 
 	child.stdout?.on('data', (chunk: Buffer) => {
@@ -551,10 +557,12 @@ export function streamAdb(args: readonly string[], handlers: AdbStreamHandlers):
 	child.stderr?.on('data', (chunk: string) => {
 		stderrTail = `${stderrTail}${chunk}`.slice(-ADB_STREAM_STDERR_TAIL_CHARS);
 	});
-	child.on('error', (error: Error) => {
+	child.on('error', (error: NodeJS.ErrnoException) => {
 		ended = true;
-		// Nothing ran at all — `adb` absent from PATH is the common one.
-		finish(`${ADB} ${argv.join(' ')} failed to run: ${error.message}`);
+		// Nothing ran at all — `adb` absent from PATH is the common one, and the only one of
+		// these a caller can act on rather than retry. `ENOENT` on a spawn means the executable
+		// itself was not found; nothing here passes a `cwd`, which is the other way to get it.
+		finish(`${ADB} ${argv.join(' ')} failed to run: ${error.message}`, error.code === 'ENOENT');
 	});
 	child.on('close', (code: number | null, signal: NodeJS.Signals | null) => {
 		ended = true;

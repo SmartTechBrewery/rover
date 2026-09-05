@@ -201,7 +201,8 @@ npm run -s rover -- list --json
       }
     }
   ],
-  "stale": false
+  "stale": false,
+  "staleReason": null
 }
 ```
 
@@ -479,7 +480,10 @@ concurrent callers producing exactly one daemon. It now holds a **device invento
 per device, fed by each registered backend's change stream, refusing anything attached to another
 host — and answers `list_devices` alongside `status`. The inventory is a cache and never the
 authority: a lease re-verifies its device against the backend at grant time (`PROJECT.md` D6),
-and `list_devices` says `stale` whenever the list is not known to be current.
+and `list_devices` says `stale` whenever the list is not known to be current — with a `staleReason`
+beside it in the one case that will **not** clear on its own, `tooling-missing`, which names the
+program the host could not run and the platform it therefore cannot see. Every transient
+interruption leaves it `null`.
 
 **Leases work.** `acquire_device` grants one device — not the whole machine — to an explicit
 caller-supplied `owner` string, alongside a required `project` and `test_name`, and an optional
@@ -1386,7 +1390,7 @@ curl -sS -X POST http://127.0.0.1:4712/rpc \
 ```
 
 ```json
-{"type":"result","protocolVersion":1,"id":"1","result":{"devices":[{"serial":"emulator-5554","platform":"android","model":"sdk_gphone64_arm64","state":"ready","attachment":"this-host","heldBy":null}],"stale":false}}
+{"type":"result","protocolVersion":1,"id":"1","result":{"devices":[{"serial":"emulator-5554","platform":"android","model":"sdk_gphone64_arm64","state":"ready","attachment":"this-host","heldBy":null}],"stale":false,"staleReason":null}}
 ```
 
 Four things about that surface are worth knowing before pointing anything at it:

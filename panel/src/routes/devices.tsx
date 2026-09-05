@@ -7,7 +7,7 @@ import { HeldFreeCounter } from '@panel/components/devices/held-free-counter.js'
 import { PageHeader } from '@panel/components/layout/page-header.js';
 import { QuietBanner } from '@panel/components/quiet-banner.js';
 import { QuietPanel } from '@panel/components/quiet-panel.js';
-import type { ListedDevice } from '@panel/devices/device-list.js';
+import type { ListedDevice, StaleReason } from '@panel/devices/device-list.js';
 import { useDeviceList } from '@panel/devices/device-list-provider.js';
 import type { ForceReleaseAnswer } from '@panel/devices/force-release.js';
 import { createRoute } from '@tanstack/react-router';
@@ -34,6 +34,7 @@ import { rootRoute } from './__root.js';
  * | an empty list | *No devices attached* — normal, common and finished (D21) |
  * | `stale` with a list | the banner, then the grid quieted as a set; lease fields untouched (D6) |
  * | `stale` with an empty list | *No view* — and never *nothing attached* |
+ * | either, with a `staleReason` | the same block, saying what will not clear on its own (#168) |
  *
  * The counter is derived from the very array the cards come from, so "the counter agrees with the
  * cards" is structural rather than something to keep in step.
@@ -134,17 +135,12 @@ function Content({
 	}
 
 	if (state.devices.length === 0) {
-		return state.stale ? <NoView /> : <NothingAttached />;
+		return state.stale ? <NoView reason={state.staleReason} /> : <NothingAttached />;
 	}
 
 	return (
 		<>
-			{state.stale ? (
-				<HostViewNotCurrent>
-					This hardware list is the last thing seen, not what is attached now. The lease details
-					below are still accurate.
-				</HostViewNotCurrent>
-			) : null}
+			{state.stale ? <NotCurrentBanner reason={state.staleReason} /> : null}
 			{/*
 			 * Column count follows the width available to the content, not a viewport breakpoint
 			 * (§4). 300 rather than 350 because three cards plus their gutters have to fit the
@@ -194,6 +190,34 @@ function Content({
 }
 
 /**
+ * The banner over a list that is only the last thing seen — the variant of the two stale states
+ * that has something to caveat.
+ *
+ * The sentence vouching for the lease details is in both wordings and is the point of the banner
+ * (`docs/DESIGN.md` §7): `stale` is about the host's view of the hardware and says nothing about
+ * leases, so a banner that cast doubt over the whole grid would lose the operator the part that was
+ * fine. What the reason adds is the clause between them — see {@link missingTooling}.
+ */
+function NotCurrentBanner({ reason }: { readonly reason: StaleReason | null }) {
+	const missing = missingTooling(reason);
+	return (
+		<HostViewNotCurrent>
+			{missing === null ? (
+				<>
+					This hardware list is the last thing seen, not what is attached now. The lease details
+					below are still accurate.
+				</>
+			) : (
+				<>
+					This hardware list is the last thing seen, not what is attached now, and it will not
+					correct itself: {missing}. The lease details below are still accurate.
+				</>
+			)}
+		</HostViewNotCurrent>
+	);
+}
+
+/**
  * Nothing is plugged into the machine — normal, common and *finished* (D21). Rover never starts an
  * emulator and never plugs in a phone; a person does, so until they do this is the correct state
  * rather than a fault.
@@ -225,17 +249,51 @@ function NothingAttached() {
  *
  * The counter is absent for *nothing attached*'s reason and more sharply: `0 held · 0 free` would
  * describe an empty pool, which is the precise claim this state exists to refuse. There is no retry
- * control either — this is host state that resolves itself, and the poll is already asking.
+ * control either — this is host state that resolves itself and the poll is already asking, and in
+ * the one case where it does not resolve itself ({@link missingTooling}) retrying is precisely what
+ * will not help.
  */
-function NoView() {
+function NoView({ reason }: { readonly reason: StaleReason | null }) {
+	const missing = missingTooling(reason);
 	return (
 		<HostViewNotCurrent>
-			Rover cannot say what is attached to this machine. Its view of the hardware was interrupted,
-			has not arrived yet, or is not running.
+			{missing === null ? (
+				<>
+					Rover cannot say what is attached to this machine. Its view of the hardware was
+					interrupted, has not arrived yet, or is not running.
+				</>
+			) : (
+				<>Rover cannot say what is attached to this machine, and it will not find out: {missing}.</>
+			)}
 			<span className="mt-2 block">
 				This is not the same as nothing being attached — a phone may well be plugged in.
 			</span>
 		</HostViewNotCurrent>
+	);
+}
+
+/**
+ * The one clause both stale states swap in when the host named a cause that will **not** clear on
+ * its own (#168) — and `null` for every transient interruption, which leaves the wording R35
+ * settled exactly as it was.
+ *
+ * It is one sentence rather than a state of its own because the heading is still true and still one
+ * clause (`docs/DESIGN.md` §7): the host's view is not current. What changes is what a person
+ * should do about it — waiting works for the transient case and never works for this one, so the
+ * sentence names the program and says who has to install it.
+ *
+ * **The panel knows nothing about `adb`.** The program's name and the platform are values the host
+ * sent, rendered as they arrived (`ai/RULES.md` §2). An unrecognised `cause` falls through to
+ * `null` and the ordinary wording, because a newer daemon's second cause is one this screen cannot
+ * write a sentence for.
+ */
+function missingTooling(reason: StaleReason | null): string | null {
+	if (reason === null || reason.cause !== 'tooling-missing') {
+		return null;
+	}
+	return (
+		`this host could not run ${reason.tool}, so it cannot see its ${reason.platform} devices ` +
+		`at all until somebody installs it there or puts it on the PATH the host runs with`
 	);
 }
 
