@@ -11,6 +11,31 @@
 	}
 
 	/*
+	 * A pointer on what can be pressed, and nothing on what cannot — `docs/DESIGN.md` §5.
+	 *
+	 * Tailwind v4's preflight carries no `cursor: pointer` for `button` the way v3's did, so every
+	 * control in the panel fell back to the user agent's arrow and nothing in the interface read as
+	 * clickable at all. The Archive's `All` / `Testing groups` toggle is where that was noticed, not
+	 * where it lived.
+	 *
+	 * One base rule on the element rather than a utility per control, because the rule is about
+	 * *every* button including the next one somebody writes — a class sprinkled across eight files
+	 * is the one the ninth component forgets. It also adds no class, so it is invisible to the tests
+	 * that assert over rendered markup, and it cannot reach anything that is not a button: the
+	 * archive's contents rows are `<div>`s, read rather than followed (§9), and stay untouched.
+	 *
+	 * `:not(:disabled)` is the whole of the exception, and it is `.control-tactile`'s reason below:
+	 * a disabled control promises a press that does nothing, so it drops the affordance rather than
+	 * keeping a weakened one. It keeps its own `cursor-not-allowed`, which promises nothing.
+	 *
+	 * Links need no rule here — a user agent already points at an `a[href]` and preflight leaves
+	 * that alone, so the sidebar, the breadcrumb and the archive tree were never part of this.
+	 */
+	button:not(:disabled) {
+		cursor: pointer;
+	}
+
+	/*
 	 * The CRT scanline. It is a *static* 4px repeating gradient and does not move —
 	 * `docs/DESIGN.md` §5. Two rules ride on it and both are load-bearing:
 	 *
