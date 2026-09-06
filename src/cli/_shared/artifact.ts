@@ -110,6 +110,18 @@ export interface ArtifactDelivery {
 	 * one, because a label names a copy no client is ever handed (D19).
 	 */
 	readonly label?: string;
+	/**
+	 * One more line for a human, when the answer carries something a written file does not show.
+	 *
+	 * It exists for `record` and the still-screen case (#183): `--json` carries the whole answer
+	 * and a script reads `container` off it, but a human running `rover record` sees one "Wrote N
+	 * bytes …" line, and "the screen never changed" is precisely the fact that line cannot
+	 * convey. It is host text like the media type, so it is escaped like host text.
+	 *
+	 * Optional and printed only on the `ok` non-`--json` path — a failure prints the refusal and
+	 * nothing else, and `screenshot` passes none.
+	 */
+	readonly note?: string;
 }
 
 /**
@@ -123,7 +135,7 @@ export interface ArtifactDelivery {
  * file, rather than a short one. Two copies of that ordering is one copy that can drift.
  */
 export async function deliverArtifact(delivery: ArtifactDelivery): Promise<number> {
-	const { host, verb, answer, destination, json, label } = delivery;
+	const { host, verb, answer, destination, json, label, note } = delivery;
 	// Absent stays absent in the document too — no key rather than a null, which is what the
 	// wire means by a label nobody supplied.
 	const labelled = label === undefined ? {} : { label };
@@ -147,6 +159,10 @@ export async function deliverArtifact(delivery: ArtifactDelivery): Promise<numbe
 		out.printJson(host, { ...describeWithoutBytes(answer), ...labelled, artifactPath });
 	} else {
 		out.info(renderWritten(artifact, artifactPath));
+		// After the written line rather than instead of it: the file is still the answer, and the
+		// note is what the file alone would not tell you. `--json` needs none of this — it carries
+		// the field the note was rendered from.
+		if (note !== undefined) out.info(out.escapeControlCharacters(note));
 	}
 	return exitCodeFor(answer);
 }

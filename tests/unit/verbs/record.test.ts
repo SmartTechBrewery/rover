@@ -51,6 +51,7 @@ import {
 	createMockDeviceBackend,
 	createMockDeviceInfo,
 	createMockPngBytes,
+	createMockRecordingBytes,
 	createMockScreenElement,
 	createMockVerbContext,
 } from '../../helpers/factories.js';
@@ -461,5 +462,79 @@ describe('record_video answers with the frames sliced out of the recording', () 
 	it('scales frames down rather than carrying the panel at full width', () => {
 		expect(FRAME_WIDTH_PX).toBeLessThan(720);
 		expect(FRAME_WIDTH_PX).toBeGreaterThan(0);
+	});
+});
+
+/**
+ * The answer says what the recording **contains** (#183).
+ *
+ * The gap this closes is not a check that was missing — every check the verb makes passes for a
+ * capture of a screen that never moved — it is that the answer said nothing at all about the
+ * file. An agent that ffprobed one, found a single frame of zero duration and could not square
+ * it with an `ok` filed a defect against a tool that was working correctly.
+ *
+ * The parse itself has its own suite (`./recording-container.test.ts`). What is asserted here is
+ * that the field reaches the answer, that the still-screen case is still an `ok` answer with its
+ * frame, and that reading it cost no second pass over the device and no second host hook.
+ */
+describe('record_video says what the recording holds', () => {
+	it('carries the container’s sample count and declared duration on the answer', async () => {
+		const { context, options } = recording({
+			video: createMockRecordingBytes({ sampleCount: 42, durationMs: 3_000 }),
+		});
+
+		const result = await recordVideo(context, options);
+
+		expect(result.container).toEqual({ kind: 'samples', sampleCount: 42, durationMs: 3_000 });
+	});
+
+	/**
+	 * The numbers come off the container, never from what the caller asked for. PROJECT.md §6
+	 * has a 15 s capture declaring 27.61 s, so the two are different facts and an answer that
+	 * echoed the request would be a plausible-looking wrong one.
+	 */
+	it('reads the duration off the file rather than echoing the one it was asked for', async () => {
+		const { context, options } = recording({
+			video: createMockRecordingBytes({ sampleCount: 2, durationMs: 27_610 }),
+		});
+
+		const result = await recordVideo(context, { ...options, durationMs: MAX_RECORDING_MS });
+
+		expect(result.container).toMatchObject({ durationMs: 27_610 });
+	});
+
+	it('names a recording of a screen that never changed, and still answers ok with its frame', async () => {
+		const { calls, context, options } = recording({
+			video: createMockRecordingBytes({ sampleCount: 1, durationMs: 0 }),
+			frames: [createMockPngBytes()],
+		});
+
+		const result = await recordVideo(context, options);
+
+		expect(result.container).toMatchObject({ kind: 'still-screen', sampleCount: 1, durationMs: 0 });
+		// A capture of an idle screen is a true answer about the device, so it is reported rather
+		// than refused: the recording is still on the artifact and the one frame `round=up`
+		// extracted is still beside it.
+		expect(result.artifact).not.toBeNull();
+		expect(result.frames).toHaveLength(1);
+		// And nothing was asked of the device or of the host a second time to learn any of it —
+		// the walk is over bytes already in hand.
+		expect(calls).toEqual(['recordVideo', 'extractFrames', 'readScreen', 'deviceInfo']);
+	});
+
+	/**
+	 * A backend "promises video bytes without saying in which container", so bytes this host
+	 * cannot parse are an anticipated future rather than a bug. Saying so is the honest answer;
+	 * throwing would add the refusal #183 rules out, and a zero would be the plausible-looking
+	 * empty result ai/RULES.md §2 forbids.
+	 */
+	it('answers unreadable rather than refusing bytes it cannot parse', async () => {
+		const { context, options } = recording({ video: recorded(2_048) });
+
+		const result = await recordVideo(context, options);
+
+		expect(result.container.kind).toBe('unreadable');
+		expect(result.artifact).not.toBeNull();
+		expect(result.frames).not.toHaveLength(0);
 	});
 });

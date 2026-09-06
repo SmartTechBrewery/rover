@@ -13,6 +13,7 @@ import {
 	MAX_FRAMES_PER_SECOND,
 	MAX_RECORDING_MS,
 } from '@/verbs/record.js';
+import { readRecordingContainer } from '@/verbs/recording-container.js';
 
 /**
  * `screenrecord` against a real attached device. Skips rather than fails when there is none
@@ -117,6 +118,32 @@ describe.skipIf(!process.env.ROVER_TEST_DEVICE)('record_video against a real dev
 
 		expect(isFinishedRecording(second)).toBe(true);
 	}, 120_000);
+
+	/**
+	 * What the answer now says the recording contains (#183) — read off a real recorder's
+	 * output rather than off a fixture or a hand-built file.
+	 *
+	 * Gated on the device flag **only**: the walk needs no decoder, so this case has nothing to
+	 * do with `ROVER_TEST_FRAME_EXTRACTION`.
+	 *
+	 * **No relationship is asserted between these numbers, the duration asked for, and how many
+	 * frames come out.** Whichever screen happens to be on the device decides all three, and a
+	 * still one is a legitimate answer — PROJECT.md §6 records a 15 s capture declaring 27.61 s.
+	 * Asserting the product would be asserting a device's timing.
+	 */
+	it('says how many samples the recording holds and what duration it declares', async () => {
+		const device = await firstUsableDevice();
+
+		const bytes = await backend.recordVideo(device.serial, { durationMs: DURATION_MS });
+		const container = readRecordingContainer(bytes);
+
+		// A real recorder's own container, so this walk must be able to read it — `unreadable`
+		// here would mean the parse does not understand what the device actually writes.
+		expect(container.kind).not.toBe('unreadable');
+		if (container.kind === 'unreadable') return;
+		expect(container.sampleCount).toBeGreaterThanOrEqual(1);
+		expect(container.durationMs).toBeGreaterThanOrEqual(0);
+	}, 60_000);
 });
 
 /**

@@ -27,6 +27,7 @@
 
 import { parseLeaseId } from '../../core/ids.js';
 import { DEFAULT_REQUEST_TIMEOUT_MS } from '../../ipc/client.js';
+import type { RecordVideoCallResult } from '../../ipc/methods.js';
 import {
 	DEFAULT_FRAMES_PER_SECOND,
 	DEFAULT_RECORDING_MS,
@@ -69,6 +70,14 @@ this command carries. The answer is both or neither: on a host that cannot slice
 installed on the machine holding the device — this exits 1 with \`frame-extraction-unavailable\`
 and writes no video either. The frames themselves are not written to disk yet; --json reports
 how many there were and how large each one is.
+
+The answer also says what the recording contains: how many encoded samples it holds and what
+duration the container declares, both read off the file rather than taken from --duration-ms,
+which is a different number. A recording of a screen that never changed is one sample with a
+declared duration of 0 and a single frame — a device's virtual display produces a buffer only
+when the screen changes, so that is a true answer about the device rather than a fault. It
+still exits 0 and still writes the video; --json reports it on \`container\`, and without --json
+this command prints a line saying so under the written file.
 
 This command waits for the whole recording, the frame extraction and the transfer, so it
 raises its own request timeout past the ${DEFAULT_REQUEST_TIMEOUT_MS} ms every other command uses — a long
@@ -132,10 +141,30 @@ export async function run(argv: string[]): Promise<number> {
 			destination,
 			json: values.json === true,
 			...(label === undefined ? {} : { label }),
+			...noteFor(answer),
 		});
 	} finally {
 		await client.close();
 	}
+}
+
+/**
+ * The extra line a human gets when the host said something the written file cannot show — for
+ * now, exactly the still-screen case (#183).
+ *
+ * The message is the **host's**, printed rather than restated, so the CLI and an agent reading
+ * the MCP answer are told the same thing by the same sentence rather than by two copies free to
+ * drift. `--json` gets nothing extra: it already carries `container` whole, which is what a
+ * script reads. `client.request('record_video', …)` is typed `RecordVideoCallResult`, so the
+ * branch below narrows rather than casts.
+ *
+ * A `samples` or `unreadable` container prints nothing. `unreadable` is a fact about this
+ * host's parse rather than about the recording, the video is written either way, and a line
+ * about it would read to a human as a problem with the file they just got.
+ */
+function noteFor(answer: RecordVideoCallResult): { note?: string } {
+	if (answer.outcome !== 'ok' || answer.result.container.kind !== 'still-screen') return {};
+	return { note: answer.result.container.message };
 }
 
 /**

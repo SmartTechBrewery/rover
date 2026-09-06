@@ -50,24 +50,62 @@ export function createMockCapabilities(overrides: Partial<Capabilities> = {}): C
 }
 
 /**
- * Bytes shaped like the smallest thing a recorder could hand back: an `ftyp` box, then a
- * `moov` — the index a finished recording has and an unfinished one does not.
+ * Bytes shaped like what a recorder hands back: an `ftyp` box, then a `moov` carrying a
+ * movie header and one video track with a sample table.
  *
- * Real box headers rather than three arbitrary bytes, because two things downstream read
- * them: `mediaTypeOf` sniffs the `ftyp` at offset 4 to answer `video/mp4`, and the Android
- * backend's `isFinishedRecording` looks for the `moov`. A fixture that carried neither would
- * make every test over it agree with a verb that had stopped checking.
+ * Real box headers rather than a few arbitrary bytes, because **three** things downstream read
+ * them: `mediaTypeOf` sniffs the `ftyp` at offset 4 to answer `video/mp4`, the Android
+ * backend's `isFinishedRecording` looks for the `moov`, and — since #183 —
+ * `readRecordingContainer` walks into that `moov` for the sample count and the declared
+ * duration. A fixture that carried none of it would make every test over it agree with a verb
+ * that had stopped checking; an `ftyp` and an *empty* `moov`, which is what this was, would
+ * make every one of them assert the `unreadable` branch.
+ *
+ * The defaults are an **ordinary** recording — several samples over five declared seconds — so
+ * a suite that does not care gets the uninteresting answer. `{ sampleCount: 1, durationMs: 0 }`
+ * is the still-screen shape, which is the one case worth asking for by name.
+ *
+ * Deterministic byte for byte: `tests/unit/mcp/artifact-tools.test.ts` compares a written file
+ * against a second call to this function.
  */
-export function createMockRecordingBytes(): Uint8Array {
-	const box = (type: string) => [
-		0,
-		0,
-		0,
-		8,
-		...[...type].map((character) => character.charCodeAt(0)),
+export function createMockRecordingBytes(
+	options: { sampleCount?: number; durationMs?: number } = {},
+): Uint8Array {
+	const sampleCount = options.sampleCount ?? 10;
+	const durationMs = options.durationMs ?? 5_000;
+	const uint32 = (value: number) => [
+		(value >>> 24) & 0xff,
+		(value >>> 16) & 0xff,
+		(value >>> 8) & 0xff,
+		value & 0xff,
 	];
-	return Uint8Array.from([...box('ftyp'), ...box('moov')]);
+	const characters = (text: string) => [...text].map((character) => character.charCodeAt(0));
+	const box = (type: string, body: number[] = []) => [
+		...uint32(BOX_HEADER_BYTES + body.length),
+		...characters(type),
+		...body,
+	];
+	// A `FullBox`'s body opens with `version:uint8` and three flag bytes; every box below is
+	// version 0, which is what puts the timescale and the duration at the offsets the parser
+	// reads. The `mvhd` stops after `duration` rather than carrying the rate, volume and matrix
+	// a recorder writes — the declared size says so, and nothing here reads past it.
+	const mvhd = box('mvhd', [
+		...uint32(0),
+		...uint32(0),
+		...uint32(0),
+		// A timescale of a thousand makes the declared duration read back as the milliseconds
+		// asked for, without a fixture author having to do the division in their head.
+		...uint32(1_000),
+		...uint32(durationMs),
+	]);
+	const hdlr = box('hdlr', [...uint32(0), ...uint32(0), ...characters('vide')]);
+	const stsz = box('stsz', [...uint32(0), ...uint32(0), ...uint32(sampleCount)]);
+	const trak = box('trak', box('mdia', [...hdlr, ...box('minf', box('stbl', stsz))]));
+	return Uint8Array.from([...box('ftyp'), ...box('moov', [...mvhd, ...trak])]);
 }
+
+/** Every ISO base media box opens with `size:uint32` then `type:4 chars` (ISO/IEC 14496-12 §4.2). */
+const BOX_HEADER_BYTES = 8;
 
 /** The eight bytes every PNG starts with (PNG 1.2 §3.1) — the ones a frame is split on. */
 const PNG_SIGNATURE = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];

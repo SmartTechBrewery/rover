@@ -265,6 +265,24 @@ describe('what tools/list advertises for the verbs', () => {
 			expect(toolNamed(tools, method).description).toContain('canControlNetwork');
 		}
 	});
+
+	/**
+	 * The same legibility-before-the-call argument, applied to the one answer that is easy to
+	 * mistake for a broken tool (#183). An agent that reads the declaration knows a recording of
+	 * a still screen exists as a case *before* it records one, rather than working it out from a
+	 * one-frame answer and an `ffprobe` run — which is how it was worked out the first time, and
+	 * the conclusion was that Rover does not record video.
+	 */
+	it('tells an agent what a recording of a still screen looks like, before it takes one', async () => {
+		const description = (await advertisedTools()).find(
+			(tool) => tool.name === 'record_video',
+		)?.description;
+
+		expect(description).toContain('still-screen');
+		expect(description).toMatch(/did not change/i);
+		expect(description).toMatch(/virtual display/i);
+		expect(description).toMatch(/rather than a fault/i);
+	});
 });
 
 describe('the completeness gate over IPC_METHODS', () => {

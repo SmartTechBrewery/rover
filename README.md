@@ -737,6 +737,17 @@ Because the extraction happens inside the same call, `rover record` answers with
 on a host with no decoder installed the command exits 1 with `frame-extraction-unavailable` and
 writes no video either, and its `--help` says so.
 
+**The answer also says what the recording contains.** `result.container` carries how many encoded
+samples the recording holds and what duration the file itself declares — read out of the container
+on the host, and deliberately not the duration you asked for, which is a different number: a
+fifteen-second capture of a barely-changing screen has been measured declaring 27.61 s. **A
+recording of a screen that never changed is one sample, a declared duration of zero and a single
+frame**, and it is named as exactly that (`still-screen`) with the reason in words. A device's
+virtual display produces a buffer only when the screen changes, so that is a true answer about the
+device rather than a fault — it still exits 0, still writes the video and still carries its frame,
+and the point of naming it is that every other check this verb makes passes for it, so an agent
+that saw only one frame had nothing to conclude from but its own suspicion.
+
 **What a recording is honest about: it samples motion, and the frames sample it again.** It can tell
 you something moved and roughly when. It cannot tell you how the movement eased, whether a frame was
 dropped, or whether what a person would call jank happened — and reading any of that out of it
