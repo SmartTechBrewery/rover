@@ -520,9 +520,12 @@ caller-supplied `actor` string the host records and derives from nothing — nev
 authenticated, and never a token (D20).
 
 **The daemon restores the device itself** (D9) — on `release_device`, on `force_release_device` and
-on expiry alike, from the one place a lease is observed to end. It stops the project's applications, turns airplane mode off,
-turns wifi back on (in that order: `PROJECT.md` §6 records why the wifi step has to be last), stops
-the project's helper services and runs the project's teardown hook. A caller is never asked to do any of it and cannot opt out; a
+on expiry alike, from the one place a lease is observed to end. It stops a recording the lease left
+running and removes the file it was writing, stops the project's applications, turns airplane mode
+off, turns wifi back on (in that order: `PROJECT.md` §6 records why the wifi step has to be last),
+stops the project's helper services and runs the project's teardown hook. The recorder goes first
+because it is the driver most likely to still be holding the device, and its bytes are **dropped**
+rather than archived — a lease that ended has nobody left to hand a recording to. A caller is never asked to do any of it and cannot opt out; a
 step that fails is reported and the remaining steps still run — including a project resolver that
 throws, which costs that project's own steps and never the device's; and a device is never handed
 to the next lessee while its restoration is still in flight. An unref'ed sweep is what notices a
@@ -802,8 +805,10 @@ queued behind a recorder nobody intends to stop yet. Stopping when nothing was r
 because the file it left is complete and the stop hands it over.
 
 The length is decided by when you stop, so the start takes no duration — but the recorder is still
-given the fifteen seconds `MAX_RECORDING_MS` allows as its own kill switch, which is what stops one
-whose caller walked away from running on under the next lease. Nothing on the host remembers that a
+given the fifteen seconds `MAX_RECORDING_MS` allows as its own kill switch. A caller that walks away
+without stopping is now the host's problem rather than the limit's: the lease's end stops the
+recorder and removes its file, on release and on expiry alike (D9), and the limit is what covers the
+one case a teardown cannot — a host that died along with the lease. Nothing on the host remembers that a
 recording is open (D6): whether one is is a question for the device, asked at the moment it matters.
 And because no window was ever named, `stop_recording` holds nothing across one — the file follows
 the recorder's own timeline whatever it turned out to be, and `normalisation.message` says so. That

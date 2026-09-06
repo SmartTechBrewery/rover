@@ -67,6 +67,9 @@ const TTL_MS = 60_000;
 
 /** What a fully restored device looks like, in the order PROJECT.md §6 says is correct. */
 const FULL_RESTORATION = [
+	// Ahead of the app steps (#191): the recorder is the driver most likely to still be holding
+	// the device, and force-stopping an app underneath one is the two-drivers problem in miniature.
+	'discardRecording',
 	`stopApp ${APP}`,
 	`stopApp ${OTHER_APP}`,
 	'setAirplaneMode false',
@@ -238,6 +241,9 @@ function createRecordingBackend(
 		setWifiEnabled: async (_serial, enabled: boolean) => {
 			performed.push(`setWifiEnabled ${enabled}`);
 		},
+		discardRecording: async () => {
+			performed.push('discardRecording');
+		},
 		...overrides,
 	};
 }
@@ -352,6 +358,7 @@ describe('a step that fails does not take the rest with it', () => {
 		// A teardown that stops at the first error is "only runs on the happy path" in a new
 		// costume: the app would be left running because a radio would not turn off.
 		expect(harness.performed).toEqual([
+			'discardRecording',
 			`stopApp ${APP}`,
 			`stopApp ${OTHER_APP}`,
 			'setWifiEnabled true',
@@ -389,10 +396,140 @@ describe('a backend that cannot control the network', () => {
 
 		// An honest opt-out is not a failure (D11), and a teardown is not a verb an agent
 		// called — there is nobody to hand a `MissingCapabilityError` to.
-		expect(harness.performed).toEqual([`stopApp ${APP}`, `stopApp ${OTHER_APP}`, 'teardown']);
+		expect(harness.performed).toEqual([
+			'discardRecording',
+			`stopApp ${APP}`,
+			`stopApp ${OTHER_APP}`,
+			'teardown',
+		]);
 		expect(harness.warnings).toHaveLength(1);
 		expect(harness.warnings[0]).toContain('canControlNetwork');
 		expect(harness.warnings[0]).toContain(SERIAL);
+	});
+});
+
+/**
+ * A recording the lease left running (#191, R43 phase 3).
+ *
+ * The two suites above already carry the headline claim: `FULL_RESTORATION` opens with
+ * `discardRecording`, so the expiry cases — where there is nobody left to ask — assert it as
+ * flatly as the release cases do. What is left here is the shape of the step itself.
+ */
+describe('a recorder that outlived its lease', () => {
+	it('is stopped ahead of the apps, so nothing is force-stopped underneath it', async () => {
+		const harness = createHarness();
+		const leaseId = await harness.acquire('issue-112');
+
+		harness.handlers.release_device({ leaseId });
+		await harness.settle();
+
+		expect(harness.performed[0]).toBe('discardRecording');
+		expect(harness.warnings).toEqual([]);
+	});
+
+	// Contained like every other step: the warning names it, and the app, airplane-mode and wifi
+	// steps still run. A device left in airplane mode because a recorder would not die is the
+	// "only runs on the happy path" failure D9 exists to remove.
+	it('is a warning naming the step when it fails, and the rest still runs', async () => {
+		const harness = createHarness({
+			backend: () => ({
+				discardRecording: async () => {
+					throw new Error('screenrecord still running as pid 29633');
+				},
+			}),
+		});
+		const leaseId = await harness.acquire('issue-112');
+
+		harness.handlers.release_device({ leaseId });
+		await harness.settle();
+
+		expect(harness.performed).toEqual([
+			`stopApp ${APP}`,
+			`stopApp ${OTHER_APP}`,
+			'setAirplaneMode false',
+			'setWifiEnabled true',
+			'teardown',
+		]);
+		expect(harness.warnings).toHaveLength(1);
+		expect(harness.warnings[0]).toContain('stopping a recording left running');
+		expect(harness.warnings[0]).toContain('screenrecord still running as pid 29633');
+	});
+
+	// And on the expiry path too, where the agent that started the recorder is gone: the same
+	// containment, from the sweep rather than from a release.
+	it('is a warning on the expiry path as well, with nobody left to ask', async () => {
+		const harness = createHarness({
+			backend: () => ({
+				discardRecording: async () => {
+					throw new Error('screenrecord still running as pid 29633');
+				},
+			}),
+		});
+		await harness.acquire('issue-112');
+
+		harness.at(1_000_000 + TTL_MS);
+		harness.leases.sweep();
+		await harness.settle();
+
+		expect(harness.performed).toEqual([
+			`stopApp ${APP}`,
+			`stopApp ${OTHER_APP}`,
+			'setAirplaneMode false',
+			'setWifiEnabled true',
+			'teardown',
+		]);
+		expect(harness.warnings).toHaveLength(1);
+		expect(harness.warnings[0]).toContain('stopping a recording left running');
+	});
+
+	/**
+	 * An honest opt-out is not a failure (D11) and not a skipped restoration — the same shape
+	 * `canControlNetwork` already has. What it costs is named, because a backend that cannot stop
+	 * a recorder leaves one running until it reaches its own limit.
+	 */
+	it('is one warning naming the capability when the backend does not declare it', async () => {
+		const harness = createHarness({ capabilities: { canControlRecording: false } });
+		const leaseId = await harness.acquire('issue-112');
+
+		harness.handlers.release_device({ leaseId });
+		await harness.settle();
+
+		expect(harness.performed).toEqual([
+			`stopApp ${APP}`,
+			`stopApp ${OTHER_APP}`,
+			'setAirplaneMode false',
+			'setWifiEnabled true',
+			'teardown',
+		]);
+		expect(harness.warnings).toHaveLength(1);
+		expect(harness.warnings[0]).toContain('canControlRecording');
+		expect(harness.warnings[0]).toContain(SERIAL);
+	});
+
+	/**
+	 * A backend that declares the capability and implements nothing is a wiring bug the
+	 * conformance suite exists to catch — reported here as a warning naming both, rather than as
+	 * a restoration that stopped.
+	 */
+	it('names the capability and the method when a backend declares one and answers neither', async () => {
+		const harness = createHarness({
+			backend: () => ({ discardRecording: undefined }),
+		});
+		const leaseId = await harness.acquire('issue-112');
+
+		harness.handlers.release_device({ leaseId });
+		await harness.settle();
+
+		expect(harness.performed).toEqual([
+			`stopApp ${APP}`,
+			`stopApp ${OTHER_APP}`,
+			'setAirplaneMode false',
+			'setWifiEnabled true',
+			'teardown',
+		]);
+		expect(harness.warnings).toHaveLength(1);
+		expect(harness.warnings[0]).toContain('canControlRecording');
+		expect(harness.warnings[0]).toContain('discardRecording');
 	});
 });
 
@@ -415,7 +552,11 @@ describe('the project seam the hook file fills', () => {
 		// And the resolver costs its own steps only. One unreadable config file that skipped
 		// the radios would hand the next agent a phone in airplane mode, for every device that
 		// project ever leases, with nothing left to retry it.
-		expect(harness.performed).toEqual(['setAirplaneMode false', 'setWifiEnabled true']);
+		expect(harness.performed).toEqual([
+			'discardRecording',
+			'setAirplaneMode false',
+			'setWifiEnabled true',
+		]);
 		expect(harness.warnings).toHaveLength(1);
 		expect(harness.warnings[0]).toContain('the project file is unreadable');
 	});
@@ -430,7 +571,11 @@ describe('the project seam the hook file fills', () => {
 		harness.leases.sweep();
 		await harness.settle();
 
-		expect(harness.performed).toEqual(['setAirplaneMode false', 'setWifiEnabled true']);
+		expect(harness.performed).toEqual([
+			'discardRecording',
+			'setAirplaneMode false',
+			'setWifiEnabled true',
+		]);
 		expect(harness.warnings).toHaveLength(1);
 		expect(harness.warnings[0]).toContain('the project file is unreadable');
 	});
@@ -444,7 +589,11 @@ describe('the project seam the hook file fills', () => {
 
 		// A project with no hook file leaves the app and hook steps with nothing to do. A hook
 		// that does not fire is not a hook that is broken.
-		expect(harness.performed).toEqual(['setAirplaneMode false', 'setWifiEnabled true']);
+		expect(harness.performed).toEqual([
+			'discardRecording',
+			'setAirplaneMode false',
+			'setWifiEnabled true',
+		]);
 		expect(harness.warnings).toEqual([]);
 	});
 });
@@ -467,6 +616,7 @@ describe('a project teardown hook that never returns', () => {
 
 		await expect(harness.acquire('pr-127-review')).resolves.toBeTruthy();
 		expect(harness.performed).toEqual([
+			'discardRecording',
 			`stopApp ${APP}`,
 			'setAirplaneMode false',
 			'setWifiEnabled true',
@@ -493,6 +643,7 @@ describe('a verb call from the ending lease that never unwinds', () => {
 
 		await expect(harness.acquire('pr-127-review')).resolves.toBeTruthy();
 		expect(harness.performed).toEqual([
+			'discardRecording',
 			`stopApp ${APP}`,
 			`stopApp ${OTHER_APP}`,
 			'setAirplaneMode false',
@@ -561,6 +712,7 @@ describe('a device is never granted mid-restore', () => {
 		await acquiring;
 
 		expect(harness.performed).toEqual([
+			'discardRecording',
 			`stopApp ${APP}`,
 			'setAirplaneMode false',
 			'setWifiEnabled true',
@@ -699,6 +851,7 @@ describe('a project hook file, on both paths a lease can end', () => {
 		await harness.settle();
 
 		expect(harness.performed).toEqual([
+			'discardRecording',
 			`stopApp ${CHECKOUT}`,
 			`stopApp ${HELPER}`,
 			'setAirplaneMode false',
@@ -727,6 +880,7 @@ describe('a project hook file, on both paths a lease can end', () => {
 		await harness.settle();
 
 		expect(harness.performed).toEqual([
+			'discardRecording',
 			`stopApp ${CHECKOUT}`,
 			`stopApp ${HELPER}`,
 			'setAirplaneMode false',
@@ -755,6 +909,7 @@ describe('a project hook file, on both paths a lease can end', () => {
 		// D6: the file is re-read at every use and never cached, so the helper app is no longer
 		// stopped and no teardown runs — with the daemon still up.
 		expect(harness.performed).toEqual([
+			'discardRecording',
 			`stopApp ${CHECKOUT}`,
 			'setAirplaneMode false',
 			'setWifiEnabled true',
@@ -770,7 +925,11 @@ describe('a project hook file, on both paths a lease can end', () => {
 
 		// A project nobody has registered is the ordinary state of a host, not a failure — and
 		// no default anywhere names an application, so nothing is stopped.
-		expect(harness.performed).toEqual(['setAirplaneMode false', 'setWifiEnabled true']);
+		expect(harness.performed).toEqual([
+			'discardRecording',
+			'setAirplaneMode false',
+			'setWifiEnabled true',
+		]);
 		expect(harness.warnings).toEqual([]);
 	});
 
@@ -788,7 +947,11 @@ describe('a project hook file, on both paths a lease can end', () => {
 		// One bad config file costs that project's own steps and nothing else. The alternative
 		// hands the next agent a phone left in airplane mode, for every device that project
 		// ever leases, with nothing left to retry it.
-		expect(harness.performed).toEqual(['setAirplaneMode false', 'setWifiEnabled true']);
+		expect(harness.performed).toEqual([
+			'discardRecording',
+			'setAirplaneMode false',
+			'setWifiEnabled true',
+		]);
 		expect(harness.warnings).toHaveLength(1);
 		expect(harness.warnings[0]).toContain(HOOK_PROJECT);
 		expect(harness.warnings[0]).toContain('is not valid JSON');
@@ -840,6 +1003,7 @@ describe('a project hook file, on both paths a lease can end', () => {
 		// The teardown is last, so everything before it already ran; the failure is contained
 		// the way every other step's is, and the device is free for the next lessee.
 		expect(harness.performed).toEqual([
+			'discardRecording',
 			`stopApp ${CHECKOUT}`,
 			'setAirplaneMode false',
 			'setWifiEnabled true',
@@ -883,6 +1047,7 @@ describe('a project hook file, on both paths a lease can end', () => {
 			// This test cannot pass by waiting: the restorer's bound outlasts the suite's own.
 			expect(harness.warnings).toEqual([]);
 			expect(harness.performed).toEqual([
+				'discardRecording',
 				`stopApp ${CHECKOUT}`,
 				'setAirplaneMode false',
 				'setWifiEnabled true',
@@ -960,6 +1125,7 @@ describe('a project hook file, on both paths a lease can end', () => {
 			]);
 			// The device's own steps are unchanged and still come first.
 			expect(harness.performed).toEqual([
+				'discardRecording',
 				`stopApp ${CHECKOUT}`,
 				'setAirplaneMode false',
 				'setWifiEnabled true',
@@ -1106,6 +1272,7 @@ describe('a project hook file, on both paths a lease can end', () => {
 
 			// The existing order, untouched: a field nobody uses costs nothing at all.
 			expect(harness.performed).toEqual([
+				'discardRecording',
 				`stopApp ${CHECKOUT}`,
 				`stopApp ${HELPER}`,
 				'setAirplaneMode false',

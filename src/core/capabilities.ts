@@ -135,7 +135,7 @@ export const CAPABILITY_METHODS = {
 	canInput: ['tap', 'swipe', 'typeText', 'pressKey'],
 	canControlNetwork: ['setAirplaneMode', 'setWifiEnabled'],
 	canRecordVideo: ['recordVideo'],
-	canControlRecording: ['startRecording', 'stopRecording'],
+	canControlRecording: ['startRecording', 'stopRecording', 'discardRecording'],
 } as const satisfies Record<CapabilityId, readonly CapabilityGatedMethod[]>;
 
 /** Non-throwing query — what the verb layer asks before dispatching. */

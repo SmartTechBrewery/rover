@@ -3619,3 +3619,124 @@ describe('stopRecording', () => {
 		expect(Buffer.from(bytes).equals(FINISHED_RECORDING)).toBe(true);
 	});
 });
+
+/**
+ * `discardRecording`, the lease-end teardown's own method (#191).
+ *
+ * It is `stopRecording` with everything after the wait taken out, and that absence is the
+ * subject of nearly every case below: no `stat`, no pull, no `moov` check, no bytes — a lease
+ * that ended has no caller to hand a recording to, and pulling several megabytes off a device
+ * nobody is waiting on is what the separate method exists to avoid. What it keeps is the pair
+ * that matters: the recorder is signalled and *waited for on a condition*, and the scratch file
+ * is removed on every path.
+ */
+describe('discardRecording', () => {
+	it('asks, signals, waits for the recorder to go and removes the file, pinned to the device', async () => {
+		records({ pids: ['29633\n', ''] });
+
+		await backend.discardRecording(SERIAL);
+
+		expect(runAdbOnDevice.mock.calls.map(([, args]) => [...args])).toEqual([
+			RECORDING_PIDOF_ARGV,
+			RECORDING_KILL_ARGV,
+			RECORDING_PIDOF_ARGV,
+			RECORDING_RM_ARGV,
+		]);
+		for (const call of runAdbOnDevice.mock.calls) expect(call[0]).toBe(SERIAL);
+	});
+
+	// The whole reason this is not `stopRecording` with the answer thrown away: nothing is asked
+	// of the device about the file's contents, and no bytes cross the bridge.
+	it('never asks for the bytes, and never asks whether they would be playable', async () => {
+		records({ pids: ['29633\n', ''] });
+
+		await backend.discardRecording(SERIAL);
+
+		expect(runAdbBinaryOnDevice).not.toHaveBeenCalled();
+		expect(runAdbOnDevice.mock.calls.map(([, args]) => args.join(' '))).not.toContain(
+			RECORDING_STAT_ARGV.join(' '),
+		);
+	});
+
+	// The condition, as an assertion about ordering: still there on the first probe, gone on the
+	// second, and the file removed only once it is gone.
+	it('never removes the file while the recorder is still writing it', async () => {
+		records({ pids: ['29633\n', '29633\n', ''] });
+
+		await backend.discardRecording(SERIAL);
+
+		const argv = runAdbOnDevice.mock.calls.map(([, args]) => args.join(' '));
+		expect(argv.filter((call) => call === RECORDING_PIDOF_ARGV.join(' '))).toHaveLength(3);
+		expect(argv.indexOf(RECORDING_RM_ARGV.join(' '))).toBe(argv.length - 1);
+	});
+
+	/**
+	 * The ordinary case, because most leases record nothing: no recorder means nothing to signal
+	 * and nothing to wait for, and `rm -f` is happy about a path that is not there. A teardown
+	 * that treated it as a failure would warn on every lease that ended.
+	 */
+	it('removes the file and signals nothing when no recorder is running', async () => {
+		records({ pids: [''] });
+
+		await expect(backend.discardRecording(SERIAL)).resolves.toBeUndefined();
+
+		expect(runAdbOnDevice.mock.calls.map(([, args]) => [...args])).toEqual([
+			RECORDING_PIDOF_ARGV,
+			RECORDING_RM_ARGV,
+		]);
+	});
+
+	/**
+	 * The race the `|| true` on the signal is for: `pidof` named a recorder one round trip ago and
+	 * it has reached its own `--time-limit` since, so the command expands to a bare `kill -INT`
+	 * that exits 1 (PROJECT.md §6). Without the tolerance a teardown would warn about a device
+	 * that is perfectly fine.
+	 */
+	it('is untroubled by a recorder that exited between the pid check and the signal', async () => {
+		recorderVanishesAfterPreCheck();
+
+		await expect(backend.discardRecording(SERIAL)).resolves.toBeUndefined();
+
+		expect(runAdbOnDevice.mock.calls.map(([, args]) => args.join(' '))).toContain(
+			RECORDING_RM_ARGV.join(' '),
+		);
+	});
+
+	/**
+	 * A recorder that survives the signal is a failure and is reported as one — the restoration
+	 * step contains it into a warning naming the step (`src/daemon/restore.ts`). The file still
+	 * goes, which is the `finally`: leaving several megabytes on hardware the next lessee gets is
+	 * the thing this method exists to prevent, and it is no less true when the recorder held on.
+	 */
+	it('times out naming the pids when the recorder never goes away, and still removes the file', async () => {
+		vi.useFakeTimers();
+		try {
+			records({ pids: ['29633\n'] });
+
+			const failure = backend.discardRecording(SERIAL).catch((error) => error);
+			await vi.advanceTimersByTimeAsync(RECORDING_FINISH_TIMEOUT_MS + 1_000);
+
+			expect(String(await failure)).toMatch(/screenrecord still running as pid 29633/);
+			expect(runAdbOnDevice.mock.calls.map(([, args]) => args.join(' '))).toContain(
+				RECORDING_RM_ARGV.join(' '),
+			);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	/**
+	 * And the other half of that `finally`: a cleanup that failed is **not** swallowed here, which
+	 * is the one place this departs from `stopRecording` on purpose. That method has an answer to
+	 * protect; this one has none, and a file still sitting on the device is exactly what the
+	 * restoration needs to hear about.
+	 */
+	it('reports a cleanup the device refused rather than swallowing it', async () => {
+		records({
+			pids: [''],
+			fails: { [RECORDING_RM_ARGV.join(' ')]: new Error('the device refused') },
+		});
+
+		await expect(backend.discardRecording(SERIAL)).rejects.toThrow('the device refused');
+	});
+});

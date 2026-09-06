@@ -309,9 +309,10 @@ export interface RecordVideoOptions {
  * One knob, and it is deliberately **not** how long to record for: the caller decides that by
  * *when it stops* (#190). What this bounds is the recorder's own kill switch — the limit that
  * makes a recorder which outlived the client that started it stop by itself rather than run on
- * under the next lease (PROJECT.md §6). Until the lease-end teardown lands (R43 phase 3) it is
- * the **only** thing that bounds a stray recorder, which is why it is required rather than
- * optional.
+ * under the next lease (PROJECT.md §6). It was the **only** thing bounding a stray recorder until
+ * {@link discardRecording} landed the lease-end teardown (#191), and it is still required rather
+ * than optional, because that teardown runs on this host: a host that died with the lease cannot
+ * stop anything, and this limit does not need it to be alive.
  *
  * Not a schema and not optional, for {@link RecordVideoOptions}' reasons to the letter: the
  * default is the *verb's* (`src/verbs/record.ts`), so no backend invents a second one.
@@ -732,4 +733,33 @@ export interface DeviceBackend {
 	 * thing that decides its length is when this is called.
 	 */
 	stopRecording?(serial: DeviceSerial): Promise<Uint8Array>;
+
+	/**
+	 * Stop whatever recorder this device is running and remove the file it was writing. Gated by
+	 * `canControlRecording`.
+	 *
+	 * **The teardown's method, not a verb's** (#191, R43 phase 3). Nothing calls this on behalf of
+	 * an agent: `src/daemon/restore.ts` calls it when a lease ends, on release and on expiry
+	 * alike, because a recorder that outlives its lease is exactly the teardown-that-only-runs-on-
+	 * the-happy-path D9 exists to prevent — the next lessee would inherit a device that is still
+	 * recording, and a multi-megabyte scratch file on hardware that is not theirs.
+	 *
+	 * **It deliberately does not pull, check or answer with bytes**, which is why it is a method of
+	 * its own rather than a {@link stopRecording} the restoration ignores the answer of. That one
+	 * would drag several megabytes off a device nobody is waiting on, and would then refuse an
+	 * unfinished file (`UnfinishedRecordingError`) that a teardown has no reason to care about —
+	 * a lease that ended has no caller left to hand a recording to, and writing one into the
+	 * archive after the fact is a decision nobody has asked for. The bytes are dropped.
+	 *
+	 * **Nothing recording is the ordinary case, not a failure.** This runs for every lease that
+	 * ends, and most leases never record anything: a device with no recorder and no file is a
+	 * silent success, exactly as the radios are set without being read first. The failure it does
+	 * report is the one that matters — a recorder that would not go away, or a file that could not
+	 * be removed.
+	 *
+	 * **"The recorder is gone" is a condition with a timeout, never a sleep** (D12(b),
+	 * ai/RULES.md §2), the same one {@link stopRecording} waits on and for the same measured
+	 * reason.
+	 */
+	discardRecording?(serial: DeviceSerial): Promise<void>;
 }

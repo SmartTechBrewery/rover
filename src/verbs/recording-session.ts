@@ -74,8 +74,10 @@ import { type ActionResult, type Artifact, artifactFrom } from './result.js';
  * true: a screen read no longer queues behind a recording on the same device).
  *
  * **The recorder is started with a kill switch and it is not negotiable.** Nothing waits on this
- * recording, so until a lease's end tears one down (R43 phase 3) that limit is the only thing
- * standing between a caller that walked away and a recorder running on under the next lease. It
+ * recording, so that limit was the only thing standing between a caller that walked away and a
+ * recorder running on under the next lease until the lease's end started tearing one down (#191);
+ * it stays because that teardown runs on this host, and a host that died with the lease cannot
+ * run it. It
  * is {@link MAX_RECORDING_MS} — the same bound that caps `record_video`, because it is the same
  * bound for the same reason: what one answer can carry. A recording that reaches it stops
  * itself, and stopping afterwards still answers with the file it left, which is complete.
