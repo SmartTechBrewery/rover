@@ -189,6 +189,21 @@ describe('a recording whose container says nothing usable', () => {
 			/no encoded samples/,
 		],
 		['nothing at all', new Uint8Array(0), /no 'moov' box/],
+		// An 8-byte `mvhd` at the very end of the file is the one box whose body starts one past
+		// the last byte. It reached the version read before this walk checked it had a body, and
+		// a `DataView` throws there — which is the one thing this module promises never to do.
+		[
+			'an mvhd with no body as the last box in the file',
+			Uint8Array.from([...box('ftyp'), ...box('moov', box('mvhd'))]),
+			/'mvhd' box has no body/,
+		],
+		// The same box arrived at the other way: `size === 0` is the format's "to the end of this
+		// container", so eight trailing bytes are a header and nothing else.
+		[
+			'an mvhd declaring a length of zero as the last box in the file',
+			Uint8Array.from([...box('ftyp'), ...box('moov', [...uint32(0), ...chars('mvhd')])]),
+			/'mvhd' box has no body/,
+		],
 	])('names what was missing when there is %s', (_case, bytes, expected) => {
 		const container = readRecordingContainer(bytes);
 
@@ -212,6 +227,38 @@ describe('a recording whose container says nothing usable', () => {
 		const zeroLength = Uint8Array.from([...uint32(0), ...chars('ftyp'), 0, 0, 0, 0]);
 
 		expect(readRecordingContainer(zeroLength).kind).toBe('unreadable');
+	});
+
+	/**
+	 * The message says what could not be read and stops there. Both halves are read before
+	 * either is reported, so a file whose `mvhd` is unusable does not have its perfectly
+	 * readable `stsz` written off with it — an answer saying more than it checked is the fault
+	 * #183 is about, pointed the other way.
+	 */
+	it('says only the duration is unknown when the sample table was readable', () => {
+		const container = readRecordingContainer(recording(mvhd(0, 3_000), trak('vide', 3)));
+
+		if (container.kind !== 'unreadable') throw new Error('unreachable');
+		expect(container.message).toMatch(/what is unknown is what duration it declares/);
+		expect(container.message).not.toMatch(/how many encoded samples/);
+	});
+
+	it('says only the sample count is unknown when the movie header was readable', () => {
+		const container = readRecordingContainer(recording(mvhd(1_000, 3_000), trak('vide', 0)));
+
+		if (container.kind !== 'unreadable') throw new Error('unreachable');
+		expect(container.message).toMatch(/what is unknown is how many encoded samples it holds,/);
+		expect(container.message).not.toMatch(/what duration it declares/);
+	});
+
+	it('names both, and both reasons, when neither half could be read', () => {
+		const container = readRecordingContainer(recording(mvhd(0, 3_000), trak('vide', 0)));
+
+		if (container.kind !== 'unreadable') throw new Error('unreachable');
+		expect(container.message).toMatch(/no encoded samples at all; and .*timescale of zero/);
+		expect(container.message).toMatch(
+			/what is unknown is how many encoded samples it holds and what duration it declares/,
+		);
 	});
 
 	/**

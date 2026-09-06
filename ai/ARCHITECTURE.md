@@ -347,9 +347,16 @@ Verbs live above the backends and below the adapters, and this is where determin
   stream over a protocol built for request and response.
 - **`recordVideo()`** (`src/verbs/record.ts`) is the second verb whose answer carries more than an
   `ActionResult`, and it reuses `readLogs`' machinery rather than forking it:
-  `RecordVideoResultSchema` is `ActionResultSchema.extend({ frames })`, its row's answer comes out
-  of the same `verbCallResultOf()` factory, and `runVerb` was already generic. The recording rides
-  on `artifact` where `screenshot`'s capture does; the frames are the one field added. What is new
+  `RecordVideoResultSchema` is `ActionResultSchema.extend({ frames, container })`, its row's answer
+  comes out of the same `verbCallResultOf()` factory, and `runVerb` was already generic. The
+  recording rides on `artifact` where `screenshot`'s capture does; the frames and what the
+  container says the recording holds are the two fields added. **`container` is read in the verb
+  layer, not behind `FrameExtractor`** (`src/verbs/recording-container.ts`, #183): the criterion
+  that puts the extractor under `src/daemon/` is that it starts a process or touches the host
+  filesystem, and a bounded walk over bytes already in hand does neither — so it needs nothing the
+  daemon has, and moving it behind the seam would widen one signature at every call site to put a
+  pure function where a client cannot reach it. That is the rule for the next answer field too:
+  the seam is for host *tools*, not for host *knowledge*. What is new
   in shape is **where the work happens**: extracting frames needs a host program, and a program
   started from anywhere under `src/verbs/` would be `node:child_process` in every client's module
   graph, since `src/ipc/verb-methods.ts` imports these schemas (D19). So the verb declares a

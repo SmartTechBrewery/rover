@@ -537,4 +537,38 @@ describe('record_video says what the recording holds', () => {
 		expect(result.artifact).not.toBeNull();
 		expect(result.frames).not.toHaveLength(0);
 	});
+
+	/**
+	 * The one shape of container that used to reach a `DataView` read before its bounds were
+	 * checked: a `moov` at the end of the file whose only child is an `mvhd` header with no body
+	 * at all. The `RangeError` escaped the verb entirely — out of `performAction`, into `answer()`
+	 * — and the agent got an `internal_error` instead of a recording the host had already pulled
+	 * intact. It answers `unreadable` and keeps the bytes, like every other container it cannot
+	 * read.
+	 */
+	it('keeps a recording whose movie header has no body, rather than throwing it away', async () => {
+		// A box header: its length — under 256 here, so three zero bytes and the count — and its
+		// four type characters.
+		const header = (size: number, type: string): number[] => [
+			0,
+			0,
+			0,
+			size,
+			...[...type].map((character) => character.charCodeAt(0)),
+		];
+		// `ftyp` with an eight-byte brand, then a `moov` whose whole content is an eight-byte
+		// `mvhd` — so the movie header's body would start one past the last byte of the file.
+		const empty = Uint8Array.from([
+			...header(16, 'ftyp'),
+			...[...'isom0000'].map((character) => character.charCodeAt(0)),
+			...header(16, 'moov'),
+			...header(8, 'mvhd'),
+		]);
+		const { context, options } = recording({ video: empty });
+
+		const result = await recordVideo(context, options);
+
+		expect(result.container).toMatchObject({ kind: 'unreadable' });
+		expect(result.artifact).not.toBeNull();
+	});
 });

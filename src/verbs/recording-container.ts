@@ -100,6 +100,18 @@ const VIDEO_HANDLER = 'vide';
 /** How many milliseconds a second is, for `duration / timescale` in the unit the wire uses. */
 const MS_PER_SECOND = 1000;
 
+/**
+ * The two halves of a readable answer, named apart so an `unreadable` message claims only the
+ * half that actually failed.
+ *
+ * The sample table and the movie header are read independently and one is routinely fine while
+ * the other is not — an `mvhd` declaring a timescale of zero sits in a file whose `stsz` is
+ * perfectly legible. Saying both numbers are unknown there would be the answer over-claiming,
+ * which is the fault #183 is about pointed the other way.
+ */
+const SAMPLE_COUNT_UNKNOWN = 'how many encoded samples it holds';
+const DURATION_UNKNOWN = 'what duration it declares';
+
 /** One box, as the far side of a header: its type and the bounds of its body. */
 interface Box {
 	readonly type: string;
@@ -131,19 +143,36 @@ export function readRecordingContainer(bytes: Uint8Array): RecordingContainer {
 	const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
 	const moov = boxesIn(bytes, view, 0, bytes.byteLength).find((box) => box.type === 'moov');
 	if (moov === undefined) {
-		return unreadable(`it has no 'moov' box, so it declares no timeline and no sample table`);
+		return unreadable(
+			`it has no 'moov' box, so it declares no timeline and no sample table`,
+			`${SAMPLE_COUNT_UNKNOWN} and ${DURATION_UNKNOWN}`,
+		);
 	}
 
 	const inMoov = boxesIn(bytes, view, moov.start, moov.end);
 	const mvhd = inMoov.find((box) => box.type === 'mvhd');
-	if (mvhd === undefined) {
-		return unreadable(`its 'moov' box carries no 'mvhd', so it declares no duration`);
-	}
-	const timeline = movieTimelineOf(view, mvhd);
-	if ('problem' in timeline) return unreadable(timeline.problem);
-
+	// Both halves are read before either is reported, so a message can name only the one that
+	// failed rather than the pair (`SAMPLE_COUNT_UNKNOWN`). A missing `mvhd` is a timeline
+	// problem like any other for that reason: the sample table is still worth looking at.
+	const timeline: Timeline =
+		mvhd === undefined
+			? { problem: `its 'moov' box carries no 'mvhd', so it declares no duration` }
+			: movieTimelineOf(view, mvhd);
 	const sampleCount = videoSampleCountIn(bytes, view, inMoov);
-	if (typeof sampleCount === 'string') return unreadable(sampleCount);
+
+	if (typeof sampleCount === 'string' || 'problem' in timeline) {
+		const problems: string[] = [];
+		const unknown: string[] = [];
+		if (typeof sampleCount === 'string') {
+			problems.push(sampleCount);
+			unknown.push(SAMPLE_COUNT_UNKNOWN);
+		}
+		if ('problem' in timeline) {
+			problems.push(timeline.problem);
+			unknown.push(DURATION_UNKNOWN);
+		}
+		return unreadable(problems.join('; and '), unknown.join(' and '));
+	}
 
 	const { durationMs, noDuration } = timeline;
 	// The still-screen test is on the **declared** duration being exactly zero rather than on
@@ -179,14 +208,18 @@ const STILL_SCREEN_MESSAGE =
 	`the recording or in the tool, and the single frame beside it is that unchanged screen. If ` +
 	`you expected motion, drive the screen during the capture rather than recording again.`;
 
-/** The `unreadable` branch, phrased so the message says what was missing. */
-function unreadable(because: string): RecordingContainer {
+/**
+ * The `unreadable` branch, phrased so the message says what was missing **and only what that
+ * cost**: `unknown` is one or both of `SAMPLE_COUNT_UNKNOWN` and `DURATION_UNKNOWN`, whichever
+ * the caller could not read.
+ */
+function unreadable(because: string, unknown: string): RecordingContainer {
 	return RecordingContainerSchema.parse({
 		kind: 'unreadable',
 		message:
 			`This recording's container could not be read here: ${because}. The video itself is ` +
-			`in the answer and may play perfectly — what is unknown is how many encoded samples ` +
-			`it holds and what duration it declares, not whether it recorded.`,
+			`in the answer and may play perfectly — what is unknown is ${unknown}, not whether ` +
+			`it recorded.`,
 	});
 }
 
@@ -203,6 +236,15 @@ function unreadable(because: string): RecordingContainer {
  * a number nobody could act on.
  */
 function movieTimelineOf(view: DataView, mvhd: Box): Timeline {
+	// The version byte is read before the length check below can be phrased in terms of it, so
+	// the emptiest possible `mvhd` — an 8-byte header with no body at all, which `boxesIn` emits
+	// for both a declared size of 8 and the format's `size === 0` at the end of a file — has to
+	// be turned away first. Without this, `getUint8` on a box whose body starts one past the
+	// last byte throws a `RangeError`, and this module answers rather than throws.
+	if (mvhd.start >= mvhd.end) {
+		return { problem: `its 'mvhd' box has no body, so it declares neither timescale nor duration` };
+	}
+
 	const version = view.getUint8(mvhd.start);
 	const wide = version === 1;
 	const timescaleAt = mvhd.start + (wide ? 20 : 12);
