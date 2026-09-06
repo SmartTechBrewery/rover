@@ -34,8 +34,8 @@
  * over it landed in the same change, and frame extraction is a separate phase; neither is
  * what moves this flag.
  *
- * `canControlRecording` flips here (#190), and it is the one flag whose two methods had to
- * land together for `canInput`'s reason: `CAPABILITY_METHODS.canControlRecording` names
+ * `canControlRecording` flips here (#190), and it is the one flag whose methods had to land
+ * together for `canInput`'s reason: `CAPABILITY_METHODS.canControlRecording` names
  * `startRecording` **and** `stopRecording`, so a manifest declaring it with only one of them
  * implemented fails `tests/helpers/backend-conformance.ts`. This backend answers both —
  * `screenrecord` launched detached and stopped by signal, the recorder's presence and absence
@@ -43,6 +43,12 @@
  * `canRecordVideo` widened: that flag names exactly one method and keeps meaning exactly that,
  * and a platform whose recorder is one command taking a duration can answer it while having no
  * way to hold a recording open at all.
+ *
+ * That list gained a **third** method with the lease-end teardown (#191): `discardRecording`,
+ * which stops a recorder the lease left running and removes its scratch file. It landed in the
+ * same change that implements it, for the reason above — a manifest naming a method nothing
+ * dispatches is the conformance failure, and the flag itself did not move, because stopping a
+ * recording you are holding open and stopping one somebody abandoned are the same ability.
  *
  * **Every flag in this manifest is now `true`, so nothing here is a declared opt-out.**
  * That is a statement about this backend, not about the model: a capability declared

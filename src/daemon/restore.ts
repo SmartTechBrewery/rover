@@ -36,16 +36,23 @@
  * ports, so the numbers are reclaimed at the tail of this chain rather than when the lease
  * record disappeared — same path, same clock, no second timer.
  *
- * **The step order is the finding, not a preference** (PROJECT.md §6, verified 2026-08-29):
- * the airplane-mode step can move wifi underneath it in a direction no caller can predict,
- * while the wifi step never moves airplane mode. So both are set explicitly and **wifi is set
- * last**. Setting a resting state unconditionally is deliberate too — both primitives are
+ * **A recorder the lease left running is stopped before anything else on the device** (#191,
+ * R43 phase 3). It is the driver most likely to still be holding the device, and force-stopping
+ * an app underneath a running recorder is the two-drivers problem in miniature. Its file goes
+ * with it: the bytes are dropped rather than archived, because a lease that ended has no caller
+ * to hand a recording to, and a multi-megabyte scratch file left on borrowed hardware is what
+ * `--time-limit` alone never cleaned up.
+ *
+ * **The step order among the radios is the finding, not a preference** (PROJECT.md §6, verified
+ * 2026-08-29): the airplane-mode step can move wifi underneath it in a direction no caller can
+ * predict, while the wifi step never moves airplane mode. So both are set explicitly and **wifi
+ * is set last**. Setting a resting state unconditionally is deliberate too — both primitives are
  * idempotent and silent about it, so a read first would buy nothing.
  */
 
 import type { RegisteredDeviceBackend } from '../backends/manifest.js';
 import { requireDeviceBackend } from '../backends/registry.js';
-import { supportsCapability } from '../core/capabilities.js';
+import { type CapabilityId, supportsCapability } from '../core/capabilities.js';
 import type { DeviceBackend } from '../core/device.js';
 import type { AppId, DeviceSerial } from '../core/ids.js';
 import type { DeviceInventory } from './inventory.js';
@@ -307,6 +314,39 @@ export function createDeviceRestorer(options: DeviceRestorerOptions): DeviceRest
 		}
 	};
 
+	/**
+	 * Whatever the lease was recording, stopped and thrown away (#191).
+	 *
+	 * **First among the device's steps**, for the reason this module's header gives: it is the
+	 * driver most likely to still be holding the device.
+	 *
+	 * **Unconditional, like the radios.** Nothing on the host remembers whether this lease ever
+	 * opened a recording — the device is what knows, asked at the moment it matters (D6) — so the
+	 * step runs for every lease that ends, and a device with no recorder and no file is a silent
+	 * success rather than a warning.
+	 */
+	const discardRecording = async (
+		serial: DeviceSerial,
+		{ manifest, backend }: RegisteredDeviceBackend,
+	): Promise<void> => {
+		if (!supportsCapability(manifest, 'canControlRecording')) {
+			// One warning, and not an error — `restoreNetwork`'s reasoning to the letter: a
+			// backend that honestly opts out is complete rather than broken (D11), and there is
+			// nobody left to hand a `MissingCapabilityError` to. Named rather than silent, because
+			// what it costs is a recorder this host will not stop.
+			warn(
+				`Restoring device '${serial}': the ${manifest.label} backend does not declare ` +
+					`'canControlRecording', so a recording the lease left running is not stopped. ` +
+					`Whatever it started keeps running until it reaches its own limit.`,
+			);
+			return;
+		}
+
+		await step(serial, 'stopping a recording left running', () =>
+			required(backend, 'discardRecording', 'canControlRecording', manifest.label)(serial),
+		);
+	};
+
 	const restoreNetwork = async (
 		serial: DeviceSerial,
 		{ manifest, backend }: RegisteredDeviceBackend,
@@ -326,10 +366,10 @@ export function createDeviceRestorer(options: DeviceRestorerOptions): DeviceRest
 
 		// Airplane mode first and wifi last — PROJECT.md §6, and see this module's header.
 		await step(serial, 'turning airplane mode off', () =>
-			required(backend, 'setAirplaneMode', manifest.label)(serial, false),
+			required(backend, 'setAirplaneMode', 'canControlNetwork', manifest.label)(serial, false),
 		);
 		await step(serial, 'turning wifi back on', () =>
-			required(backend, 'setWifiEnabled', manifest.label)(serial, true),
+			required(backend, 'setWifiEnabled', 'canControlNetwork', manifest.label)(serial, true),
 		);
 	};
 
@@ -404,6 +444,10 @@ export function createDeviceRestorer(options: DeviceRestorerOptions): DeviceRest
 		const project = await describeProject(serial, lease.project, lease.slot);
 		const registered = await resolveDevice(serial, reason);
 
+		if (registered) {
+			// Ahead of the app steps on purpose — see this module's header.
+			await discardRecording(serial, registered);
+		}
 		if (registered && project) {
 			for (const app of project.apps) {
 				await step(serial, `stopping '${app}'`, () => registered.backend.stopApp(serial, app));
@@ -533,17 +577,21 @@ export function createDeviceRestorer(options: DeviceRestorerOptions): DeviceRest
  * A capability-gated method the manifest promised. Missing here is a wiring bug the
  * conformance suite exists to catch (ai/TESTING.md), so it throws — into the step's own
  * containment, which turns it into a warning rather than a lost restoration.
+ *
+ * The capability is passed rather than looked up, because the message is the whole point: it
+ * names the flag that was declared and the method that was not there, and a second list mapping
+ * one to the other would be a list that drifts (`src/core/capabilities.ts` already holds the
+ * only one).
  */
-function required<Method extends 'setAirplaneMode' | 'setWifiEnabled'>(
+function required<Method extends 'setAirplaneMode' | 'setWifiEnabled' | 'discardRecording'>(
 	backend: DeviceBackend,
 	method: Method,
+	capability: CapabilityId,
 	label: string,
 ): NonNullable<DeviceBackend[Method]> {
 	const implementation = backend[method];
 	if (!implementation) {
-		throw new Error(
-			`the ${label} backend declares 'canControlNetwork' but implements no '${method}'`,
-		);
+		throw new Error(`the ${label} backend declares '${capability}' but implements no '${method}'`);
 	}
 	return implementation.bind(backend) as NonNullable<DeviceBackend[Method]>;
 }

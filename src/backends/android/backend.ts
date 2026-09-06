@@ -193,8 +193,8 @@ const RECORDING_TIME_LIMIT_UNIT_MS = 1_000;
  * broken device (PROJECT.md §6). A literal this file owns, the case this file's header names:
  * no caller's string is anywhere near it.
  *
- * One constant rather than the same string in four places, because the three recording methods
- * all ask the same question and a copy that drifted would make two of them disagree about what
+ * One constant rather than the same string in five places, because all four recording methods
+ * ask the same question and a copy that drifted would make two of them disagree about what
  * "already recording" means.
  */
 const RECORDER_PIDS_COMMAND = 'pidof screenrecord || true';
@@ -1889,10 +1889,11 @@ export class AndroidDeviceBackend implements DeviceBackend {
 	 *   So {@link waitForCondition} polls {@link recorderPids} until one is there, bounded by
 	 *   {@link RECORDING_START_TIMEOUT_MS} — a condition with a timeout, never a sleep (D12(b)).
 	 * - **`--time-limit` is passed here for a reason `record_video` only half needs it for.**
-	 *   Nothing is waiting on this recorder, so until the lease-end teardown lands (R43 phase 3)
-	 *   that limit is the *only* thing that stops one whose caller went away — a detached recorder
-	 *   started with `--time-limit 3` exited on its own three seconds later with nothing on the
-	 *   host holding it (PROJECT.md §6). It is whole seconds, rounded **up** and floored at one,
+	 *   Nothing is waiting on this recorder, so that limit was the *only* thing that stopped one
+	 *   whose caller went away until the lease-end teardown landed (#191,
+	 *   {@link discardRecording}) — and it stays, because the teardown needs this host to still be
+	 *   alive and the limit does not: a detached recorder started with `--time-limit 3` exited on
+	 *   its own three seconds later with nothing on the host holding it (PROJECT.md §6). It is whole seconds, rounded **up** and floored at one,
 	 *   for {@link recordVideo}'s stated reason: `--time-limit 0` is documented as *removing* the
 	 *   limit, so a computed zero would turn the kill switch off.
 	 *
@@ -2016,9 +2017,59 @@ export class AndroidDeviceBackend implements DeviceBackend {
 	}
 
 	/**
+	 * Stop whatever recorder is running and remove the file it was writing — the lease-end
+	 * teardown's own method (#191), never a verb's.
+	 *
+	 * The order is **ask, signal, wait on the condition, remove**, which is {@link stopRecording}
+	 * with everything after the wait taken out: no `stat`, no pull, no `moov` check and no bytes.
+	 * A lease that ended has no caller to hand a recording to, so dragging several megabytes off a
+	 * device nobody is waiting on would buy nothing, and refusing an unfinished file — which is
+	 * what a recorder abandoned mid-lease usually leaves — would turn the ordinary case into a
+	 * failure the teardown then has to swallow.
+	 *
+	 * **Nothing recording is a silent success.** Most leases never record anything, and this runs
+	 * for every one that ends: no recorder means nothing to signal and nothing to wait for, and
+	 * `rm -f` is happy about a path that is not there. The `|| true` on
+	 * {@link STOP_RECORDER_COMMAND} covers the same race it covers for the stop — the pids are
+	 * read one round trip earlier, so a recorder that reaches its own `--time-limit` in the gap
+	 * leaves a bare `kill -INT` that exits 1 (PROJECT.md §6).
+	 *
+	 * **The `rm` is in a `finally` and its failure is not swallowed**, which is the one place this
+	 * departs from {@link stopRecording} deliberately. That method has an answer to protect, so a
+	 * failing cleanup must never replace it; this one has none, and a multi-megabyte file still
+	 * sitting on hardware that goes to somebody else next is precisely the failure it exists to
+	 * prevent. It is a `finally` rather than a plain statement so the file goes even when the
+	 * recorder would not — `rm -f` unlinks a path a running recorder still holds open.
+	 *
+	 * **Exclusive on {@link RECORDING_PATH}** ({@link exclusivelyOn}) like the other three, so a
+	 * teardown cannot interleave with a recording call the ending lease still had in flight.
+	 */
+	async discardRecording(serial: DeviceSerial): Promise<void> {
+		return this.exclusivelyOn(serial, RECORDING_PATH, async () => {
+			try {
+				const running = await this.recorderPids(serial);
+				if (running.length === 0) return;
+
+				await runAdbOnDevice(serial, ['shell', STOP_RECORDER_COMMAND]);
+				await waitForCondition({
+					what: `the recording on device '${serial}' to stop`,
+					timeoutMs: RECORDING_FINISH_TIMEOUT_MS,
+					probe: async () => {
+						const pids = await this.recorderPids(serial);
+						if (pids.length === 0) return { met: true, value: undefined };
+						return { found: `screenrecord still running as pid ${pids.join(', ')}`, met: false };
+					},
+				});
+			} finally {
+				await this.removeRecording(serial);
+			}
+		});
+	}
+
+	/**
 	 * The pids of every recorder on the device, empty when there is none.
 	 *
-	 * One place asks the device this question, because three callers act on the same answer and a
+	 * One place asks the device this question, because four callers act on the same answer and a
 	 * copy that drifted would make them disagree about what "already recording" means. It answers
 	 * pids rather than a boolean so a refusal and a wait's `found` can both name them — the half
 	 * of a message that makes it actionable rather than mysterious.

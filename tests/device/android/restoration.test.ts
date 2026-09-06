@@ -1,3 +1,5 @@
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { afterEach, describe, expect, it } from 'vitest';
 // Side-effect import: this is what puts a backend in the registry, which is where the
 // restorer under test resolves the device's platform to something it can drive.
@@ -28,6 +30,12 @@ import { createNoProjectServices } from '../../helpers/factories.js';
  * asserts is the store's end hook firing on both paths, which is a layer below the protocol and
  * would only be obscured by putting one in front of it.
  *
+ * **The recorder cases are the exception to that shortness** (#191). "No recorder outlives its
+ * lease" is a claim about the device, and the unit suite asserts it over a mock that cannot say
+ * whether the device let go — so those two cases start a real `screenrecord`, end the lease
+ * without stopping it, and then ask `adb` itself whether the process is gone and the file is
+ * removed.
+ *
  * **What this deliberately does not cover, so silence is not read as "checked":**
  *
  * - **No assertion reads a radio back**, for the reason `./network.test.ts` records at
@@ -45,6 +53,19 @@ import { createNoProjectServices } from '../../helpers/factories.js';
 /** Present on every Android build, and safe to open and close under someone else's eyes. */
 const SETTINGS = parseAppId('com.android.settings');
 const TTL_MS = 60_000;
+
+const execFileAsync = promisify(execFile);
+const ADB_TIMEOUT_MS = 10_000;
+
+/**
+ * The device-side scratch path the backend owns, named here rather than imported so the
+ * assertion is over the path a person would look at with `adb` — the recording suite names it
+ * the same way and for the same reason.
+ */
+const RECORDING_PATH = '/sdcard/rover-recording.mp4';
+
+/** The recorder's own kill switch, long enough that nothing but the teardown ends it. */
+const MAX_RECORDING_MS = 15_000;
 
 /** Only for arranging and cleaning up — never for the restoration this suite is about. */
 const backend = new AndroidDeviceBackend();
@@ -129,6 +150,40 @@ async function reset(device: Device): Promise<void> {
 	await backend.setAirplaneMode(device.serial, false);
 	await backend.setWifiEnabled(device.serial, true);
 	await backend.stopApp(device.serial, SETTINGS);
+	// Whatever a recording case left behind, gone — including on the path where the assertion
+	// that follows it failed. This is the backend's own teardown, which is what the suite is
+	// about, so it is deliberately the *only* cleanup here that could hide what it asserts;
+	// every assertion below is made before this runs.
+	await backend.discardRecording(device.serial);
+}
+
+/**
+ * The device's own answer about whether a recorder is running — asked with `adb` directly rather
+ * than through the backend, because the backend is what is under test.
+ *
+ * `|| true` for the reason the backend's own probe carries it: `pidof` exits 1 when nothing
+ * matches, and "no such process" is the answer this is looking for.
+ */
+async function recorderPidsOnDevice(serial: string): Promise<string> {
+	const { stdout } = await execFileAsync(
+		'adb',
+		['-s', serial, 'shell', 'pidof screenrecord || true'],
+		{ timeout: ADB_TIMEOUT_MS },
+	);
+	return stdout.trim();
+}
+
+/** What `ls` says about the scratch path — the device's own words, whichever stream. */
+async function listScratchFile(serial: string): Promise<string> {
+	const { stdout, stderr } = await execFileAsync(
+		'adb',
+		['-s', serial, 'shell', 'ls', RECORDING_PATH],
+		{ timeout: ADB_TIMEOUT_MS },
+	).catch((error: { stdout?: string; stderr?: string }) => ({
+		stdout: error.stdout ?? '',
+		stderr: error.stderr ?? '',
+	}));
+	return `${stdout}${stderr}`;
 }
 
 describe.skipIf(!process.env.ROVER_TEST_LOCAL_DEVICE)('the daemon restores a real device', () => {
@@ -183,4 +238,73 @@ describe.skipIf(!process.env.ROVER_TEST_LOCAL_DEVICE)('the daemon restores a rea
 		expect(host.warnings).toEqual([]);
 		expect(host.hookRan()).toBe(true);
 	});
+
+	/**
+	 * The claim #191 turns on, and the only place it can be made: a recorder the lease left
+	 * running is really gone and its file is really removed.
+	 *
+	 * Everything the unit suite asserts about this is asserted over a mock, which cannot say
+	 * whether the device let go — and `--time-limit`, which is all that bounded a stray recorder
+	 * before, would keep this one running for the whole fifteen seconds and leave its file
+	 * behind afterwards. So both assertions are the device's own words, read with `adb` rather
+	 * than through the backend that is under test, and they are made *before* `afterEach` gets
+	 * to tidy anything.
+	 *
+	 * The recording is started through the backend class rather than through a verb: what is
+	 * under test is the teardown, and arranging for it must not go through the thing being torn
+	 * down.
+	 */
+	it('stops a recording the lease left running, and removes its file', async () => {
+		const host = createHost();
+		const device = await firstLocalDevice();
+		const granted = await host.handlers.acquire_device({
+			serial: device.serial,
+			owner: 'device-suite',
+			project: 'rover',
+			testName: 'checkout flow',
+		});
+		if (granted.outcome !== 'granted') {
+			throw new Error(`the acquire must be granted, got '${granted.message}'`);
+		}
+		await backend.startRecording(device.serial, { maxDurationMs: MAX_RECORDING_MS });
+		// The premise, asserted rather than assumed: there is really a recorder to outlive the
+		// lease, so a teardown that did nothing at all could not pass this test.
+		expect(await recorderPidsOnDevice(device.serial)).not.toBe('');
+
+		// Nobody stops it. The lease simply ends — and the holder never asked for the bytes.
+		expect(host.handlers.release_device({ leaseId: granted.lease.leaseId })).toEqual({
+			released: true,
+		});
+		await host.restorer.settle(device.serial);
+
+		expect(await recorderPidsOnDevice(device.serial)).toBe('');
+		expect(await listScratchFile(device.serial)).toMatch(/No such file or directory/);
+		expect(host.warnings).toEqual([]);
+	}, 60_000);
+
+	// And on the path with no caller left to ask, which is the half of D9 a teardown is most
+	// likely to be missing: nothing here releases anything.
+	it('stops one left running when the lease simply expires', async () => {
+		const host = createHost();
+		const device = await firstLocalDevice();
+		const granted = await host.handlers.acquire_device({
+			serial: device.serial,
+			owner: 'device-suite',
+			project: 'rover',
+			testName: 'checkout flow',
+		});
+		if (granted.outcome !== 'granted') {
+			throw new Error(`the acquire must be granted, got '${granted.message}'`);
+		}
+		await backend.startRecording(device.serial, { maxDurationMs: MAX_RECORDING_MS });
+		expect(await recorderPidsOnDevice(device.serial)).not.toBe('');
+
+		host.at(1_000_000 + TTL_MS);
+		host.leases.sweep();
+		await host.restorer.settle(device.serial);
+
+		expect(await recorderPidsOnDevice(device.serial)).toBe('');
+		expect(await listScratchFile(device.serial)).toMatch(/No such file or directory/);
+		expect(host.warnings).toEqual([]);
+	}, 60_000);
 });

@@ -347,6 +347,7 @@ export function createMockDeviceBackend(overrides: Partial<DeviceBackend> = {}):
 		stopRecording: vi.fn<NonNullable<DeviceBackend['stopRecording']>>(async () =>
 			createMockRecordingBytes(),
 		),
+		discardRecording: vi.fn<NonNullable<DeviceBackend['discardRecording']>>(async () => {}),
 		...overrides,
 	};
 }
@@ -470,6 +471,12 @@ export function createConformingDeviceBackend(
 		async stopRecording(serial) {
 			performed.push(`stopRecording ${serial}`);
 			return createMockRecordingBytes();
+		},
+		// The teardown's own half of the same capability (#191). It answers nothing by design —
+		// no pull, no bytes — so the line it records is what keeps it clear of the harness's
+		// empty-answer check, exactly as `startRecording` above.
+		async discardRecording(serial) {
+			performed.push(`discardRecording ${serial}`);
 		},
 		...overrides,
 	};

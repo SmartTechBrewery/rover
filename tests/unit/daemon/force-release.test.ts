@@ -56,6 +56,10 @@ const START_MS = 1_000_000;
 
 /** What a fully restored device looks like, in the order PROJECT.md §6 says is correct. */
 const FULL_RESTORATION = [
+	// A recording the holder left running is stopped and thrown away first (#191). It is here
+	// rather than in a suite of its own because that is the claim: force-release is a third
+	// trigger on the shared path, so it inherits the step without a branch to carry it.
+	'discardRecording',
 	`stopApp ${APP}`,
 	'setAirplaneMode false',
 	'setWifiEnabled true',
@@ -201,6 +205,9 @@ function createRecordingBackend(
 		},
 		setWifiEnabled: async (_serial, enabled: boolean) => {
 			performed.push(`setWifiEnabled ${enabled}`);
+		},
+		discardRecording: async () => {
+			performed.push('discardRecording');
 		},
 	};
 }
