@@ -1108,6 +1108,20 @@ own fold one level up: to a reader standing in this view there is no group eithe
 would change it is the same thing. `archive.test.tsx` asserts that no two of the three share a
 phrase, the way it already does for the `All` view's pair.
 
+**A walk that was cut short does not get the definitive sentence** (corrected in place, #189
+review). The middle row is one state with two claims in it, not two states: the host sets
+`truncated` when a directory that exists was not fully examined — a `group_id.json` that is not
+JSON, a subtree it could not read, a bound reached — and it can do that having recorded no group at
+all. *Nothing filed on this host has named a group* would then be a definitive negative about a
+walk that never finished, so the flag is carried on the empty answer (`archive-groups.ts`) and the
+panel changes the claim clause instead: **more is filed here than the host could examine, no group
+was named in the part it could, and a grouped run may be missing from this view.** The heading, the
+`rover acquire --group-id` instruction and the pointer at the `All` view are the same in both,
+because they are true in both; only the claim narrows. This is `Searched`'s rule in
+`directory-tree.tsx` applied one level up — the same screen already refuses to say *no name in the
+archive contains that text* about a search that was cut short — and it is why a truncated grouping
+answer is not a fourth empty-handed state.
+
 ### The tree — expansion is derived from the URL
 
 **A node is expanded exactly when it is a prefix of the selected path**, and the selected node is
@@ -1405,9 +1419,15 @@ makes and documents, for the same reason: what the screen has to decide is narro
 
 **Four routes, two families, one component** (amended in place, #181): `/archive` and `/archive/$`
 for the file explorer, `/groups` and `/groups/$` for the group-first arrangement, all four
-`useParams({ strict: false })` and all four the same component with `view` as a prop. Two per family
-rather than one optional splat because a splat route does not match `/archive`, which is the address
-the navigation points at. The components are joined with `/` and the router does the encoding — a
+`useParams({ strict: false })` and all four the same component with `view` as a prop. **Two per
+family because `to` is typed off the route tree** (corrected in place, #189 review): the splat route
+does match the bare address — against @tanstack/react-router 1.170.32, `/archive`, `/archive/`,
+`/groups` and `/groups/` all resolve to the `$` route with `_splat: ''`, and the bare route is never
+in `router.state.matches`, which `archive-path.test.tsx` now pins — but without the bare routes
+declared, `/archive` and `/groups` are not link targets the router's types admit, and `sidebar.tsx`
+and `view-toggle.tsx` cannot name the root of a family without a trailing `$` in a shared address.
+The bare routes are declarations for the type; the splat route is what renders. The components are
+joined with `/` and the router does the encoding — a
 directory name may legally carry a space, a `%` or a `#`, and `archive-path.test.tsx` proves the
 round trip for **both** splats against a **real** router rather than the mocked `Link` the screen
 tests use.

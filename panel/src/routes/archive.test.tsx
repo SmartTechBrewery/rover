@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import type { AnchorHTMLAttributes, ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -1539,6 +1539,41 @@ describe('the testing groups view with nothing to arrange', () => {
 		expect(screen.queryByText('DIRECTORY')).toBeNull();
 		expect(container.textContent).not.toContain('Nothing in the archive');
 		expect(container.textContent).not.toContain('ARCHIVE NOT READABLE');
+	});
+
+	/*
+	 * **A walk that was cut short must not be reported as a definitive negative** (#189 review).
+	 * The host sets `truncated` having recorded no group at all whenever a `group_id.json` is not
+	 * JSON, a subtree cannot be read, or a bound is reached — so *nothing filed on this host has
+	 * named a group* would be a claim about an archive nobody finished examining. The same
+	 * distinction the searched tree already draws, one level up.
+	 */
+	it('does not claim nothing named a group when the walk was cut short', async () => {
+		host.groups = { outcome: 'listed', groups: [], truncated: true };
+		const { container } = await grouped(undefined);
+
+		expect(screen.getByText('No testing groups')).toBeDefined();
+		expect(container.textContent).not.toContain('Nothing filed on this host has named a group');
+		expect(container.textContent).toContain('More is filed here than the host could examine');
+		expect(container.textContent).toContain('A grouped run may be missing from this view');
+	});
+
+	// D6, extended to the pair inside this state: the two claims may never render alike, and neither
+	// may borrow a sentence from the `All` view's empty hand or from the unreadable banner.
+	it('keeps the cut-short answer apart from the complete one, and from the other two', async () => {
+		host.groups = { outcome: 'listed', groups: [], truncated: false };
+		const complete = (await grouped(undefined)).container.textContent ?? '';
+		cleanup();
+		host.groups = { outcome: 'listed', groups: [], truncated: true };
+		const short = (await grouped(undefined)).container.textContent ?? '';
+
+		expect(complete).toContain('Nothing filed on this host has named a group');
+		expect(short).not.toContain('Nothing filed on this host has named a group');
+		expect(complete).not.toContain('More is filed here than the host could examine');
+		for (const text of [complete, short]) {
+			expect(text).not.toContain('Nothing in the archive');
+			expect(text).not.toContain('ARCHIVE NOT READABLE');
+		}
 	});
 
 	// Nothing ever archived here is *no groups here* to a reader standing in this view: there is no

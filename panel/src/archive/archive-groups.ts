@@ -31,17 +31,22 @@ import { type ArchiveGroup, ListArchiveGroupsResultSchema } from './archive-list
  * - **`missing` folds into `empty`.** *Nothing has ever been archived on this host* and *nothing on
  *   this host named a group* are the same sentence to a reader standing in a view that draws
  *   groups: there is no group here, and what would change it is the same thing.
- * - **`listed` with no groups is `empty` too**, for that reason. Including when the walk was
- *   truncated: an answer that examined part of the archive and found no group in it has still found
- *   no group, and there is no arrangement to draw a truncation line beside.
+ * - **`listed` with no groups is `empty` too**, for that reason — but **`truncated` rides on it**,
+ *   because a walk that was cut short has not established that nothing named a group. *No lease
+ *   named a group* and *no lease named a group in the part of the archive that could be examined*
+ *   are two different claims, and only the first is a definitive one. There is no arrangement to
+ *   draw a truncation line beside in this state, so the flag changes the sentence instead — which
+ *   is exactly what `Searched` in `directory-tree.tsx` already does for an empty search result
+ *   (#189 review).
  * - **Everything unusable folds into `unreadable`** — an `error` envelope, a result this panel
  *   cannot parse, and a request nothing answered. The state whose copy is true either way.
  * - **A `refused` sets nothing.** `Session.call` has already fired `onRefusal` and the router is
  *   coming down; *not readable* would be the panel's last word being the wrong one.
  *
- * `truncated` rides on `listed` because it is a claim about the arrangement being drawn: at least
- * one directory that exists was not fully examined, so a group, a run or a labelled artifact may be
- * missing, and a partial arrangement must not read like a complete one.
+ * `truncated` rides on `listed` and on `empty` alike because it is a claim about the answer, not
+ * about the arrangement: at least one directory that exists was not fully examined, so a group, a
+ * run or a labelled artifact may be missing. On `listed` that makes a partial arrangement say so
+ * above its rows; on `empty` it makes the screen stop short of a negative nobody established.
  */
 export type ArchiveGroups =
 	| { readonly status: 'loading' }
@@ -50,7 +55,7 @@ export type ArchiveGroups =
 			readonly groups: readonly ArchiveGroup[];
 			readonly truncated: boolean;
 	  }
-	| { readonly status: 'empty' }
+	| { readonly status: 'empty'; readonly truncated: boolean }
 	| { readonly status: 'unreadable' };
 
 const LOADING: ArchiveGroups = { status: 'loading' };
@@ -108,8 +113,12 @@ function read(answer: HostAnswer<RpcEnvelope>): ArchiveGroups | undefined {
 	if (parsed.data.outcome === 'unreadable') {
 		return { status: 'unreadable' } as const;
 	}
-	if (parsed.data.outcome === 'missing' || parsed.data.groups.length === 0) {
-		return { status: 'empty' } as const;
+	if (parsed.data.outcome === 'missing') {
+		// Nothing has ever been archived here, so nothing was cut short either.
+		return { status: 'empty', truncated: false } as const;
+	}
+	if (parsed.data.groups.length === 0) {
+		return { status: 'empty', truncated: parsed.data.truncated } as const;
 	}
 	return {
 		status: 'listed',

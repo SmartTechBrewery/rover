@@ -46,6 +46,30 @@ describe('the components a splat names', () => {
 		expect(deep).toEqual(['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h']);
 	});
 
+	/*
+	 * **The cap is a bound on the *archive* path, so a view that puts a component in front of it
+	 * gets that component back** (#189 review). A groups splat carries the `groupId`, which
+	 * `archiveAddressOf` drops *after* this runs — capping at eight regardless would hand the
+	 * screen the parent of the row that was clicked at the deepest addresses the tree can build.
+	 */
+	it('adds the view’s own offset to the cap, so both views reach the same archive depth', () => {
+		const nine = 'checkout-app/group-1/login-flow/run-1/R5CT30ABCDE/f/g/h/i';
+		const groups = componentsFromSplat(nine, 1);
+
+		expect(groups).toHaveLength(MAX_ARCHIVE_PATH_DEPTH + 1);
+		expect(archiveAddressOf(groups)).toEqual(
+			componentsFromSplat('checkout-app/login-flow/run-1/R5CT30ABCDE/f/g/h/i'),
+		);
+	});
+
+	// The default is the `All` view's, where a splat *is* an archive path and there is nothing in
+	// front of it — so the bound is unchanged for the caller that does not pass one.
+	it('defaults to no offset', () => {
+		expect(componentsFromSplat('a/b/c/d/e/f/g/h/i')).toEqual(
+			componentsFromSplat('a/b/c/d/e/f/g/h/i', 0),
+		);
+	});
+
 	// Verbatim, always (D22): nothing here trims, lower-cases or sanitises a name.
 	it('keeps a name exactly as it arrived', () => {
 		const odd = 'a b%c#d\ne\\f';
@@ -219,6 +243,13 @@ describe('the archive address a groups splat names', () => {
  * is in question is exactly what a mocked `Link` would supply.
  */
 describe('the groups view’s round trip through the router', () => {
+	/*
+	 * What `routes/archive.tsx` passes as `OFFSET.groups`: the one component this view puts in
+	 * front of the archive's own path. Repeated rather than imported, because importing the route
+	 * module here would build the panel's whole route tree to read one number.
+	 */
+	const GROUPS_OFFSET = 1;
+
 	function routerFor(initial: string) {
 		const rootRoute = createRootRoute();
 		const groupsRoute = createRoute({
@@ -226,7 +257,7 @@ describe('the groups view’s round trip through the router', () => {
 			path: '/groups/$',
 			component: () => {
 				const params = useParams({ strict: false });
-				const components = componentsFromSplat(params._splat);
+				const components = componentsFromSplat(params._splat, GROUPS_OFFSET);
 				return (
 					<>
 						<span data-testid="components">{JSON.stringify(components)}</span>
@@ -275,5 +306,81 @@ describe('the groups view’s round trip through the router', () => {
 			'checkout-app',
 			'a b%c#d',
 		]);
+	});
+
+	/*
+	 * **The deepest groups address the tree can build survives the trip through the URL** (#189
+	 * review). The `All` view reaches eight archive components; the groups view names the same
+	 * entry in nine, because the `groupId` sits in front of them. Asserted as a pair, because what
+	 * is in question is that the two arrive at the *same* archive address rather than that either
+	 * one is a particular length.
+	 */
+	it('lands on the entry a nine-component groups splat names, not on its parent', async () => {
+		const groups = [
+			'checkout-app',
+			'group-1',
+			'login-flow',
+			'run-1',
+			'R5CT30ABCDE',
+			'f',
+			'g',
+			'h',
+			'i',
+		];
+		const router = routerFor(`/groups/${groups.map(encodeURIComponent).join('/')}`);
+
+		render(<RouterProvider router={router as never} />);
+
+		await waitFor(() => {
+			expect(screen.getByTestId('address').textContent).toBe(
+				JSON.stringify(componentsFromSplat('checkout-app/login-flow/run-1/R5CT30ABCDE/f/g/h/i')),
+			);
+		});
+	});
+});
+
+/**
+ * **Which route a bare family address actually matches** (#189 review).
+ *
+ * `routes/archive.tsx` declares `/archive` and `/groups` alongside their splat routes, and the
+ * reason recorded there used to be that a splat route does not match the bare address. It does:
+ * the bare routes are declarations that make `/archive` and `/groups` valid `to` values for a
+ * `Link`, and the splat route is what renders. Pinned against a real router so the comment and
+ * `docs/DESIGN.md` §9 cannot drift back to the other claim on a router upgrade.
+ */
+describe('the route a bare family address resolves to', () => {
+	async function matchedIds(initial: string) {
+		const rootRoute = createRootRoute();
+		const bare = createRoute({
+			getParentRoute: () => rootRoute,
+			path: '/groups',
+			component: () => null,
+		});
+		const splat = createRoute({
+			getParentRoute: () => rootRoute,
+			path: '/groups/$',
+			component: () => null,
+		});
+		const router = createRouter({
+			routeTree: rootRoute.addChildren([bare, splat]),
+			history: createMemoryHistory({ initialEntries: [initial] }),
+		});
+		await router.load();
+		return router.state.matches.map((match) => match.routeId);
+	}
+
+	it('matches the splat route, with an empty splat, and never the bare one', async () => {
+		for (const initial of ['/groups', '/groups/']) {
+			const ids = await matchedIds(initial);
+
+			expect(ids).toContain('/groups/$');
+			expect(ids).not.toContain('/groups');
+		}
+	});
+
+	// Which is why the bare route changes nothing a reader can see: the splat it hands the screen
+	// is the root either way.
+	it('reads the empty splat back as the root', () => {
+		expect(componentsFromSplat('')).toEqual([]);
 	});
 });

@@ -100,7 +100,9 @@ import { rootRoute } from './__root.js';
 export function ArchiveScreen({ view }: { readonly view: ArchiveView }) {
 	// `strict: false` is what lets one component serve all four of this screen's routes.
 	const params = useParams({ strict: false });
-	const selected = componentsFromSplat(params._splat);
+	// The cap is the archive's depth plus whatever this view puts in front of it — one component in
+	// the groups view, none in the `All` view (#189 review).
+	const selected = componentsFromSplat(params._splat, OFFSET[view]);
 	const depths = depthsOf(view);
 	/*
 	 * **The whole of the groups arrangement above a run, in one request** (#181). It takes no
@@ -265,7 +267,11 @@ function Content({
 			);
 		}
 		if (root === 'empty') {
-			return view === 'groups' ? <NoTestingGroups /> : <NothingArchived />;
+			return view === 'groups' ? (
+				<NoTestingGroups truncated={groups.status === 'empty' && groups.truncated} />
+			) : (
+				<NothingArchived />
+			);
 		}
 		if (root === 'unreadable') {
 			// The same banner in both views, because it is the same fact about the same archive: the
@@ -864,15 +870,26 @@ function NothingArchived() {
  * empty-handed answers of this screen must stay three (D6). What would change it is a `group_id` on
  * a lease, so that is what it says; where the runs are meanwhile is the `All` view, so it says that
  * too, and this state is the one place a reader could otherwise conclude the archive is empty.
+ *
+ * **A walk that was cut short gets the other sentence, and it is not a fourth state** (#189 review).
+ * The host sets `truncated` when a directory that exists was not fully examined — a `group_id.json`
+ * that is not JSON, an unreadable subtree, a bound reached — and it can do that having recorded no
+ * group at all. *Nothing filed on this host has named a group* would then be a definitive negative
+ * about a walk that never finished, which is the exact failure the flag exists to prevent and the
+ * one `Searched` in `directory-tree.tsx` already avoids for a search that matched nothing. Same
+ * heading, same instruction, one clause changed: the claim narrows to what was actually examined.
  */
-function NoTestingGroups() {
+function NoTestingGroups({ truncated }: { readonly truncated: boolean }) {
 	return (
 		<QuietPanel heading="No testing groups">
 			{/* The one command on this screen, in the monospace face because it is one — `projects.tsx`
 			    set that precedent, and the face is the token's rather than a treatment invented here. */}
 			A run joins a group when the lease that produced it names one, with{' '}
-			<span className="font-code-md">rover acquire --group-id</span>. Nothing filed on this host has
-			named a group, so there is no grouping to arrange. Every run is still listed in the All view.
+			<span className="font-code-md">rover acquire --group-id</span>.{' '}
+			{truncated
+				? 'More is filed here than the host could examine, and no group was named in the part it could. A grouped run may be missing from this view.'
+				: 'Nothing filed on this host has named a group, so there is no grouping to arrange.'}{' '}
+			Every run is still listed in the All view.
 		</QuietPanel>
 	);
 }
@@ -880,9 +897,15 @@ function NoTestingGroups() {
 /**
  * The four routes, two views, one component (#181).
  *
- * **Two route families rather than one with a search parameter**, and each is two routes rather than
- * one optional splat, because TanStack matches a splat route against `/archive/` and not against
- * `/archive` — and `/archive` is the address the navigation points at.
+ * **Two route families rather than one with a search parameter**, and each is two routes rather
+ * than one — but not because a splat route fails to match the bare address. It matches both:
+ * against @tanstack/react-router 1.170.32, `/archive`, `/archive/`, `/groups` and `/groups/` all
+ * resolve to the `$` route with `_splat: ''`, and the bare route is never in `router.state.matches`
+ * (`archive-path.test.tsx` pins it). **The bare routes exist because `to` is typed off the route
+ * tree**: without them `/archive` and `/groups` are not link targets the router admits, and
+ * `sidebar.tsx` and `view-toggle.tsx` — which point at the root of each family and must not put a
+ * trailing `$` in a shared address — stop compiling. They are declarations for the type, and the
+ * splat route is what actually renders (#189 review).
  *
  * **`/groups` rather than `/archive/groups/$`**, checked and rejected: a project literally named
  * `groups` would be shadowed by it in the `All` view, which is a silent bug in a vocabulary that is
