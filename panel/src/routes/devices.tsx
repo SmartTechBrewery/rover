@@ -293,7 +293,7 @@ function missingTooling(reason: StaleReason | null): string | null {
 	}
 	return (
 		`this host could not run ${reason.tool}, so it cannot see its ${reason.platform} devices ` +
-		`at all until somebody installs it there or puts it on the PATH the host runs with`
+		`at all until somebody installs it there or points that host at a copy it already has`
 	);
 }
 

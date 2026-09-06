@@ -1,12 +1,14 @@
 import type { ExecFileException } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
 	ADB_BINARY_MAX_BUFFER_BYTES,
 	ADB_MAX_BUFFER_BYTES,
 	ADB_STREAM_STDERR_TAIL_CHARS,
 	AdbCommandError,
+	type AdbStream,
+	type AdbStreamHandlers,
 	DEFAULT_ADB_TIMEOUT_MS,
 	describeBytes,
 	runAdb,
@@ -26,6 +28,13 @@ import { parseDeviceSerial } from '@/core/ids.js';
  * The mock is declared through `vi.hoisted` so it can carry `execFile`'s real callback
  * signature: an untyped `vi.fn()` infers a zero-argument call and `mock.calls[0][2]`
  * then fails to typecheck (ai/TESTING.md).
+ *
+ * **Which `adb` gets run is stubbed out here on purpose** (#171). Finding it is
+ * `adb-path.test.ts`'s subject and it needs a real filesystem to be about anything; what this
+ * suite is about is what happens once one has been found, so the resolution answers one fixed
+ * path and every assertion on the executed file names it. Leaving it real would also make the
+ * suite depend on whether the machine running it has an Android SDK — the exact property the
+ * runners were changed to stop depending on.
  */
 type ExecFileCallback = (
 	error: ExecFileException | null,
@@ -39,15 +48,24 @@ type ExecFileCall = [
 	callback: ExecFileCallback,
 ];
 
-const { execFileMock, spawnMock } = vi.hoisted(() => ({
+const { execFileMock, spawnMock, adbExecutableMock } = vi.hoisted(() => ({
 	execFileMock: vi.fn<(...call: ExecFileCall) => void>(),
 	// `spawn` is a named import of the module under test, so the factory has to answer it
 	// even for the suites that never touch it — an ESM named import that resolves to
 	// nothing fails the whole file, not the one call.
 	spawnMock: vi.fn(),
+	adbExecutableMock: vi.fn<() => Promise<string>>(),
 }));
 
 vi.mock('node:child_process', () => ({ execFile: execFileMock, spawn: spawnMock }));
+vi.mock('@/backends/android/adb-path.js', () => ({ adbExecutable: adbExecutableMock }));
+
+/** The file the search settled on, as an absolute path no `PATH` lookup could produce. */
+const RESOLVED_ADB = '/opt/android-sdk/platform-tools/adb';
+
+beforeEach(() => {
+	adbExecutableMock.mockResolvedValue(RESOLVED_ADB);
+});
 
 const SERIAL = parseDeviceSerial('device-under-test');
 
@@ -88,7 +106,7 @@ describe('runAdb', () => {
 			stdout: 'List of devices attached\n',
 			stderr: '* daemon started successfully\n',
 		});
-		expect(execFileMock.mock.calls[0][0]).toBe('adb');
+		expect(execFileMock.mock.calls[0][0]).toBe(RESOLVED_ADB);
 		expect(execFileMock.mock.calls[0][1]).toEqual(['devices', '-l']);
 	});
 
@@ -159,6 +177,19 @@ describe('runAdb', () => {
 		fails({ code: 1 });
 
 		expect((await failureOf(runAdb(['devices']))).message).toContain('stderr: (empty)');
+	});
+
+	/**
+	 * No `adb` anywhere this host looks (#171). The search's own failure is what the caller
+	 * gets, unwrapped: it names every location that was tried and the setting that overrides
+	 * them, which is the whole difference from `spawn adb ENOENT` repeated once per verb.
+	 */
+	it('refuses without running anything when the search found no adb at all', async () => {
+		answers('');
+		adbExecutableMock.mockRejectedValue(new Error('nowhere to be found'));
+
+		await expect(runAdb(['devices'])).rejects.toThrow('nowhere to be found');
+		expect(execFileMock).not.toHaveBeenCalled();
 	});
 });
 
@@ -432,13 +463,27 @@ async function settled(): Promise<void> {
 	await new Promise((resolve) => setImmediate(resolve));
 }
 
+/**
+ * The stream, with the resolution behind it settled.
+ *
+ * `streamAdb` answers its handle synchronously and spawns once the search has said which
+ * `adb` to run (#171), so a case that drives the child has to let that land first — the
+ * handle exists before the process does. The cases that deliberately act *before* it lands
+ * call `streamAdb` directly.
+ */
+async function streaming(args: readonly string[], handlers: AdbStreamHandlers): Promise<AdbStream> {
+	const stream = streamAdb(args, handlers);
+	await settled();
+	return stream;
+}
+
 describe('streamAdb', () => {
-	it('spawns adb with the arguments it was given, and never inherits stdin', () => {
+	it('spawns adb with the arguments it was given, and never inherits stdin', async () => {
 		spawns();
 
-		streamAdb(['track-devices', '-l'], { onStdout: vi.fn(), onEnd: vi.fn() });
+		await streaming(['track-devices', '-l'], { onStdout: vi.fn(), onEnd: vi.fn() });
 
-		expect(spawnMock.mock.calls[0]?.[0]).toBe('adb');
+		expect(spawnMock.mock.calls[0]?.[0]).toBe(RESOLVED_ADB);
 		expect(spawnMock.mock.calls[0]?.[1]).toEqual(['track-devices', '-l']);
 		expect(spawnMock.mock.calls[0]?.[2]).toEqual({ stdio: ['ignore', 'pipe', 'pipe'] });
 	});
@@ -448,7 +493,7 @@ describe('streamAdb', () => {
 	it('hands stdout back as the chunks it arrived in', async () => {
 		const child = spawns();
 		const onStdout = vi.fn();
-		streamAdb(['track-devices'], { onStdout, onEnd: vi.fn() });
+		await streaming(['track-devices'], { onStdout, onEnd: vi.fn() });
 
 		child.stdout.write(Buffer.from('0074emu'));
 		child.stdout.write(Buffer.from('lator-5554'));
@@ -469,7 +514,7 @@ describe('streamAdb', () => {
 	it('reports a clean exit as an end, naming the command and the code', async () => {
 		const child = spawns();
 		const onEnd = vi.fn();
-		streamAdb(['track-devices', '-l'], { onStdout: vi.fn(), onEnd });
+		await streaming(['track-devices', '-l'], { onStdout: vi.fn(), onEnd });
 
 		child.emit('close', 0, null);
 		await settled();
@@ -482,7 +527,7 @@ describe('streamAdb', () => {
 	it('names the signal when the run was killed rather than exited', async () => {
 		const child = spawns();
 		const onEnd = vi.fn();
-		streamAdb(['track-devices'], { onStdout: vi.fn(), onEnd });
+		await streaming(['track-devices'], { onStdout: vi.fn(), onEnd });
 
 		child.emit('close', null, 'SIGKILL');
 		await settled();
@@ -495,7 +540,7 @@ describe('streamAdb', () => {
 	it('reports a run that never started, with the reason node gave', async () => {
 		const child = spawns();
 		const onEnd = vi.fn();
-		streamAdb(['track-devices'], { onStdout: vi.fn(), onEnd });
+		await streaming(['track-devices'], { onStdout: vi.fn(), onEnd });
 
 		child.emit('error', enoent('spawn adb ENOENT'));
 		await settled();
@@ -511,7 +556,7 @@ describe('streamAdb', () => {
 	it('flags the end as adb not being installed, from the error code and not the message', async () => {
 		const child = spawns();
 		const onEnd = vi.fn();
-		streamAdb(['track-devices'], { onStdout: vi.fn(), onEnd });
+		await streaming(['track-devices'], { onStdout: vi.fn(), onEnd });
 
 		// The message deliberately says nothing about ENOENT: what classifies this is the code.
 		child.emit('error', enoent('spawn failed'));
@@ -523,7 +568,7 @@ describe('streamAdb', () => {
 	it('leaves the flag off for a failure that is not the executable being missing', async () => {
 		const child = spawns();
 		const onEnd = vi.fn();
-		streamAdb(['track-devices'], { onStdout: vi.fn(), onEnd });
+		await streaming(['track-devices'], { onStdout: vi.fn(), onEnd });
 
 		const denied: NodeJS.ErrnoException = new Error('spawn adb EACCES');
 		denied.code = 'EACCES';
@@ -537,7 +582,7 @@ describe('streamAdb', () => {
 	it('leaves the flag off when the run started and then ended', async () => {
 		const child = spawns();
 		const onEnd = vi.fn();
-		streamAdb(['track-devices'], { onStdout: vi.fn(), onEnd });
+		await streaming(['track-devices'], { onStdout: vi.fn(), onEnd });
 
 		child.emit('close', 0, null);
 		await settled();
@@ -548,7 +593,7 @@ describe('streamAdb', () => {
 	it('ends exactly once when the run both errors and closes', async () => {
 		const child = spawns();
 		const onEnd = vi.fn();
-		streamAdb(['track-devices'], { onStdout: vi.fn(), onEnd });
+		await streaming(['track-devices'], { onStdout: vi.fn(), onEnd });
 
 		child.emit('error', new Error('spawn adb ENOENT'));
 		child.emit('close', null, null);
@@ -562,7 +607,7 @@ describe('streamAdb', () => {
 	it('carries the stderr tail in the end reason', async () => {
 		const child = spawns();
 		const onEnd = vi.fn();
-		streamAdb(['track-devices'], { onStdout: vi.fn(), onEnd });
+		await streaming(['track-devices'], { onStdout: vi.fn(), onEnd });
 
 		child.stderr.write('* daemon not running; starting now at tcp:5037\n');
 		await settled();
@@ -576,7 +621,7 @@ describe('streamAdb', () => {
 	it('keeps only the tail of a long-running stderr, and keeps the last of it', async () => {
 		const child = spawns();
 		const onEnd = vi.fn();
-		streamAdb(['track-devices'], { onStdout: vi.fn(), onEnd });
+		await streaming(['track-devices'], { onStdout: vi.fn(), onEnd });
 
 		child.stderr.write('x'.repeat(ADB_STREAM_STDERR_TAIL_CHARS * 2));
 		child.stderr.write('the last thing adb said');
@@ -592,7 +637,7 @@ describe('streamAdb', () => {
 	it('says so plainly when the run ended having printed nothing', async () => {
 		const child = spawns();
 		const onEnd = vi.fn();
-		streamAdb(['track-devices'], { onStdout: vi.fn(), onEnd });
+		await streaming(['track-devices'], { onStdout: vi.fn(), onEnd });
 
 		child.emit('close', 0, null);
 		await settled();
@@ -602,7 +647,7 @@ describe('streamAdb', () => {
 
 	it('kills the child on stop, and resolves once it is gone', async () => {
 		const child = spawns();
-		const stream = streamAdb(['track-devices'], { onStdout: vi.fn(), onEnd: vi.fn() });
+		const stream = await streaming(['track-devices'], { onStdout: vi.fn(), onEnd: vi.fn() });
 
 		await stream.stop();
 
@@ -615,7 +660,7 @@ describe('streamAdb', () => {
 		const child = spawns();
 		const onStdout = vi.fn();
 		const onEnd = vi.fn();
-		const stream = streamAdb(['track-devices'], { onStdout, onEnd });
+		const stream = await streaming(['track-devices'], { onStdout, onEnd });
 
 		await stream.stop();
 		child.stdout.write(Buffer.from('0000'));
@@ -628,7 +673,7 @@ describe('streamAdb', () => {
 
 	it('is a no-op when stopped twice, or after the run already ended', async () => {
 		const child = spawns();
-		const stream = streamAdb(['track-devices'], { onStdout: vi.fn(), onEnd: vi.fn() });
+		const stream = await streaming(['track-devices'], { onStdout: vi.fn(), onEnd: vi.fn() });
 
 		child.emit('close', 0, null);
 		await settled();
@@ -636,6 +681,43 @@ describe('streamAdb', () => {
 		await stream.stop();
 
 		expect(child.kill).not.toHaveBeenCalled();
+	});
+
+	/**
+	 * The other way this run can never start (#171), and the one a person can act on: the
+	 * search reached the end of its candidate list. It is the same `notInstalled` end as an
+	 * `ENOENT` on the spawn, because it means the same thing to the caller — nothing will
+	 * change until somebody installs or names an `adb` — and it carries the search's own
+	 * message rather than a sentence written here, so what a person reads names every place
+	 * that was tried.
+	 */
+	it('ends as adb not being installed when the search found none, without spawning', async () => {
+		spawns();
+		adbExecutableMock.mockRejectedValue(
+			new Error("'adb' was not found in any of the locations this host looks in"),
+		);
+		const onEnd = vi.fn();
+
+		await streaming(['track-devices'], { onStdout: vi.fn(), onEnd });
+
+		expect(spawnMock).not.toHaveBeenCalled();
+		expect(onEnd).toHaveBeenCalledTimes(1);
+		expect(onEnd.mock.calls[0]?.[0]).toContain("'adb' was not found");
+		expect(onEnd.mock.calls[0]?.[1]).toBe(true);
+	});
+
+	// `stop()` before the search has answered: the handle exists, the process does not, and
+	// the promise the caller is holding must not later put one on the machine.
+	it('never spawns when it is stopped before the search has answered', async () => {
+		spawns();
+		const onEnd = vi.fn();
+
+		const stream = streamAdb(['track-devices'], { onStdout: vi.fn(), onEnd });
+		await stream.stop();
+		await settled();
+
+		expect(spawnMock).not.toHaveBeenCalled();
+		expect(onEnd).not.toHaveBeenCalled();
 	});
 });
 

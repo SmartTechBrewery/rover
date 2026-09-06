@@ -18,7 +18,7 @@ Three steps, and the third is run **inside the project you want an agent to be a
 ```bash
 git clone git@github.com:SmartTechBrewery/rover.git
 cd rover
-npm install     # installs the git hooks, and checks adb is on PATH
+npm install     # installs the git hooks, and checks this machine has an adb Rover can run
 npm link        # puts `rover` on your PATH, running this checkout
 ```
 
@@ -73,12 +73,15 @@ of the command. The CLI's own usage text says which of the two it is for you.
 ### What you need
 
 - **Node 22 or newer**, and `npm install` in this checkout — that also installs the git hooks.
-- **`adb` on `PATH`, with a device in debug mode.** `adb devices` has to name it before Rover can:
-  Rover lends what is already attached and never starts an emulator or connects a phone itself
+- **`adb`, with a device in debug mode.** `adb devices` has to name it before Rover can: Rover
+  lends what is already attached and never starts an emulator or connects a phone itself
   (`PROJECT.md` D21), and it never takes a device reached over `adb connect` into its inventory,
-  because that is not this machine's hardware (D18). `npm install` says so when it cannot find
-  `adb`, and changes nothing about your `PATH` or your shell configuration itself: what is on this
-  machine's `PATH` is the operator's, the same way the devices are.
+  because that is not this machine's hardware (D18). It does **not** have to be on your `PATH` —
+  an Android SDK in the standard place is found without one, and `ROVER_ADB_PATH` names an `adb`
+  anywhere else. See [where Rover looks for `adb`](#where-rover-looks-for-adb) for the order, which
+  is the same order `npm install` checks and reports on. Rover changes nothing about your `PATH` or
+  your shell configuration either way: what is on this machine's `PATH` is the operator's, the same
+  way the devices are.
 - **`ffmpeg` on the host, and only for `record`.** The machine this was written on does not have
   it, so `record` is not shown below — see [what this will not tell
   you](#what-this-will-not-tell-you).
@@ -712,7 +715,7 @@ of one moment is `screenshot`. The one knob is `framesPerSecond`, two by default
 exposes it as `--frames-per-second`, bounded before the call the way `--duration-ms` is.
 
 Extraction needs a video decoder, this project contains none, and writing one is out of the
-question — so the host drives `ffmpeg`, found on `PATH` the way `adb` is, with the recording written
+question — so the host drives `ffmpeg`, found on `PATH` alone, with the recording written
 to its standard input and the images read back off its standard output. **No temporary file is ever
 written**, which is also why no path exists that could end up in an answer. That is a fact about the
 *host* rather than about the device, so it is not a device capability: a machine without `ffmpeg`
@@ -1001,6 +1004,7 @@ startup, naming the variable and the reason, rather than binding something surpr
 
 | Variable | Default | Value |
 |---|---|---|
+| `ROVER_ADB_PATH` | unset — the search below | The one setting that overrides where this host looks for `adb`: the **path of the executable**, not the SDK it came from, so an `adb` in a layout with no `platform-tools` directory can be named too. Unset or empty and the ordered search under [where Rover looks for `adb`](#where-rover-looks-for-adb) answers instead — **empty counts as unset**, as it is for the socket. Read only by the daemon, on the machine the devices are attached to (`PROJECT.md` D19, D32): a client never resolves `adb` and never runs one. There is deliberately **no schema** for it, unlike every other row here: the only check worth making on this value is whether the file runs, which no shape can express — so a path that is not an executable this host can run is **skipped like any other candidate** rather than failing the daemon, and the search continues past it; when nothing is left, the failure names every location that was tried and this variable. The resolved path is held in memory for the daemon's life and **never written anywhere** (`PROJECT.md` D6), so an SDK upgrade takes effect on the next daemon start and there is no cache to invalidate. |
 | `ROVER_SOCKET_PATH` | `~/.rover/rover.sock` | Absolute path of the unix socket the local daemon binds and a local client connects to. **Empty counts as unset** — an exported-but-blank variable is what a shell leaves behind, and reading it as a real setting would point the daemon at the current directory. At most **103 bytes of UTF-8**: a unix socket address is a fixed-size struct (104 bytes on macOS, 108 on Linux, NUL included), and over the cap `bind` truncates or answers `EINVAL` instead of naming the length, so a longer path is rejected at startup with the byte count and the path. |
 | `ROVER_USERS_PATH` | `~/.rover/users.json` | Absolute path of the host's own user store — one record per user: identifier, display name, the **hash** of that user's token, and when it was created. Never a token: `rover users add` and `rover users rotate` print the raw value once and store only its hash. **Empty counts as unset**, as it is for the socket. Read by `rover users`, which touches the file directly and never goes over the network (`PROJECT.md` D25), **and by the network listener**, which is the host's entire authentication surface: the token in a caller's greeting is hashed and looked up here, re-read at every connection attempt and never cached, so `revoke` and `rotate` take effect on the very next attempt with the daemon still running. |
 | `ROVER_ARTIFACTS_PATH` | `~/.rover/artifacts` | Root of the durable artifact archive: every `screenshot`, `record_video` and `read_logs` call additionally writes its output here, on the host, **in addition to** returning the bytes to the client (`PROJECT.md` D23, §10). **Empty counts as unset**, as it is for the socket. Read only by the daemon — a client never resolves it, and the archive path is never the one an agent is given. **Nothing prunes it**: retention is deliberately undecided (`PROJECT.md` §9.4), so this grows without bound until an operator removes what they no longer want. |
@@ -1021,6 +1025,43 @@ startup, naming the variable and the reason, rather than binding something surpr
 While a daemon is coming up over a socket a crashed one left behind, a `<socket>.reclaim` lock file
 may briefly appear beside it. It is removed by whoever took it, and any left behind by a killed
 process is discarded on age by the next start.
+
+### Where Rover looks for `adb`
+
+Every device Rover drives is driven through `adb`, and **the host — not your shell — is what has to
+find it**. The daemon starts itself on the first call (`PROJECT.md` D5) and inherits the environment
+of whichever client needed it, which for an MCP server launched by a desktop application is a short
+`PATH` with no `platform-tools` on it. So the host looks in a fixed, ordered list of **known**
+locations, takes the first one that is an executable it can actually run, and holds the answer in
+memory for the rest of its life:
+
+| # | Location | |
+|---|---|---|
+| 1 | `ROVER_ADB_PATH` | The executable itself, exactly as you wrote it. Nothing is appended to it. |
+| 2 | `PATH` | Every entry, in order. An empty entry — the working directory on POSIX — is skipped: the daemon's working directory came from a client nobody chose it for. |
+| 3 | `$ANDROID_HOME/platform-tools` | |
+| 4 | `$ANDROID_SDK_ROOT/platform-tools` | |
+| 5 | the platform's standard SDK location | `~/Library/Android/sdk/platform-tools` on macOS, `~/Android/Sdk/platform-tools` on Linux, `%LOCALAPPDATA%\Android\Sdk\platform-tools` on Windows. |
+
+A candidate is accepted only once the host has run it — `adb version`, which reports the client
+version and starts no adb server (`PROJECT.md` §6). One that exists but will not run is treated as
+not found and the search moves on, so a broken leftover early in the order cannot shadow a working
+SDK later in it. When every location has been tried the failure **names each of them** and this
+table's first row, rather than repeating `spawn adb ENOENT` once per verb.
+
+**It is a list, never a search of your disk** (`PROJECT.md` D32). A developer machine usually holds
+several `adb` binaries at different versions, and `adb` replaces a running server whose version does
+not match the client that reached it — so a Rover that picked one off the disk could disrupt
+whatever another tool on your machine was doing with a device. If yours is somewhere not on this
+list, name it in `ROVER_ADB_PATH`.
+
+`npm install` runs the same list and warns when it comes up empty, printing exactly the locations it
+tried. It never executes a candidate — an install that left an adb server behind, or hung on a
+wedged binary, would be a worse prerequisite check than none.
+
+`ffmpeg`, which `record` needs on the host, is deliberately **not** resolved this way: there is no
+canonical install location for it the way there is for the Android SDK, so `PATH` remains the right
+answer for it.
 
 ### Project hooks
 
@@ -1610,7 +1651,7 @@ one agent screenshots the other's build.
 ## Working on this repo
 
 Read `ai/RULES.md` in full first. `npm install` sets up the toolchain, installs the git hooks, and
-warns when `adb` is not on `PATH`;
+warns when it can find no `adb` for Rover to run;
 `npm run verify` (lint, typecheck of both the Node tree and the panel, then the unit and panel test
 projects) is the one command that says whether the tree is healthy — it needs no device and no host
 tool. `npm run test:device` needs a device on `adb`, and

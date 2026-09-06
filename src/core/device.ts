@@ -313,9 +313,9 @@ export interface RecordVideoOptions {
  * already renders, and nothing about it changes.
  *
  * `tooling-missing` is the case that will **never** clear on its own: the program a backend
- * drives is not installed on this host, or is not on the `PATH` it runs with, so every
- * attempt fails identically forever behind a generic "the view was interrupted" message on
- * every surface. It is classified from the error code the platform reports, never from
+ * drives is not installed on this host, or is not in any of the places that backend looks for
+ * it, so every attempt fails identically forever behind a generic "the view was interrupted"
+ * message on every surface. It is classified from the error code the platform reports, never from
  * matching a message written for a human to read.
  *
  * One member today. It is an enum rather than a literal because the next permanent cause

@@ -1,5 +1,6 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import { adbExecutable } from '@/backends/android/adb-path.js';
 import { FFMPEG } from '@/daemon/frames.js';
 import { type DeviceGate, readDeviceGate } from '../helpers/device-gate.js';
 
@@ -28,13 +29,19 @@ const ADB_TIMEOUT_MS = 10_000;
  * machine without a device it may touch skips rather than fails (ai/TESTING.md). Starting
  * or connecting a device is the operator's job — this probe never attaches anything itself,
  * and it installs nothing either.
+ *
+ * **Through the backend's own resolution, never the bare name** (#171): a suite that drove one
+ * `adb` while the daemon it is testing drove another would be measuring two machines. That is
+ * also why this probe holds no candidate list of its own.
  */
 async function probeDevices(): Promise<DeviceGate> {
 	try {
-		const { stdout } = await execFileAsync('adb', ['devices'], { timeout: ADB_TIMEOUT_MS });
+		const adb = await adbExecutable();
+		const { stdout } = await execFileAsync(adb, ['devices'], { timeout: ADB_TIMEOUT_MS });
 		return readDeviceGate(stdout);
 	} catch {
-		// adb absent from PATH, or hung past the timeout. No device — not a failure.
+		// No `adb` anywhere this host looks, or one that hung past the timeout. No device — not a
+		// failure.
 		return { usable: false, local: false };
 	}
 }
