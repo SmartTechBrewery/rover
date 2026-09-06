@@ -15,7 +15,7 @@ import {
 	MAX_RECORDING_MS,
 } from '@/verbs/record.js';
 import { readRecordingContainer } from '@/verbs/recording-container.js';
-import { planNormalisation } from '@/verbs/recording-normalisation.js';
+import { NORMALISED_MAX_BIT_RATE_BPS, planNormalisation } from '@/verbs/recording-normalisation.js';
 import { MAX_ARTIFACT_BYTES } from '@/verbs/result.js';
 
 /**
@@ -76,6 +76,18 @@ const OVERLAP_DURATION_MS = 6_000;
 
 /** The sampling rate the frame cases ask for — named, so the count assertion can use it. */
 const FRAMES_PER_SECOND = 2;
+
+/** The two unit conversions the rate-ceiling assertion needs, spelled out rather than inline. */
+const MS_PER_SECOND = 1_000;
+const BITS_PER_BYTE = 8;
+
+/**
+ * What the rate-ceiling assertion allows above `NORMALISED_MAX_BIT_RATE_BPS` × the container's
+ * declared duration: the MP4's own boxes, and the VBV overshoot `-bufsize` admits by design —
+ * the buffer is the rate itself, so a quarter of a megabyte of it. Generous rather than tuned,
+ * because a device case that goes red on encoder slack is worse than one that admits some.
+ */
+const RATE_CEILING_SLACK_BYTES = 512 * 1024;
 
 const backend = new AndroidDeviceBackend();
 
@@ -363,20 +375,43 @@ describe.skipIf(!process.env.ROVER_TEST_DEVICE || !process.env.ROVER_TEST_FRAME_
 		 * the number `artifact-too-large` would be decided on — and the rate ceiling exists so
 		 * that a normal recording stays well inside it rather than becoming a refusal that the
 		 * un-normalised bytes would not have been.
+		 *
+		 * **Which bound holds depends on the branch, so the assertion asks the plan which one it
+		 * is on.** Only the *hold* branch is bounded by `MAX_ARTIFACT_BYTES` by construction:
+		 * `MAX_RECORDING_MS` at `NORMALISED_MAX_BIT_RATE_BPS` is 3.75 MB inside 4 MiB. The
+		 * container branch keeps the recorder's own timeline, and `NORMALISED_MAX_BIT_RATE_BPS`'
+		 * own documentation says the ceiling "is not a guarantee" there — a 15 s ask whose
+		 * container declares more than ~16.8 s goes over, and PROJECT.md §6 measures a real 15 s
+		 * still-screen capture declaring 27.61 s. Asserting `MAX_ARTIFACT_BYTES` unconditionally
+		 * would go red on a device that was merely busy, for the implementation behaving exactly
+		 * as documented. So the container branch asserts the property the code *does* promise:
+		 * the byte count is consistent with the timeline the container itself declares, at the
+		 * rate ceiling.
 		 */
 		it('stays inside what one answer can carry, at the longest recording the wire admits', async () => {
 			const device = await firstUsableDevice();
 			const recording = await backend.recordVideo(device.serial, {
 				durationMs: MAX_RECORDING_MS,
 			});
-			const plan = planNormalisation(readRecordingContainer(recording), MAX_RECORDING_MS);
+			const container = readRecordingContainer(recording);
+			const plan = planNormalisation(container, MAX_RECORDING_MS);
 
 			const normalised = await normaliseRecording(device.serial, recording, {
 				holdForMs: plan.holdForMs,
 			});
 
 			expect(normalised.byteLength).toBeGreaterThan(0);
-			expect(normalised.byteLength).toBeLessThanOrEqual(MAX_ARTIFACT_BYTES);
+			if (plan.holdForMs !== null) {
+				expect(normalised.byteLength).toBeLessThanOrEqual(MAX_ARTIFACT_BYTES);
+				return;
+			}
+			// The container branch. An unreadable container lands here too and declares no
+			// duration to hold the rate against, so there is nothing to assert beyond the
+			// non-empty file above — and an unreadable one is its own case elsewhere.
+			if (container.kind !== 'samples') return;
+			const atTheCeiling =
+				(container.durationMs / MS_PER_SECOND) * (NORMALISED_MAX_BIT_RATE_BPS / BITS_PER_BYTE);
+			expect(normalised.byteLength).toBeLessThanOrEqual(atTheCeiling + RATE_CEILING_SLACK_BYTES);
 		}, 180_000);
 
 		// No host path reaches an answer and nothing is left on the device either: the normaliser

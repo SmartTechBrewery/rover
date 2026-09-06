@@ -121,8 +121,9 @@ export function registerArtifactTools(server: McpServer, host: HostName): void {
 				'with an explanation: a device’s virtual display produces a buffer only when the ' +
 				'screen changes, so that is a true answer about the device rather than a fault, and ' +
 				'not a reason to suspect this tool. Drive the screen during the capture if you ' +
-				'expected motion. This call can take half a minute; that is the recording and ' +
-				'the slicing, not a hang. `label` is optional and is `screenshot`’s: it names the host’s ' +
+				'expected motion. This call can take a couple of minutes; that is the recording, ' +
+				'then the normalisation and the slicing on the host, not a hang. ' +
+				'`label` is optional and is `screenshot`’s: it names the host’s ' +
 				'archived copy so the same flow recorded in two runs of one group is filed as one thing ' +
 				'at two moments, and it requires the lease to carry a `groupId` — without one the call is ' +
 				'refused by name rather than losing its label.',

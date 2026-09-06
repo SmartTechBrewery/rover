@@ -318,8 +318,9 @@ export class FrameExtractionFailedError extends Error {
 }
 
 /**
- * Thrown when the recording could not be **normalised** because the program that normalises it
- * could not be started — `ffmpeg` is not on this host's `PATH` (#185).
+ * Thrown when the recording could not be **normalised** because this host cannot run the
+ * program that normalises it at all — `ffmpeg` is not on its `PATH`, or there is nowhere on it
+ * the encoder may write (#185).
  *
  * **The branch that keeps a silently un-normalised file from ever being the answer.** What
  * `screenrecord` writes is not a constant-rate video: a capture of a screen that did not change
@@ -332,12 +333,15 @@ export class FrameExtractionFailedError extends Error {
  *
  * Kept apart from {@link RecordingNormalisationFailedError} for the reason
  * {@link FrameExtractionUnavailableError} is kept apart from its own pair: the remedy differs —
- * install the program, rather than ask about this recording again — and apart from
+ * fix this machine, rather than ask about this recording again — and apart from
  * `MissingCapabilityError` because that one is about a *device* (D11), and nothing about a
  * missing host program says anything about the hardware.
  *
- * `reason` is Node's own words for the failed spawn (`spawn ffmpeg ENOENT`), because a program
- * that is present but not executable fails here too and says so differently.
+ * `reason` is what distinguishes the two ways a host can be unable to run it: Node's own words
+ * for the failed spawn (`spawn ffmpeg ENOENT`), because a program that is present but not
+ * executable fails there too and says so differently, or — the one condition the normaliser has
+ * and the extractor does not, since only this tool needs a file — a temp directory it could not
+ * create. **Never the path of that directory**, which is what D19 keeps out of answers.
  */
 export class RecordingNormalisationUnavailableError extends Error {
 	readonly serial: DeviceSerial;
@@ -347,11 +351,12 @@ export class RecordingNormalisationUnavailableError extends Error {
 	constructor(serial: DeviceSerial, program: string, reason: string) {
 		super(
 			`The recording from device '${serial}' could not be normalised into a file that ` +
-				`plays: '${program}' could not be started (${reason}). Install it on this host and ` +
-				'put it on PATH — it is what re-encodes the recording onto a real timeline. The ' +
-				'recording itself is unaffected and was pulled intact; what cannot be produced is a ' +
-				'playable file, and handing over the un-normalised one quietly is not something ' +
-				'this host will do',
+				`plays: this host cannot run '${program}' over it (${reason}). The remedy is on ` +
+				'the host rather than in the call — the program on PATH, and a writable temporary ' +
+				'directory for it to encode into; it is what re-encodes the recording onto a real ' +
+				'timeline. The recording itself is unaffected and was pulled intact; what cannot ' +
+				'be produced is a playable file, and handing over the un-normalised one quietly ' +
+				'is not something this host will do',
 		);
 		this.name = 'RecordingNormalisationUnavailableError';
 		this.serial = serial;

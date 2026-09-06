@@ -194,11 +194,18 @@ Backends are genuinely asymmetric and flattening that is the design mistake to a
 - **A system log is not one of those asymmetries**, which is why `readLogs` is a *required* method and not a capability: every platform here keeps one, and a flag that is always `true` is noise (`src/core/capabilities.ts`). What differs is the wording inside an entry — that is what the neutral `LogEntry` shape and a backend's own parser absorb.
 - **Moving a file is not one either**, so `pushFile` and `pullFile` are required too. The asymmetry that matters there is the *direction* rather than the platform: a push takes a path on the host, because the host is where the daemon runs, and a pull answers with **bytes**, because the answer is read on the agent's machine (D19).
 - **A missing *host* program is not one either, and it must not be modelled as a capability.**
-  Slicing a recording into frames needs a video decoder this project does not contain, so the host
-  drives `ffmpeg` off `PATH` (`src/daemon/frames.ts`). Capabilities describe what a device backend
-  can do; `ffmpeg` says nothing about any device, and the remedy is different in kind — install a
-  program *here*, rather than stop asking *that device*. So it is a named verb failure
-  (`frame-extraction-unavailable`) and never a `Capabilities` flag, and the honest empty-result rule
+  Two of `record_video`'s three host steps need a video tool this project does not contain, so the
+  host drives `ffmpeg` off `PATH` for both: normalising the pulled recording into a file that
+  plays (`src/daemon/normalise.ts`) and slicing it into frames (`src/daemon/frames.ts`).
+  Capabilities describe what a device backend can do; `ffmpeg` says nothing about any device, and
+  the remedy is different in kind — fix something *here*, rather than stop asking *that device*.
+  So each is a named verb failure (`recording-normalisation-unavailable`,
+  `frame-extraction-unavailable`) and never a `Capabilities` flag. The normalisation pair carries
+  one condition the extraction pair cannot, because only the normaliser needs a host file: a temp
+  directory the daemon could not create — full, read-only, or private to a sandbox — is
+  `recording-normalisation-unavailable` too, since it is the same machine unable to run the
+  encoder at all, and never the `internal_error` an unmapped `mkdtemp` rejection would otherwise
+  become. And the honest empty-result rule
   applies exactly as it does to a capability — with no exception left to it. A frame list on an `ok`
   answer is **never empty**: the one case that legitimately sampled to nothing (a screen that never
   changed) is closed inside the filter, and every other way a host produces no images is one of the
@@ -361,9 +368,20 @@ Verbs live above the backends and below the adapters, and this is where determin
   started from anywhere under `src/verbs/` would be `node:child_process` in every client's module
   graph, since `src/ipc/verb-methods.ts` imports these schemas (D19). So the verb declares a
   `FrameExtractor` — a function from a finished recording to images — and the daemon supplies the
-  one implementation (`src/daemon/frames.ts`), exactly as it supplies `context.backend`. That is the
-  pattern to copy for the next host-side tool, and `tests/unit/no-backend-in-a-client.test.ts` walks
-  the graph from each client entrypoint so it stays a fact rather than a convention. The bounds live
+  one implementation (`src/daemon/frames.ts`), exactly as it supplies `context.backend`. **That
+  pattern has since been copied once**, for the recording normaliser (#185): the verb declares a
+  `RecordingNormaliser` and the daemon supplies `src/daemon/normalise.ts`, with the policy that
+  decides *what* to ask the encoder for left in the verb layer as a pure module
+  (`src/verbs/recording-normalisation.ts`) for the same reason `recording-container.ts` is there.
+  It deviates in exactly one place, and the deviation is measured rather than chosen: the
+  normaliser writes a **host temp file** where the extractor deliberately writes none, because the
+  mp4 muxer refuses a non-seekable output and the fragmented alternative makes a recording
+  unreadable (PROJECT.md §6). That does not weaken D19, but it takes work rather than following
+  from the temp directory: the run gets its own directory as `cwd` and a bare output name so
+  ffmpeg has no absolute path to echo into the stderr a refusal carries, that stderr is redacted
+  besides, and a temp directory the host could not create is a named refusal rather than an
+  `internal_error` naming it. `tests/unit/no-backend-in-a-client.test.ts` walks
+  the graph from each client entrypoint so all of it stays a fact rather than a convention. The bounds live
   with the verb rather than with the tool, so they hold whichever extractor was handed in — and that
   includes the extraction *timeout*, which is a verb-layer constant even though only the daemon's
   runner passes it to a process: `rover record`'s own request timeout has to cover every budget the
@@ -577,10 +595,12 @@ exactly as the CLI is: it holds no verb logic and reaches no backend, which
   `describeWithoutBytes`, so `structuredContent` says what the answer carries without repeating
   it. Where a recording lands is `ROVER_MCP_ARTIFACT_DIR` — server configuration for the reason
   the host is one — created on demand, and only when there are bytes to write: a refusal
-  (`artifact-too-large`, `unfinished-recording`, `frame-extraction-unavailable`,
+  (`artifact-too-large`, `unfinished-recording`, `recording-normalisation-unavailable`,
+  `recording-normalisation-failed`, `frame-extraction-unavailable`,
   `frames-too-large`) is `isError` naming it and leaves **no** file behind, not a truncated one
   and not a zero-byte one. `record_video` raises its own request timeout past the recording *and*
-  the host's frame extraction, `rover record`'s three-term sum with every term imported. The three
+  both host steps that follow it — the normalisation and the frame extraction — which is
+  `rover record`'s four-term sum with every term imported. The three
   rows that move a whole file — `install_app`, `push_file`, `pull_file` — are deliberately not
   tools: how a client supplies and receives a file is R24 phase 2's, and neither client has it.
 - **A missing capability is a loud, agent-readable error** (D11). `read_screen` against a backend

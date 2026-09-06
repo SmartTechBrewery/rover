@@ -52,6 +52,14 @@ const normaliseRecordingMock = vi.hoisted(() => vi.fn());
 // The second host tool `record_video` reaches (#185). Mocked for the reason the extractor is:
 // left unmocked a unit run would spawn a real `ffmpeg` over the stub recording. It hands its
 // input straight back, so this suite's assertions are about what it already asserted.
+//
+// **Its own D19 obligation is therefore asserted where the path exists, not here.** It is the
+// one module under `src/daemon/` that writes a host file, and a refusal it raises carries
+// `ffmpeg`'s stderr verbatim across the wire — deliberately, because a non-zero exit is data
+// (ai/CODING_STANDARDS.md). So the scratch path is kept out of that stderr *inside*
+// `src/daemon/normalise.ts`, and `tests/unit/daemon/normalise.test.ts` is what proves it. A
+// case here that mocked the normaliser into rejecting with a leaky refusal would be asserting
+// that this layer sanitises what crosses it, which it does not and must not.
 vi.mock('@/daemon/normalise.js', () => ({ normaliseRecording: normaliseRecordingMock }));
 
 let temp: TempSocket;

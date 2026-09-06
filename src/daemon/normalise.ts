@@ -23,9 +23,18 @@
  * `readRecordingContainer` answer `unreadable` for every recording Rover would produce
  * (PROJECT.md §6). So the
  * output goes into a `mkdtemp` directory, is read back, and the directory is removed in a
- * `finally` on **every** path, refusals and timeout kills included. No path ever reaches an
- * answer, which is what D19 forbids; the input still arrives on `pipe:0`, so the pulled bytes
- * never touch this host's disk at all.
+ * `finally` on **every** path, refusals and timeout kills included. The input still arrives on
+ * `pipe:0`, so the pulled bytes never touch this host's disk at all.
+ *
+ * **Keeping that file out of every answer takes two deliberate things, and writing it under
+ * `mkdtemp` is neither of them.** `ffmpeg` names its own *output URL* in its error-level
+ * messages, and that stderr is carried verbatim on {@link RecordingNormalisationFailedError}
+ * and across the wire — so an output-side failure (a full temp filesystem, a reaper that
+ * removed the directory under the muxer, a mode the daemon cannot write) would put this host's
+ * absolute path into the one place D19 forbids it. So: the run is spawned with `cwd` set to its
+ * own directory and handed the bare `normalised.mp4`, which is then the only name it has to
+ * echo; and whatever stderr does carry is put through {@link withoutHostPaths} before it
+ * reaches a refusal, because the argv is not the only way a path could get in there.
  *
  * The same seekability buys the property PROJECT.md §6 records as load-bearing: `+faststart`
  * moves the `moov` **before** the payload, which is the only reason `ffmpeg -i pipe:0` works on
@@ -35,7 +44,8 @@
  *
  * **A host that cannot normalise says so by name** ({@link RecordingNormalisationUnavailableError},
  * {@link RecordingNormalisationFailedError}) rather than handing its input back. No path out of
- * this module returns the un-normalised recording: a run that could not start, one that exited
+ * this module returns the un-normalised recording, and none of them leaves as an unmapped error
+ * either: a host with no writable temp directory, a run that could not start, one that exited
  * non-zero, one killed by its own budget, and one that exited 0 having written nothing are all
  * refusals, because a silently un-normalised file is the plausible-looking wrong answer here —
  * it is a structurally valid MP4 that no player will show anything for, written to a client's
@@ -66,6 +76,13 @@ const TEMP_DIRECTORY_PREFIX = 'rover-normalise-';
 const NORMALISED_FILE = 'normalised.mp4';
 
 /**
+ * What stands in for the scratch file wherever the encoder named it — enough for a human to
+ * read the rest of ffmpeg's diagnosis, which is the part that is data, without the part that is
+ * this machine's business alone.
+ */
+const REDACTED_SCRATCH = "<the run's own scratch file>";
+
+/**
  * How many milliseconds a second is — the unit the wire speaks in against the unit `ffmpeg`'s
  * `-t` and `tpad` take.
  */
@@ -79,22 +96,56 @@ const MS_PER_SECOND = 1000;
  * the whole of what `record_video` phase 1 promised, so normalising costs no second pass over
  * the device and nothing here talks to one.
  *
- * @throws RecordingNormalisationUnavailableError when the program could not be started at all.
+ * @throws RecordingNormalisationUnavailableError when the program could not be started at all,
+ *   or when this host had nowhere to let it write.
  * @throws RecordingNormalisationFailedError when it ran and did not produce a normalised
  *   recording — a refusal, a signal, or an exit 0 that wrote no file or an empty one.
  */
 export const normaliseRecording: RecordingNormaliser = async (serial, recording, options) => {
-	const directory = await mkdtemp(join(tmpdir(), TEMP_DIRECTORY_PREFIX));
-	const output = join(directory, NORMALISED_FILE);
+	const directory = await scratchDirectory(serial);
 	try {
-		return await runFfmpeg(serial, recording, options.holdForMs, output);
+		return await runFfmpeg(serial, recording, options.holdForMs, directory);
 	} finally {
 		// On every path, including the refusals above and a run killed by its own budget: a
 		// multi-megabyte file left in the OS temp directory for every recording is exactly the
 		// thing the frame extractor gets to avoid by having no file at all.
-		await rm(directory, { recursive: true, force: true });
+		//
+		// Swallowed for the reason a backend's own device-side `rm` is: a cleanup that fails
+		// (EPERM, EBUSY — `force` only forgives ENOENT) must not be what the caller hears about,
+		// because the refusal already travelling is the answer, and an unmapped fs error thrown
+		// from a `finally` would replace it with an `internal_error`.
+		await rm(directory, { recursive: true, force: true }).catch(() => undefined);
 	}
 };
+
+/**
+ * The directory this run owns, or the refusal that says this host could not give it one.
+ *
+ * **Outside the `try` above there is no `finally` to run**, and that is deliberate: nothing was
+ * created, so there is nothing to remove. What is not optional is the name it fails by. A
+ * `mkdtemp` that rejects — a temp filesystem that is full, read-only, absent, or private to a
+ * sandbox the daemon runs under (ENOSPC/EROFS/EACCES/ENOENT) — is an ordinary host condition
+ * with a remedy on the host, and letting Node's own error escape would make it an
+ * `internal_error` that reads as a broken host *and* carries the path Node puts in its message
+ * (`src/verbs/failure.ts`'s note that `internal_error` must never be the answer to a named
+ * condition). So it becomes the same refusal a host with no `ffmpeg` gets: both are this
+ * machine being unable to run the encoder at all, and both are fixed here rather than in the
+ * call.
+ *
+ * @throws RecordingNormalisationUnavailableError with a reason that names the condition and not
+ *   the path, since the path is what D19 keeps out of answers.
+ */
+async function scratchDirectory(serial: DeviceSerial): Promise<string> {
+	try {
+		return await mkdtemp(join(tmpdir(), TEMP_DIRECTORY_PREFIX));
+	} catch {
+		throw new RecordingNormalisationUnavailableError(
+			serial,
+			FFMPEG,
+			'this host has no writable temporary directory for it to encode into',
+		);
+	}
+}
 
 /**
  * The argv, written out here rather than assembled at the call site so there is one place that
@@ -122,8 +173,13 @@ export const normaliseRecording: RecordingNormaliser = async (serial, recording,
  *
  * `-y` so a run can never block on ffmpeg's overwrite prompt — the directory is this run's own,
  * so there is nothing there to protect — and `-an` because there is no audio to carry.
+ *
+ * **The output is the bare file name, not a path**, and the run is given its own directory as
+ * `cwd` instead (see {@link runFfmpeg}). ffmpeg echoes the output URL it was handed in its own
+ * error messages, so a relative one here is what keeps this host's absolute path off the wire
+ * when the muxer cannot open the file (D19, and the header's second paragraph on it).
  */
-export function normaliseArgs(holdForMs: number | null, output: string): string[] {
+export function normaliseArgs(holdForMs: number | null): string[] {
 	const filters = [`fps=${NORMALISED_FRAME_RATE}:round=up`];
 	const hold: string[] = [];
 	if (holdForMs !== null) {
@@ -157,21 +213,28 @@ export function normaliseArgs(holdForMs: number | null, output: string): string[
 		'-movflags',
 		'+faststart',
 		'-y',
-		output,
+		NORMALISED_FILE,
 	];
 }
 
-/** Run the encoder over `recording` and hand back the file it wrote. */
+/**
+ * Run the encoder over `recording` inside `directory` and hand back the file it wrote.
+ *
+ * `cwd` is the run's own scratch directory so the argv can carry a bare file name, and the
+ * stderr that becomes a refusal goes through {@link withoutHostPaths} regardless — the argv is
+ * the way a path gets echoed, not the only way one could appear.
+ */
 async function runFfmpeg(
 	serial: DeviceSerial,
 	recording: Uint8Array,
 	holdForMs: number | null,
-	output: string,
+	directory: string,
 ): Promise<Uint8Array> {
-	const args = normaliseArgs(holdForMs, output);
+	const args = normaliseArgs(holdForMs);
 
 	await new Promise<void>((resolve, reject) => {
 		const child = spawn(FFMPEG, args, {
+			cwd: directory,
 			stdio: ['pipe', 'pipe', 'pipe'],
 			timeout: RECORDING_NORMALISATION_TIMEOUT_MS,
 		});
@@ -220,7 +283,7 @@ async function runFfmpeg(
 						serial,
 						FFMPEG,
 						code,
-						stderrTail,
+						withoutHostPaths(stderrTail, directory),
 						endOfRun(code, signal),
 					),
 				);
@@ -228,7 +291,27 @@ async function runFfmpeg(
 		});
 	});
 
-	return readNormalised(serial, output);
+	return readNormalised(serial, join(directory, NORMALISED_FILE));
+}
+
+/**
+ * ffmpeg's own diagnosis with this host's scratch file taken out of it.
+ *
+ * **The stderr is data and the path is not** (ai/CODING_STANDARDS.md, "a non-zero exit is
+ * data"): "No space left on device" and "Unknown encoder libx264" are what an agent needs, and
+ * `/tmp/rover-normalise-XXXXXX/normalised.mp4` is a name that does not exist on the machine
+ * reading the answer — or, worse, one that does and means something else. So the file is
+ * replaced rather than the message dropped.
+ *
+ * The full path goes first so a message carrying it does not come out as two placeholders, and
+ * the bare name is taken too because that is what the `cwd` in {@link runFfmpeg} makes ffmpeg
+ * print in the ordinary case.
+ */
+function withoutHostPaths(stderr: string, directory: string): string {
+	return [join(directory, NORMALISED_FILE), directory, NORMALISED_FILE].reduce(
+		(text, named) => text.split(named).join(REDACTED_SCRATCH),
+		stderr,
+	);
 }
 
 /**

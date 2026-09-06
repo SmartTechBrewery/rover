@@ -736,8 +736,10 @@ timeline much longer than the recording was asked for, and the sampling follows 
 total size is the bound the ordinary case reaches, refused with both numbers on it.
 
 Because the extraction happens inside the same call, `rover record` answers with **both or neither**:
-on a host with no decoder installed the command exits 1 with `frame-extraction-unavailable` and
-writes no video either, and its `--help` says so.
+on a host with no `ffmpeg` installed the command exits 1 and writes no video either, and its
+`--help` says so. The name is `recording-normalisation-unavailable`, because the normalisation
+below runs first and needs the same program; `frame-extraction-unavailable` is what a host that
+could normalise the recording but not slice it gives.
 
 **The video itself is normalised on the host, so the file you get always plays.** What a device
 recorder writes is not a constant-rate video: its samples exist only where the screen changed, so a
@@ -752,9 +754,10 @@ none of its own — the still screen, held across the window, which is what the 
 further sample actually means — or `container`, the recorder's own timestamps, with every sample it
 wrote intact. Those two are different numbers and the second is routinely the larger. It is the
 same `ffmpeg` off the same `PATH`, so a host that can slice a recording can normalise one, and a
-host that cannot refuses by name — `recording-normalisation-unavailable` for a program that never
-started, `recording-normalisation-failed` for a run that produced nothing — never a silently
-un-normalised file. `MAX_ARTIFACT_BYTES` is checked on the **normalised** bytes, because
+host that cannot refuses by name — `recording-normalisation-unavailable` when the host cannot
+run it at all, which is the program missing from `PATH` or no writable temporary directory for
+it to encode into, and `recording-normalisation-failed` for a run that produced nothing — never
+a silently un-normalised file. `MAX_ARTIFACT_BYTES` is checked on the **normalised** bytes, because
 re-encoding is what changes the number; the frames are still sliced from the recording as it came
 off the device, so nothing about the sampling or its bounds moved.
 

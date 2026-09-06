@@ -329,17 +329,94 @@ describe('the scratch directory is this run’s own and never anybody else’s b
 	});
 
 	/**
+	 * The structural half of D19 here: the run is given its own directory as `cwd` and a bare
+	 * file name, so the only output URL ffmpeg has to echo in its own error messages is one that
+	 * names nothing on any machine. An absolute path on the argv is what put the host's path into
+	 * `recording-normalisation-failed` before.
+	 */
+	it('hands the encoder a bare file name and its own directory to write it in', async () => {
+		await normalising(null);
+
+		expect(argsOf().at(-1)).toBe('normalised.mp4');
+		expect(argsOf().join(' ')).not.toContain(TEMP_DIRECTORY);
+		expect(spawnMock.mock.calls[0]?.[2]).toMatchObject({ cwd: TEMP_DIRECTORY });
+	});
+
+	/**
 	 * D19, on the host tool that has a file where `src/daemon/frames.ts` has none: the path is an
 	 * implementation detail of this machine, and an answer that carried it would name something
 	 * that is not on the agent's disk — or, worse, something that is.
+	 *
+	 * The stderr here is ffmpeg 8.1.1's real output-side shape, absolute path and all, because a
+	 * case whose input never contained the path proves only that nothing invented one. The
+	 * diagnosis itself has to survive: it is the part that is data.
 	 */
-	it('never puts the path in a refusal or in the bytes it answers with', async () => {
+	it('redacts the scratch file out of a refusal, keeping the diagnosis', async () => {
 		const thrown = await refusalOf((child) => {
-			child.stderr.end('Invalid data found when processing input\n');
+			child.stderr.end(
+				`[out#0/mp4 @ 0x1] Error opening output ${TEMP_DIRECTORY}/normalised.mp4: No space left on device\n` +
+					`Error opening output file ${TEMP_DIRECTORY}/normalised.mp4.\n`,
+			);
+			queueMicrotask(() => child.emit('close', 243, null));
+		});
+
+		const refusal = thrown as RecordingNormalisationFailedError;
+		for (const named of [TEMP_DIRECTORY, 'normalised.mp4']) {
+			expect(refusal.stderr).not.toContain(named);
+			expect(refusal.message).not.toContain(named);
+		}
+		expect(refusal.stderr).toContain('No space left on device');
+	});
+});
+
+/**
+ * The host condition the frame extractor cannot have, because only this tool needs a file: a
+ * temp directory that could not be created. Left unmapped it is a plain `Error` no branch of
+ * `toVerbFailure` matches, so `record_video` would answer `internal_error` carrying the path
+ * Node puts in its own message — the reading `src/verbs/failure.ts` says must never happen.
+ */
+describe('a host with nowhere to write refuses by name rather than breaking', () => {
+	it('names the condition, and not the path, when the scratch directory cannot be made', async () => {
+		mkdtempMock.mockRejectedValue(
+			new Error("ENOENT: no such file or directory, mkdtemp '/nope/rover-normalise-x'"),
+		);
+
+		const thrown = await normaliseRecording(SERIAL, RECORDING, { holdForMs: null }).then(
+			() => {
+				throw new Error('the normalisation resolved where it was expected to refuse');
+			},
+			(error: unknown) => error,
+		);
+
+		expect(thrown).toBeInstanceOf(RecordingNormalisationUnavailableError);
+		expect(thrown).toMatchObject({ serial: SERIAL, program: FFMPEG });
+		expect((thrown as Error).message).toContain('writable temporary directory');
+		expect((thrown as Error).message).not.toContain('/nope/');
+		// Nothing was created, so nothing is removed — and the encoder was never reached.
+		expect(rmMock).not.toHaveBeenCalled();
+		expect(spawnMock).not.toHaveBeenCalled();
+	});
+
+	/**
+	 * A cleanup that fails — EPERM, EBUSY; `force` only forgives ENOENT — must not become the
+	 * answer. The refusal already travelling is what the agent needs, and an fs error thrown
+	 * from the `finally` would replace it with an `internal_error` naming the same path.
+	 */
+	it('lets the refusal already in flight survive a cleanup that failed', async () => {
+		rmMock.mockRejectedValue(new Error('EPERM: operation not permitted, rm'));
+
+		const thrown = await refusalOf((child) => {
+			child.stderr.end('Unknown encoder libx264\n');
 			queueMicrotask(() => child.emit('close', 183, null));
 		});
 
-		expect((thrown as Error).message).not.toContain(TEMP_DIRECTORY);
-		expect((thrown as RecordingNormalisationFailedError).stderr).not.toContain(TEMP_DIRECTORY);
+		expect(thrown).toBeInstanceOf(RecordingNormalisationFailedError);
+		expect(thrown).toMatchObject({ exitCode: 183 });
+	});
+
+	it('answers with the normalised recording even when the cleanup failed', async () => {
+		rmMock.mockRejectedValue(new Error('EBUSY: resource busy or locked, rm'));
+
+		expect(await normalising(null)).toEqual(new Uint8Array(NORMALISED));
 	});
 });

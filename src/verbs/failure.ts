@@ -225,8 +225,9 @@ export const VerbFailureSchema = z.discriminatedUnion('kind', [
 		})
 		.strict(),
 	/**
-	 * The recording could not be normalised into a file that plays, because the program that
-	 * normalises it is not on this host (#185).
+	 * The recording could not be normalised into a file that plays, because this host cannot run
+	 * the program that normalises it at all — it is not on `PATH`, or the encoder has nowhere on
+	 * this host to write (#185).
 	 *
 	 * **The branch that keeps a silently un-normalised file from ever being the answer.** What
 	 * the recorder writes is not a constant-rate video — a still screen is one sample declaring
@@ -235,6 +236,12 @@ export const VerbFailureSchema = z.discriminatedUnion('kind', [
 	 * show anything for, or `internal_error`, which reads as a broken host for a machine that is
 	 * merely missing a program. `program` and `reason` are what make it actionable, exactly as
 	 * on `frame-extraction-unavailable`, whose shape this is field for field.
+	 *
+	 * The second condition has no counterpart on `frame-extraction-unavailable` because only
+	 * this tool needs a file: a temp directory the daemon cannot create (full, read-only, or
+	 * private to a sandbox) reaches the agent here rather than as the `internal_error` an
+	 * unmapped `mkdtemp` rejection would otherwise become. `reason` names the condition and
+	 * never the directory, which is D19's business.
 	 *
 	 * Not a `missing-capability`: that one is about a *device backend* (D11), and a host tool
 	 * says nothing about the hardware.
