@@ -21,10 +21,15 @@ import type { ReactNode } from 'react';
  * rule and surface are the thing that must not differ between them. A `title: string` made the third
  * of those impossible and would have grown a second card component to hold it.
  *
- * `min-w-0` beside `flex-1` is what stops the card being widened by what is in it. Now that the one
- * arrangement is the `shrink-0` tree beside this one `flex-1` card (#160), a long path or an
- * unbroken log line would otherwise hold the card at its content's width and push the row past the
- * window instead of scrolling inside the card.
+ * `min-w-0` is what stops the card being widened by what is in it, and it matters more now that the
+ * row is two fractions that shrink into the `--gutter` (#172): a long path or an unbroken log line
+ * would otherwise hold the card at its content's width and push the row past the window instead of
+ * scrolling inside the card.
+ *
+ * **The card's share of the row is not written here** but in `routes/archive.tsx` (`Columns`), with
+ * the tree's. `flex-1` stays because it is what this card is in the *stacked* arrangement below
+ * `xl`; the `0%` basis its shorthand carries is outranked above it by the row's own `> section`
+ * rule, which is why the fraction can live there at all.
  */
 export function ContentsCard({
 	header,
