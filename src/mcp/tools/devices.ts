@@ -104,8 +104,8 @@ export function registerDeviceTools(
 				'case the host can name a cause that will not clear on its own: `tooling-missing` ' +
 				'means the host could not run the program it watches devices with, and it names that ' +
 				'program and the platform whose devices are therefore invisible. Retrying will not ' +
-				'help there — say so, because somebody has to install it on that machine or put it ' +
-				'on the PATH the host runs with. A `null` is the ordinary case: the view was ' +
+				'help there — say so, because somebody has to install it on that machine, or point ' +
+				'that host at a copy it already has. A `null` is the ordinary case: the view was ' +
 				'interrupted and the host is already re-establishing it, so asking again shortly is ' +
 				'the right move.',
 			inputSchema: ListDevicesParamsSchema,

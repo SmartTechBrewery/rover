@@ -323,7 +323,7 @@ describe('a stale view the host says will not clear on its own', () => {
 
 		expect(screen.getByText('HOST VIEW NOT CURRENT')).toBeDefined();
 		expect(screen.getByText(/could not run adb/)).toBeDefined();
-		expect(screen.getByText(/puts it on the PATH/)).toBeDefined();
+		expect(screen.getByText(/points that host at a copy/)).toBeDefined();
 		expect(screen.getByText(/a phone may well be plugged in/)).toBeDefined();
 		// The wording that invites a wait is the one this state exists to replace.
 		expect(screen.queryByText(/has not arrived yet, or is not running/)).toBeNull();

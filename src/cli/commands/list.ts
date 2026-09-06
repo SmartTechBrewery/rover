@@ -47,7 +47,7 @@ export function staleWarning(host: string, reason: StaleReason | null): string {
 	return (
 		`Warning: host '${host}' could not run '${reason.tool}', so it cannot see its ` +
 		`'${reason.platform}' devices at all — this will not clear on its own. Install ` +
-		`'${reason.tool}' on that host, or put it on the PATH the host runs with. An empty list ` +
+		`'${reason.tool}' on that host, or point that host at a copy it already has. An empty list ` +
 		`here means no view, not no devices.`
 	);
 }

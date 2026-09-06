@@ -6,16 +6,25 @@
  * process — argv, the timeout, the exit code and the two streams. That is what lets the
  * parsers be tested without a process and this be tested without a device.
  *
- * `adb` is resolved from `PATH` rather than from configuration, exactly as
- * `tests/device/setup.ts` already does. A configurable path is a real request, but it is
- * a configuration option (ai/RULES.md §7) and nothing needs one yet.
+ * **Which `adb` runs is `./adb-path.js`'s answer, and every runner here goes through it**
+ * — the two `execFile` calls below and the `spawn`, so a verb and the device tracker can
+ * never be driving different binaries (#171). It used to be the bare name, resolved against
+ * the `PATH` of whichever process autostarted the daemon (D5); that made a host blind on a
+ * machine whose own shell finds `adb` perfectly well. `tests/device/setup.ts` resolves
+ * through the same function for the same reason.
+ *
+ * **A failure here still calls the program by its bare name**, never by the path it resolved
+ * to. An {@link AdbCommandError} becomes the text of an `internal_error` response, read on the
+ * caller's machine and possibly on another machine entirely (D19), where this host's SDK
+ * layout names nothing anyone can act on — the reason {@link RunAdbOptions.redactArgv} exists
+ * at all. Where the binary was found is the host's own business; the failure that *is* about
+ * the search says so in full, and that one is `AdbNotFoundError` in `./adb-path.js`.
  */
 
-import { type ExecFileException, execFile, spawn } from 'node:child_process';
+import { type ChildProcess, type ExecFileException, execFile, spawn } from 'node:child_process';
 import { type DeviceSerial, unwrap } from '../../core/ids.js';
-
-/** The program name, looked up on `PATH`. */
-const ADB = 'adb';
+import { ADB } from './adb-locations.mjs';
+import { adbExecutable } from './adb-path.js';
 
 /**
  * Every external invocation has a timeout (ai/CODING_STANDARDS.md) — a hung `adb` with no
@@ -395,19 +404,24 @@ export function shellText(value: string): string {
 /**
  * Run `adb <args>` and hand back both streams.
  *
- * Throws {@link AdbCommandError} on a non-zero exit, a timeout, or a failure to start.
+ * Throws {@link AdbCommandError} on a non-zero exit, a timeout, or a failure to start, and
+ * `AdbNotFoundError` when there was no `adb` to run in the first place (`./adb-path.js`).
  * Note that plenty of `adb` failures exit 0 and say so in their output — those are the
  * parsers' to catch, not this function's.
+ *
+ * The resolution is awaited before the timeout starts running, so the budget below is the
+ * command's own and not the command's plus whatever the search cost.
  */
 export async function runAdb(
 	args: readonly string[],
 	options: RunAdbOptions = {},
 ): Promise<AdbResult> {
 	const timeoutMs = options.timeoutMs ?? DEFAULT_ADB_TIMEOUT_MS;
+	const adb = await adbExecutable();
 
 	return new Promise<AdbResult>((resolve, reject) => {
 		execFile(
-			ADB,
+			adb,
 			[...args],
 			{ timeout: timeoutMs, maxBuffer: ADB_MAX_BUFFER_BYTES, encoding: 'utf8' },
 			(error, stdout, stderr) => {
@@ -455,10 +469,11 @@ export async function runAdbBinaryOnDevice(
 ): Promise<AdbBinaryResult> {
 	const argv = ['-s', unwrap(serial), ...args];
 	const timeoutMs = options.timeoutMs ?? DEFAULT_ADB_TIMEOUT_MS;
+	const adb = await adbExecutable();
 
 	return new Promise<AdbBinaryResult>((resolve, reject) => {
 		execFile(
-			ADB,
+			adb,
 			argv,
 			{ timeout: timeoutMs, maxBuffer: ADB_BINARY_MAX_BUFFER_BYTES, encoding: 'buffer' },
 			(error, stdout, stderr) => {
@@ -495,10 +510,11 @@ export interface AdbStreamHandlers {
 	 * caller: the argv, how it ended, and the stderr tail.
 	 *
 	 * `notInstalled` is the one end a caller can act on rather than wait out: `adb` itself
-	 * could not be found, so nothing ran and nothing will until it is installed or put on
-	 * this host's `PATH`. Taken from the `ENOENT` Node reports on the spawn — the error
-	 * *code*, never the message, which is written for a person and may be reworded by any
-	 * runtime release.
+	 * could not be found, so nothing ran and nothing will until it is installed or named
+	 * (`./adb-path.js`). It comes from either half of that — the search reaching the end of
+	 * its candidate list, and the `ENOENT` Node reports if the file it settled on is gone by
+	 * the time it is spawned. From the error *code* in the second case, never the message,
+	 * which is written for a person and may be reworded by any runtime release.
 	 */
 	onEnd(reason: string, notInstalled: boolean): void;
 }
@@ -532,15 +548,24 @@ export interface AdbStream {
  * Ends on `close` rather than on `exit`, because `exit` can fire while stdout still holds
  * bytes: a caller that restarts on the end reason would then take delivery of the old
  * run's last chunk after the new one began.
+ *
+ * **Synchronous, over an asynchronous resolution** (#171). Resolving which `adb` to run is a
+ * promise, and this is the one runner here that is not — its caller in `./backend.js` builds
+ * the handle and the frame decoder around it in one statement. So the handle is answered at
+ * once and the spawn happens when the search does, which changes nothing a caller can
+ * observe: every handler was already asynchronous, and `stop()` before the spawn is why every
+ * one of them sits behind `finished` — a run stopped while the search was still going never
+ * starts a process at all.
  */
 export function streamAdb(args: readonly string[], handlers: AdbStreamHandlers): AdbStream {
 	const argv = [...args];
-	const child = spawn(ADB, argv, { stdio: ['ignore', 'pipe', 'pipe'] });
 
 	let stderrTail = '';
 	let ended = false;
 	/** Set by the first of `close`/`error`, and by `stop()`; suppresses every handler call. */
 	let finished = false;
+	/** The process, once the search has answered. `null` before that, and after a failed one. */
+	let child: ChildProcess | null = null;
 
 	const finish = (reason: string, notInstalled = false): void => {
 		if (finished) return;
@@ -548,38 +573,64 @@ export function streamAdb(args: readonly string[], handlers: AdbStreamHandlers):
 		handlers.onEnd(reason, notInstalled);
 	};
 
-	child.stdout?.on('data', (chunk: Buffer) => {
-		if (!finished) handlers.onStdout(chunk);
-	});
-	// Decoded by the stream itself, so a chunk boundary inside a multi-byte character
-	// cannot become a replacement character in the message a human reads.
-	child.stderr?.setEncoding('utf8');
-	child.stderr?.on('data', (chunk: string) => {
-		stderrTail = `${stderrTail}${chunk}`.slice(-ADB_STREAM_STDERR_TAIL_CHARS);
-	});
-	child.on('error', (error: NodeJS.ErrnoException) => {
-		ended = true;
-		// Nothing ran at all — `adb` absent from PATH is the common one, and the only one of
-		// these a caller can act on rather than retry. `ENOENT` on a spawn means the executable
-		// itself was not found; nothing here passes a `cwd`, which is the other way to get it.
-		finish(`${ADB} ${argv.join(' ')} failed to run: ${error.message}`, error.code === 'ENOENT');
-	});
-	child.on('close', (code: number | null, signal: NodeJS.Signals | null) => {
-		ended = true;
-		finish(
-			`${ADB} ${argv.join(' ')} ${streamOutcome(code, signal)}\nstderr: ${quoteStream(stderrTail)}`,
-		);
-	});
+	const run = (adb: string): void => {
+		const spawned = spawn(adb, argv, { stdio: ['ignore', 'pipe', 'pipe'] });
+		child = spawned;
+
+		spawned.stdout?.on('data', (chunk: Buffer) => {
+			if (!finished) handlers.onStdout(chunk);
+		});
+		// Decoded by the stream itself, so a chunk boundary inside a multi-byte character
+		// cannot become a replacement character in the message a human reads.
+		spawned.stderr?.setEncoding('utf8');
+		spawned.stderr?.on('data', (chunk: string) => {
+			stderrTail = `${stderrTail}${chunk}`.slice(-ADB_STREAM_STDERR_TAIL_CHARS);
+		});
+		spawned.on('error', (error: NodeJS.ErrnoException) => {
+			ended = true;
+			// Nothing ran at all. The search settled on a file that was executable moments ago, so
+			// this is the SDK moving out from under a running daemon — still the one end a caller
+			// can act on rather than retry. `ENOENT` on a spawn means the executable itself was not
+			// found; nothing here passes a `cwd`, which is the other way to get it.
+			finish(`${ADB} ${argv.join(' ')} failed to run: ${error.message}`, error.code === 'ENOENT');
+		});
+		spawned.on('close', (code: number | null, signal: NodeJS.Signals | null) => {
+			ended = true;
+			finish(
+				`${ADB} ${argv.join(' ')} ${streamOutcome(code, signal)}\nstderr: ${quoteStream(stderrTail)}`,
+			);
+		});
+	};
+
+	void adbExecutable().then(
+		(adb) => {
+			// Stopped while the search was running: nothing is spawned, and `stop()` has already
+			// resolved with nothing to kill.
+			if (!finished) run(adb);
+		},
+		(error: unknown) => {
+			ended = true;
+			// Every candidate was tried and none of them ran — `AdbNotFoundError`, whose message
+			// names each one and the setting that overrides them. Permanent until somebody acts,
+			// which is exactly what `notInstalled` means to the caller (#168).
+			finish(error instanceof Error ? error.message : String(error), true);
+		},
+	);
 
 	return {
 		async stop(): Promise<void> {
 			finished = true;
 			if (ended) return;
 
+			const spawned = child;
+			// Before the search answered, so there is no process — and none will be started,
+			// because `finished` is now set.
+			if (spawned === null) return;
+
 			await new Promise<void>((resolve) => {
-				child.once('close', () => resolve());
-				child.once('error', () => resolve());
-				child.kill();
+				spawned.once('close', () => resolve());
+				spawned.once('error', () => resolve());
+				spawned.kill();
 			});
 		},
 	};

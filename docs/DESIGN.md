@@ -604,8 +604,9 @@ near red.
 `list_devices` now answers a `staleReason` beside `stale`, and it is `null` for every transient
 interruption — which is the state above, unchanged in every particular. It is **not** `null` in one
 case: `tooling-missing`, meaning the host could not run the program it watches devices with at all.
-A machine with no `adb` on its `PATH` retries forever and fails identically every time, so the
-wording above — the last thing seen, check back — is advice that never comes good.
+A machine with no `adb` anywhere the host looks (`PROJECT.md` D32) retries forever and fails
+identically every time, so the wording above — the last thing seen, check back — is advice that
+never comes good.
 
 This is a **variant of both stale states, not a fifth state**, and the distinction is what keeps the
 screen from growing a state per cause:
@@ -616,7 +617,7 @@ screen from growing a state per cause:
   Nothing failed here in the sense that would earn a warning colour — a program is not installed.
 - **One clause changes**, and it is the one that implies a wait. Over a list: *…and it will not
   correct itself: this host could not run adb, so it cannot see its android devices at all until
-  somebody installs it there or puts it on the PATH the host runs with.* Over an empty list, the
+  somebody installs it there or points that host at a copy it already has.* Over an empty list, the
   same clause replaces *interrupted, has not arrived yet, or is not running*.
 - **The sentence that keeps the empty case apart from *nothing attached* stays**, word for word.
   That is the state's whole reason to exist and no cause makes it less true.

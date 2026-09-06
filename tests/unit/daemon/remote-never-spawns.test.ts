@@ -21,6 +21,12 @@ const ALLOWED_TO_SPAWN = [
 	// process, and it starts no daemon: it runs one command and waits for it. Kept as an
 	// explicit file list rather than a directory exemption so this stays a tripwire —
 	// a second backend file reaching for a process has to be added here deliberately.
+	//
+	// The second one is that tripwire working as intended (#171): finding the bridge means
+	// asking a candidate for its version, which is a process. It starts no daemon either, it
+	// runs bounded and once per daemon lifetime, and it is the reason the runner beside it can
+	// name a file instead of a bare program name.
+	'backends/android/adb-path.ts',
 	'backends/android/adb.ts',
 	'daemon/connect.ts',
 	// Slicing a recording into frames needs a decoder this tree does not contain, so the host

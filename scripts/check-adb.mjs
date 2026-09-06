@@ -1,15 +1,24 @@
 /**
- * `npm install`'s one prerequisite check: is `adb` on this machine's `PATH`?
+ * `npm install`'s one prerequisite check: can this machine find an `adb` for Rover to run?
  *
  * README.md has listed `adb` under "What you need" since 2026-08-31 and nothing checked it, so a
  * machine with the Android SDK installed but its `platform-tools` never added to `PATH` got no
  * install-time signal at all — the first symptom was the panel's Devices screen reporting a host
  * view it could not make current, which names neither `adb` nor `PATH` (#167).
  *
- * **This resolves the name; it never runs the program.** `adb devices` would leave an adb server
- * running as a side effect of `npm install`, and a hung `adb` would hang the install — while the
- * prerequisite the README states is exactly "on `PATH`", which a walk of `PATH` answers directly
- * and with no subprocess to time out.
+ * **It asks the question the daemon asks, from the daemon's own list.** The order of places to
+ * look lives in `src/backends/android/adb-locations.mjs` and this file imports it (#171). A check
+ * that answered only "is it on `PATH`" once the daemon had learned to look further would warn on
+ * a machine Rover works on perfectly, which is worse than not warning; and two hand-kept copies
+ * of the same order drift the first time one of them is edited.
+ *
+ * **This resolves a path; it never runs the program.** `adb devices` would leave an adb server
+ * running as a side effect of `npm install`, and a hung `adb` would hang the install — so what is
+ * checked here is that a candidate exists and is executable by this user, which is exactly what
+ * the shared list answers with no subprocess to time out. The daemon goes one step further and
+ * confirms that the file it picked actually runs (`src/backends/android/adb-path.ts`); the
+ * asymmetry is deliberate and is about `npm install`, not about a daemon whose entire job is to
+ * run this program.
  *
  * **It reports and changes nothing.** No `PATH` edit, no shell rc file, no registry write: shells
  * and operating systems disagree about where that would even go, and an `npm install` that edits
@@ -18,71 +27,49 @@
  * same rule one step further out.
  */
 
-import { accessSync, constants, statSync } from 'node:fs';
-import { delimiter, join } from 'node:path';
-
-const ADB = 'adb';
-
-/**
- * The file names that count as `adb` in one `PATH` entry. One on POSIX; on Windows a bare name is
- * not executable, so `PATHEXT` decides — with Windows' own default when the variable is unset.
- */
-function executableNames() {
-	if (process.platform !== 'win32') return [ADB];
-	const extensions = (process.env.PATHEXT ?? '.COM;.EXE;.BAT;.CMD').split(';').filter(Boolean);
-	return extensions.map((extension) => ADB + extension.toLowerCase());
-}
-
-/** Present, a file, and executable by this user — `statSync` throws for the first two. */
-function isExecutableFile(candidate) {
-	try {
-		if (!statSync(candidate).isFile()) return false;
-		// X_OK is meaningless on Windows: every file answers yes, so PATHEXT above is the test.
-		if (process.platform === 'win32') return true;
-		accessSync(candidate, constants.X_OK);
-		return true;
-	} catch {
-		return false;
-	}
-}
-
-function foundOnPath() {
-	const names = executableNames();
-	for (const entry of (process.env.PATH ?? '').split(delimiter)) {
-		// An empty entry means the working directory on POSIX. Deliberately not honoured: an
-		// `adb` in whatever directory npm happened to run in is not a machine that has `adb`.
-		if (entry === '') continue;
-		for (const name of names) {
-			if (isExecutableFile(join(entry, name))) return true;
-		}
-	}
-	return false;
-}
+import {
+	ADB_PATH_ENV_VAR,
+	adbSearchLocations,
+	describeAdbSearch,
+	findAdb,
+} from '../src/backends/android/adb-locations.mjs';
 
 const RULE = '─'.repeat(74);
 
-const MESSAGE = `
+/** The same numbered list the daemon's own failure prints, indented into the block below. */
+function searched() {
+	return describeAdbSearch(adbSearchLocations())
+		.map((line) => `    ${line}`)
+		.join('\n');
+}
+
+function message() {
+	return `
   ${RULE}
-  Rover: 'adb' was not found on PATH.
+  Rover: no 'adb' was found in any of the places Rover looks.
   ${RULE}
-  Rover talks to every device through 'adb'. Until it is on PATH the daemon
+  Rover talks to every device through 'adb'. Until it can find one the daemon
   finds no devices at all: 'rover list' comes back empty and the web panel's
   Devices screen cannot make its host view current — with nothing in either
   naming the cause.
 
-  The usual reason is an Android SDK that is installed while its
-  'platform-tools' directory was never added to PATH. Where that directory
-  lives depends on how the SDK was installed, so see 'What you need' in
-  README.md for the prerequisites rather than a guess repeated here.
+  Looked here, in this order — the same order the daemon uses:
+
+${searched()}
+
+  The usual reason is an Android SDK installed somewhere else. Set
+  ${ADB_PATH_ENV_VAR} to the 'adb' you want Rover to run, or see 'What you
+  need' in README.md for the prerequisites.
 
   Nothing on this machine was changed: this check never edits PATH, a shell
   profile or anything else, and it has not failed the install — 'npm install'
   itself does not need 'adb'.
   ${RULE}
 `;
+}
 
 try {
-	if (!foundOnPath()) console.error(MESSAGE);
+	if (findAdb() === null) console.error(message());
 } catch {
 	// A warning about a later `rover` run is never a reason for `npm install` to fail (#167).
 	// Nothing here sets an exit code, and anything unexpected — an exotic PATH, a stat that throws

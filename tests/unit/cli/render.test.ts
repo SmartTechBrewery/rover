@@ -170,7 +170,10 @@ describe('the device table', () => {
 
 		expect(said).toContain("could not run 'adb'");
 		expect(said).toContain('will not clear on its own');
-		expect(said).toContain('PATH');
+		// Something for the reader to do, without this layer knowing what the program is or
+		// where its platform keeps one (#171): a host that already has a copy is pointed at it.
+		expect(said).toContain('Install');
+		expect(said).toContain('point that host at a copy');
 		expect(said).toContain('no view, not no devices');
 		// The wording the transient case keeps must not be the one a permanent cause gets: it
 		// invites a wait that would never end.
