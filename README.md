@@ -1787,8 +1787,12 @@ badge is absent there for the reason it is absent at a run: the walk behind it i
 count over it would read as a count of a set and could be short without saying so; where it *was*
 short the tree says so, above the rows. **Each view has addresses of its own** — `/archive…` and
 `/groups…` — so the toggle's segments are links, a reload lands in the view you were in, and a
-shared link lands on the selection inside it. The label badges for artifacts that share a label are
-the one part of this still to come.
+shared link lands on the selection inside it. **And an artifact a run filed under a label carries a
+round letter beside its name** (#182): inside one group each distinct label takes `A`, `B`, `C` or
+`D` — `@` past the fourth — and the same label is the same letter everywhere in that group, though
+nothing about a letter carries across to another group. The letter is what carries it and never the
+colour alone, so the label the archive filed is on every badge as a tooltip and to a screen reader;
+an artifact with no label carries no badge at all.
 
 **In the `All` view there is one arrangement at every depth: the tree, then one card.** What the parent listing says
 the selected address is decides what that card draws, and nothing about it decides whether the tree

@@ -1,7 +1,8 @@
 import type { ArchiveGroups } from './archive-groups.js';
 import { type ArchiveLevels, levelAt, runContentsLevel } from './archive-levels.js';
 import type { ArchiveEntry } from './archive-listing.js';
-import { archiveAddressOf } from './archive-path.js';
+import { archiveAddressOf, keyOf } from './archive-path.js';
+import { type ArtifactLabel, labelledArtifactsOf, NO_LABELS } from './group-labels.js';
 import { groupRowsAt } from './group-tree.js';
 import { mostRecentFirst, orderedEntries } from './level-order.js';
 
@@ -22,6 +23,9 @@ import { mostRecentFirst, orderedEntries } from './level-order.js';
  * - **the level a row opens**, which is what the run's `<serial>` hop was already expressed as;
  * - **the route a row's address is on**, which is the whole of the row's `<Link>` and the one thing
  *   in `Row` that could not stay literally untouched: it hardcoded `to="/archive/$"`.
+ * - **the label an artifact was filed under**, and the letter its group gives it (#182) — the one
+ *   addition since, and it is here rather than in the component for the reason the route is: a
+ *   letter is defined only inside a group, so the `All` view's rows carry none by construction.
  *
  * **A node is an address in the tree's own space, never a host path.** In the `All` view the two
  * coincide. In the groups view a node is `<project>/<groupId>/<testName>/<run>/<serial>/<…>`, and
@@ -45,6 +49,17 @@ export interface TreeRow {
 	readonly address: readonly string[];
 	/** The node it opens, or `null` when it opens nothing at all. */
 	readonly opens: readonly string[] | null;
+	/**
+	 * The label this artifact was filed under and the letter its group gives it, or `undefined` on
+	 * every row that has neither (#182).
+	 *
+	 * **The one thing on a row that is not true of it in both views**, and it is a *source*'s answer
+	 * for the reason `route` is: a letter is defined only inside a group, so only the groups source
+	 * ever sets it and the `All` view's rows are `undefined` here by construction rather than by a
+	 * condition in the component. An artifact with no label is `undefined` too, so the tree of an
+	 * archive that never used labels is byte for byte the tree it is today.
+	 */
+	readonly label?: ArtifactLabel;
 }
 
 /**
@@ -125,7 +140,12 @@ export function groupRowSource(groups: ArchiveGroups, levels: ArchiveLevels): Tr
 		isRunContents: (node) => node.length === GROUP_SERIAL_DEPTH,
 		rowsAt: (node) => {
 			if (node.length >= GROUP_SERIAL_DEPTH) {
-				return archiveRows(levels, archiveAddressOf(node), node);
+				/*
+				 * **The badges, and they are drawn nowhere else** (#182). The letters are assigned per
+				 * group, so which group this node is in is what decides them — and it is the first two
+				 * components of a groups address, which is why no other source can ask for them.
+				 */
+				return archiveRows(levels, archiveAddressOf(node), node, labelsIn(groups, node));
 			}
 			if (groups.status !== 'listed') {
 				// One answer feeds every level above a run, so its three other states are this
@@ -178,6 +198,25 @@ export function groupRowSource(groups: ArchiveGroups, levels: ArchiveLevels): Tr
 }
 
 /**
+ * The labelled artifacts of whichever group a groups-view node is in, keyed by their **archive**
+ * addresses — or nothing at all, at a node no answer covers.
+ *
+ * A groups address leads with `<project>/<groupId>`, which is exactly the pair a group is keyed on
+ * (`archive-listing.ts`), so the group is read off the node by position and never parsed out of
+ * what a component says (D22).
+ */
+function labelsIn(
+	groups: ArchiveGroups,
+	node: readonly string[],
+): ReadonlyMap<string, ArtifactLabel> {
+	const [project, groupId] = node;
+	if (groups.status !== 'listed' || project === undefined || groupId === undefined) {
+		return NO_LABELS;
+	}
+	return labelledArtifactsOf(groups.groups, project, groupId);
+}
+
+/**
  * One `list_archive` level's rows, **addressed in whichever tree is drawing them**.
  *
  * `path` is where the level is in the archive; `node` is where it is in the tree. They are the same
@@ -188,11 +227,18 @@ export function groupRowSource(groups: ArchiveGroups, levels: ArchiveLevels): Tr
  * re-addressed by the same rule: whatever it added below `path` is what it adds below `node`. That
  * is one component for an ordinary directory and two for a run — its name and its `<serial>` — and
  * neither depth is written down here.
+ *
+ * `labels` is keyed by the **archive** address for the same reason the entries are read at `path`:
+ * the grouping answer names an artifact the way a `list_archive` walk would have reached it, so the
+ * group id is not in it and a row matches by the address it is listed at rather than by the one it
+ * links to. It is {@link NO_LABELS} in the `All` view, which is how that tree gains no badge without
+ * anything having to say so.
  */
 function archiveRows(
 	levels: ArchiveLevels,
 	path: readonly string[],
 	node: readonly string[],
+	labels: ReadonlyMap<string, ArtifactLabel> = NO_LABELS,
 ): TreeLevel {
 	const level = levelAt(levels, path);
 	if (level.status !== 'listed') {
@@ -210,6 +256,7 @@ function archiveRows(
 					kind: entry.kind,
 					address: [...node, entry.name],
 					opens: below === null ? null : [...node, ...below.slice(depth)],
+					label: labels.get(keyOf([...path, entry.name])),
 				};
 			}),
 	};

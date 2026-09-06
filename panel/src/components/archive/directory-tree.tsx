@@ -7,6 +7,7 @@ import {
 import type { ArchiveSearch, ArchiveSearchState } from '@panel/archive/archive-search.js';
 import { type HitNode, hitTree } from '@panel/archive/search-tree.js';
 import type { TreeRoute, TreeSource } from '@panel/archive/tree-source.js';
+import { LabelBadge } from '@panel/components/archive/label-badge.js';
 import { Link } from '@tanstack/react-router';
 import {
 	ChevronDown,
@@ -19,7 +20,7 @@ import {
 	Search,
 	X,
 } from 'lucide-react';
-import { type RefObject, useRef } from 'react';
+import { type ReactNode, type RefObject, useRef } from 'react';
 
 /**
  * The archive as a directory tree — `docs/DESIGN.md` §9's left column.
@@ -80,6 +81,12 @@ import { type RefObject, useRef } from 'react';
  *   triangle, because there is no level to open and drawing one over nothing is the same class of
  *   claim as an invented `0`.
  * - **`break-words`, never `break-all`.** The latter splits `issue-112` across two lines.
+ * - **One thing was added, and it is a name rather than a measure** (#182): the label badge, on an
+ *   artifact the **groups** view has a filed label for and on no other row anywhere. A letter is
+ *   defined only inside a group, so the source is what answers it and the `All` view's rows have
+ *   none by construction; an artifact with no label has none either, so an archive that never used
+ *   labels draws the tree it drew before. It is not a verdict, nothing is ranked by it, and the
+ *   letter — never the colour alone — is what carries it (`label-badge.tsx`).
  *
  * Every row is a `<Link>` and there is no nested interactive element: the triangle is `aria-hidden`
  * decoration saying *this opens*, not a second control. **Collapsing stays the row's** (#175): the
@@ -465,6 +472,17 @@ function Branch({
 				return (
 					<li className="min-w-0" key={row.name}>
 						<Row
+							/*
+							 * **A badge exactly where the source answered a label, and nowhere else** (#182).
+							 * The letter is the group's and the label is the archive's, and both come off the
+							 * row rather than out of anything this component knows — so the `All` view's tree,
+							 * whose rows carry no label at any depth, renders exactly what it renders today.
+							 */
+							badge={
+								row.label === undefined ? undefined : (
+									<LabelBadge label={row.label.label} letter={row.label.letter} />
+								)
+							}
 							expanded={expanded}
 							kind={row.kind}
 							name={row.name}
@@ -540,6 +558,7 @@ function Row({
 	expanded,
 	selected,
 	route,
+	badge,
 }: {
 	/** Where clicking goes — this row's own address, or the node above it when it is open (#175). */
 	readonly to: readonly string[];
@@ -555,6 +574,17 @@ function Row({
 	 * arrangement had addresses of its own; everything else about a row is still unconditional.
 	 */
 	readonly route: TreeRoute;
+	/**
+	 * The label badge, on an artifact the groups view has a label for and `undefined` on every other
+	 * row (#182) — the second thing a view gets to decide, and the whole of the row's change.
+	 *
+	 * It is not one of the extras this row refuses. A count is a measure of the row and a status
+	 * glyph is a verdict about it; this is a **name the archive filed with the artifact**, drawn
+	 * short because a group is where the same label on two runs is the point. Nothing about it is an
+	 * outcome, nothing is ranked by it, and the colour is a second channel for the letter rather than
+	 * a meaning of its own (`label-badge.tsx`).
+	 */
+	readonly badge?: ReactNode;
 }) {
 	const Icon = glyphFor(kind, expanded === true);
 	const Triangle = expanded === null ? null : expanded ? ChevronDown : ChevronRight;
@@ -570,6 +600,9 @@ function Row({
 				<Triangle aria-hidden="true" className="mt-0.5 shrink-0" size={14} strokeWidth={2} />
 			)}
 			<Icon aria-hidden="true" className="mt-0.5 shrink-0" size={16} strokeWidth={2} />
+			{/* Between the glyph and the name: what this entry is, then which label it was filed
+			    under, then what it is called. A row without one is this row with nothing in it. */}
+			{badge}
 			{/* Verbatim, and wrapping at its own separators — `break-words`, never `break-all`. */}
 			<span className="min-w-0 break-words">{name}</span>
 		</Link>

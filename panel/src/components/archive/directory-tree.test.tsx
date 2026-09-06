@@ -1,8 +1,14 @@
+import type { ArchiveGroups } from '@panel/archive/archive-groups.js';
 import type { ArchiveLevel, ArchiveLevels } from '@panel/archive/archive-levels.js';
-import type { ArchiveEntry, ArchiveSearchMatch } from '@panel/archive/archive-listing.js';
+import type {
+	ArchiveEntry,
+	ArchiveGroup,
+	ArchiveGroupRun,
+	ArchiveSearchMatch,
+} from '@panel/archive/archive-listing.js';
 import { keyOf, MAX_ARCHIVE_SEARCH_TEXT_LENGTH } from '@panel/archive/archive-path.js';
 import type { ArchiveSearch, ArchiveSearchState } from '@panel/archive/archive-search.js';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import type { AnchorHTMLAttributes, ReactNode } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -28,7 +34,7 @@ vi.mock('@tanstack/react-router', () => ({
 	),
 }));
 
-import { allRowSource } from '@panel/archive/tree-source.js';
+import { allRowSource, groupRowSource } from '@panel/archive/tree-source.js';
 import { DirectoryTree } from './directory-tree.js';
 
 function directory(
@@ -848,5 +854,200 @@ describe('the hits a search draws', () => {
 
 		const marked = rows(container).filter((row) => row.className.includes('border-tertiary'));
 		expect(marked.map((row) => row.textContent)).toEqual(['login-flow']);
+	});
+});
+
+/**
+ * **The lettered label badges, and the groups view is the only place one is drawn** (#182,
+ * `docs/DESIGN.md` §9).
+ *
+ * A letter is defined only inside a group, so the source is what answers it: these cases go through
+ * `groupRowSource`, and the `All` view's own tree above — whose exact text is asserted several times
+ * over — is the assertion that nothing outside this view gained one.
+ */
+describe('the label badges', () => {
+	const GROUP_ID = 'app-bar-top-space';
+	const A_VARIANT = 'home_a_variant';
+	const B_VARIANT = 'home_b_variant';
+	const BASELINE = 'home-baseline';
+	const AFTER = 'home-after';
+	const SHOTS = 'screenshots';
+
+	/** One run's archive address — the four levels the archive is always deep (#129). */
+	function runPath(testName: string, name: string): readonly string[] {
+		return ['checkout-app', testName, name, SERIAL];
+	}
+
+	/** One run of a group, filing one artifact per label in the order the host answers them. */
+	function grouped(testName: string, name: string, labels: readonly string[]): ArchiveGroupRun {
+		return {
+			path: [...runPath(testName, name)],
+			artifacts: labels.map((label, index) => ({
+				path: [...runPath(testName, name), SHOTS, `00${index + 1}_${label}.png`],
+				label,
+			})),
+		};
+	}
+
+	/** One group holding those runs, answered as the whole of `list_archive_groups`. */
+	function answer(runs: readonly ArchiveGroupRun[]): ArchiveGroups {
+		const group: ArchiveGroup = { project: 'checkout-app', groupId: GROUP_ID, runs: [...runs] };
+		return { status: 'listed', groups: [group], truncated: false };
+	}
+
+	/**
+	 * The `list_archive` levels the tree browses inside those runs, **built from the answer itself**
+	 * — so the artifacts the grouping walk named and the entries the tree lists cannot drift apart in
+	 * this fixture the way they could if both were written out by hand.
+	 */
+	function levelsFor(runs: readonly ArchiveGroupRun[]): ArchiveLevels {
+		const under = new Map<string, ArchiveEntry[]>();
+		for (const run of runs) {
+			under.set(keyOf(run.path), [file('device_info.json'), directory(SHOTS, 1)]);
+			for (const artifact of run.artifacts) {
+				const parent = keyOf(artifact.path.slice(0, -1));
+				under.set(parent, [...(under.get(parent) ?? []), file(artifact.path.at(-1) ?? '')]);
+			}
+		}
+		return new Map([...under].map(([path, entries]) => [path, listed(...entries)]));
+	}
+
+	/** The address of one run's `screenshots` level, in the **tree's** own space — group id and all. */
+	function shotsIn(testName: string, name: string): readonly string[] {
+		return ['checkout-app', GROUP_ID, testName, name, SERIAL, SHOTS];
+	}
+
+	function showingGroups(selected: readonly string[], runs: readonly ArchiveGroupRun[]) {
+		return render(
+			<DirectoryTree selected={selected} source={groupRowSource(answer(runs), levelsFor(runs))} />,
+		);
+	}
+
+	/** The badge on one row of the tree, as the letter it draws — or `null` where there is none. */
+	function badgeOn(container: HTMLElement, name: string): string | null {
+		const row = rows(container).find((candidate) => candidate.textContent?.endsWith(name));
+		const badge = row === undefined ? null : within(row).queryByRole('img');
+		return badge?.textContent ?? null;
+	}
+
+	// A badge where there is a label, and nowhere else: not on the directory holding the artifacts,
+	// not on the run's own files, and not on any level of the arrangement above them.
+	it('draws a badge on a labelled artifact and on no other row', () => {
+		const { container } = showingGroups(shotsIn(A_VARIANT, RUN), [
+			grouped(A_VARIANT, RUN, [BASELINE, AFTER]),
+		]);
+
+		expect(badgeOn(container, `001_${BASELINE}.png`)).toBe('A');
+		expect(badgeOn(container, `002_${AFTER}.png`)).toBe('B');
+		expect(badgeOn(container, 'device_info.json')).toBeNull();
+		expect(badgeOn(container, SHOTS)).toBeNull();
+		expect(badgeOn(container, RUN)).toBeNull();
+		expect(badgeOn(container, 'checkout-app')).toBeNull();
+	});
+
+	/*
+	 * **The same label is the same letter everywhere in one group**, which is what the badge is for:
+	 * two runs filed `home-baseline` and a reader has to see one letter on both. Only one path is
+	 * ever expanded, so it is asserted as two loads of the same group — which is also the case that
+	 * would catch a letter drifting between two visits to the same address.
+	 */
+	it('gives one label one letter across two runs of a group', () => {
+		const runs = [
+			grouped(A_VARIANT, OLDER, [BASELINE, AFTER]),
+			grouped(B_VARIANT, RUN, [AFTER, BASELINE]),
+		];
+
+		const first = showingGroups(shotsIn(A_VARIANT, OLDER), runs);
+		expect(badgeOn(first.container, `001_${BASELINE}.png`)).toBe('A');
+		expect(badgeOn(first.container, `002_${AFTER}.png`)).toBe('B');
+		first.unmount();
+
+		const second = showingGroups(shotsIn(B_VARIANT, RUN), runs);
+		expect(badgeOn(second.container, `002_${BASELINE}.png`)).toBe('A');
+		expect(badgeOn(second.container, `001_${AFTER}.png`)).toBe('B');
+	});
+
+	// Four letters, then `@` — a case rather than a corner (`docs/DESIGN.md` §9). The badge stops
+	// distinguishing them there and the row does not.
+	it('gives every label past the fourth `@`, and still says which artifact it is', () => {
+		const labels = ['one', 'two', 'three', 'four', 'five', 'six'];
+		const { container } = showingGroups(shotsIn(A_VARIANT, RUN), [grouped(A_VARIANT, RUN, labels)]);
+
+		expect(labels.map((label, index) => badgeOn(container, `00${index + 1}_${label}.png`))).toEqual(
+			['A', 'B', 'C', 'D', '@', '@'],
+		);
+		expect(screen.getByText('001_one.png')).toBeDefined();
+		expect(screen.getByText('006_six.png')).toBeDefined();
+	});
+
+	/*
+	 * **The filed label is reachable, and the letter is never the only thing a screen reader gets.**
+	 * A letter is a code local to one group and `@` names nothing, so the label the archive filed
+	 * travels into the row's own accessible name — and into a `title`, for a reader who hovers.
+	 */
+	it('puts the filed label in the row’s accessible name and in a `title`', () => {
+		const { container } = showingGroups(shotsIn(A_VARIANT, RUN), [
+			grouped(A_VARIANT, RUN, [BASELINE]),
+		]);
+
+		// Matched as a predicate rather than as one string: whether the accname algorithm separates
+		// the badge from the name with a space depends on the badge's computed display, and jsdom
+		// applies no stylesheet. What is asserted is what the criterion asks — the filed label and the
+		// artifact's own name are both in the row's accessible name.
+		const row = screen.getByRole('link', {
+			name: (name: string) =>
+				name.includes(`Filed under the label ${BASELINE}`) && name.includes(`001_${BASELINE}.png`),
+		});
+		expect(row.getAttribute('href')).toBe(
+			`/groups/${[...shotsIn(A_VARIANT, RUN), `001_${BASELINE}.png`].join('/')}`,
+		);
+		expect(within(row).getByRole('img').getAttribute('title')).toBe(
+			`Filed under the label ${BASELINE}`,
+		);
+		// And the run's own unlabelled file is untouched by any of it.
+		expect(container.textContent).toContain('device_info.json');
+	});
+
+	// An artifact with no label carries no badge, so the tree of an archive that never used labels
+	// looks exactly as it does today — asserted as the tree's exact text, the way the `All` view's is.
+	it('draws nothing at all for a group whose runs carry no label', () => {
+		const { container } = showingGroups(shotsIn(A_VARIANT, RUN), [grouped(A_VARIANT, RUN, [])]);
+
+		expect(within(container).queryAllByRole('img')).toHaveLength(0);
+		expect(rows(container).map((row) => row.textContent)).toEqual([
+			'checkout-app',
+			GROUP_ID,
+			A_VARIANT,
+			RUN,
+			'device_info.json',
+			SHOTS,
+		]);
+	});
+
+	/*
+	 * **No row outside the groups view gains one**, and it is structural rather than a rule the
+	 * component keeps: the `All` source answers no label at any depth, so the same tree over the same
+	 * directories draws no badge even for an archive whose group is full of them.
+	 */
+	it('draws none in the `All` view, over the same directories', () => {
+		const runs = [grouped(A_VARIANT, RUN, [BASELINE, AFTER])];
+		// The `All` view walks from the root, so it needs the three levels above the run that the
+		// groups view reads off its one answer instead.
+		const levels: ArchiveLevels = new Map([
+			[keyOf([]), listed(directory('checkout-app'))],
+			[keyOf(['checkout-app']), listed(directory(A_VARIANT))],
+			[keyOf(['checkout-app', A_VARIANT]), listed(directory(RUN, 1, SERIAL))],
+			...levelsFor(runs),
+		]);
+		const { container } = render(
+			<DirectoryTree
+				search={searching(NOT_SEARCHING)}
+				selected={['checkout-app', A_VARIANT, RUN, SERIAL, SHOTS]}
+				source={allRowSource(levels)}
+			/>,
+		);
+
+		expect(screen.getByText(`001_${BASELINE}.png`)).toBeDefined();
+		expect(within(container).queryAllByRole('img')).toHaveLength(0);
 	});
 });
