@@ -37,6 +37,7 @@ import { createDeviceInventory, type DeviceInventory } from './inventory.js';
 import { createLeaseHandlers } from './lease-handlers.js';
 import { createLeaseStore, type LeaseStore } from './leases.js';
 import { createListArchiveHandler } from './list-archive.js';
+import { createListArchiveGroupsHandler } from './list-archive-groups.js';
 import { createListDevicesHandler } from './list-devices.js';
 import { createListProjectsHandler } from './list-projects.js';
 import type { HttpListenerConfig, NetworkListenerConfig } from './network-config.js';
@@ -199,14 +200,17 @@ export type StartResult = RunningDaemon | DaemonAlreadyRunning;
 
 /**
  * The method table the daemon serves — status, the device list, the three lease operations, the
- * verbs and **two** reads of the artifact archive, on one surface (D19). A new verb family is one
+ * verbs and **three** reads of the artifact archive, on one surface (D19). A new verb family is one
  * more spread, or one more entry in `./verb-handlers.ts`; nothing about the connection lifecycle
  * changes to carry it.
  *
- * The two archive reads are one level at a time (`./list-archive.ts`, R36) and a bounded search of
- * the whole tree (`./search-archive.ts`, R38). They are two methods rather than one with a
- * parameter, for the reason both modules' headers give: a parameter that turned a listing into a
- * query is how an index gets built by accident (D24).
+ * The three archive reads are one level at a time (`./list-archive.ts`, R36), a bounded search of
+ * the whole tree (`./search-archive.ts`, R38) and a bounded walk answering which runs share a
+ * group and which of their artifacts share a label (`./list-archive-groups.ts`, R41). They are
+ * three methods rather than one with a parameter, for the reason all three modules' headers give:
+ * a parameter that turned a listing into a query is how an index gets built by accident (D24).
+ * All three read the one `artifactsRoot` below, so none can be pointed at a different tree from
+ * the writer.
  *
  * It also answers **what this host is configured to do** around a lease: `./list-projects.ts`
  * (R39) reads the projects root and says which projects are registered, which is the read half of
@@ -239,6 +243,7 @@ export function createDaemonHandlers(
 		...createVerbHandlers(inventory, leases, traffic, archive, installProject),
 		...createListArchiveHandler({ root: artifactsRoot }),
 		...createSearchArchiveHandler({ root: artifactsRoot }),
+		...createListArchiveGroupsHandler({ root: artifactsRoot }),
 		...createListProjectsHandler({ root: projectsRoot }),
 	};
 }

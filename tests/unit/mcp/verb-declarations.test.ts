@@ -95,6 +95,13 @@ const DEVICE_METHODS = ['status', 'list_devices', 'acquire_device', 'release_dev
  * other agent on the host in a single answer. It is on `PANEL_METHODS` instead, which is the
  * operator's own browser (D27, D29).
  *
+ * `list_archive_groups` is here on `search_archive`'s exact terms (R41, #178): it is the archive's
+ * third read, and one call answers which runs share a group and which of their artifacts share a
+ * label across every project on the host — which is every other agent's run names, handed over
+ * without a walk. An agent already knows its own group and its own labels: it chose them, and the
+ * bytes came back in the verb's own answer (D19). The arrangement is the operator's browser's
+ * (D27, D29).
+ *
  * `list_projects` is here for a reason of the same kind and not the same one: it is not about a
  * device at all, and it is not about the archive either — it answers what the **host operator**
  * configured this machine to run around a lease (R39, D31). An agent already gets everything its
@@ -110,6 +117,7 @@ const NOT_YET_EXPOSED = [
 	'force_release_device',
 	'list_archive',
 	'search_archive',
+	'list_archive_groups',
 	'list_projects',
 ] as const satisfies readonly IpcMethodName[];
 

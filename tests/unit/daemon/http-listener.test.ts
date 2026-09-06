@@ -597,6 +597,24 @@ describe('only the panel’s methods are reachable, and no table gained a row', 
 		});
 	});
 
+	it('reaches list_archive_groups, which of the archive\u2019s runs share a group', async () => {
+		registerFakeBackend();
+		await withStore();
+		const daemon = await startWithHttp();
+
+		const answer = await call(daemon, 'list_archive_groups', {});
+
+		// On the allowlist since #178, on `search_archive`'s exact terms: the arrangement of a
+		// group is the operator's browser's question (R41, D27), and an agent's copy of it would
+		// be every other agent's run names in one call. Nothing archived on this host yet, which
+		// is `missing` and not a refusal — which is what proves it reached the handler.
+		expect(envelopeOf(answer)).toMatchObject({
+			type: 'result',
+			id: 'req-1',
+			result: { outcome: 'missing' },
+		});
+	});
+
 	it('reaches list_projects, what this host has registered', async () => {
 		registerFakeBackend();
 		await withStore();

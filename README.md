@@ -977,8 +977,12 @@ host in a single answer. It is on the panel's surface instead, which is the oper
 answers what the **host operator** configured this machine to run around a lease, which is an
 operator's question rather than an agent's — an agent already gets everything its own lease implies
 without asking, and enumerating every other project registered on the host is not something it
-needs. It is on the panel's surface too.
-`tests/unit/mcp/verb-declarations.test.ts` records all six as
+needs. It is on the panel's surface too. `list_archive_groups` is the seventh, on `search_archive`'s
+exact terms (R41): it answers which of the host's runs share a testing group and which of their
+artifacts share a label, and one call would hand an agent every other agent's run names without
+even a walk — while an agent already knows its own group and its own labels, having chosen them.
+The arrangement of a group is the operator's browser's question.
+`tests/unit/mcp/verb-declarations.test.ts` records all seven as
 decisions, so no row can quietly land with no tool. The `rover` command is published through `package.json`'s `bin` and reaches a `PATH`
 only through `npm link`, which `PROJECT.md` §9.4 records the reasoning for; `bin/rover-mcp.mjs`
 is a path an MCP config states absolutely and not that.
@@ -1711,7 +1715,11 @@ to its address and the screen carries on as it does when you browse there; clear
 back the tree the address describes. The answer is bounded, because there is no index behind it — a
 walk of the files at the moment you ask — so an answer that had to stop early says so rather than
 looking complete, **including when it found nothing at all**: an unreadable subtree is exactly the
-case where the field would otherwise tell you a name is definitively not in the archive. A run shows its own directory name in full, the owner and grant time read out of
+case where the field would otherwise tell you a name is definitively not in the archive. The host
+answers a third method reading the same archive, `list_archive_groups` — which runs share a testing group
+and which of their artifacts share a label, as addresses in that same one path vocabulary, from
+another bounded walk with no index behind it either (R41) — and nothing in the panel draws it yet:
+the *Testing groups* view is still the explicit placeholder #165 put there. A run shows its own directory name in full, the owner and grant time read out of
 that name, the serial of the one device the lease held, and everything the lease wrote with a size or
 a file count beside it. Nothing is added: no duration, no trigger, no verdict, and no file that was
 not in the listing — Rover reports what is on disk and judging it is the agent's job.

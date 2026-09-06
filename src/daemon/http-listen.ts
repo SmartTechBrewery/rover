@@ -181,12 +181,14 @@ import { findUserByToken, type UserRecord } from './user-store.js';
  * Typed against `IpcMethodName`, so renaming a method is a compile error here rather than a
  * surface that silently stops answering. `force_release_device` joined it with the screen that
  * calls it (R35, #122), `list_archive` with the archive's own read side (R36, #130),
- * `search_archive` with the search of the archive (R38, #144) and `list_projects` with the
- * *Projects* screen's read side (R39, #152) — every one of them was on the table already, so what
+ * `search_archive` with the search of the archive (R38, #144), `list_projects` with the
+ * *Projects* screen's read side (R39, #152) and `list_archive_groups` with the host half of
+ * surfacing testing groups (R41, #178) — every one of them was on the table already, so what
  * changed here is one transport's reach and not the surface.
  * That is the whole list: the panel reads the pool, ends a stuck lease in it, reads the artifact
- * archive one directory level at a time, searches the whole of it, and reads what this host has
- * registered — and D27 still keeps every acquire and every verb off a browser.
+ * archive one directory level at a time, searches the whole of it, asks which of its runs share a
+ * group, and reads what this host has registered — and D27 still keeps every acquire and every
+ * verb off a browser.
  *
  * `search_archive` is here and deliberately **not** an MCP tool, which is the same asymmetry
  * `list_archive` and `force_release_device` already have: this transport serves the operator's own
@@ -195,12 +197,19 @@ import { findUserByToken, type UserRecord } from './user-store.js';
  * operator configured this machine to run is not something every agent on it needs to enumerate.
  * It is a **read** and the whole of D31's read side — no method on this list, or on the table,
  * writes a hook file or takes a path into the projects directory.
+ *
+ * `list_archive_groups` is here on `search_archive`'s exact terms and not an MCP tool for its exact
+ * reason: it is the third method that reads the archive, it answers which runs share a group and
+ * which of their artifacts share a label, and one call would hand an agent every other agent's run
+ * names on the host. Like the other two it composes no path for a caller — every run and artifact it answers is
+ * an address `list_archive` and `GET /artifact/…` already accept (D19).
  */
 const PANEL_METHODS: readonly IpcMethodName[] = [
 	'list_devices',
 	'force_release_device',
 	'list_archive',
 	'search_archive',
+	'list_archive_groups',
 	'list_projects',
 ];
 
