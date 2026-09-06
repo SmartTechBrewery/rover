@@ -30,6 +30,7 @@ import {
 import { type AppId, InvalidIdError, parseAppId, parseDeviceSerial } from '@/core/ids.js';
 import { MAX_RECORDING_MS } from '@/verbs/record.js';
 import { MAX_ARTIFACT_BYTES } from '@/verbs/result.js';
+import { createGate } from '../../../helpers/timing.js';
 
 /**
  * The backend driven off the **captured** adb output of `tests/fixtures/adb/`, with only
@@ -2876,6 +2877,32 @@ function records(options: { pids?: string[]; fails?: Record<string, Error> } = {
 	runAdbBinaryOnDevice.mockResolvedValue({ stdout: FINISHED_RECORDING, stderr: '' });
 }
 
+/**
+ * Both halves of the backend's device work answering at once: a read's argv off
+ * {@link READ_FACTS}, a recording's off the recorder's own, and the `screenrecord` call held
+ * on `held` until the test releases it — `reached` is called first, so a test can wait for
+ * the recorder to be genuinely in flight.
+ *
+ * Neither {@link reads} nor {@link records} can serve this: each installs a whole
+ * implementation, so the second replaces the first, and neither answers the other's argv.
+ */
+function readsWhileRecording(held: Promise<void>, reached: () => void): void {
+	runAdbOnDevice.mockImplementation(async (_serial, args): Promise<AdbResult> => {
+		const key = args.join(' ');
+		if (key === recordArgv(1).join(' ')) {
+			reached();
+			await held;
+			return { stdout: '', stderr: '' };
+		}
+		const reply = READ_FACTS[key];
+		if (typeof reply === 'string') return { stdout: reply, stderr: '' };
+		if (reply !== undefined && !(reply instanceof Error)) return reply;
+		// Everything else in a recording — the two `rm`s and the `pidof` that answers "gone".
+		return { stdout: '', stderr: '' };
+	});
+	runAdbBinaryOnDevice.mockResolvedValue({ stdout: FINISHED_RECORDING, stderr: '' });
+}
+
 /** Every device call in the order it was made, text and binary interleaved by call time. */
 function recordingArgv(): string[][] {
 	return [
@@ -3097,6 +3124,58 @@ describe('recordVideo', () => {
 			RECORDING_PIDOF_ARGV,
 			RECORDING_RM_ARGV,
 		]);
+	});
+
+	/**
+	 * The exclusion is on the **file**, not on the device (#184), and this is the case that
+	 * separates the two: a recording in flight holds `RECORDING_PATH` and a screen read holds
+	 * `DUMP_PATH`, so the read answers rather than waiting for the recorder.
+	 *
+	 * It is what phases 2 and 3 stand on. A recording is going to be held open on purpose
+	 * while the agent drives the device, and one queue covering both paths would hold every
+	 * `read_screen` on that device for the recording's whole life — the acceptance criterion
+	 * inverted.
+	 *
+	 * The recorder is held on a gate the test opens by hand rather than on a duration
+	 * (ai/RULES.md §2), so "still in flight" is a fact the test controls rather than a race
+	 * it hopes to win.
+	 */
+	it('lets a screen read run while a recording is still in flight', async () => {
+		const held = createGate();
+		const recording = createGate();
+		readsWhileRecording(held.reached, recording.reach);
+		let finished = false;
+		const recorded = backend.recordVideo(SERIAL, { durationMs: 1_000 }).finally(() => {
+			finished = true;
+		});
+		await recording.reached;
+
+		const elements = await backend.readScreen(SERIAL);
+
+		expect(elements).toHaveLength(75);
+		// The read did not wait for it: nothing has opened the gate yet.
+		expect(finished).toBe(false);
+		held.reach();
+		await expect(recorded).resolves.toBeInstanceOf(Uint8Array);
+	});
+
+	// The containment property, now that there are two queues rather than one: a read that
+	// threw has finished with its own file and nothing about it reaches the recording beside it.
+	it('does not let a read that threw fail a recording on the same device', async () => {
+		readsWhileRecording(Promise.resolve(), () => undefined);
+		const succeeds = runAdbOnDevice.getMockImplementation();
+		runAdbOnDevice.mockImplementation(async (serial, args, options) => {
+			if (args.join(' ') === DUMP_ARGV.join(' ')) {
+				throw new Error("device 'emulator-5554' not found");
+			}
+			return (succeeds as NonNullable<typeof succeeds>)(serial, args, options);
+		});
+
+		const read = backend.readScreen(SERIAL);
+		const recorded = backend.recordVideo(SERIAL, { durationMs: 1_000 });
+
+		await expect(read).rejects.toThrow("device 'emulator-5554' not found");
+		await expect(recorded).resolves.toBeInstanceOf(Uint8Array);
 	});
 
 	/**
