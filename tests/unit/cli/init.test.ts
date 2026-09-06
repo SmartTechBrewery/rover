@@ -377,6 +377,9 @@ describe('the generated ROVER.md', () => {
 		// The same reason with more force: one call, and an agent has every other agent's run
 		// names rather than having to walk to them a level at a time (R38).
 		'search_archive',
+		// And that reason again: one call answers which runs share a group and which of their
+		// artifacts share a label, across every project on the host (R41, #178).
+		'list_archive_groups',
 		// Not MCP tools: neither has a form that carries no bytes (R19 phase 3, #104).
 		'push_file',
 		'pull_file',

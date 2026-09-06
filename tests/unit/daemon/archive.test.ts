@@ -17,7 +17,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { DeviceInfoSchema } from '@/core/device.js';
 import { parseLeaseId } from '@/core/ids.js';
 import { type ArchivableResult, createArtifactArchive } from '@/daemon/archive.js';
-import { leaseArchiveDirectory } from '@/daemon/archive-path.js';
+import { filedLabelOf, leaseArchiveDirectory, pathSegment } from '@/daemon/archive-path.js';
 import type { Lease } from '@/daemon/leases.js';
 import { GrantedLeaseSchema } from '@/ipc/methods.js';
 import type { Artifact } from '@/verbs/result.js';
@@ -500,5 +500,145 @@ describe('createArtifactArchive', () => {
 		await durable.record(lease, resultOf('screenshot', { artifact: CAPTURE }));
 
 		expect(await readdir(join(directoryFor(), 'screenshots'))).toEqual(['001_screenshot.png']);
+	});
+});
+
+/**
+ * The writer against its own reader — the gate that keeps the two halves of one layout from
+ * drifting (#178).
+ *
+ * `labelled` puts a label into an artifact's name and `filedLabelOf` takes it back out, and both
+ * live in `archive-path.ts` so there is one account of that layout rather than two. What is
+ * asserted here is the round trip against **what the writer actually wrote to disk**, not against
+ * a name a test composed: every case below reads `readdir` and decodes the name it found.
+ *
+ * The recovered text is `pathSegment(label)` and **not the caller's own string**, which is the
+ * decision this method rests on: `pathSegment` truncates, rewrites and hashes, so the caller's
+ * label is genuinely unrecoverable and nothing may present the filed text as one
+ * (`docs/DESIGN.md` §9's rule for `OWNER`).
+ */
+describe('a label written into a name and read back out of it', () => {
+	/** Every name the writer put in one of the run's three artifact directories. */
+	async function namesUnder(of: Lease, kind: string): Promise<string[]> {
+		return readdir(join(directoryFor(of), kind));
+	}
+
+	it('round-trips a screenshot label', async () => {
+		await archive().record(grouped, resultOf('screenshot', { artifact: CAPTURE }), 'before');
+
+		for (const name of await namesUnder(grouped, 'screenshots')) {
+			expect(filedLabelOf(name)).toBe(pathSegment('before'));
+		}
+	});
+
+	// Both names the recording wrote — the file and the frame directory beside it — because the
+	// pair is the whole reason the frames are named after the recording (#150).
+	it('round-trips a recording label off both the file and its frame directory', async () => {
+		const frames = [artifactOf('image/png', [0x89, 0x50, 0x4e, 0x47, 0x11])];
+
+		await archive().record(
+			grouped,
+			resultOf('record_video', { artifact: RECORDING, frames }),
+			'checkout-flow',
+		);
+
+		const names = await namesUnder(grouped, 'recordings');
+		expect(names).toHaveLength(2);
+		for (const name of names) {
+			expect(filedLabelOf(name)).toBe(pathSegment('checkout-flow'));
+		}
+	});
+
+	it('round-trips a log label', async () => {
+		await archive().record(grouped, resultOf('read_logs', { logs: createMockLogRead() }), 'crash');
+
+		for (const name of await namesUnder(grouped, 'logs')) {
+			expect(filedLabelOf(name)).toBe(pathSegment('crash'));
+		}
+	});
+
+	/*
+	 * The case the whole *filed, not original* rule exists for: a label needing rewriting comes
+	 * back as the rewritten text, hash and all. That is what a reader can honestly answer, and it
+	 * is still an identity that behaves — two different labels do not arrive here as one string.
+	 */
+	it('recovers the rewritten text for a label that needed rewriting, not the caller string', async () => {
+		await archive().record(
+			grouped,
+			resultOf('screenshot', { artifact: CAPTURE }),
+			'before change!',
+		);
+
+		const [name] = await namesUnder(grouped, 'screenshots');
+		const filed = filedLabelOf(name ?? '');
+		expect(filed).toBe(pathSegment('before change!'));
+		expect(filed).toMatch(/^before_change_-[0-9a-f]{8}$/);
+		expect(filed).not.toBe('before change!');
+	});
+
+	/*
+	 * A label that is itself one of the fixed suffixes the writer puts *after* it. The parse has
+	 * to strip the suffix and keep the label, which is why the vocabulary is a fixed list rather
+	 * than "the last underscore-separated word".
+	 */
+	it('round-trips a label that is itself the verb suffix', async () => {
+		const durable = archive();
+		await durable.record(grouped, resultOf('screenshot', { artifact: CAPTURE }), 'screenshot');
+		await durable.record(
+			grouped,
+			resultOf('read_logs', { logs: createMockLogRead() }),
+			'read_logs',
+		);
+		await durable.record(
+			grouped,
+			resultOf('record_video', {
+				artifact: RECORDING,
+				frames: [artifactOf('image/png', [0x89])],
+			}),
+			'frames',
+		);
+
+		expect(await namesUnder(grouped, 'screenshots')).toEqual(['001_screenshot_screenshot.png']);
+		expect(filedLabelOf('001_screenshot_screenshot.png')).toBe('screenshot');
+		expect(await namesUnder(grouped, 'logs')).toEqual(['001_read_logs_read_logs.txt']);
+		expect(filedLabelOf('001_read_logs_read_logs.txt')).toBe('read_logs');
+		// The frames directory has no extension and the recording beside it does, which is what
+		// lets a label of `frames` survive on both.
+		expect(await namesUnder(grouped, 'recordings')).toEqual([
+			'001_frames.mp4',
+			'001_frames_frames',
+		]);
+		for (const name of await namesUnder(grouped, 'recordings')) {
+			expect(filedLabelOf(name)).toBe('frames');
+		}
+	});
+
+	// The other direction, and the one that must never be a label: an unlabelled call's names, and
+	// the three files the archive writes about the lease rather than about the bytes.
+	it('answers no label for what the writer wrote without one', async () => {
+		const durable = archive();
+		await durable.record(described, resultOf('screenshot', { artifact: CAPTURE }));
+		await durable.record(described, resultOf('read_logs', { logs: createMockLogRead() }));
+		await durable.record(
+			described,
+			resultOf('record_video', {
+				artifact: RECORDING,
+				frames: [artifactOf('image/png', [0x89])],
+			}),
+		);
+
+		for (const kind of ['screenshots', 'recordings', 'logs']) {
+			for (const name of await namesUnder(described, kind)) {
+				expect(filedLabelOf(name)).toBeNull();
+			}
+		}
+		// And every name at the run level, `device_info.json` and `test_description.json` among
+		// them, plus a frame's own four-digit name one level down.
+		for (const name of await readdir(directoryFor(described))) {
+			expect(filedLabelOf(name)).toBeNull();
+		}
+		for (const name of await readdir(join(directoryFor(described), 'recordings', '001_frames'))) {
+			expect(filedLabelOf(name)).toBeNull();
+		}
 	});
 });

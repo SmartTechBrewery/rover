@@ -47,6 +47,13 @@
  * whether or not either was supplied (`./archive-path.ts`, #129), so nothing walking this tree
  * has to know that this feature exists.
  *
+ * **That walk is `./list-archive-groups.ts`** (#178), and it is the reader this writer is pinned
+ * against: it reads `group_id.json` back verbatim and decodes an artifact's filed label out of the
+ * name below with `filedLabelOf`, the inverse of the very `labelled` this module writes with.
+ * Nothing about what is written changed to make that possible — no sidecar file recording the
+ * caller's original label, no `<group_id>/` level — so what the reader can answer is what the
+ * archive already holds and every run already on disk is readable by it.
+ *
  * **Nothing here prunes.** Retention — a TTL, a size cap, who runs it — is explicitly out of
  * scope (PROJECT.md §9.4). This tree grows without bound, on purpose and for now.
  */
@@ -56,7 +63,7 @@ import { dirname, join } from 'node:path';
 import type { LogRead } from '../core/device.js';
 import type { LeaseId } from '../core/ids.js';
 import type { ActionResult, Artifact } from '../verbs/result.js';
-import { leaseArchiveDirectory, pathSegment } from './archive-path.js';
+import { labelled, leaseArchiveDirectory } from './archive-path.js';
 import type { Lease } from './leases.js';
 
 /**
@@ -259,24 +266,6 @@ function plan(
 		default:
 			return [];
 	}
-}
-
-/**
- * The sequence number with the call's label after it — `001` becomes `001_before` — or the
- * sequence number exactly as it was for a call that carried none.
- *
- * **Through {@link pathSegment} like every other caller string that becomes part of a path**, so
- * a label carrying a separator, a leading dot or anything outside `[A-Za-z0-9._-]` is one
- * component and not an escape, and two labels that sanitise alike land on two names rather than
- * one (the collision hash). It is the one place a label is looked at, and it is looked at for its
- * *shape* and never for what it says (D22).
- *
- * **Absent adds nothing at all** — not an empty segment, not a placeholder — so an unlabelled
- * screenshot is still `001_screenshot.png` and the tree of a caller who never used this feature
- * is byte for byte the tree it was before (#129's lesson, applied to a file name).
- */
-function labelled(ordinal: string, label: string | undefined): string {
-	return label === undefined ? ordinal : `${ordinal}_${pathSegment(label)}`;
 }
 
 /** `device_info.json` — a static copy of what the result already carries (D14). */

@@ -23,6 +23,14 @@
  * **Known and accepted:** a case-insensitive filesystem (the macOS default) folds `Home` and
  * `home` into one directory. Two mechanisms for one class of collision is not worth it; the
  * hash above covers the case that is actually reachable by accident.
+ *
+ * **A label goes into an artifact's file name here and comes back out of it here** —
+ * {@link labelled} and {@link filedLabelOf}, one module owning both halves of one layout (#178).
+ * `./archive.ts` writes the name and `./list-archive-groups.ts` reads it, and neither one holds a
+ * second account of it that could drift; `tests/unit/daemon/archive.test.ts` pins the round trip
+ * against what the writer actually puts on disk. What comes back out is the label **as the archive
+ * filed it**, never the caller's own string — `pathSegment` is not reversible, and nothing may
+ * present its output as an input.
  */
 
 import { createHash } from 'node:crypto';
@@ -136,4 +144,97 @@ function archiveTimestamp(instantMs: number): string {
 /** The first {@link SHORT_HASH_CHARS} hex characters of a SHA-256 — never reversible back. */
 function shortHash(raw: string): string {
 	return createHash('sha256').update(raw, 'utf8').digest('hex').slice(0, SHORT_HASH_CHARS);
+}
+
+/**
+ * The sequence number with the call's label after it — `001` becomes `001_before` — or the
+ * sequence number exactly as it was for a call that carried none.
+ *
+ * **Through {@link pathSegment} like every other caller string that becomes part of a path**, so
+ * a label carrying a separator, a leading dot or anything outside `[A-Za-z0-9._-]` is one
+ * component and not an escape, and two labels that sanitise alike land on two names rather than
+ * one (the collision hash). It is the one place a label is looked at, and it is looked at for its
+ * *shape* and never for what it says (D22).
+ *
+ * **Absent adds nothing at all** — not an empty segment, not a placeholder — so an unlabelled
+ * screenshot is still `001_screenshot.png` and the tree of a caller who never used this feature
+ * is byte for byte the tree it was before (#129's lesson, applied to a file name).
+ *
+ * **It lives here rather than in `./archive.ts` so that one module owns a label going into a name
+ * and coming back out of it** — {@link filedLabelOf} is its inverse, and a reader that lived
+ * somewhere else would be a second, drifting account of the same layout.
+ */
+export function labelled(ordinal: string, label: string | undefined): string {
+	return label === undefined ? ordinal : `${ordinal}_${pathSegment(label)}`;
+}
+
+/**
+ * The fixed strings the archive writes *after* the label, one per artifact kind that has one
+ * (PROJECT.md §10): `<seq>_<label>_screenshot.png`, `<seq>_<label>_read_logs.txt` and the
+ * `<seq>_<label>_frames` directory beside a recording. A recording itself has none —
+ * `<seq>_<label>.mp4` — which is why the empty case has to be a legal parse below.
+ *
+ * Split by whether the name carries an extension, and that is not tidiness. Every file the
+ * archive writes gets one (`.bin` is the fallback, never nothing), and the frames *directory*
+ * never does — so a recording whose filed label is exactly `frames` (`001_frames.mp4`) is read
+ * as labelled rather than mistaken for a frame directory, and a frame directory whose label is
+ * `frames` (`001_frames_frames`) still reads as labelled too.
+ */
+const SUFFIXES_AFTER_AN_EXTENSION = ['screenshot', 'read_logs'] as const;
+const SUFFIXES_WITHOUT_AN_EXTENSION = ['frames'] as const;
+
+/**
+ * What one archived artifact's name says its label was, or `null` for one that carries none.
+ *
+ * **The inverse of {@link labelled}, and it recovers the *filed* text and nothing else.**
+ * `pathSegment` ran on the way in — everything outside `[A-Za-z0-9._-]` became `_`, the result was
+ * truncated at {@link MAX_SEGMENT_LENGTH}, and a rewritten string picked up a hash of the
+ * caller's original — and none of that is reversible. So what comes back out is **what the archive
+ * called it**, never the caller's own string, and nothing may present it as one; that is the rule
+ * `docs/DESIGN.md` §9 already states for `OWNER`, applied to a file name.
+ *
+ * It is still an identity that behaves, which is the whole reason it is worth answering: an
+ * unrewritten label is itself, and a rewritten one carries a hash of the original, so two
+ * different labels essentially never arrive here as one string. *The same label is the same thing
+ * at two moments* is exactly what a reader of a group needs and all a reader can honestly claim.
+ *
+ * Four steps, answering `null` at the first one that does not hold:
+ *
+ * 1. Strip an extension — a trailing `.` plus a run of alphanumerics, which is every extension
+ *    this archive writes and is deliberately narrower than *everything after the last dot*: a
+ *    label may itself contain a `.`, and `001_a.b_frames` is a directory with no extension at all.
+ * 2. Strip a trailing `_<suffix>` from the vocabulary above, chosen by whether step 1 found an
+ *    extension.
+ * 3. Split what is left at its **first** `_`. No `_` at all means no label. A head that is not a
+ *    non-empty run of ASCII digits is not a sequence number, so the name is not an artifact's —
+ *    `device_info.json`, `group_id.json` and `test_description.json` all leave here.
+ * 4. The tail is the filed label, or `null` when it is empty.
+ *
+ * **One narrow case it cannot recover, recorded rather than hidden.** A *recording* is the one
+ * artifact written with no suffix, so a recording whose filed label is exactly `screenshot` or
+ * `read_logs`, or ends in `_screenshot` or `_read_logs`, is read as though that tail were the
+ * suffix — `001_home_screenshot.mp4` answers `home`. The parse cannot go the other way without
+ * making an *unlabelled* screenshot (`001_screenshot.png`, which must answer `null`) ambiguous,
+ * and the extension does not settle it because `.bin` is the fallback for both kinds. It is the
+ * same reason every document here tells a caller to keep a label short and identifier-shaped.
+ */
+export function filedLabelOf(name: string): string | null {
+	const extension = /\.[A-Za-z0-9]+$/.exec(name);
+	const stem = extension === null ? name : name.slice(0, extension.index);
+	const suffixes = extension === null ? SUFFIXES_WITHOUT_AN_EXTENSION : SUFFIXES_AFTER_AN_EXTENSION;
+
+	let body = stem;
+	for (const suffix of suffixes) {
+		if (stem.endsWith(`_${suffix}`)) {
+			body = stem.slice(0, -(suffix.length + 1));
+			break;
+		}
+	}
+
+	const separator = body.indexOf('_');
+	if (separator <= 0 || !/^\d+$/.test(body.slice(0, separator))) {
+		return null;
+	}
+	const label = body.slice(separator + 1);
+	return label === '' ? null : label;
 }

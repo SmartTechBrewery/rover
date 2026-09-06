@@ -1,0 +1,246 @@
+{
+	"answers": [
+		{
+			"case": "two groups, one with labels and one without",
+			"result": {
+				"outcome": "listed",
+				"groups": [
+					{
+						"project": "checkout-web",
+						"groupId": "basket-total",
+						"runs": [
+							{
+								"path": [
+									"checkout-web",
+									"basket",
+									"20260901T080000Z-issue-178-09cd12df",
+									"emulator-5554"
+								],
+								"artifacts": []
+							}
+						]
+					},
+					{
+						"project": "rover",
+						"groupId": "app-bar-top-space",
+						"runs": [
+							{
+								"path": [
+									"rover",
+									"home_after",
+									"20260901T083000Z-issue-178-139367de",
+									"emulator-5554"
+								],
+								"artifacts": [
+									{
+										"path": [
+											"rover",
+											"home_after",
+											"20260901T083000Z-issue-178-139367de",
+											"emulator-5554",
+											"logs",
+											"001_the-crash_read_logs.txt"
+										],
+										"label": "the-crash"
+									},
+									{
+										"path": [
+											"rover",
+											"home_after",
+											"20260901T083000Z-issue-178-139367de",
+											"emulator-5554",
+											"recordings",
+											"001_the-whole-flow.mp4"
+										],
+										"label": "the-whole-flow"
+									},
+									{
+										"path": [
+											"rover",
+											"home_after",
+											"20260901T083000Z-issue-178-139367de",
+											"emulator-5554",
+											"recordings",
+											"001_the-whole-flow_frames"
+										],
+										"label": "the-whole-flow"
+									},
+									{
+										"path": [
+											"rover",
+											"home_after",
+											"20260901T083000Z-issue-178-139367de",
+											"emulator-5554",
+											"screenshots",
+											"001_home-screen_screenshot.png"
+										],
+										"label": "home-screen"
+									}
+								]
+							},
+							{
+								"path": [
+									"rover",
+									"home_before",
+									"20260901T080000Z-issue-178-26d097b4",
+									"emulator-5554"
+								],
+								"artifacts": [
+									{
+										"path": [
+											"rover",
+											"home_before",
+											"20260901T080000Z-issue-178-26d097b4",
+											"emulator-5554",
+											"logs",
+											"001_the-crash_read_logs.txt"
+										],
+										"label": "the-crash"
+									},
+									{
+										"path": [
+											"rover",
+											"home_before",
+											"20260901T080000Z-issue-178-26d097b4",
+											"emulator-5554",
+											"recordings",
+											"001_the-whole-flow.mp4"
+										],
+										"label": "the-whole-flow"
+									},
+									{
+										"path": [
+											"rover",
+											"home_before",
+											"20260901T080000Z-issue-178-26d097b4",
+											"emulator-5554",
+											"recordings",
+											"001_the-whole-flow_frames"
+										],
+										"label": "the-whole-flow"
+									},
+									{
+										"path": [
+											"rover",
+											"home_before",
+											"20260901T080000Z-issue-178-26d097b4",
+											"emulator-5554",
+											"screenshots",
+											"001_home-screen_screenshot.png"
+										],
+										"label": "home-screen"
+									}
+								]
+							}
+						]
+					}
+				],
+				"truncated": false
+			}
+		},
+		{
+			"case": "a run whose group_id.json will not parse",
+			"result": {
+				"outcome": "listed",
+				"groups": [
+					{
+						"project": "checkout-web",
+						"groupId": "basket-total",
+						"runs": [
+							{
+								"path": [
+									"checkout-web",
+									"basket",
+									"20260901T080000Z-issue-178-09cd12df",
+									"emulator-5554"
+								],
+								"artifacts": []
+							}
+						]
+					},
+					{
+						"project": "rover",
+						"groupId": "app-bar-top-space",
+						"runs": [
+							{
+								"path": [
+									"rover",
+									"home_after",
+									"20260901T083000Z-issue-178-139367de",
+									"emulator-5554"
+								],
+								"artifacts": [
+									{
+										"path": [
+											"rover",
+											"home_after",
+											"20260901T083000Z-issue-178-139367de",
+											"emulator-5554",
+											"logs",
+											"001_the-crash_read_logs.txt"
+										],
+										"label": "the-crash"
+									},
+									{
+										"path": [
+											"rover",
+											"home_after",
+											"20260901T083000Z-issue-178-139367de",
+											"emulator-5554",
+											"recordings",
+											"001_the-whole-flow.mp4"
+										],
+										"label": "the-whole-flow"
+									},
+									{
+										"path": [
+											"rover",
+											"home_after",
+											"20260901T083000Z-issue-178-139367de",
+											"emulator-5554",
+											"recordings",
+											"001_the-whole-flow_frames"
+										],
+										"label": "the-whole-flow"
+									},
+									{
+										"path": [
+											"rover",
+											"home_after",
+											"20260901T083000Z-issue-178-139367de",
+											"emulator-5554",
+											"screenshots",
+											"001_home-screen_screenshot.png"
+										],
+										"label": "home-screen"
+									}
+								]
+							}
+						]
+					}
+				],
+				"truncated": true
+			}
+		},
+		{
+			"case": "nothing on this host named a group",
+			"result": {
+				"outcome": "listed",
+				"groups": [],
+				"truncated": false
+			}
+		},
+		{
+			"case": "no archive root",
+			"result": {
+				"outcome": "missing"
+			}
+		},
+		{
+			"case": "the archive root cannot be read",
+			"result": {
+				"outcome": "unreadable"
+			}
+		}
+	]
+}

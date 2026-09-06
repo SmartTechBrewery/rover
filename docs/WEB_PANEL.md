@@ -99,7 +99,10 @@ Design work lives in [`DESIGN.md`](./DESIGN.md); the brief that produced the fir
    above, unchanged, and `Testing groups` — runs arranged by the `group_id` a lease named
    (`PROJECT.md` R41) — is an explicit *not built yet*. It reads no `group_id` and groups nothing;
    the arrangement itself is the work after this, and `docs/DESIGN.md` §9 records what the toggle
-   settled.
+   settled. **The host half of that arrangement has since landed** (#178): `list_archive_groups`
+   answers which groups exist, which runs are in each, and which of a grouped run's artifacts carry
+   a label — every run and artifact as an address this screen already accepts, so the view has no
+   path to compose and no name to parse. What is left here is drawing it.
    `docs/DESIGN.md` §9 records what it settled, including the cost that shapes it — an authenticated
    byte route cannot be an `<img src>`, so the panel fetches the bytes with the session header and
    renders an object URL, and the whole artifact is therefore buffered in the tab.

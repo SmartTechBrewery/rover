@@ -36,10 +36,11 @@ function statusHandlers(overrides: Partial<IpcHandlers> = {}): IpcHandlers {
 			reason: 'not-held',
 			message: 'no device host in these tests',
 		}),
-		// The two archive rows: an empty listing and a search that matched nothing are the
-		// cheapest real answers, and these suites have no archive root at all.
+		// The three archive rows: an empty listing, a search that matched nothing and a walk that
+		// found no group are the cheapest real answers, and these suites have no archive root at all.
 		list_archive: () => ({ outcome: 'listed', entries: [] }),
 		search_archive: () => ({ outcome: 'searched', matches: [], truncated: false }),
+		list_archive_groups: () => ({ outcome: 'listed', groups: [], truncated: false }),
 		// And the projects row, for the same reason: these suites have no projects root either,
 		// and `missing` is the honest answer of a host that has none.
 		list_projects: () => ({ outcome: 'missing' }),
