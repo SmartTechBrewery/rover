@@ -159,6 +159,23 @@ describe('createArtifactArchive', () => {
 		);
 	});
 
+	/**
+	 * Both ways of recording file the same file (#190), which is what keeps one kind of artifact
+	 * on one naming convention: a second branch would be a second convention, and the two would
+	 * drift. They share the per-lease `recordings` sequence too, so a lease that used both is
+	 * still one ordered set rather than two overlapping ones.
+	 */
+	it('files a recording stopped over two calls exactly as a fixed-length one, in one sequence', async () => {
+		const frames = [artifactOf('image/png', [0x89, 0x50, 0x4e, 0x47, 0x33])];
+		const durable = archive();
+
+		await durable.record(lease, resultOf('record_video', { artifact: RECORDING, frames }));
+		await durable.record(lease, resultOf('stop_recording', { artifact: RECORDING, frames }));
+
+		expect(await read('recordings', '002.mp4')).toEqual(Buffer.from(RECORDING.base64, 'base64'));
+		expect(await readdir(join(directoryFor(), 'recordings', '002_frames'))).toEqual(['0001.png']);
+	});
+
 	it('writes a log read as one text file, oldest entry first', async () => {
 		const logs = createMockLogRead({
 			entries: [

@@ -15,7 +15,7 @@
  * fails at module load rather than at the first verb call.
  *
  * Only genuinely divergent abilities get a flag; a capability that is always `true`
- * would be noise. The four below are the divergences PROJECT.md §5 and
+ * would be noise. The five below are the divergences PROJECT.md §5 and
  * ai/ARCHITECTURE.md actually name.
  */
 
@@ -51,6 +51,19 @@ export const CapabilitiesSchema = z
 		 * (PROJECT.md §5), which is the same asymmetry `canReadScreen` above is for.
 		 */
 		canRecordVideo: z.boolean(),
+		/**
+		 * Holding a recording **open** — starting one, letting the caller drive the device, and
+		 * stopping it — rather than capturing a window fixed in advance (#190, R43 phase 2).
+		 *
+		 * **Its own flag rather than a second meaning for `canRecordVideo`**, because the
+		 * divergence between the two is real and a platform can land on either side of it. A
+		 * recorder that is one command taking a duration, with no way to signal it and no process
+		 * to signal, gives a perfectly good `record_video` and cannot give this at all; that is a
+		 * backend with a narrower ability, not a broken one, and D11's whole point is that it says
+		 * so by name instead of failing at the call. `canRecordVideo` names exactly one method and
+		 * keeps meaning exactly that.
+		 */
+		canControlRecording: z.boolean(),
 	})
 	.strict();
 export type Capabilities = z.infer<typeof CapabilitiesSchema>;
@@ -122,6 +135,7 @@ export const CAPABILITY_METHODS = {
 	canInput: ['tap', 'swipe', 'typeText', 'pressKey'],
 	canControlNetwork: ['setAirplaneMode', 'setWifiEnabled'],
 	canRecordVideo: ['recordVideo'],
+	canControlRecording: ['startRecording', 'stopRecording'],
 } as const satisfies Record<CapabilityId, readonly CapabilityGatedMethod[]>;
 
 /** Non-throwing query — what the verb layer asks before dispatching. */

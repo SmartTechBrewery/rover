@@ -293,7 +293,7 @@ export const MAX_LOG_ENTRIES = 5_000;
  * no condition and a stream over IPC; the other two are real requests and would each be a
  * row's worth of design rather than a flag smuggled in beside a bound.
  *
- * `label` is the second optional key and is one of the three the archive files
+ * `label` is the second optional key and is one of the four the archive files
  * ({@link ArtifactLabelSchema}): reading the same log at two moments of one investigation is
  * exactly what it is for. Absent stays absent, and a label sent on a lease with no `groupId` is
  * refused by name rather than dropped.
@@ -608,6 +608,53 @@ export const RecordVideoParamsSchema = VerbCallBaseSchema.extend({
 export type RecordVideoParams = z.infer<typeof RecordVideoParamsSchema>;
 
 /**
+ * What a `start_recording` call carries: the lease id, and nothing else.
+ *
+ * **No duration, deliberately.** The length of a recording held open is decided by *when the
+ * caller stops it* (#190), which is the whole of what this pair is for; a duration here would
+ * be a second number free to disagree with the recorder's own kill switch, which the verb sets
+ * from {@link MAX_RECORDING_MS} because that is what one answer can carry
+ * (`src/verbs/recording-session.ts`).
+ *
+ * **No `label` either, and that is not an omission.** A label names an *archived artifact*
+ * ({@link ArtifactLabelSchema}) and this call produces none — the bytes arrive at the stop. So
+ * the label belongs on {@link StopRecordingParamsSchema}, and one here would be a name for a
+ * file this call never writes.
+ *
+ * Its own schema rather than a shared one, for {@link DeviceInfoParamsSchema}'s reason: two rows
+ * that happen to carry the same field today are two rows, and `.strict()` is what turns a field
+ * sent to the wrong one into `invalid_params`.
+ */
+export const StartRecordingParamsSchema = VerbCallBaseSchema.strict();
+export type StartRecordingParams = z.infer<typeof StartRecordingParamsSchema>;
+
+/**
+ * What a `stop_recording` call carries: the lease id, optionally how densely to slice the
+ * recording into frames, and optionally a `label`.
+ *
+ * **`framesPerSecond` is {@link RecordVideoParamsSchema}'s field, in the same words and under
+ * the same imported bound**, because the frames come out of the same extractor under the same
+ * caps — there is no second vocabulary for a recording just because it arrived over two calls.
+ * Absent rather than defaulted, so the verb's own default applies to a caller who said nothing.
+ *
+ * **There is no `durationMs`**: the recording is already over by the time this is called, and
+ * its length was decided by when this call was made.
+ *
+ * `label` makes this the **fourth** artifact-producing call — `screenshot`, `record_video` and
+ * `read_logs` are the others — so it inherits `ArtifactLabelSchema` whole, and with it the
+ * `label-without-group` refusal, for free.
+ *
+ * **A caller must raise its own request timeout for this one**, exactly as `record_video`'s
+ * docblock says: the host pulls the recording, normalises it and slices it before it answers,
+ * and `IpcRequestOptions.timeoutMs` defaults to 30 s (`./client.ts`).
+ */
+export const StopRecordingParamsSchema = VerbCallBaseSchema.extend({
+	framesPerSecond: z.number().int().positive().max(MAX_FRAMES_PER_SECOND).optional(),
+	label: ArtifactLabelSchema.optional(),
+}).strict();
+export type StopRecordingParams = z.infer<typeof StopRecordingParamsSchema>;
+
+/**
  * Why a call never reached a verb at all.
  *
  * Deliberately the same words as `AcquireRefusalReasonSchema` for the three they share, so
@@ -703,6 +750,18 @@ export type ReadLogsCallResult = z.infer<typeof ReadLogsCallResultSchema>;
  */
 export const RecordVideoCallResultSchema = verbCallResultOf(RecordVideoResultSchema);
 export type RecordVideoCallResult = z.infer<typeof RecordVideoCallResultSchema>;
+
+/**
+ * `stop_recording`, which answers with exactly what `record_video` answers with — the same
+ * recording, the same frames, the same `container` and the same `normalisation`.
+ *
+ * The same schema rather than a second one carrying the same four fields (#190): a client that
+ * has learned to read one recording answer reads both, and the two would otherwise be free to
+ * drift apart over a difference that does not exist. What *is* different is on
+ * `normalisation.message`, which is where a difference about one recording belongs.
+ */
+export const StopRecordingCallResultSchema = RecordVideoCallResultSchema;
+export type StopRecordingCallResult = z.infer<typeof StopRecordingCallResultSchema>;
 
 /**
  * The two answers that mean no verb result exists — the branches every row shares whatever

@@ -298,8 +298,8 @@ printf '%s\n' \
 ```
 
 The first answer is the handshake (`"protocolVersion":"2025-06-18"`, `"serverInfo":{"name":"rover"`
-…) and the second lists **23 tools**: the four device and lease rows, the seventeen verbs whose
-answer is plain data, and the two whose answer is bytes. Swap the last frame for a call to watch
+…) and the second lists **25 tools**: the four device and lease rows, the eighteen verbs whose
+answer is plain data, and the three whose answer is bytes. Swap the last frame for a call to watch
 one run against the device:
 
 ```bash
@@ -579,7 +579,7 @@ test behind it rather than only a convention: `tests/unit/no-sleep.test.ts` scan
 are exempt from the scan. It is a floor, not a proof — a determined re-implementation gets
 through, and reading the wait vocabulary is still how you learn what a wait here looks like.
 
-**The verb layer has a spine, nineteen verbs on it and the two waits standing beside it.**
+**The verb layer has a spine, twenty-one verbs on it and the two waits standing beside it.**
 `src/verbs/` is the layer above the backends where determinism stops being a rule and becomes a
 signature (D12): `resolveTarget()` takes
 a target and *nothing else* — no screen, no element list, no state read a turn ago — so a target can
@@ -781,6 +781,36 @@ you something moved and roughly when. It cannot tell you how the movement eased,
 dropped, or whether what a person would call jank happened — and reading any of that out of it
 anyway is exactly the plausible-looking wrong answer this whole design is against.
 
+**`start_recording` and `stop_recording` are the same recording asked for as two calls**
+(`src/verbs/recording-session.ts`), and they exist because `record_video` can only capture a
+window fixed before anything happens — there was no way to say *record while I do this*. The start
+returns while the recorder is still running, so the input verbs and `read_screen` work on that
+device under the same lease and end up in the recording; the stop signals the recorder, waits on a
+condition for it to be gone, pulls the file and answers with **exactly what `record_video` answers
+with** — the same normalised video on `result.artifact`, the same frames, the same `container` and
+the same `normalisation`, held to the same schema rather than a second one carrying the same
+fields. `record_video` is untouched: this is a second way to record, not a replacement.
+
+They declare **`canControlRecording`**, which is deliberately not `canRecordVideo`: a platform
+whose recorder is one command taking a duration gives a perfectly good `record_video` and cannot
+hold a recording open at all, and that is a narrower backend rather than a broken one, so it says
+so by name. A device can only hold **one** recording at a time, and a second one — a second
+`start_recording`, or a `record_video` during an open session — is refused by name,
+`recording-already-running` carrying the device and the processes that were there, rather than
+queued behind a recorder nobody intends to stop yet. Stopping when nothing was recording at all is
+`no-recording-running`; a recorder that reached its own limit before the stop is **not** a failure,
+because the file it left is complete and the stop hands it over.
+
+The length is decided by when you stop, so the start takes no duration — but the recorder is still
+given the fifteen seconds `MAX_RECORDING_MS` allows as its own kill switch, which is what stops one
+whose caller walked away from running on under the next lease. Nothing on the host remembers that a
+recording is open (D6): whether one is is a question for the device, asked at the moment it matters.
+And because no window was ever named, `stop_recording` holds nothing across one — the file follows
+the recorder's own timeline whatever it turned out to be, and `normalisation.message` says so. That
+is visible in exactly one case: a screen nobody drove comes back as `still-screen`, one sample and
+no duration, the same true answer about the device `record_video` reports — with nothing to stretch
+it across. Drive the device between the two calls, which is what the tool descriptions say.
+
 **`read_logs` is the verb that sees what a screenshot cannot** (`src/verbs/logs.ts`), and it is the
 first one whose answer carries a payload of its own: the device's log, parsed into neutral entries —
 a timestamp as the device printed it, a level, a tag, a process id and the line — on top of
@@ -973,24 +1003,25 @@ outside it, because `--import tsx/esm` resolves against the caller's directory r
 the script. What that entry looks like in an MCP client's own configuration, and how to prove it
 handshakes, is [Wire up the MCP server](#wire-up-the-mcp-server) above. What exists today is the
 server, speaking stdio, declaring
-twenty-three tools under the `IPC_METHODS` names exactly: the four device and lease rows (`status`, `list_devices`,
-`acquire_device`, `release_device`), the seventeen verbs whose answer is plain data
+twenty-five tools under the `IPC_METHODS` names exactly: the four device and lease rows (`status`, `list_devices`,
+`acquire_device`, `release_device`), the eighteen verbs whose answer is plain data
 (`wait_for`, `wait_until_gone`, `tap`, `long_press`, `swipe`, `scroll`, `type_text`,
 `press_key`, `read_screen`, `device_info`, `launch_app`, `stop_app`, `clear_app_data`,
-`read_logs`, `install_app`, `set_airplane_mode`, `set_wifi`), and the two whose answer is bytes.
+`read_logs`, `install_app`, `start_recording`, `set_airplane_mode`, `set_wifi`), and the three
+whose answer is bytes.
 Every one of them takes **camelCase** arguments under a `snake_case` name (D26), and says so in
 its own description.
 
-Those two are `screenshot` and `record_video`, and how their bytes reach an agent is the point
-of the pair. **`screenshot` answers with the image inline** — an MCP `image` block the model
-looks at directly — and writes nothing, because an inline image is the one form of an artifact
-that needs no path at all. **`record_video` writes the recording to a file on the machine
-running the server** and reports its absolute local path, because an mp4 is not something a
-model can read; its frames come back inline like a screenshot, so the recording is legible
-without a second call. Where that file lands is `ROVER_MCP_ARTIFACT_DIR` below, and it is
-always a path on the agent's own machine — never one on the host, even when the two are the
-same machine. Neither tool takes a destination or a format, for the same reason neither takes
-a host. A refusal (`artifact-too-large`, `unfinished-recording`,
+Those three are `screenshot`, `record_video` and `stop_recording`, and how their bytes reach an
+agent is the point of the group. **`screenshot` answers with the image inline** — an MCP `image`
+block the model looks at directly — and writes nothing, because an inline image is the one form
+of an artifact that needs no path at all. **`record_video` and `stop_recording` write the
+recording to a file on the machine running the server** and report its absolute local path,
+because an mp4 is not something a model can read; the frames come back inline like a screenshot,
+so the recording is legible without a second call. Where that file lands is
+`ROVER_MCP_ARTIFACT_DIR` below, and it is always a path on the agent's own machine — never one on
+the host, even when the two are the same machine. None of the three takes a destination or a
+format, for the same reason none takes a host. A refusal (`artifact-too-large`, `unfinished-recording`, `no-recording-running`,
 `recording-normalisation-unavailable`, `recording-normalisation-failed`,
 `frame-extraction-unavailable`, `frames-too-large`) is an error naming it and leaves no file
 behind at all — never a truncated one, and never one that will not play.
@@ -1051,7 +1082,7 @@ startup, naming the variable and the reason, rather than binding something surpr
 | `ROVER_ADB_PATH` | unset — the search below | The one setting that overrides where this host looks for `adb`: the **path of the executable**, not the SDK it came from, so an `adb` in a layout with no `platform-tools` directory can be named too. Unset or empty and the ordered search under [where Rover looks for `adb`](#where-rover-looks-for-adb) answers instead — **empty counts as unset**, as it is for the socket. Read only by the daemon, on the machine the devices are attached to (`PROJECT.md` D19, D32): a client never resolves `adb` and never runs one. There is deliberately **no schema** for it, unlike every other row here: the only check worth making on this value is whether the file runs, which no shape can express — so a path that is not an executable this host can run is **skipped like any other candidate** rather than failing the daemon, and the search continues past it; when nothing is left, the failure names every location that was tried and this variable. The resolved path is held in memory for the daemon's life and **never written anywhere** (`PROJECT.md` D6), so an SDK upgrade takes effect on the next daemon start and there is no cache to invalidate. |
 | `ROVER_SOCKET_PATH` | `~/.rover/rover.sock` | Absolute path of the unix socket the local daemon binds and a local client connects to. **Empty counts as unset** — an exported-but-blank variable is what a shell leaves behind, and reading it as a real setting would point the daemon at the current directory. At most **103 bytes of UTF-8**: a unix socket address is a fixed-size struct (104 bytes on macOS, 108 on Linux, NUL included), and over the cap `bind` truncates or answers `EINVAL` instead of naming the length, so a longer path is rejected at startup with the byte count and the path. |
 | `ROVER_USERS_PATH` | `~/.rover/users.json` | Absolute path of the host's own user store — one record per user: identifier, display name, the **hash** of that user's token, and when it was created. Never a token: `rover users add` and `rover users rotate` print the raw value once and store only its hash. **Empty counts as unset**, as it is for the socket. Read by `rover users`, which touches the file directly and never goes over the network (`PROJECT.md` D25), **and by the network listener**, which is the host's entire authentication surface: the token in a caller's greeting is hashed and looked up here, re-read at every connection attempt and never cached, so `revoke` and `rotate` take effect on the very next attempt with the daemon still running. |
-| `ROVER_ARTIFACTS_PATH` | `~/.rover/artifacts` | Root of the durable artifact archive: every `screenshot`, `record_video` and `read_logs` call additionally writes its output here, on the host, **in addition to** returning the bytes to the client (`PROJECT.md` D23, §10). **Empty counts as unset**, as it is for the socket. Read only by the daemon — a client never resolves it, and the archive path is never the one an agent is given. **Nothing prunes it**: retention is deliberately undecided (`PROJECT.md` §9.4), so this grows without bound until an operator removes what they no longer want. |
+| `ROVER_ARTIFACTS_PATH` | `~/.rover/artifacts` | Root of the durable artifact archive: every `screenshot`, `record_video`, `stop_recording` and `read_logs` call additionally writes its output here, on the host, **in addition to** returning the bytes to the client (`PROJECT.md` D23, §10). **Empty counts as unset**, as it is for the socket. Read only by the daemon — a client never resolves it, and the archive path is never the one an agent is given. **Nothing prunes it**: retention is deliberately undecided (`PROJECT.md` §9.4), so this grows without bound until an operator removes what they no longer want. |
 | `ROVER_PROJECTS_PATH` | `~/.rover/projects` | Directory holding the **per-project hook files** — one `<project>.json` per project, selected by the `project` string a lease carries (`PROJECT.md` D13, and see below). **Empty counts as unset**, as it is for the socket. Read only by the daemon, on the machine the devices are attached to: a hook file names a program the host runs with the daemon's own privileges, and nothing about it is ever **accepted** over the wire. What *is* on the wire is one read: `list_projects` answers which projects are registered here — by name, with `apps`, the helper services by name, and whether there is an `install` and a `teardown` — over the panel's HTTP surface alone (`PROJECT.md` D31, R39). **No `env` value and no host path is on that answer** and there is no field either would fit in, and no method writes a hook file or takes a path into this directory. Files are **re-read at every use and never cached** (`PROJECT.md` D6) — when a lease ends, and when an `install_app` carrying no package asks for the project's own install — so editing one takes effect on the very next call with nothing restarted. A `project` string that is not a valid identifier — anything with a separator, a leading `-`, whitespace or over 64 characters — resolves to **no hooks at all**, because no path is ever built from it. |
 | `ROVER_PROJECT_FILE` | unset — **no default project** | The opt-in switch on the *client* side, and the counterpart of `ROVER_PROJECTS_PATH` above: the path of **one** project hook file on the machine running the client, whose `project` identifier becomes the default for `rover acquire`'s `--project` and for the MCP `acquire_device` tool's `project` argument (`PROJECT.md` D22). Unset or empty and nothing is read, `--project` is required exactly as it was, and the tool still declares the argument — **empty counts as unset**, as it is for the socket. Given both, the flag or the argument wins. It is one explicit path and there is no search: nothing walks up from the working directory and no `.rover/` convention exists, so the file a client reads is the file you named. A path naming a file that is missing or will not parse is a **loud client-side failure naming it** — exit 2 from the CLI, and an MCP server that dies on stderr at startup rather than advertising a tool it cannot fill in — never a silent fallback to attributing the lease to nothing. Convenience only: nothing else in the file is read here, no client ever runs what one declares, and the wire is unchanged — `project` stays a required, opaque string the host stores and never interprets. `owner` is **never** defaulted from this or from anything else (`PROJECT.md` D16, D20). |
 | `ROVER_LISTEN_PORT` | unset — **no network listener** | The opt-in switch for the TCP+TLS listener that serves the same IPC surface as the local socket. Unset or empty and nothing binds, nothing else below is read, and the daemon is a purely local host. Set it and the next two become **required together**: a port with no TLS material would be a listener nobody could trust, so a missing one is a startup failure naming every variable still missing rather than a half-configured host. Who may connect is not a variable at all — it comes from the user store (`ROVER_USERS_PATH`), which always resolves, so a host with no users yet starts and refuses everyone. 1–65535. |
@@ -1064,7 +1095,7 @@ startup, naming the variable and the reason, rather than binding something surpr
 | `ROVER_HOST_TOKEN` | — (required with `ROVER_HOST_ADDRESS`) | **A client-side credential, and only that** — the value `rover users add` (or `users rotate`) printed on the host, pasted on the machine that borrows a device. The host itself no longer reads this variable: it authenticates against its user store, so a token is revocable and rotatable where it was issued rather than being a secret both machines hold forever (`PROJECT.md` D25). At least **32 characters**, checked locally so a truncated paste fails here naming the variable instead of coming back as an opaque refusal. It is a **host-level** setting and belongs in the environment, never in a file the repository tracks. The token **authenticates and attributes nothing**: a lease's owner is a separate, caller-supplied string (`PROJECT.md` D20). |
 | `ROVER_HOST_PORT` | — (required with the address) | The port that host listens on — its own `ROVER_LISTEN_PORT`, named from the other side. 1–65535. |
 | `ROVER_HOST_CA` | unset — the system trust store | Path to a PEM certificate to trust in addition to nothing else — normally the host's own certificate, which is how a self-signed host is trusted. There is deliberately **no variable that turns verification off**: a client that skipped the check would accept any host that answered on that port. |
-| `ROVER_MCP_ARTIFACT_DIR` | a `rover-artifacts` directory under the OS temp directory | Where the **MCP server** writes the files it hands an agent — today just `record_video`'s recording, because an mp4 is not something a model can read inline. It is the agent's own machine, never the host's: the capture happens wherever the device is and the path reported back has to exist where the answer is read (`PROJECT.md` D19). **Empty counts as unset**, as it is for the socket. Server configuration rather than a tool parameter, for the reason `ROVER_HOST_ADDRESS` is one — an MCP client launches each server with its own `env` block, and where an agent's files land on your disk is your decision rather than a free-text field in front of a model. Created on demand and only when there are bytes to write, so a refused recording leaves nothing behind and a server nobody asked to record never creates it. **Nothing prunes it**, the way nothing prunes the host's own archive. `screenshot` never writes here at all, because its capture comes back as an inline image and an inline image needs no path. |
+| `ROVER_MCP_ARTIFACT_DIR` | a `rover-artifacts` directory under the OS temp directory | Where the **MCP server** writes the files it hands an agent — today just the recordings `record_video` and `stop_recording` answer with, because an mp4 is not something a model can read inline. It is the agent's own machine, never the host's: the capture happens wherever the device is and the path reported back has to exist where the answer is read (`PROJECT.md` D19). **Empty counts as unset**, as it is for the socket. Server configuration rather than a tool parameter, for the reason `ROVER_HOST_ADDRESS` is one — an MCP client launches each server with its own `env` block, and where an agent's files land on your disk is your decision rather than a free-text field in front of a model. Created on demand and only when there are bytes to write, so a refused recording leaves nothing behind and a server nobody asked to record never creates it. **Nothing prunes it**, the way nothing prunes the host's own archive. `screenshot` never writes here at all, because its capture comes back as an inline image and an inline image needs no path. |
 
 While a daemon is coming up over a socket a crashed one left behind, a `<socket>.reclaim` lock file
 may briefly appear beside it. It is removed by whoever took it, and any left behind by a killed

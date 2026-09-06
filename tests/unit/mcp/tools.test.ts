@@ -58,6 +58,7 @@ function registerFakeBackend(): void {
 				canInput: true,
 				canControlNetwork: true,
 				canRecordVideo: true,
+				canControlRecording: true,
 			},
 		},
 		backend: createMockDeviceBackend({

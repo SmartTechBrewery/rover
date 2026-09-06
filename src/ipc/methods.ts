@@ -38,6 +38,9 @@ import {
 	RecordVideoParamsSchema,
 	ScreenshotParamsSchema,
 	ScrollParamsSchema,
+	StartRecordingParamsSchema,
+	StopRecordingCallResultSchema,
+	StopRecordingParamsSchema,
 	SwipeParamsSchema,
 	TapParamsSchema,
 	TypeTextParamsSchema,
@@ -85,6 +88,12 @@ export {
 	ScreenshotParamsSchema,
 	type ScrollParams,
 	ScrollParamsSchema,
+	type StartRecordingParams,
+	StartRecordingParamsSchema,
+	type StopRecordingCallResult,
+	StopRecordingCallResultSchema,
+	type StopRecordingParams,
+	StopRecordingParamsSchema,
 	type SwipeParams,
 	SwipeParamsSchema,
 	type TapParams,
@@ -1180,8 +1189,8 @@ export type ListProjectsResult = z.infer<typeof ListProjectsResultSchema>;
  * to enumerate.
  *
  * The verb rows are the two waits, the six input verbs, the three read verbs, the three
- * app-lifecycle verbs, the log read, the screen recording, the two environment verbs and the
- * three file transfers; each further verb family is one more row beside them and one more
+ * app-lifecycle verbs, the log read, the three recording rows, the two environment verbs and
+ * the three file transfers; each further verb family is one more row beside them and one more
  * entry in `src/daemon/verb-handlers.ts`. All but two answer with `VerbCallResultSchema`,
  * because "what happened on the device" is one shape whatever was asked of it. `read_screen`
  * and `device_info` answer with the state every other verb already reports, while
@@ -1191,10 +1200,18 @@ export type ListProjectsResult = z.infer<typeof ListProjectsResultSchema>;
  * radio is not something on the screen — answer with a null `target`. The three app rows
  * share one params schema, and the two environment rows share a lease id and boolean schema.
  *
- * `read_logs` and `record_video` are the exceptions that prove the rule: their answers are
- * that same shape with one field added — the log entries on one, the frames sliced out of the
- * recording on the other — built by the same factory in `./verb-methods.ts`, so their refusals
- * are word for word every other verb's.
+ * `read_logs`, `record_video` and `stop_recording` are the exceptions that prove the rule: their
+ * answers are that same shape with fields added — the log entries on the first, the frames
+ * sliced out of the recording and what it contains on the other two — built by the same factory
+ * in `./verb-methods.ts`, so their refusals are word for word every other verb's. The two
+ * recording rows share **one** result schema rather than declaring two identical ones, because
+ * a recording asked for as one call and a recording asked for as two are the same answer.
+ *
+ * **The recording rows are three because there are two ways to record, not because there are
+ * three kinds of recording** (#190). `record_video` fixes the window before it starts;
+ * `start_recording` and `stop_recording` let a caller drive the device in between and decide the
+ * length by when it stops. Both go through the same handler preamble, both file into the same
+ * archive branch, and only the first takes a `durationMs`.
  *
  * The two rows that carry bytes **into** the host — `install_app` and `push_file` — are the
  * only ones whose params are bounded in bytes (`MAX_TRANSFER_BYTES`), and going over that is
@@ -1235,6 +1252,8 @@ export const IPC_METHODS = {
 	push_file: { params: PushFileParamsSchema, result: VerbCallResultSchema },
 	pull_file: { params: PullFileParamsSchema, result: VerbCallResultSchema },
 	record_video: { params: RecordVideoParamsSchema, result: RecordVideoCallResultSchema },
+	start_recording: { params: StartRecordingParamsSchema, result: VerbCallResultSchema },
+	stop_recording: { params: StopRecordingParamsSchema, result: StopRecordingCallResultSchema },
 	set_airplane_mode: { params: EnvironmentVerbParamsSchema, result: VerbCallResultSchema },
 	set_wifi: { params: EnvironmentVerbParamsSchema, result: VerbCallResultSchema },
 } as const satisfies Record<string, IpcMethodDefinition>;

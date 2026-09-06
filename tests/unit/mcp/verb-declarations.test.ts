@@ -18,7 +18,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { InstallAppParamsSchema, IPC_METHODS, type IpcMethodName } from '@/ipc/methods.js';
 import { connectMcpAgent } from '../../helpers/mcp-agent.js';
 
-/** The nineteen verb rows exposed as tools, in `IPC_METHODS` order. */
+/** The twenty-one verb rows exposed as tools, in `IPC_METHODS` order. */
 const VERB_METHODS = [
 	'wait_for',
 	'wait_until_gone',
@@ -37,6 +37,8 @@ const VERB_METHODS = [
 	'read_logs',
 	'install_app',
 	'record_video',
+	'start_recording',
+	'stop_recording',
 	'set_airplane_mode',
 	'set_wifi',
 ] as const satisfies readonly IpcMethodName[];
@@ -70,9 +72,9 @@ const DEVICE_METHODS = ['status', 'list_devices', 'acquire_device', 'release_dev
  * it by way of the surface whose refusals are supposed to *tell* an agent that a device is
  * busy. It is recorded here as a decision rather than left as a row that quietly has no tool.
  *
- * `screenshot` and `record_video` answer *with* bytes, and R19 phase 3 settled what a tool does
- * with those: an inline image, or a file this server writes on the agent's own machine
- * (`src/mcp/_shared/artifact.ts`). `install_app` used to sit here beside these two and no
+ * `screenshot`, `record_video` and `stop_recording` answer *with* bytes, and R19 phase 3 settled
+ * what a tool does with those: an inline image, or a file this server writes on the agent's own
+ * machine (`src/mcp/_shared/artifact.ts`). `install_app` used to sit here beside these two and no
  * longer does, which is the distinction: it has a **second form that carries no bytes** — the
  * lease's project runs its own install (D13) — so the tool is that form and the payload is
  * simply not in the declaration. `push_file` has no such form. Its whole subject is a file
@@ -243,7 +245,7 @@ describe('what tools/list advertises for the verbs', () => {
 		}
 	});
 
-	it('offers the two byte-carrying rows no destination and no format', async () => {
+	it('offers the three byte-carrying rows no destination and no format', async () => {
 		const tools = await advertisedTools();
 
 		// D19, stated as a declaration rather than as prose: the capture happens on the host,
@@ -251,7 +253,7 @@ describe('what tools/list advertises for the verbs', () => {
 		// disk — and the format is what the device recorder produced rather than something a
 		// caller picks. Where the recording lands on *this* machine is server configuration
 		// (`ROVER_MCP_ARTIFACT_DIR`), which is why there is nothing here to offer a model.
-		for (const method of ['screenshot', 'record_video']) {
+		for (const method of ['screenshot', 'record_video', 'stop_recording']) {
 			const properties = Object.keys(toolNamed(tools, method).inputSchema.properties as object);
 			for (const property of properties) {
 				expect(property.toLowerCase()).not.toMatch(/out|path|dest|dir|file|format|codec/);

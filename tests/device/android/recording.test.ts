@@ -1,9 +1,11 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import { AndroidDeviceBackend } from '@/backends/android/backend.js';
 import { isFinishedRecording } from '@/backends/android/parsers/screenrecord.js';
-import type { Device } from '@/core/device.js';
+import type { Device, ScreenElement } from '@/core/device.js';
+import { NoRecordingRunningError, RecordingAlreadyRunningError } from '@/core/errors.js';
+import { type DeviceSerial, unwrap } from '@/core/ids.js';
 import { extractFrames } from '@/daemon/frames.js';
 import { normaliseRecording } from '@/daemon/normalise.js';
 import { FrameExtractionFailedError } from '@/verbs/errors.js';
@@ -30,8 +32,13 @@ import { MAX_ARTIFACT_BYTES } from '@/verbs/result.js';
  * player will open — so "the pull happened after the recorder exited" is the property, and
  * a real encoder is the only thing that can demonstrate it.
  *
- * **Read-only with respect to the screen**: it records whatever is on the device, launches
- * nothing and changes no setting, so it is safe against a device someone else is looking at.
+ * **Read-only with respect to the screen, with one deliberate exception** (#190): the
+ * `start_recording` / `stop_recording` cases *drive* the device between the two calls, because
+ * that is the whole of what they are for — a recording of a screen nobody touched is the
+ * still-screen answer, and it is what proved the old shape unusable. What they drive is `home`
+ * and two vertical swipes, so nothing is launched, nothing is installed, no setting is changed
+ * and the device is put back on its home screen afterwards. Everything else here still records
+ * whatever is in front of it and touches nothing.
  * **It drives the backend class directly, outside any lease** — the sixth suite on
  * ai/TESTING.md's temporary exemption list, alongside `./screenshot.test.ts`. Leases do
  * exist and a daemon will lend one; the only reason this suite does not take one is that
@@ -77,6 +84,16 @@ const OVERLAP_DURATION_MS = 6_000;
 /** The sampling rate the frame cases ask for — named, so the count assertion can use it. */
 const FRAMES_PER_SECOND = 2;
 
+/**
+ * How long a swipe that is meant to be *seen* takes, in milliseconds.
+ *
+ * Slower than a flick on purpose: the recorder emits a buffer only when the screen changes, so
+ * what a driving case needs is a transition that lasts long enough to produce several of them.
+ * It is a number this suite owns rather than a verb-layer default, because nothing here goes
+ * through the verb layer.
+ */
+const DRIVEN_SWIPE_MS = 300;
+
 /** The two unit conversions the rate-ceiling assertion needs, spelled out rather than inline. */
 const MS_PER_SECOND = 1_000;
 const BITS_PER_BYTE = 8;
@@ -95,6 +112,32 @@ async function firstUsableDevice(): Promise<Device> {
 	const ready = (await backend.listDevices()).filter((device) => device.state === 'ready');
 	expect(ready.length).toBeGreaterThan(0);
 	return ready[0] as Device;
+}
+
+/**
+ * Drive the device so there is something in the recording, and put it back where it started.
+ *
+ * `home`, a swipe up, the screen read the whole issue is about, a swipe down, `home` again — a
+ * transition at each end, so the recorder has something to encode. The coordinates come off
+ * `deviceInfo` rather than being written down: this suite hardcodes no size (see the header), and
+ * `swipe` takes dp.
+ *
+ * It answers with what the read saw, so a caller can assert that the read worked *and* that the
+ * recording it overlapped survived — a read that answered by spoiling the recording would be worse
+ * than one that waited.
+ */
+async function driveAndRead(serial: DeviceSerial): Promise<ScreenElement[]> {
+	const { screen } = await backend.deviceInfo(serial);
+	const x = screen.widthDp / 2;
+	const low = { x, y: screen.heightDp * 0.7 };
+	const high = { x, y: screen.heightDp * 0.3 };
+
+	await backend.pressKey(serial, 'home');
+	await backend.swipe(serial, low, high, DRIVEN_SWIPE_MS);
+	const elements = await backend.readScreen(serial);
+	await backend.swipe(serial, high, low, DRIVEN_SWIPE_MS);
+	await backend.pressKey(serial, 'home');
+	return elements;
 }
 
 /** What `ls` says about the scratch path — the device's own words, whichever stream. */
@@ -442,3 +485,157 @@ function isPng(bytes: Uint8Array): boolean {
 function ihdrWidth(bytes: Uint8Array): number {
 	return new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength).getUint32(16);
 }
+
+/**
+ * The recording held open across two calls (#190) — the half `record_video` cannot demonstrate,
+ * against a device rather than against a mocked runner.
+ *
+ * What only a device can say here is everything the recipe rests on: that a recorder launched
+ * detached really outlives its adb client, that the interrupt really makes it write its index,
+ * and — the criterion the whole issue turns on — that **what happened on the screen between the
+ * two calls is in the recording**. A one-frame answer is exactly what proved the old shape
+ * unusable, so the assertion is more than one sample, a non-zero duration and more than one
+ * frame; nothing here relates the frame count to a duration times a rate, which PROJECT.md §6
+ * rules out as an assertion about a device's timing.
+ *
+ * This is the block that drives the device, within the bounds the header states.
+ */
+describe.skipIf(!process.env.ROVER_TEST_DEVICE)('a recording started and stopped', () => {
+	// The device must not be left recording by a case that threw part-way: the next one would be
+	// refused by name, correctly, and the suite would report a cascade instead of the one failure.
+	afterEach(async () => {
+		const ready = (await backend.listDevices()).filter((device) => device.state === 'ready');
+		for (const device of ready) {
+			await backend.stopRecording(device.serial).catch(() => undefined);
+		}
+	});
+
+	/**
+	 * The headline criterion. The device is driven *inside* the recording — which is only possible
+	 * because the scratch-path queue excludes per file (#184 phase 1) — and what comes back
+	 * declares more than the single sample a screen nobody touched produces.
+	 */
+	it('captures what happened on the screen between the two calls', async () => {
+		const device = await firstUsableDevice();
+
+		await backend.startRecording(device.serial, { maxDurationMs: MAX_RECORDING_MS });
+		const elements = await driveAndRead(device.serial);
+		const bytes = await backend.stopRecording(device.serial);
+
+		// The read answered while the recording was open, and the recording survived it.
+		expect(elements.length).toBeGreaterThan(0);
+		expect(isFinishedRecording(bytes)).toBe(true);
+		const container = readRecordingContainer(bytes);
+		expect(container.kind).not.toBe('unreadable');
+		if (container.kind === 'unreadable') return;
+		// More than one sample and a real timeline: this is the assertion that separates "the
+		// device was driven and it was recorded" from the still screen every other check passes for.
+		expect(container.sampleCount).toBeGreaterThan(1);
+		expect(container.durationMs).toBeGreaterThan(0);
+	}, 90_000);
+
+	/**
+	 * The cleanup, on the device: a multi-megabyte file left on hardware that goes to somebody
+	 * else next is what the `finally` in the stop exists to prevent.
+	 *
+	 * **It drives the device rather than stopping straight away**, and that is not padding. A stop
+	 * that arrives before the encoder has written a frame leaves a zero-byte file and is refused as
+	 * `unfinished-recording` (PROJECT.md §6) — which is correct behaviour and cleans up just the
+	 * same, but whether an immediate stop lands on that side is the device's timing rather than
+	 * anything this asserts. Driving makes the successful stop the case under test; the refusal
+	 * path's own cleanup is pinned over a mocked runner in
+	 * `tests/unit/backends/android/backend.test.ts`, where it can be reached on purpose.
+	 */
+	it('leaves no scratch file behind on the device', async () => {
+		const device = await firstUsableDevice();
+
+		await backend.startRecording(device.serial, { maxDurationMs: MAX_RECORDING_MS });
+		await driveAndRead(device.serial);
+		await backend.stopRecording(device.serial);
+
+		expect(await listScratchFile(device.serial)).toMatch(/No such file or directory/);
+	}, 90_000);
+
+	// Two lifecycles in a row, because a path that leaks a recorder or a file works exactly once —
+	// and the second one is the case a stale scratch file would corrupt. Driven for the reason
+	// above: what is under test is the second lifecycle, not how fast this device's encoder is.
+	it('can be started again immediately after a stop', async () => {
+		const device = await firstUsableDevice();
+
+		await backend.startRecording(device.serial, { maxDurationMs: MAX_RECORDING_MS });
+		await driveAndRead(device.serial);
+		await backend.stopRecording(device.serial);
+		await backend.startRecording(device.serial, { maxDurationMs: MAX_RECORDING_MS });
+		await driveAndRead(device.serial);
+		const second = await backend.stopRecording(device.serial);
+
+		expect(isFinishedRecording(second)).toBe(true);
+	}, 120_000);
+
+	/**
+	 * The refusal, against a device that really is recording — which is the only place the probe
+	 * behind it can be checked at all. It names the pids, and those come off the device rather
+	 * than out of anything this host remembered (D6).
+	 */
+	it('refuses a second recording by name, naming the device and the pids', async () => {
+		const device = await firstUsableDevice();
+		await backend.startRecording(device.serial, { maxDurationMs: MAX_RECORDING_MS });
+
+		const failure = await backend
+			.startRecording(device.serial, { maxDurationMs: MAX_RECORDING_MS })
+			.catch((error: unknown) => error);
+
+		expect(failure).toBeInstanceOf(RecordingAlreadyRunningError);
+		expect((failure as RecordingAlreadyRunningError).pids.length).toBeGreaterThan(0);
+		expect(String(failure)).toContain(unwrap(device.serial));
+	}, 90_000);
+
+	// And the same refusal covers the fixed-length verb during an open session, because it is one
+	// fact about the device rather than a rule about a call. It used to be a ten-second timeout.
+	it('refuses a fixed-length recording during an open session, by the same name', async () => {
+		const device = await firstUsableDevice();
+		await backend.startRecording(device.serial, { maxDurationMs: MAX_RECORDING_MS });
+
+		const failure = await backend
+			.recordVideo(device.serial, { durationMs: DURATION_MS })
+			.catch((error: unknown) => error);
+
+		expect(failure).toBeInstanceOf(RecordingAlreadyRunningError);
+	}, 90_000);
+
+	// The narrow failure: no recorder and nothing left behind. A recorder that stopped itself is
+	// deliberately not this, because the file it left is complete.
+	it('refuses a stop with nothing recording, naming the device', async () => {
+		const device = await firstUsableDevice();
+
+		const failure = await backend.stopRecording(device.serial).catch((error: unknown) => error);
+
+		expect(failure).toBeInstanceOf(NoRecordingRunningError);
+		expect(String(failure)).toContain(unwrap(device.serial));
+	}, 60_000);
+
+	/**
+	 * The other half of the headline criterion, on the host's own gate: a recording of a driven
+	 * screen slices into **more than one** frame. One frame is what a still screen produces, and
+	 * an answer that could not tell the two apart is the thing this phase exists to fix.
+	 */
+	it.skipIf(!process.env.ROVER_TEST_FRAME_EXTRACTION)(
+		'slices the driven recording into more than one frame',
+		async () => {
+			const device = await firstUsableDevice();
+
+			await backend.startRecording(device.serial, { maxDurationMs: MAX_RECORDING_MS });
+			await driveAndRead(device.serial);
+			const bytes = await backend.stopRecording(device.serial);
+
+			const frames = await extractFrames(device.serial, bytes, {
+				framesPerSecond: FRAMES_PER_SECOND,
+			});
+
+			expect(frames.length).toBeGreaterThan(1);
+			expect(frames.length).toBeLessThanOrEqual(MAX_FRAMES);
+			for (const frame of frames) expect(isPng(frame)).toBe(true);
+		},
+		120_000,
+	);
+});

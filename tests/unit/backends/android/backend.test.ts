@@ -13,6 +13,7 @@ import {
 	OS_VERSION_ADB_TIMEOUT_MS,
 	RECORDING_FINISH_TIMEOUT_MS,
 	RECORDING_PULL_TIMEOUT_MS,
+	RECORDING_START_TIMEOUT_MS,
 	SCREENSHOT_ADB_TIMEOUT_MS,
 	TRANSFER_ADB_TIMEOUT_MS,
 } from '@/backends/android/adb.js';
@@ -24,6 +25,8 @@ import {
 import type { Device, DeviceWatcher } from '@/core/device.js';
 import {
 	FileTooLargeError,
+	NoRecordingRunningError,
+	RecordingAlreadyRunningError,
 	UnfinishedRecordingError,
 	UnsupportedTextError,
 } from '@/core/errors.js';
@@ -77,6 +80,7 @@ const OS_VERSION = fixture('getprop-version.api37-sdk-gphone16k-arm64.txt');
 const OS_VERSION_ABSENT = fixture('getprop-version.absent.api37-sdk-gphone16k-arm64.txt');
 const STAT_FILE = fixture('stat.file.api37-sdk-gphone16k-arm64.txt');
 const STAT_EMPTY_FILE = fixture('stat.empty-file.api37-sdk-gphone16k-arm64.txt');
+const STAT_MISSING = fixture('stat.missing.api37-sdk-gphone16k-arm64.txt');
 const STAT_DIRECTORY = fixture('stat.directory.api37-sdk-gphone16k-arm64.txt');
 const STAT_CHARACTER_DEVICE = fixture('stat.character-device.api37-sdk-gphone16k-arm64.txt');
 
@@ -2835,6 +2839,17 @@ const RECORDING_RM_ARGV = ['shell', 'rm', '-f', RECORDING_PATH];
 const RECORDING_PIDOF_ARGV = ['shell', 'pidof screenrecord || true'];
 const RECORDING_PULL_ARGV = ['exec-out', 'cat', RECORDING_PATH];
 
+/**
+ * The question the stop asks before it pulls: *is there a file there at all* (#190).
+ *
+ * The same `stat -L -c '%s %F'` both transfers put to the device, on the recorder's own scratch
+ * path — needed because the pull cannot answer it. `adb exec-out cat` of a path that does not
+ * exist exits **0** and hands the shell's error text back on stdout, 60 bytes of
+ * `cat: …: No such file or directory` measured on API 37 (PROJECT.md §6), so *bytes came back*
+ * is not evidence a recording did.
+ */
+const RECORDING_STAT_ARGV = ['shell', 'stat', '-L', '-c', "'%s %F'", `'${RECORDING_PATH}'`];
+
 const recordArgv = (seconds: number): string[] => [
 	'shell',
 	'screenrecord',
@@ -2844,6 +2859,21 @@ const recordArgv = (seconds: number): string[] => [
 	String(seconds),
 	RECORDING_PATH,
 ];
+
+/**
+ * The detached launch, as one command line rather than an argv (#190) — because that is what it
+ * is on the device: a shell command whose redirections are what let the adb client return, and
+ * whose `&` alone would not (PROJECT.md §6). Written out here rather than derived from the
+ * backend's own builder, so a change to either has to be a change to both.
+ */
+const startArgv = (seconds: number): string[] => [
+	'shell',
+	`screenrecord --bit-rate 2000000 --time-limit ${seconds} ${RECORDING_PATH} ` +
+		'</dev/null >/dev/null 2>&1 &',
+];
+
+/** The interrupt that makes a recorder write its index and exit. */
+const RECORDING_KILL_ARGV = ['shell', 'kill -INT $(pidof screenrecord)'];
 
 const FINISHED_RECORDING = readFileSync(
 	new URL(
@@ -2863,8 +2893,13 @@ const UNFINISHED_RECORDING = readFileSync(
  * `pids` queued for it — one entry per probe, so a test can make the recorder outlive its
  * adb client for exactly as many polls as it wants to.
  */
-function records(options: { pids?: string[]; fails?: Record<string, Error> } = {}): void {
+function records(
+	options: { pids?: string[]; fails?: Record<string, Error>; stat?: string | Error } = {},
+): void {
 	const pids = [...(options.pids ?? [''])];
+	// A file there unless the test says otherwise, because that is what a stop finds: the
+	// recording it is being asked for. `missingFile()` is how a test says the other thing.
+	const stat = options.stat ?? STAT_FILE;
 	runAdbOnDevice.mockImplementation(async (_serial, args): Promise<AdbResult> => {
 		const key = args.join(' ');
 		const failure = options.fails?.[key];
@@ -2872,9 +2907,27 @@ function records(options: { pids?: string[]; fails?: Record<string, Error> } = {
 		if (key === RECORDING_PIDOF_ARGV.join(' ')) {
 			return { stdout: pids.length > 1 ? (pids.shift() as string) : (pids[0] ?? ''), stderr: '' };
 		}
+		if (key === RECORDING_STAT_ARGV.join(' ')) {
+			if (stat instanceof Error) throw stat;
+			return { stdout: stat, stderr: '' };
+		}
 		return { stdout: '', stderr: '' };
 	});
 	runAdbBinaryOnDevice.mockResolvedValue({ stdout: FINISHED_RECORDING, stderr: '' });
+}
+
+/**
+ * What the device does when the scratch path is not there: toybox `stat` exits **1** with its
+ * message on stderr, which `./adb.js` turns into this (measured on API 37, PROJECT.md §6).
+ */
+function missingFile(): AdbCommandError {
+	return new AdbCommandError(
+		RECORDING_STAT_ARGV,
+		10_000,
+		Object.assign(new Error('adb'), { code: 1 }),
+		'',
+		STAT_MISSING,
+	);
 }
 
 /**
@@ -2912,12 +2965,15 @@ function recordingArgv(): string[][] {
 }
 
 describe('recordVideo', () => {
-	it('removes, records, waits, pulls and removes again, in that order and pinned to the device', async () => {
+	it('asks, removes, records, waits, pulls and removes again, in that order and pinned to the device', async () => {
 		records();
 
 		await backend.recordVideo(SERIAL, { durationMs: 3_000 });
 
 		expect(runAdbOnDevice.mock.calls.map(([, args]) => [...args])).toEqual([
+			// The pre-check leads (#190): a device already recording is refused by name before
+			// anything is removed, rather than found ten seconds later by the completion wait.
+			RECORDING_PIDOF_ARGV,
 			RECORDING_RM_ARGV,
 			recordArgv(3),
 			RECORDING_PIDOF_ARGV,
@@ -2972,7 +3028,7 @@ describe('recordVideo', () => {
 
 		await backend.recordVideo(SERIAL, { durationMs: 3_000 });
 
-		expect(runAdbOnDevice.mock.calls[1][2]).toEqual({
+		expect(runAdbOnDevice.mock.calls[2][2]).toEqual({
 			timeoutMs: 3_000 + RECORDING_FINISH_TIMEOUT_MS,
 		});
 	});
@@ -2985,7 +3041,7 @@ describe('recordVideo', () => {
 
 		await backend.recordVideo(SERIAL, { durationMs: 2_500 });
 
-		expect(runAdbOnDevice.mock.calls[1][2]).toEqual({
+		expect(runAdbOnDevice.mock.calls[2][2]).toEqual({
 			timeoutMs: 3_000 + RECORDING_FINISH_TIMEOUT_MS,
 		});
 	});
@@ -3010,12 +3066,14 @@ describe('recordVideo', () => {
 	 * poll gap.
 	 */
 	it('never pulls while the recorder is still running', async () => {
-		records({ pids: ['29633\n', ''] });
+		// Three answers, because the pre-check asks first and must see an idle device: nothing,
+		// then the recorder this call started, then gone.
+		records({ pids: ['', '29633\n', ''] });
 
 		await backend.recordVideo(SERIAL, { durationMs: 1_000 });
 
 		const argv = runAdbOnDevice.mock.calls.map(([, args]) => args.join(' '));
-		expect(argv.filter((call) => call === RECORDING_PIDOF_ARGV.join(' '))).toHaveLength(2);
+		expect(argv.filter((call) => call === RECORDING_PIDOF_ARGV.join(' '))).toHaveLength(3);
 		// The pull is the one binary call, and it happened after both probes had run.
 		expect(runAdbBinaryOnDevice).toHaveBeenCalledTimes(1);
 		expect(argv.at(-1)).toBe(RECORDING_RM_ARGV.join(' '));
@@ -3031,7 +3089,9 @@ describe('recordVideo', () => {
 		// something a unit test may spend — the same seam `src/core/wait.ts` documents.
 		vi.useFakeTimers();
 		try {
-			records({ pids: ['29633\n'] });
+			// Idle when the pre-check asks, and a recorder that never goes away afterwards — the
+			// shape of a recorder started by something this host is not driving.
+			records({ pids: ['', '29633\n'] });
 
 			// Caught on creation rather than asserted on later: the rejection lands while the
 			// timers below are being advanced, and an assertion attached after that is an
@@ -3115,10 +3175,12 @@ describe('recordVideo', () => {
 		]);
 
 		expect(runAdbOnDevice.mock.calls.map(([, args]) => [...args])).toEqual([
+			RECORDING_PIDOF_ARGV,
 			RECORDING_RM_ARGV,
 			recordArgv(1),
 			RECORDING_PIDOF_ARGV,
 			RECORDING_RM_ARGV,
+			RECORDING_PIDOF_ARGV,
 			RECORDING_RM_ARGV,
 			recordArgv(1),
 			RECORDING_PIDOF_ARGV,
@@ -3187,5 +3249,288 @@ describe('recordVideo', () => {
 		const longestBytes = (MAX_RECORDING_MS / 1_000) * (RECORDING_BIT_RATE_BPS / 8);
 
 		expect(longestBytes).toBeLessThanOrEqual(MAX_ARTIFACT_BYTES);
+	});
+});
+
+/**
+ * The other half of the lifecycle (#190): a recorder started detached and stopped by signal.
+ *
+ * Everything here is over the same mocked runner the `recordVideo` suite uses, so what it can
+ * assert is the same thing — the argv, the order, and which call happens before which. Whether a
+ * real device answers this recipe at all is `tests/device/android/recording.test.ts`'s, and
+ * PROJECT.md §6 is where the measurements behind each argv are recorded.
+ */
+describe('startRecording', () => {
+	/**
+	 * The order, and the two things in it that are not `recordVideo`'s: the pre-check leads, and
+	 * the last call is a `pidof` that answered *found* rather than one that answered *gone*. There
+	 * is no pull and no second `rm` — the file this leaves behind is the recording.
+	 */
+	it('asks, removes, launches detached and waits for the recorder to appear', async () => {
+		records({ pids: ['', '29633\n'] });
+
+		await backend.startRecording(SERIAL, { maxDurationMs: 15_000 });
+
+		expect(runAdbOnDevice.mock.calls.map(([, args]) => [...args])).toEqual([
+			RECORDING_PIDOF_ARGV,
+			RECORDING_RM_ARGV,
+			startArgv(15),
+			RECORDING_PIDOF_ARGV,
+		]);
+		for (const call of runAdbOnDevice.mock.calls) expect(call[0]).toBe(SERIAL);
+		expect(runAdbBinaryOnDevice).not.toHaveBeenCalled();
+	});
+
+	/**
+	 * The whole reason the launch is a command line rather than an argv. `adb shell` waits for EOF
+	 * on the shell service's stream rather than for the foreground process, so without the
+	 * redirections this call blocks for the recorder's whole life — measured at 2.24 s against a
+	 * two-second run, where the redirected form returned in 93 ms (PROJECT.md §6).
+	 */
+	it('detaches the recorder by redirecting its streams, not by backgrounding alone', async () => {
+		records({ pids: ['', '29633\n'] });
+
+		await backend.startRecording(SERIAL, { maxDurationMs: 15_000 });
+
+		const launched = runAdbOnDevice.mock.calls[2][1][1] as string;
+		expect(launched).toContain('</dev/null');
+		expect(launched).toContain('>/dev/null 2>&1');
+		expect(launched.endsWith('&')).toBe(true);
+	});
+
+	// `--time-limit` counts whole seconds and `0` removes the limit, so the conversion rounds up
+	// and floors at one — `recordVideo`'s arithmetic, and here it matters more: nothing is waiting
+	// on this recorder, so that limit is the only thing that stops one whose caller went away.
+	it.each([
+		[15_000, 15],
+		[2_500, 3],
+		[0, 1],
+		[-1_000, 1],
+	])('gives a %d ms limit as %d whole seconds, never zero', async (maxDurationMs, seconds) => {
+		records({ pids: ['', '29633\n'] });
+
+		await backend.startRecording(SERIAL, { maxDurationMs });
+
+		expect(runAdbOnDevice.mock.calls.map(([, args]) => [...args])).toContainEqual(
+			startArgv(seconds),
+		);
+	});
+
+	/**
+	 * The refusal the whole pre-check exists for, and the assertion that matters is the second
+	 * one: nothing was removed and nothing was launched, so the recording that is already open is
+	 * still there and still writing its own file.
+	 */
+	it('refuses a device that is already recording, naming the device and the pids', async () => {
+		records({ pids: ['29633 29640\n'] });
+
+		const failure = backend.startRecording(SERIAL, { maxDurationMs: 15_000 });
+
+		await expect(failure).rejects.toBeInstanceOf(RecordingAlreadyRunningError);
+		await expect(failure).rejects.toThrow(/29633, 29640/);
+		await expect(failure).rejects.toThrow(/emulator-5554/);
+		expect(runAdbOnDevice.mock.calls.map(([, args]) => [...args])).toEqual([RECORDING_PIDOF_ARGV]);
+	});
+
+	/**
+	 * "It started" is a condition rather than the launch command's exit, because that exit says
+	 * the shell forked: an unwritable path or a codec the device would not open still exits 0 and
+	 * leaves nothing behind. Without the wait this answers `ok` for a recording that does not
+	 * exist, and the first sign of it is a stop minutes later that finds nothing.
+	 */
+	it('times out rather than answering ok when the recorder never appears', async () => {
+		vi.useFakeTimers();
+		try {
+			records();
+
+			const failure = backend
+				.startRecording(SERIAL, { maxDurationMs: 15_000 })
+				.catch((error) => error);
+			await vi.advanceTimersByTimeAsync(RECORDING_START_TIMEOUT_MS + 1_000);
+
+			expect(String(await failure)).toMatch(/no screenrecord process/);
+			expect(String(await failure)).toMatch(/emulator-5554/);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+});
+
+describe('stopRecording', () => {
+	/**
+	 * The order: ask, signal, wait until it is gone, *ask whether there is a file*, pull, remove.
+	 * The wait is not a formality —
+	 * on API 37 `pidof` went on naming the recorder for a quarter of a second after the interrupt
+	 * returned (PROJECT.md §6), which is exactly the window a pull would come back unfinished in.
+	 */
+	it('asks, signals, waits for the recorder to go, pulls and removes', async () => {
+		records({ pids: ['29633\n', ''] });
+
+		const bytes = await backend.stopRecording(SERIAL);
+
+		expect(runAdbOnDevice.mock.calls.map(([, args]) => [...args])).toEqual([
+			RECORDING_PIDOF_ARGV,
+			RECORDING_KILL_ARGV,
+			RECORDING_PIDOF_ARGV,
+			RECORDING_STAT_ARGV,
+			RECORDING_RM_ARGV,
+		]);
+		expect(runAdbBinaryOnDevice.mock.calls[0][1]).toEqual(RECORDING_PULL_ARGV);
+		expect(runAdbBinaryOnDevice.mock.calls[0][2]).toEqual({
+			timeoutMs: RECORDING_PULL_TIMEOUT_MS,
+		});
+		expect(Buffer.from(bytes).equals(FINISHED_RECORDING)).toBe(true);
+	});
+
+	// The condition, as an assertion about ordering: still there on the first probe, gone on the
+	// second, and nothing pulled in between.
+	it('never pulls while the recorder is still running', async () => {
+		records({ pids: ['29633\n', '29633\n', ''] });
+
+		await backend.stopRecording(SERIAL);
+
+		const argv = runAdbOnDevice.mock.calls.map(([, args]) => args.join(' '));
+		expect(argv.filter((call) => call === RECORDING_PIDOF_ARGV.join(' '))).toHaveLength(3);
+		expect(runAdbBinaryOnDevice).toHaveBeenCalledTimes(1);
+	});
+
+	/**
+	 * A recorder that reached its own `--time-limit` before the stop is **not** a failure: the
+	 * file it left is complete and playable, and this hands it over. There is nothing to signal,
+	 * so nothing is signalled.
+	 */
+	it('answers with the recording a recorder that already stopped itself left behind', async () => {
+		records();
+
+		const bytes = await backend.stopRecording(SERIAL);
+
+		expect(Buffer.from(bytes).equals(FINISHED_RECORDING)).toBe(true);
+		expect(runAdbOnDevice.mock.calls.map(([, args]) => [...args])).toEqual([
+			RECORDING_PIDOF_ARGV,
+			RECORDING_STAT_ARGV,
+			RECORDING_RM_ARGV,
+		]);
+	});
+
+	/**
+	 * The one genuine failure of this method: nothing recorded at all. What separates it from the
+	 * one below is the **file**, and the file is what the device is asked about — no recorder and
+	 * no `stat` answer is *nothing happened*, which is a different thing to tell a caller than
+	 * *the recording is not playable*.
+	 */
+	it('refuses a stop with no recorder and no file, naming the device', async () => {
+		records({ stat: missingFile() });
+
+		const failure = backend.stopRecording(SERIAL);
+
+		await expect(failure).rejects.toBeInstanceOf(NoRecordingRunningError);
+		await expect(failure).rejects.toThrow(/emulator-5554/);
+	});
+
+	/**
+	 * And the reason that question goes to `stat` rather than to the pull, pinned as a case
+	 * because it is what the device really does: `adb exec-out cat` of a path that does not exist
+	 * exits **0** and hands the shell's own error text back **on stdout** — 60 bytes of
+	 * `cat: …: No such file or directory` on API 37 (PROJECT.md §6). Deciding on *did bytes come
+	 * back* therefore never reaches this refusal at all, and calls a device that recorded nothing
+	 * an unfinished recording of 60 bytes. Nothing is pulled here, because there is nothing there.
+	 */
+	it('never mistakes the pull of a missing path for a recording', async () => {
+		records({ stat: missingFile() });
+		runAdbBinaryOnDevice.mockResolvedValue({
+			stdout: Buffer.from(`cat: ${RECORDING_PATH}: No such file or directory\n`),
+			stderr: '',
+		});
+
+		const failure = backend.stopRecording(SERIAL);
+
+		await expect(failure).rejects.toBeInstanceOf(NoRecordingRunningError);
+		expect(runAdbBinaryOnDevice).not.toHaveBeenCalled();
+	});
+
+	/**
+	 * The other side of that line: a recorder *was* there, was signalled, and produced nothing
+	 * usable — which is what stopping immediately after starting leaves behind, measured on API 37
+	 * as a **zero-byte file that is really there** rather than as a missing one. That is the same
+	 * refusal a pull that raced the encoder gets, because it is the same fact about the bytes.
+	 */
+	it('refuses zero bytes left by a recorder that was there as an unfinished recording', async () => {
+		records({ pids: ['29633\n', ''], stat: STAT_EMPTY_FILE });
+		runAdbBinaryOnDevice.mockResolvedValue({ stdout: Buffer.alloc(0), stderr: '' });
+
+		const failure = backend.stopRecording(SERIAL);
+
+		await expect(failure).rejects.toBeInstanceOf(UnfinishedRecordingError);
+		await expect(failure).rejects.toThrow(/emulator-5554/);
+	});
+
+	/**
+	 * The same fact with the file gone underneath the recorder rather than left empty — a
+	 * recording that was interrupted and cleaned up by something else. A recorder was there, so
+	 * this is not *nothing recorded*; there is nothing to hand back, so it is not `ok` either.
+	 */
+	it('refuses a signalled recorder that left no file at all as unfinished, naming zero bytes', async () => {
+		records({ pids: ['29633\n', ''], stat: missingFile() });
+
+		const failure = backend.stopRecording(SERIAL);
+
+		await expect(failure).rejects.toBeInstanceOf(UnfinishedRecordingError);
+		await expect(failure).rejects.toThrow(/\b0 bytes\b/);
+	});
+
+	it('refuses a recording pulled without its index, naming the device and the byte length', async () => {
+		records({ pids: ['29633\n', ''] });
+		runAdbBinaryOnDevice.mockResolvedValue({ stdout: UNFINISHED_RECORDING, stderr: '' });
+
+		const failure = backend.stopRecording(SERIAL);
+
+		await expect(failure).rejects.toBeInstanceOf(UnfinishedRecordingError);
+		await expect(failure).rejects.toThrow(String(UNFINISHED_RECORDING.byteLength));
+	});
+
+	// The cleanup runs on the refusal paths too, which is where it does the most good: a
+	// multi-megabyte file left on borrowed hardware is what it is for.
+	it('removes the scratch file even when the pull came back unfinished', async () => {
+		records({ pids: ['29633\n', ''] });
+		runAdbBinaryOnDevice.mockResolvedValue({ stdout: UNFINISHED_RECORDING, stderr: '' });
+
+		await expect(backend.stopRecording(SERIAL)).rejects.toThrow();
+		expect(runAdbOnDevice.mock.calls.filter(([, args]) => args[1] === 'rm')).toHaveLength(1);
+	});
+
+	/**
+	 * The exclusion is on the file rather than on the device (#184), and this is what phase 2
+	 * stands on: a screen read runs *while* a recording is open, rather than queueing behind a
+	 * recorder nobody intends to stop yet.
+	 */
+	it('lets a screen read run between a start and a stop', async () => {
+		let probes = 0;
+		// Idle for the pre-check, running once it has been started, gone after the signal.
+		const pidof = (): string => {
+			probes += 1;
+			return probes === 1 || probes > 2 ? '' : '29633\n';
+		};
+		const recorder: Record<string, () => string> = {
+			[RECORDING_PIDOF_ARGV.join(' ')]: pidof,
+			[RECORDING_STAT_ARGV.join(' ')]: () => STAT_FILE,
+		};
+		runAdbOnDevice.mockImplementation(async (_serial, args): Promise<AdbResult> => {
+			const key = args.join(' ');
+			const asked = recorder[key];
+			if (asked) return { stdout: asked(), stderr: '' };
+			const reply = READ_FACTS[key];
+			if (typeof reply === 'string') return { stdout: reply, stderr: '' };
+			if (reply !== undefined && !(reply instanceof Error)) return reply;
+			// The recording's own calls: the two `rm`s, the launch and the interrupt.
+			return { stdout: '', stderr: '' };
+		});
+		runAdbBinaryOnDevice.mockResolvedValue({ stdout: FINISHED_RECORDING, stderr: '' });
+
+		await backend.startRecording(SERIAL, { maxDurationMs: 15_000 });
+		const elements = await backend.readScreen(SERIAL);
+		const bytes = await backend.stopRecording(SERIAL);
+
+		expect(elements).toHaveLength(75);
+		expect(Buffer.from(bytes).equals(FINISHED_RECORDING)).toBe(true);
 	});
 });

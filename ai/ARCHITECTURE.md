@@ -191,6 +191,14 @@ Backends are genuinely asymmetric and flattening that is the design mistake to a
   physical iOS device has no cheap command-line equivalent at all. `record_video` declares
   `requires: ['canRecordVideo']` for `read_screen`'s reason — the payload *is* the answer, so a
   backend without it has to fail by name before dispatch rather than answer with no recording.
+- **Holding a recording open is a *second* one, and so a second flag** (#190). Capturing a
+  fixed-length recording and holding one open while the caller drives the device are different
+  abilities: a platform whose recorder is one command taking a duration — no process to signal, no
+  way to signal it — answers `canRecordVideo` perfectly well and cannot do the other at all. So
+  `startRecording` and `stopRecording` sit behind `canControlRecording` and `canRecordVideo` is
+  untouched, because it names exactly one method and must keep meaning exactly that. The two land
+  together rather than one at a time, the split point `canInput`'s four primitives already sit on:
+  `CAPABILITY_METHODS` naming a method a backend does not answer fails the conformance suite.
 - **A system log is not one of those asymmetries**, which is why `readLogs` is a *required* method and not a capability: every platform here keeps one, and a flag that is always `true` is noise (`src/core/capabilities.ts`). What differs is the wording inside an entry — that is what the neutral `LogEntry` shape and a backend's own parser absorb.
 - **Moving a file is not one either**, so `pushFile` and `pullFile` are required too. The asymmetry that matters there is the *direction* rather than the platform: a push takes a path on the host, because the host is where the daemon runs, and a pull answers with **bytes**, because the answer is read on the agent's machine (D19).
 - **A missing *host* program is not one either, and it must not be modelled as a capability.**
@@ -449,10 +457,12 @@ Verbs live above the backends and below the adapters, and this is where determin
 - **`ActionResult`** names the verb, the device (as `DeviceInfo`, so D14's density travels with the
   measurement), the resolved target and the state after the action. A backend with input but no
   screen reading answers an explicit `unavailable` after-state naming the capability that would have
-  answered — never an empty element list, which reads as a blank screen. `screenshot` and
-  `record_video` are the two verbs whose answer is not a state the result already carries, and both
-  hang their bytes off the same nullable `artifact` field rather than growing a second home for
-  them — `record_video` extends the schema for its *frames* and still leaves the recording there. A read that was declared,
+  answered — never an empty element list, which reads as a blank screen. `screenshot`,
+  `record_video` and `stop_recording` are the verbs whose answer is not a state the result already
+  carries, and all three hang their bytes off the same nullable `artifact` field rather than
+  growing a second home for them — `record_video` extends the schema for its *frames* and still
+  leaves the recording there, and `stop_recording` answers with that same extended schema rather
+  than a second one carrying the same fields (#190). A read that was declared,
   attempted and rejected is the separate `failed` branch: once the action has run, an exception in
   its place would leave the agent unable to tell whether it landed, which is exactly what D12(c)
   rules out. Every shape is a Zod schema of plain data, because the host executes the verb and the
@@ -492,7 +502,8 @@ the process with a registry.
   inherits that wait through `DeviceRestorer.settle`. Without both, the host itself becomes the
   second driver of a device it has already lent to somebody else.
 - **A call that produced bytes has a second effect: the archive** (D23, `PROJECT.md` §10). Every
-  `ok` answer from a `screenshot`, a `record_video` or a `read_logs` is also written into the
+  `ok` answer from a `screenshot`, a `record_video`, a `stop_recording` or a `read_logs` is also
+  written into the
   host's own durable tree — `src/daemon/archive.ts`, wired into the same preamble. It is
   **additive, never substitutive**: the bytes still go back to the client exactly as R24 settled,
   and no archive path is ever put on an answer. That last part is structural rather than
@@ -583,24 +594,26 @@ exactly as the CLI is: it holds no verb logic and reaches no backend, which
   human; neither decides anything the host already decided. A completeness gate over
   `IPC_METHODS` is what stops a verb row landing later with no tool and no decision.
 - **An artifact reaches the agent as bytes it can use, never as a path on the host**
-  (`src/mcp/tools/artifacts.ts`, `src/mcp/_shared/artifact.ts`). The two rows whose answer *is*
+  (`src/mcp/tools/artifacts.ts`, `src/mcp/_shared/artifact.ts`). The rows whose answer *is*
   bytes answer differently, because their bytes are different things. `screenshot` comes back as
   an inline MCP `image` block and writes nothing — a screenshot exists to be looked at, and an
   inline image is the one form of an artifact that needs no path at all, which is how D19 is
-  satisfied here. `record_video` writes the recording to a file **on the agent's machine** and
-  reports its absolute local path, because an mp4 is not something a model can read; its frames
-  come back as image blocks, already bounded by `MAX_FRAMES_BYTES` and `MAX_FRAMES`, so the
-  recording is legible without a second call. Neither declaration has a destination or a format
-  on it, because the capture happens on the host. The document beside the blocks goes through
+  satisfied here. `record_video` and `stop_recording` write the recording to a file **on the
+  agent's machine** and report its absolute local path, because an mp4 is not something a model
+  can read; the frames come back as image blocks, already bounded by `MAX_FRAMES_BYTES` and
+  `MAX_FRAMES`, so the recording is legible without a second call. No declaration has a
+  destination or a format on it, because the capture happens on the host. The document beside the blocks goes through
   `describeWithoutBytes`, so `structuredContent` says what the answer carries without repeating
   it. Where a recording lands is `ROVER_MCP_ARTIFACT_DIR` — server configuration for the reason
   the host is one — created on demand, and only when there are bytes to write: a refusal
-  (`artifact-too-large`, `unfinished-recording`, `recording-normalisation-unavailable`,
-  `recording-normalisation-failed`, `frame-extraction-unavailable`,
-  `frames-too-large`) is `isError` naming it and leaves **no** file behind, not a truncated one
-  and not a zero-byte one. `record_video` raises its own request timeout past the recording *and*
-  both host steps that follow it — the normalisation and the frame extraction — which is
-  `rover record`'s four-term sum with every term imported. The three
+  (`artifact-too-large`, `unfinished-recording`, `no-recording-running`,
+  `recording-normalisation-unavailable`, `recording-normalisation-failed`,
+  `frame-extraction-unavailable`, `frames-too-large`) is `isError` naming it and leaves **no**
+  file behind, not a truncated one and not a zero-byte one. `record_video` raises its own request
+  timeout past the recording *and* both host steps that follow it — the normalisation and the
+  frame extraction — which is `rover record`'s four-term sum with every term imported;
+  `stop_recording` raises its own with one term fewer, because the recording is already over by
+  the time it is called. The three
   rows that move a whole file — `install_app`, `push_file`, `pull_file` — are deliberately not
   tools: how a client supplies and receives a file is R24 phase 2's, and neither client has it.
 - **A missing capability is a loud, agent-readable error** (D11). `read_screen` against a backend

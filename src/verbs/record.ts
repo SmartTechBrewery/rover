@@ -475,9 +475,13 @@ export async function recordVideo(
  * checks before its own: base64 of an over-sized payload is a copy a third larger again, built
  * only to be thrown away.
  *
+ * Exported for `./recording-session.ts` alone, which slices its recording under the same bounds
+ * and must refuse in the same words: this file owns what one answer may carry, and a second
+ * copy of this check is the second implementation the paragraph above is about.
+ *
  * @throws FramesTooLargeError when the frames are over {@link MAX_FRAMES_BYTES} together.
  */
-function withinByteBudget(
+export function withinByteBudget(
 	serial: DeviceSerial,
 	frames: readonly Uint8Array[],
 ): readonly Uint8Array[] {

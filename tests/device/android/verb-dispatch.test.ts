@@ -791,6 +791,108 @@ describe.skipIf(!process.env.ROVER_TEST_DEVICE)('a daemon runs verbs on its own 
 	);
 
 	/**
+	 * The whole of #190 over the wire: one recording, two calls, and the device driven under the
+	 * same lease in between.
+	 *
+	 * What only a device on a socket can prove is that the three calls really are one lifecycle —
+	 * that the recorder started by the first outlives that call, that a verb dispatched between
+	 * them reaches the same device without queueing behind it (#184 phase 1), and that the stop
+	 * still comes back with a **finished** recording. The container assertion is one layer down in
+	 * `tests/device/android/recording.test.ts`, which is also where the device is driven hard
+	 * enough to guarantee motion; this suite keeps its one-point rule, so what it taps is
+	 * {@link HARMLESS_POINT} and what it asserts is the lifecycle rather than the content.
+	 *
+	 * Gated on the decoder for `record_video`'s reason: the stop normalises and slices before it
+	 * answers, so there is no half of it left to check on a host without one.
+	 */
+	it.skipIf(!process.env.ROVER_TEST_FRAME_EXTRACTION)(
+		'starts a recording, drives the device under the same lease, and stops it',
+		async () => {
+			const client = await startHost();
+			const device = await freeDevice(client);
+			const leaseId = await lease(client, device.serial);
+
+			const started = await client.request('start_recording', { leaseId });
+			const tapped = await client.request('tap', { leaseId, target: HARMLESS_POINT });
+			const read = await client.request('read_screen', { leaseId });
+			const stopped = await client.request(
+				'stop_recording',
+				{ leaseId },
+				// The client's own bound, raised past its 30 s default: the host normalises and
+				// slices the recording before it answers (`src/ipc/verb-methods.ts`).
+				{ timeoutMs: RECORDING_REQUEST_TIMEOUT_MS },
+			);
+
+			// The start answers plain data and produces no bytes — the recording is not over yet.
+			expect(started).toMatchObject({
+				outcome: 'ok',
+				result: { verb: 'start_recording', target: null, artifact: null },
+			});
+			// The two verbs in between reached the same device rather than queueing behind the
+			// recorder, which is the criterion phase 1 landed for.
+			expect(tapped).toMatchObject({ outcome: 'ok', result: { verb: 'tap' } });
+			expect(read).toMatchObject({ outcome: 'ok', result: { verb: 'read_screen' } });
+
+			expect(stopped).toMatchObject({
+				outcome: 'ok',
+				result: { verb: 'stop_recording', target: null, device: { serial: device.serial } },
+			});
+			if (stopped.outcome !== 'ok') throw new Error('the assertion above should have caught this');
+			const { artifact } = stopped.result;
+			if (!artifact)
+				throw new Error(`the stop answered with no artifact: ${JSON.stringify(stopped)}`);
+
+			// Bytes, and only bytes: three fields, none of them a path on the host (D19).
+			expect(Object.keys(artifact).sort()).toEqual(['base64', 'byteLength', 'mediaType']);
+			expect(artifact.mediaType).toBe('video/mp4');
+			const bytes = new Uint8Array(Buffer.from(artifact.base64, 'base64'));
+			expect(bytes.byteLength).toBe(artifact.byteLength);
+			// The criterion the recording rows share: the index box is there, so the recorder had
+			// exited before the pull.
+			expect(isFinishedRecording(bytes)).toBe(true);
+			// And the answer is `record_video`'s, field for field, because it is that schema.
+			expect(stopped.result.frames.length).toBeGreaterThan(0);
+			expect(stopped.result.container).toBeDefined();
+			expect(stopped.result.normalisation.timeline).toBe('container');
+		},
+		120_000,
+	);
+
+	/**
+	 * The refusal over a lease, and the reason it is here as well as one layer down: an agent meets
+	 * it through this surface, where it has to arrive as a `failed` answer it can branch on rather
+	 * than as an `internal_error` about a device that is working perfectly.
+	 *
+	 * The recording it opens is stopped in the same test, so the suite leaves the device as it
+	 * found it.
+	 */
+	it.skipIf(!process.env.ROVER_TEST_FRAME_EXTRACTION)(
+		'refuses a second recording on a device that is already recording, by name',
+		async () => {
+			const client = await startHost();
+			const device = await freeDevice(client);
+			const leaseId = await lease(client, device.serial);
+			await client.request('start_recording', { leaseId });
+
+			const second = await client.request('start_recording', { leaseId });
+			await client
+				.request('stop_recording', { leaseId }, { timeoutMs: RECORDING_REQUEST_TIMEOUT_MS })
+				.catch(() => undefined);
+
+			expect(second).toMatchObject({
+				outcome: 'failed',
+				failure: { kind: 'recording-already-running', serial: device.serial },
+			});
+			if (second.outcome !== 'failed')
+				throw new Error('the assertion above should have caught this');
+			if (second.failure.kind !== 'recording-already-running') return;
+			// The pids came off the device rather than out of anything this host remembered (D6).
+			expect(second.failure.pids.length).toBeGreaterThan(0);
+		},
+		120_000,
+	);
+
+	/**
 	 * The app rows against real hardware: a package really launched and really stopped, over a
 	 * lease, by the process that owns the device. Both halves run in one test so the suite
 	 * leaves the device as it found it.
