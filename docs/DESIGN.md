@@ -974,25 +974,63 @@ no `group_id` is read and nothing is grouped.
 **A node is expanded exactly when it is a prefix of the selected path**, and the selected node is
 expanded too. Nothing else is, and there is no stored expansion state anywhere.
 
+**And a row's address is its own while it is shut, and the address of the node it is drawn under
+while it is open** (amended in place, #175). That second sentence is the whole of collapsing: a
+click on a shut node selects it and the rule above draws it open, and a second click on it lands one
+level above it and the same rule then draws it shut. Nothing else changed — opening is what it
+always was, and **a row that opens nothing gains nothing**: a file, and a run whose parent named no
+single child, still carry no triangle and still link to themselves.
+
+**No depth is special-cased, in either direction.** A run's children are its `<serial>`'s entries
+(the depth table below), and the hop the tree makes on the way down is made back on the way up — an
+open directory inside a run closes onto the **run**, never onto the `<serial>` address, because no
+row of this tree stands for that address. At the root level an open project closes onto `/archive`,
+which is the one address the splat contract had never been asked to build until now
+(`archive-path.test.tsx` pins it against a real router). `directory-tree.tsx` carries this as one
+value passed down the recursion — *the node this level is drawn under* — rather than as arithmetic
+on a depth, which is what keeps every depth the same.
+
 Three of the issue's requirements fall out of that single rule rather than being implemented
-separately:
+separately, and **all three still hold after #175** — which is the reason collapsing took the shape
+it did rather than the other one:
 
 - *the tree expands lazily, one `readdir` at a time* — the levels read are precisely the prefixes of
   the selection, at most four requests at the deepest point, each one a level actually drawn. A
-  pre-walk is not avoided so much as unrepresentable;
+  pre-walk is not avoided so much as unrepresentable. **Closing a node reads nothing**: it is a
+  navigation to a level that has already answered;
 - *a reload lands where you were and a link is shareable* — **where you are is the address, and the
   tree card's search text is the one deliberate exception** (#146, amended in place). It is component
   state and is deliberately not in the URL: a reload and a shared link land on the *address*, without
   somebody else's search, and a hit is a navigation to an address like any other, so nothing about
   following one needs a query parameter to survive. Putting the text in the URL was considered and
   refused by the operator; what the address carries is still *where you are*, and that is what a
-  shared link has to reproduce;
+  shared link has to reproduce. **Collapsing adds no second exception**, because it moves the
+  address: what a reload lands on is what the reader last closed onto;
 - the tree and the URL cannot disagree, because there is only one of them — and the searched tree
-  cannot either, since every row in it is an address the host answered with.
+  cannot either, since every row in it is an address the host answered with. **This is the one a
+  collapse had to be careful with**, and it is what decided between the two answers below.
 
-**The accepted cost**: a folder cannot be peeked at without selecting it. That is ordinary
-file-explorer behaviour, it buys the removal of a whole class of *the tree says one thing and the
-address says another* bugs, and a separate collapse control is a later change if anybody wants one.
+**Collapsing is a navigation rather than tree state, and choosing that was the substance of #175.**
+
+| | what it buys | what it costs |
+| --- | --- | --- |
+| **collapse by navigation** — an open row goes to the node above it | nothing is stored, so all three consequences above survive intact | collapsing **moves the selection** to that node, so the card beside the tree becomes that node's card |
+| **collapse as tree state** — a set of deliberately-closed nodes laid over the rule | a node closes without the selection moving | it puts back the state this section removed, and makes *the selection is drawn nowhere in the tree* reachable in one click |
+
+The second cost is what settled it. The tree stands beside an open file **precisely so a reader
+stays placed** (#160) — that is the whole reason it is still on screen there — and a closed ancestor
+with the card still drawing the file underneath it is that guarantee inverted. Collapse by
+navigation cannot reach that state at all: the tree is derived from the selection, so it draws the
+selection at every moment. What it does instead is stated rather than hidden — **the card follows
+the tree up**, and closing a project therefore lands on *Projects with runs filed on this host*, the
+same as clicking the breadcrumb would.
+
+**The accepted cost**: a folder cannot be peeked at without selecting it, and since #175 it cannot
+be closed without leaving it either. Both are ordinary file-explorer behaviour, and together they
+buy the removal of a whole class of *the tree says one thing and the address says another* bugs.
+**The separate collapse control this section used to park as *a later change if anybody wants one*
+is that change** — and it turned out not to be a control at all, but the row, which already goes
+somewhere.
 
 #### And the card searches the whole archive — settled (#146)
 
@@ -1015,8 +1053,13 @@ browser.
   stop. The `<serial>` *is* a row here, because the host answered with it.
 - **A hit row is the same row.** The same `<Link>`, the same classes, and every extra a browsing row
   is forbidden: no count, no status glyph, no colour that means an outcome, the name verbatim and
-  `break-words`. Only the two glyphs differ, and they say what the entry *is* — `FolderOpen`/`Folder`,
+  `break-words`. The glyphs differ, and they say what the entry *is* — `FolderOpen`/`Folder`,
   `FileText`, and `FileQuestionMark` for the host's own *unclassified*.
+- **And the searched tree does not collapse** (amended in place, #175). Where a browsing row that is
+  open goes to the node above it, a hit goes to its own address whatever it is drawing beneath it:
+  every node here **is** an address the host answered with, so there is no *node it is drawn under*
+  to close onto and nothing to derive a closed state from. It still carries `aria-expanded`, because
+  it is still open — by construction, and now said rather than only drawn.
 - **Three states, and none borrows another's sentence** — nor one from *Nothing in the archive*,
   `ARCHIVE NOT READABLE` or the tree's own *Reading this level.*: in flight is
   ***Searching this host's archive.***, one quiet line with `aria-live="polite"` and **no spinner**
@@ -1062,10 +1105,16 @@ browser.
   still not a level of the tree and still in every address below the run. The glyph is
   `FolderOpen`/`Folder`, `FileText`, or `FileQuestionMark` for the host's own *unclassified*, taken
   from the entry's `kind` and never from its name (D22); the triangle is `ChevronDown`/`ChevronRight`.
-  Both are `aria-hidden` — the triangle is decoration meaning *this opens*, not a second control
-  inside a link. **A run whose parent named no single child gets neither an open folder nor a
-  triangle**: there is no level to open, and drawing one over nothing is the same class of claim as
-  an invented `0`.
+  Both are `aria-hidden` — **the triangle stayed decoration meaning *this opens*, and did not become
+  a second control inside the link** (#175, rewritten in place). Collapsing landed on the row, which
+  already goes somewhere: hanging the closing half of one gesture on a `<button>` nested inside the
+  `<Link>` would split it across two targets, make a row two things, and be a markup change larger
+  than it looks for no behaviour the row cannot carry itself. **What the row does say out loud is
+  `aria-expanded`**, on every row there is a level under and on no other — the triangle draws
+  openness and cannot say it, the tree told assistive technology nothing about it until now, and the
+  row is a toggle, so this is the change that had to notice. **A run whose parent named no single
+  child gets none of the three — no open folder, no triangle, and no `aria-expanded`**: there is no
+  level to open, and drawing one over nothing is the same class of claim as an invented `0`.
 - **No count.** `childCount` is on the wire and is deliberately not drawn here. The header badge
   carries the one number for whatever is selected, which is what keeps the tree a tree rather than a
   report. `directory-tree.test.tsx` asserts the tree's exact text, so a number cannot creep back in.

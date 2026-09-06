@@ -1700,7 +1700,9 @@ signed-in user's identifier, so
 
 **Archive is a file explorer over what past runs wrote.** A tree on the left expands one directory
 at a time as you go down it and reaches every address in the archive — a project, a test name, a
-run, and every level below that run — beside the contents of whatever is selected. Browsing reads one level at a time: each level is one `list_archive` call for a level
+run, and every level below that run — beside the contents of whatever is selected. Clicking an open
+node closes it again, at every depth, and closing one takes you to the level above it, so where the
+tree is open is always exactly where the address says you are. Browsing reads one level at a time: each level is one `list_archive` call for a level
 actually on the screen, so opening a project reads that project and nothing else. **And the tree card
 has a field that searches the whole archive on the host** — one `search_archive` call for the text
 once it settles, never one per keystroke, with every match drawn in the tree in place: each matching

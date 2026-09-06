@@ -106,6 +106,10 @@ describe('the round trip through the router', () => {
 						>
 							deeper
 						</Link>
+						{/* What the tree's own open row at the root level goes to (#175). */}
+						<Link params={{ _splat: splatFromComponents([]) }} to="/archive/$">
+							up
+						</Link>
 					</>
 				);
 			},
@@ -139,5 +143,26 @@ describe('the round trip through the router', () => {
 			'checkout-app',
 			'child dir',
 		]);
+	});
+
+	/*
+	 * **Closing a project goes to the root, and the root is an empty splat** (#175). The tree's open
+	 * rows link to the node above them, and at the root level that node is the archive itself — so
+	 * the one address this contract had never been asked to build is now built on every screen with
+	 * a project open. Asserted against a real router, because whether `/archive/` matches the splat
+	 * route and reads back as `[]` is exactly what the mocked `Link` in the screen tests supplies.
+	 */
+	it('builds the root as an empty splat, and reads it back as the root', async () => {
+		const router = routerFor('/archive/checkout-app');
+
+		render(<RouterProvider router={router as never} />);
+
+		const up = await waitFor(() => screen.getByRole('link', { name: 'up' }));
+		expect(up.getAttribute('href')).toBe('/archive');
+		up.click();
+
+		await waitFor(() => {
+			expect(screen.getByTestId('components').textContent).toBe('[]');
+		});
 	});
 });
