@@ -29,6 +29,7 @@ import {
 	withSnippet,
 } from '@/cli/init/documents.js';
 import { MCP_SERVER_KEY } from '@/cli/init/mcp-config.js';
+import { pathSegment } from '@/daemon/archive-path.js';
 import { ProjectHooksSchema } from '@/daemon/project-hooks.js';
 import { IPC_METHODS } from '@/ipc/methods.js';
 import { ROVER_MCP_NAME } from '@/mcp/server.js';
@@ -420,7 +421,7 @@ describe('the generated ROVER.md', () => {
 	it('teaches the before/after pattern as a worked example, not as a field list', () => {
 		// The trigger, in the words the ask actually arrives in.
 		expect(page).toContain('before and after');
-		// Two `acquire_device` calls sharing one group, and a `screenshot` in each sharing a label.
+		// Two `acquire_device` calls sharing one group and one label, differing in their name.
 		expect(page.match(/acquire_device \{/g) ?? []).toHaveLength(2);
 		expect(page.match(/"groupId": "app-bar-top-space"/g) ?? []).toHaveLength(2);
 		expect(page.match(/"label": "home-screen"/g) ?? []).toHaveLength(2);
@@ -429,12 +430,42 @@ describe('the generated ROVER.md', () => {
 		expect(page).toContain('does not diff');
 	});
 
+	/**
+	 * #177: the arms of a comparison are told apart by name rather than by timestamp, so the
+	 * example is the shape it teaches — one `testName` per lease, each ending in its own letter.
+	 */
+	it('gives each run in the group its own suffixed testName', () => {
+		const names = [...page.matchAll(/"testName": "([^"]+)"/g)].map(([, name]) => name);
+
+		expect(names).toEqual(['app-bar-top-space_variantA', 'app-bar-top-space_variantB']);
+		// A name the archive has to rewrite gets a `-<hash>` directory, so the example shows one
+		// that survives `pathSegment` verbatim (`src/daemon/archive-path.ts`).
+		for (const name of names) {
+			expect(pathSegment(name)).toBe(name);
+		}
+	});
+
+	// The rule has to be readable by an agent on its fourth run, so it is scoped to the section
+	// rather than to the page: a mention anywhere else cannot satisfy it.
+	it('states the suffix rule past the third letter, with its reason and its exclusion', () => {
+		const section = page.slice(page.indexOf('## Comparing two runs'), page.indexOf('## The verbs'));
+
+		expect(section).toContain('_variantA');
+		expect(section).toContain('_variantB');
+		expect(section).toContain('_variantC');
+		expect(section).toContain('_variantD');
+		// What it applies to, what it does not, and what it buys.
+		expect(section).toContain('no `groupId`');
+		expect(section).toContain('directory');
+	});
+
 	// `theLoop`'s step 2 is the paragraph an agent reads before its first call, so it names the
 	// field and points at the example rather than leaving the two unconnected.
 	it('names groupId in the step that describes acquire_device', () => {
 		const step = page.slice(page.indexOf('2. **`acquire_device`**'), page.indexOf('3. **'));
 
 		expect(step).toContain('groupId');
+		expect(step).toContain('_variant');
 		expect(step).toContain('Comparing two runs');
 	});
 

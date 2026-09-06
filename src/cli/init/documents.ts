@@ -283,8 +283,13 @@ function theLoop(facts: DocumentFacts): string[] {
 		'   directory, the operator sees it beside the device while you drive it, and the host files',
 		'   it with the run. `groupId` is optional too and is the one field here that spans leases:',
 		'   several leases sharing one are a single investigation, which is what "before and after"',
-		'   needs — see **Comparing two runs** below. The returned **`lease.leaseId` is the',
-		'   credential** every later call carries and the only thing that can release the lease.',
+		'   needs. **Every lease that shares a `groupId` with another ends its `testName` with its',
+		'   own variant letter** — `…_variantA` for the first run of the group, `…_variantB` for the',
+		'   second, `…_variantC` for the third, and on in the order the runs happen — so each run is',
+		'   its own directory in the archive rather than a timestamp inside a shared one. A lease',
+		'   with no `groupId` is a single run and takes no suffix. See **Comparing two runs** below.',
+		'   The returned **`lease.leaseId` is the credential** every later call carries and the only',
+		'   thing that can release the lease.',
 		'3. **`install_app`** — takes the lease id and nothing else. There is no package argument by',
 		"   design: what installing means here is the host operator's own configuration.",
 		'4. **`launch_app`**, then drive and read.',
@@ -308,6 +313,17 @@ function theLoop(facts: DocumentFacts): string[] {
  * it worked", "show me what changed" — for the reason {@link agentSnippet} is written the way it
  * is: an agent matches on the request it was given, not on a field name it has never seen.
  *
+ * **One `testName` per lease in a group, suffixed, is a deliberate exchange** (#177). `testName` is
+ * a directory level in the archive (`src/daemon/archive-path.ts`, `PROJECT.md` §10), so runs
+ * sharing one name are told apart only by their lease directory's timestamp — and until the panel
+ * groups by `group_id` (#165), the name is the only thing a reader browsing the archive has. A
+ * distinct `…_variant<Letter>` buys a nameable directory per arm and spends the idiom
+ * `leaseDirectoryName` records: the two most recent runs of one name are no longer the two
+ * sides of the diff by `ls` (D24), because the arms are now sibling directories. What still holds
+ * them together is the `group_id` filed with each run (#150). The name shown is path-safe on
+ * purpose — `pathSegment` keeps `[A-Za-z0-9._-]` verbatim and hashes anything else, so an example
+ * with spaces in it would produce a directory carrying a `-<hash>` the page never explains.
+ *
  * Two runs because that is the common case, and the last line says three or more is equally
  * normal, because a reader shown exactly two will believe two is the rule.
  */
@@ -316,37 +332,48 @@ function beforeAndAfter(): string[] {
 		'## Comparing two runs — before and after',
 		'',
 		'When the ask is a **comparison** — "screenshot before and after", "prove the fix worked",',
-		'"show me what changed" — two optional strings are what keep the pieces together after the',
-		'leases have ended:',
+		'"show me what changed" — two optional strings keep the pieces together after the leases',
+		'have ended, and the name each run carries is what tells them apart:',
 		'',
 		'- **`groupId` on `acquire_device`** — the runs. Every lease in one comparison gets the same',
 		'  one. You invent the string; nothing parses it.',
+		'- **`testName` on `acquire_device`** — *this* run. Every lease that shares a `groupId` with',
+		'  another ends its name with a distinct variant letter, assigned in the order the runs',
+		'  happen: `…_variantA` for the first, `…_variantB` for the second, `…_variantC` for the',
+		'  third, `…_variantD` for the fourth, and on through the alphabet. That reads the same way',
+		'  for either kind of group — a before and an after, or three alternatives compared side by',
+		'  side: the letter says *which run*, not which side of a pair. `testName` names a',
+		"  **directory** in the host's archive, so without the suffix every run of a comparison",
+		'  lands in one folder and is told apart only by its timestamp; with it, each run is a',
+		'  directory a person can name. Keep the whole name identifier-shaped for the reason a',
+		'  `label` must be (`app-bar-top-space_variantA`, not `app bar top space`). **A lease with',
+		'  no `groupId` is a single run and takes no suffix** — it carries the plain name.',
 		'- **`label` on `screenshot`, `record_video` and `read_logs`** — the things being compared.',
 		'  The same screen captured in each run gets the same label. Keep it short and',
 		'  identifier-shaped (`home-screen`, not `home screen`): it becomes part of a file name on',
 		'  the host, and anything outside `[A-Za-z0-9._-]` is rewritten.',
 		'',
 		'```jsonc',
-		'// before the change',
-		'acquire_device { "serial": "…", "owner": "issue-150", "testName": "app bar top space",',
-		'                 "groupId": "app-bar-top-space" }',
+		'// before the change — the first run of the group, so _variantA',
+		'acquire_device { "serial": "…", "owner": "issue-150",',
+		'                 "testName": "app-bar-top-space_variantA", "groupId": "app-bar-top-space" }',
 		'screenshot     { "leaseId": "…", "label": "home-screen" }',
 		'release_device { "leaseId": "…" }',
 		'',
 		'// …make the change…',
 		'',
-		'// after it — a new lease, the same groupId, the same label',
-		'acquire_device { "serial": "…", "owner": "issue-150", "testName": "app bar top space",',
-		'                 "groupId": "app-bar-top-space" }',
+		'// after it — a new lease, the same groupId and the same label, the next letter',
+		'acquire_device { "serial": "…", "owner": "issue-150",',
+		'                 "testName": "app-bar-top-space_variantB", "groupId": "app-bar-top-space" }',
 		'screenshot     { "leaseId": "…", "label": "home-screen" }',
 		'release_device { "leaseId": "…" }',
 		'```',
 		'',
 		'Both are optional and neither authorizes anything. Three points of comparison are as normal',
-		'as two — reuse the same `groupId` for as many runs as the investigation needs — and nothing',
-		'requires that a second run ever happens. **A `label` needs a `groupId`**: send one on a lease',
-		'that has no group and the call is refused, naming both fields, rather than accepted with the',
-		'label quietly dropped.',
+		'as two — reuse the same `groupId` for as many runs as the investigation needs, and advance',
+		'the letter each time — and nothing requires that a second run ever happens.',
+		'**A `label` needs a `groupId`**: send one on a lease that has no group and the call is',
+		'refused, naming both fields, rather than accepted with the label quietly dropped.',
 		'',
 		'Rover files this and nothing more. **It does not diff the images, score them, or decide',
 		'whether the fix worked** — that judgement is yours, from looking at what came back.',
