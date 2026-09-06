@@ -607,8 +607,8 @@ exactly as the CLI is: it holds no verb logic and reaches no backend, which
   it. Where a recording lands is `ROVER_MCP_ARTIFACT_DIR` — server configuration for the reason
   the host is one — created on demand, and only when there are bytes to write: a refusal
   (`artifact-too-large`, `unfinished-recording`, `no-recording-running`,
-  `recording-normalisation-unavailable`, `recording-normalisation-failed`,
-  `frame-extraction-unavailable`, `frames-too-large`) is `isError` naming it and leaves **no**
+  `recording-already-running`, `recording-normalisation-unavailable`,
+  `recording-normalisation-failed`, `frame-extraction-unavailable`, `frames-too-large`) is `isError` naming it and leaves **no**
   file behind, not a truncated one and not a zero-byte one. `record_video` raises its own request
   timeout past the recording *and* both host steps that follow it — the normalisation and the
   frame extraction — which is `rover record`'s four-term sum with every term imported;

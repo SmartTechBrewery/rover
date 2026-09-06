@@ -127,7 +127,10 @@ export function registerArtifactTools(server: McpServer, host: HostName): void {
 				'before it is pulled, and the answer is the video and the frames or neither: a ' +
 				'recording that came off the device unfinished, one too large for a single answer, a ' +
 				'host with no decoder installed, and frames that will not fit beside the recording ' +
-				'are each refused by name and leave no file behind. **Frames sample motion and ' +
+				'are each refused by name and leave no file behind. **A recording already open on ' +
+				'the device is refused by name too** — this is the fixed-length way to record and it ' +
+				'will not cut short a recording `start_recording` opened; stop that one first, or ' +
+				'let it reach its own limit. **Frames sample motion and ' +
 				'nothing finer**: they can say something moved and roughly when, never whether an ' +
 				'animation was smooth. **The video file is normalised on the host so it always ' +
 				'plays** — what a device recorder writes is not a constant-rate video, so the host ' +

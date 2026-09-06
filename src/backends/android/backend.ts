@@ -211,8 +211,21 @@ const RECORDER_PIDS_COMMAND = 'pidof screenrecord || true';
  * It signals **every** recorder on the device for {@link RECORDER_PIDS_COMMAND}'s reason: this
  * code never learned a pid, so there is no particular one to match. A literal this file owns,
  * with no caller's string in it.
+ *
+ * **And it carries that constant's `|| true` for a sharper version of that constant's reason.**
+ * `pidof` naming a recorder is read one adb round trip before this one runs, so a recorder that
+ * reaches its own `--time-limit` in the gap — the fifteen seconds this pair supports is exactly
+ * the length agents are told to drive — leaves this expanding to a bare `kill -INT`, which
+ * prints its usage line and exits **1** (measured on API 37, PROJECT.md §6). Without the
+ * tolerance that arrives as `AdbCommandError`, which no `toVerbFailure` branch names, so the
+ * agent is told `internal_error` about a device that is fine — and `stopRecording`'s `finally`
+ * deletes the complete, playable file the recorder had just finished writing. The stderr goes
+ * with it because the usage line is noise about a race, not about a device.
+ *
+ * Nothing is lost by swallowing the exit code: a recorder that survived the signal is caught by
+ * the wait that follows, which fails naming the pids still there.
  */
-const STOP_RECORDER_COMMAND = 'kill -INT $(pidof screenrecord)';
+const STOP_RECORDER_COMMAND = 'kill -INT $(pidof screenrecord) 2>/dev/null || true';
 
 /**
  * The tracker's argv. `-l` because the long format is what carries `model:`, and the

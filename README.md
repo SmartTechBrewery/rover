@@ -1022,8 +1022,8 @@ so the recording is legible without a second call. Where that file lands is
 `ROVER_MCP_ARTIFACT_DIR` below, and it is always a path on the agent's own machine — never one on
 the host, even when the two are the same machine. None of the three takes a destination or a
 format, for the same reason none takes a host. A refusal (`artifact-too-large`, `unfinished-recording`, `no-recording-running`,
-`recording-normalisation-unavailable`, `recording-normalisation-failed`,
-`frame-extraction-unavailable`, `frames-too-large`) is an error naming it and leaves no file
+`recording-already-running`, `recording-normalisation-unavailable`,
+`recording-normalisation-failed`, `frame-extraction-unavailable`, `frames-too-large`) is an error naming it and leaves no file
 behind at all — never a truncated one, and never one that will not play.
 
 `install_app` is a tool in **one** of its two forms: it takes the lease id and nothing else, and

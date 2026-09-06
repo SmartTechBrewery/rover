@@ -886,14 +886,30 @@ it:
   `WARNING: failed at 1280x2856, retrying at 720x1280` — **on stdout, at exit 0**, having recorded
   perfectly well at the fallback size. So nothing that decides an answer is ever read off these
   streams; what is checked is the bytes that arrive, exactly as `record_video` checks them.
-- **`SIGINT` makes the recorder write its index and exit, and it is not instantaneous.**
-  `adb -s $SERIAL shell 'kill -INT $(pidof screenrecord)'` exits **0** immediately, and `pidof`
-  still named the recorder for **0.265 s over 8 further probes** after it. The file at that point
-  is complete and has the ordinary shape: `ftyp` (24 B), `moov` (1618 B), `free`, `mdat`. So "the
-  recorder is gone" is again a condition with a timeout and never a sleep (D12(b)) — and unlike
-  `record_video`'s, where the recorder had already exited by the time its adb client returned, this
-  wait genuinely waits. A 7-second signalled session of a screen being swiped came back declaring
-  **23 samples over 7.04 s**.
+- **`SIGINT` makes the recorder write its index and exit, and it is not instantaneous.** The
+  recipe is `adb -s $SERIAL shell 'kill -INT $(pidof screenrecord) 2>/dev/null || true'`: it exits
+  **0** immediately with a recorder there, and `pidof` still named the recorder for **0.265 s over
+  8 further probes** after it. The file at that point is complete and has the ordinary shape:
+  `ftyp` (24 B), `moov` (1618 B), `free`, `mdat` — measured again while fixing the trap below as
+  247,603 bytes, `ftyp` then `moov`, from a swiped session. So "the recorder is gone" is again a
+  condition with a timeout and never a sleep (D12(b)) — and unlike `record_video`'s, where the
+  recorder had already exited by the time its adb client returned, this wait genuinely waits. A
+  7-second signalled session of a screen being swiped came back declaring **23 samples over
+  7.04 s**.
+- **`kill` inherits `pidof`'s non-zero exit, and it is worse here than it is there.** **This recipe
+  was written without its `|| true`** and the omission held only for as long as the recorder was
+  assumed to still be there when the signal lands. It is not: the pids are read one adb round trip
+  earlier, so a recorder that reaches its own `--time-limit` in the gap — fifteen seconds is the
+  only length `start_recording` / `stop_recording` support, and the one agents are told to drive —
+  leaves `$(pidof screenrecord)` expanding to nothing and the shell seeing a bare `kill -INT`. That
+  prints `usage:	kill [-s signame | -signum | -signame] { job | pid | pgrp } ...` and exits **1**;
+  with the tolerance the same command exits **0** and prints nothing. Measured both ways
+  (#195 review). Untolerated it arrives as `AdbCommandError`, which no `toVerbFailure` branch
+  names, so the agent is told `internal_error` about a device that is fine — and `stopRecording`'s
+  `finally` removes the complete, playable file the recorder had just finished writing, after which
+  a retry answers `no-recording-running` and there is no path back to the bytes. Swallowing the
+  exit code costs nothing: a recorder that survived the signal is caught by the wait that follows,
+  which fails naming the pids still there.
 - **`--time-limit` still bounds a recorder whose adb client is long gone.** A detached recorder
   started with `--time-limit 3` exited on its own **3 s** later with nothing on the host holding
   it, leaving a finished 35,181-byte file. That is what makes the limit the kill switch until

@@ -201,6 +201,30 @@ describe('record_video, which records and then waits for the host to work on it 
 	});
 });
 
+describe('stop_recording, which waits for the host to work on bytes it already has', () => {
+	it('waits out both of the host’s budgets and the round trip, and nothing for the recording', async () => {
+		const request = await requestFrom('stop_recording', {});
+
+		// `record_video`'s sum minus its first term, and minus it deliberately: the recording is
+		// over before this call is made, and how long it ran is not something the call knows or
+		// could have carried (#190). Every remaining term is imported for `record_video`'s reason
+		// — a copied number is one the original is free to drift away from.
+		expect(request.options?.timeoutMs).toBe(
+			RECORDING_NORMALISATION_TIMEOUT_MS + FRAME_EXTRACTION_TIMEOUT_MS + DEFAULT_REQUEST_TIMEOUT_MS,
+		);
+	});
+
+	it('outlives both host steps, which is the whole reason it raises the deadline at all', async () => {
+		const request = await requestFrom('stop_recording', {});
+
+		// The load-bearing inequality: a slow re-encode or a slow decode is reported by the host,
+		// by name, rather than by this client as a nameless timeout.
+		expect(request.options?.timeoutMs ?? 0).toBeGreaterThan(
+			RECORDING_NORMALISATION_TIMEOUT_MS + FRAME_EXTRACTION_TIMEOUT_MS,
+		);
+	});
+});
+
 describe('install_app, which runs a build on the host', () => {
 	it('waits out the host’s whole install budget plus the round trip', async () => {
 		const request = await requestFrom('install_app', {});
@@ -223,22 +247,70 @@ describe('install_app, which runs a build on the host', () => {
 	});
 });
 
+/** The rows that take the client's own deadline, each one a decision rather than an omission. */
+const DEFAULT_DEADLINE_ROWS = [
+	{ tool: 'tap', args: { target: TARGET } },
+	{ tool: 'type_text', args: { text: 'hello' } },
+	{ tool: 'press_key', args: { key: 'back' } },
+	{ tool: 'read_screen', args: {} },
+	{ tool: 'device_info', args: {} },
+	{ tool: 'read_logs', args: {} },
+	{ tool: 'launch_app', args: { appId: 'com.example.app' } },
+	{ tool: 'stop_app', args: { appId: 'com.example.app' } },
+	{ tool: 'clear_app_data', args: { appId: 'com.example.app' } },
+	{ tool: 'set_wifi', args: { enabled: false } },
+	{ tool: 'set_airplane_mode', args: { enabled: false } },
+	{ tool: 'screenshot', args: {} },
+	// The half of the recording pair that only starts one: the recorder is launched detached
+	// and the call returns as soon as the device confirms it is up (#190), so there is no
+	// host step to sit outside of. Stated here rather than left absent, so the default is a
+	// decision rather than an omission — `stop_recording` above is where the waiting happens.
+	{ tool: 'start_recording', args: {} },
+] as const;
+
+/** The rows above that raise one, each with a `describe` of its own in this file. */
+const RAISED_DEADLINE_TOOLS = [
+	...WAITING_VERBS.map((row) => row.tool),
+	'record_video',
+	'stop_recording',
+	'install_app',
+] as const;
+
 describe('a verb that cannot outrun the default is left alone', () => {
-	it.each([
-		{ tool: 'tap', args: { target: TARGET } },
-		{ tool: 'type_text', args: { text: 'hello' } },
-		{ tool: 'press_key', args: { key: 'back' } },
-		{ tool: 'read_screen', args: {} },
-		{ tool: 'device_info', args: {} },
-		{ tool: 'read_logs', args: {} },
-		{ tool: 'launch_app', args: { appId: 'com.example.app' } },
-		{ tool: 'set_wifi', args: { enabled: false } },
-		{ tool: 'screenshot', args: {} },
-	])('$tool passes no timeout, so the client’s own applies', async ({ tool, args }) => {
+	it.each(DEFAULT_DEADLINE_ROWS)('$tool passes no timeout, so the client’s own applies', async ({
+		tool,
+		args,
+	}) => {
 		const request = await requestFrom(tool, args);
 
 		// Nothing invented for a call that returns when the device is done: a raised deadline
 		// where none is needed is a number nobody can justify later.
 		expect(request.options?.timeoutMs).toBeUndefined();
+	});
+});
+
+/**
+ * **The gate that makes the two lists above exhaustive**, rather than a pair that a new row can
+ * simply be left out of — which is how `stop_recording` and `start_recording` first landed here
+ * unasserted (#190 review). `tests/unit/mcp/verb-declarations.test.ts` covers the declarations
+ * this way for the same reason; this is the same shape for the deadlines.
+ *
+ * It reads `tools/list` off a real client rather than `IPC_METHODS`, so what it enumerates is
+ * what an agent can actually call — a row with no tool is not this suite's problem, and a tool
+ * with no row cannot exist. The four device and lease rows are excluded because they are not
+ * verbs and carry no device work to outrun.
+ */
+describe('every tool an agent can call has a stated deadline', () => {
+	const NOT_A_VERB = ['status', 'list_devices', 'acquire_device', 'release_device'];
+
+	it('names each one in exactly one of this file’s two lists', async () => {
+		const agent = await connectAgent();
+		const advertised = (await agent.listTools()).tools
+			.map((tool) => tool.name)
+			.filter((name) => !NOT_A_VERB.includes(name));
+
+		const stated = [...RAISED_DEADLINE_TOOLS, ...DEFAULT_DEADLINE_ROWS.map((row) => row.tool)];
+
+		expect([...advertised].sort()).toEqual([...stated].sort());
 	});
 });

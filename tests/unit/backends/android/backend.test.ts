@@ -2872,8 +2872,14 @@ const startArgv = (seconds: number): string[] => [
 		'</dev/null >/dev/null 2>&1 &',
 ];
 
-/** The interrupt that makes a recorder write its index and exit. */
-const RECORDING_KILL_ARGV = ['shell', 'kill -INT $(pidof screenrecord)'];
+/**
+ * The interrupt that makes a recorder write its index and exit.
+ *
+ * The `|| true` is load-bearing rather than defensive: the pids are read one round trip earlier,
+ * so a recorder that reaches its own `--time-limit` in the gap leaves this expanding to a bare
+ * `kill -INT` (#190). {@link killWithNoOperand} is what the device answers then.
+ */
+const RECORDING_KILL_ARGV = ['shell', 'kill -INT $(pidof screenrecord) 2>/dev/null || true'];
 
 const FINISHED_RECORDING = readFileSync(
 	new URL(
@@ -2928,6 +2934,48 @@ function missingFile(): AdbCommandError {
 		'',
 		STAT_MISSING,
 	);
+}
+
+/**
+ * What the device shell does when `$(pidof screenrecord)` expands to nothing: `kill` with no
+ * operand prints its usage line and exits **1**, measured on API 37 (PROJECT.md §6). `./adb.js`
+ * turns a non-zero exit into this, which is why the signal has to carry its own tolerance —
+ * without it, a recorder that finished itself in the gap between the pid check and the signal
+ * would reach the caller as `internal_error` and take its finished recording with it (#190).
+ */
+function killWithNoOperand(argv: readonly string[]): AdbCommandError {
+	return new AdbCommandError(
+		argv,
+		10_000,
+		Object.assign(new Error('adb'), { code: 1 }),
+		'',
+		'usage: kill [-s signame | -signum | -signame] { job | pid | pgrp } ...\n',
+	);
+}
+
+/**
+ * The device for the race {@link killWithNoOperand} describes: `pidof` names a recorder on the
+ * pre-check and nothing from the next round trip on, and the shell answers a `kill` whose
+ * `$(pidof …)` expanded to nothing the way API 37 does — unless the command carries its own
+ * tolerance, which is the whole point. The array it answers with collects every command in
+ * order, so a test can assert what ran before what.
+ */
+function recorderVanishesAfterPreCheck(): string[] {
+	const seen: string[] = [];
+	let probes = 0;
+	runAdbOnDevice.mockImplementation(async (_serial, args): Promise<AdbResult> => {
+		const key = args.join(' ');
+		seen.push(key);
+		if (key === RECORDING_PIDOF_ARGV.join(' ')) {
+			probes += 1;
+			return { stdout: probes === 1 ? '29633\n' : '', stderr: '' };
+		}
+		if (key === RECORDING_STAT_ARGV.join(' ')) return { stdout: STAT_FILE, stderr: '' };
+		if (key.startsWith('shell kill') && !key.includes('|| true')) throw killWithNoOperand(args);
+		return { stdout: '', stderr: '' };
+	});
+	runAdbBinaryOnDevice.mockResolvedValue({ stdout: FINISHED_RECORDING, stderr: '' });
+	return seen;
 }
 
 /**
@@ -3410,6 +3458,43 @@ describe('stopRecording', () => {
 			RECORDING_STAT_ARGV,
 			RECORDING_RM_ARGV,
 		]);
+	});
+
+	/**
+	 * The same fact one round trip later, which is the version the pre-check cannot see: `pidof`
+	 * named a recorder, and by the time the signal's own round trip lands the recorder has hit
+	 * its `--time-limit`, written its index and exited. {@link recorderVanishesAfterPreCheck}
+	 * **models** that shell rather than stubbing it, so this case fails if the command ever loses
+	 * its tolerance again. What has to come back is the complete recording, because that is
+	 * exactly what is sitting on the device.
+	 */
+	it('hands back the recording when the recorder exits between the pid check and the signal', async () => {
+		recorderVanishesAfterPreCheck();
+
+		const bytes = await backend.stopRecording(SERIAL);
+
+		expect(Buffer.from(bytes).equals(FINISHED_RECORDING)).toBe(true);
+		expect(runAdbBinaryOnDevice.mock.calls[0][1]).toEqual(RECORDING_PULL_ARGV);
+	});
+
+	/**
+	 * And the consequence that made that race worth a case of its own: the `finally` runs on
+	 * every path, so a signal that failed would have deleted a complete, playable recording
+	 * before anything ever pulled it — and a retry would then answer `no-recording-running`, with
+	 * no path back to the bytes. The order is the assertion: nothing is removed until the pull
+	 * has happened.
+	 */
+	it('never removes the scratch file before the pull when the signal found nothing to signal', async () => {
+		const order = recorderVanishesAfterPreCheck();
+		runAdbBinaryOnDevice.mockImplementation(async () => {
+			order.push('pull');
+			return { stdout: FINISHED_RECORDING, stderr: '' };
+		});
+
+		await backend.stopRecording(SERIAL);
+
+		expect(order).toContain('pull');
+		expect(order.indexOf(RECORDING_RM_ARGV.join(' '))).toBeGreaterThan(order.indexOf('pull'));
 	});
 
 	/**
