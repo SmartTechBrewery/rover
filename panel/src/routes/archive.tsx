@@ -42,6 +42,12 @@ import { rootRoute } from './__root.js';
  * shared link land on the **address**, without somebody else's search, and a hit is a navigation to
  * an address like any other, so nothing about it needs to be in the URL to survive being followed.
  *
+ * **So closing a node in the tree moves the selection, and this card follows it up** (#175,
+ * `directory-tree.tsx`). An open row goes to the node it is drawn under, which is what makes
+ * clicking it a second time close it without anything being stored — and the cost, decided there
+ * and recorded in §9, is that the card beside the tree becomes that node's card. Nothing here has
+ * to know: it is a navigation like any other, onto levels this screen has already read.
+ *
  * **Every state below is a state of this one screen** (§7's rule, applied to a second screen). The
  * breadcrumb, the describing line and the header row's shape are the same in all of them; the badge
  * is the only thing in the header that comes and goes, and it goes rather than reading `0`.

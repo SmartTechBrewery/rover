@@ -19,7 +19,10 @@ vi.mock('@tanstack/react-router', () => ({
 		params?: { _splat?: string };
 		children: ReactNode;
 	} & AnchorHTMLAttributes<HTMLAnchorElement>) => (
-		<a href={`${to.replace('$', '')}${params?._splat ?? ''}`} {...rest}>
+		// The trailing slash an **empty** splat leaves is dropped, because the real router drops it:
+		// closing a project goes to the root (#175), and `/archive` is the address it emits for it —
+		// pinned against a real router in `archive-path.test.tsx` rather than believed of this mock.
+		<a href={`${to.replace('$', '')}${params?._splat ?? ''}`.replace(/\/$/, '')} {...rest}>
 			{children}
 		</a>
 	),
@@ -143,14 +146,29 @@ describe('the tree', () => {
 	 * The lazy-expansion assertion, in DOM terms. A node is expanded exactly when it is a prefix of
 	 * the selection, so `payments-web` has no children drawn — nothing was read for it, and nothing
 	 * ever will be until it is selected.
+	 *
+	 * **And every row that opens something now says which it is** (#175). The tree told assistive
+	 * technology nothing about openness while the triangle was the only thing that carried it, and
+	 * the row is a toggle since collapsing landed on it.
 	 */
-	it('expands only the selected path', () => {
+	it('expands only the selected path, and says so on every row that opens something', () => {
 		const { container } = showing(['checkout-app', 'login-flow']);
 
 		const names = rows(container).map((row) => row.textContent);
 		expect(names).toContain(RUN);
 		expect(names.filter((name) => name === 'payments-web')).toHaveLength(1);
 		expect(names.indexOf('payments-web')).toBe(names.length - 1);
+		const openness = Object.fromEntries(
+			rows(container).map((row) => [row.textContent, row.getAttribute('aria-expanded')]),
+		);
+		expect(openness).toEqual({
+			'checkout-app': 'true',
+			'login-flow': 'true',
+			[RUN]: 'false',
+			[OLDER]: 'false',
+			unlabeled: 'false',
+			'payments-web': 'false',
+		});
 	});
 
 	it('marks the selected row, and only that row', () => {
@@ -173,11 +191,58 @@ describe('the tree', () => {
 		expect(runs).toEqual([RUN, OLDER]);
 	});
 
-	it('links every row to its own level', () => {
+	/*
+	 * **A shut row goes to its own level; an open one goes to the node above it** (#175, rewritten in
+	 * place). That second half is the whole of collapsing: clicking an open node lands one level up,
+	 * where the rule above draws it closed — and nothing is stored to make it happen.
+	 */
+	it('links a shut row to its own level and an open row to the node above it', () => {
 		const { container } = showing(['checkout-app']);
 
-		const login = rows(container).find((row) => row.textContent === 'login-flow');
-		expect(login?.getAttribute('href')).toBe('/archive/checkout-app/login-flow');
+		const href = (name: string) =>
+			rows(container)
+				.find((row) => row.textContent === name)
+				?.getAttribute('href');
+		expect(href('login-flow')).toBe('/archive/checkout-app/login-flow');
+		// `checkout-app` is the selection and is open, so clicking it again is a click back to the
+		// archive root — the tree's own way of closing a project.
+		expect(href('checkout-app')).toBe('/archive');
+	});
+
+	/**
+	 * **The collapse is the same at every depth that has a level under it** (#175, AC 2). One
+	 * selection reaching a file six components deep draws an open row at every one of them — a
+	 * project, a test name, a run, a directory inside the run and a directory inside that — and each
+	 * of them goes to the node it is drawn under. The run's contents close onto the **run**, because
+	 * the `<serial>` is not a level of this tree and no row of it stands for that address.
+	 */
+	it('closes an open row onto the node it is drawn under, at every depth', () => {
+		const { container } = showing([...FRAMES, '0001.png']);
+
+		const href = (name: string) =>
+			rows(container)
+				.find((row) => row.textContent === name)
+				?.getAttribute('href');
+		const address = (components: readonly string[]) => `/archive/${components.join('/')}`;
+		expect(href('checkout-app')).toBe('/archive');
+		expect(href('login-flow')).toBe(address(['checkout-app']));
+		expect(href(RUN)).toBe(address(['checkout-app', 'login-flow']));
+		expect(href('recordings')).toBe(address(RUN_PATH));
+		expect(href('001_frames')).toBe(address([...SERIAL_LEVEL, 'recordings']));
+		// And a shut row at those same depths still goes to itself, so opening is untouched.
+		expect(href('payments-web')).toBe(address(['payments-web']));
+		expect(href(OLDER)).toBe(address(['checkout-app', 'login-flow', OLDER]));
+		expect(href('screenshots')).toBe(address([...SERIAL_LEVEL, 'screenshots']));
+	});
+
+	// A row that opens nothing gains nothing: the selected file is still a link to itself, so
+	// clicking it a second time is the no-op it has always been.
+	it('leaves a row that opens nothing linking to itself', () => {
+		const { container } = showing([...FRAMES, '0001.png']);
+
+		const leaf = rows(container).find((row) => row.textContent === '0001.png');
+		expect(leaf?.getAttribute('href')).toBe(`/archive/${[...FRAMES, '0001.png'].join('/')}`);
+		expect(leaf?.getAttribute('aria-expanded')).toBeNull();
 	});
 });
 
@@ -198,8 +263,12 @@ describe('what a row may carry', () => {
 	 * **No status icon of any kind** — Rover has no verdicts to report (`docs/DESIGN.md` §2), and
 	 * green ticks and red crosses beside runs in the tree are exactly what the superseded design got
 	 * wrong. The two icons a row may carry are a folder and, if it opens, a triangle.
+	 *
+	 * **And a row that opens nothing claims no state either** (#175, rewritten in place): the
+	 * triangle and `aria-expanded` come and go together, so the two never disagree about whether
+	 * there is anything to open.
 	 */
-	it('carries a glyph on every row and a triangle only where there is a level under it', () => {
+	it('carries a glyph and an expanded state only where there is a level under it', () => {
 		const { container } = showing(RUN_PATH);
 
 		for (const row of rows(container)) {
@@ -208,6 +277,7 @@ describe('what a row may carry', () => {
 			// its `<serial>`'s — except the two entries inside the run that open nothing.
 			const opens = !['device_info.json', 'latest_recording'].includes(row.textContent ?? '');
 			expect(icons).toHaveLength(opens ? 2 : 1);
+			expect(row.hasAttribute('aria-expanded')).toBe(opens);
 		}
 	});
 
@@ -302,6 +372,10 @@ describe('what a row may carry', () => {
 		expect(container.textContent).not.toContain(SERIAL);
 		expect(container.textContent).not.toContain('device_info.json');
 		expect(container.textContent).not.toContain('0 ');
+		// It gains nothing from #175 either: no state to claim, and clicking it is the selection it
+		// has always been rather than a collapse of a level that is not there.
+		expect(run?.getAttribute('aria-expanded')).toBeNull();
+		expect(run?.getAttribute('href')).toBe(`/archive/${RUN_PATH.join('/')}`);
 	});
 
 	// The tree's own quiet line, one level deeper: the run is expanded, and what is under it has not
@@ -675,6 +749,26 @@ describe('the hits a search draws', () => {
 
 		const hit = rows(container).find((row) => row.textContent === 'login.png');
 		expect(hit?.getAttribute('href')).toBe(`/archive/${DEEP.join('/')}`);
+	});
+
+	/*
+	 * **The searched tree does not collapse** (#175). Every node in it is an address the host
+	 * answered with and is drawn expanded by construction, so there is no node it is drawn *under* to
+	 * close onto — a hit goes to its own address whatever it is drawing beneath it. It still says it
+	 * is open, because it is.
+	 */
+	it('links an expanded hit to its own address all the same, and says it is open', () => {
+		const { container } = showing(['checkout-app'], archive(), hits());
+
+		const parent = rows(container).find((row) => row.textContent === 'screenshots');
+		expect(parent?.getAttribute('href')).toBe(`/archive/${DEEP.slice(0, 5).join('/')}`);
+		expect(parent?.getAttribute('aria-expanded')).toBe('true');
+		// And a hit with nothing under it claims no state, exactly as a browsing leaf does.
+		expect(
+			rows(container)
+				.find((row) => row.textContent === 'login.png')
+				?.getAttribute('aria-expanded'),
+		).toBeNull();
 	});
 
 	// A hit row is the browsing row, so it carries nothing §9 forbids: the card's heading, the
