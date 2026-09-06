@@ -64,6 +64,33 @@ describe('Sidebar', () => {
 		);
 	});
 
+	/*
+	 * **The Archive item stays current in the groups view** (#181). The Archive screen has two
+	 * arrangements of one archive on two route families, and the panel has one Archive destination
+	 * — a second nav item would say the opposite, and the screen's own toggle is already the way
+	 * between the two.
+	 */
+	it('keeps Archive current on the groups view’s own routes', () => {
+		renderSidebar('/groups/checkout-app/app-bar-top-space');
+
+		const active = screen.getByRole('link', { name: 'Archive' });
+		expect(active.className).toContain('border-tertiary');
+		expect(active.getAttribute('aria-current')).toBe('page');
+		// And still exactly one item is current — the widening marks no other destination.
+		expect(screen.getAllByRole('link').filter((one) => one.getAttribute('aria-current'))).toEqual([
+			active,
+		]);
+	});
+
+	// A destination is not current merely because its name is a prefix of the address.
+	it('does not make Archive current on an unrelated address that starts with the same text', () => {
+		renderSidebar('/groups-of-things');
+
+		expect(screen.getByRole('link', { name: 'Archive' }).className).not.toContain(
+			'border-tertiary',
+		);
+	});
+
 	it('pins Profile at the foot, below its own divider', () => {
 		const container = renderSidebar();
 

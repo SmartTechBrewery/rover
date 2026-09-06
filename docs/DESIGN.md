@@ -946,14 +946,14 @@ badge since #165, below. The content area is
 The breadcrumb, the describing line and the header row's shape are the same in all of them; the
 badge is the only thing in the header that comes and goes, and it **goes rather than reading `0`**.
 
-### The two views — settled here, not designed (#165)
+### The two views — settled here, not designed (#165, #181)
 
 The screen has **two views**, and everything else in §9 describes the first of them:
 
 | Segment | What it draws |
 | --- | --- |
 | `All` | the file explorer — the tree beside one card, at every depth. Unchanged in every particular |
-| `Testing groups` | a placeholder. Runs arranged by the `group_id` a lease named (`PROJECT.md` R41) is separate work; what landed here is that the arrangement is reachable and says it is not built |
+| `Testing groups` | the same archive arranged by the `group_id` a lease named (`PROJECT.md` R41): project, then the group id, then the standard arrangement under it. **Built** (#181), on the host's `list_archive_groups` (#178); the label badges inside it are a further phase |
 
 **No approved Stitch screen shows this control**, and none was commissioned for it (§1, §11's third
 list). So nothing about it is invented: the frame is the header badge's own — `rounded-sm border-2
@@ -966,36 +966,161 @@ header row, and §5 keeps the emphasis on the data. That is what keeps the devia
 reconcile in one edit once a design for it exists.
 
 **It is text and nothing else.** No glyph on either segment — neither arrangement has a symbol that
-says more than its name — and the two are `<button>`s in a `<fieldset>` named *Archive view*, with
-`aria-pressed` saying which one you are on, since the colour cannot. Buttons rather than links
-because the toggle changes what the screen *draws* and never where you are.
+says more than its name — and the two sit in a `<fieldset>` named *Archive view*.
 
-**The badge still comes and goes beside it, and is absent in the groups view** — the same rule that
-makes it absent at a run: a placeholder lists nothing, and `0` would describe a set. The toggle
-itself is always there, so the header row's shape is still the same in every state. The describing
-line becomes *Runs arranged by the testing group their lease named.*, which says what the view is
-for; the panel below is the `CalmNotice` every unbuilt destination in the panel uses (§7).
+**They are links, and that reverses #165's own sentence in place** (#181). They were `<button>`s
+carrying `aria-pressed`, *because the toggle changes what the screen draws and never where you are*
+— which was true exactly as long as the second arrangement had no addresses. It has them now, so the
+view **is** where you are: each segment is a `<Link>` to its view's root and `aria-current` says
+which one you are on, the same word the breadcrumb and the nav item already use. Each links to the
+**root** of its view and never to the address you are standing on translated into the other one: the
+two arrangements share no vocabulary below the project — one has a group id where the other has a
+test name — so *the same place in the other view* is a claim neither can make honestly.
 
-**The choice is not in the URL, and a change of address ends it.** Two things follow, and both were
-the point:
+**The badge still comes and goes beside it, and is absent throughout the groups view** — the same
+rule that makes it absent at a run, with its reason rewritten now that the view lists something
+(#181). That view is one **bounded** walk of the archive, so what it holds at any level is what the
+host could examine rather than what is filed; a badge over it would read as a count of a set and
+could be short without saying so. Where the shortfall matters it is said where the reader is looking
+at the rows it is short of — one line above them in the tree — and not as a number in the header
+that would need the same caveat beside it. The toggle itself is always there, so the header row's
+shape is still the same in every state.
 
-- The groups arrangement has **no addresses of its own yet**, so there is nothing about it to share
-  or to reload onto — a link to a placeholder is a link to nothing. Whoever builds the arrangement
-  settles that question with content in front of them. This is `archive-search.ts`'s call, for a
-  sharper reason.
-- **Any navigation lands back in the file explorer, and only the toggle ever leaves it.** The
-  breadcrumb still names where you are while the placeholder is up — the toggle moved nothing — so
-  its links have to work, and every address in the panel is an address of that explorer. A plain
-  flag would have left them navigating underneath a placeholder that never gave way, since
-  `/archive/$` serves every depth from one component and moving inside it remounts nothing. So the
-  screen remembers the address the view was chosen at and clears the view when it changes — a reset,
-  not a key. Keying the view *to* that address would have been symmetric, and the other half of that
-  symmetry is a bug: walking back in, by a tree row or the browser's Back, would have raised the
-  placeholder again with nobody having asked for it (#166 review).
+**And the choice is in the URL, which is the question #165 deliberately left open.** It recorded
+that the groups arrangement had *no addresses of its own yet … Whoever builds the arrangement
+settles that question with content in front of them*, and this is that. Two things follow, and both
+are the point:
 
-And **switching is a return, not a reload**: every hook stays mounted in either view, so `All` costs
-no request and lands on exactly the address it left. The groups view asks the host for nothing —
-no `group_id` is read and nothing is grouped.
+- **The selection is an address in either view**, which is what §9 asks of the `All` view's: a
+  reload lands where you were and a shared link lands on it. So the `viewChosenAt` / `setView`
+  machinery goes, and with it the rule that any navigation ended the second view — a reset that was
+  standing in for an address, and that a real one does not need.
+- **Switching views is a navigation, so it is no longer a return.** #165 recorded that every hook
+  stayed mounted and `All` therefore cost no request; the two views are two route families now, so
+  moving between them remounts the screen and its levels are read again. That is the price of the
+  address and it was worth paying: a view you cannot link to or reload onto is not a place.
+
+### The group-first arrangement — settled here, not designed (#181)
+
+**Settled in this document rather than by a Stitch round**, and which of the two was chosen is said
+out loud because §1 requires it: this is §11's third-list test. The row anatomy, the card, the
+shell, the split and the empty states are all already settled above, so a design round would
+re-derive what §9 fixes and would settle only the level vocabulary — which is a table, not a screen.
+The alternative was a commissioned screen; if anyone would still rather have one, the deliverable is
+a ready-to-paste prompt and never a generated screen (`ai/RULES.md` §8).
+
+The host method behind it is **`list_archive_groups`** (#178), the archive's third read: it takes no
+parameter and answers, from **one** bounded walk, which `(project, groupId)` pairs exist, which runs
+are in each as the components `list_archive` would name them, and which of a grouped run's artifacts
+carry a label. So the whole arrangement above a run is **one request**, and no level of it is
+listed.
+
+| depth | the level | a row is |
+| --- | --- | --- |
+| 0 | the root | a project that has at least one grouped run |
+| 1 | a project | a `groupId` a lease under it named |
+| 2 | a group | a test name a run in that group was filed under |
+| 3 | a test name in a group | a run, most recent first |
+| 4 | a run | not a tree level — hopped, never descended into, exactly as in the `All` view |
+| 5 and below | inside the run | **any entry**, whatever its `kind` — the `All` view's own levels |
+
+- **It is one tree component, one row anatomy and one card** (#160). `directory-tree.tsx` reads its
+  rows from a **source** (`panel/src/archive/tree-source.ts`) rather than from `ArchiveLevels`
+  directly: a source answers *the rows at this node*, *the level a row opens* and *the route a row's
+  address is on*, and nothing else about a tree is a view's to choose. Every rule above — what a row
+  may never carry, expansion derived from the selection, an open row going up to close (#175),
+  `aria-expanded`, the glyphs, `break-words` — is shared and unconditional. **A second tree
+  implementation is the failure mode**, and the source is what makes it unrepresentable rather than
+  merely avoided.
+- **Below the group the arrangement is the standard one and unchanged.** At and below a run's
+  `<serial>` the groups source delegates to the `All` source, so those rows are the same rows listed
+  by the same method at the same address; only the splat they link to differs.
+- **A run's `<serial>` comes off the answer rather than off a listing's `onlyChild`.** It is still
+  not a level of the tree and it is still in every address below the run; what differs is that this
+  view does not have to read the level above a run to learn it.
+- **The runs are most recent first, and one helper decides that for all four panes.**
+  `panel/src/archive/level-order.ts` reverses at the run level for the tree and for the card in
+  both views; `group-tree.ts` answers in the host's own order and holds no opinion about the
+  direction.
+- **The card beside the tree is the same card.** At the group-only depths it is `LevelContents` fed
+  from the answer, given the **archive's** depth rather than the address's, so a group's test names
+  carry `RUNS` exactly as a project's do and a group's runs carry `OWNER` / `GRANTED` exactly as a
+  test name's do. At the run and below it is exactly what it is in the `All` view.
+- **`RUNS` here counts the runs the answer holds** for that row. It is the one measure this view has
+  that costs no second request, and it is the same `childCount` column the `All` view draws.
+- **The tree card's search field is the `All` view's and is absent here.** `search_archive` answers
+  addresses of the archive, which this arrangement does not own, so a hit found from here would have
+  nowhere in it to land. Searching is the file explorer's question.
+- **A truncated answer says so, above the rows**, exactly as the searched tree says it: *More is
+  filed here than the host could examine. A group or a run may be missing.* `truncated` means one
+  thing — at least one directory that exists was not fully examined — and a partial arrangement must
+  not read like a complete one.
+- **No label badge is drawn in this phase.** The labels are on the wire and mirrored in
+  `archive-listing.ts`; the badges, their letters and their palette are a further phase.
+
+**The addresses.** Two more routes, `/groups` and `/groups/$`, served by the same screen component
+with `view` as a prop — so nothing here is a second screen. The splat is
+`<project>/<groupId>/<testName>/<run>/<serial>/<…>`, and every read below the group composes the
+archive's own path from it by **dropping the component at index 1**: the group id is not a
+directory. One helper knows that, `archiveAddressOf` in `panel/src/archive/archive-path.ts`, beside
+`componentsFromSplat` — so the `list_archive` levels inside a run, the run's two files and an open
+artifact's bytes all take the archive's one path vocabulary and no call site filters a group id out
+for itself.
+
+Two shapes were checked and rejected:
+
+- **`/archive/groups/$`** — a project literally named `groups` would be shadowed by it in the `All`
+  view. A component is opaque (D22), so that is a silent bug rather than an unlikely one.
+- **`?view=groups&group=<id>`** — two carriers of one piece of state, and the breadcrumb would have
+  to thread both.
+
+The sidebar's `Archive` item is current on `/groups` as well as on `/archive`, widened in place
+rather than by adding a nav item: the panel has **one** Archive destination and two arrangements of
+it, and the screen's own toggle is already the way between them.
+
+**The breadcrumb is the same trail with the group id in it**, on this view's own routes:
+`Archive > checkout-app > app-bar-top-space > home_a_variant > …`. Its first segment is still
+*Archive* and goes to the root of the view you are in, so a breadcrumb never moves a reader between
+the two arrangements — that is the toggle's job and it is the one control that does it.
+
+**What is deliberately absent, and why.**
+
+- **A run that named no group is not drawn**, and **a project with no grouped runs is not drawn
+  either.** This view answers *what groups exist*; the `All` view still lists every run, so nothing
+  becomes unreachable by being absent here. The root's describing line says *grouped* out loud —
+  *Projects with runs filed under a testing group on this host.* — because that is the one thing
+  about this view a reader could otherwise get wrong.
+- **There is no *ungrouped* bucket.** Inventing one would file a run under a name no lease chose,
+  which is exactly the claim D22 and #129 refuse.
+- **Nothing compares, diffs or scores anything** (`ai/RULES.md` §1). A group is a set of runs a
+  caller said belong together; what to make of them is the agent's judgement and not Rover's.
+
+**The three empty-handed answers stay three** (D6), and no two render alike:
+
+| The grouping walk's answer | What renders |
+| --- | --- |
+| nothing yet | one quiet line — *Reading the testing groups on this host's archive.* — `aria-live="polite"`, **no spinner** (§5) |
+| no group on this host, or nothing archived at all | `QuietPanel` — **No testing groups**, saying what would change it — `rover acquire --group-id`, in the monospace face §10's *no projects registered* already puts a command in — and that every run is still listed in the `All` view. No badge, **no tree card** |
+| the host could not read the archive | the same `ARCHIVE NOT READABLE` banner the `All` view draws, because it is the same fact about the same archive |
+
+*Nothing has ever been archived here* folds into *no testing groups*, which is `archive-levels.ts`'s
+own fold one level up: to a reader standing in this view there is no group either way, and what
+would change it is the same thing. `archive.test.tsx` asserts that no two of the three share a
+phrase, the way it already does for the `All` view's pair.
+
+**A walk that was cut short does not get the definitive sentence** (corrected in place, #189
+review). The middle row is one state with two claims in it, not two states: the host sets
+`truncated` when a directory that exists was not fully examined — a `group_id.json` that is not
+JSON, a subtree it could not read, a bound reached — and it can do that having recorded no group at
+all. *Nothing filed on this host has named a group* would then be a definitive negative about a
+walk that never finished, so the flag is carried on the empty answer (`archive-groups.ts`) and the
+panel changes the claim clause instead: **more is filed here than the host could examine, no group
+was named in the part it could, and a grouped run may be missing from this view.** The heading, the
+`rover acquire --group-id` instruction and the pointer at the `All` view are the same in both,
+because they are true in both; only the claim narrows. This is `Searched`'s rule in
+`directory-tree.tsx` applied one level up — the same screen already refuses to say *no name in the
+archive contains that text* about a search that was cut short — and it is why a truncated grouping
+answer is not a fourth empty-handed state.
 
 ### The tree — expansion is derived from the URL
 
@@ -1292,16 +1417,26 @@ makes and documents, for the same reason: what the screen has to decide is narro
 
 ### Routing, and no polling
 
-Two routes, `/archive` and `/archive/$`, one component, `useParams({ strict: false })`. Two rather
-than one optional splat because the splat route does not match `/archive`, which is the address the
-navigation points at. The components are joined with `/` and the router does the encoding — a
+**Four routes, two families, one component** (amended in place, #181): `/archive` and `/archive/$`
+for the file explorer, `/groups` and `/groups/$` for the group-first arrangement, all four
+`useParams({ strict: false })` and all four the same component with `view` as a prop. **Two per
+family because `to` is typed off the route tree** (corrected in place, #189 review): the splat route
+does match the bare address — against @tanstack/react-router 1.170.32, `/archive`, `/archive/`,
+`/groups` and `/groups/` all resolve to the `$` route with `_splat: ''`, and the bare route is never
+in `router.state.matches`, which `archive-path.test.tsx` now pins — but without the bare routes
+declared, `/archive` and `/groups` are not link targets the router's types admit, and `sidebar.tsx`
+and `view-toggle.tsx` cannot name the root of a family without a trailing `$` in a shared address.
+The bare routes are declarations for the type; the splat route is what renders. The components are
+joined with `/` and the router does the encoding — a
 directory name may legally carry a space, a `%` or a `#`, and `archive-path.test.tsx` proves the
-round trip against a **real** router rather than the mocked `Link` the screen tests use.
+round trip for **both** splats against a **real** router rather than the mocked `Link` the screen
+tests use.
 
 **There is no polling and no refresh control.** The archive is finished data: a run directory is
 written while a lease is live and nothing is added once it ends, and this screen makes no claim to
-show a run appearing. A level is fetched on navigation and cached for the life of the screen. This is
-the one place the panel's data differs from the Devices screen's, which polls because *what is
+show a run appearing. A level is fetched on navigation and cached for the life of the screen, and
+the grouping walk is fetched **once**, only in the view that reads it, on exactly those terms. This
+is the one place the panel's data differs from the Devices screen's, which polls because *what is
 attached* changes under the reader.
 
 **A path deeper than a run is no longer reachable only by typing it or by following a search hit**
@@ -1966,6 +2101,15 @@ top of this file). Do not commission a Stitch screen for them.
 - **The Archive screen's root level, and its three states with nothing to browse — done** (#132).
   The three levels had approved screens; the root level and the empty-ish states did not, and were
   built from this document as this list intends. What they settled is written into §9 above.
+- **The Archive screen's two views, and the group-first arrangement in the second — done** (#165,
+  #181). Neither had an approved screen and neither was commissioned one, and both belong here for
+  the same reason: by the time either was built, the row anatomy, the card, the shell, the split and
+  the empty states were all already settled in §9, so a design round would have re-derived what §9
+  fixes and settled only a level vocabulary — which is a table rather than a screen. What they
+  settled is written into §9 above: the toggle's frame and colours, the four routes and why the
+  view is an address, the group-first level table, what is deliberately absent from it, and its
+  three empty-handed answers. The label badges inside that view are the one part still to come, and
+  they are a palette and a letter — the third-list test applies to them too.
 - **The Archive preview's rules, and what it deliberately does not offer — done** (#133). They were
   settled here by #131, before there was a screen, and settling them at that point was deliberate:
   #131 is what made them decisions about the *host's answer* rather than about one panel's markup.

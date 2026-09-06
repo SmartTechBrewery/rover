@@ -1760,8 +1760,8 @@ looking complete, **including when it found nothing at all**: an unreadable subt
 case where the field would otherwise tell you a name is definitively not in the archive. The host
 answers a third method reading the same archive, `list_archive_groups` — which runs share a testing group
 and which of their artifacts share a label, as addresses in that same one path vocabulary, from
-another bounded walk with no index behind it either (R41) — and nothing in the panel draws it yet:
-the *Testing groups* view is still the explicit placeholder #165 put there. A run shows its own directory name in full, the owner and grant time read out of
+another bounded walk with no index behind it either (R41) — and the panel's *Testing groups* view is
+what draws it, below. A run shows its own directory name in full, the owner and grant time read out of
 that name, the serial of the one device the lease held, and everything the lease wrote with a size or
 a file count beside it. Nothing is added: no duration, no trigger, no verdict, and no file that was
 not in the listing — Rover reports what is on disk and judging it is the agent's job.
@@ -1777,12 +1777,18 @@ without one is an ordinary thing to find.
 
 **The screen carries two views, and everything above and below describes the first of them.** A
 text-only `All` / `Testing groups` toggle sits beside the header badge: `All` is the file explorer,
-unchanged at every depth, and `Testing groups` is the archive arranged by the group a lease named
-(`PROJECT.md` R41). That second view is **an explicit not-built-yet placeholder** — it reads no
-`group_id`, asks the host for nothing and groups nothing; the arrangement itself is the work after
-this. The badge is absent there for the reason it is absent at a run: a placeholder lists nothing.
-The choice is not in the URL, and **any navigation lands back in the file explorer** — the
-breadcrumb still names where you are while the placeholder is up, so only the toggle ever leaves it.
+unchanged at every depth, and `Testing groups` is the same archive arranged by the group a lease
+named (`PROJECT.md` R41) — project, then the group id, then the standard arrangement under it: test
+name, run, and the run's contents to any depth. It is drawn from **one** `list_archive_groups`
+answer, in the same tree with the same rows and the same card beside it; only the levels differ.
+**A run that named no group is not drawn, and neither is a project with none** — this view answers
+*what groups exist*, and the `All` view still lists every run, so nothing becomes unreachable. The
+badge is absent there for the reason it is absent at a run: the walk behind it is bounded, so a
+count over it would read as a count of a set and could be short without saying so; where it *was*
+short the tree says so, above the rows. **Each view has addresses of its own** — `/archive…` and
+`/groups…` — so the toggle's segments are links, a reload lands in the view you were in, and a
+shared link lands on the selection inside it. The label badges for artifacts that share a label are
+the one part of this still to come.
 
 **In the `All` view there is one arrangement at every depth: the tree, then one card.** What the parent listing says
 the selected address is decides what that card draws, and nothing about it decides whether the tree

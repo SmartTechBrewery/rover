@@ -94,15 +94,21 @@ Design work lives in [`DESIGN.md`](./DESIGN.md); the brief that produced the fir
    still **no index**: the answer is a bounded walk of the files at request time, and a truncated one
    says so rather than looking complete. The text is component state and deliberately not in the
    URL, so a shared link still lands on the *address*; selecting a hit navigates there and the screen
-   carries on exactly as it does when you browse to it. **And the screen now has two views** (#165):
-   a text-only `All` / `Testing groups` toggle beside the header badge, where `All` is everything
-   above, unchanged, and `Testing groups` — runs arranged by the `group_id` a lease named
-   (`PROJECT.md` R41) — is an explicit *not built yet*. It reads no `group_id` and groups nothing;
-   the arrangement itself is the work after this, and `docs/DESIGN.md` §9 records what the toggle
-   settled. **The host half of that arrangement has since landed** (#178): `list_archive_groups`
-   answers which groups exist, which runs are in each, and which of a grouped run's artifacts carry
-   a label — every run and artifact as an address this screen already accepts, so the view has no
-   path to compose and no name to parse. What is left here is drawing it.
+   carries on exactly as it does when you browse to it. **And the screen has two views** (#165, filled
+   in by #181): a text-only `All` / `Testing groups` toggle beside the header badge, where `All` is
+   everything above, unchanged, and `Testing groups` is the same archive arranged by the `group_id`
+   a lease named (`PROJECT.md` R41) — project, then the group id, then the standard arrangement
+   under it: test name, run, and the run's contents to any depth. The host half landed first as
+   **`list_archive_groups`** (#178), which answers from one bounded walk which groups exist, which
+   runs are in each and which of a grouped run's artifacts carry a label — every run and artifact as
+   an address this screen already accepts, so the view composes no path and parses no name. The
+   panel half (#181) draws it in the **same tree component, with the same row anatomy and the same
+   card beside it**, on addresses of its own — `/groups` and `/groups/$` — so the view is somewhere
+   a reload and a shared link land, which is the question #165 deliberately left open. A run that
+   named no group is not drawn and neither is a project with none: this view answers *what groups
+   exist*, and the `All` view still lists every run. **What is left is the label badges** and their
+   palette. `docs/DESIGN.md` §9 records all of it, including which of *design it* and *settle it
+   here* was chosen and why.
    `docs/DESIGN.md` §9 records what it settled, including the cost that shapes it — an authenticated
    byte route cannot be an `<img src>`, so the panel fetches the bytes with the session header and
    renders an object URL, and the whole artifact is therefore buffered in the tab.

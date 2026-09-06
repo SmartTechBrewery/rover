@@ -28,6 +28,7 @@ vi.mock('@tanstack/react-router', () => ({
 	),
 }));
 
+import { allRowSource } from '@panel/archive/tree-source.js';
 import { DirectoryTree } from './directory-tree.js';
 
 function directory(
@@ -123,7 +124,12 @@ function showing(
 	levels: ArchiveLevels = archive(),
 	search: ArchiveSearch = searching(NOT_SEARCHING),
 ) {
-	return render(<DirectoryTree levels={levels} search={search} selected={selected} />);
+	// The `All` view's source, which is what every case below browses (#181). The groups view's is
+	// the same component over a second source, and is asserted through the screen in
+	// `routes/archive.test.tsx`.
+	return render(
+		<DirectoryTree search={search} selected={selected} source={allRowSource(levels)} />,
+	);
 }
 
 function rows(container: HTMLElement): readonly HTMLElement[] {

@@ -19,7 +19,22 @@ export function orderedEntries(
 	entries: readonly ArchiveEntry[],
 	depth: number,
 ): readonly ArchiveEntry[] {
-	return depth === RUN_LEVEL_DEPTH ? [...entries].reverse() : entries;
+	return depth === RUN_LEVEL_DEPTH ? mostRecentFirst(entries) : entries;
+}
+
+/**
+ * The host's own order, reversed — **the whole of *most recent first*, in one place** (#181).
+ *
+ * The `All` view reaches it through {@link orderedEntries}, which knows the one depth a level is
+ * runs at; the groups view reaches it directly, because *which level is runs* is a different
+ * question there and the answer it arranges is not a listing at all. What must not differ between
+ * the two is what *most recent first* means, and that is this function.
+ *
+ * Generic over what it is ordering for exactly that reason: the two callers hold different things,
+ * and neither of them may re-decide the direction.
+ */
+export function mostRecentFirst<Entry>(entries: readonly Entry[]): readonly Entry[] {
+	return [...entries].reverse();
 }
 
 /**

@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import type { AnchorHTMLAttributes, ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -63,6 +63,14 @@ const { host, HANGS } = vi.hoisted(() => ({
 		searches: [] as unknown[],
 		/** What the host answers a search with. */
 		search: { outcome: 'searched', matches: [], truncated: false } as unknown,
+		/**
+		 * How many times `list_archive_groups` was asked (#181) — counted rather than logged,
+		 * because it takes no parameter and what is worth asserting is *once, and only in the view
+		 * that reads it*.
+		 */
+		groupings: 0,
+		/** What the host answers the grouping walk with. */
+		groups: { outcome: 'listed', groups: [], truncated: false } as unknown,
 		/** Accepts every request and never answers it — the state before the first answer. */
 		hangs: false,
 	},
@@ -90,16 +98,33 @@ vi.mock('@panel/session/session-provider.js', () => {
 		}
 		return { ok: true, value: { type: 'result', result: host.search } };
 	};
+	/** The one grouping walk, counted apart for the same reason (#181). */
+	const grouping = async () => {
+		host.groupings += 1;
+		if (host.hangs || host.groups === HANGS) {
+			return await new Promise(() => undefined);
+		}
+		return { ok: true, value: { type: 'result', result: host.groups } };
+	};
 
 	return {
 		useSession: () => ({
 			/*
-			 * Two methods now (#146), so this reads `method` rather than assuming a listing: the tree
-			 * card's field asks `search_archive`, and *searching issues no extra `list_archive`* is
-			 * assertable only because the two are logged apart.
+			 * Three methods now (#146, #181), so this reads `method` rather than assuming a listing:
+			 * the tree card's field asks `search_archive` and the groups view asks
+			 * `list_archive_groups`. *Searching issues no extra `list_archive`*, and *the groups
+			 * view lists nothing above a run*, are assertable only because the three are logged
+			 * apart.
 			 */
-			call: async (method: string, params: { path: readonly string[]; text?: string }) =>
-				method === 'search_archive' ? await search(params.text) : await listing(params.path),
+			call: async (method: string, params: { path: readonly string[]; text?: string }) => {
+				if (method === 'search_archive') {
+					return await search(params.text);
+				}
+				if (method === 'list_archive_groups') {
+					return await grouping();
+				}
+				return await listing(params.path);
+			},
 			readArtifactText: async (path: readonly string[]) => {
 				host.files.push(path);
 				if (host.hangs) {
@@ -154,13 +179,63 @@ function archive(): Record<string, unknown> {
 async function showing(splat: string | undefined, levels: Record<string, unknown> = archive()) {
 	at.splat = splat;
 	host.answers = new Map(Object.entries(levels));
-	const rendered = render(<ArchiveScreen />);
+	const rendered = render(<ArchiveScreen view="all" />);
 	// The levels settle over as many microtask turns as there are levels to fetch, because each is
 	// asked for only once the one above it has answered.
 	for (let turn = 0; turn < 6; turn += 1) {
 		await act(async () => undefined);
 	}
 	return rendered;
+}
+
+/** The testing group the archive above is arranged by, and a second one under the same project. */
+const GROUP = 'app-bar-top-space';
+const OTHER_GROUP = 'basket-total';
+const SERIAL = 'R5CT30ABCDE';
+
+function groupRun(testName: string, run: string, serial = SERIAL) {
+	return { path: ['checkout-app', testName, run, serial], artifacts: [] };
+}
+
+/**
+ * The grouping answer the cases below arrange — **over exactly the archive above**, so what is in
+ * one view and not the other is a fact about the same host rather than about two fixtures.
+ *
+ * `payments-web` has no grouped run and `unlabeled` names no group, so neither may be drawn here;
+ * both are still in the `All` view, which is what makes their absence an arrangement rather than a
+ * disappearance.
+ */
+function groupings(): unknown {
+	return {
+		outcome: 'listed',
+		truncated: false,
+		groups: [
+			{
+				project: 'checkout-app',
+				groupId: GROUP,
+				// The host's own ascending order, oldest first — reversed by whoever draws it.
+				runs: [groupRun('login-flow', OLDER, 'emulator-5554'), groupRun('login-flow', RUN)],
+			},
+			{ project: 'checkout-app', groupId: OTHER_GROUP, runs: [groupRun('basket', RUN)] },
+		],
+	};
+}
+
+/** The same, in the groups view — one splat on `/groups/$`, and one grouping answer. */
+async function grouped(splat: string | undefined, levels: Record<string, unknown> = archive()) {
+	at.splat = splat;
+	host.answers = new Map(Object.entries(levels));
+	const rendered = render(<ArchiveScreen view="groups" />);
+	for (let turn = 0; turn < 6; turn += 1) {
+		await act(async () => undefined);
+	}
+	return rendered;
+}
+
+/** The tree card's rows, in the order they are drawn — the one pane a level's arrangement is in. */
+function treeRows(): readonly (string | null)[] {
+	const tree = document.querySelector('aside');
+	return [...(tree?.querySelectorAll('a') ?? [])].map((row) => row.textContent);
 }
 
 /**
@@ -201,6 +276,8 @@ beforeEach(() => {
 	host.artifacts = [];
 	host.searches = [];
 	host.search = { outcome: 'searched', matches: [], truncated: false };
+	host.groupings = 0;
+	host.groups = groupings();
 	host.file = { outcome: 'missing' };
 	host.fileByName = {};
 	host.artifact = { outcome: 'missing' };
@@ -525,7 +602,7 @@ describe('before the host has answered', () => {
 	it('says it is reading, in one line and with no spinner', () => {
 		at.splat = undefined;
 		host.hangs = true;
-		const { container } = render(<ArchiveScreen />);
+		const { container } = render(<ArchiveScreen view="all" />);
 
 		expect(screen.getByText("Reading the host's artifact archive.")).toBeDefined();
 		expect(container.innerHTML).not.toContain('animate');
@@ -903,7 +980,7 @@ describe('an artifact open inside a run', () => {
 		at.splat = AT_THE_FILE;
 		host.answers = new Map(Object.entries(withScreenshots()));
 
-		const { container } = render(<ArchiveScreen />);
+		const { container } = render(<ArchiveScreen view="all" />);
 		expect(screen.getByText('DIRECTORY')).toBeDefined();
 		expect(container.querySelectorAll('div.xl\\:flex-row > section')).toHaveLength(1);
 		expect(screen.getByText('Reading this address.')).toBeDefined();
@@ -931,7 +1008,7 @@ describe('an artifact open inside a run', () => {
 		at.splat = SCREENSHOTS.join('/');
 		host.answers = new Map(Object.entries(withScreenshots()));
 
-		const { container } = render(<ArchiveScreen />);
+		const { container } = render(<ArchiveScreen view="all" />);
 		expect(screen.getByText('DIRECTORY')).toBeDefined();
 		const columns = container.querySelector('div.xl\\:flex-row');
 		expect(columns?.children).toHaveLength(2);
@@ -970,7 +1047,7 @@ describe('an artifact open inside a run', () => {
 		host.answers = new Map(Object.entries(withScreenshots()));
 		at.splat = `checkout-app/login-flow/${RUN}`;
 
-		const { rerender } = render(<ArchiveScreen />);
+		const { rerender } = render(<ArchiveScreen view="all" />);
 		for (let turn = 0; turn < 6; turn += 1) {
 			await act(async () => undefined);
 		}
@@ -978,7 +1055,7 @@ describe('an artifact open inside a run', () => {
 		const readSoFar = host.asked.length;
 
 		at.splat = AT_THE_FILE;
-		rerender(<ArchiveScreen />);
+		rerender(<ArchiveScreen view="all" />);
 		for (let turn = 0; turn < 6; turn += 1) {
 			await act(async () => undefined);
 		}
@@ -1188,7 +1265,7 @@ describe('searching the archive from the tree card', () => {
 			listed({ kind: 'file', name: 'a.png', sizeBytes: 4 }),
 		);
 		await act(async () => {
-			rerender(<ArchiveScreen />);
+			rerender(<ArchiveScreen view="all" />);
 		});
 		for (let turn = 0; turn < 6; turn += 1) {
 			await act(async () => undefined);
@@ -1209,136 +1286,330 @@ describe('searching the archive from the tree card', () => {
 });
 
 /**
- * The screen's two views (#165). *All* is everything above; *Testing groups* is a placeholder, and
- * what is settled here is that it is reachable, that it says it is not built, and that reaching it
- * costs the host nothing.
+ * The screen's two views (#165, given addresses of their own by #181).
+ *
+ * The toggle's segments are **links** now: the view is where you are, so a reload and a shared link
+ * land on it, and the reset machinery an address was standing in for is gone.
  */
-describe('the two views', () => {
+describe('the view toggle', () => {
 	function toggle() {
 		return screen.getByRole('group', { name: 'Archive view' });
 	}
 
 	function segment(label: string) {
-		return screen.getByRole('button', { name: label });
+		return screen.getByRole('link', { name: label });
 	}
 
 	it('offers both, in text, with no icon on either', async () => {
 		await showing(undefined);
 
-		expect([...toggle().querySelectorAll('button')].map((one) => one.textContent)).toEqual([
+		expect([...toggle().querySelectorAll('a')].map((one) => one.textContent)).toEqual([
 			'All',
 			'Testing groups',
 		]);
 		expect(toggle().querySelectorAll('svg')).toHaveLength(0);
 	});
 
-	it('starts on All, which is the screen as it was', async () => {
+	// `aria-current` rather than `aria-pressed`, because this is where you are and not a control
+	// you last pressed — the same word the breadcrumb and the nav item already use.
+	it('says you are in the file explorer', async () => {
 		await showing(undefined);
 
-		expect(segment('All').getAttribute('aria-pressed')).toBe('true');
-		expect(segment('Testing groups').getAttribute('aria-pressed')).toBe('false');
-		expect(screen.getByText('DIRECTORY')).toBeDefined();
-		expect(screen.getByText('2 projects archived')).toBeDefined();
+		expect(segment('All').getAttribute('aria-current')).toBe('page');
+		expect(segment('Testing groups').getAttribute('aria-current')).toBeNull();
 	});
 
-	it('says the testing groups view is not built yet, and shows nothing of the tree', async () => {
-		await showing(undefined);
+	it('says you are in the groups view', async () => {
+		await grouped(undefined);
 
-		fireEvent.click(segment('Testing groups'));
-
-		expect(segment('Testing groups').getAttribute('aria-pressed')).toBe('true');
-		expect(screen.getByText('Not built yet')).toBeDefined();
-		expect(screen.getByText(/named the same testing group will be arranged here/)).toBeDefined();
-		expect(screen.getByText('Runs arranged by the testing group their lease named.')).toBeDefined();
-		expect(screen.queryByText('DIRECTORY')).toBeNull();
-		// The badge counts what is listed, and a placeholder lists nothing — absent, never `0`.
-		expect(screen.queryByText('2 projects archived')).toBeNull();
+		expect(segment('Testing groups').getAttribute('aria-current')).toBe('page');
+		expect(segment('All').getAttribute('aria-current')).toBeNull();
 	});
 
-	// No grouping logic, no new host call, no new data read: the view draws one panel and asks for
-	// nothing. The reads already made are the ones the All view made before the toggle was touched.
-	it('asks the host for nothing at all when it is selected', async () => {
-		await showing('checkout-app/login-flow');
-		const asked = [...host.asked];
+	/*
+	 * Each segment points at its view's **root**, from any depth. The two arrangements share no
+	 * vocabulary below the project — one has a group id where the other has a test name — so *the
+	 * same place in the other view* is a claim neither can make honestly.
+	 */
+	it('links to each view’s own root, from a deep address', async () => {
+		await showing(`checkout-app/login-flow/${RUN}`);
 
-		fireEvent.click(segment('Testing groups'));
+		expect(segment('All').getAttribute('href')).toBe('/archive');
+		expect(segment('Testing groups').getAttribute('href')).toBe('/groups');
+	});
+});
 
-		expect(host.asked).toEqual(asked);
-		expect(host.files).toEqual([]);
+/**
+ * **The group-first arrangement of the same archive** (#181, `PROJECT.md` R41): project, then the
+ * `groupId`, then the standard arrangement under it — test name, run, and the run's contents to any
+ * depth.
+ */
+describe('the testing groups view', () => {
+	it('describes itself and lists the projects that have groups, and no others', async () => {
+		await grouped(undefined);
+
+		expect(
+			screen.getByText('Projects with runs filed under a testing group on this host.'),
+		).toBeDefined();
+		expect(treeRows()).toEqual(['checkout-app']);
+		// `payments-web` is in the archive and has no grouped run, so it is not in this arrangement.
+		expect(document.body.textContent).not.toContain('payments-web');
+	});
+
+	it('puts the group id below the project', async () => {
+		await grouped('checkout-app');
+
+		expect(screen.getByText('Testing groups the leases under this project named.')).toBeDefined();
+		expect(treeRows()).toEqual(['checkout-app', GROUP, OTHER_GROUP]);
+	});
+
+	it('puts the standard arrangement below the group — test name, then run', async () => {
+		await grouped(`checkout-app/${GROUP}`);
+
+		expect(screen.getByText('Tests recorded under this testing group.')).toBeDefined();
+		expect(treeRows()).toEqual(['checkout-app', GROUP, 'login-flow', OTHER_GROUP]);
+	});
+
+	/*
+	 * **Most recent first, exactly as the `All` view lists the same run directories** — the answer
+	 * arrives in the host's ascending order and one helper decides the direction for both panes and
+	 * both views (`panel/src/archive/level-order.ts`).
+	 */
+	it('lists a group’s runs most recent first, in the tree and in the card alike', async () => {
+		const { container } = await grouped(`checkout-app/${GROUP}/login-flow`);
+
+		expect(
+			screen.getByText('Runs filed under this test name in this group, most recent first.'),
+		).toBeDefined();
+		expect(treeRows()).toEqual(['checkout-app', GROUP, 'login-flow', RUN, OLDER, OTHER_GROUP]);
+		// And the card beside it lists the same two in the same order — the run names, which lead
+		// with a UTC basic-format timestamp, and not the `GRANTED` field reformatted out of them.
+		const card = besideTheTree(container);
+		expect(card.getAllByText(/^2026\d{4}T/).map((row) => row.textContent)).toEqual([RUN, OLDER]);
+	});
+
+	// A run that named no group is not drawn: this view is *what groups exist*. `unlabeled` holds a
+	// run in the archive and named none, and the `All` view still lists it.
+	it('draws no run that named no group', async () => {
+		await grouped('checkout-app');
+
+		expect(document.body.textContent).not.toContain('unlabeled');
+	});
+
+	/*
+	 * **The whole arrangement above a run is one request.** No level is listed for it, because the
+	 * grouping answer holds the projects, the group ids, the test names and the runs together.
+	 */
+	it('asks the grouping walk once and lists no level above a run', async () => {
+		await grouped(`checkout-app/${GROUP}/login-flow`);
+
+		expect(host.groupings).toBe(1);
+		expect(host.asked).toEqual([]);
 		expect(host.searches).toEqual([]);
 	});
 
-	// Switching is not a navigation, so All is a return: the same address, and no request to get
-	// back to it.
-	it('returns to exactly the address it left, without re-reading it', async () => {
-		await showing(`checkout-app/login-flow/${RUN}`);
-		const asked = [...host.asked];
+	// And the `All` view never pays for it — the reader who does not open this view spends no walk.
+	it('is not walked at all by the All view', async () => {
+		await showing('checkout-app/login-flow');
 
-		fireEvent.click(segment('Testing groups'));
-		fireEvent.click(segment('All'));
+		expect(host.groupings).toBe(0);
+	});
 
-		expect(host.asked).toEqual(asked);
-		expect(screen.getByText('R5CT30ABCDE')).toBeDefined();
-		expect(document.querySelector('nav[aria-label="Breadcrumb"]')?.textContent).toContain(
+	/*
+	 * **At and below the run it is the `All` view's own levels**, at the archive's own address —
+	 * the group id is not a directory, and one helper drops it (`archiveAddressOf`).
+	 */
+	it('opens a run at the archive’s own address, with the serial off the answer', async () => {
+		const { container } = await grouped(`checkout-app/${GROUP}/login-flow/${RUN}`);
+
+		expect(host.asked).toEqual([['checkout-app', 'login-flow', RUN, SERIAL]]);
+		expect(
+			screen.getByText('Everything this lease wrote; nothing is added once it ends.'),
+		).toBeDefined();
+		expect(besideTheTree(container).getByText(SERIAL)).toBeDefined();
+		// The run's own contents hang under its node, exactly as they do in the `All` view — the
+		// `<serial>` is hopped rather than drawn, here off the answer rather than off `onlyChild`.
+		expect(treeRows()).toEqual([
+			'checkout-app',
+			GROUP,
 			'login-flow',
+			RUN,
+			'device_info.json',
+			'screenshots',
+			OLDER,
+			OTHER_GROUP,
+		]);
+	});
+
+	/*
+	 * **The selection is an address**: a reload and a shared link land on it. Rendering straight at
+	 * a deep splat — which is what a reload is — draws that level with the tree expanded to it, and
+	 * every row of that tree is a `/groups/…` address.
+	 */
+	it('lands on a deep selection straight from the address, on its own routes', async () => {
+		await grouped(`checkout-app/${GROUP}/login-flow/${RUN}/${SERIAL}/screenshots`);
+
+		expect(screen.getByText('Everything filed under this directory.')).toBeDefined();
+		expect(treeRows()).toEqual([
+			'checkout-app',
+			GROUP,
+			'login-flow',
+			RUN,
+			'device_info.json',
+			'screenshots',
+			OLDER,
+			OTHER_GROUP,
+		]);
+		// **Every row of this tree is an address of this view**, never of the file explorer: the
+		// two arrangements are two route families and a row may not leave the one it is drawn in.
+		const tree = document.querySelector('aside');
+		for (const row of tree?.querySelectorAll('a') ?? []) {
+			expect(row.getAttribute('href')).toMatch(/^\/groups(\/|$)/);
+		}
+		// The open folder's own row goes one level up, which is how clicking it a second time
+		// closes it (#175) — and that address is a `/groups` one too.
+		expect(screen.getByRole('link', { name: 'screenshots' }).getAttribute('href')).toBe(
+			`/groups/checkout-app/${GROUP}/login-flow/${RUN}`,
 		);
+		expect(document.querySelector('nav[aria-label="Breadcrumb"]')?.textContent).toContain(GROUP);
 	});
 
-	// The breadcrumb still names where you are while the placeholder is up, so its links have to
-	// work — and every address in the panel is an address of the file explorer.
-	it('lands back in the tree at any other address', async () => {
-		const { rerender } = await showing('checkout-app/login-flow');
+	// The field searches the archive's own addresses, which this arrangement does not own — so it
+	// is the `All` view's and is absent here (#181).
+	it('draws no search field', async () => {
+		await grouped(undefined);
 
-		fireEvent.click(segment('Testing groups'));
-		expect(screen.getByText('Not built yet')).toBeDefined();
-
-		at.splat = 'checkout-app';
-		rerender(<ArchiveScreen />);
-
-		expect(screen.queryByText('Not built yet')).toBeNull();
-		expect(segment('All').getAttribute('aria-pressed')).toBe('true');
 		expect(screen.getByText('DIRECTORY')).toBeDefined();
+		expect(screen.queryByLabelText('Search the whole archive')).toBeNull();
 	});
 
-	// The navigation *ended* the groups view; it did not park it at that address. Walking back in —
-	// a tree row, a breadcrumb segment, the browser's Back — is a navigation like any other, and
-	// only the toggle ever puts the placeholder back up (#166 review).
-	it('does not come back when you return to the address it was chosen at', async () => {
-		const { rerender } = await showing('checkout-app');
+	/*
+	 * **No badge, at any depth.** This view is one bounded walk, so a count over it would read as a
+	 * count of a set and could be short without saying so — the same rule that makes the badge
+	 * absent at a run rather than an exception to it.
+	 */
+	it('shows no badge at the root, where the All view shows one', async () => {
+		const { container } = await grouped(undefined);
 
-		fireEvent.click(segment('Testing groups'));
-		expect(screen.getByText('Not built yet')).toBeDefined();
+		expect(container.textContent).not.toContain('archived');
+	});
 
+	it('shows no badge at a project either', async () => {
+		const { container } = await grouped('checkout-app');
+
+		expect(container.textContent).not.toContain('archived');
+	});
+
+	// A partial arrangement must not read like a complete one — said above the rows, as the
+	// searched tree says it.
+	it('says nothing about truncation when the walk was complete', async () => {
+		await grouped(undefined);
+
+		expect(screen.queryByText(/could examine/)).toBeNull();
+	});
+
+	it('says so when the walk was cut short', async () => {
+		host.groups = { ...(groupings() as object), truncated: true };
+		await grouped(undefined);
+
+		expect(screen.getByText(/More is filed here than the host could examine/)).toBeDefined();
+	});
+});
+
+/**
+ * The three empty-handed answers of this view, and **no two of them render alike** (D6) — the same
+ * rule §9 already holds the `All` view's three to.
+ */
+describe('the testing groups view with nothing to arrange', () => {
+	it('says it is reading, in one line and with no spinner', () => {
 		at.splat = undefined;
-		rerender(<ArchiveScreen />);
-		expect(screen.getByText('DIRECTORY')).toBeDefined();
+		host.hangs = true;
+		const { container } = render(<ArchiveScreen view="groups" />);
 
-		at.splat = 'checkout-app';
-		rerender(<ArchiveScreen />);
-
-		expect(screen.queryByText('Not built yet')).toBeNull();
-		expect(screen.getByText('DIRECTORY')).toBeDefined();
-		expect(segment('All').getAttribute('aria-pressed')).toBe('true');
+		expect(screen.getByText("Reading the testing groups on this host's archive.")).toBeDefined();
+		expect(container.innerHTML).not.toContain('animate');
+		expect(screen.queryByText('DIRECTORY')).toBeNull();
 	});
 
-	// The same case at the root, where it is worst: the placeholder takes the whole content area,
-	// so there would be no tree left to navigate out with.
-	it('does not come back at the root either', async () => {
-		const { rerender } = await showing(undefined);
+	it('says no lease has named a group, and shows no tree beside it', async () => {
+		host.groups = { outcome: 'listed', groups: [], truncated: false };
+		const { container } = await grouped(undefined);
 
-		fireEvent.click(segment('Testing groups'));
-		expect(screen.getByText('Not built yet')).toBeDefined();
+		expect(screen.getByText('No testing groups')).toBeDefined();
+		expect(screen.queryByText('DIRECTORY')).toBeNull();
+		expect(container.textContent).not.toContain('Nothing in the archive');
+		expect(container.textContent).not.toContain('ARCHIVE NOT READABLE');
+	});
 
-		at.splat = 'checkout-app';
-		// Walking in asks for that project's own listing, so let it answer before walking back out.
-		await act(async () => {
-			rerender(<ArchiveScreen />);
-		});
-		at.splat = undefined;
-		rerender(<ArchiveScreen />);
+	/*
+	 * **A walk that was cut short must not be reported as a definitive negative** (#189 review).
+	 * The host sets `truncated` having recorded no group at all whenever a `group_id.json` is not
+	 * JSON, a subtree cannot be read, or a bound is reached — so *nothing filed on this host has
+	 * named a group* would be a claim about an archive nobody finished examining. The same
+	 * distinction the searched tree already draws, one level up.
+	 */
+	it('does not claim nothing named a group when the walk was cut short', async () => {
+		host.groups = { outcome: 'listed', groups: [], truncated: true };
+		const { container } = await grouped(undefined);
 
-		expect(screen.queryByText('Not built yet')).toBeNull();
+		expect(screen.getByText('No testing groups')).toBeDefined();
+		expect(container.textContent).not.toContain('Nothing filed on this host has named a group');
+		expect(container.textContent).toContain('More is filed here than the host could examine');
+		expect(container.textContent).toContain('A grouped run may be missing from this view');
+	});
+
+	// D6, extended to the pair inside this state: the two claims may never render alike, and neither
+	// may borrow a sentence from the `All` view's empty hand or from the unreadable banner.
+	it('keeps the cut-short answer apart from the complete one, and from the other two', async () => {
+		host.groups = { outcome: 'listed', groups: [], truncated: false };
+		const complete = (await grouped(undefined)).container.textContent ?? '';
+		cleanup();
+		host.groups = { outcome: 'listed', groups: [], truncated: true };
+		const short = (await grouped(undefined)).container.textContent ?? '';
+
+		expect(complete).toContain('Nothing filed on this host has named a group');
+		expect(short).not.toContain('Nothing filed on this host has named a group');
+		expect(complete).not.toContain('More is filed here than the host could examine');
+		for (const text of [complete, short]) {
+			expect(text).not.toContain('Nothing in the archive');
+			expect(text).not.toContain('ARCHIVE NOT READABLE');
+		}
+	});
+
+	// Nothing ever archived here is *no groups here* to a reader standing in this view: there is no
+	// group either way, and what would change it is the same thing.
+	it('says the same for a host that has never archived anything', async () => {
+		host.groups = { outcome: 'missing' };
+		await grouped(undefined);
+
+		expect(screen.getByText('No testing groups')).toBeDefined();
+	});
+
+	it('keeps an archive it cannot read apart from one with no groups in it', async () => {
+		host.groups = { outcome: 'unreadable' };
+		const { container } = await grouped(undefined);
+
+		expect(screen.getByText('ARCHIVE NOT READABLE')).toBeDefined();
+		expect(container.textContent).not.toContain('No testing groups');
+		expect(screen.queryByText('DIRECTORY')).toBeNull();
+	});
+
+	/*
+	 * **A deep address does not wait on the walk.** Below the `<serial>` every component of the
+	 * archive address is in the URL already, so the tree draws and the card fills in — the same
+	 * rule that keeps a deep `All` address off the root gate.
+	 */
+	it('browses a deep address while the walk is still out', async () => {
+		at.splat = `checkout-app/${GROUP}/login-flow/${RUN}/${SERIAL}/screenshots`;
+		host.answers = new Map(Object.entries(archive()));
+		host.groups = HANGS;
+		render(<ArchiveScreen view="groups" />);
+		for (let turn = 0; turn < 6; turn += 1) {
+			await act(async () => undefined);
+		}
+
 		expect(screen.getByText('DIRECTORY')).toBeDefined();
-		expect(screen.getByText('2 projects archived')).toBeDefined();
+		expect(screen.queryByText('No testing groups')).toBeNull();
+		expect(host.asked).toContainEqual(['checkout-app', 'login-flow', RUN, SERIAL]);
 	});
 });

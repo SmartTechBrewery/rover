@@ -10,6 +10,7 @@ import {
 import { render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import {
+	archiveAddressOf,
 	componentsFromSplat,
 	keyOf,
 	levelsOf,
@@ -43,6 +44,30 @@ describe('the components a splat names', () => {
 
 		expect(deep).toHaveLength(MAX_ARCHIVE_PATH_DEPTH);
 		expect(deep).toEqual(['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h']);
+	});
+
+	/*
+	 * **The cap is a bound on the *archive* path, so a view that puts a component in front of it
+	 * gets that component back** (#189 review). A groups splat carries the `groupId`, which
+	 * `archiveAddressOf` drops *after* this runs — capping at eight regardless would hand the
+	 * screen the parent of the row that was clicked at the deepest addresses the tree can build.
+	 */
+	it('adds the view’s own offset to the cap, so both views reach the same archive depth', () => {
+		const nine = 'checkout-app/group-1/login-flow/run-1/R5CT30ABCDE/f/g/h/i';
+		const groups = componentsFromSplat(nine, 1);
+
+		expect(groups).toHaveLength(MAX_ARCHIVE_PATH_DEPTH + 1);
+		expect(archiveAddressOf(groups)).toEqual(
+			componentsFromSplat('checkout-app/login-flow/run-1/R5CT30ABCDE/f/g/h/i'),
+		);
+	});
+
+	// The default is the `All` view's, where a splat *is* an archive path and there is nothing in
+	// front of it — so the bound is unchanged for the caller that does not pass one.
+	it('defaults to no offset', () => {
+		expect(componentsFromSplat('a/b/c/d/e/f/g/h/i')).toEqual(
+			componentsFromSplat('a/b/c/d/e/f/g/h/i', 0),
+		);
 	});
 
 	// Verbatim, always (D22): nothing here trims, lower-cases or sanitises a name.
@@ -164,5 +189,198 @@ describe('the round trip through the router', () => {
 		await waitFor(() => {
 			expect(screen.getByTestId('components').textContent).toBe('[]');
 		});
+	});
+});
+
+/**
+ * The groups view's own splat, `<project>/<groupId>/<testName>/<run>/<serial>/<…>`, and the one
+ * place that knows the archive address underneath it (#181).
+ */
+describe('the archive address a groups splat names', () => {
+	// The group id is not a directory, so it is dropped — and nothing else about the address is
+	// touched, which is what keeps every read below a group on the archive's one path vocabulary.
+	it('drops the group id and keeps every other component in place', () => {
+		expect(
+			archiveAddressOf([
+				'checkout-app',
+				'app-bar-top-space',
+				'login-flow',
+				'20260830T170501Z-issue-112-9f1c2ab4',
+				'R5CT30ABCDE',
+				'screenshots',
+				'001.png',
+			]),
+		).toEqual([
+			'checkout-app',
+			'login-flow',
+			'20260830T170501Z-issue-112-9f1c2ab4',
+			'R5CT30ABCDE',
+			'screenshots',
+			'001.png',
+		]);
+	});
+
+	// A drop by position, never a parse: a group id spelled exactly like a test name is still the
+	// component at index 1 and nothing reads either of them (D22).
+	it('drops by position, whatever the components say', () => {
+		expect(archiveAddressOf(['a', 'a', 'a'])).toEqual(['a', 'a']);
+	});
+
+	it('leaves the root and a project alone, which is what nothing below them asks about', () => {
+		expect(archiveAddressOf([])).toEqual([]);
+		expect(archiveAddressOf(['checkout-app'])).toEqual(['checkout-app']);
+	});
+
+	// A group with nothing selected under it names its project's level, which is exactly what the
+	// card beside the tree draws its row shapes from.
+	it('gives a group’s own address as its project’s', () => {
+		expect(archiveAddressOf(['checkout-app', 'app-bar-top-space'])).toEqual(['checkout-app']);
+	});
+});
+
+/**
+ * The groups view's half of the URL contract, against a **real** router for the reason above: what
+ * is in question is exactly what a mocked `Link` would supply.
+ */
+describe('the groups view’s round trip through the router', () => {
+	/*
+	 * What `routes/archive.tsx` passes as `OFFSET.groups`: the one component this view puts in
+	 * front of the archive's own path. Repeated rather than imported, because importing the route
+	 * module here would build the panel's whole route tree to read one number.
+	 */
+	const GROUPS_OFFSET = 1;
+
+	function routerFor(initial: string) {
+		const rootRoute = createRootRoute();
+		const groupsRoute = createRoute({
+			getParentRoute: () => rootRoute,
+			path: '/groups/$',
+			component: () => {
+				const params = useParams({ strict: false });
+				const components = componentsFromSplat(params._splat, GROUPS_OFFSET);
+				return (
+					<>
+						<span data-testid="components">{JSON.stringify(components)}</span>
+						<span data-testid="address">{JSON.stringify(archiveAddressOf(components))}</span>
+						<Link
+							params={{ _splat: splatFromComponents([...components, 'a b%c#d']) }}
+							to="/groups/$"
+						>
+							deeper
+						</Link>
+					</>
+				);
+			},
+		});
+		return createRouter({
+			routeTree: rootRoute.addChildren([groupsRoute]),
+			history: createMemoryHistory({ initialEntries: [initial] }),
+		});
+	}
+
+	// A shared link lands on the selection, and the group id survives being a component like any
+	// other — including one carrying the characters a directory name may legally carry.
+	it('gives back a deep group selection, and the archive address under it', async () => {
+		const components = ['checkout-app', 'a b%c#d', 'login-flow', 'run-1', 'R5CT30ABCDE'];
+		const router = routerFor(`/groups/${components.map(encodeURIComponent).join('/')}`);
+
+		render(<RouterProvider router={router as never} />);
+
+		await waitFor(() => {
+			expect(screen.getByTestId('components').textContent).toBe(JSON.stringify(components));
+		});
+		expect(screen.getByTestId('address').textContent).toBe(
+			JSON.stringify(['checkout-app', 'login-flow', 'run-1', 'R5CT30ABCDE']),
+		);
+	});
+
+	it('encodes a link deeper into the groups view so the address survives being pasted', async () => {
+		const router = routerFor('/groups/checkout-app');
+
+		render(<RouterProvider router={router as never} />);
+
+		const link = await waitFor(() => screen.getByRole('link', { name: 'deeper' }));
+		const href = link.getAttribute('href') ?? '';
+		expect(href).not.toContain(' ');
+		expect(componentsFromSplat(decodeURIComponent(href).replace('/groups/', ''))).toEqual([
+			'checkout-app',
+			'a b%c#d',
+		]);
+	});
+
+	/*
+	 * **The deepest groups address the tree can build survives the trip through the URL** (#189
+	 * review). The `All` view reaches eight archive components; the groups view names the same
+	 * entry in nine, because the `groupId` sits in front of them. Asserted as a pair, because what
+	 * is in question is that the two arrive at the *same* archive address rather than that either
+	 * one is a particular length.
+	 */
+	it('lands on the entry a nine-component groups splat names, not on its parent', async () => {
+		const groups = [
+			'checkout-app',
+			'group-1',
+			'login-flow',
+			'run-1',
+			'R5CT30ABCDE',
+			'f',
+			'g',
+			'h',
+			'i',
+		];
+		const router = routerFor(`/groups/${groups.map(encodeURIComponent).join('/')}`);
+
+		render(<RouterProvider router={router as never} />);
+
+		await waitFor(() => {
+			expect(screen.getByTestId('address').textContent).toBe(
+				JSON.stringify(componentsFromSplat('checkout-app/login-flow/run-1/R5CT30ABCDE/f/g/h/i')),
+			);
+		});
+	});
+});
+
+/**
+ * **Which route a bare family address actually matches** (#189 review).
+ *
+ * `routes/archive.tsx` declares `/archive` and `/groups` alongside their splat routes, and the
+ * reason recorded there used to be that a splat route does not match the bare address. It does:
+ * the bare routes are declarations that make `/archive` and `/groups` valid `to` values for a
+ * `Link`, and the splat route is what renders. Pinned against a real router so the comment and
+ * `docs/DESIGN.md` §9 cannot drift back to the other claim on a router upgrade.
+ */
+describe('the route a bare family address resolves to', () => {
+	async function matchedIds(initial: string) {
+		const rootRoute = createRootRoute();
+		const bare = createRoute({
+			getParentRoute: () => rootRoute,
+			path: '/groups',
+			component: () => null,
+		});
+		const splat = createRoute({
+			getParentRoute: () => rootRoute,
+			path: '/groups/$',
+			component: () => null,
+		});
+		const router = createRouter({
+			routeTree: rootRoute.addChildren([bare, splat]),
+			history: createMemoryHistory({ initialEntries: [initial] }),
+		});
+		await router.load();
+		return router.state.matches.map((match) => match.routeId);
+	}
+
+	it('matches the splat route, with an empty splat, and never the bare one', async () => {
+		for (const initial of ['/groups', '/groups/']) {
+			const ids = await matchedIds(initial);
+
+			expect(ids).toContain('/groups/$');
+			expect(ids).not.toContain('/groups');
+		}
+	});
+
+	// Which is why the bare route changes nothing a reader can see: the splat it hands the screen
+	// is the root either way.
+	it('reads the empty splat back as the root', () => {
+		expect(componentsFromSplat('')).toEqual([]);
 	});
 });
