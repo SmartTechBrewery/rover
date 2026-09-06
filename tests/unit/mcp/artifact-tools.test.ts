@@ -210,6 +210,54 @@ describe('the record_video tool', () => {
 		expect(JSON.stringify(result.structuredContent)).not.toContain('base64');
 	});
 
+	/**
+	 * The AC of #183 that this suite owns: the two numbers reach the **agent**, not just the
+	 * daemon's logs. They arrive in `structuredContent` and in the JSON text block alike, which
+	 * is what a model actually reads.
+	 */
+	it('tells the agent what the recording contains, in both halves of the answer', async () => {
+		await serve({
+			recordVideo: vi.fn<NonNullable<DeviceBackend['recordVideo']>>(async () =>
+				createMockRecordingBytes({ sampleCount: 306, durationMs: 5_157 }),
+			),
+		});
+		const agent = await connectAgent();
+		const leaseId = await acquireLease(agent);
+
+		const result = await callTool(agent, 'record_video', { leaseId });
+
+		const container = { kind: 'samples', sampleCount: 306, durationMs: 5_157 };
+		expect(result.structuredContent).toMatchObject({ result: { container } });
+		expect(JSON.parse(textOf(result))).toMatchObject({ result: { container } });
+	});
+
+	/**
+	 * The session that prompted #183: two recordings of an unchanged screen, one frame each, and
+	 * an agent that concluded the tool was broken. It stays `ok` with its frame — a capture of an
+	 * idle screen is a legitimate thing to ask for — and the answer now says what it is.
+	 */
+	it('names a capture of an unchanged screen without failing the call', async () => {
+		await serve({
+			recordVideo: vi.fn<NonNullable<DeviceBackend['recordVideo']>>(async () =>
+				createMockRecordingBytes({ sampleCount: 1, durationMs: 0 }),
+			),
+		});
+		const agent = await connectAgent();
+		const leaseId = await acquireLease(agent);
+
+		const result = await callTool(agent, 'record_video', { leaseId });
+
+		expect(result.isError).toBeFalsy();
+		expect(result.structuredContent).toMatchObject({
+			outcome: 'ok',
+			result: { container: { kind: 'still-screen', sampleCount: 1, durationMs: 0 } },
+		});
+		const said = textOf(result);
+		expect(said).toMatch(/nothing on the screen changed/i);
+		expect(said).toMatch(/virtual display/i);
+		expect(said).toMatch(/rather than a fault/i);
+	});
+
 	it('sends no duration of its own, leaving the verb’s default the only one', async () => {
 		const recordVideo = vi.fn<NonNullable<DeviceBackend['recordVideo']>>(async () =>
 			createMockRecordingBytes(),

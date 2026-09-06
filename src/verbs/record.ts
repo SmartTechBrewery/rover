@@ -43,6 +43,16 @@
  * call jank happened. An agent asking "is this animation smooth" is asking a question this
  * verb does not answer, and reading an answer out of it anyway is the plausible-looking wrong
  * result the whole design is against.
+ *
+ * **The answer says what the recording contains** (#183, `./recording-container.ts`). Every
+ * check this verb makes is about whether a recording *arrived*, and every one of them passes
+ * for a capture of a screen that never moved — which comes back as one encoded sample
+ * declaring no duration, and used to be indistinguishable from five seconds of a busy screen.
+ * So `container` carries the sample count and the duration the file itself declares, read off
+ * the bytes rather than taken from `durationMs`: the requested timeline and the container's
+ * are different facts, and PROJECT.md §6 has a 15 s capture declaring 27.61 s to prove it. A
+ * still screen is **named** there and stays `ok` with its one frame — turning a legitimate
+ * recording of an idle screen into a failure would be the opposite mistake.
  */
 
 import { z } from 'zod';
@@ -50,6 +60,11 @@ import type { DeviceSerial } from '../core/ids.js';
 import { capabilityMethod, type VerbContext } from './context.js';
 import { FramesTooLargeError } from './errors.js';
 import { performAction } from './perform.js';
+import {
+	type RecordingContainer,
+	RecordingContainerSchema,
+	readRecordingContainer,
+} from './recording-container.js';
 import { ActionResultSchema, type Artifact, ArtifactSchema, artifactFrom } from './result.js';
 
 /**
@@ -211,7 +226,8 @@ export type FrameExtractor = (
 ) => Promise<Uint8Array[]>;
 
 /**
- * What `record_video` answers with: everything every verb answers with, **plus the frames**.
+ * What `record_video` answers with: everything every verb answers with, **plus the frames and
+ * what the recording contains**.
  *
  * `ActionResultSchema.extend(…)` rather than a shape of its own, the way
  * `ReadLogsResultSchema` already does it, so the common half cannot drift from what the other
@@ -231,9 +247,17 @@ export type FrameExtractor = (
  * same fact, and the answer it produces is worse — a client failing to *parse* a host's reply,
  * rather than the named failure the host already sent. The guarantee is enforced where it can
  * be given a name.
+ *
+ * `container` is the second field, added by #183, and it is what makes the sentence above
+ * readable from the answer rather than only from this comment: it carries the recording's
+ * encoded sample count and the duration the container declares, and names the still-screen
+ * case that `round=up` quietly covers. Required rather than optional for `artifact`'s reason —
+ * `undefined` does not survive JSON — with `unreadable` as the honest branch for bytes this
+ * host could not parse (`./recording-container.ts`).
  */
 export const RecordVideoResultSchema = ActionResultSchema.extend({
 	frames: z.array(ArtifactSchema),
+	container: RecordingContainerSchema,
 }).strict();
 export type RecordVideoResult = z.infer<typeof RecordVideoResultSchema>;
 
@@ -276,6 +300,11 @@ export interface RecordVideoVerbOptions {
  * wherever the agent is, so a filesystem location would name a file that is not there — or,
  * worse, one that is (D19).
  *
+ * `result.container` says what the recording holds — how many encoded samples and what duration
+ * the file declares — and names the one case every other check passes: a screen that did not
+ * change, which records as a single sample of no duration. That is **reported, not refused**;
+ * the answer stays `ok` and `frames` still carries the frame `round=up` extracted from it.
+ *
  * A recording too large for one answer is refused by name rather than trimmed, one that came
  * off the device unfinished is refused by name rather than handed over, a host that cannot
  * slice one refuses by name rather than answering with an empty list, and frames that would
@@ -290,6 +319,7 @@ export async function recordVideo(
 	const framesPerSecond = options.framesPerSecond ?? DEFAULT_FRAMES_PER_SECOND;
 	let captured: Artifact | null = null;
 	let frames: Artifact[] = [];
+	let container: RecordingContainer | null = null;
 
 	const result = await performAction(context, {
 		verb: 'record_video',
@@ -306,6 +336,11 @@ export async function recordVideo(
 			// bytes rather than on the device — the recording is finished and pulled by the time
 			// this line is reached, which is the whole of what phase 1 promised.
 			captured = artifactFrom(context.serial, recording);
+			// Read here, off the same bytes, for the same reason the encoding is: it is the only
+			// moment the recording exists as bytes, and the walk needs no decoder, no process and
+			// no second pass over the device (#183, `./recording-container.ts`). It cannot throw
+			// and it cannot refuse — a recording it does not understand answers `unreadable`.
+			container = readRecordingContainer(recording);
 			frames = withinByteBudget(
 				context.serial,
 				await options.extractFrames(context.serial, recording, { framesPerSecond }),
@@ -315,7 +350,7 @@ export async function recordVideo(
 
 	// Re-parsed rather than spread and returned, so both payloads are held to the same schema
 	// the spine's own answer was — the shape `screenshot` established and `read_logs` extended.
-	return RecordVideoResultSchema.parse({ ...result, artifact: captured, frames });
+	return RecordVideoResultSchema.parse({ ...result, artifact: captured, frames, container });
 }
 
 /**

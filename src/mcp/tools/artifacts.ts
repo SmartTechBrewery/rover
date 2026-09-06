@@ -102,7 +102,15 @@ export function registerArtifactTools(server: McpServer, host: HostName): void {
 				'host with no decoder installed, and frames that will not fit beside the recording ' +
 				'are each refused by name and leave no file behind. **Frames sample motion and ' +
 				'nothing finer**: they can say something moved and roughly when, never whether an ' +
-				'animation was smooth. This call can take half a minute; that is the recording and ' +
+				'animation was smooth. `container` on the answer says what the recording actually ' +
+				'holds — how many encoded samples and what duration the file declares, read off the ' +
+				'file rather than from what you asked for, which is a different number. **A recording ' +
+				'of a screen that did not change comes back as one encoded sample, a declared ' +
+				'duration of 0 and a single frame**, reported as `container.kind: "still-screen"` ' +
+				'with an explanation: a device’s virtual display produces a buffer only when the ' +
+				'screen changes, so that is a true answer about the device rather than a fault, and ' +
+				'not a reason to suspect this tool. Drive the screen during the capture if you ' +
+				'expected motion. This call can take half a minute; that is the recording and ' +
 				'the slicing, not a hang. `label` is optional and is `screenshot`’s: it names the host’s ' +
 				'archived copy so the same flow recorded in two runs of one group is filed as one thing ' +
 				'at two moments, and it requires the lease to carry a `groupId` — without one the call is ' +

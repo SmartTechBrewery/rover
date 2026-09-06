@@ -263,9 +263,15 @@ describe('the verb layer speaks only in plain data', () => {
 		// The common half is an `ActionResult` field for field, and the schema is `.strict()`,
 		// so it rejects the extra key rather than dropping it — the same pair `read_logs` above
 		// asserts, for the same reason.
-		const { frames: _frames, ...common } = recorded;
+		const { frames: _frames, container: _container, ...common } = recorded;
 		expect(ActionResultSchema.parse(roundTrip(common))).toEqual(common);
 		expect(() => ActionResultSchema.parse(roundTrip(recorded))).toThrow();
+		// And the field #183 added is plain data too: a discriminated union of a string and two
+		// numbers survives the trip whole, rather than being the one part of the answer that
+		// arrives as something else.
+		expect(RecordVideoResultSchema.parse(roundTrip(recorded)).container).toEqual(
+			recorded.container,
+		);
 	});
 
 	it('round-trips read verb results, whose answers are state rather than an action', async () => {

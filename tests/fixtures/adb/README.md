@@ -302,6 +302,15 @@ a device that is not usable is listed with a null version without any process be
   the whole `recordVideo` path. `.gitignore` ignores `*.mp4` as a run artifact and carries an
   explicit exception for this directory, because these two are the opposite of a run artifact: a
   hand-written pair would prove exactly what a hand-written pair cannot.
+- **`screenrecord.finished.…mp4` is a capture of an *idle* screen, and a second suite now depends
+  on that.** Inside its `moov` sit an `mvhd` (v0, timescale 10000, duration **0**) and **three**
+  `trak`s — one `vide` and two `meta`, each with an `stsz` of `sample_count` **1** — which is the
+  still-screen case exactly: one encoded sample, no declared duration, `ffprobe`'s `nb_frames=1` /
+  `duration=0.000000`. `tests/unit/verbs/recording-container.test.ts` reads that off this file
+  rather than off a mock (#183, PROJECT.md §6), and the two `meta` tracks are what make selecting
+  the video track by handler type load-bearing rather than incidental. **Do not replace it with a
+  recording of a moving screen**: it would still pass `isFinishedRecording`, and the case it is now
+  the only real-device evidence for would quietly stop being tested.
 - **`screenrecord`'s success has no fixture, because it is zero bytes** — nothing on either stream
   at exit 0 — for the reason the network and `input` rows have none. The refusal is what is
   committed, and it is a **merged** capture (`> f 2>&1`) whose content came back on stderr at exit

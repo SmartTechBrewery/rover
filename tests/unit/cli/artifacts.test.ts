@@ -461,6 +461,69 @@ describe('rover record', () => {
 		expect(document).not.toContain('base64');
 	});
 
+	/**
+	 * The field #183 added, on the mode a script reads. `--json` spreads the whole result, so
+	 * this is the CLI half of "the numbers reach the client rather than only the daemon's logs".
+	 */
+	it('reports what the recording contains on the --json document', async () => {
+		registerFakeBackend({
+			recordVideo: vi.fn<NonNullable<DeviceBackend['recordVideo']>>(async () =>
+				createMockRecordingBytes({ sampleCount: 12, durationMs: 4_926 }),
+			),
+		});
+		await start();
+		const leaseId = await acquireLease();
+
+		expect(await run(['record', leaseId, '--out', destination('r.mp4'), '--json'])).toBe(EXIT_OK);
+
+		expect(JSON.parse(logged[0] ?? '')).toMatchObject({
+			result: { container: { kind: 'samples', sampleCount: 12, durationMs: 4_926 } },
+		});
+	});
+
+	/**
+	 * A human running this command sees one "Wrote N bytes" line, and that line is exactly what
+	 * cannot convey "the screen never changed" — which is the whole failure #183 is about. So the
+	 * host's own sentence is printed under it, rather than restated here in a second wording.
+	 */
+	it('says under the written file when the screen never changed during the capture', async () => {
+		registerFakeBackend({
+			recordVideo: vi.fn<NonNullable<DeviceBackend['recordVideo']>>(async () =>
+				createMockRecordingBytes({ sampleCount: 1, durationMs: 0 }),
+			),
+		});
+		await start();
+		const leaseId = await acquireLease();
+		const out = destination('still.mp4');
+
+		// Still a success, and still a file: a capture of an idle screen is a true answer about
+		// the device rather than something to fail on.
+		expect(await run(['record', leaseId, '--out', out])).toBe(EXIT_OK);
+
+		expect(existsSync(out)).toBe(true);
+		const said = logged.join('\n');
+		expect(said).toContain('Wrote');
+		expect(said).toMatch(/nothing on the screen changed/i);
+		expect(said).toMatch(/rather than a fault/i);
+	});
+
+	it('says nothing extra about an ordinary recording', async () => {
+		registerFakeBackend({
+			recordVideo: vi.fn<NonNullable<DeviceBackend['recordVideo']>>(async () =>
+				createMockRecordingBytes({ sampleCount: 306, durationMs: 5_157 }),
+			),
+		});
+		await start();
+		const leaseId = await acquireLease();
+
+		expect(await run(['record', leaseId, '--out', destination('moving.mp4')])).toBe(EXIT_OK);
+
+		// One line, the one this command has always printed — the note is for the case a human
+		// would otherwise misread, not a running commentary on every capture.
+		expect(logged).toHaveLength(1);
+		expect(logged[0]).toContain('Wrote');
+	});
+
 	it('exits 1 naming the device and writes nothing when the recording came off unfinished', async () => {
 		registerFakeBackend({
 			recordVideo: vi.fn<NonNullable<DeviceBackend['recordVideo']>>(async () => {
