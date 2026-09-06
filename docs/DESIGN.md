@@ -909,8 +909,8 @@ design's `rounded` is Tailwind v4's `rounded-sm` (§1's radius rename).
 The header is `PageHeader`'s two rows unchanged (§3): the breadcrumb, then the describing line on the
 left and **one badge** on the right over the `border-b-2` rule — with the view toggle beside that
 badge since #165, below. The content area is
-`max-w-(--container-max)`, a `lg:w-[320px] shrink-0` tree `<aside>` beside a `flex-1` contents
-`<section>`, both `bg-surface-container border-2 border-outline-variant rounded-lg` with a
+`max-w-(--container-max)`, a tree `<aside>` beside a contents `<section>` that **share the row 0.4 /
+0.6** (#172, below), both `bg-surface-container border-2 border-outline-variant rounded-lg` with a
 `bg-surface-container-high` header strip.
 
 **Every state below is a state of this one screen**, exactly as §7 requires of the Devices screen.
@@ -1042,9 +1042,11 @@ browser.
   level has none: the archive is finished data.
 - **The accepted cost, checked against a real answer**: the searched tree reuses the browsing tree's
   own indent (`pl-5 ml-2.5 border-l-2` per level), and a hit six levels down therefore has little of
-  the 320px column left for its name, which wraps. That is `break-words` doing what it is there for
+  the column left for its name, which wraps. That is `break-words` doing what it is there for
   rather than `break-all` — and a *shorter* indent for the searched tree would be a second tree
-  idiom, invented at the keyboard, for a column the approved markup already settled.
+  idiom, invented at the keyboard, for a column the approved markup already settled. **#172 bought
+  this room rather than removing the cost**: the column is 0.4 of the row instead of 320px, so it is
+  370px at `xl` and 504px at `--container-max`, and below `xl` the tree has the whole width.
 - **The field is absent in every state that draws no tree** — and that needs saying nowhere in the
   code: it is part of the tree card, so it goes wherever the card goes. It is **present with an artifact open** since #160, because the
   tree is. The *state* lives above the card (`panel/src/routes/archive.tsx`), where it outlives the
@@ -1409,12 +1411,46 @@ boundary was the weaker half: sending a reader to a second address for the thing
 pointing at is not an explorer. That screen has nothing left this does not do, and it is marked
 accordingly in §1.
 
-**The card is `flex-1 min-w-0` inside `max-w-(--container-max)`, with no fixed width, no percentage
-and no `basis-*` on it.** The approved markup pins the preview to `lg:w-[580px] shrink-0`; that was
-tried and **reversed**, because a pinned preview makes the *split* depend on the window, so the same
-screen shows different proportions on different monitors. The tree is the one sized child of the
-row — `lg:w-[320px] shrink-0` — exactly as it is at every other depth, and equal halves are a
-property of the row rather than of any card in it.
+**The tree and the card share the row 0.4 / 0.6, and neither of them carries a width** (#172). The
+approved markup pins the preview to `lg:w-[580px] shrink-0`; that was tried and **reversed**,
+because a pinned child makes the *split* depend on the window, so the same screen shows different
+proportions on different monitors. That reasoning stands and is the whole of this rule; what has
+been rewritten is the answer that followed from it.
+
+***The tree is the one sized child of the row — `lg:w-[320px] shrink-0`* is reversed** (#160's
+arrangement, edited in place). A 320px tree is a fixed child too, so it had the very property the
+pinned preview was reversed for: measured in Chrome, that tree was **48% of the row at `lg` and 25%
+of it at a 1728px window** — the same screen, different proportions, one monitor to the next. The
+split is now written as two fractions on the row itself
+(`panel/src/routes/archive.tsx`, `Columns`): `basis-2/5` on the `<aside>` and `basis-3/5` on the
+`<section>`, through `xl:[&>aside]:` / `xl:[&>section]:` child selectors so that **both halves of
+the arrangement are in one place** and each card describes only itself. The card keeps `flex-1
+min-w-0` — `min-w-0` is what stops a long path widening the row, and `flex-1` is what the card is in
+the stacked arrangement; the `0%` basis its shorthand carries is outranked by the row's own
+`> section` rule.
+
+**`basis-*` rather than a width, because it is what makes `--gutter` free.** The two bases come to
+exactly the row, so the gap is the row's one overflow and the default `flex-shrink: 1` takes it back
+in proportion to them — 40% of the gutter off the tree, 60% off the card — which leaves each on its
+exact fraction of what is actually there to share, with no `calc()` and nothing pushed past the
+window. `w-2/5` and `w-3/5` are the same two numbers and overflow the row by 20px.
+
+**The row goes horizontal at `xl`, not `lg`, and that is the same decision as the fraction** (#172,
+settled in a browser rather than derived). 320px was a constant the row could afford from `lg` up; a
+fraction cannot be. At `lg` the 256px sidebar and the 40px desktop margins leave a 688px row, of
+which 40% is **267px** — *less* than the tree had — and the fraction does not reach 320px until a
+1156px window. Looked at in Chrome, that band is where a six-deep artifact name stops breaking at
+its separators and starts breaking mid-word, one syllable to a line, which is the opposite of what
+this change is for. So the **stacked** arrangement — where the tree has the whole content width and
+every name fits on one line — runs one breakpoint further up, and the horizontal row begins at `xl`
+(1280px), where the tree is 370px and every window above it is wider than the 320px this replaces.
+
+A **floor under the fraction** was the alternative and was rejected: a `min-w-[320px]` on the tree
+would hold between `lg` and 1156px and the split in that band would once again be whatever the
+window happened to make it — the property this section exists to forbid, reintroduced in the one
+place it would be least expected. Measured after the change: 40.00% / 60.00% at 1280, 1440, 1600,
+1728 and 2560, with no horizontal overflow at any of them, and 504px / 756px once the row reaches
+`--container-max`.
 
 ***The tree is not shown while a file is open* is reversed** (#160, edited in place). The rule was
 the answer to a real constraint rather than a preference: the run's column stood beside the preview,
@@ -1595,7 +1631,12 @@ as `image` and `text`, and both are scriptable as a document, so that gate is wh
 
 **The three deviations from the approved markup**, recorded rather than made silently:
 
-- the preview is `flex-1 min-w-0` and not `lg:w-[580px] shrink-0` (above);
+- the preview is **0.6 of the row and the tree 0.4 of it** (`basis-3/5` / `basis-2/5`, from `xl`),
+  and not the markup's `lg:w-[580px] shrink-0` (above). This is the widest of the three departures
+  and #172 widened it further: the markup pins one child, #160 pinned the *other* one at 320px, and
+  neither is a ratio — a pinned child of either kind makes the split a function of the window, which
+  is the one thing this row must not be. Recorded here rather than only in the code because
+  `ai/RULES.md` §8 makes a departure from approved markup a thing to write down;
 - one `FileText` glyph for every file instead of the markup's per-media `image` one — `CONTENTS`
   kept it while it existed, and the tree keeps it now (#161);
 - and **the arrangement itself is departed from** (#160). `a843d32b7a414ac3a84fd7e80aa8a8bf` draws

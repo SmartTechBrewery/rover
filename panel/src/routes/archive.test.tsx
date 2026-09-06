@@ -173,7 +173,7 @@ async function showing(splat: string | undefined, levels: Record<string, unknown
  * is about rather than relying on that.
  */
 function besideTheTree(container: HTMLElement) {
-	const card = container.querySelector('div.lg\\:flex-row > section');
+	const card = container.querySelector('div.xl\\:flex-row > section');
 	if (card === null) {
 		throw new Error('no card is drawn beside the tree');
 	}
@@ -675,27 +675,45 @@ describe('an artifact open inside a run', () => {
 	});
 
 	/*
-	 * The one criterion the approved markup gets wrong: a pinned preview makes the *split* depend on
-	 * the window, so the same screen shows different proportions on different monitors. **The tree is
-	 * the one sized child** and the card beside it takes the rest, which is what every other depth
-	 * already does — one row, one shape (#160).
+	 * The criterion the approved markup gets wrong, and #160's answer to it went only half way: a
+	 * *fixed* child makes the split depend on the window, so the same screen shows different
+	 * proportions on different monitors — and a 320px tree is a fixed child too. **The row is two
+	 * fractions now** (#172), 0.4 for the tree and 0.6 for the card, so neither card carries a
+	 * width and the split is the same at every width the row is horizontal at.
+	 *
+	 * **And it is horizontal from `xl`, not `lg`.** A fraction and the breakpoint are one decision:
+	 * 40% of the row at `lg` is narrower than the tree it replaces (§9 carries the arithmetic and
+	 * the measurement), so the stacked arrangement, where the tree has the whole width, runs a
+	 * breakpoint further up rather than the fraction gaining a floor that would put the proportions
+	 * back on the window.
 	 */
-	it('takes the rest of the row beside the sized tree, with no width, percentage or basis', async () => {
+	it('splits the row 0.4 / 0.6 from xl, with neither card carrying a width of its own', async () => {
 		host.artifact = PNG;
 
 		const { container } = await showing(AT_THE_FILE, withScreenshots());
 
-		const columns = container.querySelectorAll('div.lg\\:flex-row > section');
+		const row = container.querySelector('div.xl\\:flex-row') as HTMLElement;
+		// Both fractions are written on the row, which is where the split belongs.
+		expect(row.className).toContain('xl:[&>aside]:basis-2/5');
+		expect(row.className).toContain('xl:[&>section]:basis-3/5');
+		// `basis-*` and not `w-*`: the gutter is the row's one overflow and shrinking removes it.
+		expect(row.className).toContain('gap-(--gutter)');
+		// The stacked arrangement is what every width below `xl` gets, `lg` included now.
+		expect(row.className).not.toContain('lg:');
+
+		const columns = container.querySelectorAll('div.xl\\:flex-row > section');
 		expect(columns).toHaveLength(1);
 		const preview = columns[0] as HTMLElement;
-		expect(preview.className).toContain('flex-1');
 		expect(preview.className).toContain('min-w-0');
 		expect(preview.className).not.toMatch(/\bw-\[/);
 		expect(preview.className).not.toMatch(/\bbasis-/);
 		expect(preview.className).not.toMatch(/\bw-1\/2/);
 		expect(preview.className).not.toContain('shrink-0');
-		// And the tree is the sized one, exactly as it is at every other depth.
-		expect(container.querySelector('aside')?.className).toContain('shrink-0');
+		// And the tree is no longer the one sized child — it carries neither a width nor a `shrink-0`.
+		const tree = container.querySelector('aside') as HTMLElement;
+		expect(tree.className).not.toMatch(/\bw-\[/);
+		expect(tree.className).not.toMatch(/\bbasis-/);
+		expect(tree.className).not.toContain('shrink-0');
 	});
 
 	/*
@@ -775,7 +793,7 @@ describe('an artifact open inside a run', () => {
 		expect(
 			screen.queryByRole('link', { name: 'Close the preview and go back to the directory' }),
 		).toBeNull();
-		const strip = container.querySelector('div.lg\\:flex-row > section > div:first-child');
+		const strip = container.querySelector('div.xl\\:flex-row > section > div:first-child');
 		expect(strip?.textContent).toBe('001_screenshot.pngOpen in a new window');
 	});
 
@@ -808,7 +826,7 @@ describe('an artifact open inside a run', () => {
 		expect(container.textContent).not.toContain('DEVICE — FROM device_info.json');
 		expect(container.textContent).not.toContain('Run Details');
 		// The tree, then one card — the row every depth draws.
-		const columns = container.querySelector('div.lg\\:flex-row');
+		const columns = container.querySelector('div.xl\\:flex-row');
 		expect(columns?.children).toHaveLength(2);
 		expect(columns?.children[0]?.tagName).toBe('ASIDE');
 		// The card is the folder's own read-only listing, headed by its name — and read-only is now
@@ -887,7 +905,7 @@ describe('an artifact open inside a run', () => {
 
 		const { container } = render(<ArchiveScreen />);
 		expect(screen.getByText('DIRECTORY')).toBeDefined();
-		expect(container.querySelectorAll('div.lg\\:flex-row > section')).toHaveLength(1);
+		expect(container.querySelectorAll('div.xl\\:flex-row > section')).toHaveLength(1);
 		expect(screen.getByText('Reading this address.')).toBeDefined();
 		expect(screen.queryByText('Reading this artifact.')).toBeNull();
 		expect(container.textContent).not.toContain('One artifact from this run');
@@ -898,7 +916,7 @@ describe('an artifact open inside a run', () => {
 		}
 
 		expect(screen.getByText('DIRECTORY')).toBeDefined();
-		expect(container.querySelectorAll('div.lg\\:flex-row > section')).toHaveLength(1);
+		expect(container.querySelectorAll('div.xl\\:flex-row > section')).toHaveLength(1);
 		expect(screen.getByAltText('001_screenshot.png')).toBeDefined();
 	});
 
@@ -915,7 +933,7 @@ describe('an artifact open inside a run', () => {
 
 		const { container } = render(<ArchiveScreen />);
 		expect(screen.getByText('DIRECTORY')).toBeDefined();
-		const columns = container.querySelector('div.lg\\:flex-row');
+		const columns = container.querySelector('div.xl\\:flex-row');
 		expect(columns?.children).toHaveLength(2);
 		expect(columns?.children[0]?.tagName).toBe('ASIDE');
 		// The card is headed by the address's last component and says neither *level* nor *artifact*.
@@ -936,7 +954,7 @@ describe('an artifact open inside a run', () => {
 		// The listing landed in the card the quiet line was in: nothing added, and none replaced.
 		expect(screen.getByText('DIRECTORY')).toBeDefined();
 		expect(screen.getByText('Everything filed under this directory.')).toBeDefined();
-		expect(container.querySelector('div.lg\\:flex-row')?.children).toHaveLength(2);
+		expect(container.querySelector('div.xl\\:flex-row')?.children).toHaveLength(2);
 		expect(besideTheTree(container).getByText('001_screenshot.png')).toBeDefined();
 		expect(host.artifacts).toEqual([]);
 	});

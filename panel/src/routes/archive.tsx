@@ -369,14 +369,35 @@ function ReadingThisAddress({ path }: { readonly path: readonly string[] }) {
 /**
  * The content area's row, in one place because every state that browses shares it.
  *
- * **The split is a property of this row rather than of any card in it** (§9, whose equal halves
- * #160 collapsed to one card): the card is `flex-1 min-w-0` and carries no width, no percentage and
- * no `basis-*`, so what it is given does not depend on the window. The tree is the one child that is
- * sized, and it is `shrink-0` beside it.
+ * **The split is a property of this row rather than of any card in it** (§9), and since #172 the
+ * row is where both halves of it are written: `basis-2/5` for the tree and `basis-3/5` for the card
+ * beside it. Neither child carries a width, a fixed size or a `shrink-0` any more, so the same
+ * screen shows the same proportions on every monitor — the property §9 requires, and one the 320px
+ * tree this replaces did not have: measured in Chrome, that tree was 48% of the row at `lg` and 25%
+ * of it at a 1728px window.
+ *
+ * **The `--gutter` needs no `calc()`.** The two bases come to exactly the row, so the gap is the
+ * row's one overflow and the default `flex-shrink: 1` takes it back in proportion to those bases —
+ * 40% of it off the tree and 60% off the card, which leaves each with its fraction of what is
+ * actually there to share. Writing the fractions as `basis-*` is what buys that; `w-2/5` would be
+ * the same number and would push the row past the window by the gutter.
+ *
+ * **The child selectors are why both fractions can live here.** `ContentsCard` is `flex-1`, whose
+ * shorthand carries a `0%` basis of its own; `.row > section` outranks a plain utility class, so
+ * the fraction wins wherever the two meet, whatever order the stylesheet emits them in.
+ *
+ * **And the row goes horizontal at `xl`, not `lg`** — the fraction and the breakpoint are one
+ * decision, recorded in §9. 320px was a constant the row could afford from `lg` up; a *fraction*
+ * cannot be, because at `lg` the 256px sidebar and the desktop margins leave a 688px row, of which
+ * 40% is 267px — less than the tree had, so the narrowest horizontal window would have come out
+ * worse. It only reaches 320px at a 1156px window. Below `xl` the stacked arrangement gives the
+ * tree the whole width instead, which is where a six-deep name fits on one line. A floor under the
+ * fraction was the alternative and is the thing §9 forbids: it would put the proportions back on
+ * the window in exactly the band it applied to.
  */
 function Columns({ children }: { readonly children: ReactNode }) {
 	return (
-		<div className="mt-8 flex max-w-(--container-max) flex-col gap-(--gutter) lg:flex-row lg:items-stretch">
+		<div className="mt-8 flex max-w-(--container-max) flex-col gap-(--gutter) xl:flex-row xl:items-stretch xl:[&>aside]:basis-2/5 xl:[&>section]:basis-3/5">
 			{children}
 		</div>
 	);

@@ -25,6 +25,10 @@ import { type RefObject, useRef } from 'react';
 /**
  * The archive as a directory tree — `docs/DESIGN.md` §9's left column.
  *
+ * **The card carries no width of its own** (#172). It was `lg:w-[320px] shrink-0` — the row's one
+ * sized child — and the row now writes both fractions of the split itself (`routes/archive.tsx`,
+ * `Columns`). This file describes the card, never how much of the row it is given.
+ *
  * **Expansion is derived from the selection, never stored.** A node is expanded exactly when it is
  * a prefix of the selected path, and the selected node is expanded too; nothing else is. Everything
  * the issue asks of this tree falls out of that one rule:
@@ -129,7 +133,7 @@ export function DirectoryTree({
 	const field = useRef<HTMLInputElement>(null);
 
 	return (
-		<aside className="flex w-full shrink-0 flex-col overflow-hidden rounded-lg border-2 border-outline-variant bg-surface-container lg:w-[320px]">
+		<aside className="flex w-full flex-col overflow-hidden rounded-lg border-2 border-outline-variant bg-surface-container">
 			<div className="border-outline-variant border-b-2 bg-surface-container-high px-4 py-3">
 				<h2 className="font-label-caps text-label-caps text-on-surface uppercase tracking-widest">
 					DIRECTORY
