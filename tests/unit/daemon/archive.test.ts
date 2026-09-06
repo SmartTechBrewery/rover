@@ -613,6 +613,81 @@ describe('a label written into a name and read back out of it', () => {
 		}
 	});
 
+	/*
+	 * The one label a name genuinely cannot carry back, asserted as the pair rather than as two
+	 * names: a recording is the single artifact filed with **no** suffix after the label, so
+	 * `001_screenshot.mp4` is spelled exactly as an *unlabelled* screenshot would be if the
+	 * extension fell the same way (`.bin` is the fallback for both kinds). The parse resolves that
+	 * towards the suffix, which is the direction that never invents a label — and the frame
+	 * directory is decoded by the recording's own rule, so the two halves of one artifact can
+	 * never answer two different things.
+	 */
+	it('answers no label for a recording labelled exactly the verb suffix, on both halves', async () => {
+		const durable = archive();
+		for (const label of ['screenshot', 'read_logs']) {
+			await durable.record(
+				grouped,
+				resultOf('record_video', {
+					artifact: RECORDING,
+					frames: [artifactOf('image/png', [0x89])],
+				}),
+				label,
+			);
+		}
+
+		const names = await namesUnder(grouped, 'recordings');
+		expect(names).toEqual([
+			'001_screenshot.mp4',
+			'001_screenshot_frames',
+			'002_read_logs.mp4',
+			'002_read_logs_frames',
+		]);
+		// Both halves of both pairs, and the same answer on each: absent rather than labelled with
+		// something a caller could not trust, which is what `list_archive_groups` then answers.
+		for (const name of names) {
+			expect(filedLabelOf(name)).toBeNull();
+		}
+	});
+
+	/*
+	 * And the recoverable half of the same ambiguity: a label that merely *ends* in a suffix token
+	 * comes back as its head, on every artifact kind — including the frame directory, which would
+	 * otherwise be the one name in the pair that kept the whole label.
+	 */
+	it('answers one label for a label ending in the verb suffix, across all three kinds', async () => {
+		const durable = archive();
+		await durable.record(grouped, resultOf('screenshot', { artifact: CAPTURE }), 'home_screenshot');
+		await durable.record(
+			grouped,
+			resultOf('read_logs', { logs: createMockLogRead() }),
+			'home_screenshot',
+		);
+		await durable.record(
+			grouped,
+			resultOf('record_video', {
+				artifact: RECORDING,
+				frames: [artifactOf('image/png', [0x89])],
+			}),
+			'home_screenshot',
+		);
+
+		// A screenshot and a log carry their own suffix, so the whole label survives on those.
+		expect(filedLabelOf('001_home_screenshot_screenshot.png')).toBe('home_screenshot');
+		expect(await namesUnder(grouped, 'screenshots')).toEqual([
+			'001_home_screenshot_screenshot.png',
+		]);
+		expect(filedLabelOf('001_home_screenshot_read_logs.txt')).toBe('home_screenshot');
+		expect(await namesUnder(grouped, 'logs')).toEqual(['001_home_screenshot_read_logs.txt']);
+		// The recording has no suffix of its own, so its own `_screenshot` is read as one and the
+		// head is what comes back — and the frame directory answers the head too rather than
+		// splitting one artifact across two labels.
+		const recordings = await namesUnder(grouped, 'recordings');
+		expect(recordings).toEqual(['001_home_screenshot.mp4', '001_home_screenshot_frames']);
+		for (const name of recordings) {
+			expect(filedLabelOf(name)).toBe('home');
+		}
+	});
+
 	// The other direction, and the one that must never be a label: an unlabelled call's names, and
 	// the three files the archive writes about the lease rather than about the bytes.
 	it('answers no label for what the writer wrote without one', async () => {

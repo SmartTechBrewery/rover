@@ -30,10 +30,12 @@ import type { Lease } from '@/daemon/leases.js';
 import { createListArchiveGroupsHandler } from '@/daemon/list-archive-groups.js';
 import { type RunningDaemon, startDaemon } from '@/daemon/listen.js';
 import type { IpcClient } from '@/ipc/client.js';
+import { MAX_FRAME_BYTES } from '@/ipc/framing.js';
 import {
 	type ArchiveGroup,
 	ListArchiveGroupsParamsSchema,
 	type ListArchiveGroupsResult,
+	ListArchiveGroupsResultSchema,
 	ListArchiveParamsSchema,
 	MAX_ARCHIVE_GROUP_ARTIFACTS,
 } from '@/ipc/methods.js';
@@ -120,6 +122,32 @@ async function list(): Promise<ListArchiveGroupsResult> {
 	return (await connect()).request('list_archive_groups', {});
 }
 
+/**
+ * The handler on its own, with one or more of its bounds lowered — the only way to reach a cap
+ * without writing the archive that would reach it, and the reason those bounds are handler options
+ * rather than wire parameters (D24).
+ */
+function handlerWith(bounds: {
+	readonly maxGroups?: number;
+	readonly maxRuns?: number;
+	readonly maxEntries?: number;
+}) {
+	return createListArchiveGroupsHandler({
+		root: temp.artifactsRoot,
+		warn: (line) => warnings.push(line),
+		...bounds,
+	});
+}
+
+/** Everything the answer counts against the whole-answer bound: every run and every artifact. */
+function entriesOf(result: ListArchiveGroupsResult): number {
+	return groupsOf(result).reduce(
+		(total, group) =>
+			total + group.runs.length + group.runs.reduce((sum, run) => sum + run.artifacts.length, 0),
+		0,
+	);
+}
+
 /** The groups, or a failed test naming the outcome that was answered instead. */
 function groupsOf(result: ListArchiveGroupsResult): readonly ArchiveGroup[] {
 	if (result.outcome !== 'listed') {
@@ -160,6 +188,15 @@ function archive() {
 /** One archived screenshot under `of`, with an optional label. */
 async function archiveAScreenshot(of: Lease, label?: string): Promise<void> {
 	await archive().record(of, resultOf('screenshot', of, { artifact: CAPTURE }), label);
+}
+
+/** One archived recording and its one frame — the pair whose two names must agree on a label. */
+async function archiveARecording(of: Lease, label?: string): Promise<void> {
+	await archive().record(
+		of,
+		resultOf('record_video', of, { artifact: RECORDING, frames: [{ ...CAPTURE }] }),
+		label,
+	);
 }
 
 /** The four components of one lease's own run, as the writer names them. */
@@ -224,6 +261,11 @@ describe('the three answers, which must never be one', () => {
 		// The diagnosis the answer may not carry lives here instead (D19).
 		expect(warnings.join('\n')).toContain(temp.artifactsRoot);
 		expect(warnings.join('\n')).toContain('ENOTDIR');
+		// And it says what the caller was actually told. This arm has no `truncated` field at all,
+		// so a line claiming the walk answered as truncated would misdescribe the answer in the
+		// host's only account of it.
+		expect(warnings.join('\n')).toContain('answered as unreadable');
+		expect(warnings.join('\n')).not.toContain('answered as truncated');
 	});
 });
 
@@ -362,6 +404,40 @@ describe('which of a grouped run’s artifacts carry a label', () => {
 		);
 	});
 
+	/*
+	 * The one class of label a name cannot carry back, because a recording is the single artifact
+	 * the writer files with no fixed suffix after the label (`archive-path.ts`, PROJECT.md §10).
+	 * What is asserted is not that the label survives — it cannot — but that **the recording and
+	 * its frame directory never answer two different things**, which is what a reader grouping by
+	 * label depends on.
+	 */
+	it('drops a recording labelled exactly like a verb suffix, and its frames with it', async () => {
+		const of = leaseFor({ groupId: 'app-bar' });
+		await archiveARecording(of, 'screenshot');
+
+		// Both names are on disk, and neither is answered: `001_screenshot.mp4` is spelled the way
+		// an *unlabelled* screenshot is, so answering `screenshot` here would give every unlabelled
+		// screenshot on every host a label nobody gave it. Absent is the honest half of that pair.
+		expect(await readdir(join(temp.artifactsRoot, ...runPathOf(of), 'recordings'))).toEqual([
+			'001_screenshot.mp4',
+			'001_screenshot_frames',
+		]);
+		expect(groupsOf(await list())[0]?.runs[0]?.artifacts).toEqual([]);
+	});
+
+	it('answers a recording whose label ends in a verb suffix under one label, on both halves', async () => {
+		const of = leaseFor({ groupId: 'app-bar' });
+		await archiveARecording(of, 'home_screenshot');
+
+		// The head is what a name ending in a suffix token can carry back, and the frame directory
+		// is decoded by the recording's own rule so that it cannot answer `home_screenshot` while
+		// the recording beside it answers `home` — one artifact pair, one label.
+		expect(groupsOf(await list())[0]?.runs[0]?.artifacts).toEqual([
+			{ path: [...runPathOf(of), 'recordings', '001_home_screenshot.mp4'], label: 'home' },
+			{ path: [...runPathOf(of), 'recordings', '001_home_screenshot_frames'], label: 'home' },
+		]);
+	});
+
 	it('answers the label the archive filed, which is not the caller’s own string', async () => {
 		const of = leaseFor({ groupId: 'app-bar' });
 		await archiveAScreenshot(of, 'before change!');
@@ -437,6 +513,51 @@ describe('the bounds, and the one thing truncated means', () => {
 		});
 	});
 
+	it('caps the groups of one answer and says it is truncated', async () => {
+		// The caps are handler options with defaults, exactly as the directory bound is, so the
+		// cap itself is what is asserted rather than two hundred groups' worth of writing.
+		await archiveAScreenshot(leaseFor({ groupId: 'app-bar', testName: 'a' }));
+		await archiveAScreenshot(leaseFor({ groupId: 'checkout-total', testName: 'b' }));
+
+		const result = await handlerWith({ maxGroups: 1 }).list_archive_groups({});
+		expect(groupsOf(result).map((group) => group.groupId)).toEqual(['app-bar']);
+		expect(result.outcome === 'listed' && result.truncated).toBe(true);
+		// The cap dropped a group rather than producing one the schema would refuse — which is
+		// the whole point of enforcing it here, and is what `invalid_result` would be instead.
+		expect(ListArchiveGroupsResultSchema.safeParse(result).success).toBe(true);
+	});
+
+	it('caps the runs of one group and says the answer is truncated', async () => {
+		const first = leaseFor({ groupId: 'app-bar', testName: 'a' });
+		await archiveAScreenshot(first);
+		await archiveAScreenshot(leaseFor({ groupId: 'app-bar', testName: 'b' }));
+
+		const result = await handlerWith({ maxRuns: 1 }).list_archive_groups({});
+		expect(groupsOf(result)[0]?.runs.map((run) => run.path)).toEqual([runPathOf(first)]);
+		expect(result.outcome === 'listed' && result.truncated).toBe(true);
+		// And the group the cap left behind still has a run in it — `ArchiveGroupSchema.runs` is
+		// `.min(1)`, so a group emptied by a cap would be an `invalid_result` on the host.
+		expect(ListArchiveGroupsResultSchema.safeParse(result).success).toBe(true);
+	});
+
+	it('caps the whole answer across runs and artifacts, and says it is truncated', async () => {
+		// The three structural caps bound one level each and nothing bounds their product, so this
+		// is the bound that keeps a large grouped archive from answering a frame no caller can
+		// decode. Two runs of two labelled screenshots is six entries; three is where it stops.
+		for (const testName of ['a', 'b']) {
+			const of = leaseFor({ groupId: 'app-bar', testName });
+			await archiveAScreenshot(of, 'before');
+			await archiveAScreenshot(of, 'after');
+		}
+
+		const result = await handlerWith({ maxEntries: 3 }).list_archive_groups({});
+		expect(entriesOf(result)).toBe(3);
+		expect(result.outcome === 'listed' && result.truncated).toBe(true);
+		// The property the cap exists for: what came back is something the framing can carry.
+		expect(Buffer.byteLength(JSON.stringify(result), 'utf8')).toBeLessThan(MAX_FRAME_BYTES);
+		expect(ListArchiveGroupsResultSchema.safeParse(result).success).toBe(true);
+	});
+
 	it('caps the artifacts of one run and says the answer is truncated', async () => {
 		const of = leaseFor({ groupId: 'app-bar' });
 		const directory = join(temp.artifactsRoot, ...runPathOf(of), 'screenshots');
@@ -487,16 +608,36 @@ describe('a run this walk cannot make sense of', () => {
 		expect(await list()).toEqual({ outcome: 'listed', groups: [], truncated: true });
 	});
 
-	it('skips a run directory holding anything other than one entry, and truncates nothing', async () => {
+	it('skips a run directory holding two serial directories, and truncates nothing', async () => {
 		const of = leaseFor({ groupId: 'app-bar' });
 		await archiveAScreenshot(of);
-		// One lease is one device (D7), so a second entry at the run level is a fact about that
-		// run rather than a shortfall in the answer — the same rule `onlyChild` applies.
+		// One lease is one device (D7), so a second *directory* at the run level is a fact about
+		// that run rather than a shortfall in the answer — the same rule `onlyChild` applies.
 		const run = join(temp.artifactsRoot, ...runPathOf(of).slice(0, 3));
 		await mkdir(join(run, 'a-second-serial'));
 
 		expect(await list()).toEqual({ outcome: 'listed', groups: [], truncated: false });
 		expect(warnings).toEqual([]);
+	});
+
+	it('still answers a run whose directory also holds a stray file', async () => {
+		const of = leaseFor({ groupId: 'app-bar' });
+		await archiveAScreenshot(of, 'before');
+		// This tree is meant to be opened by a human (D24) and a file browser writes into what it
+		// opens. A `.DS_Store` beside the `<serial>` may not delete the run from every answer —
+		// silently, since a run skipped for its shape sets no `truncated` either.
+		await writeFile(join(temp.artifactsRoot, ...runPathOf(of).slice(0, 3), '.DS_Store'), '');
+
+		const result = await list();
+		expect(groupsOf(result)[0]?.runs).toEqual([
+			{
+				path: runPathOf(of),
+				artifacts: [
+					{ path: [...runPathOf(of), 'screenshots', '001_before_screenshot.png'], label: 'before' },
+				],
+			},
+		]);
+		expect(result.outcome === 'listed' && result.truncated).toBe(false);
 	});
 
 	it('skips a run directory that is empty, and truncates nothing', async () => {

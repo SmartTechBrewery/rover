@@ -860,6 +860,30 @@ export const MAX_ARCHIVE_GROUP_RUNS = 200;
 export const MAX_ARCHIVE_GROUP_ARTIFACTS = 500;
 
 /**
+ * How many runs and artifacts **one whole answer** may carry, counted together.
+ *
+ * The three caps above are structural — one on each level — and nothing bounds their product: a
+ * host holding a few hundred grouped runs of a hundred labelled screenshots each is inside every
+ * one of them and still answers tens of thousands of entries. That matters because an answer past
+ * `MAX_FRAME_BYTES` (`src/ipc/framing.ts`) does not arrive large, it arrives as
+ * `malformed_frame` — `FrameDecoder.push` throws and `src/ipc/client.ts` fails every request on
+ * the connection and destroys it — so a healthy host with a healthy archive is diagnosed as a
+ * broken one, and the caller has no short answer to fall back to. The archive never prunes
+ * (`PROJECT.md` §9.4), so it only gets worse.
+ *
+ * Ten thousand is a little over a megabyte of JSON at the shape
+ * `tests/fixtures/panel/list-archive-groups.json` shows, which is {@link
+ * MAX_ARCHIVE_SEARCH_MATCHES}' own argument — *the frame stays ordinary* — applied to an answer
+ * with two levels in it, and it is far past any archive an operator is reading by hand. Reaching
+ * it is `truncated: true` like every other bound: the answer is short, and it says so.
+ *
+ * **Not in the schema, unlike the three above**, and that is deliberate: it is a bound on a
+ * *total* across two arrays, which no `.max()` can express, so it is enforced by the walk in
+ * `src/daemon/list-archive-groups.ts` and asserted there.
+ */
+export const MAX_ARCHIVE_GROUP_ENTRIES = 10_000;
+
+/**
  * `.strict()` and no key at all, for {@link ListProjectsParamsSchema}'s reason — and here the
  * closed shape is the decision rather than a habit.
  *
@@ -896,6 +920,17 @@ export type ListArchiveGroupsParams = z.infer<typeof ListArchiveGroupsParamsSche
  * An artifact carrying **no** label is absent from a run's list rather than present with `null`:
  * nothing is invented for a call that named nothing (#129's lesson), and every entry here is a
  * fact the archive holds.
+ *
+ * **One class of label is not recoverable from a name, and is therefore not answered here.** A
+ * recording is the one artifact the archive writes with no fixed suffix after the label
+ * (`<seq>_<label>.mp4`, `PROJECT.md` §10), so a recording labelled exactly `screenshot` or
+ * `read_logs` is spelled the way an *unlabelled* screenshot or log would be; `filedLabelOf`
+ * resolves that towards the suffix, so the recording **and its `_frames` directory** are both
+ * absent from this list rather than one of them arriving under a label no caller can trust. A
+ * label merely *ending* in `_screenshot` or `_read_logs` answers its head — `home` for
+ * `home_screenshot` — on both halves of the pair. Both are properties of what the archive writes
+ * rather than of this method, and neither can put a recording and its frames under two different
+ * labels, which is what a reader grouping by label depends on.
  */
 export const ArchiveGroupArtifactSchema = z
 	.object({
@@ -957,7 +992,9 @@ export type ArchiveGroup = z.infer<typeof ArchiveGroupSchema>;
  *
  * **`truncated` has exactly one meaning: at least one directory that exists was not fully
  * examined**, so a group, a run or an artifact may be missing. The host's directory bound does
- * it, so does each of the three structural caps above, so does a level the host could not read
+ * it, so does each of the three structural caps above and {@link MAX_ARCHIVE_GROUP_ENTRIES} —
+ * the bound on the answer as a whole, which is what keeps the three structural ones from
+ * multiplying into a frame no caller can decode — so does a level the host could not read
  * mid-walk, and so does a run whose `group_id.json` will not parse — that last one because a run
  * that *is* grouped is then absent, and an incomplete group must not render as a complete one.
  */
@@ -1110,11 +1147,11 @@ export type ListProjectsResult = z.infer<typeof ListProjectsResultSchema>;
  * `list_archive`'s reason with more force — a search would hand every agent the run names of every
  * other agent on the host in one call.
  *
- * **`list_archive_groups` is the archive's third read, and the one that answers a *grouping*
- * rather than a level or a name** (R41, #178). It takes nothing and answers, from one bounded walk,
- * which groups exist — a `(project, groupId)` pair read out of each run's `group_id.json` — which
- * runs are in each, as the components `list_archive` would name them, and which of a grouped run's
- * artifacts carry a label together with that label's text. A run that named no group is absent and
+ * **`list_archive_groups` is the third method that reads the archive, and the one that answers a
+ * *grouping* rather than a level or a name** (R41, #178). It takes nothing and answers, from one
+ * bounded walk, which groups exist — a `(project, groupId)` pair read out of each run's
+ * `group_id.json` — which runs are in each, as the components `list_archive` would name them, and
+ * which of a grouped run's artifacts carry a label together with that label's text. A run that named no group is absent and
  * an unlabelled artifact is absent; nothing is invented for either. The label is the label **as
  * the archive filed it** and never the caller's own string, which `pathSegment` made unrecoverable
  * on the way in ({@link ArchiveGroupArtifactSchema}). It is bounded for `search_archive`'s reason

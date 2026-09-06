@@ -204,31 +204,48 @@ const SUFFIXES_WITHOUT_AN_EXTENSION = ['frames'] as const;
  *    this archive writes and is deliberately narrower than *everything after the last dot*: a
  *    label may itself contain a `.`, and `001_a.b_frames` is a directory with no extension at all.
  * 2. Strip a trailing `_<suffix>` from the vocabulary above, chosen by whether step 1 found an
- *    extension.
+ *    extension — and for a `_frames` directory, **strip a second time by the recording's own
+ *    rule**, because a frames directory is named `<n>_frames` where `<n>` is character for
+ *    character the stem of the recording beside it. Decoding the two halves by two different
+ *    rules is what would let the pair answer two labels; this is what makes that impossible.
  * 3. Split what is left at its **first** `_`. No `_` at all means no label. A head that is not a
  *    non-empty run of ASCII digits is not a sequence number, so the name is not an artifact's —
  *    `device_info.json`, `group_id.json` and `test_description.json` all leave here.
  * 4. The tail is the filed label, or `null` when it is empty.
  *
- * **One narrow case it cannot recover, recorded rather than hidden.** A *recording* is the one
- * artifact written with no suffix, so a recording whose filed label is exactly `screenshot` or
- * `read_logs`, or ends in `_screenshot` or `_read_logs`, is read as though that tail were the
- * suffix — `001_home_screenshot.mp4` answers `home`. The parse cannot go the other way without
- * making an *unlabelled* screenshot (`001_screenshot.png`, which must answer `null`) ambiguous,
- * and the extension does not settle it because `.bin` is the fallback for both kinds. It is the
- * same reason every document here tells a caller to keep a label short and identifier-shaped.
+ * **One narrow case it cannot recover, recorded rather than hidden — and it is never recovered
+ * differently on the two halves of a recording.** A *recording* is the one artifact written with
+ * no suffix of its own, so a name ending in a suffix token is genuinely ambiguous: `001_x.mp4`
+ * where `x` is `screenshot` is byte for byte what an *unlabelled* screenshot would be called if
+ * the extension fell the same way, and `.bin` is the fallback extension for both kinds, so the
+ * extension does not settle it either. This parse always resolves that ambiguity **towards the
+ * suffix**, which is the direction that never invents a label:
+ *
+ * - A recording labelled exactly `screenshot` or `read_logs` (`001_screenshot.mp4`) answers
+ *   `null` and is **absent** from a group listing, as does its `001_screenshot_frames` directory.
+ *   Answering `screenshot` here would give every *unlabelled* screenshot on every host a label it
+ *   was never given, which is the strictly worse failure — a fabricated fact rather than a
+ *   missing one.
+ * - A recording whose label *ends* in `_screenshot` or `_read_logs` answers the head:
+ *   `001_home_screenshot.mp4` answers `home`, and so does `001_home_screenshot_frames`.
+ *
+ * Neither case can be settled from a name alone while the writer gives a recording no suffix
+ * (`./archive.ts`'s `plan`), and what the archive writes is deliberately unchanged by #178. It is
+ * the same reason every document here tells a caller to keep a label short and identifier-shaped.
  */
 export function filedLabelOf(name: string): string | null {
 	const extension = /\.[A-Za-z0-9]+$/.exec(name);
 	const stem = extension === null ? name : name.slice(0, extension.index);
-	const suffixes = extension === null ? SUFFIXES_WITHOUT_AN_EXTENSION : SUFFIXES_AFTER_AN_EXTENSION;
 
-	let body = stem;
-	for (const suffix of suffixes) {
-		if (stem.endsWith(`_${suffix}`)) {
-			body = stem.slice(0, -(suffix.length + 1));
-			break;
-		}
+	let body: string;
+	if (extension === null) {
+		const withoutFrames = withoutSuffix(stem, SUFFIXES_WITHOUT_AN_EXTENSION);
+		// Only a name that really was a `_frames` directory chains: what is left of it is the
+		// recording's own stem, so it is decoded by the recording's rule and the two cannot disagree.
+		body =
+			withoutFrames === stem ? stem : withoutSuffix(withoutFrames, SUFFIXES_AFTER_AN_EXTENSION);
+	} else {
+		body = withoutSuffix(stem, SUFFIXES_AFTER_AN_EXTENSION);
 	}
 
 	const separator = body.indexOf('_');
@@ -237,4 +254,14 @@ export function filedLabelOf(name: string): string | null {
 	}
 	const label = body.slice(separator + 1);
 	return label === '' ? null : label;
+}
+
+/** The stem with one trailing `_<suffix>` from this vocabulary removed, or exactly as it came. */
+function withoutSuffix(stem: string, suffixes: readonly string[]): string {
+	for (const suffix of suffixes) {
+		if (stem.endsWith(`_${suffix}`)) {
+			return stem.slice(0, -(suffix.length + 1));
+		}
+	}
+	return stem;
 }

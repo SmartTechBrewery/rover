@@ -199,9 +199,9 @@ import { findUserByToken, type UserRecord } from './user-store.js';
  * writes a hook file or takes a path into the projects directory.
  *
  * `list_archive_groups` is here on `search_archive`'s exact terms and not an MCP tool for its exact
- * reason: it is the archive's third read, it answers which runs share a group and which of their
- * artifacts share a label, and one call would hand an agent every other agent's run names on the
- * host. Like the other two it composes no path for a caller — every run and artifact it answers is
+ * reason: it is the third method that reads the archive, it answers which runs share a group and
+ * which of their artifacts share a label, and one call would hand an agent every other agent's run
+ * names on the host. Like the other two it composes no path for a caller — every run and artifact it answers is
  * an address `list_archive` and `GET /artifact/…` already accept (D19).
  */
 const PANEL_METHODS: readonly IpcMethodName[] = [

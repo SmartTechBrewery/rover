@@ -1716,7 +1716,7 @@ back the tree the address describes. The answer is bounded, because there is no 
 walk of the files at the moment you ask — so an answer that had to stop early says so rather than
 looking complete, **including when it found nothing at all**: an unreadable subtree is exactly the
 case where the field would otherwise tell you a name is definitively not in the archive. The host
-answers a third read of the same archive, `list_archive_groups` — which runs share a testing group
+answers a third method reading the same archive, `list_archive_groups` — which runs share a testing group
 and which of their artifacts share a label, as addresses in that same one path vocabulary, from
 another bounded walk with no index behind it either (R41) — and nothing in the panel draws it yet:
 the *Testing groups* view is still the explicit placeholder #165 put there. A run shows its own directory name in full, the owner and grant time read out of

@@ -14,21 +14,27 @@
  * Nothing here is memoised, nothing is warmed on start, and no answer is derived from a previous
  * one. That is a deliberate cost, and the bounds below are how it is paid rather than discovered.
  *
- * **Four bounds, and one meaning of `truncated`.** Directories read are capped at
+ * **Five bounds, and one meaning of `truncated`.** Directories read are capped at
  * {@link MAX_ARCHIVE_GROUP_DIRECTORIES}, because that is the bound that caps disk work when
  * *nothing* is grouped; groups, runs per group and artifacts per run are capped structurally by
  * the schemas, enforced here by dropping the overflow so an over-large answer is a *truncated*
- * one and never an `invalid_result` on the host. And `truncated` means exactly one thing, the
+ * one and never an `invalid_result` on the host. Those three are structural and do **not** bound
+ * their own product, so the fifth bound is on the answer as a whole:
+ * {@link MAX_ARCHIVE_GROUP_ENTRIES} counts every run and every artifact this walk puts on the
+ * answer, because an answer over `MAX_FRAME_BYTES` reaches its caller as a *malformed frame* and
+ * not as a large one — a healthy host misdiagnosed, and the cost
+ * `MAX_ARCHIVE_SEARCH_MATCHES` exists to avoid. And `truncated` means exactly one thing, the
  * sentence `search_archive` already carries: **at least one directory that exists was not fully
- * examined**, so a group, a run or an artifact may be missing. Any of the four bounds does it, so
+ * examined**, so a group, a run or an artifact may be missing. Any of the five bounds does it, so
  * does a level the host could not read mid-walk, and so does a run whose `group_id.json` will not
  * parse — that last one because such a run *is* grouped, so an incomplete group would otherwise
  * render as a complete one.
  *
- * **An ungrouped run costs one `readFile` and nothing more.** The walk reads `group_id.json`
- * before it reads a single artifact directory, so the archive of a caller who never grouped
- * anything is walked at the cost of its run directories alone. That ordering is the whole reason
- * this method is affordable on a host with a large archive and no groups in it.
+ * **An ungrouped run costs one `readFile` and no artifact directory at all.** The walk reads
+ * `group_id.json` before it reads a single artifact directory, so the archive of a caller who
+ * never grouped anything is walked at the cost of its run directories alone — one `readdir` per
+ * run, which is how the `<serial>` is found, and nothing below it. That ordering is the whole
+ * reason this method is affordable on a host with a large archive and no groups in it.
  *
  * **The depth is the archive's own known shape rather than a counter.** Four levels down to a
  * run's `<serial>`, then that directory and one level below it — `screenshots/`, `recordings/`,
@@ -36,11 +42,17 @@
  * frame inside a `_frames` directory carries no label of its own, so descending into one would be
  * disk work that could not change the answer.
  *
- * **One shape rule, stated once.** A run directory holds exactly one entry by construction — one
- * lease is one device (D7) — and that entry is the `<serial>`. A run holding anything else is
- * **skipped and does not set `truncated`**: it was examined, and it is a fact about that run
+ * **One shape rule, stated once.** A run directory holds exactly one *directory* by construction
+ * — one lease is one device (D7) — and that directory is the `<serial>`. A run holding two or more
+ * is **skipped and does not set `truncated`**: it was examined, and it is a fact about that run
  * rather than a shortfall in the answer. `./list-archive.ts`'s `onlyChild` is the same rule from
  * the other side.
+ *
+ * **A file beside the `<serial>` is ignored rather than fatal to the run**, and that is the
+ * decision rather than an accident: this tree is meant to be opened by a human (D24), and a
+ * `.DS_Store` a file browser drops into a run directory must not delete that run from every
+ * answer — silently, since a run skipped for its shape sets no `truncated`. Only directories are
+ * counted, so looking at the archive cannot change what it says.
  *
  * **Every component is opaque and nothing here parses one** (D22) — with one exception that is
  * named rather than smuggled: an artifact's *file name* is decoded by `filedLabelOf`, because the
@@ -78,6 +90,7 @@ import {
 	GroupIdSchema,
 	type IpcHandlers,
 	MAX_ARCHIVE_GROUP_ARTIFACTS,
+	MAX_ARCHIVE_GROUP_ENTRIES,
 	MAX_ARCHIVE_GROUP_RUNS,
 	MAX_ARCHIVE_GROUPS,
 } from '../ipc/methods.js';
@@ -119,6 +132,15 @@ export interface ListArchiveGroupsOptions {
 	 * caller-settable bound is the parameter D24 refused.
 	 */
 	readonly maxDirectories?: number;
+	/**
+	 * The three answer bounds, on {@link maxDirectories}' terms exactly — overridable so a suite
+	 * can reach each cap without writing two hundred groups, and **never** reachable from the
+	 * wire. Lowering one is what a test does; raising one past the schema's own `.max()` would
+	 * make an over-large answer `invalid_result` on the host, which is what the caps prevent.
+	 */
+	readonly maxGroups?: number;
+	readonly maxRuns?: number;
+	readonly maxEntries?: number;
 }
 
 export type ListArchiveGroupsHandler = Pick<IpcHandlers, 'list_archive_groups'>;
@@ -128,6 +150,9 @@ export function createListArchiveGroupsHandler(
 ): ListArchiveGroupsHandler {
 	const warn = options.warn ?? ((message: string) => console.warn(message));
 	const maxDirectories = options.maxDirectories ?? MAX_ARCHIVE_GROUP_DIRECTORIES;
+	const maxGroups = options.maxGroups ?? MAX_ARCHIVE_GROUPS;
+	const maxRuns = options.maxRuns ?? MAX_ARCHIVE_GROUP_RUNS;
+	const maxEntries = options.maxEntries ?? MAX_ARCHIVE_GROUP_ENTRIES;
 
 	return {
 		async list_archive_groups() {
@@ -139,16 +164,20 @@ export function createListArchiveGroupsHandler(
 				if (codeOf(error) === 'ENOENT') {
 					return { outcome: 'missing' as const };
 				}
-				warn(unreadableWarning(options.root, error));
+				warn(unreadableWarning(options.root, error, UNREADABLE_ANSWER));
 				return { outcome: 'unreadable' as const };
 			}
 
 			const walk: Walk = {
 				root: options.root,
 				maxDirectories,
+				maxGroups,
+				maxRuns,
+				maxEntries,
 				warn,
 				groups: new Map(),
 				directoriesRead: 1,
+				entries: 0,
 				truncated: false,
 			};
 			await walkProjects(walk, sortedByName(rootDirents));
@@ -163,7 +192,7 @@ export function createListArchiveGroupsHandler(
 }
 
 /**
- * One walk in progress — what it has found, and the two counters the bounds are read against.
+ * One walk in progress — what it has found, and the counters the bounds are read against.
  *
  * Mutable and passed by reference rather than threaded through return values, for
  * `./search-archive.ts`'s reason: every field is updated from more than one place and the
@@ -174,10 +203,15 @@ interface Walk {
 	/** The absolute path of the archive root on the host — never on an answer. */
 	readonly root: string;
 	readonly maxDirectories: number;
+	readonly maxGroups: number;
+	readonly maxRuns: number;
+	readonly maxEntries: number;
 	readonly warn: (message: string) => void;
 	/** Groups so far, keyed by {@link keyOf} — a `(project, groupId)` pair and never one of them. */
 	readonly groups: Map<string, ArchiveGroup>;
 	directoriesRead: number;
+	/** Runs plus artifacts on the answer so far — what {@link MAX_ARCHIVE_GROUP_ENTRIES} bounds. */
+	entries: number;
 	/** At least one directory that exists was not fully examined — the module header's sentence. */
 	truncated: boolean;
 }
@@ -227,7 +261,8 @@ async function walkRuns(walk: Walk, testNamePath: readonly string[]): Promise<vo
  * One run: whether it named a group, and — only then — which of its artifacts carry a label.
  *
  * The order is the affordability of this whole method: `group_id.json` is read before any artifact
- * directory is, so an ungrouped run costs one `readFile` and no `readdir` at all.
+ * directory is, so an ungrouped run costs this one `readdir` — which is how the `<serial>` is
+ * found — plus one `readFile`, and no artifact directory at all.
  */
 async function examineRun(walk: Walk, runPath: readonly string[]): Promise<void> {
 	const runDirectory = join(walk.root, ...runPath);
@@ -235,10 +270,13 @@ async function examineRun(walk: Walk, runPath: readonly string[]): Promise<void>
 	if (!entries) {
 		return;
 	}
-	// The shape rule, stated in the module header: exactly one entry, and it is the `<serial>`.
-	// Anything else is a fact about this run and not a shortfall in the answer, so no `truncated`.
-	const serial = entries.length === 1 ? entries[0] : undefined;
-	if (!serial?.isDirectory()) {
+	// The shape rule, stated in the module header: exactly one *directory*, and it is the
+	// `<serial>`. A file beside it — a `.DS_Store` from a file browser, an editor's swap file — is
+	// ignored, because merely looking at this tree may not drop a run from every answer. Two or
+	// more directories is a fact about this run and not a shortfall, so still no `truncated`.
+	const directories = entries.filter((entry) => entry.isDirectory());
+	const serial = directories.length === 1 ? directories[0] : undefined;
+	if (!serial) {
 		return;
 	}
 
@@ -248,15 +286,23 @@ async function examineRun(walk: Walk, runPath: readonly string[]): Promise<void>
 		return;
 	}
 
+	// The whole-answer bound, checked before the group is created so no group is ever left with
+	// zero runs — which `ArchiveGroupSchema.runs`' `.min(1)` relies on.
+	if (walk.entries >= walk.maxEntries) {
+		walk.truncated = true;
+		return;
+	}
+
 	const path = [...runPath, serial.name];
 	const group = groupFor(walk, runPath[0] ?? '', groupId);
 	if (!group) {
 		return;
 	}
-	if (group.runs.length >= MAX_ARCHIVE_GROUP_RUNS) {
+	if (group.runs.length >= walk.maxRuns) {
 		walk.truncated = true;
 		return;
 	}
+	walk.entries += 1;
 	group.runs.push({ path, artifacts: await labelledArtifactsOf(walk, serialDirectory, path) });
 }
 
@@ -278,7 +324,7 @@ async function groupIdOf(walk: Walk, serialDirectory: string): Promise<string | 
 			// This run named no group. Not a shortfall, and the common case on most hosts.
 			return null;
 		}
-		walk.warn(unreadableWarning(path, error));
+		walk.warn(unreadableWarning(path, error, TRUNCATED_ANSWER));
 		walk.truncated = true;
 		return null;
 	}
@@ -309,10 +355,11 @@ async function labelledArtifactsOf(
 	const artifacts: ArchiveGroupArtifact[] = [];
 
 	function record(path: readonly string[], label: string): void {
-		if (artifacts.length >= MAX_ARCHIVE_GROUP_ARTIFACTS) {
+		if (artifacts.length >= MAX_ARCHIVE_GROUP_ARTIFACTS || walk.entries >= walk.maxEntries) {
 			walk.truncated = true;
 			return;
 		}
+		walk.entries += 1;
 		artifacts.push({ path: [...path], label });
 	}
 
@@ -357,7 +404,7 @@ function groupFor(walk: Walk, project: string, groupId: string): ArchiveGroup | 
 	if (held) {
 		return held;
 	}
-	if (walk.groups.size >= MAX_ARCHIVE_GROUPS) {
+	if (walk.groups.size >= walk.maxGroups) {
 		walk.truncated = true;
 		return undefined;
 	}
@@ -416,7 +463,7 @@ async function readLevel(walk: Walk, directory: string): Promise<Dirent[] | null
 	} catch (error) {
 		// `EACCES`, `EPERM`, `ENOTDIR`, `ELOOP`, `EIO`, a run removed between two reads — never a
 		// failed answer. The path and the reason stay on the host, and the answer says it is short.
-		walk.warn(unreadableWarning(directory, error));
+		walk.warn(unreadableWarning(directory, error, TRUNCATED_ANSWER));
 		walk.truncated = true;
 		return null;
 	}
@@ -441,21 +488,33 @@ function compare(a: string, b: string): number {
 }
 
 /**
+ * How the two callers of {@link unreadableWarning} differ, because the answers differ: a level the
+ * walk could not read mid-way is a *truncated* listing, while the root itself is `unreadable` —
+ * an arm with no `truncated` field at all. One message telling the operator the answer was
+ * truncated when it was not is a log that misdescribes what the caller got, and the daemon's
+ * stderr is the host's only account of either.
+ */
+const TRUNCATED_ANSWER = 'The group walk answered as truncated';
+const UNREADABLE_ANSWER = 'The group walk answered as unreadable';
+
+/**
  * What the operator is told, on the host, about something this walk could not read.
  *
  * Names the path and the errno, which is exactly what the answer may not carry: the wire says
- * only that the answer is truncated, and this is where the diagnosis lives instead (D19).
+ * only that the answer is short — or that the root is unreadable — and this is where the diagnosis
+ * lives instead (D19). What the caller was actually told is the `answered` clause, so the log and
+ * the wire cannot disagree.
  *
  * The path goes through `JSON.stringify`, never plain interpolation — it ends in names read off
  * disk, and a newline in one of those would otherwise end this line and start a fabricated one in
  * the daemon's log (`./lease-handlers.ts` renders the force-release audit record the same way).
  */
-function unreadableWarning(path: string, error: unknown): string {
+function unreadableWarning(path: string, error: unknown, answered: string): string {
 	const code = codeOf(error);
 	return (
 		`The artifact archive could not be read at ${JSON.stringify(path)}: ` +
 		`${code ?? 'unknown error'}. ` +
-		`The group walk answered as truncated — no path or reason leaves this host.`
+		`${answered} — no path or reason leaves this host.`
 	);
 }
 
