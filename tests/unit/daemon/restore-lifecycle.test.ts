@@ -105,6 +105,7 @@ function registerRecordingBackend(holdAirplaneMode?: Promise<void>): Recorded {
 				canInput: false,
 				canControlNetwork: true,
 				canRecordVideo: true,
+				canControlRecording: true,
 			},
 		},
 		backend: createMockDeviceBackend(overrides),

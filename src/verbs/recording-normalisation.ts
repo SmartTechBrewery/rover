@@ -32,11 +32,14 @@
  *   what the absence of a sample *means*, and it is the same fact `STILL_SCREEN_MESSAGE`
  *   already states. Padding can destroy nothing here, because there is nothing past the cut.
  * - a container that declares a timeline keeps **its own**, made constant-rate, with every
- *   sample intact. The 27.61 s case comes back as a 27.61 s file that is scrubbable and
- *   trustworthy against its own content, and the answer says the length is the recorder's
- *   rather than the window that was asked for. Compressing it into the requested window would
- *   have to either drop the late sample or re-time it, and both are the plausible-looking wrong
- *   answer ai/RULES.md §2 exists against.
+ *   sample intact. So does every recording of a call that named **no** window at all — one an
+ *   agent started and stopped itself (#190) — because there is nothing there to hold anything
+ *   across; the answer says so in its own words rather than reporting a length nobody measured.
+ *   The 27.61 s case comes back as a 27.61 s file that is scrubbable and trustworthy against
+ *   its own content, and the answer says the length is the recorder's rather than the window
+ *   that was asked for. Compressing it into the requested window would have to either drop the
+ *   late sample or re-time it, and both are the plausible-looking wrong answer ai/RULES.md §2
+ *   exists against.
  *
  * **`result.container` still describes the pulled bytes and this describes the answered ones.**
  * Reading the container off the normalised file instead would erase the still-screen naming
@@ -181,23 +184,53 @@ const KEPT_CONTAINER_TIMELINE_MESSAGE =
 	`compressing it into the requested window would mean dropping one or re-timing it.`;
 
 /**
+ * The sentence for the call that named no window at all — a recording an agent started and
+ * stopped itself (#190).
+ *
+ * Its own message rather than {@link KEPT_CONTAINER_TIMELINE_MESSAGE} reworded, because the two
+ * are answering different questions. That one explains a length that is *not* the one the caller
+ * asked for; here the caller asked for none, and what needs saying is why there is nothing to
+ * hold a still screen across — and what to do about it, since the one thing that decides whether
+ * such a recording has a timeline at all is whether the agent drove the device between its two
+ * calls.
+ */
+const NO_REQUESTED_WINDOW_MESSAGE =
+	`This file's length is what the recorder's own timestamps declare, made constant-rate. ` +
+	`Nothing was held across a window, because this call named none: a recording that is ` +
+	`started and stopped as two separate calls is as long as whatever happened between them, ` +
+	`and no length is reported to the host to hold it to — a length invented here would be a ` +
+	`number nobody measured. So if 'container' says this recording holds a single sample and ` +
+	`declares no duration, the screen did not change between the two calls: drive the device ` +
+	`while the recording is open, or use the fixed-length recording, which does have a ` +
+	`requested window to hold a still screen across.`;
+
+/**
  * How this recording is normalised, and what the answer will say about it.
  *
  * Never throws and never refuses: every recording is normalised, including one whose container
  * this host could not read at all. That one keeps its own timeline — there is no requested
  * window to hold it across that could be justified from bytes nobody parsed — and says so with
  * a `durationMs` of `null` rather than a number nobody measured.
+ *
+ * **`requestedMs` is `null` for a call that named no window**, which is the whole of what a
+ * recording started and stopped as two calls is (#190): its length is the time between them,
+ * and nothing on the host times that — a map of open recordings is exactly the stale daemon
+ * state D6 exists to prevent, and the device has no birth time to subtract (PROJECT.md §6). So
+ * that call keeps the container's timeline whatever the container says, including for a still
+ * screen, and the message says why rather than reporting a length nobody measured. Nullable
+ * rather than defaulted to `0`, because "no window" and "a window of zero" are different
+ * sentences and only one of them is a caller's mistake.
  */
 export function planNormalisation(
 	container: RecordingContainer,
-	requestedMs: number,
+	requestedMs: number | null,
 ): NormalisationPlan {
 	// The hold is on the container declaring *no* duration, which is the still-screen fact in
 	// both shapes it arrives in: `still-screen` is one sample of zero duration, and a `samples`
 	// container of zero duration is the same fact with more samples in it. A requested zero
 	// never holds — `-t 0` writes an empty file, and the core is callable in process, so a
 	// caller that really sent one gets the container branch rather than nothing at all.
-	if (container.kind !== 'unreadable' && container.durationMs === 0 && requestedMs > 0) {
+	if (container.kind !== 'unreadable' && container.durationMs === 0 && (requestedMs ?? 0) > 0) {
 		return {
 			holdForMs: requestedMs,
 			report: RecordingNormalisationSchema.parse({
@@ -215,7 +248,7 @@ export function planNormalisation(
 			timeline: 'container',
 			durationMs: container.kind === 'unreadable' ? null : container.durationMs,
 			framesPerSecond: NORMALISED_FRAME_RATE,
-			message: KEPT_CONTAINER_TIMELINE_MESSAGE,
+			message: requestedMs === null ? NO_REQUESTED_WINDOW_MESSAGE : KEPT_CONTAINER_TIMELINE_MESSAGE,
 		}),
 	};
 }

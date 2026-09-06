@@ -204,9 +204,11 @@ interface PlannedFile {
  *
  * A verb this does not name contributes nothing, deliberately: the row covers screenshots,
  * recordings and log pulls, and archiving a tap's after-state would fill the tree with
- * things nobody asked to keep. **Those three are exactly the calls that take a `label`**
+ * things nobody asked to keep. **The calls it names are exactly the calls that take a `label`**
  * (`src/ipc/verb-methods.ts`), and the correspondence is not a coincidence: a label names a
- * thing that was filed, so a call this switch drops has nothing to label.
+ * thing that was filed, so a call this switch drops has nothing to label. `start_recording` is
+ * the proof rather than the exception — it produces no bytes, so it takes no label and is not
+ * named here; the stop that produces them is both (#190).
  *
  * `label` is prefixed by {@link labelled} in every branch, so an artifact's name is
  * `<sequence>_<label>_…` rather than the label being appended or replacing anything. The
@@ -230,7 +232,12 @@ function plan(
 			];
 		}
 
-		case 'record_video': {
+		// One branch for both ways of recording (#190). The answer is the same shape — the
+		// normalised recording on `artifact`, the frames beside it — so the file it makes is the
+		// same file, filed under the same per-lease `recordings` sequence. A second branch would
+		// be a second naming convention for one kind of artifact, and the two would drift.
+		case 'record_video':
+		case 'stop_recording': {
 			if (!result.artifact) return [];
 			const n = labelled(sequence(take('recordings')), label);
 			// The frames go in a sibling of the recording they were cut from, named after it, so

@@ -304,6 +304,31 @@ export interface RecordVideoOptions {
 }
 
 /**
+ * What bounds one {@link DeviceBackend.startRecording} call.
+ *
+ * One knob, and it is deliberately **not** how long to record for: the caller decides that by
+ * *when it stops* (#190). What this bounds is the recorder's own kill switch — the limit that
+ * makes a recorder which outlived the client that started it stop by itself rather than run on
+ * under the next lease (PROJECT.md §6). Until the lease-end teardown lands (R43 phase 3) it is
+ * the **only** thing that bounds a stray recorder, which is why it is required rather than
+ * optional.
+ *
+ * Not a schema and not optional, for {@link RecordVideoOptions}' reasons to the letter: the
+ * default is the *verb's* (`src/verbs/record.ts`), so no backend invents a second one.
+ */
+export interface StartRecordingOptions {
+	/**
+	 * The longest the recorder may run before it stops itself, in milliseconds.
+	 *
+	 * **Must be positive**, and a backend rounding to its own granularity floors rather than
+	 * passing a zero on — the same trap {@link RecordVideoOptions.durationMs} records, and here it
+	 * is worse: nothing about this call is waiting on the recorder, so a limit of zero read as *no
+	 * limit* leaves a recorder running on borrowed hardware with no call left to notice.
+	 */
+	readonly maxDurationMs: number;
+}
+
+/**
  * Why a backend's view of its device set was interrupted, in the cases where the backend
  * can say something a caller can **act on**.
  *
@@ -657,4 +682,54 @@ export interface DeviceBackend {
 	 * rather than shipping a method that answers with an empty file.
 	 */
 	recordVideo?(serial: DeviceSerial, options: RecordVideoOptions): Promise<Uint8Array>;
+
+	/**
+	 * Start recording the screen and **return while the recorder is still running**. Gated by
+	 * `canControlRecording`.
+	 *
+	 * The other half of {@link recordVideo}, not a replacement for it: that one is a window fixed
+	 * before anything happens, this one is a recording an agent drives the device *inside* (#190).
+	 * Both stay, because a caller that knows how long it wants should not have to make two calls
+	 * to get it.
+	 *
+	 * **It answers when the recorder is running, not when it was asked to run.** "The recorder
+	 * started" is a condition with a timeout, exactly as "the recorder is gone" is for
+	 * {@link recordVideo} (D12(b), ai/RULES.md §2) — an implementation that returned as soon as it
+	 * had spawned something would be answering `ok` for a recorder that failed to open its output,
+	 * and the first anyone would hear of it is a {@link stopRecording} that finds nothing.
+	 *
+	 * **A device that is already recording is refused by name** (`src/core/errors.ts`,
+	 * `RecordingAlreadyRunningError`), never queued behind the recording that is already there and
+	 * never allowed to become a second recorder writing the same file. That refusal is the same
+	 * one {@link recordVideo} gives on a device with a recording open, because it is the same fact
+	 * about the device.
+	 *
+	 * **Nothing about the recording is remembered on the host.** Whether one is open is a question
+	 * for the device, asked at the moment it matters (D6): a host that kept a flag would go on
+	 * believing it across a daemon restart, a recorder that hit its own limit, and a recorder some
+	 * other program on the host started.
+	 */
+	startRecording?(serial: DeviceSerial, options: StartRecordingOptions): Promise<void>;
+
+	/**
+	 * Stop the recording this device is holding open and answer with the video bytes. Gated by
+	 * `canControlRecording`.
+	 *
+	 * **Bytes, never a path**, and **finished before they are handed over** — {@link recordVideo}'s
+	 * two promises word for word, and made in the same two ways: the recorder is signalled and
+	 * then *waited for on a condition* until it is gone, because it writes its container index as
+	 * it exits, and the index is checked on the bytes that actually arrived rather than on any exit
+	 * code. What did not finish is `UnfinishedRecordingError` naming the device and the byte
+	 * length, never a file handed over (`src/core/errors.ts`).
+	 *
+	 * **A recorder that already stopped itself is not a failure.** It may have reached the limit
+	 * {@link StartRecordingOptions.maxDurationMs} set; the file it left is complete and playable,
+	 * and this answers with it. The failure is *nothing recorded at all* — no recorder and no file
+	 * — which is `NoRecordingRunningError`, so a caller that stopped something it never started
+	 * is told so rather than handed an empty answer.
+	 *
+	 * No options: everything that shapes the recording was decided when it started, and the one
+	 * thing that decides its length is when this is called.
+	 */
+	stopRecording?(serial: DeviceSerial): Promise<Uint8Array>;
 }

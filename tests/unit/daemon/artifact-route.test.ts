@@ -126,6 +126,7 @@ function registerFakeBackend(devices: Device[] = [createMockDevice({ serial: lea
 				canInput: true,
 				canControlNetwork: true,
 				canRecordVideo: true,
+				canControlRecording: true,
 			},
 		},
 		backend: createMockDeviceBackend({

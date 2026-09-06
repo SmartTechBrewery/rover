@@ -1,17 +1,18 @@
 /**
- * The two tools whose answer is bytes: `screenshot` and `record_video`.
+ * The three tools whose answer is bytes: `screenshot`, `record_video` and `stop_recording`.
  *
  * **The schemas from `src/ipc/methods.ts` *are* the tool declarations**, exactly as
- * `./devices.ts` and `./verbs.ts` say for the other twenty-one rows (ai/CODING_STANDARDS.md,
- * boundary #1). Which matters twice over here, because of a field those two schemas do
- * **not** have: there is no destination and no format on either. The capture happens on the
+ * `./devices.ts` and `./verbs.ts` say for the other twenty-two rows (ai/CODING_STANDARDS.md,
+ * boundary #1). Which matters twice over here, because of a field none of those schemas has:
+ * there is no destination and no format on any of them. The capture happens on the
  * host (D19), so a path sent to it would name nothing or name the wrong disk, and the format
  * is what the device recorder produced rather than something a caller picks. Declaring from
  * the schema is what keeps a well-meaning `--out`-shaped parameter from appearing here.
  *
  * **Where the bytes go is `../_shared/artifact.ts`'s** — the inline image for a screenshot,
  * the local file and the frames for a recording, and the guarantee that a refusal leaves no
- * file behind. This module is the two rows and nothing else.
+ * file behind. Both recording rows answer in the same shape, so both go through the same
+ * `recordVideoToolResult`. This module is the three rows and nothing else.
  *
  * **`record_video` raises its own request timeout**, the way `rover record` does: the call
  * spends up to fifteen seconds recording, then as long again on the host normalising the
@@ -19,6 +20,12 @@
  * megabytes. Left at the client's thirty-second default, a long-but-perfectly-normal recording
  * surfaces as a hang — no answer and no name — while the host is still working and about to say
  * exactly what happened.
+ *
+ * **`stop_recording` raises its own for the same reason and with one term fewer** (#190): by the
+ * time it is called the recording is over, so what is left is the host's normalisation, the
+ * host's frame extraction and the transfer. Its partner `start_recording` is a plain-data row in
+ * `./verbs.ts` — it produces no bytes and returns as soon as the recorder is up, so it belongs
+ * with the verbs and needs no timeout of its own.
  */
 
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
@@ -58,6 +65,22 @@ function recordingTimeoutMs(params: RecordVideoParams): number {
 		RECORDING_NORMALISATION_TIMEOUT_MS +
 		FRAME_EXTRACTION_TIMEOUT_MS +
 		DEFAULT_REQUEST_TIMEOUT_MS
+	);
+}
+
+/**
+ * How long this client waits for a recording it started separately to be stopped and handed
+ * back: **the host's normalisation, the host's frame extraction and the round trip**.
+ *
+ * {@link recordingTimeoutMs} minus its first term, and minus it deliberately rather than by
+ * oversight: the recording is already over by the time this call is made, and how long it ran is
+ * not something the call knows or could have carried (#190). Every remaining term is imported
+ * for that function's reason — the promise only holds while this bound is larger than every
+ * bound inside it, and a copied number is one the original is free to drift away from.
+ */
+function stopRecordingTimeoutMs(): number {
+	return (
+		RECORDING_NORMALISATION_TIMEOUT_MS + FRAME_EXTRACTION_TIMEOUT_MS + DEFAULT_REQUEST_TIMEOUT_MS
 	);
 }
 
@@ -104,7 +127,10 @@ export function registerArtifactTools(server: McpServer, host: HostName): void {
 				'before it is pulled, and the answer is the video and the frames or neither: a ' +
 				'recording that came off the device unfinished, one too large for a single answer, a ' +
 				'host with no decoder installed, and frames that will not fit beside the recording ' +
-				'are each refused by name and leave no file behind. **Frames sample motion and ' +
+				'are each refused by name and leave no file behind. **A recording already open on ' +
+				'the device is refused by name too** — this is the fixed-length way to record and it ' +
+				'will not cut short a recording `start_recording` opened; stop that one first, or ' +
+				'let it reach its own limit. **Frames sample motion and ' +
 				'nothing finer**: they can say something moved and roughly when, never whether an ' +
 				'animation was smooth. **The video file is normalised on the host so it always ' +
 				'plays** — what a device recorder writes is not a constant-rate video, so the host ' +
@@ -144,5 +170,50 @@ export function registerArtifactTools(server: McpServer, host: HostName): void {
 				),
 			);
 		},
+	);
+
+	server.registerTool(
+		'stop_recording',
+		declaring({
+			title: 'Stop the recording and collect it',
+			description:
+				'Stop the recording this device is holding open and answer with the frames sliced ' +
+				'out of it — inline, in order — and the path of the video file, written on **this** ' +
+				'machine. What it contains is whatever happened on the screen between ' +
+				'`start_recording` and this call, so it is only as interesting as what you did in ' +
+				'between. The answer is `record_video`’s exactly: the same video, the same frames, ' +
+				'the same `container` saying what the recording holds, and the same ' +
+				'`normalisation` saying which timeline the file you get follows. ' +
+				'`framesPerSecond` is optional; omit it for the host’s own default. It takes no ' +
+				'destination and no format, for the reason `screenshot` does not, and no duration ' +
+				'— the length was decided by when you called this. **A recorder that already ' +
+				'stopped itself is not a failure**: recordings are capped, so one left open long ' +
+				'enough ends on its own and this hands you the complete file it left. Stopping ' +
+				'when nothing was recording at all is `no-recording-running`, a recording that ' +
+				'came off the device mid-write is `unfinished-recording`, and a host that cannot ' +
+				'normalise or slice it refuses by name — each of them leaves no file behind. ' +
+				'**Nothing is held across a window here**, unlike `record_video`: this call names ' +
+				'no duration and nothing times the gap between the two calls, so the file follows ' +
+				'the recorder’s own timeline and `normalisation.message` says so. That is why a ' +
+				'recording of a screen you never touched comes back as `container.kind: ' +
+				'"still-screen"` — one sample, no duration, one frame — which is a true answer ' +
+				'about the device rather than a fault. Drive the device while the recording is ' +
+				'open, or use `record_video` with a duration. This call can take a couple of ' +
+				'minutes; that is the normalisation and the slicing on the host, not a hang. ' +
+				'`label` is optional and is `screenshot`’s: it names the host’s archived copy so ' +
+				'the same flow recorded in two runs of one group is filed as one thing at two ' +
+				'moments, and it requires the lease to carry a `groupId` — without one the call is ' +
+				'refused by name rather than losing its label.',
+			inputSchema: IPC_METHODS.stop_recording.params,
+		}),
+		async (received: unknown) =>
+			guarded('stop_recording', async () =>
+				recordVideoToolResult(
+					await callHost(host, 'stop_recording', received as never, {
+						timeoutMs: stopRecordingTimeoutMs(),
+					}),
+					resolveArtifactDirectory(),
+				),
+			),
 	);
 }

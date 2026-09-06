@@ -65,11 +65,11 @@
  * inside a CLI (D19).
  *
  * **And the archive's `label` is read off the call here, so no verb ever sees one** (D22, as
- * amended #150). The three rows that carry one are exactly the three the archive files —
- * `screenshot`, `record_video`, `read_logs` — and each hands its own string to {@link runVerb} as
- * a third argument rather than into the verb's options: a label names the *filed copy*, and the
- * device does not have one. That is the property R25 already had, kept: no verb signature, verb
- * option or result schema changes to carry it.
+ * amended #150). The four rows that carry one are exactly the four the archive files —
+ * `screenshot`, `record_video`, `stop_recording`, `read_logs` — and each hands its own string to
+ * {@link runVerb} as a third argument rather than into the verb's options: a label names the
+ * *filed copy*, and the device does not have one. That is the property R25 already had, kept: no
+ * verb signature, verb option or result schema changes to carry it.
  *
  * **A `label` on a lease with no `groupId` is refused here, before anything touches a device.**
  * It is the one refusal in this file that is about the call rather than about the lease's
@@ -113,6 +113,8 @@ import type {
 	RecordVideoParams,
 	ScreenshotParams,
 	ScrollParams,
+	StartRecordingParams,
+	StopRecordingParams,
 	SwipeParams,
 	TapParams,
 	TypeTextParams,
@@ -140,6 +142,11 @@ import {
 import { type ReadLogsVerbOptions, readLogs } from '../verbs/logs.js';
 import { deviceInfo, readScreen, screenshot } from '../verbs/read.js';
 import { type RecordVideoVerbOptions, recordVideo } from '../verbs/record.js';
+import {
+	type StopRecordingVerbOptions,
+	startRecording,
+	stopRecording,
+} from '../verbs/recording-session.js';
 import { type WaitVerbOptions, waitFor, waitUntilGone } from '../verbs/wait-for.js';
 import type { ArchivableResult, ArtifactArchive } from './archive.js';
 import { extractFrames } from './frames.js';
@@ -171,6 +178,8 @@ export type VerbHandlers = Pick<
 	| 'push_file'
 	| 'pull_file'
 	| 'record_video'
+	| 'start_recording'
+	| 'stop_recording'
 	| 'set_airplane_mode'
 	| 'set_wifi'
 >;
@@ -505,6 +514,26 @@ export function createVerbHandlers(
 			);
 		},
 
+		// The other way to record (#190): two calls with the device driven in between, rather than
+		// a window fixed before anything happens. Nothing about the preamble changes for them —
+		// which is the point of `runVerb` — and the *device* is what remembers that a recording is
+		// open, never this handler (D6): a map of open recordings here would be exactly the stale
+		// daemon state that decision exists to prevent.
+		start_recording(params: StartRecordingParams): Promise<VerbCallResult> {
+			return runVerb(params.leaseId, (context) => startRecording(context));
+		},
+
+		// The stop is the one that produces bytes, so it is the one that takes a `label` and hands
+		// it to `runVerb` as the third argument the way `record_video` does. Its answer is
+		// `record_video`'s whole, which is why it needs no result type of its own.
+		stop_recording(params: StopRecordingParams): Promise<RecordVideoCallResult> {
+			return runVerb(
+				params.leaseId,
+				(context) => stopRecording(context, stopRecordOptions(params)),
+				params.label,
+			);
+		},
+
 		// The two environment rows. Like the app rows they call the *verbs* rather than
 		// `context.backend.setAirplaneMode` — which reads identically, would skip the spine, and
 		// would also skip the `canControlNetwork` assertion the verbs carry, turning a device
@@ -611,6 +640,25 @@ function recordOptions(params: {
 		extractFrames,
 		normaliseRecording,
 		...(params.durationMs === undefined ? {} : { durationMs: params.durationMs }),
+		...(params.framesPerSecond === undefined ? {} : { framesPerSecond: params.framesPerSecond }),
+	};
+}
+
+/**
+ * The same for a recording that was started separately — one caller's knob and the two host
+ * halves, and deliberately **not** a duration: by the time this call is made the recording is
+ * already over, and how long it ran was decided by when the caller stopped it (#190).
+ *
+ * The host halves are the same two functions {@link recordOptions} resolves, for the same
+ * reason: the verb layer names each shape and the daemon supplies the implementation, because
+ * both start a process and nothing under `src/verbs/` may.
+ */
+function stopRecordOptions(params: {
+	readonly framesPerSecond?: number;
+}): StopRecordingVerbOptions {
+	return {
+		extractFrames,
+		normaliseRecording,
 		...(params.framesPerSecond === undefined ? {} : { framesPerSecond: params.framesPerSecond }),
 	};
 }

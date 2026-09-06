@@ -57,9 +57,12 @@ import {
 	type ReadLogsOptions,
 	type RecordVideoOptions,
 	type ScreenElement,
+	type StartRecordingOptions,
 } from '../../core/device.js';
 import {
 	FileTooLargeError,
+	NoRecordingRunningError,
+	RecordingAlreadyRunningError,
 	UnfinishedRecordingError,
 	UnsupportedTextError,
 } from '../../core/errors.js';
@@ -82,6 +85,7 @@ import {
 	quoteStream,
 	RECORDING_FINISH_TIMEOUT_MS,
 	RECORDING_PULL_TIMEOUT_MS,
+	RECORDING_START_TIMEOUT_MS,
 	runAdb,
 	runAdbBinaryOnDevice,
 	runAdbOnDevice,
@@ -180,6 +184,48 @@ export const RECORDING_BIT_RATE_BPS = 2_000_000;
  * {@link AndroidDeviceBackend.recordVideo}.
  */
 const RECORDING_TIME_LIMIT_UNIT_MS = 1_000;
+
+/**
+ * What this file asks the device for the recorder's pids, and it carries its own `|| true`.
+ *
+ * `pidof` exits **1** when nothing matches and `./adb.js` treats a non-zero exit as a failure,
+ * so "no such process" — the answer half these callers are looking for — would arrive as a
+ * broken device (PROJECT.md §6). A literal this file owns, the case this file's header names:
+ * no caller's string is anywhere near it.
+ *
+ * One constant rather than the same string in four places, because the three recording methods
+ * all ask the same question and a copy that drifted would make two of them disagree about what
+ * "already recording" means.
+ */
+const RECORDER_PIDS_COMMAND = 'pidof screenrecord || true';
+
+/**
+ * What stops a recording that is being held open: an interrupt to whatever `pidof` names.
+ *
+ * **The signal is what makes the file playable**, not a convenience. A recorder writes its
+ * container index as it exits, so killing it outright would leave exactly the unfinished file
+ * {@link UnfinishedRecordingError} exists for; interrupted, it writes the index and exits —
+ * measured on API 37, with `pidof` still naming it for a quarter of a second afterwards, which
+ * is why what follows this is a wait rather than a pull (PROJECT.md §6).
+ *
+ * It signals **every** recorder on the device for {@link RECORDER_PIDS_COMMAND}'s reason: this
+ * code never learned a pid, so there is no particular one to match. A literal this file owns,
+ * with no caller's string in it.
+ *
+ * **And it carries that constant's `|| true` for a sharper version of that constant's reason.**
+ * `pidof` naming a recorder is read one adb round trip before this one runs, so a recorder that
+ * reaches its own `--time-limit` in the gap — the fifteen seconds this pair supports is exactly
+ * the length agents are told to drive — leaves this expanding to a bare `kill -INT`, which
+ * prints its usage line and exits **1** (measured on API 37, PROJECT.md §6). Without the
+ * tolerance that arrives as `AdbCommandError`, which no `toVerbFailure` branch names, so the
+ * agent is told `internal_error` about a device that is fine — and `stopRecording`'s `finally`
+ * deletes the complete, playable file the recorder had just finished writing. The stderr goes
+ * with it because the usage line is noise about a race, not about a device.
+ *
+ * Nothing is lost by swallowing the exit code: a recorder that survived the signal is caught by
+ * the wait that follows, which fails naming the pids still there.
+ */
+const STOP_RECORDER_COMMAND = 'kill -INT $(pidof screenrecord) 2>/dev/null || true';
 
 /**
  * The tracker's argv. `-l` because the long format is what carries `model:`, and the
@@ -726,6 +772,29 @@ function notAnImage(serial: DeviceSerial, result: AdbBinaryResult): Error {
  */
 function scratchKey(serial: DeviceSerial, scratchPath: string): string {
 	return `${unwrap(serial)}\0${scratchPath}`;
+}
+
+/**
+ * The one command line that starts a recorder and lets the adb client go — every piece of it
+ * load-bearing, and every piece of it measured (PROJECT.md §6).
+ *
+ * `</dev/null >/dev/null 2>&1` is what detaches it, and the `&` alone is not: adb's shell
+ * service waits for EOF on the stream rather than for the foreground process, so without the
+ * redirections this command returns only when the recorder exits. What they throw away is a
+ * warning `screenrecord` prints on stdout at exit 0; nothing here reads either stream, and
+ * whether the recorder actually started is answered by {@link RECORDER_PIDS_COMMAND} rather
+ * than by anything it printed.
+ *
+ * Assembled here rather than at the call site so there is one place that knows what this
+ * backend asks of the recorder. Every part of it is a literal this file owns except
+ * `timeLimitSeconds`, which is a number it computed — the case this file's header names, and
+ * the reason nothing here takes a quoter.
+ */
+function detachedRecorderCommand(timeLimitSeconds: number): string {
+	return (
+		`screenrecord --bit-rate ${RECORDING_BIT_RATE_BPS} --time-limit ${timeLimitSeconds} ` +
+		`${RECORDING_PATH} </dev/null >/dev/null 2>&1 &`
+	);
 }
 
 export class AndroidDeviceBackend implements DeviceBackend {
@@ -1728,10 +1797,15 @@ export class AndroidDeviceBackend implements DeviceBackend {
 	 * the answer: `read_screen` reports the screen as it was mid-recording, which is what
 	 * D12(c) asks of it. What is still excluded is another call holding this same file.
 	 *
-	 * **A recorder somebody else started on the same device makes this time out.** The probe
-	 * asks whether *any* `screenrecord` is running, because matching a particular one would
-	 * mean matching a pid this code never learned; the timeout names the pids that were there,
-	 * which is what makes it actionable rather than mysterious.
+	 * **A recorder already running on the device is refused before anything else happens**
+	 * ({@link recorderPids}), naming the device and the pids that were there. It used to be a
+	 * `wait-timeout` ten seconds later, which was the honest answer while the only way to reach
+	 * it was somebody else's recorder; a recording held open on purpose (#190) makes it an
+	 * ordinary thing for an agent to do by accident, and "you are already recording" is what it
+	 * needs to hear. The probe asks whether *any* `screenrecord` is running, because matching a
+	 * particular one would mean matching a pid this code never learned. The completion wait
+	 * below keeps its own timeout regardless: a recorder that appears *during* this call is
+	 * still bounded.
 	 *
 	 * Neither `RECORDING_PATH` nor the bit rate takes a quoter: both are literals this file
 	 * owns, and the `--time-limit` argument is a number it computed.
@@ -1748,6 +1822,7 @@ export class AndroidDeviceBackend implements DeviceBackend {
 		const timeLimitMs = timeLimitSeconds * RECORDING_TIME_LIMIT_UNIT_MS;
 
 		return this.exclusivelyOn(serial, RECORDING_PATH, async () => {
+			await this.refuseIfRecording(serial);
 			await this.removeRecording(serial);
 
 			try {
@@ -1771,12 +1846,9 @@ export class AndroidDeviceBackend implements DeviceBackend {
 					what: `the recording on device '${serial}' to finish`,
 					timeoutMs: RECORDING_FINISH_TIMEOUT_MS,
 					probe: async () => {
-						const running = await runAdbOnDevice(serial, ['shell', 'pidof screenrecord || true']);
-						if (!isRecorderRunning(running.stdout)) return { met: true, value: undefined };
-						return {
-							found: `screenrecord still running as pid ${recorderPids(running.stdout).join(', ')}`,
-							met: false,
-						};
+						const pids = await this.recorderPids(serial);
+						if (pids.length === 0) return { met: true, value: undefined };
+						return { found: `screenrecord still running as pid ${pids.join(', ')}`, met: false };
 					},
 				});
 
@@ -1793,6 +1865,182 @@ export class AndroidDeviceBackend implements DeviceBackend {
 				await this.removeRecording(serial).catch(() => undefined);
 			}
 		});
+	}
+
+	/**
+	 * `screenrecord` **detached**, so this returns while the recorder runs on (#190).
+	 *
+	 * The other half of {@link recordVideo}'s lifecycle, and everything that method's docblock
+	 * records about `screenrecord` still applies — the index written on exit, `--time-limit` as
+	 * the kill switch, the fixed scratch path, the exclusion on it. What is new is measured in
+	 * PROJECT.md §6 and is the whole of this method:
+	 *
+	 * - **Detaching is the redirections, not the `&`.** `adb shell` waits for EOF on the shell
+	 *   service's stream rather than for the foreground process, so the same command line
+	 *   *without* `</dev/null >/dev/null 2>&1` returns only when the recorder exits — 2.24 s for a
+	 *   two-second run, measured — while with them it returned in 93 ms with the recorder running.
+	 *   No `nohup` and no `setsid`: adb sends no `SIGHUP` when the session ends. What the
+	 *   redirection throws away is a warning the recorder prints on stdout at exit 0 (a codec size
+	 *   it retried at), never anything that decides an answer — the answer is decided on the bytes
+	 *   {@link stopRecording} pulls.
+	 * - **"It started" is a condition, not the command's exit.** That exit says the shell forked;
+	 *   an unwritable path or a codec the device would not open would still exit 0 and leave
+	 *   nothing behind, and the first anyone would hear of it is a stop that finds no recording.
+	 *   So {@link waitForCondition} polls {@link recorderPids} until one is there, bounded by
+	 *   {@link RECORDING_START_TIMEOUT_MS} — a condition with a timeout, never a sleep (D12(b)).
+	 * - **`--time-limit` is passed here for a reason `record_video` only half needs it for.**
+	 *   Nothing is waiting on this recorder, so until the lease-end teardown lands (R43 phase 3)
+	 *   that limit is the *only* thing that stops one whose caller went away — a detached recorder
+	 *   started with `--time-limit 3` exited on its own three seconds later with nothing on the
+	 *   host holding it (PROJECT.md §6). It is whole seconds, rounded **up** and floored at one,
+	 *   for {@link recordVideo}'s stated reason: `--time-limit 0` is documented as *removing* the
+	 *   limit, so a computed zero would turn the kill switch off.
+	 *
+	 * **A device already recording is refused by name** rather than joined: two recorders would
+	 * write one file and spoil both, and {@link exclusivelyOn} cannot see the first one because it
+	 * belongs to a call that has already returned. That is the whole difference this method makes
+	 * to the register — the queue keeps two *calls* off one file, and this keeps two *recorders*
+	 * off it.
+	 *
+	 * **The `rm -f` is before the launch and there is deliberately no `finally` after it.** The
+	 * file this leaves behind is the recording, which is the point; removing it is
+	 * {@link stopRecording}'s, on every path. What the `rm` buys is {@link recordVideo}'s
+	 * freshness guarantee: a leftover from a run that died before its cleanup can never be the
+	 * file a later stop pulls.
+	 */
+	async startRecording(serial: DeviceSerial, options: StartRecordingOptions): Promise<void> {
+		// Whole seconds, rounded up and floored at one — {@link recordVideo}'s conversion, for its
+		// reason: a computed `0` is the value that turns the kill switch off.
+		const timeLimitSeconds = Math.max(
+			1,
+			Math.ceil(options.maxDurationMs / RECORDING_TIME_LIMIT_UNIT_MS),
+		);
+
+		return this.exclusivelyOn(serial, RECORDING_PATH, async () => {
+			await this.refuseIfRecording(serial);
+			await this.removeRecording(serial);
+
+			await runAdbOnDevice(serial, ['shell', detachedRecorderCommand(timeLimitSeconds)]);
+
+			await waitForCondition({
+				what: `the recording on device '${serial}' to start`,
+				timeoutMs: RECORDING_START_TIMEOUT_MS,
+				probe: async () => {
+					const pids = await this.recorderPids(serial);
+					if (pids.length > 0) return { met: true, value: undefined };
+					return { found: 'no screenrecord process on the device', met: false };
+				},
+			});
+		});
+	}
+
+	/**
+	 * Signal the recording this device is holding open, wait for it to be gone, and pull it.
+	 *
+	 * The order is fixed: **ask, signal, wait on the condition, pull, check, answer** — and
+	 * everything from the pull onwards is {@link recordVideo}'s, unchanged and for its reasons:
+	 * `exec-out` and never `shell` because a pty translates `0x0a`; the index checked on the bytes
+	 * that actually arrived rather than on an exit code; and the `rm -f` in a `finally` that runs
+	 * on the refusal paths too, where it does the most good.
+	 *
+	 * **The wait after the signal is not a formality here.** On API 37 the interrupt returns
+	 * immediately and `pidof` went on naming the recorder for another **0.265 s** across eight
+	 * further probes (PROJECT.md §6) — where `record_video`'s recorder had always already exited
+	 * by the time its own adb client returned. Pulling in that window is exactly the unfinished
+	 * file the whole design is against.
+	 *
+	 * **A recorder that already stopped is not a failure and not a special case.** It reached the
+	 * limit it was started with, its file is complete, and the pull below is the same pull. So
+	 * this branches on whether there is anything to signal, not on whether anything went wrong.
+	 *
+	 * **Which leaves one genuine failure, and `stat` is what tells it from the other one — the
+	 * pull cannot.** `adb exec-out cat` of a path that does not exist exits **0** and hands the
+	 * shell's own error text back *on stdout*: 60 bytes of `cat: …: No such file or directory`,
+	 * measured on API 37 (PROJECT.md §6). So the pull cannot report *nothing*, and bytes coming
+	 * back is not evidence that a recording did. The device is asked instead, with the same
+	 * `stat -L -c '%s %F'` both transfers already use ({@link statOnDevice}) — no `kind` branch,
+	 * because unlike a transfer's path this one is a literal this file owns, so the only question
+	 * is whether anything is there:
+	 *
+	 * - nothing there and no recorder either is {@link NoRecordingRunningError}: nothing was
+	 *   recorded, so there is nothing to hand back and nothing to explain about the bytes;
+	 * - anything else is pulled, and the index is checked on the bytes that arrived. A recorder
+	 *   that was signalled and still produced nothing usable is {@link UnfinishedRecordingError}
+	 *   naming what did arrive — the same refusal a pull that raced the encoder gets, because it
+	 *   is the same fact: the recording exists and is not playable. Stopping immediately after
+	 *   starting produces exactly this, as a **zero-byte file that is really there** rather than
+	 *   as a missing one (PROJECT.md §6).
+	 *
+	 * `RECORDING_PATH` takes no quoter — a literal this file owns, the case its header names.
+	 */
+	async stopRecording(serial: DeviceSerial): Promise<Uint8Array> {
+		return this.exclusivelyOn(serial, RECORDING_PATH, async () => {
+			try {
+				const running = await this.recorderPids(serial);
+				if (running.length > 0) {
+					await runAdbOnDevice(serial, ['shell', STOP_RECORDER_COMMAND]);
+					await waitForCondition({
+						what: `the recording on device '${serial}' to stop`,
+						timeoutMs: RECORDING_FINISH_TIMEOUT_MS,
+						probe: async () => {
+							const pids = await this.recorderPids(serial);
+							if (pids.length === 0) return { met: true, value: undefined };
+							return { found: `screenrecord still running as pid ${pids.join(', ')}`, met: false };
+						},
+					});
+				}
+
+				// Is there a recording at all? Asked before the pull rather than inferred from it,
+				// because a pull of a path that is not there answers with the shell's error text on
+				// stdout — bytes that are neither a recording nor nothing (see above). Nothing there
+				// is nothing to pull, so it is decided here and no bytes are asked for.
+				const onDevice = await this.statOnDevice(serial, RECORDING_PATH);
+				if (onDevice === null) {
+					if (running.length === 0) throw new NoRecordingRunningError(serial);
+					throw new UnfinishedRecordingError(serial, 0);
+				}
+
+				const pulled = await runAdbBinaryOnDevice(serial, ['exec-out', 'cat', RECORDING_PATH], {
+					timeoutMs: RECORDING_PULL_TIMEOUT_MS,
+				});
+
+				if (!isFinishedRecording(pulled.stdout)) {
+					throw new UnfinishedRecordingError(serial, pulled.stdout.byteLength);
+				}
+
+				return pulled.stdout;
+			} finally {
+				await this.removeRecording(serial).catch(() => undefined);
+			}
+		});
+	}
+
+	/**
+	 * The pids of every recorder on the device, empty when there is none.
+	 *
+	 * One place asks the device this question, because three callers act on the same answer and a
+	 * copy that drifted would make them disagree about what "already recording" means. It answers
+	 * pids rather than a boolean so a refusal and a wait's `found` can both name them — the half
+	 * of a message that makes it actionable rather than mysterious.
+	 */
+	private async recorderPids(serial: DeviceSerial): Promise<string[]> {
+		const running = await runAdbOnDevice(serial, ['shell', RECORDER_PIDS_COMMAND]);
+		return isRecorderRunning(running.stdout) ? recorderPids(running.stdout) : [];
+	}
+
+	/**
+	 * Refuse by name if this device is already recording — what both ways of starting one ask
+	 * before they start anything.
+	 *
+	 * Asked of the device rather than remembered (D6): a flag on this host would go on believing
+	 * itself across a daemon restart, across a recorder that reached its own `--time-limit`, and
+	 * across one some other program on the machine started.
+	 *
+	 * @throws RecordingAlreadyRunningError naming the device and the pids that were there.
+	 */
+	private async refuseIfRecording(serial: DeviceSerial): Promise<void> {
+		const pids = await this.recorderPids(serial);
+		if (pids.length > 0) throw new RecordingAlreadyRunningError(serial, pids);
 	}
 
 	/** The scratch file, gone — run before the recording and again after it, on every path. */

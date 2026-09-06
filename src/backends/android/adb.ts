@@ -91,6 +91,25 @@ export const SCREENSHOT_ADB_TIMEOUT_MS = 30_000;
 export const RECORDING_FINISH_TIMEOUT_MS = 10_000;
 
 /**
+ * How long the recorder gets to *appear* after a detached launch — the mirror of
+ * {@link RECORDING_FINISH_TIMEOUT_MS}, for the half of the lifecycle that has no adb client
+ * waiting on it (#190).
+ *
+ * A recording started to be held open returns while the recorder runs, so nothing about that
+ * command's own exit says the recorder opened its output — it says the shell forked. "A
+ * recorder is running on the device" is what says it, and it is a condition with a timeout
+ * like every other wait here (D12(b)). The launch was measured at **93 ms** to the client's
+ * return with `pidof` already naming the process (PROJECT.md §6), so this ordinarily costs one
+ * round trip; ten seconds is the same headroom the finish budget gets, for the same loaded
+ * device, rather than a number tuned to that measurement.
+ *
+ * What it bounds is the recorder that never starts at all — an unwritable path, a codec the
+ * device would not open — which without it would be an answered `ok` for a recording that does
+ * not exist, and a `stop_recording` minutes later as the first sign of it.
+ */
+export const RECORDING_START_TIMEOUT_MS = 10_000;
+
+/**
  * The third call here that is not a query: pulling a whole recording off the device.
  *
  * A recording is bounded by `MAX_ARTIFACT_BYTES` (4 MiB, `src/verbs/result.ts`) — up to

@@ -147,14 +147,19 @@ describe('what tools/list advertises', () => {
 	});
 
 	/*
-	 * The three calls the archive files, and only those (`src/daemon/archive.ts`'s `plan`). The
+	 * The four calls the archive files, and only those (`src/daemon/archive.ts`'s `plan`). The
 	 * declarations come from the same schemas as everything else here — what this adds is that the
-	 * key is on the right three rows, on the right side of the required line, and that each row's
+	 * key is on the right four rows, on the right side of the required line, and that each row's
 	 * prose says a label needs a group rather than leaving an agent to find out by refusal.
+	 *
+	 * `start_recording` is deliberately absent even though it is half of a call that files one
+	 * (#190): it produces no bytes, so there is nothing of its own to name, and the label goes on
+	 * the stop that produces them. That correspondence — a label is on exactly the calls that
+	 * file something — is what this gate is really holding.
 	 */
-	it('declares label on exactly the three calls the archive files, and never as a requirement', async () => {
+	it('declares label on exactly the four calls the archive files, and never as a requirement', async () => {
 		const tools = await advertisedTools();
-		const labelled = ['screenshot', 'record_video', 'read_logs'];
+		const labelled = ['screenshot', 'record_video', 'read_logs', 'stop_recording'];
 
 		for (const tool of tools) {
 			const properties = Object.keys(tool.inputSchema.properties ?? {});

@@ -1,5 +1,5 @@
 /**
- * The seventeen verb tools — every `IPC_METHODS` verb row whose answer is plain data, minus
+ * The eighteen verb tools — every `IPC_METHODS` verb row whose answer is plain data, minus
  * the two file transfers that have no shape a tool argument could carry.
  *
  * **The schemas from `src/ipc/methods.ts` *are* the tool declarations**, exactly as
@@ -25,9 +25,14 @@
  * **Zero verb logic.** Every handler is one {@link callHost} and one shared answer mapping
  * (`../_shared/verb-answer.ts`). Nothing here resolves a target, applies a default the host
  * does not already own, or branches on what a verb means — the host decided all of it and said
- * so in words that name the device (D16). That is why this is a table rather than seventeen
+ * so in words that name the device (D16). That is why this is a table rather than eighteen
  * hand-written blocks: the only thing that differs between rows is what the tool *says about
  * itself*, and a verb that later needs something of its own gets a field on its row.
+ *
+ * **`start_recording` is here and its partner is not**, which is the same split `record_video`
+ * already sits on (#190): this row answers plain data — the recorder is up, and here is the
+ * screen it starts on — while `stop_recording` answers bytes and so belongs beside the other
+ * two in `./artifacts.ts`, where the file-writing and the frames live.
  *
  * **A missing capability is a loud, agent-readable error** (D11). `read_screen` on a backend
  * that does not declare `canReadScreen`, and the two environment rows on one without
@@ -295,6 +300,27 @@ const VERB_TOOLS: readonly VerbToolRow[] = [
 		requestTimeoutMs: () => INSTALL_HOOK_TIMEOUT_MS + DEFAULT_REQUEST_TIMEOUT_MS,
 		// The one narrowed declaration, derived rather than restated — see the header.
 		declares: InstallAppParamsSchema.omit({ packageBase64: true }),
+	},
+	{
+		method: 'start_recording',
+		title: 'Start recording the screen',
+		description:
+			'Start recording the screen of the leased device and return **while the recorder is ' +
+			'still running**, so you can drive the device and have it captured. Call ' +
+			'`stop_recording` to end it and collect the video and its frames. **Everything the ' +
+			'recording contains is what happened on the screen between the two calls — so drive ' +
+			'the device.** A recording of a screen you never touched is a single still frame with ' +
+			'no duration, which is a true answer about the device rather than a fault, and there ' +
+			'is no window to stretch it across because you never named one. **The recorder stops ' +
+			'itself after about fifteen seconds**, which is what one answer can carry, so a ' +
+			'recording left open that long ends on its own — stopping afterwards still hands you ' +
+			'the complete file it left. It takes no duration: the length is decided by when you ' +
+			'stop. Starting a recording on a device that is already recording is refused by name, ' +
+			'naming the processes that were there, and so is a fixed-length `record_video` while ' +
+			'one is open — stop the open recording first. **Requires `canControlRecording`**, ' +
+			'which is not `canRecordVideo`: a device that can capture a fixed-length recording ' +
+			'may have no way to hold one open, and answers with a `missing-capability` failure ' +
+			'naming the capability and the device.',
 	},
 	{
 		method: 'set_airplane_mode',

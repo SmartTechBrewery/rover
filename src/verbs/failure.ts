@@ -30,6 +30,8 @@ import { CapabilityIdSchema } from '../core/capabilities.js';
 import { PointSchema, ScreenElementSchema } from '../core/device.js';
 import {
 	MissingCapabilityError,
+	NoRecordingRunningError,
+	RecordingAlreadyRunningError,
 	UnfinishedRecordingError,
 	UnsupportedTextError,
 	WaitTimeoutError,
@@ -177,6 +179,48 @@ export const VerbFailureSchema = z.discriminatedUnion('kind', [
 			kind: z.literal('unfinished-recording'),
 			serial: DeviceSerialSchema,
 			byteLength: z.number().int().nonnegative(),
+			message: z.string().min(1),
+		})
+		.strict(),
+	/**
+	 * A recording was asked for on a device that is already recording (#190).
+	 *
+	 * Its own kind rather than a `wait-timeout`, which is what it used to be: while the only way
+	 * to reach it was somebody else's recorder, a timeout naming the pids was the honest answer.
+	 * A recording held open on purpose makes it an ordinary thing for an agent to do by accident
+	 * — a second `start_recording`, or a `record_video` during an open session — and what it
+	 * needs to hear then is *you are already recording*, immediately, rather than after ten
+	 * seconds of a device that was never broken.
+	 *
+	 * `pids` is what makes it more than a restatement: a recorder this host started and one some
+	 * other program on the machine started are the same refusal and different remedies, and the
+	 * pids are the only thing here that separates them. Strings, because that is what the device
+	 * printed and nothing arithmetics them.
+	 */
+	z
+		.object({
+			kind: z.literal('recording-already-running'),
+			serial: DeviceSerialSchema,
+			pids: z.array(z.string().min(1)).min(1),
+			message: z.string().min(1),
+		})
+		.strict(),
+	/**
+	 * A recording was stopped on a device that was not recording and left nothing behind (#190).
+	 *
+	 * Kept apart from `unfinished-recording` because the two ask opposite things of the caller:
+	 * that one says the bytes were caught mid-write, ask again; this one says there were never
+	 * any bytes, start a recording first. And it is deliberately **not** the answer for a
+	 * recorder that stopped itself at its own limit — that one left a complete file and is an
+	 * `ok` answer with it.
+	 *
+	 * Without the branch it would arrive as `internal_error`, i.e. "the host broke", for a device
+	 * that is simply idle.
+	 */
+	z
+		.object({
+			kind: z.literal('no-recording-running'),
+			serial: DeviceSerialSchema,
 			message: z.string().min(1),
 		})
 		.strict(),
@@ -385,9 +429,10 @@ export type VerbFailure = z.infer<typeof VerbFailureSchema>;
  * class's own test seeing an internal error instead of an answer, which is the loud version
  * of this drifting.
  *
- * The four failures that are about a **host tool** rather than a device are delegated to
- * {@link hostToolFailure} — one list this long is harder to read than two, and those four
- * genuinely belong together.
+ * Two groups are delegated to helpers below — one list this long is harder to read than three,
+ * and each group genuinely belongs together: the four failures about a **host tool** rather than
+ * a device ({@link hostToolFailure}), and the two about whether a device has a recording open
+ * ({@link openRecordingFailure}).
  */
 export function toVerbFailure(error: unknown): VerbFailure | null {
 	if (error instanceof MissingCapabilityError) {
@@ -473,6 +518,8 @@ export function toVerbFailure(error: unknown): VerbFailure | null {
 			message: error.message,
 		};
 	}
+	const openRecording = openRecordingFailure(error);
+	if (openRecording !== null) return openRecording;
 	const hostTool = hostToolFailure(error);
 	if (hostTool !== null) return hostTool;
 	if (error instanceof FramesTooLargeError) {
@@ -523,6 +570,35 @@ export function toVerbFailure(error: unknown): VerbFailure | null {
 			polls: error.polls,
 			message: error.message,
 		};
+	}
+	return null;
+}
+
+/**
+ * The two failures about whether a device has a recording open (#190), split out of
+ * {@link toVerbFailure} for {@link hostToolFailure}'s reason.
+ *
+ * They belong together because they are the same question answered both ways — *is a recorder
+ * running on this device* — and because neither is about the recording's **bytes**, which is
+ * what keeps `unfinished-recording` out of this pair and in the list above. That one says
+ * something came off the device and is not playable; these two say the device was in the wrong
+ * state to be asked.
+ *
+ * Returns `null` for anything else, so the caller carries on down its own list.
+ */
+function openRecordingFailure(error: unknown): VerbFailure | null {
+	if (error instanceof RecordingAlreadyRunningError) {
+		return {
+			kind: 'recording-already-running',
+			serial: error.serial,
+			// Copied for the reason the candidates above are: the union's own type is a mutable
+			// array and the error published a `readonly` one to whoever caught it.
+			pids: [...error.pids],
+			message: error.message,
+		};
+	}
+	if (error instanceof NoRecordingRunningError) {
+		return { kind: 'no-recording-running', serial: error.serial, message: error.message };
 	}
 	return null;
 }

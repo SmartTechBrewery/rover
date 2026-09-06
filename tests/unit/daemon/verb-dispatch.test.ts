@@ -40,7 +40,12 @@ import {
 } from '@/backends/registry.js';
 import type { Capabilities } from '@/core/capabilities.js';
 import type { Device, DeviceBackend, DeviceWatch, DeviceWatcher, Point } from '@/core/device.js';
-import { UnfinishedRecordingError, UnsupportedTextError } from '@/core/errors.js';
+import {
+	NoRecordingRunningError,
+	RecordingAlreadyRunningError,
+	UnfinishedRecordingError,
+	UnsupportedTextError,
+} from '@/core/errors.js';
 import {
 	type AppId,
 	type DeviceSerial,
@@ -143,6 +148,8 @@ interface HostOptions {
 	readonly capture?: Uint8Array;
 	readonly recording?: Uint8Array;
 	readonly recordVideo?: DeviceBackend['recordVideo'];
+	readonly startRecording?: DeviceBackend['startRecording'];
+	readonly stopRecording?: DeviceBackend['stopRecording'];
 	readonly capabilities?: Partial<Capabilities>;
 	readonly leaseTtlMs?: number;
 	/** Defaults to the temp socket's own. Overridden by the test that makes the write fail. */
@@ -228,6 +235,13 @@ let transfers: Array<{
 let recordings: Array<{ serial: string; durationMs: number }>;
 
 /**
+ * The open-ended recordings the daemon's backend was asked for (#190) — the serial off the
+ * lease and the kill switch the verb decided on for a start, the serial alone for a stop, since
+ * a stop carries nothing about the recording it ends.
+ */
+let sessions: Array<{ method: string; serial: string; maxDurationMs?: number }>;
+
+/**
  * The radio calls the daemon's backend received, in order — which method, on which serial,
  * and with the boolean the client sent. Two methods of identical signature is the family a
  * crossed wire is invisible in, so these are recorded rather than inferred from an answer.
@@ -250,6 +264,7 @@ async function serve(options: HostOptions = {}): Promise<void> {
 	logReads = [];
 	transfers = [];
 	recordings = [];
+	sessions = [];
 	frameCalls.length = 0;
 	radioCalls = [];
 	const watchDevices = vi.fn<DeviceBackend['watchDevices']>((watcher: DeviceWatcher) => {
@@ -330,6 +345,17 @@ async function serve(options: HostOptions = {}): Promise<void> {
 				options.recordVideo ??
 				(async (serial, { durationMs }) => {
 					recordings.push({ serial, durationMs });
+					return options.recording ?? RECORDING;
+				}),
+			startRecording:
+				options.startRecording ??
+				(async (serial, { maxDurationMs }) => {
+					sessions.push({ method: 'startRecording', serial, maxDurationMs });
+				}),
+			stopRecording:
+				options.stopRecording ??
+				(async (serial) => {
+					sessions.push({ method: 'stopRecording', serial });
 					return options.recording ?? RECORDING;
 				}),
 		}),
@@ -1894,6 +1920,144 @@ describe('the recording row carries its payload on the artifact', () => {
 });
 
 /**
+ * The other two recording rows (#190), over the same wire and the same preamble.
+ *
+ * What is new on the wire is that one lifecycle is two calls, so the assertions are about the
+ * pair: the start reaches the device and answers plain data, the device is drivable between the
+ * two, and the stop answers exactly what `record_video` answers — because it is that schema.
+ */
+describe('a recording started and stopped over two calls', () => {
+	it('start_recording reaches the device the lease names and answers plain data', async () => {
+		await serve();
+		const client = await connect();
+		const leaseId = await acquire(client);
+
+		const answer = await client.request('start_recording', { leaseId });
+
+		expect(answer).toMatchObject({
+			outcome: 'ok',
+			// No target and no artifact: this call produces no bytes, and the device is the
+			// *lease's*, which the client never sent (D20).
+			result: { verb: 'start_recording', target: null, artifact: null, device: { serial: SERIAL } },
+		});
+		// The kill switch is the verb's, off `MAX_RECORDING_MS`, and there is no wire field for it.
+		expect(sessions).toEqual([
+			{ method: 'startRecording', serial: SERIAL, maxDurationMs: MAX_RECORDING_MS },
+		]);
+	});
+
+	/**
+	 * The acceptance criterion of the whole change, as far as this layer can state it: the verbs
+	 * that drive the device run between the two calls, on the same lease, and the stop still
+	 * answers. Whether the recording *contains* what happened in between is a device question
+	 * (`tests/device/android/recording.test.ts`).
+	 */
+	it('drives the device between the two calls, on one lease', async () => {
+		await serve();
+		const client = await connect();
+		const leaseId = await acquire(client);
+
+		await client.request('start_recording', { leaseId });
+		await client.request('tap', { leaseId, target: { by: 'text', text: 'Save' } });
+		await client.request('read_screen', { leaseId });
+		const stopped = await client.request('stop_recording', { leaseId });
+
+		expect(stopped).toMatchObject({ outcome: 'ok', result: { verb: 'stop_recording' } });
+		expect(taps).toHaveLength(1);
+		expect(sessions.map((call) => call.method)).toEqual(['startRecording', 'stopRecording']);
+	});
+
+	/**
+	 * The bytes over the real framing, for the reason `record_video`'s own case needs a socket:
+	 * `JSON.stringify` turns a `Uint8Array` into an object of numeric keys, so a result carrying
+	 * raw bytes passes every in-process test and arrives here as nonsense.
+	 */
+	it('stop_recording answers with the recording and its frames, intact after the round trip', async () => {
+		await serve();
+		const client = await connect();
+		const leaseId = await acquire(client);
+
+		await client.request('start_recording', { leaseId });
+		const answer = await client.request('stop_recording', { leaseId });
+
+		if (answer.outcome !== 'ok') throw new Error('the stop refused');
+		const { artifact } = answer.result;
+		if (!artifact) throw new Error('stop_recording answered with no artifact');
+		expect(artifact.mediaType).toBe('video/mp4');
+		expect(new Uint8Array(Buffer.from(artifact.base64, 'base64'))).toEqual(RECORDING);
+		expect(Object.keys(artifact).sort()).toEqual(['base64', 'byteLength', 'mediaType']);
+		// The same four fields `record_video` answers with, because it is the same schema.
+		expect(answer.result.frames.map((frame) => frame.mediaType)).toEqual([
+			'image/png',
+			'image/png',
+		]);
+		expect(answer.result.container).toBeDefined();
+		expect(answer.result.normalisation.timeline).toBe('container');
+	});
+
+	/**
+	 * A device already recording, as data rather than as a broken host. Without the branch in
+	 * `toVerbFailure` this arrives as `internal_error` — "the host broke" — for a device that is
+	 * working perfectly and is merely busy, and the pids are what say whose recorder it is.
+	 */
+	it('answers recording-already-running as data, naming the device and the pids', async () => {
+		await serve({
+			startRecording: async (serial) => {
+				throw new RecordingAlreadyRunningError(serial, ['29633']);
+			},
+		});
+		const client = await connect();
+		const leaseId = await acquire(client);
+
+		const answer = await client.request('start_recording', { leaseId });
+
+		expect(answer).toMatchObject({
+			outcome: 'failed',
+			failure: { kind: 'recording-already-running', serial: SERIAL, pids: ['29633'] },
+		});
+	});
+
+	// Its opposite, and equally not an `internal_error`: a stop for a start that was never made.
+	it('answers no-recording-running as data, naming the device', async () => {
+		await serve({
+			stopRecording: async (serial) => {
+				throw new NoRecordingRunningError(serial);
+			},
+		});
+		const client = await connect();
+		const leaseId = await acquire(client);
+
+		const answer = await client.request('stop_recording', { leaseId });
+
+		expect(answer).toMatchObject({
+			outcome: 'failed',
+			failure: { kind: 'no-recording-running', serial: SERIAL },
+		});
+	});
+
+	// The start takes the lease id and nothing else: no duration, because the length is decided
+	// by when the stop is called, and no label, because it files nothing.
+	it.each([
+		['durationMs', 1_000],
+		['label', 'home-screen'],
+	])('refuses %s sent to start_recording', async (field, value) => {
+		await serve();
+		const client = await connect();
+		const leaseId = await acquire(client);
+
+		const thrown = await client
+			// The field is computed, so the type sees an index signature rather than an unknown key
+			// — the cast is what puts a shape the schema will refuse on the wire, which is the point.
+			.request('start_recording', { leaseId, [field]: value } as never)
+			.catch((error: unknown) => error);
+
+		expect(thrown).toBeInstanceOf(IpcRequestError);
+		expect((thrown as IpcRequestError).code).toBe('invalid_params');
+		expect(sessions).toEqual([]);
+	});
+});
+
+/**
  * The two environment rows, which are the app rows' claim with one addition: this is the
  * first family on the wire whose `requires` names a **real capability**, so a backend that
  * does not declare it has to refuse as data — `missing-capability` naming the capability,
@@ -2386,7 +2550,7 @@ describe('a label on a lease with no group', () => {
 		expect(answer.message).toContain("'groupId'");
 	});
 
-	it('is refused for all three of the calls that carry one', async () => {
+	it('is refused for all four of the calls that carry one', async () => {
 		await serve();
 		const client = await connect();
 		const leaseId = await acquire(client);
@@ -2395,6 +2559,7 @@ describe('a label on a lease with no group', () => {
 			await client.request('screenshot', { leaseId, label: 'home-screen' }),
 			await client.request('record_video', { leaseId, label: 'home-screen' }),
 			await client.request('read_logs', { leaseId, label: 'home-screen' }),
+			await client.request('stop_recording', { leaseId, label: 'home-screen' }),
 		];
 
 		for (const answer of answers) {

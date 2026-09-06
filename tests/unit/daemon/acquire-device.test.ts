@@ -83,6 +83,7 @@ function registerFakeBackend(
 				canInput: false,
 				canControlNetwork: true,
 				canRecordVideo: true,
+				canControlRecording: true,
 			},
 		},
 		backend: createMockDeviceBackend({ watchDevices, describeDevice }),
@@ -222,6 +223,7 @@ describe('what a granted lease carries', () => {
 			canInput: false,
 			canControlNetwork: true,
 			canRecordVideo: true,
+			canControlRecording: true,
 		});
 	});
 

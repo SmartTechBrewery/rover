@@ -3,10 +3,11 @@
  *
  * "This device cannot do that" and "this broke" call for opposite responses from an
  * agent, so a missing capability is its own type rather than a generic `Error`
- * (ai/CODING_STANDARDS.md "Error handling", D11). The same test admits the four below:
+ * (ai/CODING_STANDARDS.md "Error handling", D11). The same test admits the six below:
  * "the device went away", "the device is not attached to this host", "this device cannot
- * type that string" and "the recording came off the device unfinished" are each an answer
- * a caller acts on differently, and none of them is a bug. Everything else in this layer
+ * type that string", "the recording came off the device unfinished", "this device is
+ * already recording" and "this device is not recording at all" are each an answer a caller
+ * acts on differently, and none of them is a bug. Everything else in this layer
  * throws plain `Error` for a programmer or validation bug, and returns `null` for not-found.
  *
  * Imports from `./capabilities.js` are type-only on purpose: that module imports this
@@ -176,6 +177,78 @@ export class UnfinishedRecordingError extends Error {
 		this.name = 'UnfinishedRecordingError';
 		this.serial = serial;
 		this.byteLength = byteLength;
+	}
+}
+
+/**
+ * Thrown when a recording was asked for on a device that is already recording.
+ *
+ * A near-twin of {@link UnfinishedRecordingError} in placement and in kind: the device is
+ * working perfectly, and what it is doing is not what this call assumed. It is here rather
+ * than in `src/verbs/errors.ts` because a backend raises it — "is a recorder running" is a
+ * question only the thing holding the device can ask, and it is asked of the device at the
+ * moment it matters rather than remembered on the host (D6).
+ *
+ * **It exists so that the second recording is refused instead of racing the first.** The two
+ * would otherwise share one device-side file and corrupt both, or — with the scratch path
+ * excluded per path (#184) — queue behind a recorder nobody intends to stop yet and surface as
+ * a `wait-timeout` on a device that was never broken. Both readings send an agent looking in
+ * the wrong place, when the actionable fact is simply *this device is already recording, stop
+ * that one first*.
+ *
+ * `pids` is what makes it more than a restatement: a recorder this host started and one some
+ * other program on the machine started are the same refusal and different remedies, and the
+ * pids are the only thing in the answer that can tell whoever is looking which they are
+ * dealing with. They travel as strings because that is what the device printed and nothing here
+ * arithmetics them.
+ *
+ * Every field is plain data, for the reason {@link WaitTimeoutError} states: `src/verbs/failure.ts`
+ * serializes it and a client on another machine reads it (D19).
+ */
+export class RecordingAlreadyRunningError extends Error {
+	readonly serial: DeviceSerial;
+	readonly pids: readonly string[];
+
+	constructor(serial: DeviceSerial, pids: readonly string[]) {
+		super(
+			`Device '${serial}' is already recording — ${pids.length === 1 ? 'a recorder is' : `${pids.length} recorders are`} ` +
+				`running on it as pid ${pids.join(', ')}. A second recording would share the same ` +
+				'device-side file and spoil both, so it is refused rather than started. Stop the ' +
+				'recording that is already open and ask again',
+		);
+		this.name = 'RecordingAlreadyRunningError';
+		this.serial = serial;
+		this.pids = [...pids];
+	}
+}
+
+/**
+ * Thrown when a recording was stopped on a device that was not recording and left no file.
+ *
+ * **The narrow case, deliberately.** A recorder that stopped itself before this call — because
+ * it reached the limit it was started with — is *not* this: the file it left is complete and
+ * playable, and stopping answers with it. This is the other one, where there is no recorder and
+ * no file, so there is nothing to hand over and nothing that happened: a stop for a start that
+ * was never made, or one that was made against a different device.
+ *
+ * Its own type rather than {@link UnfinishedRecordingError}, because the two ask opposite things
+ * of the caller: that one says the bytes were caught mid-write, ask again; this one says there
+ * were never any bytes, start a recording first. And a plain `Error` would surface as
+ * `internal_error` — "the host broke" — for a device that is simply idle.
+ *
+ * Plain fields only, for {@link WaitTimeoutError}'s reason (D19).
+ */
+export class NoRecordingRunningError extends Error {
+	readonly serial: DeviceSerial;
+
+	constructor(serial: DeviceSerial) {
+		super(
+			`Device '${serial}' is not recording and has no recording waiting to be collected — ` +
+				'there is no recorder running on it and nothing was left behind by one, so there is ' +
+				'nothing to stop and nothing to hand back. Start a recording before stopping one',
+		);
+		this.name = 'NoRecordingRunningError';
+		this.serial = serial;
 	}
 }
 

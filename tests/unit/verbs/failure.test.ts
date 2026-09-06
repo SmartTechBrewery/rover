@@ -12,6 +12,8 @@ import { describe, expect, it } from 'vitest';
 import {
 	DeviceVanishedError,
 	MissingCapabilityError,
+	NoRecordingRunningError,
+	RecordingAlreadyRunningError,
 	UnfinishedRecordingError,
 	UnsupportedTextError,
 	WaitTimeoutError,
@@ -196,6 +198,37 @@ describe('a verb-layer error becomes a failure a client can branch on', () => {
 			kind: 'unfinished-recording',
 			serial: SERIAL,
 			byteLength: 3_232,
+			message: error.message,
+		});
+	});
+
+	/**
+	 * The refusal that used to be a `wait-timeout` ten seconds later (#190). A recording held
+	 * open makes "this device is already recording" an ordinary thing for an agent to run into,
+	 * and the pids are what separate a recorder this host started from one it did not.
+	 */
+	it('maps a device that is already recording, naming the device and the pids', () => {
+		const error = new RecordingAlreadyRunningError(SERIAL, ['29633', '29640']);
+
+		expect(failureOf(error)).toEqual({
+			kind: 'recording-already-running',
+			serial: SERIAL,
+			pids: ['29633', '29640'],
+			message: error.message,
+		});
+	});
+
+	/**
+	 * Its opposite, and kept apart from `unfinished-recording` because the two ask opposite
+	 * things of the caller: that one says ask again, this one says start one first. Without the
+	 * branch a device that is simply idle answers `internal_error`.
+	 */
+	it('maps a stop with nothing recording, naming the device', () => {
+		const error = new NoRecordingRunningError(SERIAL);
+
+		expect(failureOf(error)).toEqual({
+			kind: 'no-recording-running',
+			serial: SERIAL,
 			message: error.message,
 		});
 	});
@@ -444,6 +477,8 @@ describe('a failure survives the trip to the agent', () => {
 		],
 		['artifact-too-large', new ArtifactTooLargeError(SERIAL, 9_000_000, 4_194_304)],
 		['unfinished-recording', new UnfinishedRecordingError(SERIAL, 3_232)],
+		['recording-already-running', new RecordingAlreadyRunningError(SERIAL, ['29633'])],
+		['no-recording-running', new NoRecordingRunningError(SERIAL)],
 		[
 			'frame-extraction-unavailable',
 			new FrameExtractionUnavailableError(SERIAL, 'ffmpeg', 'spawn ffmpeg ENOENT'),

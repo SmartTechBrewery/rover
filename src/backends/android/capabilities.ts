@@ -34,6 +34,16 @@
  * over it landed in the same change, and frame extraction is a separate phase; neither is
  * what moves this flag.
  *
+ * `canControlRecording` flips here (#190), and it is the one flag whose two methods had to
+ * land together for `canInput`'s reason: `CAPABILITY_METHODS.canControlRecording` names
+ * `startRecording` **and** `stopRecording`, so a manifest declaring it with only one of them
+ * implemented fails `tests/helpers/backend-conformance.ts`. This backend answers both —
+ * `screenrecord` launched detached and stopped by signal, the recorder's presence and absence
+ * each waited on as a condition (`../android/backend.ts`). It is deliberately **not**
+ * `canRecordVideo` widened: that flag names exactly one method and keeps meaning exactly that,
+ * and a platform whose recorder is one command taking a duration can answer it while having no
+ * way to hold a recording open at all.
+ *
  * **Every flag in this manifest is now `true`, so nothing here is a declared opt-out.**
  * That is a statement about this backend, not about the model: a capability declared
  * before its methods exist is exactly the "an agent is told a device can do something it
@@ -54,5 +64,6 @@ export const androidCapabilityManifest: CapabilityManifestInput = {
 		canInput: true,
 		canControlNetwork: true,
 		canRecordVideo: true,
+		canControlRecording: true,
 	},
 };

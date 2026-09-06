@@ -45,6 +45,7 @@ export function createMockCapabilities(overrides: Partial<Capabilities> = {}): C
 		canInput: true,
 		canControlNetwork: true,
 		canRecordVideo: true,
+		canControlRecording: true,
 		...overrides,
 	};
 }
@@ -342,6 +343,10 @@ export function createMockDeviceBackend(overrides: Partial<DeviceBackend> = {}):
 		recordVideo: vi.fn<NonNullable<DeviceBackend['recordVideo']>>(async () =>
 			createMockRecordingBytes(),
 		),
+		startRecording: vi.fn<NonNullable<DeviceBackend['startRecording']>>(async () => {}),
+		stopRecording: vi.fn<NonNullable<DeviceBackend['stopRecording']>>(async () =>
+			createMockRecordingBytes(),
+		),
 		...overrides,
 	};
 }
@@ -454,6 +459,16 @@ export function createConformingDeviceBackend(
 		// looks like.
 		async recordVideo(serial, options) {
 			performed.push(`recordVideo ${serial} ${options.durationMs}`);
+			return createMockRecordingBytes();
+		},
+		// The two halves of a recording held open (#190). `startRecording` answers nothing, so
+		// what keeps it clear of the harness's empty-answer check is the line it records — the
+		// same thing every other void method here does.
+		async startRecording(serial, options) {
+			performed.push(`startRecording ${serial} ${options.maxDurationMs}`);
+		},
+		async stopRecording(serial) {
+			performed.push(`stopRecording ${serial}`);
 			return createMockRecordingBytes();
 		},
 		...overrides,
