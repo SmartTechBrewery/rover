@@ -840,9 +840,10 @@ reports itself as **v1.4**:
   records above: `adb shell` may put a pty in the path and a pty translates every `0x0a` in a
   binary payload, conditionally on version, platform and whether stdin is a terminal — so a
   recording that survives on one machine is corrupt on the next.
-- **The scratch path is fixed (`/sdcard/rover-recording.mp4`) and made exclusive per device**, the
-  way `uiautomator`'s dump path is: two overlapping recordings would otherwise share one file and
-  corrupt both. It is removed **before** the recording as well as after, so a leftover from a run
+- **The scratch path is fixed (`/sdcard/rover-recording.mp4`) and made exclusive per scratch path**,
+  the way `uiautomator`'s dump path is: two overlapping recordings would otherwise share one file
+  and corrupt both, while a screen read can proceed alongside the recording. It is removed
+  **before** the recording as well as after, so a leftover from a run
   that died before its cleanup can never be the file that is pulled.
 - **Encoded at 2 Mbps rather than `screenrecord`'s 20 Mbps default.** A 3-second recording of a
   static home screen came to 62–64 KB; the rate is what ties `MAX_RECORDING_MS` to
@@ -993,6 +994,25 @@ fixture and off a synthetic worst case rather than off a live capture; the devic
   near-identical frames rather than one — over `MAX_FRAMES_BYTES` at ~100 KB each, turning an `ok`
   answer into a `frames-too-large` refusal. The sampling follows the container the *recorder*
   wrote, exactly as it did, and nothing asserts `frames.length ≈ duration × rate` anywhere.
+
+Checked on an **API 37** emulator (`sdk_gphone16k_arm64`, Android 17) and an **API 33** emulator
+(`sdk_gphone64_arm64`) with `adb` 37.0.0-14910828 while landing #184 phase 1 — the backend's
+scratch-path queues (R43), 2026-09-06:
+
+- **`uiautomator dump` and `screenrecord` do not compete for anything on the device, which is what
+  lets the backend's queue be per scratch path rather than per device.** A screen read taken while
+  a 6 s recording was in flight on the *same* device answered in **2386 ms** against a **2311 ms**
+  baseline with nothing recording, with the same 77 elements either way, and it answered **4077 ms
+  before** the recording did (API 37). On the API 33 emulator: **2068 ms** against a 2363 ms
+  baseline, 31 elements both times, 4312 ms before. The recording came back **finished** — `moov`
+  present — in every one of those runs, so the read costs the recording nothing either.
+- **The same measurement with the old per-device key is what the reversal rests on.** With one
+  queue covering both scratch paths, that read took **8862 ms** on the same emulator — it did not
+  begin until the recorder had gone — and answered **2332 ms after** the recording rather than
+  before it. That is tolerable only while a recording ends inside its own verb call; a recording
+  deliberately held open while the agent drives the device (R43 phases 2 and 3) would hold every
+  `read_screen` on that device for the recorder's whole life, which is the acceptance criterion
+  inverted.
 
 Checked against Node 25.2 while building R22's client, 2026-08-30:
 

@@ -713,18 +713,34 @@ function notAnImage(serial: DeviceSerial, result: AdbBinaryResult): Error {
 	);
 }
 
+/**
+ * The key one queue is held under: the device **and** the file, joined by a byte neither can
+ * contain, so two paths on one device cannot collide and one path on two devices cannot
+ * either.
+ *
+ * `\0` rather than a printable separator: `parseDeviceSerial` checks only that a serial is
+ * non-empty, so a serial carrying a printable one is not excluded by construction, while a
+ * NUL cannot reach here at all — every serial this backend holds travelled in an argv, and
+ * an argv entry is NUL-terminated. The path half is always {@link DUMP_PATH} or
+ * {@link RECORDING_PATH}, literals this file owns; no caller's string is ever part of a key.
+ */
+function scratchKey(serial: DeviceSerial, scratchPath: string): string {
+	return `${unwrap(serial)}\0${scratchPath}`;
+}
+
 export class AndroidDeviceBackend implements DeviceBackend {
 	/**
-	 * The tail of the queue of calls holding a device-side scratch path on each device —
-	 * {@link exclusivelyOn}'s register, and one of the two things this class holds.
+	 * The tail of the queue of calls holding one device-side scratch path on one device —
+	 * {@link exclusivelyOn}'s register, keyed by {@link scratchKey} on that pair, and one of
+	 * the two things this class holds.
 	 *
 	 * It is a queue and not a cache, which is the distinction D6 draws: nothing about a
-	 * device is remembered here between calls, only whether a call is still running. A serial
+	 * device is remembered here between calls, only whether a call is still running. A pair
 	 * appears while one is in flight and is dropped again straight afterwards. The other
 	 * thing held, {@link osVersions}, *is* a cache — and stays inside D6 by re-deriving
 	 * itself at every enumeration.
 	 */
-	private readonly scratchUse = new Map<DeviceSerial, Promise<void>>();
+	private readonly scratchUse = new Map<string, Promise<void>>();
 
 	/** See {@link OsVersionCache}: one read per attached device, re-derived at enumeration. */
 	private readonly osVersions = new OsVersionCache();
@@ -1348,15 +1364,18 @@ export class AndroidDeviceBackend implements DeviceBackend {
 	 * before the dump so the two overlap. It is awaited only after the dump has settled, so
 	 * the cleanup below can never race a dump that is still writing.
 	 *
-	 * **The whole triple is exclusive per device**, which is {@link exclusivelyOn}'s subject: the
-	 * three commands share one fixed device-side path, and a second read overlapping this
-	 * one either has its `uiautomator` killed by the device (exit 137 with both streams
-	 * empty, measured on API 37 — PROJECT.md §6) or has its file removed between its dump
-	 * and its `cat`. Either way a device that is working perfectly answers a verb with a
-	 * throw. Nothing above this stops that: the IPC server dispatches frames without
-	 * awaiting them and `src/daemon/verb-traffic.ts` registers concurrent calls on one
-	 * device rather than excluding them, both on purpose, so the exclusion belongs to the
-	 * one place that knows {@link DUMP_PATH} is shared.
+	 * **The whole triple is exclusive on {@link DUMP_PATH}**, which is
+	 * {@link exclusivelyOn}'s subject: the three commands share one fixed device-side path,
+	 * and a second read overlapping this one either has its `uiautomator` killed by the
+	 * device (exit 137 with both streams empty, measured on API 37 — PROJECT.md §6) or has
+	 * its file removed between its dump and its `cat`. Either way a device that is working
+	 * perfectly answers a verb with a throw. Both failure modes were only ever two *reads*
+	 * racing, which is why the exclusion is on the path and not on the device: a recording
+	 * in flight on this device holds {@link RECORDING_PATH} and touches nothing here, so it
+	 * no longer delays this read (#184). Nothing above this stops two reads either: the IPC
+	 * server dispatches frames without awaiting them and `src/daemon/verb-traffic.ts`
+	 * registers concurrent calls on one device rather than excluding them, both on purpose,
+	 * so the exclusion belongs to the one place that knows {@link DUMP_PATH} is shared.
 	 *
 	 * **The `rm` runs in a `finally` and its own failure never replaces the answer.**
 	 * Leaving a file behind on hardware held under a lease is what the cleanup exists to
@@ -1373,7 +1392,7 @@ export class AndroidDeviceBackend implements DeviceBackend {
 	 * header names. If it ever becomes a caller's value it takes a quoter.
 	 */
 	async readScreen(serial: DeviceSerial): Promise<ScreenElement[]> {
-		return this.exclusivelyOn(serial, async () => {
+		return this.exclusivelyOn(serial, DUMP_PATH, async () => {
 			const density = this.pixelScale(serial);
 			// Awaited at the end; the handler is attached now so a density that fails while the
 			// dump is still in flight is never an unhandled rejection.
@@ -1403,44 +1422,61 @@ export class AndroidDeviceBackend implements DeviceBackend {
 	}
 
 	/**
-	 * Run `work` after every call already queued for `serial`, and never beside one.
+	 * Run `work` after every call already queued for `scratchPath` on `serial`, and never
+	 * beside one.
 	 *
-	 * **The subject is the device-side scratch paths this backend owns** — {@link DUMP_PATH}
-	 * and {@link RECORDING_PATH} — both of which are fixed literals, so two overlapping calls
-	 * on one device would share one file. For a screen read that means a `uiautomator` killed
-	 * by the device or a document removed between the dump and the `cat`; for a recording it
-	 * means two encoders writing one file and both answers corrupt. One queue covers both
-	 * rather than one per path: the two do not overlap in practice, and a second register
-	 * would be a second thing to get right for a verb that is not competing for the device
-	 * anyway.
+	 * **The subject is one device-side scratch path this backend owns** — {@link DUMP_PATH}
+	 * or {@link RECORDING_PATH} — both of which are fixed literals, so two overlapping calls
+	 * holding the *same* one would share a file. For a screen read that means a `uiautomator`
+	 * killed by the device or a document removed between the dump and the `cat`; for a
+	 * recording it means two encoders writing one file and both answers corrupt.
 	 *
-	 * A promise chain per serial rather than a lock, because there is nothing to unlock: the
-	 * entry *is* the tail of the queue, and the next caller waits on it. Per serial, because
-	 * the thing being made exclusive is one device's scratch path — two devices are driven at
-	 * the same time as before, which is what an inventory of several is for.
+	 * **One queue per (device, path) pair, which reverses what this register did first.** One
+	 * queue covering both paths was right while every recording ended inside its own verb
+	 * call: the two did not overlap in practice, a screen read queued behind a recording
+	 * waited at most as long as the recording the same agent had just asked for, and a second
+	 * register was a second thing to get right for a verb that was not competing for the
+	 * device anyway. #184 removes that premise outright — a recording is going to be held open
+	 * *on purpose* while the agent drives the device, so a `read_screen` behind it would wait
+	 * for a recorder nobody intends to stop yet, which is the acceptance criterion inverted.
+	 * So the subject of one queue is now one **file**: two calls holding `DUMP_PATH` still
+	 * cannot overlap, two holding `RECORDING_PATH` still cannot, and a call holding one runs
+	 * beside a call holding the other. One map keyed on the pair rather than two named maps,
+	 * because the register's subject is *a scratch path a call is holding* and a key that says
+	 * which path is the version of that sentence every call site has to state.
+	 *
+	 * A promise chain per pair rather than a lock, because there is nothing to unlock: the
+	 * entry *is* the tail of the queue, and the next caller waits on it. Per pair rather than
+	 * per host, because the thing being made exclusive is one file on one device — two devices
+	 * are driven at the same time as before, which is what an inventory of several is for.
 	 *
 	 * The chain never rejects and never carries a value: a call that threw has still finished
 	 * with the device, and letting its rejection through would fail the *next* caller with the
-	 * previous caller's error. The entry is dropped once this call is the last one queued, so
-	 * the map is bounded by the devices being driven right now rather than by every device
-	 * this host has ever touched.
+	 * previous caller's error. The entry is dropped once this call is the last one queued for
+	 * that pair, so the map is bounded by the paths being driven right now rather than by
+	 * every device this host has ever touched.
 	 *
 	 * It bounds nothing else. A call that hangs holds the queue for exactly as long as
 	 * `./adb.js`'s timeout allows the command underneath it to hang, which is the bound that
 	 * already applies to every caller of it.
 	 */
-	private async exclusivelyOn<T>(serial: DeviceSerial, work: () => Promise<T>): Promise<T> {
-		const queued = (this.scratchUse.get(serial) ?? Promise.resolve()).then(work);
+	private async exclusivelyOn<T>(
+		serial: DeviceSerial,
+		scratchPath: string,
+		work: () => Promise<T>,
+	): Promise<T> {
+		const held = scratchKey(serial, scratchPath);
+		const queued = (this.scratchUse.get(held) ?? Promise.resolve()).then(work);
 		const settled = queued.then(
 			() => undefined,
 			() => undefined,
 		);
-		this.scratchUse.set(serial, settled);
+		this.scratchUse.set(held, settled);
 
 		try {
 			return await queued;
 		} finally {
-			if (this.scratchUse.get(serial) === settled) this.scratchUse.delete(serial);
+			if (this.scratchUse.get(held) === settled) this.scratchUse.delete(held);
 		}
 	}
 
@@ -1683,10 +1719,14 @@ export class AndroidDeviceBackend implements DeviceBackend {
 	 *   where it does the most good, because a multi-megabyte file left on borrowed hardware is
 	 *   what the cleanup is for.
 	 *
-	 * **Exclusive per device** ({@link exclusivelyOn}), because {@link RECORDING_PATH} is a
+	 * **Exclusive on {@link RECORDING_PATH}** ({@link exclusivelyOn}), because that path is a
 	 * fixed literal: two concurrent recordings on one device would otherwise share one file and
 	 * corrupt both, and nothing above this excludes them — `src/daemon/verb-traffic.ts`
-	 * registers concurrent calls on one device rather than preventing them, on purpose.
+	 * registers concurrent calls on one device rather than preventing them, on purpose. On the
+	 * path rather than on the device, so a {@link readScreen} on the same device now runs
+	 * *during* a recording rather than after it (#184) — which is deliberate, and is visible in
+	 * the answer: `read_screen` reports the screen as it was mid-recording, which is what
+	 * D12(c) asks of it. What is still excluded is another call holding this same file.
 	 *
 	 * **A recorder somebody else started on the same device makes this time out.** The probe
 	 * asks whether *any* `screenrecord` is running, because matching a particular one would
@@ -1707,7 +1747,7 @@ export class AndroidDeviceBackend implements DeviceBackend {
 		// what was asked: the adb client must outlive the command it is waiting on.
 		const timeLimitMs = timeLimitSeconds * RECORDING_TIME_LIMIT_UNIT_MS;
 
-		return this.exclusivelyOn(serial, async () => {
+		return this.exclusivelyOn(serial, RECORDING_PATH, async () => {
 			await this.removeRecording(serial);
 
 			try {

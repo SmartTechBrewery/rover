@@ -66,6 +66,14 @@ const RECORDING_PATH = '/sdcard/rover-recording.mp4';
 /** A short recording: long enough to have a payload, short enough for a suite to wait on. */
 const DURATION_MS = 2_000;
 
+/**
+ * The window the overlap case records for. Longer than {@link DURATION_MS} on purpose: that
+ * case asserts the recording was *still running* when the screen read came back, and a
+ * `uiautomator dump` on a loaded device takes a second or two of it. Six seconds is headroom
+ * over a real dump rather than a number tuned to one emulator's timing.
+ */
+const OVERLAP_DURATION_MS = 6_000;
+
 /** The sampling rate the frame cases ask for — named, so the count assertion can use it. */
 const FRAMES_PER_SECOND = 2;
 
@@ -128,6 +136,36 @@ describe.skipIf(!process.env.ROVER_TEST_DEVICE)('record_video against a real dev
 
 		expect(isFinishedRecording(second)).toBe(true);
 	}, 120_000);
+
+	/**
+	 * The claim #184 phase 1 turns on, and the only place it can be made: the unit suite
+	 * asserts it over a mocked runner, which cannot say whether `uiautomator dump` and
+	 * `screenrecord` coexist on a real device at all.
+	 *
+	 * Three things at once — the read answers with a screen, the recording it overlapped is
+	 * still *finished* when it arrives, and the scratch file is gone afterwards — because a
+	 * read that answered by corrupting the recording would be worse than one that waited.
+	 *
+	 * Read-only with respect to the screen, like the rest of this suite: it reads whatever is
+	 * on the device and changes nothing.
+	 */
+	it('answers a screen read while a recording is still running', async () => {
+		const device = await firstUsableDevice();
+		let finished = false;
+		const recording = backend
+			.recordVideo(device.serial, { durationMs: OVERLAP_DURATION_MS })
+			.finally(() => {
+				finished = true;
+			});
+
+		const elements = await backend.readScreen(device.serial);
+
+		expect(elements.length).toBeGreaterThan(0);
+		// The read did not queue behind the recorder: the recording is still in flight.
+		expect(finished).toBe(false);
+		expect(isFinishedRecording(await recording)).toBe(true);
+		expect(await listScratchFile(device.serial)).toMatch(/No such file or directory/);
+	}, 60_000);
 
 	/**
 	 * What the answer now says the recording contains (#183) — read off a real recorder's
