@@ -45,6 +45,8 @@ import {
 	InstallHookUndeclaredError,
 	OffScreenPointError,
 	ProjectNotRegisteredError,
+	RecordingNormalisationFailedError,
+	RecordingNormalisationUnavailableError,
 	TargetNotFoundError,
 	UnaddressableElementError,
 } from './errors.js';
@@ -223,6 +225,60 @@ export const VerbFailureSchema = z.discriminatedUnion('kind', [
 		})
 		.strict(),
 	/**
+	 * The recording could not be normalised into a file that plays, because this host cannot run
+	 * the program that normalises it at all — it is not on `PATH`, or the encoder has nowhere on
+	 * this host to write (#185).
+	 *
+	 * **The branch that keeps a silently un-normalised file from ever being the answer.** What
+	 * the recorder writes is not a constant-rate video — a still screen is one sample declaring
+	 * no duration, and an ordinary capture declares a timeline that is not the requested one —
+	 * so a host without the program has two wrong ways to reply: hand over bytes no player will
+	 * show anything for, or `internal_error`, which reads as a broken host for a machine that is
+	 * merely missing a program. `program` and `reason` are what make it actionable, exactly as
+	 * on `frame-extraction-unavailable`, whose shape this is field for field.
+	 *
+	 * The second condition has no counterpart on `frame-extraction-unavailable` because only
+	 * this tool needs a file: a temp directory the daemon cannot create (full, read-only, or
+	 * private to a sandbox) reaches the agent here rather than as the `internal_error` an
+	 * unmapped `mkdtemp` rejection would otherwise become. `reason` names the condition and
+	 * never the directory, which is D19's business.
+	 *
+	 * Not a `missing-capability`: that one is about a *device backend* (D11), and a host tool
+	 * says nothing about the hardware.
+	 */
+	z
+		.object({
+			kind: z.literal('recording-normalisation-unavailable'),
+			serial: DeviceSerialSchema,
+			program: z.string().min(1),
+			reason: z.string().min(1),
+			message: z.string().min(1),
+		})
+		.strict(),
+	/**
+	 * The normaliser ran and produced no normalised recording — a file it would not read, a
+	 * filter or encoder it refused, a run that outlived its budget, or one that exited 0 having
+	 * written nothing.
+	 *
+	 * Kept apart from the branch above because the two are fixed in different places: that one
+	 * says install a program, this one says something about *these bytes* or about this build of
+	 * it — a build without the H.264 encoder lands here, and its stderr names what is missing.
+	 * The exit code and the stderr travel together because "a non-zero exit is data"
+	 * (ai/CODING_STANDARDS.md), and `outcome` says how the run ended in words, since an exit, a
+	 * signal and an exit-0 that wrote no file are indistinguishable from a code.
+	 */
+	z
+		.object({
+			kind: z.literal('recording-normalisation-failed'),
+			serial: DeviceSerialSchema,
+			program: z.string().min(1),
+			exitCode: z.number().int().nullable(),
+			stderr: z.string(),
+			outcome: z.string().min(1),
+			message: z.string().min(1),
+		})
+		.strict(),
+	/**
 	 * The frames were extracted and do not fit one answer beside the recording they came from.
 	 *
 	 * Its own kind rather than a shape of `artifact-too-large`, because the way out differs:
@@ -328,6 +384,10 @@ export type VerbFailure = z.infer<typeof VerbFailureSchema>;
  * Adding a further error class to the verb layer without a branch here surfaces as that
  * class's own test seeing an internal error instead of an answer, which is the loud version
  * of this drifting.
+ *
+ * The four failures that are about a **host tool** rather than a device are delegated to
+ * {@link hostToolFailure} — one list this long is harder to read than two, and those four
+ * genuinely belong together.
  */
 export function toVerbFailure(error: unknown): VerbFailure | null {
 	if (error instanceof MissingCapabilityError) {
@@ -413,26 +473,8 @@ export function toVerbFailure(error: unknown): VerbFailure | null {
 			message: error.message,
 		};
 	}
-	if (error instanceof FrameExtractionUnavailableError) {
-		return {
-			kind: 'frame-extraction-unavailable',
-			serial: error.serial,
-			program: error.program,
-			reason: error.reason,
-			message: error.message,
-		};
-	}
-	if (error instanceof FrameExtractionFailedError) {
-		return {
-			kind: 'frame-extraction-failed',
-			serial: error.serial,
-			program: error.program,
-			exitCode: error.exitCode,
-			stderr: error.stderr,
-			outcome: error.outcome,
-			message: error.message,
-		};
-	}
+	const hostTool = hostToolFailure(error);
+	if (hostTool !== null) return hostTool;
 	if (error instanceof FramesTooLargeError) {
 		return {
 			kind: 'frames-too-large',
@@ -479,6 +521,63 @@ export function toVerbFailure(error: unknown): VerbFailure | null {
 			found: error.found,
 			timeoutMs: error.timeoutMs,
 			polls: error.polls,
+			message: error.message,
+		};
+	}
+	return null;
+}
+
+/**
+ * The four failures that are about a **host tool** rather than about a device, split out of
+ * {@link toVerbFailure} so neither function is a wall of branches.
+ *
+ * They belong together on their own terms and not only for the line count: each says something
+ * about the machine holding the device rather than about the hardware, so none of them is a
+ * `missing-capability` (D11) and none may ever be an `internal_error` — a host that is merely
+ * missing a program is not a broken one. `record_video` is the one verb that reaches two host
+ * tools, and both answer in the same two shapes: one for a program that never started, one for
+ * a run that produced nothing.
+ *
+ * Returns `null` for anything else, so the caller carries on down its own list.
+ */
+function hostToolFailure(error: unknown): VerbFailure | null {
+	if (error instanceof FrameExtractionUnavailableError) {
+		return {
+			kind: 'frame-extraction-unavailable',
+			serial: error.serial,
+			program: error.program,
+			reason: error.reason,
+			message: error.message,
+		};
+	}
+	if (error instanceof FrameExtractionFailedError) {
+		return {
+			kind: 'frame-extraction-failed',
+			serial: error.serial,
+			program: error.program,
+			exitCode: error.exitCode,
+			stderr: error.stderr,
+			outcome: error.outcome,
+			message: error.message,
+		};
+	}
+	if (error instanceof RecordingNormalisationUnavailableError) {
+		return {
+			kind: 'recording-normalisation-unavailable',
+			serial: error.serial,
+			program: error.program,
+			reason: error.reason,
+			message: error.message,
+		};
+	}
+	if (error instanceof RecordingNormalisationFailedError) {
+		return {
+			kind: 'recording-normalisation-failed',
+			serial: error.serial,
+			program: error.program,
+			exitCode: error.exitCode,
+			stderr: error.stderr,
+			outcome: error.outcome,
 			message: error.message,
 		};
 	}

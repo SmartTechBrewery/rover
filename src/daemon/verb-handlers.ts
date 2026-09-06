@@ -146,6 +146,7 @@ import { extractFrames } from './frames.js';
 import type { DeviceInventory } from './inventory.js';
 import { refusalReasonFor } from './lease-handlers.js';
 import type { Lease, LeaseStore } from './leases.js';
+import { normaliseRecording } from './normalise.js';
 import type { ProjectInstall } from './project-install.js';
 import { LeaseEndedError, type VerbCall, type VerbTraffic } from './verb-traffic.js';
 
@@ -602,11 +603,13 @@ function recordOptions(params: {
 	readonly framesPerSecond?: number;
 }): RecordVideoVerbOptions {
 	return {
-		// The host half of the call, and the only verb option that is not a caller's number:
-		// the verb layer names the shape and the daemon resolves the implementation, exactly as
-		// it resolves the backend, because the implementation starts a process and nothing under
-		// `src/verbs/` may (`./frames.ts`).
+		// The host half of the call, and the two verb options that are not a caller's numbers:
+		// the verb layer names each shape and the daemon resolves the implementation, exactly as
+		// it resolves the backend, because both implementations start a process and nothing
+		// under `src/verbs/` may (`./frames.ts`, `./normalise.ts`). They are the same program,
+		// resolved from `PATH` once in one place, so a host that has one has both.
 		extractFrames,
+		normaliseRecording,
 		...(params.durationMs === undefined ? {} : { durationMs: params.durationMs }),
 		...(params.framesPerSecond === undefined ? {} : { framesPerSecond: params.framesPerSecond }),
 	};

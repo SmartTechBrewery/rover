@@ -53,6 +53,26 @@
  * are different facts, and PROJECT.md §6 has a 15 s capture declaring 27.61 s to prove it. A
  * still screen is **named** there and stays `ok` with its one frame — turning a legitimate
  * recording of an idle screen into a failure would be the opposite mistake.
+ *
+ * **And the file it hands over is normalised on the host, so it always plays** (#185,
+ * `./recording-normalisation.ts`). What `screenrecord` writes is a variable-frame-rate stream
+ * whose samples exist only where the screen changed: a still screen is a structurally valid MP4
+ * that no player shows anything for, and an ordinary capture declares a timeline that is not the
+ * one that was asked for. So the pulled recording is re-encoded at a constant rate — held across
+ * the requested window when it declared no timeline of its own, otherwise over the recorder's
+ * own timeline with every sample intact — and it is the **normalised** bytes that become
+ * `result.artifact` and that `MAX_ARTIFACT_BYTES` is checked against, because re-encoding
+ * changes the byte count and the bound is on what is actually answered with. A host that cannot
+ * normalise refuses by name (`recording-normalisation-…`, `./errors.ts`), never a silently
+ * un-normalised file and never an `internal_error`.
+ *
+ * **Two fields about two files, and that is deliberate.** `container` says what came off the
+ * device — which is where the still-screen case is *named*, and it would stop being nameable if
+ * it were read off the normalised copy, since a normalised still screen is many samples over the
+ * window. `normalisation` says what is in the answer and which of the two timelines it follows.
+ * The frames are sliced from the **pulled** recording for the same reason and one more: the
+ * sampling would otherwise stop following the container's timeline, which is the derivation
+ * {@link MAX_FRAMES} rests on.
  */
 
 import { z } from 'zod';
@@ -65,6 +85,11 @@ import {
 	RecordingContainerSchema,
 	readRecordingContainer,
 } from './recording-container.js';
+import {
+	planNormalisation,
+	type RecordingNormalisation,
+	RecordingNormalisationSchema,
+} from './recording-normalisation.js';
 import { ActionResultSchema, type Artifact, ArtifactSchema, artifactFrom } from './result.js';
 
 /**
@@ -145,6 +170,19 @@ export const MAX_FRAMES_PER_SECOND = 4;
  * bound itself would stop ffmpeg and exit 0, and nothing downstream could tell that answer from
  * a complete one. {@link MAX_FRAMES_BYTES} stops an over-sized answer the same way, naming both
  * numbers, and in practice usually first.
+ *
+ * **Normalising the recording (#185) does not move the timeline this derivation rests on**, and
+ * that is why the constant is unchanged rather than re-derived. The frames are sliced from the
+ * **pulled** bytes, before anything re-encodes them ({@link recordVideo}), so the sampling still
+ * follows the container the recorder wrote and this is still a bound a call the wire admits can
+ * reach. Slicing the normalised copy instead would change the derivation twice over and both
+ * ways badly: it runs at {@link NORMALISED_FRAME_RATE} over the requested window, so a 15 s
+ * still-screen capture that samples to **one** frame today would sample to 61 near-identical
+ * ones — over {@link MAX_FRAMES_BYTES} at ~100 KB each, turning an `ok` answer into a
+ * `frames-too-large` refusal — while a container timeline longer than the request would still
+ * overrun the cap from the other direction. Whoever changes which bytes are sliced owes this
+ * paragraph a rewrite and `tests/unit/verbs/record.test.ts` a new assertion; the one it has is
+ * the guard.
  */
 export const MAX_FRAMES = 61;
 
@@ -226,6 +264,31 @@ export type FrameExtractor = (
 ) => Promise<Uint8Array[]>;
 
 /**
+ * How a pulled recording becomes a file that plays — declared here, implemented on the host.
+ *
+ * {@link FrameExtractor}'s arrangement exactly, for its reason: re-encoding needs an encoder,
+ * this tree has none, and the one that exists is a program on the host — so the implementation
+ * starts a process, and a process started anywhere under `src/verbs/` would put
+ * `node:child_process` in every client's module graph, since `src/ipc/verb-methods.ts` imports
+ * these schemas (D19, `tests/unit/daemon/remote-never-spawns.test.ts`). The verb layer names
+ * the shape and the daemon supplies it (`src/daemon/normalise.ts`).
+ *
+ * It answers with **bytes and never a path**, like everything else that crosses this seam: the
+ * normaliser needs a file on the host to write into (an MP4 muxer cannot write a non-fragmented
+ * file to a pipe) and that file is its own to create and remove, never something an answer
+ * names.
+ *
+ * `holdForMs` is {@link NormalisationPlan}'s decision rather than the caller's duration: non-null
+ * means hold the content across that window, because the recording declared no timeline of its
+ * own, and null means keep the recorder's timeline with every sample intact.
+ */
+export type RecordingNormaliser = (
+	serial: DeviceSerial,
+	recording: Uint8Array,
+	options: { readonly holdForMs: number | null },
+) => Promise<Uint8Array>;
+
+/**
  * What `record_video` answers with: everything every verb answers with, **plus the frames and
  * what the recording contains**.
  *
@@ -254,10 +317,19 @@ export type FrameExtractor = (
  * case that `round=up` quietly covers. Required rather than optional for `artifact`'s reason —
  * `undefined` does not survive JSON — with `unreadable` as the honest branch for bytes this
  * host could not parse (`./recording-container.ts`).
+ *
+ * `normalisation` is the third, added by #185, and the two are about **two different files**:
+ * `container` describes the bytes that came off the device, `normalisation` describes the bytes
+ * on `artifact`. Which is the whole reason both are here — the still-screen case can only be
+ * *named* off the pulled container, and the timeline a viewer can trust only exists on the
+ * normalised one. Required for the same reason, and never optional even when the two timelines
+ * happen to agree: an answer that omitted it when there was nothing surprising to say would
+ * make its presence the surprise.
  */
 export const RecordVideoResultSchema = ActionResultSchema.extend({
 	frames: z.array(ArtifactSchema),
 	container: RecordingContainerSchema,
+	normalisation: RecordingNormalisationSchema,
 }).strict();
 export type RecordVideoResult = z.infer<typeof RecordVideoResultSchema>;
 
@@ -273,6 +345,18 @@ export interface RecordVideoVerbOptions {
 	 * by answering with an empty array (`src/daemon/frames.ts`).
 	 */
 	readonly extractFrames: FrameExtractor;
+	/**
+	 * How the host turns the pulled recording into a file that plays
+	 * ({@link RecordingNormaliser}).
+	 *
+	 * **Required, and deliberately without a default**, for {@link extractFrames}' reason to the
+	 * letter: a default would be an import, and the import is what puts a process spawn in a
+	 * CLI's module graph. It is also what makes an un-normalised recording impossible to answer
+	 * with by accident — there is no way to call this verb without saying who normalises, and
+	 * the one implementation refuses by name rather than handing back its input
+	 * (`src/daemon/normalise.ts`).
+	 */
+	readonly normaliseRecording: RecordingNormaliser;
 	/**
 	 * Defaults to {@link DEFAULT_RECORDING_MS}. Bounded by {@link MAX_RECORDING_MS} and held
 	 * positive on the wire (`RecordVideoParamsSchema`), the way `read_logs` bounds `maxEntries`
@@ -305,6 +389,13 @@ export interface RecordVideoVerbOptions {
  * change, which records as a single sample of no duration. That is **reported, not refused**;
  * the answer stays `ok` and `frames` still carries the frame `round=up` extracted from it.
  *
+ * The artifact is the **normalised** recording rather than the bytes the device produced: a
+ * constant-rate file over a real timeline, so it opens and scrubs in an ordinary player whatever
+ * the encoder wrote (#185). `result.normalisation` says which timeline that is — the window that
+ * was asked for, for a recording that declared none of its own, or the recorder's own, which is
+ * a different number and routinely a longer one. `result.container` still describes the pulled
+ * bytes, so the two fields together say what was recorded and what is being handed over.
+ *
  * A recording too large for one answer is refused by name rather than trimmed, one that came
  * off the device unfinished is refused by name rather than handed over, a host that cannot
  * slice one refuses by name rather than answering with an empty list, and frames that would
@@ -320,6 +411,7 @@ export async function recordVideo(
 	let captured: Artifact | null = null;
 	let frames: Artifact[] = [];
 	let container: RecordingContainer | null = null;
+	let normalisation: RecordingNormalisation | null = null;
 
 	const result = await performAction(context, {
 		verb: 'record_video',
@@ -330,17 +422,31 @@ export async function recordVideo(
 			// before the dispatch rather than wherever a verb author remembered to (`./context.ts`).
 			const record = capabilityMethod(context, 'canRecordVideo', 'recordVideo');
 			const recording = await record(context.serial, { durationMs });
+			// Read here, off the pulled bytes, before anything re-encodes them: it is the only
+			// moment the recording the *device* produced exists, and reading it off the
+			// normalised copy instead would erase the still-screen naming this field exists for
+			// (#183, `./recording-container.ts`). The walk needs no decoder, no process and no
+			// second pass over the device, and it cannot throw or refuse — a recording it does
+			// not understand answers `unreadable`.
+			container = readRecordingContainer(recording);
+			// The plan is decided from that, and the host does the work (#185). The recording is
+			// finished and pulled by the time this line is reached — which is the whole of what
+			// phase 1 promised, and why normalising costs no second pass over the device.
+			const plan = planNormalisation(container, durationMs);
+			const normalised = await options.normaliseRecording(context.serial, recording, {
+				holdForMs: plan.holdForMs,
+			});
+			normalisation = plan.report;
 			// Encoded here, inside the action, for `screenshot`'s stated reason: a recording too
 			// large to answer with refuses before the spine spends a screen read reaching the
-			// same refusal. The extraction is inside it for the same reason, and it runs on the
-			// bytes rather than on the device — the recording is finished and pulled by the time
-			// this line is reached, which is the whole of what phase 1 promised.
-			captured = artifactFrom(context.serial, recording);
-			// Read here, off the same bytes, for the same reason the encoding is: it is the only
-			// moment the recording exists as bytes, and the walk needs no decoder, no process and
-			// no second pass over the device (#183, `./recording-container.ts`). It cannot throw
-			// and it cannot refuse — a recording it does not understand answers `unreadable`.
-			container = readRecordingContainer(recording);
+			// same refusal, and before a decoder is asked to slice bytes nobody will receive. It
+			// is the **normalised** bytes that are bounded and answered with, because re-encoding
+			// changes the byte count and `MAX_ARTIFACT_BYTES` is a bound on what is actually sent.
+			captured = artifactFrom(context.serial, normalised);
+			// Sliced from the **pulled** recording rather than from the normalised one, which is
+			// what keeps the sampling following the container's own timeline and so keeps
+			// `MAX_FRAMES`' derivation where it was — see that constant's docblock for what
+			// slicing the normalised copy would cost.
 			frames = withinByteBudget(
 				context.serial,
 				await options.extractFrames(context.serial, recording, { framesPerSecond }),
@@ -350,7 +456,13 @@ export async function recordVideo(
 
 	// Re-parsed rather than spread and returned, so both payloads are held to the same schema
 	// the spine's own answer was — the shape `screenshot` established and `read_logs` extended.
-	return RecordVideoResultSchema.parse({ ...result, artifact: captured, frames, container });
+	return RecordVideoResultSchema.parse({
+		...result,
+		artifact: captured,
+		frames,
+		container,
+		normalisation,
+	});
 }
 
 /**

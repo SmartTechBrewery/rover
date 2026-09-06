@@ -2,7 +2,8 @@
  * **A refusal is loud, and it leaves no file behind.**
  *
  * The four named refusals a byte-carrying verb can give — `artifact-too-large`,
- * `unfinished-recording`, `frame-extraction-unavailable`, `frames-too-large` — and a lease that
+ * `unfinished-recording`, `recording-normalisation-unavailable`, `frame-extraction-unavailable`,
+ * `frames-too-large` — and a lease that
  * is no longer live. Each has to reach the agent as `isError` naming it, because not getting
  * what you asked for must never read as having got it. The fifth way this can end, a decoded
  * length that disagrees with the host's, is a property of the writer both adapters now share
@@ -28,7 +29,11 @@ import {
 	HOST_TOKEN_ENV_VAR,
 } from '@/daemon/network-config.js';
 import { ARTIFACT_DIR_ENV_VAR } from '@/mcp/_shared/artifact.js';
-import { FrameExtractionUnavailableError, FramesTooLargeError } from '@/verbs/errors.js';
+import {
+	FrameExtractionUnavailableError,
+	FramesTooLargeError,
+	RecordingNormalisationUnavailableError,
+} from '@/verbs/errors.js';
 import { MAX_FRAMES_BYTES } from '@/verbs/record.js';
 import { MAX_ARTIFACT_BYTES } from '@/verbs/result.js';
 import {
@@ -49,6 +54,13 @@ import {
 const extractFramesMock = vi.hoisted(() => vi.fn());
 
 vi.mock('@/daemon/frames.js', () => ({ extractFrames: extractFramesMock }));
+
+const normaliseRecordingMock = vi.hoisted(() => vi.fn());
+
+// The second host tool `record_video` reaches (#185). Mocked for the reason the extractor is:
+// left unmocked a unit run would spawn a real `ffmpeg` over the stub recording. It hands its
+// input straight back, so this suite's assertions are about what it already asserted.
+vi.mock('@/daemon/normalise.js', () => ({ normaliseRecording: normaliseRecordingMock }));
 
 /** A backend that records fine, so a refusal in these tests is the one the test arranged. */
 const recordsFine = {
@@ -82,6 +94,10 @@ beforeEach(async () => {
 	}
 	extractFramesMock.mockReset();
 	extractFramesMock.mockResolvedValue(EXTRACTED_FRAMES);
+	normaliseRecordingMock.mockReset();
+	normaliseRecordingMock.mockImplementation(
+		async (_serial: unknown, recording: Uint8Array) => recording,
+	);
 });
 
 afterEach(async () => {
@@ -164,6 +180,27 @@ describe('a recording the host will not hand over', () => {
 		expect(textOf(result)).toContain('frame-extraction-unavailable');
 		// The answer is the video and the frames or neither. Writing the recording anyway would
 		// hand back a file whose absent frames read as a screen on which nothing happened.
+		expect(filesIn(artifactDir)).toEqual([]);
+	});
+
+	/**
+	 * The refusal that keeps a silently un-normalised file from ever reaching an agent (#185).
+	 * The alternative on a host without the program is a file written to this machine that no
+	 * player will show anything for, and nothing in the answer saying so.
+	 */
+	it('names recording-normalisation-unavailable on a host with no encoder, and writes nothing', async () => {
+		normaliseRecordingMock.mockRejectedValue(
+			new RecordingNormalisationUnavailableError(ARTIFACT_SERIAL, 'ffmpeg', 'spawn ffmpeg ENOENT'),
+		);
+		await serve(recordsFine);
+		const agent = await connectAgent();
+		const leaseId = await acquireLease(agent);
+
+		const result = await callTool(agent, 'record_video', { leaseId });
+
+		expect(result.isError).toBe(true);
+		expect(textOf(result)).toContain('recording-normalisation-unavailable');
+		expect(textOf(result)).toContain(ARTIFACT_SERIAL);
 		expect(filesIn(artifactDir)).toEqual([]);
 	});
 

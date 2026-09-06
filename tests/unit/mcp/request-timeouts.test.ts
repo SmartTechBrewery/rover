@@ -31,6 +31,7 @@ import {
 	FRAME_EXTRACTION_TIMEOUT_MS,
 	MAX_RECORDING_MS,
 } from '@/verbs/record.js';
+import { RECORDING_NORMALISATION_TIMEOUT_MS } from '@/verbs/recording-normalisation.js';
 import { DEFAULT_WAIT_TIMEOUT_MS } from '@/verbs/wait-for.js';
 import { callTool, connectMcpAgent } from '../../helpers/mcp-agent.js';
 
@@ -159,17 +160,21 @@ describe.each(WAITING_VERBS)('$tool, which can be asked to take a long time', (r
 	});
 });
 
-describe('record_video, which records and then waits for the host to slice it', () => {
-	it('waits out the recording, the host’s frame extraction and the round trip', async () => {
+describe('record_video, which records and then waits for the host to work on it twice', () => {
+	it('waits out the recording, both of the host’s budgets and the round trip', async () => {
 		const asked = 12_000;
 
 		const request = await requestFrom('record_video', { durationMs: asked });
 
-		// `rover record`'s three-term sum, term for term. Leaving the extraction out would put
-		// this client's deadline *inside* the host's, so a slow decode would be reported here as
-		// a nameless timeout while the host was about to say exactly what happened.
+		// `rover record`'s sum, term for term, and there are now two host steps in it (#185).
+		// Leaving either out would put this client's deadline *inside* the host's, so a slow
+		// re-encode or a slow decode would be reported here as a nameless timeout while the host
+		// was about to say exactly what happened.
 		expect(request.options?.timeoutMs).toBe(
-			asked + FRAME_EXTRACTION_TIMEOUT_MS + DEFAULT_REQUEST_TIMEOUT_MS,
+			asked +
+				RECORDING_NORMALISATION_TIMEOUT_MS +
+				FRAME_EXTRACTION_TIMEOUT_MS +
+				DEFAULT_REQUEST_TIMEOUT_MS,
 		);
 	});
 
@@ -177,7 +182,10 @@ describe('record_video, which records and then waits for the host to slice it', 
 		const request = await requestFrom('record_video', {});
 
 		expect(request.options?.timeoutMs).toBe(
-			DEFAULT_RECORDING_MS + FRAME_EXTRACTION_TIMEOUT_MS + DEFAULT_REQUEST_TIMEOUT_MS,
+			DEFAULT_RECORDING_MS +
+				RECORDING_NORMALISATION_TIMEOUT_MS +
+				FRAME_EXTRACTION_TIMEOUT_MS +
+				DEFAULT_REQUEST_TIMEOUT_MS,
 		);
 		expect(request.params).not.toHaveProperty('durationMs');
 	});
@@ -188,7 +196,7 @@ describe('record_video, which records and then waits for the host to slice it', 
 		// The one call most likely to be legitimately slow, and the one it would be worst to
 		// report as a hang: the bytes exist by then and the host is about to send them.
 		expect(request.options?.timeoutMs ?? 0).toBeGreaterThan(
-			MAX_RECORDING_MS + FRAME_EXTRACTION_TIMEOUT_MS,
+			MAX_RECORDING_MS + RECORDING_NORMALISATION_TIMEOUT_MS + FRAME_EXTRACTION_TIMEOUT_MS,
 		);
 	});
 });

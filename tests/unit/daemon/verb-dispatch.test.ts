@@ -106,6 +106,13 @@ vi.mock('@/daemon/frames.js', () => ({
 	},
 }));
 
+// The second host tool the daemon supplies (#185). Mocked beside the extractor for its reason —
+// unmocked, a unit run would spawn a real `ffmpeg` — and it hands its input straight back, so
+// what reaches the wire is still the recording the stub backend produced.
+vi.mock('@/daemon/normalise.js', () => ({
+	normaliseRecording: async (_serial: DeviceSerial, recording: Uint8Array) => recording,
+}));
+
 const SERIAL = parseDeviceSerial('attached-1');
 const attached = createMockDevice({ serial: SERIAL });
 const save = createMockScreenElement({ id: 'save', text: 'Save' });

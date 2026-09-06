@@ -28,8 +28,9 @@
  *
  * **A refusal leaves no file behind at all** — not a truncated one, not a zero-byte one. The
  * write is the last thing that happens and only on the `ok` branch, so `artifact-too-large`,
- * `unfinished-recording`, `frame-extraction-unavailable`, `frames-too-large` and a decoded
- * length that disagrees with the host's every one of them return or throw first. The
+ * `unfinished-recording`, `recording-normalisation-unavailable`,
+ * `recording-normalisation-failed`, `frame-extraction-unavailable`, `frames-too-large` and a
+ * decoded length that disagrees with the host's every one of them return or throw first. The
  * destination directory is not even created until the bytes are in hand.
  */
 

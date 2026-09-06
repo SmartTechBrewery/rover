@@ -19,11 +19,13 @@ const ADB_TIMEOUT_MS = 10_000;
  * - `ROVER_TEST_LOCAL_DEVICE` — ...and it is physically attached to **this host**, which is
  *   what a suite that changes the device's network has to have (D18).
  * - `ROVER_TEST_FRAME_EXTRACTION` — the host has the program that slices a recording into
- *   frames (`src/daemon/frames.ts`). That one is not about a device at all, and it is a gate
- *   rather than a failure for the same reason the others are: a host without it is a host
- *   that cannot run those cases, not a repository that is broken. It is warned about
- *   **loudly**, because a `record_video` case silently not running is exactly the silence
- *   ai/RULES.md §6 says reads as "checked".
+ *   frames (`src/daemon/frames.ts`) **and normalises one into a file that plays**
+ *   (`src/daemon/normalise.ts`). One flag rather than two, because it is the same program off
+ *   the same `PATH`: a host that has it can do both, and a host that does not can do neither.
+ *   That one is not about a device at all, and it is a gate rather than a failure for the same
+ *   reason the others are: a host without it is a host that cannot run those cases, not a
+ *   repository that is broken. It is warned about **loudly**, because a `record_video` case
+ *   silently not running is exactly the silence ai/RULES.md §6 says reads as "checked".
  *
  * Suites gate on the one they need with `describe.skipIf(!process.env.ROVER_TEST_…)`, so a
  * machine without a device it may touch skips rather than fails (ai/TESTING.md). Starting
@@ -46,7 +48,7 @@ async function probeDevices(): Promise<DeviceGate> {
 	}
 }
 
-/** Whether the frame extractor's program is on this host's `PATH` and will answer. */
+/** Whether the host tools' one program is on this host's `PATH` and will answer. */
 async function probeFrameExtraction(): Promise<boolean> {
 	try {
 		await execFileAsync(FFMPEG, ['-version'], { timeout: ADB_TIMEOUT_MS });
@@ -76,8 +78,9 @@ if (!gate.usable) {
 if (!canExtractFrames) {
 	console.warn(
 		`[device] '${FFMPEG}' is not on this host's PATH — skipping every case that slices a\n` +
-			'  recording into frames, including the whole `record_video` verb over a lease, since\n' +
-			'  the verb answers with the recording and the frames or with neither. Install it and\n' +
+			'  recording into frames or normalises one into a file that plays, including the whole\n' +
+			'  `record_video` verb over a lease, since the verb answers with the normalised\n' +
+			'  recording and its frames or with neither. Install it and\n' +
 			`  check \`${FFMPEG} -version\` to run them.`,
 	);
 }
