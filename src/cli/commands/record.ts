@@ -4,16 +4,17 @@
  * The same shape as `screenshot`, over the same one field: the recording rides on
  * `ActionResult.artifact` as base64 and never as a path (D19), and `../_shared/artifact.ts`
  * writes it here. What is different is time. This call spends up to fifteen seconds
- * recording, and then as long again on the host slicing the recording into frames, *before*
- * it starts transferring several megabytes — which is the one verb that can reach the
- * client's own 30 s request timeout. So this command raises it past **both** of the host's
- * own budgets ({@link requestTimeoutFor}), and a recording that finishes normally can never
- * surface as a hang.
+ * recording, and then as long again on the host normalising the recording and as long again
+ * slicing it into frames, *before* it starts transferring several megabytes — which is the one
+ * verb that can reach the client's own 30 s request timeout. So this command raises it past
+ * **every** one of the host's own budgets ({@link requestTimeoutFor}), and a recording that
+ * finishes normally can never surface as a hang.
  *
- * The frames are the host's work and this end cannot do it: `frame-extraction-unavailable`
- * is a host that has no decoder installed, and it fails the call whole rather than writing a
- * video without them. `--help` says so, because it is the one way a command that worked
- * yesterday stops working today without the device changing.
+ * The normalisation and the frames are both the host's work and this end cannot do either:
+ * `recording-normalisation-unavailable` and `frame-extraction-unavailable` are a host with no
+ * `ffmpeg` installed, and each fails the call whole rather than writing a file. `--help` says
+ * so, because it is the one way a command that worked yesterday stops working today without the
+ * device changing.
  *
  * The host is still the only thing that decides a recording is finished: the backend waits
  * on a condition for the recorder to be gone, checks the container index on the bytes that
@@ -35,6 +36,7 @@ import {
 	MAX_FRAMES_PER_SECOND,
 	MAX_RECORDING_MS,
 } from '../../verbs/record.js';
+import { RECORDING_NORMALISATION_TIMEOUT_MS } from '../../verbs/recording-normalisation.js';
 import { deliverArtifact, resolveDestination } from '../_shared/artifact.js';
 import {
 	expectPositionals,
@@ -65,23 +67,34 @@ Usage: rover record <lease-id> --out <path> [--duration-ms <n>] [--frames-per-se
                        --group-id — without one the host refuses the call by name rather
                        than dropping the label, and nothing is recorded or written.
 
-The host also slices the recording into PNG frames, with the decoder it has rather than one
-this command carries. The answer is both or neither: on a host that cannot slice — no decoder
-installed on the machine holding the device — this exits 1 with \`frame-extraction-unavailable\`
-and writes no video either. The frames themselves are not written to disk yet; --json reports
-how many there were and how large each one is.
+The video is normalised on the host before it is sent, so the file written here always plays.
+What a device recorder writes is not a constant-rate video — a capture of a screen that did not
+change is a valid MP4 no player shows anything for — so the host re-encodes it at a constant
+rate over a real timeline. --json reports \`normalisation\`, which says which timeline the file
+follows: \`requested\`, the window asked for, when the recording declared none of its own; or
+\`container\`, the recorder's own timestamps, which is a different number from --duration-ms and
+is routinely longer. On a host that cannot normalise — no ffmpeg installed on the machine
+holding the device — this exits 1 with \`recording-normalisation-unavailable\` and writes
+nothing, rather than handing over a file that will not play.
+
+The host also slices the recording into PNG frames, with the same program. The answer is both
+or neither: on a host that cannot slice this exits 1 with \`frame-extraction-unavailable\` and
+writes no video either. The frames themselves are not written to disk yet; --json reports how
+many there were and how large each one is. They are sliced from the recording as it came off
+the device, not from the normalised copy, so the sampling is unchanged by any of this.
 
 The answer also says what the recording contains: how many encoded samples it holds and what
-duration the container declares, both read off the file rather than taken from --duration-ms,
-which is a different number. A recording of a screen that never changed is one sample with a
-declared duration of 0 and a single frame — a device's virtual display produces a buffer only
-when the screen changes, so that is a true answer about the device rather than a fault. It
-still exits 0 and still writes the video; --json reports it on \`container\`, and without --json
-this command prints a line saying so under the written file.
+duration the container declares, both read off the file as it came off the device rather than
+taken from --duration-ms, which is a different number. A recording of a screen that never
+changed is one sample with a declared duration of 0 and a single frame — a device's virtual
+display produces a buffer only when the screen changes, so that is a true answer about the
+device rather than a fault, and the written video is that screen held across the window you
+asked for. It still exits 0 and still writes the video; --json reports it on \`container\`, and
+without --json this command prints a line saying so under the written file.
 
-This command waits for the whole recording, the frame extraction and the transfer, so it
-raises its own request timeout past the ${DEFAULT_REQUEST_TIMEOUT_MS} ms every other command uses — a long
-recording is never a hang.
+This command waits for the whole recording, the normalisation, the frame extraction and the
+transfer, so it raises its own request timeout past the ${DEFAULT_REQUEST_TIMEOUT_MS} ms every other command
+uses — a long recording is never a hang.
 
 A recording that came off the device unfinished, one too large for a single answer, or frames
 that will not fit beside it, is refused by name, exits 1 and leaves no file at --out at all —
@@ -168,16 +181,17 @@ function noteFor(answer: RecordVideoCallResult): { note?: string } {
 }
 
 /**
- * How long this client waits: the recording, **the frame extraction**, and the budget every
- * other call gets for the round trip and the transfer.
+ * How long this client waits: the recording, **the normalisation**, **the frame extraction**,
+ * and the budget every other call gets for the round trip and the transfer.
  *
  * Every step the host spends inside this one request is a term here, because the promise this
  * module's header makes — a call that finishes normally never surfaces as a hang — is only
- * true while this bound is larger than every bound inside it. Extraction is the third step and
- * {@link FRAME_EXTRACTION_TIMEOUT_MS} is what the host allows it, so leaving it out would put
- * the client's own deadline *inside* the host's: a slow decode would be reported here as a
- * timeout, with no answer and no name, while the host was still working and about to say
- * exactly what happened.
+ * true while this bound is larger than every bound inside it. Normalising and extracting are
+ * the second and third steps, and {@link RECORDING_NORMALISATION_TIMEOUT_MS} and
+ * {@link FRAME_EXTRACTION_TIMEOUT_MS} are what the host allows each, so leaving either out
+ * would put the client's own deadline *inside* the host's: a slow re-encode or a slow decode
+ * would be reported here as a timeout, with no answer and no name, while the host was still
+ * working and about to say exactly what happened.
  *
  * {@link DEFAULT_RECORDING_MS} stands in for a duration the caller did not send, and it is
  * imported rather than guessed at — but it is used *only* to size this timeout, never put on
@@ -187,7 +201,10 @@ function noteFor(answer: RecordVideoCallResult): { note?: string } {
  */
 function requestTimeoutFor(durationMs: number | undefined): number {
 	return (
-		(durationMs ?? DEFAULT_RECORDING_MS) + FRAME_EXTRACTION_TIMEOUT_MS + DEFAULT_REQUEST_TIMEOUT_MS
+		(durationMs ?? DEFAULT_RECORDING_MS) +
+		RECORDING_NORMALISATION_TIMEOUT_MS +
+		FRAME_EXTRACTION_TIMEOUT_MS +
+		DEFAULT_REQUEST_TIMEOUT_MS
 	);
 }
 

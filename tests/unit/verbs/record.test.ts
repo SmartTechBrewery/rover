@@ -15,12 +15,17 @@
  *   read as a recording in which nothing happened between two moments that are no longer
  *   adjacent, and nothing in the answer would say otherwise.
  * - **The frames are sliced from the recording that was pulled**, not from a second pass over
- *   the device: the extractor is handed the bytes the backend returned, and the call log below
- *   is what shows the device was touched once.
+ *   the device and not from the normalised copy: the extractor is handed the bytes the backend
+ *   returned, and the call log below is what shows the device was touched once. Slicing the
+ *   normalised recording instead would move the timeline the sampling follows, which is the
+ *   derivation `MAX_FRAMES` rests on (PROJECT.md §6).
+ * - **The artifact is the normalised recording, and the byte bound is checked on it** (#185).
+ *   Re-encoding changes the byte count, so a bound checked on the pulled bytes would be a bound
+ *   on something other than what is answered with — in both directions.
  *
- * The extractor is a parameter rather than an import (`FrameExtractor`), which is what keeps a
- * process spawn out of every client's module graph — so a test supplies its own rather than
- * mocking a module. Nothing here judges the recording itself. Whether the bytes are a
+ * The extractor and the normaliser are parameters rather than imports (`FrameExtractor`,
+ * `RecordingNormaliser`), which is what keeps a process spawn out of every client's module graph
+ * — so a test supplies its own rather than mocking a module. Nothing here judges the recording itself. Whether the bytes are a
  * *finished* recording is the backend's question, asked of the bytes it pulled
  * (`UnfinishedRecordingError`), and whether the recording shows anything is the agent's.
  */
@@ -41,9 +46,11 @@ import {
 	MAX_FRAMES_BYTES,
 	MAX_FRAMES_PER_SECOND,
 	MAX_RECORDING_MS,
+	type RecordingNormaliser,
 	type RecordVideoVerbOptions,
 	recordVideo,
 } from '@/verbs/record.js';
+import { NORMALISED_FRAME_RATE } from '@/verbs/recording-normalisation.js';
 import { MAX_ARTIFACT_BYTES } from '@/verbs/result.js';
 import {
 	createMockCapabilities,
@@ -82,6 +89,9 @@ interface Recording {
 	readonly rates: number[];
 	/** What the extractor was handed — the bytes the backend returned, or nothing yet. */
 	readonly sliced: Uint8Array[];
+	/** What the normaliser was handed, and the plan it was given for each. */
+	readonly normalised: Uint8Array[];
+	readonly holds: Array<number | null>;
 	readonly context: VerbContext;
 	readonly options: RecordVideoVerbOptions;
 }
@@ -100,12 +110,15 @@ function recording(
 		video?: Uint8Array;
 		frames?: readonly Uint8Array[];
 		extractFrames?: FrameExtractor;
+		normaliseRecording?: RecordingNormaliser;
 	} = {},
 ): Recording {
 	const calls: string[] = [];
 	const durations: number[] = [];
 	const rates: number[] = [];
 	const sliced: Uint8Array[] = [];
+	const normalised: Uint8Array[] = [];
+	const holds: Array<number | null> = [];
 	const bytes = options.video ?? recorded(2_048);
 
 	const backend = createMockDeviceBackend({
@@ -142,19 +155,46 @@ function recording(
 			return [...(options.frames ?? [createMockPngBytes(), createMockPngBytes()])];
 		});
 
-	return { calls, durations, rates, sliced, context, options: { extractFrames } };
+	// The default normaliser hands its input straight back, so every assertion that is not about
+	// normalisation reads exactly as it did before the host gained this step. A test that is
+	// about it supplies one that returns different bytes.
+	const normaliseRecording: RecordingNormaliser =
+		options.normaliseRecording ??
+		(async (_serial, recorded_, normaliseOptions) => {
+			calls.push('normaliseRecording');
+			normalised.push(recorded_);
+			holds.push(normaliseOptions.holdForMs);
+			return recorded_;
+		});
+
+	return {
+		calls,
+		durations,
+		rates,
+		sliced,
+		normalised,
+		holds,
+		context,
+		options: { extractFrames, normaliseRecording },
+	};
 }
 
 describe('record_video', () => {
-	it('is on the spine: it records, slices, then reads the screen, then reads the device', async () => {
+	it('is on the spine: it records, normalises, slices, then reads the screen and the device', async () => {
 		const { calls, context, options } = recording();
 
 		const result = await recordVideo(context, options);
 
 		expect(result.verb).toBe('record_video');
-		// The recording and the slicing first, then the spine's own capture — a verb that
-		// assembled its own answer would show neither of the last two.
-		expect(calls).toEqual(['recordVideo', 'extractFrames', 'readScreen', 'deviceInfo']);
+		// The recording, the normalisation and the slicing first, then the spine's own capture —
+		// a verb that assembled its own answer would show neither of the last two.
+		expect(calls).toEqual([
+			'recordVideo',
+			'normaliseRecording',
+			'extractFrames',
+			'readScreen',
+			'deviceInfo',
+		]);
 		expect(result.after).toEqual({ kind: 'screen', elements: [save] });
 		expect(result.device).toEqual(createMockDeviceInfo({ serial: context.serial }));
 	});
@@ -255,8 +295,9 @@ describe('record_video', () => {
 		});
 		// And it refused where the recording happened, before the spine spent a screen read
 		// reaching the same answer — and before a decoder was asked to slice bytes nobody can
-		// be sent.
-		expect(calls).toEqual(['recordVideo']);
+		// be sent. The normalisation is the one step ahead of it, because the bound is on the
+		// bytes that would actually be answered with.
+		expect(calls).toEqual(['recordVideo', 'normaliseRecording']);
 	});
 
 	/**
@@ -397,7 +438,7 @@ describe('record_video answers with the frames sliced out of the recording', () 
 		// Both ways out are in the message, because the pair of numbers alone does not say which.
 		expect((thrown as Error).message).toContain('Record for less time');
 		// Refused where the slicing happened, so no screen read was spent on it.
-		expect(calls).toEqual(['recordVideo', 'extractFrames']);
+		expect(calls).toEqual(['recordVideo', 'normaliseRecording', 'extractFrames']);
 	});
 
 	/**
@@ -426,7 +467,7 @@ describe('record_video answers with the frames sliced out of the recording', () 
 		});
 
 		await expect(recordVideo(context, options)).rejects.toBe(refusal);
-		expect(calls).toEqual(['recordVideo']);
+		expect(calls).toEqual(['recordVideo', 'normaliseRecording']);
 	});
 
 	/**
@@ -519,7 +560,13 @@ describe('record_video says what the recording holds', () => {
 		expect(result.frames).toHaveLength(1);
 		// And nothing was asked of the device or of the host a second time to learn any of it —
 		// the walk is over bytes already in hand.
-		expect(calls).toEqual(['recordVideo', 'extractFrames', 'readScreen', 'deviceInfo']);
+		expect(calls).toEqual([
+			'recordVideo',
+			'normaliseRecording',
+			'extractFrames',
+			'readScreen',
+			'deviceInfo',
+		]);
 	});
 
 	/**
@@ -570,5 +617,158 @@ describe('record_video says what the recording holds', () => {
 
 		expect(result.container).toMatchObject({ kind: 'unreadable' });
 		expect(result.artifact).not.toBeNull();
+	});
+});
+
+/**
+ * The recording is normalised on the host before it is answered with (#185).
+ *
+ * The gap this closes is that the artifact was whatever the encoder wrote, and what a device
+ * recorder writes is not a constant-rate video: a capture of a screen that did not change is a
+ * structurally valid MP4 with one sample of zero duration, which no player shows anything for,
+ * and an ordinary capture declares a timeline that is not the one that was asked for.
+ *
+ * The decision itself has its own suite (`./recording-normalisation.test.ts`). What is asserted
+ * here is what this layer owns: that it is the **normalised** bytes that are answered with and
+ * bounded, that the frames and `container` still come off the **pulled** ones, and that a host
+ * that could not normalise never quietly hands the original over.
+ */
+describe('record_video answers with the normalised recording', () => {
+	/** A normaliser whose output is unmistakably not its input. */
+	const rewrites =
+		(bytes: Uint8Array): RecordingNormaliser =>
+		async () =>
+			bytes;
+
+	it('puts the normalised bytes on the artifact rather than the ones that were pulled', async () => {
+		const pulled = recorded(2_048);
+		const normalisedBytes = recorded(1_024);
+		const { context, options } = recording({
+			video: pulled,
+			normaliseRecording: rewrites(normalisedBytes),
+		});
+
+		const result = await recordVideo(context, options);
+
+		// Byte for byte: a length check alone would pass for the pulled bytes truncated.
+		expect(new Uint8Array(Buffer.from(result.artifact?.base64 ?? '', 'base64'))).toEqual(
+			normalisedBytes,
+		);
+	});
+
+	it('hands the normaliser the pulled recording and the plan for it', async () => {
+		const pulled = createMockRecordingBytes({ sampleCount: 1, durationMs: 0 });
+		const { normalised, holds, context, options } = recording({ video: pulled });
+
+		await recordVideo(context, { ...options, durationMs: 6_000 });
+
+		expect(normalised).toEqual([pulled]);
+		// A container declaring no timeline is held across the window that was asked for.
+		expect(holds).toEqual([6_000]);
+	});
+
+	it('leaves a recording that declared a timeline on its own, and says so', async () => {
+		const { holds, context, options } = recording({
+			video: createMockRecordingBytes({ sampleCount: 2, durationMs: 27_610 }),
+		});
+
+		const result = await recordVideo(context, { ...options, durationMs: MAX_RECORDING_MS });
+
+		expect(holds).toEqual([null]);
+		expect(result.normalisation).toEqual({
+			timeline: 'container',
+			durationMs: 27_610,
+			framesPerSecond: NORMALISED_FRAME_RATE,
+			message: expect.any(String),
+		});
+	});
+
+	/**
+	 * The two fields are about two different files, and this is the pair that shows it: the
+	 * pulled bytes are still *named* as a still screen — which is what #183 exists for, and what
+	 * reading the container off the normalised copy would erase — while the answer says the file
+	 * being handed over follows the requested window instead.
+	 */
+	it('says the container is a still screen and the answer is the requested window', async () => {
+		const { context, options } = recording({
+			video: createMockRecordingBytes({ sampleCount: 1, durationMs: 0 }),
+			frames: [createMockPngBytes()],
+		});
+
+		const result = await recordVideo(context, { ...options, durationMs: 6_000 });
+
+		expect(result.container).toMatchObject({ kind: 'still-screen', durationMs: 0 });
+		expect(result.normalisation).toMatchObject({ timeline: 'requested', durationMs: 6_000 });
+	});
+
+	/**
+	 * The frames come off the **pulled** recording, which is what keeps the sampling following
+	 * the container's timeline and so keeps `MAX_FRAMES`' derivation where it is. Slicing the
+	 * normalised copy would sample a 15 s still-screen capture into 61 near-identical frames
+	 * instead of one — over `MAX_FRAMES_BYTES`, and an `ok` answer turned into a refusal.
+	 */
+	it('slices the pulled recording, never the normalised one', async () => {
+		const pulled = recorded(4_096);
+		const { sliced, context, options } = recording({
+			video: pulled,
+			normaliseRecording: rewrites(recorded(512)),
+		});
+
+		await recordVideo(context, options);
+
+		expect(sliced).toEqual([pulled]);
+	});
+
+	/**
+	 * The bound is on what is actually answered with, in both directions. A source over the bound
+	 * that the normaliser brings under it is an `ok` answer — refusing it would refuse bytes
+	 * nobody was ever going to send.
+	 */
+	it('admits an over-sized source that the normalisation brought under the bound', async () => {
+		const { context, options } = recording({
+			video: new Uint8Array(MAX_ARTIFACT_BYTES + 1),
+			normaliseRecording: rewrites(recorded(2_048)),
+		});
+
+		const result = await recordVideo(context, options);
+
+		expect(result.artifact?.byteLength).toBe(2_048);
+	});
+
+	/** And the other direction: a re-encode that grew past the bound is refused on its own length. */
+	it('refuses on the normalised length rather than on the length that was pulled', async () => {
+		const { calls, context, options } = recording({
+			video: recorded(2_048),
+			normaliseRecording: rewrites(new Uint8Array(MAX_ARTIFACT_BYTES + 1)),
+		});
+
+		const thrown = await recordVideo(context, options).catch((error: unknown) => error);
+
+		expect(thrown).toBeInstanceOf(ArtifactTooLargeError);
+		expect(thrown).toMatchObject({
+			byteLength: MAX_ARTIFACT_BYTES + 1,
+			maxBytes: MAX_ARTIFACT_BYTES,
+		});
+		// And no screen read and no decoder were spent on an answer nobody can be sent. (The
+		// normaliser here is this test's own, so it leaves no entry on the shared log.)
+		expect(calls).toEqual(['recordVideo']);
+	});
+
+	/**
+	 * A refusal from the host tool travels rather than being swallowed — and the extractor is
+	 * never reached, because the answer is the normalised video and its frames or neither. A verb
+	 * that caught this and answered with the pulled bytes would be the silently un-normalised
+	 * file the whole change exists against.
+	 */
+	it('lets a refusal from the normaliser through rather than answering with the original', async () => {
+		const refusal = new Error('the encoder is not installed on this host');
+		const { calls, context, options } = recording({
+			normaliseRecording: async () => {
+				throw refusal;
+			},
+		});
+
+		await expect(recordVideo(context, options)).rejects.toBe(refusal);
+		expect(calls).toEqual(['recordVideo']);
 	});
 });

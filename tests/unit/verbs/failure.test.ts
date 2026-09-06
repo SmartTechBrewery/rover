@@ -27,6 +27,8 @@ import {
 	InstallHookUndeclaredError,
 	OffScreenPointError,
 	ProjectNotRegisteredError,
+	RecordingNormalisationFailedError,
+	RecordingNormalisationUnavailableError,
 	TargetNotFoundError,
 	UnaddressableElementError,
 } from '@/verbs/errors.js';
@@ -240,6 +242,51 @@ describe('a verb-layer error becomes a failure a client can branch on', () => {
 		});
 	});
 
+	/**
+	 * The same pair again for the normalisation (#185), and the same reason it may never be an
+	 * `internal_error`: a host without `ffmpeg` is a machine missing a program, not a broken
+	 * one, and the alternative to naming it is handing over a recording no player will show
+	 * anything for.
+	 */
+	it('maps a host that cannot normalise a recording, naming the program and why it would not start', () => {
+		const error = new RecordingNormalisationUnavailableError(
+			SERIAL,
+			'ffmpeg',
+			'spawn ffmpeg ENOENT',
+		);
+
+		expect(failureOf(error)).toEqual({
+			kind: 'recording-normalisation-unavailable',
+			serial: SERIAL,
+			program: 'ffmpeg',
+			reason: 'spawn ffmpeg ENOENT',
+			message: error.message,
+		});
+	});
+
+	// And the one that ran: an exit 0 that wrote nothing is a branch of its own here, because it
+	// is the shape a build without the H.264 encoder takes and the one path by which an
+	// un-normalised file could otherwise have become the answer.
+	it('maps a normaliser that ran and produced nothing, carrying its exit code and its stderr', () => {
+		const error = new RecordingNormalisationFailedError(
+			SERIAL,
+			'ffmpeg',
+			0,
+			'Unknown encoder libx264\n',
+			'exited 0 without writing a recording at all',
+		);
+
+		expect(failureOf(error)).toEqual({
+			kind: 'recording-normalisation-failed',
+			serial: SERIAL,
+			program: 'ffmpeg',
+			exitCode: 0,
+			stderr: 'Unknown encoder libx264\n',
+			outcome: 'exited 0 without writing a recording at all',
+			message: error.message,
+		});
+	});
+
 	// Its own kind rather than a shape of `artifact-too-large`: that one is a capture that will
 	// never fit, this one has two knobs, and `frames` is what says which is worth turning.
 	it('maps frames over the budget, carrying the count and both byte numbers', () => {
@@ -404,6 +451,14 @@ describe('a failure survives the trip to the agent', () => {
 		[
 			'frame-extraction-failed',
 			new FrameExtractionFailedError(SERIAL, 'ffmpeg', 183, 'invalid data', 'exited 183'),
+		],
+		[
+			'recording-normalisation-unavailable',
+			new RecordingNormalisationUnavailableError(SERIAL, 'ffmpeg', 'spawn ffmpeg ENOENT'),
+		],
+		[
+			'recording-normalisation-failed',
+			new RecordingNormalisationFailedError(SERIAL, 'ffmpeg', 183, 'invalid data', 'exited 183'),
 		],
 		['frames-too-large', new FramesTooLargeError(SERIAL, 30, 3_000_000, 1_572_864)],
 		['project-not-registered', new ProjectNotRegisteredError(SERIAL, 'checkout-web')],

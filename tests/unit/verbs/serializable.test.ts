@@ -247,7 +247,12 @@ describe('the verb layer speaks only in plain data', () => {
 			}),
 		});
 
-		const recorded = await recordVideo(context, { extractFrames: async () => frames });
+		const recorded = await recordVideo(context, {
+			extractFrames: async () => frames,
+			// Hands its input straight back: this suite is about whether the answer survives JSON,
+			// not about what the host does to the recording (#185).
+			normaliseRecording: async (_serial, recording) => recording,
+		});
 
 		expect(RecordVideoResultSchema.parse(roundTrip(recorded))).toEqual(recorded);
 		// No raw bytes, no function, and no string that looks like somewhere on this host —
@@ -263,7 +268,12 @@ describe('the verb layer speaks only in plain data', () => {
 		// The common half is an `ActionResult` field for field, and the schema is `.strict()`,
 		// so it rejects the extra key rather than dropping it — the same pair `read_logs` above
 		// asserts, for the same reason.
-		const { frames: _frames, container: _container, ...common } = recorded;
+		const {
+			frames: _frames,
+			container: _container,
+			normalisation: _normalisation,
+			...common
+		} = recorded;
 		expect(ActionResultSchema.parse(roundTrip(common))).toEqual(common);
 		expect(() => ActionResultSchema.parse(roundTrip(recorded))).toThrow();
 		// And the field #183 added is plain data too: a discriminated union of a string and two
@@ -271,6 +281,11 @@ describe('the verb layer speaks only in plain data', () => {
 		// arrives as something else.
 		expect(RecordVideoResultSchema.parse(roundTrip(recorded)).container).toEqual(
 			recorded.container,
+		);
+		// And #185's, whose `durationMs` is required-and-nullable for this exact reason: an
+		// optional field would be `undefined` on the way out and simply absent on the way back.
+		expect(RecordVideoResultSchema.parse(roundTrip(recorded)).normalisation).toEqual(
+			recorded.normalisation,
 		);
 	});
 

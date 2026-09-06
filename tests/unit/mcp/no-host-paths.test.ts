@@ -47,6 +47,13 @@ const extractFramesMock = vi.hoisted(() => vi.fn());
 
 vi.mock('@/daemon/frames.js', () => ({ extractFrames: extractFramesMock }));
 
+const normaliseRecordingMock = vi.hoisted(() => vi.fn());
+
+// The second host tool `record_video` reaches (#185). Mocked for the reason the extractor is:
+// left unmocked a unit run would spawn a real `ffmpeg` over the stub recording. It hands its
+// input straight back, so this suite's assertions are about what it already asserted.
+vi.mock('@/daemon/normalise.js', () => ({ normaliseRecording: normaliseRecordingMock }));
+
 let temp: TempSocket;
 /** The agent's own directory, in its own place — never under the host's. */
 let agentDir: string;
@@ -77,6 +84,10 @@ beforeEach(async () => {
 	}
 	extractFramesMock.mockReset();
 	extractFramesMock.mockResolvedValue(EXTRACTED_FRAMES);
+	normaliseRecordingMock.mockReset();
+	normaliseRecordingMock.mockImplementation(
+		async (_serial: unknown, recording: Uint8Array) => recording,
+	);
 	running.push(
 		await serveDevice(temp, {
 			recordVideo: vi.fn<NonNullable<DeviceBackend['recordVideo']>>(async () =>

@@ -45,6 +45,13 @@ const extractFramesMock = vi.hoisted(() => vi.fn());
 // subject, and this suite only needs the `frames` field to arrive carrying real PNG bytes.
 vi.mock('@/daemon/frames.js', () => ({ extractFrames: extractFramesMock }));
 
+const normaliseRecordingMock = vi.hoisted(() => vi.fn());
+
+// The second host tool `record_video` reaches (#185). Mocked for the reason the extractor is:
+// left unmocked a unit run would spawn a real `ffmpeg` over the stub recording. It hands its
+// input straight back, so this suite's assertions are about what it already asserted.
+vi.mock('@/daemon/normalise.js', () => ({ normaliseRecording: normaliseRecordingMock }));
+
 let temp: TempSocket;
 let artifactDir: string;
 const running: RunningDaemon[] = [];
@@ -79,6 +86,10 @@ beforeEach(async () => {
 	}
 	extractFramesMock.mockReset();
 	extractFramesMock.mockResolvedValue(EXTRACTED_FRAMES);
+	normaliseRecordingMock.mockReset();
+	normaliseRecordingMock.mockImplementation(
+		async (_serial: unknown, recording: Uint8Array) => recording,
+	);
 });
 
 afterEach(async () => {

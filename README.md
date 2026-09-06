@@ -452,9 +452,11 @@ short form:
 And the gaps this quick start runs into today, rather than in principle:
 
 - **`record` was not run for this section**, because this machine has no `ffmpeg`. It was tried:
-  the call exits 1 with `frame-extraction-unavailable`, naming the program to install, and writes
-  no video either — never an empty frame list, which would read as a screen on which nothing
-  happened.
+  the call exits 1 naming the program to install and writes no video either — never an empty frame
+  list, which would read as a screen on which nothing happened. The name it exits with is now
+  `recording-normalisation-unavailable` rather than `frame-extraction-unavailable`, because the
+  host normalises the recording before it slices it and both need the same program; either way the
+  remedy is the same one line.
 - **One call carries one whole file, capped at 4 MiB**, so `install <lease-id> <local-path>` moves
   a small package and refuses a real APK by name. Chunked transfer is its own issue — and the way
   a real APK reaches the device today is `install` with **no** path, which runs the project's own
@@ -737,16 +739,39 @@ Because the extraction happens inside the same call, `rover record` answers with
 on a host with no decoder installed the command exits 1 with `frame-extraction-unavailable` and
 writes no video either, and its `--help` says so.
 
+**The video itself is normalised on the host, so the file you get always plays.** What a device
+recorder writes is not a constant-rate video: its samples exist only where the screen changed, so a
+capture of a screen that did not move is a structurally valid MP4 with **one sample declaring a
+duration of zero** — nothing to scrub, no timeline, and no player will show anything for it — while
+an ordinary capture declares a timeline that is not the one you asked for. That file was being
+written to your disk and filed in the host's durable archive, where whoever eventually opened it
+could not tell it from a broken one. So the host re-encodes the pulled recording at a constant
+frame rate over a real timeline before it answers, and `result.normalisation` says **which**
+timeline you are looking at: `requested`, the window you asked for, when the recording declared
+none of its own — the still screen, held across the window, which is what the absence of any
+further sample actually means — or `container`, the recorder's own timestamps, with every sample it
+wrote intact. Those two are different numbers and the second is routinely the larger. It is the
+same `ffmpeg` off the same `PATH`, so a host that can slice a recording can normalise one, and a
+host that cannot refuses by name — `recording-normalisation-unavailable` for a program that never
+started, `recording-normalisation-failed` for a run that produced nothing — never a silently
+un-normalised file. `MAX_ARTIFACT_BYTES` is checked on the **normalised** bytes, because
+re-encoding is what changes the number; the frames are still sliced from the recording as it came
+off the device, so nothing about the sampling or its bounds moved.
+
 **The answer also says what the recording contains.** `result.container` carries how many encoded
 samples the recording holds and what duration the file itself declares — read out of the container
-on the host, and deliberately not the duration you asked for, which is a different number: a
+**as it came off the device**, and deliberately not the duration you asked for, which is a
+different number: a
 fifteen-second capture of a barely-changing screen has been measured declaring 27.61 s. **A
 recording of a screen that never changed is one sample, a declared duration of zero and a single
 frame**, and it is named as exactly that (`still-screen`) with the reason in words. A device's
 virtual display produces a buffer only when the screen changes, so that is a true answer about the
 device rather than a fault — it still exits 0, still writes the video and still carries its frame,
 and the point of naming it is that every other check this verb makes passes for it, so an agent
-that saw only one frame had nothing to conclude from but its own suspicion.
+that saw only one frame had nothing to conclude from but its own suspicion. `container` and
+`normalisation` are about two different files on purpose — what was recorded, and what you are
+being handed — which is what lets the still screen stay *named* while the video you get is still
+one that plays.
 
 **What a recording is honest about: it samples motion, and the frames sample it again.** It can tell
 you something moved and roughly when. It cannot tell you how the movement eased, whether a frame was
@@ -963,8 +988,9 @@ without a second call. Where that file lands is `ROVER_MCP_ARTIFACT_DIR` below, 
 always a path on the agent's own machine — never one on the host, even when the two are the
 same machine. Neither tool takes a destination or a format, for the same reason neither takes
 a host. A refusal (`artifact-too-large`, `unfinished-recording`,
+`recording-normalisation-unavailable`, `recording-normalisation-failed`,
 `frame-extraction-unavailable`, `frames-too-large`) is an error naming it and leaves no file
-behind at all — never a truncated one.
+behind at all — never a truncated one, and never one that will not play.
 
 `install_app` is a tool in **one** of its two forms: it takes the lease id and nothing else, and
 the host runs what the lease's project declared as its install (D13). There is deliberately no
@@ -1074,7 +1100,8 @@ list, name it in `ROVER_ADB_PATH`.
 tried. It never executes a candidate — an install that left an adb server behind, or hung on a
 wedged binary, would be a worse prerequisite check than none.
 
-`ffmpeg`, which `record` needs on the host, is deliberately **not** resolved this way: there is no
+`ffmpeg`, which `record` needs on the host — once to normalise the recording and once to slice it
+into frames — is deliberately **not** resolved this way: there is no
 canonical install location for it the way there is for the Android SDK, so `PATH` remains the right
 answer for it.
 
@@ -1670,8 +1697,9 @@ warns when it can find no `adb` for Rover to run;
 `npm run verify` (lint, typecheck of both the Node tree and the panel, then the unit and panel test
 projects) is the one command that says whether the tree is healthy — it needs no device and no host
 tool. `npm run test:device` needs a device on `adb`, and
-the `record_video` cases additionally need `ffmpeg` on `PATH`; a host missing either **skips those
-suites loudly** rather than failing or passing in silence. Issues are filed with `/write-issue` and implemented with
+the `record_video` cases additionally need `ffmpeg` on `PATH` — which is the one program both the
+frame extraction and the recording normalisation use, so one flag gates both; a host missing either
+**skips those suites loudly** rather than failing or passing in silence. Issues are filed with `/write-issue` and implemented with
 `/solve-issue`; both are committed under `.claude/skills/`. Work is also delegated to
 [Swarm](https://github.com/SmartTechBrewery/swarm), which is why every issue carries the `swarm`
 label.

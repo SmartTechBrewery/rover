@@ -5,6 +5,7 @@ import { AndroidDeviceBackend } from '@/backends/android/backend.js';
 import { isFinishedRecording } from '@/backends/android/parsers/screenrecord.js';
 import type { Device } from '@/core/device.js';
 import { extractFrames } from '@/daemon/frames.js';
+import { normaliseRecording } from '@/daemon/normalise.js';
 import { FrameExtractionFailedError } from '@/verbs/errors.js';
 import {
 	FRAME_WIDTH_PX,
@@ -14,6 +15,8 @@ import {
 	MAX_RECORDING_MS,
 } from '@/verbs/record.js';
 import { readRecordingContainer } from '@/verbs/recording-container.js';
+import { planNormalisation } from '@/verbs/recording-normalisation.js';
+import { MAX_ARTIFACT_BYTES } from '@/verbs/result.js';
 
 /**
  * `screenrecord` against a real attached device. Skips rather than fails when there is none
@@ -43,6 +46,13 @@ import { readRecordingContainer } from '@/verbs/recording-container.js';
  * from a stream with no host temp file anywhere (PROJECT.md §6). Those cases gate on
  * `ROVER_TEST_FRAME_EXTRACTION` and the run **says so loudly** when the program is missing
  * (`tests/device/setup.ts`) rather than passing in silence.
+ *
+ * **So is the normalisation** (#185), on the same flag, because it drives the same program.
+ * What a mocked process cannot say is the whole of what that change claims: that a recording of
+ * a screen that never moved comes back as a file with a real timeline in it, that one with
+ * motion keeps every sample the recorder wrote, and that what the muxer writes is still
+ * decodable from a pipe — which is `+faststart`'s only job and the one property PROJECT.md §6
+ * records as load-bearing for everything downstream.
  *
  * Nothing below hardcodes a size, a model or a byte count off one device — every assertion
  * is a property of whatever is attached.
@@ -245,6 +255,100 @@ describe.skipIf(!process.env.ROVER_TEST_DEVICE || !process.env.ROVER_TEST_FRAME_
 			const recording = await backend.recordVideo(device.serial, { durationMs: DURATION_MS });
 
 			await extractFrames(device.serial, recording, { framesPerSecond: FRAMES_PER_SECOND });
+
+			expect(await listScratchFile(device.serial)).toMatch(/No such file or directory/);
+		}, 90_000);
+	},
+);
+
+/**
+ * The normalisation against a real recording off a real device (#185) — the half no mock can
+ * assert, on the same gate as the extraction because it drives the same program.
+ *
+ * Whichever screen happens to be on the device decides which branch each case takes, so every
+ * assertion below is a property of *whatever came back* rather than of a screen this suite
+ * arranged. In particular **nothing here relates a frame count to a duration times a rate**:
+ * PROJECT.md §6 rules that out as an assertion about a device's timing, and normalising does not
+ * change that.
+ */
+describe.skipIf(!process.env.ROVER_TEST_DEVICE || !process.env.ROVER_TEST_FRAME_EXTRACTION)(
+	'normalising a real recording into a file that plays',
+	() => {
+		/**
+		 * The headline criterion: whatever the recorder wrote, what comes back declares a real
+		 * timeline and more than the one sample a still screen arrives as. On a device sitting
+		 * idle this is the hold branch — the case the whole change exists for, and the one that
+		 * used to come back as `duration 0.000000` / `nb_frames 1`.
+		 */
+		it('answers with a recording whose container declares a timeline a viewer can trust', async () => {
+			const device = await firstUsableDevice();
+			const recording = await backend.recordVideo(device.serial, { durationMs: DURATION_MS });
+			const plan = planNormalisation(readRecordingContainer(recording), DURATION_MS);
+
+			const normalised = await normaliseRecording(device.serial, recording, {
+				holdForMs: plan.holdForMs,
+			});
+			const container = readRecordingContainer(normalised);
+
+			// Read back with the same walk the verb uses, so this is the answer a client would get
+			// rather than a second opinion from another tool.
+			expect(container.kind).toBe('samples');
+			if (container.kind !== 'samples') return;
+			expect(container.durationMs).toBeGreaterThan(0);
+			expect(container.sampleCount).toBeGreaterThan(1);
+		}, 120_000);
+
+		/**
+		 * `+faststart`'s only job, and the reason it is not optional: the `moov` has to sit before
+		 * the payload or nothing downstream can read this file from a stream. Feeding it to the
+		 * frame extractor is the executable proof, because that is exactly what `ffmpeg -i pipe:0`
+		 * requires (PROJECT.md §6).
+		 */
+		it('writes a file that is still decodable from a pipe, index before payload', async () => {
+			const device = await firstUsableDevice();
+			const recording = await backend.recordVideo(device.serial, { durationMs: DURATION_MS });
+			const plan = planNormalisation(readRecordingContainer(recording), DURATION_MS);
+
+			const normalised = await normaliseRecording(device.serial, recording, {
+				holdForMs: plan.holdForMs,
+			});
+			const frames = await extractFrames(device.serial, normalised, {
+				framesPerSecond: FRAMES_PER_SECOND,
+			});
+
+			expect(frames.length).toBeGreaterThan(0);
+			expect(isPng(frames[0] as Uint8Array)).toBe(true);
+		}, 120_000);
+
+		/**
+		 * The bound the answer is actually held to. Re-encoding changes the byte count, so this is
+		 * the number `artifact-too-large` would be decided on — and the rate ceiling exists so
+		 * that a normal recording stays well inside it rather than becoming a refusal that the
+		 * un-normalised bytes would not have been.
+		 */
+		it('stays inside what one answer can carry, at the longest recording the wire admits', async () => {
+			const device = await firstUsableDevice();
+			const recording = await backend.recordVideo(device.serial, {
+				durationMs: MAX_RECORDING_MS,
+			});
+			const plan = planNormalisation(readRecordingContainer(recording), MAX_RECORDING_MS);
+
+			const normalised = await normaliseRecording(device.serial, recording, {
+				holdForMs: plan.holdForMs,
+			});
+
+			expect(normalised.byteLength).toBeGreaterThan(0);
+			expect(normalised.byteLength).toBeLessThanOrEqual(MAX_ARTIFACT_BYTES);
+		}, 180_000);
+
+		// No host path reaches an answer and nothing is left on the device either: the normaliser
+		// owns its scratch directory and removes it, and the only device-side path this repository
+		// ever writes is the recording's own (D19).
+		it('leaves nothing behind on the device or in what it answers with', async () => {
+			const device = await firstUsableDevice();
+			const recording = await backend.recordVideo(device.serial, { durationMs: DURATION_MS });
+
+			await normaliseRecording(device.serial, recording, { holdForMs: null });
 
 			expect(await listScratchFile(device.serial)).toMatch(/No such file or directory/);
 		}, 90_000);

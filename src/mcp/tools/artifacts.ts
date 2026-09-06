@@ -14,10 +14,11 @@
  * file behind. This module is the two rows and nothing else.
  *
  * **`record_video` raises its own request timeout**, the way `rover record` does: the call
- * spends up to fifteen seconds recording and then as long again on the host slicing the
- * recording into frames, before it starts transferring several megabytes. Left at the client's
- * thirty-second default, a long-but-perfectly-normal recording surfaces as a hang — no answer
- * and no name — while the host is still working and about to say exactly what happened.
+ * spends up to fifteen seconds recording, then as long again on the host normalising the
+ * recording and as long again slicing it into frames, before it starts transferring several
+ * megabytes. Left at the client's thirty-second default, a long-but-perfectly-normal recording
+ * surfaces as a hang — no answer and no name — while the host is still working and about to say
+ * exactly what happened.
  */
 
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
@@ -25,6 +26,7 @@ import type { HostName } from '../../daemon/host.js';
 import { DEFAULT_REQUEST_TIMEOUT_MS } from '../../ipc/client.js';
 import { IPC_METHODS, type RecordVideoParams } from '../../ipc/methods.js';
 import { DEFAULT_RECORDING_MS, FRAME_EXTRACTION_TIMEOUT_MS } from '../../verbs/record.js';
+import { RECORDING_NORMALISATION_TIMEOUT_MS } from '../../verbs/recording-normalisation.js';
 import { guarded } from '../_shared/answer.js';
 import {
 	recordVideoToolResult,
@@ -35,14 +37,15 @@ import { callHost } from '../_shared/call.js';
 import { declaring } from '../_shared/declaration.js';
 
 /**
- * How long this client waits for a recording: the recording itself, **the host's frame
- * extraction**, and the budget every other call gets for the round trip and the transfer.
+ * How long this client waits for a recording: the recording itself, **the host's
+ * normalisation**, **the host's frame extraction**, and the budget every other call gets for
+ * the round trip and the transfer.
  *
  * `src/cli/commands/record.ts`'s `requestTimeoutFor`, term for term, and every term is
  * imported rather than restated — the promise only holds while this bound is larger than
  * every bound inside it, and a copied number is one the original is free to drift away from.
- * Leaving the extraction out would put this client's deadline *inside* the host's, so a slow
- * decode would be reported here as a nameless timeout.
+ * Leaving either host step out would put this client's deadline *inside* the host's, so a slow
+ * re-encode or a slow decode would be reported here as a nameless timeout.
  *
  * {@link DEFAULT_RECORDING_MS} stands in for a duration the caller did not send and is used
  * **only** to size this timeout, never put on the request: a second default on the wire is a
@@ -52,6 +55,7 @@ import { declaring } from '../_shared/declaration.js';
 function recordingTimeoutMs(params: RecordVideoParams): number {
 	return (
 		(params.durationMs ?? DEFAULT_RECORDING_MS) +
+		RECORDING_NORMALISATION_TIMEOUT_MS +
 		FRAME_EXTRACTION_TIMEOUT_MS +
 		DEFAULT_REQUEST_TIMEOUT_MS
 	);
@@ -102,8 +106,15 @@ export function registerArtifactTools(server: McpServer, host: HostName): void {
 				'host with no decoder installed, and frames that will not fit beside the recording ' +
 				'are each refused by name and leave no file behind. **Frames sample motion and ' +
 				'nothing finer**: they can say something moved and roughly when, never whether an ' +
-				'animation was smooth. `container` on the answer says what the recording actually ' +
-				'holds — how many encoded samples and what duration the file declares, read off the ' +
+				'animation was smooth. **The video file is normalised on the host so it always ' +
+				'plays** — what a device recorder writes is not a constant-rate video, so the host ' +
+				're-encodes it at a constant rate over a real timeline before sending it, and ' +
+				'`normalisation` says which timeline you are looking at: `requested`, the window ' +
+				'you asked for, when the recording declared none of its own, or `container`, the ' +
+				'recorder’s own timestamps, which is a different number from `durationMs` and is ' +
+				'routinely longer. A host that cannot normalise refuses by name and writes ' +
+				'nothing, rather than handing you a file that will not play. `container` on the ' +
+				'answer says what the recording actually holds — how many encoded samples and what duration the file declares, read off the ' +
 				'file rather than from what you asked for, which is a different number. **A recording ' +
 				'of a screen that did not change comes back as one encoded sample, a declared ' +
 				'duration of 0 and a single frame**, reported as `container.kind: "still-screen"` ' +

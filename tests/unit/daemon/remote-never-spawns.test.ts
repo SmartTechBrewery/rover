@@ -43,6 +43,14 @@ const ALLOWED_TO_SPAWN = [
 	// beside `daemon/project-hooks.ts` rather than inside it because reading a hook file must
 	// stay importable from anywhere.
 	'daemon/hook-command.ts',
+	// A second entry beside `daemon/frames.ts`, and the same program behind it: normalising a
+	// recording into a file that plays needs an encoder this tree does not contain either
+	// (#185). It is a separate file rather than a second function in that one because the two
+	// runs differ in the thing this list is about — the normaliser writes a host temp file,
+	// which an mp4 muxer requires and a PNG stream does not — and it lives under `src/daemon/`
+	// for the identical reason: a spawn under `src/verbs/` would be a spawn in a CLI's module
+	// graph.
+	'daemon/normalise.ts',
 ];
 
 const SRC_ROOT = fileURLToPath(new URL('../../../src', import.meta.url));
