@@ -1055,8 +1055,9 @@ listed.
   filed here than the host could examine. A group or a run may be missing.* `truncated` means one
   thing — at least one directory that exists was not fully examined — and a partial arrangement must
   not read like a complete one.
-- **No label badge is drawn in this phase.** The labels are on the wire and mirrored in
-  `archive-listing.ts`; the badges, their letters and their palette are a further phase.
+- **The label badges are drawn here and nowhere else** (#182, and the section below). An artifact a
+  run filed under a label carries a round letter beside its name; a letter is defined only inside a
+  group, so no row of the `All` view has one and no row above a run has one in either view.
 
 **The addresses.** Two more routes, `/groups` and `/groups/$`, served by the same screen component
 with `view` as a prop — so nothing here is a second screen. The splat is
@@ -1121,6 +1122,92 @@ because they are true in both; only the claim narrows. This is `Searched`'s rule
 `directory-tree.tsx` applied one level up — the same screen already refuses to say *no name in the
 archive contains that text* about a search that was cut short — and it is why a truncated grouping
 answer is not a fourth empty-handed state.
+
+### The label badges — settled here, not designed (#182)
+
+**Settled in this document rather than by a Stitch round**, and which of the two was chosen is said
+out loud because §1 requires it — the same call the arrangement above it is: the row anatomy and the
+card are already fixed, so a design round would have settled a five-swatch palette out of a system
+this document can read directly, and `ai/RULES.md` §8 is explicit that an agent's deliverable there
+is a prompt rather than a generated screen.
+
+A run's artifacts may carry a **label**, filed with the artifact by the lease that produced it
+(R41). A group is where that matters: the same label on an artifact of two runs is the caller
+saying *these two are the same thing at two moments*. What the tree draws for it is a short letter.
+
+**The badge.** A round badge — `rounded-full`, 18px, the design's own `label-caps` step in the
+monospace face — sitting **between the row's glyph and its name**. That is the whole of the row's
+change: nothing else about a row moves, and a row without a badge is the row it was.
+
+**The letters are per group.** Every distinct filed label in one group takes a letter — `A`, `B`,
+`C`, `D` — in the order the host answered them, and **the same label carries the same letter
+everywhere it appears in that group**. Nothing about a letter is stable across groups: the same
+string in a second group takes whatever that group's own order gives it, and a reader who carries a
+letter from one group to another has read something the badge never said. Inside one group it is
+completely determined, which is a different claim and a load-bearing one — a letter that moved
+between two loads of the same group would be a bug. The order is the **answer's**, never the drawn
+one: the tree and the card reverse at the run level (`level-order.ts`), so an assignment that
+followed what is drawn would give one group two alphabets.
+
+**Overflow is `@`, and it is a first-class case rather than a corner.** A group holding more distinct
+labels than there are letters gives every remaining one `@`. The badge stops distinguishing them
+there and **the row does not**: the artifact's own name is unchanged, and each `@` still names its
+own filed label. Four letters is what this palette can honestly carry, and saying so is better than
+a fifth swatch nobody could tell from the fourth.
+
+**The letter carries the meaning, never the colour alone.** Every badge says which label it is in
+text, so the fill is a second channel for something already written — the rule §5's status LED keeps
+from the other side, where the colour is the only channel and the LED is therefore `aria-hidden`.
+This one is not: a letter is a code local to one group and `@` names nothing at all, so the **filed**
+label travels with it in an accessible name and in a `title`. It is the label as the archive filed
+it and never the caller's own string, which `pathSegment` truncated and rewrote and which is
+genuinely unrecoverable — the rule this section already states for `OWNER`.
+
+**An artifact with no label carries no badge**, so the tree of an archive that never used labels is
+the tree it is today. And the badge is **not a control**: the row is one `<Link>` and stays one
+target (#175), so this is an element inside it and never a second thing to click.
+
+**The palette — four letters, then `@`.**
+
+| letter | fill | text | reads as |
+| --- | --- | --- | --- |
+| `A` | `bg-primary-fixed` | `text-on-primary-fixed` | pale lavender |
+| `B` | `bg-secondary-fixed` | `text-on-secondary-fixed` | pale peach |
+| `C` | `bg-tertiary-fixed` | `text-on-tertiary-fixed` | mint |
+| `D` | `bg-inverse-surface` | `text-inverse-on-surface` | neutral |
+| `@` | `bg-surface-container-highest` | `text-on-surface-variant` | the quietest thing on the card |
+
+**Every colour comes from `panel/src/tokens.css`** (§1, `ai/RULES.md` §8), and
+`tests/unit/panel/tokens-are-the-source-of-truth.test.ts` fails loudly on a hex written in a
+component. `A`…`D` are four light fills carrying dark text, which is what makes them read at badge
+size against `surface-container`; `@` is the one that inverts — a dark fill a shade off the card,
+carrying the light text the tree's quiet lines already use — and that is deliberate, because it
+distinguishes nothing and should not ask to be looked at.
+
+**No badge colour may read as an outcome.** §5 already spends `bg-tertiary` green on *a free
+device*, `bg-primary-container` blue on *held* and `secondary-container` orange on *warning*, and
+`error` is not available at all — so every fill above is a `-fixed` step or a neutral, none is one of
+the three §5 gives a meaning to, and **no two of them can pair into a red/green verdict**. A green
+`A` beside a red `B` is precisely the pass/fail semantics Rover does not have (§2,
+`ai/RULES.md` §1), and this palette is chosen to make it unavailable rather than discouraged.
+
+**Why four, and how to get more.** Analog Horizon has three accent families plus `error`, and three
+of its steps already mean something — so there is no honest fifth hue in it, and the arithmetic is
+the reason for `@` rather than an excuse for it. A longer alphabet is a **commissioned categorical
+ramp** for Analog Horizon, through the operator's own Stitch round (§1, `ai/RULES.md` §8): a set of
+swatches that are equal in weight and mean *different*, not *better* or *worse*. That is its own
+piece of work, and picking a fifth colour at the keyboard is the thing it exists instead of.
+
+**What is deliberately absent, and why.**
+
+- **No badge in the `All` view.** A letter is defined only inside a group and the `All` view has no
+  group context, so a badge there would be a code with no key. It is said here rather than left to
+  be discovered.
+- **No legend.** Four letters and a hover that names each one is the whole vocabulary; a legend
+  would be a second, staler copy of what every badge already says.
+- **No filter by label, no compare-these-two control, and nothing that ranks or scores an artifact**
+  (`ai/RULES.md` §1). A label is a caller's claim that two artifacts are the same thing at two
+  moments; what to make of them is the agent's judgement and not Rover's.
 
 ### The tree — expansion is derived from the URL
 
@@ -1275,6 +1362,10 @@ browser.
   outcome. Rover has no verdicts to report (§2), and green ticks beside runs in the tree are exactly
   what the superseded `Archive — Browsing (V2)` got wrong.
 - **The name, verbatim and `break-words`.** Nothing is truncated, ellipsised or lower-cased.
+- **One thing was added to that list, and it is a name rather than a measure** (#182): the label
+  badge, between the glyph and the name, on an artifact the **groups** view has a filed label for
+  and on no other row anywhere. It is not a verdict and nothing is ranked by it — the section above
+  is its whole vocabulary.
 
 **Every row is a `<Link>`**, and **below a run every entry becomes one** (#159, amended in place).
 Above a run only a `directory` does: a stray file at a project or a test-name level is not something

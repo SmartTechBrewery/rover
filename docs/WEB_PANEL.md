@@ -106,9 +106,14 @@ Design work lives in [`DESIGN.md`](./DESIGN.md); the brief that produced the fir
    card beside it**, on addresses of its own — `/groups` and `/groups/$` — so the view is somewhere
    a reload and a shared link land, which is the question #165 deliberately left open. A run that
    named no group is not drawn and neither is a project with none: this view answers *what groups
-   exist*, and the `All` view still lists every run. **What is left is the label badges** and their
-   palette. `docs/DESIGN.md` §9 records all of it, including which of *design it* and *settle it
-   here* was chosen and why.
+   exist*, and the `All` view still lists every run. **The label badges completed it** (#182): inside
+   one group every distinct filed label takes a letter — `A`…`D`, then `@` — drawn as a round badge
+   beside the artifact's name, with the letter carrying the meaning and never the colour alone, and
+   the filed label reachable by hover and by screen reader. Nothing about a letter is stable across
+   groups, an artifact with no label carries no badge, and no badge colour may read as an outcome.
+   `docs/DESIGN.md` §9 records all of it, including which of *design it* and *settle it here* was
+   chosen and why, and that a longer alphabet is a commissioned categorical ramp rather than a
+   colour picked at the keyboard.
    `docs/DESIGN.md` §9 records what it settled, including the cost that shapes it — an authenticated
    byte route cannot be an `<img src>`, so the panel fetches the bytes with the session header and
    renders an object URL, and the whole artifact is therefore buffered in the tab.
