@@ -15,7 +15,13 @@ import { stripComments } from './no-sleep-scan.js';
  * hex code typed into a component, a looping animation, and test-framework vocabulary.
  */
 
-const PANEL_SRC = fileURLToPath(new URL('../../panel/src', import.meta.url));
+/*
+ * Resolved off this file rather than off the working directory, and **without the global `URL`**:
+ * a gate that asks for jsdom per file (`@vitest-environment jsdom`) replaces that global with
+ * jsdom's own, which `node:url`'s `fileURLToPath` refuses, and the walk would fail at import time
+ * before a single assertion ran. Handing it the string keeps it on Node's own parser.
+ */
+const PANEL_SRC = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'panel/src');
 
 export interface PanelSource {
 	/** Repo-relative, e.g. `panel/src/components/layout/sidebar.tsx`. */

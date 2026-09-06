@@ -333,6 +333,34 @@ the free device's serial almost into the background, which is exactly backwards.
 outrank it; it needs a confirmation step. It was originally a full-width solid orange button
 repeated on every held card, louder than the data it was there to act on.
 
+**A pointer on what can be pressed, and nothing on what cannot.** The affordance has to match the
+behaviour: a control that presses says so under the cursor, and anything that does not press stays
+silent. Tailwind v4's preflight, unlike v3's, carries no `cursor: pointer` for `button` — so until
+#180 every control in the panel hovered as the user agent's arrow and nothing in the interface read
+as clickable at all. The Archive's `All` / `Testing groups` toggle is where that was noticed, not
+where it lived; all ten buttons the panel drew had it.
+
+*As built* (#180): one rule in `index.css`'s `@layer base`, `button:not(:disabled) { cursor:
+pointer }`, and no `cursor-*` utility in any component. A base rule on the element rather than a
+class per control, because the rule is about **every** button including the next one somebody
+writes — a utility sprinkled across eight files is the one the ninth component forgets. It also
+adds no class, so it is invisible to the tests that assert over rendered markup, and an element
+selector cannot reach anything that is not a button: the archive's contents rows are `<div>`s,
+read and not followed (§9), and keep exactly the nothing they had.
+
+`:not(:disabled)` is the whole of the exception, and its reason is `.control-tactile`'s: a disabled
+control promises a press that does nothing, so it drops the affordance rather than keeping a
+weakened one. The three that exist — the sign-in submit, `Profile`'s sign-out and the force-release
+confirmation, each while its ask is in flight — keep their `cursor-not-allowed`, which promises
+nothing.
+
+**Links needed nothing.** Every user agent already points at an `a[href]` and preflight leaves that
+alone, so the `<Link>`s in the sidebar, the breadcrumb and the archive tree, and the `<a>` behind
+`Open in a new window`, were never part of this. `tests/unit/panel/pointer-on-what-can-be-pressed.test.ts`
+is the gate: it puts the panel's own base rules through a real cascade and reads the cursor back off
+a button, a disabled button, an archive row and a link, so the rule is asserted by what it reaches
+rather than by the string it is written as.
+
 ---
 
 ## 6. The device card, as settled
