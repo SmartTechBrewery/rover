@@ -1,8 +1,9 @@
 import { z } from 'zod';
 
 /**
- * The archive's two reads, as much of them as the Archive screen needs — `list_archive`'s answer
- * one level at a time, and `search_archive`'s matching entries of the whole of it (R38, #146).
+ * The archive's three reads, as much of them as the Archive screen needs — `list_archive`'s answer
+ * one level at a time, `search_archive`'s matching entries of the whole of it (R38, #146), and
+ * `list_archive_groups`'s account of which runs share a group (R41, #178).
  *
  * **Deliberately re-declared rather than imported from `src/ipc/methods.ts`**, for the reason
  * `panel/src/devices/device-list.ts` gives at length: the panel is a separate tree with its own
@@ -13,8 +14,9 @@ import { z } from 'zod';
  * The drift that buys is pinned rather than hoped for, once per method:
  * `tests/fixtures/panel/list-archive.json` is parsed by the **daemon's**
  * `ListArchiveResultSchema` in `tests/unit/panel/list-archive-fixture.test.ts` and by the mirror
- * below in `archive-listing.test.ts`, and `tests/fixtures/panel/search-archive.json` is parsed the
- * same way twice for the search. One fixture, two projects, no cross-tree import.
+ * below in `archive-listing.test.ts`, `tests/fixtures/panel/search-archive.json` is parsed the
+ * same way twice for the search, and `tests/fixtures/panel/list-archive-groups.json` the same way
+ * again for the groups. One fixture per method, two projects, no cross-tree import.
  *
  * **Nothing here is `.strict()`**, and that is the same deliberate difference from the host's copy
  * the device mirror makes: a browser that blanks a working screen because a newer daemon added a
@@ -126,3 +128,83 @@ export const SearchArchiveResultSchema = z.discriminatedUnion('outcome', [
 	z.object({ outcome: z.literal('unreadable') }),
 ]);
 export type SearchArchiveResult = z.infer<typeof SearchArchiveResultSchema>;
+
+/**
+ * One labelled artifact of a grouped run — **where it is, and the label the archive filed it
+ * under** (R41, #178).
+ *
+ * `path` is the components a `list_archive` walk would have reached it by, exactly as a search
+ * match is: the archive has one path vocabulary across all three of its reads, so an artifact here
+ * is by construction an address the tree can link to and the byte route already accepts.
+ *
+ * **`label` is the label as the archive filed it and is never the caller's own string.** It went
+ * through `pathSegment` on the way into the file name, which truncates and rewrites, so the
+ * caller's string is genuinely unrecoverable — the rule §9 already states for `OWNER`. An artifact
+ * carrying no label is absent from the run's list rather than present with a `null`.
+ *
+ * **Nothing in this phase draws one** (#181): the badges are #182's. It is mirrored here because
+ * the mirror is of the *wire*, and a field left out of it would be stripped by the parse before
+ * the phase that needs it could see it.
+ */
+const ArchiveGroupArtifactSchema = z.object({
+	path: z.array(z.string()),
+	label: z.string(),
+});
+export type ArchiveGroupArtifact = z.infer<typeof ArchiveGroupArtifactSchema>;
+
+/**
+ * One run in a group — its address as `list_archive` would name it, and its labelled artifacts.
+ *
+ * `path` is `[project, test_name, run, serial]`, the four levels the archive is always deep
+ * (`PROJECT.md` §10), so the `<serial>` a group row needs in order to open the run's own contents
+ * is carried on the answer rather than derived from a second listing's `onlyChild`.
+ *
+ * `artifacts: []` is a run that produced nothing labelled, which is ordinary: a group is a claim
+ * about *runs*, and labelling artifacts inside one is a second, independent choice.
+ */
+const ArchiveGroupRunSchema = z.object({
+	path: z.array(z.string()),
+	artifacts: z.array(ArchiveGroupArtifactSchema),
+});
+export type ArchiveGroupRun = z.infer<typeof ArchiveGroupRunSchema>;
+
+/**
+ * One group — a `(project, groupId)` pair and the runs that named it.
+ *
+ * **Keyed on the project as well as the group id**, because `groupId` is an opaque caller string
+ * that nothing makes unique and `project` is the archive's own top-level partition. That is why
+ * the groups view's level below a project is the group id and not the other way round: a group id
+ * only means something inside one project.
+ *
+ * `groupId` is verbatim out of the run's own `group_id.json` and is parsed by nothing (D22).
+ */
+const ArchiveGroupSchema = z.object({
+	project: z.string(),
+	groupId: z.string(),
+	runs: z.array(ArchiveGroupRunSchema),
+});
+export type ArchiveGroup = z.infer<typeof ArchiveGroupSchema>;
+
+/**
+ * `list_archive_groups`'s answer — the archive's own three words a third time, so all three of its
+ * reads speak one vocabulary (R41, #178).
+ *
+ * `groups: []` with `truncated: false` is **no run on this host named a group**, and is not a
+ * failure; the pair D6 forbids rendering alike is that against `unreadable`.
+ *
+ * **`truncated` has exactly one meaning**: at least one directory that exists was not fully
+ * examined, so a group, a run or a labelled artifact may be missing. Any of the host's five bounds
+ * does it, so does a level it could not read mid-walk, and so does a run whose `group_id.json`
+ * will not parse. It is what keeps a partial arrangement from rendering like a complete one, which
+ * is why the groups tree says so above its rows.
+ */
+export const ListArchiveGroupsResultSchema = z.discriminatedUnion('outcome', [
+	z.object({
+		outcome: z.literal('listed'),
+		groups: z.array(ArchiveGroupSchema),
+		truncated: z.boolean(),
+	}),
+	z.object({ outcome: z.literal('missing') }),
+	z.object({ outcome: z.literal('unreadable') }),
+]);
+export type ListArchiveGroupsResult = z.infer<typeof ListArchiveGroupsResultSchema>;

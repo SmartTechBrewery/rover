@@ -41,18 +41,31 @@ import {
 export function LevelContents({
 	path,
 	level,
+	depth = path.length,
 }: {
 	readonly path: readonly string[];
 	readonly level: ArchiveLevel;
+	/**
+	 * Which of the three level shapes to draw, and the order to draw it in — **the archive's own
+	 * depth, which is not always how deep the address is** (#181).
+	 *
+	 * In the `All` view they are the same number and this defaults to it. In the groups view the
+	 * address carries a group id the archive has no directory for, so a group's test names sit one
+	 * component deeper in the URL than the project's test names they are the same *kind* of level
+	 * as. Passing the archive depth is what makes this the same three shapes rather than a fourth
+	 * one — `archiveAddressOf` is the one place that knows the difference, and `routes/archive.tsx`
+	 * is the one caller that asks it.
+	 */
+	readonly depth?: number;
 }) {
 	return (
 		<ContentsCard header={<CardHeading>{path.at(-1) ?? 'Archive'}</CardHeading>}>
-			<Body level={level} path={path} />
+			<Body depth={depth} level={level} />
 		</ContentsCard>
 	);
 }
 
-function Body({ path, level }: { readonly path: readonly string[]; readonly level: ArchiveLevel }) {
+function Body({ depth, level }: { readonly depth: number; readonly level: ArchiveLevel }) {
 	if (level.status === 'loading') {
 		return (
 			<div className="px-6 py-5">
@@ -72,9 +85,9 @@ function Body({ path, level }: { readonly path: readonly string[]; readonly leve
 	}
 	return (
 		<ul>
-			{orderedEntries(level.entries, path.length).map((entry) => (
+			{orderedEntries(level.entries, depth).map((entry) => (
 				<li key={entry.name}>
-					<Row depth={path.length} entry={entry} />
+					<Row depth={depth} entry={entry} />
 				</li>
 			))}
 		</ul>

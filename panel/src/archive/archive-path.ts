@@ -73,3 +73,25 @@ export function keyOf(components: readonly string[]): string {
 export function levelsOf(components: readonly string[]): readonly (readonly string[])[] {
 	return [[], ...components.map((_name, index) => components.slice(0, index + 1))];
 }
+
+/**
+ * The archive address a **groups-view** splat names — its components with the one at index 1
+ * dropped, because the group id is not a directory (#181).
+ *
+ * The groups view's splat is `<project>/<groupId>/<testName>/<run>/<serial>/<…>`, and everything
+ * under it that reads bytes or lists a directory — `list_archive` at and below a run's `<serial>`,
+ * `device_info.json`, `test_description.json`, the byte route for an open artifact — takes the
+ * archive's own `<project>/<testName>/<run>/<serial>/<…>`. **This is the only place that knows the
+ * difference**, which is what keeps the group id from having to be threaded past, or filtered out
+ * of, every one of those call sites.
+ *
+ * It is a drop rather than a parse: no component is read, trimmed or interpreted, and the one at
+ * index 1 is identified by its position in an address this view composed itself (D22).
+ *
+ * Below the group's own depth this is the address; at or above it there is no archive address to
+ * name — `[project]` alone gives back `[project]`, which is the level the `All` view would list,
+ * and no caller asks it about anything shallower.
+ */
+export function archiveAddressOf(components: readonly string[]): readonly string[] {
+	return [...components.slice(0, 1), ...components.slice(2)];
+}

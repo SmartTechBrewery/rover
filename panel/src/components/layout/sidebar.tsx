@@ -1,6 +1,6 @@
 import { Wordmark } from '@panel/components/wordmark.js';
 import { Link, useRouterState } from '@tanstack/react-router';
-import { Archive, Boxes, CircleUser, Smartphone, Terminal } from 'lucide-react';
+import { Archive, Boxes, CircleUser, type LucideIcon, Smartphone, Terminal } from 'lucide-react';
 
 /**
  * The four destinations, in the order `docs/DESIGN.md` §3 settles them. `Archive`, not
@@ -22,16 +22,34 @@ import { Archive, Boxes, CircleUser, Smartphone, Terminal } from 'lucide-react';
  */
 const NAV_ITEMS = [
 	{ label: 'Devices', to: '/devices', Icon: Smartphone },
-	{ label: 'Archive', to: '/archive', Icon: Archive },
+	{ label: 'Archive', to: '/archive', Icon: Archive, also: '/groups' },
 	{ label: 'Projects', to: '/projects', Icon: Boxes },
 	{ label: 'System', to: '/system', Icon: Terminal },
-] as const;
+] as const satisfies readonly {
+	readonly label: string;
+	readonly to: string;
+	readonly Icon: LucideIcon;
+	/**
+	 * A second route family the item is **also** current on (#181).
+	 *
+	 * The Archive screen has two arrangements of one archive, on two route families — `/archive…`
+	 * and `/groups…` — and the panel has one Archive destination, not two. Widening the item is
+	 * what says that; a second nav item would say the opposite, and would put a reader on a screen
+	 * whose own toggle is already the way between the two.
+	 */
+	readonly also?: string;
+}[];
 
 const ITEM_BASE = 'flex items-center gap-3 rounded-sm px-4 py-3 border-2 font-code-md text-code-md';
 const ITEM_ACTIVE =
 	'bg-tertiary-container text-on-tertiary-container border-tertiary nav-item-active-tactile';
 const ITEM_INACTIVE =
 	'text-on-surface-variant border-transparent hover:bg-surface-container-highest transition-colors';
+
+/** Whether an address is that destination's own or one below it — `/groups` and `/groups/x` both. */
+function isUnder(pathname: string, to: string): boolean {
+	return pathname === to || pathname.startsWith(`${to}/`);
+}
 
 /**
  * The panel's navigation chrome, and nothing else.
@@ -59,8 +77,10 @@ export function Sidebar() {
 				</div>
 
 				<ul className="flex-1 space-y-2 px-2 py-4">
-					{NAV_ITEMS.map(({ label, to, Icon }) => {
-						const isActive = pathname === to || pathname.startsWith(`${to}/`);
+					{NAV_ITEMS.map((item) => {
+						const { label, to, Icon } = item;
+						const isActive =
+							isUnder(pathname, to) || ('also' in item && isUnder(pathname, item.also));
 						return (
 							<li key={to}>
 								<Link

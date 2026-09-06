@@ -1,3 +1,4 @@
+import { type ArchiveGroups, useArchiveGroups } from '@panel/archive/archive-groups.js';
 import {
 	type ArchiveLevel,
 	type ArchiveLevels,
@@ -5,14 +6,21 @@ import {
 	runContentsLevel,
 	useArchiveLevels,
 } from '@panel/archive/archive-levels.js';
-import { componentsFromSplat, levelsOf, splatFromComponents } from '@panel/archive/archive-path.js';
+import {
+	archiveAddressOf,
+	componentsFromSplat,
+	levelsOf,
+	splatFromComponents,
+} from '@panel/archive/archive-path.js';
 import { type ArchiveSearch, useArchiveSearch } from '@panel/archive/archive-search.js';
 import { useArchivedArtifact } from '@panel/archive/artifact.js';
 import { type ArchivedDeviceInfo, useArchivedDeviceInfo } from '@panel/archive/device-info.js';
+import { groupRowsAt, groupRunSerial } from '@panel/archive/group-tree.js';
 import {
 	type ArchivedTestDescription,
 	useArchivedTestDescription,
 } from '@panel/archive/test-description.js';
+import { allRowSource, groupRowSource, type TreeSource } from '@panel/archive/tree-source.js';
 import { ArtifactPreview } from '@panel/components/archive/artifact-preview.js';
 import {
 	ArchiveNotReadable,
@@ -23,16 +31,16 @@ import { DirectoryTree } from '@panel/components/archive/directory-tree.js';
 import { LevelContents } from '@panel/components/archive/level-contents.js';
 import { RunPanel, type RunSerial } from '@panel/components/archive/run-panel.js';
 import { type ArchiveView, ArchiveViewToggle } from '@panel/components/archive/view-toggle.js';
-import { CalmNotice, NOT_BUILT_YET } from '@panel/components/calm-notice.js';
 import type { BreadcrumbSegment } from '@panel/components/layout/breadcrumb.js';
 import { PageHeader } from '@panel/components/layout/page-header.js';
 import { QuietPanel } from '@panel/components/quiet-panel.js';
 import { createRoute, useParams } from '@tanstack/react-router';
-import { type ReactNode, useState } from 'react';
+import type { ReactNode } from 'react';
 import { rootRoute } from './__root.js';
 
 /**
- * The archive, as a file explorer over what past leases wrote (`docs/DESIGN.md` §9).
+ * The archive, as a file explorer over what past leases wrote — **in either of its two
+ * arrangements** (`docs/DESIGN.md` §9, #165, #181).
  *
  * **The path is in the URL, and the tree card's search text is the one piece of state that is
  * deliberately not** (#146). A reload lands where you were, a link is shareable, and the tree's
@@ -41,6 +49,24 @@ import { rootRoute } from './__root.js';
  * of the path (`archive-levels.ts`). The search text is component state on purpose: a reload and a
  * shared link land on the **address**, without somebody else's search, and a hit is a navigation to
  * an address like any other, so nothing about it needs to be in the URL to survive being followed.
+ *
+ * **And since #181 the *view* is in the URL too, which is the question #165 deliberately left
+ * open.** It could not be answered then, because the groups arrangement had no addresses of its own
+ * and a link to a placeholder is a link to nothing. It has them now: `/archive` and `/archive/$`
+ * are the file explorer, `/groups` and `/groups/$` the group-first arrangement, and this one
+ * component serves all four with `view` as a prop. What that buys is exactly what §9 asks of the
+ * `All` view's selection — a reload and a shared link land on it — and what it costs is the reset
+ * machinery that stood in for it: `viewChosenAt`, `setView`, and the rule that any navigation ended
+ * the second view. An address does not need to be ended by a navigation; it *is* one.
+ *
+ * **The two arrangements share every level below the group, and one component draws both.** The
+ * tree, the row anatomy and the card beside it are the same in either view (`directory-tree.tsx`,
+ * `tree-source.ts`); what differs is which rows sit under which node, and — in this file — one
+ * component of the address. The groups view's splat is
+ * `<project>/<groupId>/<testName>/<run>/<serial>/<…>`, and `archiveAddressOf` is the only thing
+ * that turns it into the archive's own path by dropping the group id. Every read below a group goes
+ * through it: the `list_archive` levels inside a run, the run's two files, and an open artifact's
+ * bytes.
  *
  * **So closing a node in the tree moves the selection, and this card follows it up** (#175,
  * `directory-tree.tsx`). An open row goes to the node it is drawn under, which is what makes
@@ -52,34 +78,37 @@ import { rootRoute } from './__root.js';
  * breadcrumb, the describing line and the header row's shape are the same in all of them; the badge
  * is the only thing in the header that comes and goes, and it goes rather than reading `0`.
  *
- * **The screen has two views, and everything below describes the first of them** (#165). *All* is
- * the file explorer; *Testing groups* is the archive arranged by the group a lease named
- * (`PROJECT.md` R41) and is a placeholder — see `view` below for where that choice is held, why the
- * address is not where it lives, and why any navigation ends it.
- *
  * **And there is one arrangement at every depth** (#160): the tree, then one card. What the parent
  * listing says the selection is decides what that card *draws* and nothing about whether the tree
  * is there —
  *
- * | The host's answer for the root | What the content area is |
+ * | The view's answer for its own root | What the content area is |
  * | --- | --- |
  * | nothing yet | one quiet line, no spinner |
  * | a listing | the tree, beside the selected address's own card |
- * | an empty listing, or nothing there | *Nothing in the archive* — and **no tree card** |
+ * | an empty listing, or nothing there | *Nothing in the archive* / *No testing groups* — and **no tree card** |
  * | unreadable | `ARCHIVE NOT READABLE` — and **no tree card** |
  *
  * The last two take the whole content area because **an empty tree beside a message is furniture**:
  * there is nothing to browse, so there is nothing for a tree to be a way into. They are the only
  * two states without a tree, and they gate the browsing layout **at and above the `<serial>`** —
- * no address *below* the `<serial>` ever waits on the archive root.
+ * no address *below* the `<serial>` ever waits on that root, in either view.
  *
  * Exported for `archive.test.tsx`, as `DevicesScreen` is: a route's component is otherwise
  * reachable only through a router instance, and what is worth asserting is which state renders what.
  */
-export function ArchiveScreen() {
-	// `strict: false` is what lets one component serve both `/archive` and `/archive/$`.
+export function ArchiveScreen({ view }: { readonly view: ArchiveView }) {
+	// `strict: false` is what lets one component serve all four of this screen's routes.
 	const params = useParams({ strict: false });
 	const selected = componentsFromSplat(params._splat);
+	const depths = depthsOf(view);
+	/*
+	 * **The whole of the groups arrangement above a run, in one request** (#181). It takes no
+	 * parameter and there is no shape in which a second call could be made, so the levels this view
+	 * draws down to a run cost exactly one round trip — and `view === 'groups'` is what keeps a
+	 * reader who never opens it from paying for a walk of the archive they will not look at.
+	 */
+	const groups = useArchiveGroups(view === 'groups');
 	/*
 	 * **One cache, asked as a function of itself** (`archive-levels.ts`). Some of these levels are
 	 * addressed by a path *derived from* an answer — a run's `<serial>` is the level above's
@@ -88,21 +117,24 @@ export function ArchiveScreen() {
 	 * the other held (#140 review). `levelsWanted` is that derivation, run against what has answered
 	 * so far.
 	 */
-	const levels = useArchiveLevels((known) => levelsWanted(selected, known));
-	const inRun = selected.length >= BELOW_THE_SERIAL;
+	const levels = useArchiveLevels((known) => levelsWanted(view, selected, known, groups));
+	/** The archive's own path for the selection — the splat itself, minus the group id (#181). */
+	const address = view === 'groups' ? archiveAddressOf(selected) : selected;
+	const inRun = selected.length >= depths.below;
 	/*
 	 * What the open address turned out to be, out of the listing of the level above it — and *not*
 	 * out of its own name (D22). Until that listing answers, nothing is fetched for it: a file is not
 	 * read on a guess any more than a level is listed on one, and asking the byte route for a
 	 * directory would put a warning in the host's log on every folder a reader opens.
 	 */
-	const open = inRun ? openEntryOf(levels, selected) : 'unanswered';
+	const open = inRun ? openEntryOf(levels, address) : 'unanswered';
 	/*
-	 * The one extra level a selected run needs, and it can only be asked for once the level above
-	 * has answered: the `<serial>` directory's name is that answer's `onlyChild`.
+	 * The one extra level a selected run needs, and in the `All` view it can only be asked for once
+	 * the level above has answered: the `<serial>` directory's name is that answer's `onlyChild`. In
+	 * the groups view the answer carries it outright, so there is nothing to wait for.
 	 */
-	const serial = serialOf(levels, selected);
-	const runLevel = runContents(levels, selected);
+	const serial = serialOf(view, levels, groups, selected);
+	const runLevel = runContents(view, levels, groups, selected);
 	/*
 	 * The run's `device_info.json`, read out of that same `<serial>` directory — the one thing on
 	 * this screen that is a file's contents rather than a listing (#136, #131's byte route). It is
@@ -123,107 +155,55 @@ export function ArchiveScreen() {
 	 */
 	const description = useArchivedTestDescription(runLevel);
 	/** The open artifact's own bytes. `null` while the address is a folder, or not yet classified. */
-	const artifact = useArchivedArtifact(open === 'artifact' ? selected : null);
+	const artifact = useArchivedArtifact(open === 'artifact' ? address : null);
 	/*
 	 * **The tree card's search, held here rather than in the card** (#146). It stays here now that
 	 * there is one arrangement (#160): the state outlives an address change either way, and the
 	 * input is still absent wherever the card is — the two states with nothing to browse draw no
 	 * tree, so they draw no field either, without anything having to say so twice.
+	 *
+	 * **It is handed to the `All` view's card alone** (#181): `search_archive` answers addresses of
+	 * the archive, which the groups view does not own, so a hit found from there would have nowhere
+	 * in that arrangement to land. The hook is mounted either way and asks for nothing while the
+	 * text is empty, which it always is in the view that draws no field.
 	 */
 	const search = useArchiveSearch();
-	/*
-	 * **Which of the two views is drawn, and a change of address puts it back to *All*** (#165).
-	 * Every hook above stays mounted in either view, which is what makes *All* a return rather than
-	 * a reload: switching costs no request and lands back on exactly the address the breadcrumb
-	 * still names. The groups view asks for nothing of its own.
-	 *
-	 * The toggle is not in the URL, and that is the same call `useArchiveSearch` made and for a
-	 * sharper reason: the groups arrangement has no addresses of its own yet, so there is nothing
-	 * about it to share or to reload onto, and a link to a placeholder is a link to nothing. Whoever
-	 * builds the arrangement gets to settle that question with content in front of them.
-	 *
-	 * **So the address is what ends it, and it has to end it in one direction only** (#166 review).
-	 * The breadcrumb still names where you are while the placeholder is up — the toggle changes what
-	 * is *drawn*, never where you are — so its links have to work, and every one of them is an
-	 * address of the file explorer. A plain flag would have left them navigating underneath a
-	 * placeholder that never gave way, since `/archive/$` serves every depth from one component and
-	 * nothing about moving inside it remounts this. But *keying* the view to the address it was
-	 * chosen at is symmetric, and the wrong half of that symmetry is a bug: coming back to that
-	 * address — a tree row, a breadcrumb segment, the browser's Back — would have raised the
-	 * placeholder again with nobody having asked for it. Storing the address and clearing the view
-	 * when it changes is the same reset in one direction: any navigation lands back in the tree, and
-	 * only the toggle ever chooses the placeholder.
-	 */
-	const here = splatFromComponents(selected);
-	const [view, setView] = useState<ArchiveView>('all');
-	const [viewChosenAt, setViewChosenAt] = useState(here);
-	if (viewChosenAt !== here) {
-		// React's own way to reset state on a prop change: set during render, and it re-runs this
-		// component with the new values before anything is committed. No effect, so no flash of the
-		// placeholder at an address that never asked for one.
-		setViewChosenAt(here);
-		setView('all');
-	}
-
-	const level = levelAt(levels, selected);
-	const depth = selected.length;
+	/** Where the tree's rows come from — the one thing the two views differ in (`tree-source.ts`). */
+	const source = view === 'groups' ? groupRowSource(groups, levels) : allRowSource(levels);
 
 	return (
 		<>
 			<PageHeader
-				trail={trailFor(selected)}
-				description={view === 'groups' ? TESTING_GROUPS : descriptionFor(selected, open)}
+				trail={trailFor(view, selected)}
+				description={descriptionFor(view, selected, open)}
 				aside={
 					/*
 					 * The toggle is the one thing in this row that is always there; the badge still comes
 					 * and goes beside it, and it is absent in the groups view for the reason it is absent
-					 * at a run — there is nothing there to count. The toggle sits last so a badge
-					 * appearing does not move it.
+					 * at a run — see {@link badgeFor}. The toggle sits last so a badge appearing does not
+					 * move it.
 					 */
 					<div className="flex items-center gap-3">
-						{view === 'all' ? badgeFor(depth, level) : undefined}
-						<ArchiveViewToggle onSelect={setView} view={view} />
+						{view === 'all' ? badgeFor(selected.length, levelAt(levels, selected)) : undefined}
+						<ArchiveViewToggle view={view} />
 					</div>
 				}
 			/>
-			{view === 'groups' ? (
-				<TestingGroupsNotBuilt />
-			) : (
-				<Content
-					artifact={artifact}
-					description={description}
-					device={device}
-					levels={levels}
-					open={open}
-					search={search}
-					selected={selected}
-					serial={serial}
-				/>
-			)}
+			<Content
+				artifact={artifact}
+				description={description}
+				device={device}
+				groups={groups}
+				levels={levels}
+				open={open}
+				root={rootOf(view, levels, groups)}
+				search={view === 'all' ? search : undefined}
+				selected={selected}
+				serial={serial}
+				source={source}
+				view={view}
+			/>
 		</>
-	);
-}
-
-/**
- * The describing line for the second view: what the view is *for*, exactly as `System`'s says what
- * that screen is for. The panel below it is what says it is not built.
- */
-const TESTING_GROUPS = 'Runs arranged by the testing group their lease named.';
-
-/**
- * The second view, in the words every unbuilt destination in the panel uses (`CalmNotice`,
- * `docs/DESIGN.md` §7) — normal and *finished*, not a fault and not a wait.
- *
- * It reads nothing. No `group_id` is fetched, no listing is asked for and nothing is grouped: what
- * this issue settles is that the arrangement is reachable and says so, and the arrangement itself
- * is the work after it.
- */
-function TestingGroupsNotBuilt() {
-	return (
-		<CalmNotice
-			{...NOT_BUILT_YET}
-			detail="Runs whose leases named the same testing group will be arranged here, instead of by project and test name."
-		/>
 	);
 }
 
@@ -237,11 +217,17 @@ function TestingGroupsNotBuilt() {
  * **The root gate reaches the `<serial>` and no deeper.** An address below the `<serial>` draws the
  * tree from the first frame and the tree fills its own levels in as they arrive
  * (`directory-tree.tsx`); gating it on the root would make a deep link wait on a level it is not
- * waiting for anything else from.
+ * waiting for anything else from. In the groups view that is the same rule over a different answer,
+ * and it is what lets a deep group address browse while the grouping walk is still out: below the
+ * `<serial>` every component of the archive address is in the URL already.
  */
 function Content({
+	view,
+	root,
 	selected,
 	levels,
+	groups,
+	source,
 	serial,
 	device,
 	description,
@@ -249,47 +235,58 @@ function Content({
 	artifact,
 	search,
 }: {
+	readonly view: ArchiveView;
+	/** The state of this view's own root — {@link rootOf}. */
+	readonly root: RootAnswer;
 	readonly selected: readonly string[];
 	/** The one cache, holding whatever has answered — the tree's levels and the run's `<serial>`. */
 	readonly levels: ArchiveLevels;
+	/** The one grouping answer, and `loading` throughout the `All` view, which reads none of it. */
+	readonly groups: ArchiveGroups;
+	readonly source: TreeSource;
 	readonly serial: RunSerial;
 	readonly device: ArchivedDeviceInfo;
 	readonly description: ArchivedTestDescription;
 	/** Which of the three the address turned out to be — {@link OpenEntry}. */
 	readonly open: OpenEntry;
 	readonly artifact: ReturnType<typeof useArchivedArtifact>;
-	readonly search: ArchiveSearch;
+	/** The tree card's search — `undefined` in the groups view, which draws no field (#181). */
+	readonly search: ArchiveSearch | undefined;
 }) {
-	const root = levelAt(levels, []);
-
-	if (selected.length < BELOW_THE_SERIAL) {
-		if (root.status === 'loading') {
+	if (selected.length < depthsOf(view).below) {
+		if (root === 'loading') {
 			// One line, and no spinner (§5). It is not an empty archive and must not read as one.
 			return (
 				<p aria-live="polite" className="mt-8 font-code-md text-code-md text-on-surface-variant">
-					Reading the host's artifact archive.
+					{view === 'groups'
+						? "Reading the testing groups on this host's archive."
+						: "Reading the host's artifact archive."}
 				</p>
 			);
 		}
-		if (root.status === 'empty') {
-			return <NothingArchived />;
+		if (root === 'empty') {
+			return view === 'groups' ? <NoTestingGroups /> : <NothingArchived />;
 		}
-		if (root.status === 'unreadable') {
+		if (root === 'unreadable') {
+			// The same banner in both views, because it is the same fact about the same archive: the
+			// host cannot read it, so neither arrangement of it can be drawn.
 			return <ArchiveNotReadable />;
 		}
 	}
 
 	return (
 		<Columns>
-			<DirectoryTree levels={levels} search={search} selected={selected} />
+			<DirectoryTree search={search} selected={selected} source={source} />
 			<Preview
 				artifact={artifact}
 				description={description}
 				device={device}
+				groups={groups}
 				levels={levels}
 				open={open}
 				selected={selected}
 				serial={serial}
+				view={view}
 			/>
 		</Columns>
 	);
@@ -303,48 +300,103 @@ function Content({
  * | --- | --- |
  * | a level above a run | that level's `LevelContents` |
  * | a run | `RunPanel` |
- * | a directory below the `<serial>` | that level's `LevelContents`, which is what depth 4 already draws |
+ * | a directory below the `<serial>` | that level's `LevelContents`, which is what the `<serial>` already draws |
  * | an artifact | `ArtifactPreview` **alone** — the run's identity and device cards are not beside it |
  * | an address nobody has answered for | {@link ReadingThisAddress}, claiming neither |
  *
  * **The preview holds one thing at a time, and the tree is what keeps the reader placed.** The run's
  * two cards used to stand beside it, from a layout where opening a file took the tree away; the tree
  * is there now, so the column beside it is the artifact and nothing else.
+ *
+ * **The group-only depths are the same table one row up** (#181). A project's groups and a group's
+ * test names are levels of an arrangement rather than of the filesystem, so their listing comes out
+ * of the grouping answer instead of out of `list_archive` — and it is drawn by the same
+ * `LevelContents` with the same three row shapes, fed the *archive* depth so that a group's test
+ * names carry `RUNS` exactly as a project's do.
  */
 function Preview({
+	view,
 	selected,
 	levels,
+	groups,
 	serial,
 	device,
 	description,
 	open,
 	artifact,
 }: {
+	readonly view: ArchiveView;
 	readonly selected: readonly string[];
 	readonly levels: ArchiveLevels;
+	readonly groups: ArchiveGroups;
 	readonly serial: RunSerial;
 	readonly device: ArchivedDeviceInfo;
 	readonly description: ArchivedTestDescription;
 	readonly open: OpenEntry;
 	readonly artifact: ReturnType<typeof useArchivedArtifact>;
 }) {
-	if (selected.length >= BELOW_THE_SERIAL) {
+	const depths = depthsOf(view);
+	const address = view === 'groups' ? archiveAddressOf(selected) : selected;
+
+	if (selected.length >= depths.below) {
 		if (open === 'artifact') {
-			return <ArtifactPreview artifact={artifact} path={selected} />;
+			return <ArtifactPreview artifact={artifact} path={address} />;
 		}
 		if (open === 'unanswered') {
 			return <ReadingThisAddress path={selected} />;
 		}
 	}
-	if (selected.length === RUN_DEPTH) {
+	if (selected.length === depths.run) {
 		/*
 		 * **The run's own `<serial>` listing is not passed to it** (#161). It was `CONTENTS`, and the
 		 * tree draws those entries under the run's node; what the card says about that level is what
 		 * `serial` already carries, which is a fact about the run rather than a listing of it.
 		 */
-		return <RunPanel description={description} device={device} run={selected} serial={serial} />;
+		return <RunPanel description={description} device={device} run={address} serial={serial} />;
 	}
-	return <LevelContents level={levelAt(levels, selected)} path={selected} />;
+	/*
+	 * The heading is the address's own last component — the group id at a group, the test name at a
+	 * test name — while the rows and their order come off the archive depth underneath it.
+	 */
+	return (
+		<LevelContents
+			depth={address.length}
+			level={
+				view === 'groups' && selected.length < depths.run
+					? groupContents(groups, selected)
+					: levelAt(levels, address)
+			}
+			path={selected}
+		/>
+	);
+}
+
+/**
+ * One of the groups view's own levels, as a listing the contents card can draw.
+ *
+ * The four states are the grouping answer's four, unchanged — which is what keeps *no groups here*
+ * and *the host cannot read the archive* apart in this card exactly as they are apart everywhere
+ * else (D6). `childCount` is how many runs of the answer the row stands over, which is the one
+ * measure this view has that costs no second request; `onlyChild` is a run's own `<serial>`, and
+ * nothing in this card reads it.
+ */
+function groupContents(groups: ArchiveGroups, selected: readonly string[]): ArchiveLevel {
+	if (groups.status !== 'listed') {
+		return groups;
+	}
+	const rows = groupRowsAt(groups.groups, selected);
+	if (rows === null || rows.length === 0) {
+		return { status: 'empty' };
+	}
+	return {
+		status: 'listed',
+		entries: rows.map((row) => ({
+			kind: 'directory',
+			name: row.name,
+			childCount: row.runs,
+			onlyChild: row.serial,
+		})),
+	};
 }
 
 /**
@@ -409,12 +461,32 @@ function Columns({ children }: { readonly children: ReactNode }) {
 	);
 }
 
-/** A run is three components deep: a project, a test name, a run. */
+/** A run is three components deep in the archive: a project, a test name, a run. */
 const RUN_DEPTH = 3;
 /** And its `<serial>` is the fourth, which is part of an address and not a level of the tree. */
 const SERIAL_DEPTH = 4;
 /** The first depth that is *inside* a run — the shallowest address the parent listing classifies. */
 const BELOW_THE_SERIAL = 5;
+
+/**
+ * How many components a view puts in front of the archive's own path (#181).
+ *
+ * One in the groups view — the `groupId`, which is a level of an arrangement and not a directory —
+ * and none in the `All` view, where a splat *is* an archive path. It is the same number
+ * `archiveAddressOf` drops, and every depth on this screen is the archive's own plus it, which is
+ * what keeps one set of rules rather than two tables of magic numbers.
+ */
+const OFFSET: Record<ArchiveView, number> = { all: 0, groups: 1 };
+
+/** The three depths one view counts in, so no call site does the arithmetic twice. */
+function depthsOf(view: ArchiveView) {
+	const offset = OFFSET[view];
+	return {
+		run: RUN_DEPTH + offset,
+		serial: SERIAL_DEPTH + offset,
+		below: BELOW_THE_SERIAL + offset,
+	};
+}
 
 /**
  * Which levels a selection needs read — **the prefixes of it with the run's `<serial>` substituted
@@ -443,28 +515,44 @@ const BELOW_THE_SERIAL = 5;
  * second `useArchiveLevels` instance until #140's review — which meant the `<serial>` level a
  * selected run read was held by the *other* cache, so opening a file under that run re-`readdir`ed
  * it. Derived here, against `known`, the same key is asked for once across both depths.
+ *
+ * **The groups view reads none of the levels above a run** (#181), and that is the whole of what
+ * differs. Its upper levels are one grouping answer rather than four listings, so `list_archive`
+ * is asked for nothing at all until a run is selected — and then for exactly the same addresses,
+ * because at and below the `<serial>` the two views are browsing the same directories.
  */
 function levelsWanted(
+	view: ArchiveView,
 	selected: readonly string[],
 	known: ArchiveLevels,
+	groups: ArchiveGroups,
 ): readonly (readonly string[])[] {
 	const depth = selected.length;
-	if (depth < RUN_DEPTH) {
-		return levelsOf(selected);
+	const depths = depthsOf(view);
+	// The archive's own path for one of this view's addresses — itself, outside the groups view.
+	const addressOf = (components: readonly string[]) =>
+		view === 'groups' ? archiveAddressOf(components) : components;
+	const archived = addressOf(selected);
+	if (depth < depths.run) {
+		// The `All` view's levels above a run are the prefixes; the groups view's are the answer's.
+		return view === 'groups' ? [] : levelsOf(selected);
 	}
 	// The run's own level is never one of them, at any depth at or below it.
-	const above = levelsOf(selected.slice(0, RUN_DEPTH)).slice(0, -1);
+	const above = view === 'groups' ? [] : levelsOf(selected.slice(0, RUN_DEPTH)).slice(0, -1);
 	const serial =
-		depth > RUN_DEPTH ? selected.slice(0, SERIAL_DEPTH) : runContentsLevel(known, selected);
+		depth > depths.run
+			? addressOf(selected.slice(0, depths.serial))
+			: runSerialLevel(view, known, groups, selected);
 	if (serial === null) {
-		// The level above has not answered, or the run names no single child: there is no address to
-		// hop to, so nothing under it is asked for on a guess.
+		// Nobody has answered where this run's contents are — the level above is still in flight in
+		// the `All` view, the grouping answer is in the groups view, or the run names no single
+		// child. There is no address to hop to, so nothing under it is asked for on a guess.
 		return above;
 	}
 	// Each intermediate directory between the `<serial>` and the selection — a node the tree expands
 	// through, and the address itself is not one of them.
-	const below = Array.from({ length: Math.max(depth - BELOW_THE_SERIAL, 0) }, (_unused, index) =>
-		selected.slice(0, BELOW_THE_SERIAL + index),
+	const below = Array.from({ length: Math.max(depth - depths.below, 0) }, (_unused, index) =>
+		addressOf(selected.slice(0, depths.below + index)),
 	);
 	/*
 	 * And the selection's own listing, once its parent has said it is a folder. Guarded on the depth
@@ -472,8 +560,49 @@ function levelsWanted(
 	 * a *run* is a directory its parent names — which would put the run's own level back.
 	 */
 	const own =
-		depth >= BELOW_THE_SERIAL && openEntryOf(known, selected) === 'directory' ? [selected] : [];
+		depth >= depths.below && openEntryOf(known, archived) === 'directory' ? [archived] : [];
 	return [...above, serial, ...below, ...own];
+}
+
+/**
+ * Where a **selected run's** contents are, as an archive address — `[…run, <serial>]` — or `null`
+ * when nobody has said yet.
+ *
+ * The two views read the same fact from two places, and that is the one asymmetry between them: the
+ * `All` view takes it off the level above the run as `onlyChild`, because a listing is all it has,
+ * while the groups view has the run's own four-component address on the grouping answer. Both are
+ * the archive's own path, so everything downstream of this — the two file reads, the tree's hop,
+ * the levels asked for — is one code path.
+ *
+ * `archiveAddressOf` is not applied to the answer's serial: what comes back from `group-tree.ts` is
+ * already the archive's, since the answer never carried the group id in a path.
+ */
+function runSerialLevel(
+	view: ArchiveView,
+	levels: ArchiveLevels,
+	groups: ArchiveGroups,
+	run: readonly string[],
+): readonly string[] | null {
+	if (view !== 'groups') {
+		return runContentsLevel(levels, run);
+	}
+	const serial = groupSerialOf(groups, run);
+	return serial === null ? null : [...archiveAddressOf(run), serial];
+}
+
+/** One run's `<serial>` out of the grouping answer, or `null` while nothing has answered for it. */
+function groupSerialOf(groups: ArchiveGroups, run: readonly string[]): string | null {
+	const [project, groupId, testName, name] = run;
+	if (
+		groups.status !== 'listed' ||
+		project === undefined ||
+		groupId === undefined ||
+		testName === undefined ||
+		name === undefined
+	) {
+		return null;
+	}
+	return groupRunSerial(groups.groups, project, groupId, testName, name);
 }
 
 /**
@@ -515,6 +644,23 @@ const DESCRIPTIONS = [
 	'Everything filed under this directory.',
 ] as const;
 
+/**
+ * The groups view's own lines, one per depth — the same list with the group id's in it (#181).
+ *
+ * The two below a group say what the standard arrangement says, because below a group it *is* the
+ * standard arrangement; the two above it are what this view is for. The root's line says *grouped*
+ * out loud, because the projects it lists are the ones with grouped runs and not every project the
+ * archive holds — which is the one thing about this view a reader could otherwise get wrong.
+ */
+const GROUP_DESCRIPTIONS = [
+	'Projects with runs filed under a testing group on this host.',
+	'Testing groups the leases under this project named.',
+	'Tests recorded under this testing group.',
+	'Runs filed under this test name in this group, most recent first.',
+	'Everything this lease wrote; nothing is added once it ends.',
+	'Everything filed under this directory.',
+] as const;
+
 /** The design's own line for one open artifact, and it says what the preview claims: nothing more. */
 const ONE_ARTIFACT = 'One artifact from this run, as it was written.';
 
@@ -527,14 +673,16 @@ const ONE_ARTIFACT = 'One artifact from this run, as it was written.';
  * long as the listing took. The run's line is true of everything under a run either way, so it is
  * what the header says until the answer decides between the other two.
  */
-function descriptionFor(selected: readonly string[], open: OpenEntry): string {
-	if (selected.length >= BELOW_THE_SERIAL) {
+function descriptionFor(view: ArchiveView, selected: readonly string[], open: OpenEntry): string {
+	const depths = depthsOf(view);
+	const lines = view === 'groups' ? GROUP_DESCRIPTIONS : DESCRIPTIONS;
+	if (selected.length >= depths.below) {
 		if (open === 'unanswered') {
-			return DESCRIPTIONS[RUN_DEPTH] ?? '';
+			return lines[depths.run] ?? '';
 		}
-		return open === 'directory' ? (DESCRIPTIONS[4] ?? '') : ONE_ARTIFACT;
+		return open === 'directory' ? (lines[depths.run + 1] ?? '') : ONE_ARTIFACT;
 	}
-	return DESCRIPTIONS[Math.min(selected.length, DESCRIPTIONS.length - 1)] ?? '';
+	return lines[Math.min(selected.length, lines.length - 1)] ?? '';
 }
 
 /** What the badge counts, by depth. A run is not counted: its contents are not one of these. */
@@ -548,6 +696,13 @@ const COUNTED = ['project', 'test', 'run'] as const;
  * at a run too, where the thing selected is one run and not a count of anything — and absent for an
  * open artifact, which is the same rule and not an exception to it: the badge is a counter, and one
  * file has nothing to count.
+ *
+ * **And absent throughout the groups view** (#181, `docs/DESIGN.md` §9), which is the same rule
+ * once more rather than an exception to it. That view is one *bounded* walk of the archive, so what
+ * it holds at any level is what the host could examine and not what is filed — a badge over it
+ * would read as a count of a set and be short without saying so. The tree says the answer was cut
+ * short where a reader is looking at the rows it is short of; the header does not carry a number
+ * that would need the same caveat.
  */
 function badgeFor(depth: number, level: ArchiveLevel) {
 	const noun = COUNTED[depth];
@@ -572,20 +727,42 @@ function badgeFor(depth: number, level: ArchiveLevel) {
  * The serial is not a tree level (§9) and there is no screen to link it to; the open file is where
  * you are, so it is last, `text-tertiary`, not a link, and shown in full — wrapping rather than
  * shortening, which `Breadcrumb` already does for a 40-character run name.
+ *
+ * **In the groups view it is the same trail with the group id in it** (#181), on that view's own
+ * routes: `Archive > checkout-app > app-bar-top-space > home_a_variant > …`. The first segment is
+ * still *Archive*, because both arrangements are the archive and the sidebar names one destination;
+ * where it goes is the view you are in, so a breadcrumb never moves the reader between them. That is
+ * the toggle's job, and it is the one control that does it.
  */
-function trailFor(selected: readonly string[]): readonly BreadcrumbSegment[] {
-	const levels = selected.length >= BELOW_THE_SERIAL ? selected.slice(0, RUN_DEPTH) : selected;
+function trailFor(view: ArchiveView, selected: readonly string[]): readonly BreadcrumbSegment[] {
+	const depths = depthsOf(view);
+	const inRun = selected.length >= depths.below;
+	const levels = inRun ? selected.slice(0, depths.run) : selected;
+	const root = view === 'groups' ? '/groups' : '/archive';
+	const deeper = view === 'groups' ? '/groups/$' : '/archive/$';
 	return [
-		{ label: 'Archive', to: '/archive' },
+		{ label: 'Archive', to: root },
 		...levels.map((name, index) => ({
 			label: name,
-			to: '/archive/$',
+			to: deeper,
 			params: { _splat: splatFromComponents(levels.slice(0, index + 1)) },
 		})),
-		...(selected.length >= BELOW_THE_SERIAL
-			? [{ label: selected.slice(SERIAL_DEPTH).join('/') }]
-			: []),
+		...(inRun ? [{ label: selected.slice(depths.serial).join('/') }] : []),
 	];
+}
+
+/**
+ * The state of whichever answer a view's **root** comes out of — a `list_archive` level in the `All`
+ * view, the whole grouping answer in the groups view.
+ *
+ * One word for both, because what the content area does with it is the same in either: nothing yet
+ * is a quiet line, nothing there takes the whole area, and unreadable takes it too. Which *sentence*
+ * the middle one gets is the view's, and is the only thing that differs.
+ */
+type RootAnswer = ArchiveLevel['status'];
+
+function rootOf(view: ArchiveView, levels: ArchiveLevels, groups: ArchiveGroups): RootAnswer {
+	return view === 'groups' ? groups.status : levelAt(levels, []).status;
 }
 
 /**
@@ -600,13 +777,28 @@ function trailFor(selected: readonly string[]): readonly BreadcrumbSegment[] {
  * An `empty` level above is `answered` with no serial: it named no runs at all, so this run is not
  * there, and *nothing to list* is the honest thing to say about it.
  *
+ * **In the groups view the answer it comes out of is the grouping answer**, which has those same
+ * four states — so a run whose serial is still in flight, one in an archive the host cannot read,
+ * and one the answer simply does not hold stay three different sentences there too.
+ *
  * Below the run this is not consulted at all: `RunPanel` is drawn at the run's own depth and
  * nowhere else, and the serial is in the address there anyway.
  */
-function serialOf(levels: ArchiveLevels, selected: readonly string[]): RunSerial {
-	if (selected.length !== RUN_DEPTH) {
+function serialOf(
+	view: ArchiveView,
+	levels: ArchiveLevels,
+	groups: ArchiveGroups,
+	selected: readonly string[],
+): RunSerial {
+	if (selected.length !== depthsOf(view).run) {
 		// Not a run, so nothing reads this — `answered` rather than a state that would draw one.
 		return NO_SERIAL;
+	}
+	if (view === 'groups') {
+		if (groups.status === 'loading' || groups.status === 'unreadable') {
+			return { status: groups.status };
+		}
+		return { status: 'answered', serial: groupSerialOf(groups, selected) };
 	}
 	const parent = levelAt(levels, selected.slice(0, 2));
 	if (parent.status === 'loading' || parent.status === 'unreadable') {
@@ -626,17 +818,24 @@ function serialOf(levels: ArchiveLevels, selected: readonly string[]): RunSerial
 const NO_SERIAL: RunSerial = { status: 'answered', serial: null };
 
 /**
- * The path of a **selected run's** `<serial>` level, or `null` at any other depth and for a run
- * with no serial to read one for — the one level whose address is derived from an answer rather
+ * The archive path of a **selected run's** `<serial>` level, or `null` at any other depth and for a
+ * run with no serial to read one for — the one level whose address is derived from an answer rather
  * than from the URL.
  *
- * The depth guard is this function's whole reason for existing beside {@link runContentsLevel}:
- * every level above a run may hold exactly one child too, so calling that helper at the wrong depth
- * composes an address nothing draws — and, through the two file hooks, reads two files out of it.
- * The tree makes the same hop through the same helper, so one place knows a run holds one child.
+ * The depth guard is this function's whole reason for existing beside {@link runSerialLevel}: every
+ * level above a run may hold exactly one child too, so hopping at the wrong depth composes an
+ * address nothing draws — and, through the two file hooks, reads two files out of it. The tree makes
+ * the same hop through the same helpers, so one place knows where a run's contents are in each view.
  */
-function runContents(levels: ArchiveLevels, selected: readonly string[]): readonly string[] | null {
-	return selected.length === RUN_DEPTH ? runContentsLevel(levels, selected) : null;
+function runContents(
+	view: ArchiveView,
+	levels: ArchiveLevels,
+	groups: ArchiveGroups,
+	selected: readonly string[],
+): readonly string[] | null {
+	return selected.length === depthsOf(view).run
+		? runSerialLevel(view, levels, groups, selected)
+		: null;
 }
 
 /**
@@ -656,19 +855,72 @@ function NothingArchived() {
 	);
 }
 
+/**
+ * The groups view's own empty hand: the archive has runs in it, or has none, and **no lease on this
+ * host named a group** (#181).
+ *
+ * The same `QuietPanel` treatment for the same reason — normal, common and *finished* — and it
+ * shares no phrase with *Nothing in the archive* or with `ARCHIVE NOT READABLE`, because the three
+ * empty-handed answers of this screen must stay three (D6). What would change it is a `group_id` on
+ * a lease, so that is what it says; where the runs are meanwhile is the `All` view, so it says that
+ * too, and this state is the one place a reader could otherwise conclude the archive is empty.
+ */
+function NoTestingGroups() {
+	return (
+		<QuietPanel heading="No testing groups">
+			{/* The one command on this screen, in the monospace face because it is one — `projects.tsx`
+			    set that precedent, and the face is the token's rather than a treatment invented here. */}
+			A run joins a group when the lease that produced it names one, with{' '}
+			<span className="font-code-md">rover acquire --group-id</span>. Nothing filed on this host has
+			named a group, so there is no grouping to arrange. Every run is still listed in the All view.
+		</QuietPanel>
+	);
+}
+
+/**
+ * The four routes, two views, one component (#181).
+ *
+ * **Two route families rather than one with a search parameter**, and each is two routes rather than
+ * one optional splat, because TanStack matches a splat route against `/archive/` and not against
+ * `/archive` — and `/archive` is the address the navigation points at.
+ *
+ * **`/groups` rather than `/archive/groups/$`**, checked and rejected: a project literally named
+ * `groups` would be shadowed by it in the `All` view, which is a silent bug in a vocabulary that is
+ * deliberately opaque (D22). A `?view=groups&group=<id>` pair was rejected too — two carriers of one
+ * piece of state, with the breadcrumb having to thread both.
+ *
+ * The sidebar's `Archive` item stays current on both, which `sidebar.tsx` states as the rule it is:
+ * the panel has one Archive destination and two arrangements of it, not two destinations.
+ */
 export const archiveRoute = createRoute({
 	getParentRoute: () => rootRoute,
 	path: '/archive',
-	component: ArchiveScreen,
+	component: () => <ArchiveScreen view="all" />,
 });
 
-/**
- * The same screen at a path. Two routes rather than one optional splat, because TanStack matches a
- * splat route against `/archive/` and not against `/archive` — and `/archive` is the address the
- * navigation points at.
- */
+/** The same screen at a path — see {@link archiveRoute} for why it is a second route. */
 export const archivePathRoute = createRoute({
 	getParentRoute: () => rootRoute,
 	path: '/archive/$',
-	component: ArchiveScreen,
+	component: () => <ArchiveScreen view="all" />,
+});
+
+/** The group-first arrangement of the same archive, at its own root. */
+export const groupsRoute = createRoute({
+	getParentRoute: () => rootRoute,
+	path: '/groups',
+	component: () => <ArchiveScreen view="groups" />,
+});
+
+/**
+ * And at a path — `<project>/<groupId>/<testName>/<run>/<serial>/<…>`.
+ *
+ * The splat is the whole of *the selection is an address*: a reload lands on it and a shared link
+ * lands on it, exactly as the `All` view's does. `archiveAddressOf` is what turns it into the
+ * archive's own path for everything below the group.
+ */
+export const groupsPathRoute = createRoute({
+	getParentRoute: () => rootRoute,
+	path: '/groups/$',
+	component: () => <ArchiveScreen view="groups" />,
 });

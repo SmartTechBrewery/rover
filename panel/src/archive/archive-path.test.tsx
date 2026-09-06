@@ -10,6 +10,7 @@ import {
 import { render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import {
+	archiveAddressOf,
 	componentsFromSplat,
 	keyOf,
 	levelsOf,
@@ -164,5 +165,115 @@ describe('the round trip through the router', () => {
 		await waitFor(() => {
 			expect(screen.getByTestId('components').textContent).toBe('[]');
 		});
+	});
+});
+
+/**
+ * The groups view's own splat, `<project>/<groupId>/<testName>/<run>/<serial>/<…>`, and the one
+ * place that knows the archive address underneath it (#181).
+ */
+describe('the archive address a groups splat names', () => {
+	// The group id is not a directory, so it is dropped — and nothing else about the address is
+	// touched, which is what keeps every read below a group on the archive's one path vocabulary.
+	it('drops the group id and keeps every other component in place', () => {
+		expect(
+			archiveAddressOf([
+				'checkout-app',
+				'app-bar-top-space',
+				'login-flow',
+				'20260830T170501Z-issue-112-9f1c2ab4',
+				'R5CT30ABCDE',
+				'screenshots',
+				'001.png',
+			]),
+		).toEqual([
+			'checkout-app',
+			'login-flow',
+			'20260830T170501Z-issue-112-9f1c2ab4',
+			'R5CT30ABCDE',
+			'screenshots',
+			'001.png',
+		]);
+	});
+
+	// A drop by position, never a parse: a group id spelled exactly like a test name is still the
+	// component at index 1 and nothing reads either of them (D22).
+	it('drops by position, whatever the components say', () => {
+		expect(archiveAddressOf(['a', 'a', 'a'])).toEqual(['a', 'a']);
+	});
+
+	it('leaves the root and a project alone, which is what nothing below them asks about', () => {
+		expect(archiveAddressOf([])).toEqual([]);
+		expect(archiveAddressOf(['checkout-app'])).toEqual(['checkout-app']);
+	});
+
+	// A group with nothing selected under it names its project's level, which is exactly what the
+	// card beside the tree draws its row shapes from.
+	it('gives a group’s own address as its project’s', () => {
+		expect(archiveAddressOf(['checkout-app', 'app-bar-top-space'])).toEqual(['checkout-app']);
+	});
+});
+
+/**
+ * The groups view's half of the URL contract, against a **real** router for the reason above: what
+ * is in question is exactly what a mocked `Link` would supply.
+ */
+describe('the groups view’s round trip through the router', () => {
+	function routerFor(initial: string) {
+		const rootRoute = createRootRoute();
+		const groupsRoute = createRoute({
+			getParentRoute: () => rootRoute,
+			path: '/groups/$',
+			component: () => {
+				const params = useParams({ strict: false });
+				const components = componentsFromSplat(params._splat);
+				return (
+					<>
+						<span data-testid="components">{JSON.stringify(components)}</span>
+						<span data-testid="address">{JSON.stringify(archiveAddressOf(components))}</span>
+						<Link
+							params={{ _splat: splatFromComponents([...components, 'a b%c#d']) }}
+							to="/groups/$"
+						>
+							deeper
+						</Link>
+					</>
+				);
+			},
+		});
+		return createRouter({
+			routeTree: rootRoute.addChildren([groupsRoute]),
+			history: createMemoryHistory({ initialEntries: [initial] }),
+		});
+	}
+
+	// A shared link lands on the selection, and the group id survives being a component like any
+	// other — including one carrying the characters a directory name may legally carry.
+	it('gives back a deep group selection, and the archive address under it', async () => {
+		const components = ['checkout-app', 'a b%c#d', 'login-flow', 'run-1', 'R5CT30ABCDE'];
+		const router = routerFor(`/groups/${components.map(encodeURIComponent).join('/')}`);
+
+		render(<RouterProvider router={router as never} />);
+
+		await waitFor(() => {
+			expect(screen.getByTestId('components').textContent).toBe(JSON.stringify(components));
+		});
+		expect(screen.getByTestId('address').textContent).toBe(
+			JSON.stringify(['checkout-app', 'login-flow', 'run-1', 'R5CT30ABCDE']),
+		);
+	});
+
+	it('encodes a link deeper into the groups view so the address survives being pasted', async () => {
+		const router = routerFor('/groups/checkout-app');
+
+		render(<RouterProvider router={router as never} />);
+
+		const link = await waitFor(() => screen.getByRole('link', { name: 'deeper' }));
+		const href = link.getAttribute('href') ?? '';
+		expect(href).not.toContain(' ');
+		expect(componentsFromSplat(decodeURIComponent(href).replace('/groups/', ''))).toEqual([
+			'checkout-app',
+			'a b%c#d',
+		]);
 	});
 });

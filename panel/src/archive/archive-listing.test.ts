@@ -1,7 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import listings from '../../../tests/fixtures/panel/list-archive.json';
+import groupings from '../../../tests/fixtures/panel/list-archive-groups.json';
 import searches from '../../../tests/fixtures/panel/search-archive.json';
-import { ListArchiveResultSchema, SearchArchiveResultSchema } from './archive-listing.js';
+import {
+	ListArchiveGroupsResultSchema,
+	ListArchiveResultSchema,
+	SearchArchiveResultSchema,
+} from './archive-listing.js';
 
 /**
  * The panel's half of the drift gate `tests/unit/panel/list-archive-fixture.test.ts` opens.
@@ -176,6 +181,106 @@ describe("the panel's mirror of search_archive", () => {
 		expect(parsed).toEqual({
 			outcome: 'searched',
 			matches: [{ path: ['checkout-app'], kind: 'directory' }],
+			truncated: false,
+		});
+	});
+});
+
+/**
+ * The panel's half of the drift gate `tests/unit/panel/list-archive-groups-fixture.test.ts` opens
+ * (#178, #181).
+ *
+ * The same captured answers, parsed here by the mirror and there by the daemon's own schemas. The
+ * other half proves the file is a set of answers the daemon could really give; this half proves
+ * every field the groups view is arranged out of survives the parse — which is the whole of the
+ * wire being pinned before anything is drawn from it.
+ */
+describe("the panel's mirror of list_archive_groups", () => {
+	it('reads every captured answer', () => {
+		for (const answer of groupings.answers) {
+			expect(ListArchiveGroupsResultSchema.safeParse(answer.result).success).toBe(true);
+		}
+	});
+
+	// The four things the groups view's levels are: the project, the group id, and — off the run's
+	// own four-component path — its test name and its `<serial>`.
+	it('reads a group down to the fields the arrangement is built from', () => {
+		const groups = groupings.answers.flatMap((answer) => {
+			const parsed = ListArchiveGroupsResultSchema.parse(answer.result);
+			return parsed.outcome === 'listed' ? parsed.groups : [];
+		});
+
+		const group = groups.find((one) => one.groupId === 'app-bar-top-space');
+		expect(group?.project).toBe('rover');
+		expect(group?.runs.map((run) => run.path)).toEqual([
+			['rover', 'home_after', '20260901T083000Z-issue-178-139367de', 'emulator-5554'],
+			['rover', 'home_before', '20260901T080000Z-issue-178-26d097b4', 'emulator-5554'],
+		]);
+	});
+
+	/*
+	 * A labelled artifact, which **this phase draws nothing from** (#181) and the mirror carries
+	 * anyway: a field left out of the mirror is stripped by the parse, so the phase that draws the
+	 * badges would find it gone rather than absent from the wire.
+	 */
+	it('keeps a labelled artifact, address and label alike', () => {
+		const parsed = ListArchiveGroupsResultSchema.parse(groupings.answers[0]?.result);
+		const artifacts =
+			parsed.outcome === 'listed' ? (parsed.groups[1]?.runs[0]?.artifacts ?? []) : [];
+
+		expect(artifacts).toContainEqual({
+			path: [
+				'rover',
+				'home_after',
+				'20260901T083000Z-issue-178-139367de',
+				'emulator-5554',
+				'screenshots',
+				'001_home-screen_screenshot.png',
+			],
+			label: 'home-screen',
+		});
+	});
+
+	// The three answers the view's three empty-handed states come off, and *no group here* is a
+	// `listed` with an empty array rather than any kind of failure (D6).
+	it('keeps no groups apart from a host that could not read the archive', () => {
+		const outcomes = groupings.answers.map((answer) => {
+			const parsed = ListArchiveGroupsResultSchema.parse(answer.result);
+			return parsed.outcome === 'listed' ? `listed:${parsed.groups.length}` : parsed.outcome;
+		});
+
+		expect(outcomes).toContain('listed:0');
+		expect(outcomes).toContain('missing');
+		expect(outcomes).toContain('unreadable');
+	});
+
+	// The flag the tree's truncation line is drawn from, in both of its states.
+	it('reads a truncated answer as truncated and a complete one as complete', () => {
+		const flags = groupings.answers.flatMap((answer) => {
+			const parsed = ListArchiveGroupsResultSchema.parse(answer.result);
+			return parsed.outcome === 'listed' ? [parsed.truncated] : [];
+		});
+
+		expect(new Set(flags)).toEqual(new Set([true, false]));
+	});
+
+	/*
+	 * The one deliberate difference from the host's copy, a third time: nothing here is `.strict()`,
+	 * so a field a newer daemon adds is stripped rather than blanking a working screen.
+	 */
+	it('strips a field it does not know rather than refusing the answer', () => {
+		const parsed = ListArchiveGroupsResultSchema.parse({
+			outcome: 'listed',
+			groups: [
+				{ project: 'rover', groupId: 'g', runs: [{ path: ['rover'], artifacts: [], notes: 1 }] },
+			],
+			truncated: false,
+			directoriesRead: 12,
+		});
+
+		expect(parsed).toEqual({
+			outcome: 'listed',
+			groups: [{ project: 'rover', groupId: 'g', runs: [{ path: ['rover'], artifacts: [] }] }],
 			truncated: false,
 		});
 	});
