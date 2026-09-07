@@ -14,6 +14,32 @@ drifts from it. §5 describes the board this skill writes to.
 
 ## 1. Establish the issue
 
+0. **Pull first, then read the code.** An issue is written against what the repository *is*, and
+   this session's checkout may be behind by every merge made since it was cloned or last synced —
+   so a body citing a file, a function or a decision can be describing code that is already gone.
+   Refresh before analysing anything:
+
+   ```bash
+   git -C "$(git rev-parse --show-toplevel)" fetch --quiet origin main
+   git -C "$(git rev-parse --show-toplevel)" status --short --branch
+   ```
+
+   Then, **only when the working tree is clean and the branch is `main`**, fast-forward it:
+
+   ```bash
+   git -C "$(git rev-parse --show-toplevel)" pull --ff-only origin main
+   ```
+
+   **Never pull over uncommitted work, never merge, and never force anything** — the pull is a
+   convenience for reading, not a reason to touch the user's tree. If the tree is dirty, the branch
+   is not `main`, or the fast-forward is refused, **say so in one line and carry on** against the
+   checkout as it stands; also say it in the report (§4), because an issue written against a stale
+   tree is worth knowing about. A `fetch` that fails (no network, no remote) is the same case: note
+   it and continue.
+
+   `git log --oneline HEAD..origin/main` is worth a glance when the pull could not run — it names
+   what the reading is missing without changing anything.
+
 1. Derive the problem, desired outcome, scope, evidence, and acceptance criteria from the
    conversation. If the user supplied issue text directly, treat it as the primary source.
 2. **Check `PROJECT.md` §9.3 first** — the backlog in dependency order (row numbers are identities, not positions: R21–R24 sit mid-table). Most planned
@@ -250,6 +276,10 @@ Three rules when you do it:
 Return the issue URL and number, its labels (including whether `swarm` was applied), its
 Backlog status on the board, any `Size`/`Estimate` set, its placement rationale, and every
 dependency recorded. State non-binding suggestions separately from requirements.
+
+**Say whether the checkout was current** (§1.0). If the pull ran, one clause is enough. If it could
+not — dirty tree, a branch other than `main`, no network, a refused fast-forward — say which, and
+say that the issue was written against a checkout that may be behind `origin/main`.
 
 Then stop. Do not create a branch or worktree, do not begin implementing, and do not invoke
 `/solve-issue` — filing a spec and building it are separate decisions, and the human takes the
