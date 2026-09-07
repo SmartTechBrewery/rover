@@ -1828,7 +1828,10 @@ round letter beside its name** (#182): inside one group each distinct label take
 alphabet, `A` through `Z` — `@` past the twenty-sixth — and the same label is the same letter
 everywhere in that group, though nothing about a letter carries across to another group. The letter
 is what carries it and never the colour alone, so the label the archive filed is on every badge as a
-tooltip and to a screen reader; an artifact with no label carries no badge at all.
+tooltip and to a screen reader; an artifact with no label carries no badge at all. The badges run on
+four colours cycled under the letters, **each cycle a step off the last** — so `E` is `A`'s colour
+at another level rather than a repeat of it — and none of them can read as an outcome, because Rover
+has none.
 
 **In the `All` view there is one arrangement at every depth: the tree, then one card.** What the parent listing says
 the selected address is decides what that card draws, and nothing about it decides whether the tree

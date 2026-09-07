@@ -75,6 +75,161 @@
 	}
 
 	/*
+	 * The label badges' per-cycle steps — the same four palette colours a step off the last on
+	 * every cycle of the alphabet (#200, `docs/DESIGN.md` §9, which carries the whole table).
+	 *
+	 * `A`…`D` are deliberately **not** here: cycle 1 keeps the four Tailwind utility pairs
+	 * `label-badge.tsx` has always drawn it with, which is what makes "cycle 1 is unchanged"
+	 * provable rather than claimed. `E`…`Z` compose three classes —
+	 * `label-badge-step label-badge-<family> label-badge-cycle-<n>`.
+	 *
+	 * **`in srgb`, and not for taste.** It interpolates the gamma-encoded channels, so a step is
+	 * exact byte arithmetic that `tests/unit/panel/label-badge-palette.test.ts` reproduces from
+	 * this file and `tokens.css` — it recomputes all twenty-eight fills and asserts contrast,
+	 * distance from every colour that already means something, and distance between the fills of
+	 * letters adjacent in the alphabet. A perceptual space would be reproducible too; the sRGB
+	 * result is the one a reader can also check with a colour picker.
+	 *
+	 * **A step is an interpolation inside one family, never a new colour.** The light end is the
+	 * very token cycle 1 draws that family on, and the dark end is that family's own dark step —
+	 * so mixing at 100% is the identity and cycle 1 *is* the light end of every ramp below. The
+	 * neutral has no `on-*-fixed-variant`, so it runs to `--color-inverse-on-surface`, the ink
+	 * cycle 1 already pairs with `bg-inverse-surface`. `--color-outline-variant` was the obvious
+	 * alternative and is **rejected**: that ramp passes within ΔE 4.4 of `--color-outline`, §5's
+	 * not-ready grey, at its own midpoint, because both are blue-tinted greys on nearly one line.
+	 * Running to the neutral ink instead diverges from it in hue and keeps 10.3 at the deepest
+	 * step, and it leaves `--color-outline-variant` unspent.
+	 *
+	 * **The text step never flips, and that was computed rather than assumed.** A fill dark enough
+	 * for the family's light `-fixed` step to carry the letter at 4.5:1 needs a relative luminance
+	 * ≤ 0.131, and a fill that still reads as a badge against the card's `--color-surface-container`
+	 * at 3:1 needs ≥ 0.143. The two windows do not overlap, so no ramp here ever crosses into the
+	 * dark half: every cycle of a family carries the one dark ink cycle 1 pairs with it.
+	 *
+	 * **Each family reaches as far as its own constraints allow, which is not equally far.**
+	 * Primary and secondary run 9% a cycle to 46%; the neutral stops at 64%, where it is still
+	 * ΔE 10.3 clear of the not-ready grey it would otherwise walk into; and the tertiary's first
+	 * step is a jump to 72% because `--color-tertiary`, §5's *free device* green, sits between
+	 * `--color-tertiary-fixed` and its own dark step — a 90% step would land ΔE 5.5 from it. The
+	 * per-family, per-cycle percentages are written out one by one rather than derived from a
+	 * `calc()` for exactly that reason: they are not one arithmetic sequence, and each one is a
+	 * decision with a number behind it.
+	 *
+	 * **The `-fixed-dim` tokens are not a free second cycle**, though they read like one. Every
+	 * one of them is already spent or already means something: `--color-tertiary-fixed-dim` is
+	 * byte-identical to `--color-tertiary` (the free-device green), `--color-primary-fixed-dim` is
+	 * byte-identical to `--color-primary` (the wordmark's own chroma step), and
+	 * `--color-secondary-fixed-dim` (`#ffb59a`) is ΔE 9.3 from `--color-error` (`#ffb4ab`) — near
+	 * enough to read as the error colour. The existing badge test asserts the *class name* is not
+	 * `bg-tertiary`, so `bg-tertiary-fixed-dim` would have passed the gate while painting the
+	 * free-device green onto a badge. Recorded here so nobody reaches for it again.
+	 */
+	.label-badge-step {
+		background-color: color-mix(in srgb, var(--badge-hue) var(--badge-step), var(--badge-shade));
+		color: var(--badge-ink);
+	}
+
+	.label-badge-primary {
+		--badge-hue: var(--color-primary-fixed);
+		--badge-shade: var(--color-on-primary-fixed-variant);
+		--badge-ink: var(--color-on-primary-fixed);
+	}
+
+	.label-badge-secondary {
+		--badge-hue: var(--color-secondary-fixed);
+		--badge-shade: var(--color-on-secondary-fixed-variant);
+		--badge-ink: var(--color-on-secondary-fixed);
+	}
+
+	.label-badge-tertiary {
+		--badge-hue: var(--color-tertiary-fixed);
+		--badge-shade: var(--color-on-tertiary-fixed-variant);
+		--badge-ink: var(--color-on-tertiary-fixed);
+	}
+
+	.label-badge-neutral {
+		--badge-hue: var(--color-inverse-surface);
+		--badge-shade: var(--color-inverse-on-surface);
+		--badge-ink: var(--color-inverse-on-surface);
+	}
+
+	.label-badge-primary.label-badge-cycle-2 {
+		--badge-step: 91%;
+	}
+	.label-badge-primary.label-badge-cycle-3 {
+		--badge-step: 82%;
+	}
+	.label-badge-primary.label-badge-cycle-4 {
+		--badge-step: 73%;
+	}
+	.label-badge-primary.label-badge-cycle-5 {
+		--badge-step: 64%;
+	}
+	.label-badge-primary.label-badge-cycle-6 {
+		--badge-step: 55%;
+	}
+	.label-badge-primary.label-badge-cycle-7 {
+		--badge-step: 46%;
+	}
+
+	.label-badge-secondary.label-badge-cycle-2 {
+		--badge-step: 91%;
+	}
+	.label-badge-secondary.label-badge-cycle-3 {
+		--badge-step: 82%;
+	}
+	.label-badge-secondary.label-badge-cycle-4 {
+		--badge-step: 73%;
+	}
+	.label-badge-secondary.label-badge-cycle-5 {
+		--badge-step: 64%;
+	}
+	.label-badge-secondary.label-badge-cycle-6 {
+		--badge-step: 55%;
+	}
+	.label-badge-secondary.label-badge-cycle-7 {
+		--badge-step: 46%;
+	}
+
+	.label-badge-tertiary.label-badge-cycle-2 {
+		--badge-step: 72%;
+	}
+	.label-badge-tertiary.label-badge-cycle-3 {
+		--badge-step: 66%;
+	}
+	.label-badge-tertiary.label-badge-cycle-4 {
+		--badge-step: 60%;
+	}
+	.label-badge-tertiary.label-badge-cycle-5 {
+		--badge-step: 54%;
+	}
+	.label-badge-tertiary.label-badge-cycle-6 {
+		--badge-step: 48%;
+	}
+	.label-badge-tertiary.label-badge-cycle-7 {
+		--badge-step: 42%;
+	}
+
+	.label-badge-neutral.label-badge-cycle-2 {
+		--badge-step: 94%;
+	}
+	.label-badge-neutral.label-badge-cycle-3 {
+		--badge-step: 88%;
+	}
+	.label-badge-neutral.label-badge-cycle-4 {
+		--badge-step: 82%;
+	}
+	.label-badge-neutral.label-badge-cycle-5 {
+		--badge-step: 76%;
+	}
+	.label-badge-neutral.label-badge-cycle-6 {
+		--badge-step: 70%;
+	}
+	.label-badge-neutral.label-badge-cycle-7 {
+		--badge-step: 64%;
+	}
+
+	/*
 	 * The active nav item's hard-edge offset, the design system's "borders as depth" in place
 	 * of an ambient shadow. The reference screen wrote the colour inline as
 	 * `rgba(0,226,157,1)`; it is the tertiary token and is read as one here.

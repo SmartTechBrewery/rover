@@ -15,9 +15,12 @@ import { LABEL_LETTERS, type LabelLetter } from '@panel/archive/group-labels.js'
  * **No colour here may read as an outcome** (`docs/DESIGN.md` §5, §9). §5 already spends the
  * tertiary green on *a free device*, the primary-container blue on *held* and the
  * secondary-container orange on *warning*, and `error` is excluded outright — so every fill below is
- * a `-fixed` step or a neutral, and no two of them can pair into the pass/fail verdict Rover does
- * not have (`ai/RULES.md` §1). A green `A` beside a red `B` is exactly the thing this palette is
- * chosen to make unavailable.
+ * a `-fixed` step, a neutral, or a step derived from one of those, and no two of them can pair into
+ * the pass/fail verdict Rover does not have (`ai/RULES.md` §1). A green `A` beside a red `B` is
+ * exactly the thing this palette is chosen to make unavailable. Since #200 that is a measurement
+ * rather than an argument: `tests/unit/panel/label-badge-palette.test.ts` fails if any fill comes
+ * within ΔE 10 of the free-device green, the held blue, the warning orange, the not-ready grey,
+ * `error` or `error-container`.
  *
  * **It is not a control.** The tree row is a single `<Link>` and must stay one target (#175), so
  * this is a `<span>` with no handler, no focus and no press affordance — an element inside the link
@@ -29,13 +32,16 @@ import { LABEL_LETTERS, type LabelLetter } from '@panel/archive/group-labels.js'
  * (`ai/RULES.md` §8, `docs/DESIGN.md` §1). A hex written here fails
  * `tests/unit/panel/tokens-are-the-source-of-truth.test.ts` loudly, which is the point of it.
  *
- * | letters | fill | reads as |
- * | --- | --- | --- |
- * | `A`, `E`, `I`, `M`, `Q`, `U`, `Y` | `bg-primary-fixed` | pale lavender |
- * | `B`, `F`, `J`, `N`, `R`, `V`, `Z` | `bg-secondary-fixed` | pale peach |
- * | `C`, `G`, `K`, `O`, `S`, `W` | `bg-tertiary-fixed` | mint |
- * | `D`, `H`, `L`, `P`, `T`, `X` | `bg-inverse-surface` | neutral |
- * | `@` | `bg-surface-container-highest` | the quietest thing on the card |
+ * | family | letters | cycle 1's fill | reads as |
+ * | --- | --- | --- | --- |
+ * | primary | `A`, `E`, `I`, `M`, `Q`, `U`, `Y` | `bg-primary-fixed` | pale lavender |
+ * | secondary | `B`, `F`, `J`, `N`, `R`, `V`, `Z` | `bg-secondary-fixed` | pale peach |
+ * | tertiary | `C`, `G`, `K`, `O`, `S`, `W` | `bg-tertiary-fixed` | mint |
+ * | neutral | `D`, `H`, `L`, `P`, `T`, `X` | `bg-inverse-surface` | neutral |
+ * | — | `@` | `bg-surface-container-highest` | the quietest thing on the card |
+ *
+ * Only the first letter of each row draws that fill as written; the rest are the same hue a cycle
+ * deeper, which is {@link CYCLE_FAMILIES} below.
  *
  * Each fill is paired with the `on-` step the design system pairs it with, so the letter is legible
  * on every one of them: the four are light fills carrying dark text, which is what makes them read
@@ -44,16 +50,10 @@ import { LABEL_LETTERS, type LabelLetter } from '@panel/archive/group-labels.js'
  * deliberate rather than an oversight in the set: it distinguishes nothing, so it does not ask to
  * be looked at.
  *
- * **Adjacency is satisfied by construction, not by inspection.** Cycling family-first means two
- * letters next to each other in the alphabet are always two different accent families, and two
- * steps of one family always sit exactly four letters apart. Cycle 1 is byte-identical to what
- * #182 shipped.
- *
- * **The one pair that leans on the letter is a cycle boundary.** `D`'s `bg-inverse-surface`
- * (`#e2e2e6`) sits beside `E`'s `bg-primary-fixed` (`#dde1ff`); they differ, chiefly in the blue
- * channel, but they are the closest pair in the set, and every weak adjacency in the whole alphabet
- * is one of these boundaries. Widening them with a per-cycle step is the follow-up phase and is
- * **not built** — said here rather than left for a reader to find.
+ * **This is cycle 1 and only cycle 1** (#200). It is what `A`…`D` draw, verbatim and
+ * byte-identical to what #182 shipped, and it is the light end of every ramp {@link cycleStep}
+ * modulates — mixing at 100% is the identity, so the utility pair here and the ramp there cannot
+ * disagree about what the first cycle is.
  */
 const CYCLED_FILLS = [
 	'bg-primary-fixed text-on-primary-fixed',
@@ -62,6 +62,41 @@ const CYCLED_FILLS = [
 	'bg-inverse-surface text-inverse-on-surface',
 ] as const;
 
+/**
+ * Cycles 2…7 — the same four families, **each cycle a step deeper into the family's own dark
+ * step** (#200, `docs/DESIGN.md` §9), which is what makes `E` onwards a different step of the same
+ * hue rather than a plain repeat of `A`…`D`.
+ *
+ * Not a colour: every step is `color-mix(in srgb, …)` over two tokens of one family, in
+ * `panel/src/index.css` beside the panel's other derived colours, and
+ * `tests/unit/panel/label-badge-palette.test.ts` recomputes all twenty-eight fills from the tokens
+ * and asserts the contrast, the distance from every colour that already means something, and the
+ * distance between the fills of letters adjacent in the alphabet. What is written here is the
+ * family and the cycle; the colour is not written anywhere but the token file.
+ *
+ * **Adjacency is satisfied by construction, and the cycle boundary is no longer the exception.**
+ * Cycling family-first already meant two letters next to each other are always two different
+ * families, with two steps of one family exactly four letters apart. What #197 had to record as
+ * the one weak pair was the boundary — `D`'s neutral `#e2e2e6` beside `E`'s lavender `#dde1ff`,
+ * ΔE 13.6 apart, because `E` was a plain repeat of `A`. `E` is now a step off `A`, so that pair
+ * is ΔE 19.7 and it is no longer the closest thing in the set to a collision; the gate asserts
+ * every one of the twenty-five adjacent pairs, boundaries included.
+ *
+ * **The `-fixed-dim` tokens are not this cycle, though they look like a free one.**
+ * `--color-tertiary-fixed-dim` is byte-identical to `--color-tertiary`, §5's *free device* green;
+ * `--color-primary-fixed-dim` is byte-identical to `--color-primary`; and
+ * `--color-secondary-fixed-dim` (`#ffb59a`) is ΔE 9.3 from `--color-error` (`#ffb4ab`). The test
+ * below asserts the *class name* is not `bg-tertiary`, so `bg-tertiary-fixed-dim` would have
+ * passed the gate while painting the free-device green onto a badge — considered, measured and
+ * rejected, said here and in §9 so nobody reaches for it again.
+ */
+const CYCLE_FAMILIES = ['primary', 'secondary', 'tertiary', 'neutral'] as const;
+
+/** The class triple a letter past `D` is drawn with — the ramp, its family, and its cycle. */
+function cycleStep(family: number, cycle: number): string {
+	return `label-badge-step label-badge-${CYCLE_FAMILIES[family]} label-badge-cycle-${cycle}`;
+}
+
 /** `@` is outside the cycle: it distinguishes nothing, so it stays the quietest thing here. */
 const OVERFLOW_FILL = 'bg-surface-container-highest text-on-surface-variant';
 
@@ -69,9 +104,18 @@ const OVERFLOW_FILL = 'bg-surface-container-highest text-on-surface-variant';
  * The map holds exactly `A`…`Z`, so `@` falls through it to {@link OVERFLOW_FILL} the same way
  * `lettersOfGroup`'s own `?? OVERFLOW_LETTER` does — one idiom, read in both directions. The `??`
  * below is therefore a live branch rather than a cast around an exhaustive record.
+ *
+ * The family and the cycle are **both** the letter's own position, which is why there is one
+ * mapping here and not two: the position modulo four picks the family, and the position over four
+ * picks how deep into that family the fill sits. Cycle 1 takes the utility pair; every later cycle
+ * takes the ramp.
  */
 const FILL_OF: ReadonlyMap<LabelLetter, string> = new Map(
-	LABEL_LETTERS.map((letter, index) => [letter, CYCLED_FILLS[index % CYCLED_FILLS.length]]),
+	LABEL_LETTERS.map((letter, index) => {
+		const family = index % CYCLED_FILLS.length;
+		const cycle = Math.floor(index / CYCLED_FILLS.length) + 1;
+		return [letter, cycle === 1 ? CYCLED_FILLS[family] : cycleStep(family, cycle)];
+	}),
 );
 
 /**
