@@ -1,7 +1,7 @@
 import type { ArchiveGroup, ArchiveGroupArtifact } from '@panel/archive/archive-listing.js';
 import { keyOf } from '@panel/archive/archive-path.js';
 import { describe, expect, it } from 'vitest';
-import { LABEL_LETTERS, labelledArtifactsOf, lettersOfGroup } from './group-labels.js';
+import { labelledArtifactsOf, numbersOfGroup } from './group-labels.js';
 
 const SERIAL = 'R5CT30ABCDE';
 /** Two runs of one group under one test name, oldest first — the host's own order. */
@@ -29,44 +29,45 @@ function group(...runs: readonly ReturnType<typeof run>[]): ArchiveGroup {
 const BASELINE = 'home-baseline';
 const AFTER = 'home-after';
 
-describe('the letters one group hands out', () => {
-	// `A`, `B`, `C`, … in the order the host answered them — runs as the walk met them, artifacts in
+describe('the numbers one group hands out', () => {
+	// `1`, `2`, `3`, … in the order the host answered them — runs as the walk met them, artifacts in
 	// the name order it read them in.
-	it('gives each distinct label a letter, in the answer’s own order', () => {
-		const letters = lettersOfGroup(
+	it('gives each distinct label a number, in the answer’s own order', () => {
+		const numbers = numbersOfGroup(
 			group(run('checkout-app', 'home_a_variant', NEWER, [BASELINE, AFTER])),
 		);
 
-		expect([...letters]).toEqual([
-			[BASELINE, 'A'],
-			[AFTER, 'B'],
+		expect([...numbers]).toEqual([
+			[BASELINE, 1],
+			[AFTER, 2],
 		]);
 	});
 
 	/*
-	 * **The same label is the same letter everywhere in the group** — which is the whole point of
-	 * the badge: two runs filed `home-baseline` and the reader has to see one letter on both.
+	 * **The same label is the same number everywhere in the group** — which is the whole point of
+	 * the badge: two runs filed `home-baseline` and the reader has to see one number on both.
 	 */
-	it('keeps one letter for a label filed by two runs', () => {
-		const letters = lettersOfGroup(
+	it('keeps one number for a label filed by two runs', () => {
+		const numbers = numbersOfGroup(
 			group(
 				run('checkout-app', 'home_a_variant', OLDER, [BASELINE, AFTER]),
 				run('checkout-app', 'home_b_variant', NEWER, [AFTER, BASELINE]),
 			),
 		);
 
-		expect(letters.size).toBe(2);
-		expect(letters.get(BASELINE)).toBe('A');
-		expect(letters.get(AFTER)).toBe('B');
+		expect(numbers.size).toBe(2);
+		expect(numbers.get(BASELINE)).toBe(1);
+		expect(numbers.get(AFTER)).toBe(2);
 	});
 
 	/*
-	 * **The nine-label group #197 was reported with** — `statistics-deliveries`, a before/after of a
-	 * Compose migration filing one label per screen. Under the four-letter alphabet five of these
-	 * nine read `@` and the badge distinguished nothing for most of the group; every one of them now
-	 * takes a letter of its own, on the four palette colours cycled.
+	 * **The nine-label group all three phases were reported with** — `statistics-deliveries`, a
+	 * before/after of a Compose migration filing one label per screen. Under the four-letter
+	 * alphabet five of these nine read `@` and the badge distinguished nothing for most of the
+	 * group; every one of them now takes a number of its own, and would have under #197's alphabet
+	 * too. What #206 changes is the group this test can no longer be written for.
 	 */
-	it('letters all nine labels of the real group that overflowed the four', () => {
+	it('numbers all nine labels of the real group that overflowed the four', () => {
 		const labels = [
 			'remaining-deliveries',
 			'all-deliveries',
@@ -79,50 +80,50 @@ describe('the letters one group hands out', () => {
 			'details-from-list',
 		];
 
-		const letters = lettersOfGroup(group(run('c-ai', 'statistics_deliveries', NEWER, labels)));
+		const numbers = numbersOfGroup(group(run('c-ai', 'statistics_deliveries', NEWER, labels)));
 
-		expect([...letters.values()]).toEqual(['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I']);
-		expect([...letters.values()]).not.toContain('@');
+		expect([...numbers.values()]).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9]);
 	});
 
 	/*
-	 * **Overflow is `@`, and it is a case rather than a corner** (`docs/DESIGN.md` §9). What runs out
-	 * is the **alphabet**, not the palette — the four colours are cycled under the letters — so the
-	 * twenty-seventh distinct label and every one after it stops being distinguished by the badge,
-	 * and says so rather than reusing `A`.
+	 * **There is no ceiling and no overflow value** (#206, `docs/DESIGN.md` §9). This is the case
+	 * that used to collapse into `@` — first at the fifth distinct label, then at the twenty-seventh
+	 * — and there is now nothing for it to collapse into: a hundred distinct labels are a hundred
+	 * distinct numbers, none of them repeated and none of them standing for *not distinguished*.
+	 * The palette's own ceiling is a separate thing and is `label-badge.tsx`'s (`#29` repeats `#1`'s
+	 * fill and differs by its digits).
 	 */
-	it('gives every label past the twenty-sixth `@`', () => {
-		const labels = [...LABEL_LETTERS, 'aa', 'bb'].map((name) => `label-${name}`);
+	it('numbers a hundred labels without repeating one or reaching an overflow', () => {
+		const labels = Array.from({ length: 100 }, (_, index) => `label-${index}`);
 
-		const letters = lettersOfGroup(group(run('checkout-app', 'home_a_variant', NEWER, labels)));
+		const numbers = numbersOfGroup(group(run('checkout-app', 'home_a_variant', NEWER, labels)));
 
-		expect([...letters.values()]).toEqual([...LABEL_LETTERS, '@', '@']);
-		// Two overflowing labels are two entries with one letter, never one entry: the row still says
-		// which artifact it is, and the filed label is still on each badge.
-		expect(letters.size).toBe(28);
+		expect([...numbers.values()]).toEqual(labels.map((_, index) => index + 1));
+		expect(new Set(numbers.values()).size).toBe(100);
+		expect(numbers.get('label-99')).toBe(100);
 	});
 
 	// A group whose runs produced nothing labelled is ordinary: a group is a claim about *runs*, and
 	// labelling artifacts inside one is a second, independent choice (`archive-listing.ts`).
 	it('hands out nothing for a group whose runs carry no label', () => {
-		expect(lettersOfGroup(group(run('checkout-app', 'home_a_variant', NEWER, [])))).toEqual(
+		expect(numbersOfGroup(group(run('checkout-app', 'home_a_variant', NEWER, [])))).toEqual(
 			new Map(),
 		);
 	});
 
 	/*
-	 * **Nothing about a letter is stable across groups**, and this is what that means in practice:
-	 * the same string in a second group takes whatever letter that group's own order gives it. The
+	 * **Nothing about a number is stable across groups**, and this is what that means in practice:
+	 * the same string in a second group takes whatever number that group's own order gives it. The
 	 * criterion forbids stability across groups; it requires it inside one.
 	 */
-	it('assigns per group, so one label may be two letters in two groups', () => {
-		const first = lettersOfGroup(group(run('checkout-app', 'home_a_variant', NEWER, [BASELINE])));
-		const second = lettersOfGroup(
+	it('assigns per group, so one label may be two numbers in two groups', () => {
+		const first = numbersOfGroup(group(run('checkout-app', 'home_a_variant', NEWER, [BASELINE])));
+		const second = numbersOfGroup(
 			group(run('checkout-app', 'basket', NEWER, ['totals', 'coupon', BASELINE])),
 		);
 
-		expect(first.get(BASELINE)).toBe('A');
-		expect(second.get(BASELINE)).toBe('C');
+		expect(first.get(BASELINE)).toBe(1);
+		expect(second.get(BASELINE)).toBe(3);
 	});
 });
 
@@ -155,31 +156,31 @@ describe('the badge for one artifact', () => {
 		]);
 	}
 
-	it('answers the letter and the filed label at the artifact’s own address', () => {
+	it('answers the number and the filed label at the artifact’s own address', () => {
 		const labelled = labelledArtifactsOf(ANSWER, 'checkout-app', 'app-bar-top-space');
 
 		expect(labelled.get(address('home_a_variant', OLDER, 1, BASELINE))).toEqual({
-			letter: 'A',
+			number: 1,
 			label: BASELINE,
 		});
 		expect(labelled.get(address('home_a_variant', OLDER, 2, AFTER))).toEqual({
-			letter: 'B',
+			number: 2,
 			label: AFTER,
 		});
-		// The second run's copy of the first label, which is what the letter exists to connect.
+		// The second run's copy of the first label, which is what the number exists to connect.
 		expect(labelled.get(address('home_b_variant', NEWER, 1, BASELINE))).toEqual({
-			letter: 'A',
+			number: 1,
 			label: BASELINE,
 		});
 	});
 
 	// The group is keyed on the pair, because a `groupId` is an opaque caller string that nothing
 	// makes unique and only means something inside one project (`archive-listing.ts`).
-	it('answers only that group’s artifacts, and gives them that group’s own letters', () => {
+	it('answers only that group’s artifacts, and gives them that group’s own numbers', () => {
 		const other = labelledArtifactsOf(ANSWER, 'checkout-app', 'basket-total');
 
 		expect(other.get(address('basket', NEWER, 2, BASELINE))).toEqual({
-			letter: 'B',
+			number: 2,
 			label: BASELINE,
 		});
 		expect(other.get(address('home_a_variant', OLDER, 1, BASELINE))).toBeUndefined();

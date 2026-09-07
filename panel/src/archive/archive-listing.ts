@@ -142,10 +142,10 @@ export type SearchArchiveResult = z.infer<typeof SearchArchiveResultSchema>;
  * caller's string is genuinely unrecoverable — the rule §9 already states for `OWNER`. An artifact
  * carrying no label is absent from the run's list rather than present with a `null`.
  *
- * **What draws one is the groups view's label badge** (#182): the distinct labels of one group are
- * lettered `A`…`Z`, with `@` past the twenty-sixth, by `group-labels.ts`. The letter is a code
- * local to one group and this string is the thing that means something, which is why it travels
- * with every badge as an accessible name and a `title`.
+ * **What draws one is the groups view's label badge** (#182, numbered by #206): the distinct labels
+ * of one group are numbered `1`, `2`, `3`, … with no ceiling, by `group-labels.ts`. The number is a
+ * code local to one group and this string is the thing that means something, which is why it
+ * travels with every badge as an accessible name and a `title`.
  */
 const ArchiveGroupArtifactSchema = z.object({
 	path: z.array(z.string()),

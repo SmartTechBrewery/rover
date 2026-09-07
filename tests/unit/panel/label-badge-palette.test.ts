@@ -1,12 +1,17 @@
 import { describe, expect, it } from 'vitest';
-import { LABEL_LETTERS } from '../../../panel/src/archive/group-labels.js';
 import { readPanelSources } from '../../helpers/panel-source-scan.js';
 
 /**
  * Four of issue #200's acceptance criteria, as an executable gate: **every label badge's fill is a
- * step of one palette family, legible at badge size, distinguishable from its neighbours in the
- * alphabet, and never close enough to a colour that already means something to read as an
+ * step of one palette family, legible at badge size, distinguishable from the fill of the number
+ * beside it, and never close enough to a colour that already means something to read as an
  * outcome** (`docs/DESIGN.md` §9, §5).
+ *
+ * Since #206 the badges are unbounded numbers and the ramps are not, so `label-badge.tsx` wraps at
+ * the last cycle this file declares — which makes the sequence of fills **periodic in twenty-eight**
+ * and means one period plus one covers every consecutive pair a group can produce, the wrap
+ * included. The component's own ceiling is read back out of its source below and compared with
+ * what `index.css` declares, so the two cannot drift into two ideas of how many cycles there are.
  *
  * Nothing here trusts a hex written in a test. The colours come out of `panel/src/tokens.css`, the
  * per-family and per-cycle mix percentages come out of `panel/src/index.css`, and every fill is
@@ -29,20 +34,20 @@ import { readPanelSources } from '../../helpers/panel-source-scan.js';
  *   (`#00e29d`): 9.9. That pair shipped in #182 and #200 does not touch it, so 10 is the floor it
  *   sets — *a derived step may never be closer to a meaning-bearing colour than the shipped palette
  *   already is*. Cycle 1 is asserted separately to be the token itself, which is what exempts it.
- * - **ΔE ≥ 15 between two letters adjacent in the alphabet.** A plain repeat — what `A`…`D` gave
- *   `E`…`H` before this change — puts `D`'s neutral `#e2e2e6` beside `E`'s `#dde1ff` at 13.6, the
+ * - **ΔE ≥ 15 between the fills of two consecutive numbers.** A plain repeat — what `#1`…`#4` gave
+ *   `#5`…`#8` before #200 — puts `#4`'s neutral `#e2e2e6` beside `#5`'s `#dde1ff` at 13.6, the
  *   pair #197 had to record as the weak one. The threshold is set above it, so this gate fails if
  *   the modulation is ever removed or flattened back into a repeat.
  *
- * Contrast is WCAG 2.x relative luminance: **4.5:1** for the letter on its fill, because the badge
+ * Contrast is WCAG 2.x relative luminance: **4.5:1** for the number on its fill, because the badge
  * draws it at 12px bold and that is not "large text"; **3:1** for the fill against the card's
  * `--color-surface-container`, which is 1.4.11's floor for a graphical object — a badge has to read
- * as a badge before the letter in it can be read at all.
+ * as a badge before the number in it can be read at all.
  *
- * What this file does *not* check is which letter gets which family and cycle — that is
+ * What this file does *not* check is which number gets which family and cycle — that is
  * `label-badge.tsx`'s arithmetic and `label-badge.test.tsx` pins it against the rendered classes.
- * Here the same two lines are re-derived from `LABEL_LETTERS` so the adjacency claim is about the
- * order a reader actually sees.
+ * Here the same three lines are re-derived over `1`, `2`, `3`, … so the adjacency claim is about
+ * the order a reader actually sees.
  */
 
 /** `--color-<name>: #<hex>;` out of the token file — the only file allowed to write a colour. */
@@ -59,7 +64,7 @@ interface Family {
 	readonly hue: string;
 	/** The dark end. A step is an interpolation towards it, never a new colour. */
 	readonly shade: string;
-	/** The letter's own colour, on every cycle of this family. */
+	/** The number's own colour, on every cycle of this family. */
 	readonly ink: string;
 	/** The mix percentage of each cycle, cycle 1 first. Cycle 1 is the ramp's implied identity. */
 	readonly steps: readonly number[];
@@ -71,7 +76,7 @@ interface Family {
  *
  * Read from the comment-stripped source, so a percentage discussed in a docblock is not mistaken
  * for a declaration. Cycle 1 has no rule of its own — it is the utility pair the component draws
- * `A`…`D` with — so it enters here as the 100% that makes the mix the identity.
+ * `#1`…`#4` with — so it enters here as the 100% that makes the mix the identity.
  */
 function familiesOf(css: string): ReadonlyMap<string, Family> {
 	const ends = new Map<string, { hue: string; shade: string; ink: string }>();
@@ -123,13 +128,18 @@ const MEANS_SOMETHING = [
 	'error-container',
 ] as const;
 
-/** The card a badge is drawn on, and `@`'s own fill — a step may collapse into neither. */
+/**
+ * The card a badge is drawn on — a step may not collapse into it.
+ *
+ * `surface-container-highest` used to be here as well, as `@`'s own inverted fill. #206 removed the
+ * overflow, so there is no second quiet colour for a step to collide with and nothing left to
+ * measure against.
+ */
 const CARD = 'surface-container';
-const OVERFLOW_FILL = 'surface-container-highest';
 
 const MEANING_DELTA_E = 10;
 const ADJACENT_DELTA_E = 15;
-/** Two stops of one family sit four letters apart, so a *perceptible* step is the whole ask. */
+/** Two stops of one family sit four numbers apart, so a *perceptible* step is the whole ask. */
 const SAME_FAMILY_DELTA_E = 3;
 const INK_CONTRAST = 4.5;
 const CARD_CONTRAST = 3;
@@ -192,6 +202,21 @@ function sourceOf(path: string): string {
 const TOKENS = tokensOf(sourceOf('panel/src/tokens.css'));
 const FAMILIES = familiesOf(sourceOf('panel/src/index.css'));
 
+/**
+ * The palette's ceiling as the **component** states it — `PALETTE_CYCLES` out of
+ * `label-badge.tsx`, read as source text because a `.tsx` cannot be imported from this project
+ * (`tsconfig.typecheck.json` enables no JSX).
+ *
+ * It is read rather than written down because #206 made it load-bearing: the numbers are unbounded,
+ * so this constant is what stops the component naming a `label-badge-cycle-8` no rule defines, and
+ * a ramp added here without raising it would simply never be drawn.
+ */
+const COMPONENT_CYCLES = Number(
+	/export const PALETTE_CYCLES = (\d+);/.exec(
+		sourceOf('panel/src/components/archive/label-badge.tsx'),
+	)?.[1],
+);
+
 function token(name: string): Rgb {
 	const value = TOKENS.get(name);
 	if (value === undefined) throw new Error(`--color-${name} is not in tokens.css`);
@@ -221,16 +246,22 @@ const STEPS = [...FAMILIES].flatMap(([family, spec]) =>
 const DERIVED = STEPS.filter((step) => step.cycle > 1);
 
 /**
- * The alphabet as it is drawn — `label-badge.tsx`'s own two lines, re-derived here. The family
+ * The badges as they are drawn — `label-badge.tsx`'s own three lines, re-derived here. The family
  * order is the order the four rules are declared in `index.css`, which is the order cycle 1's four
  * utility pairs are declared in the component; `label-badge.test.tsx` is what pins the two
  * together at the class name.
+ *
+ * One period **plus one**: the fills repeat every `families × cycles` numbers, so `#29` is `#1`'s
+ * fill again and the pair `#28`/`#29` is the wrap boundary. Including it is what makes the
+ * adjacency claim below cover every consecutive pair an unbounded numbering can reach, rather than
+ * every pair up to some number somebody chose.
  */
 const FAMILY_ORDER = [...FAMILIES.keys()];
-const ALPHABET = LABEL_LETTERS.map((letter, index) => ({
-	letter,
+const PERIOD = FAMILY_ORDER.length * COMPONENT_CYCLES;
+const DRAWN = Array.from({ length: PERIOD + 1 }, (_, index) => ({
+	number: index + 1,
 	family: FAMILY_ORDER[index % FAMILY_ORDER.length],
-	cycle: Math.floor(index / FAMILY_ORDER.length) + 1,
+	cycle: (Math.floor(index / FAMILY_ORDER.length) % COMPONENT_CYCLES) + 1,
 }));
 
 describe('the label badge palette, recomputed from the tokens', () => {
@@ -238,6 +269,8 @@ describe('the label badge palette, recomputed from the tokens', () => {
 	it('reads four families of seven steps out of index.css, over tokens.css', () => {
 		expect(FAMILY_ORDER).toEqual(['primary', 'secondary', 'tertiary', 'neutral']);
 		expect(TOKENS.size).toBe(47);
+		// The component's ceiling and the stylesheet's are one number (#206).
+		expect(COMPONENT_CYCLES).toBe(7);
 
 		for (const [name, family] of FAMILIES) {
 			expect(family.steps, `${name} steps`).toHaveLength(7);
@@ -263,7 +296,7 @@ describe('the label badge palette, recomputed from the tokens', () => {
 		for (const [name, family] of FAMILIES) {
 			expect(hex(fillOf(name, 1)), `${name} cycle 1`).toBe(TOKENS.get(family.hue));
 		}
-		// The four cycle 1 fills, spelled out: #182's palette, which this phase does not touch.
+		// The four cycle 1 fills, spelled out: #182's palette, which nothing since has touched.
 		expect([...FAMILIES.keys()].map((name) => hex(fillOf(name, 1)))).toEqual([
 			'#dde1ff',
 			'#ffdbce',
@@ -273,10 +306,10 @@ describe('the label badge palette, recomputed from the tokens', () => {
 	});
 
 	/*
-	 * **Every letter is legible on its own fill, and every badge reads as a badge.** Both floors
+	 * **Every number is legible on its own fill, and every badge reads as a badge.** Both floors
 	 * are stated in this file's docblock with the reason the number is that number.
 	 */
-	it('carries its letter at 4.5:1 and sits 3:1 off the card', () => {
+	it('carries its number at 4.5:1 and sits 3:1 off the card', () => {
 		const failures = STEPS.flatMap((step) => {
 			const ink = contrast(step.fill, step.ink);
 			const card = contrast(step.fill, token(CARD));
@@ -320,42 +353,41 @@ describe('the label badge palette, recomputed from the tokens', () => {
 	});
 
 	/*
-	 * **A step may not collapse into the card it sits on, or into `@`** — the one badge that is
-	 * deliberately the quietest thing there and must stay distinguishable from a letter that
-	 * distinguishes something. Judged at the adjacency threshold, since `@` and a letter do appear
-	 * side by side in one tree.
+	 * **A step may not collapse into the card it sits on**, which is the 3:1 above stated as a
+	 * distance rather than as a contrast ratio: a badge has to read as a badge. Judged at the
+	 * adjacency threshold, since a badge and the card are always side by side.
 	 */
-	it('keeps every step clear of the card and of `@`', () => {
-		const failures = STEPS.flatMap((step) =>
-			[CARD, OVERFLOW_FILL]
-				.map((quiet) => ({ quiet, distance: deltaE(step.fill, token(quiet)) }))
-				.filter((measured) => measured.distance < ADJACENT_DELTA_E)
-				.map(
-					(measured) =>
-						`${step.at} ${hex(step.fill)} is ΔE ${measured.distance.toFixed(1)} from --color-${measured.quiet}`,
-				),
+	it('keeps every step clear of the card', () => {
+		const failures = STEPS.filter((step) => deltaE(step.fill, token(CARD)) < ADJACENT_DELTA_E).map(
+			(step) =>
+				`${step.at} ${hex(step.fill)} is ΔE ${deltaE(step.fill, token(CARD)).toFixed(1)} from --color-${CARD}`,
 		);
 
 		expect(failures).toEqual([]);
 	});
 
 	/*
-	 * **No two letters adjacent in the alphabet read as one colour, cycle boundaries included** —
-	 * which is the pair this phase exists to close. Before it, `D`/`E` was `#e2e2e6` beside
-	 * `#dde1ff` at ΔE 13.6, and #197 had to record it as the weakest adjacency in the set.
+	 * **No two consecutive numbers read as one colour, every boundary included** — the cycle
+	 * boundaries #200 closed, and the **wrap** #206 adds. Before #200, `#4`/`#5` was `#e2e2e6`
+	 * beside `#dde1ff` at ΔE 13.6, the weakest adjacency in the set.
+	 *
+	 * One period plus one is the whole claim rather than a sample: the fills repeat every
+	 * twenty-eight numbers, so `#1`/`#2` … `#28`/`#29` is every consecutive pair that exists, and
+	 * `#28`/`#29` is the wrap — a neutral cycle 7 beside cycle 1's lavender, which is the same kind
+	 * of boundary as `#4`/`#5` and is measured as one.
 	 */
-	it('separates every pair of letters adjacent in the alphabet', () => {
+	it('separates every pair of consecutive numbers, the wrap included', () => {
 		const failures: string[] = [];
 		let closest = { pair: '', distance: Number.POSITIVE_INFINITY };
 
-		for (const [at, next] of ALPHABET.entries()) {
+		for (const [at, next] of DRAWN.entries()) {
 			if (at === 0) continue;
-			const previous = ALPHABET[at - 1];
+			const previous = DRAWN[at - 1];
 			const distance = deltaE(
 				fillOf(previous.family, previous.cycle),
 				fillOf(next.family, next.cycle),
 			);
-			const pair = `${previous.letter}/${next.letter} (${previous.family} cycle ${previous.cycle} / ${next.family} cycle ${next.cycle})`;
+			const pair = `#${previous.number}/#${next.number} (${previous.family} cycle ${previous.cycle} / ${next.family} cycle ${next.cycle})`;
 			if (distance < closest.distance) closest = { pair, distance };
 			if (distance < ADJACENT_DELTA_E) {
 				failures.push(`${pair}: ΔE ${distance.toFixed(1)}`);
@@ -363,16 +395,18 @@ describe('the label badge palette, recomputed from the tokens', () => {
 		}
 
 		expect(failures).toEqual([]);
-		expect(ALPHABET).toHaveLength(26);
-		// The boundary is no longer the weak pair, and it is no longer the plain repeat's 13.6.
+		expect(DRAWN).toHaveLength(29);
+		// `#29` is `#1`'s fill again: the colour repeats and the digits are what distinguish them.
+		expect(DRAWN.at(-1)).toEqual({ ...DRAWN[0], number: PERIOD + 1 });
+		// No boundary is the plain repeat's 13.6 any more, the wrap least of all.
 		expect(closest.distance).toBeGreaterThan(ADJACENT_DELTA_E);
 	});
 
 	/*
 	 * **The cycle is a cycle**: seven stops of one hue, each a perceptible step off the last, so
-	 * `E` is recognisably `A`'s family at another level rather than a repeat of it or a new colour.
-	 * Two stops of one family are four letters apart, never adjacent, which is why this floor is
-	 * the perceptible one and not the adjacency one.
+	 * `#5` is recognisably `#1`'s family at another level rather than a repeat of it or a new
+	 * colour. Two stops of one family are four numbers apart, never adjacent, which is why this
+	 * floor is the perceptible one and not the adjacency one.
 	 */
 	it('makes every cycle of a family a step off the last', () => {
 		const failures = DERIVED.map((step) => ({
@@ -383,7 +417,7 @@ describe('the label badge palette, recomputed from the tokens', () => {
 			.map((measured) => `${measured.at}: ΔE ${measured.distance.toFixed(1)}`);
 
 		expect(failures).toEqual([]);
-		// Seven stops, seven colours: no two letters of one family ever share a step.
+		// Seven stops, seven colours: no two numbers of one period share a family's step.
 		for (const family of FAMILIES.keys()) {
 			const drawn = STEPS.filter((step) => step.family === family).map((step) => hex(step.fill));
 			expect(new Set(drawn).size, `${family} draws seven colours`).toBe(7);

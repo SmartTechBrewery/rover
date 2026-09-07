@@ -1079,10 +1079,10 @@ describe('the hits a search draws', () => {
 });
 
 /**
- * **The lettered label badges, and the groups view is the only place one is drawn** (#182,
- * `docs/DESIGN.md` §9).
+ * **The numbered label badges, and the groups view is the only place one is drawn** (#182, numbered
+ * by #206, `docs/DESIGN.md` §9).
  *
- * A letter is defined only inside a group, so the source is what answers it: these cases go through
+ * A number is defined only inside a group, so the source is what answers it: these cases go through
  * `groupRowSource`, and the `All` view's own tree above — whose exact text is asserted several times
  * over — is the assertion that nothing outside this view gained one.
  */
@@ -1148,7 +1148,7 @@ describe('the label badges', () => {
 		);
 	}
 
-	/** The badge on one row of the tree, as the letter it draws — or `null` where there is none. */
+	/** The badge on one row of the tree, as the text it draws — or `null` where there is none. */
 	function badgeOn(container: HTMLElement, name: string): string | null {
 		const row = rows(container).find((candidate) => candidate.textContent?.endsWith(name));
 		const badge = row === undefined ? null : within(row).queryByRole('img');
@@ -1162,8 +1162,8 @@ describe('the label badges', () => {
 			grouped(A_VARIANT, RUN, [BASELINE, AFTER]),
 		]);
 
-		expect(badgeOn(container, `001_${BASELINE}.png`)).toBe('A');
-		expect(badgeOn(container, `002_${AFTER}.png`)).toBe('B');
+		expect(badgeOn(container, `001_${BASELINE}.png`)).toBe('#1');
+		expect(badgeOn(container, `002_${AFTER}.png`)).toBe('#2');
 		expect(badgeOn(container, 'device_info.json')).toBeNull();
 		expect(badgeOn(container, SHOTS)).toBeNull();
 		expect(badgeOn(container, RUN)).toBeNull();
@@ -1171,45 +1171,52 @@ describe('the label badges', () => {
 	});
 
 	/*
-	 * **The same label is the same letter everywhere in one group**, which is what the badge is for:
-	 * two runs filed `home-baseline` and a reader has to see one letter on both. Only one path is
+	 * **The same label is the same number everywhere in one group**, which is what the badge is for:
+	 * two runs filed `home-baseline` and a reader has to see one number on both. Only one path is
 	 * ever expanded, so it is asserted as two loads of the same group — which is also the case that
-	 * would catch a letter drifting between two visits to the same address.
+	 * would catch a number drifting between two visits to the same address.
 	 */
-	it('gives one label one letter across two runs of a group', () => {
+	it('gives one label one number across two runs of a group', () => {
 		const runs = [
 			grouped(A_VARIANT, OLDER, [BASELINE, AFTER]),
 			grouped(B_VARIANT, RUN, [AFTER, BASELINE]),
 		];
 
 		const first = showingGroups(shotsIn(A_VARIANT, OLDER), runs);
-		expect(badgeOn(first.container, `001_${BASELINE}.png`)).toBe('A');
-		expect(badgeOn(first.container, `002_${AFTER}.png`)).toBe('B');
+		expect(badgeOn(first.container, `001_${BASELINE}.png`)).toBe('#1');
+		expect(badgeOn(first.container, `002_${AFTER}.png`)).toBe('#2');
 		first.unmount();
 
 		const second = showingGroups(shotsIn(B_VARIANT, RUN), runs);
-		expect(badgeOn(second.container, `002_${BASELINE}.png`)).toBe('A');
-		expect(badgeOn(second.container, `001_${AFTER}.png`)).toBe('B');
+		expect(badgeOn(second.container, `002_${BASELINE}.png`)).toBe('#1');
+		expect(badgeOn(second.container, `001_${AFTER}.png`)).toBe('#2');
 	});
 
-	// The alphabet runs to `Z` (#197), so a group filing one label per screen is lettered right
-	// through rather than collapsing into `@` at the fifth. The overflow itself is a case rather than
-	// a corner and is pinned one level down, in `group-labels.test.ts`.
-	it('letters every label of a nine-label group, and still says which artifact it is', () => {
+	/*
+	 * **The numbers have no ceiling** (#206), so a group filing one label per screen is numbered
+	 * right through rather than collapsing into `@` — at the fifth under #182, at the twenty-seventh
+	 * under #197. That there is no ceiling at all is pinned one level down, in
+	 * `group-labels.test.ts`.
+	 *
+	 * **And a badge is not the file's own ordinal**, which is the reading numbering could have
+	 * bought: `#3` sits beside a row named `003_three.png` here, so the two are asserted on one row
+	 * — the badge leads with `#` and is never zero-padded, and the row's own name is untouched.
+	 */
+	it('numbers every label of a nine-label group, and still says which artifact it is', () => {
 		const labels = ['one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine'];
 		const { container } = showingGroups(shotsIn(A_VARIANT, RUN), [grouped(A_VARIANT, RUN, labels)]);
 
 		expect(labels.map((label, index) => badgeOn(container, `00${index + 1}_${label}.png`))).toEqual(
-			['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I'],
+			['#1', '#2', '#3', '#4', '#5', '#6', '#7', '#8', '#9'],
 		);
 		expect(screen.getByText('001_one.png')).toBeDefined();
 		expect(screen.getByText('009_nine.png')).toBeDefined();
 	});
 
 	/*
-	 * **The filed label is reachable, and the letter is never the only thing a screen reader gets.**
-	 * A letter is a code local to one group and `@` names nothing, so the label the archive filed
-	 * travels into the row's own accessible name — and into a `title`, for a reader who hovers.
+	 * **The filed label is reachable, and the number is never the only thing a screen reader gets.**
+	 * A number is a code local to one group, so the label the archive filed travels into the row's
+	 * own accessible name — and into a `title`, for a reader who hovers.
 	 */
 	it('puts the filed label in the row’s accessible name and in a `title`', () => {
 		const { container } = showingGroups(shotsIn(A_VARIANT, RUN), [
