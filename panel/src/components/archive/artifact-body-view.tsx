@@ -44,6 +44,9 @@ import type { ReactNode } from 'react';
  */
 export const ARTIFACT_MAX_HEIGHT = 'max-h-[70vh]';
 
+/** What the control is called, in every channel — the visible text, the `title` and the label. */
+const OPEN_IN_A_NEW_WINDOW = 'Open in a new window';
+
 /**
  * The design's own recessive control, and it renders for the three bodies a browser would display.
  *
@@ -55,20 +58,36 @@ export const ARTIFACT_MAX_HEIGHT = 'max-h-[70vh]';
  * into this one; the address is a `blob:` URL of this tab's own bytes, which is exactly why the tab
  * needs no credential and why the plain `/artifact/…` address is not what is opened here (D20, and
  * `panel/src/session/host-client.ts` for why a subresource cannot carry one).
+ *
+ * **`iconOnly` is a comparison pane's shape and nothing else**, a correction to #199 made in place.
+ * A pane is floored at 240px and there are N of them in one row, so the glyph and its four words is
+ * the widest thing in a head that now holds only a badge beside it; the single preview beside the
+ * tree has a whole card's width for its strip and keeps the words. **The name does not change with
+ * the shape** — it moves out of the text and into `aria-label` and `title`, so the control is the
+ * same control to a screen reader, to a pointer resting on it, and to a test that finds it by name.
  */
-export function OpenInANewWindow({ body }: { readonly body: ArtifactBody }) {
+export function OpenInANewWindow({
+	body,
+	iconOnly = false,
+}: {
+	readonly body: ArtifactBody;
+	/** Drop the words and keep the glyph — the comparison pane's head, never the preview's strip. */
+	readonly iconOnly?: boolean;
+}) {
 	if (body.kind === 'opaque') {
 		return null;
 	}
 	return (
 		<a
-			className="flex shrink-0 items-center gap-2 rounded-sm border-2 border-outline-variant bg-surface px-3 py-1.5 text-on-surface-variant transition-colors hover:border-tertiary hover:text-tertiary"
+			aria-label={iconOnly ? OPEN_IN_A_NEW_WINDOW : undefined}
+			className={`flex shrink-0 items-center gap-2 rounded-sm border-2 border-outline-variant bg-surface text-on-surface-variant transition-colors hover:border-tertiary hover:text-tertiary ${iconOnly ? 'p-1.5' : 'px-3 py-1.5'}`}
 			href={body.url}
 			rel="noopener noreferrer"
 			target="_blank"
+			title={OPEN_IN_A_NEW_WINDOW}
 		>
 			<ExternalLink aria-hidden="true" size={16} strokeWidth={2} />
-			<span className="font-code-md text-[12px]">Open in a new window</span>
+			{iconOnly ? null : <span className="font-code-md text-[12px]">{OPEN_IN_A_NEW_WINDOW}</span>}
 		</a>
 	);
 }

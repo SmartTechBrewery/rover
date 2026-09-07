@@ -1393,8 +1393,9 @@ one remaining uncorrected screen in the project (§11), and the operator decided
 correction round for this work. So it is used as a **layout reference only**: the layout comes from
 it and everything else from this section and the corrected Archive screens.
 
-**What is taken from it**: a horizontal split of panes, each pane headed by the artifact's own name
-in a bordered chip, the runs' identity stated above the artifacts.
+**What is taken from it**: a horizontal split of panes, each pane headed by a strip naming the arm it
+is. Its per-pane run identity was taken and has since been given back — see *A pane's anatomy* below
+for what stood there and why it does not any more.
 
 **What is not, and none of it is reproduced**: the `SUCCESS` chip, the `PASS` log line, `COMPLETE`,
 the green ticks and red crosses, the words *Visual Regression*, the `RUN A (BASELINE)` /
@@ -1423,8 +1424,10 @@ its own, with no second request, no second cache and no host change.
 **One pane per labelled artifact, not per run** — which in the common case, one artifact per label
 per run, is the same thing. Nothing enforces arity (R41), so an arm may file one label three times;
 all three are panes, in the answer's own order and adjacent, because drawing the first of them would
-drop evidence and invent a selection the archive never made (D22). Each pane says which run it is,
-so two panes naming one run read as two artifacts of one run rather than as two runs.
+drop evidence and invent a selection the archive never made (D22). Two panes of one run read as two
+artifacts of that run — from the tree, which stands on the artifact, rather than from the pane heads,
+which name the arm and not the run (*A pane's anatomy*). Two panes of one run therefore carry the
+same arm's name, which is what they are: the same arm, twice.
 
 **Oldest on the left, newest on the right — and this is the one exception to *most recent first* on
 this screen.** The panes read left to right chronologically, so a before/after reads as a
@@ -1471,29 +1474,83 @@ preview.
 `Field` label's treatment. It is the label **as the archive filed it** and never the caller's own
 string, which `pathSegment` truncated and rewrote irreversibly — the rule this section already states
 for `OWNER`, and the one `group-labels.ts` states for the badge. Nothing else is in that strip: no
-count, no chip, no glyph, no control.
+count, no glyph, no control.
 
-**The badge is not on this card.** A badge number is a code local to one group (above); the card
-says the label itself, which is the thing that has a meaning. There is no legend either, for the
-reason the badges have none.
+**The badge is in that strip, in front of the name it belongs to, and it is drawn exactly once.** It
+is the **tree's** badge — the same number on the same fill as the row that opened the card, its
+number and its fill `numbersOfGroup`'s assignment carried down on `LabelComparison` so the card holds
+no second opinion about which number a label takes. That is what ties the row a reader clicked to the
+artifacts that came back. **In front of the label rather than instead of it**: the number is a code
+local to one group and the words beside it are the thing that has a meaning. **Once rather than per
+pane**: one label heads the whole card, so a badge on every pane would draw the same number N times
+to say the one thing every pane already has in common. There is no legend, for the reason the badges
+have none.
 
-**A pane's anatomy**, top to bottom:
+**A pane's anatomy**, top to bottom — **and its head is the arm's name and the control, nothing
+else.** That is a reversal of what #199 shipped, made in place. The head carried the run directory's
+own name as an `<h3>` and `TEST NAME`, `OWNER` and `GRANTED` as three stacked `Field`s, on the
+reasoning that a pane has to say which run it is. Standing four text fields over every artifact is
+what that cost: at the 240px floor the head was taller than the screenshot under it, the evidence the
+card exists for was pushed below the fold, and the fields repeated down the row the parts a reader
+was **not** comparing. The evidence is what the card is for, so the head gets out of its way.
 
-- the **run directory's own name**, in full and `break-words`, as the run panel's `font-code-md
-  font-bold` `<h3>`;
-- **`TEST NAME`**, **`OWNER`** and **`GRANTED`** as three stacked `Field`s — stacked rather than in
-  the run panel's three-across grid, because a pane at the floor has no room for a grid. The identity
-  is the directory name decomposed at the **first and the last** hyphen (`run-identity.ts`, never
-  `split('-')`, because `pr-127-review` is one owner); `OWNER` is the directory's own text and is
-  never presented as the caller's string (D20, D22); `GRANTED` is reformatted textually and is what
-  lets a reader check *oldest on the left* for themselves. A name that does not decompose reads
-  `unknown` in both, with the name still in full. `TEST NAME` and never a bare `TEST` — that is the
-  field's real name (D22) and it is the thing two arms of one investigation differ by;
-- the **artifact's own file name**, in the reference screen's chip treatment;
-- **`Open in a new window`**, the existing recessive control, unchanged: absent for `opaque`, no
-  `download` attribute, a view rather than a transfer (§10). It is on the pane because selecting a
-  labelled artifact in this view no longer draws the single preview, and a full-size look is the one
-  thing §11 says the preview genuinely needs;
+Nothing that was removed is off the screen: the tree beside the card stands on the artifact, and the
+run, its owner and its grant time are what `LevelContents` and `RunPanel` say at the depths that are
+about a run. *Oldest on the left* is the card's own rule, decided by `level-order.ts` and stated
+below — it was never something a reader was meant to verify by reading `GRANTED` off each pane in
+turn, which is the one job `GRANTED` had here.
+
+- the **arm's own name, as a phrase** — the `<h3>` the run name used to be, carrying what
+  `TEST NAME` was on the pane for. Two panes of one comparison differ by exactly one thing, their
+  test name, and a whole test name is the group's name and the arm's together:
+  `statistics-deliveries_variantA` in `statistics-deliveries`. The group's half is the address the
+  reader is already standing on, so the pane says the arm's half alone — **`Variant A`**, four of
+  them across a row 240px wide, instead of the same prefix repeated four times. `break-words` and
+  **never** a truncation: an ellipsis would hide the character two arms differ by, which is the one
+  character the row exists to show.
+
+  **A test name is the caller's own string and Rover never wrote it** (D22), so
+  `panel/src/archive/variant-name.ts` is careful twice over and its two halves are separate for that
+  reason. `run-identity.ts` stays the only place that decomposes a name **Rover wrote**.
+
+  **`variantOf` reads as little of the name as will answer the question.** The group's own id comes
+  off the front when the name starts with it and an underscore — that is a string Rover holds, so
+  the match is a fact rather than an assumed convention, and a group id with an underscore of its
+  own comes off whole. Failing that, everything after the **first** underscore, never the last,
+  because a variant may contain one. Failing that, the test name in full: a name with no separator
+  names no arm, and the caller's own word is a better answer than an empty strip. Nothing is
+  trimmed, lower-cased or normalised — what comes back is a slice of the caller's string, and that
+  slice is what `ComparisonPane.variant` carries.
+
+  **`variantPhrase` re-spaces and re-cases it for the head, and does nothing else.** `variantA`
+  reads `Variant A`, `variant_b` reads `Variant B`, `login-flow` reads `Login Flow`. A head is read
+  at a glance, and `variantA` beside `variantB` differs by one character in the least-looked-at
+  position on the card — that is the whole of what the transform buys. What it may not do is the
+  longer list: **every word that goes in comes out**, in order, spelled as the caller spelled it
+  apart from its first character, which is only ever *raised* (`toUpperCase`, never
+  `toLocaleUpperCase` — the answer must not depend on the reader's locale, the rule this screen
+  already keeps for sorting). No word is translated, expanded from an abbreviation, abbreviated,
+  reordered or dropped, and **nothing is appended**: an arm called `A` reads `A` and does not become
+  `Variant A`, because the word *variant* would be this panel's and not the caller's. Word breaks
+  are the caller's own separators and the transitions camel case is written in, so an initialism
+  keeps its shape (`HTTPServer` → `HTTP Server`) and a numbered arm splits (`variant2` →
+  `Variant 2`). A string with no word in it comes back exactly as it went in. **The raw string is on
+  the `title`**, the same channel the label badge puts the filed label on and for the same reason:
+  this is a re-rendering of the caller's text, and what was filed is a hover away.
+
+  It stands where the artifact's own file name did, which the reference screen put in a bordered
+  chip: within one comparison every pane is the same file of a different run, so the name was the
+  same string N times across the row. The name is still on the tree row, in the body's `alt`, and
+  one click away in the window the control opens;
+- **`Open in a new window`**, the existing recessive control — **the glyph alone on a pane, and the
+  glyph and its four words in the single preview.** A pane is floored at 240px and there are N of
+  them in one row, so the words were the widest thing in a head that now holds only the arm's name
+  beside them; the preview beside the tree has a whole card's width for its strip and keeps them. The name
+  does not change with the shape: it moves out of the text and into `aria-label` and `title`, so it
+  is the same control to a screen reader and to a pointer resting on it. Everything else about it is
+  unchanged — absent for `opaque`, no `download` attribute, a view rather than a transfer (§10). It
+  is on the pane because selecting a labelled artifact in this view no longer draws the single
+  preview, and a full-size look is the one thing §11 says the preview genuinely needs;
 - then the **body**, which is whatever the host's own content type says the file is
   (`panel/src/archive/artifact-body.ts`), so a labelled recording and a labelled `read_logs` compare
   the way a screenshot does and `opaque` still creates no object URL and still says its one sentence.
@@ -2250,7 +2307,9 @@ together across the trees — a host that learns `.webm` cannot leave the panel 
 it. The tree's glyph is deliberately **not** per media type for the same reason.
 
 **One control in the preview header: `Open in a new window`**, recessive, and **it is a view rather
-than a transfer.** No download button, no `download` attribute, and it is absent for `opaque`. No
+than a transfer.** No download button, no `download` attribute, and it is absent for `opaque`. **The
+words are here**, glyph and all four of them: the strip has a whole card's width, and it is only the
+comparison card's 240px pane that takes the glyph alone (*The comparison card*). No
 zoom, pan, rotate, filmstrip or next/previous arrows over the image — **the tree** is how another
 file is chosen (#160; it was `CONTENTS` while the tree was not there). No annotation, measurement or
 comparison tooling; comparison is `Compare — Visual Diff`'s question and a different screen.
