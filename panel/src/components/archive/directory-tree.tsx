@@ -93,11 +93,13 @@ import { type MouseEvent, type ReactNode, type RefObject, useRef } from 'react';
  *   claim as an invented `0`.
  * - **`break-words`, never `break-all`.** The latter splits `issue-112` across two lines.
  * - **One thing was added, and it is a name rather than a measure** (#182): the label badge, on an
- *   artifact the **groups** view has a filed label for and on no other row anywhere. A letter is
- *   defined only inside a group, so the source is what answers it and the `All` view's rows have
+ *   artifact the **groups** view has a filed label for and on no other row anywhere. A badge number
+ *   is defined only inside a group, so the source is what answers it and the `All` view's rows have
  *   none by construction; an artifact with no label has none either, so an archive that never used
  *   labels draws the tree it drew before. It is not a verdict, nothing is ranked by it, and the
- *   letter — never the colour alone — is what carries it (`label-badge.tsx`).
+ *   number — never the colour alone — is what carries it (`label-badge.tsx`). It is also **not the
+ *   file's own ordinal**, which is why it is a `#`-prefixed pill rather than a bare digit beside a
+ *   name that already starts with one (#206).
  *
  * Every row is a `<Link>` and there is no nested interactive element: the triangle is `aria-hidden`
  * decoration saying *this opens*, not a second control. **Collapsing stays the row's** (#175, and
@@ -556,13 +558,13 @@ function Branch({
 						<Row
 							/*
 							 * **A badge exactly where the source answered a label, and nowhere else** (#182).
-							 * The letter is the group's and the label is the archive's, and both come off the
+							 * The number is the group's and the label is the archive's, and both come off the
 							 * row rather than out of anything this component knows — so the `All` view's tree,
 							 * whose rows carry no label at any depth, renders exactly what it renders today.
 							 */
 							badge={
 								row.label === undefined ? undefined : (
-									<LabelBadge label={row.label.label} letter={row.label.letter} />
+									<LabelBadge label={row.label.label} number={row.label.number} />
 								)
 							}
 							expanded={expanded}
@@ -682,7 +684,7 @@ function Row({
 	 * It is not one of the extras this row refuses. A count is a measure of the row and a status
 	 * glyph is a verdict about it; this is a **name the archive filed with the artifact**, drawn
 	 * short because a group is where the same label on two runs is the point. Nothing about it is an
-	 * outcome, nothing is ranked by it, and the colour is a second channel for the letter rather than
+	 * outcome, nothing is ranked by it, and the colour is a second channel for the number rather than
 	 * a meaning of its own (`label-badge.tsx`).
 	 */
 	readonly badge?: ReactNode;

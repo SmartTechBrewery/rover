@@ -55,11 +55,11 @@ function pane(testName: string, run: string, name: string): ComparisonPane {
 	};
 }
 
-/** `A` is the first letter `lettersOfGroup` hands out, which is what one label in a group takes. */
-const LETTER = 'A';
+/** `1` is the first number `numbersOfGroup` hands out, which is what one label in a group takes. */
+const NUMBER = 1;
 
 function comparison(...panes: readonly ComparisonPane[]): LabelComparison {
-	return { label: LABEL, letter: LETTER, panes };
+	return { label: LABEL, number: NUMBER, panes };
 }
 
 const TWO = comparison(pane(ARM_A, FIRST, 'before.png'), pane(ARM_B, SECOND, 'after.png'));
@@ -103,7 +103,7 @@ describe('a label’s artifacts side by side', () => {
 		expect(screen.getByRole('heading', { level: 2 }).textContent).toBe(LABEL);
 		const strip = container.querySelector('section > div:first-child');
 		// The caption, then the tree's badge, then the name it belongs to — and nothing else.
-		expect(strip?.textContent).toBe(`LABEL${LETTER}${LABEL}`);
+		expect(strip?.textContent).toBe(`LABEL#${NUMBER}${LABEL}`);
 		// No count, no glyph and no control in the strip.
 		expect(strip?.querySelectorAll('button')).toHaveLength(0);
 		expect(strip?.querySelectorAll('a')).toHaveLength(0);
@@ -199,8 +199,8 @@ describe('a label’s artifacts side by side', () => {
 	});
 
 	/*
-	 * **The tree's own badge, once, in front of the name it belongs to** — the letter and the fill
-	 * are `lettersOfGroup`'s assignment carried down through `LabelComparison`, so the badge over
+	 * **The tree's own badge, once, in front of the name it belongs to** — the number and the fill
+	 * are `numbersOfGroup`'s assignment carried down through `LabelComparison`, so the badge over
 	 * the card is the badge on the tree row that opened it, and it says the **filed** label out loud
 	 * (`label-badge.tsx`). One label heads the card, so it is drawn once and not per pane.
 	 */
@@ -210,8 +210,8 @@ describe('a label’s artifacts side by side', () => {
 		const badges = [...container.querySelectorAll('[role="img"]')];
 		expect(badges).toHaveLength(1);
 		const badge = badges[0];
-		expect(badge?.textContent).toBe(LETTER);
-		// The letter is a code local to one group; the label is the thing that means something.
+		expect(badge?.textContent).toBe(`#${NUMBER}`);
+		// The number is a code local to one group; the label is the thing that means something.
 		expect(badge?.getAttribute('aria-label')).toBe(`Filed under the label ${LABEL}`);
 		expect(badge?.getAttribute('title')).toBe(`Filed under the label ${LABEL}`);
 		expect(badge?.className).toContain('rounded-full');

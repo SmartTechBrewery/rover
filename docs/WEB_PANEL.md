@@ -107,24 +107,31 @@ Design work lives in [`DESIGN.md`](./DESIGN.md); the brief that produced the fir
    a reload and a shared link land, which is the question #165 deliberately left open. A run that
    named no group is not drawn and neither is a project with none: this view answers *what groups
    exist*, and the `All` view still lists every run. **The label badges completed it** (#182): inside
-   one group every distinct filed label takes a letter — `A`…`Z`, then `@` — drawn as a round badge
-   beside the artifact's name, with the letter carrying the meaning and never the colour alone, and
-   the filed label reachable by hover and by screen reader. Nothing about a letter is stable across
-   groups, an artifact with no label carries no badge, and no badge colour may read as an outcome.
-   **The alphabet is the whole of it because #197 reversed the four-letter limit in place**: that
-   limit was a conclusion about *colour* applied to *letters*, and one real group filing nine labels
-   made five of nine badges read `@`. The letters now run to `Z` on the palette's same four colours,
-   cycled family-first so neighbouring letters are always different families; `@` moves to past the
-   twenty-sixth and keeps its meaning. **And every cycle is a step off the last** (#200): `E`…`Z`
-   are the same four families modulated a step deeper into each family's own dark step, derived with
-   `color-mix` over the tokens, so a later cycle is recognisably the same hue at another level
-   rather than a plain repeat — which is what closes the one weak adjacency #197 had to record, the
-   cycle boundary at `D`/`E`. What did not move is that no badge colour may read as an outcome, and
-   that a **new hue** would still be a commissioned categorical ramp rather than a colour picked at
-   the keyboard; the derived steps are now measured against exactly that by
+   one group every distinct filed label takes a **number** — `1`, `2`, `3`, … in the order the host
+   answered them — drawn as a small `#`-prefixed pill beside the artifact's name, with the number
+   carrying the meaning and never the colour alone, and the filed label reachable by hover and by
+   screen reader. Nothing about a number is stable across groups, an artifact with no label carries
+   no badge, and no badge colour may read as an outcome.
+   **There is no ceiling and no overflow value, because #206 removed the last one in place**: #182
+   shipped four letters plus `@`, #197 reversed the four-letter limit — a conclusion about *colour*
+   applied to *letters*, after one real group filing nine labels made five of nine badges read `@` —
+   and took the alphabet to `Z`, but twenty-six is a larger arbitrary number rather than a different
+   kind of answer, and `@` survived it. An integer has no last value, so `@` is deleted rather than
+   moved further out and nothing a group files is left undistinguished. **The palette keeps a ceiling
+   of its own, and every cycle is a step off the last** (#200): the four colours are cycled
+   family-first so consecutive numbers are always different families, and `#5` onwards is the same
+   four families modulated a step deeper into each family's own dark step, derived with `color-mix`
+   over the tokens — so a later cycle is recognisably the same hue at another level rather than a
+   plain repeat, which is what closes the one weak adjacency #197 had to record, the cycle boundary
+   at `#4`/`#5`. Four families over seven steps is twenty-eight fills, and past the twenty-eighth
+   the colour **repeats** while the digits distinguish; the badge is `#`-prefixed and never
+   zero-padded so it cannot be read as the artifact's own ordinal in its file name. What did not move
+   is that no badge colour may read as an outcome — nor may a number read as a rank — and that a
+   **new hue** would still be a commissioned categorical ramp rather than a colour picked at the
+   keyboard; the derived steps are measured against exactly that by
    `tests/unit/panel/label-badge-palette.test.ts`. `docs/DESIGN.md` §9 records all of it — which of
-   *design it* and *settle it here* was chosen and why, the reversal with its reason rewritten in
-   place, and the cost that shapes the preview: an authenticated byte route cannot be an
+   *design it* and *settle it here* was chosen and why, both reversals with their reasons rewritten
+   in place, and the cost that shapes the preview: an authenticated byte route cannot be an
    `<img src>`, so the panel fetches the bytes with the session header and renders an object URL,
    and the whole artifact is therefore buffered in the tab.
 6. **Live lease state** — **done** (#113). A held card carries the `owner`, the `project`, the

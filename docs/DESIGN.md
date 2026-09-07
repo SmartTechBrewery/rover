@@ -1104,8 +1104,9 @@ listed.
   thing — at least one directory that exists was not fully examined — and a partial arrangement must
   not read like a complete one.
 - **The label badges are drawn here and nowhere else** (#182, and the section below). An artifact a
-  run filed under a label carries a round letter beside its name; a letter is defined only inside a
-  group, so no row of the `All` view has one and no row above a run has one in either view.
+  run filed under a label carries a small numbered pill beside its name; a badge number is defined
+  only inside a group, so no row of the `All` view has one and no row above a run has one in either
+  view.
 
 **The addresses.** Two more routes, `/groups` and `/groups/$`, served by the same screen component
 with `view` as a prop — so nothing here is a second screen. The splat is
@@ -1171,7 +1172,7 @@ because they are true in both; only the claim narrows. This is `Searched`'s rule
 archive contains that text* about a search that was cut short — and it is why a truncated grouping
 answer is not a fourth empty-handed state.
 
-### The label badges — settled here, not designed (#182, amended in place by #197 and #200)
+### The label badges — settled here, not designed (#182, amended in place by #197, #200 and #206)
 
 **Settled in this document rather than by a Stitch round**, and which of the two was chosen is said
 out loud because §1 requires it — the same call the arrangement above it is: the row anatomy and the
@@ -1181,81 +1182,124 @@ is a prompt rather than a generated screen.
 
 A run's artifacts may carry a **label**, filed with the artifact by the lease that produced it
 (R41). A group is where that matters: the same label on an artifact of two runs is the caller
-saying *these two are the same thing at two moments*. What the tree draws for it is a short letter.
+saying *these two are the same thing at two moments*. What the tree draws for it is a short number.
 
-**The badge.** A round badge — `rounded-full`, 18px, the design's own `label-caps` step in the
-monospace face — sitting **between the row's glyph and its name**. That is the whole of the row's
-change: nothing else about a row moves, and a row without a badge is the row it was.
+**The badge.** A small filled pill — `rounded-full`, **18px tall and as wide as its digits need**,
+the design's own `label-caps` step in the monospace face — sitting **between the row's glyph and its
+name**. That is the whole of the row's change: nothing else about a row moves, and a row without a
+badge is the row it was.
 
-**The letters are per group.** Every distinct filed label in one group takes a letter — `A`
-through `Z` — in the order the host answered them, and **the same label carries the same letter
-everywhere it appears in that group**. Nothing about a letter is stable across groups: the same
-string in a second group takes whatever that group's own order gives it, and a reader who carries a
-letter from one group to another has read something the badge never said. Inside one group it is
-completely determined, which is a different claim and a load-bearing one — a letter that moved
-between two loads of the same group would be a bug. The order is the **answer's**, never the drawn
-one: the tree and the card reverse at the run level (`level-order.ts`), so an assignment that
-followed what is drawn would give one group two alphabets.
+**The height is fixed and the width is not** (#206). 18px against the row's 14px monospace line is
+what keeps a badged row the height of an unbadged one, so a level of the tree does not jump where a
+label starts — the property `size-4.5` was chosen for. What `size-4.5` *also* fixed was the width,
+and `#12` does not fit an 18px circle; so the pill grows horizontally on the design's own spacing
+step (`px-1.5`) and `rounded-full` keeps it a pill at every width rather than becoming a rectangle.
+The height and the smallest type step are what hold.
 
-**Overflow is `@`, and it is a first-class case rather than a corner.** A group holding more distinct
-labels than there are letters gives every remaining one `@`. The badge stops distinguishing them
-there and **the row does not**: the artifact's own name is unchanged, and each `@` still names its
-own filed label. What runs out at the twenty-seventh distinct label is the **alphabet**, not the
-palette — the four colours are cycled under the letters — and a group that files twenty-seven
-distinct labels is asking the badge for a vocabulary a single letter cannot carry, so saying so is
-better than a twenty-seventh glyph nobody could read at 18px.
+**The numbers are per group.** Every distinct filed label in one group takes the next integer
+starting at **1** — `1`, `2`, `3`, … — in the order the host answered them, and **the same label
+carries the same number everywhere it appears in that group**. Nothing about a number is stable
+across groups: the same string in a second group takes whatever that group's own order gives it, and
+a reader who carries a number from one group to another has read something the badge never said.
+Inside one group it is completely determined, which is a different claim and a load-bearing one — a
+number that moved between two loads of the same group would be a bug. The order is the **answer's**,
+never the drawn one: the tree and the card reverse at the run level (`level-order.ts`), so an
+assignment that followed what is drawn would give one group two numberings.
 
-**The letter carries the meaning, never the colour alone.** Every badge says which label it is in
+**There is no overflow value, because there is no ceiling** (#206). `@` is gone and nothing stands
+in for it. An integer has no last value, so no group can file a label the badge leaves
+undistinguished, and the fallback is not kept for a case that can no longer arise. What is
+unbounded is the **glyph**; the palette keeps a ceiling of its own, below.
+
+**Why per group, now that nothing runs out.** #182 and #197 both justified the locality with *the
+alphabet ends at `Z`* — a stable-everywhere letter would run out globally instead of per group. That
+argument is gone with the alphabet, and the honest one that remains is about the answer rather than
+the glyph: a number stable across the whole archive would have to come from a registry over every
+label anywhere, and the only answer there is is **one bounded walk that says when it was cut short**
+(`list_archive_groups`, `truncated`). A global number would therefore change under a reader when
+the walk stopped a directory earlier. A number that never claimed to travel is the smaller promise
+and the one that can be kept.
+
+**A badge must not read as the artifact's own sequence number** (#206). Archived artifacts lead with
+a zero-padded ordinal inside their file names — `002_remaining-deliveries_screenshot.png`,
+`009_transferred-to-courier_screenshot.png` — so a bare `2` beside a row named `007_…` invites
+exactly the wrong reading. Three things separate them and the first is decisive: **the badge carries
+a leading `#`**, which a file's ordinal never does; it is a filled pill rather than text inside the
+row's name; and it is never zero-padded. `#` is the number sign — *this is label number two* — and
+was chosen over the bare digit for precisely that: it reads as a code and costs one glyph in a pill
+that had to grow anyway. It is **not** an ordinal or a place. Nothing here is compared, so no number
+can be a rank, a score or an order of merit (§2, `ai/RULES.md` §1); `1` is a code for a label, not a
+first place. The number is also deliberately absent from what a screen reader says, which is where
+`#1` and `001_…` would otherwise be confusable by ear.
+
+**The number carries the meaning, never the colour alone.** Every badge says which label it is in
 text, so the fill is a second channel for something already written — the rule §5's status LED keeps
 from the other side, where the colour is the only channel and the LED is therefore `aria-hidden`.
-This one is not: a letter is a code local to one group and `@` names nothing at all, so the **filed**
-label travels with it in an accessible name and in a `title`. It is the label as the archive filed
-it and never the caller's own string, which `pathSegment` truncated and rewrote and which is
-genuinely unrecoverable — the rule this section already states for `OWNER`.
+This one is not: a number is a code local to one group, so the **filed** label travels with it in an
+accessible name and in a `title`. It is the label as the archive filed it and never the caller's own
+string, which `pathSegment` truncated and rewrote and which is genuinely unrecoverable — the rule
+this section already states for `OWNER`.
 
 **An artifact with no label carries no badge**, so the tree of an archive that never used labels is
 the tree it is today. And the badge is **not a control**: the row is one `<Link>` and stays one
 target (#175), so this is an element inside it and never a second thing to click.
 
-**The palette — four colours, cycled, and a step off each on every cycle.** A letter's fill is its
-position in the alphabet modulo four, so the four families take the letters family-first:
+**The palette — four colours, cycled, and a step off each on every cycle.** A badge's fill is its
+number's position modulo four, so the four families take the numbers family-first:
 
-| letters | family | cycle 1's fill | cycle 1's text | reads as |
+| numbers | family | cycle 1's fill | cycle 1's text | reads as |
 | --- | --- | --- | --- | --- |
-| `A`, `E`, `I`, `M`, `Q`, `U`, `Y` | primary | `bg-primary-fixed` | `text-on-primary-fixed` | pale lavender |
-| `B`, `F`, `J`, `N`, `R`, `V`, `Z` | secondary | `bg-secondary-fixed` | `text-on-secondary-fixed` | pale peach |
-| `C`, `G`, `K`, `O`, `S`, `W` | tertiary | `bg-tertiary-fixed` | `text-on-tertiary-fixed` | mint |
-| `D`, `H`, `L`, `P`, `T`, `X` | neutral | `bg-inverse-surface` | `text-inverse-on-surface` | neutral |
-| `@` | — | `bg-surface-container-highest` | `text-on-surface-variant` | the quietest thing on the card |
+| `1`, `5`, `9`, `13`, `17`, `21`, `25` | primary | `bg-primary-fixed` | `text-on-primary-fixed` | pale lavender |
+| `2`, `6`, `10`, `14`, `18`, `22`, `26` | secondary | `bg-secondary-fixed` | `text-on-secondary-fixed` | pale peach |
+| `3`, `7`, `11`, `15`, `19`, `23`, `27` | tertiary | `bg-tertiary-fixed` | `text-on-tertiary-fixed` | mint |
+| `4`, `8`, `12`, `16`, `20`, `24`, `28` | neutral | `bg-inverse-surface` | `text-inverse-on-surface` | neutral |
 
-That table is **cycle 1**, which is `A`…`D` and is byte-identical to what #182 shipped. Every later
-cycle is the *same four families a step deeper into each family's own dark step* (#200), so `E` is
-`A`'s lavender at another level rather than a repeat of it. A step is
+That table is **cycle 1**, which is `#1`…`#4` and is byte-identical to what #182 shipped. Every
+later cycle is the *same four families a step deeper into each family's own dark step* (#200), so
+`#5` is `#1`'s lavender at another level rather than a repeat of it. A step is
 `color-mix(in srgb, var(--color-<family>-fixed) <n>%, var(--color-on-<family>-fixed-variant))` in
 `panel/src/index.css` — the same file's `.scanline` and `.wordmark-chroma` are the precedent — and
 the component writes only a family and a cycle: `label-badge-step label-badge-<family>
 label-badge-cycle-<n>`.
 
+**`bg-surface-container-highest` was `@`'s row in that table and is now unspent.** It was the one
+fill that inverted — a dark fill a shade off the card, carrying the light text the tree's quiet
+lines use — and that was deliberate: it distinguished nothing and should not have asked to be
+looked at. There is nothing left that distinguishes nothing, so the row is removed rather than kept
+for a fifth case.
+
+**The colour ramp keeps its own ceiling, and the number is what disambiguates past it** (#206). The
+numbers are unbounded; four families across seven honest steps is **twenty-eight** fills and no
+more. Beyond the last cycle the colour therefore **repeats** rather than a new step being invented:
+`#29` draws `#1`'s fill, `#30` draws `#2`'s, and so on. Two badges far apart may share a fill; their
+digits differ, and the digit is the identity. No new colour is invented at the keyboard and no
+`error` step is reached (`ai/RULES.md` §8). `PALETTE_CYCLES` in `label-badge.tsx` is that ceiling
+written down as a constant rather than left implicit in a modulo, and
+`tests/unit/panel/label-badge-palette.test.ts` reads it back out of the component and fails if
+`index.css` stops defining exactly that many cycles. **A cycle 8 is not a number to raise there**
+but four new steps somebody has to measure against the colours below.
+
 **The numbers are the design decision, so here they are.** Each column is the mix percentage of the
 family's own light token and the byte-rounded result; each ramp's dark end is in the header:
 
-| cycle | letters | primary → `#0035be` | secondary → `#802a00` | tertiary → `#005236` | neutral → `#2f3034` |
+| cycle | numbers | primary → `#0035be` | secondary → `#802a00` | tertiary → `#005236` | neutral → `#2f3034` |
 | --- | --- | --- | --- | --- | --- |
-| 1 | `A`…`D` | 100% `#dde1ff` | 100% `#ffdbce` | 100% `#47ffb8` | 100% `#e2e2e6` |
-| 2 | `E`…`H` | 91% `#c9d2f9` | 91% `#f4cbbb` | 72% `#33cf94` | 94% `#d7d7db` |
-| 3 | `I`…`L` | 82% `#b5c2f3` | 82% `#e8bba9` | 66% `#2fc48c` | 88% `#cdcdd1` |
-| 4 | `M`…`P` | 73% `#a1b3ed` | 73% `#ddab96` | 60% `#2bba84` | 82% `#c2c2c6` |
-| 5 | `Q`…`T` | 64% `#8da3e8` | 64% `#d19b84` | 54% `#26af7c` | 76% `#b7b7bb` |
-| 6 | `U`…`X` | 55% `#7a94e2` | 55% `#c68b71` | 48% `#22a574` | 70% `#acadb1` |
-| 7 | `Y`, `Z` | 46% `#6684dc` | 46% `#ba7b5f` | 42% `#1e9b6d` | 64% `#a2a2a6` |
+| 1 | `#1`…`#4` | 100% `#dde1ff` | 100% `#ffdbce` | 100% `#47ffb8` | 100% `#e2e2e6` |
+| 2 | `#5`…`#8` | 91% `#c9d2f9` | 91% `#f4cbbb` | 72% `#33cf94` | 94% `#d7d7db` |
+| 3 | `#9`…`#12` | 82% `#b5c2f3` | 82% `#e8bba9` | 66% `#2fc48c` | 88% `#cdcdd1` |
+| 4 | `#13`…`#16` | 73% `#a1b3ed` | 73% `#ddab96` | 60% `#2bba84` | 82% `#c2c2c6` |
+| 5 | `#17`…`#20` | 64% `#8da3e8` | 64% `#d19b84` | 54% `#26af7c` | 76% `#b7b7bb` |
+| 6 | `#21`…`#24` | 55% `#7a94e2` | 55% `#c68b71` | 48% `#22a574` | 70% `#acadb1` |
+| 7 | `#25`…`#28` | 46% `#6684dc` | 46% `#ba7b5f` | 42% `#1e9b6d` | 64% `#a2a2a6` |
 
 Mixing at 100% is the identity, which is what makes "cycle 1 is unchanged" a computation rather
-than a claim: the first stop of every ramp *is* the token the utility class above draws. The
-alphabet ends mid-cycle — `Z` is the secondary's seventh step — and the tertiary and neutral
-families simply stop at six rather than being padded out to a round number. Every hex in that table
-is the mix rounded to the nearest byte, and each was cross-checked against lightningcss (the engine
-the panel's own build runs) evaluating the same `color-mix()` call — so they are what a colour
-picker on a rendered badge reports, not what an agent's own arithmetic hoped for.
+than a claim: the first stop of every ramp *is* the token the utility class above draws. **The
+sequence now ends on a whole cycle**, which the alphabet never did — `Z` was the secondary's
+seventh step and the tertiary and neutral families stopped at six — so twenty-eight fills is four
+families times seven steps exactly, and that is also the period the colour repeats on. Every hex in
+that table is the mix rounded to the nearest byte, and each was cross-checked against lightningcss
+(the engine the panel's own build runs) evaluating the same `color-mix()` call — so they are what a
+colour picker on a rendered badge reports, not what an agent's own arithmetic hoped for.
 
 **The four ramps do not reach equally far, because their constraints do not.** Primary and
 secondary step an even 9% a cycle and the neutral an even 6%, but the neutral stops at 64% rather
@@ -1269,20 +1313,16 @@ dark end, and that too is the grey: *that* ramp passes within ΔE 4.4 of `--colo
 midpoint, because both are blue-tinted greys on nearly one line.
 
 **The text step never flips.** A fill dark enough for the family's light `-fixed` step to carry a
-12px bold letter at 4.5:1 needs a relative luminance ≤ 0.131, and a fill that still reads as a
+12px bold digit at 4.5:1 needs a relative luminance ≤ 0.131, and a fill that still reads as a
 badge against the card's `surface-container` at 3:1 needs ≥ 0.143 — the two windows do not overlap,
 so no ramp crosses into the dark half and every cycle of a family carries the one dark text step
 cycle 1 pairs with it. That was computed rather than assumed; the achieved minima across all
-twenty-eight fills are 4.81:1 for the letter and 4.59:1 against the card.
+twenty-eight fills are 4.81:1 for the digits and 4.59:1 against the card.
 
 **Every colour comes from `panel/src/tokens.css`** (§1, `ai/RULES.md` §8), and
 `tests/unit/panel/tokens-are-the-source-of-truth.test.ts` fails loudly on a hex written in a
-component. The four are light fills carrying dark text, which is what makes them read at badge
-size against `surface-container`; `@` is the one that inverts — a dark fill a shade off the card,
-carrying the light text the tree's quiet lines already use — and that is deliberate, because it
-distinguishes nothing and should not ask to be looked at. **`@` is outside the cycle** and takes no
-step: it is not a family, and modulating the thing that distinguishes nothing would be a change
-with no reader.
+component. All four are light fills carrying dark text, which is what makes them read at badge size
+against `surface-container`.
 
 **`-fixed-dim` looks like a free second cycle and is rejected, with the numbers**, because it is the
 shortcut the next reader will reach for. `--color-tertiary-fixed-dim` is byte-identical to
@@ -1292,34 +1332,40 @@ shortcut the next reader will reach for. `--color-tertiary-fixed-dim` is byte-id
 test asserts the *class name* is not `bg-tertiary`, so `bg-tertiary-fixed-dim` would have passed
 that gate while painting the free-device green onto a badge.
 
-**Adjacent letters never carry one colour**, and cycling family-first is what makes that true by
-construction rather than by inspection: two letters next to each other in the alphabet are always
-two different accent families, and two steps of one family always sit exactly four letters apart.
-**The cycle boundary used to be the exception and no longer is.** `D`'s `bg-inverse-surface`
-(`#e2e2e6`) beside `E`'s fill was ΔE 13.6 while `E` was a plain repeat of `A` — the one weak pair
-#197 had to record, and every weak adjacency in the whole alphabet was one of these boundaries.
-`E` is now a step off `A`, which puts that pair at ΔE 19.7 and makes it no longer the closest thing
-in the set to a collision. The weakest adjacency anywhere in `A`…`Z` is now 19.7.
+**Consecutive numbers never carry one colour**, and cycling family-first is what makes that true by
+construction rather than by inspection: two numbers next to each other are always two different
+accent families, and two steps of one family always sit exactly four numbers apart. **The cycle
+boundary used to be the exception and no longer is.** `#4`'s `bg-inverse-surface` (`#e2e2e6`) beside
+`#5`'s fill was ΔE 13.6 while `#5` was a plain repeat of `#1` — the one weak pair #197 had to
+record, and every weak adjacency was one of these boundaries. `#5` is now a step off `#1`, which
+puts that pair at ΔE 19.7 and makes it no longer the closest thing in the set to a collision. The
+weakest adjacency anywhere is now 19.7, and **that now includes the wrap**: `#28`'s deepest neutral
+beside `#29`'s cycle 1 lavender is the same kind of boundary and is measured as one.
 
 **And all of that is checked rather than eyeballed.**
 `tests/unit/panel/label-badge-palette.test.ts` reads the tokens and the percentages out of the two
 CSS files, recomputes all twenty-eight fills by the byte arithmetic `in srgb` performs, and fails
 on a contrast below either floor, on any derived fill within ΔE 10 of a colour that already means
-something, on any pair of alphabet-adjacent fills within ΔE 15, or on a cycle 1 that is no longer
-its own token. Both thresholds are calibrated against colours already in the repository rather than
-picked off a table: 10 is the margin cycle 1 already lives with (`tertiary-fixed` is 9.9 from the
-free green), and 15 is above the 13.6 a plain repeat gives.
+something, on any pair of consecutive fills within ΔE 15, or on a cycle 1 that is no longer its own
+token. Because the fills are periodic in twenty-eight, it walks `#1`…`#29` — one period plus one —
+which is *every* consecutive pair an unbounded numbering can produce rather than every pair up to
+some number somebody chose. Both thresholds are calibrated against colours already in the repository
+rather than picked off a table: 10 is the margin cycle 1 already lives with (`tertiary-fixed` is 9.9
+from the free green), and 15 is above the 13.6 a plain repeat gives.
 
-**No badge colour may read as an outcome.** §5 already spends `bg-tertiary` green on *a free
-device*, `bg-primary-container` blue on *held* and `secondary-container` orange on *warning*, and
-`error` is not available at all — so every fill above is a `-fixed` step, a neutral, or a derived
-step of one of those, none is one of the three §5 gives a meaning to, and **no two of them can pair
-into a red/green verdict**. A green
-`A` beside a red `B` is precisely the pass/fail semantics Rover does not have (§2,
-`ai/RULES.md` §1), and this palette is chosen to make it unavailable rather than discouraged.
+**No badge colour may read as an outcome, and no number may read as a rank.** §5 already spends
+`bg-tertiary` green on *a free device*, `bg-primary-container` blue on *held* and
+`secondary-container` orange on *warning*, and `error` is not available at all — so every fill above
+is a `-fixed` step, a neutral, or a derived step of one of those, none is one of the three §5 gives a
+meaning to, and **no two of them can pair into a red/green verdict**. A green `#1` beside a red `#2`
+is precisely the pass/fail semantics Rover does not have (§2, `ai/RULES.md` §1), and this palette is
+chosen to make it unavailable rather than discouraged. The same rule reaches the digits now that
+they are digits: nothing about a badge is sorted, scored or compared, `1` is *the first label this
+group's walk met*, and the `#` is what says so.
 
-**Why four colours and twenty-six letters** (reversed in place, #197 — the original conclusion is
-kept because the record of what was considered is most of its value).
+**Why four colours, and why the glyphs are not counted at all** (reversed in place twice — #197
+took the alphabet to `Z`, #206 dropped the alphabet; the original conclusions are kept because the
+record of what was considered is most of this document's value).
 
 *What #182 concluded.* Analog Horizon has three accent families plus `error`, and three of its steps
 already mean something — so there is no honest fifth hue in it, four letters is what the palette can
@@ -1328,7 +1374,7 @@ alphabet would be a **commissioned categorical ramp** for Analog Horizon, throug
 Stitch round (§1, `ai/RULES.md` §8): swatches equal in weight, meaning *different* and never *better*
 or *worse*.
 
-*Why it was wrong.* The conclusion was about **colour** and was applied to **letters**. Nothing
+*Why that was wrong.* The conclusion was about **colour** and was applied to **letters**. Nothing
 makes those the same count: a letter is drawn in text and is the channel this section already says
 carries the meaning, so a fifth letter costs the palette nothing at all. R41 enforces no arity on
 labels either, and real use went straight past four — one label per screen, nine distinct labels in
@@ -1336,28 +1382,51 @@ one group (`statistics-deliveries`, a before/after of a Compose migration), so f
 read `@` and for most of that group the badge distinguished nothing. Four was an assumption about
 arity the archive never made.
 
-*What replaces it.* The letters run `A`…`Z` and the same four colours are **cycled** under them,
-family-first, so `@` moves to past the twenty-sixth distinct label and keeps its meaning exactly —
-*this one is not being distinguished*. No new colour, token or CSS was needed to do it.
+*What #197 replaced it with, and why that was still a ceiling.* The letters ran `A`…`Z` with the
+same four colours cycled under them, family-first, and `@` moved to past the twenty-sixth distinct
+label keeping its meaning exactly — *this one is not being distinguished*. No new colour, token or
+CSS was needed. But the fix was the same shape as the flaw: twenty-six is a larger arbitrary number,
+not a different kind of answer. The ceiling existed only because **an alphabet has a last letter**,
+and nothing about the archive, the host's answer or the palette ever asked for one.
 
-*What survives, unchanged.* **No badge colour may read as an outcome.** `error` stays excluded
-outright, §5's three device-state steps (tertiary green, primary-container blue,
+*What replaces both.* **The badges are numbers** (#206) — `1`, `2`, `3`, … in the host's answer
+order, with no ceiling and no overflow value. An integer has no last value, so `@` is not moved
+further out but deleted, and nothing a group can file is ever left undistinguished. The palette
+keeps its ceiling because the palette's ceiling was always the real one: four families across seven
+honest steps, and past the twenty-eighth the fill repeats while the digit distinguishes. Counting
+the glyphs is the mistake this section made twice; there is now nothing to count.
+
+*Why a bare digit was not enough, and what `#` buys.* Archived artifacts already lead with a
+zero-padded ordinal in their file names, so `2` beside a row named `007_…` reads as a second copy of
+the row's own number. The leading `#` is the one channel the file's ordinal never has, and in a pill
+that already had to grow for `#12` it costs one glyph. `#1` was considered against exactly one
+objection — that it could read as *first place* — and it does not: the frame is a set nothing
+compares, the accessible name says *Filed under the label …* and never the number, and §2's rule
+that Rover reports no verdicts is what the whole badge is built under.
+
+*What survives all three, unchanged.* **No badge colour may read as an outcome.** `error` stays
+excluded outright, §5's three device-state steps (tertiary green, primary-container blue,
 secondary-container orange) stay unavailable, and no two badges can pair into a red/green verdict.
 The commissioned-ramp rule also survives for what it was actually about: a **new hue** is the
-operator's Stitch round and never a swatch picked at the keyboard. A *derived* step of a token is a
+operator's Stitch round and never a swatch picked at the keyboard — which is exactly why the numbers
+wrap at cycle 7 instead of reaching for a twenty-ninth step. A *derived* step of a token is a
 different thing — `panel/src/index.css` already derives from `--color-surface-container-lowest`,
 `--color-primary` and `--color-secondary-container` through `color-mix` — which is why the per-cycle
-modulation was a follow-up rather than a thing this section forbids. **That follow-up is now built**
+modulation was a follow-up rather than a thing this section forbids. **That follow-up is built**
 (#200): the four ramps and their twenty-eight stops are in the table above, every one of them a
 `color-mix` over two tokens of one family, and no new hue was commissioned to do it.
 
 **What is deliberately absent, and why.**
 
-- **No badge in the `All` view.** A letter is defined only inside a group and the `All` view has no
+- **No badge in the `All` view.** A number is defined only inside a group and the `All` view has no
   group context, so a badge there would be a code with no key. It is said here rather than left to
   be discovered.
-- **No legend.** A letter and a hover that names it is the whole vocabulary; a legend would be a
+- **No legend.** A number and a hover that names it is the whole vocabulary; a legend would be a
   second, staler copy of what every badge already says.
+- **No zero-padding on a badge, and no alignment to the widest one.** Padding `#1` to `#01` would
+  make it look like the file ordinals it must not be confused with, and reserving the width of the
+  group's largest number would put a variable indent on every row for a set most groups never
+  reach.
 - **No filter by label, no compare-these-two control, and nothing that ranks or scores an artifact**
   (`ai/RULES.md` §1). A label is a caller's claim that two artifacts are the same thing at two
   moments; what to make of them is the agent's judgement and not Rover's.
@@ -1455,12 +1524,12 @@ for `OWNER`, and the one `group-labels.ts` states for the badge. Nothing else is
 count, no glyph, no control.
 
 **The badge is in that strip, in front of the name it belongs to, and it is drawn exactly once.** It
-is the **tree's** badge — the same letter on the same fill as the row that opened the card, its
-letter and its fill `lettersOfGroup`'s assignment carried down on `LabelComparison` so the card holds
-no second opinion about which letter a label takes. That is what ties the row a reader clicked to the
-artifacts that came back. **In front of the label rather than instead of it**: the letter is a code
+is the **tree's** badge — the same number on the same fill as the row that opened the card, its
+number and its fill `numbersOfGroup`'s assignment carried down on `LabelComparison` so the card holds
+no second opinion about which number a label takes. That is what ties the row a reader clicked to the
+artifacts that came back. **In front of the label rather than instead of it**: the number is a code
 local to one group and the words beside it are the thing that has a meaning. **Once rather than per
-pane**: one label heads the whole card, so a badge on every pane would draw the same letter N times
+pane**: one label heads the whole card, so a badge on every pane would draw the same number N times
 to say the one thing every pane already has in common. There is no legend, for the reason the badges
 have none.
 
@@ -2698,8 +2767,8 @@ top of this file). Do not commission a Stitch screen for them.
   settled is written into §9 above: the toggle's frame and colours, the four routes and why the
   view is an address, the group-first level table, what is deliberately absent from it, and its
   three empty-handed answers. The label badges inside that view were settled the same way and are
-  built (#182, #197, #200) — they are a palette and a letter, and the third-list test applied to
-  them too.
+  built (#182, #197, #200, #206) — they are a palette and a number, and the third-list test applied
+  to them too.
 - **The groups view's comparison card — done** (#199). It belongs here for the reason the two
   entries above it do, with one difference worth writing down: this one *had* a screen, and it was
   used as a **layout reference only**. `Compare — Visual Diff (V2)` is the one remaining uncorrected
