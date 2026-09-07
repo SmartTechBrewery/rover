@@ -108,13 +108,25 @@ import { type MouseEvent, type ReactNode, type RefObject, useRef } from 'react';
  * row does say out loud is `aria-expanded`, on every row there is a level under and on no other, and
  * it reports the **drawn** state — the triangle draws openness and cannot say it.
  *
- * **And the card searches the whole archive** (#146, R38, `docs/DESIGN.md` §9). The field between
- * the header strip and the tree is the design's own (screen `8dcd4330…`), and while there is text in
- * it the body draws the host's matches instead of the URL's levels. **It is the `All` view's and is
- * absent from the groups view** (#181): `search_archive` answers addresses of the archive, which
- * are addresses the groups view does not own, so a hit found there would have nowhere in this
- * arrangement to land. The field is drawn only where the search it performs is about the tree
- * beside it —
+ * **And the card searches, in both views** (#146, R38, and #207, `docs/DESIGN.md` §9). The field
+ * between the header strip and the tree is the design's own (screen `8dcd4330…`), and while there is
+ * text in it the body draws the host's matches instead of the URL's levels.
+ *
+ * **It used to be the `All` view's alone** (#181), and the argument was that *`search_archive`
+ * answers addresses of the archive, which are addresses the groups view does not own, so a hit found
+ * there would have nowhere in this arrangement to land* — this module's own form of it being *The
+ * field is drawn only where the search it performs is about the tree beside it*. **That is reversed
+ * in place** (#207), because an address composes: `archiveAddressOf` drops the group id and
+ * `groupsAddressOf` puts it back, so a match under a grouped run has an address here after all. And
+ * this is the view where the work happens — the comparison card and the label badges are drawn in it
+ * and nowhere else — so finding one screen in a nine-label group was browsing, every time, while the
+ * `All` view beside it could find it by typing.
+ *
+ * **So it is the same field in the same place behaving the same way, and the population is the one
+ * thing that differs.** The groups view searches the runs that carry a group id and nothing else
+ * (`group-search.ts`, which restricts and re-addresses the answer above this card), and the three
+ * sentences that claim a *population* are the view's — {@link SEARCH_COPY}, looked up from the
+ * source's own route. Everything else below is unchanged and unconditional in both —
  *
  * - **every hit is visible and its ancestors are expanded, and a branch holding no match is not
  *   drawn** — all three fall out of `search-tree.ts` building the tree from the matches themselves;
@@ -137,14 +149,61 @@ import { type MouseEvent, type ReactNode, type RefObject, useRef } from 'react';
  */
 
 /**
- * The placeholder, and it is a **deliberate deviation from the approved markup** recorded in
- * `docs/DESIGN.md` §9.
+ * The rows below this line came out of an answer that was cut short — **one sentence, drawn in the
+ * two places that fact can arrive** (#181, #207).
+ *
+ * It heads the groups view's browsing rows, whose one bounded walk may have been cut short, and it
+ * heads that view's *hits* for the same reason: a search here is assembled from that walk as well as
+ * from the search's own, so a short answer means a group or a run may be missing. *Narrow the text*
+ * would be advice that does not help when the grouping walk is what was short. Defined once so the
+ * two cannot drift.
+ */
+const TRUNCATED_WALK =
+	'More is filed here than the host could examine. A group or a run may be missing.';
+
+/**
+ * The five sentences that claim a **population**, per view (#207) — and the placeholder among them
+ * is a **deliberate deviation from the approved markup** recorded in `docs/DESIGN.md` §9.
  *
  * The design says *Filter this tree...*, which describes a client-side filter over rows already
- * drawn. This is not that: typing asks the host to search the whole archive, including levels this
- * tree has never read, so the field says what it does.
+ * drawn. Neither of these is that: typing asks the host, over levels the tree has never read, so
+ * each field says what it searches. The `All` view's says the *whole* archive, and that sentence
+ * stops being true in a view that searches the runs carrying a group id — which is the whole of why
+ * this is a record rather than one constant.
+ *
+ * The in-flight and failed sentences are deliberately **not** here: *Searching this host's archive*
+ * says what the panel is doing rather than what it found, and *The host could not search the
+ * archive* is true of every one of that state's causes, the unreadable grouping walk included.
  */
-const PLACEHOLDER = 'Search the whole archive...';
+interface SearchCopy {
+	readonly placeholder: string;
+	/** `aria-label`, because a placeholder is not a name. */
+	readonly label: string;
+	readonly nothingMatched: string;
+	/** The definitive negative, narrowed — never said about an answer that was cut short. */
+	readonly nothingExamined: string;
+	/** Said above a hit list the answer cut short. */
+	readonly truncatedHits: string;
+}
+
+const SEARCH_COPY: Record<TreeRoute, SearchCopy> = {
+	'/archive/$': {
+		placeholder: 'Search the whole archive...',
+		label: 'Search the whole archive',
+		nothingMatched: 'No name in the archive contains that text.',
+		nothingExamined:
+			'Nothing in the part of the archive that could be examined contains that text.',
+		truncatedHits: 'More names match than are shown. Narrow the text.',
+	},
+	'/groups/$': {
+		placeholder: 'Search the grouped runs...',
+		label: 'Search the grouped runs',
+		nothingMatched: 'No name under a testing group contains that text.',
+		nothingExamined:
+			'Nothing in the part of the testing groups that could be examined contains that text.',
+		truncatedHits: TRUNCATED_WALK,
+	},
+};
 
 /** The leading glyph's corner, shared so the two things that sit in it cannot drift apart. */
 const GLYPH = 'absolute top-2.5 left-2.5';
@@ -173,11 +232,14 @@ export function DirectoryTree({
 	 * without anything having to say so twice, because it is part of the card. It stays above now
 	 * that #160 left one arrangement and this component no longer remounts under one.
 	 *
-	 * **Absent in the groups view** (#181), which is what `undefined` draws: no field, and the body
-	 * is the tree unconditionally.
+	 * **Both views hand one over** (#207, reversing #181's *absent in the groups view* in place).
+	 * What it carries in the groups view is the same four states over that view's own population,
+	 * restricted and re-addressed above this card (`group-search.ts`); *no field where there is no
+	 * tree* stays structural, because the two empty-handed states draw no card at all.
 	 */
-	readonly search?: ArchiveSearch;
+	readonly search: ArchiveSearch;
 }) {
+	const copy = SEARCH_COPY[source.route];
 	return (
 		<aside className="flex w-full flex-col overflow-hidden rounded-lg border-2 border-outline-variant bg-surface-container">
 			<div className="border-outline-variant border-b-2 bg-surface-container-high px-4 py-3">
@@ -185,10 +247,10 @@ export function DirectoryTree({
 					DIRECTORY
 				</h2>
 			</div>
-			{search === undefined ? null : <SearchField search={search} />}
+			<SearchField copy={copy} search={search} />
 			<div className="flex-1 overflow-y-auto p-4 font-code-md text-code-md">
-				{search !== undefined && search.state.status !== 'idle' ? (
-					<Searched route={source.route} selected={selected} state={search.state} />
+				{search.state.status !== 'idle' ? (
+					<Searched copy={copy} route={source.route} selected={selected} state={search.state} />
 				) : (
 					<>
 						{source.truncated ? <Truncated /> : null}
@@ -201,13 +263,20 @@ export function DirectoryTree({
 }
 
 /**
- * The design's own field, drawn only where the search it performs is about the tree beside it —
- * which is the `All` view (#181, and the module header's reason).
+ * The design's own field, and it is **the same field in both views** (#207, and the module header's
+ * reason) — the same position between the header strip and the scrolling tree, the same markup, the
+ * same clear action.
  *
- * Its own component since the groups view draws none, so *no field* is one absent element rather
- * than a condition threaded through the markup of one.
+ * The two strings that name a *population* come in from {@link SEARCH_COPY}, because they are the
+ * one thing the two views differ in and this component holds no idea of which view it is drawing.
  */
-function SearchField({ search }: { readonly search: ArchiveSearch }) {
+function SearchField({
+	copy,
+	search,
+}: {
+	readonly copy: SearchCopy;
+	readonly search: ArchiveSearch;
+}) {
 	// Where {@link Clear} puts the caret back, for the reason given there.
 	const field = useRef<HTMLInputElement>(null);
 
@@ -224,14 +293,14 @@ function SearchField({ search }: { readonly search: ArchiveSearch }) {
 				 * sent to be refused and reported as a host that could not search.
 				 */}
 				<input
-					aria-label="Search the whole archive"
+					aria-label={copy.label}
 					autoCapitalize="off"
 					autoComplete="off"
 					autoCorrect="off"
 					className="w-full rounded-sm border-2 border-outline-variant bg-surface px-3 py-2 pl-9 font-code-md text-code-md text-on-surface transition-colors placeholder:text-outline focus:border-tertiary focus:ring-0"
 					maxLength={MAX_ARCHIVE_SEARCH_TEXT_LENGTH}
 					onChange={(event) => search.setText(event.target.value)}
-					placeholder={PLACEHOLDER}
+					placeholder={copy.placeholder}
 					ref={field}
 					spellCheck={false}
 					type="text"
@@ -254,20 +323,20 @@ function SearchField({ search }: { readonly search: ArchiveSearch }) {
 }
 
 /**
- * The rows below this line came out of an answer that was cut short (#181).
+ * The rows below this line came out of an answer that was cut short (#181, #207).
  *
  * The groups view is one bounded walk of the whole archive, and `truncated` means exactly *at least
  * one directory that exists was not fully examined* — so a group, a run or an artifact may be
  * missing. Said **above** the rows and not below them, exactly as the searched tree says it: a
  * partial arrangement must not read like a complete one for as long as it takes to scroll to the
  * end of it.
+ *
+ * **It heads a cut-short hit list in that view too**, because it is the same fact about the same
+ * answer: a search of the grouped runs is assembled from this walk as well as the search's own
+ * ({@link SEARCH_COPY}, and `group-search.ts` for why either being short sets one flag).
  */
 function Truncated() {
-	return (
-		<p className="mb-3 px-3 text-on-surface-variant">
-			More is filed here than the host could examine. A group or a run may be missing.
-		</p>
-	);
+	return <p className="mb-3 px-3 text-on-surface-variant">{TRUNCATED_WALK}</p>;
 }
 
 /**
@@ -315,17 +384,24 @@ function Clear({
  * The host's flag means *a directory that exists was not fully examined*, which it can set without
  * recording a single match — an unreadable subtree, or a bound reached before any name matched. So
  * `matches: []` with `truncated: true` is a reachable answer, and it is the one a reader is most
- * likely to act on by giving up: *no name in the archive contains that text* would be a definitive
- * negative about a search that was cut short, so the empty answer says which of the two it is.
+ * likely to act on by giving up: a definitive negative would be a claim about a search that was cut
+ * short, so the empty answer says which of the two it is.
+ *
+ * **In the groups view the flag carries one more cause and still no more states** (#207): the answer
+ * is assembled from two bounded walks, so either being short sets it, and the three sentences that
+ * claim a population narrow with it rather than a fourth state being invented ({@link SEARCH_COPY}).
  */
 function Searched({
 	state,
 	selected,
 	route,
+	copy,
 }: {
 	readonly state: Exclude<ArchiveSearchState, { status: 'idle' }>;
 	readonly selected: readonly string[];
 	readonly route: TreeRoute;
+	/** The three sentences that claim a population — this view's (#207). */
+	readonly copy: SearchCopy;
 }) {
 	if (state.status === 'searching') {
 		return <Quiet>Searching this host's archive.</Quiet>;
@@ -334,20 +410,12 @@ function Searched({
 		return <Quiet>The host could not search the archive.</Quiet>;
 	}
 	if (state.matches.length === 0) {
-		return (
-			<Quiet>
-				{state.truncated
-					? 'Nothing in the part of the archive that could be examined contains that text.'
-					: 'No name in the archive contains that text.'}
-			</Quiet>
-		);
+		return <Quiet>{state.truncated ? copy.nothingExamined : copy.nothingMatched}</Quiet>;
 	}
 	return (
 		<>
 			{state.truncated ? (
-				<p className="mb-3 px-3 text-on-surface-variant">
-					More names match than are shown. Narrow the text.
-				</p>
+				<p className="mb-3 px-3 text-on-surface-variant">{copy.truncatedHits}</p>
 			) : null}
 			<Hits nodes={hitTree(state.matches)} route={route} selected={selected} />
 		</>

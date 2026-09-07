@@ -1,4 +1,5 @@
 import type { ArchiveGroup } from './archive-listing.js';
+import { keyOf } from './archive-path.js';
 
 /**
  * The groups view's arrangement, as pure functions over **one** `list_archive_groups` answer
@@ -57,6 +58,47 @@ export interface GroupRow {
 
 /** How deep a run's own address is in the archive: `[project, test_name, run, serial]` (#129). */
 const RUN_ADDRESS_DEPTH = 4;
+
+/**
+ * A run's address **without its `<serial>`** — `[project, test_name, run]`, which is exactly the
+ * prefix a `search_archive` match at or below a run carries (#207).
+ *
+ * Exported because {@link groupIdsByRun} is read from outside this module and the depth is the whole
+ * of what the two sides have to agree about. It is stated here, beside the address depth it comes
+ * off, rather than being arithmetic at the caller.
+ */
+export const RUN_PREFIX_DEPTH = 3;
+
+/**
+ * Which group each grouped run is in, keyed by that run's `[project, test_name, run]` (#207).
+ *
+ * **This is the whole of *which runs are grouped*, and it is a question the panel can already
+ * answer**: the groups view holds this answer for the tree it draws, so restricting a search to
+ * this arrangement costs no request and no host change (`group-search.ts`).
+ *
+ * A run whose address is not {@link RUN_ADDRESS_DEPTH} components is skipped, which is the module
+ * header's own rule rather than a second one — a run this module will not place is a run this
+ * arrangement cannot draw a hit under either. **First placement wins**, so the answer's own order
+ * decides for a run two groups somehow name, exactly as every level here is the answer's order.
+ *
+ * The key is built from the run's *own* `path` rather than from `group.project`, so it is by
+ * construction the same string a match's prefix produces.
+ */
+export function groupIdsByRun(groups: readonly ArchiveGroup[]): ReadonlyMap<string, string> {
+	const byRun = new Map<string, string>();
+	for (const group of groups) {
+		for (const run of group.runs) {
+			if (run.path.length !== RUN_ADDRESS_DEPTH) {
+				continue;
+			}
+			const key = keyOf(run.path.slice(0, RUN_PREFIX_DEPTH));
+			if (!byRun.has(key)) {
+				byRun.set(key, group.groupId);
+			}
+		}
+	}
+	return byRun;
+}
 
 /** The projects that have at least one group, in the answer's own order. */
 export function groupedProjects(groups: readonly ArchiveGroup[]): readonly GroupRow[] {

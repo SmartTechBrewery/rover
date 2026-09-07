@@ -562,12 +562,15 @@ describe('what a row may carry', () => {
 			'checkout-app',
 			'login-flow',
 			RUN,
-			'device_info.json',
-			'latest_recording',
+			// The run's contents lead with its artifact directories — `screenshots`, then
+			// `recordings` with its own open branch under it — and the rest of the level keeps the
+			// host's order below them (#208, `level-order.ts`).
+			'screenshots',
 			'recordings',
 			'001_frames',
 			'0001.png',
-			'screenshots',
+			'device_info.json',
+			'latest_recording',
 			OLDER,
 			'unlabeled',
 			'payments-web',
@@ -1079,6 +1082,170 @@ describe('the hits a search draws', () => {
 });
 
 /**
+ * **The same field, in the groups view, over that view's own population** (#207).
+ *
+ * The field used to be the `All` view's alone, on an argument about addresses that
+ * `groupsAddressOf` reverses. What this card sees is the same four states over matches already
+ * restricted and re-addressed above it (`group-search.ts`), so the cases here are the ones that are
+ * this card's: that the field is drawn, that the three sentences claiming a *population* are this
+ * view's, and that a hit is one `/groups` row like any other.
+ */
+describe('the search field and its hits in the groups view', () => {
+	const GROUP_ID = 'app-bar-top-space';
+	/** A hit's address in the **groups** view's own space — the group id at index 1. */
+	const DEEP = ['checkout-app', GROUP_ID, 'login-flow', RUN, SERIAL, 'screenshots', 'login.png'];
+
+	/**
+	 * The groups source with nothing to browse: while there is text in the field the body is the
+	 * search's answer, so what these cases need off the source is its **route**.
+	 */
+	const NO_GROUPS: ArchiveGroups = { status: 'listed', groups: [], truncated: false };
+
+	function showingSearched(state: ArchiveSearchState) {
+		const selected = ['checkout-app'];
+		return render(
+			<DirectoryTree
+				branches={branchesFor(selected)}
+				search={searching(state)}
+				selected={selected}
+				source={groupRowSource(NO_GROUPS, archive())}
+			/>,
+		);
+	}
+
+	function hits(truncated = false): ArchiveSearchState {
+		return found([match(DEEP.slice(0, 4), 'directory'), match(DEEP, 'file')], truncated);
+	}
+
+	// The same field in the same place, and the one thing that differs is the population it names —
+	// *the whole archive* stops being true where the search is the grouped runs.
+	it('draws the same field, saying which population it searches', () => {
+		const { container } = showingSearched(NOT_SEARCHING);
+
+		const field = screen.getByLabelText('Search the grouped runs');
+		expect(field.getAttribute('placeholder')).toBe('Search the grouped runs...');
+		expect(field.getAttribute('placeholder')).not.toContain('whole archive');
+		// The same position: after the header strip, before the scrolling tree.
+		const heading = screen.getByText('DIRECTORY');
+		const body = container.querySelector('div.overflow-y-auto') as HTMLElement;
+		expect(heading.compareDocumentPosition(field) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+		expect(field.compareDocumentPosition(body) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+	});
+
+	/*
+	 * Every rule the searched tree already has, unchanged: every hit visible with its ancestors
+	 * expanded, no depth bound, every row one `<Link>` — on a `/groups` address, because that is the
+	 * arrangement these matches were composed for.
+	 */
+	it('draws every hit with its ancestors expanded, on this view’s own addresses', () => {
+		const { container } = showingSearched(hits());
+
+		expect(rows(container).map((row) => row.textContent)).toEqual([
+			'checkout-app',
+			GROUP_ID,
+			'login-flow',
+			RUN,
+			SERIAL,
+			'screenshots',
+			'login.png',
+		]);
+		for (const row of rows(container)) {
+			expect(row.getAttribute('href')).toMatch(/^\/groups\//);
+		}
+		expect(href(container, 'login.png')).toBe(`/groups/${DEEP.join('/')}`);
+	});
+
+	// A hit row gains nothing a browsing row is forbidden — no count, no status glyph, no colour
+	// that reads as an outcome — and the searched tree still does not collapse.
+	it('gives a hit row nothing a browsing row is forbidden', () => {
+		const { container } = showingSearched(hits());
+
+		expect(container.textContent).toBe(
+			[
+				'DIRECTORY',
+				'checkout-app',
+				GROUP_ID,
+				'login-flow',
+				RUN,
+				SERIAL,
+				'screenshots',
+				'login.png',
+			].join(''),
+		);
+		for (const row of rows(container)) {
+			expect(row.querySelectorAll('svg').length).toBeLessThanOrEqual(2);
+			expect(row.className).not.toContain('error');
+		}
+		expect(container.innerHTML).toContain('break-words');
+		expect(container.innerHTML).not.toContain('break-all');
+		fireEvent.click(rowNamed(container, 'screenshots'));
+		expect(toggled).toEqual([]);
+	});
+
+	// While there is text in the field the body is the answer, not the address's own levels.
+	it('draws none of the URL’s own levels', () => {
+		const { container } = showingSearched(found([]));
+
+		expect(container.textContent).not.toContain('payments-web');
+		expect(rows(container)).toHaveLength(0);
+	});
+
+	/*
+	 * **The definitive negative is never said about an answer either walk cut short** — the answer
+	 * here is assembled from the search's walk and the grouping's, and `group-search.ts` ORs the
+	 * two into the one flag this reads.
+	 */
+	it('narrows the negative rather than claiming nothing is filed under a group', () => {
+		const complete = showingSearched(found([]));
+		expect(screen.getByText('No name under a testing group contains that text.')).toBeDefined();
+		// And it is this view's sentence, sharing no phrase with the `All` view's.
+		expect(complete.container.textContent).not.toContain('No name in the archive');
+		complete.unmount();
+
+		const { container } = showingSearched(found([], true));
+		expect(
+			screen.getByText(
+				'Nothing in the part of the testing groups that could be examined contains that text.',
+			),
+		).toBeDefined();
+		expect(container.textContent).not.toContain(
+			'No name under a testing group contains that text.',
+		);
+	});
+
+	/*
+	 * The cut-short hit list says the arrangement's own sentence — the one the browsing rows already
+	 * use — rather than *Narrow the text*, which is advice that would not help when the grouping
+	 * walk is what was short.
+	 */
+	it('says a cut-short hit list is short in this view’s own words', () => {
+		const { container, unmount } = showingSearched(hits(true));
+
+		expect(
+			screen.getByText(
+				'More is filed here than the host could examine. A group or a run may be missing.',
+			),
+		).toBeDefined();
+		expect(container.textContent).not.toContain('Narrow the text');
+		unmount();
+
+		const complete = showingSearched(hits());
+		expect(complete.container.textContent).not.toContain('More is filed here');
+	});
+
+	// The two states that are about the search itself say the same thing in both views: one names
+	// what the panel is doing, the other is true of every one of its causes.
+	it('keeps the in-flight and failed sentences the `All` view’s', () => {
+		const flight = showingSearched({ status: 'searching' });
+		expect(screen.getByText("Searching this host's archive.")).toBeDefined();
+		flight.unmount();
+
+		showingSearched({ status: 'failed' });
+		expect(screen.getByText('The host could not search the archive.')).toBeDefined();
+	});
+});
+
+/**
  * **The numbered label badges, and the groups view is the only place one is drawn** (#182, numbered
  * by #206, `docs/DESIGN.md` §9).
  *
@@ -1142,6 +1309,7 @@ describe('the label badges', () => {
 		return render(
 			<DirectoryTree
 				branches={branchesFor(selected)}
+				search={searching(NOT_SEARCHING)}
 				selected={selected}
 				source={groupRowSource(answer(runs), levelsFor(runs))}
 			/>,
@@ -1252,8 +1420,8 @@ describe('the label badges', () => {
 			GROUP_ID,
 			A_VARIANT,
 			RUN,
-			'device_info.json',
 			SHOTS,
+			'device_info.json',
 		]);
 	});
 
