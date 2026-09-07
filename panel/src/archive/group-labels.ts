@@ -12,7 +12,7 @@ import { keyOf } from './archive-path.js';
  *
  * **A letter is local to one group and means nothing outside it.** The assignment runs over one
  * group's runs, so the same label in a different group may take a different letter and no letter is
- * stable across groups. That is deliberate rather than a shortfall: there are four letters and an
+ * stable across groups. That is deliberate rather than a shortfall: the alphabet ends at `Z` and an
  * archive may hold any number of labels, so a letter that tried to be stable everywhere would run
  * out globally instead of per group and say less in every group for it.
  *
@@ -28,8 +28,9 @@ import { keyOf } from './archive-path.js';
  * letters gives every remaining one `@`: the badge stops distinguishing them and says so, and what
  * the row says about the artifact does not change. The palette in
  * `panel/src/components/archive/label-badge.tsx` draws it as the quietest thing on the card, and §9
- * records that a longer alphabet is a commissioned categorical ramp for Analog Horizon
- * (`ai/RULES.md` §8) rather than a fifth hue picked at the keyboard.
+ * records what #197 settled — the letters run to `Z` and the palette's four colours are cycled
+ * under them, so what runs out is the alphabet rather than the hues. What did not move is that **no
+ * badge colour may read as an outcome**.
  *
  * **The label is the archive's, never the caller's own string** (`archive-listing.ts`). It went
  * through `pathSegment` on the way into the artifact's file name, which truncates and rewrites, so
@@ -38,16 +39,50 @@ import { keyOf } from './archive-path.js';
  */
 
 /**
- * The letters a group hands out, in order, and **four is deliberate** (`docs/DESIGN.md` §9).
+ * The letters a group hands out, in order — **twenty-six letters on four colours** (`docs/DESIGN.md`
+ * §9, #197).
  *
  * Analog Horizon has three accent families plus `error`, and §5 already spends the tertiary green,
  * the primary-container blue and the secondary-container orange on device states — so what is left
  * that reads as a *category* rather than as an outcome is three `-fixed` steps and one neutral.
- * There is no honest fifth hue, which is why the overflow below is a first-class case.
+ * That arithmetic is still true and still binds the **colours**. What it never justified is a limit
+ * on **letters**: a letter is drawn in text and says which label it is on its own, so the alphabet
+ * costs the palette nothing and `label-badge.tsx` draws each letter on the colour its position
+ * modulo four picks. Four letters was an assumption about arity that #182 read into a conclusion
+ * about colour, and one real group filing nine labels is what showed it up.
  */
-export const LABEL_LETTERS = ['A', 'B', 'C', 'D'] as const;
+export const LABEL_LETTERS = [
+	'A',
+	'B',
+	'C',
+	'D',
+	'E',
+	'F',
+	'G',
+	'H',
+	'I',
+	'J',
+	'K',
+	'L',
+	'M',
+	'N',
+	'O',
+	'P',
+	'Q',
+	'R',
+	'S',
+	'T',
+	'U',
+	'V',
+	'W',
+	'X',
+	'Y',
+	'Z',
+] as const;
 
-/** What every distinct label past the fourth takes. It names nothing, and that is what it says. */
+/**
+ * What every distinct label past the twenty-sixth takes. It names nothing, and that is what it says.
+ */
 export const OVERFLOW_LETTER = '@';
 
 export type LabelLetter = (typeof LABEL_LETTERS)[number] | typeof OVERFLOW_LETTER;
@@ -74,8 +109,9 @@ export function lettersOfGroup(group: ArchiveGroup): ReadonlyMap<string, LabelLe
 	for (const run of group.runs) {
 		for (const artifact of run.artifacts) {
 			if (!letters.has(artifact.label)) {
-				// `.at` rather than an index, so the fifth label's `undefined` is in the type and the
-				// overflow is a branch the compiler knows about rather than one it takes on trust.
+				// `.at` rather than an index, so the twenty-seventh label's `undefined` is in the type
+				// and the overflow is a branch the compiler knows about rather than one it takes on
+				// trust.
 				letters.set(artifact.label, LABEL_LETTERS.at(letters.size) ?? OVERFLOW_LETTER);
 			}
 		}

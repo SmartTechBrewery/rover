@@ -107,16 +107,21 @@ Design work lives in [`DESIGN.md`](./DESIGN.md); the brief that produced the fir
    a reload and a shared link land, which is the question #165 deliberately left open. A run that
    named no group is not drawn and neither is a project with none: this view answers *what groups
    exist*, and the `All` view still lists every run. **The label badges completed it** (#182): inside
-   one group every distinct filed label takes a letter — `A`…`D`, then `@` — drawn as a round badge
+   one group every distinct filed label takes a letter — `A`…`Z`, then `@` — drawn as a round badge
    beside the artifact's name, with the letter carrying the meaning and never the colour alone, and
    the filed label reachable by hover and by screen reader. Nothing about a letter is stable across
    groups, an artifact with no label carries no badge, and no badge colour may read as an outcome.
-   `docs/DESIGN.md` §9 records all of it, including which of *design it* and *settle it here* was
-   chosen and why, and that a longer alphabet is a commissioned categorical ramp rather than a
-   colour picked at the keyboard.
-   `docs/DESIGN.md` §9 records what it settled, including the cost that shapes it — an authenticated
-   byte route cannot be an `<img src>`, so the panel fetches the bytes with the session header and
-   renders an object URL, and the whole artifact is therefore buffered in the tab.
+   **The alphabet is the whole of it because #197 reversed the four-letter limit in place**: that
+   limit was a conclusion about *colour* applied to *letters*, and one real group filing nine labels
+   made five of nine badges read `@`. The letters now run to `Z` on the palette's same four colours,
+   cycled family-first so neighbouring letters are always different families; `@` moves to past the
+   twenty-sixth and keeps its meaning. What did not move is that no badge colour may read as an
+   outcome, and that a **new hue** would still be a commissioned categorical ramp rather than a
+   colour picked at the keyboard. `docs/DESIGN.md` §9 records all of it — which of *design it* and
+   *settle it here* was chosen and why, the reversal with its reason rewritten in place, and the
+   cost that shapes the preview: an authenticated byte route cannot be an `<img src>`, so the panel
+   fetches the bytes with the session header and renders an object URL, and the whole artifact is
+   therefore buffered in the tab.
 6. **Live lease state** — **done** (#113). A held card carries the `owner`, the `project`, the
    `test_name` and the grant instant, with a countdown to the expiry that ticks once a second and
    **goes back up** when activity renews the lease (`PROJECT.md` D8) — verified against a running
@@ -139,10 +144,26 @@ Design work lives in [`DESIGN.md`](./DESIGN.md); the brief that produced the fir
    named, revocable per-user credentials (`rover users add/list/revoke/rotate`, R27–R28) precisely
    so a panel has individual accounts to manage instead of one secret everyone shares. Kept separate
    from `owner`, exactly as the daemon already keeps them separate (D20).
-9. **Before/after diff view** — list the two most recent `<lease-id>` folders under one
-   `test_name` and show them side by side. This is the reason `test_name` is deliberately not
-   unique (`PROJECT.md` D22) — the panel does no work to find the pair, the archive's shape already
-   puts them next to each other.
+9. **Before/after comparison view** — **done** (#199), and **corrected in place**: this item used
+   to say *list the two most recent `<lease-id>` folders under one `test_name`*, which predates
+   #150. The key is not recency under a test name; it is **`groupId` + `label`**. A lease names a
+   group and files an artifact under a label (`PROJECT.md` R41), and `list_archive_groups` answers
+   which runs share a group and which of their artifacts share a label — so *these two are the same
+   thing at two moments* is a claim the caller made and the host recorded, rather than something
+   recency has to stand in for. That is stronger than the original key in both directions: two arms
+   of one investigation are ordinarily *sibling test names*
+   (`statistics-deliveries_variantA` / `…_variantB`), which the old wording could not pair at all,
+   and two unrelated recent runs under one test name are no longer paired just for being recent.
+   The load-bearing half of this item survives unchanged and is why it was ever written here: **the
+   panel does no work to find the set** — the archive's own shape plus one bounded walk put them
+   next to each other, and the card is a pure function over that one answer with no second request.
+   **D22 and D24 stand and are not contradicted**: `test_name` is still deliberately not unique, a
+   path component is still opaque, and the label is still the archive's own filed string rather than
+   the caller's. What is built is the Testing groups view's comparison card
+   (`docs/DESIGN.md` §9): one label names it, one pane per artifact filed under that label in that
+   group, side by side, oldest run on the left. **Two is the common case and nothing caps it** — a
+   group may hold seven runs — and there is no diff, no score and no verdict, because the comparison
+   is visual and human-judged (`ai/RULES.md` §1).
 10. **Archive disk usage / retention view** — how much space the archive is using, and, once a
     retention policy exists (`PROJECT.md` §9.4 — still undecided), a manual prune action.
 11. **MCP config generator** — after registering a project, a ready-to-paste MCP server

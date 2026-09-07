@@ -143,9 +143,9 @@ export type SearchArchiveResult = z.infer<typeof SearchArchiveResultSchema>;
  * carrying no label is absent from the run's list rather than present with a `null`.
  *
  * **What draws one is the groups view's label badge** (#182): the distinct labels of one group are
- * lettered `A`…`D`, with `@` past the fourth, by `group-labels.ts`. The letter is a code local to
- * one group and this string is the thing that means something, which is why it travels with every
- * badge as an accessible name and a `title`.
+ * lettered `A`…`Z`, with `@` past the twenty-sixth, by `group-labels.ts`. The letter is a code
+ * local to one group and this string is the thing that means something, which is why it travels
+ * with every badge as an accessible name and a `title`.
  */
 const ArchiveGroupArtifactSchema = z.object({
 	path: z.array(z.string()),

@@ -74,6 +74,12 @@ const { host, HANGS } = vi.hoisted(() => ({
 		artifacts: [] as unknown[],
 		/** What the byte route answers for an artifact, media type included. */
 		artifact: { outcome: 'missing' } as unknown,
+		/**
+		 * One answer per artifact **file name**, for the comparison card — N panes each read their
+		 * own address, and which pane drew what is half of what is worth asserting (#199). Anything
+		 * not named here falls back to {@link host.artifact}.
+		 */
+		artifactByName: {} as Record<string, unknown>,
 		/** Every text `search_archive` was asked about — one per settled text, never per keystroke. */
 		searches: [] as unknown[],
 		/** What the host answers a search with. */
@@ -86,6 +92,11 @@ const { host, HANGS } = vi.hoisted(() => ({
 		groupings: 0,
 		/** What the host answers the grouping walk with. */
 		groups: { outcome: 'listed', groups: [], truncated: false } as unknown,
+		/**
+		 * A gate the grouping walk waits behind, so one case can watch this screen while the walk is
+		 * still out and again once it answers — the deep-link case the comparison card has (#199).
+		 */
+		groupsGate: null as null | Promise<void>,
 		/** Accepts every request and never answers it — the state before the first answer. */
 		hangs: false,
 	},
@@ -118,6 +129,9 @@ vi.mock('@panel/session/session-provider.js', () => {
 		host.groupings += 1;
 		if (host.hangs || host.groups === HANGS) {
 			return await new Promise(() => undefined);
+		}
+		if (host.groupsGate !== null) {
+			await host.groupsGate;
 		}
 		return { ok: true, value: { type: 'result', result: host.groups } };
 	};
@@ -152,7 +166,7 @@ vi.mock('@panel/session/session-provider.js', () => {
 				if (host.hangs) {
 					return await new Promise(() => undefined);
 				}
-				return { ok: true, value: host.artifact };
+				return { ok: true, value: host.artifactByName[path.at(-1) ?? ''] ?? host.artifact };
 			},
 		}),
 	};
@@ -208,8 +222,24 @@ const GROUP = 'app-bar-top-space';
 const OTHER_GROUP = 'basket-total';
 const SERIAL = 'R5CT30ABCDE';
 
-function groupRun(testName: string, run: string, serial = SERIAL) {
-	return { path: ['checkout-app', testName, run, serial], artifacts: [] };
+/**
+ * One run of a group, as the answer carries it — **and its labelled artifacts, when a case has
+ * any** (#199). Every existing case passes none, so nothing above the comparison card changes.
+ */
+function groupRun(
+	testName: string,
+	run: string,
+	serial = SERIAL,
+	labels: Readonly<Record<string, string>> = {},
+) {
+	const path = ['checkout-app', testName, run, serial];
+	return {
+		path,
+		artifacts: Object.entries(labels).map(([name, label]) => ({
+			path: [...path, 'screenshots', name],
+			label,
+		})),
+	};
 }
 
 /**
@@ -296,6 +326,8 @@ beforeEach(() => {
 	host.file = { outcome: 'missing' };
 	host.fileByName = {};
 	host.artifact = { outcome: 'missing' };
+	host.artifactByName = {};
+	host.groupsGate = null;
 	host.hangs = false;
 });
 
@@ -1696,6 +1728,204 @@ describe('the testing groups view', () => {
 		await grouped(undefined);
 
 		expect(screen.getByText(/More is filed here than the host could examine/)).toBeDefined();
+	});
+});
+
+/**
+ * **The comparison card** (#199) — the one row of this screen's table the two views do not share.
+ *
+ * A lease names a group and files an artifact under a label, and the same label on an artifact of
+ * two runs is the caller saying *these two are the same thing at two moments* (#150, R41). Selecting
+ * such an artifact in this view stands them side by side, oldest run on the left. Everything else —
+ * an artifact with no label, a label only one run filed, the `All` view at any depth — draws the
+ * single preview it always drew, so an archive that never used labels sees no change at all.
+ */
+describe('a labelled artifact open in the testing groups view', () => {
+	const SERIAL_LEVEL = ['checkout-app', 'login-flow', RUN, SERIAL];
+	const OLDER_SERIAL_LEVEL = ['checkout-app', 'login-flow', OLDER, 'emulator-5554'];
+	const SCREENSHOTS = [...SERIAL_LEVEL, 'screenshots'];
+	/** The label both arms filed, and the one only the newer arm did. */
+	const LABEL = 'home-baseline';
+	const ONE_ARM_ONLY = 'home-after';
+	/** The three files in the newer run's folder: labelled, labelled once, and not labelled at all. */
+	const COMPARED = [...SCREENSHOTS, '001_screenshot.png'];
+	const ALONE = [...SCREENSHOTS, '002_screenshot.png'];
+	const UNLABELLED = [...SCREENSHOTS, '003_screenshot.png'];
+	/** The older arm's artifact under the same label — never listed, only ever answered. */
+	const OLDER_COMPARED = [...OLDER_SERIAL_LEVEL, 'screenshots', '001_screenshot.png'];
+
+	const PNG = {
+		outcome: 'read',
+		mediaType: 'image/png',
+		bytes: new Blob(['the-png-bytes'], { type: 'image/png' }),
+	};
+
+	/** The archive above, plus the newer run's own folder. */
+	function withScreenshots(): Record<string, unknown> {
+		return {
+			...archive(),
+			[JSON.stringify(SCREENSHOTS)]: listed(
+				{ kind: 'file', name: '001_screenshot.png', sizeBytes: 421_112 },
+				{ kind: 'file', name: '002_screenshot.png', sizeBytes: 398_004 },
+				{ kind: 'file', name: '003_screenshot.png', sizeBytes: 12_004 },
+			),
+		};
+	}
+
+	/** The grouping answer with labels on it — the same two runs of the same group as everywhere. */
+	function labelled(): unknown {
+		return {
+			outcome: 'listed',
+			truncated: false,
+			groups: [
+				{
+					project: 'checkout-app',
+					groupId: GROUP,
+					// The host's own ascending order, oldest first.
+					runs: [
+						groupRun('login-flow', OLDER, 'emulator-5554', {
+							'001_screenshot.png': LABEL,
+						}),
+						groupRun('login-flow', RUN, SERIAL, {
+							'001_screenshot.png': LABEL,
+							'002_screenshot.png': ONE_ARM_ONLY,
+						}),
+					],
+				},
+				{ project: 'checkout-app', groupId: OTHER_GROUP, runs: [groupRun('basket', RUN)] },
+			],
+		};
+	}
+
+	/** One archive address of the newer run, as this view's own splat — the group id put back in. */
+	function splatFor(address: readonly string[]): string {
+		return ['checkout-app', GROUP, ...address.slice(1)].join('/');
+	}
+
+	beforeEach(() => {
+		host.groups = labelled();
+		host.artifact = PNG;
+	});
+
+	it('stands the label’s artifacts side by side, oldest run on the left', async () => {
+		const { container } = await grouped(splatFor(COMPARED), withScreenshots());
+
+		const card = besideTheTree(container);
+		// The label names the card, and it is the label as the archive filed it.
+		expect(card.getByRole('heading', { level: 2 }).textContent).toBe(LABEL);
+		const panes = [...(container.querySelectorAll('article') ?? [])];
+		expect(panes).toHaveLength(2);
+		// Oldest → newest, left to right: the departure from *most recent first*, drawn.
+		expect(panes[0]?.textContent).toContain(OLDER);
+		expect(panes[1]?.textContent).toContain(RUN);
+	});
+
+	/*
+	 * **`host.artifacts` is exactly the pane addresses**, in the archive's own path vocabulary with
+	 * no group id in it — and the selected address is **not read twice**, because the screen's own
+	 * hook is gated on the comparison.
+	 */
+	it('reads each pane’s own artifact once, and the selected one no second time', async () => {
+		await grouped(splatFor(COMPARED), withScreenshots());
+
+		expect(host.artifacts).toEqual([OLDER_COMPARED, COMPARED]);
+	});
+
+	// The header claims the order out loud, the way *most recent first* is claimed one level up —
+	// and the badge is still absent, at this depth as at every other in this view.
+	it('describes the card, and still carries no badge', async () => {
+		const { container } = await grouped(splatFor(COMPARED), withScreenshots());
+
+		expect(
+			screen.getByText('The artifacts filed under this label in this group, oldest first.'),
+		).toBeDefined();
+		expect(container.textContent).not.toContain('One artifact from this run');
+		expect(container.textContent).not.toContain('archived');
+	});
+
+	/*
+	 * **The tree is still beside it and the run's cards are still nowhere** (#160). This is one more
+	 * state of the one card, not a second screen — and the breadcrumb is a path rather than a label,
+	 * with the `<serial>` in no segment of it (§11's list of what the reference screen got wrong).
+	 */
+	it('is one state of this screen: the tree beside it, the path in the trail', async () => {
+		const { container } = await grouped(splatFor(COMPARED), withScreenshots());
+
+		expect(container.querySelector('aside')).not.toBeNull();
+		expect(container.textContent).not.toContain('Run Details');
+		expect(container.textContent).not.toContain('DEVICE — FROM device_info.json');
+		const trail = document.querySelector('nav[aria-label="Breadcrumb"]');
+		expect(trail?.querySelector('li:last-child > *')?.textContent).toBe(
+			'screenshots/001_screenshot.png',
+		);
+		expect(trail?.textContent).toContain(GROUP);
+		expect(trail?.textContent).not.toContain(SERIAL);
+	});
+
+	// One pane is not a comparison, so a label only this run filed draws the preview it always drew.
+	it('draws the single preview for a label only one run filed', async () => {
+		const { container } = await grouped(splatFor(ALONE), withScreenshots());
+
+		expect(besideTheTree(container).getByRole('heading', { level: 2 }).textContent).toBe(
+			'002_screenshot.png',
+		);
+		expect(container.querySelectorAll('article')).toHaveLength(0);
+		expect(screen.getByText('One artifact from this run, as it was written.')).toBeDefined();
+		expect(host.artifacts).toEqual([ALONE]);
+	});
+
+	// And an artifact the answer filed under no label at all — the common case, unchanged.
+	it('draws the single preview for an artifact with no label', async () => {
+		const { container } = await grouped(splatFor(UNLABELLED), withScreenshots());
+
+		expect(besideTheTree(container).getByRole('heading', { level: 2 }).textContent).toBe(
+			'003_screenshot.png',
+		);
+		expect(host.artifacts).toEqual([UNLABELLED]);
+	});
+
+	// **The `All` view is untouched.** Its rows carry no label by construction, so the same file
+	// there is the single preview at every depth — and the grouping walk is not even asked for.
+	it('leaves the All view showing the single preview for the same file', async () => {
+		const { container } = await showing(COMPARED.join('/'), withScreenshots());
+
+		expect(container.querySelectorAll('article')).toHaveLength(0);
+		expect(besideTheTree(container).getByRole('heading', { level: 2 }).textContent).toBe(
+			'001_screenshot.png',
+		);
+		expect(host.groupings).toBe(0);
+	});
+
+	/*
+	 * **A deep link does not wait on the grouping walk** — this screen's own rule (`Content`), so
+	 * the single preview is drawn from the first frame and becomes the comparison when the walk
+	 * answers. The cost is one artifact read repeated, which is stated rather than worked around.
+	 */
+	it('browses while the grouping walk is out, then draws the comparison when it answers', async () => {
+		let answer: () => void = () => undefined;
+		host.groupsGate = new Promise<void>((resolve) => {
+			answer = resolve;
+		});
+		at.splat = splatFor(COMPARED);
+		host.answers = new Map(Object.entries(withScreenshots()));
+		const { container } = render(<ArchiveScreen view="groups" />);
+		for (let turn = 0; turn < 6; turn += 1) {
+			await act(async () => undefined);
+		}
+
+		// The single preview, with no wait: the address below the `<serial>` is fully in the URL.
+		expect(container.querySelectorAll('article')).toHaveLength(0);
+		expect(screen.queryByText("Reading the testing groups on this host's archive.")).toBeNull();
+		expect(host.artifacts).toEqual([COMPARED]);
+
+		answer();
+		for (let turn = 0; turn < 6; turn += 1) {
+			await act(async () => undefined);
+		}
+
+		expect(container.querySelectorAll('article')).toHaveLength(2);
+		// And the one duplicate read the deep link costs, rather than a third address.
+		expect(host.artifacts).toEqual([COMPARED, OLDER_COMPARED, COMPARED]);
 	});
 });
 

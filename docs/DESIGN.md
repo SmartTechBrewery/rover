@@ -1128,7 +1128,7 @@ answer is not a fourth empty-handed state.
 
 **Settled in this document rather than by a Stitch round**, and which of the two was chosen is said
 out loud because §1 requires it — the same call the arrangement above it is: the row anatomy and the
-card are already fixed, so a design round would have settled a five-swatch palette out of a system
+card are already fixed, so a design round would have settled a four-colour palette out of a system
 this document can read directly, and `ai/RULES.md` §8 is explicit that an agent's deliverable there
 is a prompt rather than a generated screen.
 
@@ -1140,8 +1140,8 @@ saying *these two are the same thing at two moments*. What the tree draws for it
 monospace face — sitting **between the row's glyph and its name**. That is the whole of the row's
 change: nothing else about a row moves, and a row without a badge is the row it was.
 
-**The letters are per group.** Every distinct filed label in one group takes a letter — `A`, `B`,
-`C`, `D` — in the order the host answered them, and **the same label carries the same letter
+**The letters are per group.** Every distinct filed label in one group takes a letter — `A`
+through `Z` — in the order the host answered them, and **the same label carries the same letter
 everywhere it appears in that group**. Nothing about a letter is stable across groups: the same
 string in a second group takes whatever that group's own order gives it, and a reader who carries a
 letter from one group to another has read something the badge never said. Inside one group it is
@@ -1153,8 +1153,10 @@ followed what is drawn would give one group two alphabets.
 **Overflow is `@`, and it is a first-class case rather than a corner.** A group holding more distinct
 labels than there are letters gives every remaining one `@`. The badge stops distinguishing them
 there and **the row does not**: the artifact's own name is unchanged, and each `@` still names its
-own filed label. Four letters is what this palette can honestly carry, and saying so is better than
-a fifth swatch nobody could tell from the fourth.
+own filed label. What runs out at the twenty-seventh distinct label is the **alphabet**, not the
+palette — the four colours are cycled under the letters — and a group that files twenty-seven
+distinct labels is asking the badge for a vocabulary a single letter cannot carry, so saying so is
+better than a twenty-seventh glyph nobody could read at 18px.
 
 **The letter carries the meaning, never the colour alone.** Every badge says which label it is in
 text, so the fill is a second channel for something already written — the rule §5's status LED keeps
@@ -1168,22 +1170,35 @@ genuinely unrecoverable — the rule this section already states for `OWNER`.
 the tree it is today. And the badge is **not a control**: the row is one `<Link>` and stays one
 target (#175), so this is an element inside it and never a second thing to click.
 
-**The palette — four letters, then `@`.**
+**The palette — four colours, cycled.** A letter's fill is its position in the alphabet modulo
+four, so the four families take the letters family-first:
 
-| letter | fill | text | reads as |
+| letters | fill | text | reads as |
 | --- | --- | --- | --- |
-| `A` | `bg-primary-fixed` | `text-on-primary-fixed` | pale lavender |
-| `B` | `bg-secondary-fixed` | `text-on-secondary-fixed` | pale peach |
-| `C` | `bg-tertiary-fixed` | `text-on-tertiary-fixed` | mint |
-| `D` | `bg-inverse-surface` | `text-inverse-on-surface` | neutral |
+| `A`, `E`, `I`, `M`, `Q`, `U`, `Y` | `bg-primary-fixed` | `text-on-primary-fixed` | pale lavender |
+| `B`, `F`, `J`, `N`, `R`, `V`, `Z` | `bg-secondary-fixed` | `text-on-secondary-fixed` | pale peach |
+| `C`, `G`, `K`, `O`, `S`, `W` | `bg-tertiary-fixed` | `text-on-tertiary-fixed` | mint |
+| `D`, `H`, `L`, `P`, `T`, `X` | `bg-inverse-surface` | `text-inverse-on-surface` | neutral |
 | `@` | `bg-surface-container-highest` | `text-on-surface-variant` | the quietest thing on the card |
 
 **Every colour comes from `panel/src/tokens.css`** (§1, `ai/RULES.md` §8), and
 `tests/unit/panel/tokens-are-the-source-of-truth.test.ts` fails loudly on a hex written in a
-component. `A`…`D` are four light fills carrying dark text, which is what makes them read at badge
+component. The four are light fills carrying dark text, which is what makes them read at badge
 size against `surface-container`; `@` is the one that inverts — a dark fill a shade off the card,
 carrying the light text the tree's quiet lines already use — and that is deliberate, because it
 distinguishes nothing and should not ask to be looked at.
+
+**Adjacent letters never carry one colour**, and cycling family-first is what makes that true by
+construction rather than by inspection: two letters next to each other in the alphabet are always
+two different accent families, and two steps of one family always sit exactly four letters apart.
+The first cycle is byte-identical to what #182 shipped, so nothing about a group of four or fewer
+labels changed. **The closest pair in the set is a cycle boundary** — `D`'s `bg-inverse-surface`
+(`#e2e2e6`) beside `E`'s `bg-primary-fixed` (`#dde1ff`), which differ chiefly in the blue channel —
+and since every adjacency inside a cycle is strong (lavender/peach, peach/mint, mint/neutral),
+*every* weak pair in the whole alphabet is one of these boundaries. A per-cycle step that widens
+them, so two letters of one family read as one hue at two levels, is the follow-up phase and is
+**not built**; until it is, the letter is what tells `D` from `E`, which is the rule this section
+states anyway.
 
 **No badge colour may read as an outcome.** §5 already spends `bg-tertiary` green on *a free
 device*, `bg-primary-container` blue on *held* and `secondary-container` orange on *warning*, and
@@ -1192,23 +1207,221 @@ the three §5 gives a meaning to, and **no two of them can pair into a red/green
 `A` beside a red `B` is precisely the pass/fail semantics Rover does not have (§2,
 `ai/RULES.md` §1), and this palette is chosen to make it unavailable rather than discouraged.
 
-**Why four, and how to get more.** Analog Horizon has three accent families plus `error`, and three
-of its steps already mean something — so there is no honest fifth hue in it, and the arithmetic is
-the reason for `@` rather than an excuse for it. A longer alphabet is a **commissioned categorical
-ramp** for Analog Horizon, through the operator's own Stitch round (§1, `ai/RULES.md` §8): a set of
-swatches that are equal in weight and mean *different*, not *better* or *worse*. That is its own
-piece of work, and picking a fifth colour at the keyboard is the thing it exists instead of.
+**Why four colours and twenty-six letters** (reversed in place, #197 — the original conclusion is
+kept because the record of what was considered is most of its value).
+
+*What #182 concluded.* Analog Horizon has three accent families plus `error`, and three of its steps
+already mean something — so there is no honest fifth hue in it, four letters is what the palette can
+honestly carry, and the arithmetic is the reason for `@` rather than an excuse for it. A longer
+alphabet would be a **commissioned categorical ramp** for Analog Horizon, through the operator's own
+Stitch round (§1, `ai/RULES.md` §8): swatches equal in weight, meaning *different* and never *better*
+or *worse*.
+
+*Why it was wrong.* The conclusion was about **colour** and was applied to **letters**. Nothing
+makes those the same count: a letter is drawn in text and is the channel this section already says
+carries the meaning, so a fifth letter costs the palette nothing at all. R41 enforces no arity on
+labels either, and real use went straight past four — one label per screen, nine distinct labels in
+one group (`statistics-deliveries`, a before/after of a Compose migration), so five of nine badges
+read `@` and for most of that group the badge distinguished nothing. Four was an assumption about
+arity the archive never made.
+
+*What replaces it.* The letters run `A`…`Z` and the same four colours are **cycled** under them,
+family-first, so `@` moves to past the twenty-sixth distinct label and keeps its meaning exactly —
+*this one is not being distinguished*. No new colour, token or CSS was needed to do it.
+
+*What survives, unchanged.* **No badge colour may read as an outcome.** `error` stays excluded
+outright, §5's three device-state steps (tertiary green, primary-container blue,
+secondary-container orange) stay unavailable, and no two badges can pair into a red/green verdict.
+The commissioned-ramp rule also survives for what it was actually about: a **new hue** is the
+operator's Stitch round and never a swatch picked at the keyboard. A *derived* step of a token is a
+different thing — `panel/src/index.css` already derives from `--color-surface-container-lowest`,
+`--color-primary` and `--color-secondary-container` through `color-mix` — which is why the per-cycle
+modulation is a follow-up rather than a thing this section forbids.
 
 **What is deliberately absent, and why.**
 
 - **No badge in the `All` view.** A letter is defined only inside a group and the `All` view has no
   group context, so a badge there would be a code with no key. It is said here rather than left to
   be discovered.
-- **No legend.** Four letters and a hover that names each one is the whole vocabulary; a legend
-  would be a second, staler copy of what every badge already says.
+- **No legend.** A letter and a hover that names it is the whole vocabulary; a legend would be a
+  second, staler copy of what every badge already says.
 - **No filter by label, no compare-these-two control, and nothing that ranks or scores an artifact**
   (`ai/RULES.md` §1). A label is a caller's claim that two artifacts are the same thing at two
   moments; what to make of them is the agent's judgement and not Rover's.
+
+### The comparison card — settled here, not designed (#199)
+
+**Settled in this document rather than by a Stitch round**, and which of the two was chosen is said
+out loud because §1 requires it — but the call is a different one from the two above it, because
+this card *has* a screen. `Compare — Visual Diff (V2)` (`897632dcadce44de9bdee74a94da14f5`) is the
+one remaining uncorrected screen in the project (§11), and the operator decided **not** to run a
+correction round for this work. So it is used as a **layout reference only**: the layout comes from
+it and everything else from this section and the corrected Archive screens.
+
+**What is taken from it**: a horizontal split of panes, each pane headed by the artifact's own name
+in a bordered chip, the runs' identity stated above the artifacts.
+
+**What is not, and none of it is reproduced**: the `SUCCESS` chip, the `PASS` log line, `COMPLETE`,
+the green ticks and red crosses, the words *Visual Regression*, the `RUN A (BASELINE)` /
+`RUN B (CURRENT)` vocabulary, the `HASH` and `BRANCH` rows, `SWAP`, `RESYNC SCROLL`, the second
+navigation bar and its global `FORCE_RELEASE`, the mid-sidebar `Profile`, the per-arm orange/green
+pane borders, the simulated phone status bar and the `object-cover` crop. §11 already lists most of
+them; the last two are this section's own rules — the clean region, and *never stretched and never
+cropped*.
+
+**When it is drawn.** The groups view, an address inside a run that the parent listing says is a
+file, a label the answer filed it under, and **two or more artifacts under that label in the same
+`(project, groupId)`**. Everything else is the single preview, unchanged:
+
+| the selection | the card |
+| --- | --- |
+| a labelled artifact, ≥ 2 artifacts under that label in the group | the comparison card |
+| a labelled artifact, only one run in the group filed it | the preview — **one pane is not a comparison** |
+| an artifact the answer filed under no label | the preview |
+| any artifact in the **`All` view**, at any depth | the preview — that view's rows carry no label by construction |
+
+So **an archive that never used labels sees no change at all**, and the `All` view is untouched.
+`panel/src/archive/label-comparison.ts` is the whole of that decision — a pure function over the
+same `list_archive_groups` answer the arrangement and the badges already come out of, unit-tested on
+its own, with no second request, no second cache and no host change.
+
+**One pane per labelled artifact, not per run** — which in the common case, one artifact per label
+per run, is the same thing. Nothing enforces arity (R41), so an arm may file one label three times;
+all three are panes, in the answer's own order and adjacent, because drawing the first of them would
+drop evidence and invent a selection the archive never made (D22). Each pane says which run it is,
+so two panes naming one run read as two artifacts of one run rather than as two runs.
+
+**Oldest on the left, newest on the right — and this is the one exception to *most recent first* on
+this screen.** The panes read left to right chronologically, so a before/after reads as a
+before/after. The tree and every level listing keep most-recent-first, unchanged, and **both
+directions live in `panel/src/archive/level-order.ts`** (`mostRecentFirst`, `oldestFirst`) so no
+pane holds a second opinion about either.
+
+**It is a sort rather than a reversal, and that is not a detail.** `list_archive_groups` walks a
+group's test names in name order and each test name's runs chronologically inside it, and a group's
+whole point is that its arms are *sibling test names* (`statistics-deliveries_variantA`,
+`…_variantB`) — so the answer's order is not chronological across a group, and `mostRecentFirst`
+reversed would have ordered the arms by name and only then by time. **Sorting is still not parsing**
+(D22): the key is the run directory's own name in **code-unit** order, which is chronological by
+construction for the reason this section already gives — a lease directory leads with a UTC
+basic-format timestamp precisely so that it sorts chronologically as text
+(`src/daemon/archive-path.ts`). No component is decomposed, no `Date` is constructed, and never
+`localeCompare`, whose answer would depend on the reader's locale. The sort is stable, so two names
+that compare equal keep the answer's order.
+
+**Two is the common case and nothing caps N.** A group may hold seven runs (R41), so the row takes
+however many panes the answer gives it. Each pane is `basis-0 grow` with a floor of `min-w-[240px]`;
+past that the **row** scrolls inside the card, which is the other half of `ContentsCard`'s `min-w-0
+overflow-hidden` and of the row beside the tree being two fractions that shrink into the gutter
+(#172). **The page body must never scroll horizontally**, and does not.
+
+**The floor was settled in a browser rather than derived**, as #172's fractions were. At 1280 the
+card is 554px, 550px inside its border and 518px inside the row's own `p-4`, so two panes and one
+`--gutter` have to come to that — and 260px did not: it overflowed by 22px and scrolled the common
+case. Measured in headless Chrome on the built card at 900px tall, with a 1080x2400 portrait
+screenshot in every pane:
+
+| window | tree / card | 2 panes | 3, 7 and 9 panes |
+| --- | --- | --- | --- |
+| 1280 | 369.56 / 554.44 | 249.22px each, no scroll | 240px each, the row scrolls |
+| 1440 | 433.58 / 650.42 | 297.20px each, no scroll | 240px each, the row scrolls |
+| 1728 | 503.97 / 756.03 | 350.02px each, no scroll | 240px each, the row scrolls |
+
+No horizontal page scroll at any of them, with two panes or with nine. The screenshot came out 415px
+tall in a 240px pane and 569px in a 350px one, so inside a pane it is `max-w-full` that bounds it and
+`max-h-[70vh]` only takes over once a pane is wide — the same 569px #140 measured for the single
+preview.
+
+**The label is what names the card**, in the card's own `CardHeading` under a `LABEL` caption in the
+`Field` label's treatment. It is the label **as the archive filed it** and never the caller's own
+string, which `pathSegment` truncated and rewrote irreversibly — the rule this section already states
+for `OWNER`, and the one `group-labels.ts` states for the badge. Nothing else is in that strip: no
+count, no chip, no glyph, no control.
+
+**The badge is not on this card.** A letter is a code local to one group (above); the card says the
+label itself, which is the thing that has a meaning. There is no legend either, for the reason the
+badges have none.
+
+**A pane's anatomy**, top to bottom:
+
+- the **run directory's own name**, in full and `break-words`, as the run panel's `font-code-md
+  font-bold` `<h3>`;
+- **`TEST NAME`**, **`OWNER`** and **`GRANTED`** as three stacked `Field`s — stacked rather than in
+  the run panel's three-across grid, because a pane at the floor has no room for a grid. The identity
+  is the directory name decomposed at the **first and the last** hyphen (`run-identity.ts`, never
+  `split('-')`, because `pr-127-review` is one owner); `OWNER` is the directory's own text and is
+  never presented as the caller's string (D20, D22); `GRANTED` is reformatted textually and is what
+  lets a reader check *oldest on the left* for themselves. A name that does not decompose reads
+  `unknown` in both, with the name still in full. `TEST NAME` and never a bare `TEST` — that is the
+  field's real name (D22) and it is the thing two arms of one investigation differ by;
+- the **artifact's own file name**, in the reference screen's chip treatment;
+- **`Open in a new window`**, the existing recessive control, unchanged: absent for `opaque`, no
+  `download` attribute, a view rather than a transfer (§10). It is on the pane because selecting a
+  labelled artifact in this view no longer draws the single preview, and a full-size look is the one
+  thing §11 says the preview genuinely needs;
+- then the **body**, which is whatever the host's own content type says the file is
+  (`panel/src/archive/artifact-body.ts`), so a labelled recording and a labelled `read_logs` compare
+  the way a screenshot does and `opaque` still creates no object URL and still says its one sentence.
+
+**One body view, shared** (`panel/src/components/archive/artifact-body-view.tsx`, extracted out of
+`artifact-preview.tsx` by this change with the DOM unchanged). *Three bodies share one frame* and
+*there is not a second extension table in the panel* are exactly the rules a second copy of that
+switch would break: a labelled recording drawn differently from an unlabelled one is the failure, and
+it would not look like one until somebody labelled a recording.
+
+**What this card must not do**, and every one of these is asserted:
+
+- **no diff, no score, no verdict, no highlight of what changed.** The comparison is visual and
+  human-judged (`docs/DESIGN_INITIAL_PROMPT.md` §4): Rover puts the artifacts next to each other and
+  the person decides, because judging is the agent's job (`ai/RULES.md` §1);
+- **nothing that reads as an outcome** — no `PASS`/`SUCCESS`/`COMPLETE` chip, no tick, no cross, no
+  red/green pairing, and not the words *Visual Regression* (§2, §5);
+- **no `BASELINE` / `CURRENT` framing.** Neither arm is authoritative; Rover has no baseline. The
+  panes are one treatment, so no arm is framed in a colour the other is not — which is also why the
+  reference screen's orange/green pane borders are not reproduced;
+- **no fact Rover does not have** — no commit hash and no git branch. What the archive knows is the
+  project, the test name, the run's own directory name, the device serial, `device_info.json` and the
+  run's own `test_description.json`;
+- **no second navigation, no global `FORCE_RELEASE`**, and the breadcrumb stays a path rather than a
+  label, with the `<serial>` in no segment of it (§11's list);
+- **no zoom, pan, rotate, filmstrip or next/previous, and no picker.** The tree is how another
+  artifact is chosen (#160) and this card does not become a second explorer.
+
+**No sync scroll, and no control for one** — decided explicitly rather than by default, because the
+reference screen has a `RESYNC SCROLL` button and a control is a thing this card would otherwise not
+have. An artifact contained at `70vh` has nothing to scroll, and a control that does nothing is worse
+than none (§3). A text pane scrolls inside its own body, independently, exactly as the single
+preview's does.
+
+**Every colour is a token** (§1, `ai/RULES.md` §8) and there is no `@keyframes` and no `animate-*`
+anywhere on it; `tests/unit/panel/tokens-are-the-source-of-truth.test.ts` and
+`no-looping-animation.test.ts` stay green.
+
+**The address is unchanged**, so a reload and a shared link land on this same card. There is no new
+route, no new query parameter and no second navigation to reach it: it is one more thing the one card
+beside the tree draws at an address the screen already had.
+
+**Panel-only, and no host change.** `list_archive_groups` already answers, for each group, its runs
+and each grouped run's labelled artifacts together with the filed label (`src/ipc/methods.ts`,
+`panel/src/archive/archive-groups.ts`). No new method, no new sidecar, no archive-path change, and
+nothing about what the archive writes moves — the property #178 and #182 both kept.
+
+**Three costs, stated rather than hidden.**
+
+- **N panes is N buffered artifacts.** An authenticated byte route cannot be an `<img src>` (below),
+  so the whole of each artifact is buffered in the tab. Each pane is a component owning its own
+  `useArchivedArtifact`, because that hook is one address per instance and hooks cannot be called in
+  a variable-length loop — which is also what carries the object-URL lifecycle over verbatim rather
+  than re-deriving it. Each pane is keyed on its artifact's own address, so a pane whose address
+  changes is a new component and the URL it held is revoked by the unmount.
+- **A deep link that outruns the grouping walk reads one artifact twice.** An address below the
+  `<serial>` does not wait on the walk — this screen's own rule (`routes/archive.tsx`, `Content`) —
+  so the single preview is drawn and reads the selected file, and the comparison replaces it when the
+  walk answers, reading the panes. The ordinary path, a reader who opened the view and clicked down,
+  has the answer long before an artifact is selected.
+- **The selected artifact is read once when the comparison *is* drawn**, because the screen's own
+  hook is gated on it. Without that gate the file would be read by the screen and again by its own
+  pane.
 
 ### The tree — expansion is an open set, over the selection's own ancestors
 
@@ -1475,6 +1688,12 @@ ever parsed to decide either** (D22).
   **One helper decides it for both panes** (`panel/src/archive/level-order.ts`): they list the same
   run directories side by side, and a pane that kept the host's order beside one that reversed read
   as two different lists.
+  **The comparison card is the one exception, and it is the only one** (#199): its panes read oldest
+  → newest, left to right, so a before/after reads as a before/after. The tree and every level
+  listing are unchanged, and `level-order.ts` still decides **both** directions — `mostRecentFirst`
+  for these levels and `oldestFirst` for that card — so the exception is named in one place rather
+  than being a rule some pane quietly reversed. See *The comparison card* below for why it is a sort
+  there and a reversal here.
 - **A legacy `unlabeled/` directory lists like any other folder.** It was the fallback for a lease
   taken without a `test_name` before #129 required one (D22); nothing on this screen knows the word,
   and a run filed under it browses like any other.
@@ -2271,6 +2490,16 @@ top of this file). Do not commission a Stitch screen for them.
   view is an address, the group-first level table, what is deliberately absent from it, and its
   three empty-handed answers. The label badges inside that view are the one part still to come, and
   they are a palette and a letter — the third-list test applies to them too.
+- **The groups view's comparison card — done** (#199). It belongs here for the reason the two
+  entries above it do, with one difference worth writing down: this one *had* a screen, and it was
+  used as a **layout reference only**. `Compare — Visual Diff (V2)` is the one remaining uncorrected
+  screen (below) and the operator decided not to run a correction round for this work, so the layout
+  came from it and everything else from §9 and the corrected Archive screens — and the screen's
+  listed problems became the list of what was deliberately not reproduced. What it settled is written
+  into §9 above: when the card is drawn and when the single preview still is, one pane per labelled
+  artifact and why, *oldest on the left* as this screen's one order exception and why it is a sort,
+  the pane floor with the widths it was measured at, the pane's anatomy, the shared body view, and
+  the three costs of N panes.
 - **The Archive preview's rules, and what it deliberately does not offer — done** (#133). They were
   settled here by #131, before there was a screen, and settling them at that point was deliberate:
   #131 is what made them decisions about the *host's answer* rather than about one panel's markup.
@@ -2305,8 +2534,12 @@ top of this file). Do not commission a Stitch screen for them.
     refusal, exactly as every other unauthenticated request to it does.
 
 **The one remaining uncorrected screen is `Compare — Visual Diff (V2)`
-(`897632dcadce44de9bdee74a94da14f5`).** The Archive screens were corrected and are settled in §9;
-this one was not. `Run Detail — Artifacts (V2)` (`36b54fbe032449d8a300ea0825bbf1c8`) was the other,
+(`897632dcadce44de9bdee74a94da14f5`) — and the code no longer waits on its correction** (#199). The
+operator decided not to run a correction round for the comparison card, so the card was built from
+§9 with this screen as a **layout reference only**, and the known problems listed below are exactly
+the list of what was not reproduced. What a correction round would still buy is a corrected screen
+in the project; nothing in the panel is blocked on one. The Archive screens were corrected and are
+settled in §9; this one was not. `Run Detail — Artifacts (V2)` (`36b54fbe032449d8a300ea0825bbf1c8`) was the other,
 and it is **retired by #133** rather than waiting for a correction: the preview beside the run does
 everything it was for (§9). Known problems with the remaining one, from a first pass: pass/fail
 semantics are back (a `SUCCESS` chip, `PASS` in a log, green ticks and red crosses beside runs in the

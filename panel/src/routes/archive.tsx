@@ -17,6 +17,7 @@ import { type ArchiveSearch, useArchiveSearch } from '@panel/archive/archive-sea
 import { useArchivedArtifact } from '@panel/archive/artifact.js';
 import { type ArchivedDeviceInfo, useArchivedDeviceInfo } from '@panel/archive/device-info.js';
 import { groupRowsAt, groupRunSerial } from '@panel/archive/group-tree.js';
+import { comparisonAt, type LabelComparison } from '@panel/archive/label-comparison.js';
 import { type OpenBranches, useOpenBranches } from '@panel/archive/open-branches.js';
 import {
 	type ArchivedTestDescription,
@@ -29,6 +30,7 @@ import {
 	type TreeSource,
 } from '@panel/archive/tree-source.js';
 import { ArtifactPreview } from '@panel/components/archive/artifact-preview.js';
+import { ComparisonCard } from '@panel/components/archive/comparison-card.js';
 import {
 	ArchiveNotReadable,
 	CardHeading,
@@ -183,8 +185,31 @@ export function ArchiveScreen({ view }: { readonly view: ArchiveView }) {
 	 * go through the one hook that owns the address and the one-request rule (`archived-file.ts`).
 	 */
 	const description = useArchivedTestDescription(runLevel);
-	/** The open artifact's own bytes. `null` while the address is a folder, or not yet classified. */
-	const artifact = useArchivedArtifact(open === 'artifact' ? address : null);
+	/*
+	 * **What a selected labelled artifact is comparable with** (#199, `label-comparison.ts`), or
+	 * `null` everywhere there is nothing to compare: the whole `All` view, an artifact with no label,
+	 * and a label only one run in the group filed — one pane is not a comparison.
+	 *
+	 * It is computed **here** rather than in `Preview` because the artifact hook has to be gated on
+	 * it: with the comparison drawn, each pane reads its own artifact, and the screen reading the
+	 * selected one as well would read that file twice.
+	 *
+	 * **A deep link while the grouping walk is still out draws the single preview**, becoming the
+	 * comparison once the walk answers. That is this screen's own established rule rather than an
+	 * exception made here — *a deep group address browses while the grouping walk is still out*
+	 * ({@link Content}) — and the cost is that one artifact read is repeated in that case. The
+	 * ordinary path, a reader who opened the view and clicked down to the artifact, has the answer
+	 * long before an artifact is selected.
+	 */
+	const comparison =
+		view === 'groups' && inRun && open === 'artifact' && groups.status === 'listed'
+			? comparisonAt(groups.groups, selected[0] ?? '', selected[1] ?? '', address)
+			: null;
+	/**
+	 * The open artifact's own bytes. `null` while the address is a folder, not yet classified, or
+	 * drawn by the comparison card — whose panes each own their own read of their own address.
+	 */
+	const artifact = useArchivedArtifact(open === 'artifact' && comparison === null ? address : null);
 	/*
 	 * **The tree card's search, held here rather than in the card** (#146). It stays here now that
 	 * there is one arrangement (#160): the state outlives an address change either way, and the
@@ -204,7 +229,7 @@ export function ArchiveScreen({ view }: { readonly view: ArchiveView }) {
 		<>
 			<PageHeader
 				trail={trailFor(view, selected)}
-				description={descriptionFor(view, selected, open)}
+				description={descriptionFor(view, selected, open, comparison)}
 				aside={
 					/*
 					 * The toggle is the one thing in this row that is always there; the badge still comes
@@ -221,6 +246,7 @@ export function ArchiveScreen({ view }: { readonly view: ArchiveView }) {
 			<Content
 				artifact={artifact}
 				branches={branches}
+				comparison={comparison}
 				description={description}
 				device={device}
 				groups={groups}
@@ -264,6 +290,7 @@ function Content({
 	description,
 	open,
 	artifact,
+	comparison,
 	search,
 }: {
 	readonly view: ArchiveView;
@@ -283,6 +310,8 @@ function Content({
 	/** Which of the three the address turned out to be — {@link OpenEntry}. */
 	readonly open: OpenEntry;
 	readonly artifact: ReturnType<typeof useArchivedArtifact>;
+	/** What the open artifact is comparable with, or `null` when nothing is — {@link ComparisonCard}. */
+	readonly comparison: LabelComparison | null;
 	/** The tree card's search — `undefined` in the groups view, which draws no field (#181). */
 	readonly search: ArchiveSearch | undefined;
 }) {
@@ -316,6 +345,7 @@ function Content({
 			<DirectoryTree branches={branches} search={search} selected={selected} source={source} />
 			<Preview
 				artifact={artifact}
+				comparison={comparison}
 				description={description}
 				device={device}
 				groups={groups}
@@ -339,11 +369,18 @@ function Content({
  * | a run | `RunPanel` |
  * | a directory below the `<serial>` | that level's `LevelContents`, which is what the `<serial>` already draws |
  * | an artifact | `ArtifactPreview` **alone** — the run's identity and device cards are not beside it |
+ * | an artifact **with a filed label, in the groups view** | `ComparisonCard` — one pane per artifact of this group under that label, oldest run left (#199) |
  * | an address nobody has answered for | {@link ReadingThisAddress}, claiming neither |
  *
  * **The preview holds one thing at a time, and the tree is what keeps the reader placed.** The run's
  * two cards used to stand beside it, from a layout where opening a file took the tree away; the tree
  * is there now, so the column beside it is the artifact and nothing else.
+ *
+ * **The comparison card is the one row of this table the two views do not share** (#199). It is
+ * drawn in the groups view alone, for an artifact the answer filed under a label that a second run
+ * in the same group also filed — everything else, the `All` view at every depth included, draws the
+ * single preview it always drew. `comparisonAt` is what decides, and the screen has already asked it
+ * ({@link ArchiveScreen}), because the artifact hook is gated on the answer.
  *
  * **The group-only depths are the same table one row up** (#181). A project's groups and a group's
  * test names are levels of an arrangement rather than of the filesystem, so their listing comes out
@@ -361,6 +398,7 @@ function Preview({
 	description,
 	open,
 	artifact,
+	comparison,
 }: {
 	readonly view: ArchiveView;
 	readonly selected: readonly string[];
@@ -371,13 +409,19 @@ function Preview({
 	readonly description: ArchivedTestDescription;
 	readonly open: OpenEntry;
 	readonly artifact: ReturnType<typeof useArchivedArtifact>;
+	/** The artifacts this one is comparable with, or `null` when there is nothing to compare. */
+	readonly comparison: LabelComparison | null;
 }) {
 	const depths = depthsOf(view);
 	const address = view === 'groups' ? archiveAddressOf(selected) : selected;
 
 	if (selected.length >= depths.below) {
 		if (open === 'artifact') {
-			return <ArtifactPreview artifact={artifact} path={address} />;
+			return comparison !== null ? (
+				<ComparisonCard comparison={comparison} />
+			) : (
+				<ArtifactPreview artifact={artifact} path={address} />
+			);
 		}
 		if (open === 'unanswered') {
 			return <ReadingThisAddress path={selected} />;
@@ -724,6 +768,17 @@ const GROUP_DESCRIPTIONS = [
 const ONE_ARTIFACT = 'One artifact from this run, as it was written.';
 
 /**
+ * And the comparison card's own line, which **claims the order out loud** the way *most recent
+ * first* is claimed one level up (#199) — the reversal is the whole point of the card, so it is said
+ * rather than left to be inferred from two timestamps.
+ *
+ * Deliberately *the artifacts filed under this label* rather than *every artifact*: the grouping walk
+ * is bounded and may have been cut short, and the tree already carries that sentence beside this
+ * card. Nothing in it is a verdict, a count or a claim about what changed.
+ */
+const ONE_LABEL_COMPARED = 'The artifacts filed under this label in this group, oldest first.';
+
+/**
  * The line for one address inside a run, and **`unanswered` gets the run's own line rather than the
  * artifact's** (#140 review).
  *
@@ -731,15 +786,27 @@ const ONE_ARTIFACT = 'One artifact from this run, as it was written.';
  * arrives nobody has made it — a deep link into a folder read that sentence about a directory for as
  * long as the listing took. The run's line is true of everything under a run either way, so it is
  * what the header says until the answer decides between the other two.
+ *
+ * **And an artifact with something to compare gets a third line** (#199), because the card beside it
+ * is not one artifact: it is every artifact of this group under one label. The header follows the
+ * card rather than the depth, which is the rule this function already keeps for the other two.
  */
-function descriptionFor(view: ArchiveView, selected: readonly string[], open: OpenEntry): string {
+function descriptionFor(
+	view: ArchiveView,
+	selected: readonly string[],
+	open: OpenEntry,
+	comparison: LabelComparison | null,
+): string {
 	const depths = depthsOf(view);
 	const lines = view === 'groups' ? GROUP_DESCRIPTIONS : DESCRIPTIONS;
 	if (selected.length >= depths.below) {
 		if (open === 'unanswered') {
 			return lines[depths.run] ?? '';
 		}
-		return open === 'directory' ? (lines[depths.run + 1] ?? '') : ONE_ARTIFACT;
+		if (open === 'directory') {
+			return lines[depths.run + 1] ?? '';
+		}
+		return comparison !== null ? ONE_LABEL_COMPARED : ONE_ARTIFACT;
 	}
 	return lines[Math.min(selected.length, lines.length - 1)] ?? '';
 }
