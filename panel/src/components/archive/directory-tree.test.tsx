@@ -12,28 +12,48 @@ import { fireEvent, render, screen, within } from '@testing-library/react';
 import type { AnchorHTMLAttributes, ReactNode } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-// `breadcrumb.test.tsx`'s shape: a `Link` is a plain anchor, so the tree renders with no router
-// instance. The splat's own encoding is asserted against a real router in `archive-path.test.tsx`.
+/*
+ * `breadcrumb.test.tsx`'s shape: a `Link` is a plain anchor, so the tree renders with no router
+ * instance. The splat's own encoding is asserted against a real router in `archive-path.test.tsx`.
+ *
+ * **It keeps the one half of the real `Link` a row's own click depends on** (#198): the real one
+ * calls `preventDefault` and routes instead, so the anchor's `onClick` — which is the open set's
+ * toggle — runs without jsdom being asked to navigate. A row is still one target and there is still
+ * nothing nested in it.
+ */
 vi.mock('@tanstack/react-router', () => ({
 	Link: ({
 		to,
 		params,
 		children,
+		onClick,
 		...rest
 	}: {
 		to: string;
 		params?: { _splat?: string };
 		children: ReactNode;
 	} & AnchorHTMLAttributes<HTMLAnchorElement>) => (
-		// The trailing slash an **empty** splat leaves is dropped, because the real router drops it:
-		// closing a project goes to the root (#175), and `/archive` is the address it emits for it —
+		// The trailing slash an **empty** splat leaves is dropped, because the real router drops it —
 		// pinned against a real router in `archive-path.test.tsx` rather than believed of this mock.
-		<a href={`${to.replace('$', '')}${params?._splat ?? ''}`.replace(/\/$/, '')} {...rest}>
+		<a
+			href={`${to.replace('$', '')}${params?._splat ?? ''}`.replace(/\/$/, '')}
+			onClick={(event) => {
+				event.preventDefault();
+				onClick?.(event);
+			}}
+			{...rest}
+		>
 			{children}
 		</a>
 	),
 }));
 
+import {
+	expandedIn,
+	type OpenBranches,
+	type OpenNodes,
+	openedBy,
+} from '@panel/archive/open-branches.js';
 import { allRowSource, groupRowSource } from '@panel/archive/tree-source.js';
 import { DirectoryTree } from './directory-tree.js';
 
@@ -125,22 +145,67 @@ function found(matches: readonly ArchiveSearchMatch[], truncated = false): Archi
 	return { status: 'searched', matches, truncated };
 }
 
+/** Every address a row's click reported as toggled, in order — the open set's own gesture (#198). */
+const toggled: string[] = [];
+
+/**
+ * The open set as the screen holds it, scripted the way {@link searching} scripts the search: the
+ * state is given and the setter is recorded.
+ *
+ * **It defaults to what a fresh mount seeds** — every prefix of the address, which is the tree the
+ * derived rule drew — so every case that predates #198 renders the tree it always did. A case about
+ * *two* open branches passes its own set.
+ */
+function branchesFor(
+	selected: readonly string[],
+	open: OpenNodes = openedBy(selected),
+): OpenBranches {
+	return {
+		isOpen: (address) => expandedIn(open, selected, address),
+		toggle: (address) => toggled.push(keyOf(address)),
+	};
+}
+
 function showing(
 	selected: readonly string[],
 	levels: ArchiveLevels = archive(),
 	search: ArchiveSearch = searching(NOT_SEARCHING),
+	branches: OpenBranches = branchesFor(selected),
 ) {
 	// The `All` view's source, which is what every case below browses (#181). The groups view's is
 	// the same component over a second source, and is asserted through the screen in
 	// `routes/archive.test.tsx`.
 	return render(
-		<DirectoryTree search={search} selected={selected} source={allRowSource(levels)} />,
+		<DirectoryTree
+			branches={branches}
+			search={search}
+			selected={selected}
+			source={allRowSource(levels)}
+		/>,
 	);
 }
 
 function rows(container: HTMLElement): readonly HTMLElement[] {
 	return [...container.querySelectorAll('a')];
 }
+
+/** One row by the name it draws — and a failure rather than `undefined` when there is no such row. */
+function rowNamed(container: HTMLElement, name: string): HTMLElement {
+	const row = rows(container).find((candidate) => candidate.textContent === name);
+	if (row === undefined) {
+		throw new Error(`no row named ${name}`);
+	}
+	return row;
+}
+
+function href(container: HTMLElement, name: string): string | null {
+	return rowNamed(container, name).getAttribute('href');
+}
+
+// One test's clicks must never be another's, the way the search field's recorded text is not.
+beforeEach(() => {
+	toggled.length = 0;
+});
 
 describe('the tree', () => {
 	it('draws the root level, and nothing under a sibling off the selected path', () => {
@@ -155,15 +220,15 @@ describe('the tree', () => {
 	});
 
 	/*
-	 * The lazy-expansion assertion, in DOM terms. A node is expanded exactly when it is a prefix of
-	 * the selection, so `payments-web` has no children drawn — nothing was read for it, and nothing
-	 * ever will be until it is selected.
+	 * The lazy-expansion assertion, in DOM terms — over the set a fresh mount seeds, which is the
+	 * address's own branch and nothing else (#198). So `payments-web` has no children drawn: nothing
+	 * was read for it, and nothing will be until somebody opens it.
 	 *
-	 * **And every row that opens something now says which it is** (#175). The tree told assistive
-	 * technology nothing about openness while the triangle was the only thing that carried it, and
-	 * the row is a toggle since collapsing landed on it.
+	 * **And every row that opens something says which it is** (#175), reporting the state it is drawn
+	 * in. The tree told assistive technology nothing about openness while the triangle was the only
+	 * thing that carried it, and the row is a toggle.
 	 */
-	it('expands only the selected path, and says so on every row that opens something', () => {
+	it('expands the address’s own branch, and says so on every row that opens something', () => {
 		const { container } = showing(['checkout-app', 'login-flow']);
 
 		const names = rows(container).map((row) => row.textContent);
@@ -204,57 +269,167 @@ describe('the tree', () => {
 	});
 
 	/*
-	 * **A shut row goes to its own level; an open one goes to the node above it** (#175, rewritten in
-	 * place). That second half is the whole of collapsing: clicking an open node lands one level up,
-	 * where the rule above draws it closed — and nothing is stored to make it happen.
+	 * **Every row goes to its own address, open or shut** (#198, reversing #175's one-level-up
+	 * destination in place). One selection reaching a file six components deep draws an open row at
+	 * every depth that has a level under it — a project, a test name, a run, a directory inside the
+	 * run and a directory inside that — and not one of them links anywhere but at itself.
 	 */
-	it('links a shut row to its own level and an open row to the node above it', () => {
-		const { container } = showing(['checkout-app']);
+	it('links every row to its own address, at every depth and whether it is open or shut', () => {
+		const { container } = showing([...FRAMES, '0001.png']);
 
-		const href = (name: string) =>
-			rows(container)
-				.find((row) => row.textContent === name)
-				?.getAttribute('href');
-		expect(href('login-flow')).toBe('/archive/checkout-app/login-flow');
-		// `checkout-app` is the selection and is open, so clicking it again is a click back to the
-		// archive root — the tree's own way of closing a project.
-		expect(href('checkout-app')).toBe('/archive');
+		const address = (components: readonly string[]) => `/archive/${components.join('/')}`;
+		expect(href(container, 'checkout-app')).toBe(address(['checkout-app']));
+		expect(href(container, 'login-flow')).toBe(address(['checkout-app', 'login-flow']));
+		expect(href(container, RUN)).toBe(address(RUN_PATH));
+		expect(href(container, 'recordings')).toBe(address([...SERIAL_LEVEL, 'recordings']));
+		expect(href(container, '001_frames')).toBe(address(FRAMES));
+		// And the shut rows at those same depths, which is the address they always had.
+		expect(href(container, 'payments-web')).toBe(address(['payments-web']));
+		expect(href(container, OLDER)).toBe(address(['checkout-app', 'login-flow', OLDER]));
+		expect(href(container, 'screenshots')).toBe(address([...SERIAL_LEVEL, 'screenshots']));
 	});
 
 	/**
-	 * **The collapse is the same at every depth that has a level under it** (#175, AC 2). One
-	 * selection reaching a file six components deep draws an open row at every one of them — a
-	 * project, a test name, a run, a directory inside the run and a directory inside that — and each
-	 * of them goes to the node it is drawn under. The run's contents close onto the **run**, because
-	 * the `<serial>` is not a level of this tree and no row of it stands for that address.
+	 * **The collapse is the same at every depth that has a level under it** (#175's gesture, #198's
+	 * shape — AC 3). What a click reports is *that row's own branch*, at every one of the five depths
+	 * above, and the run's contents are no exception: the open set is keyed by the row's address, so
+	 * the `<serial>` the tree hops on the way down needs no matching hop on the way up.
 	 */
-	it('closes an open row onto the node it is drawn under, at every depth', () => {
+	it('reports a click on an open row as that row’s own branch, at every depth', () => {
 		const { container } = showing([...FRAMES, '0001.png']);
 
-		const href = (name: string) =>
-			rows(container)
-				.find((row) => row.textContent === name)
-				?.getAttribute('href');
-		const address = (components: readonly string[]) => `/archive/${components.join('/')}`;
-		expect(href('checkout-app')).toBe('/archive');
-		expect(href('login-flow')).toBe(address(['checkout-app']));
-		expect(href(RUN)).toBe(address(['checkout-app', 'login-flow']));
-		expect(href('recordings')).toBe(address(RUN_PATH));
-		expect(href('001_frames')).toBe(address([...SERIAL_LEVEL, 'recordings']));
-		// And a shut row at those same depths still goes to itself, so opening is untouched.
-		expect(href('payments-web')).toBe(address(['payments-web']));
-		expect(href(OLDER)).toBe(address(['checkout-app', 'login-flow', OLDER]));
-		expect(href('screenshots')).toBe(address([...SERIAL_LEVEL, 'screenshots']));
+		for (const name of ['checkout-app', 'login-flow', RUN, 'recordings', '001_frames']) {
+			fireEvent.click(rowNamed(container, name));
+		}
+
+		expect(toggled).toEqual([
+			keyOf(['checkout-app']),
+			keyOf(['checkout-app', 'login-flow']),
+			keyOf(RUN_PATH),
+			keyOf([...SERIAL_LEVEL, 'recordings']),
+			keyOf(FRAMES),
+		]);
+	});
+
+	// A shut row's click is the same one gesture: it opens that branch and selects it, which is the
+	// single click a folder has always taken.
+	it('reports a click on a shut row as that row’s own branch too', () => {
+		const { container } = showing(['checkout-app']);
+
+		fireEvent.click(rowNamed(container, 'payments-web'));
+
+		expect(toggled).toEqual([keyOf(['payments-web'])]);
+	});
+
+	/*
+	 * **And a modifier-click toggles nothing**, because the router declines it too and lets the
+	 * browser take the address to a new tab. Reading a second file beside the one already open must
+	 * not collapse the branch in the tab being left behind — the two halves of one gesture ride on
+	 * one click.
+	 */
+	it('toggles nothing on a click the router leaves to the browser', () => {
+		const { container } = showing(['checkout-app']);
+
+		fireEvent.click(rowNamed(container, 'payments-web'), { metaKey: true });
+		fireEvent.click(rowNamed(container, 'payments-web'), { ctrlKey: true });
+		fireEvent.click(rowNamed(container, 'payments-web'), { shiftKey: true });
+		fireEvent.click(rowNamed(container, 'payments-web'), { button: 1 });
+
+		expect(toggled).toEqual([]);
+	});
+
+	/**
+	 * **Opening a node leaves every already-open branch open** (AC 1), which is the whole of #198 —
+	 * and it is true at any depth, so this set has a second *top-level* row open and a directory
+	 * open inside the first one's run.
+	 */
+	it('draws two branches open at once, at every depth', () => {
+		const { container } = showing(
+			['checkout-app', 'login-flow'],
+			archive({
+				[keyOf(['payments-web'])]: listed(directory('refund-flow', 2)),
+			}),
+			searching(NOT_SEARCHING),
+			branchesFor(
+				['checkout-app', 'login-flow'],
+				new Set(
+					[
+						[],
+						['checkout-app'],
+						['checkout-app', 'login-flow'],
+						RUN_PATH,
+						[...SERIAL_LEVEL, 'screenshots'],
+						['payments-web'],
+					].map(keyOf),
+				),
+			),
+		);
+
+		const names = rows(container).map((row) => row.textContent);
+		// The first branch, all the way down into the run's own contents.
+		expect(names).toContain('device_info.json');
+		expect(names).toContain('recordings');
+		// And the second top-level row's, which the old rule could not have drawn at the same time.
+		expect(names).toContain('refund-flow');
+		expect(href(container, 'refund-flow')).toBe('/archive/payments-web/refund-flow');
+		expect(rowNamed(container, 'payments-web').getAttribute('aria-expanded')).toBe('true');
+	});
+
+	/**
+	 * **The one thing that must not regress** (AC 4, #160): the selection is drawn in the tree
+	 * whatever the open set holds. An address arrived at by a deep link, a breadcrumb, the back
+	 * button or a search hit is a selection nobody clicked their way down to — so the set holds none
+	 * of its ancestors, and every one of them is drawn expanded all the same.
+	 */
+	it('draws every ancestor of the selection expanded with an empty open set', () => {
+		const selected = [...FRAMES, '0001.png'];
+		const { container } = showing(
+			selected,
+			archive(),
+			searching(NOT_SEARCHING),
+			branchesFor(selected, new Set()),
+		);
+
+		const selectedRows = rows(container).filter((row) => row.className.includes('border-tertiary'));
+		expect(selectedRows).toHaveLength(1);
+		expect(selectedRows[0]?.textContent).toBe('0001.png');
+		for (const name of ['checkout-app', 'login-flow', RUN, 'recordings', '001_frames']) {
+			expect(rowNamed(container, name).getAttribute('aria-expanded')).toBe('true');
+		}
+	});
+
+	/**
+	 * **And closing the selected node leaves the row drawn** — it is its children that go, not it.
+	 * That is what makes closing a node the reader is standing on a legitimate state rather than the
+	 * one the floor above forbids: the card beside the tree draws that node, and the tree draws the
+	 * row it is drawing the card for.
+	 */
+	it('draws the selected row shut, and still draws it, once the reader has closed it', () => {
+		const selected = ['checkout-app', 'login-flow'];
+		const { container } = showing(
+			selected,
+			archive(),
+			searching(NOT_SEARCHING),
+			branchesFor(selected, new Set([[], ['checkout-app']].map(keyOf))),
+		);
+
+		const row = rowNamed(container, 'login-flow');
+		expect(row.getAttribute('aria-expanded')).toBe('false');
+		expect(row.className).toContain('border-tertiary');
+		expect(rows(container).map((candidate) => candidate.textContent)).not.toContain(RUN);
 	});
 
 	// A row that opens nothing gains nothing: the selected file is still a link to itself, so
-	// clicking it a second time is the no-op it has always been.
+	// clicking it a second time is the no-op it has always been — and it toggles nothing, because
+	// there is no branch under it to be in either state.
 	it('leaves a row that opens nothing linking to itself', () => {
 		const { container } = showing([...FRAMES, '0001.png']);
 
-		const leaf = rows(container).find((row) => row.textContent === '0001.png');
-		expect(leaf?.getAttribute('href')).toBe(`/archive/${[...FRAMES, '0001.png'].join('/')}`);
-		expect(leaf?.getAttribute('aria-expanded')).toBeNull();
+		const leaf = rowNamed(container, '0001.png');
+		expect(leaf.getAttribute('href')).toBe(`/archive/${[...FRAMES, '0001.png'].join('/')}`);
+		expect(leaf.getAttribute('aria-expanded')).toBeNull();
+		fireEvent.click(leaf);
+		expect(toggled).toEqual([]);
 	});
 });
 
@@ -384,10 +559,13 @@ describe('what a row may carry', () => {
 		expect(container.textContent).not.toContain(SERIAL);
 		expect(container.textContent).not.toContain('device_info.json');
 		expect(container.textContent).not.toContain('0 ');
-		// It gains nothing from #175 either: no state to claim, and clicking it is the selection it
-		// has always been rather than a collapse of a level that is not there.
+		// It gains nothing from #175 or #198 either: no state to claim, no branch to toggle, and
+		// clicking it is the selection it has always been rather than a collapse of a level that is
+		// not there.
 		expect(run?.getAttribute('aria-expanded')).toBeNull();
 		expect(run?.getAttribute('href')).toBe(`/archive/${RUN_PATH.join('/')}`);
+		fireEvent.click(rowNamed(container, RUN));
+		expect(toggled).toEqual([]);
 	});
 
 	// The tree's own quiet line, one level deeper: the run is expanded, and what is under it has not
@@ -764,10 +942,11 @@ describe('the hits a search draws', () => {
 	});
 
 	/*
-	 * **The searched tree does not collapse** (#175). Every node in it is an address the host
-	 * answered with and is drawn expanded by construction, so there is no node it is drawn *under* to
-	 * close onto — a hit goes to its own address whatever it is drawing beneath it. It still says it
-	 * is open, because it is.
+	 * **The searched tree does not collapse** (#175, and #198 left it alone). Every node in it is an
+	 * address the host answered with and is drawn expanded by construction, so there is nothing under
+	 * it to open and nothing to close: a hit goes to its own address whatever it is drawing beneath
+	 * it, and it is **not in the open set** — clicking it toggles nothing. It still says it is open,
+	 * because it is.
 	 */
 	it('links an expanded hit to its own address all the same, and says it is open', () => {
 		const { container } = showing(['checkout-app'], archive(), hits());
@@ -775,6 +954,8 @@ describe('the hits a search draws', () => {
 		const parent = rows(container).find((row) => row.textContent === 'screenshots');
 		expect(parent?.getAttribute('href')).toBe(`/archive/${DEEP.slice(0, 5).join('/')}`);
 		expect(parent?.getAttribute('aria-expanded')).toBe('true');
+		fireEvent.click(rowNamed(container, 'screenshots'));
+		expect(toggled).toEqual([]);
 		// And a hit with nothing under it claims no state, exactly as a browsing leaf does.
 		expect(
 			rows(container)
@@ -919,7 +1100,11 @@ describe('the label badges', () => {
 
 	function showingGroups(selected: readonly string[], runs: readonly ArchiveGroupRun[]) {
 		return render(
-			<DirectoryTree selected={selected} source={groupRowSource(answer(runs), levelsFor(runs))} />,
+			<DirectoryTree
+				branches={branchesFor(selected)}
+				selected={selected}
+				source={groupRowSource(answer(runs), levelsFor(runs))}
+			/>,
 		);
 	}
 
@@ -1039,10 +1224,12 @@ describe('the label badges', () => {
 			[keyOf(['checkout-app', A_VARIANT]), listed(directory(RUN, 1, SERIAL))],
 			...levelsFor(runs),
 		]);
+		const selected = ['checkout-app', A_VARIANT, RUN, SERIAL, SHOTS];
 		const { container } = render(
 			<DirectoryTree
+				branches={branchesFor(selected)}
 				search={searching(NOT_SEARCHING)}
-				selected={['checkout-app', A_VARIANT, RUN, SERIAL, SHOTS]}
+				selected={selected}
 				source={allRowSource(levels)}
 			/>,
 		);

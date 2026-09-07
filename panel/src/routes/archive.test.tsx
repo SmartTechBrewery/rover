@@ -9,17 +9,32 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
  */
 const { at } = vi.hoisted(() => ({ at: { splat: undefined as string | undefined } }));
 vi.mock('@tanstack/react-router', () => ({
+	/*
+	 * It keeps the one half of the real `Link` a row's click depends on (#198): the real one calls
+	 * `preventDefault` and routes instead, so the anchor's `onClick` — the open set's toggle — runs
+	 * without jsdom being asked to navigate. Nothing here moves `useParams`, so a click in this file
+	 * toggles a branch and leaves the address where the test put it, which is what isolates the open
+	 * set from the selection.
+	 */
 	Link: ({
 		to,
 		params,
 		children,
+		onClick,
 		...rest
 	}: {
 		to: string;
 		params?: { _splat?: string };
 		children: ReactNode;
 	} & AnchorHTMLAttributes<HTMLAnchorElement>) => (
-		<a href={`${to.replace('$', '')}${params?._splat ?? ''}`} {...rest}>
+		<a
+			href={`${to.replace('$', '')}${params?._splat ?? ''}`}
+			onClick={(event) => {
+				event.preventDefault();
+				onClick?.(event);
+			}}
+			{...rest}
+		>
 			{children}
 		</a>
 	),
@@ -383,6 +398,99 @@ describe('what the screen asks the host for', () => {
 		await showing('checkout-app/login-flow');
 
 		expect(host.files).toEqual([]);
+	});
+});
+
+/**
+ * **Opening a node closes nothing, and costs exactly the level it draws** (#198).
+ *
+ * These are the only cases in this file that click a **row** rather than render an address: what is
+ * under test is the open set, which the mocked `useParams` deliberately leaves the address out of —
+ * so a click here toggles a branch and the selection stays where the test put it, which is what
+ * isolates the two halves of one gesture. Where the click *goes* is asserted through the `href` of
+ * every row, and the toggle's own rule in `panel/src/archive/open-branches.test.ts`.
+ */
+describe('opening a second branch', () => {
+	/** A second project with a level of its own, so both branches have something to draw. */
+	function twoProjects(): Record<string, unknown> {
+		return { ...archive(), '["payments-web"]': listed(directory('refund-flow', 2)) };
+	}
+
+	/** One row of the tree, clicked the way a reader clicks it — and settled afterwards. */
+	async function clickRow(name: string) {
+		const tree = document.querySelector('aside') as HTMLElement;
+		fireEvent.click(within(tree).getByRole('link', { name }));
+		for (let turn = 0; turn < 6; turn += 1) {
+			await act(async () => undefined);
+		}
+	}
+
+	// AC 1, at the top level: the first branch is still open, all of it, and the second is open
+	// beside it. Under the derived rule this was unreachable — one selection is one path.
+	it('leaves the first branch open, at the root', async () => {
+		await showing(undefined, twoProjects());
+
+		await clickRow('checkout-app');
+		await clickRow('payments-web');
+
+		expect(treeRows()).toEqual([
+			'checkout-app',
+			'login-flow',
+			'unlabeled',
+			'payments-web',
+			'refund-flow',
+		]);
+	});
+
+	// AC 6: one `list_archive` per level actually drawn — the root, then exactly one per click, in
+	// the order they were opened, and nothing for a level nobody opened.
+	it('asks for exactly the level each click draws', async () => {
+		await showing(undefined, twoProjects());
+		expect(host.asked).toEqual([[]]);
+
+		await clickRow('checkout-app');
+		expect(host.asked).toEqual([[], ['checkout-app']]);
+
+		await clickRow('payments-web');
+		expect(host.asked).toEqual([[], ['checkout-app'], ['payments-web']]);
+	});
+
+	// And closing reads nothing: a second click on an open row takes its level off the screen, and
+	// nothing under it is asked for again when it comes back.
+	it('reads nothing when a branch closes, or when it opens again', async () => {
+		await showing(undefined, twoProjects());
+		await clickRow('checkout-app');
+		await clickRow('payments-web');
+
+		await clickRow('checkout-app');
+		expect(treeRows()).toEqual(['checkout-app', 'payments-web', 'refund-flow']);
+		expect(host.asked).toEqual([[], ['checkout-app'], ['payments-web']]);
+
+		await clickRow('checkout-app');
+		expect(treeRows()).toEqual([
+			'checkout-app',
+			'login-flow',
+			'unlabeled',
+			'payments-web',
+			'refund-flow',
+		]);
+		expect(host.asked).toEqual([[], ['checkout-app'], ['payments-web']]);
+	});
+
+	/*
+	 * **Both views draw one tree, so this is not a view's choice** (AC 2, #181). The groups view's
+	 * rows come from the grouping answer above a run, and two groups under one project open beside
+	 * each other exactly as two projects do — with no `list_archive` at all, because no level of that
+	 * arrangement is a listing.
+	 */
+	it('does the same in the groups view, over the same open set', async () => {
+		await grouped('checkout-app');
+
+		await clickRow(GROUP);
+		await clickRow(OTHER_GROUP);
+
+		expect(treeRows()).toEqual(['checkout-app', GROUP, 'login-flow', OTHER_GROUP, 'basket']);
+		expect(host.asked).toEqual([]);
 	});
 });
 
@@ -1466,10 +1574,11 @@ describe('the testing groups view', () => {
 		for (const row of tree?.querySelectorAll('a') ?? []) {
 			expect(row.getAttribute('href')).toMatch(/^\/groups(\/|$)/);
 		}
-		// The open folder's own row goes one level up, which is how clicking it a second time
-		// closes it (#175) — and that address is a `/groups` one too.
+		// The open folder's own row goes to its own address, which is where every row goes since
+		// #198 — clicking it a second time closes it through the open set rather than by landing one
+		// level up (#175's gesture, this issue's destination) — and that address is a `/groups` one.
 		expect(screen.getByRole('link', { name: 'screenshots' }).getAttribute('href')).toBe(
-			`/groups/checkout-app/${GROUP}/login-flow/${RUN}`,
+			`/groups/checkout-app/${GROUP}/login-flow/${RUN}/${SERIAL}/screenshots`,
 		);
 		expect(document.querySelector('nav[aria-label="Breadcrumb"]')?.textContent).toContain(GROUP);
 	});

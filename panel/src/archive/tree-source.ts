@@ -10,7 +10,7 @@ import { mostRecentFirst, orderedEntries } from './level-order.js';
  * Where the Archive screen's tree gets its rows — **the one thing the two views differ in** (#181).
  *
  * `directory-tree.tsx` draws one tree, with one row anatomy and one set of rules about what a row
- * may carry, how it expands and how clicking an open row closes it (#175). A second tree
+ * may carry, how it expands and how clicking an open row closes it (#175, #198). A second tree
  * implementation for the groups view is the failure mode the source exists to prevent: what a view
  * gets to decide is *which rows sit under which node* and *which route a row's address is on*, and
  * nothing else about a tree is a view's to choose.
@@ -26,6 +26,10 @@ import { mostRecentFirst, orderedEntries } from './level-order.js';
  * - **the label an artifact was filed under**, and the letter its group gives it (#182) — the one
  *   addition since, and it is here rather than in the component for the reason the route is: a
  *   letter is defined only inside a group, so the `All` view's rows carry none by construction.
+ * - **where a node's level is listed**, which is what {@link drawnLevels} walks (#198): the open set
+ *   is wider than the selection's prefixes, so *which levels this tree draws* stopped being
+ *   arithmetic on the address and became a question about the tree — and a question about the tree is
+ *   one answer for both views or it is two trees again.
  *
  * **A node is an address in the tree's own space, never a host path.** In the `All` view the two
  * coincide. In the groups view a node is `<project>/<groupId>/<testName>/<run>/<serial>/<…>`, and
@@ -84,12 +88,72 @@ export interface TreeSource {
 	 */
 	readonly isRunContents: (node: readonly string[]) => boolean;
 	/**
+	 * The **archive path** one node's level is listed at, or `null` for a level no `list_archive`
+	 * answers — every level of the groups arrangement above a run, which comes out of one grouping
+	 * answer rather than out of a listing.
+	 *
+	 * It is the tree's own address space on the way in and the archive's on the way out, which is the
+	 * one translation {@link drawnLevels} needs and the only thing that made it a source's answer
+	 * rather than a caller's: in the `All` view the two coincide, and in the groups view the group id
+	 * has to come out (`archiveAddressOf`).
+	 */
+	readonly listedAt: (node: readonly string[]) => readonly string[] | null;
+	/**
 	 * Whether the answer these rows come out of was cut short, so a branch may be missing.
 	 *
 	 * Always `false` for the `All` view: `list_archive` answers a whole level, so a level is either
 	 * listed or it is not. It is the groups answer that is a bounded walk with a `truncated` flag.
 	 */
 	readonly truncated: boolean;
+}
+
+/**
+ * Every level this tree **actually draws**, as the archive paths they are listed at — the whole of
+ * *still lazy* now that expansion is an open set rather than the selection's prefixes (#198).
+ *
+ * **It walks the drawn tree and nothing else.** A level is drawn under a row exactly when that row
+ * is drawn expanded, so this descends only through expanded rows and stops at the first level
+ * nothing has answered for yet: a node whose own level is still `loading` has no rows, so nothing
+ * below it can be named. That is what keeps the count *the reader's gestures* rather than *what is
+ * in the archive* — one `list_archive` per level on the screen, no pre-walk, and no request for a
+ * level nobody opened. A newly clicked row costs exactly one, because the level it is drawn in has
+ * already answered by the time there is a row in it to click.
+ *
+ * `isOpen` is the tree's own predicate (`open-branches.ts`), passed in rather than reconstructed:
+ * the levels asked for and the levels drawn have to be the same set, and two copies of that rule is
+ * how they would stop being.
+ *
+ * The run's `<serial>` hop needs no mention here. A row's level is whatever `opens` says it is, so
+ * the walk descends into that address rather than into the row's own — which is the same reason the
+ * component's recursion takes it as a value instead of computing it from a depth.
+ */
+export function drawnLevels(
+	source: TreeSource,
+	isOpen: (address: readonly string[]) => boolean,
+): readonly (readonly string[])[] {
+	const wanted: (readonly string[])[] = [];
+	const walk = (node: readonly string[]) => {
+		const level = source.rowsAt(node);
+		if (level.status !== 'listed') {
+			return;
+		}
+		for (const row of level.rows) {
+			if (row.opens === null || !isOpen(row.address)) {
+				continue;
+			}
+			const path = source.listedAt(row.opens);
+			if (path !== null) {
+				wanted.push(path);
+			}
+			walk(row.opens);
+		}
+	};
+	const root = source.listedAt([]);
+	if (root !== null) {
+		wanted.push(root);
+	}
+	walk([]);
+	return wanted;
 }
 
 /** The level whose rows are runs in the `All` view — 0 is a project, 1 a test name, 2 a run. */
@@ -121,6 +185,8 @@ export function allRowSource(levels: ArchiveLevels): TreeSource {
 		route: '/archive/$',
 		truncated: false,
 		isRunContents: (node) => node.length === SERIAL_DEPTH,
+		// A node of this tree *is* an archive path, at every depth including the root's.
+		listedAt: (node) => node,
 		rowsAt: (node) => archiveRows(levels, node, node),
 	};
 }
@@ -138,6 +204,13 @@ export function groupRowSource(groups: ArchiveGroups, levels: ArchiveLevels): Tr
 		route: '/groups/$',
 		truncated: groups.status === 'listed' && groups.truncated,
 		isRunContents: (node) => node.length === GROUP_SERIAL_DEPTH,
+		/*
+		 * **Above a run there is no level to list**, which is the whole of *this view lists nothing
+		 * until a run is opened* (#181): those levels are the one grouping answer's, so a walk of the
+		 * drawn tree must name none of them — including the root's, where `list_archive` would
+		 * otherwise be asked for the archive's own first level by a view that never draws it.
+		 */
+		listedAt: (node) => (node.length >= GROUP_SERIAL_DEPTH ? archiveAddressOf(node) : null),
 		rowsAt: (node) => {
 			if (node.length >= GROUP_SERIAL_DEPTH) {
 				/*
