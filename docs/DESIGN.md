@@ -1127,7 +1127,7 @@ answer is not a fourth empty-handed state.
 
 **Settled in this document rather than by a Stitch round**, and which of the two was chosen is said
 out loud because §1 requires it — the same call the arrangement above it is: the row anatomy and the
-card are already fixed, so a design round would have settled a five-swatch palette out of a system
+card are already fixed, so a design round would have settled a four-colour palette out of a system
 this document can read directly, and `ai/RULES.md` §8 is explicit that an agent's deliverable there
 is a prompt rather than a generated screen.
 
@@ -1139,8 +1139,8 @@ saying *these two are the same thing at two moments*. What the tree draws for it
 monospace face — sitting **between the row's glyph and its name**. That is the whole of the row's
 change: nothing else about a row moves, and a row without a badge is the row it was.
 
-**The letters are per group.** Every distinct filed label in one group takes a letter — `A`, `B`,
-`C`, `D` — in the order the host answered them, and **the same label carries the same letter
+**The letters are per group.** Every distinct filed label in one group takes a letter — `A`
+through `Z` — in the order the host answered them, and **the same label carries the same letter
 everywhere it appears in that group**. Nothing about a letter is stable across groups: the same
 string in a second group takes whatever that group's own order gives it, and a reader who carries a
 letter from one group to another has read something the badge never said. Inside one group it is
@@ -1152,8 +1152,10 @@ followed what is drawn would give one group two alphabets.
 **Overflow is `@`, and it is a first-class case rather than a corner.** A group holding more distinct
 labels than there are letters gives every remaining one `@`. The badge stops distinguishing them
 there and **the row does not**: the artifact's own name is unchanged, and each `@` still names its
-own filed label. Four letters is what this palette can honestly carry, and saying so is better than
-a fifth swatch nobody could tell from the fourth.
+own filed label. What runs out at the twenty-seventh distinct label is the **alphabet**, not the
+palette — the four colours are cycled under the letters — and a group that files twenty-seven
+distinct labels is asking the badge for a vocabulary a single letter cannot carry, so saying so is
+better than a twenty-seventh glyph nobody could read at 18px.
 
 **The letter carries the meaning, never the colour alone.** Every badge says which label it is in
 text, so the fill is a second channel for something already written — the rule §5's status LED keeps
@@ -1167,22 +1169,35 @@ genuinely unrecoverable — the rule this section already states for `OWNER`.
 the tree it is today. And the badge is **not a control**: the row is one `<Link>` and stays one
 target (#175), so this is an element inside it and never a second thing to click.
 
-**The palette — four letters, then `@`.**
+**The palette — four colours, cycled.** A letter's fill is its position in the alphabet modulo
+four, so the four families take the letters family-first:
 
-| letter | fill | text | reads as |
+| letters | fill | text | reads as |
 | --- | --- | --- | --- |
-| `A` | `bg-primary-fixed` | `text-on-primary-fixed` | pale lavender |
-| `B` | `bg-secondary-fixed` | `text-on-secondary-fixed` | pale peach |
-| `C` | `bg-tertiary-fixed` | `text-on-tertiary-fixed` | mint |
-| `D` | `bg-inverse-surface` | `text-inverse-on-surface` | neutral |
+| `A`, `E`, `I`, `M`, `Q`, `U`, `Y` | `bg-primary-fixed` | `text-on-primary-fixed` | pale lavender |
+| `B`, `F`, `J`, `N`, `R`, `V`, `Z` | `bg-secondary-fixed` | `text-on-secondary-fixed` | pale peach |
+| `C`, `G`, `K`, `O`, `S`, `W` | `bg-tertiary-fixed` | `text-on-tertiary-fixed` | mint |
+| `D`, `H`, `L`, `P`, `T`, `X` | `bg-inverse-surface` | `text-inverse-on-surface` | neutral |
 | `@` | `bg-surface-container-highest` | `text-on-surface-variant` | the quietest thing on the card |
 
 **Every colour comes from `panel/src/tokens.css`** (§1, `ai/RULES.md` §8), and
 `tests/unit/panel/tokens-are-the-source-of-truth.test.ts` fails loudly on a hex written in a
-component. `A`…`D` are four light fills carrying dark text, which is what makes them read at badge
+component. The four are light fills carrying dark text, which is what makes them read at badge
 size against `surface-container`; `@` is the one that inverts — a dark fill a shade off the card,
 carrying the light text the tree's quiet lines already use — and that is deliberate, because it
 distinguishes nothing and should not ask to be looked at.
+
+**Adjacent letters never carry one colour**, and cycling family-first is what makes that true by
+construction rather than by inspection: two letters next to each other in the alphabet are always
+two different accent families, and two steps of one family always sit exactly four letters apart.
+The first cycle is byte-identical to what #182 shipped, so nothing about a group of four or fewer
+labels changed. **The closest pair in the set is a cycle boundary** — `D`'s `bg-inverse-surface`
+(`#e2e2e6`) beside `E`'s `bg-primary-fixed` (`#dde1ff`), which differ chiefly in the blue channel —
+and since every adjacency inside a cycle is strong (lavender/peach, peach/mint, mint/neutral),
+*every* weak pair in the whole alphabet is one of these boundaries. A per-cycle step that widens
+them, so two letters of one family read as one hue at two levels, is the follow-up phase and is
+**not built**; until it is, the letter is what tells `D` from `E`, which is the rule this section
+states anyway.
 
 **No badge colour may read as an outcome.** §5 already spends `bg-tertiary` green on *a free
 device*, `bg-primary-container` blue on *held* and `secondary-container` orange on *warning*, and
@@ -1191,20 +1206,44 @@ the three §5 gives a meaning to, and **no two of them can pair into a red/green
 `A` beside a red `B` is precisely the pass/fail semantics Rover does not have (§2,
 `ai/RULES.md` §1), and this palette is chosen to make it unavailable rather than discouraged.
 
-**Why four, and how to get more.** Analog Horizon has three accent families plus `error`, and three
-of its steps already mean something — so there is no honest fifth hue in it, and the arithmetic is
-the reason for `@` rather than an excuse for it. A longer alphabet is a **commissioned categorical
-ramp** for Analog Horizon, through the operator's own Stitch round (§1, `ai/RULES.md` §8): a set of
-swatches that are equal in weight and mean *different*, not *better* or *worse*. That is its own
-piece of work, and picking a fifth colour at the keyboard is the thing it exists instead of.
+**Why four colours and twenty-six letters** (reversed in place, #197 — the original conclusion is
+kept because the record of what was considered is most of its value).
+
+*What #182 concluded.* Analog Horizon has three accent families plus `error`, and three of its steps
+already mean something — so there is no honest fifth hue in it, four letters is what the palette can
+honestly carry, and the arithmetic is the reason for `@` rather than an excuse for it. A longer
+alphabet would be a **commissioned categorical ramp** for Analog Horizon, through the operator's own
+Stitch round (§1, `ai/RULES.md` §8): swatches equal in weight, meaning *different* and never *better*
+or *worse*.
+
+*Why it was wrong.* The conclusion was about **colour** and was applied to **letters**. Nothing
+makes those the same count: a letter is drawn in text and is the channel this section already says
+carries the meaning, so a fifth letter costs the palette nothing at all. R41 enforces no arity on
+labels either, and real use went straight past four — one label per screen, nine distinct labels in
+one group (`statistics-deliveries`, a before/after of a Compose migration), so five of nine badges
+read `@` and for most of that group the badge distinguished nothing. Four was an assumption about
+arity the archive never made.
+
+*What replaces it.* The letters run `A`…`Z` and the same four colours are **cycled** under them,
+family-first, so `@` moves to past the twenty-sixth distinct label and keeps its meaning exactly —
+*this one is not being distinguished*. No new colour, token or CSS was needed to do it.
+
+*What survives, unchanged.* **No badge colour may read as an outcome.** `error` stays excluded
+outright, §5's three device-state steps (tertiary green, primary-container blue,
+secondary-container orange) stay unavailable, and no two badges can pair into a red/green verdict.
+The commissioned-ramp rule also survives for what it was actually about: a **new hue** is the
+operator's Stitch round and never a swatch picked at the keyboard. A *derived* step of a token is a
+different thing — `panel/src/index.css` already derives from `--color-surface-container-lowest`,
+`--color-primary` and `--color-secondary-container` through `color-mix` — which is why the per-cycle
+modulation is a follow-up rather than a thing this section forbids.
 
 **What is deliberately absent, and why.**
 
 - **No badge in the `All` view.** A letter is defined only inside a group and the `All` view has no
   group context, so a badge there would be a code with no key. It is said here rather than left to
   be discovered.
-- **No legend.** Four letters and a hover that names each one is the whole vocabulary; a legend
-  would be a second, staler copy of what every badge already says.
+- **No legend.** A letter and a hover that names it is the whole vocabulary; a legend would be a
+  second, staler copy of what every badge already says.
 - **No filter by label, no compare-these-two control, and nothing that ranks or scores an artifact**
   (`ai/RULES.md` §1). A label is a caller's claim that two artifacts are the same thing at two
   moments; what to make of them is the agent's judgement and not Rover's.

@@ -967,17 +967,18 @@ describe('the label badges', () => {
 		expect(badgeOn(second.container, `001_${AFTER}.png`)).toBe('B');
 	});
 
-	// Four letters, then `@` — a case rather than a corner (`docs/DESIGN.md` §9). The badge stops
-	// distinguishing them there and the row does not.
-	it('gives every label past the fourth `@`, and still says which artifact it is', () => {
-		const labels = ['one', 'two', 'three', 'four', 'five', 'six'];
+	// The alphabet runs to `Z` (#197), so a group filing one label per screen is lettered right
+	// through rather than collapsing into `@` at the fifth. The overflow itself is a case rather than
+	// a corner and is pinned one level down, in `group-labels.test.ts`.
+	it('letters every label of a nine-label group, and still says which artifact it is', () => {
+		const labels = ['one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine'];
 		const { container } = showingGroups(shotsIn(A_VARIANT, RUN), [grouped(A_VARIANT, RUN, labels)]);
 
 		expect(labels.map((label, index) => badgeOn(container, `00${index + 1}_${label}.png`))).toEqual(
-			['A', 'B', 'C', 'D', '@', '@'],
+			['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I'],
 		);
 		expect(screen.getByText('001_one.png')).toBeDefined();
-		expect(screen.getByText('006_six.png')).toBeDefined();
+		expect(screen.getByText('009_nine.png')).toBeDefined();
 	});
 
 	/*

@@ -61,19 +61,45 @@ describe('the letters one group hands out', () => {
 	});
 
 	/*
-	 * **Overflow is `@`, and it is a case rather than a corner** (`docs/DESIGN.md` §9). There is no
-	 * honest fifth hue in this palette, so the fifth distinct label and every one after it stops
-	 * being distinguished by the badge — and says so, rather than reusing `A`.
+	 * **The nine-label group #197 was reported with** — `statistics-deliveries`, a before/after of a
+	 * Compose migration filing one label per screen. Under the four-letter alphabet five of these
+	 * nine read `@` and the badge distinguished nothing for most of the group; every one of them now
+	 * takes a letter of its own, on the four palette colours cycled.
 	 */
-	it('gives every label past the fourth `@`', () => {
-		const letters = lettersOfGroup(
-			group(run('checkout-app', 'home_a_variant', NEWER, ['a', 'b', 'c', 'd', 'e', 'f'])),
-		);
+	it('letters all nine labels of the real group that overflowed the four', () => {
+		const labels = [
+			'remaining-deliveries',
+			'all-deliveries',
+			'to-delivery',
+			'delivered-successfully',
+			'delivered-unsuccessfully',
+			'undelivered-dispositions',
+			'transferred-to-pickup',
+			'transferred-to-courier',
+			'details-from-list',
+		];
+
+		const letters = lettersOfGroup(group(run('c-ai', 'statistics_deliveries', NEWER, labels)));
+
+		expect([...letters.values()]).toEqual(['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I']);
+		expect([...letters.values()]).not.toContain('@');
+	});
+
+	/*
+	 * **Overflow is `@`, and it is a case rather than a corner** (`docs/DESIGN.md` §9). What runs out
+	 * is the **alphabet**, not the palette — the four colours are cycled under the letters — so the
+	 * twenty-seventh distinct label and every one after it stops being distinguished by the badge,
+	 * and says so rather than reusing `A`.
+	 */
+	it('gives every label past the twenty-sixth `@`', () => {
+		const labels = [...LABEL_LETTERS, 'aa', 'bb'].map((name) => `label-${name}`);
+
+		const letters = lettersOfGroup(group(run('checkout-app', 'home_a_variant', NEWER, labels)));
 
 		expect([...letters.values()]).toEqual([...LABEL_LETTERS, '@', '@']);
 		// Two overflowing labels are two entries with one letter, never one entry: the row still says
 		// which artifact it is, and the filed label is still on each badge.
-		expect(letters.size).toBe(6);
+		expect(letters.size).toBe(28);
 	});
 
 	// A group whose runs produced nothing labelled is ordinary: a group is a claim about *runs*, and

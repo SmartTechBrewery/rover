@@ -8,6 +8,19 @@ const LABEL = 'home-baseline';
 /** Every letter a badge can be drawn as, the overflow included — it is a case, not a corner. */
 const EVERY_LETTER: readonly LabelLetter[] = [...LABEL_LETTERS, '@'];
 
+/** The classes one badge is drawn with, rendered and torn down so the next letter starts clean. */
+function classesOf(letter: LabelLetter): readonly string[] {
+	const { container, unmount } = render(<LabelBadge label={LABEL} letter={letter} />);
+	const className = container.querySelector('span')?.className ?? '';
+	unmount();
+	return className.split(' ');
+}
+
+/** Just the fill, which is the one class the cycle decides. */
+function fillOf(letter: LabelLetter): string {
+	return classesOf(letter).find((name) => name.startsWith('bg-')) ?? '';
+}
+
 describe('the label badge', () => {
 	/*
 	 * **The letter carries the meaning, never the colour alone.** It is drawn as text, at badge
@@ -43,21 +56,68 @@ describe('the label badge', () => {
 	});
 
 	/*
+	 * **Cycle 1 is byte-identical to what #182 shipped**, which is the whole of why cycling the four
+	 * colours costs nothing: the first four letters draw on the same four fills, in the same order,
+	 * and `@` is untouched. Pinned exactly, so the cycle cannot drift under a later edit.
+	 */
+	it('draws `A`…`D` on the four colours it draws them on today', () => {
+		expect(classesOf('A')).toContain('bg-primary-fixed');
+		expect(classesOf('A')).toContain('text-on-primary-fixed');
+		expect(classesOf('B')).toContain('bg-secondary-fixed');
+		expect(classesOf('B')).toContain('text-on-secondary-fixed');
+		expect(classesOf('C')).toContain('bg-tertiary-fixed');
+		expect(classesOf('C')).toContain('text-on-tertiary-fixed');
+		expect(classesOf('D')).toContain('bg-inverse-surface');
+		expect(classesOf('D')).toContain('text-inverse-on-surface');
+		expect(classesOf('@')).toContain('bg-surface-container-highest');
+		expect(classesOf('@')).toContain('text-on-surface-variant');
+	});
+
+	/*
+	 * **Two letters next to each other in the alphabet never carry one colour** (#197). Cycling
+	 * family-first is what makes that true by construction rather than by inspection, and this is
+	 * that criterion in executable form at the level a class name can honestly reach — the
+	 * perceptual judgement about the closest pair is recorded in `docs/DESIGN.md` §9, where that
+	 * kind of judgement belongs.
+	 */
+	it('gives no two letters adjacent in the alphabet one fill', () => {
+		const fills = LABEL_LETTERS.map(fillOf);
+
+		for (const [index, fill] of fills.entries()) {
+			if (index > 0) {
+				expect(fill).not.toBe(fills[index - 1]);
+			}
+			// `@` distinguishes nothing and must never be mistaken for a letter that does.
+			expect(fill).not.toBe(fillOf('@'));
+		}
+	});
+
+	/*
 	 * **Every colour comes from `panel/src/tokens.css`** (`ai/RULES.md` §8, `docs/DESIGN.md` §1).
 	 * `tests/unit/panel/tokens-are-the-source-of-truth.test.ts` is the gate that fails on a hex
-	 * anywhere under `panel/src`; what is asserted here is that each letter is a *different* fill, so
-	 * the palette cannot quietly collapse into one colour with five letters on it.
+	 * anywhere under `panel/src`; what is asserted here is that a fill is never drawn without the
+	 * `on-` step that makes the letter legible on it, and that the whole set is the five class pairs
+	 * that ship — the cycle adds letters, never a colour.
 	 */
-	it('gives every letter a distinct token fill, and writes no colour of its own', () => {
-		const fills = EVERY_LETTER.map((letter) => {
-			const { container, unmount } = render(<LabelBadge label={LABEL} letter={letter} />);
-			const className = container.querySelector('span')?.className ?? '';
-			unmount();
-			return className.split(' ').find((name) => name.startsWith('bg-')) ?? '';
-		});
+	it('pairs every fill with a text step, and writes no colour of its own', () => {
+		for (const letter of EVERY_LETTER) {
+			const classes = classesOf(letter);
 
-		expect(new Set(fills).size).toBe(EVERY_LETTER.length);
-		expect(fills.every((fill) => fill.length > 0)).toBe(true);
+			expect(classes.some((name) => name.startsWith('bg-'))).toBe(true);
+			// `text-inverse-on-surface` is the design system's own pairing for `bg-inverse-surface`, so
+			// the `on-` step is not always spelled with the `text-on-` prefix.
+			expect(classes.some((name) => name.includes('on-'))).toBe(true);
+		}
+
+		expect(new Set(EVERY_LETTER.map(fillOf))).toEqual(
+			new Set([
+				'bg-primary-fixed',
+				'bg-secondary-fixed',
+				'bg-tertiary-fixed',
+				'bg-inverse-surface',
+				'bg-surface-container-highest',
+			]),
+		);
 	});
 
 	/*
@@ -67,8 +127,7 @@ describe('the label badge', () => {
 	 */
 	it('uses none of the tokens that already mean something', () => {
 		for (const letter of EVERY_LETTER) {
-			const { container, unmount } = render(<LabelBadge label={LABEL} letter={letter} />);
-			const classes = (container.querySelector('span')?.className ?? '').split(' ');
+			const classes = classesOf(letter);
 
 			expect(classes.some((name) => name.includes('error'))).toBe(false);
 			// The free-device green, the held blue and the warning orange, each in the exact spelling
@@ -77,7 +136,6 @@ describe('the label badge', () => {
 			expect(classes).not.toContain('bg-tertiary');
 			expect(classes).not.toContain('bg-primary-container');
 			expect(classes).not.toContain('bg-secondary-container');
-			unmount();
 		}
 	});
 
