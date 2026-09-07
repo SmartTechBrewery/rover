@@ -283,6 +283,12 @@ function treeRows(): readonly (string | null)[] {
 	return [...(tree?.querySelectorAll('a') ?? [])].map((row) => row.textContent);
 }
 
+/** The contents card's rows, in the order they are drawn — the other pane the same level is in. */
+function cardRows(container: HTMLElement): readonly (string | null)[] {
+	const card = container.querySelector('div.xl\\:flex-row > section');
+	return [...(card?.querySelectorAll('li') ?? [])].map((row) => row.textContent);
+}
+
 /**
  * Queries scoped to the **one card** beside the tree — a level's own listing, the run's column, the
  * preview, or the quiet line for an address nobody has answered for (#160).
@@ -569,8 +575,10 @@ describe('opening a second branch', () => {
 				'checkout-app',
 				'login-flow',
 				RUN,
-				'device_info.json',
+				// The run's own contents, artifacts first — `level-order.ts`, and the same order
+				// wherever this level is drawn (#208).
 				'screenshots',
+				'device_info.json',
 				OLDER,
 				'unlabeled',
 				'payments-web',
@@ -840,6 +848,102 @@ describe('the order the runs are listed in', () => {
 
 		expect(order(container.querySelector('aside'))).toEqual([RUN, OLDER]);
 		expect(order(container.querySelector('section'))).toEqual([RUN, OLDER]);
+	});
+});
+
+/*
+ * **A run's artifacts lead its contents level** (#208) — the second departure from *the host's order
+ * stands*, and one level's one answer: the tree, the card beside it, both views and a typed
+ * `<serial>` address all draw it, so all four are asserted off the same fixture.
+ */
+describe('the order a run’s own contents are listed in', () => {
+	/** The run's own `<serial>` level, over the archive every other case browses. */
+	const filed = (...entries: readonly unknown[]) => ({
+		...archive(),
+		[JSON.stringify(['checkout-app', 'login-flow', RUN, SERIAL])]: listed(...entries),
+	});
+
+	/** The sidecar files a lease writes, whose contents the card beside the tree already draws. */
+	const SIDECARS = [
+		{ kind: 'file', name: 'device_info.json', sizeBytes: 80 },
+		{ kind: 'file', name: 'group_id.json', sizeBytes: 20 },
+		{ kind: 'file', name: 'test_description.json', sizeBytes: 120 },
+	] as const;
+
+	/** Exactly what a run holds on the host, in the host's own code-unit order (#208). */
+	const EVERYTHING = filed(
+		SIDECARS[0],
+		SIDECARS[1],
+		directory('logs', 1),
+		directory('recordings', 1),
+		directory('screenshots', 3),
+		SIDECARS[2],
+	);
+
+	/*
+	 * Screenshots, then recordings, then the rest of the level exactly as the host answered it —
+	 * `logs` still between `group_id.json` and `test_description.json`, because nothing but those two
+	 * names is lifted and nothing else is re-sorted.
+	 */
+	const ARTIFACTS_FIRST = [
+		'screenshots',
+		'recordings',
+		'device_info.json',
+		'group_id.json',
+		'logs',
+		'test_description.json',
+	];
+
+	it('puts screenshots and recordings first, in the tree and in the card alike', async () => {
+		const { container } = await showing(`checkout-app/login-flow/${RUN}/${SERIAL}`, EVERYTHING);
+
+		expect(cardRows(container)).toEqual(ARTIFACTS_FIRST);
+		// The tree draws the same level, under the run's node, and the levels above it are untouched.
+		expect(treeRows()).toEqual([
+			'checkout-app',
+			'login-flow',
+			RUN,
+			...ARTIFACTS_FIRST,
+			OLDER,
+			'unlabeled',
+			'payments-web',
+		]);
+	});
+
+	// The groups view lists the same directory at its own address, so it gets the same answer — the
+	// group id is out of the archive depth before the order is decided.
+	it('is the same order in the groups view', async () => {
+		const { container } = await grouped(
+			`checkout-app/${GROUP}/login-flow/${RUN}/${SERIAL}`,
+			EVERYTHING,
+		);
+
+		expect(cardRows(container)).toEqual(ARTIFACTS_FIRST);
+		expect(treeRows()).toEqual([
+			'checkout-app',
+			GROUP,
+			'login-flow',
+			RUN,
+			...ARTIFACTS_FIRST,
+			OLDER,
+			OTHER_GROUP,
+		]);
+	});
+
+	// An archive that recorded nothing draws exactly what it draws today: a level with neither
+	// directory in it sorts to itself, which is what a stable sort on one key gives for free.
+	it('leaves a level holding neither directory in the host’s own order', async () => {
+		const { container } = await showing(
+			`checkout-app/login-flow/${RUN}/${SERIAL}`,
+			filed(SIDECARS[0], SIDECARS[1], directory('logs', 1), SIDECARS[2]),
+		);
+
+		expect(cardRows(container)).toEqual([
+			'device_info.json',
+			'group_id.json',
+			'logs',
+			'test_description.json',
+		]);
 	});
 });
 
@@ -1648,8 +1752,9 @@ describe('the testing groups view', () => {
 			GROUP,
 			'login-flow',
 			RUN,
-			'device_info.json',
+			// Artifacts first inside the run, which is one level's one answer in both views (#208).
 			'screenshots',
+			'device_info.json',
 			OLDER,
 			OTHER_GROUP,
 		]);
@@ -1669,8 +1774,9 @@ describe('the testing groups view', () => {
 			GROUP,
 			'login-flow',
 			RUN,
-			'device_info.json',
+			// Artifacts first inside the run, which is one level's one answer in both views (#208).
 			'screenshots',
+			'device_info.json',
 			OLDER,
 			OTHER_GROUP,
 		]);
