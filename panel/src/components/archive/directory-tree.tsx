@@ -5,6 +5,7 @@ import {
 	splatFromComponents,
 } from '@panel/archive/archive-path.js';
 import type { ArchiveSearch, ArchiveSearchState } from '@panel/archive/archive-search.js';
+import type { OpenBranches } from '@panel/archive/open-branches.js';
 import { type HitNode, hitTree } from '@panel/archive/search-tree.js';
 import type { TreeRoute, TreeSource } from '@panel/archive/tree-source.js';
 import { LabelBadge } from '@panel/components/archive/label-badge.js';
@@ -20,7 +21,7 @@ import {
 	Search,
 	X,
 } from 'lucide-react';
-import { type ReactNode, type RefObject, useRef } from 'react';
+import { type MouseEvent, type ReactNode, type RefObject, useRef } from 'react';
 
 /**
  * The archive as a directory tree — `docs/DESIGN.md` §9's left column.
@@ -29,41 +30,51 @@ import { type ReactNode, type RefObject, useRef } from 'react';
  * from `ArchiveLevels`: a source answers *the rows at this node*, *the level a row opens* and *the
  * route a row's address is on*, and nothing else about a tree is a view's to choose. So the `All`
  * view's levels and the groups view's arrangement are two answers to one question, and every rule
- * below — the row anatomy, what a row may never carry, how expansion is derived, how clicking an
- * open row closes it — is shared and unconditional. A second tree implementation for the second
- * view is the failure mode this shape exists to prevent.
+ * below — the row anatomy, what a row may never carry, what expands, how clicking an open row closes
+ * it — is shared and unconditional. A second tree implementation for the second view is the failure
+ * mode this shape exists to prevent.
  *
  * **The card carries no width of its own** (#172). It was `lg:w-[320px] shrink-0` — the row's one
  * sized child — and the row now writes both fractions of the split itself (`routes/archive.tsx`,
  * `Columns`). This file describes the card, never how much of the row it is given.
  *
- * **Expansion is derived from the selection, never stored.** A node is expanded exactly when it is
- * a prefix of the selected path, and the selected node is expanded too; nothing else is. Everything
- * the issue asks of this tree falls out of that one rule:
+ * **Expansion is an open set, over the selection's own ancestors as a floor** (#198, reversing
+ * #175's derived-expansion rule in place — `docs/DESIGN.md` §9, rewritten with it). It was derived
+ * *entirely* from the selection: a node was expanded exactly when it was a prefix of the selected
+ * path, and the selected node too. One selection is one path, so only one branch could be open at
+ * a time and opening a second top-level row closed the first — the rule's exact consequence rather
+ * than a defect in it, and it made a reader crossing between two projects rebuild the tree they had
+ * a moment ago. So a node is drawn expanded when it is **in the open set** *or* it is a **strict**
+ * ancestor of the selection (`open-branches.ts`, {@link OpenBranches}), and what the reversal did
+ * **not** surrender is the guarantee the old rule was protecting:
  *
- * - *lazily, one `readdir` at a time* — the levels drawn are the prefixes of the selection, which
- *   is precisely what `useArchiveLevels` was given, so a walk of the archive is unrepresentable
- *   rather than merely avoided;
- * - *a reload lands where you were and a link is shareable* — the whole of this tree's state is the
- *   URL, so it cannot disagree with the address bar;
- * - a sibling off the selected path draws no children, because nothing has been read for it.
+ * - **the selection is always drawn.** Its ancestors are expanded whatever the set holds, so a
+ *   closed ancestor with the card beside the tree still drawing the file underneath it is
+ *   unreachable rather than merely avoided — which is what #160 put the tree there for;
+ * - *lazily, one `readdir` at a time* — the levels read are the levels **drawn**, walked from the
+ *   root through expanded rows only (`tree-source.ts`, `drawnLevels`). The set grows only by a
+ *   click, so the number of levels read is bounded by the reader's gestures and never by what is in
+ *   the archive; a pre-walk is still unrepresentable;
+ * - *a reload lands where you were and a link is shareable* — **where you are is still the address
+ *   alone.** The open set is component state and deliberately not in the URL, the exception the
+ *   tree card's search text already is (#146): a shared link lands on the address without somebody
+ *   else's browsing, and it is seeded from that address's own prefixes, so what it draws is the tree
+ *   the derived rule drew;
+ * - a sibling nobody opened draws no children, because nothing has been read for it.
  *
- * **And clicking an open row closes it, because an open row goes up** (#175). A row's address is
- * its own while it is shut and the address of the node it is drawn under while it is open, so a
- * second click on a node lands one level above it and the rule above then draws it closed. Nothing
- * is stored to make that happen at any depth: the tree is still a pure function of the URL, so a
- * reload and a shared link still land where the reader is and the tree still cannot disagree with
- * the address bar.
+ * **And clicking an open row still closes it** (#175's gesture, unchanged, at every depth). Every
+ * row links to its **own** address now — the `to` that went one level up is gone — and the click
+ * toggles that row's branch. Landing *on* the row is what makes the closing half work: it stops
+ * being a strict ancestor of the selection, so the floor stops holding it open and the set's answer
+ * is what the tree draws. **A row that opens nothing gains nothing**: no triangle, no
+ * `aria-expanded`, and a click on it is the navigation it always was.
  *
- * The cost is that **collapsing a node moves the selection to its parent**, so the card beside the
- * tree becomes that parent's card. The alternative — a set of deliberately-closed nodes laid over
- * the rule above — buys collapsing without moving the selection and pays for it by making *the
- * selection is drawn nowhere in the tree* reachable while the card still draws that file, which is
- * the one thing the tree is on screen to prevent (#160).
+ * The stated cost stays stated: **closing an ancestor of the selection moves the selection up to
+ * that node**, so the card beside the tree becomes that node's card. What it no longer costs is
+ * every *other* open branch, and closing a project no longer lands on the archive root.
  *
  * The accepted cost that stands, recorded in §9: a folder cannot be peeked at without selecting it,
- * and now it cannot be closed without leaving it either. Both are ordinary file-explorer behaviour
- * and they remove a whole class of *the tree and the URL disagree* bugs.
+ * because the row is one target and selecting is what it does.
  *
  * **What may never appear on a row**, all of it from the issue's binding rules:
  *
@@ -89,11 +100,11 @@ import { type ReactNode, type RefObject, useRef } from 'react';
  *   letter — never the colour alone — is what carries it (`label-badge.tsx`).
  *
  * Every row is a `<Link>` and there is no nested interactive element: the triangle is `aria-hidden`
- * decoration saying *this opens*, not a second control. **Collapsing stays the row's** (#175): the
- * row already goes somewhere, and hanging the second half of one gesture on a `<button>` inside the
- * link would split it across two targets and make a row two things. What the row does say out loud
- * is `aria-expanded`, on every row there is a level under and on no other — the triangle draws
- * openness and cannot say it, and this is the change that would have noticed.
+ * decoration saying *this opens*, not a second control. **Collapsing stays the row's** (#175, and
+ * #198 kept it there): the row already goes somewhere, and hanging the second half of one gesture on
+ * a `<button>` inside the link would split it across two targets and make a row two things. What the
+ * row does say out loud is `aria-expanded`, on every row there is a level under and on no other, and
+ * it reports the **drawn** state — the triangle draws openness and cannot say it.
  *
  * **And the card searches the whole archive** (#146, R38, `docs/DESIGN.md` §9). The field between
  * the header strip and the tree is the design's own (screen `8dcd4330…`), and while there is text in
@@ -139,11 +150,21 @@ const GLYPH = 'absolute top-2.5 left-2.5';
 export function DirectoryTree({
 	selected,
 	source,
+	branches,
 	search,
 }: {
 	readonly selected: readonly string[];
 	/** Where the rows come from, and the one thing the two views differ in (#181). */
 	readonly source: TreeSource;
+	/**
+	 * Which branches are open and what a click on a row does to them (#198) — held **above this
+	 * card** for the reason the search is, and with the same consequence: it outlives an address
+	 * changing under it, so opening a node never closes another.
+	 *
+	 * It is not a view's choice. Both views draw one tree, so both are handed one of these
+	 * (`routes/archive.tsx`) and the searched tree below is the only thing here that has none.
+	 */
+	readonly branches: OpenBranches;
 	/**
 	 * The search, held **above this card** (`routes/archive.tsx`, which gives the reason) — the
 	 * state outlives an address changing under it, and the field is absent wherever this card is
@@ -169,7 +190,7 @@ export function DirectoryTree({
 				) : (
 					<>
 						{source.truncated ? <Truncated /> : null}
-						<Branch node={[]} selected={selected} source={source} under={[]} />
+						<Branch branches={branches} node={[]} selected={selected} source={source} />
 					</>
 				)}
 			</div>
@@ -340,10 +361,11 @@ function Searched({
  * row is comes from the host's own `kind`**, never from its name (D22) — a folder, a file, or
  * something the host could not classify, which is `run-panel.tsx`'s own idiom for the same fact.
  *
- * **So a hit row never collapses, and it still says it is open** (#175). Every row here goes to its
- * own address, because that address is the whole of what a hit is; there is no *node it is drawn
- * under* to close onto, since a search answer is not a level of anything. `aria-expanded` is still
- * true of it and is still drawn, for the same reason the triangle is.
+ * **So a hit row never collapses, and it still says it is open** (#175, and #198 left this tree
+ * alone). Every row here goes to its own address — which every row of the browsing tree does now
+ * too — and it carries no toggle: a hit *is* an address the host answered with rather than a level
+ * of anything, so there is nothing under it to open and nothing to close onto. `aria-expanded` is
+ * still true of it and is still drawn, for the same reason the triangle is.
  */
 function Hits({
 	nodes,
@@ -395,12 +417,12 @@ function glyphFor(kind: ArchiveEntry['kind'], expanded: boolean): LucideIcon {
 }
 
 /**
- * One node's rows, and the children of whichever of them is on the selected path.
+ * One node's rows, and the children of whichever of them are open.
  *
  * **Everything about what a row is comes off the source** (#181) — which entries become rows, the
  * order they are drawn in, and the level each one opens. What is here is what is true of the tree
- * in both views: expansion derived from the selection, an open row going up, and a level with
- * nothing in it drawing nothing under its node.
+ * in both views: what expands, a click toggling it, and a level with nothing in it drawing nothing
+ * under its node.
  *
  * **A level with nothing in it draws nothing under its node — except the run's own** (#161). Every
  * other level's card is that level's listing and says *empty* or *unreadable* itself; the run's card
@@ -409,23 +431,15 @@ function glyphFor(kind: ArchiveEntry['kind'], expanded: boolean): LucideIcon {
  */
 function Branch({
 	node,
-	under,
 	selected,
 	source,
+	branches,
 }: {
 	/** This level's node, in the tree's own address space — never a host path. */
 	readonly node: readonly string[];
-	/**
-	 * The address of the node this level is drawn under, and so where an **open** row in it goes —
-	 * which is the whole of collapsing (#175). It is `[]` at the root, and it is the **run's** own
-	 * address for the run's contents: the `<serial>` is not a level of this tree, so the hop the
-	 * source makes on the way down is made back here rather than closing a row onto an address no
-	 * row of this tree stands for. Passed down rather than derived from {@link node}, so no depth is
-	 * special-cased in either direction.
-	 */
-	readonly under: readonly string[];
 	readonly selected: readonly string[];
 	readonly source: TreeSource;
+	readonly branches: OpenBranches;
 }) {
 	const level = source.rowsAt(node);
 
@@ -462,13 +476,13 @@ function Branch({
 		<ul className="space-y-1">
 			{level.rows.map((row) => {
 				/*
-				 * Open is *has a level under it* and *is on the selected path* — so nothing is ever
-				 * drawn open over a level that does not exist. `null` is the third answer and it is
-				 * not *shut*: a row that opens nothing has no state to be in, carries no triangle and
-				 * claims none to assistive technology.
+				 * Open is *has a level under it* and *the open set says so* — over the floor that keeps
+				 * every ancestor of the selection expanded (`open-branches.ts`), so nothing is ever
+				 * drawn open over a level that does not exist and the selection is never hidden under a
+				 * shut one. `null` is the third answer and it is not *shut*: a row that opens nothing
+				 * has no state to be in, carries no triangle and claims none to assistive technology.
 				 */
-				const onPath = keyOf(selected.slice(0, row.address.length)) === keyOf(row.address);
-				const expanded = row.opens === null ? null : onPath;
+				const expanded = row.opens === null ? null : branches.isOpen(row.address);
 				return (
 					<li className="min-w-0" key={row.name}>
 						<Row
@@ -499,13 +513,15 @@ function Branch({
 								keyOf(row.address) === keyOf(selected) ||
 								(row.opens !== null && keyOf(row.opens) === keyOf(selected))
 							}
-							// Shut, it goes to itself and opens; open, it goes to the node above it and
-							// closes (#175). One address per row either way, and nothing stored.
-							to={expanded === true ? under : row.address}
+							// **One address per row, and it is the row's own** (#198). Shut, the click
+							// selects it and opens it; open, it selects it and closes it — landing on the
+							// row is what takes it out from under the floor that was holding it open.
+							to={row.address}
+							toggle={row.opens === null ? undefined : () => branches.toggle(row.address)}
 						/>
 						{row.opens !== null && expanded ? (
 							<div className="mt-1 ml-2.5 space-y-1 border-outline-variant border-l-2 py-1 pl-5">
-								<Branch node={row.opens} selected={selected} source={source} under={row.address} />
+								<Branch branches={branches} node={row.opens} selected={selected} source={source} />
 							</div>
 						) : null}
 					</li>
@@ -513,6 +529,21 @@ function Branch({
 			})}
 		</ul>
 	);
+}
+
+/**
+ * Whether this click is the one that opens or closes a branch — **the same click the navigation acts
+ * on, and no other** (#198).
+ *
+ * A row's `onClick` runs *before* the router's own (`composeHandlers`, in
+ * `@tanstack/react-router`'s `link.tsx`), and the router deliberately declines a modifier-click or a
+ * secondary button so the browser can take the address to a new tab or a new window. The two halves
+ * of one gesture have to agree about that: without this, cmd-clicking a row to read a second file
+ * beside the one already open would collapse that branch in the tab being left behind. So the
+ * condition is the router's own, narrowed to what a row can see.
+ */
+function opensOn(event: MouseEvent<HTMLAnchorElement>): boolean {
+	return !(event.metaKey || event.altKey || event.ctrlKey || event.shiftKey) && event.button === 0;
 }
 
 const ROW_BASE = 'flex items-start gap-2 rounded-sm border-2 px-3 py-1.5';
@@ -526,24 +557,25 @@ const ROW_UNSELECTED =
  * One row, and it is the same row in both trees.
  *
  * **What a row *is*, whether it is open, where it goes and which route that address is on are the
- * inputs; nothing else is** (#146, amended in place by #175 and by #181). Every tree that draws one
- * takes what a row is from the host's own `kind` and never from a name (D22), and takes openness
- * from its own idea of it — a level drawn under it in a browsing tree, an answer with something
- * under it in a searched one. They differ in one more thing since #175, and it is the whole of
- * collapsing: a browsing row that is open goes to the node above it, while a hit goes to its own
- * address whatever it is drawing under itself. Everything that makes a row a row is here and
- * unconditional — the `<Link>`, the classes, and every extra it refuses to carry — so a hit, or a
- * row of the groups view, cannot acquire a count, a status glyph or an outcome colour by being
+ * inputs; nothing else is** (#146, amended in place by #175, #181 and #198). Every tree that draws
+ * one takes what a row is from the host's own `kind` and never from a name (D22), and takes openness
+ * from its own idea of it — the open set in a browsing tree, an answer with something under it in a
+ * searched one. **Where a row goes is its own address in both**, which is what #198 gave back: the
+ * one-level-up destination that used to be the whole of collapsing is gone, and what closes a
+ * browsing row is the {@link toggle} its click carries. Everything that makes a row a row is here
+ * and unconditional — the `<Link>`, the classes, and every extra it refuses to carry — so a hit, or
+ * a row of the groups view, cannot acquire a count, a status glyph or an outcome colour by being
  * drawn from a different source.
  *
- * `expanded` is `null` on a row nothing opens, which is not the same as shut: it draws no triangle
- * and claims no state. Where there is one, the triangle stays `aria-hidden` decoration meaning
- * *this opens* — never a second control inside the link — and `aria-expanded` is what says the same
- * thing to a reader who cannot see it.
+ * `expanded` is `null` on a row nothing opens, which is not the same as shut: it draws no triangle,
+ * claims no state and carries no toggle. Where there is one, the triangle stays `aria-hidden`
+ * decoration meaning *this opens* — never a second control inside the link — and `aria-expanded` is
+ * what says the same thing to a reader who cannot see it.
  *
- * **`aria-current` marks the selection, and since #175 it is not the link's destination.** An open
- * row is the selection or an ancestor of it and goes *up*; saying *you are here* about the row and
- * *this closes it* about the click is the toggle a file explorer's row already is.
+ * **The row is one target and stays one** (#175). A click is one navigation and, on a browsing row,
+ * one toggle of that row's branch: the handler is on the `<Link>` itself, never on a `<button>`
+ * nested in it, so there is nothing here a reader can hit that is not the row. The two halves ride
+ * on the same click and on no other — see {@link opensOn}.
  *
  * What this component passes is not all that reaches the DOM, and **that predates #175 and is
  * unchanged by it**: `Link` stamps `aria-current="page"` on every row whose address is a prefix of
@@ -559,8 +591,9 @@ function Row({
 	selected,
 	route,
 	badge,
+	toggle,
 }: {
-	/** Where clicking goes — this row's own address, or the node above it when it is open (#175). */
+	/** Where clicking goes, and it is always this row's own address (#198). */
 	readonly to: readonly string[];
 	readonly name: string;
 	/** What this row **is**, in the host's own words: a directory, a file, or *unclassified*. */
@@ -585,6 +618,15 @@ function Row({
 	 * a meaning of its own (`label-badge.tsx`).
 	 */
 	readonly badge?: ReactNode;
+	/**
+	 * What this row's click does to its branch — open it if it is drawn shut, close it if it is drawn
+	 * open (#198, `open-branches.ts`).
+	 *
+	 * `undefined` on a row that opens nothing, and on **every** row of the searched tree: a hit is an
+	 * address the host answered with rather than a level of anything, so there is nothing there to
+	 * open or to close (§9).
+	 */
+	readonly toggle?: () => void;
 }) {
 	const Icon = glyphFor(kind, expanded === true);
 	const Triangle = expanded === null ? null : expanded ? ChevronDown : ChevronRight;
@@ -593,6 +635,15 @@ function Row({
 			aria-current={selected ? 'page' : undefined}
 			aria-expanded={expanded ?? undefined}
 			className={`${ROW_BASE} ${selected ? ROW_SELECTED : ROW_UNSELECTED}`}
+			onClick={
+				toggle === undefined
+					? undefined
+					: (event) => {
+							if (opensOn(event)) {
+								toggle();
+							}
+						}
+			}
 			params={{ _splat: splatFromComponents(to) }}
 			to={route}
 		>

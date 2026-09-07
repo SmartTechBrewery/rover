@@ -1,12 +1,17 @@
 /**
  * The Archive screen's URL contract — the one place a path is turned into components and back.
  *
- * **Where you are is its URL, and the tree card's search text is the one deliberate exception**
- * (`docs/DESIGN.md` §9, #146). A reload lands where you were, a link is shareable, and the tree's
- * expansion is *derived* from the selected path rather than stored beside it, so the tree and the
- * address can never disagree about *where you are*. The search text is component state and is
- * deliberately not in the address (`archive-search.ts`): a shared link lands on the address without
- * somebody else's search, and selecting a hit is a navigation to one of these paths like any other.
+ * **Where you are is its URL, and this screen has two deliberate exceptions to that**
+ * (`docs/DESIGN.md` §9, #146, #198). A reload lands where you were and a link is shareable, because
+ * *where you are* is the address and nothing else carries it. The two things that are not in it are
+ * the tree card's **search text** (`archive-search.ts`) and **which branches of the tree are open**
+ * (`open-branches.ts`) — amended in place, because expansion used to be *derived* from the selected
+ * path and is not any more (#198): it is an open set laid over the selection's own ancestors as a
+ * floor. Both are component state on the same terms: a shared link lands on the address without
+ * somebody else's search and without somebody else's browsing, each is seeded from that address, and
+ * neither can make the tree and the address disagree about *where you are* — what an open set adds is
+ * what else is on screen beside it. Selecting a hit, and clicking a row, are navigations to one of
+ * these paths like any other.
  *
  * A component is used **verbatim**. Nothing here trims it, lower-cases it or sanitises it: these
  * are the on-disk names a previous `list_archive` answer returned, `pathSegment` ran on the way in
@@ -75,9 +80,16 @@ export function keyOf(components: readonly string[]): string {
 /**
  * Every level a selection needs read: the root, then one per component of the path.
  *
- * This is the whole of *lazily, one `readdir` at a time*, and it is why nothing walks the archive —
- * the levels fetched are exactly the prefixes of the selected path, each one a level actually
- * drawn. A pre-walk is not so much avoided here as unrepresentable.
+ * **This is the *address's* half of what the screen reads** (amended in place, #198). It used to be
+ * the whole of *lazily, one `readdir` at a time*; the other half is now `drawnLevels`
+ * (`tree-source.ts`), a walk of the tree the reader has actually opened. What both halves share is
+ * the rule that did not change — every level asked for is a level being **drawn**, so a pre-walk of
+ * the archive stays unrepresentable — and what this half still buys is that a deep link is one
+ * parallel batch of requests rather than one round trip per level. Every prefix it names is an
+ * ancestor the floor draws anyway (`open-branches.ts`), so it is not a second source of truth.
+ *
+ * It is also what {@link openedBy} seeds the open set from, and — dropping the last one — what
+ * `absorbing` writes into it as the selection moves.
  */
 export function levelsOf(components: readonly string[]): readonly (readonly string[])[] {
 	return [[], ...components.map((_name, index) => components.slice(0, index + 1))];

@@ -8,9 +8,13 @@ import { keyOf } from './archive-path.js';
  * The Archive screen's data: one `list_archive` per level, and only for the levels being drawn.
  *
  * **The caller says which levels it wants; this answers with their states.** Those levels are the
- * prefixes of the selected path (`archive-path.ts`, `levelsOf`), so *lazily, one `readdir` at a
- * time* is structural — at most four requests at the deepest point, each one a level on the screen,
- * and no shape here can express a walk.
+ * prefixes of the selected path (`archive-path.ts`, `levelsOf`) **and the levels the reader has
+ * opened** (`tree-source.ts`, `drawnLevels`) — amended in place, because before #198 the first half
+ * was the whole of it. So *lazily, one `readdir` at a time* is still structural, but what bounds it
+ * is no longer this hook's shape: the selector **can** now express a walk, of the **drawn** tree,
+ * and what keeps that finite is that the open set grows only by a click or by an address the reader
+ * navigated to. Every level asked for is still a level on the screen, which is the rule that did not
+ * change; a walk of the *archive* is still not something any caller here can ask for.
  *
  * **It asks as a function of what it already knows, which is why there is one instance of it and not
  * two** (#140 review). Some of the Archive screen's levels are addressed by a path *derived from* an
@@ -23,8 +27,8 @@ import { keyOf } from './archive-path.js';
  *
  * **There is no polling and no refresh control** (`docs/DESIGN.md` §9). The archive is finished
  * data: a run directory is written while a lease is live and nothing is added once it ends, and
- * this screen makes no claim to show a run appearing. So a level is fetched once, on navigation,
- * and cached for the life of the screen. That is the one thing this hook does differently from
+ * this screen makes no claim to show a run appearing. So a level is fetched once — when a navigation
+ * **or a click** first draws it (#198) — and cached for the life of the screen. That is the one thing this hook does differently from
  * `device-list-provider.tsx`, which polls because *what is attached* changes under the reader.
  *
  * **No deadline either**, for the reason `host-client.ts` gives: a budget belongs to a repeating

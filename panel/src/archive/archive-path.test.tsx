@@ -131,7 +131,7 @@ describe('the round trip through the router', () => {
 						>
 							deeper
 						</Link>
-						{/* What the tree's own open row at the root level goes to (#175). */}
+						{/* The bare root, as an empty splat on the splat route — see the case below. */}
 						<Link params={{ _splat: splatFromComponents([]) }} to="/archive/$">
 							up
 						</Link>
@@ -171,11 +171,15 @@ describe('the round trip through the router', () => {
 	});
 
 	/*
-	 * **Closing a project goes to the root, and the root is an empty splat** (#175). The tree's open
-	 * rows link to the node above them, and at the root level that node is the archive itself — so
-	 * the one address this contract had never been asked to build is now built on every screen with
-	 * a project open. Asserted against a real router, because whether `/archive/` matches the splat
-	 * route and reads back as `[]` is exactly what the mocked `Link` in the screen tests supplies.
+	 * **The root is an empty splat, and it reads back as the root** — the contract for the bare
+	 * address, which the sidebar, the breadcrumb's first segment and the view toggle all point at.
+	 *
+	 * This case arrived with #175, whose open rows linked to the node above them and therefore built
+	 * this address from the tree's own top level. **#198 reversed that**: every row links to its own
+	 * address now and no row of the tree emits an empty splat any more. The assertion stays, with its
+	 * reason rewritten, because what it pins is the *path contract* rather than that tree — whether
+	 * `/archive/` matches the splat route and reads back as `[]` is exactly what the mocked `Link` in
+	 * the screen tests supplies, and `archiveRoute`'s own comment rests on it.
 	 */
 	it('builds the root as an empty splat, and reads it back as the root', async () => {
 		const router = routerFor('/archive/checkout-app');

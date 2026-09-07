@@ -10,6 +10,7 @@ import {
 	archiveAddressOf,
 	componentsFromSplat,
 	levelsOf,
+	MAX_ARCHIVE_PATH_DEPTH,
 	splatFromComponents,
 } from '@panel/archive/archive-path.js';
 import { type ArchiveSearch, useArchiveSearch } from '@panel/archive/archive-search.js';
@@ -17,11 +18,17 @@ import { useArchivedArtifact } from '@panel/archive/artifact.js';
 import { type ArchivedDeviceInfo, useArchivedDeviceInfo } from '@panel/archive/device-info.js';
 import { groupRowsAt, groupRunSerial } from '@panel/archive/group-tree.js';
 import { comparisonAt, type LabelComparison } from '@panel/archive/label-comparison.js';
+import { type OpenBranches, useOpenBranches } from '@panel/archive/open-branches.js';
 import {
 	type ArchivedTestDescription,
 	useArchivedTestDescription,
 } from '@panel/archive/test-description.js';
-import { allRowSource, groupRowSource, type TreeSource } from '@panel/archive/tree-source.js';
+import {
+	allRowSource,
+	drawnLevels,
+	groupRowSource,
+	type TreeSource,
+} from '@panel/archive/tree-source.js';
 import { ArtifactPreview } from '@panel/components/archive/artifact-preview.js';
 import { ComparisonCard } from '@panel/components/archive/comparison-card.js';
 import {
@@ -44,13 +51,18 @@ import { rootRoute } from './__root.js';
  * The archive, as a file explorer over what past leases wrote — **in either of its two
  * arrangements** (`docs/DESIGN.md` §9, #165, #181).
  *
- * **The path is in the URL, and the tree card's search text is the one piece of state that is
- * deliberately not** (#146). A reload lands where you were, a link is shareable, and the tree's
- * expansion is *derived* from the selection rather than stored beside it — so the tree and the
- * address bar cannot disagree about *where you are*, and the levels read are exactly the prefixes
- * of the path (`archive-levels.ts`). The search text is component state on purpose: a reload and a
- * shared link land on the **address**, without somebody else's search, and a hit is a navigation to
- * an address like any other, so nothing about it needs to be in the URL to survive being followed.
+ * **The path is in the URL, and two pieces of state on this screen are deliberately not** (#146,
+ * #198). A reload lands where you were and a link is shareable, because *where you are* is the
+ * address and nothing else carries it. The two exceptions are the tree card's search text
+ * (`archive-search.ts`) and **which branches of the tree are open** (`open-branches.ts`), and they
+ * are exceptions on the same terms: a shared link lands on the address without somebody else's
+ * search and without somebody else's browsing, and each is seeded from that address — the search
+ * empty, the open set with the selection's own prefixes, which is the tree the derived-expansion
+ * rule used to draw. A hit and a row are navigations to one of these paths like any other, and the
+ * open set **absorbs the selection's ancestors at every one of them** (`open-branches.ts`,
+ * `absorbing`, and §9): the floor holding a branch open is evaluated against wherever the selection
+ * is now, so a branch reached without clicking a row has to be taken into the set before the
+ * selection leaves it — otherwise the next click elsewhere rebuilds the tree the reader was reading.
  *
  * **And since #181 the *view* is in the URL too, which is the question #165 deliberately left
  * open.** It could not be answered then, because the groups arrangement had no addresses of its own
@@ -70,11 +82,12 @@ import { rootRoute } from './__root.js';
  * through it: the `list_archive` levels inside a run, the run's two files, and an open artifact's
  * bytes.
  *
- * **So closing a node in the tree moves the selection, and this card follows it up** (#175,
- * `directory-tree.tsx`). An open row goes to the node it is drawn under, which is what makes
- * clicking it a second time close it without anything being stored — and the cost, decided there
- * and recorded in §9, is that the card beside the tree becomes that node's card. Nothing here has
- * to know: it is a navigation like any other, onto levels this screen has already read.
+ * **So closing a node in the tree moves the selection onto it, and this card follows** (#175's
+ * gesture, #198's destination — `directory-tree.tsx`). Every row links to its own address and a
+ * click toggles that row's branch, so closing an ancestor of the selection lands *on* that node and
+ * the card beside the tree becomes its card — the cost §9 states rather than hides. Nothing here has
+ * to know: it is a navigation like any other, onto levels this screen has already read. What no
+ * longer happens is every *other* open branch closing with it.
  *
  * **Every state below is a state of this one screen** (§7's rule, applied to a second screen). The
  * breadcrumb, the describing line and the header row's shape are the same in all of them; the badge
@@ -114,6 +127,20 @@ export function ArchiveScreen({ view }: { readonly view: ArchiveView }) {
 	 */
 	const groups = useArchiveGroups(view === 'groups');
 	/*
+	 * **Which branches are open, held here rather than in the tree card** (#198). It is state for the
+	 * reason the search text is — a reload and a shared link land on the *address* and not on somebody
+	 * else's browsing (`open-branches.ts`) — and it is held *here* rather than one component lower
+	 * because the levels asked for are the levels the tree draws, which is exactly what this decides.
+	 *
+	 * The bound is the deepest address this view's URL can carry, which is what `componentsFromSplat`
+	 * caps a splat at: a row past it cannot be selected, so it is not opened either.
+	 *
+	 * It takes `selected` because it draws over it *and* absorbs from it: the hook writes the
+	 * selection's strict ancestors into the set as the address moves, which costs no request — every
+	 * level it takes over is one the floor already had drawn.
+	 */
+	const branches = useOpenBranches(selected, MAX_ARCHIVE_PATH_DEPTH + OFFSET[view]);
+	/*
 	 * **One cache, asked as a function of itself** (`archive-levels.ts`). Some of these levels are
 	 * addressed by a path *derived from* an answer — a run's `<serial>` is the level above's
 	 * `onlyChild`, and the open folder's own listing is only wanted once its parent says it is a
@@ -121,7 +148,7 @@ export function ArchiveScreen({ view }: { readonly view: ArchiveView }) {
 	 * the other held (#140 review). `levelsWanted` is that derivation, run against what has answered
 	 * so far.
 	 */
-	const levels = useArchiveLevels((known) => levelsWanted(view, selected, known, groups));
+	const levels = useArchiveLevels((known) => levelsWanted(view, selected, known, groups, branches));
 	/** The archive's own path for the selection — the splat itself, minus the group id (#181). */
 	const address = view === 'groups' ? archiveAddressOf(selected) : selected;
 	const inRun = selected.length >= depths.below;
@@ -196,7 +223,7 @@ export function ArchiveScreen({ view }: { readonly view: ArchiveView }) {
 	 */
 	const search = useArchiveSearch();
 	/** Where the tree's rows come from — the one thing the two views differ in (`tree-source.ts`). */
-	const source = view === 'groups' ? groupRowSource(groups, levels) : allRowSource(levels);
+	const source = sourceFor(view, groups, levels);
 
 	return (
 		<>
@@ -218,6 +245,7 @@ export function ArchiveScreen({ view }: { readonly view: ArchiveView }) {
 			/>
 			<Content
 				artifact={artifact}
+				branches={branches}
 				comparison={comparison}
 				description={description}
 				device={device}
@@ -256,6 +284,7 @@ function Content({
 	levels,
 	groups,
 	source,
+	branches,
 	serial,
 	device,
 	description,
@@ -273,6 +302,8 @@ function Content({
 	/** The one grouping answer, and `loading` throughout the `All` view, which reads none of it. */
 	readonly groups: ArchiveGroups;
 	readonly source: TreeSource;
+	/** Which branches of the tree are open, and what a click on a row does to them (#198). */
+	readonly branches: OpenBranches;
 	readonly serial: RunSerial;
 	readonly device: ArchivedDeviceInfo;
 	readonly description: ArchivedTestDescription;
@@ -311,7 +342,7 @@ function Content({
 
 	return (
 		<Columns>
-			<DirectoryTree search={search} selected={selected} source={source} />
+			<DirectoryTree branches={branches} search={search} selected={selected} source={source} />
 			<Preview
 				artifact={artifact}
 				comparison={comparison}
@@ -538,11 +569,26 @@ function depthsOf(view: ArchiveView) {
 	};
 }
 
+/** Where the tree's rows come from, in one place because two callers ask (`tree-source.ts`). */
+function sourceFor(view: ArchiveView, groups: ArchiveGroups, levels: ArchiveLevels): TreeSource {
+	return view === 'groups' ? groupRowSource(groups, levels) : allRowSource(levels);
+}
+
 /**
  * Which levels a selection needs read — **the prefixes of it with the run's `<serial>` substituted
- * at that one depth**, over one cache (`archive-levels.ts`).
+ * at that one depth, plus whatever else the reader has opened**, over one cache
+ * (`archive-levels.ts`).
  *
- * Above a run they are the prefixes and nothing else. At and below one the run's own level drops
+ * **The two halves answer two different questions, and both are levels on the screen** (#198). The
+ * prefixes are what the *address* asks for: every one of them is an ancestor of the selection, so
+ * the tree draws it whatever the open set holds, and naming them from the URL is what keeps a deep
+ * link one parallel batch of requests rather than one round trip per depth. `drawnLevels` is what
+ * the *reader* asked for: a walk of the drawn tree that stops at every shut row and at the first
+ * level nothing has answered for, so an open branch beside the selection's costs exactly the levels
+ * it draws and a click costs exactly one. Neither half can name a level nobody opened, which is the
+ * whole of *still lazy*.
+ *
+ * Above a run the address's half is the prefixes and nothing else. At and below one the run's own level drops
  * out and its `<serial>` takes its place: a run's contents are that directory's, and its name comes
  * off the level above as `onlyChild`, so listing the run itself would be a `readdir` that draws
  * nothing. Below the `<serial>` the address already carries the serial, so it is a slice of the URL
@@ -552,7 +598,8 @@ function depthsOf(view: ArchiveView) {
  *
  * **Every path here is a level the tree actually draws**, which is what makes the counts what they
  * are: a run **4**, the `<serial>` level **4**, a folder at depth 5 **5**, an artifact at depth 6
- * **5** listings and the artifact.
+ * **5** listings and the artifact. Those are the counts for *arriving* at an address, which is what
+ * a fresh mount's open set is (`open-branches.ts`); each row the reader then opens adds exactly one.
  *
  * **#133's saving is knowingly given up** (#160). The root, the project and the test level used not
  * to be read for an artifact, because the tree was not there to need them; the tree is there at
@@ -568,15 +615,21 @@ function depthsOf(view: ArchiveView) {
  *
  * **The groups view reads none of the levels above a run** (#181), and that is the whole of what
  * differs. Its upper levels are one grouping answer rather than four listings, so `list_archive`
- * is asked for nothing at all until a run is selected — and then for exactly the same addresses,
- * because at and below the `<serial>` the two views are browsing the same directories.
+ * is asked for nothing at all until a run is opened — and then for exactly the same addresses,
+ * because at and below the `<serial>` the two views are browsing the same directories. *Opened*
+ * rather than *selected* since #198: a run's contents are drawn under its row wherever the selection
+ * is, and it is the source that knows no level of that arrangement is a listing (`listedAt`).
  */
 function levelsWanted(
 	view: ArchiveView,
 	selected: readonly string[],
 	known: ArchiveLevels,
 	groups: ArchiveGroups,
+	branches: OpenBranches,
 ): readonly (readonly string[])[] {
+	// Everything the reader has open, walked over what has answered so far — the same predicate the
+	// tree draws with, so the levels asked for and the levels drawn cannot come apart.
+	const opened = drawnLevels(sourceFor(view, groups, known), branches.isOpen);
 	const depth = selected.length;
 	const depths = depthsOf(view);
 	// The archive's own path for one of this view's addresses — itself, outside the groups view.
@@ -585,7 +638,7 @@ function levelsWanted(
 	const archived = addressOf(selected);
 	if (depth < depths.run) {
 		// The `All` view's levels above a run are the prefixes; the groups view's are the answer's.
-		return view === 'groups' ? [] : levelsOf(selected);
+		return [...opened, ...(view === 'groups' ? [] : levelsOf(selected))];
 	}
 	// The run's own level is never one of them, at any depth at or below it.
 	const above = view === 'groups' ? [] : levelsOf(selected.slice(0, RUN_DEPTH)).slice(0, -1);
@@ -597,7 +650,7 @@ function levelsWanted(
 		// Nobody has answered where this run's contents are — the level above is still in flight in
 		// the `All` view, the grouping answer is in the groups view, or the run names no single
 		// child. There is no address to hop to, so nothing under it is asked for on a guess.
-		return above;
+		return [...opened, ...above];
 	}
 	// Each intermediate directory between the `<serial>` and the selection — a node the tree expands
 	// through, and the address itself is not one of them.
@@ -611,7 +664,7 @@ function levelsWanted(
 	 */
 	const own =
 		depth >= depths.below && openEntryOf(known, archived) === 'directory' ? [archived] : [];
-	return [...above, serial, ...below, ...own];
+	return [...opened, ...above, serial, ...below, ...own];
 }
 
 /**

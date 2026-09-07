@@ -1028,10 +1028,11 @@ listed.
   rows from a **source** (`panel/src/archive/tree-source.ts`) rather than from `ArchiveLevels`
   directly: a source answers *the rows at this node*, *the level a row opens* and *the route a row's
   address is on*, and nothing else about a tree is a view's to choose. Every rule above — what a row
-  may never carry, expansion derived from the selection, an open row going up to close (#175),
-  `aria-expanded`, the glyphs, `break-words` — is shared and unconditional. **A second tree
-  implementation is the failure mode**, and the source is what makes it unrepresentable rather than
-  merely avoided.
+  may never carry, an open set over the selection's own ancestors, a click on an open row closing it
+  (#175, #198), `aria-expanded`, the glyphs, `break-words` — is shared and unconditional, so
+  branches accumulate open in the groups view because they accumulate in *the* tree and not because
+  that view chose it. **A second tree implementation is the failure mode**, and the source is what
+  makes it unrepresentable rather than merely avoided.
 - **Below the group the arrangement is the standard one and unchanged.** At and below a run's
   `<serial>` the groups source delegates to the `All` source, so those rows are the same rows listed
   by the same method at the same address; only the splat they link to differs.
@@ -1422,68 +1423,126 @@ nothing about what the archive writes moves — the property #178 and #182 both 
   hook is gated on it. Without that gate the file would be read by the screen and again by its own
   pane.
 
-### The tree — expansion is derived from the URL
+### The tree — expansion is an open set, over the selection's own ancestors
 
-**A node is expanded exactly when it is a prefix of the selected path**, and the selected node is
-expanded too. Nothing else is, and there is no stored expansion state anywhere.
+**A node is expanded when it is in the *open set*, or when it is a strict ancestor of the selected
+path.** The open set is what the reader has opened; the second clause is a floor under it, and
+between them they are the whole of what the tree draws.
 
-**And a row's address is its own while it is shut, and the address of the node it is drawn under
-while it is open** (amended in place, #175). That second sentence is the whole of collapsing: a
-click on a shut node selects it and the rule above draws it open, and a second click on it lands one
-level above it and the same rule then draws it shut. Nothing else changed — opening is what it
-always was, and **a row that opens nothing gains nothing**: a file, and a run whose parent named no
-single child, still carry no triangle and still link to themselves.
+**This reverses #175's rule in place, and the reversal is #198's** (`ai/RULES.md` §1). Expansion was
+derived *entirely* from the selection — *a node is expanded exactly when it is a prefix of the
+selected path, and the selected node too*, with no stored state anywhere. One selection is one path,
+so **only one branch could be open at a time**: opening a second top-level row closed the first, not
+as a defect in the implementation but as that rule's exact consequence. A reader comparing two
+projects, or two groups, lost the tree they had every time they crossed to the other one, and the
+deeper the two branches the more of the gesture went on rebuilding what had been on screen a moment
+earlier. **What the reversal did not surrender is the guarantee that rule was protecting**, which is
+the third bullet below and the one thing here that must not regress.
+
+**And a row's address is its own — shut or open, in both trees** (amended in place, #198). The
+one-level-up destination that was the whole of collapsing in #175 is gone. A click on a row does two
+things, at every depth: it **selects** that row, and it **toggles that row's branch**. So a click on
+a shut row selects it and opens it, exactly as it always did; a second click on it selects it again
+and closes it. Landing *on* the row is what makes the closing half work — the row stops being a
+strict ancestor of the selection, the floor stops holding it open, and the open set's answer is what
+the tree then draws. Nothing else changed: **a row that opens nothing gains nothing**, so a file, and
+a run whose parent named no single child, still carry no triangle, no `aria-expanded` and no toggle.
 
 **No depth is special-cased, in either direction.** A run's children are its `<serial>`'s entries
-(the depth table below), and the hop the tree makes on the way down is made back on the way up — an
-open directory inside a run closes onto the **run**, never onto the `<serial>` address, because no
-row of this tree stands for that address. At the root level an open project closes onto `/archive`,
-which is the one address the splat contract had never been asked to build until now
-(`archive-path.test.tsx` pins it against a real router). `directory-tree.tsx` carries this as one
-value passed down the recursion — *the node this level is drawn under* — rather than as arithmetic
-on a depth, which is what keeps every depth the same.
+(the depth table below), and the open set is keyed by the **row's** address, so the hop the tree makes
+on the way down needs no matching hop on the way up: an open directory inside a run closes onto
+itself like every other row. `directory-tree.tsx` still takes *the level this row opens* as a value
+off the row rather than as arithmetic on a depth, and the recursion descends into that node — which
+is what keeps every depth the same, and what #175 needed a second value for (*the node this level is
+drawn under*, now gone with the destination it existed for). Closing a project therefore no longer
+lands on `/archive`, the one address #175 had made the splat contract build
+(`archive-path.test.tsx` still pins it, as the contract for the bare address).
 
-Three of the issue's requirements fall out of that single rule rather than being implemented
-separately, and **all three still hold after #175** — which is the reason collapsing took the shape
-it did rather than the other one:
+Four requirements hold of this tree, and each of them is now a property of something rather than a
+consequence of one rule — which is the price of the reversal and is why they are written out:
 
-- *the tree expands lazily, one `readdir` at a time* — the levels read are precisely the prefixes of
-  the selection, at most four requests at the deepest point, each one a level actually drawn. A
-  pre-walk is not avoided so much as unrepresentable. **Closing a node reads nothing**: it is a
-  navigation to a level that has already answered;
-- *a reload lands where you were and a link is shareable* — **where you are is the address, and the
-  tree card's search text is the one deliberate exception** (#146, amended in place). It is component
-  state and is deliberately not in the URL: a reload and a shared link land on the *address*, without
-  somebody else's search, and a hit is a navigation to an address like any other, so nothing about
-  following one needs a query parameter to survive. Putting the text in the URL was considered and
-  refused by the operator; what the address carries is still *where you are*, and that is what a
-  shared link has to reproduce. **Collapsing adds no second exception**, because it moves the
-  address: what a reload lands on is what the reader last closed onto;
-- the tree and the URL cannot disagree, because there is only one of them — and the searched tree
-  cannot either, since every row in it is an address the host answered with. **This is the one a
-  collapse had to be careful with**, and it is what decided between the two answers below.
+- *the tree expands lazily, one `readdir` at a time* — the levels read are the levels **drawn**,
+  walked from the root through expanded rows only and stopping at the first level nothing has
+  answered for yet (`panel/src/archive/tree-source.ts`, `drawnLevels`). **The open set grows only by
+  a click, or by an address the reader navigated to**, so the number of levels read is bounded by the
+  reader's gestures and never by what is in the archive: a newly opened row costs exactly one
+  `list_archive`, a shut branch costs none, and a pre-walk is still unrepresentable. **What the set
+  absorbs from the floor reads nothing either** — every level it takes over is one the floor was
+  already drawing, so it has already been asked for. **Closing a node reads nothing.** The
+  selection's own prefixes
+  are named from the address as well, which is not a second source of truth — every one of them is an
+  ancestor the floor draws — but it is what keeps a deep link one parallel batch of requests instead
+  of one round trip per level;
+- *a reload lands where you were and a link is shareable* — **where you are is the address, and this
+  screen now has two pieces of state that are deliberately not in it**: the tree card's search text
+  (#146) and **the open set itself** (#198, and this is the decision that issue asked to be recorded
+  rather than left implicit). **The open set does not survive a reload.** It is component state, like
+  the search text and on the same terms: a shared link lands on the *address*, without somebody
+  else's search and without somebody else's browsing. What stands in for it is the **seed** — a fresh
+  mount opens every prefix of the address it landed on, including the selection, so a reload and a
+  shared link draw exactly the tree the derived rule drew, and the reader's own accumulation starts
+  from there. Putting it in the URL was refused for the reason the search text was: the address
+  carries *where you are*, and a second reader's list of open folders is not that;
+- **the selection is always drawn in the tree** — this is the one the reversal had to be careful
+  with, and it is a property of the **floor**. Every strict ancestor of the selection is expanded
+  whatever the open set holds, so *the selected node is hidden beneath a collapsed ancestor while the
+  card beside it still draws that node's contents* is unreachable rather than merely avoided. It
+  cannot be reached by a click, because a click's destination is the row it toggles and that row is
+  drawn; nor by a deep link, a breadcrumb, the back button or a search hit, because those move the
+  selection and the floor follows it. That state is what the tree stands beside an open file to
+  prevent (#160), and it is the whole reason the table below refused this change once;
+- the tree and the address cannot disagree about *where you are*, because only the address says it.
+  What the open set adds is *what else is on screen beside it* — which the address never claimed to
+  carry, and the searched tree does not carry either, since every row in it is an address the host
+  answered with.
 
-**Collapsing is a navigation rather than tree state, and choosing that was the substance of #175.**
+**And the set absorbs the floor as the selection moves**, because *accumulating* is not the same as
+*never resetting* (`open-branches.ts`, `absorbing`; #202 review). The floor is evaluated against
+whatever the selection is **now**, so a branch standing on it alone — one reached by a search hit, a
+breadcrumb, the back button or a link out of the card, rather than by clicking a row — would fall the
+moment the selection left it, and the next click anywhere else would rebuild the tree the reader was
+just reading. So every **strict** ancestor of a selection is written into the set the moment that
+selection arrives: the floor is only ever *lifted* off levels the set has already taken over, and it
+costs no request, because a level the floor was drawing has already been read. *Strict* does the same
+work here as in the drawing rule, in both directions — it is all the floor was holding, and it is what
+keeps closing working, since a close-click lands *on* the row it removed and no node is a strict
+ancestor of itself.
+
+**The seed is deliberately not that function.** A mount knows nothing but the address, so the derived
+rule's whole answer for it — every prefix *including the selection* — is the honest seed; a selection
+that moves is a different question, and by then the set holds the reader's own gestures. The one
+visible consequence, stated here rather than left to be found: a directory reached **mid-session** by
+a hit or a breadcrumb draws shut — its ancestors open, its own level left to a click, like any node
+nobody opened — where the same address after a reload draws open. The card beside the tree draws that
+directory's contents either way, so what differs is a triangle and not what is on screen.
+
+**Collapsing is the row's, and what it collapses is tree state after all — the table #175 settled
+against is rewritten rather than deleted.**
 
 | | what it buys | what it costs |
 | --- | --- | --- |
-| **collapse by navigation** — an open row goes to the node above it | nothing is stored, so all three consequences above survive intact | collapsing **moves the selection** to that node, so the card beside the tree becomes that node's card |
-| **collapse as tree state** — a set of deliberately-closed nodes laid over the rule | a node closes without the selection moving | it puts back the state this section removed, and makes *the selection is drawn nowhere in the tree* reachable in one click |
+| **collapse by navigation** — an open row goes to the node above it (#175, superseded) | nothing is stored, so the tree is a pure function of the address | one branch open at a time: opening a node closes every other one, because one selection is one path. And collapsing **moves the selection to the parent**, so closing a project lands on the archive root |
+| **collapse as tree state, unguarded** — a set of deliberately-closed nodes laid over the derived rule (refused, both times) | a node closes without the selection moving at all | it makes *the selection is drawn nowhere in the tree* reachable in one click, with the card still drawing the file underneath the closed ancestor — the inversion of what the tree is there for (#160) |
+| **an open set with the selection's ancestors as a floor** (#198, built) | branches accumulate open at any depth, in both views, and nothing is rebuilt when the reader crosses between two of them — including a branch reached without clicking a row, because the set absorbs the floor as the selection moves | the open set is state, so it is a second thing that can be true of the screen — and it is not in the address, so it does not survive a reload |
 
-The second cost is what settled it. The tree stands beside an open file **precisely so a reader
-stays placed** (#160) — that is the whole reason it is still on screen there — and a closed ancestor
-with the card still drawing the file underneath it is that guarantee inverted. Collapse by
-navigation cannot reach that state at all: the tree is derived from the selection, so it draws the
-selection at every moment. What it does instead is stated rather than hidden — **the card follows
-the tree up**, and closing a project therefore lands on *Projects with runs filed on this host*, the
-same as clicking the breadcrumb would.
+**Why the third answer is not the second one.** The middle row's cost is a *closed set laid over a
+derived rule*: closing is then something that can be true of an ancestor of the selection while the
+selection stays where it is, and that is exactly the state #160 forbids. An **open** set with a floor
+cannot express it — a node that is an ancestor of the selection is expanded by the floor, whatever
+the set says, and the only way to close it is to land on it. The state that was refused is still
+refused; what was added is the state above the selection's own branch, which #160 has no objection to.
 
-**The accepted cost**: a folder cannot be peeked at without selecting it, and since #175 it cannot
-be closed without leaving it either. Both are ordinary file-explorer behaviour, and together they
-buy the removal of a whole class of *the tree says one thing and the address says another* bugs.
-**The separate collapse control this section used to park as *a later change if anybody wants one*
-is that change** — and it turned out not to be a control at all, but the row, which already goes
-somewhere.
+**And its cost is paid in one place rather than everywhere.** The open set is not in the URL, so the
+one thing it can disagree with is a *reload*, which resets it to the address's own branch — a
+smaller, once-per-load surface than the class of bugs #175 was avoiding, and the same trade the
+search text has been making since #146.
+
+**The accepted cost that stands**: a folder cannot be peeked at without selecting it. The row is one
+target and selecting is what it does, so opening one moves the card beside the tree — ordinary
+file-explorer behaviour, and the alternative is the second control the row is not (#175, and the
+`aria-expanded` note below). **The separate collapse control this section once parked as *a later
+change if anybody wants one* is still not a control**: it was the row in #175's shape and it is the
+row in this one.
 
 #### And the card searches the whole archive — settled (#146)
 
@@ -1508,11 +1567,12 @@ browser.
   is forbidden: no count, no status glyph, no colour that means an outcome, the name verbatim and
   `break-words`. The glyphs differ, and they say what the entry *is* — `FolderOpen`/`Folder`,
   `FileText`, and `FileQuestionMark` for the host's own *unclassified*.
-- **And the searched tree does not collapse** (amended in place, #175). Where a browsing row that is
-  open goes to the node above it, a hit goes to its own address whatever it is drawing beneath it:
-  every node here **is** an address the host answered with, so there is no *node it is drawn under*
-  to close onto and nothing to derive a closed state from. It still carries `aria-expanded`, because
-  it is still open — by construction, and now said rather than only drawn.
+- **And the searched tree does not collapse** (amended in place, #175, and unchanged by #198). A hit
+  goes to its own address whatever it is drawing beneath it — which every browsing row does now too
+  — and it carries **no toggle**: every node here **is** an address the host answered with rather
+  than a level of anything, so there is nothing under it to open and nothing to close. It is not in
+  the open set and is not drawn from it. It still carries `aria-expanded`, because it is still open —
+  by construction, and now said rather than only drawn.
 - **Three states, and none borrows another's sentence** — nor one from *Nothing in the archive*,
   `ARCHIVE NOT READABLE` or the tree's own *Reading this level.*: in flight is
   ***Searching this host's archive.***, one quiet line with `aria-live="polite"` and **no spinner**
@@ -1559,12 +1619,14 @@ browser.
   `FolderOpen`/`Folder`, `FileText`, or `FileQuestionMark` for the host's own *unclassified*, taken
   from the entry's `kind` and never from its name (D22); the triangle is `ChevronDown`/`ChevronRight`.
   Both are `aria-hidden` — **the triangle stayed decoration meaning *this opens*, and did not become
-  a second control inside the link** (#175, rewritten in place). Collapsing landed on the row, which
-  already goes somewhere: hanging the closing half of one gesture on a `<button>` nested inside the
-  `<Link>` would split it across two targets, make a row two things, and be a markup change larger
-  than it looks for no behaviour the row cannot carry itself. **What the row does say out loud is
-  `aria-expanded`**, on every row there is a level under and on no other — the triangle draws
-  openness and cannot say it, the tree told assistive technology nothing about it until now, and the
+  a second control inside the link** (#175, rewritten in place; #198 kept it there). Collapsing
+  landed on the row, which already goes somewhere: hanging the closing half of one gesture on a
+  `<button>` nested inside the `<Link>` would split it across two targets, make a row two things, and
+  be a markup change larger than it looks for no behaviour the row cannot carry itself. **The row is
+  still one `<Link>` and one target**, and what an open set added is a handler on that link rather
+  than anything a reader can hit. **What the row does say out loud is `aria-expanded`**, on every row
+  there is a level under and on no other, **reporting the state it is drawn in** — the triangle draws
+  openness and cannot say it, the tree told assistive technology nothing about it until #175, and the
   row is a toggle, so this is the change that had to notice. **A run whose parent named no single
   child gets none of the three — no open folder, no triangle, and no `aria-expanded`**: there is no
   level to open, and drawing one over nothing is the same class of claim as an invented `0`.
@@ -1744,8 +1806,9 @@ tests use.
 
 **There is no polling and no refresh control.** The archive is finished data: a run directory is
 written while a lease is live and nothing is added once it ends, and this screen makes no claim to
-show a run appearing. A level is fetched on navigation and cached for the life of the screen, and
-the grouping walk is fetched **once**, only in the view that reads it, on exactly those terms. This
+show a run appearing. A level is fetched when a navigation or a click first draws it and cached for
+the life of the screen, and the grouping walk is fetched **once**, only in the view that reads it,
+on exactly those terms. This
 is the one place the panel's data differs from the Devices screen's, which polls because *what is
 attached* changes under the reader.
 
@@ -1753,8 +1816,10 @@ attached* changes under the reader.
 (amended in place, #146 and #159): **the tree draws it**, to any depth the archive holds, so a file
 is selectable by clicking alone. Typing one still works and still renders that level's listing rather
 than nothing at all — names, addressable, no invented measures — and a search hit still lands where
-it lands. What stays true through all three is the rule underneath them: browsing derives its levels
-from the address, so the tree can only ever draw what the address has already paid to read.
+it lands. What stays true through all three is the rule underneath them (amended in place, #198):
+browsing draws only a level somebody asked for — an ancestor of the address, or a row the reader
+clicked open — so the tree can never draw more of the archive than has been read one level at a
+time, and no gesture reads a level it does not draw.
 
 ### Deviations from the approved markup, made deliberately
 
@@ -1996,7 +2061,8 @@ arrangements, and two things on it existed only inside them:
   with nothing of its own to do (§3). The strip is the markup's left-aligned `Run Details` heading
   and nothing else — one fewer thing in it than #143 left, and nothing in it that comes and goes.
 - **`CONTENTS` is gone** (#161, and this is the last of #159's three phases). It expanded down to and
-  including the open address — the tree's own derived-expansion rule applied to the run's subtree —
+  including the open address — the tree's own expansion rule as it then was, applied to the run's
+  subtree —
   because a file below the run was reachable from this card and from nowhere else; #160 flattened it
   back to one listing of the `<serial>` level, and there is nothing left for even that to be for. The
   tree draws those entries under the run's node, so the card said the same names twice and only one
@@ -2081,10 +2147,12 @@ root's answer being a listing, and only the `≥ 5` rows draw their tree uncondi
 arrive (`directory-tree.tsx`).
 
 - **The levels read are the prefixes of the selection with the run's `<serial>` substituted at that
-  one depth**, and every one of them is a level the tree draws (`levelsWanted`,
-  `panel/src/routes/archive.tsx`). The run's own level is never among them — a run's contents are
-  its `<serial>`'s — and the selection's own listing is added only once its parent has said it is a
-  directory, never on the strength of its name (D22).
+  one depth — and, since #198, whatever else the reader has opened** (`levelsWanted`,
+  `panel/src/routes/archive.tsx`; `drawnLevels`, `tree-source.ts`). Every one of them is still a
+  level the tree draws, which is the rule that did not change: the second half is a walk of the drawn
+  tree rather than a wider guess at the address. The run's own level is never among them — a run's
+  contents are its `<serial>`'s — and the selection's own listing is added only once its parent has
+  said it is a directory, never on the strength of its name (D22).
 - **The `<serial>` comes from the URL there** (`selected[3]`), not from the level above the run's
   `onlyChild`. The address was built from a listing, so that component *is* the directory's name; it
   removes a dependency, means the card never waits on the level above the run, and collapses
@@ -2099,7 +2167,9 @@ arrive (`directory-tree.tsx`).
 - **The counts, all of them levels the tree actually draws**: a run **4** listings; the `<serial>`
   level **4**, one fewer than before #160 because the run's own level is no longer listed under it;
   a folder at depth 5 **5**; an artifact at depth 6 **5** listings and the artifact, so **6**
-  requests.
+  requests. **These are the counts for arriving at an address** — a fresh mount opens that address's
+  own branch and nothing else (#198) — and each row the reader then opens adds **exactly one**,
+  because the level it is drawn in has already answered by the time there is a row in it to click.
 - **#133's request saving is knowingly given up** (#160). The root, the project and the test level
   used not to be fetched for an artifact, because the tree was not there to need them, and a folder
   asked for them only after the answer that wanted them; the tree is drawn at every depth now, so a
