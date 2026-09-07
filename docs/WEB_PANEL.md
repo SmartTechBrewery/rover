@@ -115,13 +115,18 @@ Design work lives in [`DESIGN.md`](./DESIGN.md); the brief that produced the fir
    limit was a conclusion about *colour* applied to *letters*, and one real group filing nine labels
    made five of nine badges read `@`. The letters now run to `Z` on the palette's same four colours,
    cycled family-first so neighbouring letters are always different families; `@` moves to past the
-   twenty-sixth and keeps its meaning. What did not move is that no badge colour may read as an
-   outcome, and that a **new hue** would still be a commissioned categorical ramp rather than a
-   colour picked at the keyboard. `docs/DESIGN.md` §9 records all of it — which of *design it* and
-   *settle it here* was chosen and why, the reversal with its reason rewritten in place, and the
-   cost that shapes the preview: an authenticated byte route cannot be an `<img src>`, so the panel
-   fetches the bytes with the session header and renders an object URL, and the whole artifact is
-   therefore buffered in the tab.
+   twenty-sixth and keeps its meaning. **And every cycle is a step off the last** (#200): `E`…`Z`
+   are the same four families modulated a step deeper into each family's own dark step, derived with
+   `color-mix` over the tokens, so a later cycle is recognisably the same hue at another level
+   rather than a plain repeat — which is what closes the one weak adjacency #197 had to record, the
+   cycle boundary at `D`/`E`. What did not move is that no badge colour may read as an outcome, and
+   that a **new hue** would still be a commissioned categorical ramp rather than a colour picked at
+   the keyboard; the derived steps are now measured against exactly that by
+   `tests/unit/panel/label-badge-palette.test.ts`. `docs/DESIGN.md` §9 records all of it — which of
+   *design it* and *settle it here* was chosen and why, the reversal with its reason rewritten in
+   place, and the cost that shapes the preview: an authenticated byte route cannot be an
+   `<img src>`, so the panel fetches the bytes with the session header and renders an object URL,
+   and the whole artifact is therefore buffered in the tab.
 6. **Live lease state** — **done** (#113). A held card carries the `owner`, the `project`, the
    `test_name` and the grant instant, with a countdown to the expiry that ticks once a second and
    **goes back up** when activity renews the lease (`PROJECT.md` D8) — verified against a running

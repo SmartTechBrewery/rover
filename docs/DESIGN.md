@@ -953,7 +953,7 @@ The screen has **two views**, and everything else in §9 describes the first of 
 | Segment | What it draws |
 | --- | --- |
 | `All` | the file explorer — the tree beside one card, at every depth. Unchanged in every particular |
-| `Testing groups` | the same archive arranged by the `group_id` a lease named (`PROJECT.md` R41): project, then the group id, then the standard arrangement under it. **Built** (#181), on the host's `list_archive_groups` (#178); the label badges inside it are a further phase |
+| `Testing groups` | the same archive arranged by the `group_id` a lease named (`PROJECT.md` R41): project, then the group id, then the standard arrangement under it. **Built** (#181), on the host's `list_archive_groups` (#178), with the label badges inside it built too (#182, the alphabet #197, the per-cycle steps #200) |
 
 **No approved Stitch screen shows this control**, and none was commissioned for it (§1, §11's third
 list). So nothing about it is invented: the frame is the header badge's own — `rounded-sm border-2
@@ -1124,7 +1124,7 @@ because they are true in both; only the claim narrows. This is `Searched`'s rule
 archive contains that text* about a search that was cut short — and it is why a truncated grouping
 answer is not a fourth empty-handed state.
 
-### The label badges — settled here, not designed (#182)
+### The label badges — settled here, not designed (#182, amended in place by #197 and #200)
 
 **Settled in this document rather than by a Stitch round**, and which of the two was chosen is said
 out loud because §1 requires it — the same call the arrangement above it is: the row anatomy and the
@@ -1170,40 +1170,104 @@ genuinely unrecoverable — the rule this section already states for `OWNER`.
 the tree it is today. And the badge is **not a control**: the row is one `<Link>` and stays one
 target (#175), so this is an element inside it and never a second thing to click.
 
-**The palette — four colours, cycled.** A letter's fill is its position in the alphabet modulo
-four, so the four families take the letters family-first:
+**The palette — four colours, cycled, and a step off each on every cycle.** A letter's fill is its
+position in the alphabet modulo four, so the four families take the letters family-first:
 
-| letters | fill | text | reads as |
-| --- | --- | --- | --- |
-| `A`, `E`, `I`, `M`, `Q`, `U`, `Y` | `bg-primary-fixed` | `text-on-primary-fixed` | pale lavender |
-| `B`, `F`, `J`, `N`, `R`, `V`, `Z` | `bg-secondary-fixed` | `text-on-secondary-fixed` | pale peach |
-| `C`, `G`, `K`, `O`, `S`, `W` | `bg-tertiary-fixed` | `text-on-tertiary-fixed` | mint |
-| `D`, `H`, `L`, `P`, `T`, `X` | `bg-inverse-surface` | `text-inverse-on-surface` | neutral |
-| `@` | `bg-surface-container-highest` | `text-on-surface-variant` | the quietest thing on the card |
+| letters | family | cycle 1's fill | cycle 1's text | reads as |
+| --- | --- | --- | --- | --- |
+| `A`, `E`, `I`, `M`, `Q`, `U`, `Y` | primary | `bg-primary-fixed` | `text-on-primary-fixed` | pale lavender |
+| `B`, `F`, `J`, `N`, `R`, `V`, `Z` | secondary | `bg-secondary-fixed` | `text-on-secondary-fixed` | pale peach |
+| `C`, `G`, `K`, `O`, `S`, `W` | tertiary | `bg-tertiary-fixed` | `text-on-tertiary-fixed` | mint |
+| `D`, `H`, `L`, `P`, `T`, `X` | neutral | `bg-inverse-surface` | `text-inverse-on-surface` | neutral |
+| `@` | — | `bg-surface-container-highest` | `text-on-surface-variant` | the quietest thing on the card |
+
+That table is **cycle 1**, which is `A`…`D` and is byte-identical to what #182 shipped. Every later
+cycle is the *same four families a step deeper into each family's own dark step* (#200), so `E` is
+`A`'s lavender at another level rather than a repeat of it. A step is
+`color-mix(in srgb, var(--color-<family>-fixed) <n>%, var(--color-on-<family>-fixed-variant))` in
+`panel/src/index.css` — the same file's `.scanline` and `.wordmark-chroma` are the precedent — and
+the component writes only a family and a cycle: `label-badge-step label-badge-<family>
+label-badge-cycle-<n>`.
+
+**The numbers are the design decision, so here they are.** Each column is the mix percentage of the
+family's own light token and the byte-rounded result; each ramp's dark end is in the header:
+
+| cycle | letters | primary → `#0035be` | secondary → `#802a00` | tertiary → `#005236` | neutral → `#2f3034` |
+| --- | --- | --- | --- | --- | --- |
+| 1 | `A`…`D` | 100% `#dde1ff` | 100% `#ffdbce` | 100% `#47ffb8` | 100% `#e2e2e6` |
+| 2 | `E`…`H` | 91% `#c9d2f9` | 91% `#f4cbbb` | 72% `#33cf94` | 94% `#d7d7db` |
+| 3 | `I`…`L` | 82% `#b5c2f3` | 82% `#e8bba9` | 66% `#2fc48c` | 88% `#cdcdd1` |
+| 4 | `M`…`P` | 73% `#a1b3ed` | 73% `#ddab96` | 60% `#2bba84` | 82% `#c2c2c6` |
+| 5 | `Q`…`T` | 64% `#8da3e8` | 64% `#d19b84` | 54% `#26af7c` | 76% `#b7b7bb` |
+| 6 | `U`…`X` | 55% `#7a94e2` | 55% `#c68b71` | 48% `#22a574` | 70% `#acadb1` |
+| 7 | `Y`, `Z` | 46% `#6684dc` | 46% `#ba7b5f` | 42% `#1e9b6d` | 64% `#a2a2a6` |
+
+Mixing at 100% is the identity, which is what makes "cycle 1 is unchanged" a computation rather
+than a claim: the first stop of every ramp *is* the token the utility class above draws. The
+alphabet ends mid-cycle — `Z` is the secondary's seventh step — and the tertiary and neutral
+families simply stop at six rather than being padded out to a round number. Every hex in that table
+is the mix rounded to the nearest byte, and each was cross-checked against lightningcss (the engine
+the panel's own build runs) evaluating the same `color-mix()` call — so they are what a colour
+picker on a rendered badge reports, not what an agent's own arithmetic hoped for.
+
+**The four ramps do not reach equally far, because their constraints do not.** Primary and
+secondary step an even 9% a cycle and the neutral an even 6%, but the neutral stops at 64% rather
+than going as deep — that is where it is still ΔE 10.3 clear of `--color-outline`, §5's not-ready
+grey, which sits *inside* a neutral lightness ramp and is what bounds it. And the tertiary's first
+step is a jump to 72%, because `--color-tertiary` — §5's *free device* green — sits between
+`--color-tertiary-fixed` and its own dark step: a 90% step lands ΔE 5.5 from it, so cycle 2 clears
+it in one move and the rest step 6% a cycle. The neutral runs to
+`--color-inverse-on-surface` rather than the `--color-outline-variant` that looks like its natural
+dark end, and that too is the grey: *that* ramp passes within ΔE 4.4 of `--color-outline` at its own
+midpoint, because both are blue-tinted greys on nearly one line.
+
+**The text step never flips.** A fill dark enough for the family's light `-fixed` step to carry a
+12px bold letter at 4.5:1 needs a relative luminance ≤ 0.131, and a fill that still reads as a
+badge against the card's `surface-container` at 3:1 needs ≥ 0.143 — the two windows do not overlap,
+so no ramp crosses into the dark half and every cycle of a family carries the one dark text step
+cycle 1 pairs with it. That was computed rather than assumed; the achieved minima across all
+twenty-eight fills are 4.81:1 for the letter and 4.59:1 against the card.
 
 **Every colour comes from `panel/src/tokens.css`** (§1, `ai/RULES.md` §8), and
 `tests/unit/panel/tokens-are-the-source-of-truth.test.ts` fails loudly on a hex written in a
 component. The four are light fills carrying dark text, which is what makes them read at badge
 size against `surface-container`; `@` is the one that inverts — a dark fill a shade off the card,
 carrying the light text the tree's quiet lines already use — and that is deliberate, because it
-distinguishes nothing and should not ask to be looked at.
+distinguishes nothing and should not ask to be looked at. **`@` is outside the cycle** and takes no
+step: it is not a family, and modulating the thing that distinguishes nothing would be a change
+with no reader.
+
+**`-fixed-dim` looks like a free second cycle and is rejected, with the numbers**, because it is the
+shortcut the next reader will reach for. `--color-tertiary-fixed-dim` is byte-identical to
+`--color-tertiary`, §5's free-device green; `--color-primary-fixed-dim` is byte-identical to
+`--color-primary`, the wordmark's own chroma step; and `--color-secondary-fixed-dim` (`#ffb59a`) is
+ΔE 9.3 from `--color-error` (`#ffb4ab`), near enough to read as the error colour. Worse, the badge
+test asserts the *class name* is not `bg-tertiary`, so `bg-tertiary-fixed-dim` would have passed
+that gate while painting the free-device green onto a badge.
 
 **Adjacent letters never carry one colour**, and cycling family-first is what makes that true by
 construction rather than by inspection: two letters next to each other in the alphabet are always
 two different accent families, and two steps of one family always sit exactly four letters apart.
-The first cycle is byte-identical to what #182 shipped, so nothing about a group of four or fewer
-labels changed. **The closest pair in the set is a cycle boundary** — `D`'s `bg-inverse-surface`
-(`#e2e2e6`) beside `E`'s `bg-primary-fixed` (`#dde1ff`), which differ chiefly in the blue channel —
-and since every adjacency inside a cycle is strong (lavender/peach, peach/mint, mint/neutral),
-*every* weak pair in the whole alphabet is one of these boundaries. A per-cycle step that widens
-them, so two letters of one family read as one hue at two levels, is the follow-up phase and is
-**not built**; until it is, the letter is what tells `D` from `E`, which is the rule this section
-states anyway.
+**The cycle boundary used to be the exception and no longer is.** `D`'s `bg-inverse-surface`
+(`#e2e2e6`) beside `E`'s fill was ΔE 13.6 while `E` was a plain repeat of `A` — the one weak pair
+#197 had to record, and every weak adjacency in the whole alphabet was one of these boundaries.
+`E` is now a step off `A`, which puts that pair at ΔE 19.7 and makes it no longer the closest thing
+in the set to a collision. The weakest adjacency anywhere in `A`…`Z` is now 19.7.
+
+**And all of that is checked rather than eyeballed.**
+`tests/unit/panel/label-badge-palette.test.ts` reads the tokens and the percentages out of the two
+CSS files, recomputes all twenty-eight fills by the byte arithmetic `in srgb` performs, and fails
+on a contrast below either floor, on any derived fill within ΔE 10 of a colour that already means
+something, on any pair of alphabet-adjacent fills within ΔE 15, or on a cycle 1 that is no longer
+its own token. Both thresholds are calibrated against colours already in the repository rather than
+picked off a table: 10 is the margin cycle 1 already lives with (`tertiary-fixed` is 9.9 from the
+free green), and 15 is above the 13.6 a plain repeat gives.
 
 **No badge colour may read as an outcome.** §5 already spends `bg-tertiary` green on *a free
 device*, `bg-primary-container` blue on *held* and `secondary-container` orange on *warning*, and
-`error` is not available at all — so every fill above is a `-fixed` step or a neutral, none is one of
-the three §5 gives a meaning to, and **no two of them can pair into a red/green verdict**. A green
+`error` is not available at all — so every fill above is a `-fixed` step, a neutral, or a derived
+step of one of those, none is one of the three §5 gives a meaning to, and **no two of them can pair
+into a red/green verdict**. A green
 `A` beside a red `B` is precisely the pass/fail semantics Rover does not have (§2,
 `ai/RULES.md` §1), and this palette is chosen to make it unavailable rather than discouraged.
 
@@ -1236,7 +1300,9 @@ The commissioned-ramp rule also survives for what it was actually about: a **new
 operator's Stitch round and never a swatch picked at the keyboard. A *derived* step of a token is a
 different thing — `panel/src/index.css` already derives from `--color-surface-container-lowest`,
 `--color-primary` and `--color-secondary-container` through `color-mix` — which is why the per-cycle
-modulation is a follow-up rather than a thing this section forbids.
+modulation was a follow-up rather than a thing this section forbids. **That follow-up is now built**
+(#200): the four ramps and their twenty-eight stops are in the table above, every one of them a
+`color-mix` over two tokens of one family, and no new hue was commissioned to do it.
 
 **What is deliberately absent, and why.**
 
@@ -2488,8 +2554,9 @@ top of this file). Do not commission a Stitch screen for them.
   fixes and settled only a level vocabulary — which is a table rather than a screen. What they
   settled is written into §9 above: the toggle's frame and colours, the four routes and why the
   view is an address, the group-first level table, what is deliberately absent from it, and its
-  three empty-handed answers. The label badges inside that view are the one part still to come, and
-  they are a palette and a letter — the third-list test applies to them too.
+  three empty-handed answers. The label badges inside that view were settled the same way and are
+  built (#182, #197, #200) — they are a palette and a letter, and the third-list test applied to
+  them too.
 - **The groups view's comparison card — done** (#199). It belongs here for the reason the two
   entries above it do, with one difference worth writing down: this one *had* a screen, and it was
   used as a **layout reference only**. `Compare — Visual Diff (V2)` is the one remaining uncorrected
@@ -2499,7 +2566,6 @@ top of this file). Do not commission a Stitch screen for them.
   into §9 above: when the card is drawn and when the single preview still is, one pane per labelled
   artifact and why, *oldest on the left* as this screen's one order exception and why it is a sort,
   the pane floor with the widths it was measured at, the pane's anatomy, the shared body view, and
-  the three costs of N panes.
 - **The Archive preview's rules, and what it deliberately does not offer — done** (#133). They were
   settled here by #131, before there was a screen, and settling them at that point was deliberate:
   #131 is what made them decisions about the *host's answer* rather than about one panel's markup.
