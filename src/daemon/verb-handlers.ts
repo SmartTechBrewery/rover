@@ -281,8 +281,9 @@ export function createVerbHandlers(
 					`This call carries a 'label' but its lease has no 'groupId', and a label only means ` +
 					`something inside a group: it says this artifact and one from another run are the ` +
 					`same thing at two moments, and there is no other run here to compare it against. ` +
-					`Acquire the device with a 'groupId' — the same one for every run in the ` +
-					`comparison — or leave the 'label' off this call. Nothing was recorded.`,
+					`Acquire the device with a 'groupId': the host mints the id it files and answers ` +
+					`with it, and every further run of the comparison passes that exact id back. Or ` +
+					`leave the 'label' off this call. Nothing was recorded.`,
 			});
 		}
 

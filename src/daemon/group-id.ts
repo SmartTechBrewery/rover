@@ -59,8 +59,18 @@ export const MINTED_SUFFIX_LENGTH = 7;
 export const LONGEST_MINTABLE_NAME =
 	ATTRIBUTION_MAX_LENGTH - GROUP_ID_SEPARATOR.length - MINTED_SUFFIX_LENGTH;
 
-/** `<name>.<suffix>` — exactly one separator, and the name half may not contain one. */
-const MINTED_GROUP_ID = /^[^.]+\.[0-9a-z]{7}$/;
+/**
+ * `<name>.<suffix>` — exactly one separator, and the name half may not contain one.
+ *
+ * **Built from the two constants above rather than spelled out**, because this is the one place the
+ * shape is actually decided: a literal here would let {@link MINTED_SUFFIX_LENGTH} be changed to 8
+ * and leave {@link mintGroupId} emitting ids {@link isMintedGroupId} rejects, so every second lease
+ * of every investigation would come back `separator-in-group-id`. The separator is escaped because
+ * it is a regex metacharacter as written.
+ */
+const MINTED_GROUP_ID = new RegExp(
+	`^[^${GROUP_ID_SEPARATOR}]+\\${GROUP_ID_SEPARATOR}[0-9a-z]{${MINTED_SUFFIX_LENGTH}}$`,
+);
 
 const BASE36 = '0123456789abcdefghijklmnopqrstuvwxyz';
 const DIGITS = '0123456789';

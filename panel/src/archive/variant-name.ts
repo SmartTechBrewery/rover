@@ -3,9 +3,10 @@
  * two halves of the comparison card's pane head (#199, `docs/DESIGN.md` §9).
  *
  * A group's arms are sibling test names under the group's own name —
- * `statistics-deliveries_variantA` and `…_variantB` in `statistics-deliveries` — so the whole test
- * name is the group's half and the arm's half together, and the group's half is the address the
- * reader is already standing on. What the pane says is the arm's half alone.
+ * `statistics-deliveries_variantA` and `…_variantB` in the group the host filed as
+ * `statistics-deliveries.h57ssn4` — so the whole test name is the group's half and the arm's half
+ * together, and the group's half is the address the reader is already standing on. What the pane
+ * says is the arm's half alone.
  *
  * **A test name is the caller's own string and Rover never wrote it** (D22), which is the whole
  * reason this module is careful. `run-identity.ts` is allowed to decompose a run directory's name
@@ -19,15 +20,43 @@
  */
 
 /**
+ * The one character that separates the investigation's name from the host's minted suffix inside a
+ * group id — mirrored from `GROUP_ID_SEPARATOR` in `src/daemon/group-id.ts`, which the panel
+ * deliberately does not import from, exactly as `archive-path.ts` mirrors `MAX_ARCHIVE_PATH_DEPTH`
+ * rather than reaching across the boundary. The host reserves it, so a name half never contains one
+ * and the **first** occurrence is always the split (D22, as amended #205).
+ */
+const GROUP_ID_SEPARATOR = '.';
+
+/**
+ * The investigation's name out of a group id — `statistics-deliveries.h57ssn4` is
+ * `statistics-deliveries` — and the whole string when there is no separator in it, which is every
+ * group filed before #205.
+ *
+ * **Only the split, never the suffix.** Nothing here reads what the host appended, checks its
+ * length or asks whether it looks minted: that would be this module claiming to know the host's
+ * shape rule, where all it needs is the character the host reserved.
+ */
+function nameHalfOf(groupId: string): string {
+	const separator = groupId.indexOf(GROUP_ID_SEPARATOR);
+	return separator < 0 ? groupId : groupId.slice(0, separator);
+}
+
+/**
  * The arm a test name names, given the group it is in — `statistics-deliveries_variantA` in
- * `statistics-deliveries` is `variantA`.
+ * `statistics-deliveries.h57ssn4` is `variantA`.
  *
  * Three rules, in order, and each one is a smaller claim than the one before it:
  *
- * - **The group's own id comes off the front**, when the name starts with it and an underscore.
- *   That is not a naming convention being assumed — the group id is a string Rover already holds,
- *   so the match is a fact rather than a guess, and a group id with an underscore of its own comes
- *   off whole where reading to the first underscore would have left half of it behind.
+ * - **The group's own id comes off the front**, when the name starts with it and an underscore —
+ *   and, failing that, the id's **name half**, the part in front of the separator the host reserves
+ *   for its minted suffix. That is not a naming convention being assumed: both are strings Rover
+ *   already holds, so the match is a fact rather than a guess, and a group id with an underscore of
+ *   its own comes off whole where reading to the first underscore would have left half of it
+ *   behind. **The name half is the rule that survives #205** — the host now files
+ *   `<name>.<suffix>` and a test name is still the caller's own `<name>_variantA`, so a whole
+ *   minted id is never the front of one. The whole id is still tried first, because no archive
+ *   written before #205 was rewritten and its group ids carry no suffix to split off.
  * - **Failing that, everything after the first underscore.** Never the last: that would make
  *   `checkout_variant_A` read `A`, and a variant may contain a separator of its own.
  * - **Failing that, the test name in full.** A name with no separator in it names no arm, and the
@@ -37,9 +66,11 @@
  * string or the whole of it.
  */
 export function variantOf(testName: string, groupId: string): string {
-	const prefix = `${groupId}_`;
-	if (groupId !== '' && testName.startsWith(prefix)) {
-		return testName.slice(prefix.length);
+	for (const candidate of [groupId, nameHalfOf(groupId)]) {
+		const prefix = `${candidate}_`;
+		if (candidate !== '' && testName.startsWith(prefix)) {
+			return testName.slice(prefix.length);
+		}
 	}
 	const first = testName.indexOf('_');
 	return first < 0 ? testName : testName.slice(first + 1);

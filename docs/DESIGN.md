@@ -1445,10 +1445,17 @@ turn, which is the one job `GRANTED` had here.
   reason. `run-identity.ts` stays the only place that decomposes a name **Rover wrote**.
 
   **`variantOf` reads as little of the name as will answer the question.** The group's own id comes
-  off the front when the name starts with it and an underscore — that is a string Rover holds, so
-  the match is a fact rather than an assumed convention, and a group id with an underscore of its
-  own comes off whole. Failing that, everything after the **first** underscore, never the last,
-  because a variant may contain one. Failing that, the test name in full: a name with no separator
+  off the front when the name starts with it and an underscore — and, failing that, the id's **name
+  half**, the part in front of the `.` the host reserves for its minted suffix. Both are strings
+  Rover holds, so the match is a fact rather than an assumed convention, and a group id with an
+  underscore of its own comes off whole. **Amended for #205** (2026-09-07): the name half is the
+  rule that carries this now, because the id filed is `<name>.<suffix>` and a test name is still the
+  caller's own `<name>_variantA` — a whole minted id is never the front of one, so matching only the
+  whole id would have left the investigation's own name on the head of every pane. The whole id is
+  still tried first, because no archive written before #205 was rewritten and its group ids carry no
+  suffix to split off. Nothing reads the suffix; the panel splits at the separator this repository
+  owns and stops. Failing both, everything after the **first** underscore, never the last, because a
+  variant may contain one. Failing that, the test name in full: a name with no separator
   names no arm, and the caller's own word is a better answer than an empty strip. Nothing is
   trimmed, lower-cased or normalised — what comes back is a slice of the caller's string, and that
   slice is what `ComparisonPane.variant` carries.

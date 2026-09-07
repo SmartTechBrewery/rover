@@ -2548,6 +2548,11 @@ describe('a label on a lease with no group', () => {
 		// which call to change and how.
 		expect(answer.message).toContain("'label'");
 		expect(answer.message).toContain("'groupId'");
+		// **The round trip, not "the same one every time"** (#205): the host mints the id it files,
+		// so an agent that reuses the name it typed gets one group per run — the exact failure the
+		// mint exists to remove, arrived at by following the host's own advice.
+		expect(answer.message).toContain('mints');
+		expect(answer.message).toContain('answers with it');
 	});
 
 	it('is refused for all four of the calls that carry one', async () => {

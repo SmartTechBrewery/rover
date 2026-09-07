@@ -48,10 +48,12 @@ describe('a name with no separator', () => {
 		const filed = granted(NAME);
 
 		expect(filed.startsWith(`${NAME}${GROUP_ID_SEPARATOR}`)).toBe(true);
-		expect(filed).toHaveLength(NAME.length + 1 + MINTED_SUFFIX_LENGTH);
+		expect(filed).toHaveLength(NAME.length + GROUP_ID_SEPARATOR.length + MINTED_SUFFIX_LENGTH);
 		// The name half is byte-identical to what was sent: the host adds, and never rewrites.
 		expect(filed.slice(0, NAME.length)).toBe(NAME);
-		expect(filed.slice(-MINTED_SUFFIX_LENGTH)).toMatch(/^[0-9a-z]{7}$/);
+		// The alphabet only — the length is the constant's, asserted above, and spelling it out here
+		// as well would leave this case passing if the mint and the shape check drifted apart.
+		expect(filed.slice(-MINTED_SUFFIX_LENGTH)).toMatch(/^[0-9a-z]+$/);
 	});
 
 	/*
