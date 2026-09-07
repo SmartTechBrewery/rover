@@ -149,10 +149,26 @@ Design work lives in [`DESIGN.md`](./DESIGN.md); the brief that produced the fir
    named, revocable per-user credentials (`rover users add/list/revoke/rotate`, R27–R28) precisely
    so a panel has individual accounts to manage instead of one secret everyone shares. Kept separate
    from `owner`, exactly as the daemon already keeps them separate (D20).
-9. **Before/after diff view** — list the two most recent `<lease-id>` folders under one
-   `test_name` and show them side by side. This is the reason `test_name` is deliberately not
-   unique (`PROJECT.md` D22) — the panel does no work to find the pair, the archive's shape already
-   puts them next to each other.
+9. **Before/after comparison view** — **done** (#199), and **corrected in place**: this item used
+   to say *list the two most recent `<lease-id>` folders under one `test_name`*, which predates
+   #150. The key is not recency under a test name; it is **`groupId` + `label`**. A lease names a
+   group and files an artifact under a label (`PROJECT.md` R41), and `list_archive_groups` answers
+   which runs share a group and which of their artifacts share a label — so *these two are the same
+   thing at two moments* is a claim the caller made and the host recorded, rather than something
+   recency has to stand in for. That is stronger than the original key in both directions: two arms
+   of one investigation are ordinarily *sibling test names*
+   (`statistics-deliveries_variantA` / `…_variantB`), which the old wording could not pair at all,
+   and two unrelated recent runs under one test name are no longer paired just for being recent.
+   The load-bearing half of this item survives unchanged and is why it was ever written here: **the
+   panel does no work to find the set** — the archive's own shape plus one bounded walk put them
+   next to each other, and the card is a pure function over that one answer with no second request.
+   **D22 and D24 stand and are not contradicted**: `test_name` is still deliberately not unique, a
+   path component is still opaque, and the label is still the archive's own filed string rather than
+   the caller's. What is built is the Testing groups view's comparison card
+   (`docs/DESIGN.md` §9): one label names it, one pane per artifact filed under that label in that
+   group, side by side, oldest run on the left. **Two is the common case and nothing caps it** — a
+   group may hold seven runs — and there is no diff, no score and no verdict, because the comparison
+   is visual and human-judged (`ai/RULES.md` §1).
 10. **Archive disk usage / retention view** — how much space the archive is using, and, once a
     retention policy exists (`PROJECT.md` §9.4 — still undecided), a manual prune action.
 11. **MCP config generator** — after registering a project, a ready-to-paste MCP server
