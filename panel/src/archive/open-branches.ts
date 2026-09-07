@@ -20,8 +20,16 @@ import { keyOf, levelsOf } from './archive-path.js';
  *   set holds, which is the one thing #175 refused to give up and the whole reason the tree stands
  *   beside an open file (#160). A closed ancestor with the card still drawing the file underneath it
  *   is unreachable by construction rather than by care;
- * - and the set grows **only** by a click on a row, so the number of levels read stays bounded by
- *   the reader's gestures and never by what is in the archive.
+ * - **and the set absorbs the floor as the selection moves** ({@link absorbing}), which is what makes
+ *   *opening a node never closes another one* true of a branch the reader never clicked open. The
+ *   floor is evaluated against the *current* selection, so a branch standing on it alone would
+ *   collapse the moment the selection left it — the exact defect #198 exists to remove, reachable
+ *   through a search hit, a breadcrumb or the back button. Every strict ancestor of a selection is
+ *   therefore written into the set the moment that selection arrives, so what the floor was drawing
+ *   is still drawn once the floor has moved on;
+ * - and the set grows **only** by a click on a row or by an address the reader navigated to, so the
+ *   number of levels read stays bounded by the reader's gestures and never by what is in the
+ *   archive: absorbing adds only levels the tree was already drawing and already read.
  *
  * **A click on a row toggles that row's branch, and the target of the click is what makes closing
  * work** — the same trick #175 used, one node lower. A row always links to its **own** address, so
@@ -54,11 +62,57 @@ export interface OpenBranches {
  * §9 and this is the settlement: it does not, and what stands in for it is that the address is enough
  * to rebuild the one branch the reader was in.
  *
+ * **Including the selection itself is a choice, and it is why this is not {@link absorbing}** (#202
+ * review). A mount knows nothing but the address, so the derived rule's whole answer for it is the
+ * honest seed: land on a directory and its own level is drawn under it, exactly as it was before
+ * #198. A selection that *moves* is a different question — the set then already holds the reader's
+ * own gestures, and all that is owed is what the floor was drawing, which is strict. The two cannot
+ * be the same function: re-adding the selected node on every move would re-open the node a closing
+ * click had just landed on, and closing would never terminate.
+ *
+ * What that costs is one visible asymmetry, stated rather than left to be found: a directory reached
+ * *mid-session* by a search hit or a breadcrumb draws shut — its ancestors open, its own level left
+ * to a click, like any node the reader has not opened — where the same address after a reload draws
+ * open. The card beside the tree draws that directory's contents either way, so nothing is hidden;
+ * what differs is a triangle.
+ *
  * The root is in it and drawing does not consult it there — the root's level is always drawn — but a
  * seed that named every prefix except one would be a rule with an exception in it.
  */
 export function openedBy(selected: readonly string[]): OpenNodes {
 	return new Set(levelsOf(selected).map(keyOf));
+}
+
+/**
+ * The set with the floor written into it: every **strict** ancestor of `selected` added, and nothing
+ * else. `open` itself comes back when there is nothing to add.
+ *
+ * **This is what makes an open branch survive the selection leaving it** (#202 review). {@link
+ * expandedIn}'s floor is evaluated against whatever the selection is *now*, so a branch the reader
+ * never clicked — arrived at by a search hit, a breadcrumb, the back button, or a link out of the
+ * card — is drawn open by the floor and by nothing else, and the next click anywhere else collapses
+ * it. Running this at every change of the selection means the floor is only ever *lifted* off levels
+ * the set has already taken over.
+ *
+ * **Strict is the whole of it**, twice over. It is what may be absorbed — the floor holds nothing
+ * else — and it is what keeps closing working: a close-click lands *on* the row it removed, and that
+ * row is not a strict ancestor of itself, so absorbing cannot put it back.
+ *
+ * It reads nothing and asks for nothing: every level it adds is one the floor was already drawing,
+ * so `drawnLevels` walked it and `useArchiveLevels` has it. And it changes no tree in the render it
+ * runs in, for the same reason — `expandedIn` already draws every one of these addresses open for
+ * this selection. It is the *next* selection that sees the difference.
+ */
+export function absorbing(open: OpenNodes, selected: readonly string[]): OpenNodes {
+	const floor = levelsOf(selected).slice(0, -1).map(keyOf);
+	if (floor.every((key) => open.has(key))) {
+		return open;
+	}
+	const next = new Set(open);
+	for (const key of floor) {
+		next.add(key);
+	}
+	return next;
 }
 
 /**
@@ -121,12 +175,25 @@ export function toggled(
  * the thing that decides which those are has to be visible to `levelsWanted` and not only to the
  * component that draws them.
  *
- * Seeded from the address the screen mounted at and never re-seeded, so navigating within a view
- * accumulates rather than resets — that is the whole of what #198 changes for a reader. Switching
- * views remounts the screen (§9), which reseeds it from that view's own address.
+ * Seeded from the address the screen mounted at ({@link openedBy}) and never re-seeded, so navigating
+ * within a view accumulates rather than resets — that is the whole of what #198 changes for a reader.
+ * Switching views remounts the screen (§9), which reseeds it from that view's own address.
+ *
+ * **What it does do on every move of the selection is absorb the floor** ({@link absorbing}), because
+ * accumulating is not the same as never resetting: a branch standing on the floor alone falls the
+ * moment the selection leaves it. The address it last saw is held as state rather than in a ref, and
+ * the update is made during the render that first sees a new one — React's own way of adjusting state
+ * to a changing input, and it is safe to draw either side of because the absorbed keys are exactly
+ * the ones this selection's floor already draws open.
  */
 export function useOpenBranches(selected: readonly string[], maxDepth: number): OpenBranches {
 	const [open, setOpen] = useState<OpenNodes>(() => openedBy(selected));
+	const [seen, setSeen] = useState<string>(() => keyOf(selected));
+	const here = keyOf(selected);
+	if (seen !== here) {
+		setSeen(here);
+		setOpen((current) => absorbing(current, selected));
+	}
 	return {
 		isOpen: (address) => expandedIn(open, selected, address),
 		toggle: (address) => setOpen((current) => toggled(current, selected, address, maxDepth)),

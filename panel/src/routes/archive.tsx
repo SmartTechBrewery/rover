@@ -56,7 +56,11 @@ import { rootRoute } from './__root.js';
  * are exceptions on the same terms: a shared link lands on the address without somebody else's
  * search and without somebody else's browsing, and each is seeded from that address — the search
  * empty, the open set with the selection's own prefixes, which is the tree the derived-expansion
- * rule used to draw. A hit and a row are navigations to one of these paths like any other.
+ * rule used to draw. A hit and a row are navigations to one of these paths like any other, and the
+ * open set **absorbs the selection's ancestors at every one of them** (`open-branches.ts`,
+ * `absorbing`, and §9): the floor holding a branch open is evaluated against wherever the selection
+ * is now, so a branch reached without clicking a row has to be taken into the set before the
+ * selection leaves it — otherwise the next click elsewhere rebuilds the tree the reader was reading.
  *
  * **And since #181 the *view* is in the URL too, which is the question #165 deliberately left
  * open.** It could not be answered then, because the groups arrangement had no addresses of its own
@@ -128,6 +132,10 @@ export function ArchiveScreen({ view }: { readonly view: ArchiveView }) {
 	 *
 	 * The bound is the deepest address this view's URL can carry, which is what `componentsFromSplat`
 	 * caps a splat at: a row past it cannot be selected, so it is not opened either.
+	 *
+	 * It takes `selected` because it draws over it *and* absorbs from it: the hook writes the
+	 * selection's strict ancestors into the set as the address moves, which costs no request — every
+	 * level it takes over is one the floor already had drawn.
 	 */
 	const branches = useOpenBranches(selected, MAX_ARCHIVE_PATH_DEPTH + OFFSET[view]);
 	/*

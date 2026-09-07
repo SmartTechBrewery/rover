@@ -49,6 +49,7 @@ vi.mock('@tanstack/react-router', () => ({
 }));
 
 import {
+	absorbing,
 	expandedIn,
 	type OpenBranches,
 	type OpenNodes,
@@ -417,6 +418,45 @@ describe('the tree', () => {
 		expect(row.getAttribute('aria-expanded')).toBe('false');
 		expect(row.className).toContain('border-tertiary');
 		expect(rows(container).map((candidate) => candidate.textContent)).not.toContain(RUN);
+	});
+
+	/**
+	 * **And a branch the floor was holding open stays drawn once the selection leaves it** (#202
+	 * review). This is the two-render case the single-render ones above cannot see: the first render
+	 * is a deep selection with nothing in the set, so every row of that branch is drawn by the floor
+	 * alone; the second has the selection on a different top-level row, where the floor holds none of
+	 * it. What keeps it drawn is `absorbing`, which the screen runs at every move of the selection.
+	 */
+	it('keeps a branch the floor drew open drawn once the selection moves to another one', () => {
+		const deep = [...FRAMES, '0001.png'];
+		const { container, rerender } = showing(
+			deep,
+			archive(),
+			searching(NOT_SEARCHING),
+			branchesFor(deep, new Set()),
+		);
+		expect(rowNamed(container, '0001.png')).toBeDefined();
+
+		// The click on `payments-web` opens it and lands on it, and the fold has already taken the
+		// branch the reader was in into the set.
+		const moved = ['payments-web'];
+		const open: OpenNodes = new Set([...absorbing(new Set(), deep), keyOf(moved)]);
+		rerender(
+			<DirectoryTree
+				branches={branchesFor(moved, open)}
+				search={searching(NOT_SEARCHING)}
+				selected={moved}
+				source={allRowSource(archive())}
+			/>,
+		);
+
+		for (const name of ['checkout-app', 'login-flow', RUN, 'recordings', '001_frames']) {
+			expect(rowNamed(container, name).getAttribute('aria-expanded')).toBe('true');
+		}
+		expect(rowNamed(container, '0001.png')).toBeDefined();
+		// And the row just opened is the selected one, so nothing about the old branch is still marked.
+		const selectedRows = rows(container).filter((row) => row.className.includes('border-tertiary'));
+		expect(selectedRows.map((row) => row.textContent)).toEqual(['payments-web']);
 	});
 
 	// A row that opens nothing gains nothing: the selected file is still a link to itself, so

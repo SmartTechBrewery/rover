@@ -1782,9 +1782,13 @@ signed-in user's identifier, so
 
 **Archive is a file explorer over what past runs wrote.** A tree on the left expands one directory
 at a time as you go down it and reaches every address in the archive — a project, a test name, a
-run, and every level below that run — beside the contents of whatever is selected. Clicking an open
-node closes it again, at every depth, and closing one takes you to the level above it, so where the
-tree is open is always exactly where the address says you are. Browsing reads one level at a time: each level is one `list_archive` call for a level
+run, and every level below that run — beside the contents of whatever is selected. Opening a node
+closes nothing else: branches accumulate open as you open them, several top-level rows at once and at
+any depth, and the only thing that collapses one is a second click on that same row — which lands
+*on* it, so the contents beside the tree become that node's. Where you are is still exactly what the
+address says; which branches are open is not in it, the way the search text below is not, so a reload
+and a shared link land on the address with the branch it names open and nobody else's browsing.
+Browsing reads one level at a time: each level is one `list_archive` call for a level
 actually on the screen, so opening a project reads that project and nothing else. **And the tree card
 has a field that searches the whole archive on the host** — one `search_archive` call for the text
 once it settles, never one per keystroke, with every match drawn in the tree in place: each matching

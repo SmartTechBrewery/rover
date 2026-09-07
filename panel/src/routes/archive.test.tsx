@@ -477,6 +477,80 @@ describe('opening a second branch', () => {
 		expect(host.asked).toEqual([[], ['checkout-app'], ['payments-web']]);
 	});
 
+	/**
+	 * **The same, for a branch the reader never clicked open** (#202 review) — and the one case in
+	 * this file that lets the address move with the click, because that is the whole of the defect:
+	 * a branch drawn open by the floor alone falls the moment the selection leaves it.
+	 *
+	 * Search, follow a hit, clear the field, open a second project. Nothing in that sequence clicks a
+	 * row of the branch being read, so the set holds none of it until the screen absorbs the floor
+	 * (`open-branches.ts`, `absorbing`).
+	 */
+	it('keeps a branch reached by a search hit open when a second project is opened', async () => {
+		const SERIAL_LEVEL = ['checkout-app', 'login-flow', RUN, 'R5CT30ABCDE'];
+		const HIT = [...SERIAL_LEVEL, 'screenshots'];
+		vi.useFakeTimers();
+		try {
+			host.search = {
+				outcome: 'searched',
+				truncated: false,
+				matches: [{ path: HIT, kind: 'directory' }],
+			};
+			const { rerender } = await showing(undefined, {
+				...twoProjects(),
+				[JSON.stringify(HIT)]: listed({ kind: 'file', name: 'a.png', sizeBytes: 4 }),
+			});
+			const search = screen.getByRole('textbox') as HTMLInputElement;
+
+			const type = async (text: string) => {
+				fireEvent.change(search, { target: { value: text } });
+				await act(async () => {
+					await vi.advanceTimersByTimeAsync(SEARCH_DEBOUNCE_MS);
+					await vi.advanceTimersByTimeAsync(0);
+				});
+			};
+			await type('screenshots');
+			// Following the hit: `Hits` carries no toggle, so this moves the address and nothing else.
+			at.splat = HIT.join('/');
+			await act(async () => {
+				rerender(<ArchiveScreen view="all" />);
+			});
+			for (let turn = 0; turn < 6; turn += 1) {
+				await act(async () => undefined);
+			}
+			await type('');
+			const readSoFar = [...host.asked];
+
+			// And now the gesture the issue is about, with the address following it this time.
+			const tree = document.querySelector('aside') as HTMLElement;
+			fireEvent.click(within(tree).getByRole('link', { name: 'payments-web' }));
+			at.splat = 'payments-web';
+			await act(async () => {
+				rerender(<ArchiveScreen view="all" />);
+			});
+			for (let turn = 0; turn < 6; turn += 1) {
+				await act(async () => undefined);
+			}
+
+			// The branch the reader was reading is still there, all the way down to the hit's own row.
+			expect(treeRows()).toEqual([
+				'checkout-app',
+				'login-flow',
+				RUN,
+				'device_info.json',
+				'screenshots',
+				OLDER,
+				'unlabeled',
+				'payments-web',
+				'refund-flow',
+			]);
+			// One click, one level: nothing already read is read again.
+			expect(host.asked).toEqual([...readSoFar, ['payments-web']]);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	/*
 	 * **Both views draw one tree, so this is not a view's choice** (AC 2, #181). The groups view's
 	 * rows come from the grouping answer above a run, and two groups under one project open beside

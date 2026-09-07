@@ -1251,9 +1251,12 @@ consequence of one rule — which is the price of the reversal and is why they a
 - *the tree expands lazily, one `readdir` at a time* — the levels read are the levels **drawn**,
   walked from the root through expanded rows only and stopping at the first level nothing has
   answered for yet (`panel/src/archive/tree-source.ts`, `drawnLevels`). **The open set grows only by
-  a click**, so the number of levels read is bounded by the reader's gestures and never by what is in
-  the archive: a newly opened row costs exactly one `list_archive`, a shut branch costs none, and a
-  pre-walk is still unrepresentable. **Closing a node reads nothing.** The selection's own prefixes
+  a click, or by an address the reader navigated to**, so the number of levels read is bounded by the
+  reader's gestures and never by what is in the archive: a newly opened row costs exactly one
+  `list_archive`, a shut branch costs none, and a pre-walk is still unrepresentable. **What the set
+  absorbs from the floor reads nothing either** — every level it takes over is one the floor was
+  already drawing, so it has already been asked for. **Closing a node reads nothing.** The
+  selection's own prefixes
   are named from the address as well, which is not a second source of truth — every one of them is an
   ancestor the floor draws — but it is what keeps a deep link one parallel batch of requests instead
   of one round trip per level;
@@ -1280,6 +1283,26 @@ consequence of one rule — which is the price of the reversal and is why they a
   carry, and the searched tree does not carry either, since every row in it is an address the host
   answered with.
 
+**And the set absorbs the floor as the selection moves**, because *accumulating* is not the same as
+*never resetting* (`open-branches.ts`, `absorbing`; #202 review). The floor is evaluated against
+whatever the selection is **now**, so a branch standing on it alone — one reached by a search hit, a
+breadcrumb, the back button or a link out of the card, rather than by clicking a row — would fall the
+moment the selection left it, and the next click anywhere else would rebuild the tree the reader was
+just reading. So every **strict** ancestor of a selection is written into the set the moment that
+selection arrives: the floor is only ever *lifted* off levels the set has already taken over, and it
+costs no request, because a level the floor was drawing has already been read. *Strict* does the same
+work here as in the drawing rule, in both directions — it is all the floor was holding, and it is what
+keeps closing working, since a close-click lands *on* the row it removed and no node is a strict
+ancestor of itself.
+
+**The seed is deliberately not that function.** A mount knows nothing but the address, so the derived
+rule's whole answer for it — every prefix *including the selection* — is the honest seed; a selection
+that moves is a different question, and by then the set holds the reader's own gestures. The one
+visible consequence, stated here rather than left to be found: a directory reached **mid-session** by
+a hit or a breadcrumb draws shut — its ancestors open, its own level left to a click, like any node
+nobody opened — where the same address after a reload draws open. The card beside the tree draws that
+directory's contents either way, so what differs is a triangle and not what is on screen.
+
 **Collapsing is the row's, and what it collapses is tree state after all — the table #175 settled
 against is rewritten rather than deleted.**
 
@@ -1287,7 +1310,7 @@ against is rewritten rather than deleted.**
 | --- | --- | --- |
 | **collapse by navigation** — an open row goes to the node above it (#175, superseded) | nothing is stored, so the tree is a pure function of the address | one branch open at a time: opening a node closes every other one, because one selection is one path. And collapsing **moves the selection to the parent**, so closing a project lands on the archive root |
 | **collapse as tree state, unguarded** — a set of deliberately-closed nodes laid over the derived rule (refused, both times) | a node closes without the selection moving at all | it makes *the selection is drawn nowhere in the tree* reachable in one click, with the card still drawing the file underneath the closed ancestor — the inversion of what the tree is there for (#160) |
-| **an open set with the selection's ancestors as a floor** (#198, built) | branches accumulate open at any depth, in both views, and nothing is rebuilt when the reader crosses between two of them | the open set is state, so it is a second thing that can be true of the screen — and it is not in the address, so it does not survive a reload |
+| **an open set with the selection's ancestors as a floor** (#198, built) | branches accumulate open at any depth, in both views, and nothing is rebuilt when the reader crosses between two of them — including a branch reached without clicking a row, because the set absorbs the floor as the selection moves | the open set is state, so it is a second thing that can be true of the screen — and it is not in the address, so it does not survive a reload |
 
 **Why the third answer is not the second one.** The middle row's cost is a *closed set laid over a
 derived rule*: closing is then something that can be true of an ancestor of the selection while the

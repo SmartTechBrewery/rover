@@ -7,11 +7,12 @@ import { type ArchiveSearchMatch, SearchArchiveResultSchema } from './archive-li
  * The tree card's search — one `search_archive` per settled text, and never one per keystroke
  * (#146, R38).
  *
- * **The text is component state and is deliberately not in the address.** It is the one piece of
- * this screen's state that is not (`archive-path.ts`, `routes/archive.tsx`): a reload and a shared
- * link land on the *address*, without somebody else's search, and the tree and the address still
- * cannot disagree about **where you are** — a hit navigates, and the address is what it navigates
- * to.
+ * **The text is component state and is deliberately not in the address.** It is one of the two
+ * pieces of this screen's state that are not (`archive-path.ts`, `routes/archive.tsx`) — the other
+ * being which branches of the tree are open, on exactly these terms since #198
+ * (`open-branches.ts`). A reload and a shared link land on the *address*, without somebody else's
+ * search and without somebody else's browsing, and the tree and the address still cannot disagree
+ * about **where you are** — a hit navigates, and the address is what it navigates to.
  *
  * **One request per settled text.** The debounce is a {@link SEARCH_DEBOUNCE_MS} timer in an
  * effect, so typing inside the window issues nothing; the id is taken when the text changes and the
