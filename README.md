@@ -1828,14 +1828,18 @@ count over it would read as a count of a set and could be short without saying s
 short the tree says so, above the rows. **Each view has addresses of its own** — `/archive…` and
 `/groups…` — so the toggle's segments are links, a reload lands in the view you were in, and a
 shared link lands on the selection inside it. **And an artifact a run filed under a label carries a
-round letter beside its name** (#182): inside one group each distinct label takes a letter of the
-alphabet, `A` through `Z` — `@` past the twenty-sixth — and the same label is the same letter
-everywhere in that group, though nothing about a letter carries across to another group. The letter
-is what carries it and never the colour alone, so the label the archive filed is on every badge as a
-tooltip and to a screen reader; an artifact with no label carries no badge at all. The badges run on
-four colours cycled under the letters, **each cycle a step off the last** — so `E` is `A`'s colour
-at another level rather than a repeat of it — and none of them can read as an outcome, because Rover
-has none.
+small numbered pill beside its name** (#182): inside one group each distinct label takes the next
+number starting at `1`, in the order the host answered them, and the same label is the same number
+everywhere in that group, though nothing about a number carries across to another group. **There is
+no ceiling and no overflow value** (#206): an integer has no last value, so no label is ever left
+undistinguished — the `@` that four letters and then twenty-six needed is gone rather than moved
+further out. The number is what carries it and never the colour alone, so the label the archive
+filed is on every badge as a tooltip and to a screen reader; an artifact with no label carries no
+badge at all. The badge leads with `#` and is never zero-padded, which is what keeps it from reading
+as the artifact's own ordinal in its file name. The fills run on four colours cycled under the
+numbers, **each cycle a step off the last** — so `#5` is `#1`'s colour at another level rather than
+a repeat of it — and past the twenty-eighth they repeat while the digits distinguish. None of them
+can read as an outcome, and no number is a rank, because Rover reports neither.
 
 **In the `All` view there is one arrangement at every depth: the tree, then one card.** What the parent listing says
 the selected address is decides what that card draws, and nothing about it decides whether the tree

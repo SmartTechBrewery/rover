@@ -23,9 +23,9 @@ import { mostRecentFirst, orderedEntries } from './level-order.js';
  * - **the level a row opens**, which is what the run's `<serial>` hop was already expressed as;
  * - **the route a row's address is on**, which is the whole of the row's `<Link>` and the one thing
  *   in `Row` that could not stay literally untouched: it hardcoded `to="/archive/$"`.
- * - **the label an artifact was filed under**, and the letter its group gives it (#182) — the one
+ * - **the label an artifact was filed under**, and the number its group gives it (#182) — the one
  *   addition since, and it is here rather than in the component for the reason the route is: a
- *   letter is defined only inside a group, so the `All` view's rows carry none by construction.
+ *   number is defined only inside a group, so the `All` view's rows carry none by construction.
  * - **where a node's level is listed**, which is what {@link drawnLevels} walks (#198): the open set
  *   is wider than the selection's prefixes, so *which levels this tree draws* stopped being
  *   arithmetic on the address and became a question about the tree — and a question about the tree is
@@ -54,11 +54,11 @@ export interface TreeRow {
 	/** The node it opens, or `null` when it opens nothing at all. */
 	readonly opens: readonly string[] | null;
 	/**
-	 * The label this artifact was filed under and the letter its group gives it, or `undefined` on
+	 * The label this artifact was filed under and the number its group gives it, or `undefined` on
 	 * every row that has neither (#182).
 	 *
 	 * **The one thing on a row that is not true of it in both views**, and it is a *source*'s answer
-	 * for the reason `route` is: a letter is defined only inside a group, so only the groups source
+	 * for the reason `route` is: a number is defined only inside a group, so only the groups source
 	 * ever sets it and the `All` view's rows are `undefined` here by construction rather than by a
 	 * condition in the component. An artifact with no label is `undefined` too, so the tree of an
 	 * archive that never used labels is byte for byte the tree it is today.
@@ -214,7 +214,7 @@ export function groupRowSource(groups: ArchiveGroups, levels: ArchiveLevels): Tr
 		rowsAt: (node) => {
 			if (node.length >= GROUP_SERIAL_DEPTH) {
 				/*
-				 * **The badges, and they are drawn nowhere else** (#182). The letters are assigned per
+				 * **The badges, and they are drawn nowhere else** (#182). The numbers are assigned per
 				 * group, so which group this node is in is what decides them — and it is the first two
 				 * components of a groups address, which is why no other source can ask for them.
 				 */

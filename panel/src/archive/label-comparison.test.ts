@@ -144,12 +144,12 @@ describe('the artifacts one label is filed on across a group', () => {
 	});
 
 	/*
-	 * **The badge letter is the tree's, not a second assignment.** The card draws it over every pane
-	 * (`comparison-card.tsx`), so it has to be `lettersOfGroup`'s answer for this group — insertion
-	 * order over the host's own walk, which is where the tree's badges come from too. `A` is the
-	 * first label the walk met and `B` the second, whichever of them was selected.
+	 * **The badge number is the tree's, not a second assignment.** The card heads itself with it
+	 * (`comparison-card.tsx`), so it has to be `group-labels.ts`'s answer for this group — insertion
+	 * order over the host's own walk, which is where the tree's badges come from too. `1` is the
+	 * first label the walk met and `2` the second, whichever of them was selected.
 	 */
-	it('carries the letter this label takes in this group', () => {
+	it('carries the number this label takes in this group', () => {
 		const groups = [
 			group(
 				run(ARM_A, FIRST, [DELIVERIES, EMPTY_STATE]),
@@ -157,19 +157,21 @@ describe('the artifacts one label is filed on across a group', () => {
 			),
 		];
 
-		expect(comparisonAt(groups, PROJECT, GROUP, addressOf(ARM_A, FIRST, DELIVERIES))?.letter).toBe(
-			'A',
+		expect(comparisonAt(groups, PROJECT, GROUP, addressOf(ARM_A, FIRST, DELIVERIES))?.number).toBe(
+			1,
 		);
 		expect(
-			comparisonAt(groups, PROJECT, GROUP, addressOf(ARM_A, FIRST, EMPTY_STATE, 2))?.letter,
-		).toBe('B');
+			comparisonAt(groups, PROJECT, GROUP, addressOf(ARM_A, FIRST, EMPTY_STATE, 2))?.number,
+		).toBe(2);
 	});
 
 	/*
-	 * Past the twenty-sixth distinct label the alphabet is out and the badge stops distinguishing —
-	 * `@` on the pane exactly as on the tree row, rather than a letter that means something else.
+	 * **Past the twenty-sixth distinct label there is nothing to collapse into** (#206). This is the
+	 * case that used to be `@` on the card exactly as on the tree row; the numbers have no ceiling,
+	 * so the twenty-seventh label is `27` and stays distinguished from every other one. The palette's
+	 * own ceiling is a separate thing and is `label-badge.tsx`'s.
 	 */
-	it('carries `@` for a label past the end of the alphabet', () => {
+	it('carries the number for a label past the end of the alphabet', () => {
 		const many = Array.from({ length: 27 }, (_unused, index) => `label-${index}`);
 		const groups = [group(run(ARM_A, FIRST, many), run(ARM_B, SECOND, many))];
 		const last = many.at(-1) ?? '';
@@ -184,7 +186,7 @@ describe('the artifacts one label is filed on across a group', () => {
 		]);
 
 		expect(comparison?.label).toBe(last);
-		expect(comparison?.letter).toBe('@');
+		expect(comparison?.number).toBe(27);
 	});
 
 	it('keeps a label with surrounding whitespace exactly as it was filed', () => {

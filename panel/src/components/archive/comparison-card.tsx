@@ -107,11 +107,11 @@ export function ComparisonCard({ comparison }: { readonly comparison: LabelCompa
 						 * **The tree's own badge, in front of the name it belongs to.** One label heads the
 						 * whole card, so the badge belongs in the one strip that spans every pane rather
 						 * than repeated down the row — and here it does the job it exists for, tying the
-						 * card to the row a reader clicked in the tree. The letter is a code local to this
+						 * card to the row a reader clicked in the tree. The number is a code local to this
 						 * group; the name beside it is the thing that means something, which is why the
 						 * badge is in front of it and not instead of it.
 						 */}
-						<LabelBadge label={comparison.label} letter={comparison.letter} />
+						<LabelBadge label={comparison.label} number={comparison.number} />
 						<CardHeading>{comparison.label}</CardHeading>
 					</div>
 				</div>
@@ -170,7 +170,7 @@ export function ComparisonCard({ comparison }: { readonly comparison: LabelCompa
  * reader was meant to verify by reading `GRANTED` off each pane in turn.
  *
  * **The label badge is not here.** One label heads the whole card, so the badge is in the card's own
- * strip in front of the name it belongs to; repeating it down the row would draw the same letter N
+ * strip in front of the name it belongs to; repeating it down the row would draw the same number N
  * times to say the thing every pane already has in common. The artifact's file name is not here
  * either, for the same reason the reference screen's chip is not: within one comparison every pane
  * is the same file of a different run, so it was the same string N times across the row — and the
