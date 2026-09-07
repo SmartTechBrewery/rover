@@ -1,6 +1,8 @@
 import type { ArchiveGroup } from './archive-listing.js';
 import { keyOf } from './archive-path.js';
+import { type LabelLetter, lettersOfGroup, OVERFLOW_LETTER } from './group-labels.js';
 import { oldestFirst } from './level-order.js';
+import { variantOf } from './variant-name.js';
 
 /**
  * **Which artifacts of a group are the same thing at two moments** — as a pure function over the
@@ -32,11 +34,24 @@ export interface ComparisonPane {
 	readonly run: readonly string[];
 	/** The artifact's own archive address, verbatim from the answer — no group id in it. */
 	readonly path: readonly string[];
+	/**
+	 * **Which arm of the investigation this pane is** — the part of the run's test name that is not
+	 * the group's, which is the one thing two panes of one comparison actually differ by, **as the
+	 * caller wrote it**. `variant-name.ts` is how little is read out of the name to get it, and
+	 * `variantPhrase` there is what the pane head says out loud over it.
+	 */
+	readonly variant: string;
 }
 
 export interface LabelComparison {
 	/** The label **as the archive filed it**. */
 	readonly label: string;
+	/**
+	 * The badge letter this label takes **in this group** — `lettersOfGroup`'s assignment and not a
+	 * second opinion about it, so the badge on a pane is the badge on the tree row that opened it
+	 * (#182, `label-badge.tsx`). A letter is a code local to one group; {@link label} is the meaning.
+	 */
+	readonly letter: LabelLetter;
 	/** Oldest run first, and always two or more — one pane is not a comparison. */
 	readonly panes: readonly ComparisonPane[];
 }
@@ -89,13 +104,15 @@ export function comparisonAt(
 	for (const run of group.runs) {
 		// A run whose address is not the archive's four levels is skipped, exactly as
 		// `group-tree.ts`'s `placedRunsOf` skips it and for its reason: placing it would mean
-		// guessing which of its components was the run, and the pane's whole head is that guess.
+		// guessing which of its components was the run — and which of them was the test name the
+		// pane's head is about.
 		if (run.path.length !== RUN_ADDRESS_DEPTH) {
 			continue;
 		}
+		const variant = variantOf(run.path.at(1) ?? '', groupId);
 		for (const artifact of run.artifacts) {
 			if (artifact.label === label) {
-				panes.push({ run: run.path, path: artifact.path });
+				panes.push({ run: run.path, path: artifact.path, variant });
 			}
 		}
 	}
@@ -104,7 +121,11 @@ export function comparisonAt(
 	}
 	// The run directory's own name — index 2 of a four-component run address, and the component
 	// that leads with the host's UTC timestamp. `oldestFirst` is why this reads left to right.
-	return { label, panes: oldestFirst(panes, (pane) => pane.run.at(-2) ?? '') };
+	return {
+		label,
+		letter: lettersOfGroup(group).get(label) ?? OVERFLOW_LETTER,
+		panes: oldestFirst(panes, (pane) => pane.run.at(-2) ?? ''),
+	};
 }
 
 /** The label the answer filed one archive address under, or `null` when it filed it under none. */

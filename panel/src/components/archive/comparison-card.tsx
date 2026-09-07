@@ -1,10 +1,10 @@
 import { keyOf } from '@panel/archive/archive-path.js';
 import { useArchivedArtifact } from '@panel/archive/artifact.js';
-import { UNKNOWN } from '@panel/archive/file-size.js';
 import type { ComparisonPane, LabelComparison } from '@panel/archive/label-comparison.js';
-import { decomposeRunName } from '@panel/archive/run-identity.js';
+import { variantPhrase } from '@panel/archive/variant-name.js';
 import { ArtifactBodyView, OpenInANewWindow } from './artifact-body-view.js';
-import { CardHeading, ContentsCard, Field } from './contents-card.js';
+import { CardHeading, ContentsCard } from './contents-card.js';
+import { LabelBadge } from './label-badge.js';
 
 /**
  * **One label, one row of panes, one pane per artifact filed under it** — the groups view's card
@@ -32,9 +32,12 @@ import { CardHeading, ContentsCard, Field } from './contents-card.js';
  * **`Compare — Visual Diff (V2)` (`897632dcadce44de9bdee74a94da14f5`) is a layout reference only**,
  * and it is the one remaining uncorrected screen in the project (§11) — the operator decided not to
  * run a correction round for this work, so the layout comes from it and everything else from §9 and
- * the corrected Archive screens. What is taken: a horizontal split of panes, each pane headed by the
- * artifact's own name in a chip, run identity stated above the artifacts. What is **not**, and none
- * of it is reproduced anywhere below: its `SUCCESS` chip, its `PASS` log line, `COMPLETE`, green
+ * the corrected Archive screens. What is taken: a horizontal split of panes, each pane headed by a
+ * strip naming the arm it is. **Its per-pane run identity was taken and has since been given back**
+ * — the head carried the run name and three decomposed fields until the row was seen at
+ * {@link PANE_MIN}, where four stacked fields stood taller than the screenshot they headed; `Pane`
+ * records what replaced them and why. What is **not** taken, and none of it is reproduced anywhere
+ * below: its `SUCCESS` chip, its `PASS` log line, `COMPLETE`, green
  * ticks and red crosses, the words *Visual Regression*, `RUN A (BASELINE)` / `RUN B (CURRENT)`, the
  * `HASH` and `BRANCH` rows, `SWAP`, `RESYNC SCROLL`, its second navigation bar and global
  * `FORCE_RELEASE`, its mid-sidebar `Profile`, its per-arm orange/green pane borders (a red/green
@@ -95,11 +98,22 @@ export function ComparisonCard({ comparison }: { readonly comparison: LabelCompa
 				 * never the caller's own string, which `pathSegment` truncated and rewrote irreversibly
 				 * (`archive-listing.ts`, and the rule §9 already states for `OWNER`). The caption above
 				 * it is the `Field` label's own treatment, so the strip says *what the name is* without
-				 * inventing one. No count, no chip, no glyph and no control in it.
+				 * inventing one. No count, no glyph and no control in it.
 				 */
 				<div className="flex flex-col gap-1">
 					<span className="font-label-caps text-[10px] text-outline uppercase">LABEL</span>
-					<CardHeading>{comparison.label}</CardHeading>
+					<div className="flex items-center gap-2">
+						{/*
+						 * **The tree's own badge, in front of the name it belongs to.** One label heads the
+						 * whole card, so the badge belongs in the one strip that spans every pane rather
+						 * than repeated down the row — and here it does the job it exists for, tying the
+						 * card to the row a reader clicked in the tree. The letter is a code local to this
+						 * group; the name beside it is the thing that means something, which is why the
+						 * badge is in front of it and not instead of it.
+						 */}
+						<LabelBadge label={comparison.label} letter={comparison.letter} />
+						<CardHeading>{comparison.label}</CardHeading>
+					</div>
 				</div>
 			}
 		>
@@ -117,7 +131,7 @@ export function ComparisonCard({ comparison }: { readonly comparison: LabelCompa
 }
 
 /**
- * One pane — **which run it is, which file it is, and the file's own body.**
+ * One pane — **which arm of the investigation it is, and the file's own body.**
  *
  * **Each pane owns its own read.** `useArchivedArtifact` is one address per hook instance and hooks
  * cannot be called in a variable-length loop, so a component per pane is how N of them are legal —
@@ -127,57 +141,78 @@ export function ComparisonCard({ comparison }: { readonly comparison: LabelCompa
  * authenticated byte route cannot be an `<img src>`, so the whole artifact is buffered in the tab,
  * and N panes is N buffered artifacts.
  *
- * **Which run it is, in the vocabulary the screen already has.** The run directory's own name in
- * full, then its identity decomposed at the first and the last hyphen (`run-identity.ts` — never
- * `split('-')`, because `pr-127-review` is one owner), and the test name off the run's own address.
- * `OWNER` is the directory's own text and is **never** presented as the caller's string (D20, D22);
- * `GRANTED` is reformatted textually and is what lets a reader check *oldest on the left* for
- * themselves. A name that does not decompose reads `unknown` in both fields with the name still in
- * full. Nothing is invented — no duration, no trigger, no author, no hash and no branch.
+ * **The head is the variant and the control, and that is the whole of it** — a correction to #199
+ * made in place. It carried the run directory's own name in full and `TEST NAME`, `OWNER` and
+ * `GRANTED` decomposed out of it, on the reasoning that a pane has to say which run it is. Standing
+ * four stacked text fields over every artifact is what that cost: at {@link PANE_MIN} the head was
+ * taller than the screenshot under it in the narrow case, the thing the card exists for was pushed
+ * below the fold, and the fields repeated down the row the parts a reader was not comparing. **The
+ * evidence is what the card is for, so the head gets out of its way**, and none of what was removed
+ * is lost from the screen: the tree beside it stands on the artifact, and the run, its owner and its
+ * grant time are what `LevelContents` and `RunPanel` say at the depths that are about a run.
  *
- * `TEST NAME` and never a bare `TEST`: that is the field's real name (D22) and it does not mean a
- * test, while `TEST` alone reads as a category (`docs/DESIGN.md` §2). It is also the thing two arms
- * of one investigation differ by, which is why it is on the pane at all.
+ * **What the head kept is the one thing the panes differ by**, which is what a reader needs to know
+ * *which arm is which* and is the reason `TEST NAME` was on the pane at all. The whole test name is
+ * the group's name and the arm's run together, and the group's half is already the address the
+ * reader is standing on, so the pane says the arm's half alone — `Variant A` rather than
+ * `statistics-deliveries_variantA`, four times across a row 240px wide.
  *
- * The three fields are stacked in one column rather than in `RunPanel`'s three-across grid, because
- * a pane at {@link PANE_MIN} has no room for a grid.
+ * **And it says it as a phrase rather than as an identifier.** `variantPhrase` re-spaces and
+ * re-cases the arm's own name and does nothing else (`variant-name.ts`): every word survives, in
+ * order, spelled as the caller spelled it apart from its first character. A head is read at a
+ * glance and `variantA` beside `variantB` differs by one character in the least-looked-at position
+ * on the card, which is the whole reason a phrase is worth the transform. **The caller's own string
+ * is on the `title`**, so what was actually filed is a hover away and this is a re-rendering rather
+ * than a replacement — the rule D22 asks for when a panel touches a caller's text at all.
+ *
+ * **Ordering is not the head's job** — *oldest on the left, newest on the right* is the card's own
+ * rule, stated in this module's header and decided by `level-order.ts`, rather than something a
+ * reader was meant to verify by reading `GRANTED` off each pane in turn.
+ *
+ * **The label badge is not here.** One label heads the whole card, so the badge is in the card's own
+ * strip in front of the name it belongs to; repeating it down the row would draw the same letter N
+ * times to say the thing every pane already has in common. The artifact's file name is not here
+ * either, for the same reason the reference screen's chip is not: within one comparison every pane
+ * is the same file of a different run, so it was the same string N times across the row — and the
+ * name is still on the tree row, in the body's `alt`, and one click away in the window the control
+ * opens.
  */
 function Pane({ pane }: { readonly pane: ComparisonPane }) {
 	const artifact = useArchivedArtifact(pane.path);
-	const runName = pane.run.at(-2) ?? '';
-	const identity = decomposeRunName(runName);
 	const name = pane.path.at(-1) ?? '';
 
 	return (
 		<article
 			className={`flex ${PANE_MIN} basis-0 grow flex-col overflow-hidden rounded-lg border-2 border-outline-variant bg-surface`}
 		>
-			<div className="border-outline-variant border-b-2 bg-surface-container-high px-3 py-2">
-				<h3 className="mb-3 break-words font-code-md font-bold text-code-md text-on-surface">
-					{runName}
+			{/*
+			 * `min-h-12` is the head's height **with** the control in it — 32px of bordered, padded
+			 * glyph inside `py-2` — held whether the control is there or not. The control renders only
+			 * once the read lands, and a head sized by its text alone would have grown under the reader
+			 * mid-read, shifting every artifact in the row down at the same moment.
+			 */}
+			<div className="flex min-h-12 items-center justify-between gap-2 border-outline-variant border-b-2 bg-surface-container-high px-3 py-2">
+				{/*
+				 * `break-words` and never a truncation: an arm's name is the one thing this row is here
+				 * to tell apart, and an ellipsis on it would hide exactly the character two arms differ
+				 * by. A long one takes a second line and the row of panes grows with it.
+				 *
+				 * The `title` is the arm **as the caller named it**, unphrased — the same channel the
+				 * label badge puts the filed label on, and for the same reason.
+				 */}
+				<h3
+					className="min-w-0 break-words font-code-md font-bold text-code-md text-on-surface"
+					title={pane.variant}
+				>
+					{variantPhrase(pane.variant)}
 				</h3>
-				<div className="flex flex-col gap-3">
-					<Field label="TEST NAME">{pane.run.at(1) ?? UNKNOWN}</Field>
-					<Field label="OWNER">{identity.owner ?? UNKNOWN}</Field>
-					<Field label="GRANTED">{identity.grantedAt ?? UNKNOWN}</Field>
-				</div>
-				<div className="mt-3 flex items-start justify-between gap-2">
-					{/*
-					 * The artifact's own file name, in the reference screen's chip treatment — the one
-					 * piece of that screen's pane head worth keeping, because the pane is *this file of
-					 * this run* and the card's own heading is the label rather than the file.
-					 */}
-					<span className="break-words border border-outline-variant bg-surface-container-high px-2 py-1 font-code-md text-code-md text-on-surface-variant">
-						{name}
-					</span>
-					{/*
-					 * The **existing** control, unchanged and still recessive: absent for `opaque`, no
-					 * `download` attribute, a view rather than a transfer (§10). It is kept here because
-					 * selecting a labelled artifact in this view no longer draws the single preview, and a
-					 * full-size look is the one thing §11 says the preview genuinely needs.
-					 */}
-					{artifact.status === 'read' ? <OpenInANewWindow body={artifact.body} /> : null}
-				</div>
+				{/*
+				 * The **existing** control, unchanged in everything but its width: absent for `opaque`, no
+				 * `download` attribute, a view rather than a transfer (§10). It is kept here because
+				 * selecting a labelled artifact in this view no longer draws the single preview, and a
+				 * full-size look is the one thing §11 says the preview genuinely needs.
+				 */}
+				{artifact.status === 'read' ? <OpenInANewWindow body={artifact.body} iconOnly /> : null}
 			</div>
 			{/*
 			 * Whatever the host's own content type says this file is — so a labelled recording and a

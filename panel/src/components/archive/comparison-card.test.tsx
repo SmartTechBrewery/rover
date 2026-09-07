@@ -40,13 +40,26 @@ const FIRST = '20260901T090000Z-issue-199-1111aaaa';
 const SECOND = '20260902T090000Z-pr-127-review-2222bbbb';
 const LABEL = 'deliveries-list';
 
+/** The arm each test name names — `label-comparison.ts` decides it; the card is handed the answer. */
+const VARIANT_OF: Readonly<Record<string, string>> = {
+	[ARM_A]: 'variantA',
+	[ARM_B]: 'variantB',
+};
+
 function pane(testName: string, run: string, name: string): ComparisonPane {
 	const address = [PROJECT, testName, run, SERIAL];
-	return { run: address, path: [...address, 'screenshots', name] };
+	return {
+		run: address,
+		path: [...address, 'screenshots', name],
+		variant: VARIANT_OF[testName] ?? testName,
+	};
 }
 
+/** `A` is the first letter `lettersOfGroup` hands out, which is what one label in a group takes. */
+const LETTER = 'A';
+
 function comparison(...panes: readonly ComparisonPane[]): LabelComparison {
-	return { label: LABEL, panes };
+	return { label: LABEL, letter: LETTER, panes };
 }
 
 const TWO = comparison(pane(ARM_A, FIRST, 'before.png'), pane(ARM_B, SECOND, 'after.png'));
@@ -69,11 +82,9 @@ function panes(container: HTMLElement): readonly HTMLElement[] {
 	return [...container.querySelectorAll('article')] as HTMLElement[];
 }
 
-/** One pane's `Field`s as `[label, value]` pairs, in the order the pane states them. */
-function fieldsOf(drawn: HTMLElement | undefined): readonly (readonly string[])[] {
-	return [...(drawn?.querySelectorAll('div.flex-col > div.flex-col') ?? [])].map((field) =>
-		[...field.querySelectorAll('span')].map((part) => part.textContent ?? ''),
-	);
+/** Which file a pane drew, read off the body's own `alt` — the pane's one remaining identity. */
+function fileOf(drawn: HTMLElement | undefined): string | null | undefined {
+	return drawn?.querySelector('img')?.getAttribute('alt');
 }
 
 beforeEach(() => {
@@ -91,22 +102,28 @@ describe('a label’s artifacts side by side', () => {
 
 		expect(screen.getByRole('heading', { level: 2 }).textContent).toBe(LABEL);
 		const strip = container.querySelector('section > div:first-child');
-		expect(strip?.textContent).toBe(`LABEL${LABEL}`);
-		// No count, no chip, no glyph and no control in the strip.
+		// The caption, then the tree's badge, then the name it belongs to — and nothing else.
+		expect(strip?.textContent).toBe(`LABEL${LETTER}${LABEL}`);
+		// No count, no glyph and no control in the strip.
 		expect(strip?.querySelectorAll('button')).toHaveLength(0);
 		expect(strip?.querySelectorAll('a')).toHaveLength(0);
 		expect(strip?.textContent).not.toContain('2');
 	});
 
-	// One pane per artifact, **in the given DOM order** — oldest run on the left is decided upstream
-	// and drawn here, so what is asserted is that the order is preserved rather than re-sorted.
+	/*
+	 * One pane per artifact, **in the given DOM order** — oldest run on the left is decided upstream
+	 * and drawn here, so what is asserted is that the order is preserved rather than re-sorted.
+	 *
+	 * Read off each pane's own body since the head stopped naming the run: which artifact a pane
+	 * drew is the thing the order is about, and it is the one identity the pane still carries.
+	 */
 	it('draws one pane per artifact, in the order it was given', async () => {
 		const { container } = await showing();
 
 		const drawn = panes(container);
 		expect(drawn).toHaveLength(2);
-		expect(drawn[0]?.textContent).toContain(FIRST);
-		expect(drawn[1]?.textContent).toContain(SECOND);
+		expect(fileOf(drawn[0])).toBe('before.png');
+		expect(fileOf(drawn[1])).toBe('after.png');
 	});
 
 	// A group may hold seven runs (R41) and nothing caps N.
@@ -140,50 +157,84 @@ describe('a label’s artifacts side by side', () => {
 	});
 
 	/*
-	 * Which run a pane is, in the vocabulary the screen already has: the directory's own name, its
-	 * test name off the run's address, and `OWNER` / `GRANTED` decomposed at the first and the last
-	 * hyphen — never `split('-')`, because `pr-127-review` is **one** owner (D20, D22).
+	 * **The head is the badge and the control, and nothing else** — the correction `Pane` records in
+	 * place. The run directory's own name, `TEST NAME`, `OWNER` and `GRANTED` stood over every
+	 * artifact and pushed the evidence the card exists for below the fold at {@link PANE_MIN}.
+	 *
+	 * Asserted as an absence and not merely as a missing `<h3>`: the run name, the owner and the
+	 * grant time are the strings that were there, so the case fails if any of them comes back in
+	 * another element.
 	 */
-	it('says which run each pane is, without parsing a component to death', async () => {
+	it('heads each pane with its arm alone, and says nothing else about the run', async () => {
 		const { container } = await showing();
 
-		const later = panes(container)[1];
-		expect(later?.querySelector('h3')?.textContent).toBe(SECOND);
-		expect(fieldsOf(later)).toEqual([
-			['TEST NAME', ARM_B],
-			// The whole owner, not `pr` — which is what `split('-')` would have made of it.
-			['OWNER', 'pr-127-review'],
-			// Reformatted textually, and it is what lets a reader check *oldest on the left*.
-			['GRANTED', '2026-09-02 09:00:00 UTC'],
-		]);
-		expect(fieldsOf(panes(container)[0])).toEqual([
-			['TEST NAME', ARM_A],
-			['OWNER', 'issue-199'],
-			['GRANTED', '2026-09-01 09:00:00 UTC'],
-		]);
+		const drawn = panes(container);
+		// **As a phrase** — `variantPhrase` re-spaces and re-cases the arm and does nothing else,
+		// because a head is read at a glance and `variantA` beside `variantB` differs by one
+		// character in the least-looked-at position on the card (`variant-name.ts`).
+		expect(drawn[0]?.querySelector('h3')?.textContent).toBe('Variant A');
+		expect(drawn[1]?.querySelector('h3')?.textContent).toBe('Variant B');
+		// And the caller's own string is a hover away, so this is a re-rendering and not a rewrite.
+		expect(drawn[0]?.querySelector('h3')?.getAttribute('title')).toBe('variantA');
+		expect(drawn[1]?.querySelector('h3')?.getAttribute('title')).toBe('variantB');
+		for (const one of drawn) {
+			const text = one.textContent ?? '';
+			for (const absent of [
+				FIRST,
+				SECOND,
+				// The arm's half of the test name, never the group's half in front of it.
+				ARM_A,
+				ARM_B,
+				'TEST NAME',
+				'OWNER',
+				'GRANTED',
+				'pr-127-review',
+				'issue-199',
+				'2026-09-01',
+				'2026-09-02',
+			]) {
+				expect(text).not.toContain(absent);
+			}
+		}
 	});
 
-	it('says `unknown` for a run name that does not decompose, with the name still in full', async () => {
-		const odd = comparison(
-			pane(ARM_A, 'norunshape', 'before.png'),
-			pane(ARM_B, SECOND, 'after.png'),
-		);
+	/*
+	 * **The tree's own badge, once, in front of the name it belongs to** — the letter and the fill
+	 * are `lettersOfGroup`'s assignment carried down through `LabelComparison`, so the badge over
+	 * the card is the badge on the tree row that opened it, and it says the **filed** label out loud
+	 * (`label-badge.tsx`). One label heads the card, so it is drawn once and not per pane.
+	 */
+	it('badges the card with the tree’s badge, in front of the label and nowhere else', async () => {
+		const { container } = await showing();
 
-		const { container } = await showing(odd);
-
-		const first = panes(container)[0];
-		expect(first?.querySelector('h3')?.textContent).toBe('norunshape');
-		expect(first?.textContent).toContain('unknown');
+		const badges = [...container.querySelectorAll('[role="img"]')];
+		expect(badges).toHaveLength(1);
+		const badge = badges[0];
+		expect(badge?.textContent).toBe(LETTER);
+		// The letter is a code local to one group; the label is the thing that means something.
+		expect(badge?.getAttribute('aria-label')).toBe(`Filed under the label ${LABEL}`);
+		expect(badge?.getAttribute('title')).toBe(`Filed under the label ${LABEL}`);
+		expect(badge?.className).toContain('rounded-full');
+		// In front of the name, in the card's own strip — and on no pane.
+		expect(badge?.nextElementSibling?.textContent).toBe(LABEL);
+		for (const drawn of panes(container)) {
+			expect(drawn.querySelector('[role="img"]')).toBeNull();
+		}
 	});
 
-	it('names each pane’s own file, and asks the byte route for each address', async () => {
+	/*
+	 * The file name left the head with everything else — within one comparison every pane is the
+	 * same file of a different run, so it was the same string N times across the row. It is still
+	 * the body's `alt`, which is where a screen reader reads it and where the case above finds it.
+	 */
+	it('asks the byte route for each pane’s own address, and names the file in the body', async () => {
 		const { container } = await showing();
 
 		expect(host.asked).toEqual([
 			[PROJECT, ARM_A, FIRST, SERIAL, 'screenshots', 'before.png'],
 			[PROJECT, ARM_B, SECOND, SERIAL, 'screenshots', 'after.png'],
 		]);
-		expect(panes(container)[0]?.textContent).toContain('before.png');
+		expect(panes(container)[0]?.textContent).not.toContain('before.png');
 		expect(screen.getByAltText('before.png')).toBeDefined();
 		expect(screen.getByAltText('after.png')).toBeDefined();
 	});
@@ -269,13 +320,22 @@ describe('each pane draws the body its content type says', () => {
 		}
 	});
 
-	// The one control on a pane, and it is the existing one: a view rather than a transfer (§10).
-	it('offers `Open in a new window` per pane, and no download', async () => {
+	/*
+	 * The one control on a pane, and it is the existing one: a view rather than a transfer (§10).
+	 *
+	 * **The glyph alone here, and the words still in the single preview beside the tree** — the
+	 * control is the same control either way, so it is found by the same name: it moves out of the
+	 * text and into `aria-label` and `title` rather than being dropped.
+	 */
+	it('offers `Open in a new window` per pane as a glyph, and no download', async () => {
 		const { container } = await showing();
 
 		const controls = screen.getAllByRole('link', { name: /Open in a new window/ });
 		expect(controls).toHaveLength(2);
 		for (const control of controls) {
+			expect(control.textContent).toBe('');
+			expect(control.getAttribute('title')).toBe('Open in a new window');
+			expect(control.querySelector('svg')).not.toBeNull();
 			expect(control.getAttribute('target')).toBe('_blank');
 			expect(control.getAttribute('rel')).toBe('noopener noreferrer');
 			expect(control.hasAttribute('download')).toBe(false);

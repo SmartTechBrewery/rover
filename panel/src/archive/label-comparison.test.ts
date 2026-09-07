@@ -143,6 +143,50 @@ describe('the artifacts one label is filed on across a group', () => {
 		expect(comparison).toBeNull();
 	});
 
+	/*
+	 * **The badge letter is the tree's, not a second assignment.** The card draws it over every pane
+	 * (`comparison-card.tsx`), so it has to be `lettersOfGroup`'s answer for this group — insertion
+	 * order over the host's own walk, which is where the tree's badges come from too. `A` is the
+	 * first label the walk met and `B` the second, whichever of them was selected.
+	 */
+	it('carries the letter this label takes in this group', () => {
+		const groups = [
+			group(
+				run(ARM_A, FIRST, [DELIVERIES, EMPTY_STATE]),
+				run(ARM_B, SECOND, [DELIVERIES, EMPTY_STATE]),
+			),
+		];
+
+		expect(comparisonAt(groups, PROJECT, GROUP, addressOf(ARM_A, FIRST, DELIVERIES))?.letter).toBe(
+			'A',
+		);
+		expect(
+			comparisonAt(groups, PROJECT, GROUP, addressOf(ARM_A, FIRST, EMPTY_STATE, 2))?.letter,
+		).toBe('B');
+	});
+
+	/*
+	 * Past the twenty-sixth distinct label the alphabet is out and the badge stops distinguishing —
+	 * `@` on the pane exactly as on the tree row, rather than a letter that means something else.
+	 */
+	it('carries `@` for a label past the end of the alphabet', () => {
+		const many = Array.from({ length: 27 }, (_unused, index) => `label-${index}`);
+		const groups = [group(run(ARM_A, FIRST, many), run(ARM_B, SECOND, many))];
+		const last = many.at(-1) ?? '';
+
+		const comparison = comparisonAt(groups, PROJECT, GROUP, [
+			PROJECT,
+			ARM_A,
+			FIRST,
+			SERIAL,
+			'screenshots',
+			`0027_${last}.png`,
+		]);
+
+		expect(comparison?.label).toBe(last);
+		expect(comparison?.letter).toBe('@');
+	});
+
 	it('keeps a label with surrounding whitespace exactly as it was filed', () => {
 		const groups = [group(run(ARM_A, FIRST, [' spaced ']), run(ARM_B, SECOND, [' spaced ']))];
 
@@ -156,6 +200,40 @@ describe('the artifacts one label is filed on across a group', () => {
 		]);
 
 		expect(comparison?.label).toBe(' spaced ');
+	});
+});
+
+/**
+ * **Every pane carries the arm its run names**, which `variant-name.ts` decides and tests on its
+ * own. What is asserted here is the wiring: the arm comes off the pane's **own** run, so two panes
+ * of one comparison carry two different ones.
+ */
+describe('the arm each pane names', () => {
+	it('carries each pane’s own arm, off that pane’s own test name', () => {
+		const groups = [group(run(ARM_A, FIRST, [DELIVERIES]), run(ARM_B, SECOND, [DELIVERIES]))];
+
+		const comparison = comparisonAt(groups, PROJECT, GROUP, addressOf(ARM_A, FIRST, DELIVERIES));
+
+		// The group's own id off the front of each — `statistics-deliveries_variantA` is `variantA`.
+		expect(comparison?.panes.map((pane) => pane.variant)).toEqual(['variantA', 'variantB']);
+	});
+
+	// The arm is the caller's own slice, unphrased: `variantPhrase` is the pane head's, not the data's.
+	it('carries the arm as the caller wrote it, with no re-casing on the way', () => {
+		const groups = [
+			group(run(`${GROUP}_ Variant A `, FIRST, [DELIVERIES]), run(ARM_B, SECOND, [DELIVERIES])),
+		];
+
+		const comparison = comparisonAt(groups, PROJECT, GROUP, [
+			PROJECT,
+			`${GROUP}_ Variant A `,
+			FIRST,
+			SERIAL,
+			'screenshots',
+			`001_${DELIVERIES}.png`,
+		]);
+
+		expect(comparison?.panes.at(0)?.variant).toBe(' Variant A ');
 	});
 });
 

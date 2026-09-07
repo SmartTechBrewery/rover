@@ -1751,8 +1751,16 @@ describe('a labelled artifact open in the testing groups view', () => {
 	const COMPARED = [...SCREENSHOTS, '001_screenshot.png'];
 	const ALONE = [...SCREENSHOTS, '002_screenshot.png'];
 	const UNLABELLED = [...SCREENSHOTS, '003_screenshot.png'];
-	/** The older arm's artifact under the same label — never listed, only ever answered. */
-	const OLDER_COMPARED = [...OLDER_SERIAL_LEVEL, 'screenshots', '001_screenshot.png'];
+	/**
+	 * The older arm's artifact under the same label — never listed, only ever answered.
+	 *
+	 * **Its name differs from the newer arm's on purpose.** The two arms are the same file of two
+	 * runs in the common case, and they were both `001_screenshot.png` here until the pane's head
+	 * stopped naming the run: *oldest on the left* is this card's own claim, and the body's `alt` is
+	 * now the only thing in the DOM that says which arm a pane is. Nothing about the arrangement
+	 * depends on the name, and `comparison-card.test.tsx` covers the head itself.
+	 */
+	const OLDER_COMPARED = [...OLDER_SERIAL_LEVEL, 'screenshots', '000_screenshot.png'];
 
 	const PNG = {
 		outcome: 'read',
@@ -1784,7 +1792,7 @@ describe('a labelled artifact open in the testing groups view', () => {
 					// The host's own ascending order, oldest first.
 					runs: [
 						groupRun('login-flow', OLDER, 'emulator-5554', {
-							'001_screenshot.png': LABEL,
+							'000_screenshot.png': LABEL,
 						}),
 						groupRun('login-flow', RUN, SERIAL, {
 							'001_screenshot.png': LABEL,
@@ -1815,9 +1823,10 @@ describe('a labelled artifact open in the testing groups view', () => {
 		expect(card.getByRole('heading', { level: 2 }).textContent).toBe(LABEL);
 		const panes = [...(container.querySelectorAll('article') ?? [])];
 		expect(panes).toHaveLength(2);
-		// Oldest → newest, left to right: the departure from *most recent first*, drawn.
-		expect(panes[0]?.textContent).toContain(OLDER);
-		expect(panes[1]?.textContent).toContain(RUN);
+		// Oldest → newest, left to right: the departure from *most recent first*, drawn. Read off
+		// each pane's own body, which is what says which arm it is now the head carries the badge.
+		expect(panes[0]?.querySelector('img')?.getAttribute('alt')).toBe('000_screenshot.png');
+		expect(panes[1]?.querySelector('img')?.getAttribute('alt')).toBe('001_screenshot.png');
 	});
 
 	/*
