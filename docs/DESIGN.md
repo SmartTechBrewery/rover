@@ -1811,12 +1811,36 @@ ever parsed to decide either** (D22).
   **One helper decides it for both panes** (`panel/src/archive/level-order.ts`): they list the same
   run directories side by side, and a pane that kept the host's order beside one that reversed read
   as two different lists.
-  **The comparison card is the one exception, and it is the only one** (#199): its panes read oldest
-  → newest, left to right, so a before/after reads as a before/after. The tree and every level
-  listing are unchanged, and `level-order.ts` still decides **both** directions — `mostRecentFirst`
-  for these levels and `oldestFirst` for that card — so the exception is named in one place rather
-  than being a rule some pane quietly reversed. See *The comparison card* below for why it is a sort
-  there and a reversal here.
+  **The comparison card is the one exception to *most recent first*, and it is the only one**
+  (#199): its panes read oldest → newest, left to right, so a before/after reads as a before/after.
+  The tree and every level listing are unchanged, and `level-order.ts` decides that direction too —
+  `mostRecentFirst` for these levels and `oldestFirst` for that card — so the exception is named in
+  one place rather than being a rule some pane quietly reversed. See *The comparison card* below for
+  why it is a sort there and a reversal here.
+- **A run's own contents lead with `screenshots` and `recordings`, in that order** (#208), and
+  everything else in that level keeps the host's order below them, exactly as it arrives. The host
+  sorts in code-unit order, which put `device_info.json` and `group_id.json` above them — two files
+  whose contents the card beside the tree is already drawing, sitting over the only rows that reach
+  an artifact at all. **`logs/` is not lifted**: what leads the level is the two kinds a reader opens
+  a run to look at, and the third keeps its place like every other entry. It is decided in
+  `level-order.ts` with the other two directions, which is what makes it the **second** named
+  departure from *the host's order stands* rather than a rule a pane invented — and what makes the
+  tree and the card agree about a level they both list. `Array.sort` is stable, so *these first,
+  everything else unchanged* needs no tie-break, and a level holding neither directory draws exactly
+  what it draws today.
+- **That is a sort and not an inference, and it is on the record because it makes this screen know
+  two words** (`ai/RULES.md` §1). The bullet below stays true as written — nothing on this screen
+  knows the word `unlabeled` — and `kind` is still on the wire so that no reader guesses from a name
+  whether an address is a directory (D22). Two names are now written down, in one list private to
+  `level-order.ts`, and they are the archive's own and fixed (`src/daemon/archive.ts` files a
+  screenshot under `screenshots/`, a recording under `recordings/`, a log pull under `logs/`). What
+  keeps it a sort: **nothing branches on what a row means**. An unrecognised name keeps its place, no
+  glyph, heading, grouping label, count or status is derived from a name, and the row anatomy above
+  is untouched — only the order changes. The alternative was to have the host answer the order, which
+  would keep *nothing on this screen knows the word* literally true and would place a future
+  `traces/` with no panel edit; the rule went where this screen's other two directions live instead,
+  so *one place decides an order* stays a fact about the panel, and moving it to `list_archive`
+  remains open for whenever a third kind is worth ordering.
 - **A legacy `unlabeled/` directory lists like any other folder.** It was the fallback for a lease
   taken without a `test_name` before #129 required one (D22); nothing on this screen knows the word,
   and a run filed under it browses like any other.

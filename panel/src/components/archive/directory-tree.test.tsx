@@ -562,12 +562,15 @@ describe('what a row may carry', () => {
 			'checkout-app',
 			'login-flow',
 			RUN,
-			'device_info.json',
-			'latest_recording',
+			// The run's contents lead with its artifact directories — `screenshots`, then
+			// `recordings` with its own open branch under it — and the rest of the level keeps the
+			// host's order below them (#208, `level-order.ts`).
+			'screenshots',
 			'recordings',
 			'001_frames',
 			'0001.png',
-			'screenshots',
+			'device_info.json',
+			'latest_recording',
 			OLDER,
 			'unlabeled',
 			'payments-web',
@@ -1245,8 +1248,8 @@ describe('the label badges', () => {
 			GROUP_ID,
 			A_VARIANT,
 			RUN,
-			'device_info.json',
 			SHOTS,
+			'device_info.json',
 		]);
 	});
 
