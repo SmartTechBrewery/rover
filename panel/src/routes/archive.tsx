@@ -16,6 +16,7 @@ import {
 import { type ArchiveSearch, useArchiveSearch } from '@panel/archive/archive-search.js';
 import { useArchivedArtifact } from '@panel/archive/artifact.js';
 import { type ArchivedDeviceInfo, useArchivedDeviceInfo } from '@panel/archive/device-info.js';
+import { groupedSearch } from '@panel/archive/group-search.js';
 import { groupRowsAt, groupRunSerial } from '@panel/archive/group-tree.js';
 import { comparisonAt, type LabelComparison } from '@panel/archive/label-comparison.js';
 import { type OpenBranches, useOpenBranches } from '@panel/archive/open-branches.js';
@@ -216,12 +217,23 @@ export function ArchiveScreen({ view }: { readonly view: ArchiveView }) {
 	 * input is still absent wherever the card is — the two states with nothing to browse draw no
 	 * tree, so they draw no field either, without anything having to say so twice.
 	 *
-	 * **It is handed to the `All` view's card alone** (#181): `search_archive` answers addresses of
-	 * the archive, which the groups view does not own, so a hit found from there would have nowhere
-	 * in that arrangement to land. The hook is mounted either way and asks for nothing while the
-	 * text is empty, which it always is in the view that draws no field.
+	 * **Both views get one** (#207, reversing #181's *the `All` view's card alone* in place). The
+	 * argument was about addresses — `search_archive` answers addresses of the archive, which the
+	 * groups view does not own, so a hit found from there would have nowhere in that arrangement to
+	 * land — and an address composes: `archiveAddressOf` drops the group id and `groupsAddressOf`
+	 * puts it back. So the hook is the same hook, over the same one request per settled text, and
+	 * what the groups view is handed is its answer **restricted to the runs that carry a group id**
+	 * and re-addressed onto `/groups/$` (`group-search.ts`, which also folds the grouping answer's
+	 * four states into the search's four and ORs the two walks' `truncated`).
 	 */
 	const search = useArchiveSearch();
+	/*
+	 * What the card is actually given. The `All` view's search is untouched — same field, same
+	 * population, same addresses — and the groups view's is the same object with a restricted state,
+	 * so the text, the setter and the debounce are one implementation in both.
+	 */
+	const shown =
+		view === 'groups' ? { ...search, state: groupedSearch(search.state, groups) } : search;
 	/** Where the tree's rows come from — the one thing the two views differ in (`tree-source.ts`). */
 	const source = sourceFor(view, groups, levels);
 
@@ -253,7 +265,7 @@ export function ArchiveScreen({ view }: { readonly view: ArchiveView }) {
 				levels={levels}
 				open={open}
 				root={rootOf(view, levels, groups)}
-				search={view === 'all' ? search : undefined}
+				search={shown}
 				selected={selected}
 				serial={serial}
 				source={source}
@@ -312,8 +324,11 @@ function Content({
 	readonly artifact: ReturnType<typeof useArchivedArtifact>;
 	/** What the open artifact is comparable with, or `null` when nothing is — {@link ComparisonCard}. */
 	readonly comparison: LabelComparison | null;
-	/** The tree card's search — `undefined` in the groups view, which draws no field (#181). */
-	readonly search: ArchiveSearch | undefined;
+	/**
+	 * The tree card's search — **this view's own population** (#207): the whole archive in the `All`
+	 * view, and the runs that carry a group id in the groups view.
+	 */
+	readonly search: ArchiveSearch;
 }) {
 	if (selected.length < depthsOf(view).below) {
 		if (root === 'loading') {

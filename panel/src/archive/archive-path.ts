@@ -116,3 +116,23 @@ export function levelsOf(components: readonly string[]): readonly (readonly stri
 export function archiveAddressOf(components: readonly string[]): readonly string[] {
 	return [...components.slice(0, 1), ...components.slice(2)];
 }
+
+/**
+ * The **groups-view** address for an archive one — the group id spliced in at index 1, which is
+ * exactly what {@link archiveAddressOf} takes back out (#207).
+ *
+ * It is the inverse of that drop and the one place a groups address is *composed* from an archive
+ * one. Everything on this screen that reads bytes or lists a directory works in the archive's own
+ * path vocabulary; what needs the composition is a `search_archive` match, which answers an archive
+ * address and has to land on a row of this arrangement (`group-search.ts`).
+ *
+ * It is a splice rather than a parse: no component is read, trimmed or interpreted, and the group
+ * id goes in by position in an address this view composes itself (D22).
+ *
+ * The depth it produces is one past the archive's, which is exactly the `offset` this view already
+ * passes {@link componentsFromSplat} — so the deepest match the host can answer is still an address
+ * a hit row can link to and the router will not cut back to its parent.
+ */
+export function groupsAddressOf(groupId: string, components: readonly string[]): readonly string[] {
+	return [...components.slice(0, 1), groupId, ...components.slice(1)];
+}
