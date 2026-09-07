@@ -283,6 +283,12 @@ function treeRows(): readonly (string | null)[] {
 	return [...(tree?.querySelectorAll('a') ?? [])].map((row) => row.textContent);
 }
 
+/** The contents card's rows, in the order they are drawn — the other pane the same level is in. */
+function cardRows(container: HTMLElement): readonly (string | null)[] {
+	const card = container.querySelector('div.xl\\:flex-row > section');
+	return [...(card?.querySelectorAll('li') ?? [])].map((row) => row.textContent);
+}
+
 /**
  * Queries scoped to the **one card** beside the tree — a level's own listing, the run's column, the
  * preview, or the quiet line for an address nobody has answered for (#160).
@@ -569,8 +575,10 @@ describe('opening a second branch', () => {
 				'checkout-app',
 				'login-flow',
 				RUN,
-				'device_info.json',
+				// The run's own contents, artifacts first — `level-order.ts`, and the same order
+				// wherever this level is drawn (#208).
 				'screenshots',
+				'device_info.json',
 				OLDER,
 				'unlabeled',
 				'payments-web',
@@ -840,6 +848,102 @@ describe('the order the runs are listed in', () => {
 
 		expect(order(container.querySelector('aside'))).toEqual([RUN, OLDER]);
 		expect(order(container.querySelector('section'))).toEqual([RUN, OLDER]);
+	});
+});
+
+/*
+ * **A run's artifacts lead its contents level** (#208) — the second departure from *the host's order
+ * stands*, and one level's one answer: the tree, the card beside it, both views and a typed
+ * `<serial>` address all draw it, so all four are asserted off the same fixture.
+ */
+describe('the order a run’s own contents are listed in', () => {
+	/** The run's own `<serial>` level, over the archive every other case browses. */
+	const filed = (...entries: readonly unknown[]) => ({
+		...archive(),
+		[JSON.stringify(['checkout-app', 'login-flow', RUN, SERIAL])]: listed(...entries),
+	});
+
+	/** The sidecar files a lease writes, whose contents the card beside the tree already draws. */
+	const SIDECARS = [
+		{ kind: 'file', name: 'device_info.json', sizeBytes: 80 },
+		{ kind: 'file', name: 'group_id.json', sizeBytes: 20 },
+		{ kind: 'file', name: 'test_description.json', sizeBytes: 120 },
+	] as const;
+
+	/** Exactly what a run holds on the host, in the host's own code-unit order (#208). */
+	const EVERYTHING = filed(
+		SIDECARS[0],
+		SIDECARS[1],
+		directory('logs', 1),
+		directory('recordings', 1),
+		directory('screenshots', 3),
+		SIDECARS[2],
+	);
+
+	/*
+	 * Screenshots, then recordings, then the rest of the level exactly as the host answered it —
+	 * `logs` still between `group_id.json` and `test_description.json`, because nothing but those two
+	 * names is lifted and nothing else is re-sorted.
+	 */
+	const ARTIFACTS_FIRST = [
+		'screenshots',
+		'recordings',
+		'device_info.json',
+		'group_id.json',
+		'logs',
+		'test_description.json',
+	];
+
+	it('puts screenshots and recordings first, in the tree and in the card alike', async () => {
+		const { container } = await showing(`checkout-app/login-flow/${RUN}/${SERIAL}`, EVERYTHING);
+
+		expect(cardRows(container)).toEqual(ARTIFACTS_FIRST);
+		// The tree draws the same level, under the run's node, and the levels above it are untouched.
+		expect(treeRows()).toEqual([
+			'checkout-app',
+			'login-flow',
+			RUN,
+			...ARTIFACTS_FIRST,
+			OLDER,
+			'unlabeled',
+			'payments-web',
+		]);
+	});
+
+	// The groups view lists the same directory at its own address, so it gets the same answer — the
+	// group id is out of the archive depth before the order is decided.
+	it('is the same order in the groups view', async () => {
+		const { container } = await grouped(
+			`checkout-app/${GROUP}/login-flow/${RUN}/${SERIAL}`,
+			EVERYTHING,
+		);
+
+		expect(cardRows(container)).toEqual(ARTIFACTS_FIRST);
+		expect(treeRows()).toEqual([
+			'checkout-app',
+			GROUP,
+			'login-flow',
+			RUN,
+			...ARTIFACTS_FIRST,
+			OLDER,
+			OTHER_GROUP,
+		]);
+	});
+
+	// An archive that recorded nothing draws exactly what it draws today: a level with neither
+	// directory in it sorts to itself, which is what a stable sort on one key gives for free.
+	it('leaves a level holding neither directory in the host’s own order', async () => {
+		const { container } = await showing(
+			`checkout-app/login-flow/${RUN}/${SERIAL}`,
+			filed(SIDECARS[0], SIDECARS[1], directory('logs', 1), SIDECARS[2]),
+		);
+
+		expect(cardRows(container)).toEqual([
+			'device_info.json',
+			'group_id.json',
+			'logs',
+			'test_description.json',
+		]);
 	});
 });
 
@@ -1500,6 +1604,216 @@ describe('searching the archive from the tree card', () => {
 });
 
 /**
+ * **Searching from the groups view, over the runs that carry a group id** (#207).
+ *
+ * The hook, the debounce and the id discipline are the `All` view's and are asserted above; what is
+ * this view's is the *population* and the *addresses*, which is what this screen composes
+ * (`group-search.ts`). The contrast is drawn over one host: `unlabeled` names no group and
+ * `payments-web` holds no grouped run, so both are hits in the `All` view and neither is one here.
+ */
+describe('searching the testing groups from the tree card', () => {
+	const SERIAL_LEVEL = ['checkout-app', 'login-flow', RUN, SERIAL];
+	const HIT = [...SERIAL_LEVEL, 'screenshots', 'login.png'];
+	/** The same hit's address in this arrangement — the group id in front of the archive's own. */
+	const IN_GROUPS = ['checkout-app', GROUP, 'login-flow', RUN, SERIAL, 'screenshots', 'login.png'];
+
+	function answered(
+		matches: readonly { path: readonly string[]; kind: string }[],
+		truncated = false,
+	) {
+		return { outcome: 'searched', matches, truncated };
+	}
+
+	function field(): HTMLInputElement {
+		return screen.getByRole('textbox') as HTMLInputElement;
+	}
+
+	async function type(text: string): Promise<void> {
+		fireEvent.change(field(), { target: { value: text } });
+		await act(async () => {
+			await vi.advanceTimersByTimeAsync(SEARCH_DEBOUNCE_MS);
+			await vi.advanceTimersByTimeAsync(0);
+		});
+	}
+
+	beforeEach(() => {
+		vi.useFakeTimers();
+	});
+
+	afterEach(() => {
+		vi.useRealTimers();
+	});
+
+	/*
+	 * One request for the settled text, **no listing** and — the half that is this view's — **no
+	 * second grouping walk**: the restriction is composed from the answer this view already holds.
+	 */
+	it('asks the host once, and asks for no second grouping walk', async () => {
+		host.search = answered([{ path: HIT, kind: 'file' }]);
+		await grouped(`checkout-app/${GROUP}`);
+		const listings = [...host.asked];
+
+		await type('login');
+
+		expect(host.searches).toEqual(['login']);
+		expect(host.asked).toEqual(listings);
+		expect(host.groupings).toBe(1);
+	});
+
+	// A hit navigates to a groups-view address, with the group id in front of the archive address.
+	it('links a hit to this view’s own address', async () => {
+		host.search = answered([{ path: HIT, kind: 'file' }]);
+		const { container } = await grouped(`checkout-app/${GROUP}`);
+
+		await type('login');
+
+		expect(screen.getByRole('link', { name: 'login.png' }).getAttribute('href')).toBe(
+			`/groups/${IN_GROUPS.join('/')}`,
+		);
+		// And every row of the searched tree is on this view's route, ancestors included.
+		for (const row of container.querySelector('aside')?.querySelectorAll('a') ?? []) {
+			expect(row.getAttribute('href')).toMatch(/^\/groups\//);
+		}
+	});
+
+	// Following one lands on that address with the text and the hits intact, which is what holding
+	// the state above the card buys — the `All` view's own rule, over this view's addresses.
+	it('keeps the text and the hits when a hit is navigated to', async () => {
+		host.search = answered([{ path: HIT, kind: 'file' }]);
+		const { rerender } = await grouped(`checkout-app/${GROUP}`);
+		await type('login');
+
+		at.splat = IN_GROUPS.join('/');
+		host.answers.set(
+			JSON.stringify([...SERIAL_LEVEL, 'screenshots']),
+			listed({ kind: 'file', name: 'login.png', sizeBytes: 4 }),
+		);
+		await act(async () => {
+			rerender(<ArchiveScreen view="groups" />);
+		});
+		for (let turn = 0; turn < 6; turn += 1) {
+			await act(async () => undefined);
+		}
+
+		expect(field().value).toBe('login');
+		expect(treeRows()).toEqual([
+			'checkout-app',
+			GROUP,
+			'login-flow',
+			RUN,
+			SERIAL,
+			'screenshots',
+			'login.png',
+		]);
+		expect(host.searches).toEqual(['login']);
+	});
+
+	/*
+	 * **Only what this arrangement can address is drawn.** The same answer over the same host draws
+	 * three hits in the `All` view and one here: a run that named no group is not a hit, a project
+	 * with no grouped run is not drawn, and a test name is not addressable in this arrangement.
+	 */
+	it('draws only the matches under a grouped run, where the `All` view draws them all', async () => {
+		const matches = [
+			{ path: ['checkout-app', 'login-flow'], kind: 'directory' },
+			{ path: ['checkout-app', 'unlabeled', RUN, SERIAL, 'login.png'], kind: 'file' },
+			{ path: ['payments-web', 'refund-flow', RUN, SERIAL, 'login.png'], kind: 'file' },
+			{ path: HIT, kind: 'file' },
+		];
+		host.search = answered(matches);
+
+		const all = await showing('checkout-app');
+		await type('login');
+		expect(treeRows()).toEqual([
+			'checkout-app',
+			'login-flow',
+			RUN,
+			SERIAL,
+			'screenshots',
+			'login.png',
+			'unlabeled',
+			RUN,
+			SERIAL,
+			'login.png',
+			'payments-web',
+			'refund-flow',
+			RUN,
+			SERIAL,
+			'login.png',
+		]);
+		all.unmount();
+
+		await grouped(`checkout-app/${GROUP}`);
+		await type('login');
+		expect(treeRows()).toEqual([
+			'checkout-app',
+			GROUP,
+			'login-flow',
+			RUN,
+			SERIAL,
+			'screenshots',
+			'login.png',
+		]);
+	});
+
+	/*
+	 * **The definitive negative is never said about an answer either walk cut short.** The search
+	 * itself was complete here; the grouping walk was not, so the panel may not claim that nothing in
+	 * this arrangement contains that text.
+	 */
+	it('narrows the negative when the grouping walk was cut short', async () => {
+		host.search = answered([]);
+		host.groups = { ...(groupings() as object), truncated: true };
+		await grouped(`checkout-app/${GROUP}`);
+
+		await type('nothing');
+
+		expect(
+			screen.getByText(
+				'Nothing in the part of the testing groups that could be examined contains that text.',
+			),
+		).toBeDefined();
+		expect(document.body.textContent).not.toContain(
+			'No name under a testing group contains that text.',
+		);
+	});
+
+	/*
+	 * **No field where there is no tree**, in either of this view's two empty-handed states — and it
+	 * stays structural, because the field is part of the card and neither state draws one.
+	 */
+	it('draws no field where there is nothing to browse', async () => {
+		for (const answer of [
+			{ outcome: 'listed', groups: [], truncated: false },
+			{ outcome: 'unreadable' },
+		]) {
+			host.groups = answer;
+			const { unmount } = await grouped(undefined);
+
+			expect(screen.queryByRole('textbox')).toBeNull();
+			expect(document.querySelector('aside')).toBeNull();
+			unmount();
+		}
+	});
+
+	/*
+	 * A deep group address browses while the grouping walk is still out, so a search can answer
+	 * before the panel knows which runs are grouped. It says it is searching rather than that nothing
+	 * matched — the claim it has not established.
+	 */
+	it('says it is searching while the grouping walk is still out', async () => {
+		host.groups = HANGS;
+		host.search = answered([{ path: HIT, kind: 'file' }]);
+		await grouped(`checkout-app/${GROUP}/login-flow/${RUN}/${SERIAL}/screenshots`);
+
+		await type('login');
+
+		expect(screen.getByText("Searching this host's archive.")).toBeDefined();
+		expect(document.body.textContent).not.toContain('contains that text');
+	});
+});
+
+/**
  * The screen's two views (#165, given addresses of their own by #181).
  *
  * The toggle's segments are **links** now: the view is where you are, so a reload and a shared link
@@ -1648,8 +1962,9 @@ describe('the testing groups view', () => {
 			GROUP,
 			'login-flow',
 			RUN,
-			'device_info.json',
+			// Artifacts first inside the run, which is one level's one answer in both views (#208).
 			'screenshots',
+			'device_info.json',
 			OLDER,
 			OTHER_GROUP,
 		]);
@@ -1669,8 +1984,9 @@ describe('the testing groups view', () => {
 			GROUP,
 			'login-flow',
 			RUN,
-			'device_info.json',
+			// Artifacts first inside the run, which is one level's one answer in both views (#208).
 			'screenshots',
+			'device_info.json',
 			OLDER,
 			OTHER_GROUP,
 		]);
@@ -1689,12 +2005,17 @@ describe('the testing groups view', () => {
 		expect(document.querySelector('nav[aria-label="Breadcrumb"]')?.textContent).toContain(GROUP);
 	});
 
-	// The field searches the archive's own addresses, which this arrangement does not own — so it
-	// is the `All` view's and is absent here (#181).
-	it('draws no search field', async () => {
+	/*
+	 * **The field is here now, over the grouped runs alone** (#207, reversing #181's *absent here* in
+	 * place). The argument was about addresses, and an address composes — `archiveAddressOf` drops
+	 * the group id and `groupsAddressOf` puts it back. The population is what differs, and it is what
+	 * the field says.
+	 */
+	it('draws the field, over the grouped runs alone', async () => {
 		await grouped(undefined);
 
 		expect(screen.getByText('DIRECTORY')).toBeDefined();
+		expect(screen.getByLabelText('Search the grouped runs')).toBeDefined();
 		expect(screen.queryByLabelText('Search the whole archive')).toBeNull();
 	});
 

@@ -1049,9 +1049,56 @@ listed.
   test name's do. At the run and below it is exactly what it is in the `All` view.
 - **`RUNS` here counts the runs the answer holds** for that row. It is the one measure this view has
   that costs no second request, and it is the same `childCount` column the `All` view draws.
-- **The tree card's search field is the `All` view's and is absent here.** `search_archive` answers
-  addresses of the archive, which this arrangement does not own, so a hit found from here would have
-  nowhere in it to land. Searching is the file explorer's question.
+- **The tree card's search field is here too, over this arrangement's own runs** (#207, reversed in
+  place). It was absent, and the reason was: *`search_archive` answers addresses of the archive,
+  which this arrangement does not own, so a hit found from here would have nowhere in it to land.
+  **Searching is the file explorer's question.*** That argument was about **addresses**, and an
+  address composes: `archiveAddressOf` drops the group id on the way down and `groupsAddressOf`
+  (`panel/src/archive/archive-path.ts`) puts it back on the way up, so a match under a grouped run
+  has an address here after all. And this is the view where the work happens — the comparison card
+  and the label badges are drawn in it and nowhere else — so finding one screen in a group filing
+  nine labels across two arms was browsing, every time, while the `All` view beside it could find it
+  by typing. What the old reason was right about is what this keeps: **only what this arrangement can
+  address is drawn.**
+  - **The same field, in the same place, behaving the same way**: between the header strip and the
+    scrolling tree, the same 300 ms debounce, one request per settled text, superseded answers
+    dropped, empty text asking nothing and returning the tree to the address's own levels. The only
+    difference is the population it searches and the addresses it lands on.
+  - **The population is the runs that carry a group id.** A match at or below such a run is a hit; a
+    match on a run that named no group is not, and a match shallower than a run is not addressable
+    here at all — a test name lives under any number of groups, so *which group* has no honest answer
+    for it. A project with no grouped run is therefore never drawn, which is what this view already
+    does when browsing. The levels above a hit are the grouping's, and they come free: the searched
+    tree is built from the matches themselves, so re-addressing them first is the whole of it.
+  - **It is composed panel-side out of the two answers the view already holds**
+    (`panel/src/archive/group-search.ts`), because the groups view already fetches
+    `list_archive_groups` for the tree it draws. No `groupsOnly` key on `search_archive` — a
+    caller-settable bound is precisely the parameter D24 refused — no second method, nothing on the
+    wire, and no index (D23/D24's untouched half).
+  - **`truncated` is the OR of the two bounded walks.** It keeps its one meaning — at least one
+    directory that exists was not fully examined — now across both answers this is assembled from, so
+    either being short sets it. That is what stops the definitive negative being said about a search
+    either walk cut short, and it is why a hit whose run fell out of a truncated grouping answer does
+    not vanish silently. One flag rather than two: both causes lead to the same claim, *this answer is
+    short*, and what differs is the sentence.
+  - **The sentences that claim a population are this view's**, and they narrow rather than inventing a
+    fourth state — the precedent this section already sets one level up, where a truncated grouping
+    answer narrows *No testing groups*'s claim clause. *No name under a testing group contains that
+    text.* becomes *Nothing in the part of the testing groups that could be examined contains that
+    text.*, and a cut-short **hit list** says the arrangement's own *More is filed here than the host
+    could examine. A group or a run may be missing.* — the sentence the browsing rows already use,
+    defined once — rather than *Narrow the text*, which is advice that would not help when the
+    grouping walk is what was short. *Searching this host's archive.* and *The host could not search
+    the archive.* are unchanged in both views: the first says what the panel is doing, and the second
+    is true of every one of its causes, an unreadable grouping walk included.
+  - **The stated cost.** `search_archive` walks the whole archive and caps matches at 200, so some of
+    that cap is spent here on matches under ungrouped runs that are then dropped: a host with many
+    ungrouped runs reaches `truncated` sooner in this view than in the `All` view. A host-side method
+    answering one bounded walk with the group already in the address is the recorded alternative, at
+    the cost of a method and the doc round with it; it was considered and is deliberately not built.
+  - **The `All` view is untouched** — same field, same population, same addresses — and the field is
+    still absent in every state that draws no tree, because it is part of the card and the two
+    empty-handed states draw none.
 - **A truncated answer says so, above the rows**, exactly as the searched tree says it: *More is
   filed here than the host could examine. A group or a run may be missing.* `truncated` means one
   thing — at least one directory that exists was not fully examined — and a partial arrangement must
@@ -1737,7 +1784,11 @@ browser.
 - **The field is absent in every state that draws no tree** — and that needs saying nowhere in the
   code: it is part of the tree card, so it goes wherever the card goes. It is **present with an artifact open** since #160, because the
   tree is. The *state* lives above the card (`panel/src/routes/archive.tsx`), where it outlives the
-  address changing under it.
+  address changing under it. **And it is in both views since #207** (amended in place), over two
+  populations: the whole archive here, the runs that carry a group id in the groups view, with the
+  three sentences that claim a population being the view's and everything else — the position, the
+  markup, the debounce, the four states, the row anatomy — one implementation. The groups half is
+  above, under *The tree card's search field is here too*.
 
 **What a tree row may carry, and nothing else:**
 
@@ -1818,12 +1869,36 @@ ever parsed to decide either** (D22).
   **One helper decides it for both panes** (`panel/src/archive/level-order.ts`): they list the same
   run directories side by side, and a pane that kept the host's order beside one that reversed read
   as two different lists.
-  **The comparison card is the one exception, and it is the only one** (#199): its panes read oldest
-  → newest, left to right, so a before/after reads as a before/after. The tree and every level
-  listing are unchanged, and `level-order.ts` still decides **both** directions — `mostRecentFirst`
-  for these levels and `oldestFirst` for that card — so the exception is named in one place rather
-  than being a rule some pane quietly reversed. See *The comparison card* below for why it is a sort
-  there and a reversal here.
+  **The comparison card is the one exception to *most recent first*, and it is the only one**
+  (#199): its panes read oldest → newest, left to right, so a before/after reads as a before/after.
+  The tree and every level listing are unchanged, and `level-order.ts` decides that direction too —
+  `mostRecentFirst` for these levels and `oldestFirst` for that card — so the exception is named in
+  one place rather than being a rule some pane quietly reversed. See *The comparison card* below for
+  why it is a sort there and a reversal here.
+- **A run's own contents lead with `screenshots` and `recordings`, in that order** (#208), and
+  everything else in that level keeps the host's order below them, exactly as it arrives. The host
+  sorts in code-unit order, which put `device_info.json` and `group_id.json` above them — two files
+  whose contents the card beside the tree is already drawing, sitting over the only rows that reach
+  an artifact at all. **`logs/` is not lifted**: what leads the level is the two kinds a reader opens
+  a run to look at, and the third keeps its place like every other entry. It is decided in
+  `level-order.ts` with the other two directions, which is what makes it the **second** named
+  departure from *the host's order stands* rather than a rule a pane invented — and what makes the
+  tree and the card agree about a level they both list. `Array.sort` is stable, so *these first,
+  everything else unchanged* needs no tie-break, and a level holding neither directory draws exactly
+  what it draws today.
+- **That is a sort and not an inference, and it is on the record because it makes this screen know
+  two words** (`ai/RULES.md` §1). The bullet below stays true as written — nothing on this screen
+  knows the word `unlabeled` — and `kind` is still on the wire so that no reader guesses from a name
+  whether an address is a directory (D22). Two names are now written down, in one list private to
+  `level-order.ts`, and they are the archive's own and fixed (`src/daemon/archive.ts` files a
+  screenshot under `screenshots/`, a recording under `recordings/`, a log pull under `logs/`). What
+  keeps it a sort: **nothing branches on what a row means**. An unrecognised name keeps its place, no
+  glyph, heading, grouping label, count or status is derived from a name, and the row anatomy above
+  is untouched — only the order changes. The alternative was to have the host answer the order, which
+  would keep *nothing on this screen knows the word* literally true and would place a future
+  `traces/` with no panel edit; the rule went where this screen's other two directions live instead,
+  so *one place decides an order* stays a fact about the panel, and moving it to `list_archive`
+  remains open for whenever a third kind is worth ordering.
 - **A legacy `unlabeled/` directory lists like any other folder.** It was the fallback for a lease
   taken without a `test_name` before #129 required one (D22); nothing on this screen knows the word,
   and a run filed under it browses like any other.
@@ -1959,7 +2034,9 @@ phases that would otherwise each renumber it.
 - **The search field's placeholder says what the field does.** The design's *Filter this tree...*
   describes a client-side filter over rows already drawn, and this is not that: typing asks the host
   to search the *whole* archive, including levels this tree has never read. It reads
-  ***Search the whole archive...*** instead (#146). Nothing else about the field's markup deviates
+  ***Search the whole archive...*** instead (#146) — and in the **groups** view
+  ***Search the grouped runs...*** (#207), because the whole-archive sentence stops being true where
+  the population is the runs that carry a group id. Nothing else about the field's markup deviates
   except the clear action below — the wrapper, the classes and the leading glyph's position are the
   approved markup's, and `lucide-react`'s `Search` in place of the Material Symbols glyph and
   `rounded-sm` for the design's `rounded` are the standing portability note above rather than
