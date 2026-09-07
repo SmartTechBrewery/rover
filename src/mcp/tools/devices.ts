@@ -148,13 +148,22 @@ export function registerDeviceTools(
 				'this run in the archive weeks from now. Leave it out if you have nothing to say ' +
 				'rather than repeating `testName` or inventing a placeholder — absent is a real ' +
 				'answer here and no default is substituted for it. ' +
-				'`groupId` is **optional and is how several runs become one investigation**: give every ' +
-				'lease in a comparison the same `groupId` and the host can still say, after all of them ' +
-				'have ended, that they belong together. Reach for it whenever you are asked to show a ' +
-				'before and an after — take one lease, capture, make the change, take a second lease ' +
-				'with the same `groupId`, capture again. Two members is the common case and nothing caps ' +
-				'it: three or more runs in one group is normal, and nothing requires that a second member ' +
-				'ever arrives. Invent the string yourself and reuse it exactly; nothing parses it and it ' +
+				'`groupId` is **optional and is how several runs become one investigation** — and it is ' +
+				'the one field here the host answers back with a value of its own. **You name the ' +
+				'investigation; the host mints the id.** Send a name and the grant comes back with ' +
+				'`lease.groupId` set to the id that was actually filed — your name with a short suffix ' +
+				'on it (`statistics-deliveries` becomes `statistics-deliveries.h57ssn4`). **Read ' +
+				'`lease.groupId` off that grant and pass that exact string as `groupId` on every further ' +
+				'lease in the same comparison**; an id the host minted is taken verbatim, which is how ' +
+				'the second, third and seventh run join the same group. Do not invent the suffix ' +
+				'yourself, and do not send your own name a second time expecting to land in the first ' +
+				'group — each name is minted its own id, so that would file two groups. A name you send ' +
+				'that contains `.` is refused by name, because `.` is the reserved separator that joins ' +
+				'a run to an existing group. Reach for it whenever you are asked to show a before and an ' +
+				'after: take one lease, capture, make the change, take a second lease carrying the first ' +
+				'grant’s `lease.groupId`, capture again. Two members is the ' +
+				'common case and nothing caps it: three or more runs in one group is normal, and nothing ' +
+				'requires that a second member ever arrives. Nothing reads what your name says and it ' +
 				'authorizes nothing. **It is also what `label` on `screenshot`, `record_video` and ' +
 				'`read_logs` requires** — a labelled call on a lease with no `groupId` is refused by name ' +
 				'rather than quietly stripped of its label, because a label claims two artifacts are the ' +

@@ -293,12 +293,13 @@ describe('what a granted lease carries', () => {
 	});
 
 	/*
-	 * The fifth string (D22, as amended #150), echoed back on the grant — and echoed back for a
-	 * reason beyond symmetry: it is the string the caller passes to the *next* acquire in the
-	 * comparison, so a grant that swallowed it would leave an agent guessing at what it just sent.
-	 * Absent is an absent key, exactly as the description above.
+	 * The fifth string (D22, as amended #150 and #205), and the round trip the echo exists for.
+	 * The caller names the investigation and **the host mints the id it files**, so what comes back
+	 * on the grant is not what was sent — it is the string the caller passes to the *next* acquire
+	 * in the comparison. Absent is an absent key, exactly as the description above: a caller who
+	 * supplied no group is minted none (#129's lesson).
 	 */
-	it("echoes the caller's group back, and answers no key without one", async () => {
+	it('mints the group id it files, and answers no key without one', async () => {
 		await serveReadyDevice();
 		const client = await connect();
 
@@ -310,8 +311,93 @@ describe('what a granted lease carries', () => {
 		if (grouped.outcome !== 'granted' || plain.outcome !== 'granted') {
 			throw new Error('expected two granted leases');
 		}
-		expect(grouped.lease.groupId).toBe('app-bar-top-space');
+		const filed = grouped.lease.groupId ?? '';
+		expect(filed.startsWith('app-bar-top-space')).toBe(true);
+		expect(filed).not.toBe('app-bar-top-space');
+		expect(filed.length).toBeGreaterThan('app-bar-top-space'.length);
 		expect('groupId' in plain.lease).toBe(false);
+	});
+
+	/*
+	 * The other half of the round trip, and the reason the id is printed and echoed at all: given
+	 * back verbatim, a second lease is in the same investigation. Nothing was looked up to do it.
+	 */
+	it('takes an id it minted verbatim, so a second lease joins that group', async () => {
+		await serveReadyDevice();
+		const client = await connect();
+
+		const first = await acquire(client, 'issue-150', { groupId: 'app-bar-top-space' });
+		if (first.outcome !== 'granted' || first.lease.groupId === undefined) {
+			throw new Error('expected a granted lease carrying a group');
+		}
+		const second = await acquire(client, 'issue-150', {
+			serial: parseDeviceSerial('attached-2'),
+			groupId: first.lease.groupId,
+		});
+
+		if (second.outcome !== 'granted') {
+			throw new Error('expected a second granted lease');
+		}
+		expect(second.lease.groupId).toBe(first.lease.groupId);
+	});
+
+	/*
+	 * The collision this card removes, asserted as behaviour rather than left as prose: two
+	 * callers who each typed `statistics-deliveries` are two investigations, because each name is
+	 * minted its own id.
+	 */
+	it('gives two callers who typed one name two different groups', async () => {
+		await serveReadyDevice();
+		const client = await connect();
+
+		const one = await acquire(client, 'issue-150', { groupId: 'statistics-deliveries' });
+		const other = await acquire(client, 'issue-205', {
+			serial: parseDeviceSerial('attached-2'),
+			groupId: 'statistics-deliveries',
+		});
+
+		if (one.outcome !== 'granted' || other.outcome !== 'granted') {
+			throw new Error('expected two granted leases');
+		}
+		expect(one.lease.groupId).not.toBe(other.lease.groupId);
+	});
+
+	/*
+	 * A refusal as **data**, like `label-without-group` — and refused above every await, so the
+	 * device is untouched and the next caller gets it. That last part is what the second acquire
+	 * here checks: an early return that had already taken something would leak a device per typo.
+	 */
+	it('refuses a name carrying the separator, by name, and leaves the device free', async () => {
+		await serveReadyDevice();
+		const client = await connect();
+
+		const refusal = await acquire(client, 'issue-205', { groupId: 'statistics.summary' });
+
+		if (refusal.outcome !== 'refused') {
+			throw new Error('expected a refusal');
+		}
+		expect(refusal.reason).toBe('separator-in-group-id');
+		expect(refusal.heldBy).toBeNull();
+		expect(refusal.message).toContain("'groupId'");
+		expect(refusal.message).toContain('the separator is how a run joins an existing group');
+
+		expect((await acquire(client, 'issue-205')).outcome).toBe('granted');
+	});
+
+	it('refuses a name too long to mint an id from, rather than truncating it', async () => {
+		await serveReadyDevice();
+		const client = await connect();
+
+		const refusal = await acquire(client, 'issue-205', { groupId: 'n'.repeat(249) });
+
+		if (refusal.outcome !== 'refused') {
+			throw new Error('expected a refusal');
+		}
+		expect(refusal.reason).toBe('group-id-too-long');
+		expect(refusal.heldBy).toBeNull();
+		expect(refusal.message).toContain('truncated');
+
+		expect((await acquire(client, 'issue-205')).outcome).toBe('granted');
 	});
 
 	/*
@@ -322,14 +408,19 @@ describe('what a granted lease carries', () => {
 	it('names the holder’s group in the refusal a second caller gets', async () => {
 		await serveReadyDevice();
 		const client = await connect();
-		await acquire(client, 'issue-150', { groupId: 'app-bar-top-space' });
+		const holder = await acquire(client, 'issue-150', { groupId: 'app-bar-top-space' });
+		if (holder.outcome !== 'granted') {
+			throw new Error('expected the first caller to be granted');
+		}
 
 		const refused = await acquire(client, 'someone-else');
 
 		if (refused.outcome !== 'refused' || refused.heldBy === null) {
 			throw new Error('expected a refusal naming the holder');
 		}
-		expect(refused.heldBy.groupId).toBe('app-bar-top-space');
+		// The **minted** id, so a listing and a grant cannot name one investigation two ways (#205).
+		expect(refused.heldBy.groupId).toBe(holder.lease.groupId);
+		expect(refused.heldBy.groupId).not.toBe('app-bar-top-space');
 	});
 
 	it('grants two devices at once — a lease is per device, not per host (D7)', async () => {

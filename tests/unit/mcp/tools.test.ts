@@ -238,28 +238,71 @@ describe('the device tools over a live host', () => {
 	});
 
 	/*
-	 * The lease half of #150 over a live host: it reaches the store, comes back on the grant, and
-	 * is on the holder every other agent sees — the same three places `testDescription` is, and for
-	 * the same reason it is on `LeaseHolder` rather than only on the grant.
+	 * The lease half of #150 over a live host, as #205 amended it: the name reaches the store, the
+	 * **minted** id comes back on the grant, and that same id is on the holder every other agent
+	 * sees — the same three places `testDescription` is, and for the same reason it is on
+	 * `LeaseHolder` rather than only on the grant. The round trip is the second half: the id the
+	 * grant answered with, sent again, lands in that group.
 	 */
-	it('carries a groupId to the host, onto the grant and into the listing', async () => {
+	it('mints the groupId onto the grant, lists it, and takes it back verbatim', async () => {
 		registerFakeBackend();
 		await startHost();
 		const agent = await connectAgent();
-		const groupId = 'app-bar-top-space';
 
 		const granted = await callTool(agent, 'acquire_device', {
 			serial: 'attached-1',
 			owner: 'issue-150',
 			project: 'rover',
 			testName: 'app bar top space',
-			groupId,
+			groupId: 'app-bar-top-space',
 		});
 
 		expect(granted.isError).toBeFalsy();
-		expect(granted.structuredContent).toMatchObject({ lease: { groupId } });
+		const filed = (granted.structuredContent as { lease: { groupId?: string } }).lease.groupId;
+		expect(filed?.startsWith('app-bar-top-space.')).toBe(true);
+		expect(filed).not.toBe('app-bar-top-space');
+
 		const listed = await callTool(agent, 'list_devices');
-		expect(listed.structuredContent).toMatchObject({ devices: [{ heldBy: { groupId } }] });
+		expect(listed.structuredContent).toMatchObject({
+			devices: [{ heldBy: { groupId: filed } }],
+		});
+
+		const joined = await callTool(agent, 'acquire_device', {
+			serial: 'attached-2',
+			owner: 'issue-150',
+			project: 'rover',
+			testName: 'app bar top space',
+			groupId: filed,
+		});
+		expect(joined.isError).toBeFalsy();
+		expect(joined.structuredContent).toMatchObject({ lease: { groupId: filed } });
+	});
+
+	/*
+	 * A refusal is data on the wire and an error to the agent, exactly as `label-without-group` is:
+	 * a name carrying the reserved separator is refused by the host, in the host's own sentence,
+	 * with no client code of its own (#205).
+	 */
+	it('surfaces the separator refusal as an error naming the field', async () => {
+		registerFakeBackend();
+		await startHost();
+		const agent = await connectAgent();
+
+		const refused = await callTool(agent, 'acquire_device', {
+			serial: 'attached-1',
+			owner: 'issue-205',
+			project: 'rover',
+			testName: 'app bar top space',
+			groupId: 'statistics.summary',
+		});
+
+		expect(refused.isError).toBe(true);
+		expect(textOf(refused)).toContain("'groupId'");
+		expect(refused.structuredContent).toMatchObject({
+			outcome: 'refused',
+			reason: 'separator-in-group-id',
+			heldBy: null,
+		});
 	});
 
 	// Optional, so a call without one is granted — and carries no key rather than a blank.

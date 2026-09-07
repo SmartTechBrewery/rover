@@ -22,11 +22,14 @@
  * invented in their place. Neither is a directory name — nothing in the archive's tree is shaped
  * from either — which is why they may be left out where `--test-name` may not.
  *
- * `--group-id` is the one flag on this command that is about **more than this lease**: pass the
- * same one to two acquires and the two runs are one investigation, which is what makes a
- * before/after comparison recoverable after both leases have ended. It is also what `--label` on
- * `rover screenshot` and `rover record` needs — a labelled call on a lease with no group is
- * refused by the host, naming both fields.
+ * `--group-id` is the one flag on this command that is about **more than this lease**, and the one
+ * whose value the host has a say in (D22, as amended #205): you name the investigation, the host
+ * mints the id it files and prints it back on the grant's `Group:` line, and **that** printed id
+ * is what the next `rover acquire` in the comparison is given. Two runs given the id the first
+ * grant answered with are one investigation, which is what makes a before/after recoverable after
+ * both leases have ended. The separator is reserved, so a name containing one is refused by the
+ * host rather than rewritten. It is also what `--label` on `rover screenshot` and `rover record`
+ * needs — a labelled call on a lease with no group is refused by the host, naming both fields.
  *
  * A refusal is the host's answer, not an error — it is rendered and exits 1.
  */
@@ -68,12 +71,19 @@ Usage: rover acquire <serial> --owner <string> --project <string> --test-name <s
                  never becomes one; the host files it with the run so it outlives the
                  lease, and the web panel shows it live and in the archive.
   --group-id     Which investigation this lease is part of. Optional, and the one string
-                 here that spans leases: give the run before a change and the run after it
-                 the same --group-id and the archive can still say they belong together
-                 once both leases are gone. Two runs is the common case; three or more is
-                 equally valid and nothing caps it. It is also what --label on
-                 \`rover screenshot\` and \`rover record\` requires — a label on a lease with
-                 no group is refused, because there would be nothing to compare it against.
+                 here that spans leases — and the one the host has a say in: you name the
+                 investigation, and the host mints the id. Pass a name and the grant's
+                 \`Group:\` line prints what was actually filed, the name with a short suffix
+                 on it (\`statistics-deliveries\` → \`statistics-deliveries.h57ssn4\`); pass
+                 that printed id to the next acquire and both runs are the same
+                 investigation, which is what lets the archive still say they belong
+                 together once both leases are gone. Do not type the same name twice
+                 expecting one group — each name is minted its own id. \`.\` is the reserved
+                 separator, so a name containing one is refused, naming this flag. Two runs
+                 is the common case; three or more is equally valid and nothing caps it. It
+                 is also what --label on \`rover screenshot\` and \`rover record\` requires — a
+                 label on a lease with no group is refused, because there would be nothing
+                 to compare it against.
 
 --project and --test-name name directories in the host's artifact archive, so two runs of
 one test name sit side by side there. --test-description and --group-id name nothing.
@@ -125,7 +135,9 @@ export function renderGrant(lease: GrantedLease, projectFile?: string): string {
 	if (lease.groupId !== undefined) {
 		// Its own line and only when there is one, exactly as the description below. What it is
 		// **for** is being copied: it is the string the next acquire in this comparison is given,
-		// so it is printed on the grant the way the release command is.
+		// so it is printed on the grant the way the release command is. And it is the id the host
+		// filed rather than the name that was typed (#205) — which is why printing it is not a
+		// receipt: without this line the caller does not know what to pass next.
 		lines.push(`Group: ${out.escapeControlCharacters(lease.groupId)}`);
 	}
 	if (lease.testDescription !== undefined) {

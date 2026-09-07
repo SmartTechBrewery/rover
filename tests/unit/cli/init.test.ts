@@ -30,6 +30,7 @@ import {
 } from '@/cli/init/documents.js';
 import { MCP_SERVER_KEY } from '@/cli/init/mcp-config.js';
 import { pathSegment } from '@/daemon/archive-path.js';
+import { isMintedGroupId } from '@/daemon/group-id.js';
 import { ProjectHooksSchema } from '@/daemon/project-hooks.js';
 import { IPC_METHODS } from '@/ipc/methods.js';
 import { ROVER_MCP_NAME } from '@/mcp/server.js';
@@ -416,21 +417,49 @@ describe('the generated ROVER.md', () => {
 	});
 
 	/**
-	 * **The criterion the whole of #150 turns on**: an agent asked to compare a before and an after
-	 * arrives at `groupId` and `label` without a human naming them, and this page is where it
-	 * reads. So the worked example is asserted to be a worked example — both calls, the string that
-	 * repeats between them, and the rule that ties the two fields together — rather than a mention.
+	 * **The criterion the whole of #150 turns on**, as #205 amended it: an agent asked to compare a
+	 * before and an after arrives at `groupId` and `label` without a human naming them, and this
+	 * page is where it reads. So the worked example is asserted to be a worked example — both
+	 * calls, the label that repeats between them, and the rule that ties the two fields together —
+	 * rather than a mention.
+	 *
+	 * The `groupId` no longer repeats, and that is the point: the host mints the id it files and
+	 * answers with it, so the second call carries **the first grant's id** rather than the name
+	 * again. Two identical literals here would teach a group of one plus a second group nobody
+	 * asked for.
 	 */
 	it('teaches the before/after pattern as a worked example, not as a field list', () => {
 		// The trigger, in the words the ask actually arrives in.
 		expect(page).toContain('before and after');
-		// Two `acquire_device` calls sharing one group and one label, differing in their name.
+		// Two `acquire_device` calls sharing one label, differing in their name and their group.
 		expect(page.match(/acquire_device \{/g) ?? []).toHaveLength(2);
-		expect(page.match(/"groupId": "app-bar-top-space"/g) ?? []).toHaveLength(2);
 		expect(page.match(/"label": "home-screen"/g) ?? []).toHaveLength(2);
 		// The rule, and the one thing Rover deliberately does not do with the pair (ai/RULES.md §1).
 		expect(page).toContain('A `label` needs a `groupId`');
 		expect(page).toContain('does not diff');
+	});
+
+	/**
+	 * The round trip, asserted on the example rather than only on the prose (#205). The first call
+	 * sends the name; the page shows the id that came back; the second call sends **that**.
+	 */
+	it('sends the name once and the answered id after, never the same literal twice', () => {
+		const section = page.slice(page.indexOf('## Comparing two runs'), page.indexOf('## The verbs'));
+		const groups = [...section.matchAll(/"groupId": "([^"]+)"/g)].map(([, group]) => group);
+
+		expect(groups).toHaveLength(2);
+		const [named, answered] = groups as [string, string];
+		expect(named).toBe('app-bar-top-space');
+		// The second is the first with the host's separator and suffix on it, not a repeat.
+		expect(answered).not.toBe(named);
+		expect(answered.startsWith(`${named}.`)).toBe(true);
+		expect(isMintedGroupId(answered)).toBe(true);
+		// And the page says where that string came from, so the shape is not left to be guessed.
+		expect(section).toContain(`lease.groupId == "${answered}"`);
+		expect(section).toContain('the host');
+		expect(section).toContain('mints the id');
+		// A minted id survives `pathSegment` verbatim, exactly as the example's names do.
+		expect(pathSegment(answered)).toBe(answered);
 	});
 
 	/**
@@ -464,12 +493,15 @@ describe('the generated ROVER.md', () => {
 
 	// `theLoop`'s step 2 is the paragraph an agent reads before its first call, so it names the
 	// field and points at the example rather than leaving the two unconnected.
-	it('names groupId in the step that describes acquire_device', () => {
+	it('names groupId in the step that describes acquire_device, and the round trip with it', () => {
 		const step = page.slice(page.indexOf('2. **`acquire_device`**'), page.indexOf('3. **'));
 
 		expect(step).toContain('groupId');
 		expect(step).toContain('_variant');
 		expect(step).toContain('Comparing two runs');
+		// The host mints and the grant answers, so the step says what to pass next (#205).
+		expect(step).toContain('mints the id');
+		expect(step).toContain('lease.groupId');
 	});
 
 	// The snippet is the other place an agent reads, and it carries the trigger for the same
@@ -481,6 +513,9 @@ describe('the generated ROVER.md', () => {
 		expect(snippet).toContain('before and after');
 		expect(snippet).toContain('`groupId`');
 		expect(snippet).toContain('`label`');
+		// Not "the same `groupId`" any more — the id the first grant answered with (#205).
+		expect(snippet).toContain('first grant answered with');
+		expect(snippet).not.toMatch(/same `groupId`/);
 	});
 
 	it('says what a project without an install will actually be told', () => {

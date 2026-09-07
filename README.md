@@ -125,10 +125,15 @@ about, which `--test-name` is too short to carry. Nothing parses it and it names
 host stores it, shows it beside the test name on the web panel, and files it with the run so it
 outlives the lease. Leave it out and the lease carries none; nothing is invented in its place.
 
-`--group-id` is the other, and the one that spans leases: give the run before a change and the run
-after it the same `--group-id` and the archive can still say they belong together once both leases
-are gone. Two members is the common case; three or more is equally valid and nothing caps it. It is
-also what `--label` on `screenshot` and `record` needs — see [comparing two
+`--group-id` is the other, and the one that spans leases — **and the one string here whose value the
+host has a say in: you name the investigation, the host mints the id.** Pass a name and the grant
+prints what was actually filed on its `Group:` line, your name with a short suffix on it; pass that
+printed id to the next acquire and the archive can still say the two runs belong together once both
+leases are gone. Typing the same name twice files two groups instead, which is the point of the
+mint: nothing else stops two unrelated investigations that both reached for `statistics-deliveries`
+becoming one. `.` is the reserved separator, so a name containing one is refused, naming the flag.
+Two members is the common case; three or more is equally valid and nothing caps it. It is also what
+`--label` on `screenshot` and `record` needs — see [comparing two
 runs](#comparing-two-runs-before-and-after).
 
 ```bash
@@ -499,7 +504,15 @@ sharing one `group_id` are one investigation — the run before a change and the
 the artifact-producing calls take an optional `label` beside it, so the archive can still say which
 runs and which artifacts belonged together long after every lease in the group has ended. A
 labelled call on a lease with no group is refused by name rather than accepted with the label
-dropped. The lease runs on a 20-minute
+dropped. **`group_id` is the one of those strings the host does not merely store: the caller names
+the investigation and the host mints the id it files**, appending a reserved `.` and a short suffix
+and answering with it on the grant, so the next lease of the comparison passes back what it was
+given (D22, as amended #205). An id the host minted is taken verbatim; a *name* containing the
+separator is refused (`separator-in-group-id`), and one too long to mint an id from within the
+256-character limit is refused too (`group-id-too-long`) rather than truncated into a different
+group. Nothing is looked up to do it — uniqueness comes from the minted bytes, so the host still
+holds no index and reads nothing out of the archive (D6) — and it never reads what the name says.
+The lease runs on a 20-minute
 TTL **renewed by activity rather than by a heartbeat**, so an agent that pauses to think keeps its
 device and one that died lets go on its own. A busy device is a refusal that names who holds it and
 for how much longer, never an error, and never the holder's lease id; `release_device` hands it
@@ -1408,25 +1421,38 @@ And **nothing prunes this tree**: retention is deliberately out of scope for now
 ### Comparing two runs, before and after
 
 Two screenshots of one screen, taken either side of a change, are the ordinary reason to want any of
-this. `--group-id` ties the runs together and `--label` ties the artifacts:
+this. `--group-id` ties the runs together and `--label` ties the artifacts. You name the
+investigation once; the host mints the id and prints it on the grant, and the second acquire is
+given **that**:
 
 ```bash
-# before the change
+# before the change — you send the name
 npm run -s rover -- acquire emulator-5554 --owner issue-150 --project rover \
   --test-name "app bar top space" --group-id app-bar-top-space
+#   …
+#   Group: app-bar-top-space.h57ssn4     ← the id the host filed. Keep it.
 npm run -s rover -- screenshot <lease-id> --out /tmp/before.png --label home-screen
 npm run -s rover -- release <lease-id>
 
-# …make the change, then take a second lease with the same --group-id…
+# …make the change, then take a second lease carrying the id the first grant printed…
 npm run -s rover -- acquire emulator-5554 --owner issue-150 --project rover \
-  --test-name "app bar top space" --group-id app-bar-top-space
+  --test-name "app bar top space" --group-id app-bar-top-space.h57ssn4
 npm run -s rover -- screenshot <lease-id> --out /tmp/after.png --label home-screen
 npm run -s rover -- release <lease-id>
 ```
 
 The two runs are two sibling directories, each with a `group_id.json` naming the same group and a
 `screenshots/001_home-screen_screenshot.png` inside it. Three points of comparison are as normal as
-two, and nothing requires that a second run ever happens.
+two — pass the same printed id to each — and nothing requires that a second run ever happens.
+
+Typing `--group-id app-bar-top-space` a second time would **not** join the first group: it is a name,
+so it is minted its own id, and the two runs are two groups. That is the whole reason the host mints
+— a name an agent picked from what it was looking at is not a source of uniqueness, and two
+unrelated investigations that both reached for it would otherwise be one group. A `--group-id`
+carrying `.` that the host did not mint is refused (`separator-in-group-id`), because the separator
+is how a run joins an existing group; a name too long to mint an id from is refused too
+(`group-id-too-long`) rather than shortened into a different group. Both render as a sentence and as
+a `--json` document, like every other refusal, and neither takes the device.
 
 **A `--label` requires a `--group-id`.** Send one on a lease that has no group and the host refuses
 the call by name, saying which two fields are involved and what to do — it is never accepted with

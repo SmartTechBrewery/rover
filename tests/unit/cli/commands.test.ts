@@ -361,11 +361,12 @@ describe('acquire, list, release', () => {
 	});
 
 	/*
-	 * The group, end to end (D22, as amended #150): typed on the command line, carried on the wire,
-	 * echoed on the grant's own line — because it is the string the *next* acquire in the
-	 * comparison is given — and on the holder every other agent sees in a listing.
+	 * The group, end to end (D22, as amended #150 and #205): typed on the command line, carried on
+	 * the wire, **minted by the host**, and printed on the grant's own line — because the printed
+	 * id, not the typed name, is what the *next* acquire in the comparison is given. The listing
+	 * shows the holder that same id, so a grant and a listing cannot disagree.
 	 */
-	it('carries --group-id to the host, shows it on the grant, and lists it on the holder', async () => {
+	it('prints the group id the host minted, and lists that same id on the holder', async () => {
 		registerFakeBackend();
 		await start();
 
@@ -384,13 +385,62 @@ describe('acquire, list, release', () => {
 			]),
 		).toBe(EXIT_OK);
 
-		expect(logged.join('\n')).toContain('Group: app-bar-top-space');
+		const printed = /^Group: (.+)$/m.exec(logged.join('\n'))?.[1] ?? '';
+		expect(printed.startsWith('app-bar-top-space.')).toBe(true);
+		expect(printed).not.toBe('app-bar-top-space');
 
 		logged = [];
 		expect(await run(['list', '--json'])).toBe(EXIT_OK);
 		expect(JSON.parse(logged[0] ?? '')).toMatchObject({
-			devices: [{ heldBy: { groupId: 'app-bar-top-space' } }],
+			devices: [{ heldBy: { groupId: printed } }],
 		});
+
+		// The printed id given back joins that group verbatim — the round trip, from the CLI.
+		logged = [];
+		expect(
+			await run([
+				'acquire',
+				'attached-2',
+				'--owner',
+				'issue-150',
+				'--project',
+				'rover',
+				'--test-name',
+				'checkout flow',
+				'--group-id',
+				printed,
+			]),
+		).toBe(EXIT_OK);
+		expect(logged.join('\n')).toContain(`Group: ${printed}`);
+	});
+
+	/*
+	 * The refusal renders as a sentence and exits 1 with no client code of its own — the host
+	 * decides and the host says so, in both clients (#205).
+	 */
+	it('exits 1 with the host’s sentence when --group-id carries the separator', async () => {
+		registerFakeBackend();
+		await start();
+
+		expect(
+			await run([
+				'acquire',
+				'attached-1',
+				'--owner',
+				'issue-205',
+				'--project',
+				'rover',
+				'--test-name',
+				'checkout flow',
+				'--group-id',
+				'statistics.summary',
+			]),
+		).toBe(EXIT_FAILED);
+
+		const said = errored.join('\n');
+		expect(said).toContain('Not granted (separator-in-group-id):');
+		expect(said).toContain("'groupId'");
+		expect(said).toContain('the separator is how a run joins an existing group');
 	});
 
 	// No flag, no key, no line — nothing invents a group for a caller who never named one.
