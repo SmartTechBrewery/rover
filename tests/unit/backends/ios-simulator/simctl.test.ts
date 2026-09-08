@@ -178,6 +178,67 @@ describe('runSimctl', () => {
 		expect(error.message).toContain('found nothing to terminate');
 	});
 
+	/**
+	 * The redaction, on the failure it was written for: `simctl install` echoes the path it was
+	 * given straight back out — `lstat of <path> failed: No such file or directory`, measured on
+	 * Xcode 26.4.1 — so masking the argv alone would leave the same string in the message two
+	 * lines further down. That is the hole a first pass at this left open on the Android side.
+	 */
+	it('masks a host path out of the message, in the argv and in the streams alike', async () => {
+		const staged = '/var/folders/qx/T/rover-transfer-a1b2/payload';
+		fails(
+			{ code: 2 },
+			'',
+			'An error was encountered processing the command (domain=NSPOSIXErrorDomain, code=2):\n' +
+				`\tlstat of ${staged} failed: No such file or directory\n`,
+		);
+
+		const error = await failureOf(runSimctl(['install', SERIAL, staged], { redactArgv: [staged] }));
+
+		expect(error.message).not.toContain(staged);
+		expect(error.message).toContain(`simctl install ${SERIAL} <the file you sent> exited 2`);
+		expect(error.message).toContain('lstat of <the file you sent> failed');
+	});
+
+	/**
+	 * The error object keeps the real values, and the boundary is the message: this host's own
+	 * log is exactly where the staged path is worth having (D19).
+	 */
+	it('keeps the unmasked argv and streams on the error itself', async () => {
+		const staged = '/var/folders/qx/T/rover-transfer-a1b2/payload';
+		fails({ code: 2 }, '', `lstat of ${staged} failed\n`);
+
+		const error = await failureOf(runSimctl(['install', staged], { redactArgv: [staged] }));
+
+		expect(error.argv).toEqual(['install', staged]);
+		expect(error.stderr).toContain(staged);
+	});
+
+	/**
+	 * The argv is matched as **whole entries** so the mask cannot swallow a device path that
+	 * merely starts with the staged one — the asymmetry with the stream rule, and the reason it
+	 * is one.
+	 */
+	it('does not mask an argv entry that only shares a prefix with the redacted path', async () => {
+		fails({ code: 2 }, '', '');
+
+		const error = await failureOf(
+			runSimctl(['install', '/tmp/rover/payload-2'], { redactArgv: ['/tmp/rover/payload'] }),
+		);
+
+		expect(error.message).toContain('/tmp/rover/payload-2');
+	});
+
+	it('leaves the message alone when nothing was named for redaction', async () => {
+		const path = '/tmp/rover/payload';
+		fails({ code: 2 }, '', `lstat of ${path} failed\n`);
+
+		const error = await failureOf(runSimctl(['install', path]));
+
+		expect(error.message).toContain(`simctl install ${path} exited 2`);
+		expect(error.message).toContain(`lstat of ${path} failed`);
+	});
+
 	it('names the budget it exceeded when a call times out', async () => {
 		fails({ killed: true, signal: 'SIGTERM' });
 
@@ -330,6 +391,20 @@ describe('quoteStream', () => {
 
 	it('trims the trailing newline every one of these carries', () => {
 		expect(quoteStream('Invalid device: 0000\n')).toBe('Invalid device: 0000');
+	});
+
+	// The substring rule, which is what reaches a path the tool embedded in a sentence of its
+	// own. Safe because the only values ever passed are paths this host invented moments before.
+	it('masks a redacted path wherever the tool embedded it', () => {
+		const staged = '/var/folders/qx/T/rover-transfer-a1b2/payload';
+
+		expect(quoteStream(`lstat of ${staged} failed\n`, [staged])).toBe(
+			'lstat of <the file you sent> failed',
+		);
+	});
+
+	it('leaves an empty redaction entry alone rather than masking every gap', () => {
+		expect(quoteStream('Invalid device: 0000\n', [''])).toBe('Invalid device: 0000');
 	});
 
 	// A successful `simctl io` writes an informational note here, so an inner newline is

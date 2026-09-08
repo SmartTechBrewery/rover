@@ -40,6 +40,9 @@ const devices = (map: Record<string, { udid: string; name: string; state: string
 					entries.map((entry) => ({
 						...entry,
 						deviceTypeIdentifier: 'com.apple.CoreSimulator.SimDeviceType.iPhone-17',
+						// Required by the schema and read by nothing in this module — the transfers'
+						// business (`src/backends/ios-simulator/containers.ts`), not the mapping's.
+						dataPath: `/Users/nobody/Library/Developer/CoreSimulator/Devices/${entry.udid}/data`,
 					})),
 				]),
 			),

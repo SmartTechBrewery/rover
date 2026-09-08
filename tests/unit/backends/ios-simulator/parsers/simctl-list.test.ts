@@ -61,24 +61,47 @@ describe('parseSimctlDevices, against the real capture', () => {
 				name: 'iPhone 17',
 				state: 'Booted',
 				deviceTypeIdentifier: 'com.apple.CoreSimulator.SimDeviceType.iPhone-17',
+				dataPath:
+					'/Users/jkwiecien/Library/Developer/CoreSimulator/Devices/' +
+					'997FA43E-FF9F-4109-BEF0-53D3F46653E7/data',
 			},
 		]);
 	});
 
 	/**
-	 * The projection's whole point: the entry carries `isAvailable`, `dataPath`,
-	 * `dataPathSize`, `logPath` and — on some entries only — `logPathSize` and
-	 * `lastBootedAt`, and none of them reaches the parsed shape.
+	 * The projection's whole point: the entry carries `isAvailable`, `dataPathSize`, `logPath`
+	 * and — on some entries only — `logPathSize` and `lastBootedAt`, and none of them reaches
+	 * the parsed shape. `dataPath` is on the list below rather than in that sentence because
+	 * the transfers read it (`src/backends/ios-simulator/containers.ts`).
 	 */
-	it('keeps only the four fields it reads', () => {
+	it('keeps only the five fields it reads', () => {
 		const [first] = Object.values(parseSimctlDevices(ALL_LISTINGS).devices).flat();
 
 		expect(Object.keys(first ?? {}).sort()).toEqual([
+			'dataPath',
 			'deviceTypeIdentifier',
 			'name',
 			'state',
 			'udid',
 		]);
+	});
+
+	/**
+	 * The field the transfers rest on, and the claim that let it be required rather than
+	 * optional: **all 22** entries of the capture carry it, under both runtimes and whatever
+	 * their state. A `dataPath` missing from one entry would make every device on that host
+	 * unparseable, so this is the assertion that would have to be revisited first if a future
+	 * Xcode ever dropped it.
+	 */
+	it('carries a data root for every device, under the udid it belongs to', () => {
+		const entries = Object.values(parseSimctlDevices(ALL_LISTINGS).devices).flat();
+
+		expect(entries).toHaveLength(22);
+		for (const entry of entries) {
+			expect(entry.dataPath).toContain('/Library/Developer/CoreSimulator/Devices/');
+			expect(entry.dataPath).toBe(`${entry.dataPath.replace(/\/data$/, '')}/data`);
+			expect(entry.dataPath).toContain(entry.udid);
+		}
 	});
 
 	// Finding 3 of the plan, as a test: `simctl list`'s own usage text says to specify one
@@ -195,7 +218,7 @@ describe('the schemas, on shapes no capture here carries', () => {
 	 * Inline because the case is an Xcode release that has not happened: the vendor adds
 	 * keys to a device entry per release (four of the 22 captured entries already carry a
 	 * key the other eighteen do not), and this decides that such a release is not a
-	 * load-time failure in a module that reads four fields.
+	 * load-time failure in a module that reads five fields.
 	 */
 	it('ignores a vendor field it has never seen', () => {
 		expect(
@@ -204,6 +227,7 @@ describe('the schemas, on shapes no capture here carries', () => {
 				name: 'iPhone 42',
 				state: 'Shutdown',
 				deviceTypeIdentifier: 'com.apple.CoreSimulator.SimDeviceType.iPhone-42',
+				dataPath: '/Users/nobody/Devices/A1B2C3D4-0000-0000-0000-000000000000/data',
 				somethingXcode27Added: { nested: true },
 			}),
 		).toEqual({
@@ -211,6 +235,7 @@ describe('the schemas, on shapes no capture here carries', () => {
 			name: 'iPhone 42',
 			state: 'Shutdown',
 			deviceTypeIdentifier: 'com.apple.CoreSimulator.SimDeviceType.iPhone-42',
+			dataPath: '/Users/nobody/Devices/A1B2C3D4-0000-0000-0000-000000000000/data',
 		});
 	});
 

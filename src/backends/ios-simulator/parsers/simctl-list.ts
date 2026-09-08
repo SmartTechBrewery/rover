@@ -34,7 +34,7 @@ import { z } from 'zod';
  * `state`, `deviceTypeIdentifier`, `isAvailable`, `dataPath`, `dataPathSize` and
  * `logPath`, while only four carry `logPathSize` and only three `lastBootedAt`
  * (`tests/fixtures/ios-simulator/README.md`). Strictness here would turn an Xcode upgrade
- * into a load-time failure in a module that reads four fields and does not care about the
+ * into a load-time failure in a module that reads five fields and does not care about the
  * rest, so this is a **projection** of the JSON rather than a record of it and Zod's
  * default key-stripping is the wanted behaviour.
  *
@@ -59,6 +59,21 @@ export const SimctlDeviceSchema = z.object({
 	 * metrics are all in the `devicetypes` listing rather than here.
 	 */
 	deviceTypeIdentifier: z.string().min(1),
+	/**
+	 * The device's own data root **on this host** — the directory a simulator keeps
+	 * everything it writes in.
+	 *
+	 * `~/Library/Developer/CoreSimulator/Devices/<udid>/data` on the bench, holding
+	 * `Containers`, `Documents`, `Downloads`, `Library`, `Media`, `tmp` and `var`. It is read
+	 * rather than assembled for `bundlePath`'s reason: the tool knows where it put the
+	 * directory, and `simctl --set <path>` moves the whole device set somewhere else entirely.
+	 *
+	 * This is the field `../containers.js` maps a device path onto, and it is why that mapping
+	 * is possible at all — a simulator's storage *is* a host path. Present on all 22 entries of
+	 * the committed capture (`tests/fixtures/ios-simulator/README.md`), so it is required here
+	 * rather than optional.
+	 */
+	dataPath: z.string().min(1),
 });
 export type SimctlDevice = z.infer<typeof SimctlDeviceSchema>;
 
