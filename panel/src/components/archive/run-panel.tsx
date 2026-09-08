@@ -4,8 +4,10 @@ import {
 	deviceFactsFrom,
 } from '@panel/archive/device-info.js';
 import { UNKNOWN } from '@panel/archive/file-size.js';
+import type { PinState } from '@panel/archive/pinned-tests.js';
 import { decomposeRunName } from '@panel/archive/run-identity.js';
 import type { ArchivedTestDescription } from '@panel/archive/test-description.js';
+import { ArchiveCheckbox } from './archive-checkbox.js';
 import { CardHeading, ContentsCard, Field } from './contents-card.js';
 
 /**
@@ -65,6 +67,7 @@ export function RunPanel({
 	serial,
 	device,
 	description,
+	pin,
 }: {
 	readonly run: readonly string[];
 	/** The run directory's `onlyChild`, with the state of the answer it came from — {@link RunSerial}. */
@@ -73,12 +76,30 @@ export function RunPanel({
 	readonly device: ArchivedDeviceInfo;
 	/** This run's own `test_description.json` — {@link ArchivedTestDescription}. */
 	readonly description: ArchivedTestDescription;
+	/**
+	 * The `Keep` checkbox, bound to **the test this run belongs to** rather than to the run.
+	 *
+	 * One flag per test, so this is the same tick as the one on that test's own card and lighting
+	 * either lights both (`pinned-tests.ts`). A run is one lease's output; what a reader keeps is
+	 * the test.
+	 */
+	readonly pin: PinState;
 }) {
 	const name = run.at(-1) ?? '';
 	const identity = decomposeRunName(name);
 
 	return (
-		<ContentsCard header={<CardHeading>Run Details</CardHeading>}>
+		<ContentsCard
+			header={
+				/* `Run Details` is a fixed two words, so unlike a level's name it cannot crowd the
+				   control — but the row is the same one, because the strip must not differ between
+				   the two cards that carry this checkbox. */
+				<div className="flex items-center justify-between gap-4">
+					<CardHeading>Run Details</CardHeading>
+					<ArchiveCheckbox pin={pin} />
+				</div>
+			}
+		>
 			<div className="space-y-6 p-6">
 				<section className="rounded-lg border-2 border-outline-variant bg-surface p-5">
 					<h3 className="mb-4 break-words font-code-md font-bold text-code-md text-on-surface">

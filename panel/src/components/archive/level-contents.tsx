@@ -2,7 +2,9 @@ import type { ArchiveLevel } from '@panel/archive/archive-levels.js';
 import type { ArchiveEntry } from '@panel/archive/archive-listing.js';
 import { UNKNOWN } from '@panel/archive/file-size.js';
 import { orderedEntries } from '@panel/archive/level-order.js';
+import type { PinState } from '@panel/archive/pinned-tests.js';
 import { decomposeRunName } from '@panel/archive/run-identity.js';
+import { ArchiveCheckbox } from './archive-checkbox.js';
 import {
 	CardHeading,
 	ContentsCard,
@@ -42,6 +44,7 @@ export function LevelContents({
 	path,
 	level,
 	depth = path.length,
+	pin,
 }: {
 	readonly path: readonly string[];
 	readonly level: ArchiveLevel;
@@ -57,9 +60,32 @@ export function LevelContents({
 	 * is the one caller that asks it.
 	 */
 	readonly depth?: number;
+	/**
+	 * The `Keep` checkbox for this level, bound to the test it is about — **given only at a test
+	 * name**, and `undefined` at every other depth (`archive-checkbox.tsx`).
+	 *
+	 * A prop rather than a depth branch here, because the depth in this component decides *which
+	 * columns a row carries and nothing else*, and the screen already owns the depth arithmetic
+	 * (`depthsOf`). So this component draws the control when it is handed one and never works out
+	 * whether it should exist.
+	 */
+	readonly pin?: PinState;
 }) {
 	return (
-		<ContentsCard header={<CardHeading>{path.at(-1) ?? 'Archive'}</CardHeading>}>
+		<ContentsCard
+			header={
+				/* The name at one end of the strip and the control at the other, which is the only
+				   thing that puts them in a row rather than a stack. `min-w-0` lets a 40-character
+				   name wrap instead of pushing the control out of the card — the control is a tick,
+				   a word and a glyph, so it is one line and the row can centre on it. */
+				<div className="flex items-center justify-between gap-4">
+					<div className="min-w-0">
+						<CardHeading>{path.at(-1) ?? 'Archive'}</CardHeading>
+					</div>
+					{pin === undefined ? null : <ArchiveCheckbox pin={pin} />}
+				</div>
+			}
+		>
 			<Body depth={depth} level={level} />
 		</ContentsCard>
 	);

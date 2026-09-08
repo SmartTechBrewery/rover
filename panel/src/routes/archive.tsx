@@ -20,6 +20,7 @@ import { groupedSearch } from '@panel/archive/group-search.js';
 import { groupRowsAt, groupRunSerial } from '@panel/archive/group-tree.js';
 import { comparisonAt, type LabelComparison } from '@panel/archive/label-comparison.js';
 import { type OpenBranches, useOpenBranches } from '@panel/archive/open-branches.js';
+import { type PinnedTests, TEST_NAME_DEPTH, usePinnedTests } from '@panel/archive/pinned-tests.js';
 import {
 	type ArchivedTestDescription,
 	useArchivedTestDescription,
@@ -142,6 +143,15 @@ export function ArchiveScreen({ view }: { readonly view: ArchiveView }) {
 	 */
 	const branches = useOpenBranches(selected, MAX_ARCHIVE_PATH_DEPTH + OFFSET[view]);
 	/*
+	 * **Which tests the reader has ticked `Keep` on** (`pinned-tests.ts`). Held here for one
+	 * reason the open set above is not: the two cards that draw the checkbox — a test name's, and a
+	 * run's — are never on screen at once, and they share one flag, so the state cannot live in
+	 * either. It is deliberately *not* addressable and deliberately not stored: nothing sweeps the
+	 * archive yet, so a tick that outlived the screen would look like a decision the host had been
+	 * told about.
+	 */
+	const pinned = usePinnedTests();
+	/*
 	 * **One cache, asked as a function of itself** (`archive-levels.ts`). Some of these levels are
 	 * addressed by a path *derived from* an answer — a run's `<serial>` is the level above's
 	 * `onlyChild`, and the open folder's own listing is only wanted once its parent says it is a
@@ -258,6 +268,7 @@ export function ArchiveScreen({ view }: { readonly view: ArchiveView }) {
 			<Content
 				artifact={artifact}
 				branches={branches}
+				pinned={pinned}
 				comparison={comparison}
 				description={description}
 				device={device}
@@ -304,6 +315,7 @@ function Content({
 	artifact,
 	comparison,
 	search,
+	pinned,
 }: {
 	readonly view: ArchiveView;
 	/** The state of this view's own root — {@link rootOf}. */
@@ -329,6 +341,8 @@ function Content({
 	 * view, and the runs that carry a group id in the groups view.
 	 */
 	readonly search: ArchiveSearch;
+	/** Which tests the reader has ticked `Keep` on — {@link usePinnedTests}. */
+	readonly pinned: PinnedTests;
 }) {
 	if (selected.length < depthsOf(view).below) {
 		if (root === 'loading') {
@@ -366,6 +380,7 @@ function Content({
 				groups={groups}
 				levels={levels}
 				open={open}
+				pinned={pinned}
 				selected={selected}
 				serial={serial}
 				view={view}
@@ -414,6 +429,7 @@ function Preview({
 	open,
 	artifact,
 	comparison,
+	pinned,
 }: {
 	readonly view: ArchiveView;
 	readonly selected: readonly string[];
@@ -426,6 +442,8 @@ function Preview({
 	readonly artifact: ReturnType<typeof useArchivedArtifact>;
 	/** The artifacts this one is comparable with, or `null` when there is nothing to compare. */
 	readonly comparison: LabelComparison | null;
+	/** Which tests the reader has ticked `Keep` on — {@link usePinnedTests}. */
+	readonly pinned: PinnedTests;
 }) {
 	const depths = depthsOf(view);
 	const address = view === 'groups' ? archiveAddressOf(selected) : selected;
@@ -448,7 +466,21 @@ function Preview({
 		 * tree draws those entries under the run's node; what the card says about that level is what
 		 * `serial` already carries, which is a fact about the run rather than a listing of it.
 		 */
-		return <RunPanel description={description} device={device} run={address} serial={serial} />;
+		return (
+			<RunPanel
+				description={description}
+				device={device}
+				/*
+				 * **Bound to the test above this run, not to the run** (`pinned-tests.ts`). A run
+				 * address is `<project>/<test_name>/<run>`, so the pair that names its test is always
+				 * there — which is why the tuple is built here, at the one depth that can promise it,
+				 * rather than checked for inside the card.
+				 */
+				pin={pinned.stateFor([address[0], address[1]])}
+				run={address}
+				serial={serial}
+			/>
+		);
 	}
 	/*
 	 * The heading is the address's own last component — the group id at a group, the test name at a
@@ -463,6 +495,16 @@ function Preview({
 					: levelAt(levels, address)
 			}
 			path={selected}
+			/*
+			 * **At a test name and at no other level this card draws.** It draws the root and a
+			 * project above a run, and every directory *below* the `<serial>` as well — all of which
+			 * are two components or more, so the test the address passes through is not what those
+			 * cards are about. `=== TEST_NAME_DEPTH` rather than `>=` is the whole of that
+			 * distinction.
+			 */
+			pin={
+				address.length === TEST_NAME_DEPTH ? pinned.stateFor([address[0], address[1]]) : undefined
+			}
 		/>
 	);
 }

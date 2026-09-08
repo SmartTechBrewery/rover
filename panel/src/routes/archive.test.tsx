@@ -2356,3 +2356,96 @@ describe('the testing groups view with nothing to arrange', () => {
 		expect(host.asked).toContainEqual(['checkout-app', 'login-flow', RUN, SERIAL]);
 	});
 });
+
+/**
+ * **The `Keep` checkbox — one flag per test, and the two cards that carry it share it.**
+ *
+ * It marks a test to be kept once Rover starts sweeping the archive. Nothing sweeps it yet, so the
+ * state is deliberately ephemeral and lives on this screen (`pinned-tests.ts`) — which is *why*
+ * these assertions belong here rather than beside either card: the test-name card and a run's card
+ * are never on screen together, so *ticking one lights the other* is a claim only the screen can
+ * make.
+ */
+describe('the Keep checkbox', () => {
+	const box = () => screen.getByRole('checkbox', { name: 'Keep' }) as HTMLInputElement;
+
+	/*
+	 * The navigation is a `rerender` with a new splat rather than a fresh `render`: the flag lasts as
+	 * long as the screen is mounted, which is the whole of what this test is about, and a remount
+	 * would be a different question with an obvious answer.
+	 */
+	it('ticks on a run and is already ticked on that run’s test', async () => {
+		const { rerender } = await showing(`checkout-app/login-flow/${RUN}`);
+		expect(box().checked).toBe(false);
+
+		fireEvent.click(box());
+		expect(box().checked).toBe(true);
+
+		at.splat = 'checkout-app/login-flow';
+		await act(async () => {
+			rerender(<ArchiveScreen view="all" />);
+		});
+
+		// `Run Details` heads the run's card and nothing else, so its absence is the navigation
+		// having happened — `getByText('login-flow')` would match the tree row as well as the card.
+		expect(screen.queryByText('Run Details')).toBeNull();
+		expect(box().checked).toBe(true);
+	});
+
+	it('unticks from either card', async () => {
+		const { rerender } = await showing('checkout-app/login-flow');
+		fireEvent.click(box());
+		expect(box().checked).toBe(true);
+
+		at.splat = `checkout-app/login-flow/${RUN}`;
+		await act(async () => {
+			rerender(<ArchiveScreen view="all" />);
+		});
+		fireEvent.click(box());
+
+		at.splat = 'checkout-app/login-flow';
+		await act(async () => {
+			rerender(<ArchiveScreen view="all" />);
+		});
+		expect(box().checked).toBe(false);
+	});
+
+	/*
+	 * **Only the two cards that are about a test carry it.** The card above a run also draws the
+	 * root and a project, and every directory *below* the `<serial>` — all of which are addresses
+	 * that pass through a test without being about one.
+	 */
+	it('is drawn at a test name and at a run, and at no other depth', async () => {
+		for (const [splat, drawn] of [
+			[undefined, false],
+			['checkout-app', false],
+			['checkout-app/login-flow', true],
+			[`checkout-app/login-flow/${RUN}`, true],
+			[`checkout-app/login-flow/${RUN}/R5CT30ABCDE`, false],
+			[`checkout-app/login-flow/${RUN}/R5CT30ABCDE/screenshots`, false],
+		] as const) {
+			const { unmount } = await showing(splat);
+
+			expect(screen.queryAllByRole('checkbox', { name: 'Keep' })).toHaveLength(drawn ? 1 : 0);
+			unmount();
+		}
+	});
+
+	/*
+	 * **The same test is the same flag in the groups view**, which is what keying it on the *archive*
+	 * address buys: a groups address carries a group id the archive has no directory for, and keying
+	 * on the address as the URL spells it would have pinned `checkout-app/app-bar-top-space` — a
+	 * name that is not a test — leaving the tick invisible from the `All` view.
+	 */
+	it('carries a tick made in one view into the other', async () => {
+		const { rerender } = await showing('checkout-app/login-flow');
+		fireEvent.click(box());
+
+		at.splat = `checkout-app/${GROUP}/login-flow`;
+		await act(async () => {
+			rerender(<ArchiveScreen view="groups" />);
+		});
+
+		expect(box().checked).toBe(true);
+	});
+});

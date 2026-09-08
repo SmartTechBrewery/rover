@@ -71,13 +71,17 @@ beforeAll(() => {
 		document.head.append(style);
 	}
 
-	// The four shapes the rule has to tell apart. The row is the archive contents row's own —
-	// a `<div>` inside an `<li>`, read and not followed (#161, `docs/DESIGN.md` §9).
+	// The shapes the rule has to tell apart. The row is the archive contents row's own —
+	// a `<div>` inside an `<li>`, read and not followed (#161, `docs/DESIGN.md` §9) — and the last
+	// two are the Archive screen's `Keep` tick with the label that wraps it (§9), beside a
+	// `<label>` over a text field, which the rule must leave alone.
 	document.body.innerHTML = `
 		<button id="pressable" type="button">All</button>
 		<button disabled id="unpressable" type="submit">Checking…</button>
 		<ul><li><div id="row">20260826T101155Z-issue-104-2fd913c7</div></li></ul>
 		<a href="/archive" id="link">checkout-app</a>
+		<label id="tick"><input id="box" type="checkbox" /><span>Archive</span></label>
+		<label id="field-label">Search<input id="field" type="text" /></label>
 	`;
 });
 
@@ -113,6 +117,25 @@ describe('the panel points at what can be pressed', () => {
 	it('leaves a link pointing, without a rule of its own', () => {
 		expect(cursorOn('#link')).toBe('pointer');
 	});
+
+	/*
+	 * **A checkbox is pressable, so the rule reaches it** — and reaches the `<label>` that wraps
+	 * one, because the word beside the box toggles it and is the larger half of the hit area. It is
+	 * the same base rule rather than a utility on the one control, for the reason the rule itself
+	 * records: a class on this checkbox is the one the next checkbox forgets.
+	 */
+	it('points at a checkbox, and at the label that wraps it', () => {
+		expect(cursorOn('#box')).toBe('pointer');
+		expect(cursorOn('#tick')).toBe('pointer');
+	});
+
+	/*
+	 * `:has(> input[type='checkbox'])` is what keeps that to a label over a checkbox. A label over
+	 * a text field is not a press, and the archive search field's is one of them.
+	 */
+	it('points at nothing on a label over a text field', () => {
+		expect(cursorOn('#field-label')).not.toBe('pointer');
+	});
 });
 
 describe('and nothing in the panel takes that pointer away', () => {
@@ -122,7 +145,13 @@ describe('and nothing in the panel takes that pointer away', () => {
 		expect(drawing.length).toBeGreaterThan(0);
 	});
 
-	it('declares a cursor in exactly one place, on the button rule', () => {
+	/*
+	 * **One declaration, whatever the selector list grows to.** The checkbox joined it rather than
+	 * taking a `cursor-pointer` of its own (§9), so what this pins is that there is still exactly
+	 * one place a cursor is declared — the property the scan below depends on — and not how many
+	 * elements that one rule reaches.
+	 */
+	it('declares a cursor in exactly one place, on the pressable-elements rule', () => {
 		const declared: string[] = [];
 
 		for (const sheet of STYLESHEETS) {
@@ -132,7 +161,9 @@ describe('and nothing in the panel takes that pointer away', () => {
 			}
 		}
 
-		expect(declared).toEqual(['panel/src/index.css: button:not(:disabled)']);
+		expect(declared).toEqual([
+			"panel/src/index.css: button:not(:disabled),\n\tinput[type='checkbox']:not(:disabled),\n\tlabel:has(> input[type='checkbox']:not(:disabled))",
+		]);
 	});
 
 	/*

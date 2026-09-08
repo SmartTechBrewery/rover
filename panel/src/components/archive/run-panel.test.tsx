@@ -1,7 +1,8 @@
 import type { ArchivedDeviceInfo } from '@panel/archive/device-info.js';
+import type { PinState } from '@panel/archive/pinned-tests.js';
 import type { ArchivedTestDescription } from '@panel/archive/test-description.js';
 import { formatInstant } from '@panel/time/instant.js';
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import fixture from '../../../../tests/fixtures/panel/device-info.json';
 import { RunPanel, type RunSerial } from './run-panel.js';
@@ -34,12 +35,22 @@ const DESCRIBED: ArchivedTestDescription = {
 /** The common case for a run filed before the field existed: no such file. */
 const UNDESCRIBED: ArchivedTestDescription = { status: 'missing' };
 
+/**
+ * The `Keep` checkbox, unticked and inert. This file is about what the card says about a run;
+ * that the tick is one flag shared with the test's own card is asserted where both cards are on one
+ * screen (`routes/archive.test.tsx`), which is the only place that claim can be made.
+ */
+const UNPINNED: PinState = { checked: false, toggle: () => {} };
+
 function showing(
 	serial: RunSerial = NAMED,
 	device: ArchivedDeviceInfo = DEVICE,
 	description: ArchivedTestDescription = DESCRIBED,
+	pin: PinState = UNPINNED,
 ) {
-	return render(<RunPanel description={description} device={device} run={RUN} serial={serial} />);
+	return render(
+		<RunPanel description={description} device={device} pin={pin} run={RUN} serial={serial} />,
+	);
 }
 
 describe('a run', () => {
@@ -316,18 +327,96 @@ describe('what is not on this panel', () => {
  * and `CONTENTS` expanded down to the open address in two. The tree is beside the card at every
  * depth now and reaches every address in the archive, so this column is what a **selected run** is:
  * two cards, no listing, and no way in or out of it at all.
+ *
+ * **The strip carries one control now, and the claim above is unchanged** (amended in place): the
+ * `Keep` checkbox ticks a flag about the test this run belongs to and **navigates nowhere**. What
+ * #161 settled was that the tree is the only way to *move* — a card that offered a second route
+ * through the archive was the objection — and a checkbox is the Devices screen's force-release
+ * shape instead: an operator control inside the card that owns the data it acts on
+ * (`docs/DESIGN.md` §7). So the assertions below keep testing for a link and drop only the part
+ * that read *no control of any kind*.
  */
 describe('the run column', () => {
-	it('is headed by `Run Details`, and the strip carries no control', () => {
+	it('is headed by `Run Details`, with the tick at the other end and no way out', () => {
 		const { container } = showing();
 
 		const strip = container.querySelector('section > div:first-child');
-		expect(strip?.textContent).toBe('Run Details');
+		// The heading first and the control after it, so the strip reads name-then-control in the DOM
+		// as well as on screen. **Not asserted on the strip's whole `textContent`**: the control's
+		// described-by sentence is in there too, visually hidden, and pinning that string here would
+		// make one wording change fail a test about the heading.
+		expect(strip?.querySelector('h2')?.textContent).toBe('Run Details');
+		expect(strip?.querySelectorAll('input[type="checkbox"]')).toHaveLength(1);
+		expect(
+			within(strip as HTMLElement)
+				.getByRole('checkbox')
+				.getAttribute('type'),
+		).toBe('checkbox');
+		// The part of the old claim that stands: nothing here is a way in or out of the archive, and
+		// the tick is an `<input>` rather than either of the two elements that would be.
 		expect(strip?.querySelectorAll('a')).toHaveLength(0);
 		expect(strip?.querySelectorAll('button')).toHaveLength(0);
 		expect(
 			screen.queryByRole('link', { name: 'Close the preview and go back to the directory' }),
 		).toBeNull();
+	});
+
+	/*
+	 * The checkbox is about **the test**, not this run, and the card says so where a reader will look
+	 * for it — the description carries both halves of what the tick does not yet do.
+	 */
+	it('ticks and unticks from whatever the screen handed it', () => {
+		const ticks: boolean[] = [];
+		const { rerender } = render(
+			<RunPanel
+				description={DESCRIBED}
+				device={DEVICE}
+				pin={{ checked: false, toggle: () => ticks.push(true) }}
+				run={RUN}
+				serial={NAMED}
+			/>,
+		);
+
+		const box = screen.getByRole('checkbox', { name: 'Keep' });
+		expect((box as HTMLInputElement).checked).toBe(false);
+		fireEvent.click(box);
+		expect(ticks).toEqual([true]);
+
+		rerender(
+			<RunPanel
+				description={DESCRIBED}
+				device={DEVICE}
+				pin={{ checked: true, toggle: () => {} }}
+				run={RUN}
+				serial={NAMED}
+			/>,
+		);
+		expect((screen.getByRole('checkbox', { name: 'Keep' }) as HTMLInputElement).checked).toBe(true);
+	});
+
+	/*
+	 * **The sentence is the input's own description**, shown on hover and announced regardless — one
+	 * sentence, so there is no tooltip and no accessible copy of it to drift apart.
+	 *
+	 * **It names a condition and not a number of days.** The sentence a reader eventually wants is
+	 * *…in 14 days…*, and the panel does not have the 14: no host answer carries a retention window,
+	 * so writing digits here would be the invention this screen refuses (`docs/DESIGN.md` §9). That
+	 * is asserted rather than commented, because a later edit that helpfully fills in a plausible
+	 * number is exactly what this is guarding.
+	 */
+	it('describes the tick with the sentence that says why it matters, and no deadline', () => {
+		showing();
+
+		const box = screen.getByRole('checkbox', { name: 'Keep' });
+		const description = box.getAttribute('aria-describedby');
+		expect(description).not.toBeNull();
+		const said = document.getElementById(description as string)?.textContent ?? '';
+		expect(said).toContain('will be removed');
+		expect(said).toContain('unless you keep it');
+		// It is real text in the document rather than a `title`, and carries no fabricated window.
+		expect(screen.getByText(said)).toBeDefined();
+		expect(said).not.toMatch(/\d/);
+		expect(box.closest('label')?.getAttribute('title')).toBeNull();
 	});
 
 	/*
@@ -349,9 +438,11 @@ describe('the run column', () => {
 	});
 
 	/*
-	 * **Nothing on this card is clickable**, which is the whole of #159's third phase from this
-	 * side: the tree is the one navigation surface, and `Open in a new window` on an artifact is the
-	 * only interactive control the card beside it may carry.
+	 * **Nothing on this card is a way through the archive**, which is the whole of #159's third phase
+	 * from this side: the tree is the one navigation surface. Amended in place — the `Keep` tick is an
+	 * `<input>` and neither an `<a>` nor a `<button>`, and its sentence appears on hover rather than
+	 * from a control of its own, so both assertions stand and what they say is *this card moves
+	 * nobody anywhere* rather than *this card is inert*.
 	 */
 	it('carries no link and no button in any state', () => {
 		for (const serial of [

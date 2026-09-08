@@ -2583,6 +2583,112 @@ device card: a recording is megabytes and its object URL is a live handle on the
 lifetime is the state that holds it. There is no cap on a text file's lines; `MAX_LOG_ENTRIES` bounds
 the ones Rover writes at about 5 000.
 
+### The `Keep` checkbox — settled here, not designed, and the UI half of a mechanism that does not exist yet
+
+A test the reader wants **kept** once Rover starts sweeping the archive. **The sweep does not
+exist**: nothing on the host deletes an old run today, so this control is a picture of a decision
+rather than the decision, and everything below follows from saying that plainly instead of hiding
+it. The host half is its own issue, and the sentence below is what comes out when it lands.
+
+**It is `Keep` and not `Archive`, and the sentence is what forced the rename.** The control read
+`Archive` first — on a screen called Archive, whose one job is browsing the archive — and the
+sentence explaining it then had to say *…sweeping the archive, unless you archive it*: one word for
+two different things, eight words apart. `Keep` is the verb a reader would use for what the tick
+does, and it leaves *archive* meaning the place. `Store`, `Save` and `Preserve` were the other
+candidates; the first two are what a form does with edits, and the third is heavier than a
+checkbox.
+
+**A popover on hover says why it is there** — *Traces of this test will be removed once Rover
+starts sweeping the archive, unless you keep it.* — in the panel's own card treatment
+(`rounded-lg border-2 border-outline-variant bg-surface`), 288px wide, opening down from the strip's
+right edge and over the card's body. A checkbox alone does not say what happens if you leave it
+alone; this sentence does. It is the input's `aria-describedby` as well as visible text, so there is
+one sentence rather than a tooltip and an accessible copy of it that drift apart.
+
+**Three shapes were tried and rejected before it, each for its own reason**, and they are recorded
+because the fourth looks arbitrary without them: a **`title`** (a tooltip nobody reads, in the
+browser's styling rather than the panel's); the same sentence **printed in the strip** (it did not
+fit — a 40-character run name lost its own header to it); and a **green `?` opening it on a press**
+(one sentence given its own control, and a `<button>` on a card whose whole claim is that it moves
+nobody anywhere). What survives keeps the words and spends no room and no affordance on them.
+
+**`group-hover` and `group-has-[:focus-visible]`, and no state at all** — no `useState`, no
+listener, no Escape key. The second half is not decoration: hover is unreachable from a keyboard,
+so a keyboard reader would otherwise never see the sentence. And it is `:focus-visible` rather than
+`:focus-within`, which was the first attempt at that half and was wrong in a way only using it
+shows — **a mouse click on a checkbox focuses it**, so the popover stayed up after the tick until
+the reader clicked somewhere else. `:has()` rather than a `group-focus-visible` variant, because
+what takes focus is the input inside the group, not the group. The popover stays **in the DOM**
+either way, hidden by the `hidden` utility rather than unmounted, because it is the tick's
+`aria-describedby` target: a reference resolves to hidden content, so the description holds for a
+reader who never brings a pointer near it.
+
+**There is no number of days in it, and that is deliberate.** The sentence a reader eventually
+wants is *…will be removed in 14 days…*; the panel does not have the 14. No host answer carries a
+retention window, nothing sweeps the archive, and a figure written in here would be the panel
+inventing data the host never sent — which §9's *nothing is invented* rule and `ai/RULES.md` §2 both
+refuse, and which `archive-checkbox.test.tsx` asserts against so that a later edit cannot fill in a
+plausible one. Naming the condition instead of a deadline still tells the reader why the box is
+there, and the day the host answers a window it is one string that changes.
+
+**Nothing enforces the tick, and it is not saved.** The state is React state on the Archive screen
+(`pinned-tests.ts`), deliberately **not** `localStorage` and deliberately not in the URL: retention
+is a fact about the *host's* disk, and a tick that survived a reload would look like a decision the
+host had been told about. *I ticked it on my laptop and the run was deleted anyway* is the failure
+this cannot have while it is only a control.
+
+**Where it is drawn, and the two levels are the whole list.** At the right end of the card's header
+strip, opposite the name — on a **test name's** card and on a **run's** `Run Details`, and nowhere
+else. The card above a run also draws the root, a project, and every directory below the
+`<serial>`; those addresses pass *through* a test without being about one, so they carry no
+checkbox. `ContentsCard`'s header being a slot rather than a title (#133) is what makes this an
+argument to that slot instead of a fourth card component.
+
+**One flag per test, shown on two cards.** The tick on a run's card is the *same* flag as the one
+on its test's card — ticking either lights the other, and the two are never on screen together. A run
+is one lease's output; what a reader recognises across runs, and what a sweep would come for, is the
+test. It is keyed on `<project>/<test_name>` out of the **archive** address, so the same test is the
+same tick in the groups view, where the URL carries a group id the archive has no directory for.
+
+**No approved Stitch screen shows a checkbox** — none was commissioned, exactly as for the view
+toggle above (§1, §11's third list) — so nothing about it is invented and every value is already on
+this screen: the search field's frame at checkbox size (`rounded-sm border-2 border-outline-variant
+bg-surface`), warming to the `tertiary` green that means *active* in the breadcrumb, the nav item
+and the view toggle; `lucide-react`'s `Check` over it in `on-tertiary`, the token paired with that
+fill; the label twelve pixels in the code face, the view toggle's own step, warming on hover the way
+an inactive segment does and going green when it is on. That is what keeps the deviation small
+enough to reconcile in one edit once a design for it exists.
+
+**It is a native `<input type="checkbox">`** with `appearance-none`, not a `<button
+role="checkbox">`: the element already carries the role, the tick state, the space bar and the
+label association. The glyph is drawn over the box rather than left to the browser, because a
+checked native box cannot be recoloured to `tertiary` on every platform — and the ring is
+`focus-visible` rather than `focus`, since a checkbox is also focused by the click that just toggled
+it and a ring drawn then reads as an error.
+
+**The sentence sits outside the `<label>`, and that is not cosmetic.** An accessible name is
+computed from the label's own text, so the sentence — written inside it first — became part of the
+name, and the control announced itself as *Keep Traces of this test will be removed…*.
+`getByRole('checkbox', { name: 'Keep' })` is what caught it, which is the query a screen reader
+performs. **No portal, either**: the popover is anchored on the control and opens over the card's
+body, which it may do because the `overflow-hidden` on this screen's cards is on the `<section>`,
+and it stays inside that. So there is nothing to measure and nothing to keep in step with a
+scroll.
+
+**The cursor came from the base rule, not from a utility on this control.** §5's *a pointer on what
+can be pressed* is one rule in `index.css`, and a checkbox is pressable — so
+`input[type='checkbox']:not(:disabled)` and `label:has(> input[type='checkbox']:not(:disabled))`
+joined that selector rather than this component carrying a `cursor-pointer`. The label is in it
+because the word `Archive` toggles the box and is the larger half of the hit area;
+`pointer-on-what-can-be-pressed.test.ts` gates both, and refuses the utility.
+
+**It reverses one sentence of #161 in place, and only one.** *Nothing on the run's card is
+clickable* was about **navigation**: the tree is the one way to move through the archive, and a card
+offering a second route was the objection. This checkbox navigates nowhere. It is the Devices
+screen's force-release shape instead — an operator control inside the card that owns the data it
+acts on (§7) — and the assertions that stood are the ones that matter: no `<a>` and no `<button>` on
+that card, in any state.
+
 ---
 
 ## 10. The Projects screen, as settled
