@@ -758,8 +758,14 @@ function notRecordable(serial: DeviceSerial, state: DeviceState): Error {
  *
  * Both streams are quoted because whichever of them carries the explanation, this is the only
  * place a reader would find it — and on this tool that is as often stdout as stderr
- * (`./simctl.ts`). The staged path is not in either: it is masked, because the message is read on
- * the agent's machine (D19).
+ * (`./simctl.ts`).
+ *
+ * **The staged path reaches none of the three**, because this message is read on the agent's
+ * machine (D19) and the path is one this host derived and has already removed. The two streams
+ * are masked here ({@link quoteStream}); `reason` is masked where it is built, by the
+ * `redactArgv` {@link launchRecorder} hands the runner (`./simctl.ts`,
+ * `StreamSimctlOptions.redactArgv`) — it carries the recorder's whole argv, and the last entry of
+ * that argv *is* the path.
  */
 function recorderNeverStarted(
 	serial: DeviceSerial,
@@ -1394,10 +1400,13 @@ export class IosSimulatorDeviceBackend implements DeviceBackend {
 	 * - **The container is checked on the bytes that actually arrived**, not on an exit code — the
 	 *   zero-byte file above exits 0. {@link UnfinishedRecordingError} names the device and the
 	 *   byte length rather than handing over something no player will open.
-	 * - **The `finally` signals again and then removes the file, and its own failure never
-	 *   replaces the answer.** The extra signal is not a formality: this platform's kill switch
-	 *   is on the host, so a wait that timed out or a read that failed must not leave a recorder
-	 *   running on hardware somebody else gets next. It is a no-op once the run has ended.
+	 * - **Two nested `finally` blocks, one per obligation, and neither's own failure replaces the
+	 *   answer.** The inner one signals again, which is not a formality: this platform's kill
+	 *   switch is on the host, so a wait that timed out or a read that failed must not leave a
+	 *   recorder running on hardware somebody else gets next. It is a no-op once the run has
+	 *   ended. The outer one removes the file, and it wraps the launch as well, so a recorder
+	 *   that never reported having started leaves nothing behind either — the split is what lets
+	 *   the removal cover a path where there is no recorder to signal.
 	 *
 	 * **Exclusive on the recording path** ({@link exclusivelyOn}), because that path is derived
 	 * from the udid and two overlapping calls would therefore share one file. On the path rather
@@ -1411,29 +1420,37 @@ export class IosSimulatorDeviceBackend implements DeviceBackend {
 			await this.refuseIfRecording(serial);
 			await this.removeRecording(path);
 
-			const recorder = await this.launchRecorder(serial, path);
-			// A deadline whose callback does work, which is a deadline and not a sleep: nothing on
-			// the device stops this recorder, so this is the whole of the window.
-			const deadline = setTimeout(
-				() => recorder.stream.signal(RECORDING_SIGNAL),
-				options.durationMs,
-			);
-			deadline.unref();
-
+			// Two obligations, two blocks: the outer one owns the *file*, so it is taken away on
+			// every path out of here — including a launch that never reported a start, which is
+			// `../android/backend.ts`'s spawn-inside-the-block shape and for its reason. The inner
+			// one owns the *recorder*, and there is nothing to stop until the launch has answered
+			// (a launch that fails signals its own, {@link launchRecorder}).
 			try {
-				await waitForCondition({
-					what: `the recording on device '${unwrap(serial)}' to finish`,
-					timeoutMs: options.durationMs + RECORDING_FINISH_TIMEOUT_MS,
-					probe: () =>
-						recorder.ended() === null
-							? { found: 'the recorder is still running', met: false }
-							: { met: true, value: undefined },
-				});
+				const recorder = await this.launchRecorder(serial, path);
+				// A deadline whose callback does work, which is a deadline and not a sleep: nothing
+				// on the device stops this recorder, so this is the whole of the window.
+				const deadline = setTimeout(
+					() => recorder.stream.signal(RECORDING_SIGNAL),
+					options.durationMs,
+				);
+				deadline.unref();
 
-				return await this.readFinishedRecording(serial, path);
+				try {
+					await waitForCondition({
+						what: `the recording on device '${unwrap(serial)}' to finish`,
+						timeoutMs: options.durationMs + RECORDING_FINISH_TIMEOUT_MS,
+						probe: () =>
+							recorder.ended() === null
+								? { found: 'the recorder is still running', met: false }
+								: { met: true, value: undefined },
+					});
+
+					return await this.readFinishedRecording(serial, path);
+				} finally {
+					clearTimeout(deadline);
+					recorder.stream.signal(RECORDING_SIGNAL);
+				}
 			} finally {
-				clearTimeout(deadline);
-				recorder.stream.signal(RECORDING_SIGNAL);
 				await this.removeRecording(path).catch(() => undefined);
 			}
 		});
@@ -1481,15 +1498,26 @@ export class IosSimulatorDeviceBackend implements DeviceBackend {
 			await this.refuseIfRecording(serial);
 			await this.removeRecording(path);
 
-			const recorder = await this.launchRecorder(serial, path);
-			// The recorder's own kill switch, host-side because this platform offers no other —
-			// see the docblock for what that costs. A callback that does work, not a sleep.
-			const limit = setTimeout(
-				() => recorder.stream.signal(RECORDING_SIGNAL),
-				options.maxDurationMs,
-			);
-			limit.unref();
-			recorder.stream.release();
+			// A `catch` and not a `finally`, and that is the whole difference from
+			// {@link recordVideo}: this method's success leaves the recording behind on purpose, so
+			// only the failure may take the file away. What it takes away is the zero-byte file a
+			// recorder signalled during the start wait leaves (`./parsers/recording.ts`), which
+			// would otherwise sit there until the lease ended and make the next `stop_recording` on
+			// this device an `UnfinishedRecordingError` about a recording that never existed.
+			try {
+				const recorder = await this.launchRecorder(serial, path);
+				// The recorder's own kill switch, host-side because this platform offers no other —
+				// see the docblock for what that costs. A callback that does work, not a sleep.
+				const limit = setTimeout(
+					() => recorder.stream.signal(RECORDING_SIGNAL),
+					options.maxDurationMs,
+				);
+				limit.unref();
+				recorder.stream.release();
+			} catch (failure) {
+				await this.removeRecording(path).catch(() => undefined);
+				throw failure;
+			}
 		});
 	}
 
@@ -1612,19 +1640,27 @@ export class IosSimulatorDeviceBackend implements DeviceBackend {
 		let ended: string | null = null;
 		const streams = { stdout: '', stderr: '' };
 
-		const stream = streamSimctlOnDevice(serial, 'io', [...RECORD_VIDEO_ARGV, path], {
-			onStdout: (chunk) => {
-				if (!started) streams.stdout += chunk;
+		const stream = streamSimctlOnDevice(
+			serial,
+			'io',
+			[...RECORD_VIDEO_ARGV, path],
+			{
+				onStdout: (chunk) => {
+					if (!started) streams.stdout += chunk;
+				},
+				onStderr: (chunk) => {
+					if (started) return;
+					streams.stderr += chunk;
+					started = saysRecordingStarted(streams.stderr);
+				},
+				onEnd: (reason) => {
+					ended = reason;
+				},
 			},
-			onStderr: (chunk) => {
-				if (started) return;
-				streams.stderr += chunk;
-				started = saysRecordingStarted(streams.stderr);
-			},
-			onEnd: (reason) => {
-				ended = reason;
-			},
-		});
+			// The last argv entry is the file this host chose, and the end reason names the argv:
+			// masked by the same value the streams are, so all three agree (D19).
+			{ redactArgv: [path] },
+		);
 
 		try {
 			await waitForCondition({

@@ -1,7 +1,7 @@
 import { stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { IosSimulatorDeviceBackend } from '@/backends/ios-simulator/backend.js';
 import { isFinishedRecording } from '@/backends/ios-simulator/parsers/recording.js';
 import { readProcessTable, runSimctlOnDevice } from '@/backends/ios-simulator/simctl.js';
@@ -30,8 +30,11 @@ import { readRecordingContainer } from '@/verbs/recording-container.js';
  * **It boots nothing and shuts nothing down**, which is `docs/IOS.md` §8 trap 4's rule: a suite
  * that booted its own subject could take the operator's whole session with it. What it *does*
  * change is one setting, deliberately — the appearance, toggled to make the screen move for the
- * driven case — and it puts it back in `afterEach` on every path. Nothing is installed and
- * nothing is launched.
+ * driven case — and it puts back **the value the device was in before the suite ran**, read once
+ * in `beforeAll` and written in `afterEach` on every path. Restoring a literal would have been a
+ * change disguised as a cleanup: the gate is probed rather than set by the operator
+ * (`../setup.ts`), so `npm run test:device` opts a host in by itself and a Mac whose simulator
+ * was in dark mode would have been left in light. Nothing is installed and nothing is launched.
  *
  * **Only `SIGINT` is ever sent**, here as in the backend, and that is a rule this suite has to
  * keep as much as the code does: a killed recorder leaves CoreSimulator holding this device's
@@ -81,6 +84,19 @@ async function fileExists(serial: DeviceSerial): Promise<boolean> {
 }
 
 /**
+ * The appearance the device was in before this suite touched it, or `null` when there is nothing
+ * to put back — see {@link readAppearance}.
+ */
+let appearanceBefore: 'dark' | 'light' | null = null;
+
+beforeAll(async () => {
+	if (!process.env.ROVER_TEST_SIMULATOR) return;
+	const device = (await backend.listDevices()).find((candidate) => candidate.state === 'ready');
+	if (device === undefined) return;
+	appearanceBefore = await readAppearance(device.serial);
+});
+
+/**
  * Leave nothing recording and nothing on disk, however a case ended, and put the appearance back.
  *
  * `discardRecording` is the teardown the daemon itself runs (D9), so using it here is not a
@@ -92,7 +108,7 @@ afterEach(async () => {
 	const device = (await backend.listDevices()).find((candidate) => candidate.state === 'ready');
 	if (device === undefined) return;
 	await backend.discardRecording(device.serial);
-	await setAppearance(device.serial, 'light');
+	if (appearanceBefore !== null) await setAppearance(device.serial, appearanceBefore);
 });
 
 describe.skipIf(!process.env.ROVER_TEST_SIMULATOR)('the recorder against a real simulator', () => {
@@ -300,4 +316,21 @@ describe.skipIf(!process.env.ROVER_TEST_SIMULATOR)('the recorder against a real 
  */
 async function setAppearance(serial: DeviceSerial, appearance: 'dark' | 'light'): Promise<void> {
 	await runSimctlOnDevice(serial, 'ui', ['appearance', appearance]);
+}
+
+/**
+ * The appearance the device is in now, or `null` when it is not one this suite could write back.
+ *
+ * `simctl ui <device> appearance` **with no mode is the read** — its own usage text says so, and
+ * it printed `light` at exit 0 on the bench above (macOS 26.6.2 / Xcode 26.6 / iPhone 17, iOS
+ * 26.5, 2026-09-08). That is what makes the restore a restore rather than a second change.
+ *
+ * The tool documents four answers to the read and accepts only two of them as a write — `light`,
+ * `dark`, and then `unsupported` (the runtime has no appearance styles) or `unknown` (it could
+ * not tell). Those two are `null` here rather than coerced to a default: writing a guess back to
+ * a device that told us it does not know is the very thing this function exists to stop.
+ */
+async function readAppearance(serial: DeviceSerial): Promise<'dark' | 'light' | null> {
+	const mode = (await runSimctlOnDevice(serial, 'ui', ['appearance'])).stdout.trim();
+	return mode === 'dark' || mode === 'light' ? mode : null;
 }

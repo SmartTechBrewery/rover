@@ -634,6 +634,44 @@ describe('streamSimctlOnDevice', () => {
 		expect(handlers.onEnd.mock.calls[0]?.[0]).toContain('ended with exit 0');
 	});
 
+	/**
+	 * The counterpart of `runSimctl`'s redaction case, on the reason instead of the message: this
+	 * runner's one caller is the recorder, whose last argv entry is a file *this host* chose, and
+	 * that reason is what a recorder that ended before it started is reported with — read on the
+	 * agent's machine (D19).
+	 */
+	it('masks a redacted argv entry in the end reason', async () => {
+		const staged = '/var/folders/qx/T/rover-ios-recording-BOOTED.mov';
+		const child = spawns();
+		const handlers = noHandlers();
+		streamSimctlOnDevice(SERIAL, 'io', ['recordVideo', staged], handlers, {
+			redactArgv: [staged],
+		});
+
+		child.emit('close', 16, null);
+		await settled();
+
+		expect(handlers.onEnd.mock.calls[0]?.[0]).not.toContain(staged);
+		expect(handlers.onEnd.mock.calls[0]?.[0]).toContain(
+			`simctl io ${String(SERIAL)} recordVideo <the file you sent> ended with exit 16`,
+		);
+	});
+
+	// Whole entries, as in the argv `runSimctl` masks: a path this host made up either is an entry
+	// or it is the caller's own value.
+	it('does not mask an argv entry that only shares a prefix with the redacted path', async () => {
+		const child = spawns();
+		const handlers = noHandlers();
+		streamSimctlOnDevice(SERIAL, 'io', ['recordVideo', '/tmp/out.mov.part'], handlers, {
+			redactArgv: ['/tmp/out.mov'],
+		});
+
+		child.emit('close', 0, null);
+		await settled();
+
+		expect(handlers.onEnd.mock.calls[0]?.[0]).toContain('/tmp/out.mov.part');
+	});
+
 	it('names the signal when the run was killed rather than exited', async () => {
 		const child = spawns();
 		const handlers = noHandlers();

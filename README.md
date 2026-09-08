@@ -1019,11 +1019,16 @@ the device does not have reports today. That is true of every verb family here, 
 and it is filed as its own issue.
 
 **On a real iOS simulator the same daemon runs the same verbs, and refuses three of them by
-name.** `device_info`, `screenshot`, `read_logs`, the three app verbs, both file transfers,
-`record_video` and the recording trio all answer off a booted simulator over a lease — a recording
-comes back as a QuickTime file that is provably finished before it is handed over, checked on the
-bytes rather than on an exit code, because `simctl` exits 0 on a recording that produced nothing at
-all. `read_screen`, the input verbs and the two network toggles come back as `missing-capability`
+name.** What has been driven **over a lease** on a booted simulator is `device_info`,
+`start_recording` — including the refusal of a second one and the release teardown that stops an
+abandoned recorder — and the two `missing-capability` refusals; `record_video` and
+`stop_recording` over a lease are gated on a host that has `ffmpeg`, since the verb answers with
+the normalised recording and its frames or with neither, and they do not run where it is absent.
+`screenshot`, `read_logs`, the three app verbs and both file transfers are asserted against the
+backend on a real simulator rather than over the wire, which each of those suites' headers now
+says. That distinction is worth drawing rather than eliding: a recording comes back as a
+QuickTime file that is provably finished before it is handed over, checked on the bytes rather
+than on an exit code, because `simctl` exits 0 on a recording that produced nothing at all. `read_screen`, the input verbs and the two network toggles come back as `missing-capability`
 naming the capability and the device instead, which is the honest answer and not a gap in the
 implementation. Two things are worth knowing before relying on it: the recorder is a process on the
 **host** rather than on the device, so a recording's time limit dies with the daemon that armed it

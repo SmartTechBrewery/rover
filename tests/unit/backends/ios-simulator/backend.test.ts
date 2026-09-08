@@ -1683,6 +1683,9 @@ const RECORDING_FIXTURE = new Uint8Array(
 const recordingPathOf = (serial: DeviceSerial): string =>
 	join(tmpdir(), `rover-ios-recording-${String(serial)}.mov`);
 
+/** What a masked argv entry reads as, restated here for {@link recordingPathOf}'s reason. */
+const REDACTED_ARGV = '<the file you sent>';
+
 /** A process table naming one recorder for `serial`, in the shape `ps` prints one. */
 const tableRecording = (serial: DeviceSerial, pid = '31473'): string =>
 	`${pid} /Library/Developer/PrivateFrameworks/CoreSimulator.framework/Versions/A/Resources/bin/simctl io ${String(serial)} recordVideo --codec h264 --mask ignored ${recordingPathOf(serial)}\n`;
@@ -1716,12 +1719,18 @@ function recorderThat(
 	let released = false;
 	let end = (): void => {};
 
-	streamSimctlOnDevice.mockImplementation((serial, _subcommand, args, handlers) => {
+	streamSimctlOnDevice.mockImplementation((serial, subcommand, args, handlers, runner) => {
+		// The end reason as the real runner builds it: the whole argv, with whatever `redactArgv`
+		// named masked as whole entries (`src/backends/ios-simulator/simctl.ts`). Spelled out here
+		// because the leak this pins is *in* that argv — a fake that elided it could not see it.
+		const quoted = [subcommand, String(serial), ...args]
+			.map((entry) => (runner?.redactArgv?.includes(entry) === true ? REDACTED_ARGV : entry))
+			.join(' ');
 		let ended = false;
 		end = (): void => {
 			if (ended) return;
 			ended = true;
-			handlers.onEnd('simctl io … ended with exit 0');
+			handlers.onEnd(`simctl ${quoted} ended with exit 0`);
 		};
 
 		if (announce === 'started') {
@@ -1735,7 +1744,7 @@ function recorderThat(
 					'progress}.\n',
 			);
 			handlers.onStdout(`the path was ${args[args.length - 1]}\n`);
-			handlers.onEnd('simctl io … ended with exit 16');
+			handlers.onEnd(`simctl ${quoted} ended with exit 16`);
 			ended = true;
 		}
 
@@ -1930,14 +1939,22 @@ describe('recordVideo', () => {
 		await expect(rejection).rejects.toThrow(/stdout: the path was/);
 	});
 
-	/** The staged path is this host's, and the message is read on the agent's machine (D19). */
+	/**
+	 * The staged path is this host's, and the message is read on the agent's machine (D19).
+	 *
+	 * Asserted as an **absence**, because the token appearing somewhere is not the claim: the path
+	 * is in the recorder's argv as well as in its streams, and the argv is half of the `reason`
+	 * this failure quotes. A case that only looked for the token passed while the path came
+	 * through beside it.
+	 */
 	it('keeps the path it derived out of the failure it reports', async () => {
 		answers(listing());
 		recorderThat('refused');
 
-		await expect(backend.recordVideo(BOOTED, { durationMs: 0 })).rejects.toThrow(
-			/<the file you sent>/,
-		);
+		const rejection = backend.recordVideo(BOOTED, { durationMs: 0 });
+
+		await expect(rejection).rejects.toThrow(/<the file you sent>/);
+		await expect(rejection).rejects.not.toThrow(new RegExp(recordingPathOf(BOOTED)));
 	});
 
 	/**

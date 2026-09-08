@@ -603,13 +603,34 @@ export interface SimctlStreamHandlers {
 	/**
 	 * The run ended, for any reason at all, or never started. Called **exactly once**.
 	 *
-	 * `reason` is a message ready to be shown to a caller: the argv and how it ended. It
-	 * deliberately does **not** carry the streams — the caller has been handed every byte of both
-	 * already, and a runner that quoted them again would decide for the caller which half of a
-	 * failure matters. On this tool that decision cannot be made here: an unrecognised subcommand
+	 * `reason` is a message ready to be shown to a caller: the argv — masked by
+	 * {@link StreamSimctlOptions.redactArgv} — and how it ended. It deliberately does **not**
+	 * carry the streams — the caller has been handed every byte of both already, and a runner
+	 * that quoted them again would decide for the caller which half of a failure matters. On this tool that decision cannot be made here: an unrecognised subcommand
 	 * puts its usage text on stdout and one line of complaint on stderr (module header).
 	 */
 	onEnd(reason: string): void;
+}
+
+export interface StreamSimctlOptions {
+	/**
+	 * argv entries that must not appear in the `reason` {@link SimctlStreamHandlers.onEnd} is
+	 * given — {@link RunSimctlOptions.redactArgv}'s counterpart on the streaming runner, matched
+	 * as whole entries by the same {@link quoteArgv} rule and for the same reason.
+	 *
+	 * The one caller that needs it is the recorder, whose last argv entry is the file *this host*
+	 * chose to write the recording to (`./backend.ts`, `launchRecorder`). That `reason` is what a
+	 * recorder that ended before it said it had started is reported with, and that report becomes
+	 * the text of an `internal_error` read on the agent's machine — possibly another machine
+	 * entirely — where a `/var/folders/…` path this host has already removed names nothing anyone
+	 * can act on (D19, PROJECT.md §4).
+	 *
+	 * Only the argv is masked here, because unlike {@link RunSimctlOptions.redactArgv} this runner
+	 * never quotes a stream: every byte of both goes to the handlers as it arrives, and whoever
+	 * puts a stream into a message masks it there ({@link quoteStream}) — which is what
+	 * `recorderNeverStarted` does.
+	 */
+	readonly redactArgv?: readonly string[];
 }
 
 /** The handle {@link streamSimctlOnDevice} answers with. */
@@ -674,14 +695,20 @@ export interface SimctlStream {
  *
  * `stdin` is `ignore`d: nothing here has anything to say to a recorder, and inheriting it would
  * let a recording consume the daemon's own input.
+ *
+ * **The argv in the end reason is masked**, {@link StreamSimctlOptions.redactArgv}, because that
+ * reason crosses the boundary the same way {@link SimctlCommandError}'s message does.
  */
 export function streamSimctlOnDevice(
 	serial: DeviceSerial,
 	subcommand: string,
 	args: readonly string[],
 	handlers: SimctlStreamHandlers,
+	options: StreamSimctlOptions = {},
 ): SimctlStream {
 	const argv = [...pinnedArgv(serial, subcommand, args)];
+	/** The command as the end reason may name it — a host path in it is masked (D19). */
+	const quoted = quoteArgv(argv, options.redactArgv ?? []);
 	const simctl = join(resolveDeveloperDir(), SIMCTL_RELATIVE_PATH);
 	const child: ChildProcess = spawn(simctl, argv, { stdio: ['ignore', 'pipe', 'pipe'] });
 
@@ -703,12 +730,12 @@ export function streamSimctlOnDevice(
 	});
 	child.on('error', (error: Error) => {
 		// Nothing ran at all: the file the search settled on has moved since it was verified.
-		finish(`${SIMCTL} ${argv.join(' ')} failed to run: ${error.message}`);
+		finish(`${SIMCTL} ${quoted} failed to run: ${error.message}`);
 	});
 	// `close` rather than `exit`, because `exit` can fire while stdout still holds bytes — and on
 	// this tool the last thing a finished recording says (`Wrote video to: …`) is on stdout.
 	child.on('close', (code: number | null, signal: NodeJS.Signals | null) => {
-		finish(`${SIMCTL} ${argv.join(' ')} ${streamOutcome(code, signal)}`);
+		finish(`${SIMCTL} ${quoted} ${streamOutcome(code, signal)}`);
 	});
 
 	return {
