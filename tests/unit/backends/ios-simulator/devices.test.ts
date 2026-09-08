@@ -1,10 +1,19 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { IOS_SIMULATOR_PLATFORM_ID, toDevices } from '@/backends/ios-simulator/devices.js';
+import {
+	IOS_SIMULATOR_PLATFORM_ID,
+	toDevices,
+	toNotifiedDevices,
+} from '@/backends/ios-simulator/devices.js';
+import {
+	IdbNotifyFrameDecoder,
+	type IdbTarget,
+} from '@/backends/ios-simulator/parsers/idb-notify.js';
 import {
 	parseSimctlDevices,
 	parseSimctlRuntimes,
 } from '@/backends/ios-simulator/parsers/simctl-list.js';
+import type { Device } from '@/core/device.js';
 
 /**
  * The mapping, against output **captured from a real simulator** — Xcode 26.4.1 with the
@@ -24,6 +33,41 @@ const fixture = (name: string): string =>
 const ALL_LISTINGS = fixture('simctl-list.xcode26.4.1-ios26.4.1.json');
 
 const CAPTURED = toDevices(parseSimctlDevices(ALL_LISTINGS), parseSimctlRuntimes(ALL_LISTINGS));
+
+/**
+ * The **same eleven simulators, in the same states, read two ways** — the pair of captures that
+ * makes the two mappings comparable at all.
+ *
+ * They were taken minutes apart on one bench (companion v1.5.2, Xcode 26.6, iOS 26.5, one
+ * `iPhone 17` booted and nothing else): `xcrun simctl list -j`, and the first frame of
+ * `idb_companion --notify stdout`. That is the whole point of committing a second `simctl`
+ * listing rather than reusing the Xcode 26.4.1 one — the drift worth asserting is between the two
+ * *paths*, and two paths read off two different machines cannot be compared device by device.
+ */
+const SAME_BENCH_LISTINGS = fixture('simctl-list.xcode26.6-ios26.5.json');
+
+const NOTIFY_CAPTURE = readFileSync(
+	new URL(
+		'../../../fixtures/ios-simulator/idb-notify.idbcompanion1.5.2-xcode26.6-ios26.5.txt',
+		import.meta.url,
+	),
+);
+
+const NOTIFY_FRAMES = new IdbNotifyFrameDecoder().push(NOTIFY_CAPTURE);
+
+/** The first frame: the set exactly as the `simctl` capture beside it found it. */
+const NOTIFIED = toNotifiedDevices(NOTIFY_FRAMES[0] ?? []);
+
+/** One idb target, on the shape the capture pins, with a case's own overrides. */
+const target = (overrides: Partial<IdbTarget> = {}): IdbTarget => ({
+	udid: 'A1B2C3D4-0000-0000-0000-00000000000A',
+	type: 'Simulator',
+	name: 'iPhone 17',
+	model: 'iPhone 17',
+	os_version: 'iOS 26.5',
+	state: 'Shutdown',
+	...overrides,
+});
 
 /** The runtime key the booted device sits under, and the version it does *not* spell. */
 const BOOTED_RUNTIME = 'com.apple.CoreSimulator.SimRuntime.iOS-26-4';
@@ -194,5 +238,134 @@ describe('toDevices, on shapes no capture on this machine carries', () => {
 		);
 
 		expect(mapped.map((device) => device.state)).toEqual(['offline', 'offline', 'offline']);
+	});
+});
+
+describe('toNotifiedDevices, against the real capture', () => {
+	it('reports every simulator the frame carries', () => {
+		expect(NOTIFIED).toHaveLength(11);
+	});
+
+	it('gives every device this platform id, no API level and this host', () => {
+		for (const device of NOTIFIED) {
+			expect(device.platform).toBe(IOS_SIMULATOR_PLATFORM_ID);
+			expect(device.osApiLevel).toBeNull();
+			expect(device.attachment).toBe('this-host');
+		}
+	});
+
+	/**
+	 * **The assertion this whole pairing of captures exists for.** `simctl`'s runtime reports
+	 * `26.5` while the idb target for the same device reports `iOS 26.5`; if the watch published
+	 * one spelling and `listDevices` the other, `list_devices` and the inventory would disclose
+	 * two different OS versions for one device. Asserted as an equality between the two functions
+	 * over one bench rather than against a literal, because a literal would go on passing while
+	 * the two paths drifted apart.
+	 */
+	it('answers the same device as toDevices does, field for field', () => {
+		const bySerial = (mapped: Device[]) =>
+			Object.fromEntries(mapped.map((device) => [device.serial, device]));
+
+		expect(bySerial(NOTIFIED)).toEqual(
+			bySerial(
+				toDevices(
+					parseSimctlDevices(SAME_BENCH_LISTINGS),
+					parseSimctlRuntimes(SAME_BENCH_LISTINGS),
+				),
+			),
+		);
+	});
+
+	// The one `ready`, on both paths, from the one predicate.
+	it('reports the booted simulator as the only ready one', () => {
+		expect(
+			NOTIFIED.filter((device) => device.state === 'ready').map((device) => device.model),
+		).toEqual(['iPhone 17']);
+	});
+
+	/**
+	 * The capture is a stream, so the states a device passes through are real data rather than a
+	 * hand-written case — and `Booting` in particular must not come out `ready` (`docs/IOS.md` §8,
+	 * trap 1).
+	 */
+	it('maps every state that is not Booted to offline, across the whole run', () => {
+		const transitioning = 'D85C3449-4D0C-4E93-B8EC-77FD0E5A8F3F';
+		const states = NOTIFY_FRAMES.map((frame) => {
+			const mapped = toNotifiedDevices(frame).find((device) => device.serial === transitioning);
+			return [frame.find((entry) => entry.udid === transitioning)?.state, mapped?.state];
+		});
+
+		expect(states).toEqual([
+			['Shutdown', 'offline'],
+			['Booting', 'offline'],
+			['Booted', 'ready'],
+			['Shutting Down', 'offline'],
+			['Shutdown', 'offline'],
+		]);
+	});
+});
+
+/**
+ * The allowlist, inline rather than from a capture — and that is the honest place for it.
+ *
+ * No physical iPhone was paired to the capturing bench and no watchOS or tvOS runtime was
+ * installed on it, so neither exclusion appears in the committed frames: `Simulator` under
+ * `iOS 26.5` is every target there is. These cases pin what happens to the targets this bench
+ * could not produce, the way `unified-log.test.ts` pins `messageType: "None"` inline for the same
+ * reason.
+ */
+describe('toNotifiedDevices, on the targets this bench could not produce', () => {
+	/**
+	 * A physical iPhone is outside this backend entirely — it cannot answer `screenshot`, a
+	 * *required* method (`docs/IOS.md` §6), and `./attachment.ts` records that a paired-but-absent
+	 * one is served by this platform's tooling by default, forever. Admitting it is D18's
+	 * two-agents-one-device failure wearing a disguise.
+	 */
+	it('excludes a target that is not a simulator', () => {
+		expect(toNotifiedDevices([target({ type: 'device', state: 'Booted' })])).toEqual([]);
+	});
+
+	/**
+	 * An allowlist rather than a blocklist, because the direction of the mistake is not
+	 * symmetric: an unrecognised target excluded is a device this host declines to lend, while one
+	 * admitted by default is a device it lends and cannot drive.
+	 */
+	it('excludes a target whose type it has never seen rather than admitting it', () => {
+		expect(toNotifiedDevices([target({ type: 'Something idb added in 1.6' })])).toEqual([]);
+	});
+
+	/** The same exclusion `toDevices` makes from the runtime's own `platform` field. */
+	it('excludes a simulator under a runtime that is not iOS', () => {
+		expect(toNotifiedDevices([target({ os_version: 'watchOS 26.5' })])).toEqual([]);
+		expect(toNotifiedDevices([target({ os_version: 'tvOS 26.5' })])).toEqual([]);
+	});
+
+	/**
+	 * `iOS26.5` and a bare `26.5` are both the shape this mapping cannot read, and neither is
+	 * evidence that the target *is* one of this platform's — so they are dropped rather than
+	 * reported with a `null` version. Where `toDevices` keeps a device whose runtime key does not
+	 * resolve, the platform word here is the only evidence there is about which platform the
+	 * target belongs to.
+	 */
+	it('excludes a target whose os_version carries no recognisable platform word', () => {
+		expect(toNotifiedDevices([target({ os_version: 'iOS26.5' })])).toEqual([]);
+		expect(toNotifiedDevices([target({ os_version: '26.5' })])).toEqual([]);
+		expect(toNotifiedDevices([target({ os_version: 'iOS ' })])).toEqual([]);
+	});
+
+	/**
+	 * `name` and not `model`: both are here, `simctl list devices` carries only the first, and
+	 * they differ the moment anyone renames a simulator — taking `model` would make the two paths
+	 * disagree about one device.
+	 */
+	it('reports the operator-chosen name, not the device type idb reports beside it', () => {
+		const mapped = toNotifiedDevices([target({ name: 'Jacek’s bench phone', model: 'iPhone 17' })]);
+
+		expect(mapped.map((device) => device.model)).toEqual(['Jacek’s bench phone']);
+	});
+
+	/** An empty frame is a real answer — a host with no simulators created — not a failure. */
+	it('answers an empty inventory for an empty frame', () => {
+		expect(toNotifiedDevices([])).toEqual([]);
 	});
 });
