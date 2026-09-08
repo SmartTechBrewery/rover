@@ -3,10 +3,10 @@ import { decomposeRunName } from './run-identity.js';
 
 describe('a run directory decomposed', () => {
 	it('reads the timestamp and the owner out of a name Rover wrote', () => {
-		expect(decomposeRunName('20260830T170501Z-issue-112-9f1c2ab4')).toEqual({
+		expect(decomposeRunName('20260830T170501Z-issue-112-9f1c2ab4', 'Europe/Warsaw')).toEqual({
 			name: '20260830T170501Z-issue-112-9f1c2ab4',
 			owner: 'issue-112',
-			grantedAt: '2026-08-30 17:05:01 UTC',
+			grantedAt: '2026-08-30 19:05',
 		});
 	});
 
@@ -39,23 +39,24 @@ describe('a run directory decomposed', () => {
 	});
 
 	/*
-	 * The string is the **host's** own UTC instant and nothing may re-express it in this browser's
-	 * zone (`docs/DESIGN.md` §6). The reformatting is textual for exactly that reason, so a reader
-	 * in Warsaw and a reader in Los Angeles are shown the same run at the same time.
+	 * **Inverted, not deleted** (#223). This asserted that a reader in `Pacific/Kiritimati` and one
+	 * in `Pacific/Niue` were shown the *same* string, which was the point of reformatting the name
+	 * textually; the run's grant time is now read in the reader's own zone, so what has to hold is
+	 * that the two are shown the correct *different* strings for the one instant the name carries.
+	 * Nothing is differenced against either reader's clock, which is the half of §6's rule that
+	 * stands (D17, R29).
+	 *
+	 * The zone is a parameter rather than an ambient `process.env.TZ` flip **because that flip does
+	 * not work here**: under the `panel` project the tests run in a worker thread, whose own V8
+	 * isolate never sees it, so a test written that way would pass whatever this module did
+	 * (`time/instant.ts`, `ai/TESTING.md`).
 	 */
-	it('does not shift with the reader time zone', () => {
-		const before = process.env.TZ;
-		try {
-			process.env.TZ = 'Pacific/Kiritimati';
-			const east = decomposeRunName('20260830T170501Z-issue-112-9f1c2ab4').grantedAt;
-			process.env.TZ = 'Pacific/Niue';
-			const west = decomposeRunName('20260830T170501Z-issue-112-9f1c2ab4').grantedAt;
+	it("shifts with the reader's own time zone, and by the right amount", () => {
+		const name = '20260830T170501Z-issue-112-9f1c2ab4';
 
-			expect(east).toBe('2026-08-30 17:05:01 UTC');
-			expect(west).toBe(east);
-		} finally {
-			process.env.TZ = before;
-		}
+		expect(decomposeRunName(name, 'Pacific/Kiritimati').grantedAt).toBe('2026-08-31 07:05');
+		expect(decomposeRunName(name, 'Pacific/Niue').grantedAt).toBe('2026-08-30 06:05');
+		expect(decomposeRunName(name, 'Europe/Warsaw').grantedAt).toBe('2026-08-30 19:05');
 	});
 
 	// `OWNER` is the directory's own text: `pathSegment` ran on the way in and is not reversible,

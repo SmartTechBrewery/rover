@@ -1,5 +1,6 @@
 import type { ArchiveLevel } from '@panel/archive/archive-levels.js';
 import type { ArchiveEntry } from '@panel/archive/archive-listing.js';
+import { formatInstant } from '@panel/time/instant.js';
 import { render, screen } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import { LevelContents } from './level-contents.js';
@@ -17,6 +18,14 @@ const RUNS = [
 	directory('20260828T091544Z-pr-127-review-c8d1a0f3', 1),
 	directory('20260830T170501Z-issue-112-9f1c2ab4', 1),
 ] as const;
+
+/*
+ * The newest run's `GRANTED` as the panel draws every instant since #223 — the reader's own
+ * zone, to the minute (`docs/DESIGN.md` §6, §9). Composed rather than written out because the
+ * zone is whatever machine runs the suite; the format itself is `time/instant.test.ts`'s to
+ * assert.
+ */
+const GRANTED = String(formatInstant('2026-08-30T17:05:01Z'));
 
 function showing(path: readonly string[], level: ArchiveLevel) {
 	return render(<LevelContents level={level} path={path} />);
@@ -117,7 +126,7 @@ describe('a test name', () => {
 		showing(['checkout-app', 'login-flow'], listed(...RUNS));
 
 		expect(screen.getByText('issue-112')).toBeDefined();
-		expect(screen.getByText('2026-08-30 17:05:01 UTC')).toBeDefined();
+		expect(screen.getByText(GRANTED)).toBeDefined();
 		// The owner is everything between the first and the last hyphen, hyphens included.
 		expect(screen.getByText('pr-127-review')).toBeDefined();
 	});

@@ -1,5 +1,6 @@
 import type { ListedDevice } from '@panel/devices/device-list.js';
 import type { ForceReleaseAnswer } from '@panel/devices/force-release.js';
+import { formatInstant } from '@panel/time/instant.js';
 import { Smartphone } from 'lucide-react';
 import type { ReactNode } from 'react';
 import { ForceReleaseControl } from './force-release-control.js';
@@ -171,12 +172,25 @@ function LeasePanel({
 				<Field label="Owner" value={lease.owner} />
 				<Field label="Project" value={lease.project} />
 				{/*
-				 * Rendered exactly as the host sent it — the whole ISO-8601 instant with its `Z`,
-				 * never truncated to `14:02 UTC` as the design's mock data shows it, and never
-				 * differenced against this machine's clock. It is the host's clock, and the only
-				 * honest relative number on this card is the countdown (`countdown.ts`, D17).
+				 * **In the reader's own zone, to the minute, through the one module that decides that
+				 * for every screen in this panel** (`time/instant.ts`, `docs/DESIGN.md` §6). It was
+				 * rendered exactly as the host sent it until #223 — the whole ISO-8601 instant with
+				 * its `Z` — on the reasoning that this is the *host's* clock. Half of that reasoning
+				 * stands and is untouched: nothing differences the instant against this machine's
+				 * clock, and the only relative number on this card is still the countdown, driven by
+				 * a duration (`countdown.ts`, D17). The other half was wrong — re-expressing an
+				 * unambiguous UTC instant in another zone is exact and needs no agreement between the
+				 * two clocks.
+				 *
+				 * A value the formatter cannot read is a host that broke its own
+				 * `z.string().datetime()` contract (`src/ipc/methods.ts`), so the card falls back to
+				 * what it was sent rather than hiding the only evidence that it did.
 				 */}
-				<Field className="col-span-2" label="Granted" value={lease.grantedAt} />
+				<Field
+					className="col-span-2"
+					label="Granted"
+					value={formatInstant(lease.grantedAt) ?? lease.grantedAt}
+				/>
 			</dl>
 			{/*
 			 * Below `GRANTED`, so everything the action would end is read before the control that

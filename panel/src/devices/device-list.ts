@@ -49,10 +49,11 @@ export const LeaseHolderSchema = z.object({
 	/**
 	 * When the lease was granted, as the host's own ISO-8601 instant.
 	 *
-	 * Kept as the string it arrived as. It is the *host's* clock, so the panel renders it and never
-	 * differences it against `Date.now()` — that difference is the skew plus the answer. Anything
-	 * relative comes from {@link LeaseHolder.expiresInMs}, which is a duration for exactly that
-	 * reason (D17).
+	 * Kept as the string it arrived as, and **re-expressed rather than differenced** on the way to a
+	 * card: `time/instant.ts` renders it in the reader's own zone, which is exact because this is an
+	 * unambiguous UTC instant, while subtracting it from `Date.now()` would cost the skew between
+	 * two clocks on top of the answer's own age. So nothing differences it, and anything relative
+	 * comes from {@link LeaseHolder.expiresInMs}, which is a duration for exactly that reason (D17).
 	 */
 	grantedAt: z.string(),
 	/** How long until this lease would expire **if nothing renews it** (D8). */
