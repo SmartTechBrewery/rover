@@ -149,12 +149,16 @@ export function ArchiveScreen({ view }: { readonly view: ArchiveView }) {
 	 */
 	const branches = useOpenBranches(selected, MAX_ARCHIVE_PATH_DEPTH + OFFSET[view]);
 	/*
-	 * **Which tests the reader has ticked `Keep` on** (`pinned-tests.ts`). Held here for one
+	 * **Which tests the reader has ticked `Keep` on** (`pinned-tests.ts`). Asked for here for one
 	 * reason the open set above is not: the two cards that draw the checkbox — a test name's, and a
-	 * run's — are never on screen at once, and they share one flag, so the state cannot live in
-	 * either. It is deliberately *not* addressable and deliberately not stored: nothing sweeps the
-	 * archive yet, so a tick that outlived the screen would look like a decision the host had been
-	 * told about.
+	 * run's — are never on screen at once, and they share one flag, so neither can be the one that
+	 * asks.
+	 *
+	 * It is deliberately *not* addressable, and it is **not state of this screen's at all**: the
+	 * flag is the host's, read once per mount out of `~/.rover/kept-tests.json` and written one
+	 * press at a time (D33, #234). So a tick outlives the screen on purpose — that is what makes it
+	 * a decision the host has been told about rather than a mark in one browser — and what this
+	 * hook holds is a cache of the host's own answer, replaced by the answer to every press.
 	 */
 	const pinned = usePinnedTests();
 	/*
@@ -481,7 +485,8 @@ function Preview({
 				 * **Bound to the test above this run, not to the run** (`pinned-tests.ts`). A run
 				 * address is `<project>/<test_name>/<run>`, so the pair that names its test is always
 				 * there — which is why the tuple is built here, at the one depth that can promise it,
-				 * rather than checked for inside the card.
+				 * rather than checked for inside the card. `null` is the kept set not having answered,
+				 * which is the one reason this card draws no tick.
 				 */
 				pin={pinned.stateFor([address[0], address[1]])}
 				run={address}
@@ -642,7 +647,8 @@ const OFFSET: Record<ArchiveView, number> = { all: 0, groups: 1 };
  * here — the one place that already owns the depth arithmetic — rather than in the card working out
  * whether it should have a control (the rule `force-release-control.tsx` records: no branch for a
  * control that cannot exist). The run's card asks {@link PinnedTests.stateFor} at its own branch,
- * where the depth is already known and a tick is certain.
+ * where the depth is already known and the level is certainly about a test — so the only `null` it
+ * has to draw is the kept set's, and it passes that one straight through.
  *
  * | the level | the tick |
  * | --- | --- |
@@ -653,6 +659,11 @@ const OFFSET: Record<ArchiveView, number> = { all: 0, groups: 1 };
  * **A group whose tests are not listed gets no control** — the walk is still out, the answer is
  * unreadable, or the group is empty. There is nothing to keep, and a tick over an empty group would
  * be a promise about runs nobody has seen.
+ *
+ * **And no level gets one until the kept set has answered**, which is the same rule one level up:
+ * the set is the host's and `stateFor`/`stateForAll` answer `null` while it is out or unreadable
+ * (`pinned-tests.ts`). A box drawn then would say *this test is not kept* about a test the panel
+ * cannot ask about.
  */
 function levelPin(
 	view: ArchiveView,
@@ -669,10 +680,15 @@ function levelPin(
 		const tests = testNamesOfGroup(groups.groups, project, selected[1] ?? '').map(
 			(row): TestPath => [project, row.name],
 		);
-		return tests.length === 0 ? null : { state: pinned.stateForAll(tests), scope: 'group' };
+		if (tests.length === 0) {
+			return null;
+		}
+		const state = pinned.stateForAll(tests);
+		return state === null ? null : { state, scope: 'group' };
 	}
 	if (address.length === TEST_NAME_DEPTH) {
-		return { state: pinned.stateFor([address[0], address[1]]), scope: 'test' };
+		const state = pinned.stateFor([address[0], address[1]]);
+		return state === null ? null : { state, scope: 'test' };
 	}
 	return null;
 }

@@ -91,6 +91,21 @@ describe('the Keep tick', () => {
 	});
 
 	/*
+	 * **It says where the decision is held** (#237). The tick was React state and forgot on reload,
+	 * so the sentence could only promise what the reader was about to lose; the host remembers it
+	 * now (D33), and a reader who ticks a box on one machine is told that it holds. Asserted with
+	 * the no-digit rule beside it, because the host answering the *window* is a different landing
+	 * from the host answering the *set* — and only the second has happened.
+	 */
+	it('says the host holds the decision, and still names no window', () => {
+		showing();
+
+		const said = sentenceOf(tick())?.textContent ?? '';
+		expect(said).toContain('The host remembers this tick, not the browser.');
+		expect(said).not.toMatch(/\d/);
+	});
+
+	/*
 	 * **`mixed` is a third state and is drawn as one.** It belongs to a group's tick, where some of
 	 * its tests are kept and some are not, and the box shows a dash rather than a tick or nothing —
 	 * `indeterminate` is a property and not an attribute, so a ref is the only way React reaches it,
@@ -115,6 +130,9 @@ describe('the Keep tick', () => {
 		const said = sentenceOf(tick())?.textContent ?? '';
 		expect(said).toContain('every test in this group');
 		expect(said).toContain('keep them all');
+		// Plural, for the same reason the first half is the group's own wording rather than the
+		// test's: the press stands over several flags.
+		expect(said).toContain('The host remembers these ticks, not the browser.');
 		expect(said).not.toMatch(/\d/);
 	});
 

@@ -97,6 +97,20 @@ const { host, HANGS } = vi.hoisted(() => ({
 		 * still out and again once it answers — the deep-link case the comparison card has (#199).
 		 */
 		groupsGate: null as null | Promise<void>,
+		/**
+		 * **Which tests this host keeps** — the `Keep` flag, which is host state since #237. The
+		 * mock applies each press to it the way `src/daemon/kept-tests.ts` does, so *ticking a test's
+		 * card lights its run's* is a fact about one set rather than about two mocked answers.
+		 */
+		kept: [] as readonly { readonly project: string; readonly testName: string }[],
+		/** How many times the whole set was read — **once per mount**, and nothing refreshes it. */
+		keptReads: 0,
+		/** Every press, in order — one per press however many tests it stood over. */
+		presses: [] as unknown[],
+		/** What `list_kept_tests` answers instead of the set, for the states that draw no tick. */
+		keptAnswer: null as unknown,
+		/** What `set_kept_tests` answers instead of the new set — a press the host did not make. */
+		pressAnswer: null as unknown,
 		/** Accepts every request and never answers it — the state before the first answer. */
 		hangs: false,
 	},
@@ -135,22 +149,86 @@ vi.mock('@panel/session/session-provider.js', () => {
 		}
 		return { ok: true, value: { type: 'result', result: host.groups } };
 	};
+	/** The whole kept set, counted apart because *once per mount* is what is worth asserting. */
+	const keptTests = async () => {
+		host.keptReads += 1;
+		if (host.hangs || host.keptAnswer === HANGS) {
+			return await new Promise(() => undefined);
+		}
+		const result = host.keptAnswer ?? { outcome: 'listed', tests: host.kept };
+		return { ok: true, value: { type: 'result', result } };
+	};
+	/**
+	 * One press, applied to the set the way the host applies it — a union of the tests it names, or
+	 * a difference — and answered with the whole set afterwards (R29). Doing the arithmetic here is
+	 * what makes the two cards' shared flag assertable: the panel is told what the host now holds
+	 * and draws nothing of its own.
+	 */
+	/*
+	 * The pair the host keys a kept test by, joined on NUL for `archive-path.ts`'s reason: it is one
+	 * of the two characters an archive path component cannot contain, so no two pairs collide. It is
+	 * an escape rather than a byte in this file — a literal NUL makes git call the file binary and
+	 * stops its diff being reviewable.
+	 */
+	const keptKeyOf = (test: { project: string; testName: string }) =>
+		`${test.project}\u0000${test.testName}`;
+	const keepPress = async (params: {
+		tests: readonly { project: string; testName: string }[];
+		kept: boolean;
+	}) => {
+		host.presses.push(params);
+		if (host.hangs) {
+			return await new Promise(() => undefined);
+		}
+		if (host.pressAnswer === null) {
+			const named = new Set(params.tests.map(keptKeyOf));
+			host.kept = params.kept
+				? [...host.kept.filter((test) => !named.has(keptKeyOf(test))), ...params.tests]
+				: host.kept.filter((test) => !named.has(keptKeyOf(test)));
+		}
+		const result = host.pressAnswer ?? { outcome: 'set', tests: host.kept };
+		return { ok: true, value: { type: 'result', result } };
+	};
 
 	return {
 		useSession: () => ({
 			/*
-			 * Three methods now (#146, #181), so this reads `method` rather than assuming a listing:
-			 * the tree card's field asks `search_archive` and the groups view asks
-			 * `list_archive_groups`. *Searching issues no extra `list_archive`*, and *the groups
-			 * view lists nothing above a run*, are assertable only because the three are logged
+			 * The signed-in identity, which is what the `Keep` press is attributed with (D20, D28) —
+			 * the panel derives nothing from the credential, and this is the one thing on `state`
+			 * that any of these screens reads.
+			 */
+			state: {
+				status: 'signed-in',
+				identity: { identifier: 'karolina', displayName: 'Karolina' },
+			},
+			/*
+			 * Five methods now (#146, #181, #237), so this reads `method` rather than assuming a
+			 * listing: the tree card's field asks `search_archive`, the groups view asks
+			 * `list_archive_groups`, and the `Keep` tick reads and writes the host's kept set.
+			 * *Searching issues no extra `list_archive`*, *the groups view lists nothing above a
+			 * run*, and *a group's press is one request* are assertable only because each is logged
 			 * apart.
 			 */
-			call: async (method: string, params: { path: readonly string[]; text?: string }) => {
+			call: async (
+				method: string,
+				params: {
+					path: readonly string[];
+					text?: string;
+					tests?: readonly { project: string; testName: string }[];
+					kept?: boolean;
+				},
+			) => {
 				if (method === 'search_archive') {
 					return await search(params.text);
 				}
 				if (method === 'list_archive_groups') {
 					return await grouping();
+				}
+				if (method === 'list_kept_tests') {
+					return await keptTests();
+				}
+				if (method === 'set_kept_tests') {
+					return await keepPress(params as Parameters<typeof keepPress>[0]);
 				}
 				return await listing(params.path);
 			},
@@ -334,6 +412,11 @@ beforeEach(() => {
 	host.artifact = { outcome: 'missing' };
 	host.artifactByName = {};
 	host.groupsGate = null;
+	host.kept = [];
+	host.keptReads = 0;
+	host.presses = [];
+	host.keptAnswer = null;
+	host.pressAnswer = null;
 	host.hangs = false;
 });
 
@@ -2397,25 +2480,33 @@ describe('the testing groups view with nothing to arrange', () => {
 /**
  * **The `Keep` checkbox — one flag per test, and the two cards that carry it share it.**
  *
- * It marks a test to be kept once Rover starts sweeping the archive. Nothing sweeps it yet, so the
- * state is deliberately ephemeral and lives on this screen (`pinned-tests.ts`) — which is *why*
- * these assertions belong here rather than beside either card: the test-name card and a run's card
- * are never on screen together, so *ticking one lights the other* is a claim only the screen can
- * make.
+ * It marks a test to be kept once Rover starts sweeping the archive. **The flag is the host's**
+ * since #237 (D33): this screen reads the whole set once per mount and every press is one
+ * `set_kept_tests` whose answer it draws (`pinned-tests.ts`), so what the assertions below watch is
+ * the traffic as much as the box. They belong here rather than beside either card for the reason
+ * they always did: the test-name card and a run's card are never on screen together, so *ticking
+ * one lights the other* is a claim only the screen can make.
  */
 describe('the Keep checkbox', () => {
 	const box = () => screen.getByRole('checkbox', { name: 'Keep' }) as HTMLInputElement;
+	/** A press is a round trip now, so the click and the answer it draws are one act. */
+	const tick = async () => {
+		await act(async () => {
+			fireEvent.click(box());
+		});
+	};
 
 	/*
-	 * The navigation is a `rerender` with a new splat rather than a fresh `render`: the flag lasts as
-	 * long as the screen is mounted, which is the whole of what this test is about, and a remount
-	 * would be a different question with an obvious answer.
+	 * The navigation is a `rerender` with a new splat rather than a fresh `render`: what is in
+	 * question is that the two cards read one flag, and a remount would be asking a second question
+	 * (that the host still holds it) which `is the host's answer and not this mount's` asks on its
+	 * own.
 	 */
 	it('ticks on a run and is already ticked on that run’s test', async () => {
 		const { rerender } = await showing(`checkout-app/login-flow/${RUN}`);
 		expect(box().checked).toBe(false);
 
-		fireEvent.click(box());
+		await tick();
 		expect(box().checked).toBe(true);
 
 		at.splat = 'checkout-app/login-flow';
@@ -2431,20 +2522,91 @@ describe('the Keep checkbox', () => {
 
 	it('unticks from either card', async () => {
 		const { rerender } = await showing('checkout-app/login-flow');
-		fireEvent.click(box());
+		await tick();
 		expect(box().checked).toBe(true);
 
 		at.splat = `checkout-app/login-flow/${RUN}`;
 		await act(async () => {
 			rerender(<ArchiveScreen view="all" />);
 		});
-		fireEvent.click(box());
+		await tick();
 
 		at.splat = 'checkout-app/login-flow';
 		await act(async () => {
 			rerender(<ArchiveScreen view="all" />);
 		});
 		expect(box().checked).toBe(false);
+	});
+
+	/*
+	 * **The tick is drawn from the host's answer, so a remount finds it where it was left** — the
+	 * whole point of #237. A fresh `render` is a reload of the page with the same daemon behind it,
+	 * which is the state the old ephemeral set could not survive.
+	 */
+	it('is the host’s answer and not this mount’s', async () => {
+		host.kept = [{ project: 'checkout-app', testName: 'login-flow' }];
+
+		const { unmount } = await showing('checkout-app/login-flow');
+		expect(box().checked).toBe(true);
+		unmount();
+
+		await showing('checkout-app/login-flow');
+		expect(box().checked).toBe(true);
+	});
+
+	// One read for the whole screen, and the press is the only other thing on this wire: nothing
+	// polls the set and nothing refreshes it (`pinned-tests.ts`).
+	it('reads the whole set once per mount, and writes only when pressed', async () => {
+		await showing('checkout-app/login-flow');
+
+		expect(host.keptReads).toBe(1);
+		expect(host.presses).toEqual([]);
+
+		await tick();
+		expect(host.keptReads).toBe(1);
+		expect(host.presses).toEqual([
+			{
+				tests: [{ project: 'checkout-app', testName: 'login-flow' }],
+				kept: true,
+				actor: 'karolina',
+			},
+		]);
+	});
+
+	/*
+	 * **No tick at all until the set has answered, and none if it cannot be read.** An empty box for
+	 * a test the panel cannot ask about says *this is not kept*, which is a claim about the
+	 * operator's own decision that nothing has established (`docs/DESIGN.md` §9).
+	 */
+	it('is not drawn while the set is out, or on an answer that cannot be read', async () => {
+		for (const answer of [HANGS, { outcome: 'unreadable' }]) {
+			host.keptAnswer = answer;
+			const { unmount } = await showing('checkout-app/login-flow');
+
+			expect(screen.queryAllByRole('checkbox', { name: 'Keep' })).toHaveLength(0);
+			// The card itself is drawn — the absence is the tick's own and not the level's.
+			expect(screen.getByText('2 runs archived')).toBeDefined();
+			unmount();
+		}
+	});
+
+	/*
+	 * **A press the host did not make leaves the tick where it was.** Nothing is written
+	 * optimistically, so there is nothing to unwind: the panel renders what it was sent (R29), and
+	 * an ask that reached nothing sent nothing.
+	 */
+	it.each([
+		['the host did not write it', { outcome: 'unwritable' }],
+		['its cap refused the press', { outcome: 'refused', reason: 'too-many' }],
+	])('leaves the tick where it was when %s', async (_case, answer) => {
+		host.pressAnswer = answer;
+		await showing('checkout-app/login-flow');
+
+		await tick();
+
+		expect(box().checked).toBe(false);
+		// The press was made — this is a failed write and not a control that did nothing.
+		expect(host.presses).toHaveLength(1);
 	});
 
 	/*
@@ -2476,7 +2638,7 @@ describe('the Keep checkbox', () => {
 	 */
 	it('carries a tick made in one view into the other', async () => {
 		const { rerender } = await showing('checkout-app/login-flow');
-		fireEvent.click(box());
+		await tick();
 
 		at.splat = `checkout-app/${GROUP}/login-flow`;
 		await act(async () => {
@@ -2496,6 +2658,11 @@ describe('the Keep checkbox', () => {
  */
 describe('the Keep tick on a group', () => {
 	const box = () => screen.getByRole('checkbox', { name: 'Keep' }) as HTMLInputElement;
+	const tick = async () => {
+		await act(async () => {
+			fireEvent.click(box());
+		});
+	};
 
 	/** One group, two arms — R41's own `_variant` shape, and the only fixture `mixed` can be seen in. */
 	function twoArms() {
@@ -2528,9 +2695,31 @@ describe('the Keep tick on a group', () => {
 		expect(said).not.toContain('Traces of this test');
 	});
 
+	/*
+	 * **One press, one request, every test in it** — the shape the write takes an array for
+	 * (`kept-tests.ts`). Nine calls would leave a partly-written group visible between them and nine
+	 * audit lines for one decision, so the count is asserted and not only the outcome.
+	 */
+	it('is one request carrying every test in the group, never one per test', async () => {
+		await atTheGroup();
+
+		await tick();
+
+		expect(host.presses).toEqual([
+			{
+				tests: [
+					{ project: 'checkout-app', testName: 'login-flow_variantA' },
+					{ project: 'checkout-app', testName: 'login-flow_variantB' },
+				],
+				kept: true,
+				actor: 'karolina',
+			},
+		]);
+	});
+
 	it('keeps every test in the group, and each test says so on its own card', async () => {
 		const { rerender } = await atTheGroup();
-		fireEvent.click(box());
+		await tick();
 		expect(box().checked).toBe(true);
 
 		for (const arm of ['login-flow_variantA', 'login-flow_variantB']) {
@@ -2548,13 +2737,13 @@ describe('the Keep tick on a group', () => {
 	 */
 	it('goes part-kept when one of its tests is unticked, and does not force it back', async () => {
 		const { rerender } = await atTheGroup();
-		fireEvent.click(box());
+		await tick();
 
 		at.splat = `checkout-app/${GROUP}/login-flow_variantB`;
 		await act(async () => {
 			rerender(<ArchiveScreen view="groups" />);
 		});
-		fireEvent.click(box());
+		await tick();
 		expect(box().checked).toBe(false);
 
 		at.splat = `checkout-app/${GROUP}`;
@@ -2573,7 +2762,7 @@ describe('the Keep tick on a group', () => {
 		await act(async () => {
 			rerender(<ArchiveScreen view="groups" />);
 		});
-		fireEvent.click(box());
+		await tick();
 
 		at.splat = `checkout-app/${GROUP}`;
 		await act(async () => {
@@ -2581,7 +2770,7 @@ describe('the Keep tick on a group', () => {
 		});
 		expect(box().indeterminate).toBe(true);
 
-		fireEvent.click(box());
+		await tick();
 		expect(box().checked).toBe(true);
 		expect(box().indeterminate).toBe(false);
 	});
