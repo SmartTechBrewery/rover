@@ -223,9 +223,11 @@ So: each backend declares its manifest, the verb layer checks before dispatching
 
 ### Where the iOS seam runs
 
-**Not** along "adb versus simctl". Along the interface above. An iOS backend will need at least two external programs where Android needs one, so nothing in the interface may assume a single tool per backend, a single process, or that enumeration is cheap (`simctl list` is a poll; `adb track-devices` is a stream).
+**Not** along "adb versus simctl". Along the interface above. Nothing in the interface may assume a single tool per backend, a single process, or that enumeration is cheap (`simctl list` is a poll; `adb track-devices` is a stream).
 
 That last parenthesis is about `simctl`, not about the platform — corrected 2026-09-08. `idb_companion --notify` streams the **full current target set on every change**, which is `DeviceWatcher.onDevices`' contract to the letter, so an iOS backend that takes the idb dependency does not poll either. The interface requirement stands unchanged: it may not *assume* either shape.
+
+This paragraph used to predict that an iOS backend "will need at least two external programs where Android needs one", and that is what the requirement above was argued from — **corrected 2026-09-08, because the prediction is what the first iOS backend disproved while the requirement it justified survives it.** `src/backends/ios-simulator/` registered on **one** Xcode program, `simctl`, with no third-party dependency at all (`docs/IOS.md` §10 step 1, `PROJECT.md` R45): the recorder is a host process this backend spawns and signals, and everything else is a query. The second external program is idb, and it arrives with §10 step 2 — which is what `canReadScreen` and `canInput` are still `false` for, since this platform has no cheap `simctl` equivalent of either. So the count was wrong and the rule was right: a backend needing two tools is still a shape this interface must not exclude, and it is now a shape one registered backend is *heading for* rather than one nothing has met.
 
 **`docs/IOS.md` is the evidence document for this seam** — every required method and gated capability probed against a real simulator, with the timings, the vocabulary mismatches (`DeviceKey`'s `back` and `recents`, `LogLevel`'s absent `warn`), the traps, and why a *physical* iPhone cannot answer `screenshot` at all and so is a different backend rather than the same one.
 

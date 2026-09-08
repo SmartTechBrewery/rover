@@ -48,7 +48,18 @@ one: a parser has to keep working on the Xcode releases already in use.
 | Captured | 2026-09-08 |
 
 Note that this bench is **not** `docs/IOS.md`'s: that one is Xcode 26.6 / iOS 26.5 (23F77) on a
-different host. Nothing in this folder re-verifies anything in that document.
+different host.
+
+**A second bench arrived with the recording captures** (#230), and it *is* `docs/IOS.md`'s —
+macOS 26.6.2 (25G83), Xcode 26.6 (17F113), iOS 26.5 (23F77), `iPhone 17`
+`88D8476E-F4A4-4A18-A89B-0C47E077CC8B`, 2026-09-08. So the sentence that used to close this
+paragraph — *"nothing in this folder re-verifies anything in that document"* — is **no longer
+true and is corrected in place** rather than deleted, because the reason it was written still
+holds for everything above: a fixture is governed by the versions it was captured on, and most of
+this folder was captured on Xcode 26.4.1. The three `recordvideo*` files were not, which is why
+they are named `xcode26.6` and have their own section below. Two benches in one folder is the
+filename convention working, not a problem to tidy away — and it is why each capture's row names
+the versions rather than the folder doing it once.
 
 ## Captures
 
@@ -62,6 +73,9 @@ different host. Nothing in this folder re-verifies anything in that document.
 | `unified-log-ndjson.levels.xcode26.4.1-ios26.4.1.json` | `log show --style ndjson` (below) | 26.4.1 | 26.4.1 | 2026-09-08 |
 | `simctl-terminate-not-running.xcode26.4.1-ios26.4.1.txt` | `simctl terminate` (below) | 26.4.1 | 26.4.1 | 2026-09-08 |
 | `simctl-terminate-shutdown.xcode26.4.1-ios26.4.1.txt` | `simctl terminate` (below) | 26.4.1 | 26.4.1 | 2026-09-08 |
+| `recordvideo.stderr.xcode26.6-ios26.5.txt` | `simctl io … recordVideo` (below) | **26.6** | **26.5** | 2026-09-08 |
+| `recordvideo.finished.xcode26.6-ios26.5.mov` | `simctl io … recordVideo` (below) | **26.6** | **26.5** | 2026-09-08 |
+| `recordvideo-ps.recording.xcode26.6.txt` | `ps -A -o pid=,command=` (below) | **26.6** | n/a | 2026-09-08 |
 
 The all-listings capture is the primary one: `xcrun simctl list -j` with no type argument answers
 all four listings at once — `devicetypes`, `runtimes`, `devices`, `pairs` — even though
@@ -216,6 +230,67 @@ xcrun simctl terminate $shutdown com.rover.nope \
   assume it.
 - Neither contains a path or anything personal: the bundle identifier is one this repository made
   up for the purpose, and no device is named in the text.
+
+## The three recording captures
+
+The only fixtures here taken on **`docs/IOS.md`'s** bench rather than on the one above — macOS
+26.6.2 (25G83), Xcode 26.6 (17F113), iOS 26.5 (23F77), `iPhone 17`
+`88D8476E-F4A4-4A18-A89B-0C47E077CC8B`, already booted and left exactly as found (#230). They pin
+the three questions `src/backends/ios-simulator/parsers/recording.ts` answers, and each of the
+three exists because a plausible shortcut would have been wrong:
+
+```bash
+udid=88D8476E-F4A4-4A18-A89B-0C47E077CC8B
+simctl=/Applications/Xcode.app/Contents/Developer/usr/bin/simctl
+mkdir -p /tmp/rover-rec
+
+# 1 + 2. One recording, its stderr and its file. SIGINT, never a kill — see below.
+$simctl io $udid recordVideo --codec h264 --mask ignored /tmp/rover-rec/fixture.mov \
+  2> tests/fixtures/ios-simulator/recordvideo.stderr.xcode26.6-ios26.5.txt &
+recorder=$!
+# … wait for `Recording started` in that file, then: …
+kill -INT $recorder && wait $recorder
+cp /tmp/rover-rec/fixture.mov \
+   tests/fixtures/ios-simulator/recordvideo.finished.xcode26.6-ios26.5.mov
+
+# 3. The process table while that recorder ran, cut to the two lines that matter.
+ps -A -o pid=,command= | grep recordVideo
+```
+
+| Fixture | What it pins |
+|---|---|
+| `recordvideo.stderr.xcode26.6-ios26.5.txt` | **Two lines, in the order they arrive**: `Note: No display specified. Defaulting to display: … (screenID: 1, name: LCD)` at ~0.12 s, then `Recording started` at 0.14–0.23 s. That order *is* the fixture's point — a wait on "anything on stderr" would resolve on the note, before a frame existed |
+| `recordvideo.finished.xcode26.6-ios26.5.mov` | A real finished recording, 100,782 bytes for ~2 s of an idle screen: `ftyp` (brand `qt  `, 20 bytes) → `moov` (860) → `wide` (8) → `mdat` (99,894). So `moov` is **before** `mdat` on this platform, and `src/verbs/recording-container.ts`'s shared walk reads it as one sample declaring 2,042 ms |
+| `recordvideo-ps.recording.xcode26.6.txt` | One real recorder **and one deliberate near miss** — a `/bin/sh` whose arguments merely quote the same command line. Two lines, and the second is the whole reason the file exists |
+
+- **The near miss is not invented.** While these were being measured, a scan for the token sequence
+  `io <udid> recordVideo` alone matched the **capturing agent's own shell**, whose arguments held a
+  script discussing that command line — and it would then have been sent a `SIGINT`. So
+  `recorderPids` requires the first token's basename to be `simctl` as well, and this capture is
+  the negative case for it. The near-miss line was produced on purpose, with a newline inside its
+  argument, which is also what pins that `ps` escapes one as `\012` rather than breaking a process
+  across two lines.
+- **The recorder's own line reports the CoreSimulator path, not the one that was spawned.**
+  `<developer-dir>/usr/bin/simctl` is a bash shim that `exec`s
+  `/Library/Developer/PrivateFrameworks/CoreSimulator.framework/…/bin/simctl`, so a path
+  comparison against what the backend spawned would match nothing — the basename is what works,
+  and `exec` preserves the pid. That is visible in the capture and is why it is committed rather
+  than described.
+- **Re-capture with `SIGINT` and never with `kill -9`.** A killed recorder leaves CoreSimulator
+  holding that device's recording lock — every later recording on it fails at exit 16, *"Host
+  recording is already in progress"*, until the device is shut down and booted again
+  (`docs/IOS.md` §8 trap 13). Re-capturing carelessly costs the operator their session, which is
+  the same class of harm as trap 4 and the reason both are stated here rather than only in code.
+- **The `.mov` is committed as bytes and is the only binary fixture in this folder.** It is a
+  recording of a simulator's idle home screen: no application, no personal content, and no path
+  inside it. `tests/fixtures/adb/screenrecord.finished…mp4` is its counterpart on the other
+  platform and is committed for the same reason — a container check written against a
+  hand-assembled file checks what its author believed, not what the tool writes.
+- **The stderr capture is `.txt`, and carries no exit code.** Both halves are this folder's
+  existing rule: it is prose because that is what the tool wrote, and the number lives in a table
+  a reader can see rather than anywhere the code can reach. This run exited **0**, and so does a
+  recording that produced nothing at all — which is exactly why the container is checked on the
+  bytes (`docs/IOS.md` §8 trap 12).
 
 ## Two things about the contents
 

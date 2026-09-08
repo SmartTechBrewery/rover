@@ -15,6 +15,13 @@
  * green and meaningless until R5. **R5 has landed** — the loop below now runs over a real
  * manifest, and the harness suite stays because a gate whose only subject is the code it
  * gates cannot tell a passing backend from a check that stopped checking.
+ *
+ * **There are two manifests now** (#230), which is the first time this gate is doing the job
+ * it was written for rather than describing one backend. `ios-simulator` is also the first
+ * registered manifest with a capability declared `false`, so it is the first real subject for
+ * the two rules that are about *asymmetry* rather than completeness: a declared opt-out needs
+ * no method, and any method that is present is scanned for a stub regardless of what the flag
+ * says.
  */
 
 import { describe, expect, it } from 'vitest';
@@ -48,10 +55,14 @@ describe('device backend conformance', () => {
 	 * here. This one line exists so the phase that lands a backend has to acknowledge the
 	 * gate deliberately — like `barrel.test.ts`'s twin assertion, its failure is the signal
 	 * that a backend joined, not a regression. It read `[]` until #38 registered the first
-	 * one, which is also what stopped every suite below being a loop over nothing.
+	 * one, which is also what stopped every suite below being a loop over nothing, and
+	 * `['android']` until #230 registered the second.
 	 */
 	it('runs over every registered manifest', () => {
-		expect(registered.map((entry) => entry.manifest.platform)).toEqual(['android']);
+		expect(registered.map((entry) => entry.manifest.platform)).toEqual([
+			'android',
+			'ios-simulator',
+		]);
 	});
 
 	// The gate is only worth reading if it has a subject. Asserted separately from the list

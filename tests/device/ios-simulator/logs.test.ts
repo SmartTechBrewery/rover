@@ -24,8 +24,9 @@ import { type Device, LogLevelSchema } from '@/core/device.js';
  * (`tests/fixtures/ios-simulator/README.md`). The flags that decide the levels are pinned as argv
  * in the unit suite, where they are a fact about this backend rather than about the host's mood.
  *
- * No lease, for `./backend.test.ts`'s reason: nothing is registered yet, so there is no daemon
- * that could lend one of these devices.
+ * No lease, for `./backend.test.ts`'s reason — which is no longer that nothing is registered
+ * (#230 landed the manifest and `./verb-dispatch.test.ts` takes one) but that every call here is a
+ * read against a device nobody is holding, so what it asserts is a claim about the backend.
  */
 const backend = new IosSimulatorDeviceBackend();
 

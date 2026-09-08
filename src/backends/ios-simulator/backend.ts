@@ -1,21 +1,20 @@
 /**
- * The device backend for this platform, at the phase that adds *the screen capture and the log
- * read* to the app lifecycle and the transfers.
+ * The device backend for this platform, complete: every required method of `DeviceBackend` plus
+ * the recorder and its two capabilities.
  *
- * **Every required method of `DeviceBackend` is answered now**, and there is no `not implemented
- * yet` stub left in the class: the four the enumeration phase brought, the six the lifecycle and
- * the transfers brought, and {@link IosSimulatorDeviceBackend.screenshot} and
- * {@link IosSimulatorDeviceBackend.readLogs} here. The capability-gated methods are absent rather
- * than stubbed: a manifest is what declares those, and there is none yet.
+ * **This is the backend that registers** (`./index.ts`, `./capabilities.ts`, and one import line
+ * in `../index.ts`), which is why the four recording methods land in the same change as the
+ * manifest rather than earlier: `CAPABILITY_METHODS.canControlRecording` names
+ * {@link IosSimulatorDeviceBackend.startRecording}, {@link IosSimulatorDeviceBackend.stopRecording}
+ * **and** {@link IosSimulatorDeviceBackend.discardRecording}, so a manifest declaring the
+ * capability with any of them missing fails the conformance gate the manifest exists to pass
+ * (`ai/TESTING.md`, "A backend under construction registers nothing"; `PROJECT.md` R45).
  *
- * **This backend registers nothing** (`ai/TESTING.md`, "A backend under construction registers
- * nothing"): no `./capabilities.ts`, no `./index.ts` and no line in `../index.ts`, so
- * `tests/unit/backends/barrel.test.ts` and `tests/unit/backends/conformance.test.ts` still read
- * `['android']` after this phase. That is deliberate rather than unfinished, and this is the phase
- * where the *reason* changes: it was that a stub-bearing manifest fails the conformance gate for
- * the backend that already passes it, and the stubs are gone. What a manifest would now be
- * waiting on is what it would have to declare beside these twelve methods — the recorder and its
- * two capabilities — so it lands with those, in the phase after this one (`PROJECT.md` R45).
+ * **What is absent is absent on purpose.** There is no `readScreen`, no `tap`/`swipe`/`typeText`/
+ * `pressKey`, no `setAirplaneMode` and no `setWifiEnabled` — the three capabilities
+ * `./capabilities.ts` declares `false`, which carries why each is an honest opt-out rather than a
+ * gap. An absent method beside a `false` flag is a complete backend; a stub beside it is one
+ * under construction.
  *
  * Everything that touches a simulator goes through `./simctl.js`, everything that reads its
  * output through `./parsers/`, and the three pure modules beside this one own the vocabulary, the
@@ -28,6 +27,13 @@
  * has no counterpart on the Android side: a simulator's storage *is* a directory on this host, so
  * a push is a file copy and a pull is a file read. `./containers.js` carries why that is the only
  * route available and what confines it.
+ *
+ * **The recorder is a host process too, and that is the other place this backend's shape differs
+ * from the Android one.** `screenrecord` runs on the device, so the device answers "am I
+ * recording" and `--time-limit` is a kill switch that outlives its client; `simctl io
+ * recordVideo` runs here, so this host's process table is that answer
+ * ({@link IosSimulatorDeviceBackend.recorderPids}) and the limit is a timer in this process,
+ * which is a cost {@link IosSimulatorDeviceBackend.startRecording} states rather than hides.
  *
  * **Nothing here quotes an argument, and that is a property of the tool rather than an
  * omission** — the counterpart to `../android/backend.ts`'s header, which has to choose a quoter
@@ -53,15 +59,25 @@ import {
 	type LogRead,
 	type PullFileOptions,
 	type ReadLogsOptions,
+	type RecordVideoOptions,
+	type StartRecordingOptions,
 } from '../../core/device.js';
-import { DeviceVanishedError, FileTooLargeError } from '../../core/errors.js';
+import {
+	DeviceVanishedError,
+	FileTooLargeError,
+	NoRecordingRunningError,
+	RecordingAlreadyRunningError,
+	UnfinishedRecordingError,
+} from '../../core/errors.js';
 import { type AppId, type DeviceSerial, unwrap } from '../../core/ids.js';
+import { waitForCondition } from '../../core/wait.js';
 import { hostPathOf } from './containers.js';
 import { SIMCTL_MISSING, SimctlNotFoundError } from './developer-dir.js';
 import { IOS_SIMULATOR_PLATFORM_ID, toDevices } from './devices.js';
 import { saysNothingToTerminate } from './parsers/app-control.js';
 import { type DeviceTypeProfile, readDeviceTypeProfile } from './parsers/device-type-profile.js';
 import { isPng } from './parsers/png.js';
+import { isFinishedRecording, recorderPids, saysRecordingStarted } from './parsers/recording.js';
 import {
 	parseSimctlDevices,
 	parseSimctlDeviceTypes,
@@ -78,11 +94,16 @@ import {
 	INSTALL_SIMCTL_TIMEOUT_MS,
 	quoteStream,
 	READ_LOGS_SIMCTL_MAX_BUFFER_BYTES,
+	RECORDING_FINISH_TIMEOUT_MS,
+	RECORDING_START_TIMEOUT_MS,
+	readProcessTable,
 	runSimctl,
 	runSimctlOnDevice,
 	SCREENSHOT_SIMCTL_TIMEOUT_MS,
 	SimctlCommandError,
 	type SimctlResult,
+	type SimctlStream,
+	streamSimctlOnDevice,
 } from './simctl.js';
 
 /**
@@ -311,6 +332,74 @@ function readLogsArgv(window: string): string[] {
  * and on every change either way.
  */
 export const WATCH_POLL_INTERVAL_MS = 2_000;
+
+/**
+ * The recorder's argv up to the file it writes: `simctl io <device> recordVideo --codec h264
+ * --mask ignored <path>`.
+ *
+ * - **`--codec h264` is asked for rather than left to the default**, which is `hevc` (`simctl
+ *   help io`, Xcode 26.6). The container is QuickTime either way, and what the codec decides is
+ *   who can read the payload afterwards: the recording travels to the agent's machine as bytes
+ *   and is re-encoded here only when `ffmpeg` is present (`src/daemon/normalise.ts`), so the
+ *   more widely decodable of the two is the honest default for an answer somebody else opens.
+ * - **`--mask ignored` is the same choice {@link SCREENSHOT_ARGV} makes**, for its reason: the
+ *   default returns the device's rounded corners, which anything doing arithmetic on a frame
+ *   will not want (`docs/IOS.md` §8, trap 5).
+ * - **There is no `--force` and no bit rate.** The file is removed before the recorder is
+ *   started ({@link IosSimulatorDeviceBackend.recordVideo}), so `--force` would only make a
+ *   leftover this backend failed to remove silently overwritable — where without it the tool
+ *   refuses at exit **17**, *"cannot save recorded video output into a file that already
+ *   exists"* (measured, macOS 26.6.2 / Xcode 26.6, 2026-09-08), which is the answer worth
+ *   getting. A bit rate is simply not on offer: `recordVideo` takes a codec, a display, a mask
+ *   and `--force`, and nothing else — see {@link RECORDING_PATH_PREFIX} for what that costs.
+ */
+const RECORD_VIDEO_ARGV = ['recordVideo', '--codec', 'h264', '--mask', 'ignored'] as const;
+
+/**
+ * The signal that finishes a recording, and the only one this backend ever sends.
+ *
+ * `simctl help io`, verbatim: *"Send SIGINT (Control + C) to stop recording. simctl exits once
+ * the in-flight frames are processed and the video file is finalized."* What a `SIGKILL` does
+ * instead is measured and is much worse than a lost recording — see {@link SimctlStream.signal},
+ * which carries it, and `docs/IOS.md` §8.
+ */
+const RECORDING_SIGNAL = 'SIGINT' as const;
+
+/**
+ * Where a recording is written on **this host**, one path per device, derived from the udid.
+ *
+ * Unlike every other scratch path in this backend this one is **not** a `mkdtemp` directory, and
+ * it cannot be: a recording is held open across two calls (`startRecording` then
+ * `stopRecording`), and the lease-end teardown has to find the file a *previous* call left
+ * (`discardRecording`, D9). A path nobody can re-derive is a file nobody can collect.
+ *
+ * So it is derived rather than remembered, which is the same rule the recorder itself follows
+ * (D6): asked of the udid at the moment it matters, never held on the host. Per device rather
+ * than fixed, because one host lends several — `../android/backend.ts`'s `RECORDING_PATH` is a
+ * single literal only because it names a path on the device it belongs to.
+ *
+ * Freshness is bought by removing it *before* the recording rather than by making the name
+ * unique, `RECORDING_PATH`'s reasoning to the letter and with the same thing at stake: a unique
+ * name would leave a multi-megabyte file behind for every recording that died before its
+ * cleanup, on a host that lends the same hardware to somebody else next.
+ *
+ * **What it can hold is not bounded here, and that is worth stating rather than discovering.**
+ * `recordVideo` has no bit rate to ask for, so the size of a recording is whatever the screen
+ * did: measured on macOS 26.6.2 / Xcode 26.6 against a booted iPhone 17, 2026-09-08, an idle
+ * screen came back at ~50 KB/s (100,782 bytes for ~2 s) while four full-screen repaints came back
+ * at ~2.8 MB/s (810,871 bytes for 0.29 s). At that upper rate the verb layer's own ceiling —
+ * `MAX_ARTIFACT_BYTES`, 4 MiB (`src/verbs/result.ts`) — is reached in under two seconds, and what
+ * the caller then gets is an `artifact-too-large` refusal naming both numbers rather than a
+ * truncated video. `../android/backend.ts` buys its way out of that with
+ * `RECORDING_BIT_RATE_BPS`; this platform offers no equivalent, so the honest answer is that a
+ * recording of a busy screen is short.
+ */
+const RECORDING_PATH_PREFIX = 'rover-ios-recording-';
+
+/** `<tmpdir>/rover-ios-recording-<udid>.mov` — see {@link RECORDING_PATH_PREFIX}. */
+function recordingPathOf(serial: DeviceSerial): string {
+	return join(tmpdir(), `${RECORDING_PATH_PREFIX}${unwrap(serial)}.mov`);
+}
 
 function message(cause: unknown): string {
 	return cause instanceof Error ? cause.message : String(cause);
@@ -626,14 +715,131 @@ function notAnImage(serial: DeviceSerial, bytes: Uint8Array): Error {
 	);
 }
 
+/**
+ * A recording asked of a device that is not booted, refused before anything is started —
+ * {@link notCapturable}'s counterpart, and the *sharper* of the two.
+ *
+ * A capture on a device that is not booted fails loudly after a minute (`docs/IOS.md` §8 trap 1),
+ * so the check in front of it buys time. A **recording** on one reports success at every step and
+ * produces nothing: measured on macOS 26.6.2 / Xcode 26.6 against a `Shutdown` iPhone 17,
+ * 2026-09-08, `simctl io <device> recordVideo` printed `Recording started` at **0.228 s** — the
+ * marker the whole start wait is built on — ran for the twelve seconds it was left to, and on
+ * `SIGINT` exited **0** with `Recording completed. Writing to disk.` and `Wrote video to: …` on
+ * stdout, leaving a **zero-byte file**. Every signal the tool gives says it worked.
+ *
+ * So this check is not an optimisation, it is the only thing between a caller and a recording of
+ * nothing, and it is why it names the state rather than merely refusing.
+ */
+function notRecordable(serial: DeviceSerial, state: DeviceState): Error {
+	return new Error(
+		`Device '${unwrap(serial)}' is '${state}' rather than ready, so no recording was started. ` +
+			'A recording on this platform does not refuse a device that is not booted: it reports ' +
+			'that it started, runs for as long as it is left running, reports that it finished, and ' +
+			'writes a file of zero bytes. Boot the device and ask again.',
+	);
+}
+
+/**
+ * A recorder that ended before it said it had started, with everything it said attached.
+ *
+ * The one failure the start marker turns from a ten-second wait into an immediate answer, and it
+ * covers three measured cases at once rather than a wording anyone parses:
+ *
+ * - **exit 16, `Host recording is already in progress`** — the tool's own refusal of a second
+ *   recorder, which this backend normally pre-empts with {@link RecordingAlreadyRunningError}
+ *   from the process table. It is still reachable, and the message is worth passing on verbatim
+ *   because on this platform it also arrives when a *previous* recorder was killed rather than
+ *   interrupted: CoreSimulator then holds that device's recording lock with no process left to
+ *   release it, and only shutting the device down and booting it again clears it (`docs/IOS.md`
+ *   §8);
+ * - **exit 17, `cannot save recorded video output into a file that already exists`** — a
+ *   leftover the removal in front of the recording could not take away;
+ * - **anything that never ran at all**, which the runner reports as an end for the same reason.
+ *
+ * Both streams are quoted because whichever of them carries the explanation, this is the only
+ * place a reader would find it — and on this tool that is as often stdout as stderr
+ * (`./simctl.ts`).
+ *
+ * **The staged path reaches none of the three**, because this message is read on the agent's
+ * machine (D19) and the path is one this host derived and has already removed. The two streams
+ * are masked here ({@link quoteStream}); `reason` is masked where it is built, by the
+ * `redactArgv` {@link launchRecorder} hands the runner (`./simctl.ts`,
+ * `StreamSimctlOptions.redactArgv`) — it carries the recorder's whole argv, and the last entry of
+ * that argv *is* the path.
+ */
+function recorderNeverStarted(
+	serial: DeviceSerial,
+	reason: string,
+	streams: { stdout: string; stderr: string },
+	path: string,
+): Error {
+	return new Error(
+		`No recording was started on device '${unwrap(serial)}': the recorder ${reason} before it ` +
+			'reported having started, so nothing was captured.\n' +
+			`stdout: ${quoteStream(streams.stdout, [path])}\n` +
+			`stderr: ${quoteStream(streams.stderr, [path])}`,
+	);
+}
+
+/**
+ * A recording this host wrote and then could not read back.
+ *
+ * {@link captureUnreadable}'s counterpart and its rule about host paths (D19): the file is one
+ * this backend derived from the udid and has removed by the time anyone reads this, so naming it
+ * would name nothing on the machine the message is read on.
+ *
+ * It is deliberately **not** {@link NoRecordingRunningError}: something was recording, and a file
+ * that is missing where a recorder had just been asked to write one is this host's answer rather
+ * than the device's. Nothing recorded at all is decided before the read, from the process table.
+ */
+function recordingUnreadable(serial: DeviceSerial, cause: unknown): Error {
+	return new Error(
+		`The recording of device '${unwrap(serial)}' could not be read back (${errnoOf(cause)}). ` +
+			'The file it was written to is one the host lending the device derived for the purpose ' +
+			'and removes afterwards, so this is that write not having happened.',
+		{ cause },
+	);
+}
+
+/**
+ * A recorder this backend started, held for as long as the call that started it needs it.
+ *
+ * Two members, and the split between them is D6: {@link Recorder.stream} is a way to **act** on
+ * the run — the signal that finishes a recording — while whether *this device* is recording is
+ * never read off it. That question goes to the machine (`IosSimulatorDeviceBackend.recorderPids`),
+ * which is what sees a recorder an earlier daemon started and what survives this one restarting.
+ *
+ * {@link Recorder.ended} is not an exception to that. It answers "has the run this call is
+ * holding finished", which is an observation of this process's own child rather than a
+ * remembered fact about the device — and it is exact, because Node reports `close` after the
+ * process has gone and this tool writes the whole file before it exits
+ * ({@link IosSimulatorDeviceBackend.recordVideo}).
+ */
+interface Recorder {
+	readonly stream: SimctlStream;
+	/** The reason the run ended, or `null` while it is still running. */
+	ended(): string | null;
+}
+
 export class IosSimulatorDeviceBackend implements DeviceBackend {
+	/**
+	 * {@link exclusivelyOn}'s register, keyed by the recording path — the **one** thing this class
+	 * holds between calls.
+	 *
+	 * It is a queue and not a cache, which is the distinction D6 draws: nothing about a device is
+	 * remembered here, only whether a call is still holding its recording file. A path appears
+	 * while one is in flight and is dropped again straight afterwards. Where
+	 * `AndroidDeviceBackend` also holds an OS-version cache, this class has nothing to gain by
+	 * one — that backend pays a query per device for a version, while here it is a field of the
+	 * same listing the enumeration already read.
+	 */
+	private readonly recordingUse = new Map<string, Promise<void>>();
+
 	/**
 	 * One `simctl list -j devices runtimes`, mapped onto the neutral vocabulary.
 	 *
-	 * This class holds **nothing** between calls, which is D6 one level down, and unlike
-	 * `AndroidDeviceBackend` it has nothing to gain by holding anything: the OS version that
-	 * backend caches costs it a query per device, while here it is a field of the same listing
-	 * the enumeration already read.
+	 * Nothing about the device set is held between calls, which is D6 one level down: every
+	 * answer here is this listing, read again.
 	 */
 	async listDevices(): Promise<Device[]> {
 		const result = await runSimctl([...ENUMERATE_ARGV]);
@@ -1150,6 +1356,463 @@ export class IosSimulatorDeviceBackend implements DeviceBackend {
 		}
 
 		return bytes;
+	}
+
+	/**
+	 * Record for `options.durationMs` and answer with the bytes — **the recorder is a process on
+	 * this host, and everything below follows from that.**
+	 *
+	 * The order is fixed: **check the device, ask whether it is recording, remove, record, wait
+	 * for the marker, arm the deadline, wait for the recorder to be gone, read, check, answer.**
+	 *
+	 * - **The device's state is checked first, and it is load-bearing rather than an
+	 *   optimisation** — {@link notRecordable} carries the measurement, and the short version is
+	 *   that a recording on a device that is not booted reports success at every step and writes
+	 *   zero bytes. {@link screenshot}'s check buys a minute; this one is the difference between
+	 *   an answer and a plausible-looking nothing (`ai/RULES.md` §2).
+	 * - **"Is this device recording" is asked of the machine** ({@link refuseIfRecording}), never
+	 *   remembered (D6). A second recorder is refused by name before anything is started, which
+	 *   is also what the tool would do — exit 16, `Host recording is already in progress`
+	 *   (measured) — except that the tool's answer arrives as a failed recorder rather than as
+	 *   *this device is already recording, stop that one first*.
+	 * - **The file is removed before the recorder starts**, so a leftover from a run that died
+	 *   before its cleanup can never be the file that is read — `../android/backend.ts`'s
+	 *   freshness guarantee, bought the same way. There is no `--force`, so a leftover this
+	 *   removal could not take away is a loud refusal rather than a silent overwrite
+	 *   ({@link RECORD_VIDEO_ARGV}).
+	 * - **The start is a condition on the marker, never a duration** (D12(b)). `simctl` writes
+	 *   `Recording started` to *stderr* once the first frame has been processed, and that line
+	 *   specifically: an ordinary successful run prints `Note: No display specified…` to the same
+	 *   stream first (`./parsers/recording.ts`), so a wait on "anything on stderr" would return
+	 *   before a frame existed.
+	 * - **The window is a deadline timer whose callback sends the signal, which is the opposite
+	 *   of a sleep** (D12, `tests/helpers/no-sleep-scan.ts`). It has to be, because `simctl io
+	 *   recordVideo` has **no `--time-limit`**: there is nothing on the device that stops it, so
+	 *   the only thing that can is something here. What is *awaited* is the recorder being gone —
+	 *   a condition — with the window plus {@link RECORDING_FINISH_TIMEOUT_MS} to happen in,
+	 *   which is `../android/backend.ts`'s budget for the same wait.
+	 * - **The recorder being gone is asked of the run this call is holding**, and that is exact
+	 *   rather than approximate: Node reports `close` after the process has exited, and this tool
+	 *   writes the whole file *before* it exits — `Recording completed. Writing to disk.` then
+	 *   `Wrote video to: …` on stdout, then exit 0, measured 20–30 ms after the signal. So there
+	 *   is no equivalent of the Android side's 0.265 s during which `pidof` still names a recorder
+	 *   that has written nothing, and no second wait to cover it.
+	 * - **The container is checked on the bytes that actually arrived**, not on an exit code — the
+	 *   zero-byte file above exits 0. {@link UnfinishedRecordingError} names the device and the
+	 *   byte length rather than handing over something no player will open.
+	 * - **Two nested `finally` blocks, one per obligation, and neither's own failure replaces the
+	 *   answer.** The inner one signals again, which is not a formality: this platform's kill
+	 *   switch is on the host, so a wait that timed out or a read that failed must not leave a
+	 *   recorder running on hardware somebody else gets next. It is a no-op once the run has
+	 *   ended. The outer one removes the file, and it wraps the launch as well, so a recorder
+	 *   that never reported having started leaves nothing behind either — the split is what lets
+	 *   the removal cover a path where there is no recorder to signal.
+	 *
+	 * **Exclusive on the recording path** ({@link exclusivelyOn}), because that path is derived
+	 * from the udid and two overlapping calls would therefore share one file. On the path rather
+	 * than on the device, `../android/backend.ts`'s choice and for its reason (#184).
+	 */
+	async recordVideo(serial: DeviceSerial, options: RecordVideoOptions): Promise<Uint8Array> {
+		const path = recordingPathOf(serial);
+
+		return this.exclusivelyOn(path, async () => {
+			await this.refuseUnlessRecordable(serial);
+			await this.refuseIfRecording(serial);
+			await this.removeRecording(path);
+
+			// Two obligations, two blocks: the outer one owns the *file*, so it is taken away on
+			// every path out of here — including a launch that never reported a start, which is
+			// `../android/backend.ts`'s spawn-inside-the-block shape and for its reason. The inner
+			// one owns the *recorder*, and there is nothing to stop until the launch has answered
+			// (a launch that fails signals its own, {@link launchRecorder}).
+			try {
+				const recorder = await this.launchRecorder(serial, path);
+				// A deadline whose callback does work, which is a deadline and not a sleep: nothing
+				// on the device stops this recorder, so this is the whole of the window.
+				const deadline = setTimeout(
+					() => recorder.stream.signal(RECORDING_SIGNAL),
+					options.durationMs,
+				);
+				deadline.unref();
+
+				try {
+					await waitForCondition({
+						what: `the recording on device '${unwrap(serial)}' to finish`,
+						timeoutMs: options.durationMs + RECORDING_FINISH_TIMEOUT_MS,
+						probe: () =>
+							recorder.ended() === null
+								? { found: 'the recorder is still running', met: false }
+								: { met: true, value: undefined },
+					});
+
+					return await this.readFinishedRecording(serial, path);
+				} finally {
+					clearTimeout(deadline);
+					recorder.stream.signal(RECORDING_SIGNAL);
+				}
+			} finally {
+				await this.removeRecording(path).catch(() => undefined);
+			}
+		});
+	}
+
+	/**
+	 * Start recording and **return while the recorder is still running** (#190).
+	 *
+	 * Everything {@link recordVideo}'s docblock records still applies — the state check, the
+	 * refusal, the removal, the marker. What is different is the two things that outlive the call:
+	 *
+	 * - **the recorder itself**, which is why the handle is released rather than held
+	 *   ({@link SimctlStream.release}): the run has to survive this method returning, and the
+	 *   event loop must stop counting it as work this process owes. Nothing is destroyed, so the
+	 *   two lines the recorder writes as it finalises the file still arrive;
+	 * - **`maxDurationMs`, as a deadline timer on this host** — and this is the one place where a
+	 *   platform difference costs something a caller can feel. On Android that limit is
+	 *   `screenrecord --time-limit`, *on the device*, so a daemon that dies leaves a recorder that
+	 *   still stops itself. `simctl io recordVideo` has no such flag, so here the switch is a
+	 *   timer in this process: **a daemon that dies takes the limit with it, and the recorder runs
+	 *   on until somebody stops it.** What covers the ordinary case is the lease-end teardown
+	 *   ({@link discardRecording}, D9), which runs on release and on expiry alike — and what does
+	 *   not cover it is a host that is no longer there. `docs/IOS.md` §8 records the gap.
+	 *
+	 * The timer is unreferenced, for the reason `src/daemon/restore.ts`'s is: it exists to *stop*
+	 * a recording, never to keep this process alive. It is not cleared when the recorder ends on
+	 * its own — a stop of its own, or a `stopRecording` that got there first — because
+	 * {@link SimctlStream.signal} is a no-op by then and an unreferenced timer firing into one
+	 * costs nothing.
+	 *
+	 * A non-positive `maxDurationMs` stops the recorder on the next tick rather than removing the
+	 * limit, which is the opposite of the trap `RecordVideoOptions.durationMs` records for
+	 * `--time-limit 0` and the safe direction to fail in: the wire schema refuses it and an
+	 * in-process caller that passes one gets a recording of nothing rather than an unbounded
+	 * recorder on borrowed hardware. A value past `setTimeout`'s own 2³¹−1 ms ceiling is clamped
+	 * by Node to the next tick, which fails in the same direction; the verb layer passes
+	 * `MAX_RECORDING_MS` (`src/verbs/recording-session.ts`), so neither is reachable over the
+	 * wire.
+	 */
+	async startRecording(serial: DeviceSerial, options: StartRecordingOptions): Promise<void> {
+		const path = recordingPathOf(serial);
+
+		return this.exclusivelyOn(path, async () => {
+			await this.refuseUnlessRecordable(serial);
+			await this.refuseIfRecording(serial);
+			await this.removeRecording(path);
+
+			// A `catch` and not a `finally`, and that is the whole difference from
+			// {@link recordVideo}: this method's success leaves the recording behind on purpose, so
+			// only the failure may take the file away. What it takes away is the zero-byte file a
+			// recorder signalled during the start wait leaves (`./parsers/recording.ts`), which
+			// would otherwise sit there until the lease ended and make the next `stop_recording` on
+			// this device an `UnfinishedRecordingError` about a recording that never existed.
+			try {
+				const recorder = await this.launchRecorder(serial, path);
+				// The recorder's own kill switch, host-side because this platform offers no other —
+				// see the docblock for what that costs. A callback that does work, not a sleep.
+				const limit = setTimeout(
+					() => recorder.stream.signal(RECORDING_SIGNAL),
+					options.maxDurationMs,
+				);
+				limit.unref();
+				recorder.stream.release();
+			} catch (failure) {
+				await this.removeRecording(path).catch(() => undefined);
+				throw failure;
+			}
+		});
+	}
+
+	/**
+	 * Stop the recording this device is holding open and answer with the bytes.
+	 *
+	 * The order is **ask, signal, wait on the condition, read, check, answer** — and the whole of
+	 * it goes through the process table rather than through a handle, which is the difference this
+	 * method makes to the design. `startRecording` returned and let its handle go, so there is
+	 * nothing here to hold: the recorder is found by matching `simctl io <udid> recordVideo` in
+	 * this host's own process table (`./parsers/recording.ts`) and signalled by pid. That is what
+	 * lets this stop a recorder an earlier daemon started, and a recorder some other program on
+	 * the machine started, rather than only one this process remembers.
+	 *
+	 * **The wait after the signal is on the machine's answer, not on a handle**, for the same
+	 * reason, and it is quick: `ps` stopped naming the recorder on the first probe 39 ms after the
+	 * signal (measured, macOS 26.6.2 / Xcode 26.6, 2026-09-08). It is a condition with a timeout
+	 * all the same — a recorder finalising a long capture has megabytes to flush.
+	 *
+	 * **A recorder that already stopped is not a failure and not a special case.** It reached the
+	 * limit `startRecording` armed, its file is complete, and the read below is the same read. So
+	 * this branches on whether there is anything to signal, not on whether anything went wrong.
+	 *
+	 * **Which leaves one genuine failure, and the two are told apart by the file rather than by
+	 * the signal.** Nothing recording *and* nothing written is {@link NoRecordingRunningError}:
+	 * there was no recorder and there is nothing to hand back, so a caller that stopped something
+	 * it never started is told so rather than handed an empty answer. Anything else is read, and
+	 * the container is checked on the bytes that arrived — a recording that ran against a device
+	 * which had gone down is exactly a zero-byte file that is really there, which is
+	 * {@link UnfinishedRecordingError} naming the length.
+	 *
+	 * **The `finally` removes the file and its own failure never replaces the answer**, which is
+	 * `../android/backend.ts`'s rule: this method has an answer to protect, and it runs on the
+	 * refusal paths too, where a multi-megabyte file left on borrowed hardware does the most harm.
+	 */
+	async stopRecording(serial: DeviceSerial): Promise<Uint8Array> {
+		const path = recordingPathOf(serial);
+
+		return this.exclusivelyOn(path, async () => {
+			try {
+				const running = await this.stopRecorders(serial);
+				const bytes = await readFile(path).catch(() => null);
+
+				// Nothing recording and nothing written: nothing happened, so there is nothing to
+				// explain about the bytes. Decided from the two facts together rather than from
+				// either — a recorder that stopped itself leaves a perfectly good file behind, and a
+				// recorder that ran against a device which had gone leaves an empty one.
+				if (bytes === null) {
+					if (running.length === 0) throw new NoRecordingRunningError(serial);
+					throw new UnfinishedRecordingError(serial, 0);
+				}
+				if (!isFinishedRecording(bytes)) {
+					throw new UnfinishedRecordingError(serial, bytes.byteLength);
+				}
+
+				return bytes;
+			} finally {
+				await this.removeRecording(path).catch(() => undefined);
+			}
+		});
+	}
+
+	/**
+	 * Stop whatever recorder this device is running and remove the file — the lease-end teardown's
+	 * own method, never a verb's (`src/daemon/restore.ts`, D9).
+	 *
+	 * {@link stopRecording} with everything after the wait taken out: no read, no container check
+	 * and no bytes. A lease that ended has no caller to hand a recording to, so reading megabytes
+	 * nobody is waiting on would buy nothing, and refusing an unfinished file — which is what a
+	 * recorder abandoned mid-lease usually leaves — would turn the ordinary case into a failure the
+	 * teardown then has to swallow.
+	 *
+	 * **Nothing recording is a silent success.** This runs for every lease that ends and most
+	 * leases never record anything: no recorder means nothing to signal and nothing to wait for,
+	 * and removing a path that is not there is not an error ({@link removeRecording}).
+	 *
+	 * **It matters more here than on the other platform**, and that is the one thing worth reading
+	 * twice: `startRecording`'s limit lives in this process, so this teardown is what stops a
+	 * recorder whose lease ended inside a daemon that is still alive — which is every case except
+	 * the one where the daemon itself died.
+	 *
+	 * **The `rm` is in a `finally` and its failure is not swallowed**, `../android/backend.ts`'s
+	 * one deliberate departure from the stop and for its reason: this method has no answer to
+	 * protect, and a recording left on hardware that goes to somebody else next is precisely what
+	 * it exists to prevent.
+	 */
+	async discardRecording(serial: DeviceSerial): Promise<void> {
+		const path = recordingPathOf(serial);
+
+		return this.exclusivelyOn(path, async () => {
+			try {
+				await this.stopRecorders(serial);
+			} finally {
+				await this.removeRecording(path);
+			}
+		});
+	}
+
+	/**
+	 * Spawn the recorder and answer once it has said it is recording — the half
+	 * {@link recordVideo} and {@link startRecording} share.
+	 *
+	 * **Both streams are accumulated only until the marker arrives, and then dropped.** What they
+	 * are for is the one failure that needs them — {@link recorderNeverStarted}, where the useful
+	 * half is as often on stdout as on stderr — and once the recorder has started they are two
+	 * lines nobody reads and an unbounded buffer on a run that may outlive its call. So this is a
+	 * bound by construction rather than a tail that has to be sliced, and there is no truncation
+	 * to reason about.
+	 *
+	 * **The wait ends early when the run does.** A probe that throws propagates unchanged
+	 * (`src/core/wait.ts`), which is what turns exit 16 and exit 17 from a ten-second timeout into
+	 * the tool's own sentence. The marker is checked *before* the end, so a run that both said it
+	 * started and then stopped counts as started — its file is what decides the answer.
+	 *
+	 * A wait that times out signals the recorder before it gives up, because nothing else will: a
+	 * recorder that never produced a frame is still a process holding this device's recording lock.
+	 */
+	private async launchRecorder(serial: DeviceSerial, path: string): Promise<Recorder> {
+		let started = false;
+		let ended: string | null = null;
+		const streams = { stdout: '', stderr: '' };
+
+		const stream = streamSimctlOnDevice(
+			serial,
+			'io',
+			[...RECORD_VIDEO_ARGV, path],
+			{
+				onStdout: (chunk) => {
+					if (!started) streams.stdout += chunk;
+				},
+				onStderr: (chunk) => {
+					if (started) return;
+					streams.stderr += chunk;
+					started = saysRecordingStarted(streams.stderr);
+				},
+				onEnd: (reason) => {
+					ended = reason;
+				},
+			},
+			// The last argv entry is the file this host chose, and the end reason names the argv:
+			// masked by the same value the streams are, so all three agree (D19).
+			{ redactArgv: [path] },
+		);
+
+		try {
+			await waitForCondition({
+				what: `the recording on device '${unwrap(serial)}' to start`,
+				timeoutMs: RECORDING_START_TIMEOUT_MS,
+				probe: () => {
+					if (started) return { met: true, value: undefined };
+					if (ended !== null) throw recorderNeverStarted(serial, ended, streams, path);
+					return { found: 'nothing on stderr saying the recording had started', met: false };
+				},
+			});
+		} catch (failure) {
+			stream.signal(RECORDING_SIGNAL);
+			throw failure;
+		}
+
+		return { ended: () => ended, stream };
+	}
+
+	/**
+	 * The pids of every recorder this host is running for `serial`, empty when there is none.
+	 *
+	 * One place asks the machine this question, because four callers act on the same answer and a
+	 * copy that drifted would make two of them disagree about what "already recording" means —
+	 * `../android/backend.ts`'s `recorderPids` and its reasoning, with the process table in place
+	 * of `pidof` because the recorder is a host process (`./parsers/recording.ts`).
+	 */
+	private async recorderPids(serial: DeviceSerial): Promise<string[]> {
+		return recorderPids(await readProcessTable(), unwrap(serial));
+	}
+
+	/**
+	 * Refuse by name if this device is already recording — what both ways of starting one ask
+	 * before they start anything.
+	 *
+	 * @throws RecordingAlreadyRunningError naming the device and the pids that were there.
+	 */
+	private async refuseIfRecording(serial: DeviceSerial): Promise<void> {
+		const pids = await this.recorderPids(serial);
+		if (pids.length > 0) throw new RecordingAlreadyRunningError(serial, pids);
+	}
+
+	/**
+	 * Refuse unless the device can actually record — {@link notRecordable} carries why this is
+	 * not an optimisation.
+	 *
+	 * `describeDevice`, so a device this host no longer has is {@link DeviceVanishedError} rather
+	 * than a refusal about a state nobody can read — {@link screenshot}'s check, same shape.
+	 */
+	private async refuseUnlessRecordable(serial: DeviceSerial): Promise<void> {
+		const device = await this.describeDevice(serial);
+		if (device === null) throw new DeviceVanishedError(serial);
+		if (device.state !== 'ready') throw notRecordable(serial, device.state);
+	}
+
+	/**
+	 * Signal every recorder this host is running for `serial`, wait until the machine says they
+	 * are gone, and answer with the pids that were there — {@link stopRecording} and
+	 * {@link discardRecording}'s shared middle.
+	 *
+	 * Signalled **by pid** rather than through a handle, which is what makes both methods work on
+	 * a recorder this process did not start (see {@link stopRecording}). `ESRCH` is tolerated for
+	 * the reason `../android/backend.ts` carries a `|| true` on its own kill: the pids were read a
+	 * moment earlier, so a recorder that reached the limit `startRecording` armed in the gap
+	 * leaves a signal with nothing to deliver to — which is not a broken device, and the wait
+	 * below is what catches a recorder that really would not go.
+	 */
+	private async stopRecorders(serial: DeviceSerial): Promise<string[]> {
+		const running = await this.recorderPids(serial);
+		if (running.length === 0) return running;
+
+		for (const pid of running) {
+			try {
+				process.kill(Number(pid), RECORDING_SIGNAL);
+			} catch {
+				// Gone between the read and the signal. The wait below is the check that matters.
+			}
+		}
+
+		await waitForCondition({
+			what: `the recording on device '${unwrap(serial)}' to stop`,
+			timeoutMs: RECORDING_FINISH_TIMEOUT_MS,
+			probe: async () => {
+				const pids = await this.recorderPids(serial);
+				if (pids.length === 0) return { met: true, value: undefined };
+				return { found: `simctl still recording as pid ${pids.join(', ')}`, met: false };
+			},
+		});
+
+		return running;
+	}
+
+	/**
+	 * The bytes of a finished recording, or the refusal that says why they are not one.
+	 *
+	 * Its own step because the two ways of ending a recording ask it differently:
+	 * {@link recordVideo} knows a recorder just ran, so a file that is not there is this host's
+	 * failure ({@link recordingUnreadable}), while {@link stopRecording} has to tell that case
+	 * from a stop nobody started and reads the file itself.
+	 */
+	private async readFinishedRecording(serial: DeviceSerial, path: string): Promise<Uint8Array> {
+		const bytes = await readFile(path).catch((cause: unknown) => {
+			throw recordingUnreadable(serial, cause);
+		});
+		if (!isFinishedRecording(bytes)) {
+			throw new UnfinishedRecordingError(serial, bytes.byteLength);
+		}
+
+		return bytes;
+	}
+
+	/** The recording, gone — run before every recording and again after it, on every path. */
+	private async removeRecording(path: string): Promise<void> {
+		await rm(path, { force: true });
+	}
+
+	/**
+	 * Run `work` after every call already queued for `path` on this host, and never beside one.
+	 *
+	 * `../android/backend.ts`'s register, with one simplification the platform allows: the subject
+	 * there is a (device, path) pair because the paths are device-side literals, while here the
+	 * only scratch path a call holds across another call is the recording, and it already carries
+	 * the udid ({@link RECORDING_PATH_PREFIX}). So the path *is* the key.
+	 *
+	 * Two overlapping recording calls would otherwise share one file and spoil both answers, and
+	 * nothing above this excludes them — `src/daemon/verb-traffic.ts` registers concurrent calls
+	 * on one device rather than preventing them, on purpose. A promise chain per path rather than
+	 * a lock, because there is nothing to unlock: the entry *is* the tail of the queue.
+	 *
+	 * The chain never rejects and never carries a value: a call that threw has still finished with
+	 * the file, and letting its rejection through would fail the *next* caller with the previous
+	 * caller's error. The entry is dropped once this call is the last one queued for that path, so
+	 * the map is bounded by the devices being recorded right now rather than by every device this
+	 * host has ever touched.
+	 *
+	 * It bounds nothing else, and on this platform that is worth one sentence: a recording held
+	 * open by `startRecording` is **not** holding this queue — that call returns, and the recorder
+	 * it left running is found again through the process table. What is excluded is two *calls*.
+	 */
+	private async exclusivelyOn<T>(path: string, work: () => Promise<T>): Promise<T> {
+		const queued = (this.recordingUse.get(path) ?? Promise.resolve()).then(work);
+		const settled = queued.then(
+			() => undefined,
+			() => undefined,
+		);
+		this.recordingUse.set(path, settled);
+
+		try {
+			return await queued;
+		} finally {
+			if (this.recordingUse.get(path) === settled) this.recordingUse.delete(path);
+		}
 	}
 
 	/**

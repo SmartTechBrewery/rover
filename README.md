@@ -4,8 +4,15 @@ Hands and eyes on a real mobile device, for coding agents — and a way to share
 between several agents working at once.
 
 An agent can build a mobile app but cannot look at it. Rover taps, scrolls, types, screenshots,
-reads the view hierarchy, records video and toggles the network, over `adb`. A daemon keeps one
+reads the view hierarchy, records video and toggles the network, over `adb` — and on a Mac it
+lends **iOS simulators** too, over `simctl`, with no third-party tooling. A daemon keeps one
 inventory of the machine's devices so two agents never end up driving the same phone.
+
+The two platforms are deliberately **not** equally capable, and Rover says which is which rather
+than papering over it: a simulator answers every required call and records video, and refuses
+`read_screen`, the input verbs and the network toggles **by name**, naming the capability and the
+device. A verb without backing fails loudly; nothing is ever degraded into a plausible-looking
+empty answer.
 
 It is **not** a test framework. Nothing asserts, nothing turns red on its own, nothing is a CI
 gate. Rover moves the device and reports what is on it; judging whether that is right is the
@@ -486,7 +493,19 @@ And the gaps this quick start runs into today, rather than in principle:
 
 Design and rules are settled. The toolchain and the device-backend contract — the device
 interface, the Zod capability manifest and the registry a backend joins through one import — are
-in place, and the Android backend is registered. The daemon runs: it binds a unix socket, serves
+in place, and **two backends are registered**: `android` over `adb`, and `ios-simulator` over
+`simctl`. Adding the second one cost a folder and **one import line** in the barrel — no edit to
+dispatch, to the registry or to any verb — which is what the module shape was for, and the
+conformance gate now runs over two manifests rather than one, which is the only arrangement in
+which it can tell a passing backend from a check that stopped checking. The iOS backend is the
+first that declares something **`false`**: `canReadScreen`, `canInput` and `canControlNetwork`, the
+last of those permanently — a simulator uses the host's network stack, so the only truthful
+`set_wifi` would change the networking of the machine lending devices to other people, and the
+cosmetic status-bar override `simctl` will happily draw is exactly the plausible-looking answer
+this project refuses. Those three come back as `missing-capability` naming the capability and the
+device; the methods behind them are **absent** rather than stubbed. Physical iPhones are not
+supported and are not a gap in this one — hardware cannot answer `screenshot` at all, so it is a
+different backend, which is why this one is named `ios-simulator` and not `ios`. The daemon runs: it binds a unix socket, serves
 the schema-checked IPC surface over it, and **starts itself on the first call**, with two
 concurrent callers producing exactly one daemon. It now holds a **device inventory** — one entry
 per device, fed by each registered backend's change stream, refusing anything attached to another
@@ -998,6 +1017,25 @@ device-level refusal, such as launching a package that is not installed, still r
 `internal_error` rather than as an answer about the device — which is what a `pull_file` of a path
 the device does not have reports today. That is true of every verb family here, not just this one,
 and it is filed as its own issue.
+
+**On a real iOS simulator the same daemon runs the same verbs, and refuses three of them by
+name.** What has been driven **over a lease** on a booted simulator is `device_info`,
+`start_recording` — including the refusal of a second one and the release teardown that stops an
+abandoned recorder — and the two `missing-capability` refusals; `record_video` and
+`stop_recording` over a lease are gated on a host that has `ffmpeg`, since the verb answers with
+the normalised recording and its frames or with neither, and they do not run where it is absent.
+`screenshot`, `read_logs`, the three app verbs and both file transfers are asserted against the
+backend on a real simulator rather than over the wire, which each of those suites' headers now
+says. That distinction is worth drawing rather than eliding: a recording comes back as a
+QuickTime file that is provably finished before it is handed over, checked on the bytes rather
+than on an exit code, because `simctl` exits 0 on a recording that produced nothing at all. `read_screen`, the input verbs and the two network toggles come back as `missing-capability`
+naming the capability and the device instead, which is the honest answer and not a gap in the
+implementation. Two things are worth knowing before relying on it: the recorder is a process on the
+**host** rather than on the device, so a recording's time limit dies with the daemon that armed it
+— the lease's own teardown is what stops an abandoned recorder, on release and on expiry alike —
+and `simctl` offers no bit rate, so a recording of a busy screen reaches the 4 MiB one call may
+carry in under two seconds and is refused by name rather than truncated. `docs/IOS.md` carries the
+measurements and every trap that was hit getting there.
 
 **The host can now listen on the network, and only if you ask it to** (D17, D20, D25). Setting
 `ROVER_LISTEN_PORT` — with a TLS certificate beside it — starts a TCP+TLS listener alongside the
@@ -1792,6 +1830,7 @@ naming the same address and port. A certificate that verifies but does not carry
 | [`ai/ARCHITECTURE.md`](ai/ARCHITECTURE.md) | The four components, the lease lifecycle, where the iOS seam runs |
 | [`ai/CODING_STANDARDS.md`](ai/CODING_STANDARDS.md) | Stack, Zod boundaries, error handling, module shape |
 | [`ai/TESTING.md`](ai/TESTING.md) | Vitest, the real-device gate, fixtures, conformance |
+| [`docs/IOS.md`](docs/IOS.md) | What the iOS simulator can and cannot do, every claim measured — the recorder, the traps, and why hardware is a different backend |
 
 In the source tree: `src/core/` holds the device contract and the branded ids, `src/backends/` one
 folder per platform, `src/verbs/` the verb spine with the input verbs, the app verbs, the read verbs

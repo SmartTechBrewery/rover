@@ -33,8 +33,9 @@ import { parseAppId } from '@/core/ids.js';
  * {@link parseAppId} — not a formality even here, where nothing reaches a shell, because the
  * brand is what forces every caller through the parse before any backend sees the value.
  *
- * Like the suites beside it this drives the backend class directly rather than through a lease:
- * nothing is registered yet, so there is no daemon that could lend one of these devices
+ * Like the suites beside it this drives the backend class directly rather than through a lease —
+ * no longer because nothing is registered (#230 landed the manifest and `./verb-dispatch.test.ts`
+ * takes a lease) but because what it asserts is a claim about the backend
  * (ai/TESTING.md, and `./backend.test.ts`'s header). It boots nothing and shuts nothing down —
  * `docs/IOS.md` §8 trap 4.
  */

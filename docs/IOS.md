@@ -12,6 +12,13 @@ which `ai/ARCHITECTURE.md` guessed might have no iOS equivalent at all. A **phys
 different and much worse story: it cannot answer `screenshot`, which is a required method, so it is
 not a device this contract can lend at all without a WebDriverAgent-class in-device agent.
 
+**And it is built.** `src/backends/ios-simulator/` is the repository's **second registered
+backend** as of #230 — every required method plus `canRecordVideo` and `canControlRecording`, on
+`simctl` alone with no third-party dependency, which is §10 step 1. `canReadScreen` and `canInput`
+are declared **`false`** there and are what steps 2 and 3 flip; `canControlNetwork` is `false` for
+good (§5). Where a section below still reads as a proposal, the block naming the phase that
+delivered it says what actually shipped.
+
 ---
 
 ## Contents
@@ -88,8 +95,8 @@ startup of ~60–90 ms that a Node backend talking gRPC directly would not pay.
 |---|---|---|---|---|
 | `canReadScreen` | `readScreen` | `idb ui describe-all` | 0.16–0.22 s, labels + frames in **points** | ✅ |
 | `canInput` | `tap` `swipe` `typeText` `pressKey` | `idb ui tap/swipe/text/button` | 0.11–0.16 s each | ✅ (see §5 for `pressKey`) |
-| `canRecordVideo` | `recordVideo` | `simctl io recordVideo` | — | ✅ |
-| `canControlRecording` | `start`/`stop`/`discardRecording` | same + SIGINT | first frame at 0.21 s, 325 KB h264 | ✅ |
+| `canRecordVideo` | `recordVideo` | `simctl io <d> recordVideo --codec h264 --mask ignored <path>` | marker at 0.14–0.23 s; 100,782 bytes for ~2 s of an idle screen | ✅ **no `--time-limit` — the window is host-side** |
+| `canControlRecording` | `start`/`stop`/`discardRecording` | same + `SIGINT`, and the **host's** process table for "is this device recording" | exit 0 in 20–30 ms after the signal; `ps` stops naming the recorder in 39 ms | ✅ |
 | `canControlNetwork` | `setAirplaneMode` `setWifiEnabled` | — | — | ❌ **declare false** |
 
 19 of 20 probes succeeded; the twentieth is `canControlNetwork`, which failed **on purpose** —
@@ -213,6 +220,61 @@ readLogs     at the ceiling across that burst ageing out: it answered every time
   decide the answer while `truncated: false` claims the cap did not. What stands in for it is
   widening the window until the device says more than the cap (§5) — the answer is then full
   because the cap cut it, and a short one is short because the horizon really was reached.
+
+### What phase 5 added to the rows above, measured while building them
+
+The recorder, and the first thing in this document measured on **this** document's own bench
+rather than on the second one — macOS 26.6.2 (25G83) / Xcode 26.6 (17F113) / iOS 26.5 (23F77),
+2026-09-08, against the `iPhone 17` `88D8476E-…` §1 names. The three fixtures under
+`tests/fixtures/ios-simulator/recordvideo*` were cut from these runs, and are the only captures in
+that folder taken here (its README says which bench each came from).
+
+```
+recordVideo  `Recording started` on **stderr** at 0.14–0.23 s, always preceded by the
+             `Note: No display specified…` line at ~0.12 s — two lines, in that order
+recordVideo  SIGINT → `Recording completed. Writing to disk.` then `Wrote video to: …` on
+             **stdout**, then exit 0, 20–30 ms after the signal
+recordVideo  ~2 s of an idle screen: 100,782 bytes (~50 KB/s), ftyp(`qt  `)/moov/wide/mdat,
+             one sample declaring 2,042 ms
+recordVideo  0.29 s of four full-screen repaints: 810,871 bytes — ~2.8 MB/s
+stopRecording  `ps` stopped naming the recorder on the first probe, 39 ms after the signal
+recordVideo  on a **Shutdown** device: marker at 0.228 s, ran the whole 12 s it was left,
+             exit **0** with both success lines, and a **zero-byte** file (trap 12)
+```
+
+- **`simctl io recordVideo` has no `--time-limit`, and that is the phase's whole difficulty.**
+  `simctl help io` lists `--codec`, `--display`, `--mask` and `--force` and nothing else, so
+  nothing *on the device* stops a recorder: both `record_video`'s window and
+  `start_recording`'s `maxDurationMs` are a deadline timer on this host whose callback sends the
+  signal. **What that costs is stated rather than hidden** — a daemon that dies takes the limit
+  with it, where Android's `screenrecord --time-limit` would still stop itself. The lease-end
+  teardown (`discardRecording`, D9) covers every case except that one.
+- **`Recording started` is the only thing that says a recording is running, and matching
+  "anything on stderr" would be wrong.** The `No display specified` note lands on the same stream
+  first, before any frame exists — both lines are committed verbatim as
+  `recordvideo.stderr.xcode26.6-ios26.5.txt`.
+- **The container is QuickTime and `moov` comes *before* `mdat`.** `ftyp` (brand `qt  `) → `moov`
+  → `wide` → `mdat`, so the finished-container check and `src/verbs/recording-container.ts`'s
+  shared walk both read it — `mvhd`, `trak`, `mdia`, `hdlr 'vide'` and `stsz` are all there.
+  Note that `mediaTypeOf` (`src/verbs/result.ts`) sniffs the `ftyp` box and labels this
+  `video/mp4` whatever the brand: accurate enough for the answer, and re-encoded by
+  `src/daemon/normalise.ts` where `ffmpeg` is present.
+- **An unfinished recording on this platform is a *zero-byte* file, not a headerless container.**
+  `simctl` buffers and writes the whole file at the end — `Recording completed. Writing to disk.`
+  is the moment it happens — so a recorder that was killed, or one that ran against a device that
+  was not booted, leaves a file that is really there and holds nothing. The Android trap of an
+  index written late does not arise; the same check is made anyway, because it is the honest one.
+- **There is no bit rate to ask for**, so the size of a recording is whatever the screen did. At
+  the driven rate above the verb layer's own `MAX_ARTIFACT_BYTES` (4 MiB) is reached in **under
+  two seconds**, and a caller then gets an `artifact-too-large` refusal naming both numbers rather
+  than a truncated video. `src/backends/android/backend.ts` buys its way out with
+  `RECORDING_BIT_RATE_BPS`; this platform offers no equivalent, so the honest answer is that a
+  recording of a busy screen is short.
+- **"Is this device recording" is the *host's* process table, because the recorder is a host
+  process.** `screenrecord` runs on the device, so `pidof` on the device answers it there; here
+  the answer is `ps -A -o pid=,command=` matched on `io <udid> recordVideo` **and** on the program
+  being `simctl` (trap 14). That is what survives a daemon restart, what sees a recorder some
+  other program started, and what `discardRecording` stops a lease's abandoned recorder with.
 
 ### How a failure comes back, and why the exit code is not a vocabulary
 
@@ -399,6 +461,14 @@ it draws a different icon and changes nothing about reachability. That is precis
 "plausible-looking result where the honest answer is *this device cannot do that*" the rules forbid
 (`ai/RULES.md` §2). Declare `false`, let `MissingCapabilityError` fire, and never wire the status bar
 to it.
+
+**That is what shipped** (#230). `src/backends/ios-simulator/capabilities.ts` declares the flag
+`false` and the class carries **no** `setAirplaneMode` and **no** `setWifiEnabled` at all — an
+absent method beside a `false` flag is a complete backend, and a stub beside it is one under
+construction. It is also the repository's first registered manifest with a capability declared
+`false`, so `set_wifi` and `set_airplane_mode` over a lease on a real simulator are the first
+`missing-capability` refusals in this project that come from a device rather than from a synthetic
+backend — asserted as such in `tests/device/ios-simulator/verb-dispatch.test.ts`.
 
 **`DeviceKey` has four members and iOS answers two and a half.**
 
@@ -654,6 +724,46 @@ full factory reset if state restoration ever needs one.
     would remove the trap is a streaming read keeping a rolling tail of `maxEntries + 1` lines,
     which is a runner `src/backends/ios-simulator/simctl.ts` does not have (PROJECT.md R45).
 
+12. **A recording on a simulator that is not booted reports success at every step and writes
+    nothing.** This is the sharpest trap in the document, because unlike trap 1 there is no
+    failure to notice: measured on this section's own bench (macOS 26.6.2 / Xcode 26.6,
+    2026-09-08) against a `Shutdown` iPhone 17, `simctl io <udid> recordVideo` printed
+    `Recording started` at **0.228 s** — the marker the whole start wait is built on — ran for the
+    twelve seconds it was left, and on `SIGINT` exited **0** with `Recording completed. Writing to
+    disk.` and `Wrote video to: …`, leaving a **zero-byte file**. Every signal the tool gives says
+    it worked. Nothing downstream can catch it, so the device's state has to be checked *before*
+    the recorder is started, the way trap 1 is checked — and here the check is not an optimisation
+    but the only thing between a caller and a recording of nothing
+    (`IosSimulatorDeviceBackend.recordVideo`, #230).
+
+13. **`SIGKILL` on a recorder leaves CoreSimulator holding that device's recording lock, and only
+    a shutdown and a re-boot clears it.** `simctl help io` says to stop a recording with `SIGINT`
+    — *"simctl exits once the in-flight frames are processed and the video file is finalized"* —
+    and what a kill does instead is worse than a lost recording, measured on the same bench: the
+    killed process goes, the **encoder keeps writing**, and every later `simctl io <udid>
+    recordVideo` on that device fails at exit **16** with *"Host recording is already in
+    progress"* with no process left to signal. Nothing short of `simctl shutdown` + `boot` on the
+    operator's device releases it. So `SIGINT` is the only signal this backend ever sends, on
+    every path including the `finally` of a wait that timed out, and any test or script that
+    cleans up a recorder must do the same — a `kill -9` breaks the *next* run rather than this
+    one. Related: exit **17**, *"cannot save recorded video output into a file that already
+    exists"*, is what a leftover file produces, which is why the file is removed before every
+    recording rather than `--force`-d over.
+
+14. **Matching a recorder in `ps` needs the program as well as the arguments, and the program is
+    not the path that was spawned.** Two halves, both measured here. *The program:* a scan for the
+    token sequence `io <udid> recordVideo` alone matched the **capturing agent's own shell**,
+    whose arguments contained a script discussing that command line — and it would then have been
+    sent a `SIGINT`. So the first token's basename has to be `simctl` too, and the committed
+    capture `recordvideo-ps.recording.xcode26.6.txt` holds one real recorder and one deliberate
+    near miss for exactly that reason. *The path:* `<developer-dir>/usr/bin/simctl` is a **bash
+    shim** that `exec`s
+    `/Library/Developer/PrivateFrameworks/CoreSimulator.framework/…/bin/simctl`, so the running
+    process reports the CoreSimulator path even though the backend spawned the Xcode one —
+    comparing against the spawned path would match nothing at all. `exec` preserves the pid, so
+    the pid this host spawned *is* the pid in the table. (`ps` escapes a newline inside an argv as
+    `\012`, so one process really is one line — checked against a process deliberately given one.)
+
 ---
 
 ## 9. Two claims in `ai/ARCHITECTURE.md` this evidence corrects
@@ -677,8 +787,10 @@ second program with its own lifecycle, and `record_video` really is a simulator-
 
 ## 10. Recommendation
 
-**Build `src/backends/ios/` as a simulator backend, on `simctl` + idb's gRPC, and declare
-`canControlNetwork: false`.** Manifest:
+**Build `src/backends/ios-simulator/` as a simulator backend, on `simctl` + idb's gRPC, and declare
+`canControlNetwork: false`.** The folder was written `src/backends/ios/` here and is corrected in
+place: a backend's folder is its platform id, and the id this argues for two paragraphs down is
+`ios-simulator`. Manifest, once every step below has landed:
 
 ```ts
 { platform: 'ios-simulator', label: 'iOS Simulator (simctl + idb)',
@@ -697,6 +809,20 @@ In order, and each step is independently useful:
    `simctl list` polling for `watchDevices`. That is every required method and two capabilities,
    with **no third-party dependency at all** — and it is the version worth having even if idb is
    never adopted.
+
+   **Done** (#213, #214, #218–#220, #227–#230, `PROJECT.md` R45), and the manifest as it actually
+   shipped departs from the sketch above in one place — the **label**:
+
+   ```ts
+   { platform: 'ios-simulator', label: 'iOS Simulator (simctl)',
+     capabilities: { canReadScreen: false, canInput: false, canControlNetwork: false,
+                     canRecordVideo: true, canControlRecording: true } }
+   ```
+
+   `(simctl)` rather than `(simctl + idb)` on purpose: there is no idb in this backend, and a
+   label naming one would promise a `readScreen` and an input vocabulary it does not have. The two
+   `false` flags that are *not* `canControlNetwork` are the honest opt-outs step 2 and step 3 flip
+   — until then, an absent method beside a `false` flag is a complete backend.
 2. **Add idb**: `readScreen`, `tap`, `swipe`, `typeText`, `pressKey`, and swap `watchDevices` onto
    `--notify`. Talk gRPC from Node, supervise one companion per target, never call `file push`,
    and classify a companion crash as an interruption rather than a device fault.
