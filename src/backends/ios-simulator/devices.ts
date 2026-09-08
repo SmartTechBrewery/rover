@@ -1,11 +1,18 @@
 /**
- * The mapping from `simctl`'s device listing onto the neutral `Device[]` of
+ * The mapping from this platform's device vocabularies onto the neutral `Device[]` of
  * `src/core/device.ts`.
  *
  * Its own pure module rather than private helpers inside a backend class — which is where
  * the Android equivalents live — because there is no backend class here yet: this layer
  * ships with **no process spawning and no registration** at all, so what it is is a
- * function from two parsed listings to a validated inventory.
+ * function from parsed listings to a validated inventory.
+ *
+ * **Two sources, one file.** {@link toDevices} reads `simctl list`'s two listings and
+ * {@link toNotifiedDevices} reads one frame of `idb_companion --notify`. They live together
+ * because they have to agree about three things — this backend's platform id, what `ready`
+ * means, and the attachment — and a second module would be a second place for each of those to
+ * be decided. Where they cannot agree, this file is where the reconciliation is written down and
+ * argued: `osVersion` is the one that needed it.
  *
  * The platform's vocabulary stops at this file. Everything above it sees only
  * `Device`, and `DeviceSchema.parse` on every result is what makes that a checked claim
@@ -14,6 +21,7 @@
 
 import { type Device, DeviceSchema, type DeviceState } from '../../core/device.js';
 import { SIMULATOR_ATTACHMENT } from './attachment.js';
+import type { IdbTarget, IdbTargetList } from './parsers/idb-notify.js';
 import type {
 	SimctlDevice,
 	SimctlDeviceList,
@@ -40,21 +48,40 @@ const IOS_PLATFORM = 'iOS';
 /** The one state token that means a verb can run on this device. */
 const BOOTED_STATE = 'Booted';
 
+/** The one `type` an idb target may carry and still be a device this backend addresses. */
+const SIMULATOR_TARGET_TYPE = 'Simulator';
+
+/**
+ * How idb spells the platform in front of a target's version — `iOS 26.5`, where `simctl`'s
+ * runtime reports a bare `26.5` for that same runtime.
+ *
+ * Captured on `idb_companion` v1.5.2 / Xcode 26.6 / iOS 26.5, 2026-09-08
+ * (`tests/fixtures/ios-simulator/README.md`). The trailing space is part of the pattern: it is
+ * what separates the platform word from the version, and a target whose `os_version` is just
+ * `iOS` names no version at all.
+ */
+const IOS_VERSION_PREFIX = `${IOS_PLATFORM} `;
+
 /**
  * `Booted` is the only `ready`; everything else is `offline`.
+ *
+ * **One rule for both sources**, which is why it takes a bare token rather than one source's
+ * entry: `simctl list` and `idb_companion --notify` print the same state words for the same
+ * device, and the moment they were read separately a lease grant and the watch could disagree
+ * about whether one device is usable.
  *
  * **`unauthorized` is unreachable here, and that is worth a sentence.** A simulator has no
  * pairing prompt, so nothing this module enumerates can be in that state — the neutral
  * value exists for hardware this backend does not admit (`./attachment.js`). Everything
- * that is not `Booted` collapses to `offline` because the token list `simctl` can print
+ * that is not `Booted` collapses to `offline` because the token list these tools can print
  * (`Shutdown`, `Booting`, `Shutting Down`, `Creating`, …) is longer than the fixtures pin
  * (`tests/fixtures/ios-simulator/README.md`) and the conservative answer for an unpinned
  * token is the true one either way: visible to the host, and no verb can run on it. A
  * `Booting` device in particular is not usable — capture on a device that is not `Booted`
  * hangs for a minute and then fails (`docs/IOS.md` §8, trap 1).
  */
-function toDeviceState(entry: SimctlDevice): DeviceState {
-	return entry.state === BOOTED_STATE ? 'ready' : 'offline';
+function toDeviceState(state: string): DeviceState {
+	return state === BOOTED_STATE ? 'ready' : 'offline';
 }
 
 /**
@@ -85,7 +112,7 @@ function toDevice(entry: SimctlDevice, runtime: SimctlRuntime | undefined): Devi
 		model: entry.name,
 		osVersion: runtime?.version ?? null,
 		osApiLevel: null,
-		state: toDeviceState(entry),
+		state: toDeviceState(entry.state),
 		attachment: SIMULATOR_ATTACHMENT,
 	});
 }
@@ -122,6 +149,91 @@ export function toDevices(devices: SimctlDeviceList, runtimes: SimctlRuntimeList
 		for (const entry of entries) {
 			mapped.push(toDevice(entry, runtime));
 		}
+	}
+
+	return mapped;
+}
+
+/**
+ * The version alone, out of the platform-qualified spelling idb reports — or `null` when the value
+ * is not that shape.
+ *
+ * **This is the one real trap in this mapping.** `simctl`'s runtime reports `26.5` while the idb
+ * target for the same device reports `iOS 26.5`. If the watch published one spelling and
+ * `listDevices` the other, `list_devices` and the inventory would disclose two different OS
+ * versions for one device — the disagreement `deviceInfo`'s `model` note already refuses on the
+ * model field. So this path is normalised onto the other one rather than the other way round:
+ * `simctl`'s answer is what a lease grant re-verifies against (D6), and stripping a prefix is a
+ * claim that can be checked while inventing one is not.
+ *
+ * A value that is not the expected shape answers `null` rather than a guess. It does **not** reach
+ * a device with a `null` version, though — {@link toNotifiedDevices} drops that target, because on
+ * this path the platform word is also the only evidence there is about which platform the target
+ * belongs to. The two are the same fact read for two purposes, which is why the exclusion is
+ * argued there rather than here.
+ */
+function toNotifiedOsVersion(target: IdbTarget): string | null {
+	if (!target.os_version.startsWith(IOS_VERSION_PREFIX)) return null;
+	const version = target.os_version.slice(IOS_VERSION_PREFIX.length);
+	return version === '' ? null : version;
+}
+
+/**
+ * Every target of one `idb_companion --notify` frame that this platform id addresses, mapped onto
+ * the neutral shape.
+ *
+ * A second entry point beside {@link toDevices} rather than a module of its own, because the two
+ * have to agree about three things — the platform id, what `ready` means and the attachment — and
+ * a second module would be a second place for each of them to be decided.
+ *
+ * **Only a simulator under an iOS runtime is admitted, and it is an allowlist.** idb enumerates
+ * physical targets as well as simulators, and a physical iPhone is outside this backend
+ * entirely: it cannot answer `screenshot`, which is a *required* method rather than a gated
+ * capability (`docs/IOS.md` §6), and `./attachment.js` records that a paired-but-absent iPhone is
+ * served by this platform's tooling by default, forever. An allowlist rather than a blocklist
+ * because the direction of the mistake is not symmetric — an unrecognised target excluded is a
+ * device this host declines to lend, while one admitted by default is D18's
+ * two-agents-one-device failure wearing a disguise.
+ *
+ * The two conditions are separate on purpose: `type` excludes hardware, and the `iOS ` prefix
+ * excludes a watchOS or tvOS simulator, which is the same exclusion {@link toDevices} makes from
+ * the runtime's `platform` field. A target failing either is dropped rather than reported with a
+ * `null` version — where an unresolved *runtime* leaves a device this host can see (so it is
+ * reported), an unrecognised platform word is the evidence that it is not this platform's device.
+ *
+ * `DeviceSchema.parse` on the way out, as {@link toDevices} does: the platform's vocabulary stops
+ * at this file, and that call is what makes it a checked claim rather than a convention.
+ */
+export function toNotifiedDevices(targets: IdbTargetList): Device[] {
+	const mapped: Device[] = [];
+
+	for (const target of targets) {
+		if (target.type !== SIMULATOR_TARGET_TYPE) continue;
+
+		const osVersion = toNotifiedOsVersion(target);
+		if (osVersion === null) continue;
+
+		mapped.push(
+			DeviceSchema.parse({
+				serial: target.udid,
+				platform: IOS_SIMULATOR_PLATFORM_ID,
+				// `name`, not `model`: the same field under the same name as on the simctl path, and
+				// operator-chosen on both. idb reports the device type separately as `model`, which
+				// `simctl list devices` does not carry at all — taking it here would make the two paths
+				// disagree about one device the moment anyone renames a simulator.
+				model: target.name,
+				osVersion,
+				// This platform has no API level, on either path.
+				osApiLevel: null,
+				// The same predicate the simctl path uses, not a second copy of the rule: two device
+				// sources that disagreed about what `ready` means would make a lease grant and the
+				// watch disagree about one device, which is the failure D6's re-verification exists to
+				// catch rather than to tolerate. The token spellings match — the notify capture carries
+				// `Booted`, `Booting`, `Shutting Down` and `Shutdown`, the same words `simctl` prints.
+				state: toDeviceState(target.state),
+				attachment: SIMULATOR_ATTACHMENT,
+			}),
+		);
 	}
 
 	return mapped;

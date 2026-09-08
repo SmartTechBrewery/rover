@@ -417,11 +417,47 @@ Worth knowing about only for §5's `recents` gap and as the fallback if idb ever
 the dependency is **alive**, which is the part worth updating:
 
 - Release **v1.5.2 on 2026-09-01**; commits landing the day this was written (2026-09-08); repo not
-  archived. The private headers in it are annotated against **Xcode 26.2**.
+  archived. The private headers in it are annotated against **Xcode 26.2**. **v1.5.4 was published
+  later the same day** — which is how alive this dependency is, and why a fixture here carries the
+  companion version in its filename and a newer one is a second fixture beside it rather than an
+  edit to it. Everything measured below is v1.5.2.
 - It ships a **prebuilt `idb-companion.macos-arm64.tar.gz`** and an `arm64_tahoe` Homebrew bottle.
   Nothing was compiled to get the results above; the tarball was unpacked into a scratch directory
   and run in place. `brew` no longer carries `idb-companion` in core — the old `facebook/fb` tap is
   gone — so the release asset is the install path.
+- **That install has now been performed in this repository's own bench**, on 2026-09-08, and this
+  bullet is the report of it rather than of somebody else's machine. v1.5.2's asset was fetched,
+  checksummed against the release's own `.sha256`
+  (`f17b718a513931705542a7fbfa9cfc11895ee191562c9ffd2343cf7f8254bc08`) and unpacked into a scratch
+  directory, and `ROVER_IDB_COMPANION_PATH` was pointed at the binary in place. Nothing was
+  installed into a shared prefix, and nothing from the tarball is in the repository. The unpacked
+  tree is `idb_companion` and `idb-repl` beside a `Resources/` directory and three
+  `swift-*.bundle`s — so the binary **cannot be moved out on its own**, which is a second reason
+  the search takes the operator's path verbatim rather than appending a name to a directory.
+  ```bash
+  curl -LO https://github.com/facebook/idb/releases/download/v1.5.2/idb-companion.macos-arm64.tar.gz
+  curl -LO https://github.com/facebook/idb/releases/download/v1.5.2/idb-companion.macos-arm64.tar.gz.sha256
+  shasum -a 256 -c idb-companion.macos-arm64.tar.gz.sha256
+  tar xzf idb-companion.macos-arm64.tar.gz
+  export ROVER_IDB_COMPANION_PATH="$PWD/idb_companion"
+  ```
+- **`--version` does not print a version.** Measured here on the v1.5.2 asset: it writes
+  `{"build_date":"Sep 1 2026","build_time":"08:51:20"}` to stdout and exits 0, and the build date
+  is the only thing in it. So the version a capture is pinned to is the **release tag it was
+  downloaded from**, not something the program can be asked for, and
+  `tests/fixtures/ios-simulator/` records it that way. `--help` lists the mode flags and exits;
+  neither was measured for side effects, which is why
+  `src/backends/ios-simulator/idb-companion-path.ts` accepts a candidate on the filesystem rather
+  than by running it.
+- **`--notify stdout` writes one JSON array per line, newline-terminated**, and each line is the
+  full current set — confirmed here, not only in §7. The target shape is six keys:
+  `{"udid","type","name","model","os_version","state"}`, with `type` `Simulator`, `state` the same
+  words `simctl` prints (`Booted`, `Booting`, `Shutting Down`, `Shutdown`) and **`os_version`
+  carrying the platform word** — `iOS 26.5`, where `simctl`'s runtime reports a bare `26.5` for
+  that same runtime. Key order varies between frames. The capture is committed as
+  `tests/fixtures/ios-simulator/idb-notify.idbcompanion1.5.2-xcode26.6-ios26.5.txt`, and the
+  spelling difference is why `src/backends/ios-simulator/devices.ts` normalises this path's
+  version onto `simctl`'s rather than publishing two spellings for one device.
 - The Python client is a convenience, not the interface. The companion is a **gRPC server**
   (`--grpc-port`), which is what a Node backend would speak, dropping the Python dependency and the
   ~70 ms per-call CLI startup entirely.
@@ -611,6 +647,11 @@ full current set: once on subscription, and again on every change. Never a delta
 simulator produced exactly three updates, `Shutdown → Booting → Booted`, with no polling anywhere.
 So iOS enumeration is *not* condemned to a poll; `simctl list` is the poll, and it is the fallback,
 not the design.
+
+The framing and the target's key set are §4's, measured on this repository's own bench and
+committed as `tests/fixtures/ios-simulator/idb-notify.idbcompanion1.5.2-xcode26.6-ios26.5.txt`: one
+JSON array per line, newline-terminated, each line the full set. Nothing drives that stream yet —
+`watchDevices` still polls `simctl list`.
 
 **D18 is harder on iOS than on Android, and the field that decides it is `transportType`.**
 `devicectl list devices` on this machine — with no phone plugged in and none nearby — reported:
