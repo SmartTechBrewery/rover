@@ -2548,6 +2548,11 @@ describe('a label on a lease with no group', () => {
 		// which call to change and how.
 		expect(answer.message).toContain("'label'");
 		expect(answer.message).toContain("'groupId'");
+		// **The round trip, not "the same one every time"** (#205): the host mints the id it files,
+		// so an agent that reuses the name it typed gets one group per run — the exact failure the
+		// mint exists to remove, arrived at by following the host's own advice.
+		expect(answer.message).toContain('mints');
+		expect(answer.message).toContain('answers with it');
 	});
 
 	it('is refused for all four of the calls that carry one', async () => {
@@ -2799,18 +2804,33 @@ describe('an artifact-producing verb also writes the host-side archive', () => {
 	 * The lease half, end to end and after the lease has ended — which is the criterion the issue
 	 * turns on: **a reader can still recover which runs share a group**. Read off the tree with the
 	 * lease already released, so nothing in the daemon's memory is doing the answering.
+	 *
+	 * What is filed is the id the **host** minted, not the name the caller typed (#205), and it is
+	 * asserted against the grant's own answer rather than against a literal — a run whose
+	 * `group_id.json` said something the grant did not is the round trip broken at the disk.
 	 */
 	it('leaves the group recoverable in the tree once the lease has been released', async () => {
 		await serve();
 		const client = await connect();
-		const leaseId = await acquire(client, 'home-screen', 'app-bar-top-space');
+		const granted = await client.request('acquire_device', {
+			serial: SERIAL,
+			owner: 'issue-21',
+			project: 'rover',
+			testName: 'home-screen',
+			groupId: 'app-bar-top-space',
+		});
+		if (granted.outcome !== 'granted') {
+			throw new Error(`The test needs a lease and was refused: ${granted.message}`);
+		}
+		const { leaseId, groupId } = granted.lease;
+		expect(groupId).not.toBe('app-bar-top-space');
 		await client.request('screenshot', { leaseId, label: 'home-screen' });
 
 		await client.request('release_device', { leaseId });
 
 		const directory = await leaseDirectory('rover', 'home-screen');
 		expect(JSON.parse((await readFile(join(directory, 'group_id.json'))).toString())).toEqual({
-			groupId: 'app-bar-top-space',
+			groupId,
 		});
 	});
 

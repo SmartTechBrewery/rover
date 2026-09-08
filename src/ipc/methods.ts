@@ -177,6 +177,9 @@ export const LeaseHolderSchema = z
 		 * about it, which is the whole reason one projection builds this shape
 		 * (`src/daemon/lease-holder.ts`). It attributes and authorizes nothing: knowing which
 		 * investigation holds a device is not a way to join it.
+		 *
+		 * It is the **filed** id, the same string the holder's own grant answered with (#205), so a
+		 * listing and a grant cannot name one investigation two ways either.
 		 */
 		groupId: z.string().optional(),
 		/**
@@ -333,24 +336,45 @@ export const TEST_DESCRIPTION_MAX_LENGTH = 1024;
 export const TestDescriptionSchema = z.string().min(1).max(TEST_DESCRIPTION_MAX_LENGTH);
 
 /**
- * The lease's fifth caller-supplied string — `group_id` (D22, as amended #150) — and **the one
- * that spans leases**. Several leases carrying one `groupId` are one investigation: the run
- * before a change and the run after it, and nothing stops there being a third and a fourth.
+ * The lease's fifth caller-supplied string — `group_id` (D22, as amended #150 and #205) — and
+ * **the one that spans leases**. Several leases carrying one `groupId` are one investigation: the
+ * run before a change and the run after it, and nothing stops there being a third and a fourth.
  *
- * {@link AttributionStringSchema}'s bound and shape, because that is what it is: an identifier
- * the caller chose, opaque, stored as given, parsed by nothing, derived from nothing and
- * authorizing nothing (D20). It is deliberately **not** {@link TestDescriptionSchema}'s — this is
- * a name to match on, not prose to read.
+ * {@link AttributionStringSchema}'s bound, because that is what it is: a short identifier rather
+ * than prose, so deliberately **not** {@link TestDescriptionSchema}'s.
  *
- * **Nothing enforces arity, uniqueness or membership.** One lease may be the only member of its
- * group and a group may have seven; nothing checks that a second member ever arrives, nothing
- * refuses a group id another lease already used, and nothing anywhere counts them. A group is a
- * claim the caller makes, and the host records it.
+ * **The one attribution string the host contributes part of** (#205). The caller names the
+ * investigation and the host decides the id that is filed: a name with no separator in it is
+ * *minted* — `.` and a short high-entropy suffix appended — and an id the host already minted is
+ * taken *verbatim*, which is how the second, third and seventh lease of one investigation join
+ * it. A name that contains the reserved separator is refused in the host's own words, naming the
+ * field, rather than quietly rewritten or minted a second time. `src/daemon/group-id.ts` is that
+ * whole policy, and it is where the rest of the reasoning lives.
+ *
+ * **The shape rule is deliberately not a `.refine()` here.** This schema is also what parses
+ * `group_id.json` back off the disk (`GroupIdFileSchema`, `src/daemon/list-archive-groups.ts`)
+ * and what types {@link ArchiveGroupSchema}'s `groupId` on the wire, so a refinement rejecting
+ * the separator would make every minted id unreadable on the way back out — the grouping view
+ * silently losing exactly the runs this field files. The bound stays on the schema; the mint
+ * stays in the daemon, at the one point the decision is made.
+ *
+ * **What the host still does not do.** It never reads what the string *says*, never derives one
+ * from who authenticated or from any context (D20), never checks one against another lease and
+ * reads nothing out of the archive to decide — uniqueness comes from the minted bytes, not from a
+ * lookup, so the daemon still holds nothing it cannot re-derive (D6).
+ *
+ * **Nothing enforces arity or membership.** One lease may be the only member of its group and a
+ * group may have seven; nothing checks that a second member ever arrives, and nothing anywhere
+ * counts them. What *has* changed is only the sentence that used to sit here — that nothing
+ * refuses a group id another lease already used: two callers who type one name are now two
+ * groups, because each is minted its own id. Nothing is retroactive, and no `group_id.json`
+ * already on disk is rewritten.
  *
  * **Optional, and absent stays absent** — no empty string standing in and no group invented for a
- * caller who supplied none (#129's lesson). What it costs a caller to leave it out is stated
- * exactly once, on the wire: an artifact `label` is then refused, because a label only means
- * something inside a group (`ArtifactLabelSchema`, `src/daemon/verb-handlers.ts`).
+ * caller who supplied none (#129's lesson): a caller who sends nothing is minted nothing. What it
+ * costs a caller to leave it out is stated exactly once, on the wire: an artifact `label` is then
+ * refused, because a label only means something inside a group (`ArtifactLabelSchema`,
+ * `src/daemon/verb-handlers.ts`).
  */
 export const GroupIdSchema = AttributionStringSchema;
 
@@ -391,9 +415,10 @@ export const AcquireDeviceParamsSchema = z
 		 */
 		testDescription: TestDescriptionSchema.optional(),
 		/**
-		 * Which investigation this lease is part of — optional, and shared with every other lease
-		 * that belongs to the same one. See {@link GroupIdSchema}; it is the field an artifact
-		 * `label` needs, and the only thing a caller gives up by leaving it out.
+		 * Which investigation this lease is part of — optional, and **the name you choose or an id
+		 * the host already minted**: a plain name is minted into the id that is filed, and a minted
+		 * id is taken verbatim so this lease joins that group. See {@link GroupIdSchema}; it is the
+		 * field an artifact `label` needs, and the only thing a caller gives up by leaving it out.
 		 */
 		groupId: GroupIdSchema.optional(),
 	})
@@ -427,6 +452,10 @@ export const GrantedLeaseSchema = z
 		 * The group this lease was put in, or absent — echoed back for `testDescription`'s reason
 		 * and one of its own: it is what the *next* lease in the comparison has to be given, so a
 		 * caller reading this answer is reading the string it will pass again.
+		 *
+		 * **This is the id that landed, which is not necessarily what was sent** (#205): a name is
+		 * minted here into `<name>.<suffix>` and only an already-minted id comes back byte for byte.
+		 * So it is read off the grant rather than assumed — see {@link GroupIdSchema}.
 		 */
 		groupId: z.string().optional(),
 		expiresInMs: z.number().int().nonnegative(),
@@ -463,6 +492,25 @@ export const AcquireRefusalReasonSchema = z.enum([
 	 * it is simply full.
 	 */
 	'no-slot',
+	/**
+	 * The `groupId` contains `.`, which the host reserves as the separator between the name a
+	 * caller chose and the suffix the host mints onto it (#205, `src/daemon/group-id.ts`) — and
+	 * the value is not an id this host minted, so it cannot be an existing group being joined.
+	 *
+	 * `label-without-group`'s shape (`src/ipc/verb-methods.ts`), mirrored onto this surface: the
+	 * caller's mistake, named, rather than a quiet rewrite or a second mint appended to what was
+	 * sent. The `message` names the field, says the separator is how a run joins an existing
+	 * group, and says what to send instead. Nothing was granted and no device was taken.
+	 */
+	'separator-in-group-id',
+	/**
+	 * The `groupId` is a name too long to mint an id from within {@link ATTRIBUTION_MAX_LENGTH}
+	 * (#205). Refused by name rather than truncated, because a shortened name is a *different*
+	 * group — silently filing this run under one would be the quiet corruption of exactly the
+	 * pairing the field exists to make trustworthy. The `message` gives the longest name that
+	 * still mints.
+	 */
+	'group-id-too-long',
 ]);
 export type AcquireRefusalReason = z.infer<typeof AcquireRefusalReasonSchema>;
 

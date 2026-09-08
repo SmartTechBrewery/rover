@@ -127,12 +127,14 @@ describe('what tools/list advertises', () => {
 	});
 
 	/*
-	 * The second optional argument on that row (D22, as amended #150), and the declaration is where
-	 * an agent discovers it: the whole issue turns on an agent asked to compare a before and an
-	 * after arriving at these fields **without a human naming them**, so the description has to
-	 * teach the pattern rather than merely announce the key.
+	 * The second optional argument on that row (D22, as amended #150 and #205), and the declaration
+	 * is where an agent discovers it: the whole issue turns on an agent asked to compare a before
+	 * and an after arriving at these fields **without a human naming them**, so the description has
+	 * to teach the pattern rather than merely announce the key — and since #205 the pattern is a
+	 * **round trip**, so it has to name `lease.groupId` as the thing to pass again. An agent that
+	 * reuses its own name a second time files two groups and gets no comparison.
 	 */
-	it('declares acquire_device’s groupId, never as a requirement, and teaches the pattern', async () => {
+	it('declares acquire_device’s groupId, never as a requirement, and teaches the round trip', async () => {
 		const tools = await advertisedTools();
 
 		const acquire = tools.find((tool) => tool.name === 'acquire_device');
@@ -144,6 +146,10 @@ describe('what tools/list advertises', () => {
 		expect(acquire?.description).toContain('label');
 		expect(acquire?.description).toMatch(/before and an after/);
 		expect(acquire?.description).toMatch(/three or more/);
+		// The round trip: the host mints, the grant answers, and *that* string is passed again.
+		expect(acquire?.description).toContain('lease.groupId');
+		expect(acquire?.description).toMatch(/host mints the id/);
+		expect(acquire?.description).toMatch(/verbatim/);
 	});
 
 	/*

@@ -1,7 +1,16 @@
 import { describe, expect, it } from 'vitest';
 import { variantOf, variantPhrase } from './variant-name.js';
 
-const GROUP = 'statistics-deliveries';
+/**
+ * A group id in the shape the host actually files since #205 — the investigation's name, the
+ * reserved separator and the minted suffix. Every case below runs against this rather than against
+ * a bare name, because a bare name is no longer what `list_archive_groups` answers with for a group
+ * filed today.
+ */
+const GROUP = 'statistics-deliveries.h57ssn4';
+
+/** The same investigation as it was filed before #205, which no archive rewrote. */
+const UNMINTED_GROUP = 'statistics-deliveries';
 
 /**
  * **What is read out of a test name, and it is as little as will answer the question.** A test name
@@ -9,10 +18,22 @@ const GROUP = 'statistics-deliveries';
  * something Rover holds — the group id — or falls back to the caller's own word.
  */
 describe('the arm a test name names', () => {
-	// The common case: the arms of one group are sibling test names under the group's own name.
-	it('is the test name with the group’s own id taken off the front', () => {
-		expect(variantOf(`${GROUP}_variantA`, GROUP)).toBe('variantA');
-		expect(variantOf(`${GROUP}_variantB`, GROUP)).toBe('variantB');
+	/*
+	 * The common case: the arms of one group are sibling test names under the investigation's own
+	 * name, and the id the host filed carries a suffix the caller never typed into a test name — so
+	 * it is the id's **name half** that comes off the front (#205).
+	 */
+	it('is the test name with the group’s own name taken off the front', () => {
+		expect(variantOf(`${UNMINTED_GROUP}_variantA`, GROUP)).toBe('variantA');
+		expect(variantOf(`${UNMINTED_GROUP}_variantB`, GROUP)).toBe('variantB');
+	});
+
+	/*
+	 * **An archive written before #205 is not rewritten**, so its group ids carry no suffix and the
+	 * whole id is still what comes off the front. That is why the whole id is tried first.
+	 */
+	it('takes off the whole id of a group filed before the host minted them', () => {
+		expect(variantOf(`${UNMINTED_GROUP}_variantA`, UNMINTED_GROUP)).toBe('variantA');
 	});
 
 	/*
@@ -21,6 +42,7 @@ describe('the arm a test name names', () => {
 	 * of it on the front of every arm.
 	 */
 	it('takes off a group id that has an underscore of its own', () => {
+		expect(variantOf('stats_deliveries_variantA', 'stats_deliveries.h57ssn4')).toBe('variantA');
 		expect(variantOf('stats_deliveries_variantA', 'stats_deliveries')).toBe('variantA');
 	});
 
@@ -41,8 +63,8 @@ describe('the arm a test name names', () => {
 
 	// Nothing normalises it: what comes back is a slice of the caller's own string (D22).
 	it('keeps the arm exactly as the caller named it', () => {
-		expect(variantOf(`${GROUP}_ Variant A `, GROUP)).toBe(' Variant A ');
-		expect(variantOf(`${GROUP}_VARIANT_a`, GROUP)).toBe('VARIANT_a');
+		expect(variantOf(`${UNMINTED_GROUP}_ Variant A `, GROUP)).toBe(' Variant A ');
+		expect(variantOf(`${UNMINTED_GROUP}_VARIANT_a`, GROUP)).toBe('VARIANT_a');
 	});
 
 	// A group id of nothing matches nothing, rather than matching the front of every name.

@@ -41,6 +41,13 @@
  * It cannot run before the insert: a caller who is about to be refused `held` would otherwise
  * start — and then stop — the services of whoever actually holds the device.
  *
+ * **The group id is resolved above every await** (#205, `./group-id.ts`). The caller names an
+ * investigation and the host decides the id that is filed, so `leases.acquire` is handed the
+ * host's string and never `params.groupId` — which is what makes "the grant echoes the id that
+ * landed" structural rather than a claim, since every downstream reader takes it from the stored
+ * lease. The resolution is synchronous and adds no `await`, so it is free under the ordering rule
+ * above; the two refusals it can produce happen before the device is touched, leaving it free.
+ *
  * **A refusal is data.** `verifyForGrant` throws for the two cases it exists to detect — the
  * device vanished (D6), the device belongs to another host (D18) — and both are caught here
  * and turned into an answer. An agent told `internal_error` learns nothing it can act on; an
@@ -74,6 +81,7 @@ import type {
 	ReleaseDeviceParams,
 	ReleaseDeviceResult,
 } from '../ipc/methods.js';
+import { resolveGroupId } from './group-id.js';
 import type { DeviceInventory } from './inventory.js';
 import { toLeaseHolder } from './lease-holder.js';
 import type { Lease, LeaseStore } from './leases.js';
@@ -121,6 +129,16 @@ export function createLeaseHandlers(
 
 	return {
 		async acquire_device(params: AcquireDeviceParams): Promise<AcquireDeviceResult> {
+			// Above every await, because it is knowable from the params alone and because what comes
+			// out of here — not what came in — is what the store holds, the grant echoes, a listing
+			// discloses and the archive files (#205, `./group-id.ts`). Refusing it before the device
+			// is touched costs the caller nothing beyond the round trip they had already spent, and
+			// leaves the device free: `label-without-group`'s precedent.
+			const group = filedGroup(params.groupId);
+			if ('refused' in group) {
+				return group.refused;
+			}
+
 			// The first await. The inventory is a cache and the platform is the truth, so the
 			// grant re-verifies rather than reading what was last seen (D6).
 			let device: Device;
@@ -186,7 +204,8 @@ export function createLeaseHandlers(
 				project: params.project,
 				testName: params.testName,
 				testDescription: params.testDescription,
-				groupId: params.groupId,
+				// The host's id, never the caller's name — resolved at the top of this handler.
+				groupId: group.groupId,
 				slot,
 			});
 
@@ -302,6 +321,27 @@ export function createLeaseHandlers(
 }
 
 /**
+ * The group id this lease is filed under, or the refusal to answer with (#205, `./group-id.ts`).
+ *
+ * Its own function so `acquire_device`'s body stays the straight line this module's ordering
+ * doctrine is read from: it takes no decision of its own — `resolveGroupId` is the policy — adds
+ * no `await`, and cannot throw. **Absent is carried through as absent**, never as an empty string
+ * and never as a group invented for a caller who named none (#129's lesson).
+ */
+function filedGroup(
+	supplied: string | undefined,
+): { readonly groupId: string | undefined } | { readonly refused: AcquireDeviceResult } {
+	if (supplied === undefined) {
+		return { groupId: undefined };
+	}
+	const decided = resolveGroupId(supplied);
+	return 'refusal' in decided
+		? // `heldBy: null` because only `held` has a holder to name.
+			{ refused: { outcome: 'refused', ...decided.refusal, heldBy: null } }
+		: { groupId: decided.groupId };
+}
+
+/**
  * What the winner of an acquire is handed — the lease it was granted, as `GrantedLeaseSchema`.
  *
  * Its own function rather than an object literal inside the handler, for `./lease-holder.ts`'s
@@ -325,6 +365,8 @@ function toGrantedLease(lease: Lease, leases: LeaseStore): GrantedLease {
 		...(lease.testDescription === undefined ? {} : { testDescription: lease.testDescription }),
 		// Also the string the caller passes again to put the next run of this comparison in the
 		// same group, which is why it is echoed rather than merely stored (D22, as amended #150).
+		// Read off the lease, so what is echoed is the id the host filed rather than the name that
+		// arrived — which is the whole of the round trip #205 turns on.
 		...(lease.groupId === undefined ? {} : { groupId: lease.groupId }),
 		expiresInMs: leases.remainingMs(lease),
 	};

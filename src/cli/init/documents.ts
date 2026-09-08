@@ -112,9 +112,10 @@ export function agentSnippet(documentPath: string): string {
 		'asking a human to tap something or shelling out to `adb`.',
 		'',
 		'When the ask is a **comparison** — "screenshot before and after", "prove the fix worked",',
-		'"show me what changed" — give every lease in it the same `groupId` and give the artifacts',
-		'being compared the same `label`. Without them the archive keeps the files and forgets they',
-		'were a pair.',
+		'"show me what changed" — name the investigation once in `groupId`, then give every later',
+		'lease in it the `groupId` the **first grant answered with** (the host mints the id and hands',
+		'it back), and give the artifacts being compared the same `label`. Without them the archive',
+		'keeps the files and forgets they were a pair.',
 		'',
 		`Read \`${documentPath}\` before the first call: it carries the lease loop, the verb set,`,
 		'and the rules that keep a run honest.',
@@ -283,8 +284,12 @@ function theLoop(facts: DocumentFacts): string[] {
 		'   directory, the operator sees it beside the device while you drive it, and the host files',
 		'   it with the run. `groupId` is optional too and is the one field here that spans leases:',
 		'   several leases sharing one are a single investigation, which is what "before and after"',
-		'   needs. **Every lease that shares a `groupId` with another ends its `testName` with its',
-		'   own variant letter** — `…_variantA` for the first run of the group, `…_variantB` for the',
+		'   needs. **You name the investigation and the host mints the id** — send a name and the',
+		'   grant answers with `lease.groupId`, your name with a short suffix on it; pass *that*',
+		'   exact string on every later lease of the comparison rather than typing your name again,',
+		'   which would file a second group. **Every lease that shares a `groupId` with another ends',
+		'   its `testName` with its own variant letter** — `…_variantA` for the first run of the',
+		'   group, `…_variantB` for the',
 		'   second, `…_variantC` for the third, and on in the order the runs happen — so each run is',
 		'   its own directory in the archive rather than a timestamp inside a shared one. A lease',
 		'   with no `groupId` is a single run and takes no suffix. See **Comparing two runs** below.',
@@ -324,6 +329,14 @@ function theLoop(facts: DocumentFacts): string[] {
  * purpose — `pathSegment` keeps `[A-Za-z0-9._-]` verbatim and hashes anything else, so an example
  * with spaces in it would produce a directory carrying a `-<hash>` the page never explains.
  *
+ * **The two calls carry two different `groupId`s, and that is the whole of the round trip** (#205).
+ * The host mints the id it files — the name the agent chose plus a separator and a short suffix —
+ * and hands it back on the grant, so the second call sends what came back rather than the name
+ * again. An example that showed one literal in both calls would now be teaching a group of one
+ * plus a second group nobody asked for, which is why this example is where R41's criterion is
+ * actually met: an agent that never learns the round trip does the comparison anyway and files
+ * unrelated artifacts.
+ *
  * Two runs because that is the common case, and the last line says three or more is equally
  * normal, because a reader shown exactly two will believe two is the rule.
  */
@@ -335,8 +348,12 @@ function beforeAndAfter(): string[] {
 		'"show me what changed" — two optional strings keep the pieces together after the leases',
 		'have ended, and the name each run carries is what tells them apart:',
 		'',
-		'- **`groupId` on `acquire_device`** — the runs. Every lease in one comparison gets the same',
-		'  one. You invent the string; nothing parses it.',
+		'- **`groupId` on `acquire_device`** — the runs. **You name the investigation once; the host',
+		'  mints the id and answers with it.** The grant comes back with `lease.groupId` set to what',
+		'  was actually filed — your name with a short suffix on it — and every later lease in the',
+		'  comparison carries *that* string, which is how it joins the same group. Typing your own',
+		'  name a second time files a second group instead, and a name containing `.` is refused,',
+		'  because `.` is the separator the host joins a run to a group with.',
 		'- **`testName` on `acquire_device`** — *this* run. Every lease that shares a `groupId` with',
 		'  another ends its name with a distinct variant letter, assigned in the order the runs',
 		'  happen: `…_variantA` for the first, `…_variantB` for the second, `…_variantC` for the',
@@ -355,24 +372,29 @@ function beforeAndAfter(): string[] {
 		'  the host, and anything outside `[A-Za-z0-9._-]` is rewritten.',
 		'',
 		'```jsonc',
-		'// before the change — the first run of the group, so _variantA',
+		'// before the change — the first run of the group, so _variantA. You send the name.',
 		'acquire_device { "serial": "…", "owner": "issue-150",',
 		'                 "testName": "app-bar-top-space_variantA", "groupId": "app-bar-top-space" }',
+		'// → the grant answers with the id the host filed. Keep it:',
+		'//   lease.groupId == "app-bar-top-space.h57ssn4"',
 		'screenshot     { "leaseId": "…", "label": "home-screen" }',
 		'release_device { "leaseId": "…" }',
 		'',
 		'// …make the change…',
 		'',
-		'// after it — a new lease, the same groupId and the same label, the next letter',
+		'// after it — a new lease carrying the id the first grant answered with, not your own',
+		'// name again; the same label, the next letter',
 		'acquire_device { "serial": "…", "owner": "issue-150",',
-		'                 "testName": "app-bar-top-space_variantB", "groupId": "app-bar-top-space" }',
+		'                 "testName": "app-bar-top-space_variantB",',
+		'                 "groupId": "app-bar-top-space.h57ssn4" }',
 		'screenshot     { "leaseId": "…", "label": "home-screen" }',
 		'release_device { "leaseId": "…" }',
 		'```',
 		'',
 		'Both are optional and neither authorizes anything. Three points of comparison are as normal',
-		'as two — reuse the same `groupId` for as many runs as the investigation needs, and advance',
-		'the letter each time — and nothing requires that a second run ever happens.',
+		'as two — pass the id the first grant answered with to as many runs as the investigation',
+		'needs, and advance the letter each time — and nothing requires that a second run ever',
+		'happens.',
 		'**A `label` needs a `groupId`**: send one on a lease that has no group and the call is',
 		'refused, naming both fields, rather than accepted with the label quietly dropped.',
 		'',

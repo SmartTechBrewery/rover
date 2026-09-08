@@ -3,7 +3,16 @@ import { describe, expect, it } from 'vitest';
 import { comparisonAt } from './label-comparison.js';
 
 const PROJECT = 'c-ai';
-const GROUP = 'statistics-deliveries';
+
+/** The investigation's name — the half of the group id an agent typed and can have put in a test name. */
+const INVESTIGATION = 'statistics-deliveries';
+
+/**
+ * The group id the host actually files since #205: the investigation's name, the reserved separator
+ * and the minted suffix. The fixtures run against this rather than a bare name, so the wiring is
+ * exercised against what `list_archive_groups` answers with for a group filed today.
+ */
+const GROUP = `${INVESTIGATION}.h57ssn4`;
 const SERIAL = 'R5CT30ABCDE';
 
 /**
@@ -12,8 +21,8 @@ const SERIAL = 'R5CT30ABCDE';
  * chronological inside it. So `variantB`'s run may be answered before `variantA`'s and still be the
  * later one — which is the case a reversal gets wrong and a sort does not.
  */
-const ARM_A = 'statistics-deliveries_variantA';
-const ARM_B = 'statistics-deliveries_variantB';
+const ARM_A = `${INVESTIGATION}_variantA`;
+const ARM_B = `${INVESTIGATION}_variantB`;
 const FIRST = '20260901T090000Z-issue-199-1111aaaa';
 const SECOND = '20260902T090000Z-issue-199-2222bbbb';
 const THIRD = '20260903T090000Z-issue-199-3333cccc';
@@ -36,6 +45,11 @@ function run(testName: string, name: string, labels: readonly string[]) {
 
 function group(...runs: readonly ReturnType<typeof run>[]): ArchiveGroup {
 	return { project: PROJECT, groupId: GROUP, runs: [...runs] };
+}
+
+/** The same group as an archive written before #205 holds it — the id carries no minted suffix. */
+function unmintedGroup(...runs: readonly ReturnType<typeof run>[]): ArchiveGroup {
+	return { project: PROJECT, groupId: INVESTIGATION, runs: [...runs] };
 }
 
 /** The address of the artifact a test selects — the archive's own path, with no group id in it. */
@@ -216,19 +230,40 @@ describe('the arm each pane names', () => {
 
 		const comparison = comparisonAt(groups, PROJECT, GROUP, addressOf(ARM_A, FIRST, DELIVERIES));
 
-		// The group's own id off the front of each — `statistics-deliveries_variantA` is `variantA`.
+		// The group id's name half off the front of each — `statistics-deliveries_variantA` in
+		// `statistics-deliveries.h57ssn4` is `variantA`. A whole minted id is never the front of a
+		// test name, which is the regression #205 introduced and this case is the call site's guard.
+		expect(comparison?.panes.map((pane) => pane.variant)).toEqual(['variantA', 'variantB']);
+	});
+
+	// An archive filed before #205 is not rewritten, so its whole group id is still what comes off.
+	it('carries each pane’s arm for a group filed before the host minted ids', () => {
+		const groups = [
+			unmintedGroup(run(ARM_A, FIRST, [DELIVERIES]), run(ARM_B, SECOND, [DELIVERIES])),
+		];
+
+		const comparison = comparisonAt(
+			groups,
+			PROJECT,
+			INVESTIGATION,
+			addressOf(ARM_A, FIRST, DELIVERIES),
+		);
+
 		expect(comparison?.panes.map((pane) => pane.variant)).toEqual(['variantA', 'variantB']);
 	});
 
 	// The arm is the caller's own slice, unphrased: `variantPhrase` is the pane head's, not the data's.
 	it('carries the arm as the caller wrote it, with no re-casing on the way', () => {
 		const groups = [
-			group(run(`${GROUP}_ Variant A `, FIRST, [DELIVERIES]), run(ARM_B, SECOND, [DELIVERIES])),
+			group(
+				run(`${INVESTIGATION}_ Variant A `, FIRST, [DELIVERIES]),
+				run(ARM_B, SECOND, [DELIVERIES]),
+			),
 		];
 
 		const comparison = comparisonAt(groups, PROJECT, GROUP, [
 			PROJECT,
-			`${GROUP}_ Variant A `,
+			`${INVESTIGATION}_ Variant A `,
 			FIRST,
 			SERIAL,
 			'screenshots',
