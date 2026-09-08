@@ -75,14 +75,14 @@ startup of ~60–90 ms that a Node backend talking gRPC directly would not pay.
 | `watchDevices` | `idb_companion --notify stdout` | full-set JSON per change | ✅ **a stream, not a poll** |
 | `describeDevice` | `simctl list -j devices`, filter udid | 0.10 s | ✅ |
 | `deviceInfo` | `profile.plist` + `simctl getenv` | <1 ms | ✅ px, dpi and scale all exact |
-| `installApp` | `simctl install <path.app>` | 0.3 s reinstall, 2.7–3.8 s first | ✅ |
+| `installApp` | `simctl install <path.app>` | 0.3 s reinstall, 2.7–5.2 s first | ✅ |
 | `launchApp` | `simctl launch <bundle>` | 0.35 s, returns pid | ✅ |
 | `stopApp` | `simctl terminate <bundle>` | 0.12 s | ✅ |
-| `clearAppData` | `simctl uninstall` + `install` | 0.79 s | ⚠️ no `pm clear` equivalent |
+| `clearAppData` | `simctl uninstall` + `install` of a staged copy | 0.5–0.79 s | ⚠️ no `pm clear` equivalent |
 | `screenshot` | `simctl io <d> screenshot` | 0.14–0.24 s, 246 KB PNG | ✅ |
 | `readLogs` | `simctl spawn <d> log show --style ndjson --predicate …` | 0.95 s, 268 entries | ⚠️ must be predicate-scoped |
-| `pushFile` | `simctl get_app_container … data` + host `cp` | ~0 ms | ✅ container **is** a host path |
-| `pullFile` | same, or `idb file pull` | 0.19 s | ✅ |
+| `pushFile` | the device's `dataPath` + a host copy | 0.10 s, 64 KB | ✅ storage **is** a host path |
+| `pullFile` | same | 0.11 s, byte-identical | ✅ |
 
 | Capability | Gated methods | How | Measured | Verdict |
 |---|---|---|---|---|
@@ -103,6 +103,62 @@ with an empty `.xcappdata` — the one Apple documents for this — **could not 
 failing first for a missing `AppDataInfo.plist`, then "corresponds to an app that isn't currently
 installed", then container-manager error 55, across three plist spellings. Not worth more time when
 uninstall-and-install costs 0.8 s.
+
+### What phase 3 added to the rows above, measured while building them
+
+Everything in this block was run on the **second** bench — macOS 26.6.2 (25G83) / Xcode 26.4.1
+(17E202), 2026-09-08, the one `tests/fixtures/ios-simulator/README.md` describes — against a
+`.app` compiled for the simulator SDK for the purpose, and then driven **through
+`IosSimulatorDeviceBackend` rather than through `simctl` by hand**, which is what makes it evidence
+about this repository's code and not only about the tool:
+
+```
+installApp   5.2 s first ever, 0.23–0.28 s thereafter   launchApp 0.24 s
+pushFile     0.10 s (64 KB)   pullFile 0.11 s, byte-identical
+stopApp      0.12 s           stopApp again 0.12 s, and it succeeds
+clearAppData 0.51 s           the pushed file is gone, the app still launches
+```
+
+- **`simctl install` reads the bundle's *contents*, not its file name.** The same zipped bundle
+  installed at exit 0 as `Rover.ipa`, as `payload.zip` and as `payload` — which is the name the
+  daemon gives a caller's payload (`src/daemon/verb-handlers.ts`). So the iOS side needs no
+  analogue of `withInstallablePackage`, which exists on the Android side purely because
+  `adb install` refuses a name not ending `.apk`. The name *does* matter for an unzipped `.app`
+  **directory**: one copied to a name without the suffix was refused with *"The item being
+  installed did not contain any installable apps"*.
+- **A bundle with no Mach-O executable cannot be installed at all** — *"Failed to re-fetch bundle
+  during preflight"*, exit 1, and it leaves a half-registered container behind that
+  `get_app_container` will still answer for. So there is no toolchain-free stand-in for a real
+  `.app`, which is why `tests/device/ios-simulator/app-control.test.ts` has no `installApp` success
+  case and says so.
+- **`get_app_container <device> <bundle> app` names a path *inside* the storage `uninstall`
+  removes** — `<dataPath>/Containers/Bundle/Application/<uuid>/<Name>.app`. Verified by doing it:
+  after the uninstall the path the tool had just printed no longer exists. `clearAppData` therefore
+  copies the bundle onto this host **before** uninstalling, and the copy keeps the `.app` basename.
+- **A reinstall gets a fresh data container UUID.** Measured across one `clearAppData`, and it is
+  the cost of this route over emptying the container in place: anything holding the old UUID is
+  looking at a container that is gone.
+- **Every app-lifecycle subcommand needs the device booted, and says so in one voice.** `install`,
+  `launch`, `terminate`, `uninstall` and `get_app_container` on a `Shutdown` device all exit
+  **149** with `Unable to lookup in current state: Shutdown`. The two file transfers do not: a
+  simulator's storage is a host path, and it is there whatever state the device is in.
+- **`uninstall` of an app that is not installed exits 0 with both streams empty**, where
+  `get_app_container` for the same app exits 2. That asymmetry is why `clearAppData` resolves the
+  bundle first: the failure lands before anything has been touched.
+- **`simctl launch` is idempotent.** A second launch of an app already running answers the same pid
+  at exit 0, so there is no already-running case to special-case.
+- **`simctl spawn`'s filesystem view is this Mac's.** `spawn <udid> /bin/ls /var` lists the host's
+  `/var` — `folders`, `jabberd`, `msgs` — and `/bin/ls /var/mobile` answers *"No such file or
+  directory"*. There is no in-simulator absolute namespace to relay a path through, which is what
+  forces `pushFile`/`pullFile` to resolve under the device's own `dataPath` and rules out a
+  `spawn cat` route.
+- **`simctl` has no generic file-transfer subcommand**, verified against `simctl help`: `addmedia`,
+  `get_app_container`, `pbcopy`/`pbpaste`/`pbsync` and `install_app_data` are everything that moves
+  a byte, and each moves one particular kind to one particular place.
+- **CoreSimulator itself symlinks out of the data root.** `<dataPath>/Library/Logs` points at
+  `~/Library/Logs/CoreSimulator/<udid>`. That is why the confinement in
+  `src/backends/ios-simulator/containers.ts` is *lexical* rather than a `realpath` comparison — the
+  stricter rule would refuse an ordinary device path.
 
 ### How a failure comes back, and why the exit code is not a vocabulary
 
@@ -454,6 +510,16 @@ full factory reset if state restoration ever needs one.
    `../giotto-ai-demo/docs/AGENT_UI_TESTS.md` §6 exists for. iOS has no equivalent flag, and the
    capture came back fully rendered every time. So the `canReadScreen`-as-last-resort argument for
    Android does not carry over; on iOS the tree is a convenience, not a rescue.
+
+9. **Some of `simctl`'s failure text is localized and some is not, and only one of them is safe
+   to write a predicate over.** On a host whose UI language is Polish, a failed `simctl install`
+   came back as *"App installation failed: Nie można zainstalować „Rover”"* — the
+   `IXUserPresentableErrorDomain` half is translated — while `simctl terminate`'s *"found nothing
+   to terminate"*, captured minutes later on the same host, is English. So a check on a
+   user-presentable message passes on the machine it was written on and fails on the next one, and
+   the wording `src/backends/ios-simulator/parsers/app-control.ts` matches is deliberately not one
+   (measured on Xcode 26.4.1, 2026-09-08). Anyone re-capturing a fixture on a differently
+   localized host has to check that half again rather than assume it.
 
 ---
 

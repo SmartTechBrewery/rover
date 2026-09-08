@@ -1,16 +1,17 @@
 import { readFileSync } from 'node:fs';
-import { copyFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
 	IosSimulatorDeviceBackend,
 	WATCH_POLL_INTERVAL_MS,
 } from '@/backends/ios-simulator/backend.js';
 import { SimctlNotFoundError } from '@/backends/ios-simulator/developer-dir.js';
+import { INSTALL_SIMCTL_TIMEOUT_MS, SimctlCommandError } from '@/backends/ios-simulator/simctl.js';
 import type { Device, DeviceWatcher } from '@/core/device.js';
-import { DeviceVanishedError } from '@/core/errors.js';
-import { type DeviceSerial, parseDeviceSerial } from '@/core/ids.js';
+import { DeviceVanishedError, FileTooLargeError } from '@/core/errors.js';
+import { type AppId, type DeviceSerial, parseAppId, parseDeviceSerial } from '@/core/ids.js';
 import { REQUIRED_BACKEND_METHODS, STUB_SENTINEL } from '../../../helpers/backend-conformance.js';
 
 /**
@@ -36,11 +37,23 @@ import { REQUIRED_BACKEND_METHODS, STUB_SENTINEL } from '../../../helpers/backen
  */
 type Runner = typeof import('@/backends/ios-simulator/simctl.js');
 
-const { runSimctl } = vi.hoisted(() => ({ runSimctl: vi.fn<Runner['runSimctl']>() }));
+/**
+ * **Both** runners are replaced, not just the plain one. `runSimctlOnDevice` closes over the
+ * module's own `runSimctl` rather than over the mocked binding, so leaving it real would put
+ * every device-pinned call of this suite through `execFile` and onto whatever simulator the
+ * machine running it happens to have. Stubbing it also makes the pin itself assertable: a method
+ * that reached `runSimctl` directly with a udid it assembled would show up here as the wrong mock
+ * being called.
+ */
+const { runSimctl, runSimctlOnDevice } = vi.hoisted(() => ({
+	runSimctl: vi.fn<Runner['runSimctl']>(),
+	runSimctlOnDevice: vi.fn<Runner['runSimctlOnDevice']>(),
+}));
 
 vi.mock('@/backends/ios-simulator/simctl.js', async (importOriginal) => ({
 	...(await importOriginal<Runner>()),
 	runSimctl,
+	runSimctlOnDevice,
 }));
 
 const fixtureUrl = (name: string): URL =>
@@ -147,6 +160,8 @@ let backend = new IosSimulatorDeviceBackend();
 beforeEach(() => {
 	backend = new IosSimulatorDeviceBackend();
 	runSimctl.mockReset();
+	runSimctlOnDevice.mockReset();
+	runSimctlOnDevice.mockResolvedValue({ stdout: '', stderr: '' });
 });
 
 describe('listDevices', () => {
@@ -733,6 +748,430 @@ describe('deviceInfo', () => {
 });
 
 /**
+ * The app lifecycle, with the process replaced and the wording predicates real.
+ *
+ * Every one of these methods addresses a device, so every one of them has to go through
+ * `runSimctlOnDevice` — the runner that cannot be handed `booted` by accident. Asserting the
+ * subcommand and its arguments there rather than a flat argv is what pins that.
+ */
+describe('the app lifecycle', () => {
+	const APP: AppId = parseAppId('com.rover.testapp');
+
+	/** `simctl terminate` on an app that is not running, captured from this repository's bench. */
+	const NOT_RUNNING = readFileSync(
+		fixtureUrl('simctl-terminate-not-running.xcode26.4.1-ios26.4.1.txt'),
+		'utf8',
+	);
+	/** The same subcommand refusing for a real reason: the device is not booted. */
+	const SHUTDOWN = readFileSync(
+		fixtureUrl('simctl-terminate-shutdown.xcode26.4.1-ios26.4.1.txt'),
+		'utf8',
+	);
+
+	/** A `SimctlCommandError` as the runner would have built it, with the captured stderr. */
+	function refusedWith(exitCode: number, stderr: string): SimctlCommandError {
+		return new SimctlCommandError(
+			['terminate', BOOTED, 'com.rover.testapp'],
+			10_000,
+			Object.assign(new Error('simctl failed'), { code: exitCode }),
+			'',
+			stderr,
+		);
+	}
+
+	describe('installApp', () => {
+		it('installs the host path, pinned to the device, with the install budget', async () => {
+			await backend.installApp(BOOTED, '/var/folders/qx/T/rover-transfer-a1/payload');
+
+			expect(runSimctlOnDevice).toHaveBeenCalledTimes(1);
+			expect(runSimctlOnDevice.mock.calls[0]?.slice(0, 3)).toEqual([
+				BOOTED,
+				'install',
+				['/var/folders/qx/T/rover-transfer-a1/payload'],
+			]);
+			expect(runSimctlOnDevice.mock.calls[0]?.[3]?.timeoutMs).toBe(INSTALL_SIMCTL_TIMEOUT_MS);
+		});
+
+		/**
+		 * The path is the daemon's own temporary file, deleted moments later, and this message is
+		 * read on the agent's machine (D19) — so it is named for redaction rather than left in.
+		 */
+		it('names the host path for redaction out of the failure message', async () => {
+			await backend.installApp(BOOTED, '/var/folders/qx/T/rover-transfer-a1/payload');
+
+			expect(runSimctlOnDevice.mock.calls[0]?.[3]?.redactArgv).toEqual([
+				'/var/folders/qx/T/rover-transfer-a1/payload',
+			]);
+		});
+
+		// No wording is asserted on the way out, so the exit code the runner threw on is the whole
+		// of the check and the tool's own words reach the caller intact.
+		it('lets the runner’s failure through', async () => {
+			runSimctlOnDevice.mockRejectedValueOnce(refusedWith(2, 'lstat of … failed'));
+
+			await expect(backend.installApp(BOOTED, '/tmp/nope.app')).rejects.toThrow('exited 2');
+		});
+	});
+
+	describe('launchApp', () => {
+		it('launches the bundle identifier, pinned to the device', async () => {
+			runSimctlOnDevice.mockResolvedValueOnce({ stdout: 'com.rover.testapp: 23205\n', stderr: '' });
+
+			await backend.launchApp(BOOTED, APP);
+
+			expect(runSimctlOnDevice.mock.calls[0]?.slice(0, 3)).toEqual([
+				BOOTED,
+				'launch',
+				['com.rover.testapp'],
+			]);
+		});
+
+		it('fails when the tool did', async () => {
+			runSimctlOnDevice.mockRejectedValueOnce(
+				refusedWith(4, 'Simulator device failed to launch com.rover.testapp.'),
+			);
+
+			await expect(backend.launchApp(BOOTED, APP)).rejects.toThrow('exited 4');
+		});
+	});
+
+	describe('stopApp', () => {
+		it('terminates the bundle identifier, pinned to the device', async () => {
+			await backend.stopApp(BOOTED, APP);
+
+			expect(runSimctlOnDevice.mock.calls[0]?.slice(0, 3)).toEqual([
+				BOOTED,
+				'terminate',
+				['com.rover.testapp'],
+			]);
+		});
+
+		/**
+		 * The decision this method exists to make: an app that was not running is already in the
+		 * state the caller asked for. Read off the **captured** wording, and deliberately not off
+		 * the exit code, which is one of three unrelated numbers this tool answers with.
+		 */
+		it('counts “found nothing to terminate” as done', async () => {
+			runSimctlOnDevice.mockRejectedValueOnce(refusedWith(3, NOT_RUNNING));
+
+			await expect(backend.stopApp(BOOTED, APP)).resolves.toBeUndefined();
+		});
+
+		it('still fails when the terminate failed for any other reason', async () => {
+			runSimctlOnDevice.mockRejectedValueOnce(refusedWith(149, SHUTDOWN));
+
+			await expect(backend.stopApp(BOOTED, APP)).rejects.toThrow(
+				'Unable to lookup in current state: Shutdown',
+			);
+		});
+
+		// The wording is only ever read off a `SimctlCommandError`: anything else reaching here is
+		// a bug in this process rather than an answer from the tool, and swallowing one would hide
+		// it behind a verb that reported success.
+		it('rethrows a failure that did not come from the tool', async () => {
+			runSimctlOnDevice.mockRejectedValueOnce(new Error('found nothing to terminate'));
+
+			await expect(backend.stopApp(BOOTED, APP)).rejects.toThrow('found nothing to terminate');
+		});
+	});
+
+	describe('clearAppData', () => {
+		/** Where `get_app_container … app` says the installed bundle is — inside the device. */
+		let installedBundle: string;
+		/** The `mkdtemp` standing in for that device's storage, removed after each case. */
+		let deviceStorage: string;
+
+		afterEach(async () => {
+			await rm(deviceStorage, { recursive: true, force: true });
+		});
+
+		beforeEach(async () => {
+			deviceStorage = await mkdtemp(join(tmpdir(), 'rover-installed-'));
+			installedBundle = join(
+				deviceStorage,
+				'Containers',
+				'Bundle',
+				'Application',
+				'F12C753E',
+				'Rover.app',
+			);
+			await mkdir(installedBundle, { recursive: true });
+			await writeFile(join(installedBundle, 'Info.plist'), 'bundle contents');
+
+			runSimctlOnDevice.mockImplementation(async (_serial, subcommand) => ({
+				stdout: subcommand === 'get_app_container' ? `${installedBundle}\n` : '',
+				stderr: '',
+			}));
+		});
+
+		it('resolves the installed bundle, then uninstalls and installs it back', async () => {
+			await backend.clearAppData(BOOTED, APP);
+
+			expect(runSimctlOnDevice.mock.calls.map((call) => [call[1], call[2]?.[0]])).toEqual([
+				['get_app_container', 'com.rover.testapp'],
+				['uninstall', 'com.rover.testapp'],
+				['install', expect.stringContaining('Rover.app')],
+			]);
+			expect(runSimctlOnDevice.mock.calls.every((call) => call[0] === BOOTED)).toBe(true);
+		});
+
+		/**
+		 * The ordering that makes the method work at all, asserted by **doing what the uninstall
+		 * does**: the path `get_app_container` prints is inside the storage it removes, verified
+		 * against a simulator, so the mock below deletes the bundle when the uninstall is called.
+		 * An implementation that copied afterwards would have nothing left to copy. The staged
+		 * copy also keeps the `.app` basename `simctl install` insists on for a directory.
+		 */
+		it('copies the bundle off the device before the uninstall removes it', async () => {
+			let installedFrom = '';
+			let installedContents = '';
+			runSimctlOnDevice.mockImplementation(async (_serial, subcommand, args) => {
+				if (subcommand === 'uninstall') await rm(installedBundle, { recursive: true, force: true });
+				if (subcommand === 'install') {
+					installedFrom = args?.[0] ?? '';
+					installedContents = await readFile(join(installedFrom, 'Info.plist'), 'utf8');
+				}
+				return {
+					stdout: subcommand === 'get_app_container' ? `${installedBundle}\n` : '',
+					stderr: '',
+				};
+			});
+
+			await backend.clearAppData(BOOTED, APP);
+
+			expect(installedContents).toBe('bundle contents');
+			expect(installedFrom).not.toBe(installedBundle);
+			expect(installedFrom.endsWith('/Rover.app')).toBe(true);
+			expect(installedFrom).toContain('rover-ios-clear-');
+		});
+
+		it('removes its staging directory however the call ended', async () => {
+			let stagingRoot = '';
+			runSimctlOnDevice.mockImplementation(async (_serial, subcommand, args) => {
+				if (subcommand === 'install') stagingRoot = dirname(args?.[0] ?? '');
+				if (subcommand === 'install') throw refusedWith(1, 'App installation failed');
+				return {
+					stdout: subcommand === 'get_app_container' ? `${installedBundle}\n` : '',
+					stderr: '',
+				};
+			});
+
+			await expect(backend.clearAppData(BOOTED, APP)).rejects.toThrow('exited 1');
+
+			await expect(stat(stagingRoot)).rejects.toThrow();
+		});
+
+		/**
+		 * The one exit-0 answer the reinstall cannot be built on. An empty path would make the
+		 * staged copy the scratch directory itself and the uninstall would run with nothing behind
+		 * it, so it is refused before anything is removed rather than discovered afterwards.
+		 */
+		it('refuses when the container lookup succeeded without naming a bundle', async () => {
+			runSimctlOnDevice.mockResolvedValue({ stdout: '\n', stderr: '' });
+
+			await expect(backend.clearAppData(BOOTED, APP)).rejects.toThrow(/without naming a bundle/);
+			expect(runSimctlOnDevice).toHaveBeenCalledTimes(1);
+		});
+
+		// An app that is not installed fails at the first call, and nothing has been touched by
+		// then — the same shape `pm clear` gives for a package that does not exist.
+		it('does not uninstall anything when the app is not installed', async () => {
+			runSimctlOnDevice.mockRejectedValueOnce(refusedWith(2, 'No such file or directory'));
+
+			await expect(backend.clearAppData(BOOTED, APP)).rejects.toThrow('exited 2');
+			expect(runSimctlOnDevice).toHaveBeenCalledTimes(1);
+		});
+	});
+});
+
+/**
+ * The two transfers, against a data root of this suite's own.
+ *
+ * There is no process in either of them — a simulator's storage *is* a host path — so what is
+ * mocked is the one listing they read `dataPath` out of, and everything after that is real
+ * `node:fs` against a `mkdtemp` directory. That is the honest shape here: stubbing the filesystem
+ * would leave the confinement asserted against a stub of the thing it protects.
+ */
+describe('the two transfers', () => {
+	let scratch: string;
+	let dataRoot: string;
+	/** Somewhere outside the root, standing in for the rest of the machine lending the device. */
+	let outside: string;
+
+	afterEach(async () => {
+		await rm(scratch, { recursive: true, force: true });
+	});
+
+	/** The capture with the subject device's `dataPath` pointed at this suite's own directory. */
+	const rooted = (): string =>
+		listing((parsed) => {
+			entryOf(parsed, BOOTED).dataPath = dataRoot;
+		});
+
+	beforeEach(async () => {
+		scratch = await mkdtemp(join(tmpdir(), 'rover-ios-transfer-'));
+		dataRoot = join(scratch, 'data');
+		outside = join(scratch, 'elsewhere');
+		await mkdir(join(dataRoot, 'Documents'), { recursive: true });
+		await mkdir(outside, { recursive: true });
+		answers(rooted());
+	});
+
+	describe('pushFile', () => {
+		it('copies the host file to where the device path names, under the data root', async () => {
+			const source = join(outside, 'payload');
+			await writeFile(source, 'the bytes');
+
+			await backend.pushFile(BOOTED, source, '/Documents/report.bin');
+
+			expect(await readFile(join(dataRoot, 'Documents', 'report.bin'), 'utf8')).toBe('the bytes');
+		});
+
+		it('reads the data root off the device listing, and asks for that listing alone', async () => {
+			const source = join(outside, 'payload');
+			await writeFile(source, 'x');
+
+			await backend.pushFile(BOOTED, source, '/Documents/report.bin');
+
+			expect(runSimctl).toHaveBeenCalledTimes(1);
+			expect(runSimctl.mock.calls[0]?.[0]).toEqual(['list', '-j', 'devices']);
+			// Nothing about a transfer goes near the tool: no subcommand was run on the device.
+			expect(runSimctlOnDevice).not.toHaveBeenCalled();
+		});
+
+		// A container the app has not written to yet has no `Documents/reports/`, and there is no
+		// verb in this vocabulary that would make one.
+		it('creates the directories the destination needs', async () => {
+			const source = join(outside, 'payload');
+			await writeFile(source, 'nested');
+
+			await backend.pushFile(BOOTED, source, '/Documents/reports/2026/report.bin');
+
+			expect(
+				await readFile(join(dataRoot, 'Documents', 'reports', '2026', 'report.bin'), 'utf8'),
+			).toBe('nested');
+		});
+
+		it('overwrites a file that is already there, which is what the caller asked for', async () => {
+			const source = join(outside, 'payload');
+			await writeFile(source, 'new');
+			await writeFile(join(dataRoot, 'Documents', 'report.bin'), 'old');
+
+			await backend.pushFile(BOOTED, source, '/Documents/report.bin');
+
+			expect(await readFile(join(dataRoot, 'Documents', 'report.bin'), 'utf8')).toBe('new');
+		});
+
+		/**
+		 * The contract's own rule (`DeviceBackend.pushFile`), and it has to be a rule here rather
+		 * than a device answer: `copyFile` would fail with `EISDIR` and a host path, telling the
+		 * caller about this machine instead of about the thing it got wrong.
+		 */
+		it('refuses a destination that is already a directory', async () => {
+			const source = join(outside, 'payload');
+			await writeFile(source, 'x');
+
+			await expect(backend.pushFile(BOOTED, source, '/Documents')).rejects.toThrow(
+				/is a directory on device/,
+			);
+			expect(await readdir(join(dataRoot, 'Documents'))).toEqual([]);
+		});
+
+		/**
+		 * The confinement, on the side where it is a **write**: an unconfined join here is a
+		 * remote write anywhere this host's user can write. Asserted as "nothing moved" and not
+		 * only as a throw, because the throw would be worth little if the copy had happened first.
+		 */
+		it('refuses a path that climbs out of the data root, before anything moves', async () => {
+			const source = join(outside, 'payload');
+			await writeFile(source, 'x');
+
+			await expect(
+				backend.pushFile(BOOTED, source, '/Documents/../../elsewhere/stolen'),
+			).rejects.toThrow(/resolves outside the storage/);
+			expect(await readdir(outside)).toEqual(['payload']);
+		});
+
+		// The listing doubles as the presence check, so a device that has been deleted is the
+		// contract's own error rather than an `ENOENT` about a directory on this host.
+		it('reports a device the listing no longer names as vanished', async () => {
+			answers(withoutDevice(BOOTED));
+			const source = join(outside, 'payload');
+			await writeFile(source, 'x');
+
+			await expect(backend.pushFile(BOOTED, source, '/Documents/report.bin')).rejects.toThrow(
+				DeviceVanishedError,
+			);
+		});
+	});
+
+	describe('pullFile', () => {
+		const NO_BOUND = { maxBytes: 1024 * 1024 };
+
+		it('answers with the bytes of the file, never with a path', async () => {
+			await writeFile(join(dataRoot, 'Documents', 'report.bin'), 'the bytes');
+
+			const bytes = await backend.pullFile(BOOTED, '/Documents/report.bin', NO_BOUND);
+
+			expect(Buffer.from(bytes).toString('utf8')).toBe('the bytes');
+		});
+
+		it('answers an empty file with no bytes rather than with a failure', async () => {
+			await writeFile(join(dataRoot, 'Documents', 'empty.bin'), '');
+
+			expect(await backend.pullFile(BOOTED, '/Documents/empty.bin', NO_BOUND)).toHaveLength(0);
+		});
+
+		/**
+		 * A directory's own size says nothing about the tree under it, so a bound taken on the
+		 * reported number would admit an unbounded read. Refused by shape instead.
+		 */
+		it('refuses a source that is not one regular file', async () => {
+			await expect(backend.pullFile(BOOTED, '/Documents', NO_BOUND)).rejects.toThrow(
+				/is a directory, and a pull answers with the bytes of one regular file/,
+			);
+		});
+
+		it('refuses a file over the bound before reading it', async () => {
+			await writeFile(join(dataRoot, 'Documents', 'big.bin'), 'x'.repeat(64));
+
+			await expect(
+				backend.pullFile(BOOTED, '/Documents/big.bin', { maxBytes: 32 }),
+			).rejects.toThrow(FileTooLargeError);
+		});
+
+		/**
+		 * A missing file is a throw rather than an empty answer — an empty array is
+		 * indistinguishable from an empty file that really is there — and the message carries the
+		 * errno rather than the path, because it is read on the agent's machine (D19).
+		 */
+		it('throws for a file that is not there, naming no path on this host', async () => {
+			const rejection = backend.pullFile(BOOTED, '/Documents/gone.bin', NO_BOUND);
+
+			await expect(rejection).rejects.toThrow('ENOENT');
+			await expect(rejection).rejects.toThrow("'/Documents/gone.bin'");
+			await expect(rejection).rejects.not.toThrow(new RegExp(dataRoot));
+		});
+
+		it('refuses a path that climbs out of the data root', async () => {
+			await writeFile(join(outside, 'secret'), 'not yours');
+
+			await expect(
+				backend.pullFile(BOOTED, '/Documents/../../elsewhere/secret', NO_BOUND),
+			).rejects.toThrow(/resolves outside the storage/);
+		});
+
+		it('reports a device the listing no longer names as vanished', async () => {
+			answers(withoutDevice(BOOTED));
+
+			await expect(backend.pullFile(BOOTED, '/Documents/report.bin', NO_BOUND)).rejects.toThrow(
+				DeviceVanishedError,
+			);
+		});
+	});
+});
+
+/**
  * The required methods the later phases own, held to the sentinel the conformance gate scans for
  * (`tests/helpers/backend-conformance.ts`).
  *
@@ -746,11 +1185,17 @@ describe('the methods a later phase fills in', () => {
 		'watchDevices',
 		'describeDevice',
 		'deviceInfo',
+		'installApp',
+		'launchApp',
+		'stopApp',
+		'clearAppData',
+		'pushFile',
+		'pullFile',
 	];
 	const STUBBED = REQUIRED_BACKEND_METHODS.filter((name) => !ANSWERED.includes(name));
 
 	it('is every required method this phase does not answer', () => {
-		expect(STUBBED).toHaveLength(8);
+		expect(STUBBED).toHaveLength(2);
 	});
 
 	it.each(STUBBED)('%s throws the not-implemented sentinel', async (name) => {

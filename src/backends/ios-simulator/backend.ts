@@ -1,14 +1,15 @@
 /**
- * The device backend for this platform, at the phase that answers *which devices are there and
- * what they are*.
+ * The device backend for this platform, at the phase that adds *the app lifecycle and the two
+ * file transfers* to the enumeration.
  *
- * Four methods are real — {@link IosSimulatorDeviceBackend.listDevices},
- * {@link IosSimulatorDeviceBackend.describeDevice}, {@link IosSimulatorDeviceBackend.watchDevices}
- * and {@link IosSimulatorDeviceBackend.deviceInfo} — and every other **required** method of the
- * contract is a `not implemented yet` stub, which is what lets the class declare
- * `implements DeviceBackend` and have its signatures typechecked while the later phases fill them
- * in. The capability-gated methods are absent rather than stubbed: a manifest is what declares
- * those, and there is none yet.
+ * Ten methods are real — the four the enumeration phase brought, plus
+ * {@link IosSimulatorDeviceBackend.installApp}, {@link IosSimulatorDeviceBackend.launchApp},
+ * {@link IosSimulatorDeviceBackend.stopApp}, {@link IosSimulatorDeviceBackend.clearAppData},
+ * {@link IosSimulatorDeviceBackend.pushFile} and {@link IosSimulatorDeviceBackend.pullFile}.
+ * `screenshot` and `readLogs` are still `not implemented yet` stubs, which is what lets the class
+ * declare `implements DeviceBackend` and have its signatures typechecked while the next phase
+ * fills them in. The capability-gated methods are absent rather than stubbed: a manifest is what
+ * declares those, and there is none yet.
  *
  * **This backend registers nothing** (`ai/TESTING.md`, "A backend under construction registers
  * nothing"): no `./capabilities.ts`, no `./index.ts` and no line in `../index.ts`, so
@@ -18,10 +19,16 @@
  * manifest lands with the last stub.
  *
  * Everything that touches a simulator goes through `./simctl.js`, everything that reads its
- * output through `./parsers/`, and the two pure modules beside this one own the vocabulary and
- * the arithmetic — `./devices.js` on the enumeration, `./screen.js` on the screen. This file is
- * the join between them and holds no text-shaped knowledge of its own: no key name, no state
- * token and no plist path appears here.
+ * output through `./parsers/`, and the three pure modules beside this one own the vocabulary, the
+ * arithmetic and the path mapping — `./devices.js` on the enumeration, `./screen.js` on the
+ * screen, `./containers.js` on where a device path is on this host. This file is the join between
+ * them and holds no text-shaped knowledge of its own: no key name, no state token, no plist path
+ * and no failure wording appears here.
+ *
+ * **The two transfers reach no simulator at all**, which is the one thing about this backend that
+ * has no counterpart on the Android side: a simulator's storage *is* a directory on this host, so
+ * a push is a file copy and a pull is a file read. `./containers.js` carries why that is the only
+ * route available and what confines it.
  *
  * **Nothing here quotes an argument, and that is a property of the tool rather than an
  * omission** — the counterpart to `../android/backend.ts`'s header, which has to choose a quoter
@@ -31,7 +38,9 @@
  * question back on the table.
  */
 
-import { readFile } from 'node:fs/promises';
+import { copyFile, cp, mkdir, mkdtemp, readFile, rm, stat } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { basename, dirname, join } from 'node:path';
 import {
 	type Device,
 	type DeviceBackend,
@@ -43,10 +52,12 @@ import {
 	type PullFileOptions,
 	type ReadLogsOptions,
 } from '../../core/device.js';
-import { DeviceVanishedError } from '../../core/errors.js';
+import { DeviceVanishedError, FileTooLargeError } from '../../core/errors.js';
 import { type AppId, type DeviceSerial, unwrap } from '../../core/ids.js';
+import { hostPathOf } from './containers.js';
 import { SIMCTL_MISSING, SimctlNotFoundError } from './developer-dir.js';
 import { IOS_SIMULATOR_PLATFORM_ID, toDevices } from './devices.js';
+import { saysNothingToTerminate } from './parsers/app-control.js';
 import { type DeviceTypeProfile, readDeviceTypeProfile } from './parsers/device-type-profile.js';
 import {
 	parseSimctlDevices,
@@ -58,7 +69,14 @@ import {
 	type SimctlRuntimeList,
 } from './parsers/simctl-list.js';
 import { deviceTypeProfilePath, toScreenInfo } from './screen.js';
-import { quoteStream, runSimctl, type SimctlResult } from './simctl.js';
+import {
+	INSTALL_SIMCTL_TIMEOUT_MS,
+	quoteStream,
+	runSimctl,
+	runSimctlOnDevice,
+	SimctlCommandError,
+	type SimctlResult,
+} from './simctl.js';
 
 /**
  * The enumeration's argv: **both listings in one invocation**.
@@ -83,6 +101,33 @@ const ENUMERATE_ARGV = ['list', '-j', 'devices', 'runtimes'] as const;
  * enumeration is the call every lease grant's re-verification makes (D6).
  */
 const DEVICE_FACTS_ARGV = ['list', '-j', 'devices', 'runtimes', 'devicetypes'] as const;
+
+/**
+ * What the two transfers ask: the device listing alone, for the one field they need.
+ *
+ * `dataPath` is the device's own storage root on this host and the whole of what makes a
+ * transfer here a file copy (`./containers.js`). The runtimes are not on this argv because
+ * nothing about a transfer depends on an OS version, and this is a call made per transfer rather
+ * than once — the same reason the device types are not on {@link ENUMERATE_ARGV}. That a
+ * single-listing invocation parses is pinned by a committed capture of exactly this command
+ * (`tests/fixtures/ios-simulator/simctl-list-devices.xcode26.4.1-ios26.4.1.json`).
+ */
+const DEVICE_PATHS_ARGV = ['list', '-j', 'devices'] as const;
+
+/**
+ * The subcommand and the container `clearAppData` asks for: the **installed bundle**, not the
+ * data.
+ *
+ * `simctl get_app_container <device> <bundle> app` prints the path of the `.app` as installed —
+ * measured on macOS 26.6.2 (25G83) / Xcode 26.4.1 (17E202), 2026-09-08, that is
+ * `<dataPath>/Containers/Bundle/Application/<uuid>/<Name>.app`, *inside the device's own
+ * storage*. Which is why the reinstall has to stage a copy first: see
+ * {@link IosSimulatorDeviceBackend.clearAppData}.
+ */
+const APP_CONTAINER = 'app';
+
+/** So a scratch directory that somehow outlives its `finally` is attributable to this backend. */
+const CLEAR_PREFIX = 'rover-ios-clear-';
 
 /**
  * The gap between two polls of the device set.
@@ -202,6 +247,111 @@ function sameDeviceSet(before: readonly Device[], after: readonly Device[]): boo
 function signature(devices: readonly Device[]): string {
 	return JSON.stringify(
 		[...devices].sort((left, right) => unwrap(left.serial).localeCompare(unwrap(right.serial))),
+	);
+}
+
+/**
+ * Run `use` against a directory on this host that is removed however it ends.
+ *
+ * `../android/backend.ts`'s helper of the same name, and the `finally` is the same whole point:
+ * a `clearAppData` that throws part-way would otherwise leave a copy of somebody's application
+ * behind, on a host that lends the same hardware to somebody else next. Removal is `force`d so
+ * cleaning up after a failure cannot itself fail and replace the real error.
+ */
+async function inHostTempDirectory<Result>(
+	prefix: string,
+	use: (directory: string) => Promise<Result>,
+): Promise<Result> {
+	const directory = await mkdtemp(join(tmpdir(), prefix));
+	try {
+		return await use(directory);
+	} finally {
+		await rm(directory, { recursive: true, force: true });
+	}
+}
+
+/**
+ * What this host's `stat` says a path is, in the words a refusal can be read in.
+ *
+ * The counterpart of `../android/parsers/stat.ts`'s `%F`, except that the answer comes from
+ * `node:fs` rather than from a device's `stat(1)` — so there is no output to parse and no
+ * wording that could vary by platform, and the vocabulary is this function's own.
+ */
+function describeShape(shape: Awaited<ReturnType<typeof stat>>): string {
+	if (shape.isDirectory()) return 'a directory';
+	if (shape.isCharacterDevice()) return 'a character device';
+	if (shape.isBlockDevice()) return 'a block device';
+	if (shape.isFIFO()) return 'a fifo';
+	if (shape.isSocket()) return 'a socket';
+	return 'not a regular file';
+}
+
+/**
+ * `get_app_container` having succeeded without naming anything.
+ *
+ * Not a captured failure — the tool exits 2 when the app is not installed, and printed a path on
+ * every run of the bench — so this is the guard on the one exit-0 answer the reinstall cannot be
+ * built on, rather than a wording anyone has seen. Both streams are quoted because whichever of
+ * them carries an explanation, this is the only place a reader would find it.
+ */
+function namedNoBundle(serial: DeviceSerial, appId: AppId, result: SimctlResult): Error {
+	return new Error(
+		`simctl get_app_container ${unwrap(appId)} app succeeded on device '${unwrap(serial)}' ` +
+			'without naming a bundle, and the reinstall this clear is made of has nothing to ' +
+			`reinstall from.\nstdout: ${quoteStream(result.stdout)}\nstderr: ${quoteStream(result.stderr)}`,
+	);
+}
+
+/**
+ * A push whose destination is a directory the device already has.
+ *
+ * The contract's own rule (`DeviceBackend.pushFile`), and it needs stating as one here for a
+ * sharper reason than on the platform it was written for: `node:fs`'s `copyFile` does not copy
+ * *into* a directory at all, it fails with `EISDIR`. So the caller would be told about a host
+ * path and an errno instead of about the thing it got wrong (D19), and the one refusal that
+ * makes both backends behave alike would be an accident of which library each happens to use.
+ */
+function pushedIntoDirectory(serial: DeviceSerial, devicePath: string): Error {
+	return new Error(
+		`'${devicePath}' is a directory on device '${unwrap(serial)}', and a push names the file ` +
+			'to write, not a directory to write it into — pushing to it would put the file inside ' +
+			`under a name this host chose. Name the file: '${devicePath}/<name>'`,
+	);
+}
+
+/**
+ * A pull whose source is not one regular file, which is `DeviceBackend.pullFile`'s rule and what
+ * keeps its byte bound meaningful.
+ *
+ * A directory's own `size` is a few hundred bytes whatever the tree under it holds, and a
+ * character device reports zero and then reads without end — so a bound taken on the reported
+ * number alone would admit either. Both are named by the same refusal because the caller's fix
+ * is the same: name a file.
+ */
+function pulledNonRegularFile(serial: DeviceSerial, devicePath: string, shape: string): Error {
+	return new Error(
+		`'${devicePath}' on device '${unwrap(serial)}' is ${shape}, and a pull answers with the ` +
+			'bytes of one regular file — a size is not a prediction of what reading anything else ' +
+			'would fetch, so there is nothing to bound the read by. Recursive directory transfer ' +
+			'is deliberately not in this contract.',
+	);
+}
+
+/**
+ * A pull whose source is not there, or will not be read.
+ *
+ * A throw rather than an empty answer, which the contract requires: an empty array is
+ * indistinguishable from an empty file that really is there. **No host path**, not even in the
+ * cause's own words — `node:fs` puts one in every message it writes, and this one is read on the
+ * agent's machine (D19), so the code is carried across and the message is not.
+ */
+function noSuchFile(serial: DeviceSerial, devicePath: string, cause: unknown): Error {
+	const code = cause instanceof Error && 'code' in cause ? String(cause.code) : 'unknown';
+	return new Error(
+		`'${devicePath}' on device '${unwrap(serial)}' could not be read (${code}). On this ` +
+			"platform that path is a file in the device's own storage on the host lending it, so " +
+			'this is the file not being there, or not being readable by the user running the host.',
+		{ cause },
 	);
 }
 
@@ -363,29 +513,133 @@ export class IosSimulatorDeviceBackend implements DeviceBackend {
 		});
 	}
 
-	/*
-	 * The required methods the later phases own: the app lifecycle and the two transfers (phase
-	 * 3), the capture and the log read (phase 4). Present so the class declares
-	 * `implements DeviceBackend` and has its signatures checked against the contract now rather
-	 * than one phase at a time; each throws the `not implemented yet` sentinel
-	 * `tests/helpers/backend-conformance.ts` scans for, which is harmless while nothing is
-	 * registered and is what would fail the gate the moment something were.
+	/**
+	 * `simctl install <device> <packagePath>`, with `packagePath` read on the **host** (D19).
+	 *
+	 * **No staging, and that is measured rather than assumed** — the one place this diverges
+	 * from `../android/backend.ts`, whose `withInstallablePackage` exists because `adb install`
+	 * checks the *file name* and refuses anything not ending `.apk` or `.apex`. `simctl` looks
+	 * at the contents instead: on macOS 26.6.2 (25G83) / Xcode 26.4.1 (17E202), 2026-09-08, the
+	 * same zipped bundle installed at exit 0 as `payload`, as `payload.zip` and as `Rover.ipa`,
+	 * which is exactly what the layer above hands down — the daemon writes a caller's bytes to a
+	 * file it names `payload`, because a package format belongs to one platform and that layer
+	 * names none (`src/daemon/verb-handlers.ts`). The name does matter for the other shape a
+	 * package can arrive as, an unzipped `.app` **directory**: one copied to a name without the
+	 * suffix was refused with *"The item being installed did not contain any installable apps"*.
+	 * No staging fixes that — a directory arrives from a project hook's build output, which is
+	 * named `.app` by the toolchain that produced it.
+	 *
+	 * It carries {@link INSTALL_SIMCTL_TIMEOUT_MS} rather than the default, and the host path is
+	 * masked out of the failure message: `simctl` writes that path back out itself, `lstat of
+	 * <path> failed: No such file or directory` on a package that is not there (same bench), and
+	 * the message is read on a machine where the daemon's temporary file names nothing (D19).
+	 *
+	 * Nothing checks the wording of an exit-0 failure here, and that is stated rather than left
+	 * to be found: no such failure has been captured from this subcommand, and a wording written
+	 * from memory is what `./parsers/` and its fixtures exist to prevent (`./parsers/app-control.js`).
 	 */
-
-	async installApp(_serial: DeviceSerial, _packagePath: string): Promise<void> {
-		throw new Error(`${IOS_SIMULATOR_PLATFORM_ID}: installApp is not implemented yet`);
+	async installApp(serial: DeviceSerial, packagePath: string): Promise<void> {
+		await runSimctlOnDevice(serial, 'install', [packagePath], {
+			timeoutMs: INSTALL_SIMCTL_TIMEOUT_MS,
+			redactArgv: [packagePath],
+		});
 	}
 
-	async launchApp(_serial: DeviceSerial, _appId: AppId): Promise<void> {
-		throw new Error(`${IOS_SIMULATOR_PLATFORM_ID}: launchApp is not implemented yet`);
+	/**
+	 * `simctl launch <device> <appId>`.
+	 *
+	 * One call, where `../android/backend.ts` needs two: there is no component to resolve,
+	 * because a bundle identifier is what this platform launches by. `parseAppId` has already
+	 * branded the value and nothing here reaches a shell (this file's header), so it is passed
+	 * as the argv entry it is.
+	 *
+	 * The exit code is the whole of the check, and unusually for this repository that is enough:
+	 * every launch failure measured on the bench exits non-zero and `./simctl.js` throws on it —
+	 * **4** with `Simulator device failed to launch com.rover.nope.` for an app that is not
+	 * installed, **149** with `Unable to lookup in current state: Shutdown` for a device that is
+	 * not booted. A successful launch prints `<appId>: <pid>` on stdout; the pid is not read,
+	 * because the contract answers `void` and a process that exited a moment later would make it
+	 * a lie.
+	 */
+	async launchApp(serial: DeviceSerial, appId: AppId): Promise<void> {
+		await runSimctlOnDevice(serial, 'launch', [unwrap(appId)]);
 	}
 
-	async stopApp(_serial: DeviceSerial, _appId: AppId): Promise<void> {
-		throw new Error(`${IOS_SIMULATOR_PLATFORM_ID}: stopApp is not implemented yet`);
+	/**
+	 * `simctl terminate <device> <appId>`, with **"it was not running" counted as done**.
+	 *
+	 * That case is a failure as far as the tool is concerned — exit 3, `found nothing to
+	 * terminate` — and it is decided here from the **wording** rather than from the number,
+	 * because the number means nothing on this tool (`./simctl.js`) and because the same
+	 * sentence would have to keep meaning the same thing if it ever exited something else.
+	 * `./parsers/app-control.js` owns the predicate, the fixture it is pinned against and the
+	 * argument for treating it as a success.
+	 *
+	 * Every other terminate failure is still a failure and still throws, which is what the
+	 * `Shutdown` capture beside it pins.
+	 */
+	async stopApp(serial: DeviceSerial, appId: AppId): Promise<void> {
+		try {
+			await runSimctlOnDevice(serial, 'terminate', [unwrap(appId)]);
+		} catch (error) {
+			if (error instanceof SimctlCommandError && saysNothingToTerminate(error.stderr)) return;
+			throw error;
+		}
 	}
 
-	async clearAppData(_serial: DeviceSerial, _appId: AppId): Promise<void> {
-		throw new Error(`${IOS_SIMULATOR_PLATFORM_ID}: clearAppData is not implemented yet`);
+	/**
+	 * Uninstall the app and install the same bundle back — **this platform has no `pm clear`**.
+	 *
+	 * The honest version of that, rather than a plausible-looking one. `docs/IOS.md` §2 records
+	 * all three routes and does not need re-deriving: this one works and costs **0.79 s** there,
+	 * **0.52 s** on this repository's own bench (macOS 26.6.2 / Xcode 26.4.1, 2026-09-08);
+	 * emptying the container's contents host-side also works and keeps the binary installed; and
+	 * `simctl install_app_data` with an empty `.xcappdata`, the route Apple documents for this,
+	 * **could not be made to work** across three plist spellings.
+	 *
+	 * **The bundle to reinstall is resolved from the device, and then copied off it before
+	 * anything is uninstalled.** `simctl get_app_container <device> <appId> app` names it, and on
+	 * the bench that path is `<dataPath>/Containers/Bundle/Application/<uuid>/<Name>.app` —
+	 * *inside the very storage the uninstall removes*, which was verified by doing it: after the
+	 * uninstall the path the tool had just printed no longer exists. So the copy is not an
+	 * optimisation, it is the only ordering that leaves an application installed at the end. It
+	 * keeps the bundle's own basename, because `simctl install` refuses a directory not named
+	 * `.app` ({@link installApp}).
+	 *
+	 * An app that is not installed fails at the first call — exit 2, `No such file or directory`
+	 * — and nothing has been touched by then, which is the right shape for that answer: it is
+	 * the same refusal `pm clear` gives for a package that does not exist.
+	 *
+	 * **What this cannot preserve is the app's identity to the rest of the device.** A reinstall
+	 * gets a fresh data container UUID, and anything holding the old one — a keychain entry
+	 * scoped to it, another app's bookmark — is looking at a container that is gone. Emptying the
+	 * container in place would keep it; it would also leave whatever the caller's app wrote
+	 * outside `Documents`, `Library` and `tmp`, which is the half `pm clear` does remove.
+	 */
+	async clearAppData(serial: DeviceSerial, appId: AppId): Promise<void> {
+		const installed = await runSimctlOnDevice(serial, 'get_app_container', [
+			unwrap(appId),
+			APP_CONTAINER,
+		]);
+		const bundle = installed.stdout.trim();
+		// Exit 0 with nothing to say is not a case captured from this subcommand, and it is caught
+		// rather than trusted because of what the next two lines would do with it: an empty path
+		// makes `basename` empty, which makes the staged copy the scratch directory itself, and the
+		// uninstall would then run with nothing staged behind it.
+		if (bundle.length === 0) throw namedNoBundle(serial, appId, installed);
+
+		await inHostTempDirectory(CLEAR_PREFIX, async (directory) => {
+			// Named after the bundle rather than by this host, so the reinstall is handed the
+			// suffix `simctl install` insists on for a directory.
+			const staged = join(directory, basename(bundle));
+			await cp(bundle, staged, { recursive: true });
+
+			await runSimctlOnDevice(serial, 'uninstall', [unwrap(appId)]);
+			await runSimctlOnDevice(serial, 'install', [staged], {
+				timeoutMs: INSTALL_SIMCTL_TIMEOUT_MS,
+				redactArgv: [staged],
+			});
+		});
 	}
 
 	async screenshot(_serial: DeviceSerial): Promise<Uint8Array> {
@@ -396,16 +650,116 @@ export class IosSimulatorDeviceBackend implements DeviceBackend {
 		throw new Error(`${IOS_SIMULATOR_PLATFORM_ID}: readLogs is not implemented yet`);
 	}
 
-	async pushFile(_serial: DeviceSerial, _hostPath: string, _devicePath: string): Promise<void> {
-		throw new Error(`${IOS_SIMULATOR_PLATFORM_ID}: pushFile is not implemented yet`);
+	/**
+	 * Copy the file at `hostPath` to where `devicePath` names on the device — **a host-to-host
+	 * copy, because a simulator's storage is a host path**.
+	 *
+	 * No device protocol is involved and none is available: `./containers.js` carries why, and
+	 * the short version is that `idb file push` crashes its companion, `simctl` has no generic
+	 * transfer subcommand, and `simctl spawn`'s filesystem view is this Mac's rather than the
+	 * device's. So the whole of the transfer is {@link hostPathOf} plus `copyFile`, and the whole
+	 * of the risk is in the first of those — an unconfined join here is a remote write anywhere
+	 * this host's user can write, which is why the resolution refuses a `..` that leaves the
+	 * device's data root before this method has looked at anything.
+	 *
+	 * **A destination that is already a directory is refused**, which is the contract's own rule
+	 * ({@link pushedIntoDirectory}). Nothing else about the destination is second-guessed: an
+	 * existing file is overwritten, which is what the caller asked for.
+	 *
+	 * **Missing parent directories are created.** A container the app has not written to yet has
+	 * no `Documents/reports/`, and there is no verb in this vocabulary that would make one — so
+	 * without this a perfectly reasonable push fails with an errno about a path on a machine the
+	 * caller cannot see. What is created stays inside the data root, because the destination
+	 * already had to.
+	 */
+	async pushFile(serial: DeviceSerial, hostPath: string, devicePath: string): Promise<void> {
+		const target = hostPathOf(serial, await this.dataRootOf(serial), devicePath);
+
+		// `null` when there is nothing there, which is the *ordinary* case for a push — the file
+		// about to be created. Only the one shape the contract refuses is read off the answer.
+		const existing = await stat(target).catch(() => null);
+		if (existing?.isDirectory() === true) throw pushedIntoDirectory(serial, devicePath);
+
+		await mkdir(dirname(target), { recursive: true });
+		await copyFile(hostPath, target);
 	}
 
+	/**
+	 * The bytes of a file in the device's own storage — {@link pushFile}'s mirror, and the same
+	 * resolution and confinement before anything is read.
+	 *
+	 * **Bytes, never a path** (D19), and every refusal is issued before the read:
+	 *
+	 * - the probe is `node:fs`'s own `stat` **on this host**, so unlike the Android side it
+	 *   cannot answer "the probe would not say". There is no device wording to be defeated by
+	 *   and no second process between the question and the answer: a `stat` that fails means the
+	 *   file is not there or cannot be read, and that is a throw rather than a `null`
+	 *   ({@link noSuchFile}).
+	 * - anything the probe does not call a **regular file** is refused, which is the contract's
+	 *   rule and what keeps the bound below meaningful ({@link pulledNonRegularFile}).
+	 * - `options.maxBytes` is checked against the size the probe reported, **before** the file is
+	 *   read into the daemon's heap. The daemon holds every lease on this machine (D6, D17), so
+	 *   an allocation a peer chose is not one tenant's mistake.
+	 *
+	 * The bound is asked again of what was actually read, and that second question is not the
+	 * first one's spare: a file that grew between the `stat` and the `readFile` would otherwise
+	 * be answered whole. It is a weaker check than the Android side's second one — the allocation
+	 * has already happened by the time it fires — and it is here because refusing is still better
+	 * than handing a caller more than it said it could take.
+	 */
 	async pullFile(
-		_serial: DeviceSerial,
-		_devicePath: string,
-		_options: PullFileOptions,
+		serial: DeviceSerial,
+		devicePath: string,
+		options: PullFileOptions,
 	): Promise<Uint8Array> {
-		throw new Error(`${IOS_SIMULATOR_PLATFORM_ID}: pullFile is not implemented yet`);
+		const source = hostPathOf(serial, await this.dataRootOf(serial), devicePath);
+
+		const shape = await stat(source).catch((cause: unknown) => {
+			throw noSuchFile(serial, devicePath, cause);
+		});
+		if (!shape.isFile()) throw pulledNonRegularFile(serial, devicePath, describeShape(shape));
+		if (shape.size > options.maxBytes) {
+			throw new FileTooLargeError(serial, devicePath, shape.size, options.maxBytes);
+		}
+
+		const bytes = await readFile(source).catch((cause: unknown) => {
+			throw noSuchFile(serial, devicePath, cause);
+		});
+		if (bytes.byteLength > options.maxBytes) {
+			throw new FileTooLargeError(serial, devicePath, bytes.byteLength, options.maxBytes);
+		}
+
+		return bytes;
+	}
+
+	/**
+	 * The device's own storage root on this host, out of its `simctl list -j devices` entry.
+	 *
+	 * One invocation per transfer rather than a value held between them, which is D6 one level
+	 * down and this class's own stance (see {@link listDevices}): a `dataPath` remembered from an
+	 * earlier call is a cache of somebody else's filesystem. It costs the listing — 0.11–0.24 s
+	 * across this backend's benches — and it doubles as the presence check, so a transfer to a
+	 * device that has been deleted is {@link DeviceVanishedError} rather than an `ENOENT` about a
+	 * directory on this host.
+	 *
+	 * Read off the **raw entry** rather than the mapped {@link Device}, for the reason
+	 * {@link findEntry} exists: this is a path on the machine holding the device and the neutral
+	 * shape deliberately carries no such thing.
+	 */
+	private async dataRootOf(serial: DeviceSerial): Promise<string> {
+		const result = await runSimctl([...DEVICE_PATHS_ARGV]);
+
+		let devices: SimctlDeviceList;
+		try {
+			devices = parseSimctlDevices(result.stdout);
+		} catch (cause) {
+			throw unparseable(DEVICE_PATHS_ARGV, result, cause);
+		}
+
+		const entry = findEntry(devices, serial);
+		if (entry === null) throw new DeviceVanishedError(serial);
+
+		return entry.dataPath;
 	}
 }
 

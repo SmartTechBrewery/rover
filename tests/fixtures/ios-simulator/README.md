@@ -60,6 +60,8 @@ different host. Nothing in this folder re-verifies anything in that document.
 | `device-type-profile.ipad-pro-13-inch-m5.xcode26.4.1.plist` | `cp` (below) | 26.4.1 | n/a | 2026-09-08 |
 | `unified-log-ndjson.xcode26.4.1-ios26.4.1.json` | `log show --style ndjson` (below) | 26.4.1 | 26.4.1 | 2026-09-08 |
 | `unified-log-ndjson.levels.xcode26.4.1-ios26.4.1.json` | `log show --style ndjson` (below) | 26.4.1 | 26.4.1 | 2026-09-08 |
+| `simctl-terminate-not-running.xcode26.4.1-ios26.4.1.txt` | `simctl terminate` (below) | 26.4.1 | 26.4.1 | 2026-09-08 |
+| `simctl-terminate-shutdown.xcode26.4.1-ios26.4.1.txt` | `simctl terminate` (below) | 26.4.1 | 26.4.1 | 2026-09-08 |
 
 The all-listings capture is the primary one: `xcrun simctl list -j` with no type argument answers
 all four listings at once — `devicetypes`, `runtimes`, `devices`, `pairs` — even though
@@ -177,6 +179,43 @@ xcrun simctl spawn $udid log show --style ndjson --info --debug \
   below — a simulator UDID is not a credential and neither is that path. Note that `--style ndjson`
   escapes every forward slash (`file:\/\/\/Users\/…`), so `grep /Users/` over these files finds
   nothing while the path is right there.
+
+## The two `terminate` captures
+
+The **stderr** of two `simctl terminate` failures, and the only wording this backend reads
+(`src/backends/ios-simulator/parsers/app-control.ts`). Both are the same subcommand refusing for
+two different reasons, taken minutes apart on the same host, which is what makes the second a real
+negative case rather than an imagined one:
+
+```bash
+udid=997FA43E-FF9F-4109-BEF0-53D3F46653E7        # booted
+shutdown=1974C124-3582-4D07-89BB-B4BA3B03D32F    # Shutdown
+
+xcrun simctl terminate $udid com.rover.nope \
+  2> tests/fixtures/ios-simulator/simctl-terminate-not-running.xcode26.4.1-ios26.4.1.txt
+xcrun simctl terminate $shutdown com.rover.nope \
+  2> tests/fixtures/ios-simulator/simctl-terminate-shutdown.xcode26.4.1-ios26.4.1.txt
+```
+
+| Fixture | Exit | What it pins |
+|---|---|---|
+| `simctl-terminate-not-running…txt` | **3** | `found nothing to terminate`, on three of its six lines — the app was not running, which this backend counts as a success |
+| `simctl-terminate-shutdown…txt` | **149** | `Unable to lookup in current state: Shutdown` — a real refusal of the same subcommand, which stays a failure |
+
+- **Both are stderr only**; stdout was empty on each. They are `.txt` rather than JSON because
+  that is what the tool wrote — this is prose, not a document.
+- **Neither carries an exit code**, deliberately: the number is not what the predicate reads, and
+  three failures on this tool answered 148, 1 and 3 (`docs/IOS.md` §2). It is recorded in the table
+  above and nowhere the code can reach.
+- **The wording in the first is not localized, and that is the reason it is safe to match.** On the
+  capturing host — whose UI language is Polish — a failed `simctl install` in the same session came
+  back as *"App installation failed: Nie można zainstalować „Rover”"* from
+  `IXUserPresentableErrorDomain`, while every line of these two is English. A predicate over a
+  user-presentable message would pass here and fail on the next machine (`docs/IOS.md` §8, trap 9).
+  Anyone re-capturing on a differently-localized host should check that half again rather than
+  assume it.
+- Neither contains a path or anything personal: the bundle identifier is one this repository made
+  up for the purpose, and no device is named in the text.
 
 ## Two things about the contents
 

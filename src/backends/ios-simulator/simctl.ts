@@ -43,7 +43,9 @@
  * There is deliberately **no argument quoter** here, which is the other thing that does not
  * transfer from `../android/adb.ts`: `adb shell` joins its arguments and hands the string to a
  * shell *on the device*, so `shellArg`/`shellText` exist to protect that shell. `simctl` takes
- * argv entries, and `execFile` protects this host's.
+ * argv entries, and `execFile` protects this host's. What *does* transfer is the **masking** of
+ * a host path on its way into a failure message, which is a different question with a different
+ * answer — {@link RunSimctlOptions.redactArgv}.
  */
 
 import { type ExecFileException, execFile } from 'node:child_process';
@@ -77,6 +79,24 @@ export const DEFAULT_SIMCTL_TIMEOUT_MS = 10_000;
 export const SIMCTL_MAX_BUFFER_BYTES = 8 * 1024 * 1024;
 
 /**
+ * The one call here that is nothing like a query: `simctl install` copies a whole bundle into
+ * the device's container and then has the runtime register it.
+ *
+ * Measured on macOS 26.6.2 (25G83) / Xcode 26.4.1 (17E202), 2026-09-08: **5.2 s** for the
+ * first install of a freshly built `.app`, and **0.3 s** for the reinstall half of an
+ * uninstall-and-install round trip on the same bundle; `docs/IOS.md` §2 has 2.7–3.8 s first
+ * and 0.3 s on a reinstall from a different bench. Every one of those is already at or past
+ * {@link DEFAULT_SIMCTL_TIMEOUT_MS}'s half, on a small bundle and an idle host — a real
+ * application's is orders of magnitude larger.
+ *
+ * So this is deliberately generous rather than tuned, for `INSTALL_ADB_TIMEOUT_MS`'s stated
+ * reason and matching its number: it exists to stop a wedged `simctl` holding a lease forever,
+ * not to bound a slow but healthy install. Named and passed at the call site rather than
+ * raised as the default, because every other call this backend makes is a query.
+ */
+export const INSTALL_SIMCTL_TIMEOUT_MS = 5 * 60_000;
+
+/**
  * The one device selector `simctl` accepts that is not a device, **lowercased**.
  *
  * Refused by {@link runSimctlOnDevice} — see its own note. `simctl help`, quoted verbatim: *"or
@@ -103,6 +123,31 @@ export interface SimctlResult {
 export interface RunSimctlOptions {
 	/** Overrides {@link DEFAULT_SIMCTL_TIMEOUT_MS} for one call. */
 	readonly timeoutMs?: number;
+
+	/**
+	 * argv entries that must not appear in {@link SimctlCommandError}'s **message**.
+	 *
+	 * For the one class of argument that is a path on *this host*: the package a caller sent,
+	 * which the daemon wrote to a temporary file of its own (`src/daemon/verb-handlers.ts`) and
+	 * deletes moments later. A `SimctlCommandError` becomes the text of an `internal_error`
+	 * response (`src/ipc/server.ts`) read on the agent's machine — possibly another machine
+	 * entirely — where a `/var/folders/…` path this host already removed names nothing anyone
+	 * can act on (D19, PROJECT.md §4).
+	 *
+	 * **Masked in the argv *and* in the captured streams**, because `simctl` writes the path it
+	 * was given back out itself: measured on Xcode 26.4.1, 2026-09-08, `install <device>
+	 * /tmp/nope.app` exits 2 with `lstat of /tmp/nope.app failed: No such file or directory` on
+	 * stderr. Masking only the argv would leave the same string in the message two lines
+	 * further down.
+	 *
+	 * The argv is matched as whole entries and the streams as substrings, which is
+	 * `../android/adb.ts`'s split and for its reasons — see {@link quoteStream}.
+	 *
+	 * {@link SimctlCommandError.argv}, {@link SimctlCommandError.stdout} and
+	 * {@link SimctlCommandError.stderr} all keep the real values: they never cross the
+	 * boundary, and this host's own log is exactly where the staged path is worth having.
+	 */
+	readonly redactArgv?: readonly string[];
 }
 
 /**
@@ -120,6 +165,10 @@ export interface RunSimctlOptions {
  * another machine entirely (D19) — where this host's Xcode layout names nothing anyone can act
  * on. The failure that *is* about the search says so in full, and that one is
  * `SimctlNotFoundError` in `./developer-dir.ts`.
+ *
+ * For the same reason the message masks whatever {@link RunSimctlOptions.redactArgv} named,
+ * while {@link argv}, {@link stdout} and {@link stderr} keep the real values for this host's
+ * own log.
  */
 export class SimctlCommandError extends Error {
 	readonly argv: readonly string[];
@@ -135,6 +184,7 @@ export class SimctlCommandError extends Error {
 		error: ExecFileException,
 		stdout: string,
 		stderr: string,
+		redactArgv: readonly string[] = [],
 	) {
 		const exitCode = typeof error.code === 'number' ? error.code : null;
 		// `killed` is also set when `maxBuffer` overflows, and that is not a timeout: reporting it
@@ -144,9 +194,9 @@ export class SimctlCommandError extends Error {
 
 		super(
 			[
-				`${SIMCTL} ${argv.join(' ')} ${outcome({ error, exitCode, signal, timedOut, timeoutMs })}`,
-				`stdout: ${quoteStream(stdout)}`,
-				`stderr: ${quoteStream(stderr)}`,
+				`${SIMCTL} ${quoteArgv(argv, redactArgv)} ${outcome({ error, exitCode, signal, timedOut, timeoutMs })}`,
+				`stdout: ${quoteStream(stdout, redactArgv)}`,
+				`stderr: ${quoteStream(stderr, redactArgv)}`,
 			].join('\n'),
 		);
 
@@ -176,14 +226,48 @@ function outcome(failure: {
 }
 
 /**
+ * The command as it may be read on the caller's machine.
+ *
+ * Everything `simctl` was given, in order, with the host-local paths in `redact` replaced by
+ * {@link REDACTED_ARGV}. Whole entries are compared rather than substrings of the joined line:
+ * an argv entry either *is* the path this host made up or it is the caller's own value, and a
+ * substring rule would also mask a device path that happened to share a prefix with it.
+ */
+function quoteArgv(argv: readonly string[], redact: readonly string[]): string {
+	return argv.map((entry) => (redact.includes(entry) ? REDACTED_ARGV : entry)).join(' ');
+}
+
+/**
+ * What a host path reads as once it has crossed the boundary, in an argv or in a stream.
+ *
+ * Says what was there rather than eliding it, so a failure message stays a sentence: the caller
+ * sent bytes and this host wrote them somewhere of its own choosing, which is the whole fact the
+ * path was carrying.
+ */
+const REDACTED_ARGV = '<the file you sent>';
+
+/**
  * One captured stream, ready to be read inside an error message.
  *
  * Exported because {@link SimctlCommandError} will not be the only failure worth quoting: this
  * tool reports plenty while exiting 0, and those are caught a layer out. One definition so no
- * two messages disagree about what an empty stream looks like.
+ * two messages disagree about what an empty stream looks like — or about how a host path reads
+ * once it has crossed the boundary, which is what `redact` is for.
+ *
+ * **`redact` is a substring rule here where {@link quoteArgv}'s is a whole-entry rule**, and the
+ * asymmetry is the difference between the two subjects, exactly as in `../android/adb.ts`. An
+ * argv entry either *is* the path this host made up or it is the caller's own value. A stream is
+ * a sentence `simctl` wrote with the path embedded in it — `lstat of <host path> failed: No such
+ * file or directory` (measured on Xcode 26.4.1, 2026-09-08) — so nothing but a substring rule
+ * reaches it. That is safe because the tool echoes the path byte for byte as it was given, and
+ * because the only values ever passed here are paths this host invented moments earlier.
  */
-export function quoteStream(stream: string): string {
-	const text = stream.trimEnd();
+export function quoteStream(stream: string, redact: readonly string[] = []): string {
+	const masked = redact.reduce(
+		(text, path) => (path.length === 0 ? text : text.replaceAll(path, REDACTED_ARGV)),
+		stream,
+	);
+	const text = masked.trimEnd();
 	return text.length === 0 ? '(empty)' : text;
 }
 
@@ -215,7 +299,7 @@ export async function runSimctl(
 					resolve({ stdout, stderr });
 					return;
 				}
-				reject(new SimctlCommandError(args, timeoutMs, error, stdout, stderr));
+				reject(new SimctlCommandError(args, timeoutMs, error, stdout, stderr, options.redactArgv));
 			},
 		);
 	});
