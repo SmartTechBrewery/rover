@@ -121,6 +121,7 @@ async function start(options: { sweepIntervalMs?: number; leaseTtlMs?: number } 
 		artifactsRoot: temp.artifactsRoot,
 		projectsRoot: temp.projectsRoot,
 		keptTestsPath: temp.keptTestsPath,
+		retention: temp.retention,
 		...options,
 	});
 	if (!result.started) {

@@ -23,10 +23,13 @@
  * reason one level over: a read that cannot be parsed throws, naming the path, because
  * rewriting it as empty would delete every exemption on the host to make one call succeed.
  *
- * **Nothing here prunes, sweeps or expires anything.** There is no retention policy yet — a
- * TTL, a size cap and who runs the prune are all still open (`PROJECT.md` §9.4) — and this
- * module must not read as deciding one. {@link MAX_KEPT_TESTS} bounds the *document*, not the
- * archive.
+ * **Nothing here prunes, sweeps or expires anything — and this store is what the sweep that
+ * does honours.** `./archive-sweep.ts` re-reads this file on every sweep, cached nowhere (above),
+ * and a test named in it is exempt from both retention bounds absolutely, not even taken to bring
+ * the archive under its budget (D35, D36). A store that will not parse therefore **abandons that
+ * sweep and deletes nothing at all**, which is what the throw above buys. What is still open is
+ * who runs the prune unattended (`PROJECT.md` §9.4): `rover sweep` is the only trigger.
+ * {@link MAX_KEPT_TESTS} bounds the *document*, not the archive.
  */
 
 import { randomUUID } from 'node:crypto';

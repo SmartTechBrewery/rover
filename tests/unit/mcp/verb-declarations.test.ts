@@ -119,6 +119,15 @@ const DEVICE_METHODS = ['status', 'list_devices', 'acquire_device', 'release_dev
  * them, and enumerating what every other agent on the host has kept is an operator's question. Both
  * are on `PANEL_METHODS` instead, which is the operator's own browser (D27, D29).
  *
+ * `sweep_archive` is here for `force_release_device`'s reason with the stakes raised (§9.4, #238).
+ * That row ends somebody else's lease; this one **deletes an operator's data** on a shared host —
+ * whole run directories, permanently, with no undo and no trash directory. It is authority over
+ * the host's own disk rather than a step in any agent's work, so it is an operator's press reached
+ * from the CLI, and it is not on `PANEL_METHODS` either: a browser is not where an irreversible
+ * deletion of somebody else's runs belongs while D27's role model is still deferred. An agent
+ * needs nothing here in any case — its own artifacts came back as bytes in the verb's own answer
+ * (D19).
+ *
  * The list is short and named so the gate below can be exact: a verb row added later is either
  * a registered tool or a deliberate entry here, never a row that quietly has no tool.
  */
@@ -132,6 +141,7 @@ const NOT_YET_EXPOSED = [
 	'list_projects',
 	'list_kept_tests',
 	'set_kept_tests',
+	'sweep_archive',
 ] as const satisfies readonly IpcMethodName[];
 
 /** The platform vocabulary `tests/unit/no-platform-names.test.ts` keeps out of `src/` (D10). */

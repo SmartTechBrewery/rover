@@ -97,6 +97,7 @@ async function serve(): Promise<void> {
 		artifactsRoot: temp.artifactsRoot,
 		projectsRoot: temp.projectsRoot,
 		keptTestsPath: temp.keptTestsPath,
+		retention: temp.retention,
 	});
 	if (!result.started) {
 		throw new Error('Another daemon holds the temp socket — the test cannot proceed');

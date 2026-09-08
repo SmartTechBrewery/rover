@@ -198,8 +198,11 @@ import { findUserByToken, type UserRecord } from './user-store.js';
  * level at a time, searches the whole of it, asks which of its runs share a group, reads what this
  * host has registered, and reads and sets which of the archive's tests are kept — and D27 still
  * keeps every acquire and every verb off a browser. Neither `Keep` row writes anything into the
- * artifact tree and neither prunes it: the flag is a document of the host's own outside that tree,
- * and retention is still undecided (`PROJECT.md` §9.4).
+ * artifact tree and neither prunes it: the flag is a document of the host's own outside that tree.
+ * **`sweep_archive` is deliberately not on this list** (§9.4, #238), and that is the one row where
+ * D27's test comes out the other way: it deletes an operator's data permanently, with no undo and
+ * no trash directory, and a browser is not where an irreversible deletion of somebody else's runs
+ * belongs while D27's role model is still deferred. It is reached from the CLI (D4).
  *
  * `search_archive` is here and deliberately **not** an MCP tool, which is the same asymmetry
  * `list_archive` and `force_release_device` already have: this transport serves the operator's own

@@ -54,8 +54,12 @@
  * caller's original label, no `<group_id>/` level — so what the reader can answer is what the
  * archive already holds and every run already on disk is readable by it.
  *
- * **Nothing here prunes.** Retention — a TTL, a size cap, who runs it — is explicitly out of
- * scope (PROJECT.md §9.4). This tree grows without bound, on purpose and for now.
+ * **Nothing here prunes, and this module is untouched by the fact that something now does.**
+ * `./archive-sweep.ts` deletes whole run directories by the host's disk budget and age limit
+ * (D34–D36, §9.4, #238) — it reads this tree and never writes it, and nothing about what is
+ * written changed to serve it. What is still out of scope here is any *trigger*: no timer, no
+ * lease hook, no start-up pass, so `rover sweep` is the whole of it and on a host nobody sweeps
+ * this tree grows without bound exactly as before.
  */
 
 import { mkdir, writeFile } from 'node:fs/promises';

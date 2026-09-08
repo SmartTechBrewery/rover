@@ -21,6 +21,7 @@
 // into a type-only one: what this line does is run every backend's registration.
 import '../backends/index.js';
 import { resolveArtifactsRoot } from './archive-path.js';
+import { resolveRetentionPolicy } from './archive-retention.js';
 import { resolveKeptTestsPath } from './kept-tests.js';
 import { startDaemon } from './listen.js';
 import { resolveHttpListener, resolveNetworkListener } from './network-config.js';
@@ -40,6 +41,14 @@ async function main(): Promise<void> {
 	// again — and this is the one piece of host state a *call* writes, so a unit test reaching the
 	// developer's own `~/.rover/kept-tests.json` would not merely read it (D33).
 	const keptTestsPath = resolveKeptTestsPath();
+	// The one place the retention policy is read from the environment, for the same reason again
+	// and with the sharpest version of it: these two numbers are what a sweep *deletes* by, so an
+	// in-process daemon in a test must not pick a budget up out of the developer's shell. A value
+	// that cannot be read as a whole count above zero throws here — `main().catch` below prints it
+	// and the process exits 1 — because an operator who typed `1gb` must not quietly get 1024 MB
+	// and then discover the difference as deleted runs. Nothing runs a sweep on its own (§9.4):
+	// resolving this only makes `sweep_archive` answerable.
+	const retention = resolveRetentionPolicy();
 	// The one place the network listener is resolved from the environment. A missing token
 	// beside a set port throws here, `main().catch` below prints it and the process exits 1 —
 	// a misconfigured listener is a loud startup failure, never a host that quietly serves
@@ -54,6 +63,7 @@ async function main(): Promise<void> {
 		artifactsRoot,
 		projectsRoot,
 		keptTestsPath,
+		retention,
 		...(network ? { network } : {}),
 		...(http ? { http } : {}),
 	});

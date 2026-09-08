@@ -43,8 +43,10 @@
  * the daemon's own record. No token is in scope on this path at all (D20).
  *
  * **Nothing here sweeps, prunes or expires anything.** Setting the flag is the whole of what this
- * module does; a TTL, a size cap and who runs the prune are still undecided (`PROJECT.md` §9.4),
- * and {@link MAX_KEPT_TESTS} bounds the document rather than the archive.
+ * module does — what a set flag *means* is `./archive-sweep.ts`'s, where a kept test is exempt from
+ * both retention bounds absolutely (D35, D36, #238). Who runs the prune unattended is still
+ * undecided (`PROJECT.md` §9.4), and {@link MAX_KEPT_TESTS} bounds the document rather than the
+ * archive.
  */
 
 import type {

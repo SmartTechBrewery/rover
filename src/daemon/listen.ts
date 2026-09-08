@@ -32,6 +32,8 @@ import type { IpcServer } from '../ipc/server.js';
 import { createIpcServer } from '../ipc/server.js';
 import { type ArtifactArchive, createArtifactArchive } from './archive.js';
 import { type ArchiveFileReader, createArchiveFileReader } from './archive-file.js';
+import type { RetentionPolicy } from './archive-retention.js';
+import { type ArchiveSweeper, createArchiveSweeper } from './archive-sweep.js';
 import { type HttpListener, startHttpListener } from './http-listen.js';
 import { createDeviceInventory, type DeviceInventory } from './inventory.js';
 import { createKeptTestsHandlers } from './kept-tests-handlers.js';
@@ -52,6 +54,7 @@ import { createSlotAllocator, type SlotAllocator } from './slots.js';
 import { attemptConnect } from './socket-connect.js';
 import { assertValidSocketPath } from './socket-path.js';
 import { handleStatus } from './status.js';
+import { createSweepArchiveHandler } from './sweep-handlers.js';
 import { createVerbHandlers } from './verb-handlers.js';
 import { createVerbTraffic, type VerbTraffic } from './verb-traffic.js';
 
@@ -177,6 +180,20 @@ export interface StartDaemonOptions {
 	 * developer's own `~/.rover/kept-tests.json` because of a variable in their shell.
 	 */
 	readonly keptTestsPath: string;
+	/**
+	 * What this host is allowed to keep in that archive (§9.4, `./archive-retention.ts`) — the
+	 * disk budget and the age limit, as one value.
+	 *
+	 * **Required**, and resolved from the environment by `./main.ts`, for
+	 * {@link StartDaemonOptions.artifactsRoot}'s reason with the stakes raised: this policy is
+	 * what a sweep *deletes* by, so a `startDaemon()` in a unit test must not pick one up out of
+	 * the developer's own shell. There is no default here, deliberately — a budget nobody chose
+	 * is the one number that must never be guessed at behind `./main.ts`'s back.
+	 *
+	 * **Nothing runs a sweep on its own.** Carrying the policy makes `sweep_archive` answerable;
+	 * it starts no timer and adds nothing to the lease path.
+	 */
+	readonly retention: RetentionPolicy;
 }
 
 /** The daemon this process owns. Only the winner of the bind gets one. */
@@ -232,7 +249,14 @@ export type StartResult = RunningDaemon | DaemonAlreadyRunning;
  * read of the whole set and one write that takes however many tests a single press stood for. Its
  * store is `keptTestsPath` below and is deliberately not under `artifactsRoot`: the artifact tree
  * is what past leases wrote and every sidecar in it is written once, while this toggles
- * (`PROJECT.md` §10). Nothing here prunes the archive — retention is still undecided (§9.4).
+ * (`PROJECT.md` §10).
+ *
+ * And it now answers the one row that **deletes** what those leases wrote: `sweep_archive`
+ * (`./sweep-handlers.ts`, `./archive-sweep.ts`), the retention policy's one surface. It reads the
+ * same `artifactsRoot` the three listings read and the same `keptTestsPath` the `Keep` rows read,
+ * so what a sweep takes, what a listing shows and what the operator exempted can never be three
+ * different trees. **Nothing here schedules it**: the row is answerable and no timer, lease hook
+ * or start-up pass calls it, which is why the sweeper is constructed and then simply held.
  *
  * `artifactsRoot` and `projectsRoot` are parameters rather than things read off `archive` or off
  * a resolver: the archive writes the tree and those two modules read it, and widening the
@@ -253,6 +277,7 @@ export function createDaemonHandlers(
 	artifactsRoot: string,
 	projectsRoot: string,
 	keptTestsPath: string,
+	sweeper: ArchiveSweeper,
 ): IpcHandlers {
 	return {
 		status: handleStatus,
@@ -264,6 +289,7 @@ export function createDaemonHandlers(
 		...createListArchiveGroupsHandler({ root: artifactsRoot }),
 		...createListProjectsHandler({ root: projectsRoot }),
 		...createKeptTestsHandlers({ path: keptTestsPath }),
+		...createSweepArchiveHandler({ sweeper }),
 	};
 }
 
@@ -355,6 +381,18 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartRes
 			// instead (`DeviceRestorerOptions.onRestored`, wired at the restorer above).
 		},
 	});
+	// The retention policy's one mechanism (§9.4). Built after the store because it asks it which
+	// runs are being written into right now — as a callback, so the question is answered at the
+	// moment of the walk rather than at construction. It touches no disk here, not even to look
+	// for the archive root, so a loser of the bind leaves nothing behind here either — and
+	// **nothing about this starts a timer**: the only trigger in this phase is a `sweep_archive`
+	// call somebody made.
+	const sweeper = createArchiveSweeper({
+		root: options.artifactsRoot,
+		keptTestsPath: options.keptTestsPath,
+		retention: options.retention,
+		liveLeases: () => leases.live(),
+	});
 	// Built once, for **both** transports. Not once per bind attempt and not once per
 	// listener: one method table and one dispatcher is what makes the network listener an
 	// added transport rather than a second implementation of the surface (D17). It holds no
@@ -385,6 +423,10 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartRes
 			// while this toggles (D33, `PROJECT.md` §10). A required field for the same reason the
 			// two roots are.
 			options.keptTestsPath,
+			// And the one thing on this surface that *deletes* what those leases wrote. Pointed at
+			// the same archive root and the same `Keep` record as everything above, so what a
+			// sweep takes and what a listing shows can never be two different trees.
+			sweeper,
 		),
 	);
 

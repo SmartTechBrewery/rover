@@ -167,6 +167,21 @@ export interface LeaseStore {
 	/** The live lease on a device, or `null`. Does **not** renew — this is a question. */
 	holderOf(serial: DeviceSerial): Lease | null;
 	/**
+	 * Every live lease. Does **not** renew — this is a question, exactly as
+	 * {@link LeaseStore.holderOf} is.
+	 *
+	 * The complement of `holderOf`, and it exists because one caller has no serial to ask about:
+	 * the archive sweep needs *every run directory that is being written into right now*, so that
+	 * a lease's own run is never deleted out from under it (`./archive-sweep.ts`). Asking device
+	 * by device would mean the sweep enumerating the inventory to find out what to exclude, which
+	 * is the wrong store to ask about a lease.
+	 *
+	 * Expiry is resolved on the way out, through the same `resolveLive` every other read uses, so
+	 * there is one definition of *expired* in this module and an expired record is observed here
+	 * as it is anywhere else.
+	 */
+	live(): readonly Lease[];
+	/**
 	 * How long this lease has left, by the store's own clock. The wire carries this rather
 	 * than {@link Lease.expiresAtMs} (D17). Never negative.
 	 */
@@ -313,6 +328,20 @@ export function createLeaseStore(options: LeaseStoreOptions = {}): LeaseStore {
 
 		holderOf(serial: DeviceSerial): Lease | null {
 			return resolveLiveBySerial(serial);
+		},
+
+		live(): readonly Lease[] {
+			// Over a snapshot and through `resolveLive`, for `sweep()`'s two reasons: resolving an
+			// expired record deletes it from the map being iterated, and expiry has exactly one
+			// definition here.
+			const held: Lease[] = [];
+			for (const id of [...byId.keys()]) {
+				const lease = resolveLive(id);
+				if (lease) {
+					held.push(lease);
+				}
+			}
+			return held;
 		},
 
 		remainingMs(lease: Lease): number {

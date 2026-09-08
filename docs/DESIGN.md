@@ -2694,7 +2694,8 @@ reader who never brings a pointer near it.
 
 **There is no number of days in it, and that is deliberate.** The sentence a reader eventually
 wants is *…will be removed in 14 days…*; the panel does not have the 14. No host answer carries a
-retention window, nothing sweeps the archive, and a figure written in here would be the panel
+retention window — `sweep_archive` deliberately carries neither of the host's two settings (§13),
+and it is not on `PANEL_METHODS` in any case — and a figure written in here would be the panel
 inventing data the host never sent — which §9's *nothing is invented* rule and `ai/RULES.md` §2 both
 refuse, and which `archive-checkbox.test.tsx` asserts against so that a later edit cannot fill in a
 plausible one. Naming the condition instead of a deadline still tells the reader why the box is
@@ -3271,10 +3272,19 @@ under it saying what the number does.
 
 ### There is no `Save`, and nothing is stored
 
-Rover has no retention mechanism: nothing sweeps the archive, no method takes either number and no
-answer carries one. So the draft lives in React state and ends with the mount
-(`panel/src/system/retention-settings.ts`) — a number that survived a reload would look like a
-setting the host had been told about, and the operator would have configured nothing.
+*Corrected in place, 2026-09-08 (#238).* **Rover has a retention mechanism now, and this screen
+still cannot write to it.** The host holds the two numbers in its own environment —
+`ROVER_ARTIFACTS_BUDGET_MB` and `ROVER_ARTIFACTS_MAX_AGE_DAYS`, whose defaults are the `1024` and
+`30` in the table above, held equal to them by a test — and `sweep_archive` runs them over the
+archive. What is *unchanged* is the half this section is actually about: **no method takes either
+number**, so there is nothing on the host for a `Save` to write. So the draft still lives in React
+state and ends with the mount (`panel/src/system/retention-settings.ts`) — a number that survived a
+reload would look like a setting the host had been told about, and the operator would have
+configured nothing.
+
+**What this section said before** was that nothing sweeps the archive either. That was true until
+the sweep landed and is the one clause that had to move; the *reason* it gave is untouched, and it
+is why the fields still have no button. The sentence under them moved with it — see below.
 
 **The `Keep` tick was the other half of that pair and no longer is** (corrected in place, #237): it
 was React state for this exact reason until the host had somewhere to put it, and since #234 it has
@@ -3287,10 +3297,17 @@ first thing to lie about that*. The fields are editable anyway, because a form n
 says nothing about whether the design is right.
 
 **What the screen says instead** is two quiet lines under the fields — the pair's own rule, then
-*Nothing is stored yet. Rover has no retention mechanism, so these two numbers are not saved
-anywhere and nothing on this host is sweeping the archive.* Ordinary text in the quiet step: no
-banner, no warning colour, no icon of alarm, no `role="alert"` (§7). One of those two lines is
-temporary and comes out when the host half lands; the other is permanent.
+*These two numbers are not saved anywhere: the host reads its own, from its own environment, and no
+method here can set them.* Ordinary text in the quiet step: no banner, no warning colour, no icon
+of alarm, no `role="alert"` (§7). One of those two lines is temporary and comes out if a host
+method for writing them ever lands; the other is permanent.
+
+*Corrected in place, 2026-09-08 (#238).* That second line used to read *Nothing is stored yet.
+Rover has no retention mechanism, so these two numbers are not saved anywhere and nothing on this
+host is sweeping the archive.* Half of it is still true — nothing here saves them — and half of it
+stopped being true the day the sweep landed. The replacement keeps the true half and drops the
+other rather than softening it, because a screen that hedges about whether the host deletes an
+operator's runs is worse than one that is simply out of date.
 
 **Both lines take the card's full width**, not the prose measure the field copy wraps at, and both
 sit under the title rather than under the fields — see the arrangement above.
@@ -3303,11 +3320,17 @@ fields it is about rather than in a panel above them.
 
 - **No `Save`, no `Apply`, no `Reset`** — see above. Nothing to write to.
 - **No current usage figure.** *Using 3.4 GB of 10 GB* is the obvious companion to a disk budget and
-  the panel cannot have it: no answer carries the archive's size, and a number computed in a browser
-  from a bounded directory walk would be a measurement presented as a fact (D19, and §9's rule that
-  nothing on the archive screen is invented). It arrives with the host half or not at all.
-- **No preview of what would be deleted.** Same reason, one step further: the sweep does not exist,
-  so nothing can be asked what it would take.
+  the panel cannot have it: no answer carries the archive's size **or its budget**, and a number
+  computed in a browser from a bounded directory walk would be a measurement presented as a fact
+  (D19, and §9's rule that nothing on the archive screen is invented). `sweep_archive` deliberately
+  carries neither setting for exactly this reason, so the sweep landing does not change this row —
+  it arrives with an answer that carries the figure, or not at all.
+- **No preview of what would be deleted.** *Corrected in place, 2026-09-08 (#238): the sweep does
+  exist now and can be asked what it would take* — `sweep_archive` takes a `dryRun`. What keeps this
+  absent is that the method is **not on `PANEL_METHODS`**, and that is not an oversight to fill in:
+  the same call with `dryRun: false` deletes an operator's runs permanently, so a browser is not
+  where it belongs while D27's role model is still deferred. A preview control here would be one
+  boolean away from the destructive form. It is reached from the CLI (`rover sweep --dry-run`).
 - **No units toggle**, no GB/MB switch. The setting is a count of megabytes; a second unit is a
   second place a number can be wrong.
 - **Nothing about the daemon, the host's ports, the users or the projects root.** They are settings

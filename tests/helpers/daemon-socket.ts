@@ -12,6 +12,11 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { type Observation, pause, waitForCondition } from '@/core/wait.js';
+import {
+	DEFAULT_ARTIFACTS_BUDGET_MB,
+	DEFAULT_ARTIFACTS_MAX_AGE_DAYS,
+	type RetentionPolicy,
+} from '@/daemon/archive-retention.js';
 import { attemptConnect } from '@/daemon/socket-connect.js';
 import { createIpcClient, type IpcClient } from '@/ipc/client.js';
 
@@ -57,6 +62,18 @@ export interface TempSocket {
 	 * pointed at the real path would rewrite it.
 	 */
 	readonly keptTestsPath: string;
+	/**
+	 * What a daemon started on this socket is allowed to keep in that archive (§9.4).
+	 *
+	 * **The shipped defaults, spelled out rather than resolved from the environment**: it is a
+	 * required `startDaemonOptions` field for exactly that reason, so a suite must not be able to
+	 * inherit a budget from the developer's shell and start deleting by it. A suite that needs a
+	 * different policy passes its own — nothing here is a policy for anybody's real archive.
+	 *
+	 * Holding one changes nothing on its own: **nothing sweeps unless a `sweep_archive` call asks
+	 * it to**, so a suite that never makes one is unaffected by this field's presence.
+	 */
+	readonly retention: RetentionPolicy;
 }
 
 /**
@@ -75,6 +92,10 @@ export async function createTempSocket(): Promise<TempSocket> {
 		artifactsRoot: join(dir, 'artifacts'),
 		projectsRoot: join(dir, 'projects'),
 		keptTestsPath: join(dir, 'kept-tests.json'),
+		retention: {
+			budgetMb: DEFAULT_ARTIFACTS_BUDGET_MB,
+			maxAgeDays: DEFAULT_ARTIFACTS_MAX_AGE_DAYS,
+		},
 	};
 }
 

@@ -501,3 +501,59 @@ describe('the end hook', () => {
 		expect(warnings[0]).toContain(deviceA);
 	});
 });
+
+/**
+ * `live()` — every lease at once, which is the question the archive sweep has to ask (#238): the
+ * runs being written into *right now*, with no serial to ask about.
+ *
+ * It is the complement of `holderOf`, so it is held to the same two promises: it does not renew,
+ * and it drops an expired record on the way out through the one definition of *expired* this
+ * module has.
+ */
+describe('live', () => {
+	it('is empty for a store nobody has acquired from', () => {
+		const { store } = createClockedStore();
+
+		expect(store.live()).toEqual([]);
+	});
+
+	it('answers every live lease, however many devices they are on', () => {
+		const { store } = createClockedStore();
+		store.acquire(request(deviceA, 'issue-1'));
+		store.acquire(request(deviceB, 'issue-2'));
+
+		expect([...store.live()].map((lease) => lease.serial).sort()).toEqual([deviceA, deviceB]);
+	});
+
+	/*
+	 * **It is a question, not a renewal.** A sweep asks it on an interval one day (§9.4's later
+	 * phases), and a question that pushed every expiry out would keep every device held for as
+	 * long as the sweep kept asking.
+	 */
+	it('does not renew what it answers', () => {
+		const { store, at, nowMs } = createClockedStore();
+		const granted = store.acquire(request(deviceA, 'issue-1'));
+		if (!granted.granted) {
+			throw new Error('the acquire should have been granted');
+		}
+		const expiresAtMs = granted.lease.expiresAtMs;
+
+		at(nowMs() + LEASE_TTL_MS / 2);
+		expect(store.live()[0]?.expiresAtMs).toBe(expiresAtMs);
+
+		at(expiresAtMs + 1);
+		expect(store.live()).toEqual([]);
+	});
+
+	// And the expiry is *observed* through it, exactly as it is through every other read: the
+	// end hook fires without anybody having asked about that lease in particular.
+	it('observes an expiry it drops', () => {
+		const { store, at, nowMs, ended } = createObservedStore();
+		store.acquire(request(deviceA, 'issue-1'));
+
+		at(nowMs() + LEASE_TTL_MS + 1);
+		expect(store.live()).toEqual([]);
+
+		expect(ended.map((record) => record.reason)).toEqual(['expired']);
+	});
+});

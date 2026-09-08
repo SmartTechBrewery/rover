@@ -18,11 +18,13 @@ import { rootRoute } from './__root.js';
  * test may get. They are the two bounds of one rule, so they are one card
  * (`components/system/retention-card.tsx`).
  *
- * **Nothing is stored, and no `Save` is drawn.** Rover has no retention mechanism — nothing sweeps
- * the archive, no method takes either number and no answer carries one — so the draft lives in
- * React state and ends with the mount (`system/retention-settings.ts`). A control that appeared to
- * write would be exactly what §11 refuses on a destination that is not built, and the card says
- * plainly where the numbers stand instead.
+ * **Nothing is stored, and no `Save` is drawn.** No method takes either number and no answer
+ * carries one, so the draft lives in React state and ends with the mount
+ * (`system/retention-settings.ts`). A control that appeared to write would be exactly what §11
+ * refuses on a destination that is not built, and the card says plainly where the numbers stand
+ * instead. *Corrected in place, 2026-09-08 (#238): the host does have a retention mechanism now —
+ * it enforces these two bounds from its own environment and `rover sweep` runs them — and that
+ * changes nothing here, because what is still missing is a method that writes them.*
  *
  * **No `CalmNotice` any more.** The screen is not *empty*: it has the two fields, so the *not built
  * yet* wording would now be false of it, and the one temporary fact — that the numbers are not kept

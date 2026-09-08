@@ -392,6 +392,10 @@ describe('the generated ROVER.md', () => {
 		// somebody else's run — and its read would enumerate what every other agent has kept.
 		'list_kept_tests',
 		'set_kept_tests',
+		// And the sweep of that archive (§9.4, #238) — `force_release_device`'s reason with the
+		// stakes raised: it deletes an operator's data on a shared host, which is an operator's
+		// press and never a step in one agent's work.
+		'sweep_archive',
 	]);
 
 	const page = roverDocument({
