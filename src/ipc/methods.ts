@@ -1487,22 +1487,23 @@ export type SweepArchiveResult = z.infer<typeof SweepArchiveResultSchema>;
  * could clear the exemption on somebody else's run (D27). Neither row sweeps anything itself; the
  * row that does is below, and the flag is the exemption it honours.
  *
- * **`sweep_archive` is the retention policy's one surface, and the only thing that triggers it is
- * somebody asking** (§9.4, §10, `src/daemon/archive-sweep.ts`). It walks the archive, answers
- * which run directories the two host settings take — `ROVER_ARTIFACTS_BUDGET_MB` and
+ * **`sweep_archive` is the retention policy's one surface, and the only trigger its *age* bound
+ * has** (§9.4, §10, `src/daemon/archive-sweep.ts`). It walks the archive, answers which run
+ * directories the two host settings take — `ROVER_ARTIFACTS_BUDGET_MB` and
  * `ROVER_ARTIFACTS_MAX_AGE_DAYS` — and, unless `dryRun`, deletes them whole with their `<serial>`
- * subtree, removing any test name and project left holding nothing. **Nothing schedules it in this
- * phase**: no timer, no per-lease check, no start-up pass, so an operator through `rover sweep` is
- * the whole of the trigger. A kept test (D33) and a run whose lease is live are exempt from both
- * bounds, and an archive still over budget with only those left answers `stillOverBudget` rather
- * than taking one of them — a refusal reported as data, with one line on the host's own log
- * (D28). The answer carries three directory *names* per run, the same components `list_archive`
- * answers with, and there is no field a host path or a budget would fit in (D19,
- * {@link SweepArchiveResultSchema}). It is deliberately **not** on `PANEL_METHODS` and
- * deliberately **not** an MCP tool: `force_release_device`'s reasoning with the stakes raised —
- * it deletes an operator's data on a shared host, and no agent's step of work is that. `actor` is
- * caller-supplied attribution and never derived (D20, D28); one audit line names it and whether
- * the call was a dry run.
+ * subtree, removing any test name and project left holding nothing. **This row is not the only way
+ * the sweeper runs any more**: the host sweeps by the *budget alone* after every lease ends,
+ * released and expired alike, with nobody asking (D37) — so what this row adds is the **age**
+ * bound and the `dryRun` question, and no timer schedules either of them. A kept test (D33) and a
+ * run whose lease is live are exempt from both bounds, and an archive still over budget with only
+ * those left answers `stillOverBudget` rather than taking one of them — a refusal reported as
+ * data, with one line on the host's own log (D28). The answer carries three directory *names* per
+ * run, the same components `list_archive` answers with, and there is no field a host path or a
+ * budget would fit in (D19, {@link SweepArchiveResultSchema}). It is deliberately **not** on
+ * `PANEL_METHODS` and deliberately **not** an MCP tool: `force_release_device`'s reasoning with
+ * the stakes raised — it deletes an operator's data on a shared host, and no agent's step of work
+ * is that. `actor` is caller-supplied attribution and never derived (D20, D28); one audit line
+ * names it and whether the call was a dry run.
  *
  * The verb rows are the two waits, the six input verbs, the three read verbs, the three
  * app-lifecycle verbs, the log read, the three recording rows, the two environment verbs and

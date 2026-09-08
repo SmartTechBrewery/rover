@@ -2643,19 +2643,27 @@ device card: a recording is megabytes and its object URL is a live handle on the
 lifetime is the state that holds it. There is no cap on a text file's lines; `MAX_LOG_ENTRIES` bounds
 the ones Rover writes at about 5 000.
 
-### The `Keep` checkbox — settled here, not designed, and the operator's half of a mechanism that does not sweep yet
+### The `Keep` checkbox — settled here, not designed, and the operator's half of a sweep that now runs
 
-A test the reader wants **kept** once Rover starts sweeping the archive. **The decision is real and
-the sweep is not**: the host records which tests the operator keeps, and nothing on the host deletes
-an old run today, so the flag is an instruction waiting for the thing it instructs.
+A test the reader wants **kept** when Rover sweeps the archive. **The decision and the sweep are
+both real now, and this section is corrected in place rather than rewritten** (`ai/RULES.md` §1):
+the host records which tests the operator keeps, *and* it deletes old runs — the **disk budget**
+half after every lease ends with nobody asking (`PROJECT.md` D37, #245) and the **age** half
+whenever `rover sweep` or `sweep_archive` is called (#238). So the tick is an exemption in force
+(D35), not an instruction waiting for the thing it instructs, and it is the only thing standing
+between one test's artifacts and a host that has run out of budget.
 
 **Both halves of *remembering* the decision have landed** — the host's in #234 (D33) and the tick's
 in #237. `list_kept_tests` and `set_kept_tests` sit on the panel's own transport over
 `~/.rover/kept-tests.json`; the Archive screen reads the whole set once per mount and every press is
 one call whose answer it draws (`pinned-tests.ts`), so a tick is there after a reload, in a
 different browser, and after a daemon restart, and `rover keep list` shows the same test. So there is
-a host method and a wired control: do not design a second of either. What still does not exist is
-the **sweep** the flag exempts a test *from*, and the sentence below is what comes out when that
+a host method and a wired control: do not design a second of either. What is still absent is the
+**number** in the sentence below, and it is absent for a reason that has nothing to do with the
+sweep existing: `sweep_archive` deliberately carries neither of the host's two retention settings,
+so no answer this panel can make carries the window and digits written here would be the panel
+inventing data (`archive-checkbox.tsx`'s own comment on the sentence, and this screen's *nothing is
+invented* rule). The sentence changes when a host answer carries the window, not when a trigger
 lands.
 
 **It is `Keep` and not `Archive`, and the sentence is what forced the rename.** The control read

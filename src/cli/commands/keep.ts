@@ -70,9 +70,10 @@ test name as the archive filed them, never a path on the host, which is not your
 The flag is per test rather than per run: a test's runs are kept or not together.
 
 The flag lives in the host's own file, outside the artifact tree, so it survives a daemon
-restart. It is what \`rover sweep\` exempts: a kept test is never taken by the host's disk budget
-or its age limit, not even to bring the archive under budget. **Nothing on the host sweeps on its
-own** — \`rover sweep\` is the only trigger.
+restart. It is what a sweep exempts: a kept test is never taken by the host's disk budget
+or its age limit, not even to bring the archive under budget. That holds for the sweep the host
+runs itself after every lease ends — the disk budget, unasked — as much as for \`rover sweep\`,
+which is still the only thing that runs the age limit.
 
 A refusal exits 1: the host keeps as many tests as it will hold, or it could not read or
 write its own record. Which it was is in the host's own log, never in the answer.`;

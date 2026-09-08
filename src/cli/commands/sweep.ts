@@ -1,10 +1,11 @@
 /**
  * `rover sweep` — run the host's retention policy over its artifact archive (§9.4, §10).
  *
- * **The only trigger there is in this phase.** Nothing on the host sweeps on its own — no timer,
- * no per-lease check, no start-up pass — so this command is how the policy is reached, which is
- * D4's rule arriving where it matters most: a deletion routine an operator cannot run by hand,
- * watch, and ask a question of first is one nobody can debug.
+ * **The only trigger the *age* limit has.** The host enforces the disk budget by itself after
+ * every lease ends (D37, `src/daemon/archive-sweep.ts`), so what this command adds is the other
+ * bound and the question — which is D4's rule arriving where it matters most: a deletion routine
+ * an operator cannot run by hand, watch, and ask what it *would* do first is one nobody can
+ * debug. It stays the way the whole policy is reached even now that half of it reaches itself.
  *
  * **`--dry-run` first in the usage text, and deliberately not the default.** A command somebody
  * typed does what it says, and a `sweep` that quietly asked instead of swept would be worse than
@@ -59,7 +60,9 @@ lease is live — and neither is ever taken to get under the budget. An archive 
 budget with only those left is reported as such and nothing is deleted for it; that one only
 you can resolve, by unticking a test or raising the budget.
 
-Nothing on the host runs this on its own yet. This command is the whole of the trigger.
+The host enforces the disk budget by itself after every lease ends, released or expired — behind
+the release, so a release is never slowed or failed by one. The age limit has no trigger but this
+command.
 
 A run is named by the components a \`rover archive\` listing named — the project, the test name
 and the run directory — never a path on the host, which is not yours to know.

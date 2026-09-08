@@ -33,7 +33,7 @@ import { createIpcServer } from '../ipc/server.js';
 import { type ArtifactArchive, createArtifactArchive } from './archive.js';
 import { type ArchiveFileReader, createArchiveFileReader } from './archive-file.js';
 import type { RetentionPolicy } from './archive-retention.js';
-import { type ArchiveSweeper, createArchiveSweeper } from './archive-sweep.js';
+import { type ArchiveSweeper, createArchiveSweeper, sweepAfterLease } from './archive-sweep.js';
 import { type HttpListener, startHttpListener } from './http-listen.js';
 import { createDeviceInventory, type DeviceInventory } from './inventory.js';
 import { createKeptTestsHandlers } from './kept-tests-handlers.js';
@@ -107,6 +107,24 @@ const LEASE_SWEEP_INTERVAL_MS = 30_000;
  * be the worse failure.
  */
 const RESTORE_SETTLE_TIMEOUT_MS = 10_000;
+
+/**
+ * How long `close()` waits for a sweep of the artifact archive that is still in flight before
+ * shutting down anyway and saying so.
+ *
+ * Waiting at all is the point, and it is the archive's own invariant that makes it one: the unit
+ * of deletion is a whole run directory (`./archive-sweep.ts`), so a `process.exit` landing inside
+ * that `rm` leaves a run every listing still reports while it holds a subset of what its lease
+ * wrote — and if that partial deletion brought the tree under budget, nothing ever selects it
+ * again. `sweepAfterLease` is `void`-ed onto the tail of every lease's end, so `rover release`
+ * followed straight away by stopping the daemon lands inside exactly that window; §6's own
+ * measurement puts the walk alone at 150 ms to 690 ms.
+ *
+ * Bounded for the same reason as {@link RESTORE_SETTLE_TIMEOUT_MS}, and generously against that
+ * measurement: a `close()` that never resolves is a daemon that neither dies nor stops serving
+ * (D6), which is worse than a husk in the archive reported out loud.
+ */
+const SWEEP_SETTLE_TIMEOUT_MS = 10_000;
 
 /**
  * How long `close()` waits for a **network transport** — the TLS listener, the HTTP one, or both
@@ -190,8 +208,10 @@ export interface StartDaemonOptions {
 	 * the developer's own shell. There is no default here, deliberately — a budget nobody chose
 	 * is the one number that must never be guessed at behind `./main.ts`'s back.
 	 *
-	 * **Nothing runs a sweep on its own.** Carrying the policy makes `sweep_archive` answerable;
-	 * it starts no timer and adds nothing to the lease path.
+	 * **Nothing here starts a timer**, but this is no longer only `sweep_archive`'s: the budget
+	 * half of the policy is enforced on the tail of every lease's end (D37, `sweepAfterLease`),
+	 * so a test daemon given a tight budget will delete out of the root it was handed. The age
+	 * half still runs only when an operator asks.
 	 */
 	readonly retention: RetentionPolicy;
 }
@@ -213,7 +233,8 @@ export interface RunningDaemon {
 	readonly httpPort: number | null;
 	/**
 	 * Stops accepting on every transport, drops live connections, waits out the restorations
-	 * still owed (bounded) and unlinks the socket. Safe to call twice.
+	 * still owed and any sweep of the archive they started (both bounded) and unlinks the
+	 * socket. Safe to call twice.
 	 */
 	close(): Promise<void>;
 }
@@ -255,8 +276,11 @@ export type StartResult = RunningDaemon | DaemonAlreadyRunning;
  * (`./sweep-handlers.ts`, `./archive-sweep.ts`), the retention policy's one surface. It reads the
  * same `artifactsRoot` the three listings read and the same `keptTestsPath` the `Keep` rows read,
  * so what a sweep takes, what a listing shows and what the operator exempted can never be three
- * different trees. **Nothing here schedules it**: the row is answerable and no timer, lease hook
- * or start-up pass calls it, which is why the sweeper is constructed and then simply held.
+ * different trees. **This row is not the only caller of that sweeper any more**: the same instance
+ * is asked for a **budget-only** sweep at the tail of every lease's end (`startDaemon` below,
+ * `./archive-sweep.ts`'s `sweepAfterLease`), which is why it is one sweeper and not one per
+ * trigger — the serialisation that keeps two sweeps off one tree is keyed by the root and shared.
+ * **No timer schedules either of them**, and the age bound still has no trigger but this row.
  *
  * `artifactsRoot` and `projectsRoot` are parameters rather than things read off `archive` or off
  * a resolver: the archive writes the tree and those two modules read it, and widening the
@@ -321,6 +345,12 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartRes
 	// behind here either — and a slot is host state that dies with the host (D6): after a
 	// restart there are no leases, so there are no slots to reclaim from a predecessor.
 	const slots = createSlotAllocator();
+	// Declared here and assigned below, which is the **construction order** rather than an
+	// optional dependency: the restorer must exist before the lease store (the store's end hook
+	// calls into it) and the sweeper must exist after it (it asks the store which runs are live).
+	// The one place they meet is `onRestored`, which resolves this at call time — a restoration
+	// runs only for a lease that was granted, so by then both are built. See `sweepAfterLease`.
+	let sweeper: ArchiveSweeper | undefined;
 	// Constructed before the store, because the store's end hook calls into it. It starts
 	// nothing either: a restoration only ever begins when a lease ends, and a process that
 	// never granted one has nothing to undo.
@@ -333,7 +363,18 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartRes
 		// The lease's ports go back into the pool here rather than in `onLeaseEnded` below,
 		// because the teardown that just ran was the thing using them — see
 		// `DeviceRestorerOptions.onRestored`.
-		onRestored: (lease) => slots.release(lease.slot),
+		onRestored: (lease) => {
+			slots.release(lease.slot);
+			// And the disk budget, on the same tail and for the same reason the slot is here:
+			// this is the far side of a lease's end, released and expired alike (D9), where the
+			// caller is already gone and the run that just finished is deletable like any other.
+			// `void`, so nothing an agent is waiting on waits for a walk of the archive, and a
+			// sweep that fails leaves the release successful and says so. **A shutdown is the one
+			// thing that does wait for it** — `closeServer` below, through the sweeper's own
+			// `settle()`, because a `process.exit` landing inside the `rm` would leave a run
+			// directory holding part of what its lease wrote.
+			void sweepAfterLease(sweeper, lease);
+		},
 	});
 	// Built before the store for the restorer's reason: the store's end hook calls into it. It
 	// creates no directory until a verb call actually produces bytes, so a loser of the bind
@@ -385,9 +426,9 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartRes
 	// runs are being written into right now — as a callback, so the question is answered at the
 	// moment of the walk rather than at construction. It touches no disk here, not even to look
 	// for the archive root, so a loser of the bind leaves nothing behind here either — and
-	// **nothing about this starts a timer**: the only trigger in this phase is a `sweep_archive`
-	// call somebody made.
-	const sweeper = createArchiveSweeper({
+	// **nothing about this starts a timer**: the two triggers are a `sweep_archive` call somebody
+	// made and the budget-only sweep on the tail of every lease's end, wired at the restorer above.
+	sweeper = createArchiveSweeper({
 		root: options.artifactsRoot,
 		keptTestsPath: options.keptTestsPath,
 		retention: options.retention,
@@ -436,6 +477,7 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartRes
 		inventory,
 		leases,
 		restorer,
+		sweeper,
 		sweepIntervalMs: options.sweepIntervalMs ?? LEASE_SWEEP_INTERVAL_MS,
 		network: options.network,
 		http: options.http,
@@ -464,6 +506,12 @@ interface DaemonParts {
 	readonly inventory: DeviceInventory;
 	readonly leases: LeaseStore;
 	readonly restorer: DeviceRestorer;
+	/**
+	 * Carried for the shutdown alone: `closeServer` waits out the sweep a lease's end may have
+	 * left in flight ({@link SWEEP_SETTLE_TIMEOUT_MS}). Every other caller reaches it through the
+	 * handler table.
+	 */
+	readonly sweeper: ArchiveSweeper;
 	readonly sweepIntervalMs: number;
 	readonly network: NetworkListenerConfig | undefined;
 	readonly http: HttpListenerConfig | undefined;
@@ -585,7 +633,7 @@ async function closeServer(
 	{ server, connections, startClosing }: ListenSucceeded,
 	socketPath: string,
 	ownInode: Promise<bigint | undefined>,
-	{ inventory, leases, restorer }: DaemonParts,
+	{ inventory, leases, restorer, sweeper }: DaemonParts,
 	{ sweep, network, http }: ShutdownWork,
 ): Promise<void> {
 	// First, and unconditionally: nothing below waits for a sweep that fires halfway through
@@ -638,6 +686,11 @@ async function closeServer(
 
 	await stopped;
 	await restored;
+	// **After the restorations, never beside them**: a restoration's own tail is what starts a
+	// budget sweep (`onRestored` above), so the sweeps this shutdown is answerable for include
+	// the ones its final `leases.sweep()` has only just caused. Snapshotting the chain any
+	// earlier would wait for the wrong thing and let the last one be killed mid-deletion.
+	await settleSweeps(sweeper);
 	await networkClosed;
 	await httpClosed;
 
@@ -685,6 +738,25 @@ async function settleRestorations(restorer: DeviceRestorer): Promise<void> {
 			`Device restoration did not finish within ${RESTORE_SETTLE_TIMEOUT_MS}ms. Shutting ` +
 				`down anyway; a device may be left in the state its last lease put it in, and ` +
 				`nothing will retry it.`,
+		);
+	}
+}
+
+/**
+ * Wait out a sweep of the artifact archive still in flight, bounded — see
+ * {@link SWEEP_SETTLE_TIMEOUT_MS}.
+ *
+ * `ArchiveSweeper.settle` never rejects (a sweep answers every failure as an outcome and its
+ * `void`-ed caller catches the rest), so the only two outcomes are "the archive is consistent"
+ * and "it may not be, and here is that in writing". A run left holding part of what its lease
+ * wrote is worth a line in the log, because every listing will go on reporting it as a whole one.
+ */
+async function settleSweeps(sweeper: ArchiveSweeper): Promise<void> {
+	if (await timesOut(sweeper.settle(), SWEEP_SETTLE_TIMEOUT_MS)) {
+		console.warn(
+			`A sweep of the artifact archive did not finish within ${SWEEP_SETTLE_TIMEOUT_MS}ms. ` +
+				`Shutting down anyway; a run directory may be left holding only part of what its ` +
+				`lease wrote, and nothing will retry it.`,
 		);
 	}
 }

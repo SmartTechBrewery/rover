@@ -9,11 +9,14 @@
  * so they are one module — split apart they would be two readers of one tree that could disagree
  * about it.
  *
- * **Nothing schedules this.** There is no timer here, no per-lease hook and no start-up pass: the
- * only trigger in this phase is an operator, through `sweep_archive` and `rover sweep`. That is
- * deliberate rather than unfinished — pointing a deletion routine at a real archive for the first
- * time is survivable only while a human is the one asking, and only because they can ask what it
- * *would* do first (`dryRun`).
+ * **Two triggers, and they take different bounds.** An operator asks for the whole policy through
+ * `sweep_archive` and `rover sweep`; and the **budget alone** runs after every lease ends,
+ * released and expired alike, on the path D9 already runs — {@link sweepAfterLease}, wired at
+ * `./listen.ts`. Nothing here is a timer: there is still no clock trigger and no start-up pass, so
+ * the **age** bound is an operator's to ask for and an archive nobody sweeps still ages without
+ * bound (§9.4, phase 3). The lease trigger takes the budget only because a run finishing is the
+ * one moment the *size* of this tree can be newly crossed, and it is on the path an agent is
+ * waiting on — see {@link sweepAfterLease} for what that costs.
  *
  * **The unit of deletion is a run directory, taken whole with its `<serial>` subtree.** Never a
  * file, never a `screenshots/` folder, never a level above the run: a half-deleted run is a run
@@ -130,8 +133,8 @@ export interface ArchiveSweeper {
 	/**
 	 * Walk, select, and — unless `dryRun` — delete. Serialised: one sweep at a time per tree.
 	 *
-	 * `bounds` is `'both'` or `'budget'`. The second exists so a future caller can ask for the
-	 * size bound alone without a second entry point; nothing in this phase passes it, and the
+	 * `bounds` is `'both'` or `'budget'`. The second is what a lease's end asks for
+	 * ({@link sweepAfterLease}) — the size bound alone, through this same entry point — and the
 	 * *age* bound alone is deliberately not offered, because a size check that skipped the age
 	 * would be the one combination that lets an archive sit inside its budget for a year.
 	 */
@@ -139,6 +142,20 @@ export interface ArchiveSweeper {
 		readonly dryRun: boolean;
 		readonly bounds: 'both' | 'budget';
 	}): Promise<SweepOutcome>;
+	/**
+	 * Resolve when no sweep of **this tree** is in flight — the queue's tail, not just the walk
+	 * that happens to be running.
+	 *
+	 * This is what makes a shutdown safe. The unit of deletion is a whole run directory (see the
+	 * module header), and a `sweepAfterLease` nobody awaits is killed mid-`rm` by the
+	 * `process.exit` behind `RunningDaemon.close()` — leaving a run that `list_archive` still
+	 * reports while holding a subset of what its lease wrote. `./listen.ts`'s `closeServer` waits
+	 * on this, bounded, after the restorations it owes.
+	 *
+	 * Keyed by the root rather than by this instance, like the serialisation itself, so it also
+	 * covers a `sweep_archive` an operator asked for moments before the daemon was stopped.
+	 */
+	settle(): Promise<void>;
 }
 
 export interface ArchiveSweeperOptions {
@@ -277,7 +294,83 @@ export function createArchiveSweeper(options: ArchiveSweeperOptions): ArchiveSwe
 				};
 			});
 		},
+
+		async settle(): Promise<void> {
+			// The tail of the chain rather than the walk in progress: a sweep queued behind it is
+			// part of what "in flight" means. Looked up again after each wait because one may be
+			// appended while we are waiting — and compared by identity, because the entry is
+			// dropped a microtask *after* it settles, so an unchanged tail means we are done
+			// rather than that another one arrived.
+			let awaited: Promise<unknown> | undefined;
+			let inFlight = sweeps.get(options.root);
+			while (inFlight !== undefined && inFlight !== awaited) {
+				awaited = inFlight;
+				// Never rejects: `serialised` stores a tail that has already swallowed both
+				// settlements, so this waits for the sweep to be *over* and says nothing about
+				// how it went — the sweep's own log line is where that lives.
+				await inFlight;
+				inFlight = sweeps.get(options.root);
+			}
+		},
 	};
+}
+
+/**
+ * The disk budget, enforced because a lease just ended — released or expired, D9's own path.
+ *
+ * **Behind the release rather than inside it.** `release_device` answers the moment the store has
+ * forgotten the lease; the restoration is queued after that and this is queued after *that*
+ * (`DeviceRestorerOptions.onRestored`, `./listen.ts`). So the walk is never on the answer's
+ * path, and the caller is gone by the time it starts. It is `void`-ed at the call site for the
+ * same reason — nothing an agent is waiting on ever waits for a walk of the archive.
+ *
+ * **A shutdown does wait for it, though**, and that is not a contradiction: nobody is waiting on
+ * an answer by then, and the alternative is a `process.exit` landing inside an `rm` of a run
+ * directory (`./listen.ts`'s `closeServer`, {@link ArchiveSweeper.settle}). The unit of deletion
+ * is a whole run and a half-deleted one is still listed as a real one, so the one place this
+ * walk is awaited is the one place not awaiting it would leave a husk behind.
+ *
+ * **A sweep that fails leaves the release successful, and says so.** Every filesystem failure is
+ * already an outcome rather than a throw (see the module header), so nothing below is expected to
+ * reach this `catch`; it is here because "must not fail a release" is a promise about *every*
+ * way this could go wrong, including the ones that are not written down yet. What it costs when
+ * it happens is one line on the host's own log naming the device — the release stood, and the
+ * archive is one sweep behind. `outcome: 'unreadable'` is the same case wearing the module's own
+ * vocabulary: the sweeper has already said which path and why on this same log, and the lease is
+ * over regardless.
+ *
+ * **The budget alone**, because a run finishing is the moment the *size* of this tree can be
+ * newly crossed and nothing about it makes a test a day older. The age bound stays an operator's
+ * to ask for until a clock triggers it (§9.4, phase 3).
+ *
+ * **The run that just ended is deletable like any other by now**, and any run whose lease is
+ * still live is not: `liveLeases` is resolved inside the walk, after this lease has left the
+ * store, so the ending lease is not exempt and every other holder's is (D35).
+ *
+ * `sweeper` is optional for one reason and it is not that the dependency is: `./listen.ts`
+ * constructs the restorer *before* the lease store, and the sweeper after it, so the only value
+ * this can be handed at wiring time is one that is not built yet. It is resolved at call time
+ * instead, where it always exists — a restoration runs only for a lease that was granted, which
+ * is long after `startDaemon` finished constructing both.
+ */
+export async function sweepAfterLease(
+	sweeper: ArchiveSweeper | undefined,
+	lease: Lease,
+	warn: (message: string) => void = (message: string) => console.warn(message),
+): Promise<void> {
+	if (!sweeper) {
+		return;
+	}
+	try {
+		await sweeper.sweep({ dryRun: false, bounds: 'budget' });
+	} catch (error) {
+		warn(
+			`The artifact archive was not swept after the lease on device '${lease.serial}' ended: ` +
+				`${error instanceof Error ? error.message : String(error)}. The lease ended normally ` +
+				`and nothing about the release failed — the archive is simply one sweep behind, and ` +
+				`the next lease to end here, or 'rover sweep', will take it.`,
+		);
+	}
 }
 
 /** What the walk found, or which of the two failures it was. */
