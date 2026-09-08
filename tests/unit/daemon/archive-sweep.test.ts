@@ -10,20 +10,23 @@
  *
  * The claims that matter are the ones a reviewer would otherwise have to take on trust: the order
  * is code units and not a locale, a test's age is its newest run, the budget stops the moment it
- * is met, both exemptions hold against both bounds, and an archive that cannot be brought under
- * budget is a refusal rather than a kept test deleted.
+ * is met, both exemptions hold against both bounds, an archive that cannot be brought under
+ * budget is a refusal rather than a kept test deleted, and a sweep in flight can be **waited
+ * out** — which is what a shutdown does with the one no caller is holding (#245).
  */
 
 import { mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { type Observation, waitForCondition } from '@/core/wait.js';
 import { leaseDirectoryName, leaseRunDirectory } from '@/daemon/archive-path.js';
 import type { RetentionPolicy } from '@/daemon/archive-retention.js';
 import { type ArchiveSweeper, createArchiveSweeper } from '@/daemon/archive-sweep.js';
 import { writeKeptTests } from '@/daemon/kept-tests.js';
 import type { Lease } from '@/daemon/leases.js';
 import { createMockLease } from '../../helpers/factories.js';
+import { createGate, drainEventLoop } from '../../helpers/timing.js';
 
 /** A fixed instant to measure ages against, so no assertion here depends on the wall clock. */
 const NOW_MS = Date.UTC(2026, 8, 8, 12, 0, 0);
@@ -31,6 +34,10 @@ const DAY_MS = 24 * 60 * 60 * 1_000;
 
 /** One MiB, the unit the budget is counted in. */
 const MB = 1024 * 1024;
+
+/** How long the one condition in this file may stay unmet before the test gives up on it. */
+const CONDITION_TIMEOUT_MS = 5_000;
+const CONDITION_POLL_MS = 5;
 
 let dir: string;
 let root: string;
@@ -444,6 +451,72 @@ describe('two sweeps of one tree', () => {
 			expect(trace[index + 1]).toBe(`${trace[index]?.split(':')[0]}:out`);
 		}
 		// And the second sweep really ran on the tree the first one left, rather than joining it.
+		expect(await remainingRuns()).toEqual([]);
+	});
+});
+
+describe('settling the sweeps of one tree', () => {
+	/*
+	 * **What a shutdown waits on.** `sweepAfterLease` is `void`-ed onto the tail of every lease's
+	 * end, so the only thing standing between a walk in progress and the `process.exit` behind
+	 * `RunningDaemon.close()` is this method — and the unit of deletion being a whole run
+	 * directory is what makes that matter (`src/daemon/archive-sweep.ts`'s header). Asserted
+	 * through the `onDelete` seam, because "the deletion had not finished" is not observable
+	 * afterwards from a tree that is already gone.
+	 */
+	it('does not resolve while a run is still being deleted', async () => {
+		await fileRun('rover', 'checkout flow', runNameAt(NOW_MS - 90 * DAY_MS), 1024);
+		const held = createGate();
+		let deleting = false;
+		const sweeper = createArchiveSweeper({
+			root,
+			keptTestsPath,
+			retention: { budgetMb: 1024, maxAgeDays: 30 },
+			liveLeases: () => [],
+			now: () => NOW_MS,
+			log: (line) => logged.push(line),
+			warn: (line) => warned.push(line),
+			onDelete: async () => {
+				deleting = true;
+				await held.reached;
+			},
+		});
+
+		// `void`-ed exactly as the lease path does it, then settled exactly as `closeServer` does.
+		const sweeping = sweeper.sweep({ dryRun: false, bounds: 'both' });
+		let settled = false;
+		const settling = sweeper.settle().then(() => {
+			settled = true;
+		});
+
+		await waitForCondition({
+			what: 'the sweep to reach its first deletion',
+			timeoutMs: CONDITION_TIMEOUT_MS,
+			pollIntervalMs: CONDITION_POLL_MS,
+			probe: (): Observation<void> =>
+				deleting ? { met: true, value: undefined } : { met: false, found: 'nothing deleting' },
+		});
+		await drainEventLoop();
+		// Nothing but the held deletion is left to run, so a `settle()` that was not waiting for
+		// it would have resolved by now.
+		expect(settled).toBe(false);
+
+		held.reach();
+		await sweeping;
+		await settling;
+		expect(await remainingRuns()).toEqual([]);
+	});
+
+	it('resolves at once when no sweep of the tree is in flight', async () => {
+		await fileRun('rover', 'checkout flow', runNameAt(NOW_MS - 90 * DAY_MS), 1024);
+		const sweeper = sweeperFor({ budgetMb: 1024, maxAgeDays: 30 });
+
+		// The ordinary shutdown: nothing was sweeping, so this is a `close()` that waits for
+		// nothing rather than one that has to look for a reason not to wait.
+		await sweeper.settle();
+		await sweeper.sweep({ dryRun: false, bounds: 'both' });
+		await sweeper.settle();
+
 		expect(await remainingRuns()).toEqual([]);
 	});
 });

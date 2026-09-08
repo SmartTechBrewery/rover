@@ -8,15 +8,21 @@
  * every daemon closed through its own handle. That matters more here than anywhere else in the
  * suite, because the subject is **deletion**.
  *
- * Four claims, and each is one a reviewer would otherwise take on trust: a **released** lease and
+ * Six claims, and each is one a reviewer would otherwise take on trust: a **released** lease and
  * an **expired** one both sweep, so this is a teardown rather than a happy path; the bound is the
  * **budget alone**, so a month-old run inside the budget survives; a **live** lease's run is not
- * taken by a sweep another lease's end triggered; and a sweep that cannot run leaves the release
- * successful and says so on the host's log.
+ * taken by a sweep another lease's end triggered; a sweep that cannot run leaves the release
+ * successful and says so on the host's log; and **a shutdown waits for the walk** — both for the
+ * one a release started and for the one the shutdown's own final `leases.sweep()` causes —
+ * because the `process.exit` behind `close()` would otherwise land inside an `rm` of a run
+ * directory.
  *
- * Nothing here waits on a duration. The sweep is behind the release by construction — it is
- * `void`-ed on the tail of the restoration — so every assertion waits on the condition it is
- * about: the daemon's own summary line, or the run directory being gone.
+ * Nothing here waits on a duration to decide that something happened. The sweep is behind the
+ * release by construction — it is `void`-ed on the tail of the restoration — so every assertion
+ * waits on the condition it is about: the daemon's own summary line, the run directory being
+ * gone, or `close()` having resolved. The one clock this file watches is a lease's TTL in the
+ * last test, where waiting on anything the daemon answers would resolve the expiry that test
+ * needs the *shutdown* to be the first to notice.
  */
 
 import { mkdir, readdir, writeFile } from 'node:fs/promises';
@@ -52,6 +58,12 @@ const SECOND = parseDeviceSerial('attached-2');
 /** Short enough that the expiry lands inside the test, long enough to survive the acquire. */
 const SHORT_TTL_MS = 25;
 const SHORT_SWEEP_MS = 5;
+
+/**
+ * A sweep interval no test here reaches, for the one case whose subject is the *shutdown's* own
+ * last look at the store: the interval noticing the expiry first would leave that path untested.
+ */
+const UNREACHED_SWEEP_MS = 60_000;
 
 /** How long a condition below may stay unmet before the test gives up on it. */
 const CONDITION_TIMEOUT_MS = 5_000;
@@ -353,7 +365,10 @@ describe('a sweep that cannot run', () => {
 
 	it('turns a sweeper that throws into one warning naming the device, and nothing else', async () => {
 		const thrown = new Error('the archive volume went away');
-		const sweeper: ArchiveSweeper = { sweep: () => Promise.reject(thrown) };
+		const sweeper: ArchiveSweeper = {
+			sweep: () => Promise.reject(thrown),
+			settle: () => Promise.resolve(),
+		};
 		const lease = createMockLease({ serial: FIRST });
 		const captured: string[] = [];
 
@@ -366,5 +381,69 @@ describe('a sweep that cannot run', () => {
 		expect(captured).toHaveLength(1);
 		expect(captured[0]).toContain(FIRST);
 		expect(captured[0]).toContain(thrown.message);
+	});
+});
+
+describe('a daemon stopped while a sweep is in flight', () => {
+	it('holds close() open until the sweep the release started is over', async () => {
+		registerBackend();
+		const daemon = await start({ retention: TIGHT_BUDGET });
+		const oldest = runNameAt(Date.UTC(2026, 0, 1));
+		const newest = runNameAt(Date.UTC(2026, 5, 1));
+		await fileRun('checkout flow', oldest, 0.9 * MB);
+		await fileRun('checkout flow', newest, 0.9 * MB);
+		const client = await connect();
+		const leaseId = await acquire(client, FIRST, 'checkout flow');
+		await client.request('release_device', { leaseId });
+
+		// `rover release` and `rover stop` back to back, which is what `main.ts` turns into
+		// `await daemon.close(); process.exit(0)`.
+		await daemon.close();
+
+		// Asserted with nothing waited on in between, which is the whole claim: the deletion is
+		// already over by the time `close()` resolves, so `close()` is what waited for it.
+		// Unawaited, the `process.exit` behind it lands inside the `rm` and leaves `oldest`
+		// present and holding a subset of its own files — a run every listing still reports.
+		expect(await remainingRuns()).toEqual([`checkout flow/${newest}`]);
+		expect(warned).toContainEqual(
+			expect.stringContaining('Swept the artifact archive: deleted 1 run'),
+		);
+	});
+
+	it('waits for the sweep caused by a lease it expired on its own way out', async () => {
+		registerBackend();
+		const daemon = await start({
+			retention: TIGHT_BUDGET,
+			leaseTtlMs: SHORT_TTL_MS,
+			// Long enough never to fire inside this test, so the expiry is observed by
+			// `close()`'s own last look at the store and by nothing else — the restoration it
+			// starts, and the sweep behind *that*, are then owed by a daemon already shutting
+			// down.
+			sweepIntervalMs: UNREACHED_SWEEP_MS,
+		});
+		const oldest = runNameAt(Date.UTC(2026, 0, 1));
+		const newest = runNameAt(Date.UTC(2026, 5, 1));
+		await fileRun('checkout flow', oldest, 0.9 * MB);
+		await fileRun('checkout flow', newest, 0.9 * MB);
+		const client = await connect();
+		await acquire(client, FIRST, 'checkout flow');
+		const expiresAtMs = Date.now() + SHORT_TTL_MS;
+
+		// Waited on the clock, and deliberately not on anything the daemon would answer: every
+		// read of the store resolves expiry on the way out (`leases.ts`), so a question here
+		// would make the question the thing that noticed rather than the shutdown.
+		await waitForCondition({
+			what: "the lease's TTL to elapse with nobody having asked the daemon anything",
+			timeoutMs: CONDITION_TIMEOUT_MS,
+			pollIntervalMs: CONDITION_POLL_MS,
+			probe: (): Observation<void> =>
+				Date.now() >= expiresAtMs
+					? { met: true, value: undefined }
+					: { met: false, found: `${expiresAtMs - Date.now()}ms still on the lease` },
+		});
+
+		await daemon.close();
+
+		expect(await remainingRuns()).toEqual([`checkout flow/${newest}`]);
 	});
 });

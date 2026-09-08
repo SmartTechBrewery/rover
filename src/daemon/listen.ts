@@ -109,6 +109,24 @@ const LEASE_SWEEP_INTERVAL_MS = 30_000;
 const RESTORE_SETTLE_TIMEOUT_MS = 10_000;
 
 /**
+ * How long `close()` waits for a sweep of the artifact archive that is still in flight before
+ * shutting down anyway and saying so.
+ *
+ * Waiting at all is the point, and it is the archive's own invariant that makes it one: the unit
+ * of deletion is a whole run directory (`./archive-sweep.ts`), so a `process.exit` landing inside
+ * that `rm` leaves a run every listing still reports while it holds a subset of what its lease
+ * wrote — and if that partial deletion brought the tree under budget, nothing ever selects it
+ * again. `sweepAfterLease` is `void`-ed onto the tail of every lease's end, so `rover release`
+ * followed straight away by stopping the daemon lands inside exactly that window; §6's own
+ * measurement puts the walk alone at 150 ms to 690 ms.
+ *
+ * Bounded for the same reason as {@link RESTORE_SETTLE_TIMEOUT_MS}, and generously against that
+ * measurement: a `close()` that never resolves is a daemon that neither dies nor stops serving
+ * (D6), which is worse than a husk in the archive reported out loud.
+ */
+const SWEEP_SETTLE_TIMEOUT_MS = 10_000;
+
+/**
  * How long `close()` waits for a **network transport** — the TLS listener, the HTTP one, or both
  * — to stop before shutting down anyway and saying so. One bound shared by both, because it
  * bounds the same thing on both.
@@ -190,8 +208,10 @@ export interface StartDaemonOptions {
 	 * the developer's own shell. There is no default here, deliberately — a budget nobody chose
 	 * is the one number that must never be guessed at behind `./main.ts`'s back.
 	 *
-	 * **Nothing runs a sweep on its own.** Carrying the policy makes `sweep_archive` answerable;
-	 * it starts no timer and adds nothing to the lease path.
+	 * **Nothing here starts a timer**, but this is no longer only `sweep_archive`'s: the budget
+	 * half of the policy is enforced on the tail of every lease's end (D37, `sweepAfterLease`),
+	 * so a test daemon given a tight budget will delete out of the root it was handed. The age
+	 * half still runs only when an operator asks.
 	 */
 	readonly retention: RetentionPolicy;
 }
@@ -213,7 +233,8 @@ export interface RunningDaemon {
 	readonly httpPort: number | null;
 	/**
 	 * Stops accepting on every transport, drops live connections, waits out the restorations
-	 * still owed (bounded) and unlinks the socket. Safe to call twice.
+	 * still owed and any sweep of the archive they started (both bounded) and unlinks the
+	 * socket. Safe to call twice.
 	 */
 	close(): Promise<void>;
 }
@@ -347,8 +368,11 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartRes
 			// And the disk budget, on the same tail and for the same reason the slot is here:
 			// this is the far side of a lease's end, released and expired alike (D9), where the
 			// caller is already gone and the run that just finished is deletable like any other.
-			// `void`, never awaited — nothing on a lease's end path waits for a walk of the
-			// archive, and a sweep that fails leaves the release successful and says so.
+			// `void`, so nothing an agent is waiting on waits for a walk of the archive, and a
+			// sweep that fails leaves the release successful and says so. **A shutdown is the one
+			// thing that does wait for it** — `closeServer` below, through the sweeper's own
+			// `settle()`, because a `process.exit` landing inside the `rm` would leave a run
+			// directory holding part of what its lease wrote.
 			void sweepAfterLease(sweeper, lease);
 		},
 	});
@@ -453,6 +477,7 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartRes
 		inventory,
 		leases,
 		restorer,
+		sweeper,
 		sweepIntervalMs: options.sweepIntervalMs ?? LEASE_SWEEP_INTERVAL_MS,
 		network: options.network,
 		http: options.http,
@@ -481,6 +506,12 @@ interface DaemonParts {
 	readonly inventory: DeviceInventory;
 	readonly leases: LeaseStore;
 	readonly restorer: DeviceRestorer;
+	/**
+	 * Carried for the shutdown alone: `closeServer` waits out the sweep a lease's end may have
+	 * left in flight ({@link SWEEP_SETTLE_TIMEOUT_MS}). Every other caller reaches it through the
+	 * handler table.
+	 */
+	readonly sweeper: ArchiveSweeper;
 	readonly sweepIntervalMs: number;
 	readonly network: NetworkListenerConfig | undefined;
 	readonly http: HttpListenerConfig | undefined;
@@ -602,7 +633,7 @@ async function closeServer(
 	{ server, connections, startClosing }: ListenSucceeded,
 	socketPath: string,
 	ownInode: Promise<bigint | undefined>,
-	{ inventory, leases, restorer }: DaemonParts,
+	{ inventory, leases, restorer, sweeper }: DaemonParts,
 	{ sweep, network, http }: ShutdownWork,
 ): Promise<void> {
 	// First, and unconditionally: nothing below waits for a sweep that fires halfway through
@@ -655,6 +686,11 @@ async function closeServer(
 
 	await stopped;
 	await restored;
+	// **After the restorations, never beside them**: a restoration's own tail is what starts a
+	// budget sweep (`onRestored` above), so the sweeps this shutdown is answerable for include
+	// the ones its final `leases.sweep()` has only just caused. Snapshotting the chain any
+	// earlier would wait for the wrong thing and let the last one be killed mid-deletion.
+	await settleSweeps(sweeper);
 	await networkClosed;
 	await httpClosed;
 
@@ -702,6 +738,25 @@ async function settleRestorations(restorer: DeviceRestorer): Promise<void> {
 			`Device restoration did not finish within ${RESTORE_SETTLE_TIMEOUT_MS}ms. Shutting ` +
 				`down anyway; a device may be left in the state its last lease put it in, and ` +
 				`nothing will retry it.`,
+		);
+	}
+}
+
+/**
+ * Wait out a sweep of the artifact archive still in flight, bounded — see
+ * {@link SWEEP_SETTLE_TIMEOUT_MS}.
+ *
+ * `ArchiveSweeper.settle` never rejects (a sweep answers every failure as an outcome and its
+ * `void`-ed caller catches the rest), so the only two outcomes are "the archive is consistent"
+ * and "it may not be, and here is that in writing". A run left holding part of what its lease
+ * wrote is worth a line in the log, because every listing will go on reporting it as a whole one.
+ */
+async function settleSweeps(sweeper: ArchiveSweeper): Promise<void> {
+	if (await timesOut(sweeper.settle(), SWEEP_SETTLE_TIMEOUT_MS)) {
+		console.warn(
+			`A sweep of the artifact archive did not finish within ${SWEEP_SETTLE_TIMEOUT_MS}ms. ` +
+				`Shutting down anyway; a run directory may be left holding only part of what its ` +
+				`lease wrote, and nothing will retry it.`,
 		);
 	}
 }

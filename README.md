@@ -1495,9 +1495,12 @@ here.
 
 Two things worth knowing. The archive is never what a verb answers with — a path here means
 nothing on the machine the agent runs on, so you are handed the bytes and decide where they go.
-And **the only thing that prunes this tree is you**, through `rover sweep` below: the host has a
-retention policy and nothing runs it on its own, so on a host that records video all day this is
-still the directory to watch.
+And **the host prunes this tree by size on its own**: every lease that ends, released or expired,
+is followed by a sweep against `ROVER_ARTIFACTS_BUDGET_MB` (below), so a host that records video
+all day stays inside its budget with nobody typing anything. What is left to you is the **age**
+limit — `rover sweep` below is its only trigger — so this is still the directory to watch, now
+because a tree sitting comfortably inside its budget can hold runs from months ago rather than
+because it grows without bound.
 
 #### Sweeping the archive
 

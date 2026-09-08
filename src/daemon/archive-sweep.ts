@@ -142,6 +142,20 @@ export interface ArchiveSweeper {
 		readonly dryRun: boolean;
 		readonly bounds: 'both' | 'budget';
 	}): Promise<SweepOutcome>;
+	/**
+	 * Resolve when no sweep of **this tree** is in flight — the queue's tail, not just the walk
+	 * that happens to be running.
+	 *
+	 * This is what makes a shutdown safe. The unit of deletion is a whole run directory (see the
+	 * module header), and a `sweepAfterLease` nobody awaits is killed mid-`rm` by the
+	 * `process.exit` behind `RunningDaemon.close()` — leaving a run that `list_archive` still
+	 * reports while holding a subset of what its lease wrote. `./listen.ts`'s `closeServer` waits
+	 * on this, bounded, after the restorations it owes.
+	 *
+	 * Keyed by the root rather than by this instance, like the serialisation itself, so it also
+	 * covers a `sweep_archive` an operator asked for moments before the daemon was stopped.
+	 */
+	settle(): Promise<void>;
 }
 
 export interface ArchiveSweeperOptions {
@@ -280,6 +294,24 @@ export function createArchiveSweeper(options: ArchiveSweeperOptions): ArchiveSwe
 				};
 			});
 		},
+
+		async settle(): Promise<void> {
+			// The tail of the chain rather than the walk in progress: a sweep queued behind it is
+			// part of what "in flight" means. Looked up again after each wait because one may be
+			// appended while we are waiting — and compared by identity, because the entry is
+			// dropped a microtask *after* it settles, so an unchanged tail means we are done
+			// rather than that another one arrived.
+			let awaited: Promise<unknown> | undefined;
+			let inFlight = sweeps.get(options.root);
+			while (inFlight !== undefined && inFlight !== awaited) {
+				awaited = inFlight;
+				// Never rejects: `serialised` stores a tail that has already swallowed both
+				// settlements, so this waits for the sweep to be *over* and says nothing about
+				// how it went — the sweep's own log line is where that lives.
+				await inFlight;
+				inFlight = sweeps.get(options.root);
+			}
+		},
 	};
 }
 
@@ -290,7 +322,13 @@ export function createArchiveSweeper(options: ArchiveSweeperOptions): ArchiveSwe
  * forgotten the lease; the restoration is queued after that and this is queued after *that*
  * (`DeviceRestorerOptions.onRestored`, `./listen.ts`). So the walk is never on the answer's
  * path, and the caller is gone by the time it starts. It is `void`-ed at the call site for the
- * same reason — nothing on a lease's end path waits for a walk of the archive.
+ * same reason — nothing an agent is waiting on ever waits for a walk of the archive.
+ *
+ * **A shutdown does wait for it, though**, and that is not a contradiction: nobody is waiting on
+ * an answer by then, and the alternative is a `process.exit` landing inside an `rm` of a run
+ * directory (`./listen.ts`'s `closeServer`, {@link ArchiveSweeper.settle}). The unit of deletion
+ * is a whole run and a half-deleted one is still listed as a real one, so the one place this
+ * walk is awaited is the one place not awaiting it would leave a husk behind.
  *
  * **A sweep that fails leaves the release successful, and says so.** Every filesystem failure is
  * already an outcome rather than a throw (see the module header), so nothing below is expected to
