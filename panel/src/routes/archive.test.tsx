@@ -575,7 +575,7 @@ describe('opening a second branch', () => {
 				'checkout-app',
 				'login-flow',
 				RUN,
-				// The run's own contents, artifacts first — `level-order.ts`, and the same order
+				// The run's own contents, directories first — `level-order.ts`, and the same order
 				// wherever this level is drawn (#208).
 				'screenshots',
 				'device_info.json',
@@ -852,9 +852,10 @@ describe('the order the runs are listed in', () => {
 });
 
 /*
- * **A run's artifacts lead its contents level** (#208) — the second departure from *the host's order
- * stands*, and one level's one answer: the tree, the card beside it, both views and a typed
- * `<serial>` address all draw it, so all four are asserted off the same fixture.
+ * **A run's directories lead its contents level** (#208, by `kind` rather than by name since #235) —
+ * the second departure from *the host's order stands*, and one level's one answer: the tree, the
+ * card beside it, both views and a typed `<serial>` address all draw it, so all four are asserted
+ * off the same fixture.
  */
 describe('the order a run’s own contents are listed in', () => {
 	/** The run's own `<serial>` level, over the archive every other case browses. */
@@ -881,29 +882,30 @@ describe('the order a run’s own contents are listed in', () => {
 	);
 
 	/*
-	 * Screenshots, then recordings, then the rest of the level exactly as the host answered it —
-	 * `logs` still between `group_id.json` and `test_description.json`, because nothing but those two
-	 * names is lifted and nothing else is re-sorted.
+	 * Every directory, then every file, each half exactly as the host answered it — so the three
+	 * directories are in the host's own code-unit order rather than in one this screen chose, and
+	 * the sidecar files keep theirs below them. **`logs` leads with the other two**, which is what
+	 * naming `screenshots` and `recordings` got wrong (#235).
 	 */
-	const ARTIFACTS_FIRST = [
-		'screenshots',
+	const DIRECTORIES_FIRST = [
+		'logs',
 		'recordings',
+		'screenshots',
 		'device_info.json',
 		'group_id.json',
-		'logs',
 		'test_description.json',
 	];
 
-	it('puts screenshots and recordings first, in the tree and in the card alike', async () => {
+	it('puts every directory first, in the tree and in the card alike', async () => {
 		const { container } = await showing(`checkout-app/login-flow/${RUN}/${SERIAL}`, EVERYTHING);
 
-		expect(cardRows(container)).toEqual(ARTIFACTS_FIRST);
+		expect(cardRows(container)).toEqual(DIRECTORIES_FIRST);
 		// The tree draws the same level, under the run's node, and the levels above it are untouched.
 		expect(treeRows()).toEqual([
 			'checkout-app',
 			'login-flow',
 			RUN,
-			...ARTIFACTS_FIRST,
+			...DIRECTORIES_FIRST,
 			OLDER,
 			'unlabeled',
 			'payments-web',
@@ -918,32 +920,65 @@ describe('the order a run’s own contents are listed in', () => {
 			EVERYTHING,
 		);
 
-		expect(cardRows(container)).toEqual(ARTIFACTS_FIRST);
+		expect(cardRows(container)).toEqual(DIRECTORIES_FIRST);
 		expect(treeRows()).toEqual([
 			'checkout-app',
 			GROUP,
 			'login-flow',
 			RUN,
-			...ARTIFACTS_FIRST,
+			...DIRECTORIES_FIRST,
 			OLDER,
 			OTHER_GROUP,
 		]);
 	});
 
-	// An archive that recorded nothing draws exactly what it draws today: a level with neither
-	// directory in it sorts to itself, which is what a stable sort on one key gives for free.
-	it('leaves a level holding neither directory in the host’s own order', async () => {
+	/*
+	 * **The case the two names got wrong** (#235). A lease that pulled logs and recorded nothing has
+	 * one directory, and it used to sort between `group_id.json` and `test_description.json` — three
+	 * sidecar files above the only row that reaches what the run wrote, which is the complaint #208
+	 * was filed about.
+	 */
+	it('lifts a run’s `logs` above the sidecar files beside it', async () => {
 		const { container } = await showing(
 			`checkout-app/login-flow/${RUN}/${SERIAL}`,
 			filed(SIDECARS[0], SIDECARS[1], directory('logs', 1), SIDECARS[2]),
 		);
 
 		expect(cardRows(container)).toEqual([
+			'logs',
 			'device_info.json',
 			'group_id.json',
-			'logs',
 			'test_description.json',
 		]);
+	});
+
+	// An archive that filed nothing at all draws exactly what it draws today: a level with no
+	// directory in it sorts to itself, which two passes in the level's own order give for free.
+	it('leaves a level holding no directory in the host’s own order', async () => {
+		const { container } = await showing(
+			`checkout-app/login-flow/${RUN}/${SERIAL}`,
+			filed(...SIDECARS),
+		);
+
+		expect(cardRows(container)).toEqual([
+			'device_info.json',
+			'group_id.json',
+			'test_description.json',
+		]);
+	});
+
+	/*
+	 * **`other` is the host declining to classify an entry, and this must not read it as a
+	 * directory** (#235). It is reported rather than dropped so that a short listing cannot pass for
+	 * a complete one, and it lands with the files — in the host's own place among them.
+	 */
+	it('does not lift a `kind: "other"` entry', async () => {
+		const { container } = await showing(
+			`checkout-app/login-flow/${RUN}/${SERIAL}`,
+			filed(SIDECARS[0], { kind: 'other', name: 'latest_recording' }, directory('screenshots', 3)),
+		);
+
+		expect(cardRows(container)).toEqual(['screenshots', 'device_info.json', 'latest_recording']);
 	});
 });
 
@@ -1962,7 +1997,7 @@ describe('the testing groups view', () => {
 			GROUP,
 			'login-flow',
 			RUN,
-			// Artifacts first inside the run, which is one level's one answer in both views (#208).
+			// Directories first inside the run, which is one level's one answer in both views (#208).
 			'screenshots',
 			'device_info.json',
 			OLDER,
@@ -1984,7 +2019,7 @@ describe('the testing groups view', () => {
 			GROUP,
 			'login-flow',
 			RUN,
-			// Artifacts first inside the run, which is one level's one answer in both views (#208).
+			// Directories first inside the run, which is one level's one answer in both views (#208).
 			'screenshots',
 			'device_info.json',
 			OLDER,

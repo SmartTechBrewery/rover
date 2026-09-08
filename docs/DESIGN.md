@@ -1979,30 +1979,36 @@ ever parsed to decide either** (D22).
   `mostRecentFirst` for these levels and `oldestFirst` for that card — so the exception is named in
   one place rather than being a rule some pane quietly reversed. See *The comparison card* below for
   why it is a sort there and a reversal here.
-- **A run's own contents lead with `screenshots` and `recordings`, in that order** (#208), and
-  everything else in that level keeps the host's order below them, exactly as it arrives. The host
-  sorts in code-unit order, which put `device_info.json` and `group_id.json` above them — two files
-  whose contents the card beside the tree is already drawing, sitting over the only rows that reach
-  an artifact at all. **`logs/` is not lifted**: what leads the level is the two kinds a reader opens
-  a run to look at, and the third keeps its place like every other entry. It is decided in
+- **A run's own contents lead with every directory in them** (#208, its mechanism replaced in place
+  by #235), and everything else in that level keeps the host's order below them, exactly as it
+  arrives. The host sorts in code-unit order, which put `device_info.json` and `group_id.json` above
+  the directories — two files whose contents the card beside the tree is already drawing, sitting
+  over the only rows that reach an artifact at all. **`logs/` leads the level too**, which is what
+  the first version of this rule got wrong: it lifted the two names `screenshots` and `recordings`,
+  so a run whose lease pulled logs drew all three sidecar files above `logs/` — the exact complaint
+  #208 was filed about, surviving for one of the three kinds the archive writes. It is decided in
   `level-order.ts` with the other two directions, which is what makes it the **second** named
   departure from *the host's order stands* rather than a rule a pane invented — and what makes the
-  tree and the card agree about a level they both list. `Array.sort` is stable, so *these first,
-  everything else unchanged* needs no tie-break, and a level holding neither directory draws exactly
-  what it draws today.
-- **That is a sort and not an inference, and it is on the record because it makes this screen know
-  two words** (`ai/RULES.md` §1). The bullet below stays true as written — nothing on this screen
-  knows the word `unlabeled` — and `kind` is still on the wire so that no reader guesses from a name
-  whether an address is a directory (D22). Two names are now written down, in one list private to
-  `level-order.ts`, and they are the archive's own and fixed (`src/daemon/archive.ts` files a
-  screenshot under `screenshots/`, a recording under `recordings/`, a log pull under `logs/`). What
-  keeps it a sort: **nothing branches on what a row means**. An unrecognised name keeps its place, no
-  glyph, heading, grouping label, count or status is derived from a name, and the row anatomy above
-  is untouched — only the order changes. The alternative was to have the host answer the order, which
-  would keep *nothing on this screen knows the word* literally true and would place a future
-  `traces/` with no panel edit; the rule went where this screen's other two directions live instead,
-  so *one place decides an order* stays a fact about the panel, and moving it to `list_archive`
-  remains open for whenever a third kind is worth ordering.
+  tree and the card agree about a level they both list. The two halves are taken in the level's own
+  order, so *directories first, everything else unchanged* needs no tie-break, and a level holding
+  no directory at all draws exactly what it draws today. **A `kind: 'other'` entry is not a
+  directory** and lands with the files: the host names a symlink or a socket rather than dropping
+  it, and promoting one would be this screen deciding what the host declined to.
+- **That this screen knew two of the archive's words is reversed — the ordering it bought is not**
+  (#235, rewritten in place rather than deleted, `ai/RULES.md` §1). #208 put a deviation on the
+  record here: it wrote *the two kinds a reader opens a run to look at* as the list
+  `['screenshots', 'recordings']`, private to `level-order.ts` but a name this screen reads all the
+  same — against the bullet below, which says nothing on this screen knows the word `unlabeled`, and
+  against D22, which puts `kind` on the wire precisely so that no reader guesses from a name whether
+  an address is a directory. Expressing a statement about *kinds of thing* as one about *two
+  particular names* is also what left `logs/` behind, and what would have meant an edit for a fourth
+  kind the archive files later. The key is now `kind === 'directory'` and **no name is read at all**,
+  so the deviation is gone rather than narrowed and the bullet below is again literally true. What
+  it costs is written down: `screenshots` was drawn before `recordings` because the list said so,
+  and by kind alone the host's own code-unit order stands — `logs`, `recordings`, `screenshots`.
+  That is one fewer departure rather than a new one, and if a fixed order among the artifact
+  directories is ever worth having, the honest version is `list_archive` answering it, since the
+  host is the one that knows what it wrote.
 - **A legacy `unlabeled/` directory lists like any other folder.** It was the fallback for a lease
   taken without a `test_name` before #129 required one (D22); nothing on this screen knows the word,
   and a run filed under it browses like any other.

@@ -4,7 +4,7 @@ import type { ArchiveEntry } from './archive-listing.js';
  * The order a level's entries are drawn in — **the host's own, with two named departures from it**
  * — and the one place on this screen that decides it (`docs/DESIGN.md` §9).
  *
- * At the run level it is reversed, and inside a run the artifact directories are lifted to the top.
+ * At the run level it is reversed, and inside a run every directory is lifted above every file.
  * Every other level is the host's answer untouched, in the order it arrived.
  *
  * **Reversing is not parsing.** The order is chronological by construction, because a lease
@@ -20,7 +20,8 @@ import type { ArchiveEntry } from './archive-listing.js';
  *
  * **And the exceptions are here too, rather than somewhere that could disagree with them**: the
  * comparison card reads oldest → newest left to right, which is {@link oldestFirst} (#199), and a
- * run's own artifacts lead their level, which is {@link artifactsFirst} (#208). Every direction this
+ * run's own directories lead their level, which is {@link directoriesFirst} (#208, stated over the
+ * `kind` on the wire rather than over two of the archive's names since #235). Every direction this
  * screen has is this module's, so *the host's order stands* keeps a countable list of departures
  * rather than a rule some pane quietly reversed.
  */
@@ -31,7 +32,7 @@ export function orderedEntries(
 	if (depth === RUN_LEVEL_DEPTH) {
 		return mostRecentFirst(entries);
 	}
-	return depth === RUN_CONTENTS_DEPTH ? artifactsFirst(entries) : entries;
+	return depth === RUN_CONTENTS_DEPTH ? directoriesFirst(entries) : entries;
 }
 
 /**
@@ -83,48 +84,45 @@ export function oldestFirst<Item>(
 }
 
 /**
- * A run's artifact directories first, and **everything else in the order it arrived** (#208):
- * `screenshots`, then `recordings`, then the host's own answer with nothing else moved.
+ * A run's directories first, and **everything else in the order it arrived** — #208's outcome,
+ * taken from `kind` on the wire rather than from a list of names (#235).
  *
  * A run's contents level holds the archive's per-kind directories beside the sidecar files a lease
  * writes, and the host's code-unit order put `device_info.json` and `group_id.json` above them — two
  * files whose contents the card beside the tree is already drawing, sitting over the rows that are
  * the only way to reach an artifact at all.
  *
- * **This is a sort and not an inference, and it is a departure worth naming** (`docs/DESIGN.md` §9,
- * `ai/RULES.md` §1). §9 says *nothing on this screen knows the word `unlabeled`*, and `kind` is on
- * the wire so that no reader has to guess a level from a name (D22) — so knowing two words at all is
- * new here. What keeps it a sort: nothing branches on what a row *means*, an unrecognised name keeps
- * its place, and no glyph, measure or claim is derived from a name. A row's anatomy is untouched;
- * only the order it is drawn in changes.
+ * **What #208 got wrong is its mechanism, not its outcome, and that is reversed in place rather
+ * than deleted** (`ai/RULES.md` §1, `docs/DESIGN.md` §9). It lifted the two names `screenshots` and
+ * `recordings`, which said *these two kinds of thing* by naming two particular directories — so
+ * `logs/`, the archive's third kind (`src/daemon/archive.ts`), stayed below the sidecar files,
+ * which is the exact complaint #208 was filed about surviving for one kind in three. And it made
+ * this screen know two of the archive's words, against §9's *nothing on this screen knows the word
+ * `unlabeled`* and against D22, which puts `kind` on the wire precisely so that no reader has to
+ * work out what a row is from its name. Stated once over `kind`, **no name is read at all** and a
+ * kind the archive files next year leads the level with no edit here.
  *
- * **`Array.sort` is stable**, which is the whole of *everything else unchanged* — the same property
- * {@link oldestFirst} leans on. One key, no tie-break to invent, and a level holding neither
- * directory sorts to itself.
+ * **Within each half the host's order stands**, which is the visible change: `logs`, `recordings`,
+ * `screenshots` in the host's own code-unit order, rather than `screenshots` before `recordings`
+ * because a list said so. That is one fewer departure rather than a new one — and if a fixed order
+ * among the artifact directories is ever wanted, the honest version is the **host** answering it,
+ * since it is the one that knows what it wrote.
+ *
+ * **A `kind: 'other'` entry is not a directory** and lands with the files. The host names a symlink
+ * or a socket rather than dropping it, so that a short listing cannot pass for a complete one
+ * (`archive-listing.ts`); promoting one would be this module deciding what the host declined to.
+ *
+ * **Stable by construction rather than by a comparator's tie-break** — two passes over the level in
+ * its own order, which is the whole of *everything else unchanged*. Files keep the answer's order
+ * among themselves, directories keep theirs, and a level holding no directory at all draws exactly
+ * what it draws today.
  */
-function artifactsFirst(entries: readonly ArchiveEntry[]): readonly ArchiveEntry[] {
-	return [...entries].sort((left, right) => rankOf(left.name) - rankOf(right.name));
+function directoriesFirst(entries: readonly ArchiveEntry[]): readonly ArchiveEntry[] {
+	return [
+		...entries.filter((entry) => entry.kind === 'directory'),
+		...entries.filter((entry) => entry.kind !== 'directory'),
+	];
 }
-
-/** Where one name sorts: its place in {@link ARTIFACT_DIRECTORIES}, or after everything in it. */
-function rankOf(name: string): number {
-	const found = ARTIFACT_DIRECTORIES.indexOf(name);
-	return found === -1 ? ARTIFACT_DIRECTORIES.length : found;
-}
-
-/**
- * The names lifted, in the order they are drawn in — **a value beside the reversal rather than a
- * condition buried in a comparator**, so *what this screen orders specially* is one list to read.
- *
- * They are the archive's own and fixed: `src/daemon/archive.ts` files a screenshot under
- * `screenshots/`, a recording under `recordings/` and a log pull under `logs/`. **`logs` is
- * deliberately not in here** — what this lifts is the two kinds a reader opens a run to look at, and
- * the third keeps the host's place like every other entry.
- *
- * Not exported, and that is the point: the panel learning these two words is checkable exactly
- * because this is the one place that holds them.
- */
-const ARTIFACT_DIRECTORIES: readonly string[] = ['screenshots', 'recordings'];
 
 /**
  * Whose rows are runs: 0 is the root, 1 a project, 2 a test name.
@@ -132,7 +130,7 @@ const ARTIFACT_DIRECTORIES: readonly string[] = ['screenshots', 'recordings'];
  * **This is the only depth anything is reversed at, and that is unchanged by a run expanding**
  * (#159): below a run nothing is chronological the way a lease directory's leading timestamp is, so
  * the direction stays the host's — what {@link RUN_CONTENTS_DEPTH} does to one level below it lifts
- * two names out of that order and re-sorts nothing else.
+ * that level's directories out of that order and re-sorts nothing else.
  */
 const RUN_LEVEL_DEPTH = 2;
 
