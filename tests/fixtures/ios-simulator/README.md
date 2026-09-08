@@ -58,6 +58,8 @@ different host. Nothing in this folder re-verifies anything in that document.
 | `simctl-list-devices.xcode26.4.1-ios26.4.1.json` | `xcrun simctl list -j devices` | 26.4.1 | 26.4.1 | 2026-09-08 |
 | `device-type-profile.iphone-17-pro.xcode26.4.1.plist` | `cp` (below) | 26.4.1 | n/a | 2026-09-08 |
 | `device-type-profile.ipad-pro-13-inch-m5.xcode26.4.1.plist` | `cp` (below) | 26.4.1 | n/a | 2026-09-08 |
+| `unified-log-ndjson.xcode26.4.1-ios26.4.1.json` | `log show --style ndjson` (below) | 26.4.1 | 26.4.1 | 2026-09-08 |
+| `unified-log-ndjson.levels.xcode26.4.1-ios26.4.1.json` | `log show --style ndjson` (below) | 26.4.1 | 26.4.1 | 2026-09-08 |
 
 The all-listings capture is the primary one: `xcrun simctl list -j` with no type argument answers
 all four listings at once — `devicetypes`, `runtimes`, `devices`, `pairs` — even though
@@ -112,6 +114,69 @@ the fixture stop being what the tool actually installs.
 
 Committed verbatim like the JSON above, and they contain no path and nothing personal: a device
 type profile is the same file on every machine with the same Xcode.
+
+## The two unified-log captures
+
+The device's own system log, which comes through `log` inside the simulator rather than through
+`simctl` — one more reason this folder is named after the backend and not after one tool. Both were
+taken against the device the host already had booted, so nothing here ran `simctl boot` or
+`simctl shutdown` either.
+
+```bash
+udid=997FA43E-FF9F-4109-BEF0-53D3F46653E7
+
+xcrun simctl spawn $udid log show --style ndjson --info --debug --last 1m \
+  --predicate 'process == "SpringBoard"' \
+  > tests/fixtures/ios-simulator/unified-log-ndjson.xcode26.4.1-ios26.4.1.json
+
+xcrun simctl spawn $udid log show --style ndjson --info --debug \
+  --start '2026-09-08 10:00:16' --end '2026-09-08 10:00:17' --predicate 'process == "contactsd"' \
+  > tests/fixtures/ios-simulator/unified-log-ndjson.levels.xcode26.4.1-ios26.4.1.json
+```
+
+| Fixture | Lines | Entries | `messageType` spread | What it pins |
+|---|---|---|---|---|
+| `unified-log-ndjson.xcode26.4.1-ios26.4.1.json` | 53 | 52 | `Info` 30, `Default` 14, `Error` 1, **absent** 7 | An ordinary read: one process, one minute, the trailer, and the mapping's five fields off the first entry |
+| `unified-log-ndjson.levels.xcode26.4.1-ios26.4.1.json` | 70 | 69 | `Default` 29, **absent** 19, `Info` 14, `Error` 3, `Debug` 3, `Fault` 1 | All five of the level words `messageType` prints, in one file |
+
+- **The last line of each is a trailer, not an entry** — `{"count":52,"finished":1}`. It is the tool
+  describing its own output, the exact analogue of logcat's `--------- beginning of main`, and it
+  carries no `timestamp`, no `eventType` and no `eventMessage`. It is the one line
+  `src/backends/ios-simulator/parsers/unified-log.ts` deliberately drops, which is why both suites
+  assert the entry count is the line count *minus one*.
+- **`messageType` is absent far more often than it is `"None"`.** Every entry that is not a
+  `logEvent` — `activityCreateEvent`, `stateEvent`, `timesyncEvent` — carries no `messageType` key
+  at all: 7 of 52 here and 19 of 69 in the levels capture. In a 30-minute unfiltered survey on this
+  bench, 25,422 of 195,947 entries had none. **Not one of those 195,947 was `"None"`**, so the
+  destination `docs/IOS.md` §5 left open for that value is pinned by an inline case in
+  `tests/unit/backends/ios-simulator/parsers/unified-log.test.ts` rather than by a fixture, and is
+  named as inline there.
+- **`--info --debug` are on both captures on purpose.** Without them the tool answers neither
+  level: the levels window comes back as 53 lines carrying only `Default`, `Error`, `Fault` and
+  absent, and the flags are exactly what add its 14 `Info` and 3 `Debug`. A capture without them
+  would leave two thirds of the level table untestable, and a log read that quietly omitted a level
+  is the hole `LogEntry` exists to prevent.
+- **Predicate-scoped and short, and a capture is never truncated by hand.** Unfiltered,
+  `log show --last 20s` returned 92,204 entries against 268 for the same window scoped to one
+  process (`docs/IOS.md` §5); on this bench a 30-minute unfiltered capture came to 195,948 lines and
+  236 MB. Each entry of this output is over a kilobyte — a `formatString`, image UUIDs, and a
+  `backtrace` on every fault — so the way to a small fixture is a narrower predicate or a shorter
+  window, never a text editor: a hand-cut file stops being what the tool prints.
+- **The levels capture is a one-second `--start`/`--end` window over `contactsd`'s launch burst**,
+  and that is what made all five level words fit in tens of kilobytes. `Debug` is rare on an idle
+  simulator (519 entries in that 195,947-entry survey) and `Fault` never coincides with it by luck,
+  so the window was picked out of the survey rather than waited for; `contactsd` is the smallest
+  process on this bench whose log carries all five at all.
+- **Re-capture picks its own window rather than reusing that one.** A log archive is a ring buffer
+  somebody else is also writing to: the levels command above answered 70 lines when it was captured
+  and 58 fifteen minutes later, and once 0. Survey with `--predicate` and `--last`, find a window
+  that carries what the fixture is for, and record it here like the one above.
+- **These two do contain the capturing operator's home directory**, unlike the profiles: the one
+  `Fault` in the levels capture quotes a file URL under
+  `~/Library/Developer/CoreSimulator/Devices/<udid>/data/…`. Same judgement as the `dataPath`s
+  below — a simulator UDID is not a credential and neither is that path. Note that `--style ndjson`
+  escapes every forward slash (`file:\/\/\/Users\/…`), so `grep /Users/` over these files finds
+  nothing while the path is right there.
 
 ## Two things about the contents
 

@@ -272,9 +272,28 @@ arguments, and no per-key flag was added (`PROJECT.md` §5).
 **`LogLevel` has no `warn` on iOS, and gains a value that is not a level.** The unified log's
 `messageType` is `Debug | Info | Default | Error | Fault` — nothing maps onto `warn` — and entries
 come through with `messageType: "None"` as well. Mapping is therefore
-`Debug→debug, Info→info, Default→info, Error→error, Fault→fatal`, `None→` **?**. `verbose` and `warn`
-would simply never be produced by this backend, which is fine (the enum is a superset by design),
-but `None` needs a home and dropping the line is not it.
+`Debug→debug, Info→info, Default→info, Error→error, Fault→fatal`, and **`None→info`** (#219).
+`verbose` and `warn` would simply never be produced by this backend, which is fine (the enum is a
+superset by design).
+
+`None` needed a home and dropping the line was never it, so it takes `info` — and it shares that
+destination with two other shapes, under one rule stated in
+`src/backends/ios-simulator/parsers/unified-log.ts`: a level that could not be read is not evidence
+of severity in either direction, and a dropped line puts a silent hole in the one verb whose job is
+to show what a screenshot cannot. The other two are worth knowing before writing a predicate:
+
+- **An entry with no `messageType` key at all is the ordinary case, not a corrupt line.** Every
+  entry that is not a `logEvent` — `activityCreateEvent`, `stateEvent`, `timesyncEvent` — carries
+  none: 25,422 of 195,947 entries in a 30-minute unfiltered capture on the Xcode 26.4.1 bench that
+  produced `tests/fixtures/ios-simulator/`. An activity a process created is still something the
+  device said.
+- **A level word a later release invents** takes the same route, rather than being guessed at.
+
+Two more measured facts from that bench, both pinned by fixtures: **`"None"` did not appear once**
+in those 195,947 entries, so the parser's handling of it is pinned by an inline test case on this
+document's evidence rather than by a capture; and **`log show` omits `Info` and `Debug` unless
+`--info --debug` are passed**, so a `readLogs` that leaves them off reports a log with two of the
+five levels missing.
 
 **Logs must be predicate-scoped or they are useless.** Unfiltered, `log show --last 20s` returned
 **92,204 entries**; the same window with `--predicate 'process == "Giotto"'` returned 268. A
