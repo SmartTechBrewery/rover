@@ -428,6 +428,34 @@ the daemon's unix socket transport (R6), 2026-08-29:
   the daemon's autostart is unaffected because it spawns with `cwd: PACKAGE_ROOT`, which is exactly
   what an MCP client does not do. Testing it needs a spawn from a different `cwd`, with no
   `node_modules` above it; no assertion on a string can see a resolution failure.
+- **Every project's Rover MCP server dies when *this* checkout's `node_modules` does, and the
+  operator is told nothing** (hit 2026-09-08). The launcher above runs Rover **from source**, so
+  each consumer project's `.mcp.json` points `node` at `bin/rover-mcp.mjs` here and the server needs
+  this checkout's `tsx` — a **devDependency**. So an empty or pruned `node_modules` in this
+  directory takes the MCP server down in every project at once, while the checkout looks fine: `git
+  status` is clean, because `node_modules` is not tracked. What was observed: the directory existed
+  and held **zero** entries, with no npm log for the minute it was emptied, so npm was not what did
+  it — an interrupted `npm ci`, a manual `rm -rf`, or a cleanup step in an agent's worktree all end
+  the same way, and the cause is not recoverable after the fact. `npm ci` restores it in about three
+  seconds.
+  **What makes it cost an hour rather than a minute is the diagnosis, not the fix.** The launcher
+  already prints exactly the right sentence — *the TypeScript loader is not installed in
+  `<checkout>` — run `npm install` there* — but it prints it to **stderr**, and an MCP client
+  swallows a failed server's stderr and reports only that the server failed to start. So the useful
+  message exists and is unreachable from where the operator is standing. The way to see it is to run
+  the handshake by hand, from a foreign `cwd`, which is the same spawn the finding above says a test
+  needs:
+  ```bash
+  cd /tmp && printf '%s\n' \
+    '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"probe","version":"1"}}}' \
+    '{"jsonrpc":"2.0","method":"notifications/initialized"}' \
+    '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}' \
+    | node /abs/path/to/rover/bin/rover-mcp.mjs
+  ```
+  A healthy server answers `initialize` and lists 25 tools; a broken one prints the sentence. Run
+  against a **consumer** project's directory it also proves the whole path — `status` and
+  `list_devices` through the same pipe reach the daemon (D5's autostart included), which is what
+  separates "the MCP entry is broken" from "the daemon is down".
 - **Killing a daemon can hand the socket to one that was still starting.** Several concurrent
   first calls spawn several daemons; the losers exit when they find the path bound, but one still
   starting when the winner is killed finds the path free and binds it. That is correct behaviour —
