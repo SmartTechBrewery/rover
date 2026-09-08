@@ -51,6 +51,8 @@ Everything above this exception still holds elsewhere: a test that wants a trans
 
 Every parser is tested against output **captured from a real device**, stored under `tests/fixtures/` with the API level and model in the filename. Hand-written fixtures encode what you believe the tool prints, so the parser passes and production fails on the difference — which is the exact shape of the bug this rule prevents.
 
+The rule is that the filename pins **the versions the capture was taken on** — "the API level and the model" is one platform's spelling of it. A capture from an iOS simulator has no API level, because that platform does not have one, so its filename carries the Xcode and runtime versions in that position instead (`tests/fixtures/ios-simulator/README.md`).
+
 Re-capture rather than hand-edit when a format changes, and add the new fixture beside the old one instead of replacing it: a parser has to keep working on the API levels already in use.
 
 ### A wire answer is a fixture too, and it is filed differently
