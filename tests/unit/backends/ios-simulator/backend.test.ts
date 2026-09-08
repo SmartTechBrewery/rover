@@ -9,6 +9,8 @@ import {
 	WATCH_POLL_INTERVAL_MS,
 } from '@/backends/ios-simulator/backend.js';
 import { SimctlNotFoundError } from '@/backends/ios-simulator/developer-dir.js';
+import type { IdbCompanionStreamHandlers } from '@/backends/ios-simulator/idb-companion.js';
+import { IdbCompanionNotFoundError } from '@/backends/ios-simulator/idb-companion-path.js';
 import { PNG_SIGNATURE } from '@/backends/ios-simulator/parsers/png.js';
 import {
 	INSTALL_SIMCTL_TIMEOUT_MS,
@@ -16,7 +18,7 @@ import {
 	SCREENSHOT_SIMCTL_TIMEOUT_MS,
 	SimctlCommandError,
 } from '@/backends/ios-simulator/simctl.js';
-import type { Device, DeviceBackend, DeviceWatcher } from '@/core/device.js';
+import type { Device, DeviceBackend, DeviceWatch, DeviceWatcher } from '@/core/device.js';
 import {
 	DeviceVanishedError,
 	FileTooLargeError,
@@ -75,11 +77,49 @@ vi.mock('@/backends/ios-simulator/simctl.js', async (importOriginal) => ({
 	streamSimctlOnDevice,
 }));
 
+/**
+ * The companion runner, replaced so this suite spawns no process and needs no idb.
+ *
+ * Only the runner: the frame decoder, the mapping onto the neutral vocabulary and the search's
+ * own failure class stay real, because those are what the watch's behaviour is *made* of — a
+ * suite that stubbed the decoder too would assert its own fixtures rather than the join.
+ * `./idb-companion.test.ts` is where a real companion process is driven.
+ */
+type Companion = typeof import('@/backends/ios-simulator/idb-companion.js');
+
+const { streamIdbCompanion } = vi.hoisted(() => ({
+	streamIdbCompanion: vi.fn<Companion['streamIdbCompanion']>(),
+}));
+
+vi.mock('@/backends/ios-simulator/idb-companion.js', async (importOriginal) => ({
+	...(await importOriginal<Companion>()),
+	streamIdbCompanion,
+}));
+
 const fixtureUrl = (name: string): URL =>
 	new URL(`../../../fixtures/ios-simulator/${name}`, import.meta.url);
 
 /** `xcrun simctl list -j` — the all-listings capture, read once because every case re-parses it. */
 const CAPTURE = readFileSync(fixtureUrl('simctl-list.xcode26.4.1-ios26.4.1.json'), 'utf8');
+
+/**
+ * `idb_companion --notify stdout`, captured on this repository's own bench while one simulator
+ * was booted and shut down again: five frames of eleven targets each
+ * (`tests/fixtures/ios-simulator/README.md`).
+ *
+ * Kept as the **lines the companion printed** rather than as decoded frames, so the watch cases
+ * hand the backend bytes and the real decoder is what reads them — the boundary a frame ends on
+ * is the one thing a hand-written fixture cannot get right.
+ */
+const NOTIFY_FRAMES = readFileSync(
+	fixtureUrl('idb-notify.idbcompanion1.5.2-xcode26.6-ios26.5.txt'),
+	'utf8',
+)
+	.split('\n')
+	.filter((line) => line !== '');
+
+/** The one target of that capture whose state moved: `Shutdown → Booting → Booted → …`. */
+const TRANSITIONING = parseDeviceSerial('D85C3449-4D0C-4E93-B8EC-77FD0E5A8F3F');
 
 /** The argv of the two commands this backend makes, pinned as literals rather than as constants. */
 const ENUMERATE = ['list', '-j', 'devices', 'runtimes'];
@@ -201,6 +241,7 @@ beforeEach(() => {
 	// because an idle host is what `ps` says on one.
 	readProcessTable.mockResolvedValue('');
 	streamSimctlOnDevice.mockReset();
+	streamIdbCompanion.mockReset();
 });
 
 describe('listDevices', () => {
@@ -318,11 +359,21 @@ describe('describeDevice', () => {
 });
 
 /**
- * The poll, with the timer under the test's control so nothing here waits on a duration
- * (ai/RULES.md §2). What it proves is the delivery rules: the full set on subscription, again
- * only when the *devices* differ, an interruption that keeps polling, and a stop nothing outlives.
+ * The watch, with **both** its sources under the test's control and nothing waiting on a duration
+ * (ai/RULES.md §2). What it proves is the delivery rules the contract states once and this
+ * backend now satisfies two ways: the full set on subscription, again only when the *devices*
+ * differ, a lost view that is one interruption and never an empty set, and a stop nothing
+ * outlives.
+ *
+ * The companion is mocked at the runner rather than spawned — `./idb-companion.test.ts` is where
+ * a real process is driven, and what this file is about is the join above it: which frames become
+ * which device sets, when the poll takes over, and when it hands back.
  */
 describe('watchDevices', () => {
+	/** The handlers the backend passed to the runner, per companion it started. */
+	let companions: IdbCompanionStreamHandlers[];
+	let stops: Array<ReturnType<typeof vi.fn>>;
+
 	function watcher(): DeviceWatcher & {
 		onDevices: ReturnType<typeof vi.fn>;
 		onInterrupted: ReturnType<typeof vi.fn>;
@@ -344,286 +395,671 @@ describe('watchDevices', () => {
 		await vi.advanceTimersByTimeAsync(WATCH_POLL_INTERVAL_MS);
 	};
 
+	/** One captured frame, delivered the way the companion writes it: the line and its newline. */
+	const frame = (index: number): Buffer => Buffer.from(`${NOTIFY_FRAMES[index]}\n`);
+
+	/** The companion the backend started last — the live one, or the one that just ended. */
+	function live(): IdbCompanionStreamHandlers {
+		const handlers = companions.at(-1);
+		if (handlers === undefined) throw new Error('the backend started no companion');
+		return handlers;
+	}
+
+	/** The live companion ended, for whatever reason, with whatever it last said on stderr. */
+	const dies = (reason = 'idb_companion --notify stdout ended with exit 0'): void => {
+		live().onEnd(reason);
+	};
+
 	beforeEach(() => {
 		vi.useFakeTimers();
+		companions = [];
+		stops = [];
+		streamIdbCompanion.mockImplementation((_args, handlers) => {
+			companions.push(handlers);
+			const stop = vi.fn(async () => {});
+			stops.push(stop);
+			return { stop };
+		});
 	});
 
 	afterEach(() => {
 		vi.useRealTimers();
 	});
 
-	it('starts as soon as it is asked to, with the enumeration’s own argv', async () => {
-		answers(listing());
-
-		backend.watchDevices(watcher());
-		await settle();
-
-		expect(runSimctl).toHaveBeenCalledTimes(1);
-		expect(runSimctl.mock.calls[0]?.[0]).toEqual(ENUMERATE);
-	});
-
-	it('delivers the full current set on subscription', async () => {
-		answers(listing());
-		const listener = watcher();
-
-		backend.watchDevices(listener);
-		await settle();
-
-		expect(sets(listener)).toHaveLength(1);
-		expect(sets(listener)[0]).toHaveLength(22);
-		expect(sets(listener)[0]?.find((device) => device.serial === BOOTED)?.state).toBe('ready');
-	});
-
-	it('delivers nothing when the next poll finds the same device set', async () => {
-		answers(listing());
-		const listener = watcher();
-
-		backend.watchDevices(listener);
-		await settle();
-		await nextPoll();
-		await nextPoll();
-
-		expect(runSimctl).toHaveBeenCalledTimes(3);
-		expect(sets(listener)).toHaveLength(1);
-	});
-
 	/**
-	 * Why the comparison is over the mapped `Device[]` and not over what the tool printed: every
-	 * device entry carries a `dataPathSize` that moves as the simulator writes to its own disk, so
-	 * a raw comparison would report a device change every poll, on an idle host, forever.
+	 * The stream, which is the contract itself rather than an approximation of it: the companion
+	 * prints the whole target set on every change, so a frame *is* an `onDevices` and nothing here
+	 * polls anything.
 	 */
-	it('is silent about a listing that changed without any device changing', async () => {
-		answers(listing());
-		const listener = watcher();
+	describe('on the notify stream', () => {
+		it('starts one companion for the host, in notify mode and pinned to no device', () => {
+			backend.watchDevices(watcher());
 
-		backend.watchDevices(listener);
-		await settle();
+			expect(streamIdbCompanion).toHaveBeenCalledTimes(1);
+			expect(streamIdbCompanion.mock.calls[0]?.[0]).toEqual(['--notify', 'stdout']);
+		});
 
-		answers(
-			listing((parsed) => {
-				for (const entry of entriesOf(parsed)) entry.dataPathSize = 1_234_567_890;
-			}),
-		);
-		await nextPoll();
+		it('delivers the full current set on subscription', () => {
+			const listener = watcher();
 
-		expect(sets(listener)).toHaveLength(1);
-	});
+			backend.watchDevices(listener);
+			live().onStdout(frame(0));
 
-	it('delivers the full set again when a device changes state', async () => {
-		answers(listing());
-		const listener = watcher();
+			expect(sets(listener)).toHaveLength(1);
+			expect(sets(listener)[0]).toHaveLength(11);
+			// The set as the capture found it: the simulator that was booted during the run had
+			// not been booted yet.
+			expect(sets(listener)[0]?.find((device) => device.serial === TRANSITIONING)?.state).toBe(
+				'offline',
+			);
+		});
 
-		backend.watchDevices(listener);
-		await settle();
+		/**
+		 * The whole point of moving off the poll: while the stream is healthy, `simctl` is not run
+		 * at all — not once per gap, not once ever.
+		 */
+		it('runs no simctl listing at all while the stream is healthy', async () => {
+			answers(listing());
 
-		answers(
-			listing((parsed) => {
-				entryOf(parsed, BOOTED).state = 'Shutdown';
-			}),
-		);
-		await nextPoll();
+			backend.watchDevices(watcher());
+			live().onStdout(frame(0));
+			await nextPoll();
+			await nextPoll();
 
-		expect(sets(listener)).toHaveLength(2);
-		expect(sets(listener)[1]).toHaveLength(22);
-		expect(sets(listener)[1]?.find((device) => device.serial === BOOTED)?.state).toBe('offline');
-	});
+			expect(runSimctl).not.toHaveBeenCalled();
+		});
 
-	/** Never a delta: a device leaving is the whole remaining set, not the one that went. */
-	it('delivers the whole remaining set when a device goes away, never a delta', async () => {
-		answers(listing());
-		const listener = watcher();
+		/** Never a delta: every frame is the full set, and a state change is 11 devices again. */
+		it('delivers the full set again on every change, never a delta', () => {
+			const listener = watcher();
 
-		backend.watchDevices(listener);
-		await settle();
+			backend.watchDevices(listener);
+			live().onStdout(frame(0));
+			live().onStdout(frame(2));
 
-		answers(withoutDevice(BOOTED));
-		await nextPoll();
+			expect(sets(listener)).toHaveLength(2);
+			expect(sets(listener)[1]).toHaveLength(11);
+			expect(sets(listener)[1]?.find((device) => device.serial === TRANSITIONING)?.state).toBe(
+				'ready',
+			);
+		});
 
-		expect(sets(listener)[1]).toHaveLength(21);
-		expect(sets(listener)[1]?.some((device) => device.serial === BOOTED)).toBe(false);
-	});
+		it('delivers every frame of one chunk, in order', () => {
+			const listener = watcher();
 
-	/**
-	 * The order is the tool's — the device map is keyed by runtime — so two polls that agree about
-	 * every device may still disagree about which runtime came first. That is not a device change.
-	 */
-	it('is silent when only the order the tool printed changed', async () => {
-		answers(listing());
-		const listener = watcher();
+			backend.watchDevices(listener);
+			live().onStdout(Buffer.concat([frame(0), frame(2)]));
 
-		backend.watchDevices(listener);
-		await settle();
+			expect(sets(listener)).toHaveLength(2);
+			expect(sets(listener)[0]?.find((device) => device.serial === TRANSITIONING)?.state).toBe(
+				'offline',
+			);
+			expect(sets(listener)[1]?.find((device) => device.serial === TRANSITIONING)?.state).toBe(
+				'ready',
+			);
+		});
 
-		answers(
-			listing((parsed) => {
-				parsed.devices = Object.fromEntries(Object.entries(parsed.devices).reverse());
-				for (const entries of Object.values(parsed.devices)) entries.reverse();
-			}),
-		);
-		await nextPoll();
+		/**
+		 * The companion emits on every change *it* sees, which includes changes this backend's
+		 * mapping drops — a physical target, or a field the neutral shape does not carry. One
+		 * delivery rule for both sources is what keeps those from waking the host.
+		 */
+		it('is silent about a frame whose device set did not change', () => {
+			const listener = watcher();
 
-		expect(sets(listener)).toHaveLength(1);
-	});
+			backend.watchDevices(listener);
+			live().onStdout(frame(0));
+			live().onStdout(frame(0));
 
-	it('reports a failed poll as an interruption and keeps polling', async () => {
-		runSimctl.mockRejectedValueOnce(new Error('simctl list -j devices runtimes exited 1'));
-		const listener = watcher();
+			expect(sets(listener)).toHaveLength(1);
+		});
 
-		backend.watchDevices(listener);
-		await settle();
+		/**
+		 * The distinction `onInterrupted` exists to make, on this platform's own worst case: a
+		 * companion is a host process nothing else supervises, and `idb file push` crashes one
+		 * outright (`docs/IOS.md` §4). Delivered as `[]` it would tell an inventory that every
+		 * simulator on the machine had gone away, and every lease over one would be released.
+		 */
+		it('reports a companion that died as exactly one interruption, and never as an empty set', () => {
+			answers(listing());
+			const listener = watcher();
 
-		expect(listener.onInterrupted).toHaveBeenCalledWith(
-			'simctl list -j devices runtimes exited 1',
-			// No cause: this is expected to clear, which is every failure here but one.
-			null,
-		);
-		expect(listener.onDevices).not.toHaveBeenCalled();
+			backend.watchDevices(listener);
+			live().onStdout(frame(0));
+			dies();
 
-		answers(listing());
-		await nextPoll();
+			expect(listener.onInterrupted).toHaveBeenCalledTimes(1);
+			// No cause: a companion that ended is expected to clear on the restart, which is
+			// every end here but one.
+			expect(listener.onInterrupted).toHaveBeenCalledWith(expect.any(String), null);
+			expect(sets(listener).some((set) => set.length === 0)).toBe(false);
+		});
 
-		expect(sets(listener)).toHaveLength(1);
-	});
+		it('falls back to the poll once the stream is gone, and delivers from it', async () => {
+			answers(listing());
+			const listener = watcher();
 
-	/**
-	 * The distinction #168 exists to make: a failure that will clear on its own and one that never
-	 * will read identically on every surface unless the backend says which it is. There being no
-	 * `simctl` to run is the second kind — a Command Line Tools selection does not start carrying
-	 * one — and the program's name is what makes a client's message actionable without the client
-	 * knowing anything about Xcode.
-	 */
-	it('names simctl as the cause when there was none to run', async () => {
-		runSimctl.mockRejectedValue(new SimctlNotFoundError([]));
-		const listener = watcher();
+			backend.watchDevices(listener);
+			live().onStdout(frame(0));
+			dies();
+			await settle();
 
-		backend.watchDevices(listener);
-		await settle();
+			expect(sets(listener)).toHaveLength(2);
+			expect(sets(listener)[1]).toHaveLength(22);
+		});
 
-		expect(listener.onInterrupted).toHaveBeenCalledWith(expect.any(String), {
-			cause: 'tooling-missing',
-			tool: 'simctl',
+		/**
+		 * The companion's own complaint is what explains the end, and this runner hands every byte
+		 * of stderr over rather than quoting it back — so the watch is what puts the tail into the
+		 * message a person reads, the way `unparseable` does for a query.
+		 */
+		it('carries what the companion said on stderr into the interruption', () => {
+			answers(listing());
+			const listener = watcher();
+
+			backend.watchDevices(listener);
+			live().onStderr('NIOThrowingAsyncSequenceProducer allows only a single AsyncIterator\n');
+			dies('idb_companion --notify stdout was killed by SIGTRAP');
+
+			expect(listener.onInterrupted.mock.calls[0]?.[0]).toContain('was killed by SIGTRAP');
+			expect(listener.onInterrupted.mock.calls[0]?.[0]).toContain(
+				'stderr: NIOThrowingAsyncSequenceProducer allows only a single AsyncIterator',
+			);
+		});
+
+		it('quotes an empty stderr rather than leaving the question open', () => {
+			answers(listing());
+			const listener = watcher();
+
+			backend.watchDevices(listener);
+			dies();
+
+			expect(listener.onInterrupted.mock.calls[0]?.[0]).toContain('stderr: (empty)');
+		});
+
+		/**
+		 * A frame this backend cannot read ends the companion rather than being skipped: framing
+		 * that has lost sync cannot be resynchronised, so a device set sliced at a guessed offset
+		 * is worse than none. Reported, never thrown — this runs inside a stdout handler, where
+		 * there is nothing above it to catch.
+		 */
+		it('treats a frame it cannot read as a lost view rather than throwing', () => {
+			answers(listing());
+			const listener = watcher();
+
+			backend.watchDevices(listener);
+
+			expect(() => live().onStdout(Buffer.from('not a frame at all\n'))).not.toThrow();
+			expect(listener.onInterrupted).toHaveBeenCalledTimes(1);
+			expect(listener.onInterrupted.mock.calls[0]?.[0]).toContain(
+				'expected one JSON array of targets per line',
+			);
+			expect(listener.onDevices).not.toHaveBeenCalled();
+			// And the companion is stopped rather than left running: it can only produce more of
+			// the same.
+			expect(stops[0]).toHaveBeenCalled();
+		});
+
+		/**
+		 * The one end worth naming a program in (#168). A host with no `idb_companion` will never
+		 * grow one on its own, so every surface would otherwise repeat "the host's view was
+		 * interrupted" about a host that needs somebody to unpack a tarball. The name is what
+		 * makes that actionable without any client knowing what idb is.
+		 */
+		it('names idb_companion as the cause when this host has none', () => {
+			streamIdbCompanion.mockImplementation(() => {
+				throw new IdbCompanionNotFoundError([]);
+			});
+			const listener = watcher();
+
+			backend.watchDevices(listener);
+
+			expect(listener.onInterrupted).toHaveBeenCalledWith(expect.any(String), {
+				cause: 'tooling-missing',
+				tool: 'idb_companion',
+			});
+		});
+
+		it('starts no companion at all with a decoder holding a partial frame across a restart', () => {
+			const listener = watcher();
+
+			backend.watchDevices(listener);
+			live().onStdout(frame(0).subarray(0, 40));
+			dies();
+			vi.advanceTimersByTime(250);
+			live().onStdout(frame(0).subarray(40));
+
+			expect(sets(listener)).toHaveLength(0);
+		});
+
+		it('restarts the companion after a bounded wait', () => {
+			answers(listing());
+
+			backend.watchDevices(watcher());
+			dies();
+			expect(streamIdbCompanion).toHaveBeenCalledTimes(1);
+
+			vi.advanceTimersByTime(250);
+			expect(streamIdbCompanion).toHaveBeenCalledTimes(2);
+		});
+
+		// A companion that is not there ends as fast as it can be started; a fixed delay there is
+		// a busy loop with a process spawn in it.
+		it('backs off, up to a ceiling, while every restart keeps failing', () => {
+			answers(listing());
+
+			backend.watchDevices(watcher());
+
+			for (const delay of [250, 500, 1000, 2000, 4000, 5000, 5000]) {
+				dies();
+				vi.advanceTimersByTime(delay - 1);
+				const started = streamIdbCompanion.mock.calls.length;
+				vi.advanceTimersByTime(1);
+				expect(streamIdbCompanion.mock.calls.length).toBe(started + 1);
+			}
+		});
+
+		it('goes back to the short wait once a companion delivered a frame', () => {
+			answers(listing());
+
+			backend.watchDevices(watcher());
+			dies();
+			vi.advanceTimersByTime(250);
+			dies();
+			vi.advanceTimersByTime(500);
+			// The third companion works, so the fourth restart is a first failure again.
+			live().onStdout(frame(0));
+			dies();
+
+			vi.advanceTimersByTime(250);
+			expect(streamIdbCompanion).toHaveBeenCalledTimes(4);
+		});
+
+		/**
+		 * The handover back, which is the other half of "only one source delivers at a time": a
+		 * frame is what proves the stream is healthy again, so it is what takes the watch off the
+		 * poll — and no interruption is reported, because nothing was lost.
+		 */
+		it('takes the watch back off the poll when the stream returns', async () => {
+			answers(listing());
+			const listener = watcher();
+
+			backend.watchDevices(listener);
+			dies();
+			await settle();
+			expect(sets(listener)[0]).toHaveLength(22);
+
+			await vi.advanceTimersByTimeAsync(250);
+			live().onStdout(frame(0));
+			expect(sets(listener)[1]).toHaveLength(11);
+
+			runSimctl.mockClear();
+			await nextPoll();
+			await nextPoll();
+			expect(runSimctl).not.toHaveBeenCalled();
+			expect(listener.onInterrupted).toHaveBeenCalledTimes(1);
+		});
+
+		/**
+		 * The view is whichever source is serving the caller, so the fallback costs one
+		 * interruption and not one per attempt: once the poll is delivering, a companion that
+		 * fails to start again changes nothing the caller can observe.
+		 */
+		it('is silent about a restart that fails while the poll is delivering', async () => {
+			answers(listing());
+			const listener = watcher();
+
+			backend.watchDevices(listener);
+			dies();
+			await settle();
+			expect(listener.onInterrupted).toHaveBeenCalledTimes(1);
+
+			await vi.advanceTimersByTimeAsync(250);
+			dies();
+			await vi.advanceTimersByTimeAsync(500);
+			dies();
+
+			expect(listener.onInterrupted).toHaveBeenCalledTimes(1);
+		});
+
+		it('delivers nothing at all when it is stopped before the first frame', async () => {
+			const listener = watcher();
+
+			const watch = backend.watchDevices(listener);
+			await watch.stop();
+
+			expect(listener.onDevices).not.toHaveBeenCalled();
+			expect(listener.onInterrupted).not.toHaveBeenCalled();
+			expect(stops[0]).toHaveBeenCalledTimes(1);
+		});
+
+		it('stops the companion and never restarts it once stopped', async () => {
+			const listener = watcher();
+			const watch = backend.watchDevices(listener);
+			live().onStdout(frame(0));
+
+			await watch.stop();
+			listener.onDevices.mockClear();
+			live().onStdout(frame(2));
+			dies();
+			vi.advanceTimersByTime(60_000);
+
+			expect(stops[0]).toHaveBeenCalledTimes(1);
+			expect(streamIdbCompanion).toHaveBeenCalledTimes(1);
+			expect(listener.onDevices).not.toHaveBeenCalled();
+			expect(listener.onInterrupted).not.toHaveBeenCalled();
+		});
+
+		it('cancels a restart that was already scheduled', async () => {
+			answers(listing());
+			const watch = backend.watchDevices(watcher());
+
+			dies();
+			await watch.stop();
+			vi.advanceTimersByTime(60_000);
+
+			expect(streamIdbCompanion).toHaveBeenCalledTimes(1);
 		});
 	});
 
-	/*
-	 * And it is not a reason to stop trying: `DEVELOPER_DIR` fixed on a running daemon is exactly
-	 * what the next poll picks up, since that search is re-run per call and unmemoised.
-	 */
-	it('keeps polling when there was no simctl to run at all', async () => {
-		runSimctl.mockRejectedValue(new SimctlNotFoundError([]));
-
-		backend.watchDevices(watcher());
-		await settle();
-		await nextPoll();
-
-		expect(runSimctl).toHaveBeenCalledTimes(2);
-	});
-
 	/**
-	 * An interruption tells the caller that what it last saw is no longer known to be current, so
-	 * the next successful poll has to deliver even when the set is unchanged. Suppressing it as
-	 * "no change" would leave the caller holding a set it has been told to distrust until a device
-	 * happens to move.
+	 * The poll, on a host with no `idb_companion` at all — the fallback, doing the whole job.
+	 *
+	 * Every case here subscribes through {@link watchPolling}, which absorbs the one interruption
+	 * the missing companion produces so that each case reads as the poll's own claim. That
+	 * interruption is asserted on its own by the stream suite above.
 	 */
-	it('delivers the set again after an interruption, even when nothing changed', async () => {
-		answers(listing());
-		const listener = watcher();
+	describe('falling back to the simctl poll', () => {
+		beforeEach(() => {
+			streamIdbCompanion.mockImplementation(() => {
+				throw new IdbCompanionNotFoundError([]);
+			});
+		});
 
-		backend.watchDevices(listener);
-		await settle();
-		expect(sets(listener)).toHaveLength(1);
+		function watchPolling(listener: ReturnType<typeof watcher>): DeviceWatch {
+			const watch = backend.watchDevices(listener);
+			expect(listener.onInterrupted).toHaveBeenCalledTimes(1);
+			listener.onInterrupted.mockClear();
+			return watch;
+		}
 
-		runSimctl.mockRejectedValueOnce(new Error('simctl list -j devices runtimes exited 1'));
-		await nextPoll();
-		answers(listing());
-		await nextPoll();
+		it('starts as soon as it is asked to, with the enumeration’s own argv', async () => {
+			answers(listing());
 
-		expect(sets(listener)).toHaveLength(2);
-		expect(sets(listener)[1]).toEqual(sets(listener)[0]);
-	});
+			watchPolling(watcher());
+			await settle();
 
-	// Synchronous and never rejecting: the first poll is started rather than awaited, so a failure
-	// that happens immediately arrives through the listener like every later one.
-	it('answers with its handle synchronously, even when the first poll fails', async () => {
-		runSimctl.mockRejectedValue(new Error('simctl list -j devices runtimes exited 1'));
-		const listener = watcher();
+			expect(runSimctl).toHaveBeenCalledTimes(1);
+			expect(runSimctl.mock.calls[0]?.[0]).toEqual(ENUMERATE);
+		});
 
-		const watch = backend.watchDevices(listener);
+		it('delivers the full current set on subscription', async () => {
+			answers(listing());
+			const listener = watcher();
 
-		expect(typeof watch.stop).toBe('function');
-		expect(listener.onInterrupted).not.toHaveBeenCalled();
-		await settle();
-		expect(listener.onInterrupted).toHaveBeenCalledTimes(1);
-	});
+			watchPolling(listener);
+			await settle();
 
-	it('stops polling and calls no handler after stop', async () => {
-		answers(listing());
-		const listener = watcher();
+			expect(sets(listener)).toHaveLength(1);
+			expect(sets(listener)[0]).toHaveLength(22);
+			expect(sets(listener)[0]?.find((device) => device.serial === BOOTED)?.state).toBe('ready');
+		});
 
-		const watch = backend.watchDevices(listener);
-		await settle();
-		await watch.stop();
-		listener.onDevices.mockClear();
+		it('delivers nothing when the next poll finds the same device set', async () => {
+			answers(listing());
+			const listener = watcher();
 
-		answers(withoutDevice(BOOTED));
-		await nextPoll();
-		await nextPoll();
+			watchPolling(listener);
+			await settle();
+			await nextPoll();
+			await nextPoll();
 
-		expect(runSimctl).toHaveBeenCalledTimes(1);
-		expect(listener.onDevices).not.toHaveBeenCalled();
-		expect(listener.onInterrupted).not.toHaveBeenCalled();
-	});
+			expect(runSimctl).toHaveBeenCalledTimes(3);
+			expect(sets(listener)).toHaveLength(1);
+		});
 
-	/**
-	 * The half a cleared timer does not cover: a poll already talking to `simctl` when the watch
-	 * stopped. Its answer is dropped rather than delivered, which is what "no listener method is
-	 * called after this" has to mean for a poll that cannot be cancelled.
-	 */
-	it('drops the answer of a poll that was in flight when it stopped', async () => {
-		let answer: (result: { stdout: string; stderr: string }) => void = () => {};
-		runSimctl.mockImplementation(
-			async () =>
-				new Promise((resolve) => {
-					answer = resolve;
+		/**
+		 * Why the comparison is over the mapped `Device[]` and not over what the tool printed: every
+		 * device entry carries a `dataPathSize` that moves as the simulator writes to its own disk, so
+		 * a raw comparison would report a device change every poll, on an idle host, forever.
+		 */
+		it('is silent about a listing that changed without any device changing', async () => {
+			answers(listing());
+			const listener = watcher();
+
+			watchPolling(listener);
+			await settle();
+
+			answers(
+				listing((parsed) => {
+					for (const entry of entriesOf(parsed)) entry.dataPathSize = 1_234_567_890;
 				}),
-		);
-		const listener = watcher();
+			);
+			await nextPoll();
 
-		const watch = backend.watchDevices(listener);
-		await watch.stop();
-		answer({ stdout: listing(), stderr: '' });
-		await settle();
+			expect(sets(listener)).toHaveLength(1);
+		});
 
-		expect(listener.onDevices).not.toHaveBeenCalled();
-		expect(listener.onInterrupted).not.toHaveBeenCalled();
-	});
+		it('delivers the full set again when a device changes state', async () => {
+			answers(listing());
+			const listener = watcher();
 
-	it('drops the failure of a poll that was in flight when it stopped', async () => {
-		let fail: (error: Error) => void = () => {};
-		runSimctl.mockImplementation(
-			async () =>
-				new Promise((_resolve, reject) => {
-					fail = reject;
+			watchPolling(listener);
+			await settle();
+
+			answers(
+				listing((parsed) => {
+					entryOf(parsed, BOOTED).state = 'Shutdown';
 				}),
-		);
-		const listener = watcher();
+			);
+			await nextPoll();
 
-		const watch = backend.watchDevices(listener);
-		await watch.stop();
-		fail(new Error('simctl list -j devices runtimes exited 1'));
-		await settle();
+			expect(sets(listener)).toHaveLength(2);
+			expect(sets(listener)[1]).toHaveLength(22);
+			expect(sets(listener)[1]?.find((device) => device.serial === BOOTED)?.state).toBe('offline');
+		});
 
-		expect(listener.onInterrupted).not.toHaveBeenCalled();
-	});
+		/** Never a delta: a device leaving is the whole remaining set, not the one that went. */
+		it('delivers the whole remaining set when a device goes away, never a delta', async () => {
+			answers(listing());
+			const listener = watcher();
 
-	it('treats a second stop as a no-op rather than an error', async () => {
-		answers(listing());
+			watchPolling(listener);
+			await settle();
 
-		const watch = backend.watchDevices(watcher());
-		await settle();
+			answers(withoutDevice(BOOTED));
+			await nextPoll();
 
-		await expect(watch.stop()).resolves.toBeUndefined();
-		await expect(watch.stop()).resolves.toBeUndefined();
+			expect(sets(listener)[1]).toHaveLength(21);
+			expect(sets(listener)[1]?.some((device) => device.serial === BOOTED)).toBe(false);
+		});
+
+		/**
+		 * The order is the tool's — the device map is keyed by runtime — so two polls that agree about
+		 * every device may still disagree about which runtime came first. That is not a device change.
+		 */
+		it('is silent when only the order the tool printed changed', async () => {
+			answers(listing());
+			const listener = watcher();
+
+			watchPolling(listener);
+			await settle();
+
+			answers(
+				listing((parsed) => {
+					parsed.devices = Object.fromEntries(Object.entries(parsed.devices).reverse());
+					for (const entries of Object.values(parsed.devices)) entries.reverse();
+				}),
+			);
+			await nextPoll();
+
+			expect(sets(listener)).toHaveLength(1);
+		});
+
+		it('reports a failed poll as an interruption and keeps polling', async () => {
+			runSimctl.mockRejectedValueOnce(new Error('simctl list -j devices runtimes exited 1'));
+			const listener = watcher();
+
+			watchPolling(listener);
+			await settle();
+
+			expect(listener.onInterrupted).toHaveBeenCalledWith(
+				'simctl list -j devices runtimes exited 1',
+				// No cause: this is expected to clear, which is every failure here but one.
+				null,
+			);
+			expect(listener.onDevices).not.toHaveBeenCalled();
+
+			answers(listing());
+			await nextPoll();
+
+			expect(sets(listener)).toHaveLength(1);
+		});
+
+		/**
+		 * The distinction #168 exists to make, on the fallback's own tooling: a failure that will
+		 * clear on its own and one that never will read identically on every surface unless the
+		 * backend says which it is. There being no `simctl` to run is the second kind — a Command
+		 * Line Tools selection does not start carrying one — and the program's name is what makes a
+		 * client's message actionable without the client knowing anything about Xcode.
+		 */
+		it('names simctl as the cause when there was none to run', async () => {
+			runSimctl.mockRejectedValue(new SimctlNotFoundError([]));
+			const listener = watcher();
+
+			watchPolling(listener);
+			await settle();
+
+			expect(listener.onInterrupted).toHaveBeenCalledWith(expect.any(String), {
+				cause: 'tooling-missing',
+				tool: 'simctl',
+			});
+		});
+
+		/*
+		 * And it is not a reason to stop trying: `DEVELOPER_DIR` fixed on a running daemon is exactly
+		 * what the next poll picks up, since that search is re-run per call and unmemoised.
+		 */
+		it('keeps polling when there was no simctl to run at all', async () => {
+			runSimctl.mockRejectedValue(new SimctlNotFoundError([]));
+
+			watchPolling(watcher());
+			await settle();
+			await nextPoll();
+
+			expect(runSimctl).toHaveBeenCalledTimes(2);
+		});
+
+		/**
+		 * An interruption tells the caller that what it last saw is no longer known to be current, so
+		 * the next successful poll has to deliver even when the set is unchanged. Suppressing it as
+		 * "no change" would leave the caller holding a set it has been told to distrust until a device
+		 * happens to move.
+		 */
+		it('delivers the set again after an interruption, even when nothing changed', async () => {
+			answers(listing());
+			const listener = watcher();
+
+			watchPolling(listener);
+			await settle();
+			expect(sets(listener)).toHaveLength(1);
+
+			runSimctl.mockRejectedValueOnce(new Error('simctl list -j devices runtimes exited 1'));
+			await nextPoll();
+			answers(listing());
+			await nextPoll();
+
+			expect(sets(listener)).toHaveLength(2);
+			expect(sets(listener)[1]).toEqual(sets(listener)[0]);
+		});
+
+		/**
+		 * Synchronous and never rejecting: the missing companion is known before the call returns,
+		 * because that search is `stat` and `access` and no process — while the first poll is
+		 * started rather than awaited, so its failure arrives through the listener like every later
+		 * one rather than as a rejection nothing is written to catch.
+		 */
+		it('answers with its handle synchronously, even when the first poll fails', async () => {
+			runSimctl.mockRejectedValue(new Error('simctl list -j devices runtimes exited 1'));
+			const listener = watcher();
+
+			const watch = backend.watchDevices(listener);
+
+			expect(typeof watch.stop).toBe('function');
+			expect(listener.onInterrupted).toHaveBeenCalledTimes(1);
+			await settle();
+			expect(listener.onInterrupted).toHaveBeenCalledTimes(2);
+		});
+
+		it('stops polling and calls no handler after stop', async () => {
+			answers(listing());
+			const listener = watcher();
+
+			const watch = watchPolling(listener);
+			await settle();
+			await watch.stop();
+			listener.onDevices.mockClear();
+
+			answers(withoutDevice(BOOTED));
+			await nextPoll();
+			await nextPoll();
+
+			expect(runSimctl).toHaveBeenCalledTimes(1);
+			expect(listener.onDevices).not.toHaveBeenCalled();
+			expect(listener.onInterrupted).not.toHaveBeenCalled();
+		});
+
+		/**
+		 * The half a cleared timer does not cover: a poll already talking to `simctl` when the watch
+		 * stopped. Its answer is dropped rather than delivered, which is what "no listener method is
+		 * called after this" has to mean for a poll that cannot be cancelled.
+		 */
+		it('drops the answer of a poll that was in flight when it stopped', async () => {
+			let answer: (result: { stdout: string; stderr: string }) => void = () => {};
+			runSimctl.mockImplementation(
+				async () =>
+					new Promise((resolve) => {
+						answer = resolve;
+					}),
+			);
+			const listener = watcher();
+
+			const watch = watchPolling(listener);
+			await watch.stop();
+			answer({ stdout: listing(), stderr: '' });
+			await settle();
+
+			expect(listener.onDevices).not.toHaveBeenCalled();
+			expect(listener.onInterrupted).not.toHaveBeenCalled();
+		});
+
+		it('drops the failure of a poll that was in flight when it stopped', async () => {
+			let fail: (error: Error) => void = () => {};
+			runSimctl.mockImplementation(
+				async () =>
+					new Promise((_resolve, reject) => {
+						fail = reject;
+					}),
+			);
+			const listener = watcher();
+
+			const watch = watchPolling(listener);
+			await watch.stop();
+			fail(new Error('simctl list -j devices runtimes exited 1'));
+			await settle();
+
+			expect(listener.onInterrupted).not.toHaveBeenCalled();
+		});
+
+		it('treats a second stop as a no-op rather than an error', async () => {
+			answers(listing());
+
+			const watch = watchPolling(watcher());
+			await settle();
+
+			await expect(watch.stop()).resolves.toBeUndefined();
+			await expect(watch.stop()).resolves.toBeUndefined();
+		});
 	});
 });
 

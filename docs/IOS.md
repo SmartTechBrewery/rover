@@ -650,8 +650,47 @@ not the design.
 
 The framing and the target's key set are §4's, measured on this repository's own bench and
 committed as `tests/fixtures/ios-simulator/idb-notify.idbcompanion1.5.2-xcode26.6-ios26.5.txt`: one
-JSON array per line, newline-terminated, each line the full set. Nothing drives that stream yet —
-`watchDevices` still polls `simctl list`.
+JSON array per line, newline-terminated, each line the full set.
+
+**`watchDevices` drives that stream now** (#249), and the poll is what a host with no companion
+still watches its devices through. Three things about the arrangement, each of which is a decision
+rather than an implementation detail:
+
+- **Only one source delivers at a time.** A frame is what proves the stream is healthy, so a frame
+  is what takes the watch off the poll; losing the stream hands it back. While the stream is up,
+  `simctl list` is not run at all — not once per gap, not once ever.
+- **A lost view is one `onInterrupted`, never an empty set**, and the view is whichever source is
+  serving the caller. So the fallback costs exactly one interruption — carrying
+  `IDB_COMPANION_MISSING` when there is no companion to run and `null` otherwise — and a retry
+  that fails again while the poll is delivering is silent, because nothing the caller can observe
+  changed.
+- **The companion is restarted on a doubling backoff**, 250 ms to 5 s, reset by a frame. Mandatory
+  rather than tidy: a companion is a host process nothing else supervises, `idb file push` crashes
+  one outright (§4), and an `idb_companion` unpacked onto a *running* host is exactly what a
+  restart picks up — the search is unmemoised for that reason.
+
+`listDevices`, `describeDevice` and `deviceInfo` still read `simctl`, and deliberately: idb is not
+a second source of truth for an enumeration a lease grant re-verifies through `simctl` (D6). What
+makes the two safe to mix is that `src/backends/ios-simulator/devices.ts` normalises the notify
+path's `os_version` onto `simctl`'s spelling rather than publishing both.
+
+**Driven end to end on this bench, 2026-09-08** (companion v1.5.2, Xcode 26.6, macOS 26.6.2), with
+`watchDevices` subscribed and one `iPhone 17 Pro` booted and shut down again through `simctl boot`
+/ `bootstatus -b` / `simctl shutdown` — the recipe `tests/fixtures/ios-simulator/README.md`
+documents, so the device was left exactly as found:
+
+```
+  +0ms     11 devices  target=offline     ← the set on subscription
+  +326ms   11 devices  target=ready       ← Booted
+  +3754ms  11 devices  target=offline     ← Shutdown
+zero interruptions
+```
+
+Three deliveries, each the full set of eleven, with no `simctl list` run at all. **The `Booting`
+frame is not missing — it is collapsed**, and that is the delivery rule rather than a dropped
+event: `Booting` and `Shutdown` both map to `offline`, so the set the caller would have been handed
+was the one it already had. The companion emits per change *it* sees; the watch delivers per change
+a **caller** can see. Trap 15 in §8 is what had to be fixed before any of this arrived at all.
 
 **D18 is harder on iOS than on Android, and the field that decides it is `transportType`.**
 `devicectl list devices` on this machine — with no phone plugged in and none nearby — reported:
@@ -805,6 +844,22 @@ full factory reset if state restoration ever needs one.
     the pid this host spawned *is* the pid in the table. (`ps` escapes a newline inside an argv as
     `\012`, so one process really is one line — checked against a process deliberately given one.)
 
+15. **`idb_companion` resolves Xcode through `xcode-select`, and it does not agree with this
+    backend's own search unless it is told to.** On this bench — `xcode-select` pointing at
+    CommandLineTools, which §1 says is the state a developer machine is most likely to be in while
+    looking fully equipped — `idb_companion --notify stdout` exited **0** having printed no frame
+    at all, with *"Failed to resolve the Xcode developer directory. Ensure Xcode is installed and
+    selected with xcode-select"* on stderr, while `simctl` ran perfectly through
+    `developer-dir.ts`' search of the same machine (companion v1.5.2, macOS 26.6.2, 2026-09-08).
+    So the whole notify stream was silently unavailable on a host that enumerates simulators
+    fine, and the exit code said nothing: **0, with an empty stdout.** Exporting `DEVELOPER_DIR`
+    for the child fixes it and the frames arrive immediately, which is what
+    `src/backends/ios-simulator/idb-companion.ts` does. The sharper version of the trap is the one
+    that has not been seen yet: on a machine where the two searches resolve to *different* Xcodes,
+    `simctl` would drive one simulator set while the watch reported the other's — which is #171's
+    "measuring two machines" one program further out. Do not fix this with
+    `sudo xcode-select --switch`; the daemon has to work on the machine as it is found.
+
 ---
 
 ## 9. Two claims in `ai/ARCHITECTURE.md` this evidence corrects
@@ -866,7 +921,10 @@ In order, and each step is independently useful:
    — until then, an absent method beside a `false` flag is a complete backend.
 2. **Add idb**: `readScreen`, `tap`, `swipe`, `typeText`, `pressKey`, and swap `watchDevices` onto
    `--notify`. Talk gRPC from Node, supervise one companion per target, never call `file push`,
-   and classify a companion crash as an interruption rather than a device fault.
+   and classify a companion crash as an interruption rather than a device fault. **The
+   `watchDevices` half is done** (#249) — one companion per *host* in `--notify` mode, no gRPC and
+   no per-target companion, with the poll kept as the fallback (§7). The rest of this step is still
+   ahead.
 3. **Declare `canInput` and refuse `recents` by name.** The `recents`/`back` question is decided
    (§5): shared code carries the per-key refusal (#215), so what remains here is declaring the
    capability and raising `UnsupportedKeyError` for `recents` — `back` and `home` are answered, and
