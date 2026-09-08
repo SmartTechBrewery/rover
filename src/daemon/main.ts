@@ -46,8 +46,10 @@ async function main(): Promise<void> {
 	// in-process daemon in a test must not pick a budget up out of the developer's shell. A value
 	// that cannot be read as a whole count above zero throws here — `main().catch` below prints it
 	// and the process exits 1 — because an operator who typed `1gb` must not quietly get 1024 MB
-	// and then discover the difference as deleted runs. Nothing runs a sweep on its own (§9.4):
-	// resolving this only makes `sweep_archive` answerable.
+	// and then discover the difference as deleted runs. **And this host does sweep on its own**: a
+	// lease ending takes the budget (D37) and a clock takes the whole policy at local midnight and
+	// again right now, as this daemon comes up (D38) — so resolving these two numbers is not merely
+	// making `sweep_archive` answerable, it is choosing what this process is about to delete by.
 	const retention = resolveRetentionPolicy();
 	// The one place the network listener is resolved from the environment. A missing token
 	// beside a set port throws here, `main().catch` below prints it and the process exits 1 —

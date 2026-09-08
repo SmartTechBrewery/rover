@@ -83,16 +83,37 @@ async function fileAnOldRun(): Promise<void> {
 }
 
 async function sweep(dryRun: boolean): Promise<SweepArchiveResult> {
-	await start();
 	return (await connect()).request('sweep_archive', { dryRun, actor: 'alice' });
+}
+
+/**
+ * Start the daemon, and wait out the pass it runs as it comes up (D38).
+ *
+ * **The start pass would otherwise be racing every fixture in this file.** It is a full pass over
+ * this same root under this same one-day policy, `void`-ed inside the schedule, so a run filed
+ * moments after `startDaemon` resolves may be walked by it — and this suite's subject is the
+ * *method*, which has nothing to answer about a run the daemon already took.
+ *
+ * A dry `sweep_archive` is what waits for it, and deliberately not a duration: sweeps of one tree
+ * chain by the root (`archive-sweep.ts`), so this call is queued **behind** the start pass and its
+ * answer arriving means that pass is over. It deletes nothing itself, and the archive it looks at
+ * does not exist yet in any case.
+ */
+async function startAndSettle(): Promise<void> {
+	await start();
+	await sweep(true);
+	warnings.length = 0;
 }
 
 describe('sweep_archive', () => {
 	it('answers missing for a host with no archive at all', async () => {
+		await startAndSettle();
+
 		await expect(sweep(false)).resolves.toEqual({ outcome: 'missing' });
 	});
 
 	it('names each swept run by its components and nothing else', async () => {
+		await startAndSettle();
 		await fileAnOldRun();
 
 		const result = await sweep(false);
@@ -116,6 +137,7 @@ describe('sweep_archive', () => {
 	 * component the host itself named.
 	 */
 	it('puts no host path anywhere in the answer', async () => {
+		await startAndSettle();
 		await fileAnOldRun();
 
 		const result = await sweep(false);
@@ -125,6 +147,7 @@ describe('sweep_archive', () => {
 	});
 
 	it('deletes nothing on a dry run, and says which it was', async () => {
+		await startAndSettle();
 		await fileAnOldRun();
 
 		const result = await sweep(true);
@@ -145,6 +168,7 @@ describe('sweep_archive', () => {
 	 * authenticated (D20).
 	 */
 	it('records who asked, on the host', async () => {
+		await startAndSettle();
 		await fileAnOldRun();
 
 		await sweep(false);
@@ -153,6 +177,7 @@ describe('sweep_archive', () => {
 	});
 
 	it('records that a dry run deleted nothing', async () => {
+		await startAndSettle();
 		await fileAnOldRun();
 
 		await sweep(true);

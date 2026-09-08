@@ -81,6 +81,12 @@ describe('the Keep tick', () => {
 	 * eventually wants is *…in 14 days…*; the panel does not have the 14, no host answer carries a
 	 * retention window, and a figure written in here would be the invention this screen refuses
 	 * (`docs/DESIGN.md` §9). A later edit filling in a plausible one fails here.
+	 *
+	 * **The trigger landing did not change that, which is why this assertion is worth its own
+	 * reason** (#246). The host now sweeps by both bounds at local midnight and at start, so the
+	 * sentence stopped saying *once Rover starts sweeping the archive* and started naming the two
+	 * bounds as the condition — and the digits stayed out, because what would make them writable
+	 * is a host answer carrying the window rather than anything about when the sweep runs.
 	 */
 	it('names the condition and never a deadline', () => {
 		showing();

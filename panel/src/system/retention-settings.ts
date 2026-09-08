@@ -4,9 +4,11 @@ import { useState } from 'react';
  * The two numbers that bound what the archive keeps, as the System screen edits them — and
  * **no host method takes either of them**.
  *
- * *Corrected in place, 2026-09-08 (#238).* The host now has a retention mechanism: it enforces
- * these two bounds from its own environment (`ROVER_ARTIFACTS_BUDGET_MB`,
- * `ROVER_ARTIFACTS_MAX_AGE_DAYS`) and `rover sweep` runs them. What has *not* changed is the half
+ * *Corrected in place, 2026-09-08 (#238, and again for #246).* The host now has a retention
+ * mechanism and it runs unattended: it enforces these two bounds from its own environment
+ * (`ROVER_ARTIFACTS_BUDGET_MB`, `ROVER_ARTIFACTS_MAX_AGE_DAYS`), the budget after every lease ends
+ * and **both** at local midnight and at daemon start, and `rover sweep` runs them on demand. What
+ * has *not* changed is the half
  * this module is about — there is still no method that **sets** either number, and no answer that
  * carries one — so the draft still keeps to React state and ends with the mount: a number that
  * survived a reload would look like a setting the host had been told about, and the operator would

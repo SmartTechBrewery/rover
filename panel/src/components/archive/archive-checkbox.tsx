@@ -180,18 +180,22 @@ export function ArchiveCheckbox({
 /**
  * The sentence this control makes about itself, one per {@link ArchiveCheckbox} scope.
  *
- * **`once Rover starts sweeping the archive` is standing in for a number**, and the substitution is
- * the only thing that changes when a host answer carries the window: *…will be removed in 14 days,
- * unless…*. The *policy* landed in #238; the sentence is unchanged and one clause of the
- * reasoning under it is not. **The host does sweep unattended now** — by the disk budget, after
- * every lease ends (D37, #245) — so *once Rover starts sweeping* has stopped being a promise
- * about the future for that bound, while the *age* limit still waits for `rover sweep`. What has
- * not changed is why the digits are absent, which is why the sentence is worded this way at all:
- * `sweep_archive` deliberately carries neither of the host's two settings, so no answer this
- * panel can make carries a retention figure and one written here would be the panel inventing
- * data the host never sent (`ai/RULES.md` §2, and this screen's own *nothing is invented* rule).
- * Naming the condition still tells a reader why the box is there, which is what the sentence is
- * for. What makes the digits writable is a host answer carrying the window, not a trigger.
+ * **The sentence names the two bounds as a condition, and it used to name a trigger that had not
+ * landed** — *once Rover starts sweeping the archive* (corrected in place, 2026-09-08, #246). That
+ * clause was a promise about the future and it has stopped being one: the host enforces the disk
+ * budget after every lease ends (D37, #245) and the **whole** policy at local midnight and at
+ * daemon start (D38, #246), so *once Rover starts sweeping* would now be telling a reader the
+ * opposite of what happens to their runs. What replaces it is the pair of bounds themselves —
+ * *when the archive runs out of room, or this test gets old enough* — which is the condition the
+ * reader is actually being offered an exemption from.
+ *
+ * **Still with no number of days in it**, and that half is unchanged along with its reason:
+ * `sweep_archive` deliberately carries neither of the host's two settings, so no answer this panel
+ * can make carries a retention figure and one written here would be the panel inventing data the
+ * host never sent (`ai/RULES.md` §2, and this screen's own *nothing is invented* rule).
+ * `archive-checkbox.test.tsx` asserts against a fabricated one. What makes the digits writable is a
+ * host answer carrying the window, not a trigger — so the substitution that landing enables is
+ * still the same one: *…will be removed in 14 days, unless…*.
  *
  * **The second half says where the decision is held, and it is there because the answer changed**
  * (D33, #237). The tick was React state and forgot on reload, so the sentence could only promise
@@ -207,7 +211,7 @@ export function ArchiveCheckbox({
  * reason.
  */
 const REMOVAL_NOTICE: Readonly<Record<'test' | 'group', string>> = {
-	test: 'Traces of this test will be removed once Rover starts sweeping the archive, unless you keep it. The host remembers this tick, not the browser.',
+	test: 'Traces of this test will be removed when the archive runs out of room, or when the test gets old enough, unless you keep it. The host remembers this tick, not the browser.',
 	group:
-		'Traces of every test in this group will be removed once Rover starts sweeping the archive, unless you keep them all. The host remembers these ticks, not the browser.',
+		'Traces of every test in this group will be removed when the archive runs out of room, or when a test gets old enough, unless you keep them all. The host remembers these ticks, not the browser.',
 };

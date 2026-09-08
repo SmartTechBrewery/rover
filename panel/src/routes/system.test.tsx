@@ -22,8 +22,9 @@ import { SystemScreen } from './system.js';
  * placeholder that promised exactly that. What is asserted below is the two settings, their
  * defaults, and the two things this screen must not do while no host method **writes** either
  * number: offer a control that appears to save, or claim a deadline it cannot know. The host does
- * enforce these two bounds now (#238) — from its own environment, swept by `rover sweep` — which
- * is why the copy asserted here no longer says nothing sweeps the archive.
+ * enforce these two bounds now — from its own environment, by `rover sweep` (#238), after every
+ * lease ends (#245) and at local midnight and daemon start (#246) — which is why the copy asserted
+ * here no longer says nothing sweeps the archive.
  */
 
 const disk = () => screen.getByLabelText('Disk space for test data') as HTMLInputElement;
@@ -74,9 +75,10 @@ describe('the System screen', () => {
 	 * no error colour, no spinner (§7).
 	 *
 	 * **And it must not claim the host has no retention mechanism**, which is what this asserted
-	 * until #238 and is now false: the host enforces both bounds and `rover sweep` runs them. The
-	 * negative assertion is deliberate — the old sentence is exactly the kind that survives a
-	 * feature landing, because nothing else on the screen changes when it does.
+	 * until #238 and is now false twice over: the host enforces both bounds, and since #246 it does
+	 * so on its own clock rather than only when asked. The negative assertion is deliberate — the
+	 * old sentence is exactly the kind that survives a feature landing, because nothing else on the
+	 * screen changes when it does.
 	 */
 	it('says plainly that nothing here saves the numbers, and claims no more than that', () => {
 		const { container } = render(<SystemScreen />);
