@@ -461,12 +461,47 @@ the dependency is **alive**, which is the part worth updating:
 - The Python client is a convenience, not the interface. The companion is a **gRPC server**
   (`--grpc-port`), which is what a Node backend would speak, dropping the Python dependency and the
   ~70 ms per-call CLI startup entirely.
+- **That transport is now built, and the numbers below are this repository's own** (#250,
+  `src/backends/ios-simulator/idb-client.ts`): companion v1.5.2 driven from Node over
+  `@grpc/grpc-js`, against the booted `iPhone 17` on this bench, 2026-09-08.
+
+  **How the companion is reached was measured rather than assumed, and both routes work.** The
+  companion reports what it bound, on stdout, as one newline-terminated JSON line — so nothing has
+  to pre-bind a free port on this host to find out which one it took:
+
+  | argv | stdout | listening on |
+  | --- | --- | --- |
+  | `--grpc-port 0` | `{"grpc_port":56927,"grpc_swift_port":56927}` | `Swift server started on [IPv6]::/:::56927` |
+  | `--grpc-domain-sock <path>` | `{"grpc_path":"<path>"}` | `Swift server started on [UDS]<path>` |
+
+  **Rover takes the socket**, and the port column is why. `[IPv6]::` is *every interface*, and the
+  companion authenticates nothing — so an ephemeral port carrying the full companion API is a way
+  round the lease layer for anybody who can reach the host, on a daemon whose whole shape is being
+  reachable over the network (D17). Nothing arbitrates in this stack (below), so that lock is the
+  only one there is. A socket file under the daemon's own `mkdtemp` directory is reachable by
+  whoever can already read this host's filesystem, which is a much smaller set.
+
+  **Start latency, from `spawn` to a call answered: ~420 ms.** The socket was reported at
+  **+353 ms** and `describe` answered at **+423 ms**; a second `describe` on the established
+  channel came back in **1 ms**, against the ~70 ms every CLI measurement in this document paid.
+  Both waits are conditions with one shared deadline (`src/core/wait.ts`), never a sleep.
+
+  **One trap, and it would have made every crash unreadable:** gRPC sees the socket close before
+  Node reports the child's `close`, so a companion that dies mid-call is reported by the library as
+  `14 UNAVAILABLE: Connection dropped` — a sentence about a transport, from which nobody could tell
+  that the program a person can restart is what died. `UNAVAILABLE`, and only `UNAVAILABLE`, is
+  therefore given a short bounded grace to be explained by the process ending.
 
 The lifecycle is the real cost, and it has teeth:
 
 - **One companion process per target**, started with `--udid`, and it must be supervised. Killing it
   does **not** disturb the simulator (verified: device stayed `Booted` across companion exit), so
-  the supervision is Rover's business and only Rover's.
+  the supervision is Rover's business and only Rover's. **Re-run through this repository's own code
+  since** (`tests/device/ios-simulator/idb.test.ts`, #250): a companion is started for the booted
+  device, answers `describe`, is killed, and `describeDevice` still reports the device `ready` —
+  after which the next call starts a fresh one and is answered normally. That case is the evidence
+  the supervision is Rover's alone, and it is gated on `ROVER_TEST_SIMULATOR` **and**
+  `ROVER_TEST_IDB` so a host without either skips rather than fails.
 - **`idb file push` crashes the companion.** Reproduced twice, deterministically, on v1.5.2:
   ```
   Start of push
@@ -478,6 +513,11 @@ The lifecycle is the real cost, and it has teeth:
   Exit 133 (SIGTRAP), the whole process, taking every other in-flight call for that device with it.
   `idb file pull` and `idb file ls` are fine. **So do not route `pushFile` through idb at all** — a
   simulator's data container is a host path (§2), and `cp` neither crashes nor needs a daemon.
+  That rule now has an executable half rather than a paragraph
+  (`tests/unit/backends/ios-simulator/no-idb-file-push.test.ts`, #250): the RPC name is read out of
+  the vendored proto so a rename cannot make the gate pass silently, it is kept off the closed list
+  the client's call surface is typed from, no file that can reach a companion names it, and exactly
+  one module in `src/` is allowed to hold a channel at all.
 - **Nothing arbitrates.** Two companions were started on the same UDID, on different ports, and both
   bound and both accepted commands. There is no device locking anywhere in this stack — which is
   exactly the hole Rover's lease layer exists to fill, and it means the iOS backend inherits *all*
@@ -860,6 +900,20 @@ full factory reset if state restoration ever needs one.
     "measuring two machines" one program further out. Do not fix this with
     `sudo xcode-select --switch`; the daemon has to work on the machine as it is found.
 
+16. **gRPC sees a companion die before Node does, so every crash mid-call reads as a transport
+    fault.** Measured while building the per-target transport (#250): when the companion goes, its
+    socket closes at once and `@grpc/grpc-js` fails the outstanding call with `14 UNAVAILABLE:
+    Connection dropped` — while the child's `close` event, which is what reports *how* the process
+    ended, arrives one flush of two pipes later. Take the first answer and every crash on this
+    platform becomes a sentence about a connection, from which nobody can tell that the thing that
+    died is a program a person can restart, or that the device is fine. The fix is small and it is
+    a **condition with a timeout**, not a sleep: `UNAVAILABLE`, and only `UNAVAILABLE`, is given a
+    short bounded grace to be explained by the process ending
+    (`src/backends/ios-simulator/idb-client.ts`). A status the companion *chose* — a deadline, a
+    bad argument — is its own answer and is passed straight on, and a grace that runs out with the
+    process still running stays the plain failure: reporting an interruption there would promise a
+    replacement companion that nothing is going to start.
+
 ---
 
 ## 9. Two claims in `ai/ARCHITECTURE.md` this evidence corrects
@@ -923,8 +977,12 @@ In order, and each step is independently useful:
    `--notify`. Talk gRPC from Node, supervise one companion per target, never call `file push`,
    and classify a companion crash as an interruption rather than a device fault. **The
    `watchDevices` half is done** (#249) — one companion per *host* in `--notify` mode, no gRPC and
-   no per-target companion, with the poll kept as the fallback (§7). The rest of this step is still
-   ahead.
+   no per-target companion, with the poll kept as the fallback (§7). **The transport half is done
+   too** (#250) — gRPC from Node over a unix domain socket (§4 carries the table that chose it over
+   a port), one supervised companion per target started by a call and never on a schedule, `push`
+   off a closed RPC list with a source scan behind it, and a companion's death classified as an
+   interruption that leaves the device `ready` (§8 trap 16). Nothing dispatches to it yet: what is
+   still ahead in this step is `readScreen` and the four input primitives.
 3. **Declare `canInput` and refuse `recents` by name.** The `recents`/`back` question is decided
    (§5): shared code carries the per-key refusal (#215), so what remains here is declaring the
    capability and raising `UnsupportedKeyError` for `recents` — `back` and `home` are answered, and
