@@ -56,6 +56,8 @@
 		"vitest": "^3.2.4"
 	},
 	"dependencies": {
+		"@grpc/grpc-js": "^1.14.4",
+		"@grpc/proto-loader": "^0.8.1",
 		"@modelcontextprotocol/sdk": "^1.30.0",
 		"@tanstack/react-router": "^1.170.32",
 		"bplist-parser": "^0.5.0",
