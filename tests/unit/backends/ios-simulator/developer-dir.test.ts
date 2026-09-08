@@ -24,7 +24,11 @@ import { InterruptionCauseSchema } from '@/core/device.js';
  * one every case below accepts.
  */
 
-const XCODE_DEVELOPER_DIR = join('Xcode.app', 'Contents', 'Developer');
+const BUNDLE_DEVELOPER_DIR = join('Contents', 'Developer');
+const XCODE_DEVELOPER_DIR = join('Xcode.app', BUNDLE_DEVELOPER_DIR);
+
+const SELECTION = 'the xcode-select selection';
+const STANDARD_INSTALL = "this platform's standard Xcode install";
 
 const temporaryDirectories: string[] = [];
 
@@ -79,6 +83,17 @@ async function developerDirWithSimctl(mode = 0o755): Promise<string> {
 }
 
 /**
+ * An Xcode application bundle — the *other* form `xcrun` honours, where the developer directory is
+ * `Contents/Developer` inside it and there is nothing at `usr/bin/simctl`.
+ */
+async function bundleWithSimctl(
+	name = 'Xcode.app',
+): Promise<{ bundle: string; developerDir: string }> {
+	const bundle = join(await temporaryDirectory(), name);
+	return { bundle, developerDir: await withSimctl(join(bundle, BUNDLE_DEVELOPER_DIR)) };
+}
+
+/**
  * The state `docs/IOS.md` §1 records, reproduced rather than described: a developer directory
  * that exists, is selectable, and holds no `simctl` at all.
  */
@@ -95,6 +110,19 @@ async function selectionPointingAt(target: string): Promise<string> {
 	return link;
 }
 
+/** The message a person is actually shown, and the assertion that they were shown one. */
+function failureMessage(searched: ResolveDeveloperDirOptions): string {
+	let thrown: unknown;
+	try {
+		resolveDeveloperDir(searched);
+	} catch (error: unknown) {
+		thrown = error;
+	}
+
+	expect(thrown).toBeInstanceOf(SimctlNotFoundError);
+	return (thrown as SimctlNotFoundError).message;
+}
+
 // Symlinks need a privilege on Windows that a test runner does not reliably have, and the
 // execute bit means nothing there — the platform under test is passed in, but the filesystem
 // these cases build is the host's own.
@@ -109,18 +137,30 @@ describe.skipIf(process.platform === 'win32')('the order the host looks in', () 
 			}),
 		);
 
-		expect(locations).toEqual([
-			'/named/by/the/operator',
-			'/selected/by/xcode-select',
+		expect(locations.map(({ source, path }) => [source, path])).toEqual([
+			[DEVELOPER_DIR_ENV_VAR, '/named/by/the/operator'],
+			[SELECTION, '/selected/by/xcode-select'],
+			[STANDARD_INSTALL, join('/Applications', XCODE_DEVELOPER_DIR)],
+		]);
+	});
+
+	/**
+	 * A place that named nothing stays on the list, so position 2 means the same place on every
+	 * machine — see the interface's docblock, and `describeAdbSearch` before it.
+	 */
+	it('keeps a place that named nothing on the list rather than dropping it', () => {
+		const locations = developerDirSearchLocations(options({ applicationsRoot: '/Applications' }));
+
+		expect(locations.map(({ path }) => path)).toEqual([
+			null,
+			null,
 			join('/Applications', XCODE_DEVELOPER_DIR),
 		]);
 	});
 
 	// Empty counts as unset, as it does for every other variable Rover reads.
 	it('reads a blank DEVELOPER_DIR as unset rather than as a path', () => {
-		expect(developerDirSearchLocations(options({ applicationsRoot: '/Applications' }))).toEqual([
-			join('/Applications', XCODE_DEVELOPER_DIR),
-		]);
+		expect(developerDirSearchLocations(options())[0]?.path).toBeNull();
 	});
 
 	/**
@@ -131,33 +171,42 @@ describe.skipIf(process.platform === 'win32')('the order the host looks in', () 
 	it('walks past a selection there is nothing to read', async () => {
 		const notALink = await temporaryDirectory();
 
-		expect(
-			developerDirSearchLocations(
-				options({ selectLinkPath: notALink, applicationsRoot: '/Applications' }),
-			),
-		).toEqual([join('/Applications', XCODE_DEVELOPER_DIR)]);
+		const locations = developerDirSearchLocations(
+			options({ selectLinkPath: notALink, applicationsRoot: '/Applications' }),
+		);
+
+		expect(locations[1]?.path).toBeNull();
+		expect(locations[2]?.path).toBe(join('/Applications', XCODE_DEVELOPER_DIR));
 	});
 
 	it('resolves a relative selection against the link’s own directory', async () => {
 		const link = await selectionPointingAt(XCODE_DEVELOPER_DIR);
 
-		expect(developerDirSearchLocations(options({ selectLinkPath: link }))[0]).toBe(
+		expect(developerDirSearchLocations(options({ selectLinkPath: link }))[1]?.path).toBe(
 			join(dirname(link), XCODE_DEVELOPER_DIR),
 		);
 	});
 
-	it('names the same directory once when DEVELOPER_DIR repeats the selection', async () => {
+	/**
+	 * The same directory reached two ways is the ordinary case, and each row still says which
+	 * place reached it — the reason this list stopped deduplicating, in the function's docblock.
+	 */
+	it('names the same directory from both places when DEVELOPER_DIR repeats the selection', async () => {
 		const selected = join('/Applications', XCODE_DEVELOPER_DIR);
 
-		expect(
-			developerDirSearchLocations(
-				options({
-					env: { [DEVELOPER_DIR_ENV_VAR]: selected },
-					selectLinkPath: await selectionPointingAt(selected),
-					applicationsRoot: '/Applications',
-				}),
-			),
-		).toEqual([selected]);
+		const locations = developerDirSearchLocations(
+			options({
+				env: { [DEVELOPER_DIR_ENV_VAR]: selected },
+				selectLinkPath: await selectionPointingAt(selected),
+				applicationsRoot: '/Applications',
+			}),
+		);
+
+		expect(locations.map(({ source, path }) => [source, path])).toEqual([
+			[DEVELOPER_DIR_ENV_VAR, selected],
+			[SELECTION, selected],
+			[STANDARD_INSTALL, selected],
+		]);
 	});
 
 	/**
@@ -186,12 +235,50 @@ describe.skipIf(process.platform === 'win32')('accepting a developer directory',
 		expect(resolveDeveloperDir(options({ env: { [DEVELOPER_DIR_ENV_VAR]: named } }))).toBe(named);
 	});
 
+	/**
+	 * The other form `xcrun` honours — `DEVELOPER_DIR=/Applications/Xcode.app`, where `simctl`
+	 * lives one `Contents/Developer` deeper and `<bundle>/usr/bin/simctl` does not exist at all.
+	 */
+	it('answers with the developer directory inside a DEVELOPER_DIR naming the bundle', async () => {
+		const { bundle, developerDir } = await bundleWithSimctl();
+
+		expect(resolveDeveloperDir(options({ env: { [DEVELOPER_DIR_ENV_VAR]: bundle } }))).toBe(
+			developerDir,
+		);
+	});
+
+	/**
+	 * The escape hatch has to win, which is the whole point of it: an operator naming a second
+	 * Xcode must not silently get the one in `/Applications`.
+	 */
+	it('keeps a bundle-shaped DEVELOPER_DIR ahead of a working standard install', async () => {
+		const { bundle, developerDir } = await bundleWithSimctl('Xcode-beta.app');
+		const applications = await temporaryDirectory();
+		await withSimctl(join(applications, XCODE_DEVELOPER_DIR));
+
+		expect(
+			resolveDeveloperDir(
+				options({ env: { [DEVELOPER_DIR_ENV_VAR]: bundle }, applicationsRoot: applications }),
+			),
+		).toBe(developerDir);
+	});
+
 	it('takes the xcode-select selection when DEVELOPER_DIR is unset', async () => {
 		const selected = await developerDirWithSimctl();
 
 		expect(
 			resolveDeveloperDir(options({ selectLinkPath: await selectionPointingAt(selected) })),
 		).toBe(selected);
+	});
+
+	// `xcode-select --switch` infers the developer directory from a bundle before storing it, so
+	// this is the safety net for a link written by anything else.
+	it('answers with the developer directory inside a selection naming the bundle', async () => {
+		const { bundle, developerDir } = await bundleWithSimctl();
+
+		expect(
+			resolveDeveloperDir(options({ selectLinkPath: await selectionPointingAt(bundle) })),
+		).toBe(developerDir);
 	});
 
 	it('takes the standard install when nothing else answers', async () => {
@@ -246,25 +333,51 @@ describe.skipIf(process.platform === 'win32')('the failure, told to a person', (
 		// `applicationsRoot` is left at the empty directory `options` defaults it to: pointing the
 		// last candidate at the real `/Applications` would answer this case out of the Xcode of
 		// whoever is running the suite.
-		const searched = options({
-			env: { [DEVELOPER_DIR_ENV_VAR]: '/named/by/the/operator' },
-			selectLinkPath: await selectionPointingAt(selected),
-		});
+		const message = failureMessage(
+			options({
+				env: { [DEVELOPER_DIR_ENV_VAR]: '/named/by/the/operator' },
+				selectLinkPath: await selectionPointingAt(selected),
+			}),
+		);
 
-		let thrown: unknown;
-		try {
-			resolveDeveloperDir(searched);
-		} catch (error: unknown) {
-			thrown = error;
-		}
-
-		expect(thrown).toBeInstanceOf(SimctlNotFoundError);
-		const { message } = thrown as SimctlNotFoundError;
-		expect(message).toContain(`1. ${join('/named/by/the/operator', SIMCTL_RELATIVE_PATH)}`);
-		expect(message).toContain(`2. ${join(selected, SIMCTL_RELATIVE_PATH)}`);
-		expect(message).toContain(`3. ${join(nowhere, XCODE_DEVELOPER_DIR, SIMCTL_RELATIVE_PATH)}`);
+		expect(message).toContain(
+			`1. ${DEVELOPER_DIR_ENV_VAR} — ${join('/named/by/the/operator', SIMCTL_RELATIVE_PATH)}`,
+		);
+		expect(message).toContain(`2. ${SELECTION} — ${join(selected, SIMCTL_RELATIVE_PATH)}`);
+		expect(message).toContain(
+			`3. ${STANDARD_INSTALL} — ${join(nowhere, XCODE_DEVELOPER_DIR, SIMCTL_RELATIVE_PATH)}`,
+		);
 		expect(message).toContain(`Set ${DEVELOPER_DIR_ENV_VAR}`);
 		expect(message).toContain('the Command Line Tools alone do not carry simctl');
+	});
+
+	/**
+	 * The ordinary state of the machine this failure fires on: no variable, no selection to read.
+	 * The three rows still number the same three places, so *nothing was set* is told rather than
+	 * left for the reader to infer from a one-line list.
+	 */
+	it('says which places named nothing rather than leaving them off the list', () => {
+		const selectLinkPath = join(nowhere, 'xcode_select_link');
+
+		const message = failureMessage(options({ selectLinkPath }));
+
+		expect(message).toContain(`1. ${DEVELOPER_DIR_ENV_VAR} — not set`);
+		expect(message).toContain(`2. ${SELECTION} — nothing to read at ${selectLinkPath}`);
+		expect(message).toContain(
+			`3. ${STANDARD_INSTALL} — ${join(nowhere, XCODE_DEVELOPER_DIR, SIMCTL_RELATIVE_PATH)}`,
+		);
+	});
+
+	/** The path named is the one that was really stat'd, bundle normalisation included. */
+	it('names the simctl a bundle-shaped candidate was actually checked for', async () => {
+		const bundle = join(await temporaryDirectory(), 'Xcode.app');
+		await mkdir(join(bundle, BUNDLE_DEVELOPER_DIR, 'usr', 'bin'), { recursive: true });
+
+		const message = failureMessage(options({ env: { [DEVELOPER_DIR_ENV_VAR]: bundle } }));
+
+		expect(message).toContain(
+			`1. ${DEVELOPER_DIR_ENV_VAR} — ${join(bundle, BUNDLE_DEVELOPER_DIR, SIMCTL_RELATIVE_PATH)}`,
+		);
 	});
 
 	// Off macOS the search is empty, and a list of nothing needs saying so rather than trailing off.
