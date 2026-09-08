@@ -956,9 +956,34 @@ describe('the app lifecycle', () => {
 				};
 			});
 
-			await expect(backend.clearAppData(BOOTED, APP)).rejects.toThrow('exited 1');
+			await expect(backend.clearAppData(BOOTED, APP)).rejects.toThrow(/is \*\*not\*\* installed/);
 
 			await expect(stat(stagingRoot)).rejects.toThrow();
+		});
+
+		/**
+		 * The one window this route has: after the uninstall the app is gone, and the staged copy
+		 * goes with the scratch directory. `simctl install … exited 1` on its own reads as though
+		 * nothing had happened, so the answer names the state it left and carries the tool's own
+		 * message as the `cause` for this host's log.
+		 */
+		it('says the app is uninstalled when the reinstall fails, with the tool as the cause', async () => {
+			runSimctlOnDevice.mockImplementation(async (_serial, subcommand) => {
+				if (subcommand === 'install') throw refusedWith(1, 'App installation failed');
+				return {
+					stdout: subcommand === 'get_app_container' ? `${installedBundle}\n` : '',
+					stderr: '',
+				};
+			});
+
+			const rejection = backend.clearAppData(BOOTED, APP);
+
+			await expect(rejection).rejects.toThrow(/was uninstalled from device/);
+			await expect(rejection).rejects.toThrow('com.rover.testapp');
+			await expect(rejection).rejects.toThrow(/nothing here to retry from/);
+			await expect(rejection).rejects.toMatchObject({
+				cause: expect.objectContaining({ message: expect.stringContaining('exited 1') }),
+			});
 		});
 
 		/**
@@ -1090,6 +1115,35 @@ describe('the two transfers', () => {
 				backend.pushFile(BOOTED, source, '/Documents/../../elsewhere/stolen'),
 			).rejects.toThrow(/resolves outside the storage/);
 			expect(await readdir(outside)).toEqual(['payload']);
+		});
+
+		/**
+		 * The write-side mirror of the pull's "naming no path on this host": `mkdir` refuses when
+		 * one of the names on the way to the destination is a regular file, and `node:fs` puts the
+		 * whole host path in that message — the operator's home directory and this host's
+		 * CoreSimulator layout, to a caller that only ever named `/Documents/…` (D19).
+		 */
+		it('refuses a destination under an existing file, naming no path on this host', async () => {
+			const source = join(outside, 'payload');
+			await writeFile(source, 'x');
+			await writeFile(join(dataRoot, 'Documents', 'report.bin'), 'a file, not a directory');
+
+			const rejection = backend.pushFile(BOOTED, source, '/Documents/report.bin/nested.txt');
+
+			await expect(rejection).rejects.toThrow("'/Documents/report.bin/nested.txt'");
+			await expect(rejection).rejects.toThrow('997FA43E-FF9F-4109-BEF0-53D3F46653E7');
+			await expect(rejection).rejects.not.toThrow(new RegExp(dataRoot));
+		});
+
+		// The other half of the same rule: the source is the daemon's own staged payload, so its
+		// path is no more the caller's to read than the data root is.
+		it('carries the errno but neither path when the host file to push is gone', async () => {
+			const rejection = backend.pushFile(BOOTED, join(outside, 'never-staged'), '/Documents/x.bin');
+
+			await expect(rejection).rejects.toThrow('ENOENT');
+			await expect(rejection).rejects.toThrow("'/Documents/x.bin'");
+			await expect(rejection).rejects.not.toThrow(new RegExp(outside));
+			await expect(rejection).rejects.not.toThrow(new RegExp(dataRoot));
 		});
 
 		// The listing doubles as the presence check, so a device that has been deleted is the

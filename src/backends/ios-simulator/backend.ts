@@ -303,6 +303,26 @@ function namedNoBundle(serial: DeviceSerial, appId: AppId, result: SimctlResult)
 }
 
 /**
+ * A clear whose reinstall failed after the uninstall had already gone through.
+ *
+ * The one window this route has, and the caller has to be told what state it was left in: the
+ * tool's own `simctl install … exited 1` says nothing about the app having been removed first, so
+ * a caller reading it would take the clear for a no-op and the app for installed. There is nothing
+ * to retry from either — the staged copy came off the device and `inHostTempDirectory` removes it
+ * — which is the part that makes this worth a sentence rather than a rethrow. The tool's message
+ * rides along as the `cause` (`ai/RULES.md` §2, never degrade silently).
+ */
+function reinstallFailed(serial: DeviceSerial, appId: AppId, cause: unknown): Error {
+	return new Error(
+		`'${unwrap(appId)}' was uninstalled from device '${unwrap(serial)}' and the reinstall this ` +
+			'clear is made of failed: the app is **not** installed. The bundle was staged on the ' +
+			'host lending the device and has been removed with the scratch directory, so there is ' +
+			'nothing here to retry from — install it again from wherever it came.',
+		{ cause },
+	);
+}
+
+/**
  * A push whose destination is a directory the device already has.
  *
  * The contract's own rule (`DeviceBackend.pushFile`), and it needs stating as one here for a
@@ -351,6 +371,29 @@ function noSuchFile(serial: DeviceSerial, devicePath: string, cause: unknown): E
 		`'${devicePath}' on device '${unwrap(serial)}' could not be read (${code}). On this ` +
 			"platform that path is a file in the device's own storage on the host lending it, so " +
 			'this is the file not being there, or not being readable by the user running the host.',
+		{ cause },
+	);
+}
+
+/**
+ * A push this host would not carry out — {@link noSuchFile}'s counterpart on the write side, and
+ * one vocabulary for "this host refused" across the two transfers.
+ *
+ * Same rule and same reason: `node:fs` names a path in every message it writes, and on this side
+ * it names *two* — the daemon's own staged payload and the device's data root — so the code is
+ * carried across and the message is not (D19). Without this the caller is handed the operator's
+ * home directory and this host's CoreSimulator layout by a call that only ever named
+ * `/Documents/…`, which is exactly what {@link hostPathOf}'s refusal one branch away declines to
+ * do.
+ */
+function pushFailed(serial: DeviceSerial, devicePath: string, cause: unknown): Error {
+	const code = cause instanceof Error && 'code' in cause ? String(cause.code) : 'unknown';
+	return new Error(
+		`'${devicePath}' on device '${unwrap(serial)}' could not be written (${code}). On this ` +
+			"platform that path is a file in the device's own storage on the host lending it, so " +
+			'this is a parent directory that could not be created — one of the names on the way ' +
+			'there is a file, most often — or the file not being writable by the user running the ' +
+			'host, or the bytes to push no longer being where they were staged.',
 		{ cause },
 	);
 }
@@ -610,6 +653,13 @@ export class IosSimulatorDeviceBackend implements DeviceBackend {
 	 * — and nothing has been touched by then, which is the right shape for that answer: it is
 	 * the same refusal `pm clear` gives for a package that does not exist.
 	 *
+	 * **Between the uninstall and the install the app is not on the device, and a failed reinstall
+	 * leaves it that way.** That window is inherent to this route rather than a choice — the two
+	 * others `docs/IOS.md` §2 records do not work — and the only copy of the bundle by then is the
+	 * staged one on this host, which the `finally` removes, so there is nothing to retry from. The
+	 * failure the caller reads therefore names that outcome ({@link reinstallFailed}) instead of
+	 * a bare `simctl install … exited 1`, which reads as though nothing had happened.
+	 *
 	 * **What this cannot preserve is the app's identity to the rest of the device.** A reinstall
 	 * gets a fresh data container UUID, and anything holding the old one — a keychain entry
 	 * scoped to it, another app's bookmark — is looking at a container that is gone. Emptying the
@@ -635,9 +685,13 @@ export class IosSimulatorDeviceBackend implements DeviceBackend {
 			await cp(bundle, staged, { recursive: true });
 
 			await runSimctlOnDevice(serial, 'uninstall', [unwrap(appId)]);
+			// From here the app is off the device, so a failure has to say so rather than read as
+			// though nothing happened ({@link reinstallFailed}).
 			await runSimctlOnDevice(serial, 'install', [staged], {
 				timeoutMs: INSTALL_SIMCTL_TIMEOUT_MS,
 				redactArgv: [staged],
+			}).catch((cause: unknown) => {
+				throw reinstallFailed(serial, appId, cause);
 			});
 		});
 	}
@@ -671,6 +725,12 @@ export class IosSimulatorDeviceBackend implements DeviceBackend {
 	 * without this a perfectly reasonable push fails with an errno about a path on a machine the
 	 * caller cannot see. What is created stays inside the data root, because the destination
 	 * already had to.
+	 *
+	 * **Whether those parents can be created, and whether the copy lands, are host answers whose
+	 * wording does not cross the boundary** — the same rule {@link pullFile}'s probe follows. Both
+	 * calls name host paths in every message `node:fs` writes, and here they name two of them: the
+	 * daemon's staged payload and the device's data root. So both are caught and re-issued as
+	 * {@link pushFailed}, carrying the errno and the caller's own `devicePath` (D19).
 	 */
 	async pushFile(serial: DeviceSerial, hostPath: string, devicePath: string): Promise<void> {
 		const target = hostPathOf(serial, await this.dataRootOf(serial), devicePath);
@@ -680,8 +740,12 @@ export class IosSimulatorDeviceBackend implements DeviceBackend {
 		const existing = await stat(target).catch(() => null);
 		if (existing?.isDirectory() === true) throw pushedIntoDirectory(serial, devicePath);
 
-		await mkdir(dirname(target), { recursive: true });
-		await copyFile(hostPath, target);
+		await mkdir(dirname(target), { recursive: true }).catch((cause: unknown) => {
+			throw pushFailed(serial, devicePath, cause);
+		});
+		await copyFile(hostPath, target).catch((cause: unknown) => {
+			throw pushFailed(serial, devicePath, cause);
+		});
 	}
 
 	/**
