@@ -22,12 +22,13 @@ import {
 	OS_VERSION_ARGV,
 	RECORDING_BIT_RATE_BPS,
 } from '@/backends/android/backend.js';
-import type { Device, DeviceWatcher } from '@/core/device.js';
+import { type Device, DeviceKeySchema, type DeviceWatcher } from '@/core/device.js';
 import {
 	FileTooLargeError,
 	NoRecordingRunningError,
 	RecordingAlreadyRunningError,
 	UnfinishedRecordingError,
+	UnsupportedKeyError,
 	UnsupportedTextError,
 } from '@/core/errors.js';
 import { type AppId, InvalidIdError, parseAppId, parseDeviceSerial } from '@/core/ids.js';
@@ -2791,6 +2792,37 @@ describe('pressKey', () => {
 		answers({ 'shell input keyevent KEYCODE_BACK': INPUT_REFUSAL });
 
 		await expect(backend.pressKey(SERIAL, 'back')).rejects.toThrow(/input keyevent KEYCODE_BACK/);
+	});
+
+	/**
+	 * This backend answers the **whole** `DeviceKey` vocabulary, so no call here can produce
+	 * the per-key refusal `unsupported-key` carries (#215) — pinned rather than left to
+	 * inspection, because "nothing changed" is the one claim a reader cannot check.
+	 *
+	 * Read off `DeviceKeySchema` rather than listed again: a fifth key added to the vocabulary
+	 * with no mapping here goes red on this loop, instead of quietly acquiring a refusal path
+	 * this backend was never meant to have.
+	 */
+	it.each(DeviceKeySchema.options)('answers %s, and refuses no key by name', async (key) => {
+		answers({
+			'shell input keyevent KEYCODE_BACK': '',
+			'shell input keyevent KEYCODE_HOME': '',
+			'shell input keyevent KEYCODE_APP_SWITCH': '',
+			'shell input keyevent KEYCODE_WAKEUP': '',
+		});
+
+		let thrown: unknown = null;
+		try {
+			await backend.pressKey(SERIAL, key);
+		} catch (error) {
+			thrown = error;
+		}
+
+		// Both halves: it pressed, and it did not refuse. The second is named explicitly rather
+		// than implied by the first, because `UnsupportedKeyError` is what this test is about.
+		expect(thrown).toBeNull();
+		expect(thrown).not.toBeInstanceOf(UnsupportedKeyError);
+		expect(runAdbOnDevice).toHaveBeenCalledTimes(1);
 	});
 });
 

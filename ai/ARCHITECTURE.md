@@ -330,7 +330,15 @@ Verbs live above the backends and below the adapters, and this is where determin
   find first. There is no target *option* on `type_text` either: an
   agent composes `tap` with it, rather than keeping a second copy of the spine's resolution here.
   `pressKey` takes `DeviceKey` — the vocabulary in `src/core/device.ts`, shared with the backend and
-  with the wire so all three refuse the same keys. `typeText` hands the caller's string to the
+  with the wire so all three refuse the same keys. That vocabulary is **not** a promise that every
+  platform has all of it, so `pressKey` makes the same move `typeText` does, one argument down: a
+  device with no equivalent for one key answers `UnsupportedKeyError`, mapped to an
+  `unsupported-key` failure carrying the key. Deliberately not `missing-capability`, and this is
+  D11's boundary rather than an exception to it — capabilities name *methods*, the keys are that
+  method's arguments, and a backend that declares `canInput` and lacks one key is a narrower
+  backend rather than one that takes no input. Declaring `canInput: false` to say it would refuse
+  `tap`, `swipe` and `type_text` as well, which is the wrong answer to three questions in order to
+  answer a fourth. `typeText` hands the caller's string to the
   backend **byte for byte and inspects none of it**: what a device's own text entry reads rather
   than types is that backend's knowledge, and any escaping rule applied here would be one platform's
   rule applied to every platform. A device that cannot type a string at all answers

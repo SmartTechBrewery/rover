@@ -140,7 +140,7 @@ Working names. All of them take a device handle, and over the wire that handle i
 | `long_press` | Implemented as a drag in place with a duration |
 | `swipe` / `scroll` | |
 | `type_text` | Hides the device shell's quoting, so a space, an apostrophe and a shell metacharacter all arrive verbatim. **Non-ASCII it cannot hide — `input text` cannot type it at all** (§6), so the honest answer is a refusal naming the character rather than a silent drop. That refusal is an `unsupported-text` verb failure carrying the serial, the string and the offending characters as escapes, **not** an `internal_error`: the string is the caller's and it is the caller who can fix it (#61). **No target** — an agent taps the field first |
-| `press_key` | Back, home, recents, wake. **No target**, so it needs no screen read to aim, which makes it the one input verb provable end to end on hardware before `read_screen` (R13) |
+| `press_key` | Back, home, recents, wake. **No target**, so it needs no screen read to aim, which makes it the one input verb provable end to end on hardware before `read_screen` (R13). Those four are **one vocabulary, not a promise every platform has all four**: a backend with no equivalent for one of them refuses **that key by name** — an `unsupported-key` verb failure carrying the serial and the key — deliberately not `missing-capability` and not `internal_error`, because a backend that takes input and lacks one key is a narrower backend rather than a broken one (#215) |
 
 ### Reading
 
@@ -205,6 +205,18 @@ Some things worth knowing now, so as not to design into a corner:
   The flag names a **third** method since #191 — `discardRecording`, which the lease-end teardown
   calls to stop a recorder somebody abandoned and remove its file. It is the same ability under
   the same flag: a backend that can signal a recorder it is holding open can signal one it is not.
+- **A key a platform has no equivalent for is not a divergence a capability can name**, and this
+  is the boundary of the whole model rather than an exception to it (#215). Capabilities name
+  **methods** (D11, and `CAPABILITY_METHODS`' `as const satisfies` is what keeps that honest), so
+  a flag per key would put four booleans behind one method and leave `canInput` meaning nothing;
+  and declaring `canInput: false` to dodge one key would refuse `tap`, `swipe` and `type_text`,
+  which work. The answer is a **per-argument refusal that names the key** — an `unsupported-key`
+  verb failure carrying the serial and the key, on `unsupported-text`'s exact model one argument
+  down — so `DeviceKey` stays one shared vocabulary and a backend stays honest in both directions:
+  it answers the keys it has, and refuses the ones it does not without claiming it takes no input.
+  Answering such a key with something that is *not* the key asked for would be the silent
+  degradation ai/RULES.md §2 forbids, sharpened by the fact that the injection tooling accepts a
+  key name it does not know in silence and exits 0 (§6).
 
 ---
 

@@ -15,6 +15,7 @@ import {
 	NoRecordingRunningError,
 	RecordingAlreadyRunningError,
 	UnfinishedRecordingError,
+	UnsupportedKeyError,
 	UnsupportedTextError,
 	WaitTimeoutError,
 } from '@/core/errors.js';
@@ -164,6 +165,25 @@ describe('a verb-layer error becomes a failure a client can branch on', () => {
 			maxBytes: 4_194_304,
 			message: error.message,
 		});
+	});
+
+	it('maps a key the device has no equivalent for, naming the key rather than the capability', () => {
+		const error = new UnsupportedKeyError(
+			SERIAL,
+			'recents',
+			'this device has no app-switcher key and no gesture reachable from here',
+		);
+
+		// Not `missing-capability`: this device declares `canInput` and takes input, so the way
+		// out is a different key rather than a different device — and `key` is what says which
+		// one to stop asking for.
+		expect(failureOf(error)).toEqual({
+			kind: 'unsupported-key',
+			serial: SERIAL,
+			key: 'recents',
+			message: error.message,
+		});
+		expect(error.message).toContain('recents');
 	});
 
 	it('carries the offending characters as escapes, so an invisible one is still actionable', () => {
@@ -475,6 +495,7 @@ describe('a failure survives the trip to the agent', () => {
 				'only ASCII',
 			),
 		],
+		['unsupported-key', new UnsupportedKeyError(SERIAL, 'recents', 'no key and no gesture')],
 		['artifact-too-large', new ArtifactTooLargeError(SERIAL, 9_000_000, 4_194_304)],
 		['unfinished-recording', new UnfinishedRecordingError(SERIAL, 3_232)],
 		['recording-already-running', new RecordingAlreadyRunningError(SERIAL, ['29633'])],

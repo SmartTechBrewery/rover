@@ -268,6 +268,14 @@ export async function typeText(context: VerbContext, text: string): Promise<Acti
  * backend and with the wire rather than restated here: a key this layer accepted and a
  * backend had no mapping for would be a press that reports success and does nothing.
  *
+ * **A vocabulary is not a promise every device has all of it.** A device with no equivalent
+ * for one of these keys answers `UnsupportedKeyError`, which reaches the agent as an
+ * `unsupported-key` failure naming the key (`./failure.ts`) — not `missing-capability`,
+ * because a device that takes input and lacks one key is a narrower device rather than one
+ * that takes none. Nothing here inspects the key or substitutes for it: which keys a device
+ * has is the backend's knowledge, and this verb neither second-guesses it nor swallows the
+ * refusal.
+ *
  * **The post-state is the interesting half.** `home` and `recents` change what is on screen
  * without anything on screen having been touched, so the `ActionResult`'s `after` is the only
  * evidence of what the press did — and on a backend that cannot read its screen it says so
