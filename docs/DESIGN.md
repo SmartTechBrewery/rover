@@ -2637,12 +2637,28 @@ is a fact about the *host's* disk, and a tick that survived a reload would look 
 host had been told about. *I ticked it on my laptop and the run was deleted anyway* is the failure
 this cannot have while it is only a control.
 
-**Where it is drawn, and the two levels are the whole list.** At the right end of the card's header
-strip, opposite the name — on a **test name's** card and on a **run's** `Run Details`, and nowhere
-else. The card above a run also draws the root, a project, and every directory below the
-`<serial>`; those addresses pass *through* a test without being about one, so they carry no
-checkbox. `ContentsCard`'s header being a slot rather than a title (#133) is what makes this an
-argument to that slot instead of a fourth card component.
+**Where it is drawn, and the three levels are the whole list.** At the right end of the card's
+header strip, opposite the name — on a **test name's** card, on a **run's** `Run Details`, and on a
+**group's** card in the groups view. Nowhere else: the level card also draws the root, a project,
+and every directory below the `<serial>`, and those addresses pass *through* a test without being
+about one, so they carry no checkbox. `ContentsCard`'s header being a slot rather than a title
+(#133) is what makes this an argument to that slot instead of a fourth card component.
+
+**A group's tick is the same flag over all of its tests, and part-kept is a real state.** Pressing
+it keeps every test in that group; pressing it again, from kept, stops keeping them. It does **not**
+lock the tests underneath it — a reader may untick one afterwards, which is deliberately not
+prevented — and the group's own tick then says *some* through the platform's own third state,
+`indeterminate`, drawn as a dash in a filled box. Neither of the two roundings was acceptable: *off*
+would say nothing in the group is kept, *on* would say all of it is. There is no *group is kept*
+flag anywhere; the truth is which tests are kept, and the group's tick both reads and writes exactly
+that. A group whose tests are not listed — the walk still out, an unreadable answer, or no runs at
+all — carries **no** tick, because there is nothing to keep and a tick there would be a promise
+about runs nobody has been shown.
+
+**Its sentence is the group's, not the test's with a word changed** — *Traces of every test in this
+group will be removed once Rover starts sweeping the archive, unless you keep them all.* A reader
+who saw the test's wording over a group's tick would take it for a control over the group as a
+thing, and press it expecting one flag rather than several.
 
 **One flag per test, shown on two cards.** The tick on a run's card is the *same* flag as the one
 on its test's card — ticking either lights the other, and the two are never on screen together. A run

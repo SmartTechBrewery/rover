@@ -21,6 +21,13 @@ import { keyOf } from './archive-path.js';
  * name is what a reader recognises across runs; pinning the run and leaving its siblings sweepable
  * is a granularity nobody asked for, and a checkbox that meant different things on two cards would
  * have to say so on each.
+ *
+ * **A group's tick is the same flag over several tests, and not a flag of its own.** In the groups
+ * view a group's card carries one, and it keeps every test in that group — which is why there is no
+ * *group is kept* state anywhere here: the truth is which tests are kept, and the group's tick both
+ * reads and writes exactly that. Two things follow, and both are deliberate. A reader may untick a
+ * single test afterwards — nothing locks a test to its group's tick — and the group's own tick then
+ * has to say *some*, which is what {@link PinState.mixed} is for.
  */
 
 /**
@@ -68,12 +75,34 @@ export function testKeyOf(test: TestPath): string {
  */
 export interface PinState {
 	readonly checked: boolean;
+	/**
+	 * Some of what this tick stands for is kept and some is not — **a group's tick only**, where it
+	 * is the honest third state rather than a rounding of two.
+	 *
+	 * A group's tick stands over several tests and a reader may untick one of them afterwards, which
+	 * is deliberately not prevented. Drawing that as *off* would say nothing in the group is kept and
+	 * drawing it as *on* would say all of it is; the platform has the answer already, in a
+	 * checkbox's `indeterminate`, so the control says *some* and neither of the two lies is needed.
+	 */
+	readonly mixed?: boolean;
 	readonly toggle: () => void;
 }
 
 /** The whole set, as the screen holds it. */
 export interface PinnedTests {
 	stateFor(test: TestPath): PinState;
+	/**
+	 * One tick standing over several tests — a **group's**, in the groups view.
+	 *
+	 * `checked` only when every one of them is kept, `mixed` when some are, and the toggle is a bulk
+	 * action: it keeps all of them, or, from `checked`, stops keeping all of them. It does **not**
+	 * lock the tests underneath it — ticking a group is a way of ticking its tests, not a claim that
+	 * outranks them, so a reader may untick one afterwards and the group's tick goes `mixed`.
+	 *
+	 * The caller passes the tests; this module never reads the grouping answer. Which tests are in a
+	 * group is a fact about that answer (`group-tree.ts`), and a set of keys is all this needs.
+	 */
+	stateForAll(tests: readonly TestPath[]): PinState;
 }
 
 export function usePinnedTests(): PinnedTests {
@@ -91,13 +120,43 @@ export function usePinnedTests(): PinnedTests {
 		});
 	}, []);
 
+	/** One write for a whole group, so ticking one does not re-render per test. */
+	const setAll = useCallback((keys: readonly string[], kept: boolean): void => {
+		setPinned((current) => {
+			const next = new Set(current);
+			for (const key of keys) {
+				if (kept) {
+					next.add(key);
+				} else {
+					next.delete(key);
+				}
+			}
+			return next;
+		});
+	}, []);
+
 	return useMemo(
 		() => ({
 			stateFor: (test) => {
 				const key = testKeyOf(test);
 				return { checked: pinned.has(key), toggle: () => toggle(key) };
 			},
+			stateForAll: (tests) => {
+				const keys = tests.map(testKeyOf);
+				const kept = keys.filter((key) => pinned.has(key)).length;
+				/*
+				 * An empty list is `false` and a toggle that writes nothing. The screen does not draw
+				 * this control for a group with no tests in it — there would be nothing to keep — so
+				 * this is the shape of an unreachable case rather than a state anybody sees, and
+				 * `kept === keys.length` would otherwise read *all of nothing is kept* as `checked`.
+				 */
+				return {
+					checked: keys.length > 0 && kept === keys.length,
+					mixed: kept > 0 && kept < keys.length,
+					toggle: () => setAll(keys, kept < keys.length),
+				};
+			},
 		}),
-		[pinned, toggle],
+		[pinned, setAll, toggle],
 	);
 }

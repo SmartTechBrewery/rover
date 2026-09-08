@@ -17,10 +17,16 @@ import { type ArchiveSearch, useArchiveSearch } from '@panel/archive/archive-sea
 import { useArchivedArtifact } from '@panel/archive/artifact.js';
 import { type ArchivedDeviceInfo, useArchivedDeviceInfo } from '@panel/archive/device-info.js';
 import { groupedSearch } from '@panel/archive/group-search.js';
-import { groupRowsAt, groupRunSerial } from '@panel/archive/group-tree.js';
+import { groupRowsAt, groupRunSerial, testNamesOfGroup } from '@panel/archive/group-tree.js';
 import { comparisonAt, type LabelComparison } from '@panel/archive/label-comparison.js';
 import { type OpenBranches, useOpenBranches } from '@panel/archive/open-branches.js';
-import { type PinnedTests, TEST_NAME_DEPTH, usePinnedTests } from '@panel/archive/pinned-tests.js';
+import {
+	type PinnedTests,
+	type PinState,
+	TEST_NAME_DEPTH,
+	type TestPath,
+	usePinnedTests,
+} from '@panel/archive/pinned-tests.js';
 import {
 	type ArchivedTestDescription,
 	useArchivedTestDescription,
@@ -447,6 +453,7 @@ function Preview({
 }) {
 	const depths = depthsOf(view);
 	const address = view === 'groups' ? archiveAddressOf(selected) : selected;
+	const pin = levelPin(view, selected, address, groups, pinned);
 
 	if (selected.length >= depths.below) {
 		if (open === 'artifact') {
@@ -496,15 +503,12 @@ function Preview({
 			}
 			path={selected}
 			/*
-			 * **At a test name and at no other level this card draws.** It draws the root and a
-			 * project above a run, and every directory *below* the `<serial>` as well — all of which
-			 * are two components or more, so the test the address passes through is not what those
-			 * cards are about. `=== TEST_NAME_DEPTH` rather than `>=` is the whole of that
-			 * distinction.
+			 * **At a group and at a test name, and at no other level this card draws** — it also draws
+			 * the root, a project, and every directory below the `<serial>`, none of which is about a
+			 * test. {@link pinFor} is the whole of that decision.
 			 */
-			pin={
-				address.length === TEST_NAME_DEPTH ? pinned.stateFor([address[0], address[1]]) : undefined
-			}
+			pin={pin?.state}
+			pinScope={pin?.scope}
 		/>
 	);
 }
@@ -607,6 +611,15 @@ const SERIAL_DEPTH = 4;
 const BELOW_THE_SERIAL = 5;
 
 /**
+ * Where a **group** sits, counted in the groups view's own address — `<project>/<groupId>`.
+ *
+ * It has no entry in {@link depthsOf} because it is not a depth both views count: the `All` view has
+ * no group level at all, and the archive has no directory for one. So it is compared against
+ * `selected`, and only ever under `view === 'groups'`.
+ */
+const GROUP_DEPTH = 2;
+
+/**
  * How many components a view puts in front of the archive's own path (#181).
  *
  * One in the groups view — the `groupId`, which is a level of an arrangement and not a directory —
@@ -615,6 +628,48 @@ const BELOW_THE_SERIAL = 5;
  * what keeps one set of rules rather than two tables of magic numbers.
  */
 const OFFSET: Record<ArchiveView, number> = { all: 0, groups: 1 };
+
+/**
+ * The `Keep` tick for the level card, or `null` where that card is not about a test.
+ *
+ * That card draws six different levels and exactly two of them carry a tick, so the decision is
+ * here — the one place that already owns the depth arithmetic — rather than in the card working out
+ * whether it should have a control (the rule `force-release-control.tsx` records: no branch for a
+ * control that cannot exist). The run's card asks {@link PinnedTests.stateFor} at its own branch,
+ * where the depth is already known and a tick is certain.
+ *
+ * | the level | the tick |
+ * | --- | --- |
+ * | a group, in the groups view | every test in it, as one bulk tick (`stateForAll`) |
+ * | a test name, in either view | that test |
+ * | the root, a project, a directory below the `<serial>` | none |
+ *
+ * **A group whose tests are not listed gets no control** — the walk is still out, the answer is
+ * unreadable, or the group is empty. There is nothing to keep, and a tick over an empty group would
+ * be a promise about runs nobody has seen.
+ */
+function levelPin(
+	view: ArchiveView,
+	selected: readonly string[],
+	address: readonly string[],
+	groups: ArchiveGroups,
+	pinned: PinnedTests,
+): { readonly state: PinState; readonly scope: 'test' | 'group' } | null {
+	if (view === 'groups' && selected.length === GROUP_DEPTH) {
+		if (groups.status !== 'listed') {
+			return null;
+		}
+		const project = selected[0] ?? '';
+		const tests = testNamesOfGroup(groups.groups, project, selected[1] ?? '').map(
+			(row): TestPath => [project, row.name],
+		);
+		return tests.length === 0 ? null : { state: pinned.stateForAll(tests), scope: 'group' };
+	}
+	if (address.length === TEST_NAME_DEPTH) {
+		return { state: pinned.stateFor([address[0], address[1]]), scope: 'test' };
+	}
+	return null;
+}
 
 /** The three depths one view counts in, so no call site does the arithmetic twice. */
 function depthsOf(view: ArchiveView) {

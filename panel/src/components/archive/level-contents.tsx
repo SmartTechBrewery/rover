@@ -45,6 +45,7 @@ export function LevelContents({
 	level,
 	depth = path.length,
 	pin,
+	pinScope,
 }: {
 	readonly path: readonly string[];
 	readonly level: ArchiveLevel;
@@ -70,6 +71,12 @@ export function LevelContents({
 	 * whether it should exist.
 	 */
 	readonly pin?: PinState;
+	/**
+	 * What {@link pin} stands over, forwarded to the control and read nowhere here — a **group's**
+	 * card in the groups view ticks every test in that group, a test name's ticks one test, and the
+	 * sentence the control shows has to be about the right one (`archive-checkbox.tsx`).
+	 */
+	readonly pinScope?: 'test' | 'group';
 }) {
 	return (
 		<ContentsCard
@@ -82,7 +89,7 @@ export function LevelContents({
 					<div className="min-w-0">
 						<CardHeading>{path.at(-1) ?? 'Archive'}</CardHeading>
 					</div>
-					{pin === undefined ? null : <ArchiveCheckbox pin={pin} />}
+					{pin === undefined ? null : <ArchiveCheckbox pin={pin} scope={pinScope} />}
 				</div>
 			}
 		>

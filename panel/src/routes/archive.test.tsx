@@ -2449,3 +2449,117 @@ describe('the Keep checkbox', () => {
 		expect(box().checked).toBe(true);
 	});
 });
+
+/**
+ * **A group's own `Keep` tick — the same flag as its tests', over all of them at once.**
+ *
+ * It is a way of ticking a group's tests and not a claim that outranks them: a reader may untick one
+ * afterwards, which is deliberately not prevented, and the group's tick then has to say *some*
+ * rather than pick one of the two lies (`pinned-tests.ts`, `docs/DESIGN.md` §9).
+ */
+describe('the Keep tick on a group', () => {
+	const box = () => screen.getByRole('checkbox', { name: 'Keep' }) as HTMLInputElement;
+
+	/** One group, two arms — R41's own `_variant` shape, and the only fixture `mixed` can be seen in. */
+	function twoArms() {
+		return {
+			outcome: 'listed',
+			truncated: false,
+			groups: [
+				{
+					project: 'checkout-app',
+					groupId: GROUP,
+					runs: [groupRun('login-flow_variantA', OLDER), groupRun('login-flow_variantB', RUN)],
+				},
+			],
+		};
+	}
+
+	async function atTheGroup() {
+		host.groups = twoArms();
+		return await grouped(`checkout-app/${GROUP}`);
+	}
+
+	it('says the sentence about the group rather than about one test', async () => {
+		await atTheGroup();
+
+		const said =
+			document.getElementById(box().getAttribute('aria-describedby') ?? '')?.textContent ?? '';
+		expect(said).toContain('every test in this group');
+		expect(said).toContain('keep them all');
+		// The test's own wording is not what a group's tick shows.
+		expect(said).not.toContain('Traces of this test');
+	});
+
+	it('keeps every test in the group, and each test says so on its own card', async () => {
+		const { rerender } = await atTheGroup();
+		fireEvent.click(box());
+		expect(box().checked).toBe(true);
+
+		for (const arm of ['login-flow_variantA', 'login-flow_variantB']) {
+			at.splat = `checkout-app/${GROUP}/${arm}`;
+			await act(async () => {
+				rerender(<ArchiveScreen view="groups" />);
+			});
+			expect(box().checked).toBe(true);
+		}
+	});
+
+	/*
+	 * The point of the whole arrangement: nothing locks a test to its group's tick, so unticking one
+	 * arm leaves the group **part**-kept — `indeterminate`, which is the platform's own third state.
+	 */
+	it('goes part-kept when one of its tests is unticked, and does not force it back', async () => {
+		const { rerender } = await atTheGroup();
+		fireEvent.click(box());
+
+		at.splat = `checkout-app/${GROUP}/login-flow_variantB`;
+		await act(async () => {
+			rerender(<ArchiveScreen view="groups" />);
+		});
+		fireEvent.click(box());
+		expect(box().checked).toBe(false);
+
+		at.splat = `checkout-app/${GROUP}`;
+		await act(async () => {
+			rerender(<ArchiveScreen view="groups" />);
+		});
+		expect(box().checked).toBe(false);
+		expect(box().indeterminate).toBe(true);
+	});
+
+	/** From part-kept, one press keeps the rest rather than clearing the ones already kept. */
+	it('keeps the remainder from part-kept', async () => {
+		const { rerender } = await atTheGroup();
+
+		at.splat = `checkout-app/${GROUP}/login-flow_variantA`;
+		await act(async () => {
+			rerender(<ArchiveScreen view="groups" />);
+		});
+		fireEvent.click(box());
+
+		at.splat = `checkout-app/${GROUP}`;
+		await act(async () => {
+			rerender(<ArchiveScreen view="groups" />);
+		});
+		expect(box().indeterminate).toBe(true);
+
+		fireEvent.click(box());
+		expect(box().checked).toBe(true);
+		expect(box().indeterminate).toBe(false);
+	});
+
+	/*
+	 * **No tick over a group whose tests nobody has listed.** There is nothing to keep, and a tick
+	 * there would be a promise about runs the reader has not been shown.
+	 */
+	it('is not drawn while the walk is out, or on an answer that cannot be read', async () => {
+		for (const answer of [HANGS, { outcome: 'unreadable' }]) {
+			host.groups = answer;
+			const { unmount } = await grouped(`checkout-app/${GROUP}`);
+
+			expect(screen.queryAllByRole('checkbox', { name: 'Keep' })).toHaveLength(0);
+			unmount();
+		}
+	});
+});

@@ -91,6 +91,34 @@ describe('the Keep tick', () => {
 	});
 
 	/*
+	 * **`mixed` is a third state and is drawn as one.** It belongs to a group's tick, where some of
+	 * its tests are kept and some are not, and the box shows a dash rather than a tick or nothing —
+	 * `indeterminate` is a property and not an attribute, so a ref is the only way React reaches it,
+	 * which is exactly the wiring worth pinning.
+	 */
+	it('draws part-kept as neither on nor off', () => {
+		const { container } = render(
+			<ArchiveCheckbox pin={{ checked: false, mixed: true, toggle: () => {} }} scope="group" />,
+		);
+
+		expect(tick().checked).toBe(false);
+		expect(tick().indeterminate).toBe(true);
+		// Filled like a kept box, so *some* reads as closer to on than to off, and the glyph is what
+		// tells them apart.
+		expect(tick().className).toContain('bg-tertiary');
+		expect(container.querySelector('svg')).not.toBeNull();
+	});
+
+	it('takes the group’s wording from the scope, and nothing else from it', () => {
+		render(<ArchiveCheckbox pin={UNPINNED} scope="group" />);
+
+		const said = sentenceOf(tick())?.textContent ?? '';
+		expect(said).toContain('every test in this group');
+		expect(said).toContain('keep them all');
+		expect(said).not.toMatch(/\d/);
+	});
+
+	/*
 	 * **Nothing on this control is a link or a button.** The `?` that opened the sentence on a press
 	 * was the third shape tried and is not kept: it gave one sentence its own control, and it put a
 	 * `<button>` on a card whose whole claim is that it moves nobody anywhere (#161).

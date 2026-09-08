@@ -1,5 +1,5 @@
 import type { PinState } from '@panel/archive/pinned-tests.js';
-import { Check } from 'lucide-react';
+import { Check, Minus } from 'lucide-react';
 import { useId } from 'react';
 
 /**
@@ -47,7 +47,23 @@ import { useId } from 'react';
  * cannot be recoloured to `tertiary` on every platform, which is the one thing this control has to
  * agree with the rest of the screen about.
  */
-export function ArchiveCheckbox({ pin }: { readonly pin: PinState }) {
+export function ArchiveCheckbox({
+	pin,
+	scope = 'test',
+}: {
+	readonly pin: PinState;
+	/**
+	 * What this tick stands over, which is the only thing that differs between the three cards that
+	 * carry one: a **test** on a test name's card and on a run's, and a whole **group** on a group's
+	 * card in the groups view.
+	 *
+	 * It chooses the sentence and nothing else — the box, the word and the behaviour are the same
+	 * control, because it is the same flag (`pinned-tests.ts`). A sentence about one test shown over
+	 * a group's tick would be wrong about what pressing it does, which is the whole reason this
+	 * argument exists rather than one wording for both.
+	 */
+	readonly scope?: 'test' | 'group';
+}) {
 	const describedBy = useId();
 
 	return (
@@ -79,25 +95,47 @@ export function ArchiveCheckbox({ pin }: { readonly pin: PinState }) {
 					<input
 						aria-describedby={describedBy}
 						checked={pin.checked}
+						/*
+						 * **`indeterminate` is a property and not an attribute**, so React cannot set it
+						 * from JSX — this ref is the only way to reach it. It is what a group's tick says
+						 * when some of its tests are kept and some are not (`pinned-tests.ts`), and the
+						 * platform's own third state is used rather than a third visual invented here.
+						 */
+						ref={(box) => {
+							if (box !== null) {
+								box.indeterminate = pin.mixed ?? false;
+							}
+						}}
 						className={`size-4 appearance-none rounded-sm border-2 bg-surface transition-colors focus-visible:border-tertiary ${
-							pin.checked ? 'border-tertiary bg-tertiary' : 'border-outline-variant'
+							pin.checked || pin.mixed === true
+								? 'border-tertiary bg-tertiary'
+								: 'border-outline-variant'
 						}`}
 						onChange={pin.toggle}
 						type="checkbox"
 					/>
-					{pin.checked ? (
-						/*
-						 * `lucide-react`'s glyph over the box, not the design's Material Symbols one (§9),
-						 * and `on-tertiary` because that is the token paired with the fill underneath it.
-						 * `pointer-events-none` so the glyph never eats the click meant for the input.
-						 */
-						<Check
-							aria-hidden="true"
-							className="pointer-events-none absolute inset-0 text-on-tertiary"
-							size={16}
-							strokeWidth={3}
-						/>
-					) : null}
+					{pin.checked || pin.mixed === true
+						? /*
+							 * `lucide-react`'s glyph over the box, not the design's Material Symbols one (§9),
+							 * and `on-tertiary` because that is the token paired with the fill underneath it.
+							 * `pointer-events-none` so the glyph never eats the click meant for the input.
+							 *
+							 * **A dash for `mixed`**, which is the glyph a half-ticked box has carried since
+							 * long before this panel: *some of what this stands over*, drawn as neither a tick
+							 * nor an empty box, so the three states are three things a reader can see.
+							 */
+							(() => {
+								const Glyph = pin.checked ? Check : Minus;
+								return (
+									<Glyph
+										aria-hidden="true"
+										className="pointer-events-none absolute inset-0 text-on-tertiary"
+										size={16}
+										strokeWidth={3}
+									/>
+								);
+							})()
+						: null}
 				</span>
 				{/*
 				 * 12px in the code face, which is the view toggle's `SEGMENT` — and for the reason
@@ -108,7 +146,9 @@ export function ArchiveCheckbox({ pin }: { readonly pin: PinState }) {
 				 */}
 				<span
 					className={`font-code-md text-xs transition-colors ${
-						pin.checked ? 'text-tertiary' : 'text-on-surface-variant group-hover:text-on-surface'
+						pin.checked || pin.mixed === true
+							? 'text-tertiary'
+							: 'text-on-surface-variant group-hover:text-on-surface'
 					}`}
 				>
 					Keep
@@ -131,22 +171,30 @@ export function ArchiveCheckbox({ pin }: { readonly pin: PinState }) {
 				className="absolute top-full right-0 z-10 mt-2 hidden w-72 rounded-lg border-2 border-outline-variant bg-surface p-3 font-code-md text-on-surface-variant text-xs group-hover:block group-has-[:focus-visible]:block"
 				id={describedBy}
 			>
-				{REMOVAL_NOTICE}
+				{REMOVAL_NOTICE[scope]}
 			</span>
 		</span>
 	);
 }
 
 /**
- * The one sentence this control makes about itself, and the whole of what a reader is told.
+ * The sentence this control makes about itself, one per {@link ArchiveCheckbox} scope.
  *
  * **`once Rover starts sweeping the archive` is standing in for a number**, and the substitution is
- * the only thing that changes when the host half lands: *Traces of this test will be removed in 14
- * days, unless you keep it.* Until a host answer carries that window there is no honest way to
- * write the digits — nothing sweeps the archive, no answer carries a retention figure, and one
- * written here would be the panel inventing data the host never sent (`ai/RULES.md` §2, and this
- * screen's own *nothing is invented* rule). Naming the condition still tells a reader why the box
- * is there, which is what the sentence is for.
+ * the only thing that changes when the host half lands: *…will be removed in 14 days, unless…*.
+ * Until a host answer carries that window there is no honest way to write the digits — nothing
+ * sweeps the archive, no answer carries a retention figure, and one written here would be the panel
+ * inventing data the host never sent (`ai/RULES.md` §2, and this screen's own *nothing is invented*
+ * rule). Naming the condition still tells a reader why the box is there, which is what the sentence
+ * is for.
+ *
+ * **The group's wording is not the test's with a word swapped.** Its tick stands over several tests
+ * at once, so the sentence says *every test in this group* and *keep them all* — a reader who read
+ * the test's sentence over a group's tick would take it for a control over the group as a thing,
+ * and press it expecting one flag rather than several.
  */
-const REMOVAL_NOTICE =
-	'Traces of this test will be removed once Rover starts sweeping the archive, unless you keep it.';
+const REMOVAL_NOTICE: Readonly<Record<'test' | 'group', string>> = {
+	test: 'Traces of this test will be removed once Rover starts sweeping the archive, unless you keep it.',
+	group:
+		'Traces of every test in this group will be removed once Rover starts sweeping the archive, unless you keep them all.',
+};
