@@ -1,23 +1,24 @@
 import { describe, expect, it } from 'vitest';
-import { IosSimulatorDeviceBackend } from '@/backends/ios-simulator/backend.js';
+import { IosSimulatorDeviceBackend, LOG_WINDOWS } from '@/backends/ios-simulator/backend.js';
 import { type Device, LogLevelSchema } from '@/core/device.js';
 
 /**
  * The log read against a real booted simulator. Gated on `ROVER_TEST_SIMULATOR`
  * (`tests/device/setup.ts`), so a host without one **skips rather than fails** (ai/TESTING.md).
  *
- * The mocked suite beside it proves the argv, the cap and what `truncated` means against a
- * committed capture. What this proves is what a capture cannot: that a simulator still answers
- * this argv, that the window really is bounded — the whole point of pushing it down into the
- * query — and that what comes back off a *live* log parses into entries rather than into lines
- * the parser could not read.
+ * The mocked suite beside it proves the argv, the widening, the cap and what `truncated` means
+ * against a committed capture. What this proves is what a capture cannot: that a simulator still
+ * answers this argv, that the read really is bounded — the whole point of pushing the bound down
+ * into the query — and that what comes back off a *live* log parses into entries rather than into
+ * lines the parser could not read.
  *
  * **Read-only, and it changes nothing**: a log read is the one verb that cannot alter the device.
  * Nothing here boots, shuts down, installs or launches anything (`docs/IOS.md` §8, trap 4).
  *
- * **Nothing asserts a count or a level**, and that is deliberate rather than shy. What a device
- * says in thirty seconds belongs to whatever is running on it: the same simulator answered 67 and
- * 160 entries per second half an hour apart on this repository's bench, and `Debug` is rare
+ * **Nothing asserts an absolute count or a level**, and that is deliberate rather than shy. What
+ * a device says in a given window belongs to whatever is running on it: the same simulator
+ * answered 67 and 160 entries per second half an hour apart on this repository's bench, and
+ * `Debug` is rare
  * enough on an idle one that waiting for it would be a flaky test rather than a check
  * (`tests/fixtures/ios-simulator/README.md`). The flags that decide the levels are pinned as argv
  * in the unit suite, where they are a fact about this backend rather than about the host's mood.
@@ -38,11 +39,13 @@ async function bootedDevice(): Promise<Device> {
 
 describe.skipIf(!process.env.ROVER_TEST_SIMULATOR)('the log read against a real simulator', () => {
 	/**
-	 * The bound, end to end: a small cap comes back full and says it dropped the rest.
+	 * The bound, end to end: a small cap comes back full and says it dropped the rest. A cap this
+	 * small is filled by the narrowest width, so this is the one-read case and the timing below
+	 * bounds a single read.
 	 *
-	 * The five seconds are against a read measured at **0.9–1.4 s** on this bench, nearly all of
+	 * The five seconds are against a read measured at **0.9–1.8 s** on this bench, nearly all of
 	 * it `simctl spawn`'s own start-up rather than the window — a one-second window cost 1.39 s and
-	 * a sixty-second one 1.08 s. Loose on purpose: what the bound is here to catch is an unbounded
+	 * a five-minute one 1.75 s. Loose on purpose: what the bound is here to catch is an unbounded
 	 * read, not a busy host.
 	 */
 	it('answers the newest entries up to the cap, and says the rest were dropped', async () => {
@@ -57,17 +60,32 @@ describe.skipIf(!process.env.ROVER_TEST_SIMULATOR)('the log read against a real 
 	});
 
 	/**
-	 * `truncated` and the cap agree whichever way the window fell, which is the property that
-	 * holds on a device whose log rate nobody controls: at the ceiling the flag is set exactly
-	 * when the answer is full.
+	 * The half of `truncated` that holds on a device whose log rate nobody controls: truncation
+	 * implies a full answer, while a full answer does not imply truncation — a window holding
+	 * *exactly* the cap is not truncated, and this bench has produced 4,902, 4,983 and 5,339
+	 * entries for the same width minutes apart, so an equality across that boundary would be a
+	 * flake rather than a check. The exact-fit case is pinned deterministically in the mocked
+	 * suite instead.
+	 *
+	 * What is worth asserting against a *live* log is the widening: at the contract's ceiling the
+	 * read escalates through `LOG_WINDOWS` until the cap binds, so on any simulator that says
+	 * 5,000 things in five minutes the answer comes back cap-bound rather than window-bound. A
+	 * quieter one is allowed to answer short — that is the horizon, not a bug — and says so by
+	 * having taken every width.
 	 */
-	it('agrees with its own cap at the contract’s ceiling', async () => {
+	it('lets the cap bind the answer at the contract’s ceiling, not the lookback', async () => {
 		const device = await bootedDevice();
 
 		const read = await backend.readLogs(device.serial, { maxEntries: CEILING });
 
 		expect(read.entries.length).toBeLessThanOrEqual(CEILING);
-		expect(read.truncated).toBe(read.entries.length === CEILING);
+		if (read.truncated) expect(read.entries).toHaveLength(CEILING);
+		if (read.entries.length < CEILING) {
+			console.warn(
+				`this simulator said only ${read.entries.length} things in ${LOG_WINDOWS.at(-1)}: ` +
+					'the cap-bound read at the ceiling was NOT exercised',
+			);
+		}
 	});
 
 	/**

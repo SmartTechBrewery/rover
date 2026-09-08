@@ -5,6 +5,7 @@ import { dirname, isAbsolute, join } from 'node:path';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
 	IosSimulatorDeviceBackend,
+	LOG_WINDOWS,
 	WATCH_POLL_INTERVAL_MS,
 } from '@/backends/ios-simulator/backend.js';
 import { SimctlNotFoundError } from '@/backends/ios-simulator/developer-dir.js';
@@ -18,6 +19,7 @@ import {
 import type { Device, DeviceWatcher } from '@/core/device.js';
 import { DeviceVanishedError, FileTooLargeError } from '@/core/errors.js';
 import { type AppId, type DeviceSerial, parseAppId, parseDeviceSerial } from '@/core/ids.js';
+import { MAX_LOG_ENTRIES } from '@/ipc/verb-methods.js';
 import { REQUIRED_BACKEND_METHODS, STUB_SENTINEL } from '../../../helpers/backend-conformance.js';
 
 /**
@@ -1395,6 +1397,21 @@ describe('readLogs', () => {
 	/** The stderr an ordinary run writes while exiting 0 on this platform. */
 	const NOISE = 'getpwuid_r did not find a match for uid 501\n';
 
+	/** How many reads a cap the device never fills costs — every width, once (`LOG_WINDOWS`). */
+	const LOG_WIDTHS = LOG_WINDOWS.length;
+
+	/** The two suffixes `LOG_WINDOWS` spells its widths with, as seconds. */
+	function secondsOf(window: string): number {
+		const [, count, unit] = /^(\d+)([sm])$/.exec(window) ?? [];
+		if (count === undefined) throw new Error(`a window this helper cannot read: ${window}`);
+		return Number(count) * (unit === 'm' ? 60 : 1);
+	}
+
+	/** The `--last` argument of every read made so far, in the order they were made. */
+	function windowsAsked(): (string | undefined)[] {
+		return runSimctlOnDevice.mock.calls.map((call) => (call[2] as string[]).at(-1));
+	}
+
 	function reads(stdout: string): void {
 		runSimctlOnDevice.mockResolvedValue({ stdout, stderr: NOISE });
 	}
@@ -1408,9 +1425,12 @@ describe('readLogs', () => {
 	 * the query inside the device rather than against this Mac's own log, `--style ndjson` is the
 	 * shape the parser is pinned against, `--info --debug` are what keep two of the five levels
 	 * from being silently missing, and `--last` is the pushdown.
+	 *
+	 * The narrowest width is what a read starts at, and a cap this capture fills is what keeps it
+	 * there — the widening is the case below.
 	 */
 	it('asks the device’s own log for one bounded window, pinned to the device', async () => {
-		await backend.readLogs(BOOTED, { maxEntries: 200 });
+		await backend.readLogs(BOOTED, { maxEntries: 5 });
 
 		expect(runSimctlOnDevice).toHaveBeenCalledTimes(1);
 		expect(runSimctlOnDevice.mock.calls[0]?.slice(0, 3)).toEqual([
@@ -1425,12 +1445,32 @@ describe('readLogs', () => {
 	it('gives the read room for an answer that is a payload rather than a listing', async () => {
 		await backend.readLogs(BOOTED, { maxEntries: 200 });
 
-		expect(runSimctlOnDevice.mock.calls[0]?.[3]?.maxBufferBytes).toBe(
-			READ_LOGS_SIMCTL_MAX_BUFFER_BYTES,
-		);
+		for (const call of runSimctlOnDevice.mock.calls) {
+			expect(call[3]?.maxBufferBytes).toBe(READ_LOGS_SIMCTL_MAX_BUFFER_BYTES);
+		}
 	});
 
-	it('answers the window’s entries when they fit under the cap', async () => {
+	/**
+	 * The finding this method was rewritten for: a window that held less than the cap is not an
+	 * answer the cap bound, so reporting it as `truncated: false` off the first read would tell a
+	 * caller nothing older was dropped while the device's store held an order of magnitude more.
+	 * The widths are tried in order until one of them says more than the cap.
+	 */
+	it('widens the window while the device said no more than the cap', async () => {
+		await backend.readLogs(BOOTED, { maxEntries: 200 });
+
+		expect(windowsAsked()).toEqual([...LOG_WINDOWS]);
+	});
+
+	/** A cap the first width fills is the common case, and it costs exactly the one read. */
+	it('stops at the first width that said more than the cap', async () => {
+		const read = await backend.readLogs(BOOTED, { maxEntries: 5 });
+
+		expect(runSimctlOnDevice).toHaveBeenCalledTimes(1);
+		expect(read.truncated).toBe(true);
+	});
+
+	it('answers the widest window’s entries when they fit under the cap', async () => {
 		const read = await backend.readLogs(BOOTED, { maxEntries: 200 });
 
 		expect(read.entries).toHaveLength(CAPTURED_ENTRIES);
@@ -1447,24 +1487,43 @@ describe('readLogs', () => {
 	});
 
 	/**
-	 * The exact-fit case, which is what `truncated` is easy to get wrong on: the window held
-	 * exactly the cap, so nothing was dropped. `log show` has no count bound to ask one more than
-	 * the cap of — the window is what makes this decidable at all.
+	 * The exact-fit case, which is what `truncated` is easy to get wrong on: the widest width held
+	 * exactly the cap, so nothing was dropped *for the cap's sake*. `log show` has no count bound
+	 * to ask one more than the cap of — the widening is what stands in for the Android side's
+	 * `+ 1`, and it has to run out before this may be answered.
 	 */
 	it('answers exactly the cap without calling it truncated', async () => {
 		const read = await backend.readLogs(BOOTED, { maxEntries: CAPTURED_ENTRIES });
 
+		expect(runSimctlOnDevice).toHaveBeenCalledTimes(LOG_WIDTHS);
 		expect(read.entries).toHaveLength(CAPTURED_ENTRIES);
 		expect(read.truncated).toBe(false);
 	});
 
-	it('answers a window the device said nothing in as empty rather than as a failure', async () => {
+	/**
+	 * The number the finding turned on. A single 30 s window holds 2,000–4,800 entries at the
+	 * 67–160 entries per second this bench measured, which is *under* `MAX_LOG_ENTRIES` — so the
+	 * lookback rather than the cap decided the answer at the contract's own ceiling. Pinned
+	 * against the slowest rate measured, so that shrinking the widest width, or raising the
+	 * ceiling, cannot quietly put the lookback back in charge.
+	 */
+	it('carries a widest window that covers the contract’s ceiling at the slowest measured rate', () => {
+		const SLOWEST_ENTRIES_PER_SECOND = 67;
+		const widths = LOG_WINDOWS.map(secondsOf);
+
+		expect(widths.at(-1) as number).toBeGreaterThan(MAX_LOG_ENTRIES / SLOWEST_ENTRIES_PER_SECOND);
+		expect(widths).toEqual([...widths].sort((a, b) => a - b));
+		expect(new Set(widths).size).toBe(widths.length);
+	});
+
+	it('answers a device that said nothing as empty rather than as a failure', async () => {
 		reads(NOTHING);
 
 		expect(await backend.readLogs(BOOTED, { maxEntries: 200 })).toEqual({
 			entries: [],
 			truncated: false,
 		});
+		expect(runSimctlOnDevice).toHaveBeenCalledTimes(LOG_WIDTHS);
 	});
 
 	/**
@@ -1481,6 +1540,7 @@ describe('readLogs', () => {
 			'exited 149',
 		);
 		expect(runSimctl).not.toHaveBeenCalled();
+		expect(runSimctlOnDevice).toHaveBeenCalledTimes(1);
 	});
 });
 

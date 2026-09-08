@@ -80,7 +80,7 @@ startup of ~60–90 ms that a Node backend talking gRPC directly would not pay.
 | `stopApp` | `simctl terminate <bundle>` | 0.12 s | ✅ |
 | `clearAppData` | `simctl uninstall` + `install` of a staged copy | 0.5–0.79 s | ⚠️ no `pm clear` equivalent |
 | `screenshot` | `simctl io <d> screenshot --type png --mask ignored <path>` | 0.14–0.29 s, 246 KB–2.8 MB PNG | ✅ to a **file**, never stdout |
-| `readLogs` | `simctl spawn <d> log show --style ndjson --info --debug --last 30s` | 0.9–1.4 s, 2,000–4,800 entries | ⚠️ must be scoped in the query |
+| `readLogs` | `simctl spawn <d> log show --style ndjson --info --debug --last <30s→2m→5m>` | 0.9–1.8 s per width, 2,053–34,819 entries | ⚠️ must be scoped in the query; widens until the cap binds |
 | `pushFile` | the device's `dataPath` + a host copy | 0.10 s, 64 KB | ✅ storage **is** a host path |
 | `pullFile` | same | 0.11 s, byte-identical | ✅ |
 
@@ -172,6 +172,8 @@ screenshot   0.22–0.29 s bare, 0.37–0.49 s through the backend (the state ch
              2.83 MB PNG, 1206×2622 — exactly deviceInfo()'s widthPx/heightPx
 screenshot   on a Shutdown device: 60.68 s to fail bare, 0.12 s to refuse through the backend
 readLogs     0.9–1.4 s, 3,384 entries in a 30 s window; on a Shutdown device it fails in 0.15 s
+readLogs     the widths, re-measured for the widening (#239 review): 30s → 2,053 entries / 2.6 MB
+             / 1.01 s, 2m → 8,712 / 10.9 MB / 1.13 s, 5m → 34,819 / 42.8 MB / 1.75 s
 ```
 
 - **The capture cannot go to stdout on this platform, and the `-` that documents it is not a
@@ -199,8 +201,11 @@ readLogs     0.9–1.4 s, 3,384 entries in a 30 s window; on a Shutdown device i
   an overflow is a killed child and a lost answer rather than a truncation.
 - **`log show` has no count bound at all** — its own bounds are the window and `--predicate`
   (`log show --help`) — so there is nothing to ask `maxEntries + 1` of the way `logcat -t` is
-  asked on the Android side. The window is what makes `LogRead.truncated` decidable: whenever the
-  device said more than the cap inside it, what comes back is at least one more than the cap.
+  asked on the Android side. **One window is therefore not a substitute for that `+ 1`**, which is
+  what the first cut of this phase got wrong: a window narrower than the cap makes the *lookback*
+  decide the answer while `truncated: false` claims the cap did not. What stands in for it is
+  widening the window until the device says more than the cap (§5) — the answer is then full
+  because the cap cut it, and a short one is short because the horizon really was reached.
 
 ### How a failure comes back, and why the exit code is not a vocabulary
 
@@ -463,10 +468,22 @@ command has:
   nothing of the host's — 1,958 entries against 2,766 for the same window of the host's own log.
   That bench is far quieter than the 92,204 above; what carries over from that number is the shape
   of its point rather than its size.
-- **`--last 30s` is the rest of it**, chosen against the contract's own 5,000-entry ceiling
-  (`MAX_LOG_ENTRIES`) at a measured 67–160 entries per second, and documented with its
-  measurements beside the constant in `src/backends/ios-simulator/backend.ts`. A narrower read
-  than that is a contract change and its own issue, not something a backend improvises.
+- **A widening window is the rest of it**, `30s → 2m → 5m`, and the widening is the part that took
+  two goes. The single `--last 30s` this section first recorded was chosen against the contract's
+  own 5,000-entry ceiling (`MAX_LOG_ENTRIES`) at a measured 67–160 entries per second — but 30 s at
+  that rate holds 2,000–4,800 entries, which is *below* the ceiling, so a caller asking for 5,000
+  was handed everything the window had together with `truncated: false`: told, by the one flag that
+  exists to say otherwise, that nothing older was dropped. Corrected in place with its reason
+  rewritten (#239 review). `readLogs` now re-reads at the next width while the device said no more
+  than the cap, so the **cap** binds the answer the way `logcat -t` does on Android, and only the
+  widest width may answer `truncated: false`. Measured on the same bench, 2026-09-08: `30s` 2,053
+  entries / 2.6 MB / 1.01 s, `2m` 8,712 / 10.9 MB / 1.13 s, `5m` 34,819 / 42.8 MB / 1.75 s — the
+  cost is nearly flat in the width, because a read spends `simctl spawn`'s start-up rather than the
+  window. **The widening is self-limiting**: a device chatty enough to fill the cap fills it at
+  `30s` and is never re-read, so the widest read only happens on a device quiet enough for it to be
+  small (~12,500 entries, about 15 MB, at the ceiling — well inside the 64 MB buffer). `5m` is the
+  horizon; reaching past it is a bound the caller cannot ask for, and widening `ReadLogsOptions` to
+  let them is a contract change and its own issue, not something a backend improvises.
 
 ---
 

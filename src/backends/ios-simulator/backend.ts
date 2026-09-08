@@ -177,8 +177,8 @@ const SCREENSHOT_FILE = 'screenshot.png';
 const SCREENSHOT_ARGV = ['screenshot', '--type', 'png', '--mask', 'ignored'] as const;
 
 /**
- * How far back one log read looks — the pushdown, and the honest answer to a design problem
- * `docs/IOS.md` §5 first proposed a different solution to.
+ * How far back one log read looks, narrowest first — the pushdown, and the honest answer to a
+ * design problem `docs/IOS.md` §5 first proposed a different solution to.
  *
  * That section's measurement stands: a read that filters *after* the fact spends seconds
  * serialising noise before `maxEntries` throws it away, so the bound belongs in the query. What
@@ -194,14 +194,42 @@ const SCREENSHOT_ARGV = ['screenshot', '--type', 'png', '--mask', 'ignored'] as 
  * 26.4.1, 2026-09-08). §5's 92,204 is a busier bench than this one; what carries over is the
  * shape of its point rather than its number.
  *
- * **Thirty seconds is measured against the contract's own ceiling**, which is 5,000 entries
- * (`MAX_LOG_ENTRIES`, `src/ipc/verb-methods.ts`). The same device answered **67–160 entries per
- * second** depending on what the host was doing, so this window holds 2,000–4,800 entries: the
- * ceiling's own order of magnitude, and ten to twenty-four times the 200 a caller who did not say
- * gets (`DEFAULT_MAX_LOG_ENTRIES`, `src/verbs/logs.js`). Through this backend it answered **3,384
- * entries in about a second**, and its byte cost sits between the 2.4 MB a 20-second window
- * measured and the 5.0–11.9 MB a minute did — which is why the read carries
- * {@link READ_LOGS_SIMCTL_MAX_BUFFER_BYTES}: a window bounds a duration, not a size.
+ * **The window widens until the *cap* is what binds the answer**, because a window is the
+ * wrong bound to answer a count with and a single one was the wrong call. The contract's
+ * ceiling is 5,000 entries (`MAX_LOG_ENTRIES`, `src/ipc/verb-methods.ts`) and this device
+ * answered **67–160 entries per second** depending on what the host was doing, so thirty
+ * seconds holds 2,000–4,800 of them: *below* the ceiling. A caller asking for 5,000 therefore
+ * got everything the window had together with `truncated: false` — told, by the one flag that
+ * exists to say otherwise, that nothing older was dropped, while the device's own store held
+ * an order of magnitude more (`--last 30s` answered 2,053 entries against `--last 5m`'s 34,819
+ * on this bench). `../android/backend.ts` has no such gap: `logcat -t maxEntries + 1` reaches
+ * as far back as the ring buffer holds, so the cap binds the answer and never the lookback.
+ * Answering the same `read_logs` call with "the newest N" there and "whatever thirty seconds
+ * held, up to N" here is also D10's one-set-of-verbs promise going quietly.
+ *
+ * So {@link readLogs} re-reads at the next width while the device said no more than the cap,
+ * and only the last of these widths is allowed to answer `truncated: false`. **The escalation
+ * is self-limiting**, which is what makes it cheap rather than three reads' worth of latency: a
+ * device chatty enough to fill the cap fills it at `30s` and is never re-read — the 200 a caller
+ * who did not say gets (`DEFAULT_MAX_LOG_ENTRIES`, `src/verbs/logs.js`) is ten to twenty-four
+ * times over inside the first window — while a device quiet enough to reach the widest is by
+ * definition saying less than `maxEntries` per `2m`, so the widest read is small in exactly the
+ * case that reaches it.
+ *
+ * Measured on this bench (macOS 26.6.2 / Xcode 26.4.1, booted iPhone 17, 2026-09-08):
+ * `30s` 2,053 entries / 2.6 MB / 1.01 s, `2m` 8,712 / 10.9 MB / 1.13 s, `5m` 34,819 / 42.8 MB /
+ * 1.75 s. The cost is nearly flat in the width because what a read spends is `simctl spawn`'s
+ * own start-up rather than the window. That 42.8 MB is a busy device's figure and is *not*
+ * reachable through the escalation, which would have stopped at `2m`; the reachable worst case
+ * at the ceiling is ~12,500 entries at the 1.23 KB each these measured, about 15 MB — which is
+ * why {@link READ_LOGS_SIMCTL_MAX_BUFFER_BYTES}' 64 MB still stands well clear, and why the
+ * widest width is the number to re-measure against it if it ever grows.
+ *
+ * **`5m` is the horizon, and a read that exhausts it answers `truncated: false` honestly.**
+ * That is the same claim the Android side makes when the ring buffer holds less than the cap:
+ * nothing was dropped *for the cap's sake*. What neither platform can offer is an unbounded
+ * lookback, and a caller has no way to ask for one — `ReadLogsOptions` carries `maxEntries` and
+ * nothing else, and widening that is a contract change rather than something to improvise here.
  *
  * **The unit is spelled out because the tool's default is not what its help says.** `log show
  * --help` lists `--last <num>[m|h|d]` and no `s`, yet `s` is honoured — `--last 60s` and `--last
@@ -209,12 +237,16 @@ const SCREENSHOT_ARGV = ['screenshot', '--type', 'png', '--mask', 'ignored'] as 
  * minutes that list implies: `--last 1` answered 93 entries where `--last 60s` answered 3,998
  * (same bench). Passing the suffix is what keeps an undocumented default from choosing the
  * window.
+ *
+ * Exported so `tests/unit/backends/ios-simulator/backend.test.ts` can pin the widest of these
+ * against `MAX_LOG_ENTRIES` at the slowest rate measured above, rather than restating a number
+ * that would then be free to drift away from this one.
  */
-const LOG_WINDOW = '30s';
+export const LOG_WINDOWS = ['30s', '2m', '5m'] as const;
 
 /**
- * The log read's argv, every flag load-bearing and every one measured — this is the *guest*
- * program's argv, handed to `simctl spawn` after the udid (this file's header).
+ * The log read's argv for one width, every flag load-bearing and every one measured — this is
+ * the *guest* program's argv, handed to `simctl spawn` after the udid (this file's header).
  *
  * - **`log show`**, never `log stream`. A tail that stays open is a wait with no condition
  *   (ai/RULES.md §2) and a stream over IPC (D19); this is a bounded read that returns.
@@ -224,18 +256,12 @@ const LOG_WINDOW = '30s';
  *   levels capture comes back carrying only `Default`, `Error`, `Fault` and absent — so a log
  *   read that left them off would silently omit two of the five levels this platform has
  *   (measured, `tests/fixtures/ios-simulator/README.md`).
- * - **`--last`** is {@link LOG_WINDOW}, which carries the whole argument for a window.
+ * - **`--last`** is one of {@link LOG_WINDOWS}, which carries the whole argument for a window
+ *   and for why one width is not enough.
  */
-const READ_LOGS_ARGV = [
-	'log',
-	'show',
-	'--style',
-	'ndjson',
-	'--info',
-	'--debug',
-	'--last',
-	LOG_WINDOW,
-] as const;
+function readLogsArgv(window: string): string[] {
+	return ['log', 'show', '--style', 'ndjson', '--info', '--debug', '--last', window];
+}
 
 /**
  * The gap between two polls of the device set.
@@ -926,53 +952,65 @@ export class IosSimulatorDeviceBackend implements DeviceBackend {
 
 	/**
 	 * `simctl spawn <device> log show --style ndjson --info --debug --last <window>` — the
-	 * device's own log, bounded, over in one call.
+	 * device's own log, bounded, at the narrowest width that fills the caller's cap.
 	 *
 	 * **The bound is pushed down into the query**, which is the whole difference between this and
-	 * a read that filters afterwards: {@link LOG_WINDOW} carries the measurements and the argument
-	 * for a window, and {@link READ_LOGS_ARGV} carries what each flag is load-bearing for. The
+	 * a read that filters afterwards: {@link LOG_WINDOWS} carries the measurements and the argument
+	 * for a window, and {@link readLogsArgv} carries what each flag is load-bearing for. The
 	 * two things worth reading here rather than there are that `spawn` is *itself* half the
 	 * pushdown — the query runs inside the simulator, so the answer is the device's log and not
 	 * this Mac's — and that the read carries {@link READ_LOGS_SIMCTL_MAX_BUFFER_BYTES}, because a
 	 * window bounds a duration and not a size.
 	 *
-	 * **`maxEntries` is applied on this side, and the newest are the ones kept**, because a log
-	 * read is asked *after* something happened. {@link LogRead.truncated} is then exact for what
-	 * the window held: `log show` has no count bound at all — its own options are the window and a
-	 * predicate (`log show --help`, Xcode 26.4.1) — so there is nothing to ask one more than the
-	 * cap *of*, the way `../android/backend.ts` asks `logcat -t` for `maxEntries + 1`. The window
-	 * is that `+ 1` and more: whenever the device said more than the cap inside it, what comes
-	 * back is at least `maxEntries + 1` entries and `truncated` is decided by the cap rather than
-	 * by the request.
+	 * **The window widens until the cap binds, and that is what makes `truncated` mean what the
+	 * contract says it means.** `log show` has no count bound at all — its own options are the
+	 * window and a predicate (`log show --help`, Xcode 26.4.1) — so there is nothing to ask one
+	 * more than the cap *of*, the way `../android/backend.ts` asks `logcat -t` for `maxEntries + 1`.
+	 * Widening is this side's substitute for that `+ 1`: while the device said no more than the
+	 * cap, the next width is tried, so a read that comes back full is full because the *cap* cut
+	 * it and not because the lookback ran out. A single `30s` window could not do that at the
+	 * contract's own ceiling of 5,000 entries, which is the measurement {@link LOG_WINDOWS}
+	 * carries.
 	 *
-	 * **What the window did not fetch, it does not report**, and that is the residue of pushing a
-	 * duration down instead of a count. A `truncated: false` here means the device said this much
-	 * in the last {@link LOG_WINDOW}, not that its store holds nothing older — reaching further
-	 * back is a bound the caller has no way to ask for, and giving it one is a contract change
-	 * (`ReadLogsOptions`, `src/core/device.js`) rather than something to improvise here.
+	 * **`maxEntries` is applied on this side, and the newest are the ones kept**, because a log
+	 * read is asked *after* something happened.
+	 *
+	 * **What the widest window did not fetch, it does not report.** A `truncated: false` off the
+	 * last width means the device said this much in the last of {@link LOG_WINDOWS}, not that its
+	 * store holds nothing older — which is the same thing the Android side says when the ring
+	 * buffer holds less than the cap. Reaching past that horizon is a bound the caller has no way
+	 * to ask for, and giving it one is a contract change (`ReadLogsOptions`, `src/core/device.js`)
+	 * rather than something to improvise here.
 	 *
 	 * **No state check, unlike {@link screenshot}, and that is measured too**: `log show` on a
 	 * device that is not booted fails in **0.15 s** at exit 149 with *"Process spawn via launchd
 	 * failed because device is not booted"* (same bench). There is nothing to pre-empt — the tool
 	 * refuses loudly and immediately, so a check would be a second enumeration bought for
-	 * nothing.
+	 * nothing. It also means the escalation cannot turn one refusal into three: the first width
+	 * throws.
 	 *
-	 * The default ten-second timeout: this read cost **0.9–1.4 s**, and what it spends is
-	 * `spawn`'s own start-up rather than the window — a one-second window cost 1.39 s and a
-	 * sixty-second one 1.08 s.
+	 * The default ten-second timeout bounds each width on its own: a read cost **0.9–1.8 s**
+	 * across all three, and what it spends is `spawn`'s own start-up rather than the window — a
+	 * one-second window cost 1.39 s and a five-minute one 1.75 s.
 	 *
 	 * `runSimctlOnDevice`, never `runSimctl`: an unpinned read is somebody else's device, and a
 	 * log from the wrong device is worse than no log, since nothing about it looks wrong.
 	 */
 	async readLogs(serial: DeviceSerial, options: ReadLogsOptions): Promise<LogRead> {
-		const result = await runSimctlOnDevice(serial, 'spawn', [...READ_LOGS_ARGV], {
-			maxBufferBytes: READ_LOGS_SIMCTL_MAX_BUFFER_BYTES,
-		});
+		let entries: LogRead['entries'] = [];
 
-		const entries = parseUnifiedLog(result.stdout);
-		const truncated = entries.length > options.maxEntries;
+		for (const window of LOG_WINDOWS) {
+			const result = await runSimctlOnDevice(serial, 'spawn', readLogsArgv(window), {
+				maxBufferBytes: READ_LOGS_SIMCTL_MAX_BUFFER_BYTES,
+			});
 
-		return { entries: truncated ? entries.slice(-options.maxEntries) : entries, truncated };
+			entries = parseUnifiedLog(result.stdout);
+			if (entries.length > options.maxEntries) {
+				return { entries: entries.slice(-options.maxEntries), truncated: true };
+			}
+		}
+
+		return { entries, truncated: false };
 	}
 
 	/**
