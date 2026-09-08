@@ -219,11 +219,36 @@ const SCREENSHOT_ARGV = ['screenshot', '--type', 'png', '--mask', 'ignored'] as 
  * Measured on this bench (macOS 26.6.2 / Xcode 26.4.1, booted iPhone 17, 2026-09-08):
  * `30s` 2,053 entries / 2.6 MB / 1.01 s, `2m` 8,712 / 10.9 MB / 1.13 s, `5m` 34,819 / 42.8 MB /
  * 1.75 s. The cost is nearly flat in the width because what a read spends is `simctl spawn`'s
- * own start-up rather than the window. That 42.8 MB is a busy device's figure and is *not*
- * reachable through the escalation, which would have stopped at `2m`; the reachable worst case
- * at the ceiling is ~12,500 entries at the 1.23 KB each these measured, about 15 MB — which is
- * why {@link READ_LOGS_SIMCTL_MAX_BUFFER_BYTES}' 64 MB still stands well clear, and why the
- * widest width is the number to re-measure against it if it ever grows.
+ * own start-up rather than the window.
+ *
+ * **A width bounds a duration and not a size, and the self-limiting argument above is about a
+ * *rate*.** It said the widest read is small in the case that reaches it, and inferred from
+ * 1.23 KB an entry that the ceiling costs about 15 MB — well inside
+ * {@link READ_LOGS_SIMCTL_MAX_BUFFER_BYTES}. That inference holds only while the log rate is
+ * roughly uniform across the widths, and the case it is written for — a read taken *after*
+ * something happened — is exactly the case where it is not: a burst that has aged out of the
+ * narrowest width is still inside a wider one, so the wider read is large precisely when the
+ * narrow one came back quiet. Measured on the same bench, on a simulator a minute past boot:
+ * `30s` 94,154 entries / 113.6 MB, `2m` 160,587 / 191.8 MB, `5m` 195,444 / 232.4 MB — and on a
+ * second device type read seconds after boot, `30s` 107.9 MB, `2m` **576.8 MB**, `5m` 756.4 MB.
+ * One to two orders of magnitude past the 64 MB buffer, and an overflow is not a graceful
+ * truncation ({@link READ_LOGS_SIMCTL_MAX_BUFFER_BYTES}: the child is killed and the answer is
+ * lost).
+ *
+ * So the escalation is bounded by bytes as well as by count: a wider width that overflows the
+ * buffer does not fail the read, it **ends the widening** and the narrower width's answer stands,
+ * flagged `truncated: true` — an overflow being positive proof the device said far more than the
+ * cap, which is what the flag exists to say ({@link readLogs}). What no width can be rescued
+ * from is an overflow at the *narrowest*: there is no earlier answer to keep, and the partial
+ * buffer is no answer either, since `log show` writes oldest-first and a read is asked for the
+ * newest. That case fails loudly, and on this bench it is reachable for the first half-minute
+ * after a boot at any cap at all — at the very peak of the burst it can even exhaust the ten
+ * second budget before the buffer, which is the same refusal wearing the other name. Raising the
+ * buffer is not the fix — 756 MB was an *idle* device's figure, nothing was under test on it —
+ * and the fix that would answer it is a streaming read that keeps a rolling tail of
+ * `maxEntries + 1` lines, the way `../android/backend.ts` gets the same guarantee from
+ * `logcat -t`. That is a runner this module does not have (`./simctl.ts` is `execFile` only) and
+ * a change of its own.
  *
  * **`5m` is the horizon, and a read that exhausts it answers `truncated: false` honestly.**
  * That is the same claim the Android side makes when the ring buffer holds less than the cap:
@@ -975,6 +1000,14 @@ export class IosSimulatorDeviceBackend implements DeviceBackend {
 	 * **`maxEntries` is applied on this side, and the newest are the ones kept**, because a log
 	 * read is asked *after* something happened.
 	 *
+	 * **A wider width that outgrew the buffer ends the widening rather than failing the read.**
+	 * `SimctlCommandError.overflowedBuffer` is how that is told from an ordinary failure, and the
+	 * narrower width's answer is what stands — sliced to the cap and flagged `truncated: true`,
+	 * because a read too large for 64 MB is proof the device said far more than 5,000 entries.
+	 * An overflow at the *narrowest* width throws instead: nothing came back to keep, and the
+	 * partial buffer is the *oldest* bytes of the window rather than the newest, so it is not an
+	 * answer to this call. {@link LOG_WINDOWS} carries the measurement and what would fix it.
+	 *
 	 * **What the widest window did not fetch, it does not report.** A `truncated: false` off the
 	 * last width means the device said this much in the last of {@link LOG_WINDOWS}, not that its
 	 * store holds nothing older — which is the same thing the Android side says when the ring
@@ -998,13 +1031,27 @@ export class IosSimulatorDeviceBackend implements DeviceBackend {
 	 */
 	async readLogs(serial: DeviceSerial, options: ReadLogsOptions): Promise<LogRead> {
 		let entries: LogRead['entries'] = [];
+		let answered = false;
 
 		for (const window of LOG_WINDOWS) {
-			const result = await runSimctlOnDevice(serial, 'spawn', readLogsArgv(window), {
-				maxBufferBytes: READ_LOGS_SIMCTL_MAX_BUFFER_BYTES,
-			});
+			let result: SimctlResult;
+			try {
+				result = await runSimctlOnDevice(serial, 'spawn', readLogsArgv(window), {
+					maxBufferBytes: READ_LOGS_SIMCTL_MAX_BUFFER_BYTES,
+				});
+			} catch (cause) {
+				// A width that outgrew the buffer says the device had far more to say than the cap,
+				// which is the one thing the widening was asking. So it ends the escalation instead
+				// of failing the read — but only once some width has answered: the narrowest has
+				// nothing to fall back on, and every other failure is a failure (`LOG_WINDOWS`).
+				if (!answered || !(cause instanceof SimctlCommandError) || !cause.overflowedBuffer) {
+					throw cause;
+				}
+				return { entries: entries.slice(-options.maxEntries), truncated: true };
+			}
 
 			entries = parseUnifiedLog(result.stdout);
+			answered = true;
 			if (entries.length > options.maxEntries) {
 				return { entries: entries.slice(-options.maxEntries), truncated: true };
 			}

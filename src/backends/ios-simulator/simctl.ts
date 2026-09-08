@@ -230,6 +230,21 @@ export class SimctlCommandError extends Error {
 	readonly stdout: string;
 	readonly stderr: string;
 	readonly timedOut: boolean;
+	/**
+	 * The answer outgrew {@link RunSimctlOptions.maxBufferBytes} and the child was killed for it.
+	 *
+	 * A field rather than something a caller matches out of {@link message}, because it is the one
+	 * failure here a caller can *act* on rather than only report: it says the command was fine and
+	 * the answer was too large, so a caller reading in widening windows can keep the narrower
+	 * answer it already has instead of failing the verb (`readLogs` in `./backend.ts` is that
+	 * caller). Matching on the message would tie that decision to Node's wording, and the
+	 * message is also the one thing here that crosses the boundary and gets masked.
+	 *
+	 * Told apart from {@link timedOut} by the same `code` the constructor already reads: both
+	 * arrive as `killed`, and they call for opposite responses — a narrower window fixes this one
+	 * and does nothing for a wedged simulator.
+	 */
+	readonly overflowedBuffer: boolean;
 
 	constructor(
 		argv: readonly string[],
@@ -240,14 +255,15 @@ export class SimctlCommandError extends Error {
 		redactArgv: readonly string[] = [],
 	) {
 		const exitCode = typeof error.code === 'number' ? error.code : null;
+		const overflowedBuffer = error.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER';
 		// `killed` is also set when `maxBuffer` overflows, and that is not a timeout: reporting it
 		// as one sends the next reader looking for a slow simulator instead of a large answer.
-		const timedOut = error.killed === true && error.code !== 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER';
+		const timedOut = error.killed === true && !overflowedBuffer;
 		const signal = error.signal ?? null;
 
 		super(
 			[
-				`${SIMCTL} ${quoteArgv(argv, redactArgv)} ${outcome({ error, exitCode, signal, timedOut, timeoutMs })}`,
+				`${SIMCTL} ${quoteArgv(argv, redactArgv)} ${outcome({ error, exitCode, overflowedBuffer, signal, timedOut, timeoutMs })}`,
 				`stdout: ${quoteStream(stdout, redactArgv)}`,
 				`stderr: ${quoteStream(stderr, redactArgv)}`,
 			].join('\n'),
@@ -260,17 +276,24 @@ export class SimctlCommandError extends Error {
 		this.stdout = stdout;
 		this.stderr = stderr;
 		this.timedOut = timedOut;
+		this.overflowedBuffer = overflowedBuffer;
 	}
 }
 
 function outcome(failure: {
 	error: ExecFileException;
 	exitCode: number | null;
+	overflowedBuffer: boolean;
 	signal: NodeJS.Signals | null;
 	timedOut: boolean;
 	timeoutMs: number;
 }): string {
 	if (failure.timedOut) return `timed out after ${failure.timeoutMs}ms`;
+	// Ahead of the exit code and the signal, because both are misleading here: the child was
+	// killed, so it reports one or the other, and neither is what went wrong. Node's own message
+	// ("stdout maxBuffer length exceeded") would otherwise arrive through the branch below, which
+	// says `failed to run` — the one thing that did not happen.
+	if (failure.overflowedBuffer) return 'said more than its buffer holds and was killed for it';
 	if (failure.exitCode !== null) return `exited ${failure.exitCode}`;
 	if (failure.signal !== null) return `was killed by ${failure.signal}`;
 	// Nothing ran at all — the file the search settled on having moved since is the case here,
@@ -314,14 +337,56 @@ const REDACTED_ARGV = '<the file you sent>';
  * file or directory` (measured on Xcode 26.4.1, 2026-09-08) — so nothing but a substring rule
  * reaches it. That is safe because the tool echoes the path byte for byte as it was given, and
  * because the only values ever passed here are paths this host invented moments earlier.
+ *
+ * **Bounded at {@link QUOTED_STREAM_MAX_CHARS}, and it says what it dropped.** One of these
+ * streams is a log read's own payload, and quoting a killed one whole is tens of megabytes of
+ * `Error.message` — that constant carries the measurement.
  */
 export function quoteStream(stream: string, redact: readonly string[] = []): string {
+	const kept = quotable(stream);
 	const masked = redact.reduce(
 		(text, path) => (path.length === 0 ? text : text.replaceAll(path, REDACTED_ARGV)),
-		stream,
+		kept,
 	);
 	const text = masked.trimEnd();
-	return text.length === 0 ? '(empty)' : text;
+	const dropped = stream.length - kept.length;
+
+	if (dropped === 0) return text.length === 0 ? '(empty)' : text;
+	const note = `(${dropped} more characters, dropped)`;
+	return text.length === 0 ? `(${dropped} characters, not quoted)` : `${text}\n${note}`;
+}
+
+/**
+ * How much of a captured stream ends up inside a message.
+ *
+ * Bounded because one of these streams is a payload rather than a complaint: the log read is
+ * given {@link READ_LOGS_SIMCTL_MAX_BUFFER_BYTES} to fill, and a read that overflows it hands
+ * the runner back everything it had managed to buffer. Quoting that unbounded put ~64 MB into an
+ * `Error.message` that then travels the daemon's error path to another machine (D19) — measured
+ * at 67,108,185 characters, which was itself enough to take a test worker down serialising it.
+ * What a reader needs is the first few lines and the size, and this is the first half of that.
+ *
+ * The head rather than `../android/adb.ts`'s tail, because these two streams end differently: a
+ * long-lived `adb` is quoted for *why it stopped*, while a stream this long got here by being
+ * killed mid-sentence, so its last bytes explain nothing and its first ones say what it was.
+ */
+export const QUOTED_STREAM_MAX_CHARS = 4_096;
+
+/**
+ * The part of a long stream that is safe to quote: whole lines, up to the bound.
+ *
+ * Cut back to the last line break rather than at the character, because the bound falls wherever
+ * it falls and a host path is masked by a substring rule ({@link quoteStream}) that no partial
+ * copy of it would match. Dropping the incomplete line keeps the one guarantee that matters here
+ * — nothing crosses the boundary that was not looked at whole — and a stream with no line break
+ * inside the bound is quoted as its size alone for the same reason.
+ *
+ * The slice comes before the masking so that neither cost is paid on the whole stream.
+ */
+function quotable(stream: string): string {
+	if (stream.length <= QUOTED_STREAM_MAX_CHARS) return stream;
+	const head = stream.slice(0, QUOTED_STREAM_MAX_CHARS);
+	return head.slice(0, head.lastIndexOf('\n') + 1);
 }
 
 /**

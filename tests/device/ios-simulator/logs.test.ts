@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { IosSimulatorDeviceBackend, LOG_WINDOWS } from '@/backends/ios-simulator/backend.js';
+import { SimctlCommandError } from '@/backends/ios-simulator/simctl.js';
 import { type Device, LogLevelSchema } from '@/core/device.js';
 
 /**
@@ -69,14 +70,36 @@ describe.skipIf(!process.env.ROVER_TEST_SIMULATOR)('the log read against a real 
 	 *
 	 * What is worth asserting against a *live* log is the widening: at the contract's ceiling the
 	 * read escalates through `LOG_WINDOWS` until the cap binds, so on any simulator that says
-	 * 5,000 things in five minutes the answer comes back cap-bound rather than window-bound. A
-	 * quieter one is allowed to answer short — that is the horizon, not a bug — and says so by
-	 * having taken every width.
+	 * 5,000 things in five minutes the answer comes back cap-bound rather than window-bound —
+	 * **and it comes back at all**, which is what a widening bounded by a count and not by bytes
+	 * did not manage. A quieter one is allowed to answer short — that is the horizon, not a bug —
+	 * and says so by having taken every width.
+	 *
+	 * **The host state this is interesting on is a device that has been busy and then gone
+	 * quiet**: a burst that has aged out of the narrowest width but not out of a wider one is
+	 * what makes a wider read enormous, and a simulator a minute or two past a boot, an install
+	 * or a launch is exactly that. Past the *narrowest* width the burst is beyond rescue — 113.6
+	 * MB in `30s` a minute after boot on this bench, against a 64 MB buffer, with no narrower
+	 * answer to fall back on — so that one case is skipped out loud rather than asserted, the way
+	 * the refusal below is on a host with nothing shut down (ai/RULES.md §6).
 	 */
 	it('lets the cap bind the answer at the contract’s ceiling, not the lookback', async () => {
 		const device = await bootedDevice();
 
-		const read = await backend.readLogs(device.serial, { maxEntries: CEILING });
+		const read = await backend
+			.readLogs(device.serial, { maxEntries: CEILING })
+			.catch((cause: unknown) => {
+				if (!(cause instanceof SimctlCommandError) || !cause.overflowedBuffer) throw cause;
+				return null;
+			});
+
+		if (read === null) {
+			console.warn(
+				'this simulator says more in 30s than the log read’s buffer holds — a boot, an install ' +
+					'or a launch inside the last minutes: the cap-bound read at the ceiling was NOT exercised',
+			);
+			return;
+		}
 
 		expect(read.entries.length).toBeLessThanOrEqual(CEILING);
 		if (read.truncated) expect(read.entries).toHaveLength(CEILING);

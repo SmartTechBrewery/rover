@@ -80,7 +80,7 @@ startup of ~60–90 ms that a Node backend talking gRPC directly would not pay.
 | `stopApp` | `simctl terminate <bundle>` | 0.12 s | ✅ |
 | `clearAppData` | `simctl uninstall` + `install` of a staged copy | 0.5–0.79 s | ⚠️ no `pm clear` equivalent |
 | `screenshot` | `simctl io <d> screenshot --type png --mask ignored <path>` | 0.14–0.29 s, 246 KB–2.8 MB PNG | ✅ to a **file**, never stdout |
-| `readLogs` | `simctl spawn <d> log show --style ndjson --info --debug --last <30s→2m→5m>` | 0.9–1.8 s per width, 2,053–34,819 entries | ⚠️ must be scoped in the query; widens until the cap binds |
+| `readLogs` | `simctl spawn <d> log show --style ndjson --info --debug --last <30s→2m→5m>` | 0.9–1.8 s per width, 2,053–34,819 entries; 113.6 MB in `30s` a minute past boot | ⚠️ must be scoped in the query; widens until the cap binds or a width outgrows the 64 MB buffer |
 | `pushFile` | the device's `dataPath` + a host copy | 0.10 s, 64 KB | ✅ storage **is** a host path |
 | `pullFile` | same | 0.11 s, byte-identical | ✅ |
 
@@ -174,6 +174,13 @@ screenshot   on a Shutdown device: 60.68 s to fail bare, 0.12 s to refuse throug
 readLogs     0.9–1.4 s, 3,384 entries in a 30 s window; on a Shutdown device it fails in 0.15 s
 readLogs     the widths, re-measured for the widening (#239 review): 30s → 2,053 entries / 2.6 MB
              / 1.01 s, 2m → 8,712 / 10.9 MB / 1.13 s, 5m → 34,819 / 42.8 MB / 1.75 s
+readLogs     the same widths a minute past a boot, which is what bounds the widening by bytes
+             (#239 second pass): 30s → 94,154 entries / 113.6 MB, 2m → 160,587 / 191.8 MB,
+             5m → 195,444 / 232.4 MB — all three past the read's own 64 MB buffer; on a second
+             device type seconds after boot, 30s → 107.9 MB, 2m → 576.8 MB, 5m → 756.4 MB
+readLogs     at the ceiling across that burst ageing out: it answered every time — 5,000 entries
+             truncated at t+0s, then 1,047 truncated at t+73s off the 30s width while the 2m one
+             was 247.9 MB and overflowed, which is the kept-narrower-answer path on a real device
 ```
 
 - **The capture cannot go to stdout on this platform, and the `-` that documents it is not a
@@ -479,11 +486,30 @@ command has:
   widest width may answer `truncated: false`. Measured on the same bench, 2026-09-08: `30s` 2,053
   entries / 2.6 MB / 1.01 s, `2m` 8,712 / 10.9 MB / 1.13 s, `5m` 34,819 / 42.8 MB / 1.75 s — the
   cost is nearly flat in the width, because a read spends `simctl spawn`'s start-up rather than the
-  window. **The widening is self-limiting**: a device chatty enough to fill the cap fills it at
-  `30s` and is never re-read, so the widest read only happens on a device quiet enough for it to be
-  small (~12,500 entries, about 15 MB, at the ceiling — well inside the 64 MB buffer). `5m` is the
-  horizon; reaching past it is a bound the caller cannot ask for, and widening `ReadLogsOptions` to
-  let them is a contract change and its own issue, not something a backend improvises.
+  window. **The widening is self-limiting in *latency***: a device chatty enough to fill the cap
+  fills it at `30s` and is never re-read, so the widest read only happens on a device quiet enough
+  for it to be cheap. `5m` is the horizon; reaching past it is a bound the caller cannot ask for,
+  and widening `ReadLogsOptions` to let them is a contract change and its own issue, not something
+  a backend improvises.
+- **It is not self-limiting in *bytes*, and the claim that it was is reversed in place** (#239
+  second pass). This section said the widest read costs ~12,500 entries and about 15 MB at the
+  ceiling, well inside the 64 MB buffer; that inferred a size from a *rate*, and a log read is
+  asked **after** something happened, which is exactly where the rate is not uniform. A burst that
+  has aged out of the narrowest width is still inside a wider one, so the wider read is large
+  precisely when the narrow one came back quiet. Measured on the same bench on a simulator a minute
+  past boot: `30s` 94,154 entries / **113.6 MB**, `2m` 160,587 / 191.8 MB, `5m` 195,444 / 232.4 MB,
+  and on a second device type read seconds after boot `30s` 107.9 MB, `2m` **576.8 MB**, `5m`
+  756.4 MB — every width past the buffer, and an overflow is a killed child and a lost answer
+  rather than a truncation. So the escalation is bounded by bytes too: **a wider width that overflows ends the
+  widening**, and the narrower width's answer stands, sliced to the cap and flagged
+  `truncated: true` — an overflow being positive proof the device said far more than the cap.
+  Raising the buffer instead would be chasing an *idle* device's 756 MB. An overflow at the
+  **narrowest** width still fails loudly, because nothing came back to keep and the partial buffer
+  holds the *oldest* bytes of the window where the newest are what was asked for; on this bench
+  that is reachable for the first half-minute after a boot at any cap, and at the very peak of the
+  burst the ten-second budget refuses first (§8 trap 11). What would answer it is a
+  streaming read keeping a rolling tail of `maxEntries + 1` lines — Android's `logcat -t` guarantee
+  — and `simctl.ts` runs `execFile` only, so that is a change of its own (PROJECT.md R45).
 
 ---
 
@@ -611,6 +637,22 @@ full factory reset if state restoration ever needs one.
     absolute path prints `Wrote screenshot to: …` and produces the PNG. So a capture goes to a
     file the backend stages and removes, at an absolute path, and never to a stream (measured on
     macOS 26.6.2 / Xcode 26.4.1, 2026-09-08 — the second bench).
+
+11. **A freshly booted simulator says hundreds of megabytes in its first half-minute, so the log
+    read fails there rather than answering.** Measured on the second bench, 2026-09-08, on a
+    simulator with nothing installed and nothing under test: `log show --style ndjson --info
+    --debug --last 30s` came back **107.9–113.6 MB** within a minute of boot, `--last 2m` up to
+    **576.8 MB** and `--last 5m` up to **756.4 MB** — against the 64 MB the read gives itself,
+    and against the 30 s that a *quiet* device fills with 2.6 MB. At the very peak the read exits
+    on its ten-second budget before it fills the buffer at all, which is the same refusal wearing
+    the other name. Two consequences worth having in advance: **a `read_logs` in the first seconds
+    after a boot, an install or a launch is expected to refuse, loudly**, and it is the *narrowest*
+    width that refuses, so there is nothing narrower to fall back on (the widening keeps the
+    narrower answer whenever a *wider* width is the one that overflows, §5). And **the burst ages
+    out**: the same read answered 5,000 cap-bound entries a minute later, so a caller that reads
+    logs after waiting on a condition is in the ordinary case rather than this one. The fix that
+    would remove the trap is a streaming read keeping a rolling tail of `maxEntries + 1` lines,
+    which is a runner `src/backends/ios-simulator/simctl.ts` does not have (PROJECT.md R45).
 
 ---
 

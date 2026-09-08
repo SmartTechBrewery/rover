@@ -1516,6 +1516,83 @@ describe('readLogs', () => {
 		expect(new Set(widths).size).toBe(widths.length);
 	});
 
+	/**
+	 * The overflow as the runner builds one: `killed`, and a `code` that is Node's rather than an
+	 * exit status. The buffered half comes back with it, and is deliberately *not* what this
+	 * backend answers from — `log show` writes oldest-first, so a partial buffer is the oldest
+	 * bytes of the window where a log read is asked for the newest.
+	 */
+	function overflowed(): SimctlCommandError {
+		return new SimctlCommandError(
+			['spawn', BOOTED, 'log', 'show', '--style', 'ndjson', '--info', '--debug', '--last', '2m'],
+			10_000,
+			Object.assign(new Error('stdout maxBuffer length exceeded'), {
+				code: 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER',
+				killed: true,
+			}),
+			CAPTURED_LOG,
+			NOISE,
+		);
+	}
+
+	/**
+	 * The regression the escalation introduced, and the bound that answers it. A width bounds a
+	 * duration and not a size, and a burst that has aged out of the narrowest width is still
+	 * inside a wider one — measured at 113.6 MB / 191.8 MB / 232.4 MB across the three widths a
+	 * minute past boot (`backend.ts`), against a 64 MB buffer. An overflow there is proof the
+	 * device said far more than the cap, which is the one thing the widening was asking, so the
+	 * narrower width's answer stands rather than the read failing.
+	 */
+	it('keeps the narrower window’s answer when a wider one outgrew the buffer', async () => {
+		runSimctlOnDevice
+			.mockResolvedValueOnce({ stdout: CAPTURED_LOG, stderr: NOISE })
+			.mockRejectedValueOnce(overflowed());
+
+		const read = await backend.readLogs(BOOTED, { maxEntries: 200 });
+
+		expect(read.entries).toHaveLength(CAPTURED_ENTRIES);
+		expect(read.truncated).toBe(true);
+		expect(windowsAsked()).toEqual(LOG_WINDOWS.slice(0, 2));
+	});
+
+	/** The cap is still applied to what is kept: the fallback answers the newest, like any read. */
+	it('slices the kept answer to the cap when the wider window overflowed', async () => {
+		const all = (await backend.readLogs(BOOTED, { maxEntries: CAPTURED_ENTRIES })).entries;
+		runSimctlOnDevice.mockReset();
+		runSimctlOnDevice
+			.mockResolvedValueOnce({ stdout: CAPTURED_LOG, stderr: NOISE })
+			.mockRejectedValueOnce(overflowed());
+
+		const read = await backend.readLogs(BOOTED, { maxEntries: 20 });
+
+		expect(read.entries).toEqual(all.slice(-20));
+		expect(read.truncated).toBe(true);
+	});
+
+	/**
+	 * The narrowest width has nothing to fall back on, so the read fails loudly rather than
+	 * answering from a buffer holding the wrong end of the window. Reachable on a real host for
+	 * the first minutes after a boot, at any cap at all (`backend.ts`).
+	 */
+	it('fails the read when the narrowest window outgrew the buffer, and asks no wider one', async () => {
+		runSimctlOnDevice.mockRejectedValue(overflowed());
+
+		await expect(backend.readLogs(BOOTED, { maxEntries: 200 })).rejects.toThrow(
+			'said more than its buffer holds',
+		);
+		expect(runSimctlOnDevice).toHaveBeenCalledTimes(1);
+	});
+
+	/** Only an overflow ends the widening quietly — an ordinary failure is still a failure. */
+	it('lets a wider window’s ordinary failure through rather than answering the narrower one', async () => {
+		runSimctlOnDevice
+			.mockResolvedValueOnce({ stdout: CAPTURED_LOG, stderr: NOISE })
+			.mockRejectedValueOnce(refusedWith(149, 'device is not booted'));
+
+		await expect(backend.readLogs(BOOTED, { maxEntries: 200 })).rejects.toThrow('exited 149');
+		expect(runSimctlOnDevice).toHaveBeenCalledTimes(2);
+	});
+
 	it('answers a device that said nothing as empty rather than as a failure', async () => {
 		reads(NOTHING);
 
