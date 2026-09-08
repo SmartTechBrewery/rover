@@ -26,6 +26,7 @@
 import { mkdir, open, rm, stat } from 'node:fs/promises';
 import { createServer, type Server, type Socket } from 'node:net';
 import { dirname } from 'node:path';
+import { stopBackendHostProcesses } from '../backends/registry.js';
 import { pause } from '../core/wait.js';
 import type { IpcHandlers } from '../ipc/methods.js';
 import type { IpcServer } from '../ipc/server.js';
@@ -142,6 +143,26 @@ const SWEEP_SETTLE_TIMEOUT_MS = 10_000;
  * handful of live TLS connections is never reported as a leak.
  */
 const NETWORK_CLOSE_TIMEOUT_MS = 5_000;
+
+/**
+ * How long `close()` waits for the registered backends to let go of the **host processes** they
+ * keep outside a call, before shutting down anyway and saying so.
+ *
+ * A separate bound from {@link WATCH_STOP_TIMEOUT_MS} because it bounds a separate step taken at a
+ * separate time: a watch's child is signalled while the restorations are still settling, and this
+ * runs only once nothing can dispatch to a backend any more (see {@link closeServer}). Most
+ * backends register no teardown at all and cost nothing here; the one shape that does is a backend
+ * supervising a long-lived helper program per device it has been asked about
+ * (`src/backends/manifest.ts`, `DeviceBackendRegistration.stopHostProcesses`, which names the
+ * case). That is a signal per child and a temporary directory removed per child, so this only has
+ * to outlast a handful of children exiting normally.
+ *
+ * Bounded for {@link WATCH_STOP_TIMEOUT_MS}' reason, and the trade is the same one: a companion
+ * that ignores its signal must be able to delay a shutdown and must never prevent one, because a
+ * daemon whose `close()` never resolves neither dies nor stops serving (D6). A child reported as
+ * left behind is a line an operator can act on; a daemon that will not go away is not.
+ */
+const BACKEND_STOP_TIMEOUT_MS = 5_000;
 
 export interface StartDaemonOptions {
 	readonly socketPath: string;
@@ -722,6 +743,13 @@ async function closeServer(
 	// the ones its final `leases.sweep()` has only just caused. Snapshotting the chain any
 	// earlier would wait for the wrong thing and let the last one be killed mid-deletion.
 	await settleSweeps(sweeper);
+	// And the backends' own host processes last of all, for a stronger version of the same
+	// reason: a helper program a backend supervises per device can *be* the transport a verb call
+	// rides, so ending them beside the restorations would both fail a restoration step mid-flight
+	// and let the very next backend call start a replacement this shutdown has already walked
+	// past. By here the connections are destroyed, the watches are gone and nothing owes a device
+	// anything, so there is no caller left to re-create one.
+	await stopBackends();
 	await networkClosed;
 	await httpClosed;
 
@@ -751,6 +779,24 @@ async function stopWatches(inventory: DeviceInventory): Promise<void> {
 		console.warn(
 			`The device watches did not stop within ${WATCH_STOP_TIMEOUT_MS}ms. Shutting down ` +
 				`anyway; something they started may still be running.`,
+		);
+	}
+}
+
+/**
+ * End the registered backends' host processes, bounded — see {@link BACKEND_STOP_TIMEOUT_MS}.
+ *
+ * `stopBackendHostProcesses()` never rejects (a backend that fails to let go is a warning of its
+ * own, naming the platform), so the only thing left to add here is the bound and the sentence that
+ * goes with exceeding it. The registry rather than an injected list, because this is the process's
+ * own shutdown and the backends are the ones the barrel registered into it.
+ */
+async function stopBackends(): Promise<void> {
+	if (await timesOut(stopBackendHostProcesses(), BACKEND_STOP_TIMEOUT_MS)) {
+		console.warn(
+			`The device backends did not release their host processes within ` +
+				`${BACKEND_STOP_TIMEOUT_MS}ms. Shutting down anyway; a program one of them ` +
+				`started may still be running.`,
 		);
 	}
 }

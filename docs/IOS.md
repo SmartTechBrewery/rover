@@ -543,6 +543,33 @@ the dependency is **alive**, which is the part worth updating:
   supervised `idb_companion` per unbootable device anybody asked about, for the lifetime of the
   daemon, to deliver an answer `simctl list devices` already had.
 
+- **A pooled companion survives its target's shutdown *and* answers correctly after it boots again
+  — measured, 2026-09-09.** This is the one state change the companion pool cannot observe for
+  itself (`src/backends/ios-simulator/idb-client.ts` runs no timer and no health check), so the
+  reuse either had to be measured or the pool had to be invalidated whenever a device left `ready`;
+  the measurement is what decided it. Taken on a **throwaway** `iPhone 17 Pro` created for the run
+  and deleted after it (`simctl create`/`delete`, runtime iOS 26.4.1, companion v1.5.2), never on a
+  device another agent might hold: read → `simctl shutdown` → read → `simctl boot` → read → read,
+  all four through **one** `IdbCompanions` pool, run twice.
+
+  ```
+  read 1, fresh companion                          586 ms / 4.37 s   (14 / 3 nodes)
+  read 2, warm channel                              62 ms / 42 ms
+  read 3, device Shutdown, companion from before    gRPC INTERNAL in 4–6 ms, "not booted"
+  read 4, device Booted again, SAME companion      163 ms / 801 ms    (3 nodes, AXApplication first)
+  read 5, warm channel after the reboot             24 ms
+  ```
+
+  So the companion is genuinely target-lifecycle-independent: it neither dies with its target nor
+  goes deaf to it, the refusal in between is the same well-behaved `INTERNAL` the state check
+  pre-empts, and the first read after the target returns costs a fraction of a companion's own
+  first read rather than another 3.34 s — the translation stays loaded in the *companion*, not in
+  the simulator. `readScreen` therefore needs no pool invalidation on a state change, and the
+  differing node counts are the screen differing (Springboard mid-boot against a settled one), not
+  the read being wrong. **Deliberately not a case in `tests/device/ios-simulator/read-screen.test.ts`:**
+  that suite is read-only by design so it is safe against a device somebody else is looking at, and
+  a case that shuts a simulator down and boots it is the one thing that would take that away.
+
 The lifecycle is the real cost, and it has teeth:
 
 - **One companion process per target**, started with `--udid`, and it must be supervised. Killing it

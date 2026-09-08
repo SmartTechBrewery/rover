@@ -5,14 +5,15 @@ between several agents working at once.
 
 An agent can build a mobile app but cannot look at it. Rover taps, scrolls, types, screenshots,
 reads the view hierarchy, records video and toggles the network, over `adb` — and on a Mac it
-lends **iOS simulators** too, over `simctl`, with no third-party tooling. A daemon keeps one
-inventory of the machine's devices so two agents never end up driving the same phone.
+lends **iOS simulators** too, over `simctl`, with `idb_companion` beside it for the screen read.
+A daemon keeps one inventory of the machine's devices so two agents never end up driving the same
+phone.
 
 The two platforms are deliberately **not** equally capable, and Rover says which is which rather
-than papering over it: a simulator answers every required call and records video, and refuses
-`read_screen`, the input verbs and the network toggles **by name**, naming the capability and the
-device. A verb without backing fails loudly; nothing is ever degraded into a plausible-looking
-empty answer.
+than papering over it: a simulator answers every required call, records video and **reads the
+screen**, and refuses the input verbs and the network toggles **by name**, naming the capability
+and the device. A verb without backing fails loudly; nothing is ever degraded into a
+plausible-looking empty answer.
 
 It is **not** a test framework. Nothing asserts, nothing turns red on its own, nothing is a CI
 gate. Rover moves the device and reports what is on it; judging whether that is right is the
@@ -494,16 +495,20 @@ And the gaps this quick start runs into today, rather than in principle:
 Design and rules are settled. The toolchain and the device-backend contract — the device
 interface, the Zod capability manifest and the registry a backend joins through one import — are
 in place, and **two backends are registered**: `android` over `adb`, and `ios-simulator` over
-`simctl`. Adding the second one cost a folder and **one import line** in the barrel — no edit to
+`simctl` — with `idb_companion` beside it for the screen read. Adding the second one cost a folder
+and **one import line** in the barrel — no edit to
 dispatch, to the registry or to any verb — which is what the module shape was for, and the
 conformance gate now runs over two manifests rather than one, which is the only arrangement in
 which it can tell a passing backend from a check that stopped checking. The iOS backend is the
-first that declares something **`false`**: `canReadScreen`, `canInput` and `canControlNetwork`, the
-last of those permanently — a simulator uses the host's network stack, so the only truthful
+first that declares something **`false`**: `canInput` and `canControlNetwork`, the
+second of those permanently — a simulator uses the host's network stack, so the only truthful
 `set_wifi` would change the networking of the machine lending devices to other people, and the
 cosmetic status-bar override `simctl` will happily draw is exactly the plausible-looking answer
-this project refuses. Those three come back as `missing-capability` naming the capability and the
-device; the methods behind them are **absent** rather than stubbed. Physical iPhones are not
+this project refuses. Both come back as `missing-capability` naming the capability and the
+device; the methods behind them are **absent** rather than stubbed. `canReadScreen` was the third
+of those `false` flags and **has since flipped to `true`** (#251): `read_screen` on a simulator is
+answered by idb's accessibility read over gRPC, which is what makes `idb_companion` a second
+program this backend needs rather than an optional extra. Physical iPhones are not
 supported and are not a gap in this one — hardware cannot answer `screenshot` at all, so it is a
 different backend, which is why this one is named `ios-simulator` and not `ios`. The daemon runs: it binds a unix socket, serves
 the schema-checked IPC surface over it, and **starts itself on the first call**, with two
@@ -1025,17 +1030,21 @@ device-level refusal, such as launching a package that is not installed, still r
 the device does not have reports today. That is true of every verb family here, not just this one,
 and it is filed as its own issue.
 
-**On a real iOS simulator the same daemon runs the same verbs, and refuses three of them by
+**On a real iOS simulator the same daemon runs the same verbs, and refuses two of them by
 name.** What has been driven **over a lease** on a booted simulator is `device_info`,
 `start_recording` — including the refusal of a second one and the release teardown that stops an
 abandoned recorder — and the two `missing-capability` refusals; `record_video` and
 `stop_recording` over a lease are gated on a host that has `ffmpeg`, since the verb answers with
 the normalised recording and its frames or with neither, and they do not run where it is absent.
-`screenshot`, `read_logs`, the three app verbs and both file transfers are asserted against the
-backend on a real simulator rather than over the wire, which each of those suites' headers now
-says. That distinction is worth drawing rather than eliding: a recording comes back as a
+`screenshot`, `read_logs`, **the screen read**, the three app verbs and both file transfers are
+asserted against the backend on a real simulator rather than over the wire, which each of those
+suites' headers now says. The screen read is the newest of them (#251) and it is a *backend*
+assertion for that reason and one more: it needs a second program, `idb_companion`, so its suite
+is gated on that as well as on a booted simulator, and it is read-only — it boots nothing,
+launches nothing and taps nothing, so it stays safe against a device somebody else is looking
+at. That distinction is worth drawing rather than eliding: a recording comes back as a
 QuickTime file that is provably finished before it is handed over, checked on the bytes rather
-than on an exit code, because `simctl` exits 0 on a recording that produced nothing at all. `read_screen`, the input verbs and the two network toggles come back as `missing-capability`
+than on an exit code, because `simctl` exits 0 on a recording that produced nothing at all. The input verbs and the two network toggles come back as `missing-capability`
 naming the capability and the device instead, which is the honest answer and not a gap in the
 implementation. Two things are worth knowing before relying on it: the recorder is a process on the
 **host** rather than on the device, so a recording's time limit dies with the daemon that armed it
@@ -1178,7 +1187,7 @@ startup, naming the variable and the reason, rather than binding something surpr
 | Variable | Default | Value |
 |---|---|---|
 | `ROVER_ADB_PATH` | unset — the search below | The one setting that overrides where this host looks for `adb`: the **path of the executable**, not the SDK it came from, so an `adb` in a layout with no `platform-tools` directory can be named too. Unset or empty and the ordered search under [where Rover looks for `adb`](#where-rover-looks-for-adb) answers instead — **empty counts as unset**, as it is for the socket. Read only by the daemon, on the machine the devices are attached to (`PROJECT.md` D19, D32): a client never resolves `adb` and never runs one. There is deliberately **no schema** for it, unlike every other row here: the only check worth making on this value is whether the file runs, which no shape can express — so a path that is not an executable this host can run is **skipped like any other candidate** rather than failing the daemon, and the search continues past it; when nothing is left, the failure names every location that was tried and this variable. The resolved path is held in memory for the daemon's life and **never written anywhere** (`PROJECT.md` D6), so an SDK upgrade takes effect on the next daemon start and there is no cache to invalidate. |
-| `ROVER_IDB_COMPANION_PATH` | unset — the search below | The one setting that overrides where this host looks for `idb_companion`, the program the iOS-simulator backend will drive its device stream and its input verbs through: the **path of the executable**, not a directory it came from. Unset or empty and the two-row search under [where Rover looks for `idb_companion`](#where-rover-looks-for-idb_companion) answers instead — **empty counts as unset**, as it is for `ROVER_ADB_PATH`. Read only by the daemon, on the machine the simulators are on (`PROJECT.md` D19, D32). **No schema**, for `ROVER_ADB_PATH`'s reason: a path that is not an executable this host can run is skipped like any other candidate rather than failing the daemon, and the search continues past it. The backend **watches** the device set through this program now and falls back to polling `simctl list` when there is none to run; `list_devices` and `device_info` still read `simctl`, and the input verbs are still ahead. |
+| `ROVER_IDB_COMPANION_PATH` | unset — the search below | The one setting that overrides where this host looks for `idb_companion`, the program the iOS-simulator backend drives its device stream and its screen read through — and its input verbs, when they land: the **path of the executable**, not a directory it came from. Unset or empty and the two-row search under [where Rover looks for `idb_companion`](#where-rover-looks-for-idb_companion) answers instead — **empty counts as unset**, as it is for `ROVER_ADB_PATH`. Read only by the daemon, on the machine the simulators are on (`PROJECT.md` D19, D32). **No schema**, for `ROVER_ADB_PATH`'s reason: a path that is not an executable this host can run is skipped like any other candidate rather than failing the daemon, and the search continues past it. The backend **watches** the device set through this program now and falls back to polling `simctl list` when there is none to run, and **`read_screen` is answered through it** over gRPC (#251); `list_devices` and `device_info` still read `simctl`, and the input verbs are still ahead. **The read has no fallback** — a host with no companion still answers every *required* method, but `read_screen` on a simulator fails naming this variable and every other place that was looked, because the manifest declares `canReadScreen: true` per host-independent capability (`PROJECT.md` D11) rather than per what this machine happens to have installed. |
 | `ROVER_SOCKET_PATH` | `~/.rover/rover.sock` | Absolute path of the unix socket the local daemon binds and a local client connects to. **Empty counts as unset** — an exported-but-blank variable is what a shell leaves behind, and reading it as a real setting would point the daemon at the current directory. At most **103 bytes of UTF-8**: a unix socket address is a fixed-size struct (104 bytes on macOS, 108 on Linux, NUL included), and over the cap `bind` truncates or answers `EINVAL` instead of naming the length, so a longer path is rejected at startup with the byte count and the path. |
 | `ROVER_USERS_PATH` | `~/.rover/users.json` | Absolute path of the host's own user store — one record per user: identifier, display name, the **hash** of that user's token, and when it was created. Never a token: `rover users add` and `rover users rotate` print the raw value once and store only its hash. **Empty counts as unset**, as it is for the socket. Read by `rover users`, which touches the file directly and never goes over the network (`PROJECT.md` D25), **and by the network listener**, which is the host's entire authentication surface: the token in a caller's greeting is hashed and looked up here, re-read at every connection attempt and never cached, so `revoke` and `rotate` take effect on the very next attempt with the daemon still running. |
 | `ROVER_ARTIFACTS_PATH` | `~/.rover/artifacts` | Root of the durable artifact archive: every `screenshot`, `record_video`, `stop_recording` and `read_logs` call additionally writes its output here, on the host, **in addition to** returning the bytes to the client (`PROJECT.md` D23, §10). **Empty counts as unset**, as it is for the socket. Read only by the daemon — a client never resolves it, and the archive path is never the one an agent is given. **The host prunes it, by both of its bounds and with nobody asking.** The whole retention policy — `ROVER_ARTIFACTS_BUDGET_MB` and `ROVER_ARTIFACTS_MAX_AGE_DAYS` below — is run over this tree at **local midnight** and again every time the daemon **starts**, deleting whole run directories oldest first; the **budget** half additionally runs after every lease ends, and `rover sweep` runs the lot on demand (`PROJECT.md` D37, D38, R48). So neither bound waits for an operator any more. Nothing about the schedule is persisted: the start pass is what covers a restart, and the midnight pass compares the clock against when it last ran rather than trusting a timer, so a machine that was suspended or switched off sweeps when it comes back. |
@@ -1243,14 +1252,25 @@ answer for it.
 
 ### Where Rover looks for `idb_companion`
 
-**What drives this program today is the device watch, and only that.** The iOS-simulator backend
-watches the attached set through `idb_companion --notify stdout`, which reports every simulator on
-every change with no polling at all, and falls back to polling `simctl list` on a host that has no
-companion — so this program is **optional**, and Rover works without it. `list_devices`,
-`device_info` and the lease grant's re-verification all still read `simctl`, deliberately: idb is
-not a second source of truth for an enumeration a grant re-checks (`PROJECT.md` D6). The
-accessibility read and the input verbs are still ahead, and the backend declares no input
+**Two things drive this program today: the device watch and the screen read.** The iOS-simulator
+backend watches the attached set through `idb_companion --notify stdout`, which reports every
+simulator on every change with no polling at all, and falls back to polling `simctl list` on a host
+that has no companion. `read_screen` is answered by `accessibility_info` over gRPC against one
+supervised companion per simulator (#251), and **that half has no fallback** — `simctl` cannot dump
+a hierarchy at all. `list_devices`, `device_info` and the lease grant's re-verification all still
+read `simctl`, deliberately: idb is not a second source of truth for an enumeration a grant
+re-checks (`PROJECT.md` D6). The input verbs are still ahead, and the backend declares no input
 capability yet.
+
+**So this program is no longer optional in the way it was.** A host without it still answers every
+*required* method of the contract and still lends simulators — the watch falls back, and
+`screenshot`, `record_video`, the app verbs and both file transfers never touch idb — but
+`read_screen` fails naming `idb_companion` and every place that was looked, and so does the
+after-state every action verb returns once there are action verbs on this platform. The manifest
+says `canReadScreen: true` regardless of what this machine has installed, on purpose: a capability
+describes the platform, not the host's install state (`PROJECT.md` D11,
+`src/backends/ios-simulator/capabilities.ts`), so the failure is a named missing *program* rather
+than a device that silently looks less capable on one machine than another.
 
 `idb_companion` is Meta's companion binary for the iOS simulator — a device stream on
 `--notify stdout` and a gRPC server for the accessibility read and the input verbs (`docs/IOS.md`
@@ -1299,7 +1319,10 @@ one you can act on. Off macOS the list is empty and the failure says so.
 
 `npm install` does **not** check for this program, unlike `adb`. Every device Rover drives needs
 `adb`; `idb_companion` is one backend's second program, and a machine without it still answers
-every verb that backend has today.
+every **required** method that backend has — but not `read_screen`, which fails naming the program
+and every place that was looked (see the paragraph above for why the manifest still declares the
+capability `true` on such a host). So a Mac lending simulators wants it installed; a Linux host
+lending phones has no use for it at all.
 
 ### Project hooks
 

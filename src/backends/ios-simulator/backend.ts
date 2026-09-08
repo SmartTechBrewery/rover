@@ -1649,10 +1649,33 @@ export class IosSimulatorDeviceBackend implements DeviceBackend {
 	 * magnitude, and the first-read cost is worth stating because it is the one number a caller
 	 * would otherwise mistake for a hang.
 	 *
+	 * **The bound a caller meets first is not that one, though — it is `wait_for`'s.** `wait_for`
+	 * polls this method (`src/verbs/wait-for.ts` requires `canReadScreen`, which this platform now
+	 * declares), and its `DEFAULT_WAIT_TIMEOUT_MS` is **5 s**. So the first `wait_for` of a lease
+	 * spends roughly 3.7 s of that budget inside its own first probe — companion start plus first
+	 * read — and has about 1.3 s and a handful of 34–47 ms samples left for the condition, where
+	 * the same default on Android spends about 0.2 s getting to its first sample. No wait becomes
+	 * vacuous (`waitForCondition` probes before it waits, so the first sample always happens) and
+	 * the 5 s promise is kept; what shrinks is how many samples fit inside it, so a caller that
+	 * needs the whole window on a freshly leased simulator passes its own `timeoutMs`. Pre-warming
+	 * would belong on a lease grant and nowhere else — a timer of the transport's own is what
+	 * `./idb-client.js`' header rules out for its own reason — and documenting the cost is what
+	 * this phase owes.
+	 *
 	 * A companion that died mid-read fails this call as an **interruption**, never as a device
 	 * fault (`IdbCompanionInterruptedError`): killing one leaves the simulator booted, so what was
 	 * lost is this host's way of talking to a device that is fine, and the next read starts a
 	 * fresh companion.
+	 *
+	 * **The pool is not invalidated when a device leaves `ready`, and that is measured rather than
+	 * assumed.** It is the one state change `./idb-client.js` cannot observe for itself — it runs
+	 * no timer and no health check — so a companion started for a booted device is still in the
+	 * pool after that device is shut down, and is handed the next read once it is booted again.
+	 * Driven on a throwaway simulator created and deleted for the run, 2026-09-09 (`docs/IOS.md`
+	 * §4 has the table): the read in between is the same well-behaved `INTERNAL` refusal the state
+	 * check above pre-empts, and the read *after* the reboot is answered correctly over the same
+	 * channel in 163–801 ms, then 24 ms warm — so the reuse is right and an eviction here would
+	 * only buy back the 3.34 s.
 	 */
 	async readScreen(serial: DeviceSerial): Promise<ScreenElement[]> {
 		const device = await this.describeDevice(serial);
@@ -1929,17 +1952,21 @@ export class IosSimulatorDeviceBackend implements DeviceBackend {
 	 *
 	 * **Not on `DeviceBackend`, because that interface has no teardown at all** — every method on
 	 * it is a call about a device, and the daemon's own lifecycle reaches a backend only through
-	 * the restorer, which calls capability-gated *verbs* (`src/daemon/restore.ts`). So this is
-	 * deliberately not a hook nobody calls dressed up as one: it exists because a companion is a
-	 * process on this host and something has to be able to end it.
+	 * the restorer, which calls capability-gated *verbs* (`src/daemon/restore.ts`). It is instead
+	 * registered as this backend's `stopHostProcesses` (`./index.js`, `../manifest.js`), which is
+	 * where a teardown that is about *this host* rather than about a device belongs.
 	 *
-	 * What calls it today is the device suite, and that is the honest description of it. A suite
-	 * that read a screen and exited would otherwise leave a live `idb_companion` behind per
-	 * device it touched, and a stray one is not harmless: two companions on one udid both bind and
-	 * both accept commands (`docs/IOS.md` §4), so the leftovers are exactly the arbitration the
-	 * lease layer is the only lock for. When the daemon gains a shutdown path this is what it
-	 * calls; until then, calling nothing is better than a timer of this backend's own
-	 * (`./idb-client.js`).
+	 * **Two things call it.** The daemon's shutdown, through that registration and bounded by
+	 * `BACKEND_STOP_TIMEOUT_MS` (`src/daemon/listen.ts`) — last of all, once the watches are gone
+	 * and the restorations have settled, because a companion is the transport a verb call rides
+	 * and ending one earlier would let the next call start a replacement the shutdown has already
+	 * walked past. And the device suite, which would otherwise leave a live `idb_companion` behind
+	 * per device it touched. A stray one is not harmless either way: two companions on one udid
+	 * both bind and both accept commands (`docs/IOS.md` §4), so the leftovers are exactly the
+	 * arbitration the lease layer is the only lock for — and without a caller on the daemon's path
+	 * the count grows to one per simulator anybody has read, held for the daemon's whole life,
+	 * with no operator route to releasing them short of killing it. There is still no timer, no
+	 * health check and no eager respawn of this backend's own (`./idb-client.js`).
 	 *
 	 * Idempotent and safe on a backend that never started one: a device with no companion is not
 	 * an error.

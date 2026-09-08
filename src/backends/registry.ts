@@ -36,7 +36,16 @@ export function registerDeviceBackend(registration: DeviceBackendRegistration): 
 			`Device backend '${manifest.platform}' already registered — duplicate platform ids are not allowed`,
 		);
 	}
-	const registered: RegisteredDeviceBackend = { manifest, backend: registration.backend };
+	const registered: RegisteredDeviceBackend = {
+		manifest,
+		backend: registration.backend,
+		// Spread rather than assigned, so a registration without a teardown stores no key at all
+		// instead of an explicit `undefined` — `stopBackendHostProcesses` below reads the absence
+		// as "this backend keeps no host process", and the two spellings must not differ.
+		...(registration.stopHostProcesses
+			? { stopHostProcesses: registration.stopHostProcesses }
+			: {}),
+	};
 	registry.push(registered);
 	byPlatform.set(manifest.platform, registered);
 }
@@ -78,6 +87,46 @@ export function requireDeviceBackend(platform: PlatformId): RegisteredDeviceBack
 export function listDeviceBackends(): readonly RegisteredDeviceBackend[] {
 	// Return a shallow clone so callers can't splice the source array.
 	return registry.slice();
+}
+
+/**
+ * End every registered backend's host processes, bounded by the caller and never rejecting.
+ *
+ * The counterpart to {@link DeviceBackendRegistration.stopHostProcesses}, and the only caller of
+ * it: the daemon's shutdown (`src/daemon/listen.ts`), once, after the watches are gone and the
+ * restorations have settled. Most backends register no teardown and are skipped — Android is one
+ * — so on a host with no simulator this is a walk over a list that does nothing.
+ *
+ * `allSettled`, and this never rejects, for `DeviceInventory.stop()`'s reason: it is called on the
+ * way down, one backend failing to let go of its children is not a reason to abandon the others,
+ * and a shutdown step that throws would leave the socket file behind a rejected `close()`. What a
+ * failure costs is said out loud, naming the platform, because a process left running on this host
+ * is something an operator can only act on if they are told about it.
+ *
+ * The list is a parameter for the same reason `DeviceInventoryOptions.backends` is: the default is
+ * the registry, so adding a backend edits no shared code, and a suite can hand in its own.
+ */
+export async function stopBackendHostProcesses(
+	backends: readonly RegisteredDeviceBackend[] = listDeviceBackends(),
+	warn: (message: string) => void = console.warn,
+): Promise<void> {
+	const teardowns = backends.flatMap((entry) =>
+		entry.stopHostProcesses ? [[entry.manifest.platform, entry.stopHostProcesses] as const] : [],
+	);
+	const outcomes = await Promise.allSettled(teardowns.map(([, stop]) => stop()));
+	for (const [index, outcome] of outcomes.entries()) {
+		if (outcome.status === 'rejected') {
+			const platform = teardowns[index]?.[0];
+			warn(
+				`The host processes of device backend '${platform}' did not stop cleanly: ` +
+					`${message(outcome.reason)}. Something it started may still be running.`,
+			);
+		}
+	}
+}
+
+function message(cause: unknown): string {
+	return cause instanceof Error ? cause.message : String(cause);
 }
 
 /**

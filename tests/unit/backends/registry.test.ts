@@ -5,6 +5,7 @@ import {
 	listDeviceBackends,
 	registerDeviceBackend,
 	requireDeviceBackend,
+	stopBackendHostProcesses,
 } from '@/backends/registry.js';
 import { parsePlatformId } from '@/core/ids.js';
 import { createMockCapabilities, createMockRegistration } from '../../helpers/factories.js';
@@ -87,6 +88,79 @@ describe('listDeviceBackends', () => {
 		listed.length = 0;
 
 		expect(listDeviceBackends()).toHaveLength(1);
+	});
+});
+
+describe('stopBackendHostProcesses', () => {
+	it('calls the teardown of every backend that registered one', async () => {
+		const stopped: string[] = [];
+		registerDeviceBackend(
+			createMockRegistration({
+				stopHostProcesses: async () => {
+					stopped.push('first');
+				},
+			}),
+		);
+		registerDeviceBackend(
+			createMockRegistration({
+				manifest: {
+					platform: 'second-platform',
+					label: 'Second',
+					capabilities: createMockCapabilities(),
+				},
+				stopHostProcesses: async () => {
+					stopped.push('second');
+				},
+			}),
+		);
+
+		await stopBackendHostProcesses();
+
+		expect([...stopped].sort()).toEqual(['first', 'second']);
+	});
+
+	// Android is this backend: no process of its own between calls, so no teardown to register
+	// and nothing here to skip it by. The absence has to be a no-op rather than a crash, because
+	// it is the shape most backends will have.
+	it('skips a backend that registered no teardown', async () => {
+		registerDeviceBackend(createMockRegistration());
+
+		await expect(stopBackendHostProcesses()).resolves.toBeUndefined();
+	});
+
+	it('is a no-op on an empty registry', async () => {
+		await expect(stopBackendHostProcesses()).resolves.toBeUndefined();
+	});
+
+	// The whole point of `allSettled` here: this runs on the way down, and one backend holding on
+	// to its children is not a reason to abandon the others or to reject a shutdown step.
+	it('warns naming the platform and still stops the others when one teardown rejects', async () => {
+		const warnings: string[] = [];
+		let stoppedSecond = false;
+		registerDeviceBackend(
+			createMockRegistration({
+				stopHostProcesses: () => Promise.reject(new Error('companion would not die')),
+			}),
+		);
+		registerDeviceBackend(
+			createMockRegistration({
+				manifest: {
+					platform: 'second-platform',
+					label: 'Second',
+					capabilities: createMockCapabilities(),
+				},
+				stopHostProcesses: async () => {
+					stoppedSecond = true;
+				},
+			}),
+		);
+
+		await stopBackendHostProcesses(listDeviceBackends(), (message) => warnings.push(message));
+
+		expect(stoppedSecond).toBe(true);
+		expect(warnings).toHaveLength(1);
+		expect(warnings[0]).toContain('test-platform');
+		expect(warnings[0]).toContain('companion would not die');
 	});
 });
 
