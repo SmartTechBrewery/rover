@@ -119,7 +119,7 @@ separated from the main nav.
   settings. It is **read-only when it arrives** — what is registered and what each project
   declares, never an edit and never a delete (`PROJECT.md` D31), so nothing about this item
   promises a control the screen does not have.
-- **`System` stands in for settings** and suits the aesthetic.
+- **`System` stands in for settings** and suits the aesthetic. **Its screen is settled in §13** and built (2026-09-08, on the operator's own request rather than from an issue): the first two settings on it are what the archive is allowed to keep. It stays one destination rather than growing a `Settings` sibling — two doors to one room is the one thing this arrangement cannot survive.
 - **There is no `Analytics` item and there will not be one.** Rover aggregates nothing and scores
   nothing; a nav entry with a trend-chart icon promises a reporting product that does not exist.
 - **No `Documentation` or `Support`.** Not part of this panel.
@@ -2998,6 +2998,21 @@ sidebar — with a global `FORCE_RELEASE` button that has nothing to act on outs
 sits mid-sidebar instead of pinned at the foot; and the breadcrumb is used as a label rather than as
 a path.
 
+- **The `System` screen — done, in §13, and built** (2026-09-08, no issue). It belongs in *this* list rather than in
+  the first, and the operator's instruction to design it here is only half the reason; the other
+  half is the first list's own test. That test asks whether the screen has a pair of expensive,
+  non-obvious traps, and the `Projects` round earned its design because it did: *making a read-only
+  screen look like a form*, and *making a broken file look like a failure of the panel*. This screen
+  has one trap and it is the mirror of the first — **making a form that stores nothing look like it
+  saves** — and it is neither non-obvious nor expensive to avoid, because §11's own rule about a
+  control on an unbuilt destination already answers it. So: two fields, no `Save`, and the fact
+  stated under them.
+
+- **Destinations that lead nowhere yet — none, as of the `System` screen (2026-09-08).** The entry above this list's opening
+  recorded three (`Archive`, `System`, `Profile`); each has since been built, `System` last. What
+  survives is the *unknown address*, which keeps the shared component and its own closing line —
+  and the `NOT_BUILT_YET` wording is gone with its last caller rather than kept as a spare part.
+
 ---
 
 ## 12. Working with Stitch — what actually happens
@@ -3073,3 +3088,123 @@ a path.
   button, a `settings` icon, an `account_circle` icon and a second copy of the sidebar's wordmark —
   an action the shell may not carry (§7), plus a duplicate. It was dropped in #111 rather than
   reproduced; below `md` the sidebar stacks full-width above the content.
+
+---
+
+## 13. The System screen, as settled
+
+The panel's settings destination, and **the first screen in this document with no Stitch design
+behind it at all** — the operator asked for it to be designed here (`ai/RULES.md` §8). §11's third
+list records why that is admissible rather than a shortcut, and this section is what a design round
+would otherwise have produced: the arrangement, the wording, and the two things the screen must not
+do.
+
+It answers one question — **what is this host allowed to keep?** — and it holds two settings and
+nothing else yet, in one card headed `ARCHIVE SETTINGS`.
+
+**The card is the device card's anatomy**, which is `ContentsCard`'s too: the title in a header
+strip of its own — `bg-surface-container-high` above a `border-b-2`, in the tree card's
+`DIRECTORY` heading step — and the body beneath it. Reused rather than re-invented, because a card
+that says what it holds in a strip is what every other card in this panel already is, and a title
+floating inside the body would make this the one that is not.
+
+**Inside the body the order is a decision**: the two notes, a subtle rule, then the fields. The
+notes say what the card is *for*, so they are read before the numbers they are about rather than
+discovered underneath them — and the rule is the **1px** `border-outline-variant` weight an archive
+row and the device card's lease panel already use inside a card, never the structural `border-b-2`
+that carries this card's own strip. The lighter one separates what the card says from what it lets
+you set; the heavier one there would read as two cards inside one border. It is an `<hr>` rather
+than a styled `<div>`, because prose above and controls below is a real break rather than a
+decorative one.
+
+### It is `System`, not a new `Settings` item
+
+§3 settles four destinations and says in as many words that *`System` stands in for settings*; the
+placeholder this replaces promised *the host's own settings will be shown here*. So this fills that
+promise rather than adding a fifth item beside it, because two doors to one room is the failure that
+arrangement cannot survive — a reader who finds `Settings` will wonder what `System` is, and a reader
+who finds `System` will wonder where the settings went. Renaming the destination is a §3 decision and
+a one-line edit if the operator ever wants it; nothing in the screen assumes either answer. The
+`Terminal` glyph is unchanged, and the cog §3 rejected stays rejected: it was rejected for promising
+the write D31 refuses on the *Projects* screen, and nothing here changes that.
+
+### Two settings, one card, because they are one rule with two bounds
+
+| Setting | Unit | Default | What it does |
+| --- | --- | --- | --- |
+| Disk space for test data | MB, a whole number | `10240` (10 GiB) | Rover deletes the oldest tests first once the archive passes this size |
+| Delete tests after | days, a whole number | `30` | A test this old goes even if the disk budget is nowhere near reached |
+
+**Both, rather than either.** A budget alone lets a quiet month keep everything forever; an age alone
+lets a busy week fill the disk inside the window. **Whichever is reached first is the one that acts**,
+and that sentence sits once under the pair rather than half in each field's own line, where a reader
+would have to assemble it.
+
+**The `Keep` tick is named on this screen**, as the exemption from both (§9). It is the one thing a
+reader cannot work out from here, and the word is drawn in the same `tertiary` the tick itself uses.
+
+**The defaults are round figures and not fractions of anything.** This panel cannot see how large the
+host's disk is, so a percentage would be arithmetic off a number nobody sent (D19). `10240` is
+written as a count of MB rather than as `10 GB` because the setting *is* an integer count of
+megabytes — the host will be handed a number, not a unit to parse.
+
+### The field, and why it is not `type="number"`
+
+A caps label, the sign-in screen's own input, the unit as text **after** the value, and one line
+under it saying what the number does.
+
+- **`type="text"` with `inputMode="numeric"`, and digits enforced on the way in.** A number input
+  accepts `e` and `-` in some browsers, hands back an empty string for anything it dislikes —
+  losing what was typed — and brings a spinner this design has no styling for. So the field cannot
+  hold `1.5`, `-30` or a pasted `12 MB` at all, which makes the invalid state unrepresentable
+  rather than validated afterwards.
+- **The unit is beside the field, not in it.** It is not part of the value, and it is `aria-hidden`
+  because the label already names the setting — a screen reader reading *MB* as part of the field's
+  name would turn that name into a sentence.
+- **An unfinished field says what is missing, in words.** Cleared or left at zero it is not an
+  error and is not dressed as one: `error` is this palette's critical step (§5) and nothing has gone
+  wrong. Zero is *keep nothing*, which no operator sets on purpose, so it is *not a setting yet*
+  rather than a value — and the line under the field is replaced by the one thing a reader can act
+  on.
+
+### There is no `Save`, and nothing is stored
+
+Rover has no retention mechanism: nothing sweeps the archive, no method takes either number and no
+answer carries one. So the draft lives in React state and ends with the mount
+(`panel/src/system/retention-settings.ts`), exactly as the `Keep` tick's set does and for the same
+reason — a number that survived a reload would look like a setting the host had been told about,
+and the operator would have configured nothing.
+
+**A `Save` control is therefore not drawn, and not a disabled one either.** §11 already answers this
+for a destination that is not built: *there is nothing here to do yet, and a button would be the
+first thing to lie about that*. The fields are editable anyway, because a form nobody can type into
+says nothing about whether the design is right.
+
+**What the screen says instead** is two quiet lines under the fields — the pair's own rule, then
+*Nothing is stored yet. Rover has no retention mechanism, so these two numbers are not saved
+anywhere and nothing on this host is sweeping the archive.* Ordinary text in the quiet step: no
+banner, no warning colour, no icon of alarm, no `role="alert"` (§7). One of those two lines is
+temporary and comes out when the host half lands; the other is permanent.
+
+**Both lines take the card's full width**, not the prose measure the field copy wraps at, and both
+sit under the title rather than under the fields — see the arrangement above.
+
+**And the `CalmNotice` is gone from this route.** The screen is not empty any more — it has the two
+fields — so *not built yet* would now be false of it, and the one temporary fact belongs beside the
+fields it is about rather than in a panel above them.
+
+### What is deliberately absent
+
+- **No `Save`, no `Apply`, no `Reset`** — see above. Nothing to write to.
+- **No current usage figure.** *Using 3.4 GB of 10 GB* is the obvious companion to a disk budget and
+  the panel cannot have it: no answer carries the archive's size, and a number computed in a browser
+  from a bounded directory walk would be a measurement presented as a fact (D19, and §9's rule that
+  nothing on the archive screen is invented). It arrives with the host half or not at all.
+- **No preview of what would be deleted.** Same reason, one step further: the sweep does not exist,
+  so nothing can be asked what it would take.
+- **No units toggle**, no GB/MB switch. The setting is a count of megabytes; a second unit is a
+  second place a number can be wrong.
+- **Nothing about the daemon, the host's ports, the users or the projects root.** They are settings
+  in the ordinary sense and none of them is writable from a browser (D31, D27's deferred role
+  model). When any of them becomes readable here it is a second card on this screen, not a rewrite
+  of this one.

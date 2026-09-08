@@ -1,12 +1,16 @@
 /**
- * The panel's one empty-ish state: a destination that has nothing on it.
+ * The panel's one empty-ish state: an address that has nothing on it.
  *
- * `Archive`, `System` and `Profile` lead nowhere so far, and an unknown address leads nowhere
- * at all; both must say so rather than 404. It is written in the language of the empty states
- * (`docs/DESIGN.md` §7): a state with nothing in it is normal and *finished*, not a fault. So
- * no error or warning colour, no icon of alarm, no spinner, no progress-shaped ornament, no
- * `role="alert"` — and no control, because there is nothing here to do and a button would be
- * the first thing to lie about that.
+ * **Its `NOT_BUILT_YET` wording is gone with the last destination that needed it** (§13): every
+ * nav item is now a built screen, `System` having been the last placeholder, and an exported
+ * bundle of words with no caller is drift rather than a spare part. What remains is the one live
+ * case — an unknown address, which must say so rather than 404 — and the component is unchanged,
+ * so a destination that ever needs the other wording passes it in as this one does.
+ *
+ * It is written in the language of the empty states (`docs/DESIGN.md` §7): a state with nothing in
+ * it is normal and *finished*, not a fault. So no error or warning colour, no icon of alarm, no
+ * spinner, no progress-shaped ornament, no `role="alert"` — and no control, because there is
+ * nothing here to do and a button would be the first thing to lie about that.
  *
  * `closing` is a separate line rather than part of `detail` because the two cases genuinely
  * differ: a screen that is not built yet *will* be, and an address that does not exist will
@@ -33,9 +37,3 @@ export function CalmNotice({
 		</section>
 	);
 }
-
-/** The wording every route that is not built yet shares, so it cannot drift between them. */
-export const NOT_BUILT_YET = {
-	heading: 'Not built yet',
-	closing: 'It will be. Nothing is wrong here.',
-} as const;

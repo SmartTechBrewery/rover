@@ -1,12 +1,21 @@
 import { render, screen } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 
-import { CalmNotice, NOT_BUILT_YET } from './calm-notice.js';
+import { CalmNotice } from './calm-notice.js';
 
 describe('CalmNotice', () => {
+	/*
+	 * The three lines, from props. They were a shared `NOT_BUILT_YET` bundle until `System` — the
+	 * last destination that used it — became a built screen (§13); the component never cared, which
+	 * is what makes the removal safe rather than a rewrite.
+	 */
 	it('says what is missing and what that means', () => {
 		render(
-			<CalmNotice {...NOT_BUILT_YET} detail="The archive of past runs will be browsable here." />,
+			<CalmNotice
+				closing="It will be. Nothing is wrong here."
+				detail="The archive of past runs will be browsable here."
+				heading="Not built yet"
+			/>,
 		);
 
 		expect(screen.getByText('Not built yet')).toBeDefined();
@@ -24,14 +33,20 @@ describe('CalmNotice', () => {
 			/>,
 		);
 
-		expect(screen.queryByText(NOT_BUILT_YET.closing)).toBeNull();
+		expect(screen.queryByText('It will be. Nothing is wrong here.')).toBeNull();
 		expect(screen.getByText(/Check the address/)).toBeDefined();
 	});
 
 	// A destination with nothing on it is a normal, finished state (docs/DESIGN.md §7), not a
 	// fault and not a wait.
 	it('reads as finished rather than as an error or a wait', () => {
-		const { container } = render(<CalmNotice {...NOT_BUILT_YET} detail="Nothing here yet." />);
+		const { container } = render(
+			<CalmNotice
+				closing="It will be. Nothing is wrong here."
+				detail="Nothing here yet."
+				heading="Not built yet"
+			/>,
+		);
 
 		const html = container.innerHTML;
 		for (const forbidden of ['error', 'secondary-container', 'animate-', 'role="alert"']) {
