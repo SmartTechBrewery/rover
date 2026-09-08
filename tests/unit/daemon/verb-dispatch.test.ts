@@ -44,6 +44,7 @@ import {
 	NoRecordingRunningError,
 	RecordingAlreadyRunningError,
 	UnfinishedRecordingError,
+	UnsupportedKeyError,
 	UnsupportedTextError,
 } from '@/core/errors.js';
 import {
@@ -145,6 +146,7 @@ interface HostOptions {
 	readonly readScreen?: DeviceBackend['readScreen'];
 	readonly deviceInfo?: DeviceBackend['deviceInfo'];
 	readonly typeText?: DeviceBackend['typeText'];
+	readonly pressKey?: DeviceBackend['pressKey'];
 	readonly capture?: Uint8Array;
 	readonly recording?: Uint8Array;
 	readonly recordVideo?: DeviceBackend['recordVideo'];
@@ -302,9 +304,7 @@ async function serve(options: HostOptions = {}): Promise<void> {
 				(async (_serial, text) => {
 					typed.push(text);
 				}),
-			pressKey: async (_serial, key) => {
-				keys.push(key);
-			},
+			pressKey: pressKeyOf(options),
 			setAirplaneMode: recordRadio('setAirplaneMode'),
 			setWifiEnabled: recordRadio('setWifiEnabled'),
 			launchApp: options.launchApp ?? recordApp('launchApp'),
@@ -372,6 +372,22 @@ async function serve(options: HostOptions = {}): Promise<void> {
 		throw new Error('Another daemon holds the temp socket — the test cannot proceed');
 	}
 	running.push(result);
+}
+
+/**
+ * `press_key`'s backend method: the suite's recorder, or whatever a test installed instead.
+ *
+ * A helper rather than a `??` inside {@link serve}'s backend literal, in `recordApp`'s spirit:
+ * that function is already at this repository's complexity bound, and one more override in it
+ * tips it over.
+ */
+function pressKeyOf(options: HostOptions): NonNullable<DeviceBackend['pressKey']> {
+	return (
+		options.pressKey ??
+		(async (_serial, key) => {
+			keys.push(key);
+		})
+	);
 }
 
 /** One backend app method that records the call the daemon made rather than doing anything. */
@@ -687,6 +703,27 @@ describe('the input rows dispatch like the waits', () => {
 		expect(keys).toEqual(['home']);
 		expect(taps).toEqual([]);
 		expect(drags).toEqual([]);
+	});
+
+	it('answers a key this device has no equivalent for as a failure about that key', async () => {
+		await serve({
+			pressKey: async (serial, key) => {
+				throw new UnsupportedKeyError(serial, key, 'this device has no app-switcher key');
+			},
+		});
+		const client = await connect();
+		const leaseId = await acquire(client);
+
+		const answer = await client.request('press_key', { leaseId, key: 'recents' });
+
+		// It **resolves** rather than rejecting: this is a verb answer about the device, not
+		// `internal_error` about the host. And the kind is not `missing-capability` — this
+		// backend declares `canInput` and takes input, so `key` is what says which one key to
+		// stop asking for.
+		expect(answer).toMatchObject({
+			outcome: 'failed',
+			failure: { kind: 'unsupported-key', serial: SERIAL, key: 'recents' },
+		});
 	});
 
 	it('refuses a key nobody implements at the boundary, before any handler runs', async () => {

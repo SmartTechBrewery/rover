@@ -641,7 +641,30 @@ export interface DeviceBackend {
 	/** Gated by `canInput`. Escaping of spaces and non-ASCII characters is the backend's job. */
 	typeText?(serial: DeviceSerial, text: string): Promise<void>;
 
-	/** Gated by `canInput`. */
+	/**
+	 * Press one of the device's own keys. Gated by `canInput`.
+	 *
+	 * **{@link DeviceKey} is one shared vocabulary, not a promise that every platform has all
+	 * of it.** A backend declaring `canInput` declares the *method*; the keys are its
+	 * arguments, and platforms genuinely differ over which of them exist as a key at all
+	 * (PROJECT.md §5).
+	 *
+	 * So a key this device has no equivalent for is `UnsupportedKeyError`
+	 * (`src/core/errors.ts`), naming **that key** — which reaches the agent as an
+	 * `unsupported-key` failure carrying it (`src/verbs/failure.ts`). Never
+	 * `MissingCapabilityError`: this device does take input, and answering "cannot take
+	 * input" would be the wrong answer to `tap`, `swipe` and `typeText`, which work, in order
+	 * to answer for one key.
+	 *
+	 * **And never a substitute.** Pressing something that is not the key that was asked for,
+	 * or resolving as though it pressed while having done nothing, is the silent degradation
+	 * ai/RULES.md §2 forbids — sharpened here by the injection tooling this is implemented on
+	 * top of, which accepts a key name it does not know in silence and exits successfully
+	 * (PROJECT.md §6), so nothing downstream can detect the difference.
+	 *
+	 * **`canInput: false` is not the way to say it either.** That declares the method absent,
+	 * which is a much larger claim than one missing key and takes three working verbs with it.
+	 */
 	pressKey?(serial: DeviceSerial, key: DeviceKey): Promise<void>;
 
 	/**

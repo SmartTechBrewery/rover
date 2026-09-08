@@ -227,7 +227,7 @@ The lifecycle is the real cost, and it has teeth:
 
 ## 5. Where the vocabulary does not line up
 
-Four asymmetries. Three are declared, one needs a decision.
+Four asymmetries. Three are declared, and the fourth is now decided in shared code (#215).
 
 **`canControlNetwork` is `false`, and that is the honest answer.** A simulator has no airplane mode
 and no wifi toggle: it uses the host's network stack, so the only truthful implementation of
@@ -247,11 +247,27 @@ to it.
 | `back` | ⚠️ left-edge swipe | **Verified working**: drilled into Settings → General, `ui swipe 2 450 → 300 450`, and the root list came back. It is an app gesture, not a system key, so it works where the app supports interactive pop and nowhere else |
 | `recents` | ❌ | No button, and the app-switcher gesture needs the Indigo *edge bits* (`Indigo.h`: the guest recognises system edge gestures "from these bits, not from the contact coordinates"). idb's swipe does not set them; a slow 1.2 s bottom-edge swipe did nothing. Unreachable without patching idb or sending our own HID messages |
 
-`pressKey` is one method behind one capability, so a backend that declares `canInput` claims all
-four keys. Either `pressKey` grows a per-key failure that names the key (not the capability), or
-`recents` is answered with a loud, specific error. **This is the one design decision this analysis
-cannot make on its own** — it changes shared code, and D11's shape says a missing ability is
-declared, not discovered at the call.
+`pressKey` is one method behind one capability, so a backend that declares `canInput` would
+otherwise claim all four keys. **`pressKey` grew the per-key failure** (#215): a key the device has
+no equivalent for is `UnsupportedKeyError`, which reaches the agent as an `unsupported-key` verb
+failure carrying the serial and *the key* — `unsupported-text`'s model one argument down, and
+deliberately distinct from `missing-capability`, because a backend that takes input and lacks one
+key is a narrower backend rather than one without input. So this backend answers the keys it has
+and refuses the ones it does not, without lying in either direction:
+
+- **`recents` is refused by name, not implemented.** Accepted 2026-09-08. There is nothing behind
+  it that is the app switcher, and answering with something else would be the silent degradation
+  `ai/RULES.md` §2 forbids.
+- **`back` needs nothing from the vocabulary.** On iOS back is normally a button in the app's own
+  UI — usually the app bar — which the verb layer already reaches by label through `read_screen`
+  + `tap`. The left-edge swipe measured above works where the app supports interactive pop, and
+  that is a gesture rather than a key.
+- **`wake` is this backend's own business.** Reading lock state first and making the press
+  idempotent is an implementation question, not a vocabulary one, and only needs a failure of its
+  own if that read turns out not to exist.
+
+D11 is untouched by any of it: capabilities still name *methods*, the keys are that method's
+arguments, and no per-key flag was added (`PROJECT.md` §5).
 
 **`LogLevel` has no `warn` on iOS, and gains a value that is not a level.** The unified log's
 `messageType` is `Debug | Info | Default | Error | Fault` — nothing maps onto `warn` — and entries
@@ -408,8 +424,10 @@ In order, and each step is independently useful:
 2. **Add idb**: `readScreen`, `tap`, `swipe`, `typeText`, `pressKey`, and swap `watchDevices` onto
    `--notify`. Talk gRPC from Node, supervise one companion per target, never call `file push`,
    and classify a companion crash as an interruption rather than a device fault.
-3. **Decide the `recents`/`back` question** (§5) before `canInput` is declared, because declaring it
-   claims all four keys.
+3. **Declare `canInput` and refuse `recents` by name.** The `recents`/`back` question is decided
+   (§5): shared code carries the per-key refusal (#215), so what remains here is declaring the
+   capability and raising `UnsupportedKeyError` for `recents` — `back` and `home` are answered, and
+   `wake` reads lock state first so the press is idempotent.
 4. **Leave physical iOS alone** until someone wants to pay for WebDriverAgent — and record the
    reason in `PROJECT.md` when they do, because "iOS is supported" will otherwise be read as
    covering hardware.

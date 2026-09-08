@@ -657,7 +657,12 @@ the verb rather than a resolution that failed. There is no target *option* on `t
 agent that wants text in a particular field taps it and then types, rather than having a second copy
 of `tap`'s resolution live here. `press_key` speaks the four keys of `DeviceKey` — back, home,
 recents, wake — shared with the backend and the wire so a key nobody implements is refused at the
-boundary instead of pressed into silence. `type_text` hands the caller's string to the backend
+boundary instead of pressed into silence. A vocabulary is not a promise that every platform has all
+of it, so the other half of that is the backend's: a key that *is* in the vocabulary and that this
+device has no equivalent for comes back as an `unsupported-key` failure naming the key, which is how
+a device that takes input says so about one key without claiming it takes none — and it is a
+different answer from `missing-capability` on purpose, since one says try a different key and the
+other says try a different device. `type_text` hands the caller's string to the backend
 **byte for byte**: quoting and whatever a device's own text entry reads rather than types belong to
 the backend, and a string this layer had helpfully escaped would arrive on screen with the escaping
 in it. What a device cannot type at all — every non-ASCII character on the Android backend today —

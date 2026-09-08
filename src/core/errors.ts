@@ -3,18 +3,22 @@
  *
  * "This device cannot do that" and "this broke" call for opposite responses from an
  * agent, so a missing capability is its own type rather than a generic `Error`
- * (ai/CODING_STANDARDS.md "Error handling", D11). The same test admits the six below:
+ * (ai/CODING_STANDARDS.md "Error handling", D11). The same test admits the seven below:
  * "the device went away", "the device is not attached to this host", "this device cannot
- * type that string", "the recording came off the device unfinished", "this device is
- * already recording" and "this device is not recording at all" are each an answer a caller
- * acts on differently, and none of them is a bug. Everything else in this layer
- * throws plain `Error` for a programmer or validation bug, and returns `null` for not-found.
+ * type that string", "this device has no equivalent for that key", "the recording came off
+ * the device unfinished", "this device is already recording" and "this device is not
+ * recording at all" are each an answer a caller acts on differently, and none of them is a
+ * bug. Everything else in this layer throws plain `Error` for a programmer or validation
+ * bug, and returns `null` for not-found.
  *
  * Imports from `./capabilities.js` are type-only on purpose: that module imports this
  * one for its value, so an erased edge is what keeps the pair free of a runtime cycle.
+ * `./device.js` is type-only for a different and weaker reason — it imports only
+ * `./ids.js`, so there is no cycle here to avoid; nothing but the type is needed.
  */
 
 import type { CapabilityId } from './capabilities.js';
+import type { DeviceKey } from './device.js';
 import type { DeviceSerial, PlatformId } from './ids.js';
 
 /**
@@ -134,6 +138,48 @@ export class UnsupportedTextError extends Error {
 		this.serial = serial;
 		this.text = text;
 		this.unsupported = unsupported;
+	}
+}
+
+/**
+ * Thrown when a backend can take input and has nothing this **key** would press.
+ *
+ * {@link UnsupportedTextError} one argument down, and here for that error's reasons. Not
+ * {@link MissingCapabilityError}: the device declares `canInput` and does take input, so
+ * "try another device" is the wrong advice — the way out is a different key, or the same
+ * effect through something on the screen, and only this error can say which key was the
+ * problem. Nor a plain `Error`: `src/verbs/failure.ts` maps it, so a caller who asked for a
+ * key this platform has no equivalent for is told **which key** rather than that the host
+ * broke.
+ *
+ * It exists because `DeviceKey` is one shared vocabulary and not a promise that every
+ * platform has all of it (PROJECT.md §5). A backend declaring `canInput` is declaring the
+ * *method*, and the keys behind it are arguments — so the refusal has to be per argument.
+ * The alternative a capability could express is far worse in both directions: a flag per key
+ * would put several booleans behind one method and make `canInput` mean nothing (D11), while
+ * declaring `canInput: false` to dodge one key would refuse tapping, swiping and typing,
+ * which work.
+ *
+ * `key` is the whole of what makes it actionable, and it is the `DeviceKey` type rather than
+ * a string so the verb, the backend, the wire and now the refusal share one vocabulary.
+ *
+ * `reason` is the backend's own words for why that key has no equivalent, passed in rather
+ * than written here: what a device's own keys are is a fact about that device, and this
+ * layer names no device's particulars (ai/RULES.md §2).
+ */
+export class UnsupportedKeyError extends Error {
+	readonly serial: DeviceSerial;
+	readonly key: DeviceKey;
+
+	constructor(serial: DeviceSerial, key: DeviceKey, reason: string) {
+		super(
+			`Device '${serial}' has no equivalent for the '${key}' key: ${reason}. It does take ` +
+				`input — the other keys, and everything reachable through what is on screen, still ` +
+				`work — so this one key is refused by name rather than pressed into silence`,
+		);
+		this.name = 'UnsupportedKeyError';
+		this.serial = serial;
+		this.key = key;
 	}
 }
 

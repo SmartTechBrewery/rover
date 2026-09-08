@@ -221,6 +221,11 @@ export type TypeTextParams = z.infer<typeof TypeTextParamsSchema>;
  * `DeviceKeySchema` rather than a string, so the verb, the backend and the wire share one
  * vocabulary: a key nobody implements is `invalid_params` at the boundary instead of a press
  * that reports success and does nothing.
+ *
+ * The enum bounds which keys can be **asked for**, and says nothing about whether a given
+ * device has one. That question has a different answer on every device, only the backend
+ * knows it, and the answer arrives as an `unsupported-key` failure naming the key
+ * (`src/verbs/failure.ts`).
  */
 export const PressKeyParamsSchema = VerbCallBaseSchema.extend({
 	key: DeviceKeySchema,

@@ -27,12 +27,13 @@
 
 import { z } from 'zod';
 import { CapabilityIdSchema } from '../core/capabilities.js';
-import { PointSchema, ScreenElementSchema } from '../core/device.js';
+import { DeviceKeySchema, PointSchema, ScreenElementSchema } from '../core/device.js';
 import {
 	MissingCapabilityError,
 	NoRecordingRunningError,
 	RecordingAlreadyRunningError,
 	UnfinishedRecordingError,
+	UnsupportedKeyError,
 	UnsupportedTextError,
 	WaitTimeoutError,
 } from '../core/errors.js';
@@ -142,6 +143,28 @@ export const VerbFailureSchema = z.discriminatedUnion('kind', [
 			serial: DeviceSerialSchema,
 			text: z.string(),
 			unsupported: z.array(z.string().min(1)).min(1),
+			message: z.string().min(1),
+		})
+		.strict(),
+	/**
+	 * The device takes input, and has nothing this key would press.
+	 *
+	 * `unsupported-text` one argument down, and kept apart from `missing-capability` for that
+	 * branch's reason: a backend that declares `canInput` and has no equivalent for one key is
+	 * not a backend without input, and the two ask opposite things of the caller — that one
+	 * says stop asking, this one says ask for a different key, or reach the same effect
+	 * through what is on screen. A client that could not tell them apart would take a device
+	 * off the table over one key it does not have.
+	 *
+	 * `key` is the whole of what makes it actionable, and it is `DeviceKeySchema` rather than
+	 * a string for `PressKeyParamsSchema`'s reason: the verb, the backend, the wire and now
+	 * the refusal share one vocabulary.
+	 */
+	z
+		.object({
+			kind: z.literal('unsupported-key'),
+			serial: DeviceSerialSchema,
+			key: DeviceKeySchema,
 			message: z.string().min(1),
 		})
 		.strict(),
@@ -429,10 +452,11 @@ export type VerbFailure = z.infer<typeof VerbFailureSchema>;
  * class's own test seeing an internal error instead of an answer, which is the loud version
  * of this drifting.
  *
- * Two groups are delegated to helpers below — one list this long is harder to read than three,
- * and each group genuinely belongs together: the four failures about a **host tool** rather than
- * a device ({@link hostToolFailure}), and the two about whether a device has a recording open
- * ({@link openRecordingFailure}).
+ * Three groups are delegated to helpers below — one list this long is harder to read than
+ * four, and each group genuinely belongs together: the four failures about a **host tool**
+ * rather than a device ({@link hostToolFailure}), the two about whether a device has a
+ * recording open ({@link openRecordingFailure}), and the two where the device can do the thing
+ * and not with *this argument* ({@link unsupportedArgumentFailure}).
  */
 export function toVerbFailure(error: unknown): VerbFailure | null {
 	if (error instanceof MissingCapabilityError) {
@@ -490,17 +514,8 @@ export function toVerbFailure(error: unknown): VerbFailure | null {
 			message: error.message,
 		};
 	}
-	if (error instanceof UnsupportedTextError) {
-		return {
-			kind: 'unsupported-text',
-			serial: error.serial,
-			text: error.text,
-			// Copied for the reason the candidates above are: the union's own type is a mutable
-			// array and the error published a `readonly` one to whoever caught it.
-			unsupported: [...error.unsupported],
-			message: error.message,
-		};
-	}
+	const unsupportedArgument = unsupportedArgumentFailure(error);
+	if (unsupportedArgument !== null) return unsupportedArgument;
 	if (error instanceof ArtifactTooLargeError) {
 		return {
 			kind: 'artifact-too-large',
@@ -568,6 +583,42 @@ export function toVerbFailure(error: unknown): VerbFailure | null {
 			found: error.found,
 			timeoutMs: error.timeoutMs,
 			polls: error.polls,
+			message: error.message,
+		};
+	}
+	return null;
+}
+
+/**
+ * The two failures where the device *can* do the thing and not with **this argument**, split
+ * out of {@link toVerbFailure} for {@link hostToolFailure}'s reason.
+ *
+ * They belong together on their own terms: both come from a backend that declares `canInput`
+ * and does take input, so neither is a `missing-capability` (D11) — one says send a different
+ * string, the other says ask for a different key, and both name the offending argument because
+ * that is the only thing a caller can act on. The pair is the reason the second one was cheap
+ * to add: `unsupported-key` is `unsupported-text` one argument down (#215).
+ *
+ * Returns `null` for anything else, so the caller carries on down its own list.
+ */
+function unsupportedArgumentFailure(error: unknown): VerbFailure | null {
+	if (error instanceof UnsupportedTextError) {
+		return {
+			kind: 'unsupported-text',
+			serial: error.serial,
+			text: error.text,
+			// Copied for the reason the candidates in `toVerbFailure` are: the union's own type is
+			// a mutable array and the error published a `readonly` one to whoever caught it.
+			unsupported: [...error.unsupported],
+			message: error.message,
+		};
+	}
+	if (error instanceof UnsupportedKeyError) {
+		// Nothing to copy: a key is one value out of a closed vocabulary, not an array.
+		return {
+			kind: 'unsupported-key',
+			serial: error.serial,
+			key: error.key,
 			message: error.message,
 		};
 	}

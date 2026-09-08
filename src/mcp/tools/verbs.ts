@@ -219,7 +219,10 @@ const VERB_TOOLS: readonly VerbToolRow[] = [
 		description:
 			'Press one hardware or system key: `back`, `home`, `recents` or `wake`. Addresses ' +
 			'nothing on the screen, so it needs no screen read to aim and works on a device that ' +
-			'cannot read its screen at all.',
+			'cannot read its screen at all. A key **this** device has no equivalent for comes back ' +
+			'as an `unsupported-key` failure naming that key — never as a silent no-op, and never ' +
+			'as `missing-capability`, which would say the device takes no input at all. Ask for a ' +
+			'different key, or reach the same thing through `read_screen` and `tap`.',
 	},
 	{
 		method: 'read_screen',

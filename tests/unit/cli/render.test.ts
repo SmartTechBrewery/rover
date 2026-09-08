@@ -9,11 +9,13 @@
 import { describe, expect, it, vi } from 'vitest';
 import { LOCAL_HOST } from '@/cli/_shared/host.js';
 import { printJson, renderTable } from '@/cli/_shared/output.js';
+import { renderVerbAnswer } from '@/cli/_shared/verb.js';
 import { renderGrant, renderRefusal } from '@/cli/commands/acquire.js';
 import { renderForceRelease, renderForceReleaseRefusal } from '@/cli/commands/force-release.js';
 import { renderDeviceList, renderHolder, staleWarning } from '@/cli/commands/list.js';
 import { renderRelease } from '@/cli/commands/release.js';
 import { renderStatus } from '@/cli/commands/status.js';
+import { UnsupportedKeyError } from '@/core/errors.js';
 import { parseDeviceSerial, parseLeaseId, parsePlatformId } from '@/core/ids.js';
 import {
 	type AcquireDeviceResult,
@@ -25,6 +27,7 @@ import {
 	StatusResultSchema,
 } from '@/ipc/methods.js';
 import { PROTOCOL_VERSION } from '@/ipc/protocol.js';
+import { toVerbFailure } from '@/verbs/failure.js';
 import { createMockDevice } from '../../helpers/factories.js';
 
 const free = createMockDevice({ serial: parseDeviceSerial('free-1') });
@@ -518,6 +521,52 @@ describe('the table itself', () => {
 		// Both cells are as wide as they render, so the second column starts at the same offset
 		// on every row — the alignment a caller reads the table by.
 		expect((lines[1] ?? '').indexOf('x')).toBe((lines[2] ?? '').indexOf('y'));
+	});
+});
+
+/**
+ * The CLI's half of "the refusal reaches the agent through both clients" (#215).
+ *
+ * **One honest gap, stated rather than papered over:** the CLI exposes no input verb at all —
+ * there is no `rover press_key` in `src/cli/index.ts`'s `COMMANDS` — so the CLI half is
+ * provable only at the shared renderer every verb command routes through. That is exactly how
+ * `unsupported-text` reaches the CLI today, and it is currently pinned by nothing, so this is
+ * one better than the precedent rather than one worse.
+ */
+describe('a per-key refusal as the CLI renders it', () => {
+	const refusal = new UnsupportedKeyError(
+		parseDeviceSerial('attached-1'),
+		'recents',
+		'this device has no app-switcher key',
+	);
+	const failure = toVerbFailure(refusal);
+	if (failure === null) throw new Error('the failure mapping should have caught this');
+	const answer = { outcome: 'failed', failure } as const;
+
+	it("prints the kind beside the message, so the discriminator is within a terminal's reach", () => {
+		const line = renderVerbAnswer(answer);
+
+		// The kind is what an agent branches on and the message is what says which key; printing
+		// only the prose would put the first out of reach, and only the kind would lose the key.
+		expect(line).toBe(`Failed (unsupported-key): ${refusal.message}`);
+		expect(line).toContain('recents');
+	});
+
+	it('carries the kind and the key as fields in the --json document', () => {
+		const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+		printJson(LOCAL_HOST, answer);
+
+		const document: unknown = JSON.parse(log.mock.calls[0]?.[0] as string);
+		// Fields rather than prose to parse back apart: a script deciding what to press instead
+		// reads `key`, and `kind` is what tells it this is one key and not the whole device.
+		expect(document).toMatchObject({
+			host: LOCAL_HOST,
+			outcome: 'failed',
+			failure: { kind: 'unsupported-key', key: 'recents' },
+		});
+
+		log.mockRestore();
 	});
 });
 

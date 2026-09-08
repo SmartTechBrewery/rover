@@ -23,7 +23,11 @@ import {
 	type Point,
 	type ScreenElement,
 } from '@/core/device.js';
-import { MissingCapabilityError, UnsupportedTextError } from '@/core/errors.js';
+import {
+	MissingCapabilityError,
+	UnsupportedKeyError,
+	UnsupportedTextError,
+} from '@/core/errors.js';
 import { parseElementId } from '@/core/ids.js';
 import type { VerbContext } from '@/verbs/context.js';
 import { TargetNotFoundError } from '@/verbs/errors.js';
@@ -565,5 +569,24 @@ describe('press_key', () => {
 
 		expect(calls).not.toContain('tap');
 		expect(calls).not.toContain('swipe');
+	});
+
+	it("lets a backend's refusal of one key out, rather than answering as though it pressed", async () => {
+		const { context } = recording();
+		const refusal = new UnsupportedKeyError(
+			context.serial,
+			'recents',
+			'this device has no app-switcher key',
+		);
+		vi.mocked(context.backend.pressKey as NonNullable<DeviceBackend['pressKey']>).mockRejectedValue(
+			refusal,
+		);
+
+		// `toVerbFailure` turns it into an `unsupported-key` answer at the daemon
+		// (`tests/unit/verbs/failure.test.ts`); what matters here is that this verb neither
+		// swallows it nor reports an action that never happened. A resolved `ActionResult` here
+		// is the false green the whole tool exists to avoid — and `performAction` having no
+		// `catch` is what makes this pass with no change to `src/verbs/input.ts`.
+		await expect(pressKey(context, 'recents')).rejects.toThrow(UnsupportedKeyError);
 	});
 });
