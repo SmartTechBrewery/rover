@@ -181,20 +181,28 @@ export function ArchiveCheckbox({
  * The sentence this control makes about itself, one per {@link ArchiveCheckbox} scope.
  *
  * **`once Rover starts sweeping the archive` is standing in for a number**, and the substitution is
- * the only thing that changes when the host half lands: *…will be removed in 14 days, unless…*.
+ * the only thing that changes when the *sweep* lands: *…will be removed in 14 days, unless…*.
  * Until a host answer carries that window there is no honest way to write the digits — nothing
  * sweeps the archive, no answer carries a retention figure, and one written here would be the panel
  * inventing data the host never sent (`ai/RULES.md` §2, and this screen's own *nothing is invented*
  * rule). Naming the condition still tells a reader why the box is there, which is what the sentence
  * is for.
  *
+ * **The second half says where the decision is held, and it is there because the answer changed**
+ * (D33, #237). The tick was React state and forgot on reload, so the sentence could only promise
+ * what the reader was about to lose; the host remembers it now — in a document of its own, read and
+ * written over the panel's transport — so a reader who ticks a box on one machine can be told that
+ * it holds. Where the file is is deliberately not in it: a host path on a screen is the disclosure
+ * D19 refuses, and *the host* is the whole of what a reader has to know.
+ *
  * **The group's wording is not the test's with a word swapped.** Its tick stands over several tests
  * at once, so the sentence says *every test in this group* and *keep them all* — a reader who read
  * the test's sentence over a group's tick would take it for a control over the group as a thing,
- * and press it expecting one flag rather than several.
+ * and press it expecting one flag rather than several. Its second half is plural for that same
+ * reason.
  */
 const REMOVAL_NOTICE: Readonly<Record<'test' | 'group', string>> = {
-	test: 'Traces of this test will be removed once Rover starts sweeping the archive, unless you keep it.',
+	test: 'Traces of this test will be removed once Rover starts sweeping the archive, unless you keep it. The host remembers this tick, not the browser.',
 	group:
-		'Traces of every test in this group will be removed once Rover starts sweeping the archive, unless you keep them all.',
+		'Traces of every test in this group will be removed once Rover starts sweeping the archive, unless you keep them all. The host remembers these ticks, not the browser.',
 };

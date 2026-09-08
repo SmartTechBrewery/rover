@@ -85,12 +85,21 @@ already come back twice. So, nowhere in this UI:
 `test name` appears because that is the field's real name (D22). It does not mean a test, and it
 must never be shortened to `TEST`, which reads as a category rather than as a label.
 
-**The panel is not read-only** (D27). It carries *authority over the shared device pool* —
+**The panel is not read-only** (D27). It carries *authority over a shared resource* —
 force-releasing a stuck lease is the first such action, and as of #122 it is built: one recessive
-control on each held card, the confirmation §7 settles, and the outcomes §7 settles beside it. It
-deliberately does **not** acquire devices: a lease carries the caller's own `owner` string (D22), an agent signs its own work, and a
-person clicking a button has nothing to sign one with. So: no "new lease", no "request device", no
-create/edit/delete anywhere.
+control on each held card, the confirmation §7 settles, and the outcomes §7 settles beside it.
+
+**The `Keep` tick is the second** (D33, #234 and #237, §9): the operator says which tests a sweep
+must spare, and the host records it in a document of its own. What makes it one of these rather than
+a step in one agent's work is D27's own test — it is authority over something *shared*, not over
+one caller's own lease. An archive holds every agent's runs, so the exemption is the operator's
+call, one agent could otherwise clear another's, and there is nothing about the decision that
+belongs to the run that produced the files. That is also why neither of the two is an MCP tool.
+
+The panel deliberately does **not** acquire devices: a lease carries the caller's own `owner` string
+(D22), an agent signs its own work, and a person clicking a button has nothing to sign one with. So:
+no "new lease", no "request device", no create/edit/delete anywhere — every action it has is one the
+operator takes over something the host holds for everybody.
 
 ---
 
@@ -2178,6 +2187,13 @@ on exactly those terms. This
 is the one place the panel's data differs from the Devices screen's, which polls because *what is
 attached* changes under the reader.
 
+**The `Keep` set is not polled either, and its reason is a different one** (#237). It is not
+finished data — a press changes it, and it is the host's, so another operator's press changes it too
+— but this screen is told the **whole** set by every answer it gets, so one read on mount plus one
+answer per press is every state it can draw. What that costs is stated rather than hidden: a tick
+made in another browser appears here on the next mount and not before, which is a reload rather than
+a refresh control, and there is nothing on this screen a stale tick could damage.
+
 **A path deeper than a run is no longer reachable only by typing it or by following a search hit**
 (amended in place, #146 and #159): **the tree draws it**, to any depth the archive holds, so a file
 is selectable by clicking alone. Typing one still works and still renders that level's listing rather
@@ -2627,20 +2643,20 @@ device card: a recording is megabytes and its object URL is a live handle on the
 lifetime is the state that holds it. There is no cap on a text file's lines; `MAX_LOG_ENTRIES` bounds
 the ones Rover writes at about 5 000.
 
-### The `Keep` checkbox — settled here, not designed, and the UI half of a mechanism that does not sweep yet
+### The `Keep` checkbox — settled here, not designed, and the operator's half of a mechanism that does not sweep yet
 
-A test the reader wants **kept** once Rover starts sweeping the archive. **The sweep does not
-exist**: nothing on the host deletes an old run today, so this control is a picture of a decision
-rather than the decision, and everything below follows from saying that plainly instead of hiding
-it.
+A test the reader wants **kept** once Rover starts sweeping the archive. **The decision is real and
+the sweep is not**: the host records which tests the operator keeps, and nothing on the host deletes
+an old run today, so the flag is an instruction waiting for the thing it instructs.
 
-**The host half of *remembering* the decision landed in #234** (D33): `list_kept_tests` and
-`set_kept_tests` on the panel's own transport, over `~/.rover/kept-tests.json`, so what the
-operator keeps now survives a daemon restart. **The tick is not wired to it yet** — `pinned-tests.ts`
-is still React state and forgets on reload, and phase 2 of #234 is what connects the two and
-rewrites this section. So there is a host method: do not design a second one. What still does not
-exist is the sweep the flag exempts a test *from*, and the sentence below is what comes out when
-that lands.
+**Both halves of *remembering* the decision have landed** — the host's in #234 (D33) and the tick's
+in #237. `list_kept_tests` and `set_kept_tests` sit on the panel's own transport over
+`~/.rover/kept-tests.json`; the Archive screen reads the whole set once per mount and every press is
+one call whose answer it draws (`pinned-tests.ts`), so a tick is there after a reload, in a
+different browser, and after a daemon restart, and `rover keep list` shows the same test. So there is
+a host method and a wired control: do not design a second of either. What still does not exist is
+the **sweep** the flag exempts a test *from*, and the sentence below is what comes out when that
+lands.
 
 **It is `Keep` and not `Archive`, and the sentence is what forced the rename.** The control read
 `Archive` first — on a screen called Archive, whose one job is browsing the archive — and the
@@ -2651,7 +2667,8 @@ candidates; the first two are what a form does with edits, and the third is heav
 checkbox.
 
 **A popover on hover says why it is there** — *Traces of this test will be removed once Rover
-starts sweeping the archive, unless you keep it.* — in the panel's own card treatment
+starts sweeping the archive, unless you keep it. The host remembers this tick, not the browser.* —
+in the panel's own card treatment
 (`rounded-lg border-2 border-outline-variant bg-surface`), 288px wide, opening down from the strip's
 right edge and over the card's body. A checkbox alone does not say what happens if you leave it
 alone; this sentence does. It is the input's `aria-describedby` as well as visible text, so there is
@@ -2683,11 +2700,29 @@ refuse, and which `archive-checkbox.test.tsx` asserts against so that a later ed
 plausible one. Naming the condition instead of a deadline still tells the reader why the box is
 there, and the day the host answers a window it is one string that changes.
 
-**Nothing enforces the tick, and it is not saved.** The state is React state on the Archive screen
-(`pinned-tests.ts`), deliberately **not** `localStorage` and deliberately not in the URL: retention
-is a fact about the *host's* disk, and a tick that survived a reload would look like a decision the
-host had been told about. *I ticked it on my laptop and the run was deleted anyway* is the failure
-this cannot have while it is only a control.
+**Nothing enforces the tick, and it is the host that remembers it.** The set is the host's own
+document — `~/.rover/kept-tests.json`, beside `users.json` and deliberately outside the artifact
+tree, because every sidecar in that tree is written once and never rewritten while this toggles
+(D33, `PROJECT.md` §10). The Archive screen holds a cache of the host's answer for the life of the
+mount and nothing else (`pinned-tests.ts`): deliberately **not** `localStorage` and deliberately not
+in the URL, because retention is a fact about the *host's* disk and a tick kept per browser would
+survive a reload while remaining invisible to the sweep it claims to prevent. *I ticked it on my
+laptop and the run was deleted anyway* is the failure that arrangement has and this one cannot.
+**And nothing enforces it**, which stays true and stays its own sentence: no sweep reads the file
+yet, so what the flag buys today is that the decision is recorded, attributed and readable from
+every client (`rover keep list`, D28).
+
+**No tick is drawn until the set has answered, and none when it cannot be read.** `list_kept_tests`
+still out, an `unreadable` store, and nothing coming back at all are one state on this screen and it
+draws **no checkbox at all** — the rule a group whose tests are not listed already obeys, applied to
+the set itself. An empty box for a test the panel cannot ask about says *this is not kept*, which is
+a claim about the operator's own decision that nothing has established.
+
+**A failed write leaves the tick exactly where it was.** Nothing is written optimistically: the
+press is one call and the panel draws the set the host answered with (R29), so a press the host
+refused, could not write, or never received changes nothing on the screen and leaves nothing to
+unwind. The host's cap being reached and a store it could not write are one outcome here, because
+both mean the same thing about the tick and this screen has nowhere to say either.
 
 **Where it is drawn, and the three levels are the whole list.** At the right end of the card's
 header strip, opposite the name — on a **test name's** card, on a **run's** `Run Details`, and on a
@@ -2697,8 +2732,9 @@ about one, so they carry no checkbox. `ContentsCard`'s header being a slot rathe
 (#133) is what makes this an argument to that slot instead of a fourth card component.
 
 **A group's tick is the same flag over all of its tests, and part-kept is a real state.** Pressing
-it keeps every test in that group; pressing it again, from kept, stops keeping them. It does **not**
-lock the tests underneath it — a reader may untick one afterwards, which is deliberately not
+it keeps every test in that group — in **one** request carrying every one of them, never one per
+test, which is the shape `set_kept_tests` takes an array for; pressing it again, from kept, stops
+keeping them. It does **not** lock the tests underneath it — a reader may untick one afterwards, which is deliberately not
 prevented — and the group's own tick then says *some* through the platform's own third state,
 `indeterminate`, drawn as a dash in a filled box. Neither of the two roundings was acceptable: *off*
 would say nothing in the group is kept, *on* would say all of it is. There is no *group is kept*
@@ -2708,7 +2744,8 @@ all — carries **no** tick, because there is nothing to keep and a tick there w
 about runs nobody has been shown.
 
 **Its sentence is the group's, not the test's with a word changed** — *Traces of every test in this
-group will be removed once Rover starts sweeping the archive, unless you keep them all.* A reader
+group will be removed once Rover starts sweeping the archive, unless you keep them all. The host
+remembers these ticks, not the browser.* A reader
 who saw the test's wording over a group's tick would take it for a control over the group as a
 thing, and press it expecting one flag rather than several.
 
@@ -3236,9 +3273,13 @@ under it saying what the number does.
 
 Rover has no retention mechanism: nothing sweeps the archive, no method takes either number and no
 answer carries one. So the draft lives in React state and ends with the mount
-(`panel/src/system/retention-settings.ts`), exactly as the `Keep` tick's set does and for the same
-reason — a number that survived a reload would look like a setting the host had been told about,
-and the operator would have configured nothing.
+(`panel/src/system/retention-settings.ts`) — a number that survived a reload would look like a
+setting the host had been told about, and the operator would have configured nothing.
+
+**The `Keep` tick was the other half of that pair and no longer is** (corrected in place, #237): it
+was React state for this exact reason until the host had somewhere to put it, and since #234 it has
+one, so a tick survives a reload and a daemon restart while these two numbers still do not. What
+separates them is a host method, which is the only thing that ever separated them.
 
 **A `Save` control is therefore not drawn, and not a disabled one either.** §11 already answers this
 for a destination that is not built: *there is nothing here to do yet, and a button would be the

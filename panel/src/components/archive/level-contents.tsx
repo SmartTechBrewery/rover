@@ -63,7 +63,9 @@ export function LevelContents({
 	readonly depth?: number;
 	/**
 	 * The `Keep` checkbox for this level, bound to the test it is about — **given only at a test
-	 * name**, and `undefined` at every other depth (`archive-checkbox.tsx`).
+	 * name**, and `undefined` at every other depth (`archive-checkbox.tsx`). It is `undefined` for
+	 * one further reason since #237: the kept set is the host's, and until it has answered there is
+	 * no tick to draw at any depth (`pinned-tests.ts`).
 	 *
 	 * A prop rather than a depth branch here, because the depth in this component decides *which
 	 * columns a row carries and nothing else*, and the screen already owns the depth arithmetic

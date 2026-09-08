@@ -395,6 +395,22 @@ describe('the run column', () => {
 	});
 
 	/*
+	 * **No tick at all until the kept set has answered** (#237). The flag is the host's, and while
+	 * `list_kept_tests` is out or unreadable an empty box would say *this test is not kept* about a
+	 * test the panel cannot ask about (`pinned-tests.ts`, `docs/DESIGN.md` §9). Everything else the
+	 * strip says about the run is unchanged, which is what makes the absence the tick's own.
+	 */
+	it('draws no tick at all while the kept set has not answered', () => {
+		const { container } = render(
+			<RunPanel description={DESCRIBED} device={DEVICE} pin={null} run={RUN} serial={NAMED} />,
+		);
+
+		expect(screen.queryAllByRole('checkbox')).toHaveLength(0);
+		expect(container.querySelector('h2')?.textContent).toBe('Run Details');
+		expect(screen.getByText('20260830T170501Z-issue-112-9f1c2ab4')).toBeDefined();
+	});
+
+	/*
 	 * **The sentence is the input's own description**, shown on hover and announced regardless — one
 	 * sentence, so there is no tooltip and no accessible copy of it to drift apart.
 	 *

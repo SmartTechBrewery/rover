@@ -1,0 +1,32 @@
+{
+  "press": {
+    "tests": [
+      { "project": "checkout-app", "testName": "login-flow" },
+      { "project": "checkout-app", "testName": "basket" }
+    ],
+    "kept": true,
+    "actor": "karolina"
+  },
+  "list": [
+    {
+      "outcome": "listed",
+      "tests": [
+        { "project": "checkout-app", "testName": "login-flow" },
+        { "project": "payments-web", "testName": "login-flow" }
+      ]
+    },
+    { "outcome": "unreadable" }
+  ],
+  "set": [
+    {
+      "outcome": "set",
+      "tests": [
+        { "project": "checkout-app", "testName": "basket" },
+        { "project": "checkout-app", "testName": "login-flow" },
+        { "project": "payments-web", "testName": "login-flow" }
+      ]
+    },
+    { "outcome": "refused", "reason": "too-many" },
+    { "outcome": "unwritable" }
+  ]
+}

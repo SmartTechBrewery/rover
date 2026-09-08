@@ -82,8 +82,14 @@ export function RunPanel({
 	 * One flag per test, so this is the same tick as the one on that test's own card and lighting
 	 * either lights both (`pinned-tests.ts`). A run is one lease's output; what a reader keeps is
 	 * the test.
+	 *
+	 * **`null` is the kept set not having answered**, and it is the only reason this card draws no
+	 * tick: a run is always about a test, so — unlike `level-contents.tsx`, whose `pin` is absent at
+	 * every depth that is not about one — there is no *this card carries no control* here. The set
+	 * is the host's, and while it is out or unreadable an empty box would say *this test is not
+	 * kept* about a test the panel cannot ask about (`docs/DESIGN.md` §9).
 	 */
-	readonly pin: PinState;
+	readonly pin: PinState | null;
 }) {
 	const name = run.at(-1) ?? '';
 	const identity = decomposeRunName(name);
@@ -96,7 +102,7 @@ export function RunPanel({
 				   the two cards that carry this checkbox. */
 				<div className="flex items-center justify-between gap-4">
 					<CardHeading>Run Details</CardHeading>
-					<ArchiveCheckbox pin={pin} />
+					{pin === null ? null : <ArchiveCheckbox pin={pin} />}
 				</div>
 			}
 		>
