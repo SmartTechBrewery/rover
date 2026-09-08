@@ -20,6 +20,12 @@ import { Sidebar } from './sidebar.js';
  * `min-w-0` on `<main>` is the other half of §4's bug: without it the content box cannot
  * shrink below its contents' intrinsic width, and a grid inside it loses tracks.
  * `p-(--margin-desktop)` gives §4's equal margins in one declaration.
+ *
+ * **`<main>` is what measures a screen** — the header inside it and the content row below it alike
+ * — so the two share a right edge by construction (§4, #240). The padding here is the only measure
+ * either of them gets; a maximum on one and not on the other is what #240 was, and
+ * `tests/unit/panel/content-ends-where-the-header-does.test.ts` is the gate over the screens. The
+ * Devices grid's three-column ceiling is the one deliberate exception, argued in §4.
  */
 export function AppShell() {
 	return (

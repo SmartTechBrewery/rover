@@ -63,6 +63,22 @@ describe('AppShell', () => {
 		expect(main.className).toContain('min-w-0');
 	});
 
+	// docs/DESIGN.md §4: `<main>` is what measures a screen — the header inside it and the content
+	// row below it — so the two end at the same place (#240). A maximum on either is what that bug
+	// was, and jsdom lays nothing out, so this is the mechanism rather than a measured right edge.
+	it('measures the content itself, so the header and the content share a right edge', () => {
+		const container = renderShell();
+
+		const main = container.querySelector('main') as HTMLElement;
+		expect(main.className).not.toMatch(/\bmax-w-/);
+		expect(main.className).toContain('md:p-(--margin-desktop)');
+
+		// `PageHeader` carries no class list at all, so this is read defensively rather than
+		// asserted as a string: what matters is that it takes no measure of its own either.
+		const header = container.querySelector('header') as HTMLElement;
+		expect(header.className ?? '').not.toMatch(/\bmax-w-/);
+	});
+
 	// docs/DESIGN.md §5: the scanline is chrome texture and must never overlay a region that
 	// will render a screenshot, a video frame or a log dump — which is what the content area
 	// is for.
