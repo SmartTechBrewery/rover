@@ -109,6 +109,17 @@ describe('what is registered on this host', () => {
 		expect(screen.getByText('rover-sandbox')).toBeDefined();
 	});
 
+	// The list is the cards' one parent, so it is reached through a card rather than by class —
+	// `devices.test.tsx`'s trick. It takes no measure of its own, so it ends where the header
+	// above it ends (§4, #240).
+	it('lets the list take the content box, so it ends where the header does', async () => {
+		const { container } = await showing(THREE);
+
+		const list = container.querySelector('article')?.parentElement as HTMLElement;
+		expect(list.className).toContain('gap-(--gutter)');
+		expect(list.className).not.toMatch(/\bmax-w-/);
+	});
+
 	it('carries the identifier, the apps, the services and both hooks for a full registration', async () => {
 		await showing(THREE);
 

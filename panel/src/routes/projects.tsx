@@ -75,9 +75,14 @@ function Content({ state }: { readonly state: RegisteredProjects }) {
 	 * a registration that will not parse sorts among the others rather than being grouped last —
 	 * and `list_projects` takes no parameter, so there is no other ordering available and no sort
 	 * control to build.
+	 *
+	 * **The list carries no maximum of its own** (§4, #240), so it ends where the header above it
+	 * ends. A registration's card is therefore as wide as the content box — which is what an admin
+	 * list is — and its body is a two-column `<dl>` (§10, *As built* #157) rather than one stretched
+	 * line, so the width goes to the value columns instead of making a single string very long.
 	 */
 	return (
-		<div className="mt-8 flex max-w-(--container-max) flex-col gap-(--gutter)">
+		<div className="mt-8 flex flex-col gap-(--gutter)">
 			{state.projects.map((project) => (
 				<ProjectCard key={project.project} project={project} />
 			))}

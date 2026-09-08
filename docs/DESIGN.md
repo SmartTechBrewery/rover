@@ -229,7 +229,14 @@ here.
   cards already come out near 354 px — and only bites above it.
   - `--container-max` (1280 px) is *not* this number and must not be repurposed as it: 1260 fits
     inside 1280, so it permits the fourth column — and it is an Analog Horizon token whose value is
-    gated against the design fixture, so it is not a free parameter either.
+    gated against the design fixture, so it is not a free parameter either. **Since #240 it is
+    applied to no content row at all.** It was the cap on the Archive's tree-plus-card row and on
+    the Projects list, and taking it off both is what gave those screens the right edge below. It
+    stays declared in `tokens.css` at its fixture value because the token file is where every
+    Analog Horizon value has to reach — `tokens-are-the-source-of-truth.test.ts` fails on a token
+    that never got there, and on a re-valued one. **A token the panel defines and no longer applies
+    is the correct end state, not something for a later cleanup to tidy away**, and re-applying it
+    to a row is what the gate named below fails on.
   - `minmax(300px, 380px)` was considered and set aside. It bounds the track directly but never
     shares out the leftover space, leaving a ragged right edge at every width.
   - **This is the grid only.** *No devices attached*, the `stale` banner and *No view* keep the
@@ -237,6 +244,21 @@ here.
 - **Equal margins.** The gap between the sidebar's border and the content equals the gap between
   the content and the page edge. The breadcrumb, the page title and the first card share one left
   edge.
+- **One right edge, and it is the shell's** (#240). A screen's content row takes the width `<main>`
+  gives it — the `--margin-desktop` a side above and nothing else — so the header's right edge and
+  the content's are the same line at every window width. Until #240 they were not, and could not
+  have agreed by construction: `PageHeader` has no measure of its own and fills the content box,
+  while the cap lived on each screen's own row, so the two widths were never written in one place.
+  The arithmetic of the mismatch, from the tokens: a 1920 px window gives a content box of
+  `1920 − 256 − 2 × 40 = 1584 px` and the Archive's row stopped at `--container-max`, 1280 px,
+  leaving a **304 px** strip the header used and the content did not; on a 2560 px monitor it was
+  **944 px**. What noticed it was the `All` / `Testing groups` toggle sitting in the header at the
+  edge of that strip, over content that stopped well short of it. **The Devices grid is the one
+  deliberate exception and stays narrower than its own header**, because
+  `calc(3 × 380px + 2 × gutter)` is the *at most three columns, and a card is never full-width*
+  decision two bullets above and nothing in #240 reverses it. If a measure is wanted anywhere else
+  it belongs on **prose** — `max-w-prose`, which the Profile screen's paragraphs carry — and never
+  on a row holding a tree, a grid or a table.
 - Cards must survive a realistic host. Three devices look fine; **eight phones attached is an
   ordinary machine**, and tall cards scroll badly at that count.
 
@@ -247,6 +269,16 @@ above: without it a flex item cannot shrink below its contents' intrinsic width,
 it loses tracks for reasons that look nothing like the sidebar. `app-shell.test.tsx` asserts both —
 that the sidebar's class list contains none of `fixed`, `sticky`, `absolute`, and that `<main>`
 carries no horizontal margin.
+
+*As built* (#240): `app-shell.test.tsx` asserts `<main>` carries **no maximum** either, and that the
+header inside it carries none — the two halves of the right-edge rule in the one place they meet.
+Over the screens it is
+`tests/unit/panel/content-ends-where-the-header-does.test.ts`, which fails on any `max-w-*` in
+`panel/src/routes/` outside exactly two exceptions — `max-w-prose`, and the Devices grid's column
+ceiling in `devices.tsx` alone — and asserts each of the two is still reached by something, so a
+stale exception cannot sit there green. Its second half is `--container-max`: still declared in
+`tokens.css`, applied nowhere in `panel/src`. Its limit is the family's (`panel-source-scan.ts`) —
+a content row moved into a component outside `panel/src/routes/` would escape the first half.
 
 The grid itself is one class list on the Devices screen (#126):
 `grid-cols-[repeat(auto-fill,minmax(300px,1fr))] max-w-[calc(3*380px+2*var(--gutter))]`, and
@@ -973,9 +1005,11 @@ design's `rounded` is Tailwind v4's `rounded-sm` (§1's radius rename).
 The header is `PageHeader`'s two rows unchanged (§3): the breadcrumb, then the describing line on the
 left and **one badge** on the right over the `border-b-2` rule — with the view toggle beside that
 badge since #165, below. The content area is
-`max-w-(--container-max)`, a tree `<aside>` beside a contents `<section>` that **share the row 0.4 /
-0.6** (#172, below), both `bg-surface-container border-2 border-outline-variant rounded-lg` with a
-`bg-surface-container-high` header strip.
+**the content box's full width** — it carried `max-w-(--container-max)` until #240, and takes the
+width `<main>` gives it since (§4) — holding a tree `<aside>` beside a contents `<section>` that
+**share the row 0.4 / 0.6** (#172, below), both
+`bg-surface-container border-2 border-outline-variant rounded-lg` with a `bg-surface-container-high`
+header strip.
 
 **Every state below is a state of this one screen**, exactly as §7 requires of the Devices screen.
 The breadcrumb, the describing line and the header row's shape are the same in all of them; the
@@ -1884,7 +1918,9 @@ browser.
   rather than `break-all` — and a *shorter* indent for the searched tree would be a second tree
   idiom, invented at the keyboard, for a column the approved markup already settled. **#172 bought
   this room rather than removing the cost**: the column is 0.4 of the row instead of 320px, so it is
-  370px at `xl` and 504px at `--container-max`, and below `xl` the tree has the whole width.
+  370px at `xl` — and it keeps growing with the window, because since #240 the row has no
+  cap to stop at (§4): on a 1920px window the row is the whole 1584px content box and the tree is
+  **≈626px** (`0.4 × 1584 − 8`). Below `xl` the tree has the whole width.
 - **The field is absent in every state that draws no tree** — and that needs saying nowhere in the
   code: it is part of the tree card, so it goes wherever the card goes. It is **present with an artifact open** since #160, because the
   tree is. The *state* lives above the card (`panel/src/routes/archive.tsx`), where it outlives the
@@ -2369,8 +2405,10 @@ A **floor under the fraction** was the alternative and was rejected: a `min-w-[3
 would hold between `lg` and 1156px and the split in that band would once again be whatever the
 window happened to make it — the property this section exists to forbid, reintroduced in the one
 place it would be least expected. Measured after the change: 40.00% / 60.00% at 1280, 1440, 1600,
-1728 and 2560, with no horizontal overflow at any of them, and 504px / 756px once the row reaches
-`--container-max`.
+1728 and 2560, with no horizontal overflow at any of them. The 504px / 756px measured beside them
+was the row at `--container-max`, **a width it no longer stops at** (§4, #240, edited in place): the
+fractions are unchanged and the row they are fractions of is now the whole content box, so the same
+percentages fall on a larger number at every window above 1280px.
 
 ***The tree is not shown while a file is open* is reversed** (#160, edited in place). The rule was
 the answer to a real constraint rather than a preference: the run's column stood beside the preview,
@@ -2741,6 +2779,13 @@ and the header carries **one badge**, `4 registered`, which **goes rather than r
 **One card per row, never a grid.** A registration is a row of facts about one project rather than a
 tile, and unlike the Devices screen there is no second thing for a card to sit beside — no hardware
 to compare at a glance, and nothing that changes under the reader.
+
+**So a card is as wide as the content box** (§4, #240; it stopped at `--container-max` until then).
+That is what an admin list is, and the width goes somewhere: the body is a two-across `<dl>`
+(*As built* below, deviation 2), so a wide window gives the value columns room rather than turning
+one identifier into a very long line. The card's own text wraps on whole words and is never
+truncated, which is the property that holds at any width. If a measure is ever wanted here it is
+`max-w-prose` on prose inside a card, never the row's cap back.
 
 **The header strip carries the label `PROJECT` and then the identifier.** The device card's header
 needs no label because a phone model is self-evidently one; `checkout-web` on its own reads as a

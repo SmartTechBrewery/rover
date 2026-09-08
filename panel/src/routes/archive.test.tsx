@@ -1130,6 +1130,8 @@ describe('an artifact open inside a run', () => {
 		expect(row.className).toContain('gap-(--gutter)');
 		// The stacked arrangement is what every width below `xl` gets, `lg` included now.
 		expect(row.className).not.toContain('lg:');
+		// And the row takes no measure of its own, so it ends where the header does (§4, #240).
+		expect(row.className).not.toMatch(/\bmax-w-/);
 
 		const columns = container.querySelectorAll('div.xl\\:flex-row > section');
 		expect(columns).toHaveLength(1);

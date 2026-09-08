@@ -586,6 +586,12 @@ function ReadingThisAddress({ path }: { readonly path: readonly string[] }) {
  * shorthand carries a `0%` basis of its own; `.row > section` outranks a plain utility class, so
  * the fraction wins wherever the two meet, whatever order the stylesheet emits them in.
  *
+ * **The row carries no maximum of its own** (§4, #240). It is as wide as the content box `<main>`
+ * gives it, so its right edge and the header's are the same line at every window width; until #240
+ * it stopped at the container measure and left a strip the header used and the content did not. The
+ * fractions below are unchanged — they are fractions of *whatever the row is*, and what grew is the
+ * row they divide.
+ *
  * **And the row goes horizontal at `xl`, not `lg`** — the fraction and the breakpoint are one
  * decision, recorded in §9. 320px was a constant the row could afford from `lg` up; a *fraction*
  * cannot be, because at `lg` the 256px sidebar and the desktop margins leave a 688px row, of which
@@ -597,7 +603,7 @@ function ReadingThisAddress({ path }: { readonly path: readonly string[] }) {
  */
 function Columns({ children }: { readonly children: ReactNode }) {
 	return (
-		<div className="mt-8 flex max-w-(--container-max) flex-col gap-(--gutter) xl:flex-row xl:items-stretch xl:[&>aside]:basis-2/5 xl:[&>section]:basis-3/5">
+		<div className="mt-8 flex flex-col gap-(--gutter) xl:flex-row xl:items-stretch xl:[&>aside]:basis-2/5 xl:[&>section]:basis-3/5">
 			{children}
 		</div>
 	);
