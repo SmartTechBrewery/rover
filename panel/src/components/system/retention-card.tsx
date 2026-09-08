@@ -67,7 +67,8 @@ export function RetentionCard({ draft }: { readonly draft: RetentionDraft }) {
 				 * **The true half of what this used to say** (#238). It read *Nothing is stored yet. Rover
 				 * has no retention mechanism, so these two numbers are not saved anywhere and nothing on
 				 * this host is sweeping the archive.* The host has a retention mechanism now — it reads
-				 * its own two numbers and sweeps when an operator asks — so the second clause went and
+				 * its own two numbers, sweeps by the disk budget after every lease ends by itself (#245)
+				 * and runs the age limit when an operator asks — so the second clause went and
 				 * the first stayed, because it is the one that explains the missing `Save`. Softening it
 				 * into *may be swept* was refused: a screen that hedges about whether the host deletes an
 				 * operator's runs is worse than one that is out of date.

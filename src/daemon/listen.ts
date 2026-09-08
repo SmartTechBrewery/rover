@@ -33,7 +33,7 @@ import { createIpcServer } from '../ipc/server.js';
 import { type ArtifactArchive, createArtifactArchive } from './archive.js';
 import { type ArchiveFileReader, createArchiveFileReader } from './archive-file.js';
 import type { RetentionPolicy } from './archive-retention.js';
-import { type ArchiveSweeper, createArchiveSweeper } from './archive-sweep.js';
+import { type ArchiveSweeper, createArchiveSweeper, sweepAfterLease } from './archive-sweep.js';
 import { type HttpListener, startHttpListener } from './http-listen.js';
 import { createDeviceInventory, type DeviceInventory } from './inventory.js';
 import { createKeptTestsHandlers } from './kept-tests-handlers.js';
@@ -255,8 +255,11 @@ export type StartResult = RunningDaemon | DaemonAlreadyRunning;
  * (`./sweep-handlers.ts`, `./archive-sweep.ts`), the retention policy's one surface. It reads the
  * same `artifactsRoot` the three listings read and the same `keptTestsPath` the `Keep` rows read,
  * so what a sweep takes, what a listing shows and what the operator exempted can never be three
- * different trees. **Nothing here schedules it**: the row is answerable and no timer, lease hook
- * or start-up pass calls it, which is why the sweeper is constructed and then simply held.
+ * different trees. **This row is not the only caller of that sweeper any more**: the same instance
+ * is asked for a **budget-only** sweep at the tail of every lease's end (`startDaemon` below,
+ * `./archive-sweep.ts`'s `sweepAfterLease`), which is why it is one sweeper and not one per
+ * trigger — the serialisation that keeps two sweeps off one tree is keyed by the root and shared.
+ * **No timer schedules either of them**, and the age bound still has no trigger but this row.
  *
  * `artifactsRoot` and `projectsRoot` are parameters rather than things read off `archive` or off
  * a resolver: the archive writes the tree and those two modules read it, and widening the
@@ -321,6 +324,12 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartRes
 	// behind here either — and a slot is host state that dies with the host (D6): after a
 	// restart there are no leases, so there are no slots to reclaim from a predecessor.
 	const slots = createSlotAllocator();
+	// Declared here and assigned below, which is the **construction order** rather than an
+	// optional dependency: the restorer must exist before the lease store (the store's end hook
+	// calls into it) and the sweeper must exist after it (it asks the store which runs are live).
+	// The one place they meet is `onRestored`, which resolves this at call time — a restoration
+	// runs only for a lease that was granted, so by then both are built. See `sweepAfterLease`.
+	let sweeper: ArchiveSweeper | undefined;
 	// Constructed before the store, because the store's end hook calls into it. It starts
 	// nothing either: a restoration only ever begins when a lease ends, and a process that
 	// never granted one has nothing to undo.
@@ -333,7 +342,15 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartRes
 		// The lease's ports go back into the pool here rather than in `onLeaseEnded` below,
 		// because the teardown that just ran was the thing using them — see
 		// `DeviceRestorerOptions.onRestored`.
-		onRestored: (lease) => slots.release(lease.slot),
+		onRestored: (lease) => {
+			slots.release(lease.slot);
+			// And the disk budget, on the same tail and for the same reason the slot is here:
+			// this is the far side of a lease's end, released and expired alike (D9), where the
+			// caller is already gone and the run that just finished is deletable like any other.
+			// `void`, never awaited — nothing on a lease's end path waits for a walk of the
+			// archive, and a sweep that fails leaves the release successful and says so.
+			void sweepAfterLease(sweeper, lease);
+		},
 	});
 	// Built before the store for the restorer's reason: the store's end hook calls into it. It
 	// creates no directory until a verb call actually produces bytes, so a loser of the bind
@@ -385,9 +402,9 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartRes
 	// runs are being written into right now — as a callback, so the question is answered at the
 	// moment of the walk rather than at construction. It touches no disk here, not even to look
 	// for the archive root, so a loser of the bind leaves nothing behind here either — and
-	// **nothing about this starts a timer**: the only trigger in this phase is a `sweep_archive`
-	// call somebody made.
-	const sweeper = createArchiveSweeper({
+	// **nothing about this starts a timer**: the two triggers are a `sweep_archive` call somebody
+	// made and the budget-only sweep on the tail of every lease's end, wired at the restorer above.
+	sweeper = createArchiveSweeper({
 		root: options.artifactsRoot,
 		keptTestsPath: options.keptTestsPath,
 		retention: options.retention,

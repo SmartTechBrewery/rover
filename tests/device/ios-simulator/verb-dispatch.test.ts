@@ -75,6 +75,10 @@ async function startHost(): Promise<IpcClient> {
 		artifactsRoot: temp.artifactsRoot,
 		projectsRoot: temp.projectsRoot,
 		keptTestsPath: temp.keptTestsPath,
+		// The temp socket's own policy — the shipped defaults over a `mkdtemp` archive, never a
+		// budget inherited from whoever is running this. A required field for that reason, and
+		// this suite is the one the `unit` project does not typecheck for free.
+		retention: temp.retention,
 	});
 	if (!daemon.started) {
 		throw new Error('Another daemon holds the temp socket — the test cannot proceed');

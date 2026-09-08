@@ -182,14 +182,16 @@ export function ArchiveCheckbox({
  *
  * **`once Rover starts sweeping the archive` is standing in for a number**, and the substitution is
  * the only thing that changes when a host answer carries the window: *…will be removed in 14 days,
- * unless…*. The *policy* landed in #238 and the sentence is still the honest one, because what it
- * stands in for has not: **nothing on the host sweeps unattended** — `rover sweep` is the whole of
- * the trigger (`PROJECT.md` §9.4) — and `sweep_archive` deliberately carries neither of the host's
- * two settings, so no answer this panel can make carries a retention figure and one written here
- * would be the panel inventing data the host never sent (`ai/RULES.md` §2, and this screen's own
- * *nothing is invented* rule). Naming the condition still tells a reader why the box is there,
- * which is what the sentence is for. It is the *scheduling* phases that make the digits writable,
- * not this one.
+ * unless…*. The *policy* landed in #238; the sentence is unchanged and one clause of the
+ * reasoning under it is not. **The host does sweep unattended now** — by the disk budget, after
+ * every lease ends (D37, #245) — so *once Rover starts sweeping* has stopped being a promise
+ * about the future for that bound, while the *age* limit still waits for `rover sweep`. What has
+ * not changed is why the digits are absent, which is why the sentence is worded this way at all:
+ * `sweep_archive` deliberately carries neither of the host's two settings, so no answer this
+ * panel can make carries a retention figure and one written here would be the panel inventing
+ * data the host never sent (`ai/RULES.md` §2, and this screen's own *nothing is invented* rule).
+ * Naming the condition still tells a reader why the box is there, which is what the sentence is
+ * for. What makes the digits writable is a host answer carrying the window, not a trigger.
  *
  * **The second half says where the decision is held, and it is there because the answer changed**
  * (D33, #237). The tick was React state and forgot on reload, so the sentence could only promise

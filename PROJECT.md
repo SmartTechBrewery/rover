@@ -118,6 +118,7 @@ lends what is physically attached to it (D18).
 | D34 | **The unit of deletion is one run directory, taken whole, and the oldest go first by the code-unit order of its name** | A retention policy has to decide what a *thing* is before it can delete one, and every finer unit is wrong. Deleting a file, or a `screenshots/` folder, leaves a run whose sidecars no longer describe what is beside them — in a tree whose whole claim is that it is what past leases wrote (D24). Deleting a level *above* the run would take a test or a project, which is a decision about the operator's intent rather than about disk. So the unit is `<project>/<test_name>/<timestamp>-<owner>-<hash>` with its `<serial>` subtree, and a test name or project left holding nothing afterwards is removed as scaffolding; the root never is. *Oldest* is the run directory's own name compared as **text**, never `localeCompare` and never a `Date` parsed out of it: the name leads with a fixed-width UTC basic-format timestamp precisely so code-unit order *is* chronological order (§10), the cutoff instant is formatted by the same function that named the run, and a locale-dependent fold would make one host sweep differently from another — `list_archive`'s own reason for refusing the same call. **A test's age is the age of its newest run**, so a test with a run from yesterday is not thirty days old whatever else it holds, and an old test goes whole rather than losing its oldest runs: the two most recent runs under one test name are the before/after pair `test_name`'s non-uniqueness exists to give | 2026-09-08 |
 | D35 | **A kept test (D33) and a run whose lease is live are exempt from both retention bounds, absolutely** | The `Keep` flag shipped ahead of the sweep precisely so the sweep could never delete a test somebody had every reason to believe was safe (D33), and an exemption that yielded under disk pressure would be no exemption. A live lease is the same rule in the other direction: that run directory is being written into *right now*, so deleting it would destroy an in-flight run's artifacts — and the exemption is matched by **path**, built by the same `leaseRunDirectory` the writer files under, so the two cannot drift. The kept-tests store is re-read on every sweep and cached nowhere (D6), and a store that will not parse **abandons the sweep and deletes nothing at all**: the list of what the operator asked to keep is exactly what a deletion may not proceed without | 2026-09-08 |
 | D36 | **An archive still over budget with only kept or live runs left is a refusal with one log line, never a kept test deleted** | Something has to give when the two rules collide, and it is not the exemption. Taking a kept test to satisfy a number would make D35 conditional, and the number is a default somebody may never have looked at while the tick is a decision they made deliberately. So the sweep stops, answers `stillOverBudget`, and writes one line on the host's own stderr saying how far over and against what — D28's model: a record on the host, nothing extra on the wire. The archive can therefore sit over its budget indefinitely, and the remedies are all the operator's: untick a test, raise the budget, or wait for a lease to end. The alternative — a budget that is always met — would be a host that quietly overrode the one instruction it was given about somebody else's data | 2026-09-08 |
+| D37 | **The disk budget is enforced after every lease ends — released and expired alike — and the age limit is not** | A run finishing is the only moment this archive can *newly* cross its size: nothing else on the host writes into the tree, so a budget checked at any other moment is checked when nothing has changed. It therefore hangs off the path D9 already runs, which is what makes it a teardown rather than a happy path — an expiry restores a device with no caller left to ask, and it sweeps for the same reason. It is deliberately **behind** the release rather than inside it: `release_device` answers as soon as the store has forgotten the lease, the restoration is queued after that and the sweep after *that*, so nothing an agent is waiting on ever waits for a walk of the archive — and a sweep that fails leaves the release successful, with one line on the host's own log saying the archive is a sweep behind. The **age** bound is deliberately left out of this trigger: a lease ending makes nothing older, so enforcing it here would be a rule fired by an event that cannot change its answer. It needs a clock, and that is its own change. The accepted cost is one walk of the whole tree per lease, and it was **measured rather than assumed** (§6): ~150 ms for a full archive at the default 1 GiB budget and ~610 ms for one four times over it, linear in the file count and off the answer's path in both cases. So **no cached total was built** — the measurement does not call for one, and D6 binds it in any case: a total is re-derived, never trusted from disk | 2026-09-08 |
 
 ---
 
@@ -1403,6 +1404,31 @@ implementing D32:
   machine is talking to. `adb devices` would not do — it starts a server as a side effect, which is
   also why `scripts/check-adb.mjs` executes nothing at all.
 
+Measured on macOS 26.6.2 (Darwin 25.6.0, arm64, Apple M3 Pro, APFS on the internal SSD) with
+Node v25.2.1, 2026-09-08, while putting the disk budget on the end of every lease (D37, #245):
+
+- **One walk of a full archive costs about 150 ms, and the cost is in the *file count* rather
+  than in the bytes.** A tree of the shape §10 describes — 540 runs across 3 projects, 5220
+  files, 956 MiB, which is a host sitting at the default 1 GiB budget — walked in **145–155 ms**
+  over five consecutive walks. A neglected one four times over that budget — 2160 runs, 20880
+  files, 3825 MiB — took **609–686 ms**. That is ~29 µs per file in both, so the walk is linear
+  in how many files the archive holds and flat in how large they are: `sizeOfTree` `stat`s every
+  file and reads none of them, and doubling a recording's length costs nothing.
+- **What it was measured with, and the two ways it is generous to itself.** The shipping
+  `createArchiveSweeper` doing a `dryRun` walk with the bounds set far above the tree, so what is
+  timed is the walk and nothing else. The archive was **generated**, because no host here had one
+  that had accumulated naturally — the file counts and the shape are §10's, the contents are
+  zeroes. And the page cache was **warm**: a first walk after a reboot will cost more than this,
+  and the number to carry forward is the shape (linear in files, tens of µs each) rather than the
+  millisecond.
+- **The conclusion, which is the reason the measurement was asked for:** at those numbers a walk
+  on the release path needs no cached total. It is off the answer's path already — the sweep is
+  `void`-ed behind a release that has already been answered — so the 150 ms is not latency an
+  agent waits on, and even the neglected-archive case is I/O the host absorbs between one lease
+  and the next. **Nothing was cached**, and had the numbers said otherwise the answer would still
+  not have been a cache built here: D6 binds one (a total is re-derived at start, never trusted
+  from disk), which makes it its own change rather than a line in this one.
+
 ---
 
 ## 7. Scope
@@ -1648,15 +1674,21 @@ byte-less form alone, leaving `push_file` and `pull_file` out.
   the ordering), D35 (the two absolute exemptions) and D36 (an unmeetable budget is a refusal, never
   a kept test deleted). The mechanism is `src/daemon/archive-sweep.ts`, reachable as `sweep_archive`
   and `rover sweep --dry-run|--actor`.
-  **What is still open is the third thing, and it is the one this row is named after: who runs the
-  prune unattended.** Nothing schedules the sweep — no timer, no check when a lease ends, no pass
-  at start-up — so an operator typing the command is the whole of the trigger, and on a host nobody
-  sweeps the archive still grows without bound. That is deliberate for one phase and not a
-  destination: pointing a deletion routine at a real archive for the first time is survivable only
-  while a human is asking and can ask what it *would* do first. Phases 2 and 3 close it — the disk
-  budget after every lease, and the age limit at midnight — and **this row moves into the backlog
-  proper (§9.3) only when the last of them lands.** Saying so here is what keeps it honest in the
-  meantime: the policy is written down and enforceable, and nobody is enforcing it.
+  **Status, 2026-09-08 (#245, phase 2 of three): half of the third thing is now settled — the
+  *budget* runs unattended.** Every lease that ends, released or expired, is followed by a
+  budget-only sweep on the path D9 already runs (D37, `sweepAfterLease` in
+  `src/daemon/archive-sweep.ts`, wired at the restorer in `src/daemon/listen.ts`). So a host
+  nobody ever types a command on no longer grows past its disk budget, which is what this row was
+  named after. It is behind the release rather than in it, so no agent waits on the walk, and a
+  sweep that fails leaves the release successful and says so on the host's log. The walk's cost is
+  in §6 and was measured rather than assumed, because it is now paid on a path an agent is waiting
+  near: ~150 ms for a full archive at the default budget, and no cached total was built.
+  **What is still open is the other half: the age limit, which still only runs when asked.**
+  Nothing here is a clock — no timer, no midnight pass, no start-up pass — so a test on a host
+  inside its budget can sit there past thirty days until an operator runs `rover sweep`. Phase 3
+  closes it, and **this row moves into the backlog proper (§9.3) only when it lands.** Saying so
+  here is what keeps it honest in the meantime: half the policy now enforces itself, and half of
+  it is still waiting for somebody to ask.
 - **Multi-host addressing (R23), dropped.** The deployment this is built for has exactly one
   machine with hardware, so a device handle stays a bare serial and a client never aggregates more
   than one host (D18, revised 2026-08-29). If devices ever end up spread across more than one
@@ -1936,10 +1968,12 @@ host-local effect of the same call, never a substitute for it and never a path h
   ever deleted while it still holds a run. `ENOTEMPTY` is the ordinary case rather than a failure:
   a lease may have filed a new run between the walk and the cleanup.
 
-  **And nothing runs any of it on its own.** `rover sweep` and `sweep_archive` are the whole of the
-  trigger in this phase — no timer, no lease hook, no start-up pass — so on a host nobody sweeps,
-  this tree still grows without bound. Who runs the prune unattended is the one part of §9.4 that
-  is still open.
+  **The disk budget runs on its own; the age limit does not.** Every lease that ends — released
+  and expired alike — is followed by a budget-only sweep of this tree (D37, #245), so a host
+  nobody types a command on no longer grows past `ROVER_ARTIFACTS_BUDGET_MB`. What has no trigger
+  but `rover sweep` and `sweep_archive` is the **age** bound: no timer, no midnight pass, no
+  start-up pass, so a tree inside its budget can hold a test past `ROVER_ARTIFACTS_MAX_AGE_DAYS`
+  until somebody asks. That half is the one part of §9.4 that is still open.
 
   **What this bullet said before, and why it was right at the time.** *Retention is undecided —
   without one, this grows without bound on machines that usually have the least disk to spare, and

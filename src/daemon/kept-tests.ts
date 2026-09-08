@@ -27,8 +27,10 @@
  * does honours.** `./archive-sweep.ts` re-reads this file on every sweep, cached nowhere (above),
  * and a test named in it is exempt from both retention bounds absolutely, not even taken to bring
  * the archive under its budget (D35, D36). A store that will not parse therefore **abandons that
- * sweep and deletes nothing at all**, which is what the throw above buys. What is still open is
- * who runs the prune unattended (`PROJECT.md` §9.4): `rover sweep` is the only trigger.
+ * sweep and deletes nothing at all**, which is what the throw above buys — and that now holds for
+ * a sweep **nobody asked for**, since the disk budget is enforced after every lease ends (D37):
+ * this file is read on a path no operator is watching, so its refusal has to be as absolute there.
+ * What is still open is the *age* limit running unattended (`PROJECT.md` §9.4).
  * {@link MAX_KEPT_TESTS} bounds the *document*, not the archive.
  */
 
