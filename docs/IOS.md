@@ -79,8 +79,8 @@ startup of ~60–90 ms that a Node backend talking gRPC directly would not pay.
 | `launchApp` | `simctl launch <bundle>` | 0.35 s, returns pid | ✅ |
 | `stopApp` | `simctl terminate <bundle>` | 0.12 s | ✅ |
 | `clearAppData` | `simctl uninstall` + `install` of a staged copy | 0.5–0.79 s | ⚠️ no `pm clear` equivalent |
-| `screenshot` | `simctl io <d> screenshot` | 0.14–0.24 s, 246 KB PNG | ✅ |
-| `readLogs` | `simctl spawn <d> log show --style ndjson --predicate …` | 0.95 s, 268 entries | ⚠️ must be predicate-scoped |
+| `screenshot` | `simctl io <d> screenshot --type png --mask ignored <path>` | 0.14–0.29 s, 246 KB–2.8 MB PNG | ✅ to a **file**, never stdout |
+| `readLogs` | `simctl spawn <d> log show --style ndjson --info --debug --last <30s→2m→5m>` | 0.9–1.8 s per width, 2,053–34,819 entries; 113.6 MB in `30s` a minute past boot | ⚠️ must be scoped in the query; widens until the cap binds or a width outgrows the 64 MB buffer |
 | `pushFile` | the device's `dataPath` + a host copy | 0.10 s, 64 KB | ✅ storage **is** a host path |
 | `pullFile` | same | 0.11 s, byte-identical | ✅ |
 
@@ -159,6 +159,60 @@ clearAppData 0.51 s           the pushed file is gone, the app still launches
   `~/Library/Logs/CoreSimulator/<udid>`. That is why the confinement in
   `src/backends/ios-simulator/containers.ts` is *lexical* rather than a `realpath` comparison — the
   stricter rule would refuse an ordinary device path.
+
+### What phase 4 added to the rows above, measured while building them
+
+The two reads, on the same **second** bench — macOS 26.6.2 (25G83) / Xcode 26.4.1 (17E202),
+2026-09-08, against the `iPhone 17` the host already had booted — and driven **through
+`IosSimulatorDeviceBackend` rather than through `simctl` by hand** wherever the number is about
+this repository's code rather than about the tool:
+
+```
+screenshot   0.22–0.29 s bare, 0.37–0.49 s through the backend (the state check in front of it)
+             2.83 MB PNG, 1206×2622 — exactly deviceInfo()'s widthPx/heightPx
+screenshot   on a Shutdown device: 60.68 s to fail bare, 0.12 s to refuse through the backend
+readLogs     0.9–1.4 s, 3,384 entries in a 30 s window; on a Shutdown device it fails in 0.15 s
+readLogs     the widths, re-measured for the widening (#239 review): 30s → 2,053 entries / 2.6 MB
+             / 1.01 s, 2m → 8,712 / 10.9 MB / 1.13 s, 5m → 34,819 / 42.8 MB / 1.75 s
+readLogs     the same widths a minute past a boot, which is what bounds the widening by bytes
+             (#239 second pass): 30s → 94,154 entries / 113.6 MB, 2m → 160,587 / 191.8 MB,
+             5m → 195,444 / 232.4 MB — all three past the read's own 64 MB buffer; on a second
+             device type seconds after boot, 30s → 107.9 MB, 2m → 576.8 MB, 5m → 756.4 MB
+readLogs     at the ceiling across that burst ageing out: it answered every time — 5,000 entries
+             truncated at t+0s, then 1,047 truncated at t+73s off the 30s width while the 2m one
+             was 247.9 MB and overflowed, which is the kept-narrower-answer path on a real device
+```
+
+- **The capture cannot go to stdout on this platform, and the `-` that documents it is not a
+  no-op — it is a write that fails.** §8 trap 10 carries the wording; the consequence is that
+  `screenshot` stages a file under `tmpdir()` and removes it, and that the path it passes is
+  **absolute**, because a relative one fails the same way `-` does.
+- **`--mask ignored` changes the alpha, not the geometry.** Both mask forms came back 1206×2622,
+  which is what makes the dimensions worth asserting against `deviceInfo`: they agree exactly, so
+  the device-type profile and the capture are describing the same screen.
+- **A successful capture writes only to stderr.** `Wrote screenshot to: <path>` and the
+  `No display specified. Defaulting to display: …` note both land there, with **stdout empty** —
+  so the staged path has to be masked out of the captured streams as well as out of the argv
+  (`RunSimctlOptions.redactArgv`), and nothing may read "wrote to stderr" as "failed".
+- **`simctl spawn <device> log show` reads the *device's* log.** The processes in a capture are
+  the simulator's own (`launchd_sim`, `locationd`, `gamecontrollerd`, `backboardd`, `SpringBoard`),
+  and that is the device half of the pushdown §5 now describes.
+- **`log show`'s window unit is not what its own help says.** `--last <num>[m|h|d]` lists no `s`,
+  yet `s` is honoured — `--last 60s` and `--last 1m` answered 5,750 and 5,752 lines seconds apart
+  — while a **bare number is seconds**: `--last 1` answered 93 entries where `--last 60s` answered
+  3,998. Spell the unit; the default is not the minutes the list implies.
+- **A log window bounds a duration, not a size, and the default `maxBuffer` is not enough for a
+  generous one.** A 60-second window measured 5.0 MB (3,998 entries) on a quiet minute and
+  11.3–11.9 MB (9,166–9,669 entries) while the bench was itself reading logs — past
+  `SIMCTL_MAX_BUFFER_BYTES` on an *idle* simulator. The read carries its own 64 MB ceiling;
+  an overflow is a killed child and a lost answer rather than a truncation.
+- **`log show` has no count bound at all** — its own bounds are the window and `--predicate`
+  (`log show --help`) — so there is nothing to ask `maxEntries + 1` of the way `logcat -t` is
+  asked on the Android side. **One window is therefore not a substitute for that `+ 1`**, which is
+  what the first cut of this phase got wrong: a window narrower than the cap makes the *lookback*
+  decide the answer while `truncated: false` claims the cap did not. What stands in for it is
+  widening the window until the device says more than the cap (§5) — the answer is then full
+  because the cap cut it, and a short one is short because the horizon really was reached.
 
 ### How a failure comes back, and why the exit code is not a vocabulary
 
@@ -403,10 +457,59 @@ document's evidence rather than by a capture; and **`log show` omits `Info` and 
 `--info --debug` are passed**, so a `readLogs` that leaves them off reports a log with two of the
 five levels missing.
 
-**Logs must be predicate-scoped or they are useless.** Unfiltered, `log show --last 20s` returned
-**92,204 entries**; the same window with `--predicate 'process == "Giotto"'` returned 268. A
-`readLogs` that does not push the process filter down into the query will spend seconds serializing
-the host's own noise before `maxEntries` throws it away.
+**Logs must be scoped in the query or they are useless — and the scope `readLogs` can push down is
+not a predicate.** Unfiltered, `log show --last 20s` returned **92,204 entries** here; the same
+window with `--predicate 'process == "Giotto"'` returned 268. A read that filters after the fact
+spends seconds serializing noise before `maxEntries` throws it away, and that rule is untouched.
+
+What this section concluded from it — that `readLogs` pushes the **process** filter down — is
+**reversed in place with its reason rewritten** (#229, `ai/RULES.md` §1). It cannot:
+`ReadLogsOptions` carries `maxEntries` and nothing else (`src/core/device.ts`), so there is no
+process to filter *by*, and inventing one would answer a narrower question than the caller asked.
+What is pushed down instead is the **device** and a **window**, which are the other two bounds this
+command has:
+
+- **`simctl spawn` is itself the device scope.** The query runs inside the simulator rather than
+  against this Mac's log: on the second bench (macOS 26.6.2 / Xcode 26.4.1, 2026-09-08) a
+  20-second read came back holding `launchd_sim`, `locationd`, `backboardd` and `SpringBoard` and
+  nothing of the host's — 1,958 entries against 2,766 for the same window of the host's own log.
+  That bench is far quieter than the 92,204 above; what carries over from that number is the shape
+  of its point rather than its size.
+- **A widening window is the rest of it**, `30s → 2m → 5m`, and the widening is the part that took
+  two goes. The single `--last 30s` this section first recorded was chosen against the contract's
+  own 5,000-entry ceiling (`MAX_LOG_ENTRIES`) at a measured 67–160 entries per second — but 30 s at
+  that rate holds 2,000–4,800 entries, which is *below* the ceiling, so a caller asking for 5,000
+  was handed everything the window had together with `truncated: false`: told, by the one flag that
+  exists to say otherwise, that nothing older was dropped. Corrected in place with its reason
+  rewritten (#239 review). `readLogs` now re-reads at the next width while the device said no more
+  than the cap, so the **cap** binds the answer the way `logcat -t` does on Android, and only the
+  widest width may answer `truncated: false`. Measured on the same bench, 2026-09-08: `30s` 2,053
+  entries / 2.6 MB / 1.01 s, `2m` 8,712 / 10.9 MB / 1.13 s, `5m` 34,819 / 42.8 MB / 1.75 s — the
+  cost is nearly flat in the width, because a read spends `simctl spawn`'s start-up rather than the
+  window. **The widening is self-limiting in *latency***: a device chatty enough to fill the cap
+  fills it at `30s` and is never re-read, so the widest read only happens on a device quiet enough
+  for it to be cheap. `5m` is the horizon; reaching past it is a bound the caller cannot ask for,
+  and widening `ReadLogsOptions` to let them is a contract change and its own issue, not something
+  a backend improvises.
+- **It is not self-limiting in *bytes*, and the claim that it was is reversed in place** (#239
+  second pass). This section said the widest read costs ~12,500 entries and about 15 MB at the
+  ceiling, well inside the 64 MB buffer; that inferred a size from a *rate*, and a log read is
+  asked **after** something happened, which is exactly where the rate is not uniform. A burst that
+  has aged out of the narrowest width is still inside a wider one, so the wider read is large
+  precisely when the narrow one came back quiet. Measured on the same bench on a simulator a minute
+  past boot: `30s` 94,154 entries / **113.6 MB**, `2m` 160,587 / 191.8 MB, `5m` 195,444 / 232.4 MB,
+  and on a second device type read seconds after boot `30s` 107.9 MB, `2m` **576.8 MB**, `5m`
+  756.4 MB — every width past the buffer, and an overflow is a killed child and a lost answer
+  rather than a truncation. So the escalation is bounded by bytes too: **a wider width that overflows ends the
+  widening**, and the narrower width's answer stands, sliced to the cap and flagged
+  `truncated: true` — an overflow being positive proof the device said far more than the cap.
+  Raising the buffer instead would be chasing an *idle* device's 756 MB. An overflow at the
+  **narrowest** width still fails loudly, because nothing came back to keep and the partial buffer
+  holds the *oldest* bytes of the window where the newest are what was asked for; on this bench
+  that is reachable for the first half-minute after a boot at any cap, and at the very peak of the
+  burst the ten-second budget refuses first (§8 trap 11). What would answer it is a
+  streaming read keeping a rolling tail of `maxEntries + 1` lines — Android's `logcat -t` guarantee
+  — and `simctl.ts` runs `execFile` only, so that is a change of its own (PROJECT.md R45).
 
 ---
 
@@ -481,7 +584,9 @@ full factory reset if state restoration ever needs one.
 1. **`screenshot` on a shut-down simulator hangs for 60 seconds** and then fails with *"Timeout
    waiting for screen surfaces"*. Not an error, not fast — a minute of a lease spent on a call that
    was never going to work. Check `state == Booted` first, and put a timeout on the capture
-   regardless.
+   regardless. Both halves are in `IosSimulatorDeviceBackend.screenshot` (#229), because the state
+   can change between the check and the capture; re-measured at **60.68 s** on the second bench
+   (macOS 26.6.2 / Xcode 26.4.1, 2026-09-08) against 0.12 s for the refusal that replaces it.
 2. **`idb file push` kills the companion** (§4). Use the host path.
 3. **`xcode-select -p` may point at CommandLineTools**, where `simctl` does not exist (§1).
 4. **Quitting `Simulator.app` shuts down every booted device** (§7). The GUI app is not a viewer;
@@ -520,6 +625,34 @@ full factory reset if state restoration ever needs one.
    the wording `src/backends/ios-simulator/parsers/app-control.ts` matches is deliberately not one
    (measured on Xcode 26.4.1, 2026-09-08). Anyone re-capturing a fixture on a differently
    localized host has to check that half again rather than assume it.
+
+10. **`simctl io screenshot` will not write to stdout, and will not write to a relative path
+    either.** `simctl help io` documents `-` for stdout. On Xcode 26.4.1 that route is broken:
+    `io <udid> screenshot --type png --mask ignored -` — and a bare `screenshot -`, with stdout a
+    pipe and with stdout redirected to a file alike — exits non-zero having written nothing, with
+    *"An error was encountered processing the command (domain=NSCocoaErrorDomain, code=642)"* and
+    *"You can’t save the file “-” because the volume “Macintosh HD” is read only"*. The `-` is
+    taken as a file **name**, and resolved against a directory the caller does not choose: the
+    same command with `shot.png` from a writable working directory fails identically, while an
+    absolute path prints `Wrote screenshot to: …` and produces the PNG. So a capture goes to a
+    file the backend stages and removes, at an absolute path, and never to a stream (measured on
+    macOS 26.6.2 / Xcode 26.4.1, 2026-09-08 — the second bench).
+
+11. **A freshly booted simulator says hundreds of megabytes in its first half-minute, so the log
+    read fails there rather than answering.** Measured on the second bench, 2026-09-08, on a
+    simulator with nothing installed and nothing under test: `log show --style ndjson --info
+    --debug --last 30s` came back **107.9–113.6 MB** within a minute of boot, `--last 2m` up to
+    **576.8 MB** and `--last 5m` up to **756.4 MB** — against the 64 MB the read gives itself,
+    and against the 30 s that a *quiet* device fills with 2.6 MB. At the very peak the read exits
+    on its ten-second budget before it fills the buffer at all, which is the same refusal wearing
+    the other name. Two consequences worth having in advance: **a `read_logs` in the first seconds
+    after a boot, an install or a launch is expected to refuse, loudly**, and it is the *narrowest*
+    width that refuses, so there is nothing narrower to fall back on (the widening keeps the
+    narrower answer whenever a *wider* width is the one that overflows, §5). And **the burst ages
+    out**: the same read answered 5,000 cap-bound entries a minute later, so a caller that reads
+    logs after waiting on a condition is in the ordinary case rather than this one. The fix that
+    would remove the trap is a streaming read keeping a rolling tail of `maxEntries + 1` lines,
+    which is a runner `src/backends/ios-simulator/simctl.ts` does not have (PROJECT.md R45).
 
 ---
 

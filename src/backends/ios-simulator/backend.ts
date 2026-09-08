@@ -1,22 +1,21 @@
 /**
- * The device backend for this platform, at the phase that adds *the app lifecycle and the two
- * file transfers* to the enumeration.
+ * The device backend for this platform, at the phase that adds *the screen capture and the log
+ * read* to the app lifecycle and the transfers.
  *
- * Ten methods are real — the four the enumeration phase brought, plus
- * {@link IosSimulatorDeviceBackend.installApp}, {@link IosSimulatorDeviceBackend.launchApp},
- * {@link IosSimulatorDeviceBackend.stopApp}, {@link IosSimulatorDeviceBackend.clearAppData},
- * {@link IosSimulatorDeviceBackend.pushFile} and {@link IosSimulatorDeviceBackend.pullFile}.
- * `screenshot` and `readLogs` are still `not implemented yet` stubs, which is what lets the class
- * declare `implements DeviceBackend` and have its signatures typechecked while the next phase
- * fills them in. The capability-gated methods are absent rather than stubbed: a manifest is what
- * declares those, and there is none yet.
+ * **Every required method of `DeviceBackend` is answered now**, and there is no `not implemented
+ * yet` stub left in the class: the four the enumeration phase brought, the six the lifecycle and
+ * the transfers brought, and {@link IosSimulatorDeviceBackend.screenshot} and
+ * {@link IosSimulatorDeviceBackend.readLogs} here. The capability-gated methods are absent rather
+ * than stubbed: a manifest is what declares those, and there is none yet.
  *
  * **This backend registers nothing** (`ai/TESTING.md`, "A backend under construction registers
  * nothing"): no `./capabilities.ts`, no `./index.ts` and no line in `../index.ts`, so
  * `tests/unit/backends/barrel.test.ts` and `tests/unit/backends/conformance.test.ts` still read
- * `['android']` after this phase. That is deliberate rather than unfinished — registering a
- * stub-bearing manifest fails the conformance gate for the backend that already passes it, so the
- * manifest lands with the last stub.
+ * `['android']` after this phase. That is deliberate rather than unfinished, and this is the phase
+ * where the *reason* changes: it was that a stub-bearing manifest fails the conformance gate for
+ * the backend that already passes it, and the stubs are gone. What a manifest would now be
+ * waiting on is what it would have to declare beside these twelve methods — the recorder and its
+ * two capabilities — so it lands with those, in the phase after this one (`PROJECT.md` R45).
  *
  * Everything that touches a simulator goes through `./simctl.js`, everything that reads its
  * output through `./parsers/`, and the three pure modules beside this one own the vocabulary, the
@@ -34,8 +33,10 @@
  * omission** — the counterpart to `../android/backend.ts`'s header, which has to choose a quoter
  * per value. `simctl` takes argv entries and there is no shell on either side of it
  * (`./simctl.js`), so every value this file passes is an argument and cannot become a second
- * command. A later phase that routes something through `simctl spawn <device> sh -c …` puts that
- * question back on the table.
+ * command. {@link IosSimulatorDeviceBackend.readLogs} is the first call here to run a program
+ * *inside* the device, and it changes nothing about that: what follows the udid is the guest
+ * program's own argv — `log show …`, entry by entry — and no shell reads it. What would put the
+ * question back on the table is a `simctl spawn <device> sh -c …`, which nothing here does.
  */
 
 import { copyFile, cp, mkdir, mkdtemp, readFile, rm, stat } from 'node:fs/promises';
@@ -46,6 +47,7 @@ import {
 	type DeviceBackend,
 	type DeviceInfo,
 	DeviceInfoSchema,
+	type DeviceState,
 	type DeviceWatch,
 	type DeviceWatcher,
 	type LogRead,
@@ -59,6 +61,7 @@ import { SIMCTL_MISSING, SimctlNotFoundError } from './developer-dir.js';
 import { IOS_SIMULATOR_PLATFORM_ID, toDevices } from './devices.js';
 import { saysNothingToTerminate } from './parsers/app-control.js';
 import { type DeviceTypeProfile, readDeviceTypeProfile } from './parsers/device-type-profile.js';
+import { isPng } from './parsers/png.js';
 import {
 	parseSimctlDevices,
 	parseSimctlDeviceTypes,
@@ -68,12 +71,16 @@ import {
 	type SimctlDeviceType,
 	type SimctlRuntimeList,
 } from './parsers/simctl-list.js';
+import { parseUnifiedLog } from './parsers/unified-log.js';
 import { deviceTypeProfilePath, toScreenInfo } from './screen.js';
 import {
+	describeBytes,
 	INSTALL_SIMCTL_TIMEOUT_MS,
 	quoteStream,
+	READ_LOGS_SIMCTL_MAX_BUFFER_BYTES,
 	runSimctl,
 	runSimctlOnDevice,
+	SCREENSHOT_SIMCTL_TIMEOUT_MS,
 	SimctlCommandError,
 	type SimctlResult,
 } from './simctl.js';
@@ -129,6 +136,158 @@ const APP_CONTAINER = 'app';
 /** So a scratch directory that somehow outlives its `finally` is attributable to this backend. */
 const CLEAR_PREFIX = 'rover-ios-clear-';
 
+/** The same, for the directory one capture is staged in. */
+const SCREENSHOT_PREFIX = 'rover-ios-screenshot-';
+
+/**
+ * What the staged capture is called inside that directory.
+ *
+ * The suffix is for whoever finds one of these left behind, not for the tool: `--type png` below
+ * makes the encoding a demand of this method, so nothing here depends on the extension being
+ * read. It is not left off either — `simctl` prints `Detected file type from extension: PNG` when
+ * it does the detecting (`./simctl.js`), and a name that made it say something else about a file
+ * this backend chose would be a message nobody could act on.
+ */
+const SCREENSHOT_FILE = 'screenshot.png';
+
+/**
+ * The capture's argv up to the path it writes: `simctl io <device> screenshot --type png --mask
+ * ignored <path>`.
+ *
+ * **It goes to a file this backend stages and removes, never to stdout, and that is measured
+ * rather than preferred.** `simctl help io` does document `-` for stdout. On this bench that
+ * route is broken: `io <udid> screenshot --type png --mask ignored -` — and a bare `screenshot
+ * -`, with stdout a pipe and with stdout redirected to a file alike — exits non-zero having
+ * written nothing, with *"An error was encountered processing the command
+ * (domain=NSCocoaErrorDomain, code=642)"* and *"You can’t save the file “-” because the volume
+ * “Macintosh HD” is read only"*, while the same call with a real path prints `Wrote screenshot
+ * to: …` and produces the PNG (macOS 26.6.2 / Xcode 26.4.1, 2026-09-08). The `-` is taken as a
+ * *file name*, and resolved against a directory this process does not choose — a **relative**
+ * path fails identically, which is why the staged one is absolute (`docs/IOS.md` §8, trap 10).
+ *
+ * **`--mask ignored` is deliberate.** The default returns the device's rounded corners with
+ * alpha, which anything doing arithmetic on the frame will not want (`docs/IOS.md` §8, trap 5).
+ * It changes no dimension: both forms came back 1206×2622 on the booted iPhone 17 of that bench,
+ * which is what `deviceInfo` reports the screen to be.
+ *
+ * **`--type png` is asked for rather than left to the file name**, so the encoding this method
+ * promises is a demand on the tool. It is also what makes {@link isPng} a check rather than a
+ * guess: the bytes are refused for not being what `simctl` was told to write.
+ */
+const SCREENSHOT_ARGV = ['screenshot', '--type', 'png', '--mask', 'ignored'] as const;
+
+/**
+ * How far back one log read looks, narrowest first — the pushdown, and the honest answer to a
+ * design problem `docs/IOS.md` §5 first proposed a different solution to.
+ *
+ * That section's measurement stands: a read that filters *after* the fact spends seconds
+ * serialising noise before `maxEntries` throws it away, so the bound belongs in the query. What
+ * it named as the pushdown was `--predicate 'process == "…"'` — and `ReadLogsOptions` carries
+ * `maxEntries` and nothing else (`src/core/device.js`), so there is no process to filter *by*.
+ * Inventing one would answer a narrower question than the caller asked; widening the contract to
+ * pass one is a contract change and its own issue.
+ *
+ * So the pushdown is the other bound `log show` offers — its window — and **half of it is
+ * already the device**. `simctl spawn` runs the query *inside* the simulator: a 20-second read
+ * came back holding `launchd_sim`, `backboardd` and `SpringBoard` and nothing of this Mac's,
+ * 1,958 entries against 2,766 for the same window of the host's own log (macOS 26.6.2 / Xcode
+ * 26.4.1, 2026-09-08). §5's 92,204 is a busier bench than this one; what carries over is the
+ * shape of its point rather than its number.
+ *
+ * **The window widens until the *cap* is what binds the answer**, because a window is the
+ * wrong bound to answer a count with and a single one was the wrong call. The contract's
+ * ceiling is 5,000 entries (`MAX_LOG_ENTRIES`, `src/ipc/verb-methods.ts`) and this device
+ * answered **67–160 entries per second** depending on what the host was doing, so thirty
+ * seconds holds 2,000–4,800 of them: *below* the ceiling. A caller asking for 5,000 therefore
+ * got everything the window had together with `truncated: false` — told, by the one flag that
+ * exists to say otherwise, that nothing older was dropped, while the device's own store held
+ * an order of magnitude more (`--last 30s` answered 2,053 entries against `--last 5m`'s 34,819
+ * on this bench). `../android/backend.ts` has no such gap: `logcat -t maxEntries + 1` reaches
+ * as far back as the ring buffer holds, so the cap binds the answer and never the lookback.
+ * Answering the same `read_logs` call with "the newest N" there and "whatever thirty seconds
+ * held, up to N" here is also D10's one-set-of-verbs promise going quietly.
+ *
+ * So {@link readLogs} re-reads at the next width while the device said no more than the cap,
+ * and only the last of these widths is allowed to answer `truncated: false`. **The escalation
+ * is self-limiting**, which is what makes it cheap rather than three reads' worth of latency: a
+ * device chatty enough to fill the cap fills it at `30s` and is never re-read — the 200 a caller
+ * who did not say gets (`DEFAULT_MAX_LOG_ENTRIES`, `src/verbs/logs.js`) is ten to twenty-four
+ * times over inside the first window — while a device quiet enough to reach the widest is by
+ * definition saying less than `maxEntries` per `2m`, so the widest read is small in exactly the
+ * case that reaches it.
+ *
+ * Measured on this bench (macOS 26.6.2 / Xcode 26.4.1, booted iPhone 17, 2026-09-08):
+ * `30s` 2,053 entries / 2.6 MB / 1.01 s, `2m` 8,712 / 10.9 MB / 1.13 s, `5m` 34,819 / 42.8 MB /
+ * 1.75 s. The cost is nearly flat in the width because what a read spends is `simctl spawn`'s
+ * own start-up rather than the window.
+ *
+ * **A width bounds a duration and not a size, and the self-limiting argument above is about a
+ * *rate*.** It said the widest read is small in the case that reaches it, and inferred from
+ * 1.23 KB an entry that the ceiling costs about 15 MB — well inside
+ * {@link READ_LOGS_SIMCTL_MAX_BUFFER_BYTES}. That inference holds only while the log rate is
+ * roughly uniform across the widths, and the case it is written for — a read taken *after*
+ * something happened — is exactly the case where it is not: a burst that has aged out of the
+ * narrowest width is still inside a wider one, so the wider read is large precisely when the
+ * narrow one came back quiet. Measured on the same bench, on a simulator a minute past boot:
+ * `30s` 94,154 entries / 113.6 MB, `2m` 160,587 / 191.8 MB, `5m` 195,444 / 232.4 MB — and on a
+ * second device type read seconds after boot, `30s` 107.9 MB, `2m` **576.8 MB**, `5m` 756.4 MB.
+ * One to two orders of magnitude past the 64 MB buffer, and an overflow is not a graceful
+ * truncation ({@link READ_LOGS_SIMCTL_MAX_BUFFER_BYTES}: the child is killed and the answer is
+ * lost).
+ *
+ * So the escalation is bounded by bytes as well as by count: a wider width that overflows the
+ * buffer does not fail the read, it **ends the widening** and the narrower width's answer stands,
+ * flagged `truncated: true` — an overflow being positive proof the device said far more than the
+ * cap, which is what the flag exists to say ({@link readLogs}). What no width can be rescued
+ * from is an overflow at the *narrowest*: there is no earlier answer to keep, and the partial
+ * buffer is no answer either, since `log show` writes oldest-first and a read is asked for the
+ * newest. That case fails loudly, and on this bench it is reachable for the first half-minute
+ * after a boot at any cap at all — at the very peak of the burst it can even exhaust the ten
+ * second budget before the buffer, which is the same refusal wearing the other name. Raising the
+ * buffer is not the fix — 756 MB was an *idle* device's figure, nothing was under test on it —
+ * and the fix that would answer it is a streaming read that keeps a rolling tail of
+ * `maxEntries + 1` lines, the way `../android/backend.ts` gets the same guarantee from
+ * `logcat -t`. That is a runner this module does not have (`./simctl.ts` is `execFile` only) and
+ * a change of its own.
+ *
+ * **`5m` is the horizon, and a read that exhausts it answers `truncated: false` honestly.**
+ * That is the same claim the Android side makes when the ring buffer holds less than the cap:
+ * nothing was dropped *for the cap's sake*. What neither platform can offer is an unbounded
+ * lookback, and a caller has no way to ask for one — `ReadLogsOptions` carries `maxEntries` and
+ * nothing else, and widening that is a contract change rather than something to improvise here.
+ *
+ * **The unit is spelled out because the tool's default is not what its help says.** `log show
+ * --help` lists `--last <num>[m|h|d]` and no `s`, yet `s` is honoured — `--last 60s` and `--last
+ * 1m` answered 5,750 and 5,752 lines seconds apart — while a **bare number is seconds**, not the
+ * minutes that list implies: `--last 1` answered 93 entries where `--last 60s` answered 3,998
+ * (same bench). Passing the suffix is what keeps an undocumented default from choosing the
+ * window.
+ *
+ * Exported so `tests/unit/backends/ios-simulator/backend.test.ts` can pin the widest of these
+ * against `MAX_LOG_ENTRIES` at the slowest rate measured above, rather than restating a number
+ * that would then be free to drift away from this one.
+ */
+export const LOG_WINDOWS = ['30s', '2m', '5m'] as const;
+
+/**
+ * The log read's argv for one width, every flag load-bearing and every one measured — this is
+ * the *guest* program's argv, handed to `simctl spawn` after the udid (this file's header).
+ *
+ * - **`log show`**, never `log stream`. A tail that stays open is a wait with no condition
+ *   (ai/RULES.md §2) and a stream over IPC (D19); this is a bounded read that returns.
+ * - **`--style ndjson`** is the shape `./parsers/unified-log.js` is pinned against: one entry per
+ *   line, plus a trailer describing the output that the parser drops.
+ * - **`--info --debug` are not optional.** Without them the tool answers neither level — the
+ *   levels capture comes back carrying only `Default`, `Error`, `Fault` and absent — so a log
+ *   read that left them off would silently omit two of the five levels this platform has
+ *   (measured, `tests/fixtures/ios-simulator/README.md`).
+ * - **`--last`** is one of {@link LOG_WINDOWS}, which carries the whole argument for a window
+ *   and for why one width is not enough.
+ */
+function readLogsArgv(window: string): string[] {
+	return ['log', 'show', '--style', 'ndjson', '--info', '--debug', '--last', window];
+}
+
 /**
  * The gap between two polls of the device set.
  *
@@ -155,6 +314,18 @@ export const WATCH_POLL_INTERVAL_MS = 2_000;
 
 function message(cause: unknown): string {
 	return cause instanceof Error ? cause.message : String(cause);
+}
+
+/**
+ * The errno of a `node:fs` failure, carried across into a message that cannot quote the failure
+ * itself.
+ *
+ * Every message that library writes names a host path, and these are read on the agent's machine
+ * (D19) — so the code travels and the sentence does not. One definition because three refusals
+ * need it, and because `unknown` is genuinely all a `catch` binding says.
+ */
+function errnoOf(cause: unknown): string {
+	return cause instanceof Error && 'code' in cause ? String(cause.code) : 'unknown';
 }
 
 /**
@@ -366,11 +537,10 @@ function pulledNonRegularFile(serial: DeviceSerial, devicePath: string, shape: s
  * agent's machine (D19), so the code is carried across and the message is not.
  */
 function noSuchFile(serial: DeviceSerial, devicePath: string, cause: unknown): Error {
-	const code = cause instanceof Error && 'code' in cause ? String(cause.code) : 'unknown';
 	return new Error(
-		`'${devicePath}' on device '${unwrap(serial)}' could not be read (${code}). On this ` +
-			"platform that path is a file in the device's own storage on the host lending it, so " +
-			'this is the file not being there, or not being readable by the user running the host.',
+		`'${devicePath}' on device '${unwrap(serial)}' could not be read (${errnoOf(cause)}). On ` +
+			"this platform that path is a file in the device's own storage on the host lending it, " +
+			'so this is the file not being there, or not being readable by the user running the host.',
 		{ cause },
 	);
 }
@@ -387,14 +557,72 @@ function noSuchFile(serial: DeviceSerial, devicePath: string, cause: unknown): E
  * do.
  */
 function pushFailed(serial: DeviceSerial, devicePath: string, cause: unknown): Error {
-	const code = cause instanceof Error && 'code' in cause ? String(cause.code) : 'unknown';
 	return new Error(
-		`'${devicePath}' on device '${unwrap(serial)}' could not be written (${code}). On this ` +
-			"platform that path is a file in the device's own storage on the host lending it, so " +
-			'this is a parent directory that could not be created — one of the names on the way ' +
-			'there is a file, most often — or the file not being writable by the user running the ' +
-			'host, or the bytes to push no longer being where they were staged.',
+		`'${devicePath}' on device '${unwrap(serial)}' could not be written (${errnoOf(cause)}). ` +
+			"On this platform that path is a file in the device's own storage on the host lending " +
+			'it, so this is a parent directory that could not be created — one of the names on the ' +
+			'way there is a file, most often — or the file not being writable by the user running ' +
+			'the host, or the bytes to push no longer being where they were staged.',
 		{ cause },
+	);
+}
+
+/**
+ * A capture asked of a device that is not running one — the refusal `docs/IOS.md` §8 trap 1 is
+ * about.
+ *
+ * The state and the device, because both are what a caller acts on: one names what to fix and
+ * the other names where. Nothing was run, and that is said outright, because the alternative
+ * reading of a failure from this method is a capture that half happened.
+ *
+ * The state is the **neutral** word `./devices.js` mapped the tool's own onto, not the token
+ * `simctl` printed: every state but `Booted` collapses to `offline` there, and that module owns
+ * the vocabulary (this file's header).
+ */
+function notCapturable(serial: DeviceSerial, state: DeviceState): Error {
+	return new Error(
+		`Device '${unwrap(serial)}' is '${state}' rather than ready, so nothing was captured and ` +
+			'nothing was run. A capture on this platform does not refuse a device that is not ' +
+			'booted: it blocks for a minute waiting for a screen surface that will never be drawn ' +
+			'and then reports a timeout, which is a minute of a lease spent on a call that was ' +
+			'never going to work.',
+	);
+}
+
+/**
+ * `simctl io screenshot` having exited 0 without leaving the file behind that it was told to
+ * write.
+ *
+ * Not a captured failure — every run of the bench printed `Wrote screenshot to: …` and produced
+ * the PNG — so this is the guard on an exit-0 answer this method cannot be built on rather than a
+ * wording anyone has seen. **No host path**, {@link noSuchFile}'s rule for its reason: the staged
+ * file is one this host invented and has already removed by the time anyone reads this, so naming
+ * it would name nothing on the machine the message is read on (D19).
+ */
+function captureUnreadable(serial: DeviceSerial, cause: unknown): Error {
+	return new Error(
+		`The capture of device '${unwrap(serial)}' could not be read back (${errnoOf(cause)}). ` +
+			'simctl exited 0, so it reported having written the image; the file it was told to ' +
+			'write is one the host lending the device staged for the purpose and removes ' +
+			'afterwards, so this is that write not having happened.',
+		{ cause },
+	);
+}
+
+/**
+ * Bytes that are not an image, refused rather than handed to an agent as one — `isPng`'s stance
+ * on the Android side, at the one point on this platform where it can be taken.
+ *
+ * The bytes are *described* rather than quoted, because they are megabytes and are not text
+ * (`./simctl.js`, `describeBytes`). Whether the image is *blank* is deliberately not asked here:
+ * this platform has no way for an app to block a capture at all, so every one came back rendered
+ * (`docs/IOS.md` §8, trap 8) and what is on the screen is the caller's to interpret.
+ */
+function notAnImage(serial: DeviceSerial, bytes: Uint8Array): Error {
+	return new Error(
+		`The capture of device '${unwrap(serial)}' is not a PNG ${describeBytes(bytes)}. simctl ` +
+			'exited 0 and was asked for `--type png`, so these are the bytes it wrote and not an ' +
+			'image — refused here rather than answered as a screenshot.',
 	);
 }
 
@@ -696,12 +924,140 @@ export class IosSimulatorDeviceBackend implements DeviceBackend {
 		});
 	}
 
-	async screenshot(_serial: DeviceSerial): Promise<Uint8Array> {
-		throw new Error(`${IOS_SIMULATOR_PLATFORM_ID}: screenshot is not implemented yet`);
+	/**
+	 * `simctl io <device> screenshot --type png --mask ignored <path>` — the device's own PNG, as
+	 * **bytes** (D19).
+	 *
+	 * **The device's state is checked first, and the capture is bounded regardless.** Both halves
+	 * are needed and neither is the other's substitute (`docs/IOS.md` §8, trap 1): against a
+	 * device that is not booted this command blocks for **60.68 s** and then fails with *"Timeout
+	 * waiting for screen surfaces"* (macOS 26.6.2 / Xcode 26.4.1, 2026-09-08), so the check is
+	 * what turns a minute of a lease into an immediate refusal — and the state can change between
+	 * the two calls, so {@link SCREENSHOT_SIMCTL_TIMEOUT_MS} is what bounds the race the check
+	 * cannot close. The check is one enumeration, 0.11–0.24 s on that bench beside the capture's
+	 * own 0.22–0.29 s; it is `describeDevice`, so a device that has gone is
+	 * {@link DeviceVanishedError} rather than a refusal about a state nobody can read.
+	 *
+	 * **The PNG comes back through a file this backend stages and removes** — {@link
+	 * SCREENSHOT_ARGV} carries why stdout is not available on this platform, and
+	 * {@link inHostTempDirectory}'s `finally` is what keeps a capture of somebody's screen from
+	 * being left on a host that lends the same device to somebody else next. The staged path is
+	 * masked out of any failure message for `installApp`'s reason, and this call needs it more
+	 * plainly than that one: the tool writes the path back out **on the success path**, `Wrote
+	 * screenshot to: <path>` on stderr with stdout empty (same bench), so it is in the streams a
+	 * failure here would quote as well as in the argv — and the message is read on the agent's
+	 * machine, where a path this host has already removed names nothing (D19).
+	 *
+	 * **The bytes are checked to be a PNG before they are handed over** ({@link notAnImage}), and
+	 * answered as bytes rather than as a path, which is D19 and the same rule the transfers
+	 * follow. Whether the screen was *blank* is not asked — see that refusal's own note.
+	 */
+	async screenshot(serial: DeviceSerial): Promise<Uint8Array> {
+		const device = await this.describeDevice(serial);
+		if (device === null) throw new DeviceVanishedError(serial);
+		if (device.state !== 'ready') throw notCapturable(serial, device.state);
+
+		return inHostTempDirectory(SCREENSHOT_PREFIX, async (directory) => {
+			// Absolute rather than relative: the tool resolves the destination against a directory
+			// this process does not choose, and a relative one fails (SCREENSHOT_ARGV above).
+			const staged = join(directory, SCREENSHOT_FILE);
+			await runSimctlOnDevice(serial, 'io', [...SCREENSHOT_ARGV, staged], {
+				timeoutMs: SCREENSHOT_SIMCTL_TIMEOUT_MS,
+				redactArgv: [staged],
+			});
+
+			const bytes = await readFile(staged).catch((cause: unknown) => {
+				throw captureUnreadable(serial, cause);
+			});
+			if (!isPng(bytes)) throw notAnImage(serial, bytes);
+
+			return bytes;
+		});
 	}
 
-	async readLogs(_serial: DeviceSerial, _options: ReadLogsOptions): Promise<LogRead> {
-		throw new Error(`${IOS_SIMULATOR_PLATFORM_ID}: readLogs is not implemented yet`);
+	/**
+	 * `simctl spawn <device> log show --style ndjson --info --debug --last <window>` — the
+	 * device's own log, bounded, at the narrowest width that fills the caller's cap.
+	 *
+	 * **The bound is pushed down into the query**, which is the whole difference between this and
+	 * a read that filters afterwards: {@link LOG_WINDOWS} carries the measurements and the argument
+	 * for a window, and {@link readLogsArgv} carries what each flag is load-bearing for. The
+	 * two things worth reading here rather than there are that `spawn` is *itself* half the
+	 * pushdown — the query runs inside the simulator, so the answer is the device's log and not
+	 * this Mac's — and that the read carries {@link READ_LOGS_SIMCTL_MAX_BUFFER_BYTES}, because a
+	 * window bounds a duration and not a size.
+	 *
+	 * **The window widens until the cap binds, and that is what makes `truncated` mean what the
+	 * contract says it means.** `log show` has no count bound at all — its own options are the
+	 * window and a predicate (`log show --help`, Xcode 26.4.1) — so there is nothing to ask one
+	 * more than the cap *of*, the way `../android/backend.ts` asks `logcat -t` for `maxEntries + 1`.
+	 * Widening is this side's substitute for that `+ 1`: while the device said no more than the
+	 * cap, the next width is tried, so a read that comes back full is full because the *cap* cut
+	 * it and not because the lookback ran out. A single `30s` window could not do that at the
+	 * contract's own ceiling of 5,000 entries, which is the measurement {@link LOG_WINDOWS}
+	 * carries.
+	 *
+	 * **`maxEntries` is applied on this side, and the newest are the ones kept**, because a log
+	 * read is asked *after* something happened.
+	 *
+	 * **A wider width that outgrew the buffer ends the widening rather than failing the read.**
+	 * `SimctlCommandError.overflowedBuffer` is how that is told from an ordinary failure, and the
+	 * narrower width's answer is what stands — sliced to the cap and flagged `truncated: true`,
+	 * because a read too large for 64 MB is proof the device said far more than 5,000 entries.
+	 * An overflow at the *narrowest* width throws instead: nothing came back to keep, and the
+	 * partial buffer is the *oldest* bytes of the window rather than the newest, so it is not an
+	 * answer to this call. {@link LOG_WINDOWS} carries the measurement and what would fix it.
+	 *
+	 * **What the widest window did not fetch, it does not report.** A `truncated: false` off the
+	 * last width means the device said this much in the last of {@link LOG_WINDOWS}, not that its
+	 * store holds nothing older — which is the same thing the Android side says when the ring
+	 * buffer holds less than the cap. Reaching past that horizon is a bound the caller has no way
+	 * to ask for, and giving it one is a contract change (`ReadLogsOptions`, `src/core/device.js`)
+	 * rather than something to improvise here.
+	 *
+	 * **No state check, unlike {@link screenshot}, and that is measured too**: `log show` on a
+	 * device that is not booted fails in **0.15 s** at exit 149 with *"Process spawn via launchd
+	 * failed because device is not booted"* (same bench). There is nothing to pre-empt — the tool
+	 * refuses loudly and immediately, so a check would be a second enumeration bought for
+	 * nothing. It also means the escalation cannot turn one refusal into three: the first width
+	 * throws.
+	 *
+	 * The default ten-second timeout bounds each width on its own: a read cost **0.9–1.8 s**
+	 * across all three, and what it spends is `spawn`'s own start-up rather than the window — a
+	 * one-second window cost 1.39 s and a five-minute one 1.75 s.
+	 *
+	 * `runSimctlOnDevice`, never `runSimctl`: an unpinned read is somebody else's device, and a
+	 * log from the wrong device is worse than no log, since nothing about it looks wrong.
+	 */
+	async readLogs(serial: DeviceSerial, options: ReadLogsOptions): Promise<LogRead> {
+		let entries: LogRead['entries'] = [];
+		let answered = false;
+
+		for (const window of LOG_WINDOWS) {
+			let result: SimctlResult;
+			try {
+				result = await runSimctlOnDevice(serial, 'spawn', readLogsArgv(window), {
+					maxBufferBytes: READ_LOGS_SIMCTL_MAX_BUFFER_BYTES,
+				});
+			} catch (cause) {
+				// A width that outgrew the buffer says the device had far more to say than the cap,
+				// which is the one thing the widening was asking. So it ends the escalation instead
+				// of failing the read — but only once some width has answered: the narrowest has
+				// nothing to fall back on, and every other failure is a failure (`LOG_WINDOWS`).
+				if (!answered || !(cause instanceof SimctlCommandError) || !cause.overflowedBuffer) {
+					throw cause;
+				}
+				return { entries: entries.slice(-options.maxEntries), truncated: true };
+			}
+
+			entries = parseUnifiedLog(result.stdout);
+			answered = true;
+			if (entries.length > options.maxEntries) {
+				return { entries: entries.slice(-options.maxEntries), truncated: true };
+			}
+		}
+
+		return { entries, truncated: false };
 	}
 
 	/**

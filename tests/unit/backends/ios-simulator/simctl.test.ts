@@ -2,7 +2,10 @@ import type { ExecFileException } from 'node:child_process';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
 	DEFAULT_SIMCTL_TIMEOUT_MS,
+	describeBytes,
+	QUOTED_STREAM_MAX_CHARS,
 	quoteStream,
+	READ_LOGS_SIMCTL_MAX_BUFFER_BYTES,
 	runSimctl,
 	runSimctlOnDevice,
 	SIMCTL_MAX_BUFFER_BYTES,
@@ -113,6 +116,21 @@ describe('runSimctl', () => {
 
 		expect(execFileMock.mock.calls[0][2].timeout).toBe(90_000);
 		expect(execFileMock.mock.calls[0][2].maxBuffer).toBe(SIMCTL_MAX_BUFFER_BYTES);
+	});
+
+	/**
+	 * The other half of that: the log read's answer is a payload rather than a listing, and a
+	 * minute of it measured past the default buffer on an idle simulator. Widening it must not
+	 * quietly buy a longer budget along with the room.
+	 */
+	it('lets a caller widen the buffer for one call without touching the timeout', async () => {
+		answers('');
+		await runSimctl(['spawn', 'booted', 'log', 'show'], {
+			maxBufferBytes: READ_LOGS_SIMCTL_MAX_BUFFER_BYTES,
+		});
+
+		expect(execFileMock.mock.calls[0][2].maxBuffer).toBe(READ_LOGS_SIMCTL_MAX_BUFFER_BYTES);
+		expect(execFileMock.mock.calls[0][2].timeout).toBe(DEFAULT_SIMCTL_TIMEOUT_MS);
 	});
 
 	/**
@@ -261,6 +279,31 @@ describe('runSimctl', () => {
 		expect(error.message).not.toContain('timed out');
 	});
 
+	/**
+	 * The overflow as a field, because it is the one failure here a caller can act on rather than
+	 * only report: `./backend.ts`'s log read widens its window until the cap binds and keeps the
+	 * narrower answer when a wider one outgrows the buffer. Matching Node's wording out of the
+	 * message would tie that decision to a string, and the message is also what gets masked.
+	 */
+	it('says an overflowing output buffer was one, as a field and in the message', async () => {
+		fails({ killed: true, code: 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER' }, 'a partial answer\n');
+
+		const error = await failureOf(runSimctl(['spawn', SERIAL, 'log', 'show']));
+
+		expect(error.overflowedBuffer).toBe(true);
+		expect(error.message).toContain('said more than its buffer holds');
+		// The branch it has to sit ahead of: Node's own message reads `stdout maxBuffer length
+		// exceeded`, and quoting it through `failed to run` would name the one thing that did not
+		// happen.
+		expect(error.message).not.toContain('failed to run');
+	});
+
+	it('leaves the flag off every other failure', async () => {
+		fails({ code: 2 });
+
+		expect((await failureOf(runSimctl(['install', '/tmp/nope.app']))).overflowedBuffer).toBe(false);
+	});
+
 	it('quotes the underlying failure when the process never ran at all', async () => {
 		fails({ code: 'ENOENT', message: 'spawn ENOENT' });
 
@@ -383,6 +426,26 @@ describe('runSimctlOnDevice', () => {
 	});
 });
 
+describe('describeBytes', () => {
+	/** The eight bytes a capture off this platform starts with (`parsers/png.ts`). */
+	const PNG_HEAD = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+
+	it('names the length and the leading bytes that identify a payload', () => {
+		expect(describeBytes(Uint8Array.from([...PNG_HEAD, ...new Uint8Array(1_000)]))).toBe(
+			'(1008 bytes, starting 89 50 4e 47 0d 0a 1a 0a)',
+		);
+	});
+
+	it('reads no more than the first eight bytes', () => {
+		expect(describeBytes(Uint8Array.from([0x01, 0x02]))).toBe('(2 bytes, starting 01 02)');
+	});
+
+	// A capture that never arrived is its own diagnosis, and `0 bytes, starting ` is not it.
+	it('says so plainly when nothing came back at all', () => {
+		expect(describeBytes(new Uint8Array())).toBe('(empty)');
+	});
+});
+
 describe('quoteStream', () => {
 	it('says so plainly when a stream carried nothing', () => {
 		expect(quoteStream('')).toBe('(empty)');
@@ -413,5 +476,47 @@ describe('quoteStream', () => {
 		expect(quoteStream('Detected file type from extension: PNG\nNote: No display\n')).toBe(
 			'Detected file type from extension: PNG\nNote: No display',
 		);
+	});
+
+	/**
+	 * The bound, and why it exists: a log read that overflows its 64 MB buffer hands the runner
+	 * back everything it had buffered, and quoting that whole put tens of megabytes into an
+	 * `Error.message` that then travels to another machine (D19) — measured at 67,108,185
+	 * characters, enough on its own to take a test worker down serialising it.
+	 */
+	it('bounds a stream that is a payload rather than a complaint, and says what it dropped', () => {
+		const line = `${'x'.repeat(99)}\n`;
+		const lines = line.repeat(200);
+		const kept = Math.floor(QUOTED_STREAM_MAX_CHARS / line.length) * line.length;
+
+		const quoted = quoteStream(lines);
+
+		expect(quoted.length).toBeLessThan(QUOTED_STREAM_MAX_CHARS + 100);
+		expect(quoted).toContain(`(${lines.length - kept} more characters, dropped)`);
+	});
+
+	/**
+	 * Cut back to the last line break rather than at the character. A host path is masked by a
+	 * substring rule, which no partial copy of one would match, so a line the bound fell inside
+	 * is dropped whole rather than quoted half — and a stream with no line break inside the bound
+	 * is quoted as its size alone for the same reason.
+	 */
+	it('quotes whole lines only, so the bound cannot cut a redacted path in half', () => {
+		const staged = '/var/folders/qx/T/rover-transfer-a1b2/payload';
+		// The filler ends one line short of the bound, so the bound falls *inside* the path on the
+		// next line: a plain slice would quote `/var/folders/qx/T/rover-transfe` unmasked.
+		const stream = `${'x'.repeat(QUOTED_STREAM_MAX_CHARS - 41)}\nlstat of ${staged} failed\n`;
+
+		expect(stream.slice(0, QUOTED_STREAM_MAX_CHARS)).toContain('/var/folders');
+		expect(quoteStream(stream, [staged])).not.toContain('/var/folders');
+		expect(quoteStream('y'.repeat(QUOTED_STREAM_MAX_CHARS * 2))).toBe(
+			`(${QUOTED_STREAM_MAX_CHARS * 2} characters, not quoted)`,
+		);
+	});
+
+	it('leaves a stream that fits the bound exactly as it was', () => {
+		const stream = 'z'.repeat(QUOTED_STREAM_MAX_CHARS);
+
+		expect(quoteStream(stream)).toBe(stream);
 	});
 });

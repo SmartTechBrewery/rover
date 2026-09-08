@@ -97,6 +97,46 @@ export const SIMCTL_MAX_BUFFER_BYTES = 8 * 1024 * 1024;
 export const INSTALL_SIMCTL_TIMEOUT_MS = 5 * 60_000;
 
 /**
+ * The budget for one capture, and the one number in this module whose *upper* bound is worth as
+ * much as its size.
+ *
+ * Measured on macOS 26.6.2 (25G83) / Xcode 26.4.1 (17E202), 2026-09-08, against a booted
+ * iPhone 17: `simctl io <device> screenshot --type png --mask ignored <path>` wrote its 2.8 MB
+ * PNG in **0.22–0.29 s**. So this is generous rather than tuned, for
+ * {@link INSTALL_SIMCTL_TIMEOUT_MS}'s stated reason — it exists to stop a wedged capture
+ * holding a lease forever, not to bound a slow but healthy one on a screen bigger than that
+ * device's.
+ *
+ * **It also sits below the tool's own wait**, which is the half a tighter number would not buy.
+ * Against a `Shutdown` device the same command blocked for **60.68 s** before failing with
+ * *"Timeout waiting for screen surfaces"* (same bench, `docs/IOS.md` §8 trap 1). The device's
+ * state is checked before the capture (`./backend.ts`), so that wait is only reachable when the
+ * device went down between the two calls — and when it is, this is what makes it cost half a
+ * minute rather than a whole one.
+ */
+export const SCREENSHOT_SIMCTL_TIMEOUT_MS = 30_000;
+
+/**
+ * The headroom for the one read whose answer is a payload rather than a listing: the device's
+ * own system log, serialised as NDJSON.
+ *
+ * Measured on the bench above against the same booted iPhone 17, with nothing on it but the
+ * operator's own session: `simctl spawn <device> log show --style ndjson --info --debug --last
+ * 60s` came back as **5.0 MB** (3,998 entries) across a quiet minute and **11.3–11.9 MB**
+ * (9,166–9,669 entries) across a minute in which this bench was itself reading logs in a loop.
+ * The second of those is already past {@link SIMCTL_MAX_BUFFER_BYTES}, on an *idle* simulator,
+ * which is the whole argument for a number of its own: what `./backend.ts` pushes down is a
+ * window, which bounds a duration and not a size, and an application under test says several
+ * times more per second than a SpringBoard does.
+ *
+ * `maxBuffer` is a ceiling rather than an allocation, so a generous one costs nothing until the
+ * bytes arrive — while an overflow is not a graceful truncation: the child is killed and the
+ * answer is lost. Set well clear of the largest plausible read rather than close to the measured
+ * one, which is `../android/adb.ts`'s `ADB_BINARY_MAX_BUFFER_BYTES`' reasoning and its number.
+ */
+export const READ_LOGS_SIMCTL_MAX_BUFFER_BYTES = 64 * 1024 * 1024;
+
+/**
  * The one device selector `simctl` accepts that is not a device, **lowercased**.
  *
  * Refused by {@link runSimctlOnDevice} — see its own note. `simctl help`, quoted verbatim: *"or
@@ -123,6 +163,19 @@ export interface SimctlResult {
 export interface RunSimctlOptions {
 	/** Overrides {@link DEFAULT_SIMCTL_TIMEOUT_MS} for one call. */
 	readonly timeoutMs?: number;
+
+	/**
+	 * Overrides {@link SIMCTL_MAX_BUFFER_BYTES} for one call — for a call whose answer is a
+	 * payload rather than a listing, which today is the log read alone
+	 * ({@link READ_LOGS_SIMCTL_MAX_BUFFER_BYTES}).
+	 *
+	 * A knob of its own rather than one raised default, because every other call this backend
+	 * makes is a listing measured in kilobytes, and because the failure it prevents reads as a
+	 * different one: an overflow sets `killed` exactly as a timeout does, and
+	 * {@link SimctlCommandError} tells the two apart by the code rather than by the budget that
+	 * was exceeded.
+	 */
+	readonly maxBufferBytes?: number;
 
 	/**
 	 * argv entries that must not appear in {@link SimctlCommandError}'s **message**.
@@ -177,6 +230,21 @@ export class SimctlCommandError extends Error {
 	readonly stdout: string;
 	readonly stderr: string;
 	readonly timedOut: boolean;
+	/**
+	 * The answer outgrew {@link RunSimctlOptions.maxBufferBytes} and the child was killed for it.
+	 *
+	 * A field rather than something a caller matches out of {@link message}, because it is the one
+	 * failure here a caller can *act* on rather than only report: it says the command was fine and
+	 * the answer was too large, so a caller reading in widening windows can keep the narrower
+	 * answer it already has instead of failing the verb (`readLogs` in `./backend.ts` is that
+	 * caller). Matching on the message would tie that decision to Node's wording, and the
+	 * message is also the one thing here that crosses the boundary and gets masked.
+	 *
+	 * Told apart from {@link timedOut} by the same `code` the constructor already reads: both
+	 * arrive as `killed`, and they call for opposite responses — a narrower window fixes this one
+	 * and does nothing for a wedged simulator.
+	 */
+	readonly overflowedBuffer: boolean;
 
 	constructor(
 		argv: readonly string[],
@@ -187,14 +255,15 @@ export class SimctlCommandError extends Error {
 		redactArgv: readonly string[] = [],
 	) {
 		const exitCode = typeof error.code === 'number' ? error.code : null;
+		const overflowedBuffer = error.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER';
 		// `killed` is also set when `maxBuffer` overflows, and that is not a timeout: reporting it
 		// as one sends the next reader looking for a slow simulator instead of a large answer.
-		const timedOut = error.killed === true && error.code !== 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER';
+		const timedOut = error.killed === true && !overflowedBuffer;
 		const signal = error.signal ?? null;
 
 		super(
 			[
-				`${SIMCTL} ${quoteArgv(argv, redactArgv)} ${outcome({ error, exitCode, signal, timedOut, timeoutMs })}`,
+				`${SIMCTL} ${quoteArgv(argv, redactArgv)} ${outcome({ error, exitCode, overflowedBuffer, signal, timedOut, timeoutMs })}`,
 				`stdout: ${quoteStream(stdout, redactArgv)}`,
 				`stderr: ${quoteStream(stderr, redactArgv)}`,
 			].join('\n'),
@@ -207,17 +276,24 @@ export class SimctlCommandError extends Error {
 		this.stdout = stdout;
 		this.stderr = stderr;
 		this.timedOut = timedOut;
+		this.overflowedBuffer = overflowedBuffer;
 	}
 }
 
 function outcome(failure: {
 	error: ExecFileException;
 	exitCode: number | null;
+	overflowedBuffer: boolean;
 	signal: NodeJS.Signals | null;
 	timedOut: boolean;
 	timeoutMs: number;
 }): string {
 	if (failure.timedOut) return `timed out after ${failure.timeoutMs}ms`;
+	// Ahead of the exit code and the signal, because both are misleading here: the child was
+	// killed, so it reports one or the other, and neither is what went wrong. Node's own message
+	// ("stdout maxBuffer length exceeded") would otherwise arrive through the branch below, which
+	// says `failed to run` — the one thing that did not happen.
+	if (failure.overflowedBuffer) return 'said more than its buffer holds and was killed for it';
 	if (failure.exitCode !== null) return `exited ${failure.exitCode}`;
 	if (failure.signal !== null) return `was killed by ${failure.signal}`;
 	// Nothing ran at all — the file the search settled on having moved since is the case here,
@@ -261,14 +337,79 @@ const REDACTED_ARGV = '<the file you sent>';
  * file or directory` (measured on Xcode 26.4.1, 2026-09-08) — so nothing but a substring rule
  * reaches it. That is safe because the tool echoes the path byte for byte as it was given, and
  * because the only values ever passed here are paths this host invented moments earlier.
+ *
+ * **Bounded at {@link QUOTED_STREAM_MAX_CHARS}, and it says what it dropped.** One of these
+ * streams is a log read's own payload, and quoting a killed one whole is tens of megabytes of
+ * `Error.message` — that constant carries the measurement.
  */
 export function quoteStream(stream: string, redact: readonly string[] = []): string {
+	const kept = quotable(stream);
 	const masked = redact.reduce(
 		(text, path) => (path.length === 0 ? text : text.replaceAll(path, REDACTED_ARGV)),
-		stream,
+		kept,
 	);
 	const text = masked.trimEnd();
-	return text.length === 0 ? '(empty)' : text;
+	const dropped = stream.length - kept.length;
+
+	if (dropped === 0) return text.length === 0 ? '(empty)' : text;
+	const note = `(${dropped} more characters, dropped)`;
+	return text.length === 0 ? `(${dropped} characters, not quoted)` : `${text}\n${note}`;
+}
+
+/**
+ * How much of a captured stream ends up inside a message.
+ *
+ * Bounded because one of these streams is a payload rather than a complaint: the log read is
+ * given {@link READ_LOGS_SIMCTL_MAX_BUFFER_BYTES} to fill, and a read that overflows it hands
+ * the runner back everything it had managed to buffer. Quoting that unbounded put ~64 MB into an
+ * `Error.message` that then travels the daemon's error path to another machine (D19) — measured
+ * at 67,108,185 characters, which was itself enough to take a test worker down serialising it.
+ * What a reader needs is the first few lines and the size, and this is the first half of that.
+ *
+ * The head rather than `../android/adb.ts`'s tail, because these two streams end differently: a
+ * long-lived `adb` is quoted for *why it stopped*, while a stream this long got here by being
+ * killed mid-sentence, so its last bytes explain nothing and its first ones say what it was.
+ */
+export const QUOTED_STREAM_MAX_CHARS = 4_096;
+
+/**
+ * The part of a long stream that is safe to quote: whole lines, up to the bound.
+ *
+ * Cut back to the last line break rather than at the character, because the bound falls wherever
+ * it falls and a host path is masked by a substring rule ({@link quoteStream}) that no partial
+ * copy of it would match. Dropping the incomplete line keeps the one guarantee that matters here
+ * — nothing crosses the boundary that was not looked at whole — and a stream with no line break
+ * inside the bound is quoted as its size alone for the same reason.
+ *
+ * The slice comes before the masking so that neither cost is paid on the whole stream.
+ */
+function quotable(stream: string): string {
+	if (stream.length <= QUOTED_STREAM_MAX_CHARS) return stream;
+	const head = stream.slice(0, QUOTED_STREAM_MAX_CHARS);
+	return head.slice(0, head.lastIndexOf('\n') + 1);
+}
+
+/**
+ * A binary payload, rendered for a message a human will read — {@link quoteStream}'s
+ * counterpart, and `../android/adb.ts`'s `describeBytes` for the same reasons.
+ *
+ * Nothing in this module produces bytes, and it lives here anyway. What this platform's capture
+ * comes back as is a file `simctl` wrote at a path of this backend's choosing, which
+ * `./backend.ts` reads and then refuses if it is not an image — a failure one layer out, like
+ * the exit-0 failures {@link quoteStream} is exported for, and one that gets read beside them.
+ * One definition, so no two messages disagree about how a payload reads.
+ *
+ * Quoting the payload itself is not an option: it is megabytes and it is not text. What is
+ * quoted is the two facts that identify it — how much came back, and what it starts with. The
+ * leading bytes are the useful half, because a capture that arrived as an error message, as text
+ * or not at all is told apart by exactly those.
+ */
+export function describeBytes(bytes: Uint8Array): string {
+	if (bytes.length === 0) return '(empty)';
+	const head = [...bytes.subarray(0, 8)]
+		.map((byte) => byte.toString(16).padStart(2, '0'))
+		.join(' ');
+	return `(${bytes.length} bytes, starting ${head})`;
 }
 
 /**
@@ -293,7 +434,11 @@ export async function runSimctl(
 		execFile(
 			simctl,
 			[...args],
-			{ timeout: timeoutMs, maxBuffer: SIMCTL_MAX_BUFFER_BYTES, encoding: 'utf8' },
+			{
+				timeout: timeoutMs,
+				maxBuffer: options.maxBufferBytes ?? SIMCTL_MAX_BUFFER_BYTES,
+				encoding: 'utf8',
+			},
 			(error, stdout, stderr) => {
 				if (error === null) {
 					resolve({ stdout, stderr });
