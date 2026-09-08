@@ -1175,6 +1175,7 @@ startup, naming the variable and the reason, rather than binding something surpr
 | Variable | Default | Value |
 |---|---|---|
 | `ROVER_ADB_PATH` | unset — the search below | The one setting that overrides where this host looks for `adb`: the **path of the executable**, not the SDK it came from, so an `adb` in a layout with no `platform-tools` directory can be named too. Unset or empty and the ordered search under [where Rover looks for `adb`](#where-rover-looks-for-adb) answers instead — **empty counts as unset**, as it is for the socket. Read only by the daemon, on the machine the devices are attached to (`PROJECT.md` D19, D32): a client never resolves `adb` and never runs one. There is deliberately **no schema** for it, unlike every other row here: the only check worth making on this value is whether the file runs, which no shape can express — so a path that is not an executable this host can run is **skipped like any other candidate** rather than failing the daemon, and the search continues past it; when nothing is left, the failure names every location that was tried and this variable. The resolved path is held in memory for the daemon's life and **never written anywhere** (`PROJECT.md` D6), so an SDK upgrade takes effect on the next daemon start and there is no cache to invalidate. |
+| `ROVER_IDB_COMPANION_PATH` | unset — the search below | The one setting that overrides where this host looks for `idb_companion`, the program the iOS-simulator backend will drive its device stream and its input verbs through: the **path of the executable**, not a directory it came from. Unset or empty and the two-row search under [where Rover looks for `idb_companion`](#where-rover-looks-for-idb_companion) answers instead — **empty counts as unset**, as it is for `ROVER_ADB_PATH`. Read only by the daemon, on the machine the simulators are on (`PROJECT.md` D19, D32). **No schema**, for `ROVER_ADB_PATH`'s reason: a path that is not an executable this host can run is skipped like any other candidate rather than failing the daemon, and the search continues past it. Nothing drives this program yet — today the variable is read by the locator and by nothing else, and the backend still enumerates through `simctl`. |
 | `ROVER_SOCKET_PATH` | `~/.rover/rover.sock` | Absolute path of the unix socket the local daemon binds and a local client connects to. **Empty counts as unset** — an exported-but-blank variable is what a shell leaves behind, and reading it as a real setting would point the daemon at the current directory. At most **103 bytes of UTF-8**: a unix socket address is a fixed-size struct (104 bytes on macOS, 108 on Linux, NUL included), and over the cap `bind` truncates or answers `EINVAL` instead of naming the length, so a longer path is rejected at startup with the byte count and the path. |
 | `ROVER_USERS_PATH` | `~/.rover/users.json` | Absolute path of the host's own user store — one record per user: identifier, display name, the **hash** of that user's token, and when it was created. Never a token: `rover users add` and `rover users rotate` print the raw value once and store only its hash. **Empty counts as unset**, as it is for the socket. Read by `rover users`, which touches the file directly and never goes over the network (`PROJECT.md` D25), **and by the network listener**, which is the host's entire authentication surface: the token in a caller's greeting is hashed and looked up here, re-read at every connection attempt and never cached, so `revoke` and `rotate` take effect on the very next attempt with the daemon still running. |
 | `ROVER_ARTIFACTS_PATH` | `~/.rover/artifacts` | Root of the durable artifact archive: every `screenshot`, `record_video`, `stop_recording` and `read_logs` call additionally writes its output here, on the host, **in addition to** returning the bytes to the client (`PROJECT.md` D23, §10). **Empty counts as unset**, as it is for the socket. Read only by the daemon — a client never resolves it, and the archive path is never the one an agent is given. **Something prunes it now, and only when asked**: `rover sweep` runs the host's retention policy over this tree — `ROVER_ARTIFACTS_BUDGET_MB` and `ROVER_ARTIFACTS_MAX_AGE_DAYS` below — deleting whole run directories, oldest first. **Nothing schedules that sweep**, so this still grows without bound until an operator runs it (`PROJECT.md` §9.4). |
@@ -1236,6 +1237,54 @@ wedged binary, would be a worse prerequisite check than none.
 into frames — is deliberately **not** resolved this way: there is no
 canonical install location for it the way there is for the Android SDK, so `PATH` remains the right
 answer for it.
+
+### Where Rover looks for `idb_companion`
+
+**Nothing drives this program yet.** The iOS-simulator backend enumerates through `simctl` and
+declares no input capability; what exists today is the search below, so that the phase which does
+spawn a companion has one place to ask. Read this as documentation of a setting, not of a feature.
+
+`idb_companion` is Meta's companion binary for the iOS simulator — a device stream on
+`--notify stdout` and a gRPC server for the accessibility read and the input verbs (`docs/IOS.md`
+§3, §4). The host looks in **two** places, takes the first executable file it finds, and holds
+nothing:
+
+| # | Location | |
+|---|---|---|
+| 1 | `ROVER_IDB_COMPANION_PATH` | The executable itself, exactly as you wrote it. Nothing is appended to it. An empty value counts as unset. |
+| 2 | `PATH` | Every entry, in order. An empty entry — the working directory on POSIX — is skipped, for the reason it is skipped for `adb`. |
+
+**There is deliberately no third row, because this program has no canonical install location at
+all.** `adb` gets four more because the Android SDK *has* one per platform. Homebrew no longer
+carries `idb-companion` — the old `facebook/fb` tap is gone — so the supported install is the
+release's prebuilt tarball, unpacked wherever you put it:
+
+```bash
+curl -LO https://github.com/facebook/idb/releases/download/v1.5.2/idb-companion.macos-arm64.tar.gz
+tar xzf idb-companion.macos-arm64.tar.gz
+export ROVER_IDB_COMPANION_PATH="$PWD/idb_companion"
+```
+
+The tarball unpacks `idb_companion` beside a `Resources/` directory and several `.bundle`s it
+needs, so **the binary cannot be moved out of that tree on its own** — which is why the setting
+above names a path rather than asking you to put a copy somewhere tidy.
+
+That is the same argument as for `ffmpeg` above — no canonical location, so `PATH` is the right
+answer — with the override added on top, and the override is necessary rather than speculative: a
+tarball unpacked into a scratch directory is on no `PATH` at all, least of all the short one a
+GUI-launched daemon inherits. **It is a list, never a search of your disk** (`PROJECT.md` D32).
+
+A candidate is accepted on the **filesystem** — a file, executable by this user — and not by being
+run, which is the one place this search differs from `adb`'s. `adb version` is an acceptable
+acceptance check only because it was measured to start no adb server; the equivalent has not been
+measured for this program, and one companion process per simulator is something Rover has to
+supervise deliberately rather than start as a side effect of looking for it. When both places have
+been tried the failure **names each of them**, the unset variable included, because that row is the
+one you can act on. Off macOS the list is empty and the failure says so.
+
+`npm install` does **not** check for this program, unlike `adb`. Every device Rover drives needs
+`adb`; `idb_companion` is one backend's second program, and a machine without it still answers
+every verb that backend has today.
 
 ### Project hooks
 

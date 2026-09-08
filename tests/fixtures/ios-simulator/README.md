@@ -22,6 +22,13 @@ Each filename carries the subject and the **versions the capture was taken on**:
 put the Xcode/runtime pair, because **iOS has no API level** — there is nothing to record in that
 position, and the version the capture was taken on is the fact that governs it.
 
+**Where a program that is not Xcode's own governs the format, its version goes in front of that
+pair** — `idb-notify.idbcompanion1.5.2-xcode26.6-ios26.5.txt` is the first, because idb is a
+third-party release with a cadence of its own rather than something an Xcode update carries: v1.5.2
+and v1.5.4 are eight days apart. A newer companion is a **second fixture beside this one**, not an
+edit to it. This is the case the folder's name already anticipated — a folder called `simctl/` was
+wrong by the second program governing a capture here and is wronger with every one since.
+
 **The `-ios<runtime-version>` half is dropped where no runtime governs the capture**, and the
 device-type profiles below are the case: a `profile.plist` ships inside CoreSimulator's own
 `.simdevicetype` bundle, not inside any runtime, and describes hardware rather than an OS — the
@@ -61,6 +68,19 @@ they are named `xcode26.6` and have their own section below. Two benches in one 
 filename convention working, not a problem to tidy away — and it is why each capture's row names
 the versions rather than the folder doing it once.
 
+**The idb captures are that same second bench with one program added** (#216): macOS 26.6.2
+(25G83), Xcode 26.6 (17F113), iOS 26.5 (23F77), `iPhone 17`
+`88D8476E-F4A4-4A18-A89B-0C47E077CC8B` booted and every other device `Shutdown`, 2026-09-08 — plus
+`idb_companion` **v1.5.2** (built 2026-09-01), fetched as the release's
+`idb-companion.macos-arm64.tar.gz`, checksummed against the release's own `.sha256` and unpacked
+into a scratch directory **outside this repository** (`docs/IOS.md` §4). Eleven simulators, all
+under the one installed runtime.
+
+**The companion's version is not something the program will tell you.** `idb_companion --version`
+prints `{"build_date":"Sep 1 2026","build_time":"08:51:20"}` and no version at all, so the `1.5.2`
+in that filename is the **release tag the asset was downloaded from**. Record it from the download,
+not from the binary.
+
 ## Captures
 
 | Fixture | Command | Xcode | Runtime | Captured |
@@ -76,8 +96,11 @@ the versions rather than the folder doing it once.
 | `recordvideo.stderr.xcode26.6-ios26.5.txt` | `simctl io … recordVideo` (below) | **26.6** | **26.5** | 2026-09-08 |
 | `recordvideo.finished.xcode26.6-ios26.5.mov` | `simctl io … recordVideo` (below) | **26.6** | **26.5** | 2026-09-08 |
 | `recordvideo-ps.recording.xcode26.6.txt` | `ps -A -o pid=,command=` (below) | **26.6** | n/a | 2026-09-08 |
+| `idb-notify.idbcompanion1.5.2-xcode26.6-ios26.5.txt` | `idb_companion --notify stdout` (below) | **26.6** | **26.5** | 2026-09-08 |
+| `simctl-list.xcode26.6-ios26.5.json` | `xcrun simctl list -j` (below) | **26.6** | **26.5** | 2026-09-08 |
 
-The all-listings capture is the primary one: `xcrun simctl list -j` with no type argument answers
+The all-listings capture is the primary one — there are now two, on two Xcode releases, and the
+second one's reason is its own section below: `xcrun simctl list -j` with no type argument answers
 all four listings at once — `devicetypes`, `runtimes`, `devices`, `pairs` — even though
 `simctl list`'s own usage text says to "specify one of" them. A later phase of this split reads
 `devicetypes` out of the same file. The `devices`-only capture is what pins that a single-listing
@@ -95,6 +118,61 @@ xcrun simctl boot <udid> && xcrun simctl bootstatus <udid> -b
 # … take the two captures above …
 xcrun simctl shutdown <udid>
 ```
+
+## The idb notify capture, and the `simctl` listing beside it
+
+`idb_companion --notify stdout` is the change stream the iOS-simulator backend will eventually
+watch instead of polling (`docs/IOS.md` §7). **The companion is what governs this format**, not
+Xcode, which is why its version leads the filename.
+
+```bash
+export ROVER_IDB_COMPANION_PATH=/path/to/unpacked/idb_companion   # docs/IOS.md §4 has the install
+"$ROVER_IDB_COMPANION_PATH" --notify stdout \
+  > tests/fixtures/ios-simulator/idb-notify.idbcompanion1.5.2-xcode26.6-ios26.5.txt &
+# … with it streaming, boot one simulator and put it back …
+xcrun simctl boot D85C3449-4D0C-4E93-B8EC-77FD0E5A8F3F      # iPhone 17 Pro, Shutdown before and after
+xcrun simctl bootstatus D85C3449-4D0C-4E93-B8EC-77FD0E5A8F3F -b
+xcrun simctl shutdown D85C3449-4D0C-4E93-B8EC-77FD0E5A8F3F
+kill %1
+
+xcrun simctl list -j > tests/fixtures/ios-simulator/simctl-list.xcode26.6-ios26.5.json
+```
+
+**The host was left exactly as found**: `iPhone 17` was already booted and was never touched, and
+the simulator that moved was `Shutdown` before the capture and `Shutdown` after it. Nothing quit or
+drove `Simulator.app`, which would have shut down every device it owns (`docs/IOS.md` §8, trap 4).
+
+| | |
+|---|---|
+| Frames | 5 — `Shutdown → Booting → Booted → Shutting Down → Shutdown` for the one device that moved |
+| Targets per frame | 11, every time: each line is the **full** set, never a delta |
+| Framing | one JSON array per line, newline-terminated; the file ends with a newline |
+| Target keys | `udid`, `type`, `name`, `model`, `os_version`, `state` — in an order that varies between frames |
+
+- **The terminating newline arrives in its own write.** The reads this capture came in as were
+  `1784, 1, 1784, 1783, 1789, 1, 1785` bytes — a frame and its newline delivered separately, twice
+  in five frames. That is the whole reason
+  `src/backends/ios-simulator/parsers/idb-notify.ts` is a decoder rather than a `split('\n')`, and
+  the suite feeds the same bytes back in 1-byte chunks to prove it.
+- **`os_version` carries the platform word**: `iOS 26.5`, where the runtime in the `simctl` listing
+  beside it reports a bare `26.5` for the very same runtime. That single difference is why
+  `src/backends/ios-simulator/devices.ts` normalises this path's version onto `simctl`'s — two
+  spellings for one device would let `list_devices` and the inventory disagree.
+- **`simctl-list.xcode26.6-ios26.5.json` is here for exactly that comparison**, and it is the
+  reason a second all-listings capture exists at all when there is already one on Xcode 26.4.1: it
+  was taken minutes after the notify capture, on the same bench, with the same eleven simulators in
+  the same states, so `toDevices` and `toNotifiedDevices` can be asserted **equal device by
+  device** rather than each against a literal. Two captures from two machines could not have been
+  compared that way. It also pins that the parser still reads an all-listings capture from a second
+  Xcode release.
+- **No physical target and no non-iOS runtime is in this capture**, because none was on the bench —
+  no iPhone was paired to it and only the iOS 26.5 runtime is installed. So the allowlist in
+  `devices.ts` (only a `Simulator` under an `iOS ` runtime is admitted) is pinned by **inline cases**
+  in `tests/unit/backends/ios-simulator/devices.test.ts`, named as inline there, the same way
+  `messageType: "None"` is above.
+- Committed **verbatim**, byte for byte: the decoder's whole job is the boundary, so a re-indented
+  or re-wrapped capture would test the wrong thing. It contains simulator UDIDs and device-type
+  names and nothing else — no path and nothing personal.
 
 ## The two device-type profiles
 
