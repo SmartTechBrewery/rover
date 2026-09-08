@@ -1167,6 +1167,134 @@ export const ListProjectsResultSchema = z.discriminatedUnion('outcome', [
 export type ListProjectsResult = z.infer<typeof ListProjectsResultSchema>;
 
 /**
+ * How many tests one host may keep — the bound on the store and therefore the bound on both
+ * rows' arrays.
+ *
+ * `src/daemon/kept-tests.ts` carries it on the store's own schema, and `set_kept_tests` refuses a
+ * write over it — that pair is what lets the read promise it. An array bound declared here with
+ * nothing enforcing it at the store would make the host answer `invalid_result` forever, on every
+ * call, for a file it had already written; enforced there, a store past the cap is a read that
+ * throws naming its path, which the handlers answer as `unreadable`/`unwritable`. 1000 is
+ * far past what an operator ticks by hand, so this is allocation hygiene in
+ * {@link ATTRIBUTION_MAX_LENGTH}'s sense rather than a policy — **and it is not a retention
+ * rule**: going over it refuses the write and drops nothing (`PROJECT.md` §9.4 is still open).
+ */
+export const MAX_KEPT_TESTS = 1000;
+
+/**
+ * Which test a `Keep` flag is about: `<project>/<test_name>`, the archive's own two leading
+ * components.
+ *
+ * **The components as the archive filed them** — what `list_archive` answered — and never the
+ * caller's own attribution strings, which `pathSegment` may have rewritten on the way in and
+ * which are not recoverable from the tree (`PROJECT.md` §10). The thing a sweep would one day
+ * come for is the directory, so the directory's name is the identity. Nothing parses either
+ * component (D22): `project` is in the pair because `test_name` alone is not an identity — the
+ * tree's top level partitions precisely so two projects may reuse one test name.
+ *
+ * `.strict()` so a typo'd key is `invalid_params` rather than a flag set on a test nobody named.
+ */
+export const KeptTestRefSchema = z
+	.object({ project: ArchivePathSegmentSchema, testName: ArchivePathSegmentSchema })
+	.strict();
+export type KeptTestRef = z.infer<typeof KeptTestRefSchema>;
+
+/** `.strict()` and no key at all, for {@link ListDevicesParamsSchema}'s reason. */
+export const ListKeptTestsParamsSchema = z.object({}).strict();
+export type ListKeptTestsParams = z.infer<typeof ListKeptTestsParamsSchema>;
+
+/**
+ * The whole set in one answer, or the fact that the host cannot read its own store.
+ *
+ * **There is deliberately no `missing` arm**, and that is the one place this row diverges from
+ * the archive's reads: a store that does not exist is *nothing is kept*, which is honestly
+ * `listed` with `[]`. In the archive, empty and missing are different facts about the host's disk
+ * ({@link ListArchiveResultSchema}); here they are the same fact about the operator's intent, and
+ * two answers that render identically must not be two arms.
+ *
+ * **No `message` field anywhere**, for {@link ListArchiveResultSchema}'s stated reason: the only
+ * diagnosis worth giving names the store's path, and a `message: string` is a field a host path
+ * fits in (D19). It goes to the host's own log instead, exactly as `list_archive`'s does.
+ *
+ * **`keptBy` and `keptAt` are deliberately not here.** The file records both and one audit line
+ * says both, because *who said to keep this* is the record D28 wants; nothing needs either to
+ * draw a tick, and widening this answer later is additive.
+ */
+export const ListKeptTestsResultSchema = z.discriminatedUnion('outcome', [
+	/** The store was read. `tests: []` is **this host keeps nothing**, and is not a failure. */
+	z
+		.object({
+			outcome: z.literal('listed'),
+			tests: z.array(KeptTestRefSchema).max(MAX_KEPT_TESTS),
+		})
+		.strict(),
+	/** The store is there and the host **cannot say what is in it** — it will not parse, or will not read. */
+	z.object({ outcome: z.literal('unreadable') }).strict(),
+]);
+export type ListKeptTestsResult = z.infer<typeof ListKeptTestsResultSchema>;
+
+/**
+ * One press, however many tests it stands for — **a group's tick is one call, not one per test**.
+ *
+ * That is the shape rather than a convenience: a group's tick keeps every test in the group
+ * (`docs/DESIGN.md` §9), so nine tests ticked together are one request, one write of the whole
+ * document and one authoritative answer. Nine calls would leave a partly-written group visible
+ * between them and nine audit lines for one decision.
+ *
+ * `kept` is what the press decided — keep all of these, or stop keeping all of these — and it is
+ * a boolean rather than two methods because the two directions are the same write of the same
+ * file with the same attribution.
+ *
+ * **`actor` is attribution and not authorisation** (D20, D28), exactly as
+ * {@link ForceReleaseDeviceParamsSchema}'s is: the host records who said to keep this and derives
+ * it from nothing, because deriving attribution from whoever authenticated is what D20 forbids.
+ * What authorizes the call is reaching this surface — the local socket is a shell on the host,
+ * and a network or browser caller is a named user in the host's own store (D25, D28). No tier is
+ * invented here, and `docs/WEB_PANEL.md` keeps tiering an open question.
+ *
+ * `.min(1)` because a press is about at least one test, and `.max(MAX_KEPT_TESTS)` for the reason
+ * that constant gives.
+ */
+export const SetKeptTestsParamsSchema = z
+	.object({
+		tests: z.array(KeptTestRefSchema).min(1).max(MAX_KEPT_TESTS),
+		/** Keep all of these, or stop keeping all of these. */
+		kept: z.boolean(),
+		/** Who is keeping them. Attribution only — it authorizes nothing (D20, D28). */
+		actor: AttributionStringSchema,
+	})
+	.strict();
+export type SetKeptTestsParams = z.infer<typeof SetKeptTestsParamsSchema>;
+
+/**
+ * **`set` answers the whole set after the write**, not an acknowledgement.
+ *
+ * It costs nothing — the file was just read and written — it removes any need for a client to
+ * guess what its own press produced, and it means a group's press of nine tests is one request
+ * and one authoritative answer (R29, D6: the client renders what it was sent).
+ *
+ * `refused: 'too-many'` is the cap being reached, as **data**: the write did not happen and the
+ * store is exactly as it was, which is something an operator acts on rather than a host that
+ * broke ({@link AcquireDeviceResultSchema}'s reasoning).
+ *
+ * `unwritable` is *the host did not write it* — the store could not be read, will not parse, or
+ * could not be written. **A malformed store is never overwritten**, so it lands here too rather
+ * than being reset to whatever this one call happened to name. No `message` and no path, for
+ * {@link ListArchiveResultSchema}'s reason (D19); the diagnosis is a warning on the host.
+ */
+export const SetKeptTestsResultSchema = z.discriminatedUnion('outcome', [
+	z
+		.object({
+			outcome: z.literal('set'),
+			tests: z.array(KeptTestRefSchema).max(MAX_KEPT_TESTS),
+		})
+		.strict(),
+	z.object({ outcome: z.literal('refused'), reason: z.literal('too-many') }).strict(),
+	z.object({ outcome: z.literal('unwritable') }).strict(),
+]);
+export type SetKeptTestsResult = z.infer<typeof SetKeptTestsResultSchema>;
+
+/**
  * `status` and `list_devices` exist in the *protocol* rather than in the MCP layer because
  * D16 requires daemon state to be answerable to something that is not an agent: whatever
  * Swarm asks, it asks here, the same way a local caller does. Nothing device-shaped may
@@ -1236,6 +1364,28 @@ export type ListProjectsResult = z.infer<typeof ListProjectsResultSchema>;
  * own browser, and what the host is configured to run is not something every agent on it needs
  * to enumerate.
  *
+ * **`list_kept_tests` and `set_kept_tests` are the `Keep` flag's two directions** (D33, #234),
+ * and the pair is where this surface first *writes* something of the host's own that is not a
+ * lease. The flag is per **test** — `<project>/<test_name>`, the archive's own two leading
+ * components as `list_archive` answered them, parsed by nothing (D22) — and it lives in
+ * `~/.rover/kept-tests.json`, a document of the host's own beside `users.json` and deliberately
+ * outside the artifact tree, because every sidecar in that tree is written once and never
+ * rewritten while this toggles (D33, `PROJECT.md` §10). The read takes nothing and answers the
+ * **whole set**, so one poll draws every tick on a screen; the write takes however many tests one
+ * press stood for, so a group's tick is **one** call rather than one per test, and answers the
+ * whole set after the write. No `message` field is on either answer and no host path is anywhere
+ * near one (D19) — a store the host cannot read is `unreadable`, a write it did not make is
+ * `unwritable`, and the diagnosis goes to the host's own log the way `list_archive`'s does.
+ * `actor` is caller-supplied attribution and is never derived from whoever authenticated (D20,
+ * D28); the file records it as `keptBy`/`keptAt` and one audit line says it, and it stays off the
+ * wire on reads. **A per-entry `kept` field on `ArchiveEntry` was considered and rejected**:
+ * `list_archive` deliberately knows nothing about what a level *is* (`onlyChild` is a rule about
+ * shape, never about what a component says, D22), and a flag on an entry would teach it that
+ * level 2 is a test. Both rows are on `PANEL_METHODS` (D29) and both are deliberately **not** MCP
+ * tools — an agent does not decide what the operator keeps, and one that could untick a test
+ * could clear the exemption on somebody else's run (D27). **Nothing here sweeps, prunes or
+ * expires anything**: retention is still undecided (`PROJECT.md` §9.4).
+ *
  * The verb rows are the two waits, the six input verbs, the three read verbs, the three
  * app-lifecycle verbs, the log read, the three recording rows, the two environment verbs and
  * the three file transfers; each further verb family is one more row beside them and one more
@@ -1281,6 +1431,8 @@ export const IPC_METHODS = {
 		result: ListArchiveGroupsResultSchema,
 	},
 	list_projects: { params: ListProjectsParamsSchema, result: ListProjectsResultSchema },
+	list_kept_tests: { params: ListKeptTestsParamsSchema, result: ListKeptTestsResultSchema },
+	set_kept_tests: { params: SetKeptTestsParamsSchema, result: SetKeptTestsResultSchema },
 	wait_for: { params: WaitForParamsSchema, result: VerbCallResultSchema },
 	wait_until_gone: { params: WaitUntilGoneParamsSchema, result: VerbCallResultSchema },
 	tap: { params: TapParamsSchema, result: VerbCallResultSchema },

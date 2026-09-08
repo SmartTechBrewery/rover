@@ -83,6 +83,7 @@ async function start(options: { leaseTtlMs?: number } = {}): Promise<RunningDaem
 		socketPath: temp.socketPath,
 		artifactsRoot: temp.artifactsRoot,
 		projectsRoot: temp.projectsRoot,
+		keptTestsPath: temp.keptTestsPath,
 		...options,
 	});
 	if (!result.started) {
@@ -175,11 +176,13 @@ describe('list_devices over the socket', () => {
 				socketPath: temp.socketPath,
 				artifactsRoot: temp.artifactsRoot,
 				projectsRoot: temp.projectsRoot,
+				keptTestsPath: temp.keptTestsPath,
 			}),
 			startDaemon({
 				socketPath: temp.socketPath,
 				artifactsRoot: temp.artifactsRoot,
 				projectsRoot: temp.projectsRoot,
+				keptTestsPath: temp.keptTestsPath,
 			}),
 		]);
 		for (const result of results) {

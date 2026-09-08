@@ -387,6 +387,11 @@ describe('the generated ROVER.md', () => {
 		// Host-operator configuration rather than anything an agent calls: what this host is
 		// registered to run around a lease, on the panel's surface alone (R39, D31).
 		'list_projects',
+		// The operator's `Keep` flag on the host's own archive (D33, #234). Not an agent's to
+		// decide at all — one that could untick a test would be clearing the exemption on
+		// somebody else's run — and its read would enumerate what every other agent has kept.
+		'list_kept_tests',
+		'set_kept_tests',
 	]);
 
 	const page = roverDocument({

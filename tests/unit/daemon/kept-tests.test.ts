@@ -1,0 +1,316 @@
+/**
+ * The host's record of which archived tests are kept, against a real file (D33).
+ *
+ * Real files rather than a mocked `fs`, for `user-store.test.ts`'s reason: what is asserted here
+ * is the atomic replace, the fixed order and — above all — that a store which will not parse is
+ * left byte-identical, and a mock cannot be wrong about any of those. Every one lives inside a
+ * per-test `mkdtemp`, never `~/.rover/kept-tests.json`, which belongs to whoever is running the
+ * tests.
+ */
+
+import { readdir, readFile, writeFile } from 'node:fs/promises';
+import { homedir } from 'node:os';
+import { dirname, join } from 'node:path';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import {
+	applyKeep,
+	defaultKeptTestsPath,
+	KEPT_TESTS_PATH_ENV_VAR,
+	type KeptTest,
+	keptTestKey,
+	MAX_KEPT_TESTS,
+	readKeptTests,
+	resolveKeptTestsPath,
+	temporaryKeptTestsPath,
+	writeKeptTests,
+} from '@/daemon/kept-tests.js';
+import {
+	createTempSocket,
+	removeTempSocket,
+	type TempSocket,
+} from '../../helpers/daemon-socket.js';
+
+let temp: TempSocket;
+let path: string;
+
+const AT = '2026-09-08T10:00:00.000Z';
+
+function kept(project: string, testName: string, overrides: Partial<KeptTest> = {}): KeptTest {
+	return { project, testName, keptBy: 'an-operator', keptAt: AT, ...overrides };
+}
+
+function pairsOf(tests: readonly KeptTest[]): string[] {
+	return tests.map((test) => `${test.project}/${test.testName}`);
+}
+
+beforeEach(async () => {
+	temp = await createTempSocket();
+	path = temp.keptTestsPath;
+});
+
+afterEach(async () => {
+	await removeTempSocket(temp);
+});
+
+describe('resolveKeptTestsPath', () => {
+	it('falls back to ~/.rover/kept-tests.json, beside the socket and the user store', () => {
+		expect(resolveKeptTestsPath({})).toBe(join(homedir(), '.rover', 'kept-tests.json'));
+		expect(defaultKeptTestsPath()).toBe(join(homedir(), '.rover', 'kept-tests.json'));
+	});
+
+	it('prefers the configured path and reads process.env when passed nothing', () => {
+		expect(resolveKeptTestsPath({ [KEPT_TESTS_PATH_ENV_VAR]: '/tmp/rover-kept.json' })).toBe(
+			'/tmp/rover-kept.json',
+		);
+
+		vi.stubEnv(KEPT_TESTS_PATH_ENV_VAR, '/tmp/rover-kept-from-env.json');
+		expect(resolveKeptTestsPath()).toBe('/tmp/rover-kept-from-env.json');
+	});
+
+	it('treats an exported-but-empty variable as unset, as the socket does', () => {
+		expect(resolveKeptTestsPath({ [KEPT_TESTS_PATH_ENV_VAR]: '' })).toBe(defaultKeptTestsPath());
+	});
+});
+
+describe('readKeptTests', () => {
+	it('answers [] for a store that does not exist — a host keeping nothing is ordinary', async () => {
+		await expect(readKeptTests(path)).resolves.toEqual([]);
+	});
+
+	it('throws naming the path on a store that is not JSON, and leaves it byte-identical', async () => {
+		await writeFile(path, '{ not json', 'utf8');
+
+		await expect(readKeptTests(path)).rejects.toThrow(path);
+		// The whole promise of the throw: rewriting it as empty would delete every exemption on
+		// the host to make one call succeed (`user-store.ts`'s reason).
+		await expect(readFile(path, 'utf8')).resolves.toBe('{ not json');
+	});
+
+	it('throws on a document that will not match the schema, and leaves it byte-identical', async () => {
+		const raw = JSON.stringify({ tests: [{ project: 'rover' }] });
+		await writeFile(path, raw, 'utf8');
+
+		await expect(readKeptTests(path)).rejects.toThrow(path);
+		await expect(readFile(path, 'utf8')).resolves.toBe(raw);
+	});
+
+	it('throws on a component the archive could never have filed', async () => {
+		// `..` is one of the things `ArchivePathSegmentSchema` refuses outright, so a store
+		// carrying one is a store that was edited by something other than this host.
+		await writeFile(path, JSON.stringify({ tests: [kept('..', 'x')] }), 'utf8');
+
+		await expect(readKeptTests(path)).rejects.toThrow(path);
+	});
+
+	it('throws naming the path on a store hand-edited past the cap', async () => {
+		// The bound is on the store's own schema, not only in the handler that refuses a write
+		// over it: `list_kept_tests`' result is bounded too, so an over-cap store has to fail
+		// somewhere, and failing here is a message that names the path — which both handlers turn
+		// into `unreadable`/`unwritable` — rather than an `invalid_result` no client can act on.
+		const tests = Array.from({ length: MAX_KEPT_TESTS + 1 }, (_, index) =>
+			kept('rover', `test-${String(index).padStart(5, '0')}`),
+		);
+		await writeFile(path, JSON.stringify({ tests }), 'utf8');
+
+		await expect(readKeptTests(path)).rejects.toThrow(path);
+	});
+
+	it('answers one record per test when a hand-edited store holds a pair twice', async () => {
+		// Nothing this module writes can hold a duplicate (`applyKeep`'s Map), but the header
+		// promises an operator editing the file by hand is obeyed — so a duplicate is collapsed on
+		// the way in rather than answered twice and then quietly collapsed by the next write.
+		const first = kept('rover', 'checkout flow', { keptBy: 'alice' });
+		const second = kept('rover', 'checkout flow', { keptBy: 'bob' });
+		await writeFile(path, JSON.stringify({ tests: [first, second] }), 'utf8');
+
+		// The first in the file wins: the order is fixed and `sort` is stable, so every host makes
+		// the same choice.
+		await expect(readKeptTests(path)).resolves.toEqual([first]);
+	});
+});
+
+describe('writeKeptTests', () => {
+	it('round-trips the whole document', async () => {
+		await writeKeptTests(path, [kept('rover', 'checkout flow')]);
+
+		await expect(readKeptTests(path)).resolves.toEqual([kept('rover', 'checkout flow')]);
+	});
+
+	it('leaves no temporary file behind a successful write', async () => {
+		await writeKeptTests(path, [kept('rover', 'checkout flow')]);
+
+		// Write-then-`rename`, so a reader sees the old file or the new one and never half of
+		// either — and never a `.tmp` sitting beside it afterwards.
+		const names = await readdir(temp.dir);
+		expect(names.filter((name) => name.endsWith('.tmp'))).toEqual([]);
+	});
+
+	it('orders by project then test name, by code unit, and stably across a rewrite', async () => {
+		await writeKeptTests(path, [
+			kept('rover', 'zebra'),
+			kept('Rover', 'apple'),
+			kept('rover', 'apple'),
+		]);
+
+		// Code-unit order rather than `localeCompare`, so one host cannot answer in a different
+		// order from another: 'R' (0x52) sorts before 'r' (0x72).
+		const first = await readKeptTests(path);
+		expect(pairsOf(first)).toEqual(['Rover/apple', 'rover/apple', 'rover/zebra']);
+
+		await writeKeptTests(path, first);
+		expect(pairsOf(await readKeptTests(path))).toEqual(pairsOf(first));
+	});
+
+	it('creates the directory holding the store', async () => {
+		const nested = join(temp.dir, 'deeper', 'kept-tests.json');
+
+		await writeKeptTests(nested, [kept('rover', 'checkout flow')]);
+
+		await expect(readKeptTests(nested)).resolves.toHaveLength(1);
+	});
+
+	it('holds no credential, so no 0o600 is implied about it', async () => {
+		await writeKeptTests(path, [kept('rover', 'checkout flow')]);
+
+		// The one property worth asserting about the bytes: what a project name, a test name and
+		// an attribution string are, and nothing that reads like a secret.
+		const raw = await readFile(path, 'utf8');
+		expect(raw).toContain('"keptBy": "an-operator"');
+		expect(raw).not.toContain('token');
+	});
+});
+
+describe('two writes at once', () => {
+	it('never gives two writers the same temporary, and keeps it beside the store', () => {
+		// A wire call sets this store (D33), so two writers really do overlap — and two of them
+		// sharing one `<path>.tmp` would each truncate it, write from offset 0 and then rename the
+		// interleaved bytes over the store, leaving a document nobody can read again.
+		expect(temporaryKeptTestsPath(path)).not.toBe(temporaryKeptTestsPath(path));
+		// Same directory, because that is what keeps the `rename` atomic, and still a `.tmp`.
+		expect(dirname(temporaryKeptTestsPath(path))).toBe(temp.dir);
+		expect(temporaryKeptTestsPath(path).endsWith('.tmp')).toBe(true);
+	});
+
+	it('leaves one writer’s document whole when several overlap, and never half of each', async () => {
+		// Big enough documents that a shared temporary could not fail to interleave: what is
+		// asserted is that exactly one of the eight won the store whole.
+		const documents = Array.from({ length: 8 }, (_, writer) =>
+			Array.from({ length: 500 }, (_, index) =>
+				kept('rover', `writer-${writer}-test-${String(index).padStart(4, '0')}`),
+			),
+		);
+
+		await Promise.all(documents.map((document) => writeKeptTests(path, document)));
+
+		const stored = await readKeptTests(path);
+		expect(stored).toHaveLength(500);
+		const writers = new Set(stored.map((test) => test.testName.split('-test-')[0]));
+		expect(writers.size).toBe(1);
+		const names = await readdir(temp.dir);
+		expect(names.filter((name) => name.endsWith('.tmp'))).toEqual([]);
+	});
+
+	it('removes the temporary of a write that could not be renamed into place', async () => {
+		// A unique name is never reused, so a failed write that left its temporary would leave one
+		// per failure sitting beside the store.
+		const nested = join(temp.dir, 'as-a-directory');
+		await writeKeptTests(join(nested, 'kept-tests.json'), [kept('rover', 'alpha')]);
+
+		// `rename` onto a path that is a non-empty directory fails, whatever the platform calls it.
+		await expect(writeKeptTests(nested, [kept('rover', 'beta')])).rejects.toThrow();
+
+		const names = await readdir(temp.dir);
+		expect(names.filter((name) => name.endsWith('.tmp'))).toEqual([]);
+	});
+});
+
+describe('applyKeep', () => {
+	it('adds a test that was not kept', () => {
+		const next = applyKeep([], [{ project: 'rover', testName: 'checkout flow' }], true, {
+			actor: 'alice',
+			at: AT,
+		});
+
+		expect(next).toEqual([kept('rover', 'checkout flow', { keptBy: 'alice' })]);
+	});
+
+	it('is idempotent, and leaves the original keptBy/keptAt of an already-kept test', () => {
+		const held = [kept('rover', 'checkout flow', { keptBy: 'alice', keptAt: AT })];
+
+		const next = applyKeep(held, [{ project: 'rover', testName: 'checkout flow' }], true, {
+			actor: 'bob',
+			at: '2026-09-09T10:00:00.000Z',
+		});
+
+		// Re-ticking a test a group's press already covers is the ordinary case, and rewriting the
+		// attribution would replace who *first* said to keep it with whoever pressed last.
+		expect(next).toEqual(held);
+	});
+
+	it('removes a test, and removing one that was never kept changes nothing', () => {
+		const held = [kept('rover', 'checkout flow'), kept('rover', 'sign in')];
+
+		expect(
+			pairsOf(
+				applyKeep(held, [{ project: 'rover', testName: 'checkout flow' }], false, {
+					actor: 'alice',
+					at: AT,
+				}),
+			),
+		).toEqual(['rover/sign in']);
+		expect(
+			pairsOf(
+				applyKeep(held, [{ project: 'rover', testName: 'never kept' }], false, {
+					actor: 'alice',
+					at: AT,
+				}),
+			),
+		).toEqual(pairsOf(held));
+	});
+
+	it('keeps a whole group in one call, and unticking one leaves the rest', () => {
+		const group = Array.from({ length: 9 }, (_, index) => ({
+			project: 'rover',
+			testName: `test-${index}`,
+		}));
+
+		const all = applyKeep([], group, true, { actor: 'alice', at: AT });
+		expect(all).toHaveLength(9);
+
+		const remaining = applyKeep(all, [{ project: 'rover', testName: 'test-4' }], false, {
+			actor: 'alice',
+			at: AT,
+		});
+		// The group's part-kept state has real state underneath it: eight of nine.
+		expect(pairsOf(remaining)).not.toContain('rover/test-4');
+		expect(remaining).toHaveLength(8);
+	});
+
+	it('holds two projects reusing one test name as two entries', () => {
+		const next = applyKeep(
+			[],
+			[
+				{ project: 'rover', testName: 'checkout flow' },
+				{ project: 'swarm', testName: 'checkout flow' },
+			],
+			true,
+			{ actor: 'alice', at: AT },
+		);
+
+		// `project` is in the identity because `test_name` alone is not one — the archive's top
+		// level partitions precisely so two projects may reuse a name (`PROJECT.md` §10).
+		expect(pairsOf(next)).toEqual(['rover/checkout flow', 'swarm/checkout flow']);
+	});
+});
+
+describe('keptTestKey', () => {
+	it('joins on the one character a component may not hold, so no two tests collide', () => {
+		// NUL is one of the characters `ArchivePathSegmentSchema` refuses, so no component can
+		// contain one and no two different tests can share a key — the argument the panel's own
+		// `keyOf` records. A `/` join would collide `a/b` + `c` with `a` + `b/c`.
+		expect(keptTestKey({ project: 'a', testName: 'b' })).toBe('a\u0000b');
+		expect(keptTestKey({ project: 'a/b', testName: 'c' })).not.toBe(
+			keptTestKey({ project: 'a', testName: 'b/c' }),
+		);
+	});
+});

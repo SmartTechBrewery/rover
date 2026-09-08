@@ -30,6 +30,7 @@ async function start(socketPath: string): Promise<StartResult> {
 		socketPath,
 		artifactsRoot: temp.artifactsRoot,
 		projectsRoot: temp.projectsRoot,
+		keptTestsPath: temp.keptTestsPath,
 	});
 	if (result.started) {
 		running.push(result);

@@ -177,7 +177,14 @@ Design work lives in [`DESIGN.md`](./DESIGN.md); the brief that produced the fir
    group may hold seven runs — and there is no diff, no score and no verdict, because the comparison
    is visual and human-judged (`ai/RULES.md` §1).
 10. **Archive disk usage / retention view** — how much space the archive is using, and, once a
-    retention policy exists (`PROJECT.md` §9.4 — still undecided), a manual prune action.
+    retention policy exists (`PROJECT.md` §9.4 — still undecided), a manual prune action. **The
+    operator's per-test exemption now exists on the host** (`PROJECT.md` D33, #234): a `Keep` flag
+    per `<project>/<test_name>`, in a file of the host's own outside the artifact tree, read and set
+    over `list_kept_tests` and `set_kept_tests` on this surface and from `rover keep`. The disk-usage
+    view and the prune action are still this item's, and so is the policy itself — the flag records
+    which tests a sweep must spare and decides nothing about when one runs, how large the archive may
+    get, or who runs it. Every named user may set it, exactly as every named user may force-release
+    (D27, D28); tiering stays open below.
 11. **MCP config generator** — after registering a project, a ready-to-paste MCP server
     configuration snippet, so a user doesn't hand-write the pointer to their host.
 

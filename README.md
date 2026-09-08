@@ -532,6 +532,19 @@ reasons are three different next moves: `not-held`, `gone` and `not-attached`. W
 caller-supplied `actor` string the host records and derives from nothing — never from whoever
 authenticated, and never a token (D20).
 
+**And an operator can say *keep this test*, which the host remembers** (`list_kept_tests` /
+`set_kept_tests`, D33). The flag is per `<project>/<test_name>` — the two leading components a
+`list_archive` answer names — and it lives in `~/.rover/kept-tests.json`, a document of the host's
+own beside `users.json` and deliberately **outside** the artifact tree, because everything in that
+tree is written once and never rewritten while this toggles. The read answers the whole set in one
+call, so a screen of ticks is one poll; the write takes however many tests one press stood for, so a
+group's tick is **one** request and answers the whole set back. Who did it is a caller-supplied
+`actor` the host records and derives from nothing (D20, D28), stored beside the flag and named on one
+line of the host's own log, never on an answer. Both are on the panel's surface and reachable from
+`rover keep`, and neither is an MCP tool: what the operator keeps is not an agent's to decide. It
+survives a daemon restart, because the file is the truth and nothing caches it. **Nothing prunes the
+archive on the strength of it yet** — retention is still undecided (`PROJECT.md` §9.4).
+
 **The daemon restores the device itself** (D9) — on `release_device`, on `force_release_device` and
 on expiry alike, from the one place a lease is observed to end. It stops a recording the lease left
 running and removes the file it was writing, stops the project's applications, turns airplane mode
@@ -551,7 +564,7 @@ resolver answers nothing and only the two network steps have work to do.
 
 **There is a CLI** (D4) — `rover list`, `acquire`, `release`, `force-release`, `screenshot`,
 `record`, `pull`, `push`,
-`install`, `archive`, `status` and `users`, human-readable by default and one JSON document on stdout with `--json`, every diagnostic
+`install`, `archive`, `keep`, `status` and `users`, human-readable by default and one JSON document on stdout with `--json`, every diagnostic
 on stderr. It holds no verb logic: each command parses flags, calls one IPC method, renders the
 answer and picks an exit code. `list` shows what is attached, what is free and who holds the rest —
 the owner, project and test name, and how much longer they have — and says out loud when the host
@@ -563,7 +576,12 @@ archive one directory level at a time: its arguments are components a previous l
 a path on the host (D19), and it filters, searches, sorts and descends into nothing, because listing
 the directory is the whole query the tree is shaped for (D24). An empty level, a level that is not
 there and a level the host cannot read are three different answers — the first exits 0, the other
-two exit 1. `status` says which host
+two exit 1. `keep list`, `keep add` and `keep remove` are which of the host's archived **tests** it
+has been told to keep: the two arguments are an `archive` listing's own components, `--actor` is
+required on the two that write and is derived from nothing, and the flag lives in a file of the
+host's own outside the archive so it survives a restart. Nothing prunes that archive yet
+(`PROJECT.md` §9.4), so what this records is an intention ahead of the sweep that will honour it.
+`status` says which host
 answered. The host is named by `--host`: no flag means the local one, `remote` is the machine
 `ROVER_HOST_ADDRESS`, `ROVER_HOST_PORT` and `ROVER_HOST_TOKEN` name, and anything else fails loudly
 instead of hanging. `screenshot`, `record` and `pull` are the three commands that bring bytes back:
@@ -1055,7 +1073,7 @@ package argument on it — the byte-carrying form stays the CLI's, because a who
 argument means an agent producing several megabytes of base64. That is what `push_file` and
 `pull_file` are still waiting for and why they are not tools: `PROJECT.md` R24 phase 2 owns how a
 client supplies and receives a file, and neither of those rows has a second form that carries
-none. `force_release_device` is the third of six rows with no tool, and its reason will not expire:
+none. `force_release_device` is the third of nine rows with no tool, and its reason will not expire:
 **an agent must not be able to end another agent's lease.** It is authority over the shared pool
 rather than a step in one caller's work, which is what makes it an operator action (D27, D28)
 reached from the CLI and, later, the panel. `list_archive` is the fourth, and its reason is
@@ -1076,14 +1094,22 @@ exact terms (R41): it answers which of the host's runs share a testing group and
 artifacts share a label, and one call would hand an agent every other agent's run names without
 even a walk — while an agent already knows its own group and its own labels, having chosen them.
 The arrangement of a group is the operator's browser's question.
-`tests/unit/mcp/verb-declarations.test.ts` records all seven as
+`list_kept_tests` and `set_kept_tests` are the eighth and ninth, and the write is the sharpest of
+the nine: **what the operator keeps is not an agent's to decide at all** (D33). It is authority over
+a shared resource rather than a step in one caller's work, and an agent that could untick a test
+would be clearing the exemption on somebody else's run. The read is off the list on `list_archive`'s
+terms — an agent already knows its own project and test name, having supplied them, and enumerating
+what every other agent on the host has kept is an operator's question. Both are on the panel's
+surface and reachable from the CLI.
+`tests/unit/mcp/verb-declarations.test.ts` records all nine as
 decisions, so no row can quietly land with no tool. The `rover` command is published through `package.json`'s `bin` and reaches a `PATH`
 only through `npm link`, which `PROJECT.md` §9.4 records the reasoning for; `bin/rover-mcp.mjs`
 is a path an MCP config states absolutely and not that.
 
 Exit codes: `0` success; `1` the operation did not succeed (a refused `acquire`, a `release` that
 found no live lease, a `force-release` that found no lease on the device, an `archive` level that is
-not there or that the host cannot read, an unreachable host, a
+not there or that the host cannot read, a `keep` the host refused or whose own record it could not
+read or write, an unreachable host, a
 request the host rejected); `2` usage error (unknown
 command or flag, a missing `--owner`/`--project`/`--actor`, an attribution string past the 256 characters
 the host accepts, a `--host` that is neither `local` nor `remote`, or `remote` with nothing in
@@ -1106,6 +1132,7 @@ startup, naming the variable and the reason, rather than binding something surpr
 | `ROVER_SOCKET_PATH` | `~/.rover/rover.sock` | Absolute path of the unix socket the local daemon binds and a local client connects to. **Empty counts as unset** — an exported-but-blank variable is what a shell leaves behind, and reading it as a real setting would point the daemon at the current directory. At most **103 bytes of UTF-8**: a unix socket address is a fixed-size struct (104 bytes on macOS, 108 on Linux, NUL included), and over the cap `bind` truncates or answers `EINVAL` instead of naming the length, so a longer path is rejected at startup with the byte count and the path. |
 | `ROVER_USERS_PATH` | `~/.rover/users.json` | Absolute path of the host's own user store — one record per user: identifier, display name, the **hash** of that user's token, and when it was created. Never a token: `rover users add` and `rover users rotate` print the raw value once and store only its hash. **Empty counts as unset**, as it is for the socket. Read by `rover users`, which touches the file directly and never goes over the network (`PROJECT.md` D25), **and by the network listener**, which is the host's entire authentication surface: the token in a caller's greeting is hashed and looked up here, re-read at every connection attempt and never cached, so `revoke` and `rotate` take effect on the very next attempt with the daemon still running. |
 | `ROVER_ARTIFACTS_PATH` | `~/.rover/artifacts` | Root of the durable artifact archive: every `screenshot`, `record_video`, `stop_recording` and `read_logs` call additionally writes its output here, on the host, **in addition to** returning the bytes to the client (`PROJECT.md` D23, §10). **Empty counts as unset**, as it is for the socket. Read only by the daemon — a client never resolves it, and the archive path is never the one an agent is given. **Nothing prunes it**: retention is deliberately undecided (`PROJECT.md` §9.4), so this grows without bound until an operator removes what they no longer want. |
+| `ROVER_KEPT_TESTS_PATH` | `~/.rover/kept-tests.json` | Absolute path of the host's own record of which archived **tests** the operator has said to keep — one entry per test, carrying the `<project>/<test_name>` pair as the archive filed it, who said to keep it and when (`PROJECT.md` D33). **Empty counts as unset**, as it is for the socket. Deliberately **outside** the artifact tree: every sidecar the archive writes is written once and never rewritten, while this flag toggles. Read *and written* by the daemon, on every `list_kept_tests` and `set_kept_tests` call and cached nowhere, so an operator who edits it by hand is obeyed on the next call and a restart changes nothing. A malformed file is never reset to empty — the call is refused instead. **Nothing prunes the archive on the strength of it**: retention is still undecided (`PROJECT.md` §9.4). |
 | `ROVER_PROJECTS_PATH` | `~/.rover/projects` | Directory holding the **per-project hook files** — one `<project>.json` per project, selected by the `project` string a lease carries (`PROJECT.md` D13, and see below). **Empty counts as unset**, as it is for the socket. Read only by the daemon, on the machine the devices are attached to: a hook file names a program the host runs with the daemon's own privileges, and nothing about it is ever **accepted** over the wire. What *is* on the wire is one read: `list_projects` answers which projects are registered here — by name, with `apps`, the helper services by name, and whether there is an `install` and a `teardown` — over the panel's HTTP surface alone (`PROJECT.md` D31, R39). **No `env` value and no host path is on that answer** and there is no field either would fit in, and no method writes a hook file or takes a path into this directory. Files are **re-read at every use and never cached** (`PROJECT.md` D6) — when a lease ends, and when an `install_app` carrying no package asks for the project's own install — so editing one takes effect on the very next call with nothing restarted. A `project` string that is not a valid identifier — anything with a separator, a leading `-`, whitespace or over 64 characters — resolves to **no hooks at all**, because no path is ever built from it. |
 | `ROVER_PROJECT_FILE` | unset — **no default project** | The opt-in switch on the *client* side, and the counterpart of `ROVER_PROJECTS_PATH` above: the path of **one** project hook file on the machine running the client, whose `project` identifier becomes the default for `rover acquire`'s `--project` and for the MCP `acquire_device` tool's `project` argument (`PROJECT.md` D22). Unset or empty and nothing is read, `--project` is required exactly as it was, and the tool still declares the argument — **empty counts as unset**, as it is for the socket. Given both, the flag or the argument wins. It is one explicit path and there is no search: nothing walks up from the working directory and no `.rover/` convention exists, so the file a client reads is the file you named. A path naming a file that is missing or will not parse is a **loud client-side failure naming it** — exit 2 from the CLI, and an MCP server that dies on stderr at startup rather than advertising a tool it cannot fill in — never a silent fallback to attributing the lease to nothing. Convenience only: nothing else in the file is read here, no client ever runs what one declares, and the wire is unchanged — `project` stays a required, opaque string the host stores and never interprets. `owner` is **never** defaulted from this or from anything else (`PROJECT.md` D16, D20). |
 | `ROVER_LISTEN_PORT` | unset — **no network listener** | The opt-in switch for the TCP+TLS listener that serves the same IPC surface as the local socket. Unset or empty and nothing binds, nothing else below is read, and the daemon is a purely local host. Set it and the next two become **required together**: a port with no TLS material would be a listener nobody could trust, so a missing one is a startup failure naming every variable still missing rather than a half-configured host. Who may connect is not a variable at all — it comes from the user store (`ROVER_USERS_PATH`), which always resolves, so a host with no users yet starts and refuses everyone. 1–65535. |
@@ -1422,6 +1449,34 @@ Two things worth knowing. The archive is never what a verb answers with — a pa
 nothing on the machine the agent runs on, so you are handed the bytes and decide where they go.
 And **nothing prunes this tree**: retention is deliberately out of scope for now
 (`PROJECT.md` §9.4), so on a host that records video all day it is the directory to watch.
+
+#### Keeping a test
+
+You can tell a host that one test's artifacts are worth keeping:
+
+```bash
+npm run -s rover -- keep add rover "home screen" --actor alice
+npm run -s rover -- keep list
+npm run -s rover -- keep remove rover "home screen" --actor alice
+```
+
+The two arguments are the project and the test name **as a `rover archive` listing names them** —
+components, never a path on the host — so the command and the panel's own tick name the same test.
+The flag is per *test* rather than per run: a test's runs are kept or not together, because a test
+name is what a person recognises across runs. `--actor` is required on `add` and `remove` and
+derived from nothing: it records who said to keep this, and the host stores it beside the flag and
+writes one line about it to its own log.
+
+**It lives in the host's own file, `~/.rover/kept-tests.json`, and not in the archive**
+(`PROJECT.md` D33) — beside `users.json`, `ROVER_KEPT_TESTS_PATH` to move it. Everything the archive
+writes is written once and never rewritten, because each file says what was true when a run
+happened; a `Keep` flag toggles. The file is read on every call and cached nowhere, so a daemon
+restart changes nothing and an operator who edits it by hand is obeyed on the next call.
+
+**And nothing prunes the archive yet**, so nothing acts on this today. That is the point of the
+order: retention is still undecided (`PROJECT.md` §9.4), and a sweep that shipped before the
+exemption existed could delete a test somebody had every reason to believe was kept. It cannot
+now.
 
 ### Comparing two runs, before and after
 

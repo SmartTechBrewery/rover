@@ -110,6 +110,15 @@ const DEVICE_METHODS = ['status', 'list_devices', 'acquire_device', 'release_dev
  * own lease implies without asking, and enumerating every other project registered on the host is
  * an operator's question. It is on `PANEL_METHODS` instead (D27, D29).
  *
+ * `list_kept_tests` and `set_kept_tests` are here for `force_release_device`'s reason rather than
+ * for the archive's, and it is the sharper of the two (D33, #234). The archive reads are the
+ * operator's because they are about the host's disk; **what the operator keeps is not an agent's to
+ * decide at all** — it is authority over a shared resource, and an agent that could untick a test
+ * would be clearing the exemption on somebody else's run. The read is not advertised either, on
+ * `list_archive`'s terms: an agent already knows its own project and test name, having supplied
+ * them, and enumerating what every other agent on the host has kept is an operator's question. Both
+ * are on `PANEL_METHODS` instead, which is the operator's own browser (D27, D29).
+ *
  * The list is short and named so the gate below can be exact: a verb row added later is either
  * a registered tool or a deliberate entry here, never a row that quietly has no tool.
  */
@@ -121,6 +130,8 @@ const NOT_YET_EXPOSED = [
 	'search_archive',
 	'list_archive_groups',
 	'list_projects',
+	'list_kept_tests',
+	'set_kept_tests',
 ] as const satisfies readonly IpcMethodName[];
 
 /** The platform vocabulary `tests/unit/no-platform-names.test.ts` keeps out of `src/` (D10). */

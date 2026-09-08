@@ -48,6 +48,15 @@ export interface TempSocket {
 	 * that read the developer's own directory would start running their commands.
 	 */
 	readonly projectsRoot: string;
+	/**
+	 * Where a daemon started on this socket records which archived tests are kept (D33).
+	 *
+	 * **Nothing pre-creates it either**, so "nothing was kept" is assertable as "the file does not
+	 * exist" rather than as "the file holds an empty list". Never `~/.rover/kept-tests.json`: it is
+	 * the operator's own record, and it is the one thing on the surface a call *writes*, so a test
+	 * pointed at the real path would rewrite it.
+	 */
+	readonly keptTestsPath: string;
 }
 
 /**
@@ -65,6 +74,7 @@ export async function createTempSocket(): Promise<TempSocket> {
 		socketPath: join(dir, 'rover.sock'),
 		artifactsRoot: join(dir, 'artifacts'),
 		projectsRoot: join(dir, 'projects'),
+		keptTestsPath: join(dir, 'kept-tests.json'),
 	};
 }
 

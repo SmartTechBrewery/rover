@@ -158,6 +158,7 @@ async function startWithNetwork(
 		socketPath: temp.socketPath,
 		artifactsRoot: temp.artifactsRoot,
 		projectsRoot: temp.projectsRoot,
+		keptTestsPath: temp.keptTestsPath,
 		network: networkConfig(overrides),
 	});
 	if (!result.started) {
@@ -746,6 +747,7 @@ describe('the listener is opt-in and dies with the daemon', () => {
 			socketPath: temp.socketPath,
 			artifactsRoot: temp.artifactsRoot,
 			projectsRoot: temp.projectsRoot,
+			keptTestsPath: temp.keptTestsPath,
 		});
 		if (!daemon.started) {
 			throw new Error('Another daemon holds the temp socket — the test cannot proceed');

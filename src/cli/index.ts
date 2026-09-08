@@ -22,6 +22,7 @@ import * as archive from './commands/archive.js';
 import * as forceRelease from './commands/force-release.js';
 import * as init from './commands/init.js';
 import * as install from './commands/install.js';
+import * as keep from './commands/keep.js';
 import * as list from './commands/list.js';
 import * as pull from './commands/pull.js';
 import * as push from './commands/push.js';
@@ -68,6 +69,7 @@ const COMMANDS: Record<string, Command | undefined> = Object.assign(Object.creat
 	push,
 	install,
 	archive,
+	keep,
 	status,
 	users,
 	init,
@@ -101,6 +103,10 @@ Commands:
                            What is filed in the host's artifact archive, one directory
                            level at a time — the components a previous listing named,
                            never a path on the host
+  keep <subcommand>        Which of the host's archived tests are kept — list, add, remove
+                           (--actor required on add and remove; the arguments are the
+                           components an \`archive\` listing named). Nothing prunes the
+                           archive yet, so this records an intention ahead of the sweep
   status                   Which host answered, its pid, uptime and protocol version
   init [<path>]            Set up a project so an agent working in it can drive a device:
                            its hook file, its .mcp.json, a generated ROVER.md, and the
@@ -145,6 +151,7 @@ The local daemon starts itself on the first call, so nothing here needs starting
 a remote host is a service its operator runs and is never started from a client.
 Set ROVER_SOCKET_PATH to point at a socket other than ~/.rover/rover.sock,
 ROVER_USERS_PATH for a user store other than ~/.rover/users.json,
+ROVER_KEPT_TESTS_PATH for a kept-tests record other than ~/.rover/kept-tests.json,
 ROVER_PROJECT_FILE at a project hook file to take \`acquire --project\` from, and
 ROVER_HOST_ADDRESS, ROVER_HOST_PORT and ROVER_HOST_TOKEN (plus ROVER_HOST_CA for a
 certificate to trust) to reach a remote one.`;
