@@ -1,4 +1,5 @@
 import type { ListedDevice } from '@panel/devices/device-list.js';
+import { formatInstant } from '@panel/time/instant.js';
 import { render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -66,14 +67,18 @@ describe('a held device card', () => {
 	});
 
 	/*
-	 * The whole instant, with its `Z`. It is the host's clock, so the panel renders it as given and
-	 * never truncates it to `14:02 UTC` as the design's mock data does — and never differences it
-	 * against this machine's own `Date.now()` (D17).
+	 * **The reader's own zone, to the minute, through the panel's one formatter** (#223,
+	 * `docs/DESIGN.md` §6) — and what the card must not draw is the host's raw
+	 * `2026-08-31T14:02:41.219Z`, which is what it drew until then. The *format* is
+	 * `time/instant.test.ts`'s to assert; the expectation is composed here because the zone is
+	 * whatever machine runs the suite. Nothing is differenced against this machine's `Date.now()`,
+	 * which is the half of §6's rule that stands (D17).
 	 */
-	it('renders the grant instant exactly as the host sent it', () => {
+	it("renders the grant instant in the reader's own zone rather than as the host sent it", () => {
 		card(device({ heldBy: LEASE }));
 
-		expect(screen.getByText('2026-08-31T14:02:41.219Z')).toBeDefined();
+		expect(screen.getByText(String(formatInstant(LEASE.grantedAt)))).toBeDefined();
+		expect(screen.queryByText(LEASE.grantedAt)).toBeNull();
 	});
 
 	// Required (D22, as amended #129), so every held card carries it — there is no gap to render.

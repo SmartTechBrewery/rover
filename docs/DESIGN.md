@@ -420,14 +420,49 @@ agree with the cards below it. *As built* (#123) it grows a third term, `● 1 n
 that count is non-zero** — the three buckets sum to the grid, so the badge still agrees with the
 cards structurally, and on the ordinary screen it is exactly the two terms above.
 
-*As built* (#113): `panel/src/components/devices/device-card.tsx`, and five things the design's mock
-data never had to answer, settled here.
+*As built* (#113, its first row rewritten in place by #223):
+`panel/src/components/devices/device-card.tsx`, and five things the design's mock data never had to
+answer, settled here.
 
-- **`grantedAt` is rendered exactly as the host sent it** — the whole ISO-8601 instant with its `Z`,
-  never truncated to the mock's `14:02 UTC`, and never differenced against this machine's clock. It
-  is the *host's* clock (`LeaseHolderSchema`, D17), so the only honest relative number on the card
-  is the countdown, which is driven by `expiresInMs` — a duration — plus the moment the answer
-  arrived. `src/cli/_shared/output.ts` holds the same line for the CLI.
+- **`grantedAt` reads `2026-08-31 16:02`: the reader's own zone, to the minute, no zone marker** —
+  and it is **the format every timestamp in this panel uses**, decided in
+  `panel/src/time/instant.ts` and nowhere else (#223). It was *rendered exactly as the host sent
+  it* until then — the whole ISO-8601 instant with its `Z`, never truncated to the mock's
+  `14:02 UTC` — and that rule is **reversed here in half, in place, with its reason rewritten**
+  (`ai/RULES.md` §1).
+  - **The half that stands, unchanged.** Nothing differences a host instant against this machine's
+    clock and nothing relative is derived from one — no *5 minutes ago*, no elapsed figure. It is
+    the *host's* clock (`LeaseHolderSchema`, D17, R29), so the only relative number on the card is
+    the countdown, driven by `expiresInMs` — a duration — plus the moment the answer arrived
+    (`panel/src/devices/countdown.ts`).
+  - **The half that was wrong.** Rendering an absolute instant in the reader's zone is not the same
+    mistake as differencing it. `grantedAt` is an unambiguous instant (`z.string().datetime()`,
+    UTC), so re-expressing it in another zone is *exact* and needs no agreement between the two
+    clocks — skew only costs something when you **subtract**. The old rule collapsed *do not
+    difference* and *do not localise* into one prohibition, and the second half of it is what left a
+    screen built for a person printing `2026-08-31T14:02:41.219Z` beside the Archive screen's
+    `2026-08-30 17:05:01 UTC` — two formats for one kind of fact, disagreeing about the precision
+    and the zone marker as well.
+  - **The zone comes from the reader; the format does not.** No `toLocaleString()`, which renders
+    `8/31/2026, 4:02 PM` on an `en-US` machine and something else again on the next one — that is a
+    second format, which is the thing this rule exists to prevent. The fields come out of
+    `Intl.DateTimeFormat` and the string is assembled in a fixed order with fixed separators; the
+    pinned locale supplies the calendar and the digits and never the pattern, and **no formatter is
+    held at module scope**, because one built once would freeze the zone at first use and a reader
+    who changes their system zone mid-session would keep the old one for the life of the tab.
+  - **Two costs of minute precision, both accepted.** The value on screen no longer round-trips to
+    the host's exact instant, so it cannot be pasted into a host-side UTC log search; and two
+    instants a second apart read alike. The second is answered on the Archive screen, where the run
+    directory's own name carries the full `…T170501Z` instant and is always drawn beside the field
+    (§9). Nothing on the device card needs the equivalent — a lease is one grant, and there is no
+    second one beside it to tell apart. The full instant on a `title` was considered and is
+    deliberately not added: a hover is not a second format, but it is a second place a rule about
+    this field would have to be kept.
+  - **The CLI is not on this rule**, and #113's claim that `src/cli/_shared/output.ts` "holds the
+    same line" goes with the half that was reversed. It prints the host's instant verbatim and
+    stays that way: `rover list`'s output gets piped, diffed and pasted into a host-side log
+    search, so the exact instant is the useful value there. This rule is about the screen a person
+    reads.
 - **`model: null` falls back to the serial** in the header. The header's job is to identify the
   device, and the serial always can.
 - **`osVersion: null` renders `unknown`.** It is a real answer for a device waiting on its
@@ -1978,9 +2013,24 @@ ever parsed to decide either** (D22).
 - **`OWNER` is the directory's own text and is never presented as the caller's string.** It went
   through `pathSegment` on the way in and that is not reversible, so what the screen can honestly say
   is what the directory is called (D20, D22).
-- **`GRANTED` is reformatted textually**, `20260830T170501Z` → `2026-08-30 17:05:01 UTC`. No `Date`
-  and no `Intl`: the string is the host's own UTC instant and nothing may re-express it in the
-  reader's zone, which is §6's rule for `grantedAt` on a device card applied to a directory name.
+- **`GRANTED` reads the reader's own zone, to the minute** — `20260830T170501Z` → `2026-08-30
+  19:05` for a reader in Warsaw, through the one module that decides that for every timestamp in
+  the panel (`panel/src/time/instant.ts`, §6). It was reformatted **textually** to
+  `2026-08-30 17:05:01 UTC` until #223, with no `Date` and no `Intl`, on §6's rule that nothing may
+  re-express a host instant in the reader's zone; **that rule is reversed in half, in place, in §6**
+  — re-expressing an instant is exact where differencing it against this machine's clock would not
+  be — and this field followed it out, because it was the same rule applied to a directory name.
+  Nothing here differences anything, and the half of §6 that forbids that is untouched.
+- **The parse is unchanged, and it is still what decides `unknown`.** The name is matched against
+  the anchored basic-format shape, so a name that merely starts with digits still reads `unknown`
+  and the directory's own name is still shown in full either way — nothing is inferred from a name
+  that does not have the shape (above, and `panel/src/archive/run-identity.ts`). What changed is
+  the rendering of a prefix that *did* match.
+- **Minute precision is why the run's own name is always beside it.** Two runs a second apart draw
+  the same `GRANTED`, which §6 accepts as a cost and defers to here: this field is never the only
+  thing on the row, because the directory name carrying the full `…T170501Z` instant is drawn with
+  it in the tree, in the level listing and as the run panel's own heading. That is also where a
+  reader gets the exact instant a host-side log search wants.
 - **`DESCRIPTION` is the run's own `test_description.json`, read off #131's byte route** (#148) —
   full width, under the three-column `OWNER` / `GRANTED` / `SERIAL` grid, because it is a sentence
   rather than a measured value. It is **not in the approved markup**: a third deliberate deviation,

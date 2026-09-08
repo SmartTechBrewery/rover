@@ -1,5 +1,6 @@
 import type { ListedDevice, StaleReason } from '@panel/devices/device-list.js';
 import type { DeviceList, DeviceListState } from '@panel/devices/device-list-provider.js';
+import { formatInstant } from '@panel/time/instant.js';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { AnchorHTMLAttributes, ReactNode } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -242,7 +243,8 @@ describe('with the host view not current', () => {
 
 		expect(screen.getByText('HOST VIEW NOT CURRENT')).toBeDefined();
 		expect(screen.getByText(/The lease details below are still accurate/)).toBeDefined();
-		expect(screen.getByText('2026-08-31T14:02:41.219Z')).toBeDefined();
+		// The grant time as the card draws it — the reader's own zone, to the minute (#223, §6).
+		expect(screen.getByText(String(formatInstant(LEASE.grantedAt)))).toBeDefined();
 		expect(screen.getByText('issue-113')).toBeDefined();
 		expect(screen.queryByText('--:--')).toBeNull();
 	});

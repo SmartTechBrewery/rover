@@ -1,11 +1,20 @@
 import type { ArchivedDeviceInfo } from '@panel/archive/device-info.js';
 import type { ArchivedTestDescription } from '@panel/archive/test-description.js';
+import { formatInstant } from '@panel/time/instant.js';
 import { render, screen } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import fixture from '../../../../tests/fixtures/panel/device-info.json';
 import { RunPanel, type RunSerial } from './run-panel.js';
 
 const RUN = ['checkout-app', 'login-flow', '20260830T170501Z-issue-112-9f1c2ab4'] as const;
+
+/*
+ * `GRANTED` as the panel draws every instant since #223 — the reader's own zone, to the minute
+ * (`docs/DESIGN.md` §6, §9). Composed rather than written out because the zone is whatever
+ * machine runs the suite; the format itself is `time/instant.test.ts`'s to assert, and that the
+ * name's own timestamp is what it comes from is `run-identity.test.ts`'s.
+ */
+const GRANTED = String(formatInstant('2026-08-30T17:05:01Z'));
 
 /** The level above answered and named the run's one child — the ordinary case. */
 const NAMED: RunSerial = { status: 'answered', serial: 'R5CT30ABCDE' };
@@ -39,7 +48,7 @@ describe('a run', () => {
 
 		expect(screen.getByText('20260830T170501Z-issue-112-9f1c2ab4')).toBeDefined();
 		expect(screen.getByText('issue-112')).toBeDefined();
-		expect(screen.getByText('2026-08-30 17:05:01 UTC')).toBeDefined();
+		expect(screen.getByText(GRANTED)).toBeDefined();
 	});
 
 	// The serial is the parent listing's `onlyChild`: one lease is one device, so it is a fact about
