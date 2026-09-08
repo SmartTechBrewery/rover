@@ -104,9 +104,22 @@ export const IDB_HEALTH_RPC: IdbRpc = 'describe';
  * host may be busy, and the alternative to a generous bound is a flap on a loaded machine.
  *
  * It bounds the **whole** start rather than each of the two waits inside it, so a start can never
- * take twice what this says.
+ * take twice what this says — including the handshake *call*, whose gRPC deadline is clamped to
+ * what is left of this rather than being a call timeout of its own (`SupervisedCompanion.start`).
  */
 export const IDB_COMPANION_START_TIMEOUT_MS = 10_000;
+
+/**
+ * How often a starting companion is checked for having got there.
+ *
+ * `waitForCondition`'s 250 ms default is a grid for conditions that take seconds; this one is two
+ * pipes and a unix socket on this machine, and it is met at **+353 ms** for the socket and
+ * **+423 ms** for the first answer (`docs/IOS.md` §4). On that grid the first call of a lease pays
+ * up to a quarter second of pure rounding, twice — so the interval is the one a local pipe
+ * deserves, and polling it finely costs nothing because each check is a string search or a call
+ * that is already in flight.
+ */
+const IDB_COMPANION_START_POLL_MS = 25;
 
 /**
  * The deadline on one gRPC call.
@@ -272,20 +285,35 @@ type UnaryCall = (
  * this holds no timer and starts nothing on its own.
  */
 class SupervisedCompanion {
-	/** Every byte of stdout until the socket has been read, and nothing after that. */
-	#stdout: Buffer[] = [];
+	/**
+	 * Every byte of stdout until the socket has been read, and **nothing is retained after that**
+	 * — `null` is what the handler checks, rather than an array something clears once.
+	 *
+	 * The handshake is the only thing on this stream anyone reads, and a companion is meant to
+	 * outlive many calls: a handler that kept pushing would grow a buffer nobody drains for as
+	 * long as the daemon holds the companion. `#stderrTail` is bounded for the same reason and
+	 * survives, because that one is read on every death.
+	 */
+	#stdout: Buffer[] | null = [];
 	#stderrTail = '';
 	#stream: IdbCompanionStream | null = null;
 	#client: InstanceType<ServiceClientConstructor> | null = null;
 	#death: string | null = null;
+	/** The removal of {@link directory}, once something has started it — see {@link collect}. */
+	#collected: Promise<void> | null = null;
 	/** Calls in flight, each of which fails the moment the companion does. */
 	readonly #waiting = new Set<(reason: string) => void>();
 
 	constructor(
 		readonly udid: string,
 		readonly directory: string,
-		/** Told once, when this companion stops being usable, so its holder can forget it. */
-		private readonly onDeath: () => void,
+		/**
+		 * Told once, when this companion stops being usable, so its holder can forget it — and
+		 * handed the removal of the socket directory, which is the one thing a companion leaves
+		 * behind. A holder that dropped it could not tell a collected directory from a pending
+		 * `rm`, which is a race for anything that has to know the host is tidy.
+		 */
+		private readonly onDeath: (collected: Promise<void>) => void,
 	) {}
 
 	/**
@@ -298,38 +326,35 @@ class SupervisedCompanion {
 	 * which is 1 ms on an established channel and is also what warms the lazily-connected channel
 	 * so the caller's own first call does not pay the connect.
 	 */
-	async start(timeoutMs: number): Promise<void> {
+	async start(timeoutMs: number, callTimeoutMs: number): Promise<void> {
 		const socketPath = join(this.directory, COMPANION_SOCKET_NAME);
 		const deadline = Date.now() + timeoutMs;
+		const remaining = (): number => Math.max(0, deadline - Date.now());
 
 		// Let out synchronously by the runner when this host has no companion at all, and let out
 		// of here the same way: `IdbCompanionNotFoundError` names every place that was looked in,
 		// and burying it in a readiness timeout would lose all of it.
 		this.#stream = streamIdbCompanion(companionArgv(this.udid, socketPath), {
 			onStdout: (chunk) => {
-				this.#stdout.push(chunk);
+				// `null` once the handshake has been read: nothing reads this stream again, so
+				// what is handed over past that point is dropped rather than accumulated.
+				this.#stdout?.push(chunk);
 			},
 			onStderr: (chunk) => {
 				this.#stderrTail = `${this.#stderrTail}${chunk}`.slice(-IDB_COMPANION_STDERR_TAIL_CHARS);
 			},
 			onEnd: (reason) => {
 				this.#end(`${reason}\nstderr: ${quoteStream(this.#stderrTail)}`);
-				// A companion that died on its own leaves its socket behind, and nothing else is
-				// going to come back for it: `stop()` is what collects a companion this host shut
-				// down, and it is never called for one that shut itself down. Without this, a
-				// daemon that restarts a crashing companion accumulates a directory per crash.
-				void this.#discardDirectory();
 			},
 		});
 
 		const reported = await waitForCondition({
 			what: `${IDB_COMPANION} for ${this.udid} to report the socket it bound`,
 			timeoutMs,
+			pollIntervalMs: IDB_COMPANION_START_POLL_MS,
 			probe: () => this.#probeSocket(),
 		});
-		// Bounded past this point, so the stdout of a long-lived companion is not accumulated for
-		// the life of the host.
-		this.#stdout = [];
+		this.#stdout = null;
 
 		this.#client = new (companionService())(`unix://${reported}`, credentials.createInsecure());
 
@@ -337,8 +362,13 @@ class SupervisedCompanion {
 			what: `${IDB_COMPANION} for ${this.udid} to answer '${IDB_HEALTH_RPC}'`,
 			// What is left of the one deadline, never a second full one. `waitForCondition` probes
 			// before it waits, so a value clamped to zero still costs exactly one check.
-			timeoutMs: Math.max(0, deadline - Date.now()),
-			probe: () => this.#probeAnswer(),
+			timeoutMs: remaining(),
+			pollIntervalMs: IDB_COMPANION_START_POLL_MS,
+			// And the *call* is bounded the same way, because `waitForCondition` awaits a probe to
+			// completion before it looks at its deadline: a full call deadline in here would let a
+			// companion that binds and never answers hold a start for the start budget plus a call
+			// timeout, which is the opposite of what `IDB_COMPANION_START_TIMEOUT_MS` promises.
+			probe: () => this.#probeAnswer(Math.min(callTimeoutMs, remaining())),
 		});
 	}
 
@@ -435,21 +465,38 @@ class SupervisedCompanion {
 		this.#stream = null;
 		this.#end(`${IDB_COMPANION} for ${this.udid} was stopped`);
 		await stream?.stop();
-		await this.#discardDirectory();
+		// The same promise `#end` already started, not a second removal — so a caller that awaited
+		// `stop()` is looking at a host with nothing of this companion left on it.
+		await this.collect();
 	}
 
 	/**
-	 * Remove the directory this companion's socket lived in.
+	 * Remove the directory this companion's socket lived in, at most once, and answer with that
+	 * removal however many times it is asked for.
+	 *
+	 * Memoised because there are two ways in — the companion dying and this host stopping it —
+	 * and "the directory is gone" has to be a state something can wait on rather than a side
+	 * effect started twice and observable from nowhere.
 	 *
 	 * Failures are swallowed deliberately: the directory is a `mkdtemp` under the host's temporary
 	 * path, so the worst a failure costs is a file the operating system collects later — while
 	 * throwing here would turn tidying up into the reason a call failed.
 	 */
-	async #discardDirectory(): Promise<void> {
-		await rm(this.directory, { recursive: true, force: true }).catch(() => {});
+	collect(): Promise<void> {
+		this.#collected ??= rm(this.directory, { recursive: true, force: true }).catch(() => {});
+		return this.#collected;
 	}
 
-	/** Everything that has to happen exactly once, whether the companion died or was stopped. */
+	/**
+	 * Everything that has to happen exactly once, whether the companion died or was stopped.
+	 *
+	 * The socket directory is collected from here rather than from `onEnd` alone, because a
+	 * companion that died on its own is never handed to `stop()`: `#companion`'s death handler
+	 * drops it from the pool, so without a collector on this path a daemon restarting a crashing
+	 * companion accumulates one directory holding one dead socket per crash. The removal runs
+	 * concurrently with the kill in the `stop()` path, which is safe — the channel is closed
+	 * above and a bound socket keeps its file descriptor after its name is unlinked.
+	 */
 	#end(reason: string): void {
 		if (this.#death !== null) return;
 		this.#death = reason;
@@ -457,7 +504,7 @@ class SupervisedCompanion {
 		this.#client = null;
 		for (const waiting of this.#waiting) waiting(reason);
 		this.#waiting.clear();
-		this.onDeath();
+		this.onDeath(this.collect());
 	}
 
 	/** The socket the companion says it bound, once it has said so. */
@@ -468,7 +515,7 @@ class SupervisedCompanion {
 			throw new IdbCompanionInterruptedError(this.udid, null, this.#death);
 		}
 
-		const printed = Buffer.concat(this.#stdout).toString('utf8');
+		const printed = Buffer.concat(this.#stdout ?? []).toString('utf8');
 		const end = printed.indexOf('\n');
 		if (end === -1) return { met: false, found: 'nothing on stdout yet' };
 
@@ -481,9 +528,9 @@ class SupervisedCompanion {
 	}
 
 	/** Whether the companion answers a call, which is the only proof that it will. */
-	async #probeAnswer(): Promise<Observation<null>> {
+	async #probeAnswer(timeoutMs: number): Promise<Observation<null>> {
 		try {
-			await this.call(IDB_HEALTH_RPC, {}, IDB_CALL_TIMEOUT_MS);
+			await this.call(IDB_HEALTH_RPC, {}, timeoutMs);
 			return { met: true, value: null };
 		} catch (cause) {
 			// A companion that died mid-handshake is not a condition still worth polling for.
@@ -496,6 +543,7 @@ class SupervisedCompanion {
 /** What a suite replaces to keep a case off a real clock; not a configuration surface. */
 export interface IdbCompanionsOptions {
 	readonly startTimeoutMs?: number;
+	/** Every call, the handshake included — otherwise a start would still be on a real clock. */
 	readonly callTimeoutMs?: number;
 }
 
@@ -516,6 +564,15 @@ export class IdbCompanions {
 	readonly #callTimeoutMs: number;
 	/** One entry per udid, holding the start rather than the result, so two callers share one. */
 	readonly #companions = new Map<string, Promise<SupervisedCompanion>>();
+	/**
+	 * The socket directories still being removed, for the companions this pool no longer holds.
+	 *
+	 * A companion that died on its own is dropped from `#companions` by its own death handler, so
+	 * `stopAll()` would otherwise return while the last thing it left on the host was still going
+	 * away — a shutdown nobody can wait on, and the shape of an intermittent failure for anything
+	 * that then looks at the temporary path.
+	 */
+	readonly #collecting = new Set<Promise<void>>();
 
 	constructor(options: IdbCompanionsOptions = {}) {
 		this.#startTimeoutMs = options.startTimeoutMs ?? IDB_COMPANION_START_TIMEOUT_MS;
@@ -539,9 +596,16 @@ export class IdbCompanions {
 		await this.#stop(unwrap(serial));
 	}
 
-	/** Stop every companion this host is running — the daemon shutting down, or a suite ending. */
+	/**
+	 * Stop every companion this host is running — the daemon shutting down, or a suite ending.
+	 *
+	 * And wait for what the ones that died on their own left behind: `#stop()` covers a companion
+	 * this pool still holds, `#collecting` covers the rest, and between them this resolving means
+	 * the host is tidy rather than nearly tidy.
+	 */
 	async stopAll(): Promise<void> {
 		await Promise.all([...this.#companions.keys()].map((udid) => this.#stop(udid)));
+		await Promise.all([...this.#collecting]);
 	}
 
 	async #stop(udid: string): Promise<void> {
@@ -572,8 +636,17 @@ export class IdbCompanions {
 		const forget = (): void => {
 			if (this.#companions.get(udid) === entry) this.#companions.delete(udid);
 		};
+		// A dead companion is forgotten *and* its socket directory's removal is kept hold of, so
+		// dropping it from this pool does not drop the last thing anyone can wait on.
+		const died = (collected: Promise<void>): void => {
+			forget();
+			this.#collecting.add(collected);
+			void collected.finally(() => {
+				this.#collecting.delete(collected);
+			});
+		};
 
-		entry = this.#start(udid, forget);
+		entry = this.#start(udid, died);
 		// A start that failed is forgotten too, so the next call tries again rather than being
 		// handed a stale failure forever — the same reason `./idb-companion-path.ts` is unmemoised.
 		entry.catch(forget);
@@ -581,11 +654,14 @@ export class IdbCompanions {
 		return entry;
 	}
 
-	async #start(udid: string, forget: () => void): Promise<SupervisedCompanion> {
+	async #start(
+		udid: string,
+		died: (collected: Promise<void>) => void,
+	): Promise<SupervisedCompanion> {
 		const directory = await mkdtemp(join(tmpdir(), IDB_COMPANION_DIRECTORY_PREFIX));
-		const companion = new SupervisedCompanion(udid, directory, forget);
+		const companion = new SupervisedCompanion(udid, directory, died);
 		try {
-			await companion.start(this.#startTimeoutMs);
+			await companion.start(this.#startTimeoutMs, this.#callTimeoutMs);
 		} catch (cause) {
 			// Whatever went wrong, this host is not left holding a companion nobody can reach or a
 			// socket directory nobody will collect.

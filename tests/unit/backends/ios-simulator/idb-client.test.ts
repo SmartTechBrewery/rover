@@ -64,19 +64,37 @@ const SERIAL = parseDeviceSerial('88D8476E-F4A4-4A18-A89B-0C47E077CC8B');
 const START_TIMEOUT_MS = 4_000;
 
 let directory: string;
+let sockets: string;
 let startsFile: string;
 const pools: IdbCompanions[] = [];
 
 beforeEach(async () => {
 	directory = await mkdtemp(join(tmpdir(), 'rover-stub-companion-'));
 	startsFile = join(directory, 'starts.txt');
+	/**
+	 * **The temporary path the module under test sees is this suite's, not the host's**, and that
+	 * is what makes the two cases below assertions rather than races. `IdbCompanions` joins its
+	 * `mkdtemp` onto `tmpdir()`, so a scan of the real one cannot tell this suite's directories
+	 * from `rover-idb-companion-…` — the prefix `./idb-companion.test.ts` and
+	 * `./idb-companion-path.test.ts` use, which *also* starts with `rover-idb-`, in other workers,
+	 * at the same time. Scoping it means the only thing in here is what this suite's own calls
+	 * made, and it means the suite leaves nothing behind in the operator's own temporary path.
+	 *
+	 * `rv-` because a unix socket path is bounded by `sun_path`, 104 bytes on macOS, and
+	 * `/var/folders/…/T` is already half of that (`idb-client.ts`'
+	 * `IDB_COMPANION_DIRECTORY_PREFIX`): a directory named as legibly as `directory` is would
+	 * push the socket the module binds over the limit.
+	 */
+	sockets = await mkdtemp(join(tmpdir(), 'rv-'));
 	resolveDeveloperDirMock.mockReturnValue('/Applications/Xcode.app/Contents/Developer');
+	vi.stubEnv('TMPDIR', sockets);
 	vi.stubEnv('ROVER_STUB_STARTS_FILE', startsFile);
 });
 
 afterEach(async () => {
 	await Promise.all(pools.splice(0).map((pool) => pool.stopAll()));
 	await rm(directory, { recursive: true, force: true });
+	await rm(sockets, { recursive: true, force: true });
 });
 
 /** A stub companion: `body` as an `sh` script, executable unless a case says otherwise. */
@@ -99,9 +117,9 @@ async function starts(): Promise<number> {
 	return written.split('\n').filter((line) => line !== '').length;
 }
 
-/** The socket directories this module has left under the host's temporary path, right now. */
+/** The socket directories this module has left in the temporary path it was pointed at. */
 async function socketDirectories(): Promise<string[]> {
-	const entries = await readdir(tmpdir());
+	const entries = await readdir(sockets);
 	return entries.filter((entry) => entry.startsWith(IDB_COMPANION_DIRECTORY_PREFIX));
 }
 
@@ -227,6 +245,30 @@ describe('starting a companion', () => {
 			new IdbCompanions({ startTimeoutMs: 30_000 }).call(SERIAL, IDB_HEALTH_RPC, {}),
 		).rejects.not.toBeInstanceOf(WaitTimeoutError);
 	});
+
+	/**
+	 * And a companion that binds, prints its handshake and then answers nothing is bounded by the
+	 * **start** budget rather than by a call timeout — which is a claim about the handshake's own
+	 * gRPC deadline, not about the wait around it. `waitForCondition` runs a probe to completion
+	 * before it looks at its deadline, so a handshake carrying the full call timeout would make a
+	 * start cost the start budget *plus* that timeout.
+	 *
+	 * `callTimeoutMs` is set two orders of magnitude above `startTimeoutMs` on purpose: a
+	 * regression is then this case hanging past the suite's own timeout rather than a number that
+	 * is subtly too large.
+	 */
+	it('bounds a companion that binds and never answers by the start timeout', async () => {
+		await answering();
+		vi.stubEnv('ROVER_STUB_NEVER_ANSWERS', '1');
+
+		await expect(
+			new IdbCompanions({ startTimeoutMs: 300, callTimeoutMs: 60_000 }).call(
+				SERIAL,
+				IDB_HEALTH_RPC,
+				{},
+			),
+		).rejects.toThrow(WaitTimeoutError);
+	});
 });
 
 describe('a companion that dies', () => {
@@ -305,24 +347,30 @@ describe('the socket directory', () => {
 	 */
 	it('is collected after the companion dies on its own', async () => {
 		await answering();
-		const before = await socketDirectories();
+		const companions = pool();
 
-		await expect(pool().call(SERIAL, IDB_HEALTH_RPC, { fetch_diagnostics: true })).rejects.toThrow(
-			IdbCompanionInterruptedError,
-		);
+		await expect(
+			companions.call(SERIAL, IDB_HEALTH_RPC, { fetch_diagnostics: true }),
+		).rejects.toThrow(IdbCompanionInterruptedError);
+		// **Waited for, never sampled.** The removal is started by the death and this pool no
+		// longer holds the companion, so reading the directory straight after the rejection would
+		// race an `rm` that is still in flight. `stopAll()` is what that removal is reachable
+		// through, and it cannot be doing the collecting itself: this companion was dropped from
+		// the pool the moment it died, so a green run here is the death's own collector or nothing.
+		await companions.stopAll();
 
-		expect(await socketDirectories()).toEqual(before);
+		expect(await socketDirectories()).toEqual([]);
 	});
 
+	/** The other way in, and nothing is waited for here because `stop()` resolves after the `rm`. */
 	it('is collected after the companion is stopped', async () => {
 		await answering();
-		const before = await socketDirectories();
 		const companions = pool();
 
 		await companions.call(SERIAL, IDB_HEALTH_RPC, {});
 		await companions.stop(SERIAL);
 
-		expect(await socketDirectories()).toEqual(before);
+		expect(await socketDirectories()).toEqual([]);
 	});
 });
 

@@ -977,8 +977,12 @@ In order, and each step is independently useful:
    `--notify`. Talk gRPC from Node, supervise one companion per target, never call `file push`,
    and classify a companion crash as an interruption rather than a device fault. **The
    `watchDevices` half is done** (#249) — one companion per *host* in `--notify` mode, no gRPC and
-   no per-target companion, with the poll kept as the fallback (§7). The rest of this step is still
-   ahead.
+   no per-target companion, with the poll kept as the fallback (§7). **The transport half is done
+   too** (#250) — gRPC from Node over a unix domain socket (§4 carries the table that chose it over
+   a port), one supervised companion per target started by a call and never on a schedule, `push`
+   off a closed RPC list with a source scan behind it, and a companion's death classified as an
+   interruption that leaves the device `ready` (§8 trap 16). Nothing dispatches to it yet: what is
+   still ahead in this step is `readScreen` and the four input primitives.
 3. **Declare `canInput` and refuse `recents` by name.** The `recents`/`back` question is decided
    (§5): shared code carries the per-key refusal (#215), so what remains here is declaring the
    capability and raising `UnsupportedKeyError` for `recents` — `back` and `home` are answered, and
