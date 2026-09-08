@@ -2,7 +2,9 @@ import type { ExecFileException } from 'node:child_process';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
 	DEFAULT_SIMCTL_TIMEOUT_MS,
+	describeBytes,
 	quoteStream,
+	READ_LOGS_SIMCTL_MAX_BUFFER_BYTES,
 	runSimctl,
 	runSimctlOnDevice,
 	SIMCTL_MAX_BUFFER_BYTES,
@@ -113,6 +115,21 @@ describe('runSimctl', () => {
 
 		expect(execFileMock.mock.calls[0][2].timeout).toBe(90_000);
 		expect(execFileMock.mock.calls[0][2].maxBuffer).toBe(SIMCTL_MAX_BUFFER_BYTES);
+	});
+
+	/**
+	 * The other half of that: the log read's answer is a payload rather than a listing, and a
+	 * minute of it measured past the default buffer on an idle simulator. Widening it must not
+	 * quietly buy a longer budget along with the room.
+	 */
+	it('lets a caller widen the buffer for one call without touching the timeout', async () => {
+		answers('');
+		await runSimctl(['spawn', 'booted', 'log', 'show'], {
+			maxBufferBytes: READ_LOGS_SIMCTL_MAX_BUFFER_BYTES,
+		});
+
+		expect(execFileMock.mock.calls[0][2].maxBuffer).toBe(READ_LOGS_SIMCTL_MAX_BUFFER_BYTES);
+		expect(execFileMock.mock.calls[0][2].timeout).toBe(DEFAULT_SIMCTL_TIMEOUT_MS);
 	});
 
 	/**
@@ -380,6 +397,26 @@ describe('runSimctlOnDevice', () => {
 		await runSimctlOnDevice(SERIAL, 'install', ['/tmp/Rover.app'], { timeoutMs: 300_000 });
 
 		expect(execFileMock.mock.calls[0][2].timeout).toBe(300_000);
+	});
+});
+
+describe('describeBytes', () => {
+	/** The eight bytes a capture off this platform starts with (`parsers/png.ts`). */
+	const PNG_HEAD = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+
+	it('names the length and the leading bytes that identify a payload', () => {
+		expect(describeBytes(Uint8Array.from([...PNG_HEAD, ...new Uint8Array(1_000)]))).toBe(
+			'(1008 bytes, starting 89 50 4e 47 0d 0a 1a 0a)',
+		);
+	});
+
+	it('reads no more than the first eight bytes', () => {
+		expect(describeBytes(Uint8Array.from([0x01, 0x02]))).toBe('(2 bytes, starting 01 02)');
+	});
+
+	// A capture that never arrived is its own diagnosis, and `0 bytes, starting ` is not it.
+	it('says so plainly when nothing came back at all', () => {
+		expect(describeBytes(new Uint8Array())).toBe('(empty)');
 	});
 });
 

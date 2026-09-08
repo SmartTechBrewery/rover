@@ -97,6 +97,46 @@ export const SIMCTL_MAX_BUFFER_BYTES = 8 * 1024 * 1024;
 export const INSTALL_SIMCTL_TIMEOUT_MS = 5 * 60_000;
 
 /**
+ * The budget for one capture, and the one number in this module whose *upper* bound is worth as
+ * much as its size.
+ *
+ * Measured on macOS 26.6.2 (25G83) / Xcode 26.4.1 (17E202), 2026-09-08, against a booted
+ * iPhone 17: `simctl io <device> screenshot --type png --mask ignored <path>` wrote its 2.8 MB
+ * PNG in **0.22–0.29 s**. So this is generous rather than tuned, for
+ * {@link INSTALL_SIMCTL_TIMEOUT_MS}'s stated reason — it exists to stop a wedged capture
+ * holding a lease forever, not to bound a slow but healthy one on a screen bigger than that
+ * device's.
+ *
+ * **It also sits below the tool's own wait**, which is the half a tighter number would not buy.
+ * Against a `Shutdown` device the same command blocked for **60.68 s** before failing with
+ * *"Timeout waiting for screen surfaces"* (same bench, `docs/IOS.md` §8 trap 1). The device's
+ * state is checked before the capture (`./backend.ts`), so that wait is only reachable when the
+ * device went down between the two calls — and when it is, this is what makes it cost half a
+ * minute rather than a whole one.
+ */
+export const SCREENSHOT_SIMCTL_TIMEOUT_MS = 30_000;
+
+/**
+ * The headroom for the one read whose answer is a payload rather than a listing: the device's
+ * own system log, serialised as NDJSON.
+ *
+ * Measured on the bench above against the same booted iPhone 17, with nothing on it but the
+ * operator's own session: `simctl spawn <device> log show --style ndjson --info --debug --last
+ * 60s` came back as **5.0 MB** (3,998 entries) across a quiet minute and **11.3–11.9 MB**
+ * (9,166–9,669 entries) across a minute in which this bench was itself reading logs in a loop.
+ * The second of those is already past {@link SIMCTL_MAX_BUFFER_BYTES}, on an *idle* simulator,
+ * which is the whole argument for a number of its own: what `./backend.ts` pushes down is a
+ * window, which bounds a duration and not a size, and an application under test says several
+ * times more per second than a SpringBoard does.
+ *
+ * `maxBuffer` is a ceiling rather than an allocation, so a generous one costs nothing until the
+ * bytes arrive — while an overflow is not a graceful truncation: the child is killed and the
+ * answer is lost. Set well clear of the largest plausible read rather than close to the measured
+ * one, which is `../android/adb.ts`'s `ADB_BINARY_MAX_BUFFER_BYTES`' reasoning and its number.
+ */
+export const READ_LOGS_SIMCTL_MAX_BUFFER_BYTES = 64 * 1024 * 1024;
+
+/**
  * The one device selector `simctl` accepts that is not a device, **lowercased**.
  *
  * Refused by {@link runSimctlOnDevice} — see its own note. `simctl help`, quoted verbatim: *"or
@@ -123,6 +163,19 @@ export interface SimctlResult {
 export interface RunSimctlOptions {
 	/** Overrides {@link DEFAULT_SIMCTL_TIMEOUT_MS} for one call. */
 	readonly timeoutMs?: number;
+
+	/**
+	 * Overrides {@link SIMCTL_MAX_BUFFER_BYTES} for one call — for a call whose answer is a
+	 * payload rather than a listing, which today is the log read alone
+	 * ({@link READ_LOGS_SIMCTL_MAX_BUFFER_BYTES}).
+	 *
+	 * A knob of its own rather than one raised default, because every other call this backend
+	 * makes is a listing measured in kilobytes, and because the failure it prevents reads as a
+	 * different one: an overflow sets `killed` exactly as a timeout does, and
+	 * {@link SimctlCommandError} tells the two apart by the code rather than by the budget that
+	 * was exceeded.
+	 */
+	readonly maxBufferBytes?: number;
 
 	/**
 	 * argv entries that must not appear in {@link SimctlCommandError}'s **message**.
@@ -272,6 +325,29 @@ export function quoteStream(stream: string, redact: readonly string[] = []): str
 }
 
 /**
+ * A binary payload, rendered for a message a human will read — {@link quoteStream}'s
+ * counterpart, and `../android/adb.ts`'s `describeBytes` for the same reasons.
+ *
+ * Nothing in this module produces bytes, and it lives here anyway. What this platform's capture
+ * comes back as is a file `simctl` wrote at a path of this backend's choosing, which
+ * `./backend.ts` reads and then refuses if it is not an image — a failure one layer out, like
+ * the exit-0 failures {@link quoteStream} is exported for, and one that gets read beside them.
+ * One definition, so no two messages disagree about how a payload reads.
+ *
+ * Quoting the payload itself is not an option: it is megabytes and it is not text. What is
+ * quoted is the two facts that identify it — how much came back, and what it starts with. The
+ * leading bytes are the useful half, because a capture that arrived as an error message, as text
+ * or not at all is told apart by exactly those.
+ */
+export function describeBytes(bytes: Uint8Array): string {
+	if (bytes.length === 0) return '(empty)';
+	const head = [...bytes.subarray(0, 8)]
+		.map((byte) => byte.toString(16).padStart(2, '0'))
+		.join(' ');
+	return `(${bytes.length} bytes, starting ${head})`;
+}
+
+/**
  * Run `simctl <args>` and hand back both streams.
  *
  * Throws {@link SimctlCommandError} on a non-zero exit, a timeout, or a failure to start, and
@@ -293,7 +369,11 @@ export async function runSimctl(
 		execFile(
 			simctl,
 			[...args],
-			{ timeout: timeoutMs, maxBuffer: SIMCTL_MAX_BUFFER_BYTES, encoding: 'utf8' },
+			{
+				timeout: timeoutMs,
+				maxBuffer: options.maxBufferBytes ?? SIMCTL_MAX_BUFFER_BYTES,
+				encoding: 'utf8',
+			},
 			(error, stdout, stderr) => {
 				if (error === null) {
 					resolve({ stdout, stderr });

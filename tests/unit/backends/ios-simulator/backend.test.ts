@@ -1,14 +1,20 @@
 import { readFileSync } from 'node:fs';
 import { copyFile, mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { dirname, isAbsolute, join } from 'node:path';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
 	IosSimulatorDeviceBackend,
 	WATCH_POLL_INTERVAL_MS,
 } from '@/backends/ios-simulator/backend.js';
 import { SimctlNotFoundError } from '@/backends/ios-simulator/developer-dir.js';
-import { INSTALL_SIMCTL_TIMEOUT_MS, SimctlCommandError } from '@/backends/ios-simulator/simctl.js';
+import { PNG_SIGNATURE } from '@/backends/ios-simulator/parsers/png.js';
+import {
+	INSTALL_SIMCTL_TIMEOUT_MS,
+	READ_LOGS_SIMCTL_MAX_BUFFER_BYTES,
+	SCREENSHOT_SIMCTL_TIMEOUT_MS,
+	SimctlCommandError,
+} from '@/backends/ios-simulator/simctl.js';
 import type { Device, DeviceWatcher } from '@/core/device.js';
 import { DeviceVanishedError, FileTooLargeError } from '@/core/errors.js';
 import { type AppId, type DeviceSerial, parseAppId, parseDeviceSerial } from '@/core/ids.js';
@@ -148,6 +154,21 @@ function answers(stdout: string, stderr = ''): void {
 /** Every device of the listing, whichever runtime it is under. */
 const entriesOf = (parsed: Listing): Array<Record<string, unknown>> =>
 	Object.values(parsed.devices).flat();
+
+/**
+ * A `SimctlCommandError` as the runner would have built it, with a captured stderr — the shape
+ * every method here has to keep letting through rather than reinterpret. Module-scoped because
+ * three suites below need one.
+ */
+function refusedWith(exitCode: number, stderr: string): SimctlCommandError {
+	return new SimctlCommandError(
+		['terminate', BOOTED, 'com.rover.testapp'],
+		10_000,
+		Object.assign(new Error('simctl failed'), { code: exitCode }),
+		'',
+		stderr,
+	);
+}
 
 function entryOf(parsed: Listing, udid: string): Record<string, unknown> {
 	const found = entriesOf(parsed).find((entry) => entry.udid === udid);
@@ -768,17 +789,6 @@ describe('the app lifecycle', () => {
 		'utf8',
 	);
 
-	/** A `SimctlCommandError` as the runner would have built it, with the captured stderr. */
-	function refusedWith(exitCode: number, stderr: string): SimctlCommandError {
-		return new SimctlCommandError(
-			['terminate', BOOTED, 'com.rover.testapp'],
-			10_000,
-			Object.assign(new Error('simctl failed'), { code: exitCode }),
-			'',
-			stderr,
-		);
-	}
-
 	describe('installApp', () => {
 		it('installs the host path, pinned to the device, with the install budget', async () => {
 			await backend.installApp(BOOTED, '/var/folders/qx/T/rover-transfer-a1/payload');
@@ -1226,40 +1236,276 @@ describe('the two transfers', () => {
 });
 
 /**
- * The required methods the later phases own, held to the sentinel the conformance gate scans for
- * (`tests/helpers/backend-conformance.ts`).
- *
- * Driven off `REQUIRED_BACKEND_METHODS` rather than a list written here, so a method added to
- * `DeviceBackend` joins this suite with no edit — and counted, so the phase that implements one
- * has to change the count deliberately rather than have the case quietly pass on a shorter list.
+ * The capture, with the *tool* replaced and the filesystem real: the mock writes where it was
+ * told to write, which is the only way the staging, the read-back and the cleanup are assertable
+ * without a simulator. What no mock can answer — that a simulator answers this argv at all, and
+ * that a device which is not booted is refused in milliseconds rather than after a minute — is
+ * `tests/device/ios-simulator/screenshot.test.ts`.
  */
-describe('the methods a later phase fills in', () => {
-	const ANSWERED: readonly string[] = [
-		'listDevices',
-		'watchDevices',
-		'describeDevice',
-		'deviceInfo',
-		'installApp',
-		'launchApp',
-		'stopApp',
-		'clearAppData',
-		'pushFile',
-		'pullFile',
-	];
-	const STUBBED = REQUIRED_BACKEND_METHODS.filter((name) => !ANSWERED.includes(name));
+describe('screenshot', () => {
+	/** Enough of a PNG to pass the sniff: the signature and the first bytes of an IHDR. */
+	const PNG = Uint8Array.from([...PNG_SIGNATURE, 0x00, 0x00, 0x00, 0x0d]);
 
-	it('is every required method this phase does not answer', () => {
-		expect(STUBBED).toHaveLength(2);
+	/** What the tool says on the success path, on the stream it really says it on. */
+	const WROTE = (at: string): { stdout: string; stderr: string } => ({
+		stdout: '',
+		stderr: `Note: No display specified. Defaulting to display: …\nWrote screenshot to: ${at}\n`,
 	});
 
-	it.each(STUBBED)('%s throws the not-implemented sentinel', async (name) => {
-		const method = backend[name] as unknown as () => Promise<unknown>;
+	/** The staged path of the one capture that was asked for. */
+	const stagedPath = (): string => runSimctlOnDevice.mock.calls[0]?.[2]?.at(-1) ?? '';
 
-		await expect(method.call(backend)).rejects.toThrow(STUB_SENTINEL);
-		expect(String(backend[name])).toMatch(STUB_SENTINEL);
+	/** `simctl`, writing `bytes` where it was told to write them. */
+	function writes(bytes: Uint8Array | null): void {
+		runSimctlOnDevice.mockImplementation(async (_serial, _subcommand, args) => {
+			const at = args?.at(-1) ?? '';
+			if (bytes !== null) await writeFile(at, bytes);
+			return WROTE(at);
+		});
+	}
+
+	beforeEach(() => {
+		answers(listing());
+		writes(PNG);
 	});
 
-	it.each(ANSWERED)('%s carries no sentinel, because it is real', (name) => {
-		expect(String(backend[name as keyof IosSimulatorDeviceBackend])).not.toMatch(STUB_SENTINEL);
+	it('captures to a staged file and answers with the bytes, never with a path', async () => {
+		const bytes = await backend.screenshot(BOOTED);
+
+		expect(Buffer.from(bytes).equals(Buffer.from(PNG))).toBe(true);
+		expect(runSimctlOnDevice).toHaveBeenCalledTimes(1);
+		expect(runSimctlOnDevice.mock.calls[0]?.slice(0, 2)).toEqual([BOOTED, 'io']);
+		expect(runSimctlOnDevice.mock.calls[0]?.[2]).toEqual([
+			'screenshot',
+			'--type',
+			'png',
+			'--mask',
+			'ignored',
+			stagedPath(),
+		]);
+	});
+
+	it('bounds the capture and masks the staged path out of a failure message', async () => {
+		await backend.screenshot(BOOTED);
+
+		expect(runSimctlOnDevice.mock.calls[0]?.[3]?.timeoutMs).toBe(SCREENSHOT_SIMCTL_TIMEOUT_MS);
+		expect(runSimctlOnDevice.mock.calls[0]?.[3]?.redactArgv).toEqual([stagedPath()]);
+	});
+
+	/**
+	 * Measured rather than tidiness: the tool resolves the destination against a directory this
+	 * process does not choose, and a relative path fails with the same *read-only volume* error
+	 * that `-` does (`docs/IOS.md` §8, trap 10).
+	 */
+	it('stages an absolute path of its own, attributable to this backend', async () => {
+		await backend.screenshot(BOOTED);
+
+		expect(isAbsolute(stagedPath())).toBe(true);
+		expect(stagedPath()).toContain('rover-ios-screenshot-');
+	});
+
+	it('removes the staged capture on the way out', async () => {
+		await backend.screenshot(BOOTED);
+
+		await expect(stat(dirname(stagedPath()))).rejects.toThrow();
+	});
+
+	it('removes it when the capture failed too', async () => {
+		runSimctlOnDevice.mockImplementation(async (_serial, _subcommand, args) => {
+			await writeFile(args?.at(-1) ?? '', PNG);
+			throw refusedWith(1, 'Timeout waiting for screen surfaces');
+		});
+
+		await expect(backend.screenshot(BOOTED)).rejects.toThrow('exited 1');
+		await expect(stat(dirname(stagedPath()))).rejects.toThrow();
+	});
+
+	/**
+	 * The criterion this phase exists for: against a device that is not booted the capture blocks
+	 * for a minute and then fails, so the state is read **first** and nothing is run
+	 * (`docs/IOS.md` §8, trap 1). The refusal names the device and the state, in the neutral
+	 * vocabulary `devices.ts` maps the tool's own onto.
+	 */
+	it('refuses a device that is not booted without running the capture', async () => {
+		const rejection = backend.screenshot(IPHONE_17_PRO);
+
+		await expect(rejection).rejects.toThrow(`'${IPHONE_17_PRO}' is 'offline' rather than ready`);
+		await expect(rejection).rejects.toThrow(/nothing was captured and nothing was run/);
+		expect(runSimctlOnDevice).not.toHaveBeenCalled();
+		expect(runSimctl).toHaveBeenCalledTimes(1);
+	});
+
+	// The contract's own distinction from `describeDevice`'s `null`: a device that is not there at
+	// all is not a device in the wrong state.
+	it('reports a device the listing no longer names as vanished', async () => {
+		await expect(backend.screenshot(GONE)).rejects.toBeInstanceOf(DeviceVanishedError);
+		expect(runSimctlOnDevice).not.toHaveBeenCalled();
+	});
+
+	it('refuses bytes that are not a PNG, describing them rather than quoting them', async () => {
+		writes(new TextEncoder().encode('not an image'));
+
+		const rejection = backend.screenshot(BOOTED);
+
+		await expect(rejection).rejects.toThrow(
+			/is not a PNG \(12 bytes, starting 6e 6f 74 20 61 6e 20 69\)/,
+		);
+		await expect(rejection).rejects.toThrow(String(BOOTED));
+	});
+
+	/**
+	 * An exit-0 answer this method cannot be built on. No such run has been captured — every one
+	 * printed `Wrote screenshot to: …` and produced the file — so what is asserted is that the
+	 * failure says what happened and carries the errno instead of a host path (D19).
+	 */
+	it('says so when the tool exited 0 without writing the capture', async () => {
+		writes(null);
+
+		const rejection = backend.screenshot(BOOTED);
+
+		await expect(rejection).rejects.toThrow(/could not be read back \(ENOENT\)/);
+		await expect(rejection).rejects.toThrow(/simctl exited 0/);
+		await expect(rejection).rejects.not.toThrow(/rover-ios-screenshot-/);
+	});
+
+	it('lets the runner’s own failure through', async () => {
+		runSimctlOnDevice.mockRejectedValue(refusedWith(60, 'Timeout waiting for screen surfaces'));
+
+		await expect(backend.screenshot(BOOTED)).rejects.toThrow('exited 60');
+	});
+});
+
+/**
+ * The log read against the **captured** NDJSON of `tests/fixtures/ios-simulator/`, which is what
+ * makes the bound and the ordering assertable without a simulator. The parse itself is
+ * `parsers/unified-log.test.ts`'s subject and is not re-asserted here; what this covers is the
+ * argv, the cap and what `truncated` means.
+ */
+describe('readLogs', () => {
+	/** One process, one minute, off the booted device of the fixtures' bench: 53 lines, 52 entries. */
+	const CAPTURED_LOG = readFileSync(
+		fixtureUrl('unified-log-ndjson.xcode26.4.1-ios26.4.1.json'),
+		'utf8',
+	);
+	const CAPTURED_ENTRIES = 52;
+
+	/** The trailer alone — what a window in which the device said nothing comes back as. */
+	const NOTHING = '{"count":0,"finished":1}\n';
+
+	/** The stderr an ordinary run writes while exiting 0 on this platform. */
+	const NOISE = 'getpwuid_r did not find a match for uid 501\n';
+
+	function reads(stdout: string): void {
+		runSimctlOnDevice.mockResolvedValue({ stdout, stderr: NOISE });
+	}
+
+	beforeEach(() => {
+		reads(CAPTURED_LOG);
+	});
+
+	/**
+	 * The whole argv as a literal, because every entry of it is load-bearing: `spawn` is what runs
+	 * the query inside the device rather than against this Mac's own log, `--style ndjson` is the
+	 * shape the parser is pinned against, `--info --debug` are what keep two of the five levels
+	 * from being silently missing, and `--last` is the pushdown.
+	 */
+	it('asks the device’s own log for one bounded window, pinned to the device', async () => {
+		await backend.readLogs(BOOTED, { maxEntries: 200 });
+
+		expect(runSimctlOnDevice).toHaveBeenCalledTimes(1);
+		expect(runSimctlOnDevice.mock.calls[0]?.slice(0, 3)).toEqual([
+			BOOTED,
+			'spawn',
+			['log', 'show', '--style', 'ndjson', '--info', '--debug', '--last', '30s'],
+		]);
+	});
+
+	// A window bounds a duration and not a size, and a minute of this output measured past the
+	// runner's default buffer on an idle simulator (`simctl.ts`).
+	it('gives the read room for an answer that is a payload rather than a listing', async () => {
+		await backend.readLogs(BOOTED, { maxEntries: 200 });
+
+		expect(runSimctlOnDevice.mock.calls[0]?.[3]?.maxBufferBytes).toBe(
+			READ_LOGS_SIMCTL_MAX_BUFFER_BYTES,
+		);
+	});
+
+	it('answers the window’s entries when they fit under the cap', async () => {
+		const read = await backend.readLogs(BOOTED, { maxEntries: 200 });
+
+		expect(read.entries).toHaveLength(CAPTURED_ENTRIES);
+		expect(read.truncated).toBe(false);
+	});
+
+	/** A log read is asked *after* something happened, so the newest are the ones kept. */
+	it('keeps the newest entries when the device said more than the cap, and says so', async () => {
+		const all = await backend.readLogs(BOOTED, { maxEntries: CAPTURED_ENTRIES });
+		const read = await backend.readLogs(BOOTED, { maxEntries: 5 });
+
+		expect(read.truncated).toBe(true);
+		expect(read.entries).toEqual(all.entries.slice(-5));
+	});
+
+	/**
+	 * The exact-fit case, which is what `truncated` is easy to get wrong on: the window held
+	 * exactly the cap, so nothing was dropped. `log show` has no count bound to ask one more than
+	 * the cap of — the window is what makes this decidable at all.
+	 */
+	it('answers exactly the cap without calling it truncated', async () => {
+		const read = await backend.readLogs(BOOTED, { maxEntries: CAPTURED_ENTRIES });
+
+		expect(read.entries).toHaveLength(CAPTURED_ENTRIES);
+		expect(read.truncated).toBe(false);
+	});
+
+	it('answers a window the device said nothing in as empty rather than as a failure', async () => {
+		reads(NOTHING);
+
+		expect(await backend.readLogs(BOOTED, { maxEntries: 200 })).toEqual({
+			entries: [],
+			truncated: false,
+		});
+	});
+
+	/**
+	 * No state check here, unlike the capture, and this is the reason: the tool refuses a device
+	 * that is not booted in 0.15 s at exit 149, so there is nothing to pre-empt and an enumeration
+	 * would be bought for nothing (measured, `backend.ts`).
+	 */
+	it('lets the tool refuse a device that is not booted, without an enumeration of its own', async () => {
+		runSimctlOnDevice.mockRejectedValue(
+			refusedWith(149, 'Process spawn via launchd failed because device is not booted.'),
+		);
+
+		await expect(backend.readLogs(IPHONE_17_PRO, { maxEntries: 200 })).rejects.toThrow(
+			'exited 149',
+		);
+		expect(runSimctl).not.toHaveBeenCalled();
+	});
+});
+
+/**
+ * Every required method, held to the sentinel the conformance gate scans for
+ * (`tests/helpers/backend-conformance.ts`) — and **there is none left to find**.
+ *
+ * Driven off `REQUIRED_BACKEND_METHODS` rather than off a list written here, so a method added to
+ * `DeviceBackend` joins this suite with no edit and arrives unanswered rather than unnoticed. The
+ * count is asserted for the reason the stub count used to be: a phase that answers one has to
+ * change this deliberately rather than have the case pass on a shorter list.
+ */
+describe('the required methods', () => {
+	/** The source of each one, which is what the gate's own scans read. */
+	const sourceOf = (name: (typeof REQUIRED_BACKEND_METHODS)[number]): string =>
+		String(backend[name]);
+
+	it('is the twelve of the contract, every one of them answered here', () => {
+		expect(REQUIRED_BACKEND_METHODS).toHaveLength(12);
+		expect(REQUIRED_BACKEND_METHODS.filter((name) => STUB_SENTINEL.test(sourceOf(name)))).toEqual(
+			[],
+		);
+	});
+
+	it.each(REQUIRED_BACKEND_METHODS)('%s is real rather than a stub', (name) => {
+		expect(sourceOf(name)).not.toMatch(STUB_SENTINEL);
 	});
 });
