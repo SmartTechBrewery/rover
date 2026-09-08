@@ -56,6 +56,7 @@ import {
 	type DeviceState,
 	type DeviceWatch,
 	type DeviceWatcher,
+	type InterruptionCause,
 	type LogRead,
 	type PullFileOptions,
 	type ReadLogsOptions,
@@ -73,9 +74,16 @@ import { type AppId, type DeviceSerial, unwrap } from '../../core/ids.js';
 import { waitForCondition } from '../../core/wait.js';
 import { hostPathOf } from './containers.js';
 import { SIMCTL_MISSING, SimctlNotFoundError } from './developer-dir.js';
-import { IOS_SIMULATOR_PLATFORM_ID, toDevices } from './devices.js';
+import { IOS_SIMULATOR_PLATFORM_ID, toDevices, toNotifiedDevices } from './devices.js';
+import {
+	IDB_COMPANION_STDERR_TAIL_CHARS,
+	type IdbCompanionStream,
+	streamIdbCompanion,
+} from './idb-companion.js';
+import { IDB_COMPANION_MISSING, IdbCompanionNotFoundError } from './idb-companion-path.js';
 import { saysNothingToTerminate } from './parsers/app-control.js';
 import { type DeviceTypeProfile, readDeviceTypeProfile } from './parsers/device-type-profile.js';
+import { IdbNotifyFrameDecoder, type IdbTargetList } from './parsers/idb-notify.js';
 import { isPng } from './parsers/png.js';
 import { isFinishedRecording, recorderPids, saysRecordingStarted } from './parsers/recording.js';
 import {
@@ -326,12 +334,45 @@ function readLogsArgv(window: string): string[] {
  * number for correctness — a lease grant re-verifies the device it is about to lend rather than
  * trusting this watch (D6) — so it is a constant and not configuration (ai/RULES.md §7).
  *
- * **The poll is the deliberate first step, not the design.** `idb_companion --notify` emits the
- * full target set on every change with no polling at all (`docs/IOS.md` §7), and swapping this
- * onto it changes nothing a caller can see: the contract is the full current set on subscription
- * and on every change either way.
+ * **The poll is the fallback now, not the design.** `idb_companion --notify` emits the full
+ * target set on every change with no polling at all (`docs/IOS.md` §7), and
+ * {@link IosSimulatorDeviceBackend.watchDevices} prefers it — this gap is what a host with no
+ * companion still watches its devices through, and what the stream falls back to whenever it
+ * will not stay up. Nothing a caller can see differs between the two: the contract is the full
+ * current set on subscription and on every change either way.
  */
 export const WATCH_POLL_INTERVAL_MS = 2_000;
+
+/**
+ * The companion's argv for the one mode this phase starts one in: the change stream, on stdout.
+ *
+ * **One per host, and no `--udid`** — this is the stream that reports every target, which is
+ * what an enumeration needs. The per-target companions are a different job with a different
+ * lifecycle (`docs/IOS.md` §4), and the runner beside this takes its argv from the caller so
+ * that they can share the process handling without sharing the argv (`./idb-companion.js`).
+ *
+ * `stdout` rather than a path or a port because the process is this host's child and its output
+ * is already a pipe; the alternative would be a file somebody has to clean up.
+ */
+const IDB_NOTIFY_ARGV = ['--notify', 'stdout'] as const;
+
+/**
+ * How long to wait before starting another companion after one ended, and the ceiling that wait
+ * grows to. Doubling, and reset by the first frame a new companion delivers.
+ *
+ * `AndroidDeviceBackend`'s `TRACK_RESTART_MIN/MAX_DELAY_MS` shape and its reasoning, with this
+ * platform's own two reasons for each half. **Mandatory** rather than nice: a companion is a
+ * process on this host that nothing else supervises, killing one does not disturb the simulator
+ * (`docs/IOS.md` §4), and a host that lost its stream permanently would be a host reduced to the
+ * poll forever — while an `idb_companion` unpacked onto a *running* host is exactly what a
+ * restart picks up, since the search is unmemoised (`./idb-companion-path.js`).
+ * **Bounded** because the other reason a companion ends immediately is that there is none to
+ * run, and retrying that every 250 ms forever is a busy loop with a process spawn in it.
+ *
+ * Constants, not configuration (ai/RULES.md §7): nothing about them is a host's choice.
+ */
+const NOTIFY_RESTART_MIN_DELAY_MS = 250;
+const NOTIFY_RESTART_MAX_DELAY_MS = 5_000;
 
 /**
  * The recorder's argv up to the file it writes: `simctl io <device> recordVideo --codec h264
@@ -860,41 +901,84 @@ export class IosSimulatorDeviceBackend implements DeviceBackend {
 	}
 
 	/**
-	 * Poll the device set, delivering the **full** current set on subscription and whenever it
-	 * differs from the last set delivered.
+	 * Watch the device set, delivering the **full** current set on subscription and whenever it
+	 * differs from the last set delivered — off `idb_companion --notify` where this host has a
+	 * companion, and off the `simctl list` poll where it does not.
 	 *
-	 * Synchronous and never rejecting, as the contract requires: the first poll is started rather
-	 * than awaited, so a failure that happens immediately reaches the caller through
-	 * `onInterrupted` like every later one rather than as a rejection nothing is written to catch.
+	 * **Two sources behind one contract, and only one of them delivers at a time.** The stream is
+	 * preferred because it *is* the contract: the companion emits the whole target set on every
+	 * change, with no polling anywhere (`docs/IOS.md` §7). The poll is the fallback rather than
+	 * the design, which is what keeps a host with no idb watching the devices it has — and the
+	 * two agree device for device, including on the `osVersion` spelling, because `./devices.js`
+	 * normalises the notify path onto `simctl`'s rather than publishing two.
 	 *
-	 * **A failed poll is one `onInterrupted` and the poll continues.** Only
-	 * `SimctlNotFoundError` is classified, and it carries {@link SIMCTL_MISSING} — the end that
-	 * will not clear on its own (#168): a Command Line Tools selection does not start carrying
-	 * `simctl`, so without a cause every surface would repeat "the host's view was interrupted"
-	 * about a host that needs somebody to install Xcode. It keeps polling anyway, because
-	 * `DEVELOPER_DIR` being fixed on a running daemon is exactly what the next poll picks up —
-	 * the search is re-run per call and deliberately unmemoised (`./developer-dir.js`).
+	 * Synchronous and never rejecting, as the contract requires: whether either source can be
+	 * established is reported through the listener, never as a rejection nothing is written to
+	 * catch. {@link streamIdbCompanion} throwing `IdbCompanionNotFoundError` from the subscription
+	 * itself is caught here for exactly that reason, and it is why that runner throws rather than
+	 * reporting an end — it is the one failure worth naming a program in.
 	 *
-	 * **An interruption clears what the caller was last told**, so the next successful poll
-	 * delivers unconditionally even when the set is unchanged. Suppressing it as "no change"
-	 * would leave the caller holding a set it has been told is no longer known to be current,
-	 * with nothing to lift that until a device happens to move.
+	 * **A lost view is one `onInterrupted`, never an empty set.** An empty set reads as every
+	 * device having gone away, which for an inventory means releasing devices that never moved
+	 * (`src/core/device.ts`), so only a decoded frame and a successful poll ever produce
+	 * `onDevices`. The cause is {@link IDB_COMPANION_MISSING} when there is no companion to run
+	 * and {@link SIMCTL_MISSING} when there is no `simctl`, the two ends that will not clear on
+	 * their own (#168); everything else is `null`, which is the claim "this is expected to
+	 * clear".
+	 *
+	 * **The view is whichever source is serving the caller, so the fallback is one interruption
+	 * and not one per attempt.** Losing the stream interrupts once and hands over to the poll; a
+	 * later attempt that fails again while the poll is delivering changes nothing the caller can
+	 * observe and is silent. Retried on a backoff either way, so a companion installed on a
+	 * running host is picked up without a restart — **a `setTimeout` whose callback does the next
+	 * attempt, never a sleep** (ai/RULES.md §2, D12(b)), reset by a frame because a frame is the
+	 * only evidence the view is healthy again.
+	 *
+	 * **An interruption clears what the caller was last told**, so the next delivery from either
+	 * source is unconditional even when the set is unchanged. Suppressing it as "no change" would
+	 * leave the caller holding a set it has been told is no longer known to be current, with
+	 * nothing to lift that until a device happens to move. A *handover* is not an interruption,
+	 * though — nothing was lost — so the stream coming back is silent when it agrees with the
+	 * last set the poll delivered.
 	 *
 	 * `stop()` silences every handler **synchronously**, before its promise resolves, so no
-	 * listener method can be called after it — including from a poll already in flight, which is
-	 * left to finish and have its answer dropped. There is nothing to cancel: `runSimctl` hands
-	 * back no process handle, and a `simctl list` that is already running costs a fifth of a
-	 * second and touches no device state.
+	 * listener method can be called after it. It kills whichever companion is live, clears
+	 * whichever timer is pending, and leaves a poll already in flight to finish and have its
+	 * answer dropped — `runSimctl` hands back no process handle, and a `simctl list` that is
+	 * already running costs a fifth of a second and touches no device state.
 	 */
 	watchDevices(watcher: DeviceWatcher): DeviceWatch {
 		let stopped = false;
-		let next: NodeJS.Timeout | null = null;
 		// The last set handed to the caller, and `null` whenever the caller has nothing it can
 		// still believe: before the first delivery, and after every interruption.
 		let delivered: Device[] | null = null;
 
-		const schedule = (): void => {
+		/** The poll's own re-armed gap, and the stream's restart. Never both pending at once. */
+		let next: NodeJS.Timeout | null = null;
+		let restart: NodeJS.Timeout | null = null;
+		/** The live companion, or `null` while none is running. */
+		let companion: IdbCompanionStream | null = null;
+		let backoffMs = NOTIFY_RESTART_MIN_DELAY_MS;
+		/** Whether the poll is the source serving the caller — see the note on the handover. */
+		let polling = false;
+
+		/** One delivery rule for both sources, so they cannot come to disagree about a change. */
+		const deliver = (devices: Device[]): void => {
 			if (stopped) return;
+			if (delivered === null || !sameDeviceSet(delivered, devices)) {
+				delivered = devices;
+				watcher.onDevices(devices);
+			}
+		};
+
+		const interrupted = (reason: string, cause: InterruptionCause | null): void => {
+			if (stopped) return;
+			delivered = null;
+			watcher.onInterrupted(reason, cause);
+		};
+
+		const schedulePoll = (): void => {
+			if (stopped || !polling) return;
 			next = setTimeout(() => {
 				next = null;
 				void poll();
@@ -906,33 +990,132 @@ export class IosSimulatorDeviceBackend implements DeviceBackend {
 			try {
 				devices = await this.listDevices();
 			} catch (error) {
-				if (stopped) return;
-				delivered = null;
-				watcher.onInterrupted(
-					message(error),
-					error instanceof SimctlNotFoundError ? SIMCTL_MISSING : null,
-				);
-				schedule();
+				// `!polling` as well as `stopped`: an answer from the poll that the stream has
+				// already taken over from is dropped, because only one source delivers at a time.
+				if (stopped || !polling) return;
+				interrupted(message(error), error instanceof SimctlNotFoundError ? SIMCTL_MISSING : null);
+				schedulePoll();
 				return;
 			}
 
-			if (stopped) return;
-			if (delivered === null || !sameDeviceSet(delivered, devices)) {
-				delivered = devices;
-				watcher.onDevices(devices);
-			}
-			schedule();
+			if (stopped || !polling) return;
+			deliver(devices);
+			schedulePoll();
 		};
 
-		void poll();
+		const startPolling = (): void => {
+			if (stopped || polling) return;
+			polling = true;
+			void poll();
+		};
+
+		const stopPolling = (): void => {
+			polling = false;
+			if (next !== null) {
+				clearTimeout(next);
+				next = null;
+			}
+		};
+
+		const scheduleNotifyRestart = (): void => {
+			const delayMs = backoffMs;
+			backoffMs = Math.min(backoffMs * 2, NOTIFY_RESTART_MAX_DELAY_MS);
+			restart = setTimeout(() => {
+				restart = null;
+				if (!stopped) startNotify();
+			}, delayMs);
+		};
+
+		const startNotify = (): void => {
+			const decoder = new IdbNotifyFrameDecoder();
+			// Per attempt, so a chunk arriving from the companion that just ended cannot end the
+			// one that replaced it.
+			let over = false;
+			let stderrTail = '';
+			let handle: IdbCompanionStream | null = null;
+
+			const end = (reason: string, cause: InterruptionCause | null): void => {
+				if (over || stopped) return;
+				over = true;
+				companion = null;
+				// A framing failure ends a companion that is still running; an `onEnd` ends one
+				// that already stopped, where this resolves at once. Not awaited: the caller of
+				// this path is a stdout handler, and the restart is scheduled either way.
+				void handle?.stop();
+				if (!polling) {
+					interrupted(reason, cause);
+					startPolling();
+				}
+				scheduleNotifyRestart();
+			};
+
+			try {
+				handle = streamIdbCompanion([...IDB_NOTIFY_ARGV], {
+					onStdout(chunk) {
+						if (over || stopped) return;
+
+						let frames: IdbTargetList[];
+						try {
+							frames = decoder.push(chunk);
+						} catch (cause) {
+							// Terminal for this run: framing that has lost sync cannot be
+							// resynchronised, so the answer is one interruption and a restart
+							// rather than a device set sliced at a guessed offset
+							// (`./parsers/idb-notify.js`). Reported, never thrown — there is
+							// nothing above a stdout handler to catch it.
+							end(message(cause), null);
+							return;
+						}
+						if (frames.length === 0) return;
+
+						// A frame is the only evidence the view is healthy again, so it is what
+						// resets the backoff and what takes the watch back off the poll — a
+						// companion that starts and dies in a loop keeps backing off, and the
+						// poll goes on delivering meanwhile.
+						backoffMs = NOTIFY_RESTART_MIN_DELAY_MS;
+						stopPolling();
+
+						for (const targets of frames) deliver(toNotifiedDevices(targets));
+					},
+					onStderr(chunk) {
+						stderrTail = `${stderrTail}${chunk}`.slice(-IDB_COMPANION_STDERR_TAIL_CHARS);
+					},
+					onEnd(reason) {
+						// The tail is quoted here rather than by the runner, which hands over every
+						// byte and quotes nothing back (`./idb-companion.js`).
+						end(`${reason}\nstderr: ${quoteStream(stderrTail)}`, null);
+					},
+				});
+			} catch (cause) {
+				// There is no companion on this host — the one end worth naming a program in, and
+				// the reason that runner throws instead of reporting an end. It keeps being
+				// retried anyway: an `idb_companion` unpacked onto a running host is exactly what
+				// the backoff exists to pick up (`./idb-companion-path.js`, unmemoised).
+				end(
+					message(cause),
+					cause instanceof IdbCompanionNotFoundError ? IDB_COMPANION_MISSING : null,
+				);
+				return;
+			}
+
+			// Assigned after the spawn, so a companion that ended inside it — `end` having already
+			// stopped and forgotten this handle — cannot be revived here.
+			if (!over) companion = handle;
+		};
+
+		startNotify();
 
 		return {
 			async stop(): Promise<void> {
 				stopped = true;
-				if (next !== null) {
-					clearTimeout(next);
-					next = null;
+				stopPolling();
+				if (restart !== null) {
+					clearTimeout(restart);
+					restart = null;
 				}
+				const handle = companion;
+				companion = null;
+				await handle?.stop();
 			},
 		};
 	}

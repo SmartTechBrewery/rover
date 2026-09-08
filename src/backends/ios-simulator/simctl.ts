@@ -775,8 +775,13 @@ function unreference(stream: NodeJS.ReadableStream | null): void {
  * was asked to stop exits 0, and so does one that was given a device with no screen to record
  * and produced nothing (`./backend.ts`). Whatever the code, the run is over and the bytes are
  * what decide the answer.
+ *
+ * Exported for `./idb-companion.ts`, this backend's other long-lived run, rather than copied
+ * into it: the sentence above is the valuable part and two copies of it would be two places for
+ * it to drift. `simctl` and `idb_companion` are different programs, but "how did a run end, in
+ * the words a caller can be shown" is one question with one answer.
  */
-function streamOutcome(code: number | null, signal: NodeJS.Signals | null): string {
+export function streamOutcome(code: number | null, signal: NodeJS.Signals | null): string {
 	if (code !== null) return `ended with exit ${code}`;
 	if (signal !== null) return `was killed by ${signal}`;
 	return 'ended';
