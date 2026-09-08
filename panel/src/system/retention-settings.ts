@@ -17,15 +17,17 @@ import { useState } from 'react';
  */
 
 /**
- * Megabytes the archive may occupy. **10 GiB**, and the reason it is written as `10240` rather than
- * as gigabytes is that the setting *is* an integer count of MB — the host will be given a number,
- * not a unit to parse.
+ * Megabytes the archive may occupy. **1 GiB**, written as `1024` rather than as a gigabyte because
+ * the setting *is* an integer count of MB — the host will be given a number, not a unit to parse.
  *
- * A default is a claim about somebody else's disk, so it is deliberately a round figure well under
- * a modern one rather than a fraction of it: this panel cannot see how large the disk is, and a
- * percentage would be a calculation off a number nobody sent (D19).
+ * A default is a claim about somebody else's disk, so it is deliberately **small**: this panel
+ * cannot see how large the disk is, a percentage would be arithmetic off a number nobody sent
+ * (D19), and of the two ways to be wrong the cheap one is right. A budget set too low deletes runs
+ * an operator could have kept — recoverable by raising it, and the `Keep` tick is there for the
+ * ones that matter — while one set too high fills a disk the host needs to keep working. It is the
+ * operator's number to raise, and a gigabyte is enough archive to see that the mechanism works.
  */
-export const DEFAULT_DISK_BUDGET_MB = 10240;
+export const DEFAULT_DISK_BUDGET_MB = 1024;
 
 /**
  * Days after which a test's traces go even if the budget is nowhere near reached. **30**, which is

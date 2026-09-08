@@ -62,12 +62,13 @@ describe('what a retention field means', () => {
 describe('the defaults', () => {
 	/*
 	 * A default is a claim about somebody else's disk, so both are round figures rather than a
-	 * fraction of a size this panel cannot see (D19). They are asserted because they are the two
-	 * numbers a reader will see first, and a silent change to either is a change to what Rover
-	 * appears to promise about their disk.
+	 * fraction of a size this panel cannot see (D19), and the budget is deliberately small — of the
+	 * two ways to be wrong, deleting too eagerly is the recoverable one. They are asserted because
+	 * they are the two numbers a reader will see first, and a silent change to either is a change to
+	 * what Rover appears to promise about their disk.
 	 */
-	it('are 10 GiB and thirty days, as whole counts', () => {
-		expect(DEFAULT_DISK_BUDGET_MB).toBe(10240);
+	it('are one GiB and thirty days, as whole counts', () => {
+		expect(DEFAULT_DISK_BUDGET_MB).toBe(1024);
 		expect(DEFAULT_MAX_AGE_DAYS).toBe(30);
 		for (const value of [DEFAULT_DISK_BUDGET_MB, DEFAULT_MAX_AGE_DAYS]) {
 			expect(Number.isSafeInteger(value)).toBe(true);

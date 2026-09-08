@@ -3132,7 +3132,7 @@ the write D31 refuses on the *Projects* screen, and nothing here changes that.
 
 | Setting | Unit | Default | What it does |
 | --- | --- | --- | --- |
-| Disk space for test data | MB, a whole number | `10240` (10 GiB) | Rover deletes the oldest tests first once the archive passes this size |
+| Disk space for test data | MB, a whole number | `1024` (1 GiB) | Rover deletes the oldest tests first once the archive passes this size |
 | Delete tests after | days, a whole number | `30` | A test this old goes even if the disk budget is nowhere near reached |
 
 **Both, rather than either.** A budget alone lets a quiet month keep everything forever; an age alone
@@ -3144,9 +3144,15 @@ would have to assemble it.
 reader cannot work out from here, and the word is drawn in the same `tertiary` the tick itself uses.
 
 **The defaults are round figures and not fractions of anything.** This panel cannot see how large the
-host's disk is, so a percentage would be arithmetic off a number nobody sent (D19). `10240` is
-written as a count of MB rather than as `10 GB` because the setting *is* an integer count of
+host's disk is, so a percentage would be arithmetic off a number nobody sent (D19). `1024` is
+written as a count of MB rather than as `1 GB` because the setting *is* an integer count of
 megabytes — the host will be handed a number, not a unit to parse.
+
+**And the budget default is deliberately small.** Of the two ways a default can be wrong, one is
+recoverable and the other is not: a gigabyte deletes runs an operator might have kept, which they
+fix by raising the number and which the `Keep` tick already covers for the runs that matter, while a
+generous default fills the disk the host needs in order to work at all. It is the operator's number
+to raise.
 
 ### The field, and why it is not `type="number"`
 
