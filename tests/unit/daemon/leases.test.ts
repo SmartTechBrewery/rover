@@ -526,9 +526,10 @@ describe('live', () => {
 	});
 
 	/*
-	 * **It is a question, not a renewal.** A sweep asks it on an interval one day (§9.4's later
-	 * phases), and a question that pushed every expiry out would keep every device held for as
-	 * long as the sweep kept asking.
+	 * **It is a question, not a renewal.** Two sweeps ask it repeatedly — the expiry interval, and
+	 * every pass of the retention policy, which resolves the live set inside its walk (D35, D37,
+	 * D38) — and a question that pushed every expiry out would keep every device held for as long
+	 * as either kept asking.
 	 */
 	it('does not renew what it answers', () => {
 		const { store, at, nowMs } = createClockedStore();

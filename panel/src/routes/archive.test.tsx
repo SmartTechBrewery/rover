@@ -2480,7 +2480,9 @@ describe('the testing groups view with nothing to arrange', () => {
 /**
  * **The `Keep` checkbox — one flag per test, and the two cards that carry it share it.**
  *
- * It marks a test to be kept once Rover starts sweeping the archive. **The flag is the host's**
+ * It marks a test to be kept when the host sweeps its archive — by the disk budget after every
+ * lease ends, and by both bounds at local midnight and at daemon start (#246). **The flag is the
+ * host's**
  * since #237 (D33): this screen reads the whole set once per mount and every press is one
  * `set_kept_tests` whose answer it draws (`pinned-tests.ts`), so what the assertions below watch is
  * the traffic as much as the box. They belong here rather than beside either card for the reason

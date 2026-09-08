@@ -20,6 +20,13 @@ import { KEPT_TESTS_PATH_ENV_VAR } from '@/daemon/kept-tests.js';
  * A fixed path under the OS temp directory rather than a fresh `mkdtemp`: nothing is
  * expected to be written here at all, and a per-file directory nobody removes would
  * accumulate.
+ *
+ * **A spawned daemon now sweeps whatever it finds here as it comes up** (`PROJECT.md` D38,
+ * `src/daemon/retention-schedule.ts`), by the shipped budget and the shipped thirty days. That is
+ * the intended consequence of the floor rather than a hazard of it: this directory is the one
+ * nothing is expected to write to, so the worst it can cost is a run some earlier suite left
+ * behind — and the alternative, an unswept tree the developer's own daemon would sweep, is the
+ * divergence between a test host and a real one that this file exists to prevent.
  */
 process.env[ARTIFACTS_PATH_ENV_VAR] = join(tmpdir(), 'rover-test-artifacts');
 

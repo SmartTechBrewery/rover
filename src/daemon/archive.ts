@@ -60,8 +60,10 @@
  * written changed to serve it — including now that a sweep runs **unasked**: the disk budget is
  * enforced after every lease ends (D37, #245), on the far side of `LeaseStoreOptions.onLeaseEnded`
  * from the `forget` this module does there, so a write and a deletion never race for one lease.
- * What is still out of scope here is any *clock*: no timer and no start-up pass, so the age limit
- * waits for `rover sweep` and a tree inside its budget still ages without bound.
+ * The same holds for the *clock* that landed after it (D38, #246): a full pass at local midnight
+ * and at daemon start reads this tree and deletes out of it, and nothing about what this module
+ * writes changed to serve that either — a run directory is written once, whole, and is the unit a
+ * pass takes whole.
  */
 
 import { mkdir, writeFile } from 'node:fs/promises';

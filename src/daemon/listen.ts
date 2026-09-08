@@ -49,6 +49,7 @@ import { createProjectInstall, type ProjectInstall } from './project-install.js'
 import { createProjectResolver } from './project-resolver.js';
 import { createProjectServices, type ProjectServices } from './project-services.js';
 import { createDeviceRestorer, type DeviceRestorer } from './restore.js';
+import { createRetentionSchedule, type RetentionSchedule } from './retention-schedule.js';
 import { createSearchArchiveHandler } from './search-archive.js';
 import { createSlotAllocator, type SlotAllocator } from './slots.js';
 import { attemptConnect } from './socket-connect.js';
@@ -118,7 +119,9 @@ const RESTORE_SETTLE_TIMEOUT_MS = 10_000;
  * wrote — and if that partial deletion brought the tree under budget, nothing ever selects it
  * again. `sweepAfterLease` is `void`-ed onto the tail of every lease's end, so `rover release`
  * followed straight away by stopping the daemon lands inside exactly that window; §6's own
- * measurement puts the walk alone at 150 ms to 690 ms.
+ * measurement puts the walk alone at 150 ms to 690 ms. **The start pass lands inside it too**
+ * (D38): a daemon started and stopped straight away — which is what a `startDaemon` in a test
+ * does — is stopped while its own first pass is still walking.
  *
  * Bounded for the same reason as {@link RESTORE_SETTLE_TIMEOUT_MS}, and generously against that
  * measurement: a `close()` that never resolves is a daemon that neither dies nor stops serving
@@ -208,10 +211,12 @@ export interface StartDaemonOptions {
 	 * the developer's own shell. There is no default here, deliberately — a budget nobody chose
 	 * is the one number that must never be guessed at behind `./main.ts`'s back.
 	 *
-	 * **Nothing here starts a timer**, but this is no longer only `sweep_archive`'s: the budget
-	 * half of the policy is enforced on the tail of every lease's end (D37, `sweepAfterLease`),
-	 * so a test daemon given a tight budget will delete out of the root it was handed. The age
-	 * half still runs only when an operator asks.
+	 * **A daemon started with this policy enforces it unattended, and from the moment it comes
+	 * up**: the budget half on the tail of every lease's end (D37, `sweepAfterLease`), and the
+	 * *whole* policy at local midnight and again at start (D38, `./retention-schedule.ts`). So a
+	 * `startDaemon()` in a test deletes out of the root it was handed, by both bounds, before it
+	 * has answered anything — which is exactly why there is no default here and why the daemon
+	 * suite's roots are `mkdtemp` directories rather than `~/.rover/artifacts`.
 	 */
 	readonly retention: RetentionPolicy;
 }
@@ -232,9 +237,9 @@ export interface RunningDaemon {
 	 */
 	readonly httpPort: number | null;
 	/**
-	 * Stops accepting on every transport, drops live connections, waits out the restorations
-	 * still owed and any sweep of the archive they started (both bounded) and unlinks the
-	 * socket. Safe to call twice.
+	 * Stops the archive's clock and the lease sweep, stops accepting on every transport, drops
+	 * live connections, waits out the restorations still owed and any sweep of the archive they
+	 * or the clock started (both bounded) and unlinks the socket. Safe to call twice.
 	 */
 	close(): Promise<void>;
 }
@@ -280,7 +285,9 @@ export type StartResult = RunningDaemon | DaemonAlreadyRunning;
  * is asked for a **budget-only** sweep at the tail of every lease's end (`startDaemon` below,
  * `./archive-sweep.ts`'s `sweepAfterLease`), which is why it is one sweeper and not one per
  * trigger — the serialisation that keeps two sweeps off one tree is keyed by the root and shared.
- * **No timer schedules either of them**, and the age bound still has no trigger but this row.
+ * **And a clock asks the same instance for the whole policy** at local midnight and at start
+ * (D38, `running()` below, `./retention-schedule.ts`), so this row is what an *operator* reaches
+ * rather than the only thing that ever sweeps, and the age bound has a trigger that is not it.
  *
  * `artifactsRoot` and `projectsRoot` are parameters rather than things read off `archive` or off
  * a resolver: the archive writes the tree and those two modules read it, and widening the
@@ -426,8 +433,10 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartRes
 	// runs are being written into right now — as a callback, so the question is answered at the
 	// moment of the walk rather than at construction. It touches no disk here, not even to look
 	// for the archive root, so a loser of the bind leaves nothing behind here either — and
-	// **nothing about this starts a timer**: the two triggers are a `sweep_archive` call somebody
-	// made and the budget-only sweep on the tail of every lease's end, wired at the restorer above.
+	// **nothing about this starts a timer**, which is still true of the sweeper itself: the clock
+	// that asks it for a pass is `running()`'s, started only by the winner of the bind (D38). Its
+	// three triggers are that clock, a `sweep_archive` call somebody made, and the budget-only
+	// sweep on the tail of every lease's end, wired at the restorer above.
 	sweeper = createArchiveSweeper({
 		root: options.artifactsRoot,
 		keptTestsPath: options.keptTestsPath,
@@ -507,9 +516,10 @@ interface DaemonParts {
 	readonly leases: LeaseStore;
 	readonly restorer: DeviceRestorer;
 	/**
-	 * Carried for the shutdown alone: `closeServer` waits out the sweep a lease's end may have
-	 * left in flight ({@link SWEEP_SETTLE_TIMEOUT_MS}). Every other caller reaches it through the
-	 * handler table.
+	 * Carried for the shutdown and for the clock: `closeServer` waits out the sweep a lease's end
+	 * or the schedule may have left in flight ({@link SWEEP_SETTLE_TIMEOUT_MS}), and `running()`
+	 * hands this same instance to the retention schedule it starts (D38). Every other caller
+	 * reaches it through the handler table.
 	 */
 	readonly sweeper: ArchiveSweeper;
 	readonly sweepIntervalMs: number;
@@ -585,8 +595,23 @@ async function running(
 	// daemon is serving, never to keep a process alive that is otherwise finished.
 	sweep.unref();
 
+	// And the archive's own clock, beside the lease sweep and for the same lifecycle reasons: one
+	// full pass of the retention policy — **both** bounds — at local midnight, plus one right now
+	// (D38, `./retention-schedule.ts`). Here rather than in `startDaemon` because a loser of the
+	// bind must sweep nothing: it has no devices to lend, and two daemons deleting out of one
+	// archive root would each be answering about a tree the other had already altered. The start
+	// pass is what covers a host that was asleep or switched off at midnight, and it is `void`-ed
+	// inside the schedule, so nothing about coming up waits for a walk of the archive.
+	const retention = createRetentionSchedule({ sweeper: parts.sweeper });
+	retention.start();
+
 	const close = (): Promise<void> => {
-		closed ??= closeServer(listening, socketPath, ownInode, parts, { sweep, network, http });
+		closed ??= closeServer(listening, socketPath, ownInode, parts, {
+			sweep,
+			retention,
+			network,
+			http,
+		});
 		return closed;
 	};
 
@@ -625,6 +650,8 @@ async function running(
 /** What `close()` has to wind down besides the local socket itself. */
 interface ShutdownWork {
 	readonly sweep: NodeJS.Timeout;
+	/** The archive's clock trigger (D38). Stopped beside {@link ShutdownWork.sweep} and first. */
+	readonly retention: RetentionSchedule;
 	readonly network: NetworkListener | undefined;
 	readonly http: HttpListener | undefined;
 }
@@ -634,11 +661,15 @@ async function closeServer(
 	socketPath: string,
 	ownInode: Promise<bigint | undefined>,
 	{ inventory, leases, restorer, sweeper }: DaemonParts,
-	{ sweep, network, http }: ShutdownWork,
+	{ sweep, retention, network, http }: ShutdownWork,
 ): Promise<void> {
 	// First, and unconditionally: nothing below waits for a sweep that fires halfway through
-	// the shutdown, so the interval stops before anything else does.
+	// the shutdown, so both timers stop before anything else does. The archive's clock is the
+	// sharper of the two — the pass it would start *deletes*, and a walk begun while this
+	// shutdown is already unwinding is one `settleSweeps` below would then have to wait out for
+	// no reason at all. A pass already in flight is a different matter and is waited for.
 	clearInterval(sweep);
+	retention.stop();
 	// Then one last look, on purpose. A lease that expired seconds ago has a device owed a
 	// restoration and no holder left to ask for it; if this process does not notice now,
 	// nothing ever will — leases die with the host (D6), so a successor sees no expired holder

@@ -24,11 +24,12 @@
  * operator action that only a browser can perform is one nobody can reach when the browser is the
  * thing that is broken.
  *
- * **Nothing here prunes anything — and what this exempts a test from now exists.** `rover sweep`
- * runs the host's retention policy, and a test named here is exempt from both of its bounds
- * absolutely, not even taken to bring the archive under its budget (D35, D36, #238). What is still
- * undecided is who runs that sweep unattended (`PROJECT.md` §9.4): nothing on the host calls it on
- * its own.
+ * **Nothing here prunes anything — and what this exempts a test from runs whether anybody asks or
+ * not.** `rover sweep` runs the host's retention policy on demand, a lease's end runs its disk
+ * budget (D37), and a clock runs the whole of it at local midnight and at daemon start (D38). A
+ * test named here is exempt from both bounds absolutely, not even taken to bring the archive under
+ * its budget (D35, D36) — which is why the flag shipped ahead of the sweep and why this command is
+ * the one thing standing between one test's artifacts and a host that is out of room.
  */
 
 import {
@@ -71,9 +72,9 @@ The flag is per test rather than per run: a test's runs are kept or not together
 
 The flag lives in the host's own file, outside the artifact tree, so it survives a daemon
 restart. It is what a sweep exempts: a kept test is never taken by the host's disk budget
-or its age limit, not even to bring the archive under budget. That holds for the sweep the host
-runs itself after every lease ends — the disk budget, unasked — as much as for \`rover sweep\`,
-which is still the only thing that runs the age limit.
+or its age limit, not even to bring the archive under budget. That holds for every sweep the host
+runs unasked — the disk budget after every lease ends, and both bounds at local midnight and at
+start — as much as for \`rover sweep\`, so a tick is in force within a day of being set.
 
 A refusal exits 1: the host keeps as many tests as it will hold, or it could not read or
 write its own record. Which it was is in the host's own log, never in the answer.`;

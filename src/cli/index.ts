@@ -112,8 +112,9 @@ Commands:
   sweep                    Delete what the host's retention policy no longer keeps — the
                            oldest runs first, by its disk budget and its age limit
                            (--actor required; --dry-run asks what would go and deletes
-                           nothing). The host enforces the disk budget after every lease
-                           ends on its own; the age limit has no trigger but this
+                           nothing). The host runs the same policy itself: the disk budget
+                           after every lease ends, and both bounds at local midnight and
+                           at start
   status                   Which host answered, its pid, uptime and protocol version
   init [<path>]            Set up a project so an agent working in it can drive a device:
                            its hook file, its .mcp.json, a generated ROVER.md, and the

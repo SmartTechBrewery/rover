@@ -187,8 +187,10 @@ Design work lives in [`DESIGN.md`](./DESIGN.md); the brief that produced the fir
     still deferred, and the prune action here waits on that model rather than on the mechanism. The
     **disk-usage view** is still this item's and still blocked on the same thing it always was: no
     answer carries the archive's size or its budget, and `sweep_archive` deliberately carries
-    neither (`docs/DESIGN.md` §13). What is left open on the policy itself is only *who runs it
-    unattended* (`PROJECT.md` §9.4). Every named user may set the flag, exactly as every named user
+    neither (`docs/DESIGN.md` §13). **Nothing is left open on the policy itself**: the budget runs
+    after every lease ends and both bounds run at local midnight and at daemon start (`PROJECT.md`
+    D37, D38, R48), so *who runs it unattended* — the last open question here — is answered and the
+    host needs nobody. Every named user may set the flag, exactly as every named user
     may force-release (D27, D28); tiering stays open below.
 11. **MCP config generator** — after registering a project, a ready-to-paste MCP server
     configuration snippet, so a user doesn't hand-write the pointer to their host.

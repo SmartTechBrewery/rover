@@ -2643,15 +2643,17 @@ device card: a recording is megabytes and its object URL is a live handle on the
 lifetime is the state that holds it. There is no cap on a text file's lines; `MAX_LOG_ENTRIES` bounds
 the ones Rover writes at about 5 000.
 
-### The `Keep` checkbox — settled here, not designed, and the operator's half of a sweep that now runs
+### The `Keep` checkbox — settled here, not designed, and the operator's half of a sweep that runs unattended
 
 A test the reader wants **kept** when Rover sweeps the archive. **The decision and the sweep are
-both real now, and this section is corrected in place rather than rewritten** (`ai/RULES.md` §1):
-the host records which tests the operator keeps, *and* it deletes old runs — the **disk budget**
-half after every lease ends with nobody asking (`PROJECT.md` D37, #245) and the **age** half
-whenever `rover sweep` or `sweep_archive` is called (#238). So the tick is an exemption in force
-(D35), not an instruction waiting for the thing it instructs, and it is the only thing standing
-between one test's artifacts and a host that has run out of budget.
+both real, and this section is corrected in place rather than rewritten** (`ai/RULES.md` §1): the
+host records which tests the operator keeps, *and* it deletes old runs on its own — the **disk
+budget** after every lease ends with nobody asking (`PROJECT.md` D37, #245), and **both** bounds at
+local midnight and again at daemon start (D38, #246), with `rover sweep` and `sweep_archive` the
+operator's way to ask for the same pass on demand. So the tick is an exemption **in force within a
+day of being set** rather than an instruction waiting for the thing it instructs, and it is the
+only thing standing between one test's artifacts and a host that has run out of room — or a test
+that has simply got old.
 
 **Both halves of *remembering* the decision have landed** — the host's in #234 (D33) and the tick's
 in #237. `list_kept_tests` and `set_kept_tests` sit on the panel's own transport over
@@ -2659,12 +2661,14 @@ in #237. `list_kept_tests` and `set_kept_tests` sit on the panel's own transport
 one call whose answer it draws (`pinned-tests.ts`), so a tick is there after a reload, in a
 different browser, and after a daemon restart, and `rover keep list` shows the same test. So there is
 a host method and a wired control: do not design a second of either. What is still absent is the
-**number** in the sentence below, and it is absent for a reason that has nothing to do with the
-sweep existing: `sweep_archive` deliberately carries neither of the host's two retention settings,
-so no answer this panel can make carries the window and digits written here would be the panel
-inventing data (`archive-checkbox.tsx`'s own comment on the sentence, and this screen's *nothing is
-invented* rule). The sentence changes when a host answer carries the window, not when a trigger
-lands.
+**number** in the sentence below, and it is absent for a reason that has nothing to do with any
+trigger: `sweep_archive` deliberately carries neither of the host's two retention settings, so no
+answer this panel can make carries the window and digits written here would be the panel inventing
+data (`archive-checkbox.tsx`'s own comment on the sentence, and this screen's *nothing is invented*
+rule). The sentence changes when a host **answer** carries the window. #246 is the proof of that
+distinction rather than the exception to it: the trigger landed, the sentence had to change because
+*once Rover starts sweeping* had become false, and it changed into the two **bounds** as a
+condition — still with no digits in it, because nothing about a clock made the window sayable.
 
 **It is `Keep` and not `Archive`, and the sentence is what forced the rename.** The control read
 `Archive` first — on a screen called Archive, whose one job is browsing the archive — and the
@@ -2674,9 +2678,9 @@ does, and it leaves *archive* meaning the place. `Store`, `Save` and `Preserve` 
 candidates; the first two are what a form does with edits, and the third is heavier than a
 checkbox.
 
-**A popover on hover says why it is there** — *Traces of this test will be removed once Rover
-starts sweeping the archive, unless you keep it. The host remembers this tick, not the browser.* —
-in the panel's own card treatment
+**A popover on hover says why it is there** — *Traces of this test will be removed when the archive
+runs out of room, or when the test gets old enough, unless you keep it. The host remembers this
+tick, not the browser.* — in the panel's own card treatment
 (`rounded-lg border-2 border-outline-variant bg-surface`), 288px wide, opening down from the strip's
 right edge and over the card's body. A checkbox alone does not say what happens if you leave it
 alone; this sentence does. It is the input's `aria-describedby` as well as visible text, so there is
@@ -2700,14 +2704,18 @@ either way, hidden by the `hidden` utility rather than unmounted, because it is 
 `aria-describedby` target: a reference resolves to hidden content, so the description holds for a
 reader who never brings a pointer near it.
 
-**There is no number of days in it, and that is deliberate.** The sentence a reader eventually
-wants is *…will be removed in 14 days…*; the panel does not have the 14. No host answer carries a
-retention window — `sweep_archive` deliberately carries neither of the host's two settings (§13),
-and it is not on `PANEL_METHODS` in any case — and a figure written in here would be the panel
-inventing data the host never sent — which §9's *nothing is invented* rule and `ai/RULES.md` §2 both
-refuse, and which `archive-checkbox.test.tsx` asserts against so that a later edit cannot fill in a
-plausible one. Naming the condition instead of a deadline still tells the reader why the box is
-there, and the day the host answers a window it is one string that changes.
+**There is no number of days in it, and that is deliberate — and it survived the trigger
+landing.** The sentence a reader eventually wants is *…will be removed in 14 days…*; the panel does
+not have the 14. No host answer carries a retention window — `sweep_archive` deliberately carries
+neither of the host's two settings (§13), and it is not on `PANEL_METHODS` in any case — and a
+figure written in here would be the panel inventing data the host never sent, which §9's *nothing
+is invented* rule and `ai/RULES.md` §2 both refuse, and which `archive-checkbox.test.tsx` asserts
+against so that a later edit cannot fill in a plausible one. **Why it still holds now that the host
+sweeps on a clock** (#246) is worth saying, because that is exactly the landing that looks like it
+should have changed it: the host has the number, and the panel's access to it is unchanged — no
+method takes it, no answer carries it, and *when* the host acts on a figure has nothing to do with
+whether it tells anybody what the figure is. So naming the **condition** rather than a deadline is
+still what the sentence does, and the day the host answers a window it is one string that changes.
 
 **Nothing enforces the tick, and it is the host that remembers it.** The set is the host's own
 document — `~/.rover/kept-tests.json`, beside `users.json` and deliberately outside the artifact
@@ -2717,9 +2725,13 @@ mount and nothing else (`pinned-tests.ts`): deliberately **not** `localStorage` 
 in the URL, because retention is a fact about the *host's* disk and a tick kept per browser would
 survive a reload while remaining invisible to the sweep it claims to prevent. *I ticked it on my
 laptop and the run was deleted anyway* is the failure that arrangement has and this one cannot.
-**And nothing enforces it**, which stays true and stays its own sentence: no sweep reads the file
-yet, so what the flag buys today is that the decision is recorded, attributed and readable from
-every client (`rover keep list`, D28).
+**And what enforces it is the sweep, which is the clause that stopped being true here.** This
+paragraph used to end *nothing enforces it — no sweep reads the file yet, so what the flag buys
+today is that the decision is recorded*. It reads the file now, on every pass and cached nowhere
+(D6): the operator's exemption shipped ahead of the sweep on purpose (D33), and the sweep it was
+waiting for arrived in three parts (R48). So the flag buys the exemption itself — absolutely, and
+not even yielding to bring the archive under budget (D35, D36) — on top of the decision being
+recorded, attributed and readable from every client (`rover keep list`, D28).
 
 **No tick is drawn until the set has answered, and none when it cannot be read.** `list_kept_tests`
 still out, an `unreadable` store, and nothing coming back at all are one state on this screen and it
@@ -2753,8 +2765,8 @@ all — carries **no** tick, because there is nothing to keep and a tick there w
 about runs nobody has been shown.
 
 **Its sentence is the group's, not the test's with a word changed** — *Traces of every test in this
-group will be removed once Rover starts sweeping the archive, unless you keep them all. The host
-remembers these ticks, not the browser.* A reader
+group will be removed when the archive runs out of room, or when a test gets old enough, unless you
+keep them all. The host remembers these ticks, not the browser.* A reader
 who saw the test's wording over a group's tick would take it for a control over the group as a
 thing, and press it expecting one flag rather than several.
 
@@ -3280,19 +3292,23 @@ under it saying what the number does.
 
 ### There is no `Save`, and nothing is stored
 
-*Corrected in place, 2026-09-08 (#238).* **Rover has a retention mechanism now, and this screen
-still cannot write to it.** The host holds the two numbers in its own environment —
-`ROVER_ARTIFACTS_BUDGET_MB` and `ROVER_ARTIFACTS_MAX_AGE_DAYS`, whose defaults are the `1024` and
-`30` in the table above, held equal to them by a test — and `sweep_archive` runs them over the
-archive. What is *unchanged* is the half this section is actually about: **no method takes either
-number**, so there is nothing on the host for a `Save` to write. So the draft still lives in React
+*Corrected in place, 2026-09-08 (#238, and again for #246).* **Rover has a retention mechanism
+now, it runs unattended, and this screen still cannot write to it.** The host holds the two numbers
+in its own environment — `ROVER_ARTIFACTS_BUDGET_MB` and `ROVER_ARTIFACTS_MAX_AGE_DAYS`, whose
+defaults are the `1024` and `30` in the table above, held equal to them by a test — and three
+things run them over the archive: `sweep_archive` when an operator asks, a lease's end for the
+budget alone, and a clock for both bounds at local midnight and at daemon start (`PROJECT.md` D37,
+D38). What is *unchanged* through all of that is the half this section is actually about: **no
+method takes either number**, so there is nothing on the host for a `Save` to write. So the draft still lives in React
 state and ends with the mount (`panel/src/system/retention-settings.ts`) — a number that survived a
 reload would look like a setting the host had been told about, and the operator would have
 configured nothing.
 
 **What this section said before** was that nothing sweeps the archive either. That was true until
-the sweep landed and is the one clause that had to move; the *reason* it gave is untouched, and it
-is why the fields still have no button. The sentence under them moved with it — see below.
+the sweep landed and is the one clause that had to move — twice, in fact: first when the mechanism
+arrived and again when it stopped needing to be asked (#246), which is the last of that wording
+anywhere. The *reason* it gave is untouched through both, and it is why the fields still have no
+button. The sentence under them moved with it — see below.
 
 **The `Keep` tick was the other half of that pair and no longer is** (corrected in place, #237): it
 was React state for this exact reason until the host had somewhere to put it, and since #234 it has
@@ -3331,11 +3347,15 @@ fields it is about rather than in a panel above them.
   the panel cannot have it: no answer carries the archive's size **or its budget**, and a number
   computed in a browser from a bounded directory walk would be a measurement presented as a fact
   (D19, and §9's rule that nothing on the archive screen is invented). `sweep_archive` deliberately
-  carries neither setting for exactly this reason, so the sweep landing does not change this row —
-  it arrives with an answer that carries the figure, or not at all.
+  carries neither setting for exactly this reason, so **neither the sweep landing nor its two
+  unattended triggers change this row** (#238, #245, #246): what would is an answer that carries
+  the figure, and there is still none. A host that sweeps every midnight has *more* to say about
+  its own disk than one that never did, and it says none of it here.
 - **No preview of what would be deleted.** *Corrected in place, 2026-09-08 (#238): the sweep does
-  exist now and can be asked what it would take* — `sweep_archive` takes a `dryRun`. What keeps this
-  absent is that the method is **not on `PANEL_METHODS`**, and that is not an oversight to fill in:
+  exist now and can be asked what it would take* — `sweep_archive` takes a `dryRun`. **And it now
+  runs whether anybody previews it or not** (#245, #246), which makes a preview here more
+  tempting rather than less and changes nothing about the objection. What keeps this absent is that
+  the method is **not on `PANEL_METHODS`**, and that is not an oversight to fill in:
   the same call with `dryRun: false` deletes an operator's runs permanently, so a browser is not
   where it belongs while D27's role model is still deferred. A preview control here would be one
   boolean away from the destructive form. It is reached from the CLI (`rover sweep --dry-run`).

@@ -1,11 +1,12 @@
 /**
  * `rover sweep` — run the host's retention policy over its artifact archive (§9.4, §10).
  *
- * **The only trigger the *age* limit has.** The host enforces the disk budget by itself after
- * every lease ends (D37, `src/daemon/archive-sweep.ts`), so what this command adds is the other
- * bound and the question — which is D4's rule arriving where it matters most: a deletion routine
- * an operator cannot run by hand, watch, and ask what it *would* do first is one nobody can
- * debug. It stays the way the whole policy is reached even now that half of it reaches itself.
+ * **The operator's trigger, and no longer the only one.** The host enforces the disk budget by
+ * itself after every lease ends (D37) and the **whole** policy at local midnight and at daemon
+ * start (D38, `src/daemon/retention-schedule.ts`), so what this command adds is not a bound any
+ * more: it is the *question*, and a deletion an operator can run when they choose rather than
+ * within a day. That is D4's rule arriving where it matters most — a deletion routine an operator
+ * cannot run by hand, watch, and ask what it *would* do first is one nobody can debug.
  *
  * **`--dry-run` first in the usage text, and deliberately not the default.** A command somebody
  * typed does what it says, and a `sweep` that quietly asked instead of swept would be worse than
@@ -60,9 +61,12 @@ lease is live — and neither is ever taken to get under the budget. An archive 
 budget with only those left is reported as such and nothing is deleted for it; that one only
 you can resolve, by unticking a test or raising the budget.
 
-The host enforces the disk budget by itself after every lease ends, released or expired — behind
-the release, so a release is never slowed or failed by one. The age limit has no trigger but this
-command.
+The host runs this same policy by itself, so this command is how you ask for it sooner rather than
+the only way it happens. The disk budget goes after every lease ends, released or expired — behind
+the release, so a release is never slowed or failed by one — and both bounds go at local midnight
+and again whenever the daemon starts, the start pass being what covers a machine that was asleep or
+switched off at midnight. What that leaves you is the timing: a bound can be over-run for up to a
+day before the pass that takes it.
 
 A run is named by the components a \`rover archive\` listing named — the project, the test name
 and the run directory — never a path on the host, which is not yours to know.
