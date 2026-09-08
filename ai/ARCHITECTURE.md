@@ -183,8 +183,8 @@ The OS version is in both halves of that sentence on purpose. It is a **static**
 
 Backends are genuinely asymmetric and flattening that is the design mistake to avoid (`PROJECT.md` D11):
 
-- `simctl` cannot tap and cannot dump a hierarchy. Input and tree reads on iOS need `idb` or WebDriverAgent — a heavy dependency with its own lifecycle.
-- **Semantic screen reading may have no iOS equivalent at all.** On Android it is the one capability that survives an app blocking screen capture. That is why `read_screen` is **not a required method** of the interface but a declared capability the verb layer queries first.
+- `simctl` cannot tap and cannot dump a hierarchy. Input and tree reads on iOS need `idb` or WebDriverAgent — a heavy dependency with its own lifecycle. Measured on Xcode 26.6 / iOS 26.5, that is still exactly true: `simctl` has no input subcommand at all (`docs/IOS.md` §3).
+- **Semantic screen reading is a declared capability because a platform may not have one, not because iOS does not** — corrected 2026-09-08, `docs/IOS.md` §2. An iOS *simulator* answers a full semantic read through `idb ui describe-all`: roles, labels, traits and frames in points, verified against a Compose Multiplatform app. What does differ is which read survives what: on Android the tree is the one capability that outlives an app blocking screen capture, while on iOS there is no `FLAG_SECURE` equivalent and the capture is what never gets blocked. `read_screen` stays **not a required method** but a declared capability the verb layer queries first, because a *physical* iOS device answers neither without an in-device agent, and because that is what D11 is for.
 - A physical Android phone cannot be handed a synthetic fingerprint; an emulator can.
 - **Screen recording is another of them**, and it is why `recordVideo` is a declared capability
   rather than a required method: an iOS *simulator* records with `simctl io recordVideo`, while a
@@ -224,6 +224,10 @@ So: each backend declares its manifest, the verb layer checks before dispatching
 ### Where the iOS seam runs
 
 **Not** along "adb versus simctl". Along the interface above. An iOS backend will need at least two external programs where Android needs one, so nothing in the interface may assume a single tool per backend, a single process, or that enumeration is cheap (`simctl list` is a poll; `adb track-devices` is a stream).
+
+That last parenthesis is about `simctl`, not about the platform — corrected 2026-09-08. `idb_companion --notify` streams the **full current target set on every change**, which is `DeviceWatcher.onDevices`' contract to the letter, so an iOS backend that takes the idb dependency does not poll either. The interface requirement stands unchanged: it may not *assume* either shape.
+
+**`docs/IOS.md` is the evidence document for this seam** — every required method and gated capability probed against a real simulator, with the timings, the vocabulary mismatches (`DeviceKey`'s `back` and `recents`, `LogLevel`'s absent `warn`), the traps, and why a *physical* iPhone cannot answer `screenshot` at all and so is a different backend rather than the same one.
 
 ---
 
