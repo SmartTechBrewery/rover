@@ -10,7 +10,7 @@
 
 import { readdir, readFile, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
 	applyKeep,
@@ -18,8 +18,10 @@ import {
 	KEPT_TESTS_PATH_ENV_VAR,
 	type KeptTest,
 	keptTestKey,
+	MAX_KEPT_TESTS,
 	readKeptTests,
 	resolveKeptTestsPath,
+	temporaryKeptTestsPath,
 	writeKeptTests,
 } from '@/daemon/kept-tests.js';
 import {
@@ -99,6 +101,32 @@ describe('readKeptTests', () => {
 
 		await expect(readKeptTests(path)).rejects.toThrow(path);
 	});
+
+	it('throws naming the path on a store hand-edited past the cap', async () => {
+		// The bound is on the store's own schema, not only in the handler that refuses a write
+		// over it: `list_kept_tests`' result is bounded too, so an over-cap store has to fail
+		// somewhere, and failing here is a message that names the path — which both handlers turn
+		// into `unreadable`/`unwritable` — rather than an `invalid_result` no client can act on.
+		const tests = Array.from({ length: MAX_KEPT_TESTS + 1 }, (_, index) =>
+			kept('rover', `test-${String(index).padStart(5, '0')}`),
+		);
+		await writeFile(path, JSON.stringify({ tests }), 'utf8');
+
+		await expect(readKeptTests(path)).rejects.toThrow(path);
+	});
+
+	it('answers one record per test when a hand-edited store holds a pair twice', async () => {
+		// Nothing this module writes can hold a duplicate (`applyKeep`'s Map), but the header
+		// promises an operator editing the file by hand is obeyed — so a duplicate is collapsed on
+		// the way in rather than answered twice and then quietly collapsed by the next write.
+		const first = kept('rover', 'checkout flow', { keptBy: 'alice' });
+		const second = kept('rover', 'checkout flow', { keptBy: 'bob' });
+		await writeFile(path, JSON.stringify({ tests: [first, second] }), 'utf8');
+
+		// The first in the file wins: the order is fixed and `sort` is stable, so every host makes
+		// the same choice.
+		await expect(readKeptTests(path)).resolves.toEqual([first]);
+	});
 });
 
 describe('writeKeptTests', () => {
@@ -149,6 +177,50 @@ describe('writeKeptTests', () => {
 		const raw = await readFile(path, 'utf8');
 		expect(raw).toContain('"keptBy": "an-operator"');
 		expect(raw).not.toContain('token');
+	});
+});
+
+describe('two writes at once', () => {
+	it('never gives two writers the same temporary, and keeps it beside the store', () => {
+		// A wire call sets this store (D33), so two writers really do overlap — and two of them
+		// sharing one `<path>.tmp` would each truncate it, write from offset 0 and then rename the
+		// interleaved bytes over the store, leaving a document nobody can read again.
+		expect(temporaryKeptTestsPath(path)).not.toBe(temporaryKeptTestsPath(path));
+		// Same directory, because that is what keeps the `rename` atomic, and still a `.tmp`.
+		expect(dirname(temporaryKeptTestsPath(path))).toBe(temp.dir);
+		expect(temporaryKeptTestsPath(path).endsWith('.tmp')).toBe(true);
+	});
+
+	it('leaves one writer’s document whole when several overlap, and never half of each', async () => {
+		// Big enough documents that a shared temporary could not fail to interleave: what is
+		// asserted is that exactly one of the eight won the store whole.
+		const documents = Array.from({ length: 8 }, (_, writer) =>
+			Array.from({ length: 500 }, (_, index) =>
+				kept('rover', `writer-${writer}-test-${String(index).padStart(4, '0')}`),
+			),
+		);
+
+		await Promise.all(documents.map((document) => writeKeptTests(path, document)));
+
+		const stored = await readKeptTests(path);
+		expect(stored).toHaveLength(500);
+		const writers = new Set(stored.map((test) => test.testName.split('-test-')[0]));
+		expect(writers.size).toBe(1);
+		const names = await readdir(temp.dir);
+		expect(names.filter((name) => name.endsWith('.tmp'))).toEqual([]);
+	});
+
+	it('removes the temporary of a write that could not be renamed into place', async () => {
+		// A unique name is never reused, so a failed write that left its temporary would leave one
+		// per failure sitting beside the store.
+		const nested = join(temp.dir, 'as-a-directory');
+		await writeKeptTests(join(nested, 'kept-tests.json'), [kept('rover', 'alpha')]);
+
+		// `rename` onto a path that is a non-empty directory fails, whatever the platform calls it.
+		await expect(writeKeptTests(nested, [kept('rover', 'beta')])).rejects.toThrow();
+
+		const names = await readdir(temp.dir);
+		expect(names.filter((name) => name.endsWith('.tmp'))).toEqual([]);
 	});
 });
 

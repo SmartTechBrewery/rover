@@ -2583,12 +2583,20 @@ device card: a recording is megabytes and its object URL is a live handle on the
 lifetime is the state that holds it. There is no cap on a text file's lines; `MAX_LOG_ENTRIES` bounds
 the ones Rover writes at about 5 000.
 
-### The `Keep` checkbox — settled here, not designed, and the UI half of a mechanism that does not exist yet
+### The `Keep` checkbox — settled here, not designed, and the UI half of a mechanism that does not sweep yet
 
 A test the reader wants **kept** once Rover starts sweeping the archive. **The sweep does not
 exist**: nothing on the host deletes an old run today, so this control is a picture of a decision
 rather than the decision, and everything below follows from saying that plainly instead of hiding
-it. The host half is its own issue, and the sentence below is what comes out when it lands.
+it.
+
+**The host half of *remembering* the decision landed in #234** (D33): `list_kept_tests` and
+`set_kept_tests` on the panel's own transport, over `~/.rover/kept-tests.json`, so what the
+operator keeps now survives a daemon restart. **The tick is not wired to it yet** — `pinned-tests.ts`
+is still React state and forgets on reload, and phase 2 of #234 is what connects the two and
+rewrites this section. So there is a host method: do not design a second one. What still does not
+exist is the sweep the flag exempts a test *from*, and the sentence below is what comes out when
+that lands.
 
 **It is `Keep` and not `Archive`, and the sentence is what forced the rename.** The control read
 `Archive` first — on a screen called Archive, whose one job is browsing the archive — and the

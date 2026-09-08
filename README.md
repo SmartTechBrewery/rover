@@ -1073,7 +1073,7 @@ package argument on it — the byte-carrying form stays the CLI's, because a who
 argument means an agent producing several megabytes of base64. That is what `push_file` and
 `pull_file` are still waiting for and why they are not tools: `PROJECT.md` R24 phase 2 owns how a
 client supplies and receives a file, and neither of those rows has a second form that carries
-none. `force_release_device` is the third of six rows with no tool, and its reason will not expire:
+none. `force_release_device` is the third of nine rows with no tool, and its reason will not expire:
 **an agent must not be able to end another agent's lease.** It is authority over the shared pool
 rather than a step in one caller's work, which is what makes it an operator action (D27, D28)
 reached from the CLI and, later, the panel. `list_archive` is the fourth, and its reason is

@@ -226,7 +226,7 @@ export type StartResult = RunningDaemon | DaemonAlreadyRunning;
  * (R39) reads the projects root and says which projects are registered, which is the read half of
  * D31 and the only row that is about host-operator configuration. Nothing on this surface writes
  * one.
-
+ *
  * And it answers — and, for the first time on this surface outside a lease, **writes** — which of
  * the archive's tests the operator has said to keep: `./kept-tests-handlers.ts` (D33, #234), one
  * read of the whole set and one write that takes however many tests a single press stood for. Its

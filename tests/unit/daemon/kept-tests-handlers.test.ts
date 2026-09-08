@@ -264,6 +264,78 @@ describe('set_kept_tests', () => {
 	});
 });
 
+describe('two presses at once', () => {
+	it('lands both, and drops neither, when two different tests are kept together', async () => {
+		const client = await serving();
+		const alpha = { project: 'alpha', testName: 'one' };
+		const beta = { project: 'beta', testName: 'two' };
+
+		// `src/ipc/server.ts` dispatches frames without awaiting them, so these two really are in
+		// the handler at once. Each is a read-modify-write of the whole document, so unserialised
+		// the later read would not see the earlier press: one caller would be answered `set` for a
+		// keep that was then overwritten, and the store would hold one of the two.
+		const answers = await Promise.all([
+			client.request('set_kept_tests', { tests: [alpha], kept: true, actor: 'alice' }),
+			client.request('set_kept_tests', { tests: [beta], kept: true, actor: 'bob' }),
+		]);
+
+		expect(answers.map((answer) => answer.outcome)).toEqual(['set', 'set']);
+		// Whichever ran second was answered with the set holding both — which is what the panel
+		// renders, so *your tick landed, and so did the one beside it* is what it draws.
+		const sizes = answers.map((answer) => (answer.outcome === 'set' ? answer.tests.length : -1));
+		expect(sizes.sort()).toEqual([1, 2]);
+		await expect(client.request('list_kept_tests', {})).resolves.toEqual({
+			outcome: 'listed',
+			tests: [alpha, beta],
+		});
+		// And the file still parses — two writers sharing one temporary would have left one that
+		// does not (`kept-tests.ts`).
+		await expect(readKeptTests(temp.keptTestsPath)).resolves.toHaveLength(2);
+	});
+
+	it('leaves one whole outcome, not a corrupt store, when one test is ticked and unticked at once', async () => {
+		const client = await serving();
+
+		const answers = await Promise.all([
+			client.request('set_kept_tests', { tests: [TEST], kept: true, actor: 'alice' }),
+			client.request('set_kept_tests', { tests: [TEST], kept: false, actor: 'bob' }),
+		]);
+
+		// Which of the two lands last is the operators' race and not this test's business; what is
+		// asserted is that the store holds one of the two answers whole and is readable after.
+		expect(answers.map((answer) => answer.outcome)).toEqual(['set', 'set']);
+		const stored = await readKeptTests(temp.keptTestsPath);
+		expect([0, 1]).toContain(stored.length);
+		await expect(client.request('list_kept_tests', {})).resolves.toMatchObject({
+			outcome: 'listed',
+		});
+		expect(warnings.filter((line) => line.includes('was not written'))).toEqual([]);
+	});
+
+	it('serialises two clients on one store, not just two frames on one connection', async () => {
+		await start();
+		const [first, second] = await Promise.all([connect(), connect()]);
+
+		const answers = await Promise.all([
+			first.request('set_kept_tests', {
+				tests: [{ project: 'alpha', testName: 'one' }],
+				kept: true,
+				actor: 'alice',
+			}),
+			second.request('set_kept_tests', {
+				tests: [{ project: 'beta', testName: 'two' }],
+				kept: true,
+				actor: 'bob',
+			}),
+		]);
+
+		// Two connections are the ordinary case — the panel's tick and a `rover keep add` — and
+		// the queue is keyed by the store's path precisely so it covers them too.
+		expect(answers.map((answer) => answer.outcome)).toEqual(['set', 'set']);
+		await expect(readKeptTests(temp.keptTestsPath)).resolves.toHaveLength(2);
+	});
+});
+
 describe('a store the host cannot use', () => {
 	it('answers unreadable on a read, with no path on the answer, and warns once', async () => {
 		await writeFile(temp.keptTestsPath, '{ not json', 'utf8');

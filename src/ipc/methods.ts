@@ -1170,9 +1170,11 @@ export type ListProjectsResult = z.infer<typeof ListProjectsResultSchema>;
  * How many tests one host may keep — the bound on the store and therefore the bound on both
  * rows' arrays.
  *
- * `src/daemon/kept-tests.ts` is the **only** writer and enforces it, which is what lets the read
- * promise it: an array bound declared here with nothing enforcing it would eventually make the
- * host answer `invalid_result` forever, on every call, for a file it had already written. 1000 is
+ * `src/daemon/kept-tests.ts` carries it on the store's own schema, and `set_kept_tests` refuses a
+ * write over it — that pair is what lets the read promise it. An array bound declared here with
+ * nothing enforcing it at the store would make the host answer `invalid_result` forever, on every
+ * call, for a file it had already written; enforced there, a store past the cap is a read that
+ * throws naming its path, which the handlers answer as `unreadable`/`unwritable`. 1000 is
  * far past what an operator ticks by hand, so this is allocation hygiene in
  * {@link ATTRIBUTION_MAX_LENGTH}'s sense rather than a policy — **and it is not a retention
  * rule**: going over it refuses the write and drops nothing (`PROJECT.md` §9.4 is still open).

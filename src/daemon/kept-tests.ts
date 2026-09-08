@@ -29,7 +29,8 @@
  * archive.
  */
 
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
+import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { z } from 'zod';
@@ -37,6 +38,7 @@ import {
 	ArchivePathSegmentSchema,
 	AttributionStringSchema,
 	type KeptTestRef,
+	MAX_KEPT_TESTS,
 } from '../ipc/methods.js';
 import { describeIssues } from '../ipc/protocol.js';
 
@@ -45,10 +47,10 @@ export const KEPT_TESTS_PATH_ENV_VAR = 'ROVER_KEPT_TESTS_PATH';
 
 /**
  * The cap this store is held to, re-exported from `../ipc/methods.js` where it lives beside the
- * wire bound it also is — the store is the only writer, and that is what lets the read promise
- * `list_kept_tests`' array bound (`MAX_KEPT_TESTS`).
+ * wire bound it also is — and carried by {@link KeptTestsFileSchema} below, which is what lets
+ * `list_kept_tests`' array bound be a promise rather than a hope.
  */
-export { MAX_KEPT_TESTS } from '../ipc/methods.js';
+export { MAX_KEPT_TESTS };
 
 export const KeptTestSchema = z
 	.object({
@@ -69,8 +71,18 @@ export type KeptTest = z.infer<typeof KeptTestSchema>;
  * A top-level object rather than a bare array, `./user-store.ts`'s reason: it is what leaves
  * room for a `version` key later without a migration. Adding one before anything needs it
  * would be speculative.
+ *
+ * **The array carries {@link MAX_KEPT_TESTS} here, at the store**, and not only in the handler
+ * that refuses a write over it. `list_kept_tests`' result schema is bounded too, so a store
+ * hand-edited past the cap has to fail *somewhere*: bounded here it is a {@link readKeptTests}
+ * throw naming the path, which both handlers already turn into `unreadable`/`unwritable` with the
+ * diagnosis on the host's own log — inside the outcome vocabulary the two rows have. Left
+ * unbounded here it would instead be `invalid_result` on every read, which names no path and
+ * which no client can act on.
  */
-export const KeptTestsFileSchema = z.object({ tests: z.array(KeptTestSchema) }).strict();
+export const KeptTestsFileSchema = z
+	.object({ tests: z.array(KeptTestSchema).max(MAX_KEPT_TESTS) })
+	.strict();
 
 /** `~/.rover/kept-tests.json` — the zero-config path, beside the socket and the user store. */
 export function defaultKeptTestsPath(): string {
@@ -98,6 +110,11 @@ export function keptTestKey(test: { project: string; testName: string }): string
 /**
  * Every test this host keeps, or `[]` when the store does not exist yet — a host that has kept
  * nothing is the ordinary starting state, not a failure. Every other read failure throws.
+ *
+ * **One record per test, whatever the file holds.** {@link applyKeep}'s `Map` means nothing this
+ * module writes can hold a pair twice, but the header's own promise is that an operator editing
+ * the file by hand is obeyed — so a hand-added duplicate is collapsed on the way in rather than
+ * answered twice on the wire and then silently collapsed by the next write.
  */
 export async function readKeptTests(path: string): Promise<KeptTest[]> {
 	let raw: string;
@@ -127,7 +144,7 @@ export async function readKeptTests(path: string): Promise<KeptTest[]> {
 				`It has been left untouched — fix or move it rather than letting a call overwrite it.`,
 		);
 	}
-	return sortedForStorage(result.data.tests);
+	return deduped(sortedForStorage(result.data.tests));
 }
 
 /**
@@ -139,6 +156,18 @@ export async function readKeptTests(path: string): Promise<KeptTest[]> {
  * rather than one file per kept test: the panel draws a screen of ticks from one answer, so one
  * read answering the whole set is what keeps *one poll, one answer* (D6, R29).
  *
+ * **Every write gets its own temporary name**, and that part is not cosmetic: this store is
+ * written by a wire call (D33), so two `set_kept_tests` presses really can be in here at once,
+ * and two writers sharing one `${path}.tmp` both truncate it and write from offset 0 — then both
+ * rename the interleaved bytes over the store, leaving a document that will not parse for anyone.
+ * A per-write name makes the pair of writes a race one of them wins whole, which is the only race
+ * `rename` can make safe. It is also why `./kept-tests-handlers.ts` serialises the
+ * read-modify-write above this: atomic writes alone would still let the later read win with a set
+ * that never saw the earlier press.
+ *
+ * A temporary left by a failed write is removed rather than left beside the store, since a unique
+ * name is never reused and so would otherwise accumulate.
+ *
  * **No `mode: 0o600`, deliberately.** `./user-store.ts` writes its store that way because it is
  * what stands between a stranger with a shell account and every credential on the host. This
  * file holds no credential — a project name, a test name and an attribution string — and copying
@@ -147,9 +176,26 @@ export async function readKeptTests(path: string): Promise<KeptTest[]> {
 export async function writeKeptTests(path: string, tests: readonly KeptTest[]): Promise<void> {
 	const ordered = sortedForStorage(tests);
 	await mkdir(dirname(path), { recursive: true });
-	const temporary = `${path}.tmp`;
-	await writeFile(temporary, `${JSON.stringify({ tests: ordered }, null, 2)}\n`, 'utf8');
-	await rename(temporary, path);
+	const temporary = temporaryKeptTestsPath(path);
+	try {
+		await writeFile(temporary, `${JSON.stringify({ tests: ordered }, null, 2)}\n`, 'utf8');
+		await rename(temporary, path);
+	} catch (error) {
+		await rm(temporary, { force: true }).catch(() => undefined);
+		throw error;
+	}
+}
+
+/**
+ * The name one write's temporary takes: the store's own, plus this process and a fresh UUID.
+ *
+ * Exported so the property that matters can be asserted directly — **two calls never agree**, and
+ * both sit in the store's own directory, which is what keeps the `rename` above atomic. A shared
+ * name is the bug this replaces and it cannot be caught after the fact, since a temporary that was
+ * renamed away leaves nothing behind to look at.
+ */
+export function temporaryKeptTestsPath(path: string): string {
+	return `${path}.${process.pid}.${randomUUID()}.tmp`;
 }
 
 /**
@@ -163,6 +209,22 @@ function sortedForStorage(tests: readonly KeptTest[]): KeptTest[] {
 	return [...tests].sort(
 		(left, right) => compare(left.project, right.project) || compare(left.testName, right.testName),
 	);
+}
+
+/**
+ * One record per {@link keptTestKey}, the first in the given order winning.
+ *
+ * The order is {@link sortedForStorage}'s and `Array.prototype.sort` is stable, so *first* means
+ * the earlier of the two in the file — deterministic, and the same choice on every host.
+ */
+function deduped(tests: readonly KeptTest[]): KeptTest[] {
+	const held = new Map<string, KeptTest>();
+	for (const test of tests) {
+		if (!held.has(keptTestKey(test))) {
+			held.set(keptTestKey(test), test);
+		}
+	}
+	return [...held.values()];
 }
 
 function compare(left: string, right: string): number {
