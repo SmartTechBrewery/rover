@@ -144,6 +144,7 @@ async function start(): Promise<number> {
 		socketPath: temp.socketPath,
 		artifactsRoot: temp.artifactsRoot,
 		projectsRoot: temp.projectsRoot,
+		keptTestsPath: temp.keptTestsPath,
 		http: { address: '127.0.0.1', port: 0, usersPath: store.path },
 	});
 	if (!result.started) {

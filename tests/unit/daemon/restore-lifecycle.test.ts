@@ -120,6 +120,7 @@ async function start(options: { sweepIntervalMs?: number; leaseTtlMs?: number } 
 		socketPath: temp.socketPath,
 		artifactsRoot: temp.artifactsRoot,
 		projectsRoot: temp.projectsRoot,
+		keptTestsPath: temp.keptTestsPath,
 		...options,
 	});
 	if (!result.started) {

@@ -44,6 +44,10 @@ function statusHandlers(overrides: Partial<IpcHandlers> = {}): IpcHandlers {
 		// And the projects row, for the same reason: these suites have no projects root either,
 		// and `missing` is the honest answer of a host that has none.
 		list_projects: () => ({ outcome: 'missing' }),
+		// And the `Keep` flag's two rows: a host keeping nothing is `listed` with an empty set —
+		// there is no `missing` arm — and a write that changed nothing answers the same set back.
+		list_kept_tests: () => ({ outcome: 'listed', tests: [] }),
+		set_kept_tests: () => ({ outcome: 'set', tests: [] }),
 		// The verb rows, for the same reason and with the same cheapest real answer: these
 		// suites are about the surface, and a refusal is what a host with no device says.
 		wait_for: () => refusedWithoutAHost(),

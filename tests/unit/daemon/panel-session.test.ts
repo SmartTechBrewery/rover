@@ -102,6 +102,7 @@ async function startWithHttp(): Promise<RunningDaemon> {
 		socketPath: temp.socketPath,
 		artifactsRoot: temp.artifactsRoot,
 		projectsRoot: temp.projectsRoot,
+		keptTestsPath: temp.keptTestsPath,
 		http: httpConfig(),
 	});
 	if (!result.started) {

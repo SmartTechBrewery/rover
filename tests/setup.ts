@@ -4,6 +4,7 @@
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ARTIFACTS_PATH_ENV_VAR } from '@/daemon/archive-path.js';
+import { KEPT_TESTS_PATH_ENV_VAR } from '@/daemon/kept-tests.js';
 
 /**
  * **No test ever writes to `~/.rover/artifacts`** (ai/TESTING.md).
@@ -21,3 +22,15 @@ import { ARTIFACTS_PATH_ENV_VAR } from '@/daemon/archive-path.js';
  * accumulate.
  */
 process.env[ARTIFACTS_PATH_ENV_VAR] = join(tmpdir(), 'rover-test-artifacts');
+
+/**
+ * **And no test ever writes to `~/.rover/kept-tests.json`** — the host's own record of which
+ * archived tests the operator keeps (`PROJECT.md` D33).
+ *
+ * The floor is set here for the artifact root's exact reason, and it matters rather more: this is
+ * the one piece of host state a *call* writes, so a daemon a test **spawns** — which resolves the
+ * path from the environment it inherits (`src/daemon/main.ts`) — would not merely read the
+ * developer's own file but rewrite it. A suite that starts a daemon in-process passes
+ * `keptTestsPath` explicitly and never reads this.
+ */
+process.env[KEPT_TESTS_PATH_ENV_VAR] = join(tmpdir(), 'rover-test-kept-tests.json');

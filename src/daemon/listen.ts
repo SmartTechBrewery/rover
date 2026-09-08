@@ -34,6 +34,7 @@ import { type ArtifactArchive, createArtifactArchive } from './archive.js';
 import { type ArchiveFileReader, createArchiveFileReader } from './archive-file.js';
 import { type HttpListener, startHttpListener } from './http-listen.js';
 import { createDeviceInventory, type DeviceInventory } from './inventory.js';
+import { createKeptTestsHandlers } from './kept-tests-handlers.js';
 import { createLeaseHandlers } from './lease-handlers.js';
 import { createLeaseStore, type LeaseStore } from './leases.js';
 import { createListArchiveHandler } from './list-archive.js';
@@ -167,6 +168,15 @@ export interface StartDaemonOptions {
 	 * `~/.rover/projects` and start running commands out of it.
 	 */
 	readonly projectsRoot: string;
+	/**
+	 * Where the host's own record of which tests are kept lives (D33, `./kept-tests.ts`).
+	 *
+	 * **Required**, and resolved from the environment by `./main.ts`, for
+	 * {@link StartDaemonOptions.artifactsRoot}'s reason: a `startDaemon()` in a unit test must not
+	 * read — or, since this is the one thing on the surface a call *writes*, rewrite — the
+	 * developer's own `~/.rover/kept-tests.json` because of a variable in their shell.
+	 */
+	readonly keptTestsPath: string;
 }
 
 /** The daemon this process owns. Only the winner of the bind gets one. */
@@ -216,6 +226,13 @@ export type StartResult = RunningDaemon | DaemonAlreadyRunning;
  * (R39) reads the projects root and says which projects are registered, which is the read half of
  * D31 and the only row that is about host-operator configuration. Nothing on this surface writes
  * one.
+
+ * And it answers — and, for the first time on this surface outside a lease, **writes** — which of
+ * the archive's tests the operator has said to keep: `./kept-tests-handlers.ts` (D33, #234), one
+ * read of the whole set and one write that takes however many tests a single press stood for. Its
+ * store is `keptTestsPath` below and is deliberately not under `artifactsRoot`: the artifact tree
+ * is what past leases wrote and every sidecar in it is written once, while this toggles
+ * (`PROJECT.md` §10). Nothing here prunes the archive — retention is still undecided (§9.4).
  *
  * `artifactsRoot` and `projectsRoot` are parameters rather than things read off `archive` or off
  * a resolver: the archive writes the tree and those two modules read it, and widening the
@@ -235,6 +252,7 @@ export function createDaemonHandlers(
 	slots: SlotAllocator,
 	artifactsRoot: string,
 	projectsRoot: string,
+	keptTestsPath: string,
 ): IpcHandlers {
 	return {
 		status: handleStatus,
@@ -245,6 +263,7 @@ export function createDaemonHandlers(
 		...createSearchArchiveHandler({ root: artifactsRoot }),
 		...createListArchiveGroupsHandler({ root: artifactsRoot }),
 		...createListProjectsHandler({ root: projectsRoot }),
+		...createKeptTestsHandlers({ path: keptTestsPath }),
 	};
 }
 
@@ -361,6 +380,11 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartRes
 			// so what `list_projects` reports and what the host will actually run at lease end are
 			// the same files (R39).
 			options.projectsRoot,
+			// The host's own `Keep` record, which is deliberately **not** under either root above:
+			// the artifact tree is what past leases wrote and every sidecar in it is written once,
+			// while this toggles (D33, `PROJECT.md` §10). A required field for the same reason the
+			// two roots are.
+			options.keptTestsPath,
 		),
 	);
 

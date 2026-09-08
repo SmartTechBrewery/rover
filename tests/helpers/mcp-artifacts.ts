@@ -72,6 +72,7 @@ export async function serveDevice(
 		socketPath: temp.socketPath,
 		artifactsRoot: temp.artifactsRoot,
 		projectsRoot: temp.projectsRoot,
+		keptTestsPath: temp.keptTestsPath,
 	});
 	if (!result.started) {
 		throw new Error('Another daemon holds the temp socket — the test cannot proceed');

@@ -190,6 +190,17 @@ import { findUserByToken, type UserRecord } from './user-store.js';
  * group, and reads what this host has registered — and D27 still keeps every acquire and every
  * verb off a browser.
  *
+ * The `Keep` flag's two rows joined it with the host half of the flag (D33, #234) — the read
+ * beside the archive's own reads, and `set_kept_tests` as the **second action** on this list after
+ * `force_release_device`, admitted on D27's own test: what the operator keeps on the host's disk is
+ * authority over a shared resource rather than a step in one agent's work. So the list now reads:
+ * the panel reads the pool, ends a stuck lease in it, reads the artifact archive one directory
+ * level at a time, searches the whole of it, asks which of its runs share a group, reads what this
+ * host has registered, and reads and sets which of the archive's tests are kept — and D27 still
+ * keeps every acquire and every verb off a browser. Neither `Keep` row writes anything into the
+ * artifact tree and neither prunes it: the flag is a document of the host's own outside that tree,
+ * and retention is still undecided (`PROJECT.md` §9.4).
+ *
  * `search_archive` is here and deliberately **not** an MCP tool, which is the same asymmetry
  * `list_archive` and `force_release_device` already have: this transport serves the operator's own
  * browser, and a search that is safe there would hand every agent the run names of every other
@@ -211,6 +222,8 @@ const PANEL_METHODS: readonly IpcMethodName[] = [
 	'search_archive',
 	'list_archive_groups',
 	'list_projects',
+	'list_kept_tests',
+	'set_kept_tests',
 ];
 
 /**

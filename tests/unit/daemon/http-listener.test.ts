@@ -16,7 +16,7 @@
  * handle in `afterEach`.
  */
 
-import { rm, writeFile } from 'node:fs/promises';
+import { rm, stat, writeFile } from 'node:fs/promises';
 import {
 	Agent,
 	request as httpRequest,
@@ -203,6 +203,7 @@ async function startWithHttp(overrides: Partial<HttpListenerConfig> = {}): Promi
 		socketPath: temp.socketPath,
 		artifactsRoot: temp.artifactsRoot,
 		projectsRoot: temp.projectsRoot,
+		keptTestsPath: temp.keptTestsPath,
 		http: httpConfig(overrides),
 	});
 	if (!result.started) {
@@ -633,6 +634,61 @@ describe('only the panel’s methods are reachable, and no table gained a row', 
 			id: 'req-1',
 			result: { outcome: 'missing' },
 		});
+	});
+
+	it('reaches the Keep flag\u2019s two rows, the read and the write', async () => {
+		registerFakeBackend();
+		await withStore();
+		const daemon = await startWithHttp();
+
+		// On the allowlist since #234 (D33). The read joins the archive's reads; the write is the
+		// **second** action on the list after `force_release_device`, admitted on D27's own test —
+		// what the operator keeps on the host's disk is authority over a shared resource. Nothing
+		// pre-creates `temp.keptTestsPath`, and a store that does not exist is *nothing is kept*,
+		// which is honestly `listed` with an empty set rather than a fourth answer.
+		expect(envelopeOf(await call(daemon, 'list_kept_tests', {}))).toMatchObject({
+			type: 'result',
+			id: 'req-1',
+			result: { outcome: 'listed', tests: [] },
+		});
+
+		const written = await call(daemon, 'set_kept_tests', {
+			tests: [{ project: 'rover', testName: 'checkout flow' }],
+			kept: true,
+			actor: 'a-browser-tab',
+		});
+
+		// The whole set after the write, so the panel renders what it was sent (R29) — and no
+		// `keptBy`, no `keptAt` and no path anywhere on it (D19).
+		expect(envelopeOf(written)).toMatchObject({
+			type: 'result',
+			id: 'req-1',
+			result: { outcome: 'set', tests: [{ project: 'rover', testName: 'checkout flow' }] },
+		});
+		expect(JSON.stringify(envelopeOf(written))).not.toContain('keptBy');
+		expect(JSON.stringify(envelopeOf(written))).not.toContain(temp.dir);
+	});
+
+	it('still refuses the Keep flag\u2019s two rows to a caller with no credential', async () => {
+		registerFakeBackend();
+		await withStore();
+		const daemon = await startWithHttp();
+
+		// The allowlist widens what an *authenticated* operator reaches and nothing else: the
+		// uniform pre-auth refusal is unchanged, and a write is exactly the row that must not
+		// arrive on a bare tab (D20, D29).
+		for (const method of ['list_kept_tests', 'set_kept_tests']) {
+			const answer = await send({
+				port: portOf(daemon),
+				body: JSON.stringify({ protocolVersion: 1, id: 'req-1', method, params: {} }),
+			});
+			expect(answer.status).toBe(401);
+			expect(answer.body).toBe(REFUSAL_BODY);
+		}
+
+		// And nothing was written on the way to that refusal — authentication happens before
+		// anything is dispatched, so the store the flag lives in does not exist yet.
+		await expect(stat(temp.keptTestsPath)).rejects.toMatchObject({ code: 'ENOENT' });
 	});
 
 	it('runs nothing it refused — the device is still free over the socket', async () => {
@@ -1222,6 +1278,7 @@ describe('the listener is opt-in and dies with the daemon', () => {
 			socketPath: temp.socketPath,
 			artifactsRoot: temp.artifactsRoot,
 			projectsRoot: temp.projectsRoot,
+			keptTestsPath: temp.keptTestsPath,
 		});
 		if (!daemon.started) {
 			throw new Error('Another daemon holds the temp socket — the test cannot proceed');

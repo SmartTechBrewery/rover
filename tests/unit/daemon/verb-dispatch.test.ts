@@ -366,6 +366,7 @@ async function serve(options: HostOptions = {}): Promise<void> {
 		socketPath: temp.socketPath,
 		artifactsRoot: options.artifactsRoot ?? temp.artifactsRoot,
 		projectsRoot: temp.projectsRoot,
+		keptTestsPath: temp.keptTestsPath,
 		...(options.leaseTtlMs === undefined ? {} : { leaseTtlMs: options.leaseTtlMs }),
 	});
 	if (!result.started) {

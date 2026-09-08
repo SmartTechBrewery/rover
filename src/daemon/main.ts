@@ -21,6 +21,7 @@
 // into a type-only one: what this line does is run every backend's registration.
 import '../backends/index.js';
 import { resolveArtifactsRoot } from './archive-path.js';
+import { resolveKeptTestsPath } from './kept-tests.js';
 import { startDaemon } from './listen.js';
 import { resolveHttpListener, resolveNetworkListener } from './network-config.js';
 import { resolveProjectsRoot } from './project-hooks.js';
@@ -35,6 +36,10 @@ async function main(): Promise<void> {
 	// The one place the project hook directory is read from the environment, for the same
 	// reason — and rather more sharply, because a hook file names a program this process runs.
 	const projectsRoot = resolveProjectsRoot();
+	// The one place the host's `Keep` record is read from the environment, for the same reason
+	// again — and this is the one piece of host state a *call* writes, so a unit test reaching the
+	// developer's own `~/.rover/kept-tests.json` would not merely read it (D33).
+	const keptTestsPath = resolveKeptTestsPath();
 	// The one place the network listener is resolved from the environment. A missing token
 	// beside a set port throws here, `main().catch` below prints it and the process exits 1 —
 	// a misconfigured listener is a loud startup failure, never a host that quietly serves
@@ -48,6 +53,7 @@ async function main(): Promise<void> {
 		socketPath,
 		artifactsRoot,
 		projectsRoot,
+		keptTestsPath,
 		...(network ? { network } : {}),
 		...(http ? { http } : {}),
 	});
