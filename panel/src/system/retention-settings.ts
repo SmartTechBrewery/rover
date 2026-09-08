@@ -2,17 +2,26 @@ import { useState } from 'react';
 
 /**
  * The two numbers that bound what the archive keeps, as the System screen edits them — and
- * **nothing on the host knows about either of them yet**.
+ * **no host method takes either of them**.
  *
- * There is no retention mechanism: nothing sweeps the archive, no host answer carries a budget or
- * an age, and no method takes one. So this module is the UI half landing first, and it keeps the
- * draft in React state and lets it end with the mount: a number that survived a reload would look
- * like a setting the host had been told about, and the operator would have configured nothing.
+ * *Corrected in place, 2026-09-08 (#238).* The host now has a retention mechanism: it enforces
+ * these two bounds from its own environment (`ROVER_ARTIFACTS_BUDGET_MB`,
+ * `ROVER_ARTIFACTS_MAX_AGE_DAYS`) and `rover sweep` runs them. What has *not* changed is the half
+ * this module is about — there is still no method that **sets** either number, and no answer that
+ * carries one — so the draft still keeps to React state and ends with the mount: a number that
+ * survived a reload would look like a setting the host had been told about, and the operator would
+ * have configured nothing. What this said before was that nothing sweeps the archive at all; that
+ * clause is the one that stopped being true, and the reason it gave for React state is untouched.
+ *
+ * **The two constants below are the host's own defaults**, held equal to
+ * `src/daemon/archive-retention.ts`'s by `tests/unit/daemon/archive-retention.test.ts`. The two
+ * trees deliberately cannot import each other, so that assertion is the only thing standing
+ * between this screen and quoting a number the host does not enforce.
  *
  * **The `Keep` tick was the other half of that pair and no longer is** (D33, #237). It was React
  * state for this exact reason until the host had somewhere to put it; it now has one, so a tick
  * survives a reload and a daemon restart while these two numbers still do not. What separates them
- * is a host method, which is the only thing that ever separated them.
+ * is a host method that writes, which is the only thing that ever separated them.
  *
  * **The pair is two rules and not one**, which is why both are here and neither is derived from the
  * other. A budget alone lets a quiet month keep everything forever; an age alone lets a busy week

@@ -176,15 +176,20 @@ Design work lives in [`DESIGN.md`](./DESIGN.md); the brief that produced the fir
    group, side by side, oldest run on the left. **Two is the common case and nothing caps it** — a
    group may hold seven runs — and there is no diff, no score and no verdict, because the comparison
    is visual and human-judged (`ai/RULES.md` §1).
-10. **Archive disk usage / retention view** — how much space the archive is using, and, once a
-    retention policy exists (`PROJECT.md` §9.4 — still undecided), a manual prune action. **The
-    operator's per-test exemption now exists on the host** (`PROJECT.md` D33, #234): a `Keep` flag
-    per `<project>/<test_name>`, in a file of the host's own outside the artifact tree, read and set
-    over `list_kept_tests` and `set_kept_tests` on this surface and from `rover keep`. The disk-usage
-    view and the prune action are still this item's, and so is the policy itself — the flag records
-    which tests a sweep must spare and decides nothing about when one runs, how large the archive may
-    get, or who runs it. Every named user may set it, exactly as every named user may force-release
-    (D27, D28); tiering stays open below.
+10. **Archive disk usage / retention view** — how much space the archive is using, and a manual
+    prune action. **Both the exemption and the policy now exist on the host, and neither is on this
+    surface.** The exemption is the `Keep` flag (`PROJECT.md` D33, #234): per
+    `<project>/<test_name>`, in a file of the host's own outside the artifact tree, read and set over
+    `list_kept_tests` and `set_kept_tests` here and from `rover keep`. The policy is
+    `ROVER_ARTIFACTS_BUDGET_MB` and `ROVER_ARTIFACTS_MAX_AGE_DAYS` with `sweep_archive` behind them
+    (D34–D36, #238) — and that row is deliberately **not** on `PANEL_METHODS`: it deletes an
+    operator's runs permanently, so a browser is not where it belongs while D27's role model is
+    still deferred, and the prune action here waits on that model rather than on the mechanism. The
+    **disk-usage view** is still this item's and still blocked on the same thing it always was: no
+    answer carries the archive's size or its budget, and `sweep_archive` deliberately carries
+    neither (`docs/DESIGN.md` §13). What is left open on the policy itself is only *who runs it
+    unattended* (`PROJECT.md` §9.4). Every named user may set the flag, exactly as every named user
+    may force-release (D27, D28); tiering stays open below.
 11. **MCP config generator** — after registering a project, a ready-to-paste MCP server
     configuration snippet, so a user doesn't hand-write the pointer to their host.
 

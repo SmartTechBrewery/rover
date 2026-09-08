@@ -17,11 +17,17 @@ import { useId } from 'react';
  * fields are that screen's input with a unit after it, and the explaining lines are the archive
  * card's quiet body text. Every value is already somewhere in this panel.
  *
- * **There is no `Save`, and that is the settled rule rather than an omission.** Nothing on the host
- * takes either number — no method, no answer, no sweep — so a control that appeared to store them
+ * **There is no `Save`, and that is the settled rule rather than an omission.** No method on the
+ * host **takes** either number and no answer carries one, so a control that appeared to store them
  * would be the first thing on this screen to lie, which is the objection §11 already makes to a
  * button on a destination that is not built. The fields are editable because a form nobody can type
  * into says nothing about the design being right; what they are worth is stated under them.
+ *
+ * *Corrected in place, 2026-09-08 (#238).* The reason above used to end "no sweep", and the host
+ * has one now: it enforces these two bounds from its own environment and `rover sweep` runs them.
+ * The half that matters here is unchanged — nothing takes them *from this screen* — so the button
+ * stays absent for exactly the reason it always was, and the line under the fields says the true
+ * half rather than the old sentence's both halves.
  */
 export function RetentionCard({ draft }: { readonly draft: RetentionDraft }) {
 	return (
@@ -57,9 +63,18 @@ export function RetentionCard({ draft }: { readonly draft: RetentionDraft }) {
 					Whichever of the two is reached first is the one that acts. A test you have marked{' '}
 					<span className="text-tertiary">Keep</span> in the Archive is exempt from both.
 				</p>
+				{/*
+				 * **The true half of what this used to say** (#238). It read *Nothing is stored yet. Rover
+				 * has no retention mechanism, so these two numbers are not saved anywhere and nothing on
+				 * this host is sweeping the archive.* The host has a retention mechanism now — it reads
+				 * its own two numbers and sweeps when an operator asks — so the second clause went and
+				 * the first stayed, because it is the one that explains the missing `Save`. Softening it
+				 * into *may be swept* was refused: a screen that hedges about whether the host deletes an
+				 * operator's runs is worse than one that is out of date.
+				 */}
 				<p className="mt-2 font-code-md text-on-surface-variant text-xs">
-					Nothing is stored yet. Rover has no retention mechanism, so these two numbers are not
-					saved anywhere and nothing on this host is sweeping the archive.
+					These two numbers are not saved anywhere. The host reads its own, from its own
+					environment, and no control here can set them.
 				</p>
 
 				{/*

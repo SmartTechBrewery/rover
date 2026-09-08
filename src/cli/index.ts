@@ -30,6 +30,7 @@ import * as record from './commands/record.js';
 import * as release from './commands/release.js';
 import * as screenshot from './commands/screenshot.js';
 import * as status from './commands/status.js';
+import * as sweep from './commands/sweep.js';
 import * as users from './commands/users.js';
 
 /**
@@ -70,6 +71,7 @@ const COMMANDS: Record<string, Command | undefined> = Object.assign(Object.creat
 	install,
 	archive,
 	keep,
+	sweep,
 	status,
 	users,
 	init,
@@ -105,8 +107,13 @@ Commands:
                            never a path on the host
   keep <subcommand>        Which of the host's archived tests are kept — list, add, remove
                            (--actor required on add and remove; the arguments are the
-                           components an \`archive\` listing named). Nothing prunes the
-                           archive yet, so this records an intention ahead of the sweep
+                           components an \`archive\` listing named). A kept test is exempt
+                           from both of \`sweep\`'s bounds
+  sweep                    Delete what the host's retention policy no longer keeps — the
+                           oldest runs first, by its disk budget and its age limit
+                           (--actor required; --dry-run asks what would go and deletes
+                           nothing). Nothing on the host runs it on its own: this is the
+                           whole of the trigger
   status                   Which host answered, its pid, uptime and protocol version
   init [<path>]            Set up a project so an agent working in it can drive a device:
                            its hook file, its .mcp.json, a generated ROVER.md, and the
@@ -139,7 +146,8 @@ Exit codes:
   1   the operation did not succeed — a refused acquire, a release that found no live
       lease, a force-release that found no lease on the device, a verb the host refused
       or that failed, an archive level that is not there or that the host cannot read,
-      an unreachable host, or a request the host rejected
+      a sweep of an archive the host has none of or cannot walk, an unreachable host, or a
+      request the host rejected
   2   usage error — unknown command, unknown flag, a missing required option, an
       attribution string longer than the host accepts, an --out that names a directory
       or has no directory to write into, a file to push or install that is missing,
@@ -152,6 +160,8 @@ a remote host is a service its operator runs and is never started from a client.
 Set ROVER_SOCKET_PATH to point at a socket other than ~/.rover/rover.sock,
 ROVER_USERS_PATH for a user store other than ~/.rover/users.json,
 ROVER_KEPT_TESTS_PATH for a kept-tests record other than ~/.rover/kept-tests.json,
+ROVER_ARTIFACTS_BUDGET_MB and ROVER_ARTIFACTS_MAX_AGE_DAYS to bound what the host's archive
+keeps (both read by the daemon, never by a client),
 ROVER_PROJECT_FILE at a project hook file to take \`acquire --project\` from, and
 ROVER_HOST_ADDRESS, ROVER_HOST_PORT and ROVER_HOST_TOKEN (plus ROVER_HOST_CA for a
 certificate to trust) to reach a remote one.`;

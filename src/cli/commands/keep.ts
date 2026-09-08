@@ -24,9 +24,11 @@
  * operator action that only a browser can perform is one nobody can reach when the browser is the
  * thing that is broken.
  *
- * **Nothing here prunes anything.** Keeping a test exempts it from a sweep that does not exist
- * yet: retention is still undecided (`PROJECT.md` §9.4), and this command must not read as
- * deciding it.
+ * **Nothing here prunes anything — and what this exempts a test from now exists.** `rover sweep`
+ * runs the host's retention policy, and a test named here is exempt from both of its bounds
+ * absolutely, not even taken to bring the archive under its budget (D35, D36, #238). What is still
+ * undecided is who runs that sweep unattended (`PROJECT.md` §9.4): nothing on the host calls it on
+ * its own.
  */
 
 import {
@@ -68,8 +70,9 @@ test name as the archive filed them, never a path on the host, which is not your
 The flag is per test rather than per run: a test's runs are kept or not together.
 
 The flag lives in the host's own file, outside the artifact tree, so it survives a daemon
-restart. **Nothing prunes the archive yet** — retention is deliberately undecided — so this
-records an intention ahead of the sweep that will one day honour it.
+restart. It is what \`rover sweep\` exempts: a kept test is never taken by the host's disk budget
+or its age limit, not even to bring the archive under budget. **Nothing on the host sweeps on its
+own** — \`rover sweep\` is the only trigger.
 
 A refusal exits 1: the host keeps as many tests as it will hold, or it could not read or
 write its own record. Which it was is in the host's own log, never in the answer.`;

@@ -3,7 +3,7 @@ import { Check, Minus } from 'lucide-react';
 import { useId } from 'react';
 
 /**
- * `Keep` — mark this test to survive the sweep, once Rover has one.
+ * `Keep` — mark this test to survive the sweep (D35, #238).
  *
  * **The panel's first checkbox**, and **no approved Stitch screen shows one** (`ai/RULES.md` §8),
  * so nothing about it is invented: every value below is already on this screen or in
@@ -181,12 +181,15 @@ export function ArchiveCheckbox({
  * The sentence this control makes about itself, one per {@link ArchiveCheckbox} scope.
  *
  * **`once Rover starts sweeping the archive` is standing in for a number**, and the substitution is
- * the only thing that changes when the *sweep* lands: *…will be removed in 14 days, unless…*.
- * Until a host answer carries that window there is no honest way to write the digits — nothing
- * sweeps the archive, no answer carries a retention figure, and one written here would be the panel
- * inventing data the host never sent (`ai/RULES.md` §2, and this screen's own *nothing is invented*
- * rule). Naming the condition still tells a reader why the box is there, which is what the sentence
- * is for.
+ * the only thing that changes when a host answer carries the window: *…will be removed in 14 days,
+ * unless…*. The *policy* landed in #238 and the sentence is still the honest one, because what it
+ * stands in for has not: **nothing on the host sweeps unattended** — `rover sweep` is the whole of
+ * the trigger (`PROJECT.md` §9.4) — and `sweep_archive` deliberately carries neither of the host's
+ * two settings, so no answer this panel can make carries a retention figure and one written here
+ * would be the panel inventing data the host never sent (`ai/RULES.md` §2, and this screen's own
+ * *nothing is invented* rule). Naming the condition still tells a reader why the box is there,
+ * which is what the sentence is for. It is the *scheduling* phases that make the digits writable,
+ * not this one.
  *
  * **The second half says where the decision is held, and it is there because the answer changed**
  * (D33, #237). The tick was React state and forgot on reload, so the sentence could only promise

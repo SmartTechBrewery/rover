@@ -48,6 +48,9 @@ function statusHandlers(overrides: Partial<IpcHandlers> = {}): IpcHandlers {
 		// there is no `missing` arm — and a write that changed nothing answers the same set back.
 		list_kept_tests: () => ({ outcome: 'listed', tests: [] }),
 		set_kept_tests: () => ({ outcome: 'set', tests: [] }),
+		// And the sweep, whose cheapest real answer is `missing`: these suites have no archive
+		// root at all, which is exactly what a host that has never filed anything says.
+		sweep_archive: () => ({ outcome: 'missing' }),
 		// The verb rows, for the same reason and with the same cheapest real answer: these
 		// suites are about the surface, and a refusal is what a host with no device says.
 		wait_for: () => refusedWithoutAHost(),

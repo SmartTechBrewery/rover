@@ -20,8 +20,10 @@ import { SystemScreen } from './system.js';
  *
  * §3 settles four destinations and says that `System` stands in for settings; this screen fills the
  * placeholder that promised exactly that. What is asserted below is the two settings, their
- * defaults, and the two things this screen must not do while the host has no retention mechanism:
- * offer a control that appears to save, or claim a deadline it cannot know.
+ * defaults, and the two things this screen must not do while no host method **writes** either
+ * number: offer a control that appears to save, or claim a deadline it cannot know. The host does
+ * enforce these two bounds now (#238) — from its own environment, swept by `rover sweep` — which
+ * is why the copy asserted here no longer says nothing sweeps the archive.
  */
 
 const disk = () => screen.getByLabelText('Disk space for test data') as HTMLInputElement;
@@ -67,15 +69,22 @@ describe('the System screen', () => {
 	});
 
 	/*
-	 * **It says where the numbers stand, in words and without alarm.** Nothing is stored yet and
-	 * nothing sweeps; that is temporary and it is not a fault, so it is ordinary quiet text — no
-	 * `role="alert"`, no error colour, no spinner (§7).
+	 * **It says where the numbers stand, in words and without alarm.** Nothing here saves them and
+	 * the host reads its own; that is not a fault, so it is ordinary quiet text — no `role="alert"`,
+	 * no error colour, no spinner (§7).
+	 *
+	 * **And it must not claim the host has no retention mechanism**, which is what this asserted
+	 * until #238 and is now false: the host enforces both bounds and `rover sweep` runs them. The
+	 * negative assertion is deliberate — the old sentence is exactly the kind that survives a
+	 * feature landing, because nothing else on the screen changes when it does.
 	 */
-	it('says plainly that nothing is stored and nothing sweeps', () => {
+	it('says plainly that nothing here saves the numbers, and claims no more than that', () => {
 		const { container } = render(<SystemScreen />);
 
-		expect(screen.getByText(/Nothing is stored yet/)).toBeDefined();
-		expect(screen.getByText(/no retention mechanism/)).toBeDefined();
+		expect(screen.getByText(/not saved anywhere/)).toBeDefined();
+		expect(screen.getByText(/The host reads its own/)).toBeDefined();
+		expect(container.textContent).not.toContain('no retention mechanism');
+		expect(container.textContent).not.toContain('nothing on this host is sweeping');
 		expect(container.querySelectorAll('[role="alert"]')).toHaveLength(0);
 		expect(container.innerHTML).not.toContain('animate-');
 		expect(container.innerHTML).not.toContain('text-error');

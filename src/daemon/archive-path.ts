@@ -118,13 +118,55 @@ export function leaseDirectoryName(lease: Lease): string {
  * guarantee — no component can be `..`, contain a separator, or start with a `.`.
  */
 export function leaseArchiveDirectory(root: string, lease: Lease): string {
+	return join(leaseRunDirectory(root, lease), pathSegment(lease.serial));
+}
+
+/**
+ * The run's own directory — `<root>/<project>/<test_name>/<timestamp>-<owner>-<hash>`, the three
+ * levels above the serial.
+ *
+ * It exists because that directory is the **unit of deletion**: a sweep takes a run whole, with
+ * its `<serial>` subtree under it (`./archive-sweep.ts`, `PROJECT.md` §10). Deriving it there
+ * would be a second account of this layout that could drift from the writer's, so
+ * {@link leaseArchiveDirectory} is written in terms of this rather than the other way round —
+ * one module owns the tree in both directions, exactly as {@link labelled} and
+ * {@link filedLabelOf} own a file name in both.
+ *
+ * **A live lease's run is identified by this path and never by a name**, which is what makes the
+ * sweep's exemption exact: the sweeper asks this function the same question the writer asked, so
+ * the two cannot disagree about which directory a lease is filing into.
+ */
+export function leaseRunDirectory(root: string, lease: Lease): string {
 	return join(
 		root,
 		pathSegment(lease.project),
 		pathSegment(lease.testName),
 		leaseDirectoryName(lease),
-		pathSegment(lease.serial),
 	);
+}
+
+/**
+ * Whether a run directory's name places it before `instantMs` — **as text, with nothing parsed.**
+ *
+ * The whole of the age rule, and it is one `<` on two strings. The cutoff instant is formatted by
+ * {@link archiveTimestamp}, the *same* function that formatted the run's own name, and the prefix
+ * that function writes is fixed-width UTC basic format — so code-unit order is chronological
+ * order and no `Date` is ever constructed from a directory name (D22: a component is opaque and
+ * nothing here parses one). `localeCompare` is refused for `./list-archive.ts`'s reason: a
+ * locale-dependent fold would make one host sweep differently from another.
+ *
+ * **A name that does not lead with a timestamp is still never parsed**, and both directions it
+ * can fall are recorded rather than special-cased. Text order puts a name leading with a letter,
+ * a digit past the current century or `_` *after* every real timestamp, so such a directory is
+ * never selected by age and is selected last by budget — the benign direction. A name leading
+ * with `.` (0x2E) or `-` (0x2D) sorts below `0` (0x30) and is therefore taken *first* by budget
+ * and can be taken by age; nothing Rover files can lead with either, because {@link pathSegment}
+ * strips leading `.` and `-` runs, but a hand-made or another tool's directory can. That is the
+ * cost of never parsing a name, and it is the right side of the trade: the alternative is a
+ * parser deciding what a foreign directory *means*.
+ */
+export function runDirectoryPrecedes(name: string, instantMs: number): boolean {
+	return name < archiveTimestamp(instantMs);
 }
 
 /**

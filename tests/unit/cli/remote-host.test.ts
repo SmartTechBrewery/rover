@@ -156,6 +156,7 @@ async function startHostAndPointAtIt(): Promise<RunningDaemon> {
 		artifactsRoot: temp.artifactsRoot,
 		projectsRoot: temp.projectsRoot,
 		keptTestsPath: temp.keptTestsPath,
+		retention: temp.retention,
 		network: {
 			address: '127.0.0.1',
 			port: 0,

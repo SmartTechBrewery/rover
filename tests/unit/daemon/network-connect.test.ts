@@ -182,6 +182,7 @@ async function startHost(overrides: Partial<NetworkListenerConfig> = {}): Promis
 		artifactsRoot: temp.artifactsRoot,
 		projectsRoot: temp.projectsRoot,
 		keptTestsPath: temp.keptTestsPath,
+		retention: temp.retention,
 		network: networkConfig(overrides),
 	});
 	if (!result.started) {

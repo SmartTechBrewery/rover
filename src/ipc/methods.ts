@@ -1295,6 +1295,107 @@ export const SetKeptTestsResultSchema = z.discriminatedUnion('outcome', [
 export type SetKeptTestsResult = z.infer<typeof SetKeptTestsResultSchema>;
 
 /**
+ * How many deleted runs one sweep answers with.
+ *
+ * A first sweep of a neglected archive can take thousands of runs, and every one of them is
+ * already on the host's own log — one line each, naming the bound that took it
+ * (`src/daemon/archive-sweep.ts`). So the *answer* is bounded and says when it was bounded, which
+ * is `search_archive`'s own arrangement and its own word: `truncated` means at least one run that
+ * went is not in this list, never that the sweep did less than it says. The totals beside it are
+ * exact whatever this cap does.
+ */
+export const MAX_SWEEP_REPORTED_RUNS = 1000;
+
+/**
+ * One run the sweep took: the three components that name it, its size, and the bound that took it.
+ *
+ * **The components as the archive filed them** — what `list_archive` answered — and no path
+ * anywhere, structurally: three `ArchivePathSegmentSchema` strings is not a shape a host path fits
+ * in (D19). Nothing parses one (D22); `run` in particular is a directory name and never a
+ * timestamp to read.
+ *
+ * `bound` is `age` or `budget` because there are exactly two bounds, and knowing which one acted
+ * is the difference between *this archive is too big* and *this run is too old* — the one thing an
+ * operator does something different about.
+ */
+export const SweptRunSchema = z
+	.object({
+		project: ArchivePathSegmentSchema,
+		testName: ArchivePathSegmentSchema,
+		run: ArchivePathSegmentSchema,
+		sizeBytes: z.number().int().nonnegative(),
+		bound: z.enum(['age', 'budget']),
+	})
+	.strict();
+export type SweptRun = z.infer<typeof SweptRunSchema>;
+
+/**
+ * Sweep the archive, or ask what a sweep would take.
+ *
+ * `dryRun` is **required and has no default**: a call that deletes an operator's data on a shared
+ * host must say which of the two it is, and a default either way is a decision the wire made for
+ * somebody. `rover sweep` is where the default lives, and it is *not* the dry run — a command an
+ * operator typed does what it says.
+ *
+ * **`actor` is attribution and not authorisation** (D20, D28), exactly as
+ * {@link ForceReleaseDeviceParamsSchema}'s and {@link SetKeptTestsParamsSchema}'s are, and it is
+ * required on **both** forms including the dry run: one params schema with one rule beats a
+ * conditional refinement, and *who pointed this host's sweep at its whole archive* is worth
+ * recording for a walk that is real I/O on a machine somebody else may be using. What authorizes
+ * the call is reaching this surface — the local socket is a shell on the host (D25, D28).
+ */
+export const SweepArchiveParamsSchema = z
+	.object({
+		/** Ask what would go, and delete nothing. */
+		dryRun: z.boolean(),
+		/** Who asked. Attribution only — it authorizes nothing (D20, D28). */
+		actor: AttributionStringSchema,
+	})
+	.strict();
+export type SweepArchiveParams = z.infer<typeof SweepArchiveParamsSchema>;
+
+/**
+ * What one sweep answers: what went, what that freed, and whether the budget could be met.
+ *
+ * **The two settings are deliberately not here.** The host knows its own budget and its own age
+ * window; putting either on the wire is the first half of the readable retention window
+ * `docs/DESIGN.md` §13 defers, and that section records *no answer carries a budget* as a live
+ * constraint on the panel. `totalBytesBefore` and `stillOverBudget` are what a CLI needs to say
+ * something true, and neither implies a limit.
+ *
+ * **`stillOverBudget` is a refusal reported as data**, not an error: the archive is over its
+ * budget and every run left is kept (D33) or held by a live lease, so the limit cannot be met
+ * without the operator. Nothing kept and nothing live is ever deleted to satisfy it. The diagnosis
+ * — how far over, and against what — is one line on the host's own log, where a number about the
+ * host's disk belongs.
+ *
+ * `missing` and `unreadable` are two arms rather than one for {@link ListArchiveResultSchema}'s
+ * reason, and `unreadable` covers the host's own kept-tests store too: a sweep that cannot read
+ * the list of exemptions deletes nothing at all. No `message` and no path on any arm (D19).
+ */
+export const SweepArchiveResultSchema = z.discriminatedUnion('outcome', [
+	z
+		.object({
+			outcome: z.literal('swept'),
+			/** Whether this was a question. `true` and nothing at all was deleted. */
+			dryRun: z.boolean(),
+			runs: z.array(SweptRunSchema).max(MAX_SWEEP_REPORTED_RUNS),
+			/** At least one run that went is not in `runs` — {@link MAX_SWEEP_REPORTED_RUNS}. */
+			truncated: z.boolean(),
+			freedBytes: z.number().int().nonnegative(),
+			totalBytesBefore: z.number().int().nonnegative(),
+			totalBytesAfter: z.number().int().nonnegative(),
+			stillOverBudget: z.boolean(),
+		})
+		.strict(),
+	/** There is no archive root. Nothing has ever been filed on this host. */
+	z.object({ outcome: z.literal('missing') }).strict(),
+	/** It is there and the host cannot walk it — or cannot read its own kept-tests store. */
+	z.object({ outcome: z.literal('unreadable') }).strict(),
+]);
+export type SweepArchiveResult = z.infer<typeof SweepArchiveResultSchema>;
+
+/**
  * `status` and `list_devices` exist in the *protocol* rather than in the MCP layer because
  * D16 requires daemon state to be answerable to something that is not an agent: whatever
  * Swarm asks, it asks here, the same way a local caller does. Nothing device-shaped may
@@ -1383,8 +1484,25 @@ export type SetKeptTestsResult = z.infer<typeof SetKeptTestsResultSchema>;
  * shape, never about what a component says, D22), and a flag on an entry would teach it that
  * level 2 is a test. Both rows are on `PANEL_METHODS` (D29) and both are deliberately **not** MCP
  * tools — an agent does not decide what the operator keeps, and one that could untick a test
- * could clear the exemption on somebody else's run (D27). **Nothing here sweeps, prunes or
- * expires anything**: retention is still undecided (`PROJECT.md` §9.4).
+ * could clear the exemption on somebody else's run (D27). Neither row sweeps anything itself; the
+ * row that does is below, and the flag is the exemption it honours.
+ *
+ * **`sweep_archive` is the retention policy's one surface, and the only thing that triggers it is
+ * somebody asking** (§9.4, §10, `src/daemon/archive-sweep.ts`). It walks the archive, answers
+ * which run directories the two host settings take — `ROVER_ARTIFACTS_BUDGET_MB` and
+ * `ROVER_ARTIFACTS_MAX_AGE_DAYS` — and, unless `dryRun`, deletes them whole with their `<serial>`
+ * subtree, removing any test name and project left holding nothing. **Nothing schedules it in this
+ * phase**: no timer, no per-lease check, no start-up pass, so an operator through `rover sweep` is
+ * the whole of the trigger. A kept test (D33) and a run whose lease is live are exempt from both
+ * bounds, and an archive still over budget with only those left answers `stillOverBudget` rather
+ * than taking one of them — a refusal reported as data, with one line on the host's own log
+ * (D28). The answer carries three directory *names* per run, the same components `list_archive`
+ * answers with, and there is no field a host path or a budget would fit in (D19,
+ * {@link SweepArchiveResultSchema}). It is deliberately **not** on `PANEL_METHODS` and
+ * deliberately **not** an MCP tool: `force_release_device`'s reasoning with the stakes raised —
+ * it deletes an operator's data on a shared host, and no agent's step of work is that. `actor` is
+ * caller-supplied attribution and never derived (D20, D28); one audit line names it and whether
+ * the call was a dry run.
  *
  * The verb rows are the two waits, the six input verbs, the three read verbs, the three
  * app-lifecycle verbs, the log read, the three recording rows, the two environment verbs and
@@ -1433,6 +1551,7 @@ export const IPC_METHODS = {
 	list_projects: { params: ListProjectsParamsSchema, result: ListProjectsResultSchema },
 	list_kept_tests: { params: ListKeptTestsParamsSchema, result: ListKeptTestsResultSchema },
 	set_kept_tests: { params: SetKeptTestsParamsSchema, result: SetKeptTestsResultSchema },
+	sweep_archive: { params: SweepArchiveParamsSchema, result: SweepArchiveResultSchema },
 	wait_for: { params: WaitForParamsSchema, result: VerbCallResultSchema },
 	wait_until_gone: { params: WaitUntilGoneParamsSchema, result: VerbCallResultSchema },
 	tap: { params: TapParamsSchema, result: VerbCallResultSchema },

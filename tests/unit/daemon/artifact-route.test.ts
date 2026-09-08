@@ -145,6 +145,7 @@ async function start(): Promise<number> {
 		artifactsRoot: temp.artifactsRoot,
 		projectsRoot: temp.projectsRoot,
 		keptTestsPath: temp.keptTestsPath,
+		retention: temp.retention,
 		http: { address: '127.0.0.1', port: 0, usersPath: store.path },
 	});
 	if (!result.started) {

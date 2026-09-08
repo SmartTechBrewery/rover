@@ -20,9 +20,11 @@ import {
 	ARTIFACTS_PATH_ENV_VAR,
 	leaseArchiveDirectory,
 	leaseDirectoryName,
+	leaseRunDirectory,
 	MAX_SEGMENT_LENGTH,
 	pathSegment,
 	resolveArtifactsRoot,
+	runDirectoryPrecedes,
 } from '@/daemon/archive-path.js';
 import { createMockLease } from '../../helpers/factories.js';
 
@@ -192,5 +194,91 @@ describe('leaseDirectoryName', () => {
 		const lease = createMockLease({ owner: '../../etc' });
 
 		expect(leaseDirectoryName(lease)).not.toContain(sep);
+	});
+});
+
+/**
+ * The run directory the sweep deletes (#238) — the three levels above the serial.
+ *
+ * The claim worth asserting is that it is the **same** account of the layout as the writer's,
+ * because that is what makes the sweep's live-lease exemption exact rather than approximately
+ * right: a sweeper matching a run by path asks this function, and the writer files under
+ * `leaseArchiveDirectory`.
+ */
+describe('leaseRunDirectory', () => {
+	it('is <root>/<project>/<test_name>/<lease>, and nothing below it', () => {
+		const lease = createMockLease({ project: 'rover', testName: 'home-screen' });
+
+		const parts = leaseRunDirectory(ROOT, lease)
+			.slice(ROOT.length + 1)
+			.split(sep);
+
+		expect(parts).toHaveLength(3);
+		expect(parts[0]).toBe('rover');
+		expect(parts[1]).toBe('home-screen');
+		expect(parts[2]).toBe(leaseDirectoryName(lease));
+	});
+
+	it('is exactly what the writer files under, less the serial', () => {
+		const lease = createMockLease({ project: 'rover', testName: 'home screen' });
+
+		expect(leaseArchiveDirectory(ROOT, lease)).toBe(
+			join(leaseRunDirectory(ROOT, lease), pathSegment(lease.serial)),
+		);
+	});
+
+	it('stays inside the root for every hostile string a caller could send', () => {
+		for (const raw of HOSTILE) {
+			const lease = createMockLease({ project: raw, testName: raw, owner: raw });
+
+			expect(resolve(leaseRunDirectory(ROOT, lease)).startsWith(resolve(ROOT) + sep)).toBe(true);
+		}
+	});
+});
+
+/**
+ * The whole of the age rule (#238): one `<` on two strings, with **no `Date` constructed from a
+ * directory name and no `localeCompare`.**
+ *
+ * The cutoff is formatted by the same function that formatted the name, and that format is
+ * fixed-width UTC basic — which is what makes code-unit order chronological order.
+ */
+describe('runDirectoryPrecedes', () => {
+	const instantMs = Date.UTC(2026, 8, 8, 12, 0, 0);
+	const nameAt = (ms: number): string => leaseDirectoryName(createMockLease({ createdAtMs: ms }));
+
+	it('answers true for a run granted before the instant', () => {
+		expect(runDirectoryPrecedes(nameAt(instantMs - 1_000), instantMs)).toBe(true);
+	});
+
+	it('answers false for a run granted after it', () => {
+		expect(runDirectoryPrecedes(nameAt(instantMs + 1_000), instantMs)).toBe(false);
+	});
+
+	/*
+	 * A run granted *in* the cutoff second is not before it: the name carries the timestamp plus
+	 * `-<owner>-<hash>`, so it sorts after the bare timestamp. The direction that matters is that
+	 * it is never *taken* on the strength of a second's rounding.
+	 */
+	it('answers false for a run granted inside the cutoff second', () => {
+		expect(runDirectoryPrecedes(nameAt(instantMs), instantMs)).toBe(false);
+	});
+
+	/*
+	 * **A name that does not lead with a timestamp is still never parsed**, and text order puts a
+	 * name leading with a letter or `_` after every real timestamp — so it is never selected by
+	 * age. The other direction, a name leading with `.` or `-`, is recorded in the module header
+	 * as the cost of never parsing; nothing Rover files can lead with either.
+	 */
+	it('never selects a hand-made directory whose name leads with a letter', () => {
+		expect(runDirectoryPrecedes('unlabeled', instantMs)).toBe(false);
+		expect(runDirectoryPrecedes('_scratch', instantMs)).toBe(false);
+	});
+
+	it('is monotonic in the instant, which is what makes it an age rule', () => {
+		const name = nameAt(instantMs);
+
+		expect(runDirectoryPrecedes(name, instantMs - 1_000)).toBe(false);
+		expect(runDirectoryPrecedes(name, instantMs + 1_000)).toBe(true);
 	});
 });
