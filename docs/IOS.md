@@ -93,7 +93,7 @@ startup of ~60–90 ms that a Node backend talking gRPC directly would not pay.
 
 | Capability | Gated methods | How | Measured | Verdict |
 |---|---|---|---|---|
-| `canReadScreen` | `readScreen` | `idb ui describe-all` | 0.16–0.22 s, labels + frames in **points** | ✅ |
+| `canReadScreen` | `readScreen` | `accessibility_info {format: LEGACY}` over gRPC — the RPC `idb ui describe-all` wraps | 34–47 ms warm on an established channel, 3.34 s for a companion's **first** read; labels + frames in **points** | ✅ **declared true** (#251) |
 | `canInput` | `tap` `swipe` `typeText` `pressKey` | `idb ui tap/swipe/text/button` | 0.11–0.16 s each | ✅ (see §5 for `pressKey`) |
 | `canRecordVideo` | `recordVideo` | `simctl io <d> recordVideo --codec h264 --mask ignored <path>` | marker at 0.14–0.23 s; 100,782 bytes for ~2 s of an idle screen | ✅ **no `--time-limit` — the window is host-side** |
 | `canControlRecording` | `start`/`stop`/`discardRecording` | same + `SIGINT`, and the **host's** process table for "is this device recording" | exit 0 in 20–30 ms after the signal; `ps` stops naming the recorder in 39 ms | ✅ |
@@ -356,10 +356,24 @@ Button       'Connect to this node'                     center=(201,784)
 
 Roles, labels, frames in points, and traits (`Button`, `Selected`, `Scrollable`). That is
 `ScreenElement` with nothing missing but the id, and the id is synthesizable exactly as
-`src/backends/android/screen.ts` already synthesizes one — `AXUniqueId` is `null` throughout, so an
-ordinal is the honest choice, with the same "stable only for as long as the tree shape is" caveat
-that module already documents. The one shape difference: `describe-all` answers a **flat list**,
-where uiautomator answers a tree, so the id is a flat ordinal rather than a child-ordinal path.
+`src/backends/android/screen.ts` already synthesizes one — an ordinal, with the same "stable only
+for as long as the tree shape is" caveat that module already documents. The one shape difference:
+`describe-all` answers a **flat list**, where uiautomator answers a tree, so the id is a flat
+ordinal rather than a child-ordinal path.
+
+**One sentence here was wrong and is corrected in place rather than deleted** (2026-09-08, #251).
+It read *"`AXUniqueId` is `null` throughout, so an ordinal is the honest choice"*. The observation
+was real but it was taken on this one app: all fifteen of its nodes report `AXUniqueId: null`, and
+so it looked like a field iOS simply does not populate. It is not. On **Apple's own Safari** the
+same read reports it on **eleven of eighteen** nodes — `BackButton`, `MoreMenuButton`,
+`TabBarItemTitle` — and `favoritesItemIdentifierContent` appears on **three** of them, the three
+favourites tiles. So the field exists, is absent on some apps entirely, and **is not unique within
+one read** where it is present. `findOnScreen` treats two elements with one id as the backend
+contradicting itself (`src/verbs/errors.ts`), so using it would make Safari's start page
+unaddressable. The conclusion is unchanged and the reason for it is now stronger: the synthesised
+flat ordinal is the only truthful id available. Both reads are committed —
+`tests/fixtures/ios-simulator/accessibility.compose…json` and `…accessibility.uikit-textfield…json`
+— so this is checkable rather than remembered.
 
 ### It is genuinely headless
 
@@ -491,6 +505,70 @@ the dependency is **alive**, which is the part worth updating:
   `14 UNAVAILABLE: Connection dropped` — a sentence about a transport, from which nobody could tell
   that the program a person can restart is what died. `UNAVAILABLE`, and only `UNAVAILABLE`, is
   therefore given a short bounded grace to be explained by the process ending.
+
+- **The first thing built on that transport is the screen read, and its cost is not where it looks**
+  (#251, `readScreen` in `src/backends/ios-simulator/backend.ts`). The call is
+  `accessibility_info` in its **`LEGACY`** format — one flat JSON array of the nodes on the screen,
+  which is the shape `ScreenElement[]` is and the one `idb ui describe-all` asks for. Same bench,
+  same booted `iPhone 17`, driven through this repository's own client:
+
+  ```
+  companion start, spawn → socket → describe answered   350–423 ms
+  first accessibility_info of that companion's life     3.34 s
+  every accessibility_info after it, same companion     34–47 ms
+  ```
+
+  **The 3.34 s is the simulator loading `AccessibilityPlatformTranslation`, not idb being slow.**
+  It is paid once per companion and never again, and it is two orders of magnitude inside the
+  client's call timeout — but it is also the one number a caller would mistake for a hang, which is
+  why `readScreen` states it rather than leaving it to be discovered. The warm figure is what
+  §2's table now carries in place of the 0.16–0.22 s measured before: that number was
+  `idb ui describe-all`, and ~70 ms of it was the Python CLI starting.
+
+  **The other two formats were captured and rejected, and the reason is in the parser rather than
+  in folklore.** `NESTED` answers the same nodes as a tree, so a consumer flattens one to ask the
+  same question. `COMPLETE` renames every key (`AXLabel` → `label`, `AXUniqueId` → `identifier`),
+  drops `role` and `AXFrame`, and wraps the tree in a provenance document — and its own proto
+  comment says an older server silently serves `LEGACY` instead, so a client asking for it must be
+  able to read both shapes anyway.
+
+- **A read against a device that is not booted is refused properly, and the backend refuses first
+  anyway.** Measured against a `Shutdown` iPhone 17 Pro, 2026-09-08: `accessibility_info` came back
+  at gRPC `INTERNAL` in **13 ms**, *"Cannot run accessibility commands against `<udid>` | iPhone 17
+  Pro | Shutdown | … as it is not booted"*. So this is not `screenshot`'s 60.68 s block (§2) and
+  there is no tool timeout to pre-empt — the state check in front of `readScreen` is there for a
+  **process** rather than for the answer. Reaching that refusal means starting a companion for the
+  device first, and the companion then *stays running*: it announces on its own stderr that it
+  "will stay alive if target goes offline". A backend that skipped the check would leave one
+  supervised `idb_companion` per unbootable device anybody asked about, for the lifetime of the
+  daemon, to deliver an answer `simctl list devices` already had.
+
+- **A pooled companion survives its target's shutdown *and* answers correctly after it boots again
+  — measured, 2026-09-09.** This is the one state change the companion pool cannot observe for
+  itself (`src/backends/ios-simulator/idb-client.ts` runs no timer and no health check), so the
+  reuse either had to be measured or the pool had to be invalidated whenever a device left `ready`;
+  the measurement is what decided it. Taken on a **throwaway** `iPhone 17 Pro` created for the run
+  and deleted after it (`simctl create`/`delete`, runtime iOS 26.4.1, companion v1.5.2), never on a
+  device another agent might hold: read → `simctl shutdown` → read → `simctl boot` → read → read,
+  all four through **one** `IdbCompanions` pool, run twice.
+
+  ```
+  read 1, fresh companion                          586 ms / 4.37 s   (14 / 3 nodes)
+  read 2, warm channel                              62 ms / 42 ms
+  read 3, device Shutdown, companion from before    gRPC INTERNAL in 4–6 ms, "not booted"
+  read 4, device Booted again, SAME companion      163 ms / 801 ms    (3 nodes, AXApplication first)
+  read 5, warm channel after the reboot             24 ms
+  ```
+
+  So the companion is genuinely target-lifecycle-independent: it neither dies with its target nor
+  goes deaf to it, the refusal in between is the same well-behaved `INTERNAL` the state check
+  pre-empts, and the first read after the target returns costs a fraction of a companion's own
+  first read rather than another 3.34 s — the translation stays loaded in the *companion*, not in
+  the simulator. `readScreen` therefore needs no pool invalidation on a state change, and the
+  differing node counts are the screen differing (Springboard mid-boot against a settled one), not
+  the read being wrong. **Deliberately not a case in `tests/device/ios-simulator/read-screen.test.ts`:**
+  that suite is read-only by design so it is safe against a device somebody else is looking at, and
+  a case that shuts a simulator down and boots it is the one thing that would take that away.
 
 The lifecycle is the real cost, and it has teeth:
 
@@ -923,8 +1001,10 @@ reasonable guesses:
 
 - *"Semantic screen reading may have no iOS equivalent at all."* — **False for the simulator.**
   `idb ui describe-all` is a full semantic read with labels, roles, traits and point frames, and it
-  works on a Compose Multiplatform app. What is true is the inversion in trap 8: on Android the tree
-  is what survives a capture block; on iOS the capture is what never gets blocked.
+  works on a Compose Multiplatform app — and since #251 it is not only a measurement here but a
+  dispatched method, `readScreen` on the registered backend. What is true is the inversion in trap
+  8: on Android the tree is what survives a capture block; on iOS the capture is what never gets
+  blocked.
 - *"`simctl list` is a poll"* — **true of `simctl`, and not the whole platform.**
   `idb_companion --notify` is a change stream matching `DeviceWatcher`'s contract (§7). The
   interface requirement that enumeration must not be assumed cheap stands; the conclusion that iOS
@@ -981,8 +1061,14 @@ In order, and each step is independently useful:
    too** (#250) — gRPC from Node over a unix domain socket (§4 carries the table that chose it over
    a port), one supervised companion per target started by a call and never on a schedule, `push`
    off a closed RPC list with a source scan behind it, and a companion's death classified as an
-   interruption that leaves the device `ready` (§8 trap 16). Nothing dispatches to it yet: what is
-   still ahead in this step is `readScreen` and the four input primitives.
+   interruption that leaves the device `ready` (§8 trap 16). **And `readScreen` is done** (#251):
+   `accessibility_info` in its flat `LEGACY` format over that transport, `canReadScreen: true` in
+   the manifest with the conformance suite green on it, frames passed through in **points** because
+   that is already the unit `ScreenInfo` uses, and a synthesised **flat ordinal** for the id
+   because `AXUniqueId` turned out not to be unique where it is populated at all (§2). What is
+   still ahead in this step is the four input primitives — and the **label** stays
+   `iOS Simulator (simctl)` until they land, because naming idb beside a `canInput: false` would
+   promise in the one place with no flag beside it exactly the half that is missing.
 3. **Declare `canInput` and refuse `recents` by name.** The `recents`/`back` question is decided
    (§5): shared code carries the per-key refusal (#215), so what remains here is declaring the
    capability and raising `UnsupportedKeyError` for `recents` — `back` and `home` are answered, and

@@ -9,6 +9,7 @@ import {
 	WATCH_POLL_INTERVAL_MS,
 } from '@/backends/ios-simulator/backend.js';
 import { SimctlNotFoundError } from '@/backends/ios-simulator/developer-dir.js';
+import { IdbCompanionInterruptedError } from '@/backends/ios-simulator/idb-client.js';
 import type { IdbCompanionStreamHandlers } from '@/backends/ios-simulator/idb-companion.js';
 import { IdbCompanionNotFoundError } from '@/backends/ios-simulator/idb-companion-path.js';
 import { PNG_SIGNATURE } from '@/backends/ios-simulator/parsers/png.js';
@@ -26,7 +27,13 @@ import {
 	RecordingAlreadyRunningError,
 	UnfinishedRecordingError,
 } from '@/core/errors.js';
-import { type AppId, type DeviceSerial, parseAppId, parseDeviceSerial } from '@/core/ids.js';
+import {
+	type AppId,
+	type DeviceSerial,
+	parseAppId,
+	parseDeviceSerial,
+	unwrap,
+} from '@/core/ids.js';
 import { MAX_LOG_ENTRIES } from '@/ipc/verb-methods.js';
 import { REQUIRED_BACKEND_METHODS, STUB_SENTINEL } from '../../../helpers/backend-conformance.js';
 import { drainEventLoop } from '../../../helpers/timing.js';
@@ -94,6 +101,31 @@ const { streamIdbCompanion } = vi.hoisted(() => ({
 vi.mock('@/backends/ios-simulator/idb-companion.js', async (importOriginal) => ({
 	...(await importOriginal<Companion>()),
 	streamIdbCompanion,
+}));
+
+/**
+ * The companion **pool**, replaced for the same reason and one further out.
+ *
+ * `streamIdbCompanion` above is enough for the watch, which reads a stdout pipe; a screen read is
+ * a gRPC call, so leaving the pool real would make every `readScreen` case here stand up a server
+ * and assert against it. What is worth proving at this layer is the join — the state check in
+ * front of the call, the RPC and request the call is made with, and the mapping of what comes back
+ * — so the transport is the thing stubbed and `./idb-client.test.ts` is where a real channel is
+ * driven. The parsing stays real: the payload these cases hand back is a **captured** one.
+ */
+type IdbClient = typeof import('@/backends/ios-simulator/idb-client.js');
+
+const { companionCall, companionStopAll } = vi.hoisted(() => ({
+	companionCall: vi.fn<InstanceType<IdbClient['IdbCompanions']>['call']>(),
+	companionStopAll: vi.fn<InstanceType<IdbClient['IdbCompanions']>['stopAll']>(),
+}));
+
+vi.mock('@/backends/ios-simulator/idb-client.js', async (importOriginal) => ({
+	...(await importOriginal<IdbClient>()),
+	IdbCompanions: class {
+		call = companionCall;
+		stopAll = companionStopAll;
+	},
 }));
 
 const fixtureUrl = (name: string): URL =>
@@ -242,6 +274,8 @@ beforeEach(() => {
 	readProcessTable.mockResolvedValue('');
 	streamSimctlOnDevice.mockReset();
 	streamIdbCompanion.mockReset();
+	companionCall.mockReset();
+	companionStopAll.mockReset();
 });
 
 describe('listDevices', () => {
@@ -1830,6 +1864,101 @@ describe('screenshot', () => {
 });
 
 /**
+ * The screen read as the **join**: the state check, the call, the mapping.
+ *
+ * The payload handed back is a real capture and the parsing and mapping under it are real
+ * (`parsers/accessibility.test.ts`, `screen.test.ts` are where those are argued); the transport is
+ * the stub, so nothing here starts a companion or needs idb. `tests/device/ios-simulator/` is
+ * where a real screen is read.
+ */
+describe('readScreen', () => {
+	/** Safari's start page, captured through this repository's own client. */
+	const CAPTURED_READ = readFileSync(
+		fixtureUrl('accessibility.uikit-textfield.idbcompanion1.5.2-xcode26.4.1-ios26.4.1.json'),
+		'utf8',
+	);
+
+	beforeEach(() => {
+		answers(listing());
+		companionCall.mockResolvedValue({ json: CAPTURED_READ });
+	});
+
+	it('answers the captured read as neutral elements, in the order the tool listed them', async () => {
+		const elements = await backend.readScreen(BOOTED);
+
+		expect(elements).toHaveLength(18);
+		expect(elements[15]).toEqual({
+			id: '15',
+			label: 'Adres',
+			text: 'Szukaj lub podaj witrynę',
+			bounds: {
+				x: 136.66666666666666,
+				y: 806,
+				width: 131.99999999999997,
+				height: 20.33333333333337,
+			},
+		});
+	});
+
+	/**
+	 * The whole screen, in the flat format, through the companion for **this** device: an
+	 * unpinned read would be somebody else's screen, and the format is the one the projection is
+	 * the shape of.
+	 */
+	it('asks that device for the whole screen in the flat format', async () => {
+		await backend.readScreen(BOOTED);
+
+		expect(companionCall).toHaveBeenCalledTimes(1);
+		expect(companionCall).toHaveBeenCalledWith(BOOTED, 'accessibility_info', {
+			format: 'LEGACY',
+		});
+	});
+
+	/**
+	 * A device that is not booted is refused **before** a companion is started, and that is the
+	 * point of the check rather than a formality: the tool refuses this one properly, in 13 ms,
+	 * so what the check buys is not an answer but a process that never starts (`notReadable`).
+	 */
+	it('refuses a device that is not booted without reaching for a companion', async () => {
+		await expect(backend.readScreen(IPHONE_17_PRO)).rejects.toThrow(/'offline' rather than ready/);
+
+		expect(companionCall).not.toHaveBeenCalled();
+	});
+
+	/** And a device the enumeration no longer names is the contract's own vanishing, not a state. */
+	it('reports a device that has gone as vanished, without reaching for a companion', async () => {
+		await expect(backend.readScreen(GONE)).rejects.toThrow(DeviceVanishedError);
+
+		expect(companionCall).not.toHaveBeenCalled();
+	});
+
+	/**
+	 * A companion that died is an **interruption**, and it reaches the caller as itself. Turning
+	 * one into a device error would take a working simulator out of the inventory over a process
+	 * this host is supposed to supervise (`idb-client.ts`).
+	 */
+	it('lets a companion interruption through as itself', async () => {
+		companionCall.mockRejectedValue(new IdbCompanionInterruptedError(unwrap(BOOTED), null, 'died'));
+
+		await expect(backend.readScreen(BOOTED)).rejects.toBeInstanceOf(IdbCompanionInterruptedError);
+	});
+
+	/** A payload this projection has not seen is refused rather than mined for what it can find. */
+	it('refuses an answer that is not the flat read', async () => {
+		companionCall.mockResolvedValue({ json: '{"elements":[]}' });
+
+		await expect(backend.readScreen(BOOTED)).rejects.toThrow(/expected one flat JSON array/);
+	});
+
+	/** The one lifecycle method this backend has of its own, and the suites are what call it. */
+	it('stops every companion it started when asked to', async () => {
+		await backend.stopIdbCompanions();
+
+		expect(companionStopAll).toHaveBeenCalledTimes(1);
+	});
+});
+
+/**
  * The log read against the **captured** NDJSON of `tests/fixtures/ios-simulator/`, which is what
  * makes the bound and the ordering assertable without a simulator. The parse itself is
  * `parsers/unified-log.test.ts`'s subject and is not re-asserted here; what this covers is the
@@ -2744,13 +2873,26 @@ describe('the capabilities this backend does not declare', () => {
 		expect(contract().setWifiEnabled).toBeUndefined();
 	});
 
-	// The two that can honestly move later, and have not: both need idb, which this backend
-	// deliberately does not depend on (`docs/IOS.md` §4).
-	it('ships no screen read and no input', () => {
-		expect(contract().readScreen).toBeUndefined();
+	/**
+	 * The one that has not moved yet, and it is the whole of `canInput` (`PROJECT.md` R47 phase
+	 * 5). `canReadScreen` was here beside it until the transport arrived; **the flag it names is
+	 * `canInput`, and the four methods are why it cannot move by halves** —
+	 * `CAPABILITY_METHODS.canInput` names all four, so a manifest declaring it with one of them
+	 * implemented fails the conformance gate.
+	 */
+	it('ships no input, on the phase the transport arrived without it', () => {
 		expect(contract().tap).toBeUndefined();
 		expect(contract().swipe).toBeUndefined();
 		expect(contract().typeText).toBeUndefined();
 		expect(contract().pressKey).toBeUndefined();
+	});
+
+	/**
+	 * And the read *is* here now, which is the assertion that keeps the pair honest: the two used
+	 * to be absent together, so a change that flipped the manifest and forgot the method would
+	 * otherwise have left this file agreeing with the old shape.
+	 */
+	it('ships the screen read the manifest declares', () => {
+		expect(contract().readScreen).toBeTypeOf('function');
 	});
 });

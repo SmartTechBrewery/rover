@@ -1,11 +1,17 @@
 /**
- * A device type's screen, as the neutral `ScreenInfo` of `src/core/device.ts`.
+ * A device type's screen as the neutral `ScreenInfo` of `src/core/device.ts`, and an
+ * accessibility read as its neutral `ScreenElement[]`.
  *
  * Sibling in spirit to `../android/screen.ts`: pure arithmetic and vocabulary, no process.
  * `./parsers/simctl-list.js` owns the listing, `./parsers/device-type-profile.js` owns the
- * plist, and this owns the mapping — so everything below is asserted in
- * `tests/unit/backends/ios-simulator/screen.test.ts` against two captured profiles rather
- * than against a simulator.
+ * plist, `./parsers/accessibility.js` owns the read, and this owns the mapping — so
+ * everything below is asserted in `tests/unit/backends/ios-simulator/screen.test.ts` against
+ * two captured profiles and three captured reads rather than against a simulator.
+ *
+ * **The two halves of that file meet in one place and nowhere else**: the points
+ * {@link toScreenElements} hands back are the same unit as the `widthDp`/`heightDp`
+ * {@link toScreenInfo} divides out, which is the whole reason one performs a division and the
+ * other performs none.
  *
  * **The screen comes from the device type, never from a captured image** — trap 6 of
  * `docs/IOS.md` §8, and the whole reason this layer exists. Two mistakes it forecloses:
@@ -25,7 +31,9 @@
  */
 
 import path from 'node:path';
-import { type ScreenInfo, ScreenInfoSchema } from '../../core/device.js';
+import { type ScreenElement, type ScreenInfo, ScreenInfoSchema } from '../../core/device.js';
+import { parseElementId } from '../../core/ids.js';
+import type { AccessibilityRead } from './parsers/accessibility.js';
 import type { DeviceTypeProfile } from './parsers/device-type-profile.js';
 
 /** Where a `.simdevicetype` bundle keeps its profile, relative to the bundle root. */
@@ -84,5 +92,74 @@ export function toScreenInfo(profile: DeviceTypeProfile): ScreenInfo {
 		densityScale: mainScreenScale,
 		widthDp: mainScreenWidth / mainScreenScale,
 		heightDp: mainScreenHeight / mainScreenScale,
+	});
+}
+
+/** `''` and `null` are both "carries neither", which `ScreenElement` spells `null`. */
+function content(value: string | null): string | null {
+	return value === null || value.length === 0 ? null : value;
+}
+
+/**
+ * An accessibility read as the neutral screen elements, **with no coordinate conversion at
+ * all**.
+ *
+ * That absence is the one thing to read this function for, because the division
+ * `../android/screen.ts` performs in the function of this name is exactly what a reader will
+ * look for here. **idb reports frames in points**, which is the same unit as
+ * {@link toScreenInfo}'s `widthDp`/`heightDp` — that one divides pixels by the scale to reach
+ * this space, and this one is handed it. Measured on this bench (companion v1.5.2, Xcode
+ * 26.4.1 / iOS 26.4.1, 2026-09-08): the `AXApplication` node of each committed capture is
+ * `{x: 0, y: 0, width: 402, height: 874}` on an iPhone 17, whose profile says 1206×2622 px at
+ * scale 3 — 402×874 dp exactly. A frame divided by the scale on the way through would land at
+ * 134×291, a third of the way from the origin; multiplied, at 1206×2622, off the panel.
+ *
+ * So the frame goes **straight through**, unrounded and unclamped, for `toScreenInfo`'s own
+ * reason: rounding is a presentation decision, and a backend that rounds leaves no way to ask
+ * what the device said. A rectangle extending past the bottom edge survives — the captures
+ * carry one (`./parsers/accessibility.js`) — because `src/verbs/target.ts` reads that to
+ * decide what is addressable, the same way it reads a negative height on the other platform.
+ *
+ * **The id is a flat ordinal, and it is the only truthful one available.** `AXUniqueId` looks
+ * like the field for this and cannot be used, which was established by capturing three real
+ * screens rather than one:
+ *
+ * - On the Compose Multiplatform app it is `null` on all fifteen nodes, which is what
+ *   `docs/IOS.md` §2 recorded.
+ * - On Apple's own Safari it is populated on eleven of eighteen nodes — **and
+ *   `favoritesItemIdentifierContent` appears on three of them**, the three favourites tiles.
+ *   `findOnScreen` filters on `element.id === target.id` and treats two hits as the backend
+ *   contradicting itself (`src/verbs/errors.ts`), so an id taken from that field would make
+ *   Safari's start page unaddressable.
+ *
+ * A **flat** ordinal rather than `../android/screen.ts`' child-ordinal path, because this read
+ * answers a flat list where uiautomator answers a tree. It carries that module's caveat
+ * unchanged and the caveat is the honest claim rather than a footnote: **the id is stable only
+ * for as long as the shape of the read is.** Anything that inserts a node above an element
+ * moves every id below it, so a caller that remembers one across a turn has built D12(a)'s
+ * remembered coordinate wearing a different hat — which is why the verb layer re-reads the
+ * screen inside every verb instead.
+ *
+ * **`label` and `text` come from two different keys**, `AXLabel` and `AXValue`: an
+ * accessibility name and the string showing in the control are different strings, and
+ * conflating them taps the wrong thing (`ScreenElementSchema`). **`''` becomes `null`**,
+ * because `ScreenElement`'s two fields are nullable precisely so "carries neither" is
+ * representable, and `''` would match a substring target for `''`.
+ *
+ * **Every node, in the order the tool listed them, unfiltered.** Deciding which nodes are
+ * interesting is a policy the verb layer already applies by matching on text, and a container
+ * with no text of its own is exactly what `ScrollOptions.target` addresses — the argument is
+ * `../android/screen.ts`' and it does not change for being a list rather than a tree.
+ */
+export function toScreenElements(read: AccessibilityRead): ScreenElement[] {
+	return read.map((element, ordinal) => {
+		const { x, y, width, height } = element.frame;
+
+		return {
+			id: parseElementId(String(ordinal)),
+			text: content(element.AXValue),
+			label: content(element.AXLabel),
+			bounds: { x, y, width, height },
+		};
 	});
 }
