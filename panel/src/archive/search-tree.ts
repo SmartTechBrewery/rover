@@ -20,7 +20,7 @@ import type { ArchiveSearchMatch } from './archive-listing.js';
  * **The order is the host's and nothing here re-sorts.** `search_archive` answers breadth-first,
  * ascending by name in code-unit order within a level, and children come out in the order their
  * matches arrived — the same rule `level-order.ts` states from the browsing side, where both
- * deliberate re-orderings (runs most recent first, and a run's artifact directories first) belong to
+ * deliberate re-orderings (runs most recent first, and a run's own directories first) belong to
  * a *level* the host listed. A search answers a set of addresses rather than a level, so there is no
  * level here to reorder — a `screenshots` hit sits where its match arrived, like every other.
  */

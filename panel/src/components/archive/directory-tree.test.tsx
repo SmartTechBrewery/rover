@@ -562,13 +562,13 @@ describe('what a row may carry', () => {
 			'checkout-app',
 			'login-flow',
 			RUN,
-			// The run's contents lead with its artifact directories — `screenshots`, then
-			// `recordings` with its own open branch under it — and the rest of the level keeps the
-			// host's order below them (#208, `level-order.ts`).
-			'screenshots',
+			// The run's contents lead with its directories, in the host's own order — `recordings`
+			// with its own open branch under it, then `screenshots` — and the level's files keep
+			// the host's order below them (#208, by `kind` since #235; `level-order.ts`).
 			'recordings',
 			'001_frames',
 			'0001.png',
+			'screenshots',
 			'device_info.json',
 			'latest_recording',
 			OLDER,
