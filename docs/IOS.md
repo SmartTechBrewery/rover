@@ -368,7 +368,13 @@ full factory reset if state restoration ever needs one.
    `../giotto-ai-demo/docs/AGENT_UI_TESTS.md` §3 records costing a day on the Android side. Note
    that idb's own `describe` reports `density: 3.0`, which is the **scale**, not dpi; `ScreenInfo`
    wants 460 for `density` and 3 for `densityScale`, and taking idb's word for it puts a
-   153-times-wrong number in the field.
+   153-times-wrong number in the field. **`profile.plist` is a *binary* property list**
+   (`bplist00`) at `<bundlePath>/Contents/Resources/profile.plist`, on all 124 device types
+   Xcode 26.4.1 installs — checked 2026-09-08, on the second bench of
+   `tests/fixtures/ios-simulator/README.md` rather than this section's. So the XML parser this
+   repository already depends on cannot read it, and the `bundlePath` comes from
+   `simctl list -j devicetypes`: the bundles live under `/Library/Developer/CoreSimulator/`, not
+   under `DEVELOPER_DIR`, so an Xcode-relative path finds none of them.
 7. **The tree is system-wide, not app-scoped.** `describe-all` on Springboard listed every icon;
    there is no "only the app under test" mode. Fine for a simulator, worth knowing before it
    surprises someone.

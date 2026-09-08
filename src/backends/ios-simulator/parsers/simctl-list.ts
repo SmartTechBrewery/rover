@@ -1,5 +1,5 @@
 /**
- * Parser for `simctl list -j` — the device map and the runtime list.
+ * Parser for `simctl list -j` — the device map, the runtime list and the device types.
  *
  * Lives under `src/backends/` because it knows one platform's tool by name; nothing
  * outside a backend folder may (ai/RULES.md §2). Pure: it takes the text a runner
@@ -10,9 +10,9 @@
  * with no type argument answers all four listings at once — `devicetypes`, `runtimes`,
  * `devices`, `pairs` — even though `simctl list`'s own usage text says to specify one of
  * them, and `simctl list -j devices runtimes` works too (measured on Xcode 26.4.1,
- * 2026-09-08). The two top-level schemas below therefore each read **one** key and ignore
- * the rest, so an all-listings capture and a single-listing capture both parse; both are
- * committed in `tests/fixtures/ios-simulator/` for exactly that reason.
+ * 2026-09-08). The three top-level schemas below therefore each read **one** key and
+ * ignore the rest, so an all-listings capture and a single-listing capture both parse;
+ * both are committed in `tests/fixtures/ios-simulator/` for exactly that reason.
  *
  * **Nothing here reads the shape of an identifier.** A runtime's version comes from the
  * runtime *list*, joined on `identifier`, and never out of the device map's key — the key
@@ -54,9 +54,9 @@ export const SimctlDeviceSchema = z.object({
 	/** Raw state token. May contain spaces — `Shutting Down` is one of them. */
 	state: z.string().min(1),
 	/**
-	 * The device type this simulator was created from. Carried through unread: the type's
-	 * own name, `modelIdentifier` and screen metrics need the `devicetypes` listing, which a
-	 * later phase of this split introduces.
+	 * The device type this simulator was created from, and the join key onto
+	 * {@link SimctlDeviceTypeSchema}: the type's own name, `modelIdentifier` and screen
+	 * metrics are all in the `devicetypes` listing rather than here.
 	 */
 	deviceTypeIdentifier: z.string().min(1),
 });
@@ -77,6 +77,33 @@ export const SimctlRuntimeSchema = z.object({
 });
 export type SimctlRuntime = z.infer<typeof SimctlRuntimeSchema>;
 
+/**
+ * One device type — the *model* a simulator is created from, not a simulator.
+ *
+ * `bundlePath` is the field this listing exists for. A device type's screen metrics live in
+ * a `profile.plist` inside that bundle (`./device-type-profile.js`), and the path to it is
+ * **taken from the tool rather than assembled from a guessed layout**: on the bench machine
+ * every bundle sits under `/Library/Developer/CoreSimulator/Profiles/DeviceTypes/`, which is
+ * *not* under `DEVELOPER_DIR` — an Xcode-relative path would miss all 124 of them (measured
+ * on Xcode 26.4.1, 2026-09-08). The tool knows where it put them; nothing here has to.
+ *
+ * `modelIdentifier` (`iPhone18,1`) is the hardware model behind the type, and the only place
+ * one is available at all: a device entry carries a *name* and this carries the model.
+ *
+ * Same non-`.strict()` projection as {@link SimctlDeviceSchema} and for the same reason —
+ * all 124 entries of the committed capture carry nine keys and this reads four, so the five
+ * unread ones (`productFamily`, `minRuntimeVersion`, `maxRuntimeVersion` and their two string
+ * forms) are stripped rather than recorded.
+ */
+export const SimctlDeviceTypeSchema = z.object({
+	identifier: z.string().min(1),
+	name: z.string().min(1),
+	/** Absolute path to the `.simdevicetype` bundle. See this schema's header. */
+	bundlePath: z.string().min(1),
+	modelIdentifier: z.string().min(1),
+});
+export type SimctlDeviceType = z.infer<typeof SimctlDeviceTypeSchema>;
+
 /** The `devices` listing: one array of devices per runtime identifier. */
 export const SimctlDeviceListSchema = z.object({
 	devices: z.record(z.string(), z.array(SimctlDeviceSchema)),
@@ -88,6 +115,12 @@ export const SimctlRuntimeListSchema = z.object({
 	runtimes: z.array(SimctlRuntimeSchema),
 });
 export type SimctlRuntimeList = z.infer<typeof SimctlRuntimeListSchema>;
+
+/** The `devicetypes` listing. One word in Apple's JSON, where every other name here is camel. */
+export const SimctlDeviceTypeListSchema = z.object({
+	devicetypes: z.array(SimctlDeviceTypeSchema),
+});
+export type SimctlDeviceTypeList = z.infer<typeof SimctlDeviceTypeListSchema>;
 
 /**
  * The error for output that is not JSON at all.
@@ -123,4 +156,16 @@ export function parseSimctlDevices(stdout: string): SimctlDeviceList {
 /** Parse the `runtimes` listing out of `simctl list -j` output. */
 export function parseSimctlRuntimes(stdout: string): SimctlRuntimeList {
 	return SimctlRuntimeListSchema.parse(parseJson('simctl list -j runtimes', stdout));
+}
+
+/**
+ * Parse the `devicetypes` listing out of `simctl list -j` output.
+ *
+ * Every type Xcode ships, not the ones this host has simulators for — 124 entries against 22
+ * devices in the committed capture, and every Apple TV, Watch and Vision Pro type among them.
+ * Selecting the one a device was created from is a join on `deviceTypeIdentifier`, which is
+ * `../devices.js`'s business; this reports what the tool printed.
+ */
+export function parseSimctlDeviceTypes(stdout: string): SimctlDeviceTypeList {
+	return SimctlDeviceTypeListSchema.parse(parseJson('simctl list -j devicetypes', stdout));
 }
