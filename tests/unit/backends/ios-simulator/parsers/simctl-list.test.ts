@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import {
 	parseSimctlDevices,
+	parseSimctlDeviceTypes,
 	parseSimctlRuntimes,
 	SimctlDeviceSchema,
 } from '@/backends/ios-simulator/parsers/simctl-list.js';
@@ -120,6 +121,72 @@ describe('parseSimctlRuntimes, against the real capture', () => {
 	// parse it as the other.
 	it('refuses a capture that does not carry the runtime listing', () => {
 		expect(() => parseSimctlRuntimes(DEVICES_ONLY)).toThrow();
+	});
+});
+
+describe('parseSimctlDeviceTypes, against the real capture', () => {
+	/**
+	 * Every type Xcode ships, not the ones this host has devices for: 124 against 22. The
+	 * count is asserted so a walk that silently reads nothing cannot pass.
+	 */
+	it('reads every device type Xcode installed', () => {
+		expect(parseSimctlDeviceTypes(ALL_LISTINGS).devicetypes).toHaveLength(124);
+	});
+
+	/**
+	 * The entry the next layer needs, exactly. `bundlePath` is the field this listing exists
+	 * for and the reason nothing assembles a path from a guessed layout: it lands under
+	 * `/Library/Developer/CoreSimulator/`, **not** under `DEVELOPER_DIR`, so an Xcode-relative
+	 * path would find none of the 124.
+	 */
+	it('reads the bundle path and model of a device type exactly', () => {
+		const iPhone17Pro = parseSimctlDeviceTypes(ALL_LISTINGS).devicetypes.find(
+			(type) => type.identifier === 'com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro',
+		);
+
+		expect(iPhone17Pro).toEqual({
+			identifier: 'com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro',
+			name: 'iPhone 17 Pro',
+			bundlePath:
+				'/Library/Developer/CoreSimulator/Profiles/DeviceTypes/iPhone 17 Pro.simdevicetype',
+			modelIdentifier: 'iPhone18,1',
+		});
+		expect(iPhone17Pro?.bundlePath).not.toContain('Xcode.app');
+	});
+
+	// The listing every simulator in the capture was created from is present in it: the join
+	// `../devices.js` will make has both sides here, and neither is inferred from a name.
+	it('carries a type for every device type identifier the devices listing names', () => {
+		const types = new Set(
+			parseSimctlDeviceTypes(ALL_LISTINGS).devicetypes.map((type) => type.identifier),
+		);
+		const wanted = Object.values(parseSimctlDevices(ALL_LISTINGS).devices)
+			.flat()
+			.map((device) => device.deviceTypeIdentifier);
+
+		expect(wanted.filter((identifier) => !types.has(identifier))).toEqual([]);
+	});
+
+	/**
+	 * The projection: an entry carries nine keys — `productFamily`, `minRuntimeVersion`,
+	 * `maxRuntimeVersion` and their two string forms alongside the four read — and five of
+	 * them are stripped.
+	 */
+	it('keeps only the four fields it reads', () => {
+		const [first] = parseSimctlDeviceTypes(ALL_LISTINGS).devicetypes;
+
+		expect(Object.keys(first ?? {}).sort()).toEqual([
+			'bundlePath',
+			'identifier',
+			'modelIdentifier',
+			'name',
+		]);
+	});
+
+	// Invocation-form indifference, the other way round: the `devices`-only capture has no
+	// `devicetypes` key, and asking it for one must fail rather than answer emptily.
+	it('refuses a capture that does not carry the device-type listing', () => {
+		expect(() => parseSimctlDeviceTypes(DEVICES_ONLY)).toThrow();
 	});
 });
 
