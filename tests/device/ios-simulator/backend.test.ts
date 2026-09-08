@@ -23,10 +23,12 @@ import { createGate } from '../../helpers/timing.js';
  * owns, so a suite that booted its own subject would take the operator's session with it.
  *
  * It takes no lease, and **not under the exemption `ai/TESTING.md` grants the six Android
- * suites** — that one is a conversion gap over an enumerated list this suite is not on. This is
- * the backend-under-construction case beside it: the manifest lands with the last stub (phase 5),
- * so nothing is registered, there is no daemon that could lend one of these devices, and there is
- * nothing to take a lease from. That bound expires by itself when the registration lands.
+ * suites** — that one is a conversion gap over an enumerated list this suite is not on. It used to
+ * be the backend-under-construction case beside it: nothing was registered, so no daemon could
+ * lend one of these devices and there was nothing to take a lease from. **That reason expired when
+ * the manifest landed** (#230), and what is left is the plainer one — every call here is a listing
+ * or a file read against a device nobody is holding, which is a claim about the backend rather
+ * than about a lease. `./verb-dispatch.test.ts` is where the lease lives now.
  */
 describe.skipIf(!process.env.ROVER_TEST_SIMULATOR)(
 	'the iOS simulator backend, on this host',

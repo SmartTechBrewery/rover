@@ -1,4 +1,6 @@
 import type { ExecFileException } from 'node:child_process';
+import { EventEmitter } from 'node:events';
+import { PassThrough } from 'node:stream';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
 	DEFAULT_SIMCTL_TIMEOUT_MS,
@@ -6,10 +8,12 @@ import {
 	QUOTED_STREAM_MAX_CHARS,
 	quoteStream,
 	READ_LOGS_SIMCTL_MAX_BUFFER_BYTES,
+	readProcessTable,
 	runSimctl,
 	runSimctlOnDevice,
 	SIMCTL_MAX_BUFFER_BYTES,
 	SimctlCommandError,
+	streamSimctlOnDevice,
 } from '@/backends/ios-simulator/simctl.js';
 import { parseDeviceSerial } from '@/core/ids.js';
 
@@ -37,12 +41,16 @@ type ExecFileCall = [
 	callback: ExecFileCallback,
 ];
 
-const { execFileMock, resolveDeveloperDirMock } = vi.hoisted(() => ({
+const { execFileMock, resolveDeveloperDirMock, spawnMock } = vi.hoisted(() => ({
 	execFileMock: vi.fn<(...call: ExecFileCall) => void>(),
 	resolveDeveloperDirMock: vi.fn<() => string>(),
+	// `spawn` is a named import of the module under test, so the factory has to answer it even
+	// for the suites that never touch it — an ESM named import that resolves to nothing fails
+	// the whole file rather than the one call.
+	spawnMock: vi.fn(),
 }));
 
-vi.mock('node:child_process', () => ({ execFile: execFileMock }));
+vi.mock('node:child_process', () => ({ execFile: execFileMock, spawn: spawnMock }));
 vi.mock('@/backends/ios-simulator/developer-dir.js', () => ({
 	resolveDeveloperDir: resolveDeveloperDirMock,
 	SIMCTL_RELATIVE_PATH: 'usr/bin/simctl',
@@ -518,5 +526,260 @@ describe('quoteStream', () => {
 		const stream = 'z'.repeat(QUOTED_STREAM_MAX_CHARS);
 
 		expect(quoteStream(stream)).toBe(stream);
+	});
+});
+
+/**
+ * The long-lived spawn's stand-in. `unref` is answered on the child and on both pipes because
+ * `release()` calls all three, and a `PassThrough` has no `unref` of its own — the same gap the
+ * runner's own `unreference` exists for, since Node types a child's pipe as a `Readable` while
+ * handing back a `Socket`.
+ */
+class FakeRecorder extends EventEmitter {
+	readonly stdout = Object.assign(new PassThrough(), { unref: vi.fn() });
+	readonly stderr = Object.assign(new PassThrough(), { unref: vi.fn() });
+	readonly pid = 4242;
+	readonly kill = vi.fn((): boolean => true);
+	readonly unref = vi.fn();
+}
+
+function spawns(): FakeRecorder {
+	const child = new FakeRecorder();
+	spawnMock.mockReturnValue(child);
+	return child;
+}
+
+/** Lets every pending stream event land before the assertions read what arrived. */
+async function settled(): Promise<void> {
+	await new Promise((resolve) => setImmediate(resolve));
+}
+
+const noHandlers = () => ({ onEnd: vi.fn(), onStderr: vi.fn(), onStdout: vi.fn() });
+
+describe('streamSimctlOnDevice', () => {
+	/**
+	 * The same file the query runner runs, and the same pin: an unpinned recorder would record
+	 * whichever device `simctl` felt like and hand the bytes over as this one's.
+	 */
+	it('spawns the verified simctl with the udid after the subcommand, and never inherits stdin', () => {
+		spawns();
+
+		streamSimctlOnDevice(SERIAL, 'io', ['recordVideo', '/tmp/out.mov'], noHandlers());
+
+		expect(spawnMock.mock.calls[0]?.[0]).toBe(RESOLVED_SIMCTL);
+		expect(spawnMock.mock.calls[0]?.[1]).toEqual([
+			'io',
+			String(SERIAL),
+			'recordVideo',
+			'/tmp/out.mov',
+		]);
+		expect(spawnMock.mock.calls[0]?.[2]).toEqual({ stdio: ['ignore', 'pipe', 'pipe'] });
+	});
+
+	// The tripwire `runSimctlOnDevice` carries, on the runner where it matters most: a recording
+	// is the one long-lived call here, and the one whose wrong device is least visible.
+	it('refuses the booted selector in any casing before anything is spawned', () => {
+		spawns();
+
+		expect(() =>
+			streamSimctlOnDevice(parseDeviceSerial('BOOTED'), 'io', ['recordVideo'], noHandlers()),
+		).toThrow(/not a device/);
+		expect(spawnMock).not.toHaveBeenCalled();
+	});
+
+	// Answered synchronously, because the resolution behind it is: the pid is what the process
+	// table is later matched against, and it is available the moment this returns.
+	it('answers the pid without waiting for anything', () => {
+		spawns();
+
+		expect(streamSimctlOnDevice(SERIAL, 'io', ['recordVideo'], noHandlers()).pid).toBe(4242);
+	});
+
+	/**
+	 * Decoded text rather than bytes, unlike the Android stream: nothing this runner streams is
+	 * binary — the recording goes to a file — so a chunk boundary inside a multi-byte character
+	 * must not become a replacement character in the marker a wait is looking for.
+	 */
+	it('hands both streams back as decoded text, in order', async () => {
+		const child = spawns();
+		const handlers = noHandlers();
+		streamSimctlOnDevice(SERIAL, 'io', ['recordVideo'], handlers);
+
+		child.stderr.write('Note: No display specified.\n');
+		child.stderr.write('Recording started\n');
+		child.stdout.write('Recording completed. Writing to disk.\n');
+		await settled();
+
+		expect(handlers.onStderr.mock.calls.map(([chunk]) => chunk)).toEqual([
+			'Note: No display specified.\n',
+			'Recording started\n',
+		]);
+		expect(handlers.onStdout.mock.calls).toEqual([['Recording completed. Writing to disk.\n']]);
+	});
+
+	/**
+	 * Exit 0 is an end like any other here, and that is not a formality: a recording asked to stop
+	 * exits 0, and so does one given a device with no screen to record, which produced nothing.
+	 */
+	it('reports a clean exit as an end, naming the command and the code', async () => {
+		const child = spawns();
+		const handlers = noHandlers();
+		streamSimctlOnDevice(SERIAL, 'io', ['recordVideo'], handlers);
+
+		child.emit('close', 0, null);
+		await settled();
+
+		expect(handlers.onEnd).toHaveBeenCalledTimes(1);
+		expect(handlers.onEnd.mock.calls[0]?.[0]).toContain(`simctl io ${String(SERIAL)} recordVideo`);
+		expect(handlers.onEnd.mock.calls[0]?.[0]).toContain('ended with exit 0');
+	});
+
+	it('names the signal when the run was killed rather than exited', async () => {
+		const child = spawns();
+		const handlers = noHandlers();
+		streamSimctlOnDevice(SERIAL, 'io', ['recordVideo'], handlers);
+
+		child.emit('close', null, 'SIGINT');
+		await settled();
+
+		expect(handlers.onEnd.mock.calls[0]?.[0]).toContain('was killed by SIGINT');
+	});
+
+	// Nothing ran at all: the file the search verified has moved since.
+	it('reports a run that never started, with the reason node gave', async () => {
+		const child = spawns();
+		const handlers = noHandlers();
+		streamSimctlOnDevice(SERIAL, 'io', ['recordVideo'], handlers);
+
+		child.emit('error', new Error('spawn ENOENT'));
+		await settled();
+
+		expect(handlers.onEnd).toHaveBeenCalledTimes(1);
+		expect(handlers.onEnd.mock.calls[0]?.[0]).toContain('failed to run: spawn ENOENT');
+	});
+
+	// One end, however many ways it arrives — a caller resolves its own promise from this.
+	it('reports the end exactly once even when both events fire', async () => {
+		const child = spawns();
+		const handlers = noHandlers();
+		streamSimctlOnDevice(SERIAL, 'io', ['recordVideo'], handlers);
+
+		child.emit('error', new Error('spawn ENOENT'));
+		child.emit('close', null, 'SIGKILL');
+		await settled();
+
+		expect(handlers.onEnd).toHaveBeenCalledTimes(1);
+	});
+
+	it('calls no handler with output that arrives after the end', async () => {
+		const child = spawns();
+		const handlers = noHandlers();
+		streamSimctlOnDevice(SERIAL, 'io', ['recordVideo'], handlers);
+
+		child.emit('close', 0, null);
+		child.stdout.write('Wrote video to: /tmp/out.mov\n');
+		await settled();
+
+		expect(handlers.onStdout).not.toHaveBeenCalled();
+	});
+
+	/**
+	 * The signal is the caller's to choose and `SIGINT` is the only one this repository sends
+	 * (`../../../../src/backends/ios-simulator/simctl.ts` carries what a `SIGKILL` costs), but
+	 * what this pins is that it reaches the process at all.
+	 */
+	it('sends the signal it was given to the run', () => {
+		const child = spawns();
+		const stream = streamSimctlOnDevice(SERIAL, 'io', ['recordVideo'], noHandlers());
+
+		stream.signal('SIGINT');
+
+		expect(child.kill).toHaveBeenCalledWith('SIGINT');
+	});
+
+	/**
+	 * A signal after the end is a no-op, which is what makes it safe to arm a deadline timer and
+	 * never clear it, and safe for a `finally` to signal again on every path.
+	 */
+	it('does not signal a run that has already ended', async () => {
+		const child = spawns();
+		const stream = streamSimctlOnDevice(SERIAL, 'io', ['recordVideo'], noHandlers());
+
+		child.emit('close', 0, null);
+		await settled();
+		stream.signal('SIGINT');
+
+		expect(child.kill).not.toHaveBeenCalled();
+	});
+
+	/**
+	 * `release()` unreferences and never destroys — destroying the read end would give the
+	 * recorder `EPIPE` on the two lines it writes as it finalises the file, so the tidier-looking
+	 * version of this risks the recording.
+	 */
+	it('unreferences the run and both pipes without destroying either', () => {
+		const child = spawns();
+		const stream = streamSimctlOnDevice(SERIAL, 'io', ['recordVideo'], noHandlers());
+
+		stream.release();
+
+		expect(child.unref).toHaveBeenCalledTimes(1);
+		expect(child.stdout.unref).toHaveBeenCalledTimes(1);
+		expect(child.stderr.unref).toHaveBeenCalledTimes(1);
+		expect(child.stdout.destroyed).toBe(false);
+		expect(child.stderr.destroyed).toBe(false);
+	});
+
+	// A released run is still a run: the two lines it writes as it finalises still arrive, which
+	// is the whole difference between unreferencing a pipe and closing it.
+	it('keeps delivering output after the run has been released', async () => {
+		const child = spawns();
+		const handlers = noHandlers();
+		const stream = streamSimctlOnDevice(SERIAL, 'io', ['recordVideo'], handlers);
+
+		stream.release();
+		child.stdout.write('Wrote video to: /tmp/out.mov\n');
+		await settled();
+
+		expect(handlers.onStdout).toHaveBeenCalledWith('Wrote video to: /tmp/out.mov\n');
+	});
+});
+
+describe('readProcessTable', () => {
+	/**
+	 * By absolute path and with `-A`, because both are load-bearing: this is the one place a
+	 * `PATH` a caller controls would decide *which* program answers a question this host then
+	 * acts on with a signal, and a recorder an earlier daemon started is exactly the one the
+	 * lease-end teardown has to find.
+	 */
+	it('asks ps for every process, by absolute path, with no header row', async () => {
+		answers('4242 /usr/bin/simctl io x recordVideo\n');
+
+		expect(await readProcessTable()).toBe('4242 /usr/bin/simctl io x recordVideo\n');
+		expect(execFileMock.mock.calls[0][0]).toBe('/bin/ps');
+		expect(execFileMock.mock.calls[0][1]).toEqual(['-A', '-o', 'pid=,command=']);
+	});
+
+	it('bounds the read, tighter than a call against a simulator', async () => {
+		answers('');
+		await readProcessTable();
+
+		expect(execFileMock.mock.calls[0][2].timeout).toBeLessThan(DEFAULT_SIMCTL_TIMEOUT_MS);
+		expect(execFileMock.mock.calls[0][2]).toMatchObject({
+			encoding: 'utf8',
+			maxBuffer: SIMCTL_MAX_BUFFER_BYTES,
+		});
+	});
+
+	/**
+	 * The distinction this function exists to keep: an unknown answer is not "no". An empty table
+	 * reads as *this device is not recording*, which is the answer that starts a second recorder
+	 * and stops the teardown collecting anything — so a `ps` that would not run says so.
+	 */
+	it('fails rather than answering an empty table when ps will not run', async () => {
+		fails({ code: 'ENOENT' }, '', 'no such file');
+
+		await expect(readProcessTable()).rejects.toThrow(/not "no"/);
+		await expect(readProcessTable()).rejects.toThrow(/no such file/);
 	});
 });

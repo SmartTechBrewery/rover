@@ -1,0 +1,2 @@
+31472 /bin/sh -c # simctl io 88D8476E-F4A4-4A18-A89B-0C47E077CC8B recordVideo --codec h264\012read ignored
+31473 /Library/Developer/PrivateFrameworks/CoreSimulator.framework/Versions/A/Resources/bin/simctl io 88D8476E-F4A4-4A18-A89B-0C47E077CC8B recordVideo --codec h264 --mask ignored /tmp/rover-rec/fixture.mov

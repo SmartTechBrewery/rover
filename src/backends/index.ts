@@ -13,12 +13,21 @@
  * against it. The first import line below is what ended that: from it on, the conformance
  * suite (`tests/unit/backends/conformance.test.ts`) has a manifest to run over.
  *
+ * The **second** line is what the file's shape was for (#230). Registering `ios-simulator`
+ * needed no edit anywhere else — not to dispatch, not to the registry, not to a verb — and
+ * it is what turns that conformance suite from a loop over one manifest into a loop over
+ * two, which is the only way a gate can tell a passing backend from a check that stopped
+ * checking. It is also the first manifest here with a capability declared `false`, so it is
+ * the first time `requireCapability`'s `MissingCapabilityError` path is reachable from a real
+ * device rather than only from a synthetic one.
+ *
  * This file deliberately does **not** re-export the registry surface: a caller that
  * wants only a lookup must not pull every backend into its module graph. Import
  * `./registry.js` directly for that.
  */
 
 import './android/index.js';
+import './ios-simulator/index.js';
 
 /**
  * Explicit no-op for call sites that want registration to be visible rather than relying

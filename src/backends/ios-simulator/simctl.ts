@@ -46,9 +46,24 @@
  * argv entries, and `execFile` protects this host's. What *does* transfer is the **masking** of
  * a host path on its way into a failure message, which is a different question with a different
  * answer — {@link RunSimctlOptions.redactArgv}.
+ *
+ * **There are two runners here now, and the second one has no timeout on purpose**
+ * ({@link streamSimctlOnDevice}): a recording is *supposed* to stay open, so the bound that
+ * stops a hung query from wedging a lease would guarantee the failure instead. Same split as
+ * `../android/adb.ts`'s `execFile`-and-`spawn` pair, and for the same reason — a query is a
+ * buffer and an exit code, a recorder is a process whose output only means anything while it is
+ * arriving.
+ *
+ * **And one thing this module runs that is not `simctl` at all**: `ps`
+ * ({@link readProcessTable}). It belongs here rather than beside the parsers because this module
+ * is the one that owns *processes* for this backend, and on this platform the recorder **is** a
+ * host process — so "start one" and "is one still running" are two questions about the same
+ * subject, and separating them would put half of it in a module named after the tool it does not
+ * run. Reading the answer out of what `ps` printed is `./parsers/recording.ts`'s, exactly as
+ * every other line this tool writes is a parser's.
  */
 
-import { type ExecFileException, execFile } from 'node:child_process';
+import { type ChildProcess, type ExecFileException, execFile, spawn } from 'node:child_process';
 import { join } from 'node:path';
 import { type DeviceSerial, unwrap } from '../../core/ids.js';
 import { resolveDeveloperDir, SIMCTL_RELATIVE_PATH } from './developer-dir.js';
@@ -135,6 +150,68 @@ export const SCREENSHOT_SIMCTL_TIMEOUT_MS = 30_000;
  * one, which is `../android/adb.ts`'s `ADB_BINARY_MAX_BUFFER_BYTES`' reasoning and its number.
  */
 export const READ_LOGS_SIMCTL_MAX_BUFFER_BYTES = 64 * 1024 * 1024;
+
+/**
+ * How long a recorder is given to say it has started, before the wait on that marker gives up.
+ *
+ * Measured on macOS 26.6.2 (25G83) / Xcode 26.6 (17F113) against a booted iPhone 17, 2026-09-08:
+ * `Recording started` reached stderr at **0.14–0.23 s** across the runs here, behind a
+ * `Note: No display specified…` line at ~0.12 s. `docs/IOS.md` §2 measured 0.21 s on its own
+ * bench. So this is generous rather than tuned, for {@link INSTALL_SIMCTL_TIMEOUT_MS}'s stated
+ * reason: it exists to stop a recorder that will never start holding a lease, not to bound a
+ * slow but healthy one on a busy host.
+ *
+ * **It is also the only bound on the one failure the marker cannot rule out.** A recorder given a
+ * device that is not `Booted` prints the marker anyway and then runs forever writing nothing
+ * (`./backend.ts`, `recordVideo`), so the state check in front of the recording is what catches
+ * that — and this is what catches a device that went down in the gap between the two.
+ *
+ * The same number as `../android/adb.ts`'s `RECORDING_START_TIMEOUT_MS`, deliberately: the two
+ * platforms answer the same question with different evidence, and a caller that has to reason
+ * about how long "start a recording" may take should not have to learn two numbers.
+ */
+export const RECORDING_START_TIMEOUT_MS = 10_000;
+
+/**
+ * How long a signalled recorder is given to be gone, before the wait on the process table gives
+ * up.
+ *
+ * Measured on the bench above: after `SIGINT` the recorder wrote `Recording completed. Writing to
+ * disk.` and `Wrote video to: …` to stdout and exited **0 within 20–30 ms**, with `ps` no longer
+ * naming it on the **first** probe 39 ms later. That is unlike the Android side, where `pidof`
+ * went on naming `screenrecord` for another 0.265 s — here the file is written *before* the
+ * process goes, so the process being gone is the file being whole.
+ *
+ * Generous against those numbers, and for the same reason as everything else here: a recorder
+ * finalising a long capture of a busy screen has megabytes to flush, and this exists to stop one
+ * that will not go away at all.
+ */
+export const RECORDING_FINISH_TIMEOUT_MS = 10_000;
+
+/**
+ * The program this module asks about the recorders it started, and the arguments that make its
+ * answer parseable.
+ *
+ * By absolute path rather than by name, because this is the one place a `PATH` a caller controls
+ * would change *which* program answers a question this host acts on — and what it acts on is a
+ * `SIGINT` to a pid. `-A` for every process rather than this session's, because a recorder
+ * started by an earlier daemon is exactly the one the lease-end teardown has to find; `pid=`
+ * and `command=` with the trailing `=` so there is no header row to skip, and `command=` last
+ * because it is the field that contains spaces.
+ */
+const PROCESS_TABLE = '/bin/ps';
+const PROCESS_TABLE_ARGV = ['-A', '-o', 'pid=,command='] as const;
+
+/**
+ * What bounds one {@link readProcessTable}.
+ *
+ * Tighter than {@link DEFAULT_SIMCTL_TIMEOUT_MS} because this is not a query against a
+ * simulator: `ps -A -o pid=,command=` is a walk of the kernel's own process list and took
+ * **0.03–0.04 s** on this bench with ~700 processes on the host. It is asked before every
+ * recording and after every signal, so a bound in the same order as the calls it guards is what
+ * keeps a wedged `ps` from being indistinguishable from a recorder that will not stop.
+ */
+const PROCESS_TABLE_TIMEOUT_MS = 5_000;
 
 /**
  * The one device selector `simctl` accepts that is not a device, **lowercased**.
@@ -481,6 +558,23 @@ export async function runSimctlOnDevice(
 	args: readonly string[] = [],
 	options: RunSimctlOptions = {},
 ): Promise<SimctlResult> {
+	return runSimctl(pinnedArgv(serial, subcommand, args), options);
+}
+
+/**
+ * `<subcommand> <udid> <args…>`, with the `booted` refusal — {@link runSimctlOnDevice}'s whole
+ * body, extracted because {@link streamSimctlOnDevice} needs exactly the same guarantee.
+ *
+ * One place assembles a pinned argv, so the two runners cannot come to disagree about where the
+ * udid goes or about which selector is refused. A recorder is the one long-lived call this
+ * backend makes, and it is also the one where an unpinned command would be least visible: it
+ * records somebody else's screen and hands the bytes over as though they were this device's.
+ */
+function pinnedArgv(
+	serial: DeviceSerial,
+	subcommand: string,
+	args: readonly string[],
+): readonly string[] {
 	const udid = unwrap(serial);
 	if (udid.toLowerCase() === BOOTED_SELECTOR) {
 		throw new Error(
@@ -490,5 +584,219 @@ export async function runSimctlOnDevice(
 		);
 	}
 
-	return runSimctl([subcommand, udid, ...args], options);
+	return [subcommand, udid, ...args];
+}
+
+/** Handlers of a long-lived run. Each is called as documented on it, and never after `onEnd`. */
+export interface SimctlStreamHandlers {
+	/**
+	 * Decoded stdout text, in order. Decoded by the stream so a chunk boundary inside a
+	 * multi-byte character cannot become a replacement character — unlike
+	 * `../android/adb.ts`'s `streamAdb`, whose output is a length-framed protocol and must stay
+	 * bytes. Nothing this runner streams is binary: the recording goes to a file.
+	 */
+	onStdout(chunk: string): void;
+
+	/** Decoded stderr text, in order. This is the stream a recording's start marker arrives on. */
+	onStderr(chunk: string): void;
+
+	/**
+	 * The run ended, for any reason at all, or never started. Called **exactly once**.
+	 *
+	 * `reason` is a message ready to be shown to a caller: the argv and how it ended. It
+	 * deliberately does **not** carry the streams — the caller has been handed every byte of both
+	 * already, and a runner that quoted them again would decide for the caller which half of a
+	 * failure matters. On this tool that decision cannot be made here: an unrecognised subcommand
+	 * puts its usage text on stdout and one line of complaint on stderr (module header).
+	 */
+	onEnd(reason: string): void;
+}
+
+/** The handle {@link streamSimctlOnDevice} answers with. */
+export interface SimctlStream {
+	/**
+	 * The pid, or `null` when the spawn itself failed.
+	 *
+	 * Held as a way to *act* and never as the answer to whether anything is running — that
+	 * question is asked of the machine at the moment it matters (D6, {@link readProcessTable}).
+	 */
+	readonly pid: number | null;
+
+	/**
+	 * Send `signal` to the run. A no-op once it has ended, and once after {@link release}.
+	 *
+	 * **The only signal anything here sends is `SIGINT`, and that is measured rather than
+	 * fastidious.** `simctl io recordVideo` finalises its file on `SIGINT` — its own usage text
+	 * says so — and a `SIGKILL` does something much worse than lose the recording: on macOS
+	 * 26.6.2 / Xcode 26.6, 2026-09-08, a killed recorder left CoreSimulator holding **that
+	 * device's** host-recording lock, and every later recording on it failed with exit 16
+	 * *"Host recording is already in progress"* until the device was shut down and booted again,
+	 * while the encoder went on writing the file with no process left to stop it (4.6 MB
+	 * afterwards). So there is no `stop()` here that kills: stopping a recording *is* a `SIGINT`,
+	 * and what follows it is a wait on the process table, which is the backend's
+	 * (`./backend.ts`).
+	 */
+	signal(signal: NodeJS.Signals): void;
+
+	/**
+	 * Let this process exit while the run continues — for a recording held open past the call
+	 * that started it (`./backend.ts`, `startRecording`).
+	 *
+	 * Both pipes are **unreferenced rather than destroyed**, and that distinction is the whole
+	 * of this method: destroying the read end would give the recorder `EPIPE` on the two lines it
+	 * writes as it finalises the file, so the tidier-looking version of this risks the recording.
+	 * Unreferenced, the data still flows into the handlers and the event loop simply stops
+	 * counting it as work owed.
+	 */
+	release(): void;
+}
+
+/**
+ * Run `simctl <subcommand> <udid> <args…>` and hand both streams back for as long as it lives.
+ *
+ * `spawn`, not `execFile`, and it shares nothing with {@link runSimctl}: a query is a buffer and
+ * an exit code, this is a process whose output only means anything while it is arriving.
+ *
+ * **Deliberately without a timeout**, which every other invocation here has
+ * (ai/CODING_STANDARDS.md). A timeout exists so a hung `simctl` cannot wedge a lease; the one
+ * call that uses this is *supposed* to stay open, so a timeout would guarantee the failure
+ * instead of preventing it. What bounds it instead is `./backend.ts`: a recorder that never says
+ * it started is given {@link RECORDING_START_TIMEOUT_MS}, one that will not go away is given
+ * {@link RECORDING_FINISH_TIMEOUT_MS}, and the lease-end teardown stops whatever is left (D9).
+ *
+ * **Pinned to one device through {@link pinnedArgv}**, for that function's reason.
+ *
+ * **Synchronous, unlike `streamAdb`** — the resolution behind it is
+ * (`./developer-dir.ts` is `stat`/`access`/`readlink` and no process), so the pid is available
+ * the moment this returns and `SimctlNotFoundError` is thrown from the call rather than reported
+ * as an end. A caller that has no `simctl` gets the failure that names every place it looked,
+ * which is the one thing a person can act on (#168).
+ *
+ * `stdin` is `ignore`d: nothing here has anything to say to a recorder, and inheriting it would
+ * let a recording consume the daemon's own input.
+ */
+export function streamSimctlOnDevice(
+	serial: DeviceSerial,
+	subcommand: string,
+	args: readonly string[],
+	handlers: SimctlStreamHandlers,
+): SimctlStream {
+	const argv = [...pinnedArgv(serial, subcommand, args)];
+	const simctl = join(resolveDeveloperDir(), SIMCTL_RELATIVE_PATH);
+	const child: ChildProcess = spawn(simctl, argv, { stdio: ['ignore', 'pipe', 'pipe'] });
+
+	/** Set by the first of `close`/`error`; suppresses every later handler call and the signal. */
+	let ended = false;
+	const finish = (reason: string): void => {
+		if (ended) return;
+		ended = true;
+		handlers.onEnd(reason);
+	};
+
+	child.stdout?.setEncoding('utf8');
+	child.stdout?.on('data', (chunk: string) => {
+		if (!ended) handlers.onStdout(chunk);
+	});
+	child.stderr?.setEncoding('utf8');
+	child.stderr?.on('data', (chunk: string) => {
+		if (!ended) handlers.onStderr(chunk);
+	});
+	child.on('error', (error: Error) => {
+		// Nothing ran at all: the file the search settled on has moved since it was verified.
+		finish(`${SIMCTL} ${argv.join(' ')} failed to run: ${error.message}`);
+	});
+	// `close` rather than `exit`, because `exit` can fire while stdout still holds bytes — and on
+	// this tool the last thing a finished recording says (`Wrote video to: …`) is on stdout.
+	child.on('close', (code: number | null, signal: NodeJS.Signals | null) => {
+		finish(`${SIMCTL} ${argv.join(' ')} ${streamOutcome(code, signal)}`);
+	});
+
+	return {
+		pid: child.pid ?? null,
+		signal(signal: NodeJS.Signals): void {
+			if (ended) return;
+			child.kill(signal);
+		},
+		release(): void {
+			child.unref();
+			unreference(child.stdout);
+			unreference(child.stderr);
+		},
+	};
+}
+
+/**
+ * Stop the event loop counting one of a child's pipes as work owed, if it can be told to.
+ *
+ * `ChildProcess.stdout` and `.stderr` are typed `Readable | null`, and `Readable` has no `unref`
+ * — but a pipe from `spawn`'s `'pipe'` stdio is a `net.Socket`, which does. Asked optionally
+ * rather than cast to `Socket`, because the type is the one making the weaker claim: a stream
+ * that turns out not to be unreferenceable is a run this process keeps waiting on, which is what
+ * it would do anyway without {@link SimctlStream.release}.
+ *
+ * **Unreferenced, never destroyed** — {@link SimctlStream.release} carries why that distinction
+ * is the whole of this: the data has to keep flowing so the recorder can finish writing.
+ */
+function unreference(stream: NodeJS.ReadableStream | null): void {
+	(stream as (NodeJS.ReadableStream & { unref?: () => void }) | null)?.unref?.();
+}
+
+/**
+ * How a long-lived run ended, in the words a caller can be shown.
+ *
+ * **Exit 0 is an end like any other**, which is not a formality on this tool: a recording that
+ * was asked to stop exits 0, and so does one that was given a device with no screen to record
+ * and produced nothing (`./backend.ts`). Whatever the code, the run is over and the bytes are
+ * what decide the answer.
+ */
+function streamOutcome(code: number | null, signal: NodeJS.Signals | null): string {
+	if (code !== null) return `ended with exit ${code}`;
+	if (signal !== null) return `was killed by ${signal}`;
+	return 'ended';
+}
+
+/**
+ * This host's process table, as `ps` printed it: one process per line, the pid then the command.
+ *
+ * The device's answer to "am I recording", because the recorder is a **host** process
+ * (`./parsers/recording.ts`, which reads this). Asked fresh every time it matters and never
+ * remembered (D6): a flag on this host would go on believing itself across a daemon restart,
+ * across a recorder that somebody else's program started, and across one that stopped on its own.
+ *
+ * **One process is one line even when an argv contains a newline** — `ps` escapes it as `\012`,
+ * measured on macOS 26.6.2, 2026-09-08 against a process deliberately given one — which is what
+ * makes a line-oriented parse safe here.
+ *
+ * A failure is a throw rather than an empty table, and the distinction is the whole reason this
+ * is not `.catch(() => '')`: an empty table reads as *this device is not recording*, which is the
+ * answer that starts a second recorder and stops the teardown from cleaning up. So a `ps` that
+ * would not run says so.
+ */
+export async function readProcessTable(): Promise<string> {
+	return new Promise<string>((resolve, reject) => {
+		execFile(
+			PROCESS_TABLE,
+			[...PROCESS_TABLE_ARGV],
+			{
+				timeout: PROCESS_TABLE_TIMEOUT_MS,
+				maxBuffer: SIMCTL_MAX_BUFFER_BYTES,
+				encoding: 'utf8',
+			},
+			(error, stdout, stderr) => {
+				if (error === null) {
+					resolve(stdout);
+					return;
+				}
+				reject(
+					new Error(
+						`${PROCESS_TABLE} ${PROCESS_TABLE_ARGV.join(' ')} would not answer, so whether ` +
+							'this host is running a recorder for this device is unknown — and an unknown ' +
+							'answer is not "no", which is why this is a failure rather than an empty ' +
+							`table: ${error.message}\nstderr: ${quoteStream(stderr)}`,
+						{ cause: error },
+					),
+				);
+			},
+		);
+	});
 }

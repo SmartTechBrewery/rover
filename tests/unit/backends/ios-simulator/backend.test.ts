@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { copyFile, mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, isAbsolute, join } from 'node:path';
@@ -16,11 +16,18 @@ import {
 	SCREENSHOT_SIMCTL_TIMEOUT_MS,
 	SimctlCommandError,
 } from '@/backends/ios-simulator/simctl.js';
-import type { Device, DeviceWatcher } from '@/core/device.js';
-import { DeviceVanishedError, FileTooLargeError } from '@/core/errors.js';
+import type { Device, DeviceBackend, DeviceWatcher } from '@/core/device.js';
+import {
+	DeviceVanishedError,
+	FileTooLargeError,
+	NoRecordingRunningError,
+	RecordingAlreadyRunningError,
+	UnfinishedRecordingError,
+} from '@/core/errors.js';
 import { type AppId, type DeviceSerial, parseAppId, parseDeviceSerial } from '@/core/ids.js';
 import { MAX_LOG_ENTRIES } from '@/ipc/verb-methods.js';
 import { REQUIRED_BACKEND_METHODS, STUB_SENTINEL } from '../../../helpers/backend-conformance.js';
+import { drainEventLoop } from '../../../helpers/timing.js';
 
 /**
  * The backend driven off the **captured** `simctl` output of `tests/fixtures/ios-simulator/`,
@@ -53,15 +60,19 @@ type Runner = typeof import('@/backends/ios-simulator/simctl.js');
  * that reached `runSimctl` directly with a udid it assembled would show up here as the wrong mock
  * being called.
  */
-const { runSimctl, runSimctlOnDevice } = vi.hoisted(() => ({
+const { readProcessTable, runSimctl, runSimctlOnDevice, streamSimctlOnDevice } = vi.hoisted(() => ({
+	readProcessTable: vi.fn<Runner['readProcessTable']>(),
 	runSimctl: vi.fn<Runner['runSimctl']>(),
 	runSimctlOnDevice: vi.fn<Runner['runSimctlOnDevice']>(),
+	streamSimctlOnDevice: vi.fn<Runner['streamSimctlOnDevice']>(),
 }));
 
 vi.mock('@/backends/ios-simulator/simctl.js', async (importOriginal) => ({
 	...(await importOriginal<Runner>()),
+	readProcessTable,
 	runSimctl,
 	runSimctlOnDevice,
+	streamSimctlOnDevice,
 }));
 
 const fixtureUrl = (name: string): URL =>
@@ -185,6 +196,11 @@ beforeEach(() => {
 	runSimctl.mockReset();
 	runSimctlOnDevice.mockReset();
 	runSimctlOnDevice.mockResolvedValue({ stdout: '', stderr: '' });
+	readProcessTable.mockReset();
+	// Nothing recording, which is what nearly every case starts from — and the honest default,
+	// because an idle host is what `ps` says on one.
+	readProcessTable.mockResolvedValue('');
+	streamSimctlOnDevice.mockReset();
 });
 
 describe('listDevices', () => {
@@ -1644,5 +1660,644 @@ describe('the required methods', () => {
 
 	it.each(REQUIRED_BACKEND_METHODS)('%s is real rather than a stub', (name) => {
 		expect(sourceOf(name)).not.toMatch(STUB_SENTINEL);
+	});
+});
+
+/**
+ * The recorder, with the process replaced and the *file* real — which is deliberate rather than
+ * convenient. Whether the bytes handed over are a finished container is decided on what was
+ * actually on disk (`recordVideo`), so a suite that stubbed `readFile` would be asserting its own
+ * arrangement; instead the fake recorder writes the committed capture where the backend derived
+ * its path, exactly as `simctl` would.
+ *
+ * What no mock can say is here in `tests/device/ios-simulator/recording.test.ts`: that a simulator
+ * answers this argv at all, that the marker arrives, and that `SIGINT` produces a file a player
+ * will open.
+ */
+const RECORDING_FIXTURE = new Uint8Array(
+	readFileSync(fixtureUrl('recordvideo.finished.xcode26.6-ios26.5.mov')),
+);
+
+/** Where the backend derives a recording's path — restated here rather than imported, so a
+ * change to the derivation shows up as a failure instead of following the test along. */
+const recordingPathOf = (serial: DeviceSerial): string =>
+	join(tmpdir(), `rover-ios-recording-${String(serial)}.mov`);
+
+/** A process table naming one recorder for `serial`, in the shape `ps` prints one. */
+const tableRecording = (serial: DeviceSerial, pid = '31473'): string =>
+	`${pid} /Library/Developer/PrivateFrameworks/CoreSimulator.framework/Versions/A/Resources/bin/simctl io ${String(serial)} recordVideo --codec h264 --mask ignored ${recordingPathOf(serial)}\n`;
+
+/** What a fake recorder was asked to do, and the handles the case drives it by. */
+interface FakeRecorder {
+	readonly signals: NodeJS.Signals[];
+	readonly released: () => boolean;
+	/** End the run, as `close` would. */
+	readonly end: () => void;
+}
+
+/**
+ * Install a fake recorder.
+ *
+ * `announce` decides what the run says before anything awaits it: `'started'` writes both the
+ * note and the marker to stderr synchronously, so the start wait is met on its first probe and
+ * no case pays a poll interval for the ordinary path. `'refused'` writes the exit-16 refusal and
+ * ends, which is what a second recorder or a stuck device lock does. `'silent'` says nothing at
+ * all, which is what times out.
+ *
+ * `onSignal` is what the recording is stopped by: the fake ends the run when it is signalled,
+ * which is what the real one does 20–30 ms after `SIGINT`. A case that wants a recorder that
+ * ignores the signal passes `'ignore'`.
+ */
+function recorderThat(
+	announce: 'started' | 'refused' | 'silent',
+	options: { onSignal?: 'end' | 'ignore'; writes?: Uint8Array | null } = {},
+): FakeRecorder {
+	const signals: NodeJS.Signals[] = [];
+	let released = false;
+	let end = (): void => {};
+
+	streamSimctlOnDevice.mockImplementation((serial, _subcommand, args, handlers) => {
+		let ended = false;
+		end = (): void => {
+			if (ended) return;
+			ended = true;
+			handlers.onEnd('simctl io … ended with exit 0');
+		};
+
+		if (announce === 'started') {
+			handlers.onStderr('Note: No display specified. Defaulting to display: … (name: LCD)\n');
+			handlers.onStderr('Recording started\n');
+		}
+		if (announce === 'refused') {
+			handlers.onStderr(
+				'Error starting video recorder: Error Domain=NSPOSIXErrorDomain Code=16 ' +
+					'"Resource busy" UserInfo={NSLocalizedFailureReason=Host recording is already in ' +
+					'progress}.\n',
+			);
+			handlers.onStdout(`the path was ${args[args.length - 1]}\n`);
+			handlers.onEnd('simctl io … ended with exit 16');
+			ended = true;
+		}
+
+		return {
+			pid: 31473,
+			release: () => {
+				released = true;
+			},
+			signal: (signal: NodeJS.Signals) => {
+				signals.push(signal);
+				if (options.onSignal === 'ignore') return;
+				// What the real recorder does as it goes: the whole container, then the exit.
+				const bytes = options.writes === undefined ? RECORDING_FIXTURE : options.writes;
+				if (bytes !== null) writeFileSync(recordingPathOf(serial), bytes);
+				end();
+			},
+		};
+	});
+
+	return { end: () => end(), released: () => released, signals };
+}
+
+/** The listing, with one device's state changed — how a case says "not booted". */
+const withState = (serial: DeviceSerial, state: string): string =>
+	listing((parsed) => {
+		entryOf(parsed, String(serial)).state = state;
+	});
+
+afterEach(async () => {
+	await rm(recordingPathOf(BOOTED), { force: true });
+});
+
+describe('recordVideo', () => {
+	/**
+	 * The order the whole method is: the device is checked, the machine is asked whether it is
+	 * recording, the file is removed, and only then is anything spawned. Asserted as an order and
+	 * not just as a set of calls, because each step exists to stop the next one being reached in a
+	 * state it cannot answer from.
+	 */
+	it('checks the device and asks the machine before it spawns anything', async () => {
+		answers(listing());
+		recorderThat('started');
+
+		await backend.recordVideo(BOOTED, { durationMs: 0 });
+
+		expect(runSimctl.mock.calls[0]?.[0]).toEqual(ENUMERATE);
+		expect(readProcessTable).toHaveBeenCalled();
+		expect(streamSimctlOnDevice).toHaveBeenCalledTimes(1);
+	});
+
+	// Every flag load-bearing: the codec because the default is `hevc`, the mask because the
+	// default hands back the device's rounded corners, and the path because there is no stdout.
+	it('records to a path derived from the udid, with the codec and the mask asked for', async () => {
+		answers(listing());
+		recorderThat('started');
+
+		await backend.recordVideo(BOOTED, { durationMs: 0 });
+
+		expect(streamSimctlOnDevice.mock.calls[0]?.[0]).toBe(BOOTED);
+		expect(streamSimctlOnDevice.mock.calls[0]?.[1]).toBe('io');
+		expect(streamSimctlOnDevice.mock.calls[0]?.[2]).toEqual([
+			'recordVideo',
+			'--codec',
+			'h264',
+			'--mask',
+			'ignored',
+			recordingPathOf(BOOTED),
+		]);
+	});
+
+	it('answers with the bytes the recorder wrote', async () => {
+		answers(listing());
+		recorderThat('started');
+
+		expect(Uint8Array.from(await backend.recordVideo(BOOTED, { durationMs: 0 }))).toEqual(
+			RECORDING_FIXTURE,
+		);
+	});
+
+	/**
+	 * `simctl io recordVideo` has no `--time-limit`, so the window is a deadline timer here whose
+	 * callback sends the signal — which is what actually ends the recording. If it did not fire,
+	 * nothing would.
+	 */
+	it('ends the recording by signalling it, never by waiting the duration out', async () => {
+		answers(listing());
+		const recorder = recorderThat('started');
+
+		await backend.recordVideo(BOOTED, { durationMs: 0 });
+
+		expect(recorder.signals[0]).toBe('SIGINT');
+	});
+
+	/**
+	 * The refusal the process table decides, ahead of the tool's own: `simctl` would answer exit
+	 * 16 for a second recorder, and what a caller needs to hear is *this device is already
+	 * recording, stop that one first* — with the pids, because a recorder this host started and
+	 * one some other program started are the same refusal and different remedies.
+	 */
+	it('refuses a device the machine says is already recording, naming the pids', async () => {
+		answers(listing());
+		readProcessTable.mockResolvedValue(tableRecording(BOOTED, '9182'));
+		recorderThat('started');
+
+		const rejection = backend.recordVideo(BOOTED, { durationMs: 0 });
+
+		await expect(rejection).rejects.toBeInstanceOf(RecordingAlreadyRunningError);
+		await expect(rejection).rejects.toThrow(/9182/);
+		expect(streamSimctlOnDevice).not.toHaveBeenCalled();
+	});
+
+	/**
+	 * The sharpest case of the phase. A recording on a device that is not booted prints
+	 * `Recording started`, runs for as long as it is left, exits 0 with `Recording completed.` and
+	 * writes zero bytes — so the marker cannot catch it and only the state check can.
+	 */
+	it('refuses a device that is not booted before a recorder is started', async () => {
+		answers(withState(BOOTED, 'Shutdown'));
+		recorderThat('started');
+
+		const rejection = backend.recordVideo(BOOTED, { durationMs: 0 });
+
+		await expect(rejection).rejects.toThrow(/rather than ready/);
+		await expect(rejection).rejects.toThrow(/zero bytes/);
+		expect(streamSimctlOnDevice).not.toHaveBeenCalled();
+	});
+
+	// The contract's own distinction from `describeDevice`'s `null`.
+	it('throws for a device this host does not have at all', async () => {
+		answers(withoutDevice(BOOTED));
+		recorderThat('started');
+
+		await expect(backend.recordVideo(BOOTED, { durationMs: 0 })).rejects.toBeInstanceOf(
+			DeviceVanishedError,
+		);
+	});
+
+	/**
+	 * A leftover from a run that died before its cleanup can never be the file that is read —
+	 * and because there is no `--force`, the removal is also what keeps the tool from refusing at
+	 * exit 17 on a path that already exists.
+	 */
+	it('removes a leftover recording before starting, and again afterwards', async () => {
+		answers(listing());
+		await writeFile(recordingPathOf(BOOTED), 'a recording a killed run left behind');
+		recorderThat('started');
+
+		await backend.recordVideo(BOOTED, { durationMs: 0 });
+
+		await expect(stat(recordingPathOf(BOOTED))).rejects.toThrow();
+	});
+
+	/**
+	 * The bytes decide, not the exit code: a recorder that produced nothing exits 0 and says it
+	 * finished. `UnfinishedRecordingError` names the length so the two shapes of that failure are
+	 * distinguishable — a few kilobytes is a recording caught at its beginning, zero is one that
+	 * never had a frame.
+	 */
+	it('refuses a recording with no index box, naming the byte length', async () => {
+		answers(listing());
+		recorderThat('started', { writes: new Uint8Array() });
+
+		const rejection = backend.recordVideo(BOOTED, { durationMs: 0 });
+
+		await expect(rejection).rejects.toBeInstanceOf(UnfinishedRecordingError);
+		await expect(rejection).rejects.toThrow(/is 0 bytes with no index block/);
+	});
+
+	// simctl reported having written the file and there is none: this host's answer, not the
+	// device's, and never the "nothing was recording" one.
+	it('says so when the file the recorder was told to write is not there', async () => {
+		answers(listing());
+		recorderThat('started', { writes: null });
+
+		await expect(backend.recordVideo(BOOTED, { durationMs: 0 })).rejects.toThrow(
+			/could not be read back/,
+		);
+	});
+
+	/**
+	 * The one failure the marker turns from a ten-second wait into the tool's own sentence, and
+	 * both streams are quoted because on this tool the useful half is as often on stdout.
+	 */
+	it('reports a recorder that ended before it said it had started, with both streams', async () => {
+		answers(listing());
+		recorderThat('refused');
+
+		const rejection = backend.recordVideo(BOOTED, { durationMs: 0 });
+
+		await expect(rejection).rejects.toThrow(/before it reported having started/);
+		await expect(rejection).rejects.toThrow(/Host recording is already in progress/);
+		await expect(rejection).rejects.toThrow(/stdout: the path was/);
+	});
+
+	/** The staged path is this host's, and the message is read on the agent's machine (D19). */
+	it('keeps the path it derived out of the failure it reports', async () => {
+		answers(listing());
+		recorderThat('refused');
+
+		await expect(backend.recordVideo(BOOTED, { durationMs: 0 })).rejects.toThrow(
+			/<the file you sent>/,
+		);
+	});
+
+	/**
+	 * Nothing above this backend keeps two calls off one file — `src/daemon/verb-traffic.ts`
+	 * registers concurrent calls on one device rather than preventing them — and the path is
+	 * derived from the udid, so two overlapping recordings would share it and spoil both.
+	 */
+	it('runs two recordings on one device one after the other rather than beside each other', async () => {
+		answers(listing());
+		let spawned = 0;
+		let overlapping = 0;
+		streamSimctlOnDevice.mockImplementation((serial, _subcommand, _args, handlers) => {
+			spawned += 1;
+			overlapping = Math.max(overlapping, spawned);
+			handlers.onStderr('Recording started\n');
+			return {
+				pid: 1,
+				release: () => {},
+				signal: () => {
+					spawned -= 1;
+					writeFileSync(recordingPathOf(serial), RECORDING_FIXTURE);
+					handlers.onEnd('ended with exit 0');
+				},
+			};
+		});
+
+		await Promise.all([
+			backend.recordVideo(BOOTED, { durationMs: 0 }),
+			backend.recordVideo(BOOTED, { durationMs: 0 }),
+		]);
+
+		expect(overlapping).toBe(1);
+	});
+});
+
+describe('startRecording', () => {
+	/**
+	 * The whole point of the method: it answers while the recorder runs, and the handle is
+	 * released so the run outlives the call — nothing is destroyed, because the recorder still
+	 * has to write the file.
+	 */
+	it('answers once the recorder has said it started, and lets the run outlive the call', async () => {
+		answers(listing());
+		const recorder = recorderThat('started');
+
+		await backend.startRecording(BOOTED, { maxDurationMs: 15_000 });
+
+		expect(recorder.released()).toBe(true);
+		expect(recorder.signals).toEqual([]);
+	});
+
+	// The same argv as the fixed window, because it is the same recording — what differs is only
+	// what stops it.
+	it('records with the same flags and to the same derived path', async () => {
+		answers(listing());
+		recorderThat('started');
+
+		await backend.startRecording(BOOTED, { maxDurationMs: 15_000 });
+
+		expect(streamSimctlOnDevice.mock.calls[0]?.[2]).toEqual([
+			'recordVideo',
+			'--codec',
+			'h264',
+			'--mask',
+			'ignored',
+			recordingPathOf(BOOTED),
+		]);
+	});
+
+	/**
+	 * `maxDurationMs` is the recorder's own kill switch, and on this platform it is a timer in
+	 * *this* process — there is no `--time-limit` to hand the device. A non-positive one stops the
+	 * recorder rather than removing the limit, which is the safe direction and the opposite of the
+	 * trap `RecordVideoOptions.durationMs` records.
+	 */
+	it('arms the limit as a signal rather than passing it to the tool', async () => {
+		answers(listing());
+		const recorder = recorderThat('started', { onSignal: 'ignore' });
+
+		await backend.startRecording(BOOTED, { maxDurationMs: 0 });
+		await drainEventLoop();
+
+		expect(streamSimctlOnDevice.mock.calls[0]?.[2]).not.toContain('--time-limit');
+		expect(recorder.signals).toEqual(['SIGINT']);
+	});
+
+	it('refuses a device that is already recording, and starts nothing', async () => {
+		answers(listing());
+		readProcessTable.mockResolvedValue(tableRecording(BOOTED));
+		recorderThat('started');
+
+		await expect(backend.startRecording(BOOTED, { maxDurationMs: 15_000 })).rejects.toBeInstanceOf(
+			RecordingAlreadyRunningError,
+		);
+		expect(streamSimctlOnDevice).not.toHaveBeenCalled();
+	});
+
+	it('refuses a device that is not booted', async () => {
+		answers(withState(BOOTED, 'Shutdown'));
+		recorderThat('started');
+
+		await expect(backend.startRecording(BOOTED, { maxDurationMs: 15_000 })).rejects.toThrow(
+			/rather than ready/,
+		);
+	});
+
+	it('reports a recorder that would not start rather than answering ok', async () => {
+		answers(listing());
+		recorderThat('refused');
+
+		await expect(backend.startRecording(BOOTED, { maxDurationMs: 15_000 })).rejects.toThrow(
+			/before it reported having started/,
+		);
+	});
+});
+
+describe('stopRecording', () => {
+	/**
+	 * The order: ask the machine, signal by pid, wait until the machine says it is gone, read,
+	 * check, answer. Signalled **by pid** rather than through a handle, which is what lets this
+	 * stop a recorder an earlier daemon started.
+	 */
+	it('signals the recorder the machine named and answers with the bytes', async () => {
+		const kill = vi.spyOn(process, 'kill').mockImplementation(() => true);
+		try {
+			readProcessTable.mockResolvedValueOnce(tableRecording(BOOTED, '31473'));
+			readProcessTable.mockResolvedValue('');
+			await writeFile(recordingPathOf(BOOTED), RECORDING_FIXTURE);
+
+			expect(Uint8Array.from(await backend.stopRecording(BOOTED))).toEqual(RECORDING_FIXTURE);
+			expect(kill).toHaveBeenCalledWith(31473, 'SIGINT');
+		} finally {
+			kill.mockRestore();
+		}
+	});
+
+	/**
+	 * A recorder that already stopped itself — it reached the limit `startRecording` armed — is
+	 * not a failure: the file it left is complete, and this answers with it. So the branch is on
+	 * whether there is anything to signal, not on whether anything went wrong.
+	 */
+	it('answers with the recording a recorder that stopped itself left behind', async () => {
+		const kill = vi.spyOn(process, 'kill').mockImplementation(() => true);
+		try {
+			await writeFile(recordingPathOf(BOOTED), RECORDING_FIXTURE);
+
+			expect(Uint8Array.from(await backend.stopRecording(BOOTED))).toEqual(RECORDING_FIXTURE);
+			expect(kill).not.toHaveBeenCalled();
+		} finally {
+			kill.mockRestore();
+		}
+	});
+
+	// Nothing recording and nothing written: nothing happened, so a caller that stopped something
+	// it never started is told so rather than handed an empty answer.
+	it('refuses a stop for a recording that was never started', async () => {
+		await expect(backend.stopRecording(BOOTED)).rejects.toBeInstanceOf(NoRecordingRunningError);
+	});
+
+	/**
+	 * The other half of that pair, and the reason both facts are read: a recorder that ran against
+	 * a device which had gone leaves nothing, which is a recording that did not finish rather than
+	 * a stop nobody started.
+	 */
+	it('refuses a recorder that was running and left nothing behind', async () => {
+		const kill = vi.spyOn(process, 'kill').mockImplementation(() => true);
+		try {
+			readProcessTable.mockResolvedValueOnce(tableRecording(BOOTED));
+			readProcessTable.mockResolvedValue('');
+
+			const rejection = backend.stopRecording(BOOTED);
+
+			await expect(rejection).rejects.toBeInstanceOf(UnfinishedRecordingError);
+			await expect(rejection).rejects.toThrow(/is 0 bytes/);
+		} finally {
+			kill.mockRestore();
+		}
+	});
+
+	it('refuses bytes with no index box, naming what arrived', async () => {
+		await writeFile(recordingPathOf(BOOTED), RECORDING_FIXTURE.subarray(0, 20));
+
+		const rejection = backend.stopRecording(BOOTED);
+
+		await expect(rejection).rejects.toBeInstanceOf(UnfinishedRecordingError);
+		await expect(rejection).rejects.toThrow(/is 20 bytes/);
+	});
+
+	/**
+	 * The wait is on the machine's answer, not on the signal having been sent: a recorder that
+	 * would not go is a `wait-timeout` naming the pids rather than a recording read out from under
+	 * an encoder still writing it.
+	 */
+	it('waits until the machine says the recorder is gone', async () => {
+		const kill = vi.spyOn(process, 'kill').mockImplementation(() => true);
+		try {
+			readProcessTable
+				.mockResolvedValueOnce(tableRecording(BOOTED))
+				.mockResolvedValueOnce(tableRecording(BOOTED))
+				.mockResolvedValue('');
+			await writeFile(recordingPathOf(BOOTED), RECORDING_FIXTURE);
+
+			expect(Uint8Array.from(await backend.stopRecording(BOOTED))).toEqual(RECORDING_FIXTURE);
+			expect(readProcessTable.mock.calls.length).toBeGreaterThanOrEqual(3);
+		} finally {
+			kill.mockRestore();
+		}
+	});
+
+	/**
+	 * `ESRCH` between the read and the signal is not a broken device — the recorder reached its
+	 * limit in the gap — and the wait that follows is what catches one that really would not go.
+	 */
+	it('tolerates a recorder that went away between the read and the signal', async () => {
+		const kill = vi.spyOn(process, 'kill').mockImplementation(() => {
+			throw Object.assign(new Error('kill ESRCH'), { code: 'ESRCH' });
+		});
+		try {
+			readProcessTable.mockResolvedValueOnce(tableRecording(BOOTED));
+			readProcessTable.mockResolvedValue('');
+			await writeFile(recordingPathOf(BOOTED), RECORDING_FIXTURE);
+
+			expect(Uint8Array.from(await backend.stopRecording(BOOTED))).toEqual(RECORDING_FIXTURE);
+		} finally {
+			kill.mockRestore();
+		}
+	});
+
+	// The cleanup runs on the refusal paths too, where a multi-megabyte file left on borrowed
+	// hardware does the most harm — and its own failure never replaces the answer.
+	it('removes the recording after handing it over', async () => {
+		await writeFile(recordingPathOf(BOOTED), RECORDING_FIXTURE);
+
+		await backend.stopRecording(BOOTED);
+
+		await expect(stat(recordingPathOf(BOOTED))).rejects.toThrow();
+	});
+
+	it('removes the recording it refused as well', async () => {
+		await writeFile(recordingPathOf(BOOTED), RECORDING_FIXTURE.subarray(0, 20));
+
+		await expect(backend.stopRecording(BOOTED)).rejects.toBeInstanceOf(UnfinishedRecordingError);
+		await expect(stat(recordingPathOf(BOOTED))).rejects.toThrow();
+	});
+
+	/**
+	 * The one thing a stop must not do is ask the device whether it is booted. A lease that ended
+	 * on a device that went down still has a recording to collect, and the state check belongs
+	 * where a recording is *started*.
+	 */
+	it('asks the device nothing about its state', async () => {
+		await writeFile(recordingPathOf(BOOTED), RECORDING_FIXTURE);
+
+		await backend.stopRecording(BOOTED);
+
+		expect(runSimctl).not.toHaveBeenCalled();
+	});
+});
+
+describe('discardRecording', () => {
+	/**
+	 * It runs for every lease that ends and most leases never record anything (D9), so an idle
+	 * device is a silent success — no signal, no read, no refusal.
+	 */
+	it('is a silent success on a device that is not recording', async () => {
+		const kill = vi.spyOn(process, 'kill').mockImplementation(() => true);
+		try {
+			await expect(backend.discardRecording(BOOTED)).resolves.toBeUndefined();
+			expect(kill).not.toHaveBeenCalled();
+		} finally {
+			kill.mockRestore();
+		}
+	});
+
+	it('stops the recorder the lease left running and removes the file', async () => {
+		const kill = vi.spyOn(process, 'kill').mockImplementation(() => true);
+		try {
+			readProcessTable.mockResolvedValueOnce(tableRecording(BOOTED, '31473'));
+			readProcessTable.mockResolvedValue('');
+			await writeFile(recordingPathOf(BOOTED), RECORDING_FIXTURE);
+
+			await backend.discardRecording(BOOTED);
+
+			expect(kill).toHaveBeenCalledWith(31473, 'SIGINT');
+			await expect(stat(recordingPathOf(BOOTED))).rejects.toThrow();
+		} finally {
+			kill.mockRestore();
+		}
+	});
+
+	/**
+	 * It pulls nothing and checks nothing: a lease that ended has no caller to hand a recording
+	 * to, and refusing an unfinished file — which is what an abandoned recorder usually leaves —
+	 * would turn the ordinary case into a failure the teardown has to swallow.
+	 */
+	it('answers with nothing and refuses nothing, whatever the file holds', async () => {
+		await writeFile(recordingPathOf(BOOTED), RECORDING_FIXTURE.subarray(0, 20));
+
+		await expect(backend.discardRecording(BOOTED)).resolves.toBeUndefined();
+		await expect(stat(recordingPathOf(BOOTED))).rejects.toThrow();
+	});
+
+	// It never asks whether the device is booted: a lease ends on devices that have gone down,
+	// and there is still a file on this host to collect.
+	it('asks the device nothing about its state', async () => {
+		await backend.discardRecording(BOOTED);
+
+		expect(runSimctl).not.toHaveBeenCalled();
+	});
+
+	/**
+	 * The one place this departs from the stop deliberately: it has no answer to protect, and a
+	 * recording still sitting on hardware that goes to somebody else next is precisely what it
+	 * exists to prevent — so the removal's failure is not swallowed.
+	 */
+	it('reports a file it could not remove rather than passing for a teardown that ran', async () => {
+		await mkdir(recordingPathOf(BOOTED), { recursive: true });
+		await writeFile(join(recordingPathOf(BOOTED), 'in-the-way'), 'x');
+
+		try {
+			await expect(backend.discardRecording(BOOTED)).rejects.toThrow();
+		} finally {
+			await rm(recordingPathOf(BOOTED), { force: true, recursive: true });
+		}
+	});
+});
+
+describe('the capabilities this backend does not declare', () => {
+	/**
+	 * Read through the contract rather than off the class, because the class type is the *first*
+	 * half of the proof: `backend.setWifiEnabled` does not typecheck at all, which is a stronger
+	 * statement than `undefined` and the reason these assertions cannot be written directly. What
+	 * they are about is what the layer that dispatches a verb sees — a `DeviceBackend` whose
+	 * optional member is absent, so `MissingCapabilityError` is what fires
+	 * (`requireCapability`, `src/core/capabilities.ts`).
+	 */
+	const contract = (): DeviceBackend => backend;
+
+	/**
+	 * An absent method beside a `false` flag is a complete backend; a stub beside it is one under
+	 * construction (`ai/TESTING.md`). This is the executable half of `./capabilities.ts`'s
+	 * argument that `canControlNetwork` is `false` **for good**: a simulator uses the host's
+	 * network stack, and the only truthful `setWifiEnabled` would change the networking of a
+	 * machine lending devices to other people. `simctl status_bar override --wifiMode failed`
+	 * exists and is cosmetic, which is exactly the plausible-looking result ai/RULES.md §2
+	 * forbids — so what a caller gets is `MissingCapabilityError`, from the verb layer, naming
+	 * the capability.
+	 */
+	it('ships no network methods at all rather than ones that draw an icon', () => {
+		expect(contract().setAirplaneMode).toBeUndefined();
+		expect(contract().setWifiEnabled).toBeUndefined();
+	});
+
+	// The two that can honestly move later, and have not: both need idb, which this backend
+	// deliberately does not depend on (`docs/IOS.md` §4).
+	it('ships no screen read and no input', () => {
+		expect(contract().readScreen).toBeUndefined();
+		expect(contract().tap).toBeUndefined();
+		expect(contract().swipe).toBeUndefined();
+		expect(contract().typeText).toBeUndefined();
+		expect(contract().pressKey).toBeUndefined();
 	});
 });
