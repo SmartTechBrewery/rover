@@ -7,17 +7,20 @@ not remembered. Where something could not be run, it says so rather than implyin
 (`ai/RULES.md` §6).
 
 **Bottom line:** every **required** method of `DeviceBackend` has a working iOS **simulator**
-implementation today, and three of the five gated capabilities do too — including `canReadScreen`,
-which `ai/ARCHITECTURE.md` guessed might have no iOS equivalent at all. A **physical** iPhone is a
+implementation today, and **four of the five** gated capabilities do too — including
+`canReadScreen`, which `ai/ARCHITECTURE.md` guessed might have no iOS equivalent at all, and
+`canInput`, whose two unanswerable keys are refused by name rather than substituted for (§5). The
+fifth is `canControlNetwork`, which is `false` for good. A **physical** iPhone is a
 different and much worse story: it cannot answer `screenshot`, which is a required method, so it is
 not a device this contract can lend at all without a WebDriverAgent-class in-device agent.
 
 **And it is built.** `src/backends/ios-simulator/` is the repository's **second registered
 backend** as of #230 — every required method plus `canRecordVideo` and `canControlRecording`, on
 `simctl` alone with no third-party dependency, which is §10 step 1. `canReadScreen` and `canInput`
-are declared **`false`** there and are what steps 2 and 3 flip; `canControlNetwork` is `false` for
-good (§5). Where a section below still reads as a proposal, the block naming the phase that
-delivered it says what actually shipped.
+were declared **`false`** there and steps 2 and 3 have since flipped both (#251, #252), so
+`canControlNetwork` is the one flag left `false` and it is `false` for good (§5). Where a section
+below still reads as a proposal, the block naming the phase that delivered it says what actually
+shipped.
 
 ---
 
@@ -94,7 +97,7 @@ startup of ~60–90 ms that a Node backend talking gRPC directly would not pay.
 | Capability | Gated methods | How | Measured | Verdict |
 |---|---|---|---|---|
 | `canReadScreen` | `readScreen` | `accessibility_info {format: LEGACY}` over gRPC — the RPC `idb ui describe-all` wraps | 34–47 ms warm on an established channel, 3.34 s for a companion's **first** read; labels + frames in **points** | ✅ **declared true** (#251) |
-| `canInput` | `tap` `swipe` `typeText` `pressKey` | `idb ui tap/swipe/text/button` | 0.11–0.16 s each | ✅ (see §5 for `pressKey`) |
+| `canInput` | `tap` `swipe` `typeText` `pressKey` | one client-streaming `hid` call per injection, over the same channel as the read — the RPC `idb ui tap/swipe/text/button` all wrap | through this backend: tap 106–144 ms, `typeText` 102–154 ms for a word and 219–315 ms for all 95 printable ASCII, `pressKey('home')` 104–197 ms, a 250 ms swipe 452 ms | ✅ **declared true** (#252); `back` and `recents` refused **by name**, see §5 |
 | `canRecordVideo` | `recordVideo` | `simctl io <d> recordVideo --codec h264 --mask ignored <path>` | marker at 0.14–0.23 s; 100,782 bytes for ~2 s of an idle screen | ✅ **no `--time-limit` — the window is host-side** |
 | `canControlRecording` | `start`/`stop`/`discardRecording` | same + `SIGINT`, and the **host's** process table for "is this device recording" | exit 0 in 20–30 ms after the signal; `ps` stops naming the recorder in 39 ms | ✅ |
 | `canControlNetwork` | `setAirplaneMode` `setWifiEnabled` | — | — | ❌ **declare false** |
@@ -570,6 +573,53 @@ the dependency is **alive**, which is the part worth updating:
   that suite is read-only by design so it is safe against a device somebody else is looking at, and
   a case that shuts a simulator down and boots it is the one thing that would take that away.
 
+- **The four input primitives are the next thing on that transport, and every one of them is
+  verified by reading the screen back rather than by the call returning** (#252,
+  `src/backends/ios-simulator/input.ts`). Same bench, the booted `iPhone 17` `997FA43E-…`,
+  companion v1.5.2, 2026-09-09, driven through this repository's own code. **`hid` is the only RPC
+  behind all four** — there is no tap call and no text call, only `rpc hid(stream HIDEvent)`, so
+  what separates a tap from a swipe from a line of text is entirely which events are built, and
+  the client needed a second call shape (client-streaming) beside the unary one.
+
+  ```
+  §2's loop, re-run through this backend  6/6 typed read back exactly, 6/6 taps cleared the field
+  tap                                     106–144 ms (n=7, mean 129)
+  readScreen between the injections        135–368 ms (n=20, mean 219)
+  typeText, one 5–6 character word        102–154 ms (n=7, mean 119)
+  typeText, all 95 printable ASCII        219–315 ms through the backend, 114 ms of it the stream
+  pressKey('home')                        104–197 ms (n=5, mean 164)
+  pressKey('wake') on a woken device      424–557 ms (n=5) and it sends nothing — the guard read
+  pressKey('back') / ('recents')          refused in under 1 ms, with no round trip at all
+  swipe 250 ms asked for                  452 ms wall through the backend
+  ```
+
+  **What the loop is is the point.** `hid` answers an empty `HIDResponse` and answers it just as
+  happily for nonsense: a keycode of `9999`, a touch at `NaN`, a touch at `(99999, 99999)`, a
+  swipe of `NaN` seconds and a swipe of `-1` seconds were each accepted, at exit 0, with nothing
+  done. So a suite asserting "the call resolved" would be green on a backend that injected
+  nothing, and `tests/device/ios-simulator/input.test.ts` types a word into Spotlight, reads the
+  field back, taps the 20×19-point control inside it and reads the field back again. That tiny
+  target is also what would catch a `toDevicePixels` analogue being added to match the Android
+  side: **idb takes points**, the same unit `ScreenInfo` and `readScreen` use, so a ×3 conversion
+  would put the tap off the panel.
+
+  **The other three things measured before the map was written:**
+
+  - **`HIDSwipe.duration` is in seconds** where every duration in this contract is milliseconds,
+    so an unconverted number is a swipe a thousand times too long that the companion accepts.
+    0.05 s took 72 ms of wall clock, 0.25 s 345 ms, 0.3 s 405 ms and 1.5 s 1,660 ms — the value
+    honoured with ~100 ms over it. A **zero** duration is dispatched and moves nothing (3 ms, the
+    home screen on the same page), unlike Android's `input swipe … 0`, which is a flick.
+  - **A swipe from a point to itself is the long press**, so `src/verbs/input.ts` needs nothing new
+    here: held 0.8 s on a Springboard icon it raised the context menu (856 ms wall).
+  - **idb's keyboard map is the *client's*, not the companion's** (`idb/common/hid.py`), so a
+    backend speaking gRPC has to carry it. Transcribed and then verified as a whole: all 95
+    printable ASCII characters in one stream came back out of a text field byte-identical.
+  - **An injection against a device that is not booted is refused properly** — a tap and a `HOME`
+    press against a `Shutdown` `iPhone 17 Pro` came back at gRPC `INTERNAL` in 214 ms and 3 ms,
+    *"Mach port not connected, device may not be ready yet"*. As with `readScreen`, the state
+    check in front of them is there for the **process** rather than for the answer.
+
 The lifecycle is the real cost, and it has teeth:
 
 - **One companion process per target**, started with `--udid`, and it must be supervised. Killing it
@@ -624,13 +674,16 @@ construction. It is also the repository's first registered manifest with a capab
 `missing-capability` refusals in this project that come from a device rather than from a synthetic
 backend — asserted as such in `tests/device/ios-simulator/verb-dispatch.test.ts`.
 
-**`DeviceKey` has four members and iOS answers two and a half.**
+**`DeviceKey` has four members and iOS answers two of them.** The row that said "two and a half"
+is **corrected in place with its reason rewritten** (2026-09-09, #252, `ai/RULES.md` §1): `wake`
+turned out to be a whole answer rather than half of one, and `back` turned out not to be one at
+all.
 
 | `DeviceKey` | iOS | Notes |
 |---|---|---|
-| `home` | ✅ `idb ui button HOME` | Works on a home-buttonless iPhone 17 — verified, it went to Springboard |
-| `wake` | ⚠️ `idb ui button LOCK` | LOCK **toggles**; Android's `KEYCODE_WAKEUP` is idempotent. A `wake` built on it must read state first or it puts a woken device to sleep |
-| `back` | ⚠️ left-edge swipe | **Verified working**: drilled into Settings → General, `ui swipe 2 450 → 300 450`, and the root list came back. It is an app gesture, not a system key, so it works where the app supports interactive pop and nowhere else |
+| `home` | ✅ `HIDButtonType.HOME` | Works on a home-buttonless iPhone 17 — verified from Maps, Safari and Settings, and Springboard came back every time |
+| `wake` | ✅ `HIDButtonType.LOCK`, guarded by a read | LOCK **toggles**, where Android's `KEYCODE_WAKEUP` does not — so the press is conditional on `com.apple.springboard.hasBlankedScreen`, read with `simctl spawn <udid> notifyutil -g <name>` in ~360 ms. **That read exists, which is what decides this row**: from a woken device the first press took the flag to `1` and every press after it toggled `1, 0, 1, 0`, following the press in 1,861 ms going dark and 347 ms coming back, and three guarded `wake`s in a row left it at `0` |
+| `back` | ❌ | **Reversed in place.** This row read "⚠️ left-edge swipe, verified working" on the strength of one drill into Settings → General. Driven through idb on 2026-09-09 the same `2,450 → 300,450` swipe **paged the home screen** on Springboard and did **nothing** on a Settings sheet, both at exit 0 — silent in one direction and wrong in the other, which is the substitute `pressKey` must not make. Refused by name; on iOS back is a control in the app's own UI, which `read_screen` + `tap` reaches by label |
 | `recents` | ❌ | No button, and the app-switcher gesture needs the Indigo *edge bits* (`Indigo.h`: the guest recognises system edge gestures "from these bits, not from the contact coordinates"). idb's swipe does not set them; a slow 1.2 s bottom-edge swipe did nothing. Unreachable without patching idb or sending our own HID messages |
 
 `pressKey` is one method behind one capability, so a backend that declares `canInput` would
@@ -644,13 +697,29 @@ and refuses the ones it does not, without lying in either direction:
 - **`recents` is refused by name, not implemented.** Accepted 2026-09-08. There is nothing behind
   it that is the app switcher, and answering with something else would be the silent degradation
   `ai/RULES.md` §2 forbids.
-- **`back` needs nothing from the vocabulary.** On iOS back is normally a button in the app's own
-  UI — usually the app bar — which the verb layer already reaches by label through `read_screen`
-  + `tap`. The left-edge swipe measured above works where the app supports interactive pop, and
-  that is a gesture rather than a key.
-- **`wake` is this backend's own business.** Reading lock state first and making the press
-  idempotent is an implementation question, not a vocabulary one, and only needs a failure of its
-  own if that read turns out not to exist.
+- **`back` is refused by name too, and that is this section's own reversal** (#252). It read
+  "needs nothing from the vocabulary" on the strength of the left-edge swipe working where an app
+  supports interactive pop — measured once, in Settings. Driven through this backend it paged
+  Springboard and did nothing on a modal sheet, at exit 0 both times, so what the caller would get
+  is a gesture that is sometimes some *other* navigation and sometimes silence. The rest of that
+  bullet stands and is why nothing is lost: back on iOS is a control in the app's own UI, which
+  `read_screen` + `tap` reaches by label.
+- **`wake` is answered and idempotent, and the read it needs exists** (#252). What made it
+  half an answer was `LOCK` being a toggle with nothing to condition the press on; the flag in the
+  table above is that condition, and this backend reads it before every `wake` and presses only
+  when the screen is off. **It is the blanked-screen flag rather than the lock state**, which is
+  the correction inside the correction: `LOCK` does not unlock — a locked, woken simulator stays
+  locked however many times it is pressed — so lock state is the wrong question, and the right one
+  is the same one Android's `KEYCODE_WAKEUP` answers, which also lights a device up and leaves it
+  on its lock screen.
+
+  **The read reports the flag and cannot prove it exists, and that is stated because it cannot be
+  fixed.** `notifyutil -g` answers `<name> 0` for a name with no state at all — measured against a
+  name invented for the purpose, indistinguishable from a woken device at exit 0 with nothing on
+  stderr — so on a runtime that stopped publishing this key a `wake` would read "already awake"
+  and press nothing. What guards it is `tests/device/ios-simulator/input.test.ts`, which drives
+  the flag through **both** values against the runtime in front of it and fails if it stops
+  moving.
 
 D11 is untouched by any of it: capabilities still name *methods*, the keys are that method's
 arguments, and no per-key flag was added (`PROJECT.md` §5).
@@ -1065,14 +1134,19 @@ In order, and each step is independently useful:
    `accessibility_info` in its flat `LEGACY` format over that transport, `canReadScreen: true` in
    the manifest with the conformance suite green on it, frames passed through in **points** because
    that is already the unit `ScreenInfo` uses, and a synthesised **flat ordinal** for the id
-   because `AXUniqueId` turned out not to be unique where it is populated at all (§2). What is
-   still ahead in this step is the four input primitives — and the **label** stays
-   `iOS Simulator (simctl)` until they land, because naming idb beside a `canInput: false` would
-   promise in the one place with no flag beside it exactly the half that is missing.
-3. **Declare `canInput` and refuse `recents` by name.** The `recents`/`back` question is decided
-   (§5): shared code carries the per-key refusal (#215), so what remains here is declaring the
-   capability and raising `UnsupportedKeyError` for `recents` — `back` and `home` are answered, and
-   `wake` reads lock state first so the press is idempotent.
+   because `AXUniqueId` turned out not to be unique where it is populated at all (§2). **And the
+   four input primitives are done** (#252): one client-streaming `hid` call behind `tap`, `swipe`,
+   `typeText` and `pressKey`, each verified against a device by reading the screen back (§4). With
+   them the **label** finally becomes `iOS Simulator (simctl + idb)` — it stayed `(simctl)` through
+   every phase in which idb was present but `canInput` was still `false`, because naming idb in the
+   one place with no flag beside it would have promised exactly the half that was missing.
+3. **Declare `canInput` and refuse the keys with no equivalent by name.** **Done** (#252). Shared
+   code carries the per-key refusal (#215), so what this step was is declaring the capability —
+   all four methods at once, because `CAPABILITY_METHODS.canInput` names all four and a manifest
+   declaring it with three of them fails the conformance suite — and raising `UnsupportedKeyError`
+   for the keys this platform has none for. That is `recents` **and `back`**, which is §5's
+   reversal: `home` is answered, and `wake` is answered idempotently by reading the
+   blanked-screen flag before the press.
 4. **Leave physical iOS alone** until someone wants to pay for WebDriverAgent — and record the
    reason in `PROJECT.md` when they do, because "iOS is supported" will otherwise be read as
    covering hardware.

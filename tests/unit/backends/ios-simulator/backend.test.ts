@@ -12,6 +12,10 @@ import { SimctlNotFoundError } from '@/backends/ios-simulator/developer-dir.js';
 import { IdbCompanionInterruptedError } from '@/backends/ios-simulator/idb-client.js';
 import type { IdbCompanionStreamHandlers } from '@/backends/ios-simulator/idb-companion.js';
 import { IdbCompanionNotFoundError } from '@/backends/ios-simulator/idb-companion-path.js';
+import {
+	READ_SCREEN_BLANKED_ARGV,
+	SCREEN_BLANKED_NOTIFICATION,
+} from '@/backends/ios-simulator/input.js';
 import { PNG_SIGNATURE } from '@/backends/ios-simulator/parsers/png.js';
 import {
 	INSTALL_SIMCTL_TIMEOUT_MS,
@@ -26,6 +30,8 @@ import {
 	NoRecordingRunningError,
 	RecordingAlreadyRunningError,
 	UnfinishedRecordingError,
+	UnsupportedKeyError,
+	UnsupportedTextError,
 } from '@/core/errors.js';
 import {
 	type AppId,
@@ -115,8 +121,9 @@ vi.mock('@/backends/ios-simulator/idb-companion.js', async (importOriginal) => (
  */
 type IdbClient = typeof import('@/backends/ios-simulator/idb-client.js');
 
-const { companionCall, companionStopAll } = vi.hoisted(() => ({
+const { companionCall, companionStream, companionStopAll } = vi.hoisted(() => ({
 	companionCall: vi.fn<InstanceType<IdbClient['IdbCompanions']>['call']>(),
+	companionStream: vi.fn<InstanceType<IdbClient['IdbCompanions']>['stream']>(),
 	companionStopAll: vi.fn<InstanceType<IdbClient['IdbCompanions']>['stopAll']>(),
 }));
 
@@ -124,6 +131,7 @@ vi.mock('@/backends/ios-simulator/idb-client.js', async (importOriginal) => ({
 	...(await importOriginal<IdbClient>()),
 	IdbCompanions: class {
 		call = companionCall;
+		stream = companionStream;
 		stopAll = companionStopAll;
 	},
 }));
@@ -275,6 +283,7 @@ beforeEach(() => {
 	streamSimctlOnDevice.mockReset();
 	streamIdbCompanion.mockReset();
 	companionCall.mockReset();
+	companionStream.mockReset();
 	companionStopAll.mockReset();
 });
 
@@ -1959,6 +1968,183 @@ describe('readScreen', () => {
 });
 
 /**
+ * The four injections at the join: the state check in front of each, the events each is turned
+ * into, and the two keys this platform refuses.
+ *
+ * What the events *are* is `./input.test.ts`'s subject and is not re-asserted here — these cases
+ * check that the right builder is reached and that nothing reaches the transport it should not.
+ * What a device does with any of it is `tests/device/ios-simulator/input.test.ts`', because on
+ * this transport a call answering proves nothing: `hid` answers an empty message for a keycode
+ * that does not exist.
+ */
+describe('the input primitives', () => {
+	beforeEach(() => {
+		answers(listing());
+		companionStream.mockResolvedValue(undefined);
+	});
+
+	/** Every event of every injection goes through one client-streaming RPC on that device. */
+	it('taps through the hid stream, in points, on the device it was asked about', async () => {
+		await backend.tap(BOOTED, { x: 201.5, y: 437 });
+
+		expect(companionStream).toHaveBeenCalledTimes(1);
+		expect(companionStream).toHaveBeenCalledWith(BOOTED, 'hid', [
+			{ press: { action: { touch: { point: { x: 201.5, y: 437 } } }, direction: 'DOWN' } },
+			{ press: { action: { touch: { point: { x: 201.5, y: 437 } } }, direction: 'UP' } },
+		]);
+	});
+
+	it('swipes as one event, with the duration in seconds', async () => {
+		await backend.swipe(BOOTED, { x: 2, y: 450 }, { x: 300, y: 450 }, 300);
+
+		expect(companionStream).toHaveBeenCalledWith(BOOTED, 'hid', [
+			{ swipe: { start: { x: 2, y: 450 }, end: { x: 300, y: 450 }, duration: 0.3 } },
+		]);
+	});
+
+	it('types the whole string in one stream', async () => {
+		await backend.typeText(BOOTED, 'ab');
+
+		expect(companionStream).toHaveBeenCalledTimes(1);
+		expect(companionStream).toHaveBeenCalledWith(BOOTED, 'hid', [
+			{ press: { action: { key: { keycode: 4 } }, direction: 'DOWN' } },
+			{ press: { action: { key: { keycode: 4 } }, direction: 'UP' } },
+			{ press: { action: { key: { keycode: 5 } }, direction: 'DOWN' } },
+			{ press: { action: { key: { keycode: 5 } }, direction: 'UP' } },
+		]);
+	});
+
+	/**
+	 * **A programmer error costs no round trip and reads as itself.** The events are built before
+	 * the device is looked at, so a `NaN` coordinate never becomes a device enumeration and a
+	 * refusal about a state.
+	 */
+	it.each([
+		['tap', () => backend.tap(BOOTED, { x: Number.NaN, y: 1 })],
+		['swipe', () => backend.swipe(BOOTED, { x: 1, y: 1 }, { x: 2, y: 2 }, -1)],
+	])('refuses a %s it cannot build without asking the device anything', async (_what, inject) => {
+		await expect(inject()).rejects.toThrow();
+
+		expect(runSimctl).not.toHaveBeenCalled();
+		expect(companionStream).not.toHaveBeenCalled();
+	});
+
+	/**
+	 * Text the device has no key for is an `UnsupportedTextError` rather than a plain one, because
+	 * it is a caller's string that is wrong rather than the host: `src/verbs/failure.ts` carries it
+	 * as `unsupported-text` naming the characters to change, where a plain `Error` would arrive as
+	 * `internal_error`.
+	 */
+	it('refuses text this device has no keys for, before anything is sent', async () => {
+		const thrown = await backend.typeText(BOOTED, 'café').catch((error: unknown) => error);
+
+		expect(thrown).toBeInstanceOf(UnsupportedTextError);
+		expect((thrown as UnsupportedTextError).serial).toBe(BOOTED);
+		expect((thrown as UnsupportedTextError).unsupported.join(' ')).toContain('U+00E9');
+		expect((thrown as UnsupportedTextError).message).toContain('printable ASCII');
+		expect(companionStream).not.toHaveBeenCalled();
+	});
+
+	/** A device that is not booted is refused before a companion is started, `readScreen`'s reason. */
+	it.each([
+		['tap', () => backend.tap(IPHONE_17_PRO, { x: 1, y: 1 })],
+		['swipe', () => backend.swipe(IPHONE_17_PRO, { x: 1, y: 1 }, { x: 2, y: 2 }, 100)],
+		['typeText', () => backend.typeText(IPHONE_17_PRO, 'a')],
+		['pressKey', () => backend.pressKey(IPHONE_17_PRO, 'home')],
+	])('refuses %s on a device that is not booted, without reaching for a companion', async (_what, inject) => {
+		await expect(inject()).rejects.toThrow(/'offline' rather than ready/);
+
+		expect(companionStream).not.toHaveBeenCalled();
+	});
+
+	/** And a device the enumeration no longer names is the contract's own vanishing, not a state. */
+	it('reports a device that has gone as vanished', async () => {
+		await expect(backend.tap(GONE, { x: 1, y: 1 })).rejects.toThrow(DeviceVanishedError);
+
+		expect(companionStream).not.toHaveBeenCalled();
+	});
+
+	it('presses home unconditionally, without reading any state first', async () => {
+		await backend.pressKey(BOOTED, 'home');
+
+		expect(companionStream).toHaveBeenCalledWith(BOOTED, 'hid', [
+			{ press: { action: { button: { button: 'HOME' } }, direction: 'DOWN' } },
+			{ press: { action: { button: { button: 'HOME' } }, direction: 'UP' } },
+		]);
+		expect(runSimctlOnDevice).not.toHaveBeenCalled();
+	});
+
+	/**
+	 * **`wake` on a woken device sends nothing at all**, which is the whole of it being idempotent:
+	 * the button behind it toggles, so an unconditional press would put the device to sleep.
+	 */
+	it('sends nothing when wake is asked of a device whose screen is already on', async () => {
+		runSimctlOnDevice.mockResolvedValue({
+			stdout: `${SCREEN_BLANKED_NOTIFICATION} 0\n`,
+			stderr: '',
+		});
+
+		await backend.pressKey(BOOTED, 'wake');
+
+		expect(runSimctlOnDevice).toHaveBeenCalledWith(BOOTED, 'spawn', [...READ_SCREEN_BLANKED_ARGV]);
+		expect(companionStream).not.toHaveBeenCalled();
+	});
+
+	it('presses lock when wake is asked of a device whose screen is off', async () => {
+		runSimctlOnDevice.mockResolvedValue({
+			stdout: `${SCREEN_BLANKED_NOTIFICATION} 1\n`,
+			stderr: '',
+		});
+
+		await backend.pressKey(BOOTED, 'wake');
+
+		expect(companionStream).toHaveBeenCalledWith(BOOTED, 'hid', [
+			{ press: { action: { button: { button: 'LOCK' } }, direction: 'DOWN' } },
+			{ press: { action: { button: { button: 'LOCK' } }, direction: 'UP' } },
+		]);
+	});
+
+	/** A read that cannot be believed must not be turned into "no press needed". */
+	it('fails a wake whose state read answered something else', async () => {
+		runSimctlOnDevice.mockResolvedValue({ stdout: 'com.apple.something.else 1\n', stderr: '' });
+
+		await expect(backend.pressKey(BOOTED, 'wake')).rejects.toThrow(/not the one/);
+
+		expect(companionStream).not.toHaveBeenCalled();
+	});
+
+	/**
+	 * **The two refusals, by name, and before any round trip.** `back` and `recents` have no answer
+	 * on this platform in any device state, so asking the enumeration first would spend a call to
+	 * reach the same sentence — and `UnsupportedKeyError` rather than `MissingCapabilityError`,
+	 * because this device does take input and the other three verbs work (#215).
+	 */
+	it.each([
+		'back',
+		'recents',
+	] as const)('refuses the %s key by name, without asking the device anything', async (key) => {
+		const thrown = await backend.pressKey(BOOTED, key).catch((error: unknown) => error);
+
+		expect(thrown).toBeInstanceOf(UnsupportedKeyError);
+		expect((thrown as UnsupportedKeyError).key).toBe(key);
+		expect((thrown as UnsupportedKeyError).serial).toBe(BOOTED);
+		expect(runSimctl).not.toHaveBeenCalled();
+		expect(companionStream).not.toHaveBeenCalled();
+	});
+
+	/** A companion that died is an interruption and reaches the caller as itself, never a device fault. */
+	it('lets a companion interruption through as itself', async () => {
+		companionStream.mockRejectedValue(
+			new IdbCompanionInterruptedError(unwrap(BOOTED), 'hid', 'died'),
+		);
+
+		await expect(backend.tap(BOOTED, { x: 1, y: 1 })).rejects.toBeInstanceOf(
+			IdbCompanionInterruptedError,
+		);
+	});
+});
+
+/**
  * The log read against the **captured** NDJSON of `tests/fixtures/ios-simulator/`, which is what
  * makes the bound and the ordering assertable without a simulator. The parse itself is
  * `parsers/unified-log.test.ts`'s subject and is not re-asserted here; what this covers is the
@@ -2874,25 +3060,18 @@ describe('the capabilities this backend does not declare', () => {
 	});
 
 	/**
-	 * The one that has not moved yet, and it is the whole of `canInput` (`PROJECT.md` R47 phase
-	 * 5). `canReadScreen` was here beside it until the transport arrived; **the flag it names is
-	 * `canInput`, and the four methods are why it cannot move by halves** —
-	 * `CAPABILITY_METHODS.canInput` names all four, so a manifest declaring it with one of them
+	 * And the read and the four injections *are* here now, which is the assertion that keeps this
+	 * pair honest: all five used to be absent beside `setAirplaneMode` and `setWifiEnabled`, so a
+	 * change that flipped a flag and forgot a method would otherwise have left this file agreeing
+	 * with the old shape. **`canInput` cannot move by halves** —
+	 * `CAPABILITY_METHODS.canInput` names all four, so a manifest declaring it with three of them
 	 * implemented fails the conformance gate.
 	 */
-	it('ships no input, on the phase the transport arrived without it', () => {
-		expect(contract().tap).toBeUndefined();
-		expect(contract().swipe).toBeUndefined();
-		expect(contract().typeText).toBeUndefined();
-		expect(contract().pressKey).toBeUndefined();
-	});
-
-	/**
-	 * And the read *is* here now, which is the assertion that keeps the pair honest: the two used
-	 * to be absent together, so a change that flipped the manifest and forgot the method would
-	 * otherwise have left this file agreeing with the old shape.
-	 */
-	it('ships the screen read the manifest declares', () => {
+	it('ships every method the manifest declares a capability for', () => {
 		expect(contract().readScreen).toBeTypeOf('function');
+		expect(contract().tap).toBeTypeOf('function');
+		expect(contract().swipe).toBeTypeOf('function');
+		expect(contract().typeText).toBeTypeOf('function');
+		expect(contract().pressKey).toBeTypeOf('function');
 	});
 });

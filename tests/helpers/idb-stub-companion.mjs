@@ -22,6 +22,14 @@
  *   real crash this transport is built around (`docs/IOS.md` §4: `idb file push` dies with exit
  *   133 / SIGTRAP taking every in-flight call for that device with it), and the only way to test
  *   a call that is in flight when its companion dies without reaching for a pid.
+ * - `hid` reads the whole request stream, appends one JSON line per event to
+ *   `$ROVER_STUB_HID_FILE` when that is set, and answers the empty `HIDResponse` the real
+ *   companion answers — so a case can assert *what was written*, which is the only thing a
+ *   client-streaming call has to show for itself. `$ROVER_STUB_HID_DIES` makes it exit 133
+ *   part-way through instead, the crash-mid-stream case, and `$ROVER_STUB_HID_NEVER_ANSWERS`
+ *   reads the whole stream and never answers it — the wedged companion, one RPC over from
+ *   `$ROVER_STUB_NEVER_ANSWERS` and there because the deadline on a client-streaming call is the
+ *   one this client can get wrong by argument order alone.
  * - `accessibility_info` answers with **one node, and nothing resembling a screen**. What it is
  *   for is the transport — that the RPC is on the service and that a call over the socket comes
  *   back — and the mapping it feeds is asserted against real captures instead
@@ -84,6 +92,20 @@ server.addService(definition.idb.CompanionService.service, {
 				os_version: 'iOS 26.5',
 				architecture: 'arm64',
 			},
+		});
+	},
+	hid(call, callback) {
+		const events = process.env.ROVER_STUB_HID_FILE;
+		call.on('data', (event) => {
+			if (process.env.ROVER_STUB_HID_DIES === '1') process.exit(133);
+			if (events !== undefined && events !== '')
+				appendFileSync(events, `${JSON.stringify(event)}\n`);
+		});
+		call.on('end', () => {
+			// Listening and wedged, `describe`'s own configuration flag one RPC over: no answer and
+			// no exit, so what ends the caller's wait is its deadline and nothing else.
+			if (process.env.ROVER_STUB_HID_NEVER_ANSWERS === '1') return;
+			callback(null, {});
 		});
 	},
 	accessibility_info(_call, callback) {

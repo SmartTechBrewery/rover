@@ -1,6 +1,6 @@
 /**
  * The device backend for this platform: every required method of `DeviceBackend`, the recorder,
- * and the screen read.
+ * the screen read and the four input primitives.
  *
  * **This is the backend that registers** (`./index.ts`, `./capabilities.ts`, and one import line
  * in `../index.ts`), which is why the four recording methods land in the same change as the
@@ -10,24 +10,26 @@
  * capability with any of them missing fails the conformance gate the manifest exists to pass
  * (`ai/TESTING.md`, "A backend under construction registers nothing"; `PROJECT.md` R45). The same
  * rule is what puts {@link IosSimulatorDeviceBackend.readScreen} in the change that flips
- * `canReadScreen` (#251).
+ * `canReadScreen` (#251), and all four of {@link IosSimulatorDeviceBackend.tap},
+ * {@link IosSimulatorDeviceBackend.swipe}, {@link IosSimulatorDeviceBackend.typeText} and
+ * {@link IosSimulatorDeviceBackend.pressKey} in the one that flips `canInput` (#252).
  *
- * **What is absent is absent on purpose.** There is no `tap`/`swipe`/`typeText`/`pressKey`, no
- * `setAirplaneMode` and no `setWifiEnabled` — the two capabilities `./capabilities.ts` still
- * declares `false`, which carries why each is an honest opt-out or an unlanded phase rather than
- * a gap. An absent method beside a `false` flag is a complete backend; a stub beside it is one
- * under construction.
+ * **What is absent is absent on purpose.** There is no `setAirplaneMode` and no `setWifiEnabled`
+ * — the one capability `./capabilities.ts` still declares `false`, which carries why it is an
+ * honest opt-out rather than a gap. An absent method beside a `false` flag is a complete backend;
+ * a stub beside it is one under construction.
  *
  * **Two external programs reach a device from here, not one.** Everything Xcode's own goes
- * through `./simctl.js`; the screen read goes through `./idb-client.js`, which supervises one
- * `idb_companion` per target and speaks gRPC to it — a second program, with a lifecycle this
- * class holds ({@link IosSimulatorDeviceBackend.stopIdbCompanions}) and an install this host may
- * simply not have. Everything that reads either program's output goes through `./parsers/`, and
- * the three pure modules beside this one own the vocabulary, the arithmetic and the path mapping
- * — `./devices.js` on the enumeration, `./screen.js` on the screen and on the elements on it,
- * `./containers.js` on where a device path is on this host. This file is the join between them
- * and holds no text-shaped knowledge of its own: no key name, no state token, no plist path and
- * no failure wording appears here.
+ * through `./simctl.js`; the screen read and every injection go through `./idb-client.js`, which
+ * supervises one `idb_companion` per target and speaks gRPC to it — a second program, with a
+ * lifecycle this class holds ({@link IosSimulatorDeviceBackend.stopIdbCompanions}) and an install
+ * this host may simply not have. Everything that reads either program's output goes through
+ * `./parsers/`, and the four pure modules beside this one own the vocabulary, the arithmetic and
+ * the path mapping — `./devices.js` on the enumeration, `./screen.js` on the screen and on the
+ * elements on it, `./containers.js` on where a device path is on this host, `./input.js` on the
+ * HID events and on the key vocabulary. This file is the join between them and holds no
+ * text-shaped knowledge of its own: no key name, no state token, no plist path and no failure
+ * wording appears here.
  *
  * **The two transfers reach no simulator at all**, which is the one thing about this backend that
  * has no counterpart on the Android side: a simulator's storage *is* a directory on this host, so
@@ -59,11 +61,13 @@ import {
 	type DeviceBackend,
 	type DeviceInfo,
 	DeviceInfoSchema,
+	type DeviceKey,
 	type DeviceState,
 	type DeviceWatch,
 	type DeviceWatcher,
 	type InterruptionCause,
 	type LogRead,
+	type Point,
 	type PullFileOptions,
 	type ReadLogsOptions,
 	type RecordVideoOptions,
@@ -76,19 +80,32 @@ import {
 	NoRecordingRunningError,
 	RecordingAlreadyRunningError,
 	UnfinishedRecordingError,
+	UnsupportedKeyError,
+	UnsupportedTextError,
 } from '../../core/errors.js';
 import { type AppId, type DeviceSerial, unwrap } from '../../core/ids.js';
 import { waitForCondition } from '../../core/wait.js';
 import { hostPathOf } from './containers.js';
 import { SIMCTL_MISSING, SimctlNotFoundError } from './developer-dir.js';
 import { IOS_SIMULATOR_PLATFORM_ID, toDevices, toNotifiedDevices } from './devices.js';
-import { IdbCompanions, type IdbRpc } from './idb-client.js';
+import { IdbCompanions, type IdbStreamRpc, type IdbUnaryRpc } from './idb-client.js';
 import {
 	IDB_COMPANION_STDERR_TAIL_CHARS,
 	type IdbCompanionStream,
 	streamIdbCompanion,
 } from './idb-companion.js';
 import { IDB_COMPANION_MISSING, IdbCompanionNotFoundError } from './idb-companion-path.js';
+import {
+	buttonEvents,
+	DEVICE_KEYS,
+	isScreenBlanked,
+	READ_SCREEN_BLANKED_ARGV,
+	swipeEvents,
+	TYPEABLE_TEXT,
+	tapEvents,
+	typeTextEvents,
+	untypeableCharacters,
+} from './input.js';
 import { ACCESSIBILITY_FORMAT, parseAccessibilityRead } from './parsers/accessibility.js';
 import { saysNothingToTerminate } from './parsers/app-control.js';
 import { type DeviceTypeProfile, readDeviceTypeProfile } from './parsers/device-type-profile.js';
@@ -227,8 +244,19 @@ const SCREENSHOT_ARGV = ['screenshot', '--type', 'png', '--mask', 'ignored'] as 
  *
  * The format is that module's, exported from it because the shape it parses *is* that format.
  */
-const READ_SCREEN_RPC: IdbRpc = 'accessibility_info';
+const READ_SCREEN_RPC: IdbUnaryRpc = 'accessibility_info';
 const READ_SCREEN_REQUEST = { format: ACCESSIBILITY_FORMAT } as const;
+
+/**
+ * The RPC every one of the four input primitives goes through — the only client-streaming call
+ * this backend makes.
+ *
+ * One RPC for all four because that is what the companion offers: there is no tap call and no text
+ * call, only a stream of HID events (`./idb/idb.proto`), so the difference between a tap, a swipe,
+ * a key and a line of text is entirely which events `./input.js` builds. That is also why the
+ * vocabulary is worth its own module rather than four argv constants here.
+ */
+const HID_RPC: IdbStreamRpc = 'hid';
 
 /**
  * How far back one log read looks, narrowest first — the pushdown, and the honest answer to a
@@ -834,6 +862,27 @@ function notReadable(serial: DeviceSerial, state: DeviceState): Error {
 			'A screen read on this platform needs an accessibility connection into a running ' +
 			'system: the tool refuses one against a device that is not booted, and this host ' +
 			'refuses first so that no companion process is started for a device that cannot answer.',
+	);
+}
+
+/**
+ * An injection asked of a device that is not booted — {@link notReadable}'s twin, and it is a twin
+ * rather than a copy because the tool's answer was measured separately.
+ *
+ * `hid` refuses this one properly too. Measured against a `Shutdown` iPhone 17 Pro (companion
+ * v1.5.2, Xcode 26.4.1, 2026-09-09), a tap and a `HOME` press each came back at gRPC `INTERNAL` in
+ * 214 ms and 3 ms with *"Mach port not connected, device may not be ready yet"*. So this check is
+ * not what stands between a caller and a wrong answer either — what it stands between them and is
+ * the same **process** {@link notReadable} describes: reaching that refusal means starting a
+ * companion for the device, and the companion then stays running.
+ */
+function notInputtable(serial: DeviceSerial, state: DeviceState): Error {
+	return new Error(
+		`Device '${unwrap(serial)}' is '${state}' rather than ready, so nothing was injected into ` +
+			'it. Input on this platform goes into a running system through the same companion a ' +
+			'screen read uses: the tool refuses it against a device that is not booted, and this ' +
+			'host refuses first so that no companion process is started for a device that cannot ' +
+			'answer.',
 	);
 }
 
@@ -1688,6 +1737,105 @@ export class IosSimulatorDeviceBackend implements DeviceBackend {
 	}
 
 	/**
+	 * A tap, as the two HID events a press is — `./input.js` holds the arithmetic and the reason
+	 * nothing is converted on the way.
+	 *
+	 * **What comes back proves nothing about the device**, and that is the whole shape of input on
+	 * this transport: `hid` answers an empty `HIDResponse`, and the bench watched it answer that
+	 * for a keycode that does not exist, a touch at `NaN` and a touch a hundred thousand points
+	 * off the panel. So the checks that can be made before the stream are made in `./input.js`,
+	 * and the only real evidence a tap landed is a screen read after it — which is what
+	 * `src/verbs/input.ts` returns as the post-state and what
+	 * `tests/device/ios-simulator/input.test.ts` asserts on.
+	 *
+	 * The events are built **before** the device is checked, so a programmer error costs no round
+	 * trip and reads as itself (`../android/backend.ts`'s ordering, for its reason).
+	 */
+	async tap(serial: DeviceSerial, at: Point): Promise<void> {
+		const events = tapEvents(at);
+		await this.refuseUnlessInputtable(serial);
+
+		await this.companions.stream(serial, HID_RPC, events);
+	}
+
+	/**
+	 * A drag from `from` to `to` over `durationMs` — one `HIDSwipe`, and also the long press
+	 * (`./input.js`'s `swipeEvents` carries what was measured for both).
+	 *
+	 * The call **blocks for the gesture**: the companion holds the stream open until the swipe has
+	 * finished, measured at about 100 ms over the duration asked for. That is a call this backend
+	 * can spend a second and a half inside, well within `IDB_CALL_TIMEOUT_MS` and the reason it is
+	 * worth saying out loud.
+	 */
+	async swipe(serial: DeviceSerial, from: Point, to: Point, durationMs: number): Promise<void> {
+		const events = swipeEvents(from, to, durationMs);
+		await this.refuseUnlessInputtable(serial);
+
+		await this.companions.stream(serial, HID_RPC, events);
+	}
+
+	/**
+	 * `text`, as key presses, in one stream.
+	 *
+	 * **What this device will not type is refused before anything is sent** — `./input.js` carries
+	 * the measurements, and the short version is that outside printable ASCII there is either no
+	 * key at all, or a key that does something other than insert the character: a tab left a field
+	 * exactly as it was, and a newline is Return, which submitted. That refusal is an
+	 * `UnsupportedTextError` rather than a plain one because it is a caller's string that is wrong
+	 * rather than the host: `src/verbs/failure.ts` carries it to the agent as `unsupported-text`
+	 * naming the characters to change, where a plain `Error` would arrive as `internal_error`. The
+	 * words for what this device *can* take are this platform's and are passed in, because that
+	 * class names no platform's particulars.
+	 *
+	 * **One call however long the text is.** All 95 printable ASCII characters went in a single
+	 * stream in 114 ms and came back out of a text field byte-identical, so there is no analogue
+	 * of the Android side's `%s` cut and no run in which half the text lands.
+	 */
+	async typeText(serial: DeviceSerial, text: string): Promise<void> {
+		const unsupported = untypeableCharacters(text);
+		if (unsupported.length > 0) {
+			throw new UnsupportedTextError(serial, text, unsupported, TYPEABLE_TEXT);
+		}
+		const events = typeTextEvents(text);
+		await this.refuseUnlessInputtable(serial);
+
+		await this.companions.stream(serial, HID_RPC, events);
+	}
+
+	/**
+	 * Press one of the four keys of the neutral vocabulary — or refuse it by name, which two of
+	 * them are.
+	 *
+	 * **The refusal comes first, before any round trip**, and that ordering is deliberate: `back`
+	 * and `recents` have no answer on this platform in *any* device state, so asking the
+	 * enumeration about the device first would spend a call to reach the same sentence. What the
+	 * caller is told is which key and why (`./input.js`'s `DEVICE_KEYS`), through
+	 * `UnsupportedKeyError` — never `MissingCapabilityError`, because this device does take input
+	 * and tapping, swiping and typing all work (`src/core/device.ts`).
+	 *
+	 * **`wake` reads the screen state before it presses, and that is the whole of it being
+	 * idempotent.** The button idb exposes is `LOCK`, which *toggles*: pressing it on a woken
+	 * device puts it to sleep, which is the silent inversion this vocabulary exists to avoid. So
+	 * the press is conditional on {@link screenIsBlanked}, and a `wake` on a device that is
+	 * already awake sends nothing at all — measured three times in a row on the bench, leaving the
+	 * flag at `0` each time (`PROJECT.md` R46). `home` presses unconditionally, because `HOME` is
+	 * not a toggle.
+	 *
+	 * The state check on the device is *after* the key lookup and *before* either of those, so a
+	 * key that will be pressed is pressed on a device that can take it.
+	 */
+	async pressKey(serial: DeviceSerial, key: DeviceKey): Promise<void> {
+		const answer = DEVICE_KEYS[key];
+		if ('noEquivalent' in answer) {
+			throw new UnsupportedKeyError(serial, key, answer.noEquivalent);
+		}
+		await this.refuseUnlessInputtable(serial);
+		if (answer.onlyWhenBlanked && !(await this.screenIsBlanked(serial))) return;
+
+		await this.companions.stream(serial, HID_RPC, buttonEvents(answer.button));
+	}
+
+	/**
 	 * Record for `options.durationMs` and answer with the bytes — **the recorder is a process on
 	 * this host, and everything below follows from that.**
 	 *
@@ -2073,6 +2221,36 @@ export class IosSimulatorDeviceBackend implements DeviceBackend {
 		const device = await this.describeDevice(serial);
 		if (device === null) throw new DeviceVanishedError(serial);
 		if (device.state !== 'ready') throw notRecordable(serial, device.state);
+	}
+
+	/**
+	 * Refuse unless the device can take input — {@link notInputtable} carries what the tool does
+	 * without it, which is refuse properly and leave a companion running.
+	 *
+	 * {@link refuseUnlessRecordable}'s shape, and {@link readScreen}'s reason: a device this host
+	 * no longer has is {@link DeviceVanishedError} rather than a refusal about a state nobody can
+	 * read.
+	 */
+	private async refuseUnlessInputtable(serial: DeviceSerial): Promise<void> {
+		const device = await this.describeDevice(serial);
+		if (device === null) throw new DeviceVanishedError(serial);
+		if (device.state !== 'ready') throw notInputtable(serial, device.state);
+	}
+
+	/**
+	 * Whether this device's screen is currently off — the read that makes `wake` idempotent.
+	 *
+	 * `simctl spawn <udid> notifyutil -g <name>`, which is the second call in this backend to run
+	 * a program *inside* the device ({@link readLogs} is the first) and, like it, hands the guest
+	 * program its own argv with no shell on either side. The name, the parse and the measurement
+	 * behind all three are `./input.js`'s; what is here is the invocation.
+	 *
+	 * It costs about 360 ms, which is two orders of magnitude more than the press it guards — and
+	 * it is paid anyway, because the alternative is a `wake` that sleeps a woken device.
+	 */
+	private async screenIsBlanked(serial: DeviceSerial): Promise<boolean> {
+		const { stdout } = await runSimctlOnDevice(serial, 'spawn', [...READ_SCREEN_BLANKED_ARGV]);
+		return isScreenBlanked(stdout);
 	}
 
 	/**

@@ -35,10 +35,27 @@
  * can do (D11), and a manifest that went `false` on a machine with no companion would make the
  * same device advertise different abilities depending on which host was lending it.
  *
- * **The label stays `iOS Simulator (simctl)` until the input vocabulary lands** — see
- * {@link IOS_SIMULATOR_LABEL}, which carries why.
+ * **`canInput` is the fourth and last, and it flips here** (#252, `PROJECT.md` R46/R47 phase 5).
+ * It names four methods — `tap`, `swipe`, `typeText` **and** `pressKey` — so it could not move for
+ * three of them, which is what kept it `false` while the transport was already in place. All four
+ * go through one client-streaming `hid` call on the same companion `readScreen` uses, and each is
+ * verified against a device by **reading the screen back** rather than by a return code, because
+ * that call answers an empty message and answers it just as happily for a keycode that does not
+ * exist (`src/backends/ios-simulator/input.ts`).
  *
- * **The two remaining `false` flags are honest, and each has its own reason.**
+ * **`pressKey` is where declaring this capability stops being a boolean.** `DeviceKey` has four
+ * members and this platform has two of them: `home` and `wake` are pressed, and `back` and
+ * `recents` are refused **by name** with `UnsupportedKeyError` (#215), which reaches the agent as
+ * an `unsupported-key` failure carrying the serial and the key. That is not a hole in this
+ * manifest — it is what the per-key refusal exists for, and the alternative shapes are both worse:
+ * a flag per key would put four booleans behind one method and make `canInput` mean nothing (D11),
+ * while declaring `canInput: false` to dodge two keys would refuse tapping, swiping and typing,
+ * which work. `wake` is a *conditional* press for the same honesty: the button behind it toggles,
+ * so it is pressed only when the screen is off.
+ *
+ * **The label moves with it**, to `iOS Simulator (simctl + idb)` — see {@link IOS_SIMULATOR_LABEL}.
+ *
+ * **The one remaining `false` flag is honest, and it is `false` for good.**
  *
  * - **`canControlNetwork`** is the one that is `false` *for good* (`docs/IOS.md` §5, §10 step 1).
  *   A simulator has no airplane mode and no wifi toggle: it uses the **host's** network stack, so
@@ -49,11 +66,6 @@
  *   cannot do that*" `ai/RULES.md` §2 forbids. `MissingCapabilityError` is what a caller gets,
  *   naming this capability and the device, and there is **no** `setAirplaneMode` and **no**
  *   `setWifiEnabled` method beside the flag.
- * - **`canInput`** is `false` because the four methods behind it are the phase after this one
- *   (`PROJECT.md` R47 phase 5, `docs/IOS.md` §10): the transport they need is now here and the
- *   vocabulary is not, and `canInput` names `tap`, `swipe`, `typeText` **and** `pressKey`, so it
- *   cannot honestly move for three of the four. `PROJECT.md` R46 is the per-key refusal it will
- *   move behind. Until it does, an absent method beside a `false` flag is a complete backend.
  *
  * That is the difference between this manifest and `../android/capabilities.ts`, where every flag
  * is `true`: a declared opt-out is not an unfinished backend, and a capability declared before its
@@ -67,23 +79,25 @@ import { IOS_SIMULATOR_PLATFORM_ID } from './devices.js';
 /**
  * The label a client shows beside this platform's devices.
  *
- * **`(simctl)` rather than `docs/IOS.md` §10's `(simctl + idb)`, even though idb is now here**,
- * and it stays that way until the input vocabulary lands with it. A label is what a person picking
- * a device reads, so naming the program that does taps and text while `canInput` is still `false`
- * would promise exactly what this file says a manifest must not — and it would promise it in the
- * one place there is no capability flag beside to correct it. It moves in the phase that makes it
- * true (`PROJECT.md` R47 phase 5). The registry key itself is `./devices.ts`'s
- * `IOS_SIMULATOR_PLATFORM_ID` — reused rather than restated, because that module carries the whole
- * argument for `ios-simulator` over `ios`.
+ * **`(simctl + idb)` at last**, `docs/IOS.md` §10's spelling and the one this backend has now
+ * earned. It said `(simctl)` through the three phases in which idb was present but only some of
+ * what it enables was: a label is what a person picking a device reads, and naming the program
+ * that does taps and text while `canInput` was still `false` would have promised exactly what this
+ * file says a manifest must not — in the one place there is no capability flag beside to correct
+ * it. It moves in the phase that makes it true (#252), which is also the phase after which naming
+ * idb promises nothing this backend does not have.
+ *
+ * The registry key itself is `./devices.ts`'s `IOS_SIMULATOR_PLATFORM_ID` — reused rather than
+ * restated, because that module carries the whole argument for `ios-simulator` over `ios`.
  */
-const IOS_SIMULATOR_LABEL = 'iOS Simulator (simctl)';
+const IOS_SIMULATOR_LABEL = 'iOS Simulator (simctl + idb)';
 
 export const iosSimulatorCapabilityManifest: CapabilityManifestInput = {
 	platform: IOS_SIMULATOR_PLATFORM_ID,
 	label: IOS_SIMULATOR_LABEL,
 	capabilities: {
 		canReadScreen: true,
-		canInput: false,
+		canInput: true,
 		canControlNetwork: false,
 		canRecordVideo: true,
 		canControlRecording: true,

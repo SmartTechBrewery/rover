@@ -80,12 +80,22 @@ import { quoteStream } from './simctl.js';
  * derived from this tuple is what makes naming it a *compile* error, and the scan beside it is
  * what makes adding it here a test failure — the two halves of one rule.
  *
- * Two entries: the handshake, and the screen read `readScreen` is built on
- * (`./parsers/accessibility.ts` owns which of its three formats is asked for). A phase that needs
- * `hid` adds it here deliberately, which is the point of the list.
+ * **Split by call shape rather than one list, because the shapes are not interchangeable.** Two
+ * are request-and-answer: the handshake, and the screen read `readScreen` is built on
+ * (`./parsers/accessibility.ts` owns which of its three formats is asked for). `hid` is
+ * `rpc hid(stream HIDEvent) returns (HIDResponse)` — the client writes events and *then* gets one
+ * empty answer — so it is reached through {@link SupervisedCompanion.stream} and naming it in a
+ * unary call is a type error rather than a `client.hid(request, …)` that hands a callback where
+ * the generated method wants none.
+ *
+ * `hid` was added here in the phase that needed it (#252), which is the point of the list.
  */
-export const IDB_RPCS = ['describe', 'accessibility_info'] as const;
-export type IdbRpc = (typeof IDB_RPCS)[number];
+export const IDB_UNARY_RPCS = ['describe', 'accessibility_info'] as const;
+export const IDB_STREAM_RPCS = ['hid'] as const;
+export const IDB_RPCS = [...IDB_UNARY_RPCS, ...IDB_STREAM_RPCS] as const;
+export type IdbUnaryRpc = (typeof IDB_UNARY_RPCS)[number];
+export type IdbStreamRpc = (typeof IDB_STREAM_RPCS)[number];
+export type IdbRpc = IdbUnaryRpc | IdbStreamRpc;
 
 /**
  * The read-only call a start is proved with — the companion answering, not merely listening.
@@ -94,7 +104,7 @@ export type IdbRpc = (typeof IDB_RPCS)[number];
  * screen dimensions and changes nothing about the device. Cheap enough to be a handshake at 1 ms
  * on an established channel (module header).
  */
-export const IDB_HEALTH_RPC: IdbRpc = 'describe';
+export const IDB_HEALTH_RPC: IdbUnaryRpc = 'describe';
 
 /**
  * How long a companion has to be spawned, report its socket and answer a call.
@@ -279,6 +289,19 @@ type UnaryCall = (
 ) => void;
 
 /**
+ * A client-streaming RPC, as the same client exposes it: the callback and the options come first
+ * and the caller is handed a writable to push requests into.
+ */
+type ClientStreamCall = (
+	options: { deadline: Date },
+	callback: (error: ServiceError | null, response: unknown) => void,
+) => {
+	write(request: object): void;
+	end(): void;
+	cancel(): void;
+};
+
+/**
  * One `idb_companion` for one target: the child, the channel, and everything that happens when it
  * dies.
  *
@@ -380,7 +403,7 @@ class SupervisedCompanion {
 	 * would otherwise be reported by gRPC as whatever the socket looked like on the way down,
 	 * which is a message about a transport rather than about the program a person can restart.
 	 */
-	async call(rpc: IdbRpc, request: object, timeoutMs: number): Promise<unknown> {
+	async call(rpc: IdbUnaryRpc, request: object, timeoutMs: number): Promise<unknown> {
 		const client = this.#client;
 		if (this.#death !== null || client === null) {
 			throw new IdbCompanionInterruptedError(this.udid, rpc, this.#death ?? 'it was never started');
@@ -406,6 +429,61 @@ class SupervisedCompanion {
 					resolve(response);
 				},
 			);
+		});
+	}
+
+	/**
+	 * One client-streaming call: every request written, the stream ended, and the single answer
+	 * awaited — with {@link call}'s deadline and {@link call}'s race against the process.
+	 *
+	 * **The options go *before* the callback, and that is load-bearing rather than a style
+	 * choice.** `@grpc/grpc-js` decides what it was handed by type rather than by position
+	 * (`checkOptionalUnaryResponseArguments`): a leading function is read as the callback and
+	 * everything after it is **discarded**, so `hid(callback, { deadline })` is a call with no
+	 * deadline at all — a wedged companion holding a lease open, silently, which is the one thing
+	 * `IDB_CALL_TIMEOUT_MS` exists to prevent.
+	 *
+	 * **The whole batch goes into one call rather than one call per event**, because that is what
+	 * makes a gesture a gesture: the events of a press, a swipe or a line of text are dispatched
+	 * in order by the companion, and cutting them across calls would put a channel round trip
+	 * between a finger going down and coming up. Backpressure is deliberately not awaited — the
+	 * largest batch this backend sends is a few hundred small messages (four per shifted
+	 * character) and `ClientWritableStream` buffers them, so pausing for a drain would add a tick
+	 * per key to a 114 ms operation.
+	 *
+	 * The call is **cancelled** if the companion dies mid-stream, so a writable whose peer is gone
+	 * is not left to sit out its own deadline.
+	 */
+	async stream(rpc: IdbStreamRpc, requests: readonly object[], timeoutMs: number): Promise<void> {
+		const client = this.#client;
+		if (this.#death !== null || client === null) {
+			throw new IdbCompanionInterruptedError(this.udid, rpc, this.#death ?? 'it was never started');
+		}
+
+		const invoke = client[rpc] as ClientStreamCall;
+		await new Promise<void>((resolve, reject) => {
+			// Declared ahead of the call so the death handler can name it, and filled in the moment
+			// there is one. Nothing can reach the handler in between: it is registered on the line
+			// after, and neither line awaits.
+			let inFlight: { cancel(): void } | null = null;
+			const died = (reason: string): void => {
+				inFlight?.cancel();
+				reject(new IdbCompanionInterruptedError(this.udid, rpc, reason));
+			};
+
+			const call = invoke.call(client, { deadline: new Date(Date.now() + timeoutMs) }, (error) => {
+				this.#waiting.delete(died);
+				if (error !== null) {
+					this.#failed(rpc, error).then(reject, reject);
+					return;
+				}
+				resolve();
+			});
+			inFlight = call;
+			this.#waiting.add(died);
+
+			for (const request of requests) call.write(request);
+			call.end();
 		});
 	}
 
@@ -587,9 +665,27 @@ export class IdbCompanions {
 	 * answered, `IdbCompanionNotFoundError` when this host has no companion to run, and a
 	 * {@link WaitTimeoutError} when one starts but never answers.
 	 */
-	async call(serial: DeviceSerial, rpc: IdbRpc, request: object): Promise<unknown> {
+	async call(serial: DeviceSerial, rpc: IdbUnaryRpc, request: object): Promise<unknown> {
 		const companion = await this.#companion(unwrap(serial));
 		return await companion.call(rpc, request, this.#callTimeoutMs);
+	}
+
+	/**
+	 * The same, for the one RPC whose request is a stream — {@link SupervisedCompanion.stream}
+	 * carries why the batch is one call and why the deadline is where it is.
+	 *
+	 * It answers nothing: `hid` returns an empty `HIDResponse`, so what a caller learns from this
+	 * resolving is that the companion accepted the events, and **not** that the device did
+	 * anything with them. That distinction is the whole reason every injection on this platform is
+	 * verified by reading the screen back (`docs/IOS.md` §2).
+	 */
+	async stream(
+		serial: DeviceSerial,
+		rpc: IdbStreamRpc,
+		requests: readonly object[],
+	): Promise<void> {
+		const companion = await this.#companion(unwrap(serial));
+		await companion.stream(rpc, requests, this.#callTimeoutMs);
 	}
 
 	/** Stop the companion for `serial`, if there is one. A device with none is not an error. */

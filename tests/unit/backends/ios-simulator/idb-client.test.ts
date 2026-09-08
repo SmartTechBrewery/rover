@@ -6,7 +6,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
 	IDB_COMPANION_DIRECTORY_PREFIX,
 	IDB_HEALTH_RPC,
-	IDB_RPCS,
+	IDB_STREAM_RPCS,
+	IDB_UNARY_RPCS,
 	IdbCompanionInterruptedError,
 	IdbCompanions,
 } from '@/backends/ios-simulator/idb-client.js';
@@ -145,8 +146,13 @@ describe('the vendored proto', () => {
 
 		// Proved through the client rather than by reading the file: a call is what needs the RPC
 		// to exist, and one that answers is the only evidence the loaded service really has it.
-		for (const rpc of IDB_RPCS) {
+		// Both lists, each through the call shape it is on that list for — a client-streaming RPC
+		// invoked as a unary one is a callback handed to a method that wants none.
+		for (const rpc of IDB_UNARY_RPCS) {
 			await expect(pool().call(SERIAL, rpc, {})).resolves.toBeDefined();
+		}
+		for (const rpc of IDB_STREAM_RPCS) {
+			await expect(pool().stream(SERIAL, rpc, [])).resolves.toBeUndefined();
 		}
 	});
 });
@@ -268,6 +274,83 @@ describe('starting a companion', () => {
 				{},
 			),
 		).rejects.toThrow(WaitTimeoutError);
+	});
+});
+
+/**
+ * The client-streaming call, which is `hid` and nothing else — every input primitive on this
+ * platform goes through it.
+ *
+ * What makes it worth its own block rather than a line in the one above is that a client-streaming
+ * call is a different shape in `@grpc/grpc-js`: the requests are written rather than passed, and
+ * the options and the callback are told apart **by type rather than by position**, so a leading
+ * callback silently discards the deadline. The stub records what it received, which is the only
+ * thing such a call has to show for itself.
+ */
+describe('a streaming call', () => {
+	/** The events arrive, in order, as the messages the vendored proto defines. */
+	it('writes every event the caller batched, in order', async () => {
+		await answering();
+		const events = join(directory, 'hid.jsonl');
+		vi.stubEnv('ROVER_STUB_HID_FILE', events);
+
+		await pool().stream(SERIAL, 'hid', [
+			{ press: { action: { button: { button: 'HOME' } }, direction: 'DOWN' } },
+			{ press: { action: { button: { button: 'HOME' } }, direction: 'UP' } },
+		]);
+
+		const received = (await readFile(events, 'utf8'))
+			.split('\n')
+			.filter((line) => line !== '')
+			.map((line) => JSON.parse(line) as { press: { direction: string } });
+		expect(received.map((event) => event.press.direction)).toEqual(['DOWN', 'UP']);
+	});
+
+	/**
+	 * An empty batch still reaches the companion and still comes back — which is what makes a
+	 * `typeText('')` against a device that has gone a reported failure rather than a local no-op.
+	 */
+	it('answers an empty batch', async () => {
+		await answering();
+
+		await expect(pool().stream(SERIAL, 'hid', [])).resolves.toBeUndefined();
+	});
+
+	/**
+	 * **The deadline really is on the call**, and this is the case that proves the argument order:
+	 * `@grpc/grpc-js` reads a leading function as the callback and throws everything after it away,
+	 * so the wrong order here is a stream with no bound at all. The stub binds, prints its
+	 * handshake and never answers `describe`, so what ends this is the client's own clock.
+	 */
+	it('is bounded by a deadline rather than waiting on a wedged companion forever', async () => {
+		await answering();
+		const companions = new IdbCompanions({
+			startTimeoutMs: START_TIMEOUT_MS,
+			callTimeoutMs: 50,
+		});
+		pools.push(companions);
+		vi.stubEnv('ROVER_STUB_HID_NEVER_ANSWERS', '1');
+
+		await expect(companions.stream(SERIAL, 'hid', [])).rejects.toThrow(/DEADLINE/i);
+	});
+
+	/**
+	 * A companion that dies part-way through a batch fails it as an **interruption** naming the
+	 * RPC, the same as a unary call — never as a device fault, because killing one leaves the
+	 * simulator booted.
+	 */
+	it('fails a batch whose companion died mid-stream, as an interruption', async () => {
+		await answering();
+		vi.stubEnv('ROVER_STUB_HID_DIES', '1');
+
+		const failure = await pool()
+			.stream(SERIAL, 'hid', [
+				{ press: { action: { button: { button: 'HOME' } }, direction: 'DOWN' } },
+			])
+			.catch((error: unknown) => error);
+
+		expect(failure).toBeInstanceOf(IdbCompanionInterruptedError);
+		expect((failure as IdbCompanionInterruptedError).rpc).toBe('hid');
 	});
 });
 
