@@ -1766,9 +1766,11 @@ Read `ai/RULES.md` in full first. `npm install` sets up the toolchain, installs 
 warns when it can find no `adb` for Rover to run;
 `npm run verify` (lint, typecheck of both the Node tree and the panel, then the unit and panel test
 projects) is the one command that says whether the tree is healthy — it needs no device and no host
-tool. `npm run test:device` needs a device on `adb`, and
+tool. `npm run test:device` needs a device on `adb`,
 the `record_video` cases additionally need `ffmpeg` on `PATH` — which is the one program both the
-frame extraction and the recording normalisation use, so one flag gates both; a host missing either
+frame extraction and the recording normalisation use, so one flag gates both — and the iOS
+simulator cases need a **booted simulator instead of** an Android device, so a Mac with no phone
+attached still has cases to run. Each is gated by its own flag, and a host missing any of them
 **skips those suites loudly** rather than failing or passing in silence. Issues are filed with `/write-issue` and implemented with
 `/solve-issue`; both are committed under `.claude/skills/`. Work is also delegated to
 [Swarm](https://github.com/SmartTechBrewery/swarm), which is why every issue carries the `swarm`

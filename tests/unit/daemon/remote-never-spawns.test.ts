@@ -28,6 +28,12 @@ const ALLOWED_TO_SPAWN = [
 	// name a file instead of a bare program name.
 	'backends/android/adb-path.ts',
 	'backends/android/adb.ts',
+	// The third is the second platform's runner (#214), added here deliberately as this list
+	// intends: it runs one `simctl` and waits for it, bounded by a timeout, and it starts no
+	// daemon. Its own search needs no entry — `backends/ios-simulator/developer-dir.ts` verifies
+	// a candidate by asking the filesystem rather than by running it, which is the one deliberate
+	// departure from `adb-path.ts` and the property that lets a machine with no Xcode import it.
+	'backends/ios-simulator/simctl.ts',
 	'daemon/connect.ts',
 	// Slicing a recording into frames needs a decoder this tree does not contain, so the host
 	// drives one. It starts no daemon either — it runs one program over bytes already in
