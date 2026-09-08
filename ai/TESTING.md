@@ -18,6 +18,8 @@ Note the double meaning of "test" in this repo and keep it straight: Rover *perf
 
 Device tests take a lease like any other client. A device test that talks to `adb` directly, outside the lease, will eventually run on a device another agent is using, and that is precisely the failure this whole project exists to prevent. One temporary exemption, below.
 
+**A backend under construction is a separate case, not part of that exemption.** Until its manifest registers, a backend has no class the barrel knows about and therefore no daemon that could lend one of its devices — so its device suites drive the tool directly because there is nothing to take a lease *from*, not because they have not been converted yet. `tests/device/ios-simulator/` is that case today (#214). This bound expires by itself the moment the registration lands, which is what makes it different from the exemption below: that one expires when somebody does the conversion work, and the section describing it is deleted when they do. **Deleting it must not take this paragraph with it** — a suite here is not on that section's list and never was. The obligation while it holds is the same as everywhere else: change no device state, boot nothing, and say in the suite header which of these two reasons applies.
+
 ### The exemption: six `tests/device/` suites still drive the backend directly
 
 Six suites under `tests/device/` construct the backend class and call it, outside any lease. That is a departure from the rule above, and unlike the socket exception below it is **temporary** — it is a wiring gap, not a property of what the suites assert.

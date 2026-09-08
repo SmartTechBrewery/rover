@@ -26,9 +26,12 @@ import { parseDeviceSerial } from '@/core/ids.js';
  * down every device it owns, so a suite that boots its own subject takes the operator's session
  * with it.
  *
- * It takes no lease, which is the exemption `ai/TESTING.md` describes for the Android suites and
- * holds here for a stronger reason: this backend has no class and is registered nowhere yet, so
- * there is no daemon that could lend one of these devices.
+ * It takes no lease, and **not under the exemption `ai/TESTING.md` grants the six Android
+ * suites** — that one is a conversion gap over an enumerated list this suite is not on, and it
+ * is deleted once those six convert. This is the backend-under-construction case beside it: the
+ * backend has no class and is registered nowhere yet, so there is no daemon that could lend one
+ * of these devices and nothing to take a lease from. That bound expires by itself when the
+ * manifest registers, rather than when somebody does conversion work.
  */
 describe.skipIf(!process.env.ROVER_TEST_SIMULATOR)('simctl against a real simulator', () => {
 	/** Both listings in one invocation, because `toDevices` needs both (`devices.ts`). */

@@ -126,6 +126,24 @@ perfectly successful `simctl io <device> screenshot <path>` prefixes its run wit
 type from extension: PNG` and `Note: No display specified. Defaulting to display: … (screenID: 1,
 name: LCD)`.
 
+**The `booted` selector is matched case-insensitively**, which is why the refusal in
+`src/backends/ios-simulator/simctl.ts` lowercases before comparing (#231 review). Measured on the
+same bench with one device booted:
+
+| Command | Exit | stderr |
+|---|---|---|
+| `terminate booted com.rover.nope` | **3** | `NSPOSIXErrorDomain … found nothing to terminate` |
+| `terminate BOOTED com.rover.nope` | **3** | the same — the device was resolved |
+| `terminate Booted com.rover.nope` | **3** | the same |
+| `terminate bootedx com.rover.nope` | **148** | `Invalid device: bootedx` |
+| `terminate notadevice com.rover.nope` | **148** | `Invalid device: notadevice` |
+
+The near-miss is the control: `bootedx` is rejected as a device name while all three casings of
+the word resolve one, so the special selector is the word and not the spelling. With **no** device
+booted the three casings answer 148 and `No devices are booted.` instead (measured on the review
+bench, which had none) — still a different message from `Invalid device:`, so the conclusion does
+not rest on a device being up.
+
 ### Evidence for the two verbs that matter most
 
 The whole point of a backend is the loop, so it was run as a loop: tap a card, then read the screen

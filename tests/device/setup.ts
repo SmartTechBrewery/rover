@@ -1,16 +1,12 @@
 import { execFile } from 'node:child_process';
-import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { adbExecutable } from '@/backends/android/adb-path.js';
-import {
-	resolveDeveloperDir,
-	SIMCTL_RELATIVE_PATH,
-} from '@/backends/ios-simulator/developer-dir.js';
 import { toDevices } from '@/backends/ios-simulator/devices.js';
 import {
 	parseSimctlDevices,
 	parseSimctlRuntimes,
 } from '@/backends/ios-simulator/parsers/simctl-list.js';
+import { runSimctl } from '@/backends/ios-simulator/simctl.js';
 import { FFMPEG } from '@/daemon/frames.js';
 import { type DeviceGate, readDeviceGate } from '../helpers/device-gate.js';
 
@@ -76,11 +72,15 @@ async function probeFrameExtraction(): Promise<boolean> {
 /**
  * Whether a simulator this host can drive is booted.
  *
- * **Through the backend's own resolution, never a bare name**, for the reason `probeDevices`
- * states about `adb` (#171): a suite that drove one `simctl` while the backend it is testing
- * drove another would be measuring two machines. `xcrun` is not used here either, and for the
- * sharper version of the same reason — it performs its own search, which can disagree with the
- * one `developer-dir.ts` made (`src/backends/ios-simulator/simctl.ts`).
+ * **Through the backend's own runner, never a bare name**, for the reason `probeDevices` states
+ * about `adb` (#171): a suite that drove one `simctl` while the backend it is testing drove
+ * another would be measuring two machines. `xcrun` is not used here either, and for the sharper
+ * version of the same reason — it performs its own search, which can disagree with the one
+ * `developer-dir.ts` made (`src/backends/ios-simulator/simctl.ts`). So this calls `runSimctl`
+ * rather than resolving and spawning itself (#231 review): the resolution, the timeout and the
+ * `maxBuffer` decision then all come from the module these suites are about, and the gate cannot
+ * drift from the runner it gates — a re-implementation here would have been the same argv with
+ * the adb timeout constant and Node's unchosen 1 MB buffer.
  *
  * Both listings in one invocation because `toDevices` needs both, and the answer is read from
  * the mapped `Device[]` rather than from the raw JSON so the gate and the backend agree on what
@@ -97,10 +97,7 @@ async function probeFrameExtraction(): Promise<boolean> {
  */
 async function probeSimulators(): Promise<boolean> {
 	try {
-		const simctl = join(resolveDeveloperDir(), SIMCTL_RELATIVE_PATH);
-		const { stdout } = await execFileAsync(simctl, ['list', '-j', 'devices', 'runtimes'], {
-			timeout: ADB_TIMEOUT_MS,
-		});
+		const { stdout } = await runSimctl(['list', '-j', 'devices', 'runtimes']);
 		const devices = toDevices(parseSimctlDevices(stdout), parseSimctlRuntimes(stdout));
 		return devices.some((device) => device.state === 'ready');
 	} catch {

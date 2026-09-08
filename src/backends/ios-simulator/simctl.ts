@@ -77,11 +77,20 @@ export const DEFAULT_SIMCTL_TIMEOUT_MS = 10_000;
 export const SIMCTL_MAX_BUFFER_BYTES = 8 * 1024 * 1024;
 
 /**
- * The one device selector `simctl` accepts that is not a device.
+ * The one device selector `simctl` accepts that is not a device, **lowercased**.
  *
  * Refused by {@link runSimctlOnDevice} — see its own note. `simctl help`, quoted verbatim: *"or
  * the special "booted" string which will cause simctl to pick a booted device. If multiple
  * devices are booted when the "booted" device is selected, simctl will choose one of them."*
+ *
+ * **The tool's own match is case-insensitive, so the comparison against this constant is too.**
+ * Measured on Xcode 26.4.1 with one device booted: `terminate BOOTED com.rover.nope` and
+ * `terminate Booted com.rover.nope` both resolved that device and answered exit **3**, `found
+ * nothing to terminate` — the same answer as lowercase `booted` — while the near-miss
+ * `terminate bootedx com.rover.nope` answered exit **148**, `Invalid device: bootedx`. With no
+ * device booted the three casings answer exit 148, `No devices are booted.`, which is again a
+ * different message from `Invalid device:`. Either way the casing is not what decides it: every
+ * spelling of the word is the selector (`docs/IOS.md` §2).
  */
 const BOOTED_SELECTOR = 'booted';
 
@@ -227,9 +236,12 @@ export async function runSimctl(
  * ahead of it, so a call needing one of those flags cannot use this function's shape — and
  * none of the calls this backend makes passes one.
  *
- * **The literal `booted` is refused**, which is two lines against the worst thing this platform
- * can do quietly: `simctl` answers a pinned-*looking* command on whichever booted device it
- * feels like, and reports success (see {@link BOOTED_SELECTOR}). No serial can be that string
+ * **The literal `booted` is refused in any casing**, which is two lines against the worst thing
+ * this platform can do quietly: `simctl` answers a pinned-*looking* command on whichever booted
+ * device it feels like, and reports success. The casing matters because the tool's match is
+ * case-insensitive and measurably so, `BOOTED` and `Booted` being the selector every bit as
+ * much as `booted` is (see {@link BOOTED_SELECTOR}) — a `===` here would have let exactly the
+ * value it was written to catch through. No serial can be that string in any casing
  * today — every one comes out of the enumeration through `DeviceSerialSchema` — so this is a
  * tripwire rather than a live path, and it is worth its two lines exactly because it is the one
  * value that silently turns a pinned call into an unpinned one.
@@ -241,9 +253,9 @@ export async function runSimctlOnDevice(
 	options: RunSimctlOptions = {},
 ): Promise<SimctlResult> {
 	const udid = unwrap(serial);
-	if (udid === BOOTED_SELECTOR) {
+	if (udid.toLowerCase() === BOOTED_SELECTOR) {
 		throw new Error(
-			`Refusing to run ${SIMCTL} ${subcommand} against '${BOOTED_SELECTOR}': that is not a ` +
+			`Refusing to run ${SIMCTL} ${subcommand} against '${udid}': that is not a ` +
 				'device, it is simctl choosing one of the booted ones for itself — which is a command ' +
 				'landing on hardware lent to somebody else, reported as success.',
 		);

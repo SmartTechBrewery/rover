@@ -280,14 +280,37 @@ describe('runSimctlOnDevice', () => {
 	/**
 	 * The one value that silently turns a pinned call into an unpinned one: `simctl` accepts the
 	 * literal `booted` and, when several are, "will choose one of them" (its own usage text).
+	 *
+	 * **Every casing of it, because the tool's own match ignores case** — measured on Xcode
+	 * 26.4.1, where `terminate BOOTED …` resolved the booted device just as `booted` did while
+	 * the near-miss `bootedx` answered `Invalid device: bootedx` (`docs/IOS.md` §2). A
+	 * case-sensitive guard would refuse the one spelling nobody types and pass the two a caller
+	 * plausibly would.
 	 */
-	it('refuses the literal booted selector and says why, without running anything', async () => {
+	it.each([
+		'booted',
+		'BOOTED',
+		'Booted',
+		'bOoTeD',
+	])('refuses the booted selector spelled %s and says why, without running anything', async (selector) => {
 		answers('');
 
 		await expect(
-			runSimctlOnDevice(parseDeviceSerial('booted'), 'terminate', ['com.rover.nope']),
+			runSimctlOnDevice(parseDeviceSerial(selector), 'terminate', ['com.rover.nope']),
 		).rejects.toThrow(/simctl choosing one of the booted ones/);
 		expect(execFileMock).not.toHaveBeenCalled();
+	});
+
+	/**
+	 * The refusal names what was passed rather than the constant, so the four spellings above are
+	 * distinguishable in a log — which is the whole value of a tripwire that fires.
+	 */
+	it('names the offending value in the refusal rather than the canonical spelling', async () => {
+		answers('');
+
+		await expect(
+			runSimctlOnDevice(parseDeviceSerial('BOOTED'), 'terminate', ['com.rover.nope']),
+		).rejects.toThrow("against 'BOOTED'");
 	});
 
 	it('passes a widened timeout through to the process', async () => {
