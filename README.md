@@ -1178,7 +1178,7 @@ startup, naming the variable and the reason, rather than binding something surpr
 | Variable | Default | Value |
 |---|---|---|
 | `ROVER_ADB_PATH` | unset — the search below | The one setting that overrides where this host looks for `adb`: the **path of the executable**, not the SDK it came from, so an `adb` in a layout with no `platform-tools` directory can be named too. Unset or empty and the ordered search under [where Rover looks for `adb`](#where-rover-looks-for-adb) answers instead — **empty counts as unset**, as it is for the socket. Read only by the daemon, on the machine the devices are attached to (`PROJECT.md` D19, D32): a client never resolves `adb` and never runs one. There is deliberately **no schema** for it, unlike every other row here: the only check worth making on this value is whether the file runs, which no shape can express — so a path that is not an executable this host can run is **skipped like any other candidate** rather than failing the daemon, and the search continues past it; when nothing is left, the failure names every location that was tried and this variable. The resolved path is held in memory for the daemon's life and **never written anywhere** (`PROJECT.md` D6), so an SDK upgrade takes effect on the next daemon start and there is no cache to invalidate. |
-| `ROVER_IDB_COMPANION_PATH` | unset — the search below | The one setting that overrides where this host looks for `idb_companion`, the program the iOS-simulator backend will drive its device stream and its input verbs through: the **path of the executable**, not a directory it came from. Unset or empty and the two-row search under [where Rover looks for `idb_companion`](#where-rover-looks-for-idb_companion) answers instead — **empty counts as unset**, as it is for `ROVER_ADB_PATH`. Read only by the daemon, on the machine the simulators are on (`PROJECT.md` D19, D32). **No schema**, for `ROVER_ADB_PATH`'s reason: a path that is not an executable this host can run is skipped like any other candidate rather than failing the daemon, and the search continues past it. Nothing drives this program yet — today the variable is read by the locator and by nothing else, and the backend still enumerates through `simctl`. |
+| `ROVER_IDB_COMPANION_PATH` | unset — the search below | The one setting that overrides where this host looks for `idb_companion`, the program the iOS-simulator backend will drive its device stream and its input verbs through: the **path of the executable**, not a directory it came from. Unset or empty and the two-row search under [where Rover looks for `idb_companion`](#where-rover-looks-for-idb_companion) answers instead — **empty counts as unset**, as it is for `ROVER_ADB_PATH`. Read only by the daemon, on the machine the simulators are on (`PROJECT.md` D19, D32). **No schema**, for `ROVER_ADB_PATH`'s reason: a path that is not an executable this host can run is skipped like any other candidate rather than failing the daemon, and the search continues past it. The backend **watches** the device set through this program now and falls back to polling `simctl list` when there is none to run; `list_devices` and `device_info` still read `simctl`, and the input verbs are still ahead. |
 | `ROVER_SOCKET_PATH` | `~/.rover/rover.sock` | Absolute path of the unix socket the local daemon binds and a local client connects to. **Empty counts as unset** — an exported-but-blank variable is what a shell leaves behind, and reading it as a real setting would point the daemon at the current directory. At most **103 bytes of UTF-8**: a unix socket address is a fixed-size struct (104 bytes on macOS, 108 on Linux, NUL included), and over the cap `bind` truncates or answers `EINVAL` instead of naming the length, so a longer path is rejected at startup with the byte count and the path. |
 | `ROVER_USERS_PATH` | `~/.rover/users.json` | Absolute path of the host's own user store — one record per user: identifier, display name, the **hash** of that user's token, and when it was created. Never a token: `rover users add` and `rover users rotate` print the raw value once and store only its hash. **Empty counts as unset**, as it is for the socket. Read by `rover users`, which touches the file directly and never goes over the network (`PROJECT.md` D25), **and by the network listener**, which is the host's entire authentication surface: the token in a caller's greeting is hashed and looked up here, re-read at every connection attempt and never cached, so `revoke` and `rotate` take effect on the very next attempt with the daemon still running. |
 | `ROVER_ARTIFACTS_PATH` | `~/.rover/artifacts` | Root of the durable artifact archive: every `screenshot`, `record_video`, `stop_recording` and `read_logs` call additionally writes its output here, on the host, **in addition to** returning the bytes to the client (`PROJECT.md` D23, §10). **Empty counts as unset**, as it is for the socket. Read only by the daemon — a client never resolves it, and the archive path is never the one an agent is given. **The host prunes it, by both of its bounds and with nobody asking.** The whole retention policy — `ROVER_ARTIFACTS_BUDGET_MB` and `ROVER_ARTIFACTS_MAX_AGE_DAYS` below — is run over this tree at **local midnight** and again every time the daemon **starts**, deleting whole run directories oldest first; the **budget** half additionally runs after every lease ends, and `rover sweep` runs the lot on demand (`PROJECT.md` D37, D38, R48). So neither bound waits for an operator any more. Nothing about the schedule is persisted: the start pass is what covers a restart, and the midnight pass compares the clock against when it last ran rather than trusting a timer, so a machine that was suspended or switched off sweeps when it comes back. |
@@ -1243,9 +1243,14 @@ answer for it.
 
 ### Where Rover looks for `idb_companion`
 
-**Nothing drives this program yet.** The iOS-simulator backend enumerates through `simctl` and
-declares no input capability; what exists today is the search below, so that the phase which does
-spawn a companion has one place to ask. Read this as documentation of a setting, not of a feature.
+**What drives this program today is the device watch, and only that.** The iOS-simulator backend
+watches the attached set through `idb_companion --notify stdout`, which reports every simulator on
+every change with no polling at all, and falls back to polling `simctl list` on a host that has no
+companion — so this program is **optional**, and Rover works without it. `list_devices`,
+`device_info` and the lease grant's re-verification all still read `simctl`, deliberately: idb is
+not a second source of truth for an enumeration a grant re-checks (`PROJECT.md` D6). The
+accessibility read and the input verbs are still ahead, and the backend declares no input
+capability yet.
 
 `idb_companion` is Meta's companion binary for the iOS simulator — a device stream on
 `--notify stdout` and a gRPC server for the accessibility read and the input verbs (`docs/IOS.md`
@@ -1271,6 +1276,13 @@ export ROVER_IDB_COMPANION_PATH="$PWD/idb_companion"
 The tarball unpacks `idb_companion` beside a `Resources/` directory and several `.bundle`s it
 needs, so **the binary cannot be moved out of that tree on its own** — which is why the setting
 above names a path rather than asking you to put a copy somewhere tidy.
+
+**One thing to know before you conclude the companion is broken**: it resolves Xcode through
+`xcode-select`, not through the search Rover uses for `simctl`. On a machine whose selection is the
+Command Line Tools it prints one line about that on stderr and **exits 0 having produced no
+output**, which is why Rover exports `DEVELOPER_DIR` for the companion it starts, set to the same
+Xcode it runs `simctl` out of (`docs/IOS.md` §8, trap 15). Running it by hand needs that variable
+too.
 
 That is the same argument as for `ffmpeg` above — no canonical location, so `PATH` is the right
 answer — with the override added on top, and the override is necessary rather than speculative: a

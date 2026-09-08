@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { IosSimulatorDeviceBackend } from '@/backends/ios-simulator/backend.js';
+import { IDB_COMPANION } from '@/backends/ios-simulator/idb-companion-path.js';
 import type { Device, DeviceWatch } from '@/core/device.js';
 import { DeviceVanishedError } from '@/core/errors.js';
 import { parseDeviceSerial } from '@/core/ids.js';
@@ -42,6 +43,54 @@ describe.skipIf(!process.env.ROVER_TEST_SIMULATOR)(
 			if (ready === undefined) throw new Error('the gate said a simulator was booted');
 			return ready;
 		}
+
+		/**
+		 * Subscribe, wait for the first delivery, and stop again — whichever of the watch's two
+		 * sources this host has.
+		 *
+		 * The gate is reached by the first `onDevices` and **not** by an interruption, so a host
+		 * with no companion is not cut short by the one interruption its fallback costs; the
+		 * interruptions are handed back for a case to assert rather than swallowed. The condition
+		 * rather than a duration (ai/RULES.md §2), bounded by the suite's own timeout.
+		 *
+		 * `stop()` runs in a `finally` so a failed expectation cannot leave a companion running or
+		 * a timer polling `simctl` for the rest of the run.
+		 */
+		async function firstDelivery(): Promise<{
+			delivered: Device[];
+			interruptions: string[];
+		}> {
+			const seen: Device[][] = [];
+			const interruptions: string[] = [];
+			const first = createGate();
+
+			let watch: DeviceWatch | null = null;
+			try {
+				watch = backend.watchDevices({
+					onDevices: (set) => {
+						seen.push(set);
+						first.reach();
+					},
+					onInterrupted: (reason) => {
+						interruptions.push(reason);
+					},
+				});
+
+				await first.reached;
+			} finally {
+				await watch?.stop();
+			}
+
+			return { delivered: seen[0] ?? [], interruptions };
+		}
+
+		/** A set ordered so two sources' answers can be compared at all — the order is theirs. */
+		const bySerial = (set: readonly Device[]): Device[] =>
+			[...set].sort((left, right) => left.serial.localeCompare(right.serial));
+
+		/** The devices of a set this host could actually lend. */
+		const ready = (set: readonly Device[]): Device[] =>
+			bySerial(set.filter((device) => device.state === 'ready'));
 
 		it('names the booted simulator, with a version and this host’s attachment', async () => {
 			const device = await booted();
@@ -102,42 +151,67 @@ describe.skipIf(!process.env.ROVER_TEST_SIMULATOR)(
 		});
 
 		/**
-		 * The poll, subscribed to and stopped again — one full set delivered and nothing else asserted
-		 * about timing, because what changes the device set is the operator plugging something in.
+		 * One full set delivered, off whichever source this host has, and nothing asserted about
+		 * timing — because what changes the device set is the operator booting something.
 		 *
-		 * `stop()` runs in a `finally` so a failed expectation cannot leave a timer polling `simctl`
-		 * for the rest of the run.
+		 * **The interruption count is the source, stated rather than tolerated.** A host with a
+		 * companion is watched through the stream and is interrupted not at all; a host without one
+		 * pays exactly one interruption naming `idb_companion` and is then served by the `simctl`
+		 * poll. That one message is what tells an operator why the cheaper source is not in use, so
+		 * a case that shrugged at it would be hiding the only evidence there is.
+		 *
+		 * **What the two sources have to agree about is every device this host could lend**, and
+		 * the membership assertion is deliberately one-directional. `toDevices` keeps a simulator
+		 * whose runtime key does not resolve and reports it without a version, while
+		 * `toNotifiedDevices` drops a target whose `os_version` does not name iOS at all — on that
+		 * path the platform word is the only evidence about which platform a target belongs to
+		 * (`src/backends/ios-simulator/devices.ts`). So the watch's set is a subset of the
+		 * enumeration's, and the `ready` devices in it match device for device.
 		 */
 		it('delivers the full current set on subscription', async () => {
 			const devices = await backend.listDevices();
-			const seen: Device[][] = [];
-			const interruptions: string[] = [];
-			// The condition, not a duration (ai/RULES.md §2): what this waits on is the first delivery
-			// arriving, and the suite's own timeout is what bounds it.
-			const first = createGate();
 
-			let watch: DeviceWatch | null = null;
-			try {
-				watch = backend.watchDevices({
-					onDevices: (set) => {
-						seen.push(set);
-						first.reach();
-					},
-					onInterrupted: (reason) => {
-						interruptions.push(reason);
-						first.reach();
-					},
-				});
+			const { delivered, interruptions } = await firstDelivery();
 
-				await first.reached;
-			} finally {
-				await watch?.stop();
-			}
-
-			expect(interruptions).toEqual([]);
-			expect(seen[0]?.map((device) => device.serial).sort()).toEqual(
-				devices.map((device) => device.serial).sort(),
+			expect(interruptions).toEqual(
+				process.env.ROVER_TEST_IDB ? [] : [expect.stringContaining(IDB_COMPANION)],
 			);
+			expect(devices.map((device) => device.serial)).toEqual(
+				expect.arrayContaining(delivered.map((device) => device.serial)),
+			);
+			expect(ready(delivered)).toEqual(ready(devices));
+		});
+
+		/**
+		 * The watch on the stream it was written for, against a real companion — gated on
+		 * `ROVER_TEST_IDB` so a host with no `idb_companion` skips rather than fails
+		 * (ai/TESTING.md).
+		 *
+		 * This is the two-paths-agree claim phase 1 could only make between its own two functions,
+		 * made against the two **programs**: `simctl`'s runtime reports `26.5` where the idb target
+		 * for that same device reports `iOS 26.5`, so the normalisation in `devices.ts` is checked
+		 * here against what the two really print on this host rather than against what a capture
+		 * said they printed on another (`docs/IOS.md` §4). Two spellings for one device would let
+		 * `list_devices` and the inventory disclose two different OS versions for it.
+		 *
+		 * It boots nothing, so the transition sequence a second simulator produces
+		 * (`Shutdown → Booting → Booted`) is not a case here — that is an operator-driven
+		 * observation, for the reason this file's header gives: driving `Simulator.app` shuts down
+		 * every device it owns.
+		 */
+		describe.skipIf(!process.env.ROVER_TEST_IDB)('watched through idb’s notify stream', () => {
+			it('names the booted device listDevices names, with the same osVersion string', async () => {
+				const device = await booted();
+
+				const { delivered, interruptions } = await firstDelivery();
+
+				expect(interruptions).toEqual([]);
+				const watched = delivered.find((candidate) => candidate.serial === device.serial);
+				// The whole shape, because every field of it is a place the two paths could
+				// disagree — and then the one that actually needed reconciling, named.
+				expect(watched).toEqual(device);
+				expect(watched?.osVersion).toBe(device.osVersion);
+			});
 		});
 	},
 );

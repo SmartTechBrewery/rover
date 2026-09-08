@@ -28,11 +28,19 @@ const ALLOWED_TO_SPAWN = [
 	// name a file instead of a bare program name.
 	'backends/android/adb-path.ts',
 	'backends/android/adb.ts',
+	// The fourth is the same platform's second program (#249), and it is the one entry on this
+	// list whose child is **deliberately unbounded**: `idb_companion --notify` is a change stream
+	// that is supposed to stay open, so a timeout there would guarantee the failure a timeout
+	// exists to prevent. That is a lifetime, not a privilege — it starts no daemon, the argv is
+	// its caller's, and `backends/ios-simulator/backend.ts` is what supervises the process and
+	// restarts it on a backoff. Its own search needs no entry either, for the reason below.
+	'backends/ios-simulator/idb-companion.ts',
 	// The third is the second platform's runner (#214), added here deliberately as this list
 	// intends: it runs one `simctl` and waits for it, bounded by a timeout, and it starts no
 	// daemon. Its own search needs no entry — `backends/ios-simulator/developer-dir.ts` verifies
 	// a candidate by asking the filesystem rather than by running it, which is the one deliberate
-	// departure from `adb-path.ts` and the property that lets a machine with no Xcode import it.
+	// departure from `adb-path.ts` and the property that lets a machine with no Xcode import it —
+	// and `backends/ios-simulator/idb-companion-path.ts` keeps that property for the same reason.
 	'backends/ios-simulator/simctl.ts',
 	'daemon/connect.ts',
 	// Slicing a recording into frames needs a decoder this tree does not contain, so the host
