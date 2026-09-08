@@ -40,6 +40,7 @@ import { IpcRequestError } from '@/ipc/protocol.js';
 import {
 	connectWithoutStarting,
 	createTempSocket,
+	isSweepLogLine,
 	removeTempSocket,
 	type TempSocket,
 } from '../../helpers/daemon-socket.js';
@@ -68,7 +69,14 @@ const CAPTURE = {
 beforeEach(async () => {
 	temp = await createTempSocket();
 	warnings = [];
-	vi.spyOn(console, 'warn').mockImplementation((line: string) => warnings.push(line));
+	// The daemon runs a full pass of its retention policy as it comes up (D38) and writes to this
+	// same log, at a moment nothing here sequences — dropped at the spy so what is counted below
+	// is this suite's own subject (`isSweepLogLine`).
+	vi.spyOn(console, 'warn').mockImplementation((line: string) => {
+		if (!isSweepLogLine(line)) {
+			warnings.push(line);
+		}
+	});
 });
 
 afterEach(async () => {

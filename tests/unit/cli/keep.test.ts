@@ -147,8 +147,9 @@ describe('the usage errors a command line can make', () => {
 	it('exits 2 on an unknown subcommand', async () => {
 		await expect(run(['keep', 'prune'])).resolves.toBe(EXIT_USAGE);
 
-		// In particular `prune`: nothing prunes the archive, and this command must not read as
-		// though something did (`PROJECT.md` §9.4).
+		// In particular `prune`: something does prune the archive — `rover sweep`, and the host on
+		// its own (`PROJECT.md` D37, D38) — and this command is the *exemption* from it, so a
+		// subcommand that read as though it pruned would point the operator at the wrong verb.
 		expect(errored.join('\n')).toContain("unknown subcommand 'prune'");
 	});
 

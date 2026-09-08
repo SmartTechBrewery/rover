@@ -30,6 +30,7 @@ import { type RunningDaemon, startDaemon } from '@/daemon/listen.js';
 import { PROJECT_FILE_ENV_VAR } from '@/daemon/project-hooks.js';
 import {
 	createTempSocket,
+	isSweepLogLine,
 	removeTempSocket,
 	type TempSocket,
 } from '../../helpers/daemon-socket.js';
@@ -95,7 +96,14 @@ beforeEach(async () => {
 	logged = [];
 	errored = [];
 	vi.spyOn(console, 'log').mockImplementation((line: string) => logged.push(line));
-	vi.spyOn(console, 'warn').mockImplementation((line: string) => errored.push(line));
+	// The daemon runs a full pass of its retention policy as it comes up (D38) and writes to this
+	// same log, at a moment nothing here sequences — dropped at the spy so what is counted below
+	// is this suite's own subject (`isSweepLogLine`).
+	vi.spyOn(console, 'warn').mockImplementation((line: string) => {
+		if (!isSweepLogLine(line)) {
+			errored.push(line);
+		}
+	});
 	vi.spyOn(console, 'error').mockImplementation((line: string) => errored.push(line));
 });
 

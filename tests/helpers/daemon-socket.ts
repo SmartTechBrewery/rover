@@ -70,8 +70,14 @@ export interface TempSocket {
 	 * inherit a budget from the developer's shell and start deleting by it. A suite that needs a
 	 * different policy passes its own — nothing here is a policy for anybody's real archive.
 	 *
-	 * Holding one changes nothing on its own: **nothing sweeps unless a `sweep_archive` call asks
-	 * it to**, so a suite that never makes one is unaffected by this field's presence.
+	 * **Holding one is no longer inert, and that is worth knowing before a suite seeds a tree.** A
+	 * daemon started with this policy runs a full pass of it — both bounds — as it comes up, and
+	 * another at local midnight (`PROJECT.md` D38, `src/daemon/retention-schedule.ts`), on top of
+	 * the budget-only pass every lease's end triggers (D37). So an archive seeded **before**
+	 * `startDaemon` with runs past the age window is swept by the start pass; a suite that means
+	 * those runs to survive seeds them after the daemon is up, which is what every suite here
+	 * already does. Nothing pre-creates {@link TempSocket.artifactsRoot}, so the start pass on a
+	 * suite that files nothing walks a tree that does not exist and says nothing at all.
 	 */
 	readonly retention: RetentionPolicy;
 }
@@ -97,6 +103,47 @@ export async function createTempSocket(): Promise<TempSocket> {
 			maxAgeDays: DEFAULT_ARTIFACTS_MAX_AGE_DAYS,
 		},
 	};
+}
+
+/**
+ * What only the artifact archive's **sweep** says, as the substrings that identify one of its
+ * lines.
+ *
+ * Deliberately the sweep's own sentences rather than the openings it shares with the archive's
+ * readers: `list_archive`, `search_archive`, `list_archive_groups` and the artifact route all
+ * begin an unreadable-subtree warning with *The artifact archive could not be read at*, and a
+ * filter keyed on that would hide the very line a suite about one of those is asserting.
+ */
+const SWEEP_LOG_MARKERS: readonly string[] = [
+	// The one line every sweep writes, deleting or not, and the operator-triggered audit line.
+	'Swept the artifact archive',
+	'Asked what a sweep of the artifact archive would take',
+	// One per run taken, or that would be taken.
+	'Deleted archived run ',
+	'Would delete archived run ',
+	'The archived run at ',
+	// A budget that cannot be met with only kept and live runs left.
+	'The artifact archive is still ',
+	// The sweep's own two failures, each named by the clause only it writes.
+	'The sweep went on without it',
+	'The sweep was abandoned and nothing was deleted',
+	// And a pass that could not run at all, from either unattended trigger.
+	'The artifact archive was not swept',
+];
+
+/**
+ * Whether this line on a daemon's log is the retention sweep's own record.
+ *
+ * **Every daemon runs a full pass of its retention policy as it comes up** (`PROJECT.md` D38,
+ * `src/daemon/retention-schedule.ts`), so a suite whose subject is a *different* line has lines it
+ * did not ask for — and they arrive at a moment it does not control, because the pass is `void`-ed
+ * and whether it has reached the log yet is a race rather than a sequence. A suite that counts its
+ * own warnings drops these at the spy; a suite whose subject **is** the sweep
+ * (`sweep-archive.test.ts`, `sweep-after-lease.test.ts`, `sweep-at-start.test.ts`) reads the log
+ * unfiltered.
+ */
+export function isSweepLogLine(line: string): boolean {
+	return SWEEP_LOG_MARKERS.some((marker) => line.includes(marker));
 }
 
 export async function removeTempSocket(temp: TempSocket): Promise<void> {

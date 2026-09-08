@@ -925,8 +925,9 @@ export const MAX_ARCHIVE_GROUP_ARTIFACTS = 500;
  * `MAX_FRAME_BYTES` (`src/ipc/framing.ts`) does not arrive large, it arrives as
  * `malformed_frame` — `FrameDecoder.push` throws and `src/ipc/client.ts` fails every request on
  * the connection and destroys it — so a healthy host with a healthy archive is diagnosed as a
- * broken one, and the caller has no short answer to fall back to. The archive never prunes
- * (`PROJECT.md` §9.4), so it only gets worse.
+ * broken one, and the caller has no short answer to fall back to. The archive prunes itself now
+ * (D37, D38, R48), but its bounds are a size and an age rather than an entry count, so an archive
+ * comfortably inside both can still answer past this cap — the cap does the work, not the sweep.
  *
  * Ten thousand is a little over a megabyte of JSON at the shape
  * `tests/fixtures/panel/list-archive-groups.json` shows, which is {@link
@@ -1177,7 +1178,8 @@ export type ListProjectsResult = z.infer<typeof ListProjectsResultSchema>;
  * throws naming its path, which the handlers answer as `unreadable`/`unwritable`. 1000 is
  * far past what an operator ticks by hand, so this is allocation hygiene in
  * {@link ATTRIBUTION_MAX_LENGTH}'s sense rather than a policy — **and it is not a retention
- * rule**: going over it refuses the write and drops nothing (`PROJECT.md` §9.4 is still open).
+ * rule**: going over it refuses the write and drops nothing. Retention is R48's, and it bounds the
+ * *archive* rather than this document.
  */
 export const MAX_KEPT_TESTS = 1000;
 
@@ -1487,14 +1489,16 @@ export type SweepArchiveResult = z.infer<typeof SweepArchiveResultSchema>;
  * could clear the exemption on somebody else's run (D27). Neither row sweeps anything itself; the
  * row that does is below, and the flag is the exemption it honours.
  *
- * **`sweep_archive` is the retention policy's one surface, and the only trigger its *age* bound
- * has** (§9.4, §10, `src/daemon/archive-sweep.ts`). It walks the archive, answers which run
+ * **`sweep_archive` is the retention policy's surface for an *operator*, and the only one of its
+ * three triggers that answers anybody** (R48, §10, `src/daemon/archive-sweep.ts`). It walks the
+ * archive, answers which run
  * directories the two host settings take — `ROVER_ARTIFACTS_BUDGET_MB` and
  * `ROVER_ARTIFACTS_MAX_AGE_DAYS` — and, unless `dryRun`, deletes them whole with their `<serial>`
  * subtree, removing any test name and project left holding nothing. **This row is not the only way
  * the sweeper runs any more**: the host sweeps by the *budget alone* after every lease ends,
- * released and expired alike, with nobody asking (D37) — so what this row adds is the **age**
- * bound and the `dryRun` question, and no timer schedules either of them. A kept test (D33) and a
+ * released and expired alike, with nobody asking (D37), and by **both** bounds at local midnight
+ * and again at daemon start (D38) — so what this row adds is not a bound at all any more but the
+ * `dryRun` question and an answer somebody receives. A kept test (D33) and a
  * run whose lease is live are exempt from both bounds, and an archive still over budget with only
  * those left answers `stillOverBudget` rather than taking one of them — a refusal reported as
  * data, with one line on the host's own log (D28). The answer carries three directory *names* per

@@ -23,9 +23,11 @@ import { useId } from 'react';
  * button on a destination that is not built. The fields are editable because a form nobody can type
  * into says nothing about the design being right; what they are worth is stated under them.
  *
- * *Corrected in place, 2026-09-08 (#238).* The reason above used to end "no sweep", and the host
- * has one now: it enforces these two bounds from its own environment and `rover sweep` runs them.
- * The half that matters here is unchanged — nothing takes them *from this screen* — so the button
+ * *Corrected in place, 2026-09-08 (#238, and again for #246).* The reason above used to end "no
+ * sweep", and the host does nothing but sweep now: it enforces these two bounds from its own
+ * environment, by the budget after every lease ends, by **both** bounds at local midnight and at
+ * daemon start, and by `rover sweep` whenever an operator asks. The half that matters here is
+ * unchanged through all of it — nothing takes these two numbers *from this screen* — so the button
  * stays absent for exactly the reason it always was, and the line under the fields says the true
  * half rather than the old sentence's both halves.
  */
@@ -68,10 +70,10 @@ export function RetentionCard({ draft }: { readonly draft: RetentionDraft }) {
 				 * has no retention mechanism, so these two numbers are not saved anywhere and nothing on
 				 * this host is sweeping the archive.* The host has a retention mechanism now — it reads
 				 * its own two numbers, sweeps by the disk budget after every lease ends by itself (#245)
-				 * and runs the age limit when an operator asks — so the second clause went and
-				 * the first stayed, because it is the one that explains the missing `Save`. Softening it
-				 * into *may be swept* was refused: a screen that hedges about whether the host deletes an
-				 * operator's runs is worse than one that is out of date.
+				 * and runs **both** bounds at local midnight and at daemon start (#246) — so the second
+				 * clause went and the first stayed, because it is the one that explains the missing
+				 * `Save`. Softening it into *may be swept* was refused: a screen that hedges about
+				 * whether the host deletes an operator's runs is worse than one that is out of date.
 				 */}
 				<p className="mt-2 font-code-md text-on-surface-variant text-xs">
 					These two numbers are not saved anywhere. The host reads its own, from its own

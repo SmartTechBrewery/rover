@@ -9,14 +9,16 @@
  * so they are one module — split apart they would be two readers of one tree that could disagree
  * about it.
  *
- * **Two triggers, and they take different bounds.** An operator asks for the whole policy through
- * `sweep_archive` and `rover sweep`; and the **budget alone** runs after every lease ends,
- * released and expired alike, on the path D9 already runs — {@link sweepAfterLease}, wired at
- * `./listen.ts`. Nothing here is a timer: there is still no clock trigger and no start-up pass, so
- * the **age** bound is an operator's to ask for and an archive nobody sweeps still ages without
- * bound (§9.4, phase 3). The lease trigger takes the budget only because a run finishing is the
- * one moment the *size* of this tree can be newly crossed, and it is on the path an agent is
- * waiting on — see {@link sweepAfterLease} for what that costs.
+ * **Three triggers, and they do not all take the same bounds.** An operator asks for the whole
+ * policy through `sweep_archive` and `rover sweep`; a **clock** asks for the whole policy at local
+ * midnight and again at daemon start (D38, `./retention-schedule.ts`, wired at `./listen.ts`); and
+ * the **budget alone** runs after every lease ends, released and expired alike, on the path D9
+ * already runs — {@link sweepAfterLease}, wired at the same place. **Nothing here is a timer**,
+ * which is still the rule for this module and is why the clock is its own one: what a pass does
+ * and when a pass happens are separable, and keeping them apart is what makes the clock arithmetic
+ * a unit test rather than a suite that waits for midnight. The lease trigger takes the budget only
+ * because a run finishing is the one moment the *size* of this tree can be newly crossed, and it
+ * is on the path an agent is waiting on — see {@link sweepAfterLease} for what that costs.
  *
  * **The unit of deletion is a run directory, taken whole with its `<serial>` subtree.** Never a
  * file, never a `screenshots/` folder, never a level above the run: a half-deleted run is a run
@@ -133,7 +135,8 @@ export interface ArchiveSweeper {
 	/**
 	 * Walk, select, and — unless `dryRun` — delete. Serialised: one sweep at a time per tree.
 	 *
-	 * `bounds` is `'both'` or `'budget'`. The second is what a lease's end asks for
+	 * `bounds` is `'both'` or `'budget'`. The first is what an operator and the clock both ask for
+	 * (`./retention-schedule.ts`, D38); the second is what a lease's end asks for
 	 * ({@link sweepAfterLease}) — the size bound alone, through this same entry point — and the
 	 * *age* bound alone is deliberately not offered, because a size check that skipped the age
 	 * would be the one combination that lets an archive sit inside its budget for a year.
@@ -153,7 +156,9 @@ export interface ArchiveSweeper {
 	 * on this, bounded, after the restorations it owes.
 	 *
 	 * Keyed by the root rather than by this instance, like the serialisation itself, so it also
-	 * covers a `sweep_archive` an operator asked for moments before the daemon was stopped.
+	 * covers a `sweep_archive` an operator asked for moments before the daemon was stopped — and
+	 * the **start pass**, which is the one a daemon stopped straight after coming up is most
+	 * likely to be holding (D38).
 	 */
 	settle(): Promise<void>;
 }
@@ -340,8 +345,9 @@ export function createArchiveSweeper(options: ArchiveSweeperOptions): ArchiveSwe
  * over regardless.
  *
  * **The budget alone**, because a run finishing is the moment the *size* of this tree can be
- * newly crossed and nothing about it makes a test a day older. The age bound stays an operator's
- * to ask for until a clock triggers it (§9.4, phase 3).
+ * newly crossed and nothing about it makes a test a day older. What enforces the age bound is a
+ * clock, and it has one: a full pass at local midnight and at daemon start (D38,
+ * `./retention-schedule.ts`).
  *
  * **The run that just ended is deletable like any other by now**, and any run whose lease is
  * still live is not: `liveLeases` is resolved inside the walk, after this lease has left the
