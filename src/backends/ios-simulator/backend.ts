@@ -1,6 +1,6 @@
 /**
- * The device backend for this platform, complete: every required method of `DeviceBackend` plus
- * the recorder and its two capabilities.
+ * The device backend for this platform: every required method of `DeviceBackend`, the recorder,
+ * and the screen read.
  *
  * **This is the backend that registers** (`./index.ts`, `./capabilities.ts`, and one import line
  * in `../index.ts`), which is why the four recording methods land in the same change as the
@@ -8,20 +8,26 @@
  * {@link IosSimulatorDeviceBackend.startRecording}, {@link IosSimulatorDeviceBackend.stopRecording}
  * **and** {@link IosSimulatorDeviceBackend.discardRecording}, so a manifest declaring the
  * capability with any of them missing fails the conformance gate the manifest exists to pass
- * (`ai/TESTING.md`, "A backend under construction registers nothing"; `PROJECT.md` R45).
+ * (`ai/TESTING.md`, "A backend under construction registers nothing"; `PROJECT.md` R45). The same
+ * rule is what puts {@link IosSimulatorDeviceBackend.readScreen} in the change that flips
+ * `canReadScreen` (#251).
  *
- * **What is absent is absent on purpose.** There is no `readScreen`, no `tap`/`swipe`/`typeText`/
- * `pressKey`, no `setAirplaneMode` and no `setWifiEnabled` — the three capabilities
- * `./capabilities.ts` declares `false`, which carries why each is an honest opt-out rather than a
- * gap. An absent method beside a `false` flag is a complete backend; a stub beside it is one
+ * **What is absent is absent on purpose.** There is no `tap`/`swipe`/`typeText`/`pressKey`, no
+ * `setAirplaneMode` and no `setWifiEnabled` — the two capabilities `./capabilities.ts` still
+ * declares `false`, which carries why each is an honest opt-out or an unlanded phase rather than
+ * a gap. An absent method beside a `false` flag is a complete backend; a stub beside it is one
  * under construction.
  *
- * Everything that touches a simulator goes through `./simctl.js`, everything that reads its
- * output through `./parsers/`, and the three pure modules beside this one own the vocabulary, the
- * arithmetic and the path mapping — `./devices.js` on the enumeration, `./screen.js` on the
- * screen, `./containers.js` on where a device path is on this host. This file is the join between
- * them and holds no text-shaped knowledge of its own: no key name, no state token, no plist path
- * and no failure wording appears here.
+ * **Two external programs reach a device from here, not one.** Everything Xcode's own goes
+ * through `./simctl.js`; the screen read goes through `./idb-client.js`, which supervises one
+ * `idb_companion` per target and speaks gRPC to it — a second program, with a lifecycle this
+ * class holds ({@link IosSimulatorDeviceBackend.stopIdbCompanions}) and an install this host may
+ * simply not have. Everything that reads either program's output goes through `./parsers/`, and
+ * the three pure modules beside this one own the vocabulary, the arithmetic and the path mapping
+ * — `./devices.js` on the enumeration, `./screen.js` on the screen and on the elements on it,
+ * `./containers.js` on where a device path is on this host. This file is the join between them
+ * and holds no text-shaped knowledge of its own: no key name, no state token, no plist path and
+ * no failure wording appears here.
  *
  * **The two transfers reach no simulator at all**, which is the one thing about this backend that
  * has no counterpart on the Android side: a simulator's storage *is* a directory on this host, so
@@ -61,6 +67,7 @@ import {
 	type PullFileOptions,
 	type ReadLogsOptions,
 	type RecordVideoOptions,
+	type ScreenElement,
 	type StartRecordingOptions,
 } from '../../core/device.js';
 import {
@@ -75,12 +82,14 @@ import { waitForCondition } from '../../core/wait.js';
 import { hostPathOf } from './containers.js';
 import { SIMCTL_MISSING, SimctlNotFoundError } from './developer-dir.js';
 import { IOS_SIMULATOR_PLATFORM_ID, toDevices, toNotifiedDevices } from './devices.js';
+import { IdbCompanions, type IdbRpc } from './idb-client.js';
 import {
 	IDB_COMPANION_STDERR_TAIL_CHARS,
 	type IdbCompanionStream,
 	streamIdbCompanion,
 } from './idb-companion.js';
 import { IDB_COMPANION_MISSING, IdbCompanionNotFoundError } from './idb-companion-path.js';
+import { ACCESSIBILITY_FORMAT, parseAccessibilityRead } from './parsers/accessibility.js';
 import { saysNothingToTerminate } from './parsers/app-control.js';
 import { type DeviceTypeProfile, readDeviceTypeProfile } from './parsers/device-type-profile.js';
 import { IdbNotifyFrameDecoder, type IdbTargetList } from './parsers/idb-notify.js';
@@ -96,7 +105,7 @@ import {
 	type SimctlRuntimeList,
 } from './parsers/simctl-list.js';
 import { parseUnifiedLog } from './parsers/unified-log.js';
-import { deviceTypeProfilePath, toScreenInfo } from './screen.js';
+import { deviceTypeProfilePath, toScreenElements, toScreenInfo } from './screen.js';
 import {
 	describeBytes,
 	INSTALL_SIMCTL_TIMEOUT_MS,
@@ -204,6 +213,22 @@ const SCREENSHOT_FILE = 'screenshot.png';
  * guess: the bytes are refused for not being what `simctl` was told to write.
  */
 const SCREENSHOT_ARGV = ['screenshot', '--type', 'png', '--mask', 'ignored'] as const;
+
+/**
+ * The screen read's RPC and its whole request: the accessibility read of the **whole screen**.
+ *
+ * `AccessibilityInfoRequest` (`./idb/idb.proto`) offers three ways to narrow one and none of them
+ * is asked for. `point` resolves a single element and is the `describe-point` route — nothing in
+ * the verb layer asks for one, because `src/verbs/target.ts` resolves a target against a whole
+ * screen. `marker` searches by a substring of one key, which is target resolution done by idb
+ * instead of by the layer that owns it. `keys` restricts which accessibility keys come back, and
+ * this read wants three of them, which is not enough of a saving to have a second place where the
+ * key set is decided (`./parsers/accessibility.js` is the first).
+ *
+ * The format is that module's, exported from it because the shape it parses *is* that format.
+ */
+const READ_SCREEN_RPC: IdbRpc = 'accessibility_info';
+const READ_SCREEN_REQUEST = { format: ACCESSIBILITY_FORMAT } as const;
 
 /**
  * How far back one log read looks, narrowest first — the pushdown, and the honest answer to a
@@ -781,6 +806,38 @@ function notRecordable(serial: DeviceSerial, state: DeviceState): Error {
 }
 
 /**
+ * A screen read asked of a device that is not booted — and the **least** urgent of the three
+ * refusals here, which is why its reason is stated rather than assumed from its siblings.
+ *
+ * `idb_companion` refuses this one properly. Measured against a `Shutdown` iPhone 17 Pro
+ * (companion v1.5.2, Xcode 26.4.1, 2026-09-08), `accessibility_info` came back at gRPC
+ * `INTERNAL` in **13 ms** with *"Cannot run accessibility commands against &lt;udid&gt; | iPhone
+ * 17 Pro | Shutdown | … as it is not booted"* — no minute-long block like a capture
+ * ({@link notCapturable}) and no false success like a recording ({@link notRecordable}). So this
+ * check is not what stands between a caller and a wrong answer.
+ *
+ * What it stands between them and is a **process**. Reaching that refusal means starting a
+ * companion for the device first — 350 ms to the handshake on that same bench — and the companion
+ * *stays running*, announcing on its own stderr that it "will stay alive if target goes offline".
+ * A backend that skipped the check would leave one supervised `idb_companion` per non-bootable
+ * device anybody asked about, for the lifetime of the daemon, to deliver an answer one
+ * enumeration already had. That enumeration is 0.11–0.24 s and it doubles as the presence check,
+ * so a device that has gone is {@link DeviceVanishedError} rather than a refusal about a state
+ * nobody can read.
+ *
+ * It says the tool would have refused too, because that is the difference between this and its
+ * two siblings and a caller reading all three should not have to guess which kind this is.
+ */
+function notReadable(serial: DeviceSerial, state: DeviceState): Error {
+	return new Error(
+		`Device '${unwrap(serial)}' is '${state}' rather than ready, so its screen was not read. ` +
+			'A screen read on this platform needs an accessibility connection into a running ' +
+			'system: the tool refuses one against a device that is not booted, and this host ' +
+			'refuses first so that no companion process is started for a device that cannot answer.',
+	);
+}
+
+/**
  * A recorder that ended before it said it had started, with everything it said attached.
  *
  * The one failure the start marker turns from a ten-second wait into an immediate answer, and it
@@ -864,8 +921,7 @@ interface Recorder {
 
 export class IosSimulatorDeviceBackend implements DeviceBackend {
 	/**
-	 * {@link exclusivelyOn}'s register, keyed by the recording path — the **one** thing this class
-	 * holds between calls.
+	 * {@link exclusivelyOn}'s register, keyed by the recording path.
 	 *
 	 * It is a queue and not a cache, which is the distinction D6 draws: nothing about a device is
 	 * remembered here, only whether a call is still holding its recording file. A path appears
@@ -875,6 +931,22 @@ export class IosSimulatorDeviceBackend implements DeviceBackend {
 	 * same listing the enumeration already read.
 	 */
 	private readonly recordingUse = new Map<string, Promise<void>>();
+
+	/**
+	 * The `idb_companion` processes this host is running, one per target — the transport
+	 * {@link readScreen} goes through.
+	 *
+	 * Held for this backend's lifetime, which is what makes the channel worth having: the second
+	 * read of a lease pays a gRPC call rather than a spawn (`./idb-client.js`). It is **not** a
+	 * cache of anything about a device and so is not the exception to D6 the field above is
+	 * careful about — a companion is a way to *reach* a simulator, and every fact this backend
+	 * reports is still read again per call, from `simctl`.
+	 *
+	 * Nothing in it runs on its own: no timer, no health check, no eager respawn. A companion is
+	 * started by a read and a companion that died is forgotten by one, so nothing here reaches a
+	 * device outside the lease that asked.
+	 */
+	private readonly companions = new IdbCompanions();
 
 	/**
 	 * One `simctl list -j devices runtimes`, mapped onto the neutral vocabulary.
@@ -1542,6 +1614,57 @@ export class IosSimulatorDeviceBackend implements DeviceBackend {
 	}
 
 	/**
+	 * The screen, semantically — idb's accessibility read, mapped onto `ScreenElement[]`.
+	 *
+	 * Three steps and no arithmetic: the state check every device-touching method here makes, one
+	 * `accessibility_info` through the supervised companion, then the mapping. Each of the three
+	 * is somebody else's — {@link notReadable}, `./idb-client.js`, `./screen.js` — and what is
+	 * worth reading here is the four things this method is *not* doing.
+	 *
+	 * - **It converts no coordinates.** The frames come back in points, which is the same space
+	 *   `deviceInfo().screen.widthDp`/`heightDp` are in, so `toScreenElements` divides by nothing.
+	 *   That absence is a stated decision rather than a missing line, and it is stated there
+	 *   because that is where a reader looking for the division `../android/screen.ts` performs
+	 *   will look.
+	 * - **It reads the screen, not an app.** The read has no application argument and cannot be
+	 *   scoped to one: what comes back is whatever is frontmost, system UI included — a read taken
+	 *   while Springboard was in front listed every icon on the home screen (`docs/IOS.md` §2).
+	 *   So `readScreen` immediately after `launchApp` can answer with the *previous* app's tree if
+	 *   the launch has not finished coming to the front, which is D12(c)'s "every action returns
+	 *   the state after itself" being unavailable on this platform for launches, and is why the
+	 *   verb layer's waits are on conditions rather than on a call having returned.
+	 * - **It filters nothing and sorts nothing.** Every node the tool listed, in its order,
+	 *   including the ones carrying neither a label nor a value.
+	 * - **It takes no lock.** Nothing about a read is exclusive: two overlapping reads of one
+	 *   device share the companion and its channel, which is what {@link exclusivelyOn}'s
+	 *   counterpart on the recording path exists for and this one does not need.
+	 *
+	 * **The companion is started by this call if there is none, and outlives it.** That is
+	 * `./idb-client.js`'s whole shape — the second read of a lease pays the channel rather than a
+	 * spawn — and the cost it moves onto the first one is measured: on this bench a companion
+	 * starts in 350–423 ms and the **first** accessibility read of its life then takes **3.34 s**,
+	 * because that read is what loads the simulator's `AccessibilityPlatformTranslation`. Every
+	 * later read on the same companion came back in **34–47 ms** (companion v1.5.2, Xcode 26.4.1 /
+	 * iOS 26.4.1, 2026-09-08). Both are inside {@link IDB_CALL_TIMEOUT_MS} by two orders of
+	 * magnitude, and the first-read cost is worth stating because it is the one number a caller
+	 * would otherwise mistake for a hang.
+	 *
+	 * A companion that died mid-read fails this call as an **interruption**, never as a device
+	 * fault (`IdbCompanionInterruptedError`): killing one leaves the simulator booted, so what was
+	 * lost is this host's way of talking to a device that is fine, and the next read starts a
+	 * fresh companion.
+	 */
+	async readScreen(serial: DeviceSerial): Promise<ScreenElement[]> {
+		const device = await this.describeDevice(serial);
+		if (device === null) throw new DeviceVanishedError(serial);
+		if (device.state !== 'ready') throw notReadable(serial, device.state);
+
+		const answer = await this.companions.call(serial, READ_SCREEN_RPC, READ_SCREEN_REQUEST);
+
+		return toScreenElements(parseAccessibilityRead(answer));
+	}
+
+	/**
 	 * Record for `options.durationMs` and answer with the bytes — **the recorder is a process on
 	 * this host, and everything below follows from that.**
 	 *
@@ -1797,6 +1920,32 @@ export class IosSimulatorDeviceBackend implements DeviceBackend {
 				await this.removeRecording(path);
 			}
 		});
+	}
+
+	// --- Not part of the contract: this backend's own second program, stopped ---
+
+	/**
+	 * Kill every `idb_companion` this backend started and wait until the host is tidy.
+	 *
+	 * **Not on `DeviceBackend`, because that interface has no teardown at all** — every method on
+	 * it is a call about a device, and the daemon's own lifecycle reaches a backend only through
+	 * the restorer, which calls capability-gated *verbs* (`src/daemon/restore.ts`). So this is
+	 * deliberately not a hook nobody calls dressed up as one: it exists because a companion is a
+	 * process on this host and something has to be able to end it.
+	 *
+	 * What calls it today is the device suite, and that is the honest description of it. A suite
+	 * that read a screen and exited would otherwise leave a live `idb_companion` behind per
+	 * device it touched, and a stray one is not harmless: two companions on one udid both bind and
+	 * both accept commands (`docs/IOS.md` §4), so the leftovers are exactly the arbitration the
+	 * lease layer is the only lock for. When the daemon gains a shutdown path this is what it
+	 * calls; until then, calling nothing is better than a timer of this backend's own
+	 * (`./idb-client.js`).
+	 *
+	 * Idempotent and safe on a backend that never started one: a device with no companion is not
+	 * an error.
+	 */
+	async stopIdbCompanions(): Promise<void> {
+		await this.companions.stopAll();
 	}
 
 	/**

@@ -98,6 +98,9 @@ not from the binary.
 | `recordvideo-ps.recording.xcode26.6.txt` | `ps -A -o pid=,command=` (below) | **26.6** | n/a | 2026-09-08 |
 | `idb-notify.idbcompanion1.5.2-xcode26.6-ios26.5.txt` | `idb_companion --notify stdout` (below) | **26.6** | **26.5** | 2026-09-08 |
 | `simctl-list.xcode26.6-ios26.5.json` | `xcrun simctl list -j` (below) | **26.6** | **26.5** | 2026-09-08 |
+| `accessibility.compose.idbcompanion1.5.2-xcode26.4.1-ios26.4.1.json` | `accessibility_info` (below) | 26.4.1 | 26.4.1 | 2026-09-08 |
+| `accessibility.uikit-toggles.idbcompanion1.5.2-xcode26.4.1-ios26.4.1.json` | `accessibility_info` (below) | 26.4.1 | 26.4.1 | 2026-09-08 |
+| `accessibility.uikit-textfield.idbcompanion1.5.2-xcode26.4.1-ios26.4.1.json` | `accessibility_info` (below) | 26.4.1 | 26.4.1 | 2026-09-08 |
 
 The all-listings capture is the primary one — there are now two, on two Xcode releases, and the
 second one's reason is its own section below: `xcrun simctl list -j` with no type argument answers
@@ -173,6 +176,68 @@ drove `Simulator.app`, which would have shut down every device it owns (`docs/IO
 - Committed **verbatim**, byte for byte: the decoder's whole job is the boundary, so a re-indented
   or re-wrapped capture would test the wrong thing. It contains simulator UDIDs and device-type
   names and nothing else — no path and nothing personal.
+
+## The three accessibility reads
+
+What `readScreen` is built on: `idb_companion`'s `accessibility_info` RPC in its **`LEGACY`**
+format, which answers one flat JSON array of the nodes on the screen
+(`src/backends/ios-simulator/parsers/accessibility.ts`). The companion governs this format, so its
+version leads the filename here too.
+
+These were taken on **this README's own bench** — Xcode 26.4.1 / iOS 26.4.1, the booted `iPhone 17`
+`997FA43E-FF9F-4109-BEF0-53D3F46653E7` — and not on `docs/IOS.md`'s, which is why they carry
+`26.4.1` where the notify capture beside them carries `26.6`.
+
+**Taken through this repository's own gRPC client, not through `idb ui describe-all`.** The Python
+CLI is a wrapper around the same RPC and Rover does not use it (`docs/IOS.md` §4), so a capture
+taken through it would pin what a program this backend never runs prints. The recipe is the
+companion started the way `src/backends/ios-simulator/idb-client.ts` starts one, then one unary
+call:
+
+```bash
+export ROVER_IDB_COMPANION_PATH=/path/to/unpacked/idb_companion   # docs/IOS.md §4 has the install
+sock=$(mktemp -d)/companion.sock
+DEVELOPER_DIR=$(xcode-select -p) "$ROVER_IDB_COMPANION_PATH" \
+  --udid 997FA43E-FF9F-4109-BEF0-53D3F46653E7 --grpc-domain-sock "$sock" &
+# … wait for {"grpc_path":"…"} on stdout, then call `accessibility_info {format: LEGACY}` over
+# unix://$sock with @grpc/grpc-js and the vendored src/backends/ios-simulator/idb/idb.proto, and
+# write the response's `json` field verbatim. One capture per screen, with the app already in
+# front — a read taken in the same breath as a `simctl launch` answers with the *previous* app's
+# tree, which is itself worth knowing and is recorded in `backend.ts`' `readScreen`.
+kill %1
+```
+
+**The host was left exactly as found.** The three screens were reached by launching apps that were
+already installed and terminating them again; nothing was booted, shut down, installed or removed,
+and `Simulator.app` was not driven (`docs/IOS.md` §8, trap 4).
+
+| Fixture | The screen | What it pins that the others cannot |
+|---|---|---|
+| `accessibility.compose…json` | A Compose Multiplatform app's own screen (`com.tooploox.giotto.Giotto`) | That a Skia-canvas app exports a real tree at all — `docs/IOS.md` §2's claim, in a file. 15 nodes, **`AXValue: null` on every one**, so a mapping that hard-coded `null` for the text would pass against this capture alone |
+| `accessibility.uikit-toggles…json` | Settings › Camera | Four `AXCheckBox` nodes whose `AXValue` is the **string** `'0'` or `'1'`; one node with no label; a `role_description: ''`, which is the payload emitting an empty string at all; and a row ending at **883.67** on an **874**-point screen |
+| `accessibility.uikit-textfield…json` | Safari's start page | An `AXTextField` reporting `AXLabel: 'Adres'` and `AXValue: 'Szukaj lub podaj witrynę'` — the two different strings the mapping keeps apart — and the `AXUniqueId` measurement below |
+
+- **`AXUniqueId` is not the id, and this is the capture that settled it.** `docs/IOS.md` §2
+  recorded it as `null` throughout, which is true of the Compose capture — all fifteen. On Safari it
+  is populated on **eleven of eighteen** nodes and `favoritesItemIdentifierContent` is on **three**
+  of them, the three favourites tiles. `findOnScreen` treats two elements with one id as the backend
+  contradicting itself (`src/verbs/errors.ts`), so a backend that used that field would make
+  Safari's start page unaddressable. The synthesised flat ordinal is the only truthful id, and this
+  is why.
+- **Every frame is in points**, the same unit `ScreenInfo.widthDp`/`heightDp` are in: the
+  `AXApplication` node of each capture is `{0, 0, 402, 874}`, and the iPhone 17's panel is
+  1206×2622 px at scale 3. That is the whole reason `screen.ts` applies no conversion, and it is
+  asserted against the committed `iPhone 17 Pro` profile — a **different device type with the same
+  panel**, `iPhone18,3` and `iPhone18,1` both reporting 1206×2622 at scale 3 and 460 dpi.
+- **Key order varies between nodes** — every node carries the same sixteen keys in a different
+  order — the same property the notify capture has, and the reason nothing here is read positionally.
+- Committed **verbatim**, as one line, which is what the RPC's `json` field held. They contain
+  simulator geometry, Polish system-UI strings, an app's own labels and a `pid`; no path, and
+  nothing personal.
+- **Two formats were captured and not committed**, and the choice between the three is
+  `parsers/accessibility.ts`' header rather than folklore: `NESTED` answers the same nodes as a
+  tree, and `COMPLETE` renames every key (`AXLabel` → `label`, `AXUniqueId` → `identifier`), drops
+  `role` and `AXFrame`, and wraps the tree in a provenance document.
 
 ## The two device-type profiles
 

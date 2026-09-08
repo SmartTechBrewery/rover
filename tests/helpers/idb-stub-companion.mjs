@@ -11,13 +11,22 @@
  * client names is really on that service. `.mjs` and no `tsx`, because it is exec'd as a program
  * rather than imported.
  *
- * Two behaviours driven by the request rather than by configuration:
+ * **Every RPC on `IDB_RPCS` is implemented here**, because that suite asserts each one answers —
+ * which is what makes "the loaded service really has this method" a check rather than a hope. A
+ * phase that adds an RPC to that list adds it here too, and finds out immediately if it did not.
+ *
+ * Three behaviours driven by the request rather than by configuration:
  *
  * - `describe` answers with a fixed target description.
  * - `describe` with `fetch_diagnostics: true` **exits 133 without answering** — the shape of the
  *   real crash this transport is built around (`docs/IOS.md` §4: `idb file push` dies with exit
  *   133 / SIGTRAP taking every in-flight call for that device with it), and the only way to test
  *   a call that is in flight when its companion dies without reaching for a pid.
+ * - `accessibility_info` answers with **one node, and nothing resembling a screen**. What it is
+ *   for is the transport — that the RPC is on the service and that a call over the socket comes
+ *   back — and the mapping it feeds is asserted against real captures instead
+ *   (`tests/unit/backends/ios-simulator/parsers/accessibility.test.ts`). A stub that invented a
+ *   plausible tree would be a hand-written fixture in a file nobody would look for one in.
  *
  * And one that cannot be: `$ROVER_STUB_NEVER_ANSWERS` binds the socket, prints the handshake and
  * then answers **nothing** — the companion that is listening but wedged. It is configuration
@@ -75,6 +84,15 @@ server.addService(definition.idb.CompanionService.service, {
 				os_version: 'iOS 26.5',
 				architecture: 'arm64',
 			},
+		});
+	},
+	accessibility_info(_call, callback) {
+		// The payload is a JSON string in a protobuf field, which is idb's own shape — see the
+		// header for why this one node is deliberately not a screen.
+		callback(null, {
+			json: JSON.stringify([
+				{ frame: { x: 0, y: 0, width: 1, height: 1 }, AXLabel: null, AXValue: null },
+			]),
 		});
 	},
 });

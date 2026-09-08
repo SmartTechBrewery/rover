@@ -80,10 +80,11 @@ import { quoteStream } from './simctl.js';
  * derived from this tuple is what makes naming it a *compile* error, and the scan beside it is
  * what makes adding it here a test failure — the two halves of one rule.
  *
- * One entry, because one is what this phase calls. A phase that needs `screenshot` or `hid` adds
- * it here deliberately, which is the point of the list.
+ * Two entries: the handshake, and the screen read `readScreen` is built on
+ * (`./parsers/accessibility.ts` owns which of its three formats is asked for). A phase that needs
+ * `hid` adds it here deliberately, which is the point of the list.
  */
-export const IDB_RPCS = ['describe'] as const;
+export const IDB_RPCS = ['describe', 'accessibility_info'] as const;
 export type IdbRpc = (typeof IDB_RPCS)[number];
 
 /**
