@@ -49,6 +49,18 @@ locate-and-verify treatment `src/backends/android/adb-path.ts` gives `adb`, and 
 "Command Line Tools are installed" is the state a developer machine is most likely to be in while
 looking fully equipped.
 
+**That treatment landed, and the runner on top of it executes `simctl` directly rather than
+through `xcrun`.** Measured on a second bench — macOS 26.6.2 (25G83), Xcode 26.4.1 (17E202),
+2026-09-08, `xcode-select -p` → `/Applications/Xcode.app/Contents/Developer` — `env -u
+DEVELOPER_DIR /Applications/Xcode.app/Contents/Developer/usr/bin/simctl list -j devices runtimes`
+answered the full JSON at exit 0 in 0.11–0.20 s across four runs, with no `DEVELOPER_DIR` in the
+environment at all. So the shim buys nothing, and what it would cost is the point: `xcrun`
+performs **its own** search for the utility, which can disagree with the one
+`src/backends/ios-simulator/developer-dir.ts` has already made and verified — this section's own
+trap, where `xcrun simctl` fails outright on a machine whose Xcode holds a perfectly good one.
+`src/backends/ios-simulator/simctl.ts` is the runner, and `tests/device/setup.ts` probes for a
+booted simulator through the same resolution for the same reason (#214).
+
 ---
 
 ## 2. Contract fit, measured
@@ -91,6 +103,28 @@ with an empty `.xcappdata` — the one Apple documents for this — **could not 
 failing first for a missing `AppDataInfo.plist`, then "corresponds to an app that isn't currently
 installed", then container-manager error 55, across three plist spellings. Not worth more time when
 uninstall-and-install costs 0.8 s.
+
+### How a failure comes back, and why the exit code is not a vocabulary
+
+Three subcommands made to fail on the Xcode 26.4.1 bench (2026-09-08), each run directly out of
+the developer directory with no `DEVELOPER_DIR` set:
+
+| Command | Exit | stdout | stderr |
+|---|---|---|---|
+| `launch <bogus-udid> com.example.nope` | **148** | *(empty)* | `Invalid device: 00000000-…` |
+| `nonsense` | **1** | the whole usage text, 2931 bytes | `Unrecognized subcommand: nonsense` |
+| `terminate <booted> com.rover.nope` | **3** | *(empty)* | 6 lines of `NSPOSIXErrorDomain … found nothing to terminate` |
+
+Three different numbers for three commands, so **no meaning is attached to the number** and none
+is mapped: a table built from three samples is a table that lies. Both streams are carried
+instead, and the second row is why that is necessary rather than tidy — a bad subcommand puts its
+useful half on *stdout*, which is "a non-zero exit is data" (`ai/CODING_STANDARDS.md`) in the same
+form the Android side needs it.
+
+**`stderr` is not silence on this platform**, so no rule may read "wrote to stderr" as "failed": a
+perfectly successful `simctl io <device> screenshot <path>` prefixes its run with `Detected file
+type from extension: PNG` and `Note: No display specified. Defaulting to display: … (screenID: 1,
+name: LCD)`.
 
 ### Evidence for the two verbs that matter most
 

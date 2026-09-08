@@ -1,6 +1,16 @@
 import { execFile } from 'node:child_process';
+import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { adbExecutable } from '@/backends/android/adb-path.js';
+import {
+	resolveDeveloperDir,
+	SIMCTL_RELATIVE_PATH,
+} from '@/backends/ios-simulator/developer-dir.js';
+import { toDevices } from '@/backends/ios-simulator/devices.js';
+import {
+	parseSimctlDevices,
+	parseSimctlRuntimes,
+} from '@/backends/ios-simulator/parsers/simctl-list.js';
 import { FFMPEG } from '@/daemon/frames.js';
 import { type DeviceGate, readDeviceGate } from '../helpers/device-gate.js';
 
@@ -13,7 +23,7 @@ const ADB_TIMEOUT_MS = 10_000;
 /**
  * Device-project setup (vitest.config.ts wires this into the `device` project only).
  *
- * Sets three flags, because the suites do not all need the same thing:
+ * Sets four flags, because the suites do not all need the same thing:
  *
  * - `ROVER_TEST_DEVICE` — a device is attached and can run a command (`readDeviceGate`).
  * - `ROVER_TEST_LOCAL_DEVICE` — ...and it is physically attached to **this host**, which is
@@ -26,6 +36,10 @@ const ADB_TIMEOUT_MS = 10_000;
  *   reason the others are: a host without it is a host that cannot run those cases, not a
  *   repository that is broken. It is warned about **loudly**, because a `record_video` case
  *   silently not running is exactly the silence ai/RULES.md §6 says reads as "checked".
+ * - `ROVER_TEST_SIMULATOR` — a simulator this host can drive is **booted**
+ *   (`probeSimulators`). The three flags above all read `adb`, so none of them says anything
+ *   about this platform: on a Mac with a booted simulator and no Android device attached, every
+ *   one of them is off and the iOS suites still have everything they need.
  *
  * Suites gate on the one they need with `describe.skipIf(!process.env.ROVER_TEST_…)`, so a
  * machine without a device it may touch skips rather than fails (ai/TESTING.md). Starting
@@ -59,8 +73,44 @@ async function probeFrameExtraction(): Promise<boolean> {
 	}
 }
 
+/**
+ * Whether a simulator this host can drive is booted.
+ *
+ * **Through the backend's own resolution, never a bare name**, for the reason `probeDevices`
+ * states about `adb` (#171): a suite that drove one `simctl` while the backend it is testing
+ * drove another would be measuring two machines. `xcrun` is not used here either, and for the
+ * sharper version of the same reason — it performs its own search, which can disagree with the
+ * one `developer-dir.ts` made (`src/backends/ios-simulator/simctl.ts`).
+ *
+ * Both listings in one invocation because `toDevices` needs both, and the answer is read from
+ * the mapped `Device[]` rather than from the raw JSON so the gate and the backend agree on what
+ * `ready` means — `Booted` and nothing else, since a capture on a device that is merely
+ * `Booting` hangs for a minute and then fails (`docs/IOS.md` §8, trap 1).
+ *
+ * Every failure means the same thing and none of them is a broken repository: no Xcode, no
+ * macOS at all (`developerDirSearchLocations` answers `[]` off darwin, so the resolve throws),
+ * output that is not the JSON the parsers expect, or a tool that hung past the timeout.
+ *
+ * It **boots nothing** — starting or connecting a device is the operator's job, which is this
+ * file's own rule and matters more here than for `adb`: quitting `Simulator.app`, or shutting
+ * down what this probe had started, takes down every device it owns (`docs/IOS.md` §8, trap 4).
+ */
+async function probeSimulators(): Promise<boolean> {
+	try {
+		const simctl = join(resolveDeveloperDir(), SIMCTL_RELATIVE_PATH);
+		const { stdout } = await execFileAsync(simctl, ['list', '-j', 'devices', 'runtimes'], {
+			timeout: ADB_TIMEOUT_MS,
+		});
+		const devices = toDevices(parseSimctlDevices(stdout), parseSimctlRuntimes(stdout));
+		return devices.some((device) => device.state === 'ready');
+	} catch {
+		return false;
+	}
+}
+
 const gate = await probeDevices();
 const canExtractFrames = await probeFrameExtraction();
+const hasBootedSimulator = await probeSimulators();
 
 if (!gate.usable) {
 	console.warn(
@@ -85,6 +135,15 @@ if (!canExtractFrames) {
 	);
 }
 
+if (!hasBootedSimulator) {
+	console.warn(
+		'[device] No booted simulator — skipping every iOS simulator test.\n' +
+			'  Boot one on a condition rather than a sleep, and put it back afterwards:\n' +
+			'    xcrun simctl boot <udid> && xcrun simctl bootstatus <udid> -b',
+	);
+}
+
 process.env.ROVER_TEST_DEVICE = gate.usable ? '1' : '';
 process.env.ROVER_TEST_LOCAL_DEVICE = gate.local ? '1' : '';
 process.env.ROVER_TEST_FRAME_EXTRACTION = canExtractFrames ? '1' : '';
+process.env.ROVER_TEST_SIMULATOR = hasBootedSimulator ? '1' : '';
