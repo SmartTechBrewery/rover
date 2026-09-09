@@ -279,15 +279,94 @@
 	}
 
 	/*
-	 * There is no looping animation anywhere in the panel (`docs/DESIGN.md` §5), so the only
-	 * motion this can reach is hover and press feedback. It is still declared, because the
-	 * rule has to survive the next component someone adds.
+	 * A branch of the Archive tree opening and closing — `docs/DESIGN.md` §5 and §9 (#280).
+	 *
+	 * A toggle used to mount or unmount the level outright, so one click relocated every row below
+	 * it in a single frame, with no signal about where the new rows had come from or where the old
+	 * ones had gone. Worst on a *collapse*, where the rows below travel up the card by whatever the
+	 * branch was tall and the reader loses the list they were reading.
+	 *
+	 * **A transition, never an animation** — the same sentence `.control-tactile` above carries, and
+	 * for the same reason: it runs once, as a response to the click that asked for it, which is the
+	 * category §5 permits alongside hover and press feedback. No `@keyframes`, no `animation`
+	 * declaration and no `animate-*` utility, so `no-looping-animation.test.ts` — the executable form
+	 * of that rule — stayed exactly as strict as it was.
+	 *
+	 * **`0fr` → `1fr` on one grid track, and deliberately not `max-height`.** The branch has no known
+	 * height: its children are read lazily and a long name wraps. A guessed ceiling is therefore
+	 * subtly wrong on exactly the long `<serial>` level this exists for, while an `fr` track in an
+	 * auto-height grid is sized to its own content — so `1fr` *is* the natural height and nothing has
+	 * to be measured.
+	 *
+	 * **The `visibility` half is the accessibility half, and its delay is the whole trick.** Opening
+	 * flips it with no delay; closing falls back to this rule, whose delay is the duration, so the
+	 * subtree stays visible for exactly as long as it takes to shrink and is gone the instant it has.
+	 * `visibility: hidden` takes a shut branch out of the tab order and out of the accessibility tree
+	 * in one stroke — which is why this is not `aria-hidden`, which would hide focusable rows from a
+	 * screen reader while leaving them tabbable, and not `inert`, a second attribute that can
+	 * disagree with the CSS.
+	 *
+	 * **160ms, declared once and read by both rules.** The panel has no motion-duration token and
+	 * `tokens.css` is Analog Horizon captured verbatim, which defines none, so the number lives here
+	 * beside `.control-tactile`'s own `0.1s`. `ease-out` because the motion is a reveal.
+	 *
+	 * The clipping and the chrome are two further elements *inside* this one
+	 * (`directory-tree.tsx`, `BRANCH_CHROME`): a rail and a vertical padding on **this** box would
+	 * still occupy a dozen pixels under every shut row.
+	 */
+	.tree-branch {
+		--tree-branch-motion: 160ms;
+		display: grid;
+		grid-template-rows: 0fr;
+		visibility: hidden;
+		transition:
+			grid-template-rows var(--tree-branch-motion) ease-out,
+			visibility 0s linear var(--tree-branch-motion);
+	}
+
+	/*
+	 * The wrapper's one grid item, which is what actually hides the subtree as the track shrinks —
+	 * and what lets it shrink at all: **a grid item's automatic minimum size only applies while its
+	 * `overflow` is `visible`**, so a clip and a `min-height: 0` are two ways of saying the same
+	 * necessary thing and both are written down.
+	 *
+	 * **`clip` rather than `hidden`, with a 2px margin**, so the focus ring of a row sitting against
+	 * this box's own right edge is not shaved off — the rows are inset from the left by the chrome's
+	 * indent and from the right by nothing. It is still not `visible`, so the track still collapses,
+	 * and the margin reaches nothing at a collapsed track: the chrome's own `mt-1` puts its rail 4px
+	 * below an edge that paints 2px past.
+	 */
+	.tree-branch-clip {
+		min-height: 0;
+		overflow: clip;
+		overflow-clip-margin: 2px;
+	}
+
+	.tree-branch-open {
+		grid-template-rows: 1fr;
+		visibility: visible;
+		transition:
+			grid-template-rows var(--tree-branch-motion) ease-out,
+			visibility 0s linear 0s;
+	}
+
+	/*
+	 * There is no looping animation anywhere in the panel (`docs/DESIGN.md` §5), so the only motion
+	 * this can reach is hover and press feedback and the Archive tree's branches above. It is still
+	 * declared over everything, because the rule has to survive the next component someone adds.
+	 *
+	 * **The delay is floored as well as the duration** (#280), and that is not tidiness: a floored
+	 * duration does not reach `.tree-branch`'s delayed `visibility`, so under `reduce` a shut branch
+	 * would stay focusable for 160ms after collapsing — nothing on screen, and a state that must not
+	 * exist. Nothing else in the panel declares a transition delay, so this reaches only the rule it
+	 * was added for.
 	 */
 	@media (prefers-reduced-motion: reduce) {
 		*,
 		*::before,
 		*::after {
 			transition-duration: 0.01ms !important;
+			transition-delay: 0.01ms !important;
 			animation-duration: 0.01ms !important;
 			animation-iteration-count: 1 !important;
 			scroll-behavior: auto !important;

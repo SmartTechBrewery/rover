@@ -401,10 +401,21 @@ async function grouped(splat: string | undefined, levels: Record<string, unknown
 	return rendered;
 }
 
-/** The tree card's rows, in the order they are drawn — the one pane a level's arrangement is in. */
+/**
+ * The tree card's rows, in the order they are drawn — the one pane a level's arrangement is in.
+ *
+ * **Drawn is narrower than mounted since #280.** A branch that has been open keeps its rows once it
+ * is shut, so a *collapse* has something on screen to move; `visibility: hidden` on the wrapper is
+ * what takes every one of them off the screen, out of the tab order and out of the accessibility
+ * tree. The stylesheet is not loaded here, so the class is read instead — the same thing said one
+ * step earlier, and `tests/unit/panel/branch-motion-is-a-transition.test.ts` is what pins the class
+ * to that behaviour.
+ */
 function treeRows(): readonly (string | null)[] {
 	const tree = document.querySelector('aside');
-	return [...(tree?.querySelectorAll('a') ?? [])].map((row) => row.textContent);
+	return [...(tree?.querySelectorAll('a') ?? [])]
+		.filter((row) => row.closest('.tree-branch:not(.tree-branch-open)') === null)
+		.map((row) => row.textContent);
 }
 
 /** The contents card's rows, in the order they are drawn — the other pane the same level is in. */

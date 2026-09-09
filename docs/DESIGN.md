@@ -316,14 +316,28 @@ The direction is a dark CRT/terminal reading of the Analog Horizon system. It is
 **No looping animation, anywhere.** Nothing pulses, blinks, flickers, glows in and out or breathes.
 The first design shipped a `crt-flicker` animating the whole document's opacity on a 0.15 s loop —
 roughly seven flickers a second, inside the frequency band that matters for photosensitivity, and a
-full-page repaint every frame. The only motion in the interface is the lease countdown changing its
-digits once a second and ordinary hover/press feedback: both are responses to something real.
-Whatever remains is suppressed under `prefers-reduced-motion`.
+full-page repaint every frame. The motion in the interface is the lease countdown changing its
+digits once a second, ordinary hover/press feedback, and **a branch of the Archive tree opening and
+closing over a short transition** (§9): all three are responses to something real. Whatever remains
+is suppressed under `prefers-reduced-motion`.
 
-*As built* (#113): the countdown is that only motion, and it needs **nothing added** for
-`prefers-reduced-motion`. It changes text, with no transition and no animation on it, so the global
-block in `index.css` has nothing to reach. Recorded here so the next reader does not go looking for
-a branch that is missing on purpose.
+*As built* (#113): the countdown needs **nothing added** for `prefers-reduced-motion`. It changes
+text, with no transition and no animation on it, so the global block in `index.css` has nothing to
+reach. Recorded here so the next reader does not go looking for a branch that is missing on purpose.
+
+*As built* (#280, and this paragraph is the reason the sentence above was edited in place rather
+than left standing — `ai/RULES.md` §1): the tree's branches are the second thing that moves, and
+the **rule did not change, only its inventory**. A one-shot CSS transition on a wrapper's
+`grid-template-rows`, `0fr` → `1fr` over 160ms — `.tree-branch` in `index.css`, with the duration
+declared once as a custom property because the closing direction's `visibility` delay has to match
+it. **No `@keyframes`, no `animation` declaration and no `animate-*` utility**, so
+`tests/unit/panel/no-looping-animation.test.ts`, which is the executable form of this rule and is
+narrower than this prose, stayed exactly as strict as it was rather than being widened to let this
+through. What suppresses it is the global `prefers-reduced-motion` block, which needed **one line
+added**: `transition-delay`, because a floored duration does not reach the delayed `visibility` that
+takes a shut branch out of the tab order, and under `reduce` a branch must close outright with
+nothing half-open left on screen. `tests/unit/panel/branch-motion-is-a-transition.test.ts` is that
+paragraph as a gate.
 
 **The scanline texture stays, but only on chrome.** It carries the CRT character and costs nothing
 to read against because it does not move. It must never be a fixed full-viewport layer in a blend
@@ -1969,6 +1983,37 @@ strict ancestor of the selection, the floor stops holding it open, and the open 
 the tree then draws. Nothing else changed: **a row that opens nothing gains nothing**, so a file, and
 a run whose parent named no single child, still carry no triangle, no `aria-expanded` and no toggle.
 
+**And either half of that gesture is a movement rather than a replacement** (#280, §5). A branch was
+mounted or unmounted outright, so one click relocated every row below it in a single frame, with no
+signal about where the new rows had come from or where the old ones had gone — worst on a *collapse*,
+where the rows below travel up the card by whatever the branch was tall and the reader loses the list
+they were reading. The level a row opens is drawn in a wrapper whose single grid track goes `0fr` →
+`1fr` over 160ms instead, so the rows below move with it. Four things about it are the rule rather
+than the mechanism:
+
+- **a level stays mounted once the branch has been drawn open**, which is what gives a collapse
+  something on screen to move. It costs no request — the levels read are still the levels the open
+  set names (`drawnLevels` walks that set and never the document), and `useArchiveLevels` never
+  pruned a level anyway, so *closing a node reads nothing* is unchanged. `visibility: hidden` on the
+  shut wrapper is what takes those rows off the screen, out of the tab order and out of the
+  accessibility tree in the same instant;
+- **a branch nobody has opened is still not in the tree at all** — no rows, no *Reading this level.*
+  and no listing asked for. The lazy guarantee above is now true of the document as well as of the
+  wire, which matters most in the **groups** view, where one grouping answer has already listed every
+  level above a run;
+- **`aria-expanded` reports the state, never the end of the transition.** It is computed in the same
+  render as the wrapper's own class and from the same open set, and nothing here waits for a
+  transition to end. A level still in flight says *Reading this level.* as the branch opens, with no
+  delay and no spinner (§5), and the rows that replace it do not re-run the transition, because the
+  branch is already open by then;
+- **both views get it, unconditionally**, because there is one `Branch` — no per-view branch and no
+  flag on `TreeSource`. The **searched** tree has none of it: every node there is drawn expanded and
+  no row carries a toggle, so there is no state to move between.
+
+Nothing about *what* is drawn changed: no count, no status glyph, no colour that means an outcome,
+no new interactive element inside a row, and the triangle is still two glyphs swapped rather than one
+rotated (below).
+
 **No depth is special-cased, in either direction.** A run's children are its `<serial>`'s entries
 (the depth table below), and the open set is keyed by the **row's** address, so the hop the tree makes
 on the way down needs no matching hop on the way up: an open directory inside a run closes onto
@@ -2144,8 +2189,9 @@ browser.
   tree has to reach the file itself, and a run expands into the entries of its `<serial>` — which is
   still not a level of the tree and still in every address below the run. The glyph is
   `FolderOpen`/`Folder`, `FileText`, or `FileQuestionMark` for the host's own *unclassified*, taken
-  from the entry's `kind` and never from its name (D22); the triangle is `ChevronDown`/`ChevronRight`.
-  Both are `aria-hidden` — **the triangle stayed decoration meaning *this opens*, and did not become
+  from the entry's `kind` and never from its name (D22); the triangle is `ChevronDown`/`ChevronRight`,
+  **two glyphs swapped and not one glyph rotated** — which is what keeps #280's transition a change
+  of the branch's height and of nothing a row draws. Both are `aria-hidden` — **the triangle stayed decoration meaning *this opens*, and did not become
   a second control inside the link** (#175, rewritten in place; #198 kept it there). Collapsing
   landed on the row, which already goes somewhere: hanging the closing half of one gesture on a
   `<button>` nested inside the `<Link>` would split it across two targets, make a row two things, and

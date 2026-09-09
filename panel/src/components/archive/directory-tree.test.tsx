@@ -186,8 +186,41 @@ function showing(
 	);
 }
 
+/**
+ * A branch drawn **shut** — whose subtree is mounted so that a collapse has rows to move, and whose
+ * `visibility: hidden` is what keeps every one of them off the screen, out of the tab order and out
+ * of the accessibility tree (#280, `index.css`).
+ *
+ * The stylesheet is not loaded here, so *on screen* is read off the class rather than off a computed
+ * style — which is the same thing said one step earlier, and the gate on the class itself is
+ * `tests/unit/panel/branch-motion-is-a-transition.test.ts`.
+ */
+const SHUT_BRANCH = '.tree-branch:not(.tree-branch-open)';
+
+/**
+ * Every row **on screen**, which is what every assertion below has always meant by *the rows*.
+ * A branch that has been read and then shut keeps its own rows mounted (#280); none of them is
+ * drawn, and no assertion here is about them — {@link mounted} is where that is asserted directly.
+ */
 function rows(container: HTMLElement): readonly HTMLElement[] {
-	return [...container.querySelectorAll('a')];
+	return [...container.querySelectorAll('a')].filter((row) => row.closest(SHUT_BRANCH) === null);
+}
+
+/** Every row in the DOM, drawn or not — the one thing a collapse needs to be true (#280). */
+function mounted(container: HTMLElement): readonly (string | null)[] {
+	return [...container.querySelectorAll('a')].map((row) => row.textContent);
+}
+
+/**
+ * The text the card draws **on screen**, in order. `container.textContent` was that until a shut
+ * branch kept its rows (#280), and the exact-text assertions below are about what a reader sees.
+ */
+function drawnText(container: HTMLElement): string {
+	const copy = container.cloneNode(true) as HTMLElement;
+	for (const shut of copy.querySelectorAll(SHUT_BRANCH)) {
+		shut.remove();
+	}
+	return copy.textContent ?? '';
 }
 
 /** One row by the name it draws — and a failure rather than `undefined` when there is no such row. */
@@ -473,6 +506,188 @@ describe('the tree', () => {
 	});
 });
 
+/**
+ * **A toggle is a movement rather than a replacement** (#280, `docs/DESIGN.md` §5 and §9).
+ *
+ * The level a row opens is wrapped in `.tree-branch`, whose single grid track goes `0fr` → `1fr`
+ * over 160ms — so what is asserted here is the DOM the transition needs, which is the half a test
+ * can see. That the class *means* hidden, that its duration is in the band the issue asked for, and
+ * that nothing about it is an animation are `tests/unit/panel/branch-motion-is-a-transition.test.ts`
+ * and `no-looping-animation.test.ts`, over the stylesheet itself.
+ *
+ * Nothing about *what* is drawn changed, so the assertions above are the ones that say so: the exact
+ * text, the exact glyph count, the one selected row and the exact set of drawn rows are all still
+ * there and all still pass.
+ */
+describe('opening and closing a branch', () => {
+	/** The wrapper a row's own branch is drawn in, or `undefined` on a row that opens nothing. */
+	function branchOf(container: HTMLElement, name: string): HTMLElement | undefined {
+		const li = rowNamed(container, name).parentElement;
+		return [...(li?.children ?? [])].find((child) => child.classList.contains('tree-branch')) as
+			| HTMLElement
+			| undefined;
+	}
+
+	/** The same tree again, over a new selection and a new open set — the second of two renders. */
+	function redraw(
+		rerender: (ui: ReactNode) => void,
+		selected: readonly string[],
+		open: OpenNodes,
+	): void {
+		rerender(
+			<DirectoryTree
+				branches={branchesFor(selected, open)}
+				search={searching(NOT_SEARCHING)}
+				selected={selected}
+				source={allRowSource(archive())}
+			/>,
+		);
+	}
+
+	/*
+	 * **The wrapper's state and the row's state are one render.** This is the criterion that
+	 * `aria-expanded` never waits for a transition: both come off the same `branches.isOpen`, and
+	 * there is no transition-end handler anywhere in this component to wait for.
+	 */
+	it('draws the row’s own state on the wrapper, in the same render as `aria-expanded`', () => {
+		const { container } = showing(['checkout-app', 'login-flow']);
+
+		expect(rowNamed(container, 'login-flow').getAttribute('aria-expanded')).toBe('true');
+		expect(branchOf(container, 'login-flow')?.className).toContain('tree-branch-open');
+		expect(rowNamed(container, RUN).getAttribute('aria-expanded')).toBe('false');
+		expect(branchOf(container, RUN)?.className).toBe('tree-branch');
+	});
+
+	// A row that opens nothing gains nothing here either — no wrapper, so no class and no state.
+	it('gives a row that opens nothing no wrapper', () => {
+		const { container } = showing([...FRAMES, '0001.png']);
+
+		expect(branchOf(container, '0001.png')).toBeUndefined();
+	});
+
+	/*
+	 * **The collapse has rows to move**, which is the whole reason a level survives being shut: they
+	 * are off the screen and still in the document, and the wrapper shrinking is what moves them.
+	 */
+	it('keeps a branch it has drawn open mounted once it is shut', () => {
+		const selected = ['checkout-app', 'login-flow'];
+		const { container, rerender } = showing(
+			selected,
+			archive(),
+			searching(NOT_SEARCHING),
+			branchesFor(selected, new Set([[], ['checkout-app'], selected].map(keyOf))),
+		);
+		expect(rows(container).map((row) => row.textContent)).toContain(RUN);
+
+		// The second click on `login-flow` selects it again and takes it out of the set, and the
+		// floor does not hold it: no node is a strict ancestor of itself.
+		redraw(rerender, selected, new Set([[], ['checkout-app']].map(keyOf)));
+
+		expect(rowNamed(container, 'login-flow').getAttribute('aria-expanded')).toBe('false');
+		expect(branchOf(container, 'login-flow')?.className).toBe('tree-branch');
+		expect(rows(container).map((row) => row.textContent)).not.toContain(RUN);
+		expect(mounted(container)).toContain(RUN);
+	});
+
+	/*
+	 * **And a branch nobody has opened is not in the tree at all** — §9's lazy guarantee, in DOM
+	 * terms rather than in requests. It matters most in the groups view, where one grouping answer
+	 * has already listed every level above a run: without this, the whole arrangement would be in
+	 * the document from the first render.
+	 */
+	it('mounts nothing under a branch nobody has opened', () => {
+		const { container } = showing(['checkout-app', 'login-flow']);
+
+		const branch = branchOf(container, 'payments-web');
+		expect(branch?.className).toBe('tree-branch');
+		expect(branch?.querySelectorAll('a')).toHaveLength(0);
+		expect(branch?.textContent).toBe('');
+	});
+
+	/*
+	 * **The reading line is drawn where the level is drawn, and nowhere else.** A shut branch must
+	 * not carry a hidden *Reading this level.*: it would be a sentence claiming a read nobody asked
+	 * for, and the transition must never stand in for that line either.
+	 */
+	it('says it is reading only where the level is on screen', () => {
+		const selected = ['checkout-app'];
+		const levels = archive({ [keyOf(selected)]: { status: 'loading' } });
+		const { container, rerender } = showing(
+			selected,
+			levels,
+			searching(NOT_SEARCHING),
+			branchesFor(selected, new Set([[], selected].map(keyOf))),
+		);
+		expect(screen.getByText('Reading this level.')).toBeDefined();
+		expect(branchOf(container, 'checkout-app')?.className).toContain('tree-branch-open');
+
+		rerender(
+			<DirectoryTree
+				branches={branchesFor(selected, new Set([keyOf([])]))}
+				search={searching(NOT_SEARCHING)}
+				selected={selected}
+				source={allRowSource(levels)}
+			/>,
+		);
+
+		expect(container.textContent).not.toContain('Reading this level.');
+	});
+
+	/*
+	 * **The visibility hole, asserted rather than reasoned about.** `visibility` inherits, but a
+	 * descendant may set it back — so a row still in the open set inside a shut branch would
+	 * otherwise draw itself open, and put itself back into the tab order and into the accessibility
+	 * tree inside a clipped ancestor. `drawn` makes that unrepresentable.
+	 */
+	it('draws no open branch inside a shut one', () => {
+		const { container, rerender } = showing(
+			FRAMES,
+			archive(),
+			searching(NOT_SEARCHING),
+			branchesFor(FRAMES, openedBy(FRAMES)),
+		);
+		expect(rowNamed(container, '0001.png')).toBeDefined();
+
+		// The reader closes the project at the top of it, and lands on it. Every branch below is
+		// still in the set, and none of them is on screen.
+		const below: OpenNodes = new Set(
+			[...openedBy(FRAMES)].filter((key) => key !== keyOf(['checkout-app'])),
+		);
+		redraw(rerender, ['checkout-app'], below);
+
+		expect(
+			container.querySelectorAll('.tree-branch:not(.tree-branch-open) .tree-branch-open'),
+		).toHaveLength(0);
+		expect(rows(container).map((row) => row.textContent)).toEqual(['checkout-app', 'payments-web']);
+		expect(mounted(container)).toContain('0001.png');
+	});
+
+	// The register of the four assertions already in this file, over the one thing this change adds.
+	it('moves by a transition, with nothing that is an animation', () => {
+		const { container } = showing(['checkout-app', 'login-flow']);
+
+		expect(container.innerHTML).toContain('tree-branch');
+		expect(container.innerHTML).not.toContain('animate');
+		expect(container.innerHTML).not.toContain('keyframes');
+	});
+
+	/*
+	 * **The searched tree gains none of it**, because it has no state to move between: every node is
+	 * drawn expanded and no row carries a toggle (§9). It shares the rail and the indent and nothing
+	 * else.
+	 */
+	it('leaves the searched tree with no wrapper at all', () => {
+		const { container } = showing(
+			['checkout-app'],
+			archive(),
+			searching(found([match(FRAMES, 'directory'), match([...FRAMES, '0001.png'], 'file')])),
+		);
+
+		expect(container.querySelectorAll('.tree-branch')).toHaveLength(0);
+		expect(container.innerHTML).toContain('border-l-2');
+	});
+});
+
 describe('what a row may carry', () => {
 	// The header badge carries the one number for whatever is selected; a count in the tree is what
 	// turns a tree into a report (`docs/DESIGN.md` §9).
@@ -481,7 +696,7 @@ describe('what a row may carry', () => {
 
 		// The card's heading and the names, and **nothing else at all** — asserted as the exact text
 		// rather than by searching for a digit, because a run's hash is full of digits.
-		expect(container.textContent).toBe(
+		expect(drawnText(container)).toBe(
 			['DIRECTORY', 'checkout-app', 'login-flow', RUN, OLDER, 'unlabeled', 'payments-web'].join(''),
 		);
 	});
