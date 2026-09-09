@@ -28,6 +28,7 @@
 import { registerDeviceBackend } from '../registry.js';
 import { IosSimulatorDeviceBackend } from './backend.js';
 import { iosSimulatorCapabilityManifest } from './capabilities.js';
+import { iosSimulatorHostTooling } from './host-tooling.js';
 
 // Named rather than inlined into the registration, because the teardown below is a method *on this
 // instance*: the companion pool is its state, so a second `new` here would hand the daemon a
@@ -38,4 +39,5 @@ registerDeviceBackend({
 	manifest: iosSimulatorCapabilityManifest,
 	backend,
 	stopHostProcesses: () => backend.stopIdbCompanions(),
+	hostTooling: iosSimulatorHostTooling,
 });

@@ -24,7 +24,11 @@
 
 import { CapabilityManifestSchema } from '../core/capabilities.js';
 import type { PlatformId } from '../core/ids.js';
-import type { DeviceBackendRegistration, RegisteredDeviceBackend } from './manifest.js';
+import type {
+	DeviceBackendRegistration,
+	HostTooling,
+	RegisteredDeviceBackend,
+} from './manifest.js';
 
 const registry: RegisteredDeviceBackend[] = [];
 const byPlatform = new Map<string, RegisteredDeviceBackend>();
@@ -45,6 +49,7 @@ export function registerDeviceBackend(registration: DeviceBackendRegistration): 
 		...(registration.stopHostProcesses
 			? { stopHostProcesses: registration.stopHostProcesses }
 			: {}),
+		...(registration.hostTooling ? { hostTooling: registration.hostTooling } : {}),
 	};
 	registry.push(registered);
 	byPlatform.set(manifest.platform, registered);
@@ -122,6 +127,84 @@ export async function stopBackendHostProcesses(
 					`${message(outcome.reason)}. Something it started may still be running.`,
 			);
 		}
+	}
+}
+
+/**
+ * What every registered backend says about the programs it needs on **this** host.
+ *
+ * The read half of {@link DeviceBackendRegistration.hostTooling}, and the daemon's whole answer to
+ * `list_host_tooling` (`src/daemon/tooling-handlers.ts`). Each status is tagged with the platform
+ * that reported it, here rather than in the backend, so no backend can mislabel another's row and
+ * a provider stays a list of programs rather than a list of programs plus its own name.
+ *
+ * **Never rejects, for `stopBackendHostProcesses`' reason turned the other way up**: a `doctor`
+ * that dies because one backend's search threw tells an operator nothing about the other backend,
+ * and the missing row is the one they came for. A provider that throws contributes a row saying so
+ * — a report is not a place to be silent about a failure (ai/RULES.md §6).
+ *
+ * The list is a parameter, again so a suite can hand in its own and adding a backend edits nothing
+ * here.
+ */
+export async function describeHostTooling(
+	backends: readonly RegisteredDeviceBackend[] = listDeviceBackends(),
+): Promise<HostTooling[]> {
+	const providers = backends.flatMap((entry) =>
+		entry.hostTooling ? [[entry.manifest.platform, entry.hostTooling] as const] : [],
+	);
+	const outcomes = await Promise.allSettled(providers.map(([, tooling]) => tooling.describe()));
+
+	return outcomes.flatMap((outcome, index) => {
+		const platform = providers[index]?.[0];
+		if (platform === undefined) return [];
+		if (outcome.status === 'rejected') {
+			return [
+				{
+					platform,
+					tool: `(${platform})`,
+					found: null,
+					detail: `This backend could not say what it needs: ${message(outcome.reason)}`,
+					installable: false,
+				},
+			];
+		}
+		return outcome.value.map((status) => ({ platform, ...status }));
+	});
+}
+
+/**
+ * Install one of those programs, through the backend that offered it.
+ *
+ * The write half, and the only one with a side effect. It resolves the tool **by asking the
+ * providers**, never by a table here: which programs exist is the backends' knowledge, and a
+ * lookup written here would be a second place to add a row (ai/RULES.md §2).
+ *
+ * Throws when nothing offers that name — including when a backend knows the program but declared
+ * it uninstallable, which is the honest answer for `adb` and for Xcode: Rover fetches its own
+ * second-order tooling and never a platform SDK.
+ */
+export async function installHostTool(
+	tool: string,
+	backends: readonly RegisteredDeviceBackend[] = listDeviceBackends(),
+): Promise<HostTooling> {
+	for (const entry of backends) {
+		const provider = entry.hostTooling;
+		if (provider?.install === undefined) continue;
+		const offered = await provider.describe();
+		if (!offered.some((status) => status.tool === tool && status.installable)) continue;
+		return { platform: entry.manifest.platform, ...(await provider.install(tool)) };
+	}
+	throw new UninstallableToolError(tool);
+}
+
+/** No registered backend offers to install a program by that name. */
+export class UninstallableToolError extends Error {
+	constructor(readonly tool: string) {
+		super(
+			`No registered device backend can install '${tool}' on this host. ` +
+				'Ask for one this host reported as installable.',
+		);
+		this.name = 'UninstallableToolError';
 	}
 }
 

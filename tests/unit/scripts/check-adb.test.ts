@@ -190,10 +190,12 @@ describe('the adb prerequisite check', () => {
 	);
 
 	// Without this, renaming the script leaves a check that never runs and a suite that passes.
+	// `toContain` rather than equality now that a second check runs beside it: what this asserts is
+	// that *this* one is still in the line, not that it is the only thing in it.
 	it('is wired into npm install', async () => {
 		const manifest = JSON.parse(await readFile(join(repoRoot, 'package.json'), 'utf8'));
 
-		expect(manifest.scripts.postinstall).toBe('node scripts/check-adb.mjs');
+		expect(manifest.scripts.postinstall).toContain('node scripts/check-adb.mjs');
 		await expect(access(script)).resolves.toBeUndefined();
 	});
 });

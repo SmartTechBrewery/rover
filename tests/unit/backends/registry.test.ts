@@ -1,11 +1,14 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import {
 	_resetDeviceBackendRegistryForTesting,
+	describeHostTooling,
 	getDeviceBackend,
+	installHostTool,
 	listDeviceBackends,
 	registerDeviceBackend,
 	requireDeviceBackend,
 	stopBackendHostProcesses,
+	UninstallableToolError,
 } from '@/backends/registry.js';
 import { parsePlatformId } from '@/core/ids.js';
 import { createMockCapabilities, createMockRegistration } from '../../helpers/factories.js';
@@ -161,6 +164,115 @@ describe('stopBackendHostProcesses', () => {
 		expect(warnings).toHaveLength(1);
 		expect(warnings[0]).toContain('test-platform');
 		expect(warnings[0]).toContain('companion would not die');
+	});
+});
+
+describe('describeHostTooling', () => {
+	/**
+	 * The row arrives tagged with the platform that reported it, and the provider never says its
+	 * own name — so two backends that each need one program still produce rows a reader can tell
+	 * apart, and no provider can mislabel another's.
+	 */
+	it('tags every row with the backend that reported it', async () => {
+		registerDeviceBackend(
+			createMockRegistration({
+				hostTooling: {
+					describe: async () => [
+						{ tool: 'thing', found: '/usr/bin/thing', detail: 'From PATH.', installable: false },
+					],
+				},
+			}),
+		);
+
+		await expect(describeHostTooling()).resolves.toEqual([
+			{
+				platform: 'test-platform',
+				tool: 'thing',
+				found: '/usr/bin/thing',
+				detail: 'From PATH.',
+				installable: false,
+			},
+		]);
+	});
+
+	/** A backend that registered no provider is skipped, not reported as empty. */
+	it('skips a backend that declares no tooling', async () => {
+		registerDeviceBackend(createMockRegistration());
+
+		await expect(describeHostTooling()).resolves.toEqual([]);
+	});
+
+	/**
+	 * A report is not a place to be silent about a failure (ai/RULES.md §6), and a doctor that died
+	 * on one backend would tell an operator nothing about the other — which is the row they came
+	 * for.
+	 */
+	it('turns a provider that threw into a row saying so, rather than rejecting', async () => {
+		registerDeviceBackend(
+			createMockRegistration({
+				hostTooling: {
+					describe: async () => {
+						throw new Error('the search itself broke');
+					},
+				},
+			}),
+		);
+
+		const [row] = await describeHostTooling();
+
+		expect(row?.found).toBeNull();
+		expect(row?.detail).toContain('the search itself broke');
+		expect(row?.installable).toBe(false);
+	});
+});
+
+describe('installHostTool', () => {
+	it('routes to the backend that offered that program, and tags the answer', async () => {
+		registerDeviceBackend(
+			createMockRegistration({
+				hostTooling: {
+					describe: async () => [
+						{ tool: 'thing', found: null, detail: 'missing', installable: true },
+					],
+					install: async (tool: string) => ({
+						tool,
+						found: '/installed/thing',
+						detail: `Installed ${tool}.`,
+						installable: true,
+					}),
+				},
+			}),
+		);
+
+		await expect(installHostTool('thing')).resolves.toEqual({
+			platform: 'test-platform',
+			tool: 'thing',
+			found: '/installed/thing',
+			detail: 'Installed thing.',
+			installable: true,
+		});
+	});
+
+	/**
+	 * A program a backend reports but declares uninstallable is the honest answer for `adb` and for
+	 * Xcode — Rover fetches its own second-order tooling and never a platform SDK — so asking for
+	 * one is refused rather than dispatched.
+	 */
+	it('refuses a program nothing offered to install, naming it', async () => {
+		registerDeviceBackend(
+			createMockRegistration({
+				hostTooling: {
+					describe: async () => [
+						{ tool: 'adb', found: null, detail: 'missing', installable: false },
+					],
+					install: async () => {
+						throw new Error('should never be reached');
+					},
+				},
+			}),
+		);
+
+		await expect(installHostTool('adb')).rejects.toBeInstanceOf(UninstallableToolError);
 	});
 });
 

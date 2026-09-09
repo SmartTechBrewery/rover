@@ -59,6 +59,7 @@ import { attemptConnect } from './socket-connect.js';
 import { assertValidSocketPath } from './socket-path.js';
 import { handleStatus } from './status.js';
 import { createSweepArchiveHandler } from './sweep-handlers.js';
+import { createToolingHandlers } from './tooling-handlers.js';
 import { createVerbHandlers } from './verb-handlers.js';
 import { createVerbTraffic, type VerbTraffic } from './verb-traffic.js';
 
@@ -361,6 +362,7 @@ export function createDaemonHandlers(
 		...createListProjectsHandler({ root: projectsRoot }),
 		...createKeptTestsHandlers({ path: keptTestsPath }),
 		...createSweepArchiveHandler({ sweeper }),
+		...createToolingHandlers(),
 	};
 }
 

@@ -406,6 +406,13 @@ describe('the generated ROVER.md', () => {
 		// stakes raised: it deletes an operator's data on a shared host, which is an operator's
 		// press and never a step in one agent's work.
 		'sweep_archive',
+		// What the host machine has installed, and installing it — a question about somebody's
+		// laptop rather than about a device, answered in paths on that machine, and the install is
+		// an operator's decision with an actor attached (D28). An agent that meets an unbacked
+		// capability already gets the sentence it needs: a `missing-capability` failure naming the
+		// program, the device and the backend, to relay to a person.
+		'list_host_tooling',
+		'install_host_tool',
 	]);
 
 	const page = roverDocument({

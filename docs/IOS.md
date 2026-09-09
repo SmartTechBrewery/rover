@@ -441,7 +441,12 @@ the dependency is **alive**, which is the part worth updating:
 - It ships a **prebuilt `idb-companion.macos-arm64.tar.gz`** and an `arm64_tahoe` Homebrew bottle.
   Nothing was compiled to get the results above; the tarball was unpacked into a scratch directory
   and run in place. `brew` no longer carries `idb-companion` in core — the old `facebook/fb` tap is
-  gone — so the release asset is the install path.
+  gone — so the release asset is the install path. **Rover now walks that path itself**: `rover
+  doctor --fix` fetches the pinned asset on the host, checks it against the release's own `.sha256`
+  and unpacks it into `~/.rover/idb-companion-<version>/`, which is the third row of the search
+  (`PROJECT.md` D39). Everything below still describes the same asset — what changed is who
+  unpacks it, and that an operator no longer has to choose a directory and an environment variable
+  to go with it.
 - **That install has now been performed in this repository's own bench**, on 2026-09-08, and this
   bullet is the report of it rather than of somebody else's machine. v1.5.2's asset was fetched,
   checksummed against the release's own `.sha256`

@@ -16,8 +16,10 @@
 import { registerDeviceBackend } from '../registry.js';
 import { AndroidDeviceBackend } from './backend.js';
 import { androidCapabilityManifest } from './capabilities.js';
+import { androidHostTooling } from './host-tooling.js';
 
 registerDeviceBackend({
 	manifest: androidCapabilityManifest,
 	backend: new AndroidDeviceBackend(),
+	hostTooling: androidHostTooling,
 });

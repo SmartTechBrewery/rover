@@ -146,13 +146,41 @@ async function tryConnect(socketPath: string): Promise<ConnectSucceeded | Connec
  * starts on purpose (D17, D29), never something a client brings up behind their back. Empty
  * counts as unset for both, exactly as it does for the socket path.
  */
-function spawnDaemon(socketPath: string): void {
+/**
+ * How to run the daemon in the **foreground**, as a command for somebody else to spawn.
+ *
+ * The deliberate start, where {@link spawnDaemon} below is the automatic one — and this answers
+ * with a command rather than starting it, so the spawning stays in the one client-side module that
+ * owns it (`src/cli/_shared/foreground.ts`). What this knows and that module must not is where the
+ * daemon's entry file is and whether it needs a TypeScript loader.
+ *
+ * **The environment is the caller's, plus the socket.** `ROVER_LISTEN_PORT` and `ROVER_HTTP_PORT`
+ * are deliberately **not** cleared, where the autostart clears both: a host that began listening
+ * for the network or for browsers as a side effect of `rover list` would be a change in exposure
+ * nobody chose, and one somebody typed `rover server` for is exactly the opposite (D17, D29).
+ */
+export function daemonForegroundCommand(socketPath: string): {
+	readonly args: readonly string[];
+	readonly cwd: string;
+	readonly env: NodeJS.ProcessEnv;
+} {
+	return {
+		args: daemonArgv(),
+		cwd: PACKAGE_ROOT,
+		env: { ...process.env, [SOCKET_PATH_ENV_VAR]: socketPath },
+	};
+}
+
+/** The interpreter arguments both starts share: the loader where one is needed, then the entry. */
+function daemonArgv(): string[] {
 	const entry = fileURLToPath(
 		new URL(`main${extname(fileURLToPath(import.meta.url))}`, import.meta.url),
 	);
-	const loaderArgs = entry.endsWith('.ts') ? ['--import', typeScriptLoader()] : [];
+	return entry.endsWith('.ts') ? ['--import', typeScriptLoader(), entry] : [entry];
+}
 
-	const child = spawn(process.execPath, [...loaderArgs, entry], {
+function spawnDaemon(socketPath: string): void {
+	const child = spawn(process.execPath, daemonArgv(), {
 		detached: true,
 		stdio: 'ignore',
 		// Never the caller's cwd: a daemon outlives the command that started it, and holding a

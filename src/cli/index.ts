@@ -19,16 +19,19 @@ import { UsageError } from './_shared/flags.js';
 import * as out from './_shared/output.js';
 import * as acquire from './commands/acquire.js';
 import * as archive from './commands/archive.js';
+import * as doctor from './commands/doctor.js';
 import * as forceRelease from './commands/force-release.js';
 import * as init from './commands/init.js';
 import * as install from './commands/install.js';
 import * as keep from './commands/keep.js';
 import * as list from './commands/list.js';
+import * as panel from './commands/panel.js';
 import * as pull from './commands/pull.js';
 import * as push from './commands/push.js';
 import * as record from './commands/record.js';
 import * as release from './commands/release.js';
 import * as screenshot from './commands/screenshot.js';
+import * as server from './commands/server.js';
 import * as status from './commands/status.js';
 import * as sweep from './commands/sweep.js';
 import * as users from './commands/users.js';
@@ -75,6 +78,9 @@ const COMMANDS: Record<string, Command | undefined> = Object.assign(Object.creat
 	status,
 	users,
 	init,
+	doctor,
+	server,
+	panel,
 });
 
 export function usage(): string {
@@ -120,6 +126,13 @@ Commands:
                            its hook file, its .mcp.json, a generated ROVER.md, and the
                            snippet that tells an agent a manual test means Rover
   users <subcommand>       Who may use this host — add, list, rotate, revoke
+  doctor                   The programs the host needs and where it found them; --fix
+                           installs the ones Rover can (--actor required with --fix)
+  server                   Run this machine's host in the foreground, log and all —
+                           the deliberate start, and the only one that keeps the two
+                           settings that make a host reachable
+  panel                    Serve the web panel in the foreground, beside a host started
+                           with ROVER_HTTP_PORT set
 
 \`screenshot\`, \`record\` and \`pull\` write their bytes **here**: the verb runs on the host and
 the answer comes back as bytes, so --out is a path on this machine and the path reported is

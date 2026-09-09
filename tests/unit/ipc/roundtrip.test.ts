@@ -50,6 +50,14 @@ function statusHandlers(overrides: Partial<IpcHandlers> = {}): IpcHandlers {
 		// And the projects row, for the same reason: these suites have no projects root either,
 		// and `missing` is the honest answer of a host that has none.
 		list_projects: () => ({ outcome: 'missing' }),
+		// The two host-tooling rows: a host that reports no programs and an install nothing offers
+		// are the cheapest real answers, and these suites register no backend at all.
+		list_host_tooling: () => ({ tools: [] }),
+		install_host_tool: () => ({
+			outcome: 'refused',
+			tool: 'idb_companion',
+			message: 'no device backend in these tests',
+		}),
 		// And the `Keep` flag's two rows: a host keeping nothing is `listed` with an empty set —
 		// there is no `missing` arm — and a write that changed nothing answers the same set back.
 		list_kept_tests: () => ({ outcome: 'listed', tests: [] }),

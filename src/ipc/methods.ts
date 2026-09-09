@@ -20,7 +20,7 @@
 import { z } from 'zod';
 import { CapabilitiesSchema } from '../core/capabilities.js';
 import { DeviceSchema, StaleReasonSchema } from '../core/device.js';
-import { AppIdSchema, DeviceSerialSchema, LeaseIdSchema } from '../core/ids.js';
+import { AppIdSchema, DeviceSerialSchema, LeaseIdSchema, PlatformIdSchema } from '../core/ids.js';
 import { ProtocolVersionSchema } from './protocol.js';
 import {
 	AppVerbParamsSchema,
@@ -1181,6 +1181,87 @@ export const ListArchiveGroupsResultSchema = z.discriminatedUnion('outcome', [
 export type ListArchiveGroupsResult = z.infer<typeof ListArchiveGroupsResultSchema>;
 
 /** `.strict()` and no key at all, for {@link ListDevicesParamsSchema}'s reason. */
+/**
+ * What `list_host_tooling` carries: nothing. The host reports on itself.
+ *
+ * `.strict()` and no key at all, {@link ListProjectsParamsSchema}'s reason: there is one host per
+ * connection and a caller cannot ask about another (D17).
+ */
+export const ListHostToolingParamsSchema = z.object({}).strict();
+export type ListHostToolingParams = z.infer<typeof ListHostToolingParamsSchema>;
+
+/**
+ * One external program a registered backend needs on the host, as this host currently has it.
+ *
+ * **This is the one answer on the surface that carries host paths on purpose**, and the exception
+ * is worth stating because two other read methods go out of their way to carry none
+ * (`ListArchiveResultSchema`, `src/daemon/kept-tests-handlers.ts`). There the path is *incidental*
+ * — a caller wants the artifact, not the host's directory layout — so leaking it is cost with no
+ * benefit. Here the path **is** the answer: *which* copy of a program won the host's search is the
+ * whole diagnosis, and a report that withheld it would leave an operator with two installs of the
+ * same toolchain exactly where they started. Nothing opens these strings — they are printed, never
+ * resolved — so D19's rule about a path handed to an agent is not what this is: no client is being
+ * told where to read a file, it is being told what this machine has.
+ *
+ * `found` is `null` when the host has none, and `detail` is the one line a person acts on.
+ * `installable` says whether `install_host_tool` can get this one, which is a property of the
+ * program rather than of its absence: Rover fetches its own second-order tooling and never a
+ * platform SDK, so a program that arrives with one is `false` on every host, present or not.
+ */
+export const HostToolSchema = z
+	.object({
+		platform: PlatformIdSchema,
+		tool: z.string().min(1).max(64),
+		found: z.string().max(4096).nullable(),
+		detail: z.string().max(4096),
+		installable: z.boolean(),
+	})
+	.strict();
+export type HostTool = z.infer<typeof HostToolSchema>;
+
+/** Every program every registered backend reported, in registration order. */
+export const ListHostToolingResultSchema = z
+	.object({ tools: z.array(HostToolSchema).max(64) })
+	.strict();
+export type ListHostToolingResult = z.infer<typeof ListHostToolingResultSchema>;
+
+/**
+ * What `install_host_tool` carries: which program, and who asked.
+ *
+ * **`actor` for `force_release_device`'s reason** (D20, D28): this changes the host for everybody
+ * who borrows from it, so the audit line the daemon writes has to name a person and never derive
+ * one from whoever authenticated. The token authenticates; the string attributes.
+ *
+ * The tool is a free string rather than an enum, because which programs exist is the **backends'**
+ * knowledge and an enum here would be a second place to add a row every time a backend learns to
+ * install something (ai/RULES.md §2). A name nothing offers is refused by the registry, naming it.
+ */
+export const InstallHostToolParamsSchema = z
+	.object({ tool: z.string().min(1).max(64), actor: AttributionStringSchema })
+	.strict();
+export type InstallHostToolParams = z.infer<typeof InstallHostToolParamsSchema>;
+
+/**
+ * Installed, already there, or refused — and the refusal is data rather than a transport error.
+ *
+ * A host that cannot install the thing (an Intel Mac, a release that moved, a name no backend
+ * offers) is answering a question, not failing to answer: the caller gets a sentence naming what
+ * happened, which is `SweepArchiveResultSchema`' shape and the surface's habit for anything an
+ * operator can act on.
+ */
+export const InstallHostToolResultSchema = z.discriminatedUnion('outcome', [
+	z.object({ outcome: z.literal('installed'), tool: HostToolSchema }).strict(),
+	z.object({ outcome: z.literal('already-present'), tool: HostToolSchema }).strict(),
+	z
+		.object({
+			outcome: z.literal('refused'),
+			tool: z.string().min(1).max(64),
+			message: z.string().max(4096),
+		})
+		.strict(),
+]);
+export type InstallHostToolResult = z.infer<typeof InstallHostToolResultSchema>;
+
 export const ListProjectsParamsSchema = z.object({}).strict();
 export type ListProjectsParams = z.infer<typeof ListProjectsParamsSchema>;
 
@@ -1699,6 +1780,14 @@ export const IPC_METHODS = {
 		result: MeasureArchiveResultSchema,
 	},
 	list_projects: { params: ListProjectsParamsSchema, result: ListProjectsResultSchema },
+	list_host_tooling: {
+		params: ListHostToolingParamsSchema,
+		result: ListHostToolingResultSchema,
+	},
+	install_host_tool: {
+		params: InstallHostToolParamsSchema,
+		result: InstallHostToolResultSchema,
+	},
 	list_kept_tests: { params: ListKeptTestsParamsSchema, result: ListKeptTestsResultSchema },
 	set_kept_tests: { params: SetKeptTestsParamsSchema, result: SetKeptTestsResultSchema },
 	sweep_archive: { params: SweepArchiveParamsSchema, result: SweepArchiveResultSchema },

@@ -6,8 +6,10 @@ import {
 	IDB_COMPANION,
 	IDB_COMPANION_MISSING,
 	IDB_COMPANION_PATH_ENV_VAR,
+	IDB_COMPANION_VERSION,
 	IdbCompanionNotFoundError,
 	idbCompanionSearchLocations,
+	managedIdbCompanion,
 	resolveIdbCompanion,
 } from '@/backends/ios-simulator/idb-companion-path.js';
 import { InterruptionCauseSchema } from '@/core/device.js';
@@ -46,6 +48,18 @@ function env(overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
 	return { [IDB_COMPANION_PATH_ENV_VAR]: '', PATH: '', ...overrides };
 }
 
+/**
+ * The home the managed row is derived from.
+ *
+ * Passed by every case rather than left to default, for the reason the `env` above replaces every
+ * variable: a suite that read the runner's own home would assert a different path on every machine
+ * — and would pass or fail depending on whether whoever ran it had used `rover doctor --fix`.
+ */
+const HOME = '/somebody/home';
+
+/** The last row of the search: the copy `rover doctor --fix` unpacks. */
+const MANAGED = managedIdbCompanion(HOME);
+
 /** A directory holding an `idb_companion` this user may execute — see this file's header. */
 async function directoryWithCompanion(mode = 0o755): Promise<string> {
 	const directory = await temporaryDirectory();
@@ -55,11 +69,18 @@ async function directoryWithCompanion(mode = 0o755): Promise<string> {
 	return directory;
 }
 
-/** The message a person is actually shown, and the assertion that they were shown one. */
+/**
+ * The message a person is actually shown, and the assertion that they were shown one.
+ *
+ * `home` is {@link HOME} and not the runner's, which is load-bearing rather than tidy: the search's
+ * last row is a path under the home directory, so a case that let this default would resolve
+ * against whatever the machine running the suite happens to have — and would stop failing the day
+ * somebody typed `rover doctor --fix` on it.
+ */
 function failureMessage(environment: NodeJS.ProcessEnv): string {
 	let thrown: unknown;
 	try {
-		resolveIdbCompanion({ env: environment, platform: 'darwin' });
+		resolveIdbCompanion({ env: environment, platform: 'darwin', home: HOME });
 	} catch (error: unknown) {
 		thrown = error;
 	}
@@ -70,20 +91,42 @@ function failureMessage(environment: NodeJS.ProcessEnv): string {
 
 describe('the order the host looks in', () => {
 	// The order is the whole claim, so it is one `toEqual` rather than three.
-	it('is ROVER_IDB_COMPANION_PATH, then every PATH entry in order', () => {
+	it("is ROVER_IDB_COMPANION_PATH, then every PATH entry in order, then Rover's own copy", () => {
 		const locations = idbCompanionSearchLocations(
 			env({
 				[IDB_COMPANION_PATH_ENV_VAR]: '/named/by/the/operator/idb_companion',
 				PATH: '/first:/second',
 			}),
 			'darwin',
+			HOME,
 		);
 
 		expect(locations.map(({ source, path }) => [source, path])).toEqual([
 			[IDB_COMPANION_PATH_ENV_VAR, '/named/by/the/operator/idb_companion'],
 			['PATH', join('/first', IDB_COMPANION)],
 			['PATH', join('/second', IDB_COMPANION)],
+			[`Rover's own copy (${IDB_COMPANION_VERSION})`, MANAGED],
 		]);
+	});
+
+	/**
+	 * **Last, and that is the decision rather than an accident of construction.** A companion the
+	 * operator installed themselves is a choice; the one `rover doctor --fix` unpacked is a
+	 * default, and a default that shadowed a choice would silently swap the binary under somebody
+	 * who had pointed a variable at a build of their own.
+	 */
+	it("puts Rover's own copy behind the operator's own two rows", () => {
+		const locations = idbCompanionSearchLocations(env({ PATH: '/first' }), 'darwin', HOME);
+
+		expect(locations.at(-1)).toEqual({
+			source: `Rover's own copy (${IDB_COMPANION_VERSION})`,
+			path: MANAGED,
+		});
+	});
+
+	/** Under `~/.rover`, beside the socket and the archive — the host's own directory. */
+	it('derives that copy from the home directory it was given', () => {
+		expect(MANAGED).toBe(`${HOME}/.rover/idb-companion-${IDB_COMPANION_VERSION}/${IDB_COMPANION}`);
 	});
 
 	/**
@@ -95,13 +138,14 @@ describe('the order the host looks in', () => {
 		const named = '/scratch/idb-1.5.2/companion-binary';
 
 		expect(
-			idbCompanionSearchLocations(env({ [IDB_COMPANION_PATH_ENV_VAR]: named }), 'darwin')[0]?.path,
+			idbCompanionSearchLocations(env({ [IDB_COMPANION_PATH_ENV_VAR]: named }), 'darwin', HOME)[0]
+				?.path,
 		).toBe(named);
 	});
 
 	// Empty counts as unset, as it does for every other variable Rover reads.
 	it('reads a blank ROVER_IDB_COMPANION_PATH as unset rather than as a path', () => {
-		expect(idbCompanionSearchLocations(env(), 'darwin')[0]?.path).toBeNull();
+		expect(idbCompanionSearchLocations(env(), 'darwin', HOME)[0]?.path).toBeNull();
 	});
 
 	/**
@@ -109,9 +153,9 @@ describe('the order the host looks in', () => {
 	 * actionable half of the failure — survives to the message.
 	 */
 	it('keeps the unset override on the list rather than dropping it', () => {
-		const locations = idbCompanionSearchLocations(env({ PATH: '/first' }), 'darwin');
+		const locations = idbCompanionSearchLocations(env({ PATH: '/first' }), 'darwin', HOME);
 
-		expect(locations).toHaveLength(2);
+		expect(locations).toHaveLength(3);
 		expect(locations[0]).toEqual({
 			source: IDB_COMPANION_PATH_ENV_VAR,
 			path: null,
@@ -124,12 +168,17 @@ describe('the order the host looks in', () => {
 	 * came from whichever client autostarted it (`../android/adb-locations.mjs`, D5).
 	 */
 	it('skips an empty PATH entry rather than searching the working directory', () => {
-		const locations = idbCompanionSearchLocations(env({ PATH: '/first::/second:' }), 'darwin');
+		const locations = idbCompanionSearchLocations(
+			env({ PATH: '/first::/second:' }),
+			'darwin',
+			HOME,
+		);
 
 		expect(locations.map(({ path }) => path)).toEqual([
 			null,
 			join('/first', IDB_COMPANION),
 			join('/second', IDB_COMPANION),
+			MANAGED,
 		]);
 	});
 
@@ -143,8 +192,8 @@ describe('the order the host looks in', () => {
 			PATH: '/first',
 		});
 
-		expect(idbCompanionSearchLocations(environment, 'linux')).toEqual([]);
-		expect(idbCompanionSearchLocations(environment, 'win32')).toEqual([]);
+		expect(idbCompanionSearchLocations(environment, 'linux', HOME)).toEqual([]);
+		expect(idbCompanionSearchLocations(environment, 'win32', HOME)).toEqual([]);
 	});
 });
 
@@ -158,6 +207,7 @@ describe.skipIf(process.platform === 'win32')('what it accepts when it gets ther
 			resolveIdbCompanion({
 				env: env({ [IDB_COMPANION_PATH_ENV_VAR]: join(directory, IDB_COMPANION) }),
 				platform: 'darwin',
+				home: HOME,
 			}),
 		).toBe(join(directory, IDB_COMPANION));
 	});
@@ -167,7 +217,11 @@ describe.skipIf(process.platform === 'win32')('what it accepts when it gets ther
 		const holding = await directoryWithCompanion();
 
 		expect(
-			resolveIdbCompanion({ env: env({ PATH: `${empty}:${holding}` }), platform: 'darwin' }),
+			resolveIdbCompanion({
+				env: env({ PATH: `${empty}:${holding}` }),
+				platform: 'darwin',
+				home: HOME,
+			}),
 		).toBe(join(holding, IDB_COMPANION));
 	});
 
@@ -186,8 +240,26 @@ describe.skipIf(process.platform === 'win32')('what it accepts when it gets ther
 					PATH: holding,
 				}),
 				platform: 'darwin',
+				home: HOME,
 			}),
 		).toBe(join(holding, IDB_COMPANION));
+	});
+
+	/**
+	 * The row that makes `rover doctor --fix` worth having: nothing set, nothing on `PATH`, and the
+	 * host still answers — which is the whole difference between an operator who ran one command
+	 * and one who has to work out which of their shells the daemon will inherit (D5).
+	 */
+	it("answers with Rover's own copy when the operator has none", async () => {
+		const home = await temporaryDirectory();
+		await mkdir(join(home, '.rover', `idb-companion-${IDB_COMPANION_VERSION}`), {
+			recursive: true,
+		});
+		const managed = managedIdbCompanion(home);
+		await writeFile(managed, 'this file is not a program\n');
+		await chmod(managed, 0o755);
+
+		expect(resolveIdbCompanion({ env: env(), platform: 'darwin', home })).toBe(managed);
 	});
 
 	it('walks past a directory named idb_companion', async () => {
@@ -199,6 +271,7 @@ describe.skipIf(process.platform === 'win32')('what it accepts when it gets ther
 			resolveIdbCompanion({
 				env: env({ PATH: `${withDirectory}:${holding}` }),
 				platform: 'darwin',
+				home: HOME,
 			}),
 		).toBe(join(holding, IDB_COMPANION));
 	});
@@ -216,7 +289,22 @@ describe.skipIf(process.platform === 'win32')('what it accepts when it gets ther
 		expect(message).toContain(`1. ${IDB_COMPANION_PATH_ENV_VAR} — not set`);
 		expect(message).toContain(`2. PATH — ${join(first, IDB_COMPANION)}`);
 		expect(message).toContain(`3. PATH — ${join(second, IDB_COMPANION)}`);
+		expect(message).toContain(`4. Rover's own copy (${IDB_COMPANION_VERSION}) — ${MANAGED}`);
 		expect(message).toContain(IDB_COMPANION_PATH_ENV_VAR);
+	});
+
+	/**
+	 * The failure ends on the one command that fixes it.
+	 *
+	 * It used to end on *unpack a tarball somewhere on PATH*, which is two decisions before an
+	 * operator can act and both of them silently wrong more often than not — `~/.local/bin` is on
+	 * no stock macOS `PATH`. The instruction and the search's last row are now the same place, so
+	 * they cannot disagree.
+	 */
+	it('ends by naming the command that installs one', async () => {
+		const message = failureMessage(env({ PATH: await temporaryDirectory() }));
+
+		expect(message).toContain('rover doctor --fix');
 	});
 
 	/**
@@ -226,7 +314,7 @@ describe.skipIf(process.platform === 'win32')('what it accepts when it gets ther
 	it('says there was nowhere to look off macOS', () => {
 		let thrown: unknown;
 		try {
-			resolveIdbCompanion({ env: env({ PATH: '/first' }), platform: 'linux' });
+			resolveIdbCompanion({ env: env({ PATH: '/first' }), platform: 'linux', home: HOME });
 		} catch (error: unknown) {
 			thrown = error;
 		}

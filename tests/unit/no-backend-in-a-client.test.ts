@@ -47,8 +47,19 @@ const BARREL_IMPORTERS = ['daemon/main.ts'];
 const SRC_ROOT = fileURLToPath(new URL('../../src', import.meta.url));
 const BARREL = 'backends/index.ts';
 
-/** The one spawning module a client is *meant* to reach: autostart lives there (D5). */
-const ALLOWED_TO_SPAWN_FROM_A_CLIENT = path.normalize('daemon/connect.ts');
+/**
+ * The spawning modules a client is *meant* to reach, and there are two.
+ *
+ * `daemon/connect.ts` is D5 itself: the local socket client starts a daemon when nothing answers.
+ * `cli/_shared/foreground.ts` is the opposite half of the same idea — `rover server` and `rover
+ * panel` start a long-lived process **because somebody typed the command**, attached to their
+ * terminal. Neither reaches a backend: the daemon is spawned as a child and the client never
+ * imports it, which is the property this suite's first assertion is really about.
+ */
+const ALLOWED_TO_SPAWN_FROM_A_CLIENT = [
+	path.normalize('daemon/connect.ts'),
+	path.normalize('cli/_shared/foreground.ts'),
+];
 
 function sourceFiles(): string[] {
 	return readdirSync(SRC_ROOT, { withFileTypes: true, recursive: true })
@@ -130,7 +141,7 @@ function spawnersReachedFrom(entry: string): string[] {
 	return [...reachableFrom(entry)]
 		.filter(
 			([file]) =>
-				file !== ALLOWED_TO_SPAWN_FROM_A_CLIENT &&
+				!ALLOWED_TO_SPAWN_FROM_A_CLIENT.includes(file) &&
 				readFileSync(path.join(SRC_ROOT, file), 'utf8').includes("'node:child_process'"),
 		)
 		.map(([, via]) => `${entry} reaches ${via[via.length - 1]} via ${via.join(' → ')}`);

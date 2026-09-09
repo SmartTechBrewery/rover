@@ -33,23 +33,24 @@ npm link        # puts `rover` on your PATH, running this checkout
 Skip `npm link` and every `rover` below is typed `npm run rover --` from inside this checkout —
 except `rover init`, which has to run in *another* project's directory.
 
-### If this machine lends iOS simulators
+### On a mac lending iOS simulators
 
-One more program: `read_screen` and all four input verbs go through `idb_companion`, and Homebrew
-no longer carries it. Unpack the release and put it on your `PATH`:
+Simulators are macOS-only and so is this step — off macOS Rover looks for none of it. One more
+program: `read_screen` and all four input verbs go through `idb_companion`, which has no package
+manager and no installer, so Rover keeps its own:
 
 ```bash
-mkdir -p ~/.rover/idb-companion-1.5.2 ~/.local/bin
-curl -L https://github.com/facebook/idb/releases/download/v1.5.2/idb-companion.macos-arm64.tar.gz \
-  | tar xz -C ~/.rover/idb-companion-1.5.2
-ln -s ~/.rover/idb-companion-1.5.2/idb_companion ~/.local/bin/idb_companion
+rover doctor --fix --actor "$(whoami)"
 ```
 
-The binary needs the `Resources/` and `.bundle`s it unpacks beside, so link it rather than moving
-it. `ROVER_IDB_COMPANION_PATH` is the other way to name it — but the daemon starts itself and
-inherits the environment of whichever client woke it, which may be your agent rather than your
-terminal, so a symlink on `PATH` is the one that always holds. Full search order:
-[where Rover looks for `idb_companion`](#where-rover-looks-for-idb_companion).
+That downloads a pinned release **on the host**, checks it against the checksum the release
+publishes, and unpacks it under that host's `~/.rover`, where the search looks last — so there is
+no `PATH` to arrange and no variable to export. Run it twice and it downloads nothing the second
+time. Without `--fix` it only reports.
+
+Already have a companion, or on an Intel mac the release has no build for? Point Rover at it with
+`ROVER_IDB_COMPANION_PATH` and yours wins over anything Rover installed — see [where Rover looks
+for `idb_companion`](#where-rover-looks-for-idb_companion).
 
 ### Once per project
 
@@ -72,9 +73,31 @@ Nothing there asks a host, so it needs no daemon and no device. `rover init --he
 ```bash
 rover status    # which host answered, its pid and uptime
 rover list      # what is attached, what is free, and who holds what
+rover doctor    # the programs that host needs, and where it found them
 ```
 
 Nothing to start by hand — the first command that asks a host brings the daemon up (D5).
+
+### The host, and the panel
+
+Start the host yourself when you want to watch its log, or when it has to be reachable — an
+autostarted one deliberately listens to nothing but this machine:
+
+```bash
+rover server                          # the host, in the foreground; Ctrl-C stops it
+```
+
+The web panel needs **both** commands, because they are two halves: the host answers the data, and
+`rover panel` only serves the page. Two terminals:
+
+```bash
+rover users add panel                 # the browser's own credential, printed once
+ROVER_HTTP_PORT=4712 rover server     # one terminal — the data
+rover panel                           # another — the page, on :5174
+```
+
+Same variable in both halves, so there is one number to keep in step. Leave `ROVER_HTTP_PORT`
+unset and the host serves no browser at all.
 
 ## Quick start
 
@@ -103,6 +126,9 @@ of the command. The CLI's own usage text says which of the two it is for you.
 - **`ffmpeg` on the host, and only for `record`.** The machine this was written on does not have
   it, so `record` is not shown below — see [what this will not tell
   you](#what-this-will-not-tell-you).
+- **`idb_companion` on the host, and only for simulators** — the screen read and every input verb
+  go through it. `rover doctor` says whether the host has one and `rover doctor --fix` installs it;
+  nothing below needs it, because everything below runs against a phone.
 
 The device everything below ran against: `emulator-5554`, an `sdk_gphone64_arm64` emulator on
 **API 35** (Android 15).
@@ -369,7 +395,7 @@ export ROVER_TLS_CERT=/tmp/rover-net/rover-cert.pem
 export ROVER_TLS_KEY=/tmp/rover-net/rover-key.pem
 export ROVER_LISTEN_ADDRESS=127.0.0.1        # optional; 0.0.0.0 otherwise
 export ROVER_LISTEN_PORT=4711                # the switch — set it last
-npm run daemon
+rover server
 ```
 
 ```
@@ -1103,8 +1129,9 @@ certificate is verified; a self-signed host is trusted by naming its certificate
 [`PROJECT.md`](PROJECT.md) §9.3.
 
 The commands are in the [quick start](#quick-start) above, each one with the output it printed;
-`npm run rover -- --help` is the full list, and `npm run daemon` runs the daemon in the foreground
-instead of letting the first call start it. `rover init` is the odd one among the commands: it
+`npm run rover -- --help` is the full list, and `rover server` runs the host in the foreground
+instead of letting the first call start it — which is how you see its log, and the only start that
+keeps the two settings that make a host reachable. `rover init` is the odd one among the commands: it
 asks no host, writes a project's hook file and three files in the project's own directory, and is
 the one command meant to be run from **outside** this checkout — see [Quick
 installation](#quick-installation).
@@ -1218,7 +1245,7 @@ startup, naming the variable and the reason, rather than binding something surpr
 | Variable | Default | Value |
 |---|---|---|
 | `ROVER_ADB_PATH` | unset — the search below | The one setting that overrides where this host looks for `adb`: the **path of the executable**, not the SDK it came from, so an `adb` in a layout with no `platform-tools` directory can be named too. Unset or empty and the ordered search under [where Rover looks for `adb`](#where-rover-looks-for-adb) answers instead — **empty counts as unset**, as it is for the socket. Read only by the daemon, on the machine the devices are attached to (`PROJECT.md` D19, D32): a client never resolves `adb` and never runs one. There is deliberately **no schema** for it, unlike every other row here: the only check worth making on this value is whether the file runs, which no shape can express — so a path that is not an executable this host can run is **skipped like any other candidate** rather than failing the daemon, and the search continues past it; when nothing is left, the failure names every location that was tried and this variable. The resolved path is held in memory for the daemon's life and **never written anywhere** (`PROJECT.md` D6), so an SDK upgrade takes effect on the next daemon start and there is no cache to invalidate. |
-| `ROVER_IDB_COMPANION_PATH` | unset — the search below | The one setting that overrides where this host looks for `idb_companion`, the program the iOS-simulator backend drives its device stream, its screen read and its input verbs through: the **path of the executable**, not a directory it came from. Unset or empty and the two-row search under [where Rover looks for `idb_companion`](#where-rover-looks-for-idb_companion) answers instead — **empty counts as unset**, as it is for `ROVER_ADB_PATH`. Read only by the daemon, on the machine the simulators are on (`PROJECT.md` D19, D32). **No schema**, for `ROVER_ADB_PATH`'s reason: a path that is not an executable this host can run is skipped like any other candidate rather than failing the daemon, and the search continues past it. The backend **watches** the device set through this program now and falls back to polling `simctl list` when there is none to run, and **`read_screen` (#251) and all four input verbs (#252) are answered through it** over gRPC; `list_devices` and `device_info` still read `simctl`. **Neither the read nor the input has a fallback** — a host with no companion still answers every *required* method, but `read_screen`, `tap`, `swipe`, `type_text` and `press_key` on a simulator all fail naming this variable and every other place that was looked, because the manifest declares `canReadScreen: true` and `canInput: true` per host-independent capability (`PROJECT.md` D11) rather than per what this machine happens to have installed. |
+| `ROVER_IDB_COMPANION_PATH` | unset — the search below | The one setting that overrides where this host looks for `idb_companion`, the program the iOS-simulator backend drives its device stream, its screen read and its input verbs through: the **path of the executable**, not a directory it came from. Unset or empty and the three-row search under [where Rover looks for `idb_companion`](#where-rover-looks-for-idb_companion) answers instead — whose last row is the copy `rover doctor --fix` unpacks under the host's `~/.rover`, so on a host that ran that command this variable is not needed at all (D39) — **empty counts as unset**, as it is for `ROVER_ADB_PATH`. Read only by the daemon, on the machine the simulators are on (`PROJECT.md` D19, D32). **No schema**, for `ROVER_ADB_PATH`'s reason: a path that is not an executable this host can run is skipped like any other candidate rather than failing the daemon, and the search continues past it. The backend **watches** the device set through this program now and falls back to polling `simctl list` when there is none to run, and **`read_screen` (#251) and all four input verbs (#252) are answered through it** over gRPC; `list_devices` and `device_info` still read `simctl`. **Neither the read nor the input has a fallback** — a host with no companion still answers every *required* method, but `read_screen`, `tap`, `swipe`, `type_text` and `press_key` on a simulator all fail naming this variable and every other place that was looked, because the manifest declares `canReadScreen: true` and `canInput: true` per host-independent capability (`PROJECT.md` D11) rather than per what this machine happens to have installed. |
 | `ROVER_SOCKET_PATH` | `~/.rover/rover.sock` | Absolute path of the unix socket the local daemon binds and a local client connects to. **Empty counts as unset** — an exported-but-blank variable is what a shell leaves behind, and reading it as a real setting would point the daemon at the current directory. At most **103 bytes of UTF-8**: a unix socket address is a fixed-size struct (104 bytes on macOS, 108 on Linux, NUL included), and over the cap `bind` truncates or answers `EINVAL` instead of naming the length, so a longer path is rejected at startup with the byte count and the path. |
 | `ROVER_USERS_PATH` | `~/.rover/users.json` | Absolute path of the host's own user store — one record per user: identifier, display name, the **hash** of that user's token, and when it was created. Never a token: `rover users add` and `rover users rotate` print the raw value once and store only its hash. **Empty counts as unset**, as it is for the socket. Read by `rover users`, which touches the file directly and never goes over the network (`PROJECT.md` D25), **and by the network listener**, which is the host's entire authentication surface: the token in a caller's greeting is hashed and looked up here, re-read at every connection attempt and never cached, so `revoke` and `rotate` take effect on the very next attempt with the daemon still running. |
 | `ROVER_ARTIFACTS_PATH` | `~/.rover/artifacts` | Root of the durable artifact archive: every `screenshot`, `record_video`, `stop_recording` and `read_logs` call additionally writes its output here, on the host, **in addition to** returning the bytes to the client (`PROJECT.md` D23, §10). **Empty counts as unset**, as it is for the socket. Read only by the daemon — a client never resolves it, and the archive path is never the one an agent is given. **The host prunes it, by both of its bounds and with nobody asking.** The whole retention policy — `ROVER_ARTIFACTS_BUDGET_MB` and `ROVER_ARTIFACTS_MAX_AGE_DAYS` below — is run over this tree at **local midnight** and again every time the daemon **starts**, deleting whole run directories oldest first; the **budget** half additionally runs after every lease ends, and `rover sweep` runs the lot on demand (`PROJECT.md` D37, D38, R48). So neither bound waits for an operator any more. Nothing about the schedule is persisted: the start pass is what covers a restart, and the midnight pass compares the clock against when it last ran rather than trusting a timer, so a machine that was suspended or switched off sweeps when it comes back. |
@@ -1307,24 +1334,48 @@ than a device that silently looks less capable on one machine than another.
 
 `idb_companion` is Meta's companion binary for the iOS simulator — a device stream on
 `--notify stdout` and a gRPC server for the accessibility read and the input verbs (`docs/IOS.md`
-§3, §4). The host looks in **two** places, takes the first executable file it finds, and holds
+§3, §4). The host looks in **three** places, takes the first executable file it finds, and holds
 nothing:
 
 | # | Location | |
 |---|---|---|
 | 1 | `ROVER_IDB_COMPANION_PATH` | The executable itself, exactly as you wrote it. Nothing is appended to it. An empty value counts as unset. |
 | 2 | `PATH` | Every entry, in order. An empty entry — the working directory on POSIX — is skipped, for the reason it is skipped for `adb`. |
+| 3 | `~/.rover/idb-companion-<version>/` | The copy `rover doctor --fix` unpacks on the host, beside `rover.sock` and `artifacts/`. **Last on purpose**: a companion you installed yourself is a decision and this one is a default, so yours always wins. |
 
-**There is deliberately no third row, because this program has no canonical install location at
-all.** `adb` gets four more because the Android SDK *has* one per platform. Homebrew no longer
-carries `idb-companion` — the old `facebook/fb` tap is gone — so the supported install is the
-release's prebuilt tarball, unpacked wherever you put it:
+**The third row used to say there deliberately was none, and D39 reversed that** — this passage is
+edited in place with its reasoning rewritten rather than replaced (`ai/RULES.md` §1). It said: *no
+third row, because this program has no canonical install location at all.* Homebrew no longer
+carries `idb-companion` — the old `facebook/fb` tap is gone — so the supported install was the
+release's prebuilt tarball, unpacked wherever you put it, and `adb` gets four more rows only
+because the Android SDK *has* one location per platform.
+
+That was true for exactly as long as **you** were the one unpacking it. The day Rover unpacks it,
+a canonical location exists because Rover picked it:
+
+```bash
+rover doctor --fix --actor "$(whoami)"
+```
+
+That downloads the pinned release **on the host**, checks it against the checksum the release
+publishes beside it, and unpacks it under that host's `~/.rover`. It is idempotent — a companion
+already on the machine, yours or Rover's, is reported and nothing is downloaded — and it is not
+something `npm install` does behind you: the install-time check only *warns*, naming this command.
+
+Doing it by hand still works, and row 1 is still there for a build of your own:
 
 ```bash
 curl -LO https://github.com/facebook/idb/releases/download/v1.5.2/idb-companion.macos-arm64.tar.gz
 tar xzf idb-companion.macos-arm64.tar.gz
 export ROVER_IDB_COMPANION_PATH="$PWD/idb_companion"
 ```
+
+**If you do it by hand, mind where the variable is read.** It is read by the **daemon**, which
+starts itself on the first call that asks a host (D5) and inherits the environment of whichever
+client woke it — your shell, the panel, or an agent's MCP server with its own `env` block. So
+`export` in one terminal reaches a daemon that terminal started, and nothing else; `~/.zshrc`, or
+the `env` block in the project's `.mcp.json`, is what covers the rest. Row 3 exists so that none of
+that has to be worked out.
 
 The tarball unpacks `idb_companion` beside a `Resources/` directory and several `.bundle`s it
 needs, so **the binary cannot be moved out of that tree on its own** — which is why the setting
@@ -1813,7 +1864,7 @@ list` clears the switch in any daemon it autostarts, exactly as it clears `ROVER
 npm run rover -- users add panel     # the credential — the same store, no second secret
 export TOKEN=<the token that printed>
 export ROVER_HTTP_PORT=4712          # the switch; ROVER_HTTP_ADDRESS defaults to loopback
-npm run daemon
+rover server
 ```
 
 ```
@@ -2063,10 +2114,13 @@ label.
 
 ### The web panel
 
-`npm run panel:dev` serves it on <http://localhost:5174>; `npm run panel:build` writes
-`panel/dist` and `npm run panel:preview` serves that. **The host serves the panel's data surface
-but not the panel's own files** — `POST /rpc` is above, and serving `panel/dist` from that same
-listener is still a separate piece of work — so the panel runs from its development server for now.
+`rover panel` serves it on <http://localhost:5174> — that is `npm run panel:dev` reached from
+anywhere rather than a second thing; `npm run panel:build` writes `panel/dist` and `npm run
+panel:preview` serves that. **The host serves the panel's data surface but not the panel's own
+files** — `POST /rpc` is above, and serving `panel/dist` from that same listener is still a
+separate piece of work — so the panel runs from its development server for now, which is why
+`rover panel` needs this repository's `devDependencies` and says so in its own usage text. When the
+host serves those files, that command becomes a URL rather than a server.
 
 **Devices is the panel's default view and it reads the host.** It polls `list_devices`, the one
 method the surface lets it call, and shows every attached device as a card — model, serial,
@@ -2196,9 +2250,9 @@ sign-in screen and no base URL to configure; the host emits no CORS header on pu
 (`PROJECT.md` D29), so the proxy is what makes two origins into one.
 
 ```bash
-npm run rover -- users add panel     # prints the token, once
-ROVER_HTTP_PORT=4712 npm run daemon  # in one terminal
-ROVER_HTTP_PORT=4712 npm run panel:dev   # in another; 4712 is also the default
+rover users add panel                # prints the token, once
+ROVER_HTTP_PORT=4712 rover server    # in one terminal
+rover panel                          # in another; it reads the same variable
 ```
 
 Open the panel and paste that token into the one field. From then on:

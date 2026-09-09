@@ -137,6 +137,16 @@ const DEVICE_METHODS = ['status', 'list_devices', 'acquire_device', 'release_dev
  * needs nothing here in any case — its own artifacts came back as bytes in the verb's own answer
  * (D19).
  *
+ * The two host-tooling rows are here for a reason of their own, and it is not authority: an agent
+ * has nothing to do with them. `list_host_tooling` answers what the **host machine** has
+ * installed, in paths on that machine — a question about somebody's laptop rather than about a
+ * device, and the one answer on this surface that carries host paths on purpose (`HostToolSchema`,
+ * `src/ipc/methods.ts`), which is exactly what D19 keeps away from an agent. `install_host_tool`
+ * downloads and unpacks a program on that machine, which is an operator's decision with an actor
+ * attached (D28) and not a step in any agent's work. An agent that finds a capability unbacked
+ * already gets what it needs: a `missing-capability` failure naming the program, the device and
+ * the backend, which is a sentence to relay to a person rather than an install to attempt.
+ *
  * The list is short and named so the gate below can be exact: a verb row added later is either
  * a registered tool or a deliberate entry here, never a row that quietly has no tool.
  */
@@ -153,6 +163,8 @@ const NOT_YET_EXPOSED = [
 	'list_kept_tests',
 	'set_kept_tests',
 	'sweep_archive',
+	'list_host_tooling',
+	'install_host_tool',
 ] as const satisfies readonly IpcMethodName[];
 
 /** The platform vocabulary `tests/unit/no-platform-names.test.ts` keeps out of `src/` (D10). */
