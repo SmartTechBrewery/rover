@@ -73,6 +73,15 @@ import { type MouseEvent, type ReactNode, type RefObject, useRef } from 'react';
  * that node**, so the card beside the tree becomes that node's card. What it no longer costs is
  * every *other* open branch, and closing a project no longer lands on the archive root.
  *
+ * **And either half of that gesture is a movement rather than a replacement** (#280,
+ * `docs/DESIGN.md` §5 and §9). A branch used to be mounted or unmounted outright, so a click
+ * relocated every row below it in one frame — worst on a collapse, where the rows below travelled up
+ * the card by whatever the branch was tall. It is a one-shot CSS transition on a wrapper's single
+ * grid track now (`.tree-branch`, `index.css`), which is why a level survives being shut and why
+ * {@link Branch} is told whether it is on screen; both are that mechanism and neither is a rule of
+ * the tree. Nothing about *what* a row draws changed, `aria-expanded` still reports the state rather
+ * than the end of the transition, and there is one `Branch`, so both views have it unconditionally.
+ *
  * The accepted cost that stands, recorded in §9: a folder cannot be peeked at without selecting it,
  * because the row is one target and selecting is what it does.
  *
@@ -208,6 +217,17 @@ const SEARCH_COPY: Record<TreeRoute, SearchCopy> = {
 
 /** The leading glyph's corner, shared so the two things that sit in it cannot drift apart. */
 const GLYPH = 'absolute top-2.5 left-2.5';
+
+/**
+ * The rail and the indent one level of either tree is drawn in — one string, so the browsing tree
+ * and the searched one cannot drift apart.
+ *
+ * It is deliberately **not** on the box that opens and closes (`.tree-branch`, `index.css`): a
+ * border and a vertical padding on that box would still occupy a dozen pixels at a collapsed grid
+ * track, leaving a sliver of rail hanging under every shut row. So the box that moves, the box that
+ * clips and this one are three elements, and this one carries what it always carried.
+ */
+const BRANCH_CHROME = 'mt-1 ml-2.5 space-y-1 border-outline-variant border-l-2 py-1 pl-5';
 
 export function DirectoryTree({
 	selected,
@@ -462,7 +482,7 @@ function Hits({
 							to={node.path}
 						/>
 						{opens ? (
-							<div className="mt-1 ml-2.5 space-y-1 border-outline-variant border-l-2 py-1 pl-5">
+							<div className={BRANCH_CHROME}>
 								<Hits nodes={node.children} route={route} selected={selected} />
 							</div>
 						) : null}
@@ -499,23 +519,63 @@ function glyphFor(kind: ArchiveEntry['kind'], expanded: boolean): LucideIcon {
  * other level's card is that level's listing and says *empty* or *unreadable* itself; the run's card
  * lists nothing, so the pair is said here, in one quiet line and never as a row. Which node that is
  * is the source's to say, because the group id puts it one level deeper in the groups view.
+ *
+ * **And a toggle is a movement rather than a replacement** (#280, `docs/DESIGN.md` §5 and §9). The
+ * level a row opens was mounted or unmounted outright, so one click relocated every row below it in
+ * a single frame; it is wrapped in `.tree-branch` now (`index.css`) and the wrapper is mounted for
+ * **every** row that opens something, open or shut. Two things follow, and both are the mechanism
+ * rather than a taste:
+ *
+ * - **the flip is a class change on an element that already exists**, which is what makes the
+ *   *opening* direction transition at all — a CSS transition does not run on an element's first
+ *   style computation, so a wrapper that appeared already open would snap on the commonest gesture
+ *   there is. A wrapper mounted already-open is exactly the load and the deep link, where nothing
+ *   should move;
+ * - **a level survives being shut once it has been drawn open**, which is what gives a *collapse*
+ *   something on screen to move — behind a `visibility: hidden` wrapper, so out of the tab order and
+ *   out of the accessibility tree at that instant. A branch **nobody has opened** mounts nothing at
+ *   all, so *a sibling nobody opened draws no children* is unchanged. Both halves are
+ *   {@link Subtree}'s, with the reasoning there.
+ *
+ * {@link drawn} is what keeps that honest one level down: it says *this level is on screen*, and it
+ * is threaded rather than inferred because `visibility` inherits but a descendant may set it back.
+ * Without it a row still in the open set inside a shut branch would draw `.tree-branch-open`, put
+ * itself back into the tab order and back into the accessibility tree inside a clipped ancestor —
+ * and a branch shut before its level answered would keep a hidden *Reading this level.* standing
+ * behind the gesture that contradicted it.
+ *
+ * **`aria-expanded` is not part of any of this.** It is computed in the same render as the wrapper's
+ * class and from the same `branches.isOpen`, so it reports the state the gesture asked for and never
+ * the end of a transition; there is no transition-end handler anywhere here. And both views get the
+ * whole of it, because there is one `Branch` (#181).
  */
 function Branch({
 	node,
 	selected,
 	source,
 	branches,
+	drawn = true,
 }: {
 	/** This level's node, in the tree's own address space — never a host path. */
 	readonly node: readonly string[];
 	readonly selected: readonly string[];
 	readonly source: TreeSource;
 	readonly branches: OpenBranches;
+	/**
+	 * Whether this level is **on screen** (#280) — `true` at the root, which always is, and the
+	 * drawn openness of the row above it everywhere else.
+	 *
+	 * A level nobody is looking at says nothing and opens nothing under itself — no quiet line
+	 * claiming a read nobody asked for, and no descendant putting itself back on screen inside a
+	 * clipped ancestor. Its **rows** stay mounted all the same, because they are what a collapse
+	 * moves; whether they are on screen is the wrapper's `visibility` and nothing this decides.
+	 */
+	readonly drawn?: boolean;
 }) {
 	const level = source.rowsAt(node);
 
 	if (level.status === 'loading') {
-		return <Quiet>Reading this level.</Quiet>;
+		return drawn ? <Quiet>Reading this level.</Quiet> : null;
 	}
 	/*
 	 * An empty or unreadable level draws **nothing** under its node — no `0`, no placeholder row,
@@ -531,7 +591,7 @@ function Branch({
 	 * row.
 	 */
 	if (level.status !== 'listed') {
-		if (source.isRunContents(node)) {
+		if (drawn && source.isRunContents(node)) {
 			return (
 				<Quiet>
 					{level.status === 'empty'
@@ -554,6 +614,14 @@ function Branch({
 				 * has no state to be in, carries no triangle and claims none to assistive technology.
 				 */
 				const expanded = row.opens === null ? null : branches.isOpen(row.address);
+				/*
+				 * Whether that branch is **on screen**, which is openness under an ancestor that is
+				 * itself on screen (#280). It is the wrapper's class and the level's own `drawn`, and
+				 * it is deliberately not what `aria-expanded` reports: a row inside a shut branch is
+				 * out of the accessibility tree altogether, so the state it claims is the state the
+				 * open set holds for it and is what it will be drawn in when its ancestor opens.
+				 */
+				const drawnOpen = drawn && expanded === true;
 				return (
 					<li className="min-w-0" key={row.name}>
 						<Row
@@ -590,15 +658,71 @@ function Branch({
 							to={row.address}
 							toggle={row.opens === null ? undefined : () => branches.toggle(row.address)}
 						/>
-						{row.opens !== null && expanded ? (
-							<div className="mt-1 ml-2.5 space-y-1 border-outline-variant border-l-2 py-1 pl-5">
-								<Branch branches={branches} node={row.opens} selected={selected} source={source} />
-							</div>
-						) : null}
+						{/*
+						 * **`row.opens === null` is the whole of the condition** (#280), so a row that
+						 * opens nothing still gains nothing: no wrapper, no class, no state. What the
+						 * wrapper does with the level is {@link Subtree}'s.
+						 */}
+						{row.opens === null ? null : (
+							<Subtree open={drawnOpen}>
+								<div className={BRANCH_CHROME}>
+									<Branch
+										branches={branches}
+										drawn={drawnOpen}
+										node={row.opens}
+										selected={selected}
+										source={source}
+									/>
+								</div>
+							</Subtree>
+						)}
 					</li>
 				);
 			})}
 		</ul>
+	);
+}
+
+/**
+ * The box a branch opens and closes in — one grid whose single track goes `0fr` → `1fr` over 160ms
+ * (`.tree-branch` and `.tree-branch-clip`, `index.css`, which carry the reason for every
+ * declaration) (#280).
+ *
+ * **It is mounted shut rather than appearing open**, on every row that opens something and in either
+ * state, because a CSS transition does not run on an element's first style computation: a wrapper
+ * that arrived already open would snap on the commonest gesture there is, the first click on a shut
+ * row. A wrapper that *is* mounted already open is the load and the deep link, where nothing should
+ * move — so that case gets no transition by the same rule.
+ *
+ * **What it holds is a separate question, and it is latched.** The level is mounted from the first
+ * time the branch is drawn open and **stays** mounted once it is shut again:
+ *
+ * - staying is what gives a *collapse* something on screen to move. `useArchiveLevels` never prunes
+ *   (`archive-levels.ts`) and `drawnLevels` walks the open set rather than the DOM
+ *   (`tree-source.ts`), so those rows cost no second `list_archive` and closing a branch still reads
+ *   nothing;
+ * - not arriving until then is what keeps the tree's laziness true of the document and not only of
+ *   the wire. A branch nobody has opened holds no rows, no *Reading this level.* and no `rowsAt`
+ *   call at all — which is load-bearing in the **groups** view, where every level above a run is
+ *   already answered by the one grouping walk and the whole arrangement would otherwise sit in the
+ *   document from the first render.
+ */
+function Subtree({ open, children }: { readonly open: boolean; readonly children: ReactNode }) {
+	/*
+	 * Latched during render rather than in an effect, because what it decides is what *this* render
+	 * mounts — a subtree that arrived one commit late would miss the transition it exists for. Only
+	 * `open` ever sets it and nothing ever clears it, so a double render decides the same thing
+	 * twice.
+	 */
+	const everOpen = useRef(open);
+	if (open) {
+		everOpen.current = true;
+	}
+
+	return (
+		<div className={open ? 'tree-branch tree-branch-open' : 'tree-branch'}>
+			<div className="tree-branch-clip">{everOpen.current ? children : null}</div>
+		</div>
 	);
 }
 
