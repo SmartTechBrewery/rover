@@ -3061,8 +3061,22 @@ truncated, which is the property that holds at any width. If a measure is ever w
 needs no label because a phone model is self-evidently one; `checkout-web` on its own reads as a
 title, and it is not — it is the hook file's own name, the identifier the host looked the project up
 by, and **the exact string a lease carries as its `project`** (D22). Monospace, verbatim, wrapping
-on whole words: never truncated, never ellipsised, never lower-cased. Nothing sits on the right of
-the strip, because a registration has no status to put there.
+on whole words: never truncated, never ellipsised, never lower-cased.
+
+**What sits on the right of the strip is `Delete project` and nothing else** — settled 2026-09-09,
+and this sentence is edited in place rather than deleted, per `ai/RULES.md` §1: it read *nothing sits
+on the right of the strip, because a registration has no status to put there*. The clause about
+status stands and is why there is still no LED, no dot and no glyph standing for one — a registration
+has no state. What changed is that the strip is now also where this card's one control lives, below.
+
+**The strip centres its children, and the label and the identifier are one child.** The pill makes
+the strip taller than the words, and `items-baseline` across the whole row then left the two words
+sitting where the shorter strip had put them, which reads as a row that has grown downwards rather
+than as one row. So the strip is `items-center` and the two words are wrapped together in their own
+`items-baseline` pair: they keep the shared baseline they always had — 10px caps against a 14px
+identifier, which is what a baseline is for — and that pair is centred against the control beside
+it. `ml-auto` on the control rather than `justify-between` on the strip, so the pair stays a pair
+read from the left and the control is what is pushed away from it.
 
 **Four fields, two across, paired like with like:**
 
@@ -3089,9 +3103,54 @@ re-sorting the list would state something false about the host.
 *held or free* — a live fact about hardware. A registration has no such state, and borrowing that
 vocabulary here would invent one.
 
-**No control of any kind, and no disabled one.** No `Add`, no `Edit`, no `Delete`, no overflow menu,
-and the cards are not links. A greyed-out `Delete` promises a permission tier that does not exist:
-editing and deleting a registration wait on the role model D27 defers (D31).
+**One control, and it is `Delete project` in the header strip** — settled 2026-09-09, with the rule
+it replaces edited in place and its reasoning rewritten rather than dropped (`ai/RULES.md` §1). It
+read **no control of any kind, and no disabled one** — no `Add`, no `Edit`, no `Delete`, no overflow
+menu, the cards not links — on the ground that *a greyed-out `Delete` promises a permission tier that
+does not exist*, since editing and deleting a registration wait on the role model D27 defers (D31).
+
+**What survives of that reasoning is the whole of it except the conclusion about the affordance.**
+The privilege is genuinely not there: deleting a registration means the host removing a file that
+names programs it spawns, D31 refuses that write on every transport, and no role model distinguishes
+who may ask. So the control is **wired to nothing** — no `onClick`, no confirmation, no call, and
+pressed it does exactly nothing — and it is here so the row's shape is settled before the action
+behind it exists rather than after. The old rule's mistake was treating *the shape of a control* and
+*the privilege it would exercise* as one decision; they are two, and this is the first of them. When
+the action lands it takes `ForceReleaseControl`'s shape — a confirmation that asks first, an answer
+that says what actually happened — and this paragraph is where that gets written down.
+
+**It is deliberately not `disabled`.** A disabled control is the thing the old rule was right about:
+it promises a press that is coming and withholds it, which is a claim about permission. An ordinary
+control that does nothing yet makes no such claim, and it keeps the pointer affordance §5 gives every
+button.
+
+**It is the badge treatment, not a new one.** `BADGE_SHAPE` and `BADGE_TYPE` come out of
+`header-badge.tsx` — the Archive header's own pill — so the radius, the border width, the padding,
+the face and the 12px step are **shared rather than copied**, and a pill in a strip cannot drift from
+the one in the header by a border width. The colour is deliberately *not* in either constant: with
+`border-outline-variant` and `border-error` in one class list, which wins is the order of two
+utilities in the emitted stylesheet rather than anything the component says. The glyph-beside-12px-
+words arrangement is `artifact-body-view.tsx`'s *Open in a new window*, and the glyph is `Trash2` at
+14px, `aria-hidden`, because the words are already there.
+
+**The accent is `error`, and that is a departure recorded rather than assumed.** §5 has no red or
+orange *device state* and never will, and `ForceReleaseControl` drops the design's red hover for that
+reason — nothing has gone wrong on that card. Neither rule is about a destructive control's own
+accent, which is what this is: `error` is Analog Horizon's own red (`--color-error`), taken from the
+system rather than invented, and it lands on the glyph and the words while the frame stays
+`outline-variant` until the pointer is on it. **Never a fill.** §5's *destructive actions are
+recessive* is what that shape is for: the loudest thing on a Projects card is still the identifier it
+is about, and a solid red pill repeated down a list of registrations is exactly the full-width orange
+button §5 records as the mistake.
+
+**Its accessible name carries the identifier** — `Delete project checkout-web`, via `aria-label`,
+because the visible words are the same on every card and a list of same-labelled controls is one a
+screen reader cannot tell apart.
+
+**Everything else about the old rule stands.** No `Add`, no `Edit`, no overflow menu, no form
+control, the cards are not links, and this is the card's *one* control on both arms — the header strip
+is identical on a registration the host can read and one it cannot, which is what makes the unreadable
+one draw as *a project whose configuration will not parse* rather than as a different kind of thing.
 
 **The five fields are everything the host answers, and a sixth cannot be added from this side.**
 `ProjectRegistrationSchema` carries the identifier, `apps`, `hasInstall`, the service names and

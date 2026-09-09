@@ -145,8 +145,10 @@ describe('what is registered on this host', () => {
 	it('keeps the host’s order, with the broken registration in the middle and not last', async () => {
 		const { container } = await showing(THREE);
 
+		// The identifier is the strip's second span — `last-child` until `Delete project` joined it
+		// on the right, which is a fact about the control's position rather than about the order.
 		const identifiers = Array.from(container.querySelectorAll('article')).map(
-			(card) => card.querySelector('div > span:last-child')?.textContent,
+			(card) => card.querySelector('div > span:nth-of-type(2)')?.textContent,
 		);
 		expect(identifiers).toEqual(['checkout-web', 'legacy-kiosk', 'rover-sandbox']);
 		expect(identifiers.at(-1)).not.toBe('legacy-kiosk');
@@ -335,24 +337,32 @@ describe('what this screen asks the host, and what it never does', () => {
 	});
 
 	/*
-	 * D31: no `Add`, no `Edit`, no `Delete`, no overflow menu — and not a disabled one either,
-	 * which would promise a permission tier that does not exist. The cards are not links.
+	 * **Still nothing on this screen writes**, which is the load-bearing half of D31 and is
+	 * unchanged by the card's `Delete project`: that control is wired to nothing, so the screen asks
+	 * the host exactly one thing in every state and the assertion below is what pins it.
+	 *
+	 * What the card carries is one control per registration and no other — no `Add`, no `Edit`, no
+	 * overflow menu, no form control — and the cards are not links. A state with nothing to list
+	 * carries nothing to press at all: there is no registration for a control to be about.
 	 */
-	it('writes nothing and navigates nowhere, in every state', async () => {
-		for (const answer of [
-			THREE,
-			{ outcome: 'listed', projects: [] },
-			{ outcome: 'missing' },
-			{ outcome: 'unreadable' },
-		]) {
+	it('asks the host one thing and writes nothing, in every state', async () => {
+		for (const [answer, controls] of [
+			[THREE, 3],
+			[{ outcome: 'listed', projects: [] }, 0],
+			[{ outcome: 'missing' }, 0],
+			[{ outcome: 'unreadable' }, 0],
+		] as const) {
+			// Per iteration, not per test: the one-request claim below is about this render.
+			host.calls = [];
 			const { container, unmount } = await showing(answer);
 
-			expect(container.querySelectorAll('button')).toHaveLength(0);
+			expect(container.querySelectorAll('button')).toHaveLength(controls);
 			expect(container.querySelectorAll('[role="button"]')).toHaveLength(0);
 			expect(container.querySelectorAll('input, select, textarea')).toHaveLength(0);
 			expect(container.querySelectorAll('[disabled]')).toHaveLength(0);
 			// The breadcrumb's one segment is where you are, so it is not a link either (§3).
 			expect(container.querySelectorAll('a')).toHaveLength(0);
+			expect(host.calls).toEqual([['list_projects', {}]]);
 			unmount();
 		}
 	});

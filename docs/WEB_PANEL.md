@@ -35,6 +35,10 @@ Design work lives in [`DESIGN.md`](./DESIGN.md); the brief that produced the fir
    on any answer — and the screen draws one card per registration in the host's own order, with a
    registration it cannot read drawn as *that* rather than as a project declaring nothing
    (`docs/DESIGN.md` §10). Nothing on it writes, and it does not poll.
+   **The card carries a `Delete project` control as of 2026-09-09, and it is wired to nothing** —
+   no handler, no confirmation, no call, so *nothing on it writes* is still literally true. The
+   affordance is settled ahead of the action on purpose; `docs/DESIGN.md` §10 carries its shape and
+   the reasoning that replaced the screen's old *no control of any kind*.
    **Editing and deleting a registration wait on the role model** D27 defers — a hook file names programs the host spawns, so writing one over the
    wire is a far larger privilege than force-releasing a lease, and today every named user holds
    every panel privilege. Registering stays `rover init`'s job; R40 is the open question of it

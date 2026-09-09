@@ -1,5 +1,6 @@
+import { BADGE_SHAPE, BADGE_TYPE } from '@panel/components/archive/header-badge.js';
 import type { ProjectRegistration } from '@panel/projects/project-list.js';
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import { ProjectCard } from './project-card.js';
 
@@ -51,12 +52,22 @@ describe('the header strip, on both arms', () => {
 		expect(identifier.className).not.toContain('text-ellipsis');
 	});
 
-	// A registration has no status, so there is nothing for an LED, a dot or a glyph to mean.
-	it('puts nothing on the right of the strip', () => {
+	/*
+	 * A registration has no status, so what is on the right of the strip is the one control and
+	 * nothing standing for a state: no LED, no dot, and the only glyph is the control's own trash.
+	 *
+	 * `ml-auto` rather than `justify-between`, so the label and the identifier stay a pair reading
+	 * left to right and the control is what is pushed away from them.
+	 */
+	it('puts the one control on the right of the strip, and no status', () => {
 		const { container } = render(<ProjectCard project={CHECKOUT_WEB} />);
 
-		expect(container.querySelectorAll('svg')).toHaveLength(0);
-		expect(container.querySelectorAll('[class*="justify-between"]')).toHaveLength(0);
+		const strip = container.querySelector('article > div');
+		expect(strip?.className).not.toContain('justify-between');
+		expect(strip?.querySelector('button')?.className).toContain('ml-auto');
+		// One glyph, and it belongs to the control: nothing here is an LED or a status dot.
+		expect(container.querySelectorAll('svg')).toHaveLength(1);
+		expect(container.querySelector('svg')?.closest('button')).not.toBeNull();
 	});
 
 	// The design's markup layers one in the header strip; the texture is confined to the
@@ -156,35 +167,125 @@ describe('a registration the host cannot read', () => {
 		expect(unreadable).not.toContain('none declared');
 	});
 
-	// Which of the four causes it was is deliberately not on the wire (D19), so a code here would
-	// dress a refusal up as a diagnosis. §5's no-red rule holds too.
+	/*
+	 * Which of the four causes it was is deliberately not on the wire (D19), so a code here would
+	 * dress a refusal up as a diagnosis.
+	 *
+	 * **Asserted over the words rather than the markup**, which is a narrowing: `innerHTML` carried
+	 * this until the strip's `Delete project` brought `text-error` with it, and that class is the
+	 * accent on a destructive control rather than anything this state says. What the rule was always
+	 * about is what the reader is told — no code, no path, no errno, nothing to press for a retry.
+	 */
 	it('carries no error code, no path and no retry', () => {
 		const { container } = render(<ProjectCard project={NOT_READABLE} />);
 
-		expect(container.innerHTML).not.toContain('error');
+		const words = container.textContent ?? '';
+		expect(words.toLowerCase()).not.toContain('error');
 		// Not a path, an errno or a filename: the diagnosis stays in the host's own warning.
-		expect(container.textContent).not.toContain('/');
-		expect(container.textContent).not.toContain('.json');
-		expect(container.querySelectorAll('button')).toHaveLength(0);
+		expect(words).not.toContain('/');
+		expect(words).not.toContain('.json');
+		// Nothing to press for a retry: the card's one button is the strip's, and it is the header's
+		// on both arms rather than anything this state added.
+		const buttons = [...container.querySelectorAll('button')];
+		expect(buttons).toHaveLength(1);
+		expect(buttons[0]?.textContent).toBe('Delete project');
 	});
 });
 
 /*
- * D31: a hook file names programs the host spawns, so writing one is a different privilege in kind
- * and waits on the role model D27 defers. Not even a disabled control, which would promise a
- * permission tier that does not exist.
+ * The card's one control is the strip's `Delete project`, and everything else about the old rule
+ * stands: no `Add`, no `Edit`, no overflow menu, no form control, and the card is not a link.
  */
 describe('the card, on either arm', () => {
-	it('carries no control at all, and is not a link', () => {
+	it('carries the one control and nothing else, and is not a link', () => {
 		for (const project of [CHECKOUT_WEB, declaresNothing(), NOT_READABLE]) {
 			const { container, unmount } = render(<ProjectCard project={project} />);
 
-			expect(container.querySelectorAll('button')).toHaveLength(0);
+			expect(container.querySelectorAll('button')).toHaveLength(1);
 			expect(container.querySelectorAll('[role="button"]')).toHaveLength(0);
 			expect(container.querySelectorAll('input, select, textarea')).toHaveLength(0);
 			expect(container.querySelectorAll('a')).toHaveLength(0);
 			expect(container.querySelectorAll('[disabled]')).toHaveLength(0);
 			unmount();
 		}
+	});
+});
+
+/*
+ * `Delete project` — the affordance, deliberately ahead of the action it names. Deleting a
+ * registration means the host removing a file that names programs it spawns, which D31 refuses on
+ * every transport and which waits on the role model D27 defers; this control claims none of that,
+ * so what is asserted here is the shape and the *absence* of behaviour.
+ */
+describe('the `Delete project` control', () => {
+	// The header strip is identical on both arms, which is what makes an unreadable registration
+	// draw as a project whose configuration will not parse rather than as a different kind of thing.
+	it('is on both arms, named for the project it is about', () => {
+		for (const project of [CHECKOUT_WEB, NOT_READABLE]) {
+			const { unmount } = render(<ProjectCard project={project} />);
+
+			const control = screen.getByRole('button', { name: `Delete project ${project.project}` });
+			// The words are the same on every card; the accessible name is what tells them apart.
+			expect(control.textContent).toBe('Delete project');
+			unmount();
+		}
+	});
+
+	it('carries the trash glyph, hidden from a screen reader that already has the words', () => {
+		render(<ProjectCard project={CHECKOUT_WEB} />);
+
+		const glyph = screen.getByRole('button').querySelector('svg');
+		expect(glyph).not.toBeNull();
+		expect(glyph?.getAttribute('aria-hidden')).toBe('true');
+	});
+
+	/*
+	 * **The badge treatment, not a new one**: the shape and the type come from `header-badge.tsx`,
+	 * so a pill in a strip cannot drift from the Archive header's by a border width. Asserted as
+	 * the constants rather than as their letters, which is what makes this a claim about sharing.
+	 */
+	it('takes the header badge’s own shape and type', () => {
+		render(<ProjectCard project={CHECKOUT_WEB} />);
+
+		const { className } = screen.getByRole('button');
+		for (const shared of [...BADGE_SHAPE.split(' '), ...BADGE_TYPE.split(' ')]) {
+			expect(className).toContain(shared);
+		}
+	});
+
+	/*
+	 * The accent is Analog Horizon's own red on the glyph and the words, and **never a fill**: §5's
+	 * *destructive actions are recessive* is what keeps the identifier the loudest thing on the card.
+	 * The frame stays neutral until the pointer is on it.
+	 */
+	it('accents in `error` without filling with it', () => {
+		render(<ProjectCard project={CHECKOUT_WEB} />);
+
+		const { className } = screen.getByRole('button');
+		expect(className).toContain('text-error');
+		expect(className).toContain('hover:border-error');
+		expect(className).toContain('border-outline-variant');
+		expect(className).not.toContain('bg-error');
+	});
+
+	/*
+	 * **Nothing is wired**, and this is the assertion that says so: pressed, it does not throw, does
+	 * not navigate and has no handler to run. A control that quietly grew one would promise a
+	 * privilege D31 refuses — so the promise is asserted absent rather than left to a reading of the
+	 * component.
+	 */
+	it('does nothing when pressed, and is not disabled either', () => {
+		render(<ProjectCard project={CHECKOUT_WEB} />);
+
+		const control = screen.getByRole('button');
+		expect(control.getAttribute('type')).toBe('button');
+		expect(control.hasAttribute('disabled')).toBe(false);
+		expect(control.getAttribute('onclick')).toBeNull();
+
+		const before = document.body.innerHTML;
+		fireEvent.click(control);
+
+		// Nothing changed, because there is nothing behind it yet.
+		expect(document.body.innerHTML).toBe(before);
 	});
 });

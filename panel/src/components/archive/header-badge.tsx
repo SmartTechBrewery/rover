@@ -28,22 +28,39 @@ import type { ReactNode } from 'react';
  */
 
 /**
- * The frame alone, for the one thing in this row that needs it without the padding: the view
+ * The radius and the border width, with **no colour of their own** — the geometry a pill in a strip
+ * has whatever it is saying.
+ *
+ * Split out of {@link BADGE_FRAME} for the one caller that keeps the shape and changes the colour:
+ * the Projects card's `Delete project`, whose accent is `error` (`docs/DESIGN.md` §10). Composing
+ * that from the frame instead would put `border-outline-variant` and `border-error` in one class
+ * list, where which one wins is the order of two utilities in the emitted stylesheet rather than
+ * anything this file says — the class list would read as decided and would not be.
+ */
+export const BADGE_SHAPE = 'rounded-sm border-2';
+
+/**
+ * The frame, for the one thing in this row that needs it without the padding: the view
  * toggle, whose two segments divide one block and so carry their own `px-3 py-1` and need `p-0`
  * and `inline-flex` of their own.
  *
  * That control's header already claimed the frame was the badge's own; exporting it is what makes
  * that true rather than duplicated.
  */
-export const BADGE_FRAME = 'rounded-sm border-2 border-outline-variant bg-surface-container';
+export const BADGE_FRAME = `${BADGE_SHAPE} border-outline-variant bg-surface-container`;
 
 /**
  * The padding and the type all three share — 12px from Tailwind's own `--text-xs` rather than
  * from `text-label-caps`, for the reason `Breadcrumb` records: the caps step would drag 700 weight
  * and 0.1em tracking along with the size. The toggle's segments beside it are the same 12px in the
  * same face.
+ *
+ * **The colour is not in here**, for {@link BADGE_SHAPE}'s reason: a fourth pill saying something
+ * else takes the measure and the face and states its own.
  */
-const TYPE = 'px-3 py-1 font-code-md text-[12px] text-on-surface';
+export const BADGE_TYPE = 'px-3 py-1 font-code-md text-[12px]';
+
+const TYPE = `${BADGE_TYPE} text-on-surface`;
 
 /** One badge — the Archive header's count and size, and the System card's archive total (#260). */
 export function HeaderBadge({ children }: { readonly children: ReactNode }) {

@@ -1,5 +1,7 @@
+import { BADGE_SHAPE, BADGE_TYPE } from '@panel/components/archive/header-badge.js';
 import { type DeclaredField, declaredFieldsOf } from '@panel/projects/declared-fields.js';
 import type { ProjectRegistration } from '@panel/projects/project-list.js';
+import { Trash2 } from 'lucide-react';
 
 /**
  * One registration under this host's projects root, exactly to `docs/DESIGN.md` §10.
@@ -12,11 +14,12 @@ import type { ProjectRegistration } from '@panel/projects/project-list.js';
  * registration the host cannot read draw as *that* — a project, named, whose configuration will
  * not parse — rather than as a failure of the panel or as a project declaring nothing (D6, D31).
  *
- * **No control of any kind and no disabled one.** No `Add`, no `Edit`, no `Delete`, no overflow
- * menu, and the card is not a link: it carries no `<a>`, no `<button>`, no `role="button"` and no
- * form control. A greyed-out `Delete` would promise a permission tier that does not exist —
- * editing a registration means writing a file that names programs the host spawns, which waits on
- * the role model D27 defers (D31).
+ * **One control, and it is `Delete project` in the header strip** — the affordance, deliberately
+ * ahead of the action it names: it is wired to nothing, writes nothing and asks the host nothing.
+ * The card is still not a link and carries no other control, no overflow menu and no form control.
+ * The action itself is unchanged by its presence: deleting a registration means a write into the
+ * projects root over the wire, which D31 refuses on every transport, and it waits on the role model
+ * D27 defers. See {@link DeleteProjectButton} for what this does and does not promise.
  *
  * **No LED, no dot, no status glyph and no colour on any field.** The device card's LED means
  * *held or free*, a live fact about hardware; a registration has no such state, and borrowing that
@@ -35,22 +38,87 @@ export function ProjectCard({ project }: { readonly project: ProjectRegistration
 			 * title, and it is not — it is the hook file's own name, the identifier the host looked
 			 * the project up by, and the exact string a lease carries as its `project` (D22).
 			 *
-			 * Nothing sits on the right of the strip, because a registration has no status to put
-			 * there.
+			 * What sits on the right of the strip is the one control and **never a status**: a
+			 * registration has none, so there is still no LED, no dot and no glyph standing for one.
+			 * `ml-auto` rather than `justify-between`, so the label and the identifier stay a pair
+			 * reading left to right and the control is what is pushed away from them.
+			 *
+			 * **Two levels of alignment, because the strip now holds two different things.** The pill
+			 * made the strip taller than the words, and `items-baseline` across the whole row then
+			 * left the two words sitting where the shorter strip had put them — a row that reads as
+			 * having grown downwards rather than as one row. So the strip centres its *children* and
+			 * the label and the identifier are **one child**: they keep the shared baseline they
+			 * always had — 10px caps against a 14px identifier, which is what a baseline is for —
+			 * and that pair is centred against the control beside it.
 			 */}
-			<div className="flex items-baseline gap-3 border-outline-variant border-b-2 bg-surface-container-high px-4 py-2">
-				<span className="font-label-caps text-[10px] text-on-surface-variant uppercase">
-					Project
-				</span>
-				{/* Monospace, verbatim, wrapping on whole words: never truncated, never ellipsised,
-				    never lower-cased. */}
-				<span className="break-words font-code-md text-code-md text-on-surface">
-					{project.project}
-				</span>
+			<div className="flex items-center gap-3 border-outline-variant border-b-2 bg-surface-container-high px-4 py-2">
+				<div className="flex min-w-0 items-baseline gap-3">
+					<span className="shrink-0 font-label-caps text-[10px] text-on-surface-variant uppercase">
+						Project
+					</span>
+					{/* Monospace, verbatim, wrapping on whole words: never truncated, never ellipsised,
+					    never lower-cased. */}
+					<span className="break-words font-code-md text-code-md text-on-surface">
+						{project.project}
+					</span>
+				</div>
+				<DeleteProjectButton className="ml-auto" project={project.project} />
 			</div>
 
 			{project.kind === 'registered' ? <DeclaredBody project={project} /> : <NotReadableBody />}
 		</article>
+	);
+}
+
+/**
+ * `Delete project` — the strip's one control, **the affordance and not yet the action**.
+ *
+ * **It is wired to nothing on purpose.** No `onClick`, no confirmation, no call: pressed, it does
+ * exactly nothing, and it is here so the shape of the row can be settled before the write behind it
+ * exists. That write is a different privilege in kind — deleting a registration means the host
+ * removing a file that names programs it spawns, which D31 refuses on every transport and which
+ * waits on the role model D27 defers — so **nothing about this control claims the privilege is
+ * there**, and it must not grow a handler that pretends otherwise. What it will grow, when the
+ * action lands, is `ForceReleaseControl`'s shape: a confirmation that asks first, and an answer that
+ * says what actually happened.
+ *
+ * **It is the badge treatment, not a new one** — `BADGE_SHAPE` and `BADGE_TYPE` are the Archive
+ * header's own pill (`header-badge.tsx`), so the radius, the border width, the padding, the face and
+ * the 12px step are shared rather than copied, and the glyph-beside-12px-words arrangement is
+ * `artifact-body-view.tsx`'s *Open in a new window*. Nothing here is invented at the keyboard
+ * (`ai/RULES.md` §8).
+ *
+ * **The accent is `error`, and that is a departure recorded rather than assumed.** §5 has no red
+ * *device state* and never will — a device that vanished is simply not listed — and the
+ * force-release control drops the design's red hover for that reason. Neither rule is about a
+ * destructive control's own accent, which is what this is: `error` is Analog Horizon's own red
+ * (`--color-error`), it is on the glyph and the words rather than in a fill, and the frame stays
+ * `outline-variant` until the pointer is on it. §5's *destructive actions are recessive* is what
+ * that shape is for — the loudest thing on a Projects card is still the identifier it is about, and
+ * a solid red pill repeated down a list of registrations is exactly the full-width orange button §5
+ * records as the mistake.
+ */
+function DeleteProjectButton({
+	project,
+	className,
+}: {
+	/** The identifier this control is about — for the accessible name, so a screen reader hears
+	 *  which of the cards' identical labels it has landed on. */
+	readonly project: string;
+	readonly className: string;
+}) {
+	return (
+		<button
+			// `aria-label` overrides the visible words rather than adding to them, which is what a
+			// list of same-labelled controls needs: `Delete project checkout-web`, not `Delete
+			// project` eight times.
+			aria-label={`Delete project ${project}`}
+			className={`${BADGE_SHAPE} ${BADGE_TYPE} ${className} flex shrink-0 items-center gap-2 border-outline-variant bg-surface-container text-error transition-colors hover:border-error`}
+			type="button"
+		>
+			<Trash2 aria-hidden="true" size={14} strokeWidth={2} />
+			Delete project
+		</button>
 	);
 }
 
