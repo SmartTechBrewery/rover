@@ -1,3 +1,6 @@
+import type { ArchiveSize } from '@panel/archive/archive-size.js';
+import { sizeSentence } from '@panel/archive/size-sentence.js';
+import { HeaderBadge } from '@panel/components/archive/header-badge.js';
 import { type RetentionDraft, retentionValueOf } from '@panel/system/retention-settings.js';
 import { useId } from 'react';
 
@@ -30,8 +33,24 @@ import { useId } from 'react';
  * unchanged through all of it — nothing takes these two numbers *from this screen* — so the button
  * stays absent for exactly the reason it always was, and the line under the fields says the true
  * half rather than the old sentence's both halves.
+ *
+ * **And the strip now says what the archive already weighs** (#260). §13 kept a *no current usage
+ * figure* row and named the exact condition that would end it — an answer carrying the size — which
+ * #259 is. So the card that bounds the archive says what it currently holds, and the row is
+ * corrected in place rather than dropped, because half of it is still true: see {@link ArchiveTotal}.
  */
-export function RetentionCard({ draft }: { readonly draft: RetentionDraft }) {
+export function RetentionCard({
+	archive,
+	draft,
+}: {
+	/**
+	 * How much disk the whole archive takes — `measure_archive` over the root, asked by the screen
+	 * and not by this card (`routes/system.tsx`). Four states, and three of them draw no badge at
+	 * all ({@link ArchiveTotal}).
+	 */
+	readonly archive: ArchiveSize;
+	readonly draft: RetentionDraft;
+}) {
 	return (
 		/*
 		 * **The device card's anatomy**, which is `ContentsCard`'s too: `overflow-hidden rounded-lg
@@ -41,7 +60,17 @@ export function RetentionCard({ draft }: { readonly draft: RetentionDraft }) {
 		 * panel already is, and a title floating inside the body would make this the one that is not.
 		 */
 		<section className="mt-8 overflow-hidden rounded-lg border-2 border-outline-variant bg-surface-container">
-			<div className="border-outline-variant border-b-2 bg-surface-container-high px-4 py-3">
+			{/*
+			 * **The title at one end of the strip and the total at the other**, which is the row the
+			 * Archive's own cards already are — `RunPanel` puts the `Keep` tick exactly here (§9). The
+			 * badge is a fact about the host's disk rather than a value of either field, and the strip
+			 * is the one place on this card where it cannot be read as one.
+			 *
+			 * `flex-wrap` rather than a breakpoint: the sentence is between three and nine words
+			 * depending on what the host answered, so what it needs is to drop under the title when it
+			 * stops fitting, at whatever width that turns out to be.
+			 */}
+			<div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 border-outline-variant border-b-2 bg-surface-container-high px-4 py-3">
 				{/*
 				 * The tree card's own heading step (`directory-tree.tsx`'s `DIRECTORY`) in the place that
 				 * card puts it. A second heading step invented for this screen is how two cards start
@@ -50,6 +79,7 @@ export function RetentionCard({ draft }: { readonly draft: RetentionDraft }) {
 				<h2 className="font-label-caps text-label-caps text-on-surface uppercase tracking-widest">
 					Archive settings
 				</h2>
+				<ArchiveTotal archive={archive} />
 			</div>
 
 			<div className="p-6">
@@ -117,6 +147,41 @@ export function RetentionCard({ draft }: { readonly draft: RetentionDraft }) {
 			</div>
 		</section>
 	);
+}
+
+/**
+ * What the whole archive takes on disk, said in the strip — **the Archive header's badge, verbatim**
+ * (#260, R49, `docs/DESIGN.md` §13).
+ *
+ * **The pill is `HeaderBadge` and the sentence is `sizeSentence`'s `archive` scope**, which is the
+ * one the Archive screen draws at its own root: the same walk of the same directory answering the
+ * same bytes. One number with two phrasings on two screens is drift rather than variety, so the
+ * words live where they already lived and this screen is one more reader of them. *`All tests take
+ * 7.7 MB on disk` is what that says*, and the operator's `Tests take …` is the wording it was
+ * weighed against and lost to: `All` is what holds the root apart from the groups view's
+ * `Grouped tests take …` over a subset of the same archive (§9), and that distinction is worth more
+ * than one word of length on this card.
+ *
+ * **No `X of Y`, no percentage, and no over-budget colour.** The figure beside it in `MB` is a
+ * draft nobody has saved — no method writes either setting (§13) — so a comparison would present a
+ * typed-in number as the budget the sweep actually enforces. The sweep's own over-budget case is
+ * the sweep's to report and it says so in the host's log (#238). When a method takes these two
+ * numbers the comparison becomes possible, and it is a decision of its own then.
+ *
+ * **The unit steps by itself and the field's does not.** `formatBytes` is 1024-based and moves to
+ * `GB` above 1024 MB, so this badge may read `1.4 GB` while the field reads `1024` — two units on
+ * one card, accepted rather than fixed, because the setting *is* an integer count of megabytes the
+ * host is handed and this is a measurement for a person to read (§13).
+ *
+ * **Absent rather than invented.** `loading` — nothing answered yet — and `absent` — nothing filed
+ * at all — both draw no badge rather than a `0`, a `—` or a placeholder, which is §9's rule over
+ * this number. A cut-short walk renders *at least*, and a size the host could not take gets its own
+ * sentence rather than `unknown` in the value slot; both of those are {@link sizeSentence}'s and
+ * neither is restated here.
+ */
+function ArchiveTotal({ archive }: { readonly archive: ArchiveSize }) {
+	const sentence = sizeSentence('archive', archive);
+	return sentence === null ? null : <HeaderBadge>{sentence}</HeaderBadge>;
 }
 
 /**
