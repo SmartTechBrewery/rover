@@ -1,0 +1,86 @@
+{
+  "answers": [
+    {
+      "case": "every run of the group went, and one test it emptied was kept",
+      "params": {
+        "project": "checkout-web",
+        "groupId": "app-bar-top-space",
+        "actor": "karolina"
+      },
+      "result": {
+        "outcome": "deleted",
+        "archive": "removed",
+        "keptTests": "removed",
+        "freedBytes": 8451208,
+        "keptTestsRemoved": 1,
+        "runsRemoved": 7
+      }
+    },
+    {
+      "case": "the group's runs went and every test they were under still holds others",
+      "params": {
+        "project": "checkout-web",
+        "groupId": "basket-total",
+        "actor": "karolina"
+      },
+      "result": {
+        "outcome": "deleted",
+        "archive": "removed",
+        "keptTests": "absent",
+        "freedBytes": 412306,
+        "keptTestsRemoved": 0,
+        "runsRemoved": 1
+      }
+    },
+    {
+      "case": "one run would not go, and the tests the rest emptied were pruned",
+      "params": {
+        "project": "legacy-kiosk",
+        "groupId": "pairing-retry",
+        "actor": "alice"
+      },
+      "result": {
+        "outcome": "partial",
+        "archive": "failed",
+        "keptTests": "removed",
+        "freedBytes": 90114,
+        "keptTestsRemoved": 2,
+        "runsRemoved": 2
+      }
+    },
+    {
+      "case": "the walk was cut short, so runs of the group may never have been reached",
+      "params": {
+        "project": "legacy-kiosk",
+        "groupId": "nightly-sweep",
+        "actor": "alice"
+      },
+      "result": {
+        "outcome": "partial",
+        "archive": "failed",
+        "keptTests": "absent",
+        "freedBytes": 0,
+        "keptTestsRemoved": 0,
+        "runsRemoved": 0
+      }
+    },
+    {
+      "case": "no run filed under this project names that group",
+      "params": {
+        "project": "checkout-web",
+        "groupId": "a-group-nobody-named",
+        "actor": "alice"
+      },
+      "result": { "outcome": "not-found" }
+    },
+    {
+      "case": "a lease is filing into one of this group's runs, so nothing was touched",
+      "params": {
+        "project": "statistics-deliveries",
+        "groupId": "nightly-export.7f3a91",
+        "actor": "karolina"
+      },
+      "result": { "outcome": "refused", "reason": "lease-live" }
+    }
+  ]
+}

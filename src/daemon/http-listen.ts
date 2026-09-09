@@ -247,6 +247,18 @@ import { findUserByToken, type UserRecord } from './user-store.js';
  * `delete_project`'s reason in the same key — an agent deleting a test's artifacts destroys the
  * evidence another agent's run produced.
  *
+ * `delete_archived_group` joined it with the `Remove` on the group's own card (D43, R51 phase 3,
+ * #277), and it is the **fifth action** here. It is the same authority as the row above it over a
+ * different shape: not one directory but *the runs whose group id matches*, which is why it is a
+ * walk rather than an `rm` and why a walk that was cut short answers `partial` rather than claiming
+ * a group is gone. D27's test comes out the same way for the same reason — a group is one
+ * operator's own investigation on this host's archive, **named and bounded**, with the runs and the
+ * bytes stated before it fires — and it stays as far from `sweep_archive`'s untargeted policy run
+ * as the two rows above it. It composes one path component for a caller, `project`, and the
+ * `groupId` names no directory at all (R41); no path and no `errno` is on its answer. It is
+ * deliberately **not** an MCP tool, which is `delete_archived_test`'s reason in a wider key — a
+ * group is several agents' runs held together by a caller's own string.
+ *
  * `delete_project` joined it with the confirmation dialog that calls it (D42, R50, #273), exactly
  * as `force_release_device` joined it with the screen that calls it — the row landed on the one
  * table a phase earlier and was deliberately held off this list until there was a panel surface
@@ -265,8 +277,8 @@ import { findUserByToken, type UserRecord } from './user-store.js';
  * archive one directory level at a time, searches the whole of it, asks which of its runs share a
  * group, asks how much disk a scope of it takes, reads what this host has registered and deletes
  * one of those registrations with everything filed under it, deletes one archived test with every
- * run filed under it, and reads and sets which of the archive's tests are kept — and D27 still
- * keeps every acquire and every verb off a browser.
+ * run filed under it, deletes the runs one group holds and nothing else, and reads and sets which of
+ * the archive's tests are kept — and D27 still keeps every acquire and every verb off a browser.
  */
 const PANEL_METHODS: readonly IpcMethodName[] = [
 	'list_devices',
@@ -279,6 +291,7 @@ const PANEL_METHODS: readonly IpcMethodName[] = [
 	'list_projects',
 	'delete_project',
 	'delete_archived_test',
+	'delete_archived_group',
 	'list_kept_tests',
 	'set_kept_tests',
 ];

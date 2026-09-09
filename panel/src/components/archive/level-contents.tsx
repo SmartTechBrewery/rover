@@ -1,6 +1,5 @@
 import type { ArchiveLevel } from '@panel/archive/archive-levels.js';
 import type { ArchiveEntry } from '@panel/archive/archive-listing.js';
-import type { DeleteArchivedTestAnswer, TestRemoval } from '@panel/archive/delete-archived-test.js';
 import { UNKNOWN } from '@panel/archive/file-size.js';
 import { orderedEntries } from '@panel/archive/level-order.js';
 import type { PinState } from '@panel/archive/pinned-tests.js';
@@ -14,7 +13,7 @@ import {
 	NotReadableInCard,
 	ReadingLevel,
 } from './contents-card.js';
-import { RemoveControl } from './remove-control.js';
+import { type Removal, RemoveControl, type SettledRemoval } from './remove-control.js';
 
 /**
  * What is in the selected level — the root, a project, or a test name (`docs/DESIGN.md` §9).
@@ -84,22 +83,23 @@ export function LevelContents({
 	 */
 	readonly pinScope?: 'test' | 'group';
 	/**
-	 * The `Remove` control for this level, bound to the test it would delete — **given only at a
-	 * test name**, and `undefined` at every other depth this card draws (`remove-control.tsx`,
-	 * D43).
+	 * The `Remove` control for this level, bound to what it would delete — **given at a test name
+	 * and at a group**, and `undefined` at every other depth this card draws
+	 * (`remove-control.tsx`, D43).
 	 *
 	 * A prop for {@link pin}'s reason and the same rule: the depth in this component decides which
 	 * columns a row carries and nothing else, and `routes/archive.tsx` already owns the depth
 	 * arithmetic (`levelRemoval`). So this card draws the control when it is handed one and never
-	 * works out whether it should exist.
+	 * works out whether it should exist — including which of the two scopes it is, which the screen
+	 * says on the value itself.
 	 *
-	 * **A group's card carries none in this phase**, which is a phase boundary rather than a gap: a
-	 * group is several tests, and one call per test is not what one press should become
-	 * (`docs/DESIGN.md` §9, R51 phase 3).
+	 * **A group's card carries one since #277**, which closed the phase boundary #276 recorded: the
+	 * tick was there first because one press writes one array, and the control needed the surgical
+	 * run-by-run walk D43 settled (`docs/DESIGN.md` §9, R51 phase 3).
 	 */
-	readonly removal?: TestRemoval;
+	readonly removal?: Removal;
 	/** What a settled delete is reported to — the screen, never this card (`routes/archive.tsx`). */
-	readonly onRemoveSettled?: (answer: DeleteArchivedTestAnswer, removal: TestRemoval) => void;
+	readonly onRemoveSettled?: (settled: SettledRemoval) => void;
 }) {
 	return (
 		<ContentsCard

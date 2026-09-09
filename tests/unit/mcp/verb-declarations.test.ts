@@ -147,6 +147,12 @@ const DEVICE_METHODS = ['status', 'list_devices', 'acquire_device', 'release_dev
  * `PANEL_METHODS` yet either — that lands with the screen that calls it, exactly as
  * `force_release_device` did (R35, #122).
  *
+ * `delete_archived_group` is here for the same reason at the scope that is not an address at all
+ * (D43, #277). It takes *the runs whose group id matches*, and a group is held together by a string
+ * a caller chose — so one call would let one agent delete runs several other agents' leases wrote,
+ * which is the row below's objection with more force rather than a different one. It needs nothing
+ * here either, an agent's own artifacts having come back as bytes in the verb's own answer (D19).
+ *
  * `delete_archived_test` is here for the row above's reason in the same key (D43, #272). It is
  * that action at a finer address — one test's directory, every run filed under it and its `Keep`
  * entry — and being finer changes nothing about why an agent may not call it: the runs under a
@@ -181,6 +187,7 @@ const NOT_YET_EXPOSED = [
 	'list_projects',
 	'delete_project',
 	'delete_archived_test',
+	'delete_archived_group',
 	'list_kept_tests',
 	'set_kept_tests',
 	'sweep_archive',

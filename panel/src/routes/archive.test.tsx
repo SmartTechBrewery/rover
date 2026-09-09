@@ -153,6 +153,15 @@ const { host, HANGS } = vi.hoisted(() => ({
 		deletes: [] as unknown[],
 		/** What the host answers a delete with, or `null` for the ask that reached nothing. */
 		deleted: null as unknown,
+		/**
+		 * Every `delete_archived_group` this screen asked for, in order — logged apart from the
+		 * test's deletes for the reason those are logged apart from the listings: *the group's card
+		 * calls the group's method and never the test's* is assertable only if the two are counted
+		 * separately (#277).
+		 */
+		groupDeletes: [] as unknown[],
+		/** What the host answers a group delete with, or `null` for the ask that reached nothing. */
+		groupDeleted: null as unknown,
 		/** Accepts every request and never answers it — the state before the first answer. */
 		hangs: false,
 	},
@@ -244,6 +253,17 @@ vi.mock('@panel/session/session-provider.js', () => {
 		}
 		return { ok: true, value: { type: 'result', result: host.deleted } };
 	};
+	/** One confirmed `Remove` on a group's card, logged apart — see `route` below (#277). */
+	const deleteGroup = async (params: unknown) => {
+		host.groupDeletes.push(params);
+		if (host.hangs) {
+			return await new Promise(() => undefined);
+		}
+		if (host.groupDeleted === null) {
+			return { ok: false, refusal: 'unanswered' };
+		}
+		return { ok: true, value: { type: 'result', result: host.groupDeleted } };
+	};
 	const keepPress = async (params: {
 		tests: readonly { project: string; testName: string }[];
 		kept: boolean;
@@ -299,13 +319,35 @@ vi.mock('@panel/session/session-provider.js', () => {
 		if (method === 'list_kept_tests') {
 			return await keptTests();
 		}
+		const written = await wrote(method, params);
+		return written ?? (await listing(params.path));
+	};
+
+	/**
+	 * The three methods that **change** something on the host — the `Keep` press and the two deletes
+	 * — or `undefined` for a method that is none of them (#277).
+	 *
+	 * Split out of {@link route} rather than three more branches in it: the reads there are one
+	 * branch each and stay that way, and this half is the one that grows with every operator action
+	 * the screen gains.
+	 */
+	const wrote = async (
+		method: string,
+		params: {
+			tests?: readonly { project: string; testName: string }[];
+			kept?: boolean;
+		},
+	) => {
 		if (method === 'set_kept_tests') {
 			return await keepPress(params as Parameters<typeof keepPress>[0]);
 		}
 		if (method === 'delete_archived_test') {
 			return await deleteTest(params);
 		}
-		return await listing(params.path);
+		if (method === 'delete_archived_group') {
+			return await deleteGroup(params);
+		}
+		return undefined;
 	};
 
 	return {
@@ -529,6 +571,8 @@ beforeEach(() => {
 	host.hangs = false;
 	host.deleted = null;
 	host.deletes = [];
+	host.groupDeleted = null;
+	host.groupDeletes = [];
 	navigated.calls = [];
 });
 
@@ -3338,17 +3382,115 @@ describe('the Remove control', () => {
 	});
 
 	/*
-	 * **A group's card carries the tick and not the control**, which §9 records as a phase boundary
-	 * rather than a gap: one press over several tests is phase 3's, and the tick's own array write
-	 * already is one.
+	 * **A group's card carries the tick *and* the control since #277**, which closed the phase
+	 * boundary #276 recorded (§9, R51). The control is the group's own — labelled with the group's
+	 * noun, because the two scopes are drawn at the same depth in their two views.
 	 */
-	it('is not on a group’s card, whose tick is over several tests', async () => {
+	it('is on a group’s card, beside its tick, as the group’s own', async () => {
 		const { container } = await grouped(`checkout-app/${GROUP}`);
 
-		expect(besideTheTree(container).getByRole('checkbox', { name: 'Keep' })).toBeDefined();
+		const card = besideTheTree(container);
+		expect(card.getByRole('checkbox', { name: 'Keep' })).toBeDefined();
+		expect(card.getByRole('button', { name: `Remove group ${GROUP}` })).toBeDefined();
+		// And it is not the test's control wearing a group's name.
+		expect(card.queryAllByRole('button', { name: /^Remove test / })).toHaveLength(0);
+	});
+
+	/**
+	 * **Which card in the groups view gets a group's control, and it is the group's alone** — the
+	 * root and a project are levels of the arrangement rather than one group, and a test name and a
+	 * run below it are about a test.
+	 */
+	it.each([
+		['the groups root', undefined, 0],
+		['a project', 'checkout-app', 0],
+		['a group', `checkout-app/${GROUP}`, 1],
+		['a test name in a group', `checkout-app/${GROUP}/login-flow`, 0],
+		['a run in a group', `checkout-app/${GROUP}/login-flow/${RUN}`, 0],
+	])('is on %s: %s', async (_case, splat, drawn) => {
+		const { container } = await grouped(splat);
+
 		expect(
-			besideTheTree(container).queryAllByRole('button', { name: /^Remove test / }),
-		).toHaveLength(0);
+			besideTheTree(container).queryAllByRole('button', { name: /^Remove group / }),
+		).toHaveLength(drawn);
+	});
+
+	/*
+	 * **A group whose runs are not listed gets no control**, which is the rule its tick already
+	 * keeps. A deep link to a group id nothing on this host named is the one shape of that which
+	 * still draws a card — the walk being out or unreadable takes the whole content area — and a
+	 * control there would be a press about runs nobody has seen.
+	 */
+	it('is not on the card for a group id nothing on this host named', async () => {
+		const { container } = await grouped('checkout-app/nobody-named-this');
+
+		const card = besideTheTree(container);
+		expect(card.queryAllByRole('button', { name: /^Remove group / })).toHaveLength(0);
+		// The tick is absent for the same reason, which is what makes this one rule and not two.
+		expect(card.queryAllByRole('checkbox', { name: 'Keep' })).toHaveLength(0);
+	});
+
+	/**
+	 * **The group scope the screen hands over**, read back off the confirmation: the project, the
+	 * group id, and the run count off the grouping answer — the same answer the size badge measures,
+	 * so it costs no request of its own.
+	 */
+	it('hands the group and its run count to the confirmation', async () => {
+		await grouped(`checkout-app/${GROUP}`);
+
+		await act(async () => {
+			fireEvent.click(screen.getByRole('button', { name: `Remove group ${GROUP}` }));
+		});
+
+		// Scoped to the dialog: at a group's depth the card behind it lists test names, which carry
+		// a `RUNS` column of their own.
+		const dialog = within(screen.getByRole('dialog'));
+		const valueInDialog = (label: string): string =>
+			dialog.getByText(label).nextElementSibling?.textContent ?? '';
+		expect(valueInDialog('PROJECT')).toBe('checkout-app');
+		expect(valueInDialog('GROUP')).toBe(GROUP);
+		// Two runs of `login-flow` are in this group, and neither the project's other group's run
+		// nor the archive's ungrouped ones are.
+		expect(valueInDialog('RUNS')).toBe('2 runs');
+		expect(dialog.queryByText('KEPT')).toBeNull();
+	});
+
+	/*
+	 * **And when the grouping walk was cut short, the count it hands over is a bound** (#284 review).
+	 * That walk drops runs at its bounds while the delete's own walk is scoped to one project and
+	 * reaches runs the listing never did — so a plain figure here would understate an irreversible
+	 * action. The control stays: the group is still listed and the delete is still correct about
+	 * what it takes.
+	 */
+	it('hands over a bound rather than a figure when the grouping walk was cut short', async () => {
+		host.groups = { ...(groupings() as object), truncated: true };
+		await grouped(`checkout-app/${GROUP}`);
+
+		await act(async () => {
+			fireEvent.click(screen.getByRole('button', { name: `Remove group ${GROUP}` }));
+		});
+
+		const dialog = within(screen.getByRole('dialog'));
+		expect(dialog.getByText('RUNS').nextElementSibling?.textContent).toBe('at least 2 runs');
+	});
+
+	// And it calls the group's method, with the group's params — never the test's (R41: the group
+	// id is content and not a second path component).
+	it('asks the group’s method when the group’s control is confirmed', async () => {
+		host.groupDeleted = { outcome: 'refused', reason: 'lease-live' };
+		await grouped(`checkout-app/${GROUP}`);
+
+		await act(async () => {
+			fireEvent.click(screen.getByRole('button', { name: `Remove group ${GROUP}` }));
+		});
+		await act(async () => {
+			fireEvent.click(screen.getByRole('button', { name: 'Remove group' }));
+		});
+
+		expect(host.groupDeletes).toEqual([
+			{ project: 'checkout-app', groupId: GROUP, actor: 'karolina' },
+		]);
+		expect(host.deletes).toHaveLength(0);
 	});
 
 	/**
@@ -3575,6 +3717,102 @@ describe('a settled Remove', () => {
 		expect(navigated.calls).toHaveLength(0);
 		expect(host.asked).toHaveLength(before);
 		expect(noticed()).toBe('');
+	});
+
+	/**
+	 * **What a settled delete of a *group* does to the screen** (#277) — the same three moves as a
+	 * test's, over the one difference only a group has: the grouping answer is what the groups view
+	 * draws its own levels from, so it is re-read as well.
+	 */
+	describe('on a group’s card', () => {
+		const GROUP_DELETED = {
+			outcome: 'deleted',
+			archive: 'removed',
+			keptTests: 'removed',
+			freedBytes: 8_451_208,
+			keptTestsRemoved: 1,
+			runsRemoved: 2,
+		};
+
+		/** Press and confirm, answering the counts as they stood **after** the first walk. */
+		async function removeTheGroup(answer: unknown): Promise<{ readonly walks: number }> {
+			host.groupDeleted = answer;
+			await grouped(`checkout-app/${GROUP}`);
+			const walks = host.groupings;
+			await act(async () => {
+				fireEvent.click(screen.getByRole('button', { name: `Remove group ${GROUP}` }));
+			});
+			await act(async () => {
+				fireEvent.click(screen.getByRole('button', { name: 'Remove group' }));
+			});
+			for (let turn = 0; turn < 6; turn += 1) {
+				await act(async () => undefined);
+			}
+			return { walks };
+		}
+
+		/*
+		 * **Onto the group's parent — the project, in the groups view's own address.** A group's card
+		 * *is* that group, so the address the reader is on may not exist once its runs have gone.
+		 */
+		it('moves the selection to the project, on the groups view’s own route', async () => {
+			await removeTheGroup(GROUP_DELETED);
+
+			expect(navigated.calls).toEqual([
+				{ to: '/groups/$', params: { _splat: 'checkout-app' }, replace: true },
+			]);
+		});
+
+		/*
+		 * **The grouping answer is walked again**, which is the half of the re-read only a group
+		 * needs: this view draws its own three levels out of that one answer, so a group whose runs
+		 * went is stale in it. The levels cache is re-read too — the same `reread()` a test's delete
+		 * calls — and it is deliberately not asserted here, because above a run the groups view asks
+		 * `list_archive` for nothing, so there is no listing at this address for it to ask for
+		 * (`levelsWanted`). *That* half is covered where it is observable, on a test's card.
+		 */
+		it('walks the groupings again, which is what this view’s levels come out of', async () => {
+			const { walks } = await removeTheGroup(GROUP_DELETED);
+
+			expect(host.groupings).toBe(walks + 1);
+		});
+
+		// `partial` and `not-found` are settled too, and both mean the address may not exist.
+		it.each([
+			[
+				'a delete that could not take all of it',
+				{ ...GROUP_DELETED, outcome: 'partial', archive: 'failed' },
+			],
+			['a group nothing named', { outcome: 'not-found' }],
+		])('moves and re-reads for %s as well', async (_case, answer) => {
+			const { walks } = await removeTheGroup(answer);
+
+			expect(navigated.calls).toHaveLength(1);
+			expect(host.groupings).toBe(walks + 1);
+			expect(noticed().length).toBeGreaterThan(0);
+		});
+
+		/*
+		 * **A `refused` does neither**, for the test scope's reason: a live lease means nothing at all
+		 * was touched, so both a navigation and a second walk would be the panel acting on a change
+		 * that did not happen.
+		 */
+		it('neither moves nor re-reads for a live lease, and still says so', async () => {
+			const { walks } = await removeTheGroup({ outcome: 'refused', reason: 'lease-live' });
+
+			expect(navigated.calls).toHaveLength(0);
+			expect(host.groupings).toBe(walks);
+			expect(noticed()).toContain('nothing at all was touched');
+		});
+
+		// And the line above the content area is the **group's**, sharing no phrase with the test's.
+		it('says the group’s own sentence, with the run count leading', async () => {
+			await removeTheGroup(GROUP_DELETED);
+
+			expect(noticed()).toContain(`${GROUP} holds nothing any more`);
+			expect(noticed()).toContain('2 runs went');
+			expect(noticed()).toContain('not in it are still filed');
+		});
 	});
 
 	/**

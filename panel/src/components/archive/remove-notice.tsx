@@ -1,3 +1,4 @@
+import type { DeleteArchivedGroupAnswer } from '@panel/archive/delete-archived-group.js';
 import type { DeleteArchivedTestAnswer } from '@panel/archive/delete-archived-test.js';
 import { formatBytes } from '@panel/archive/file-size.js';
 
@@ -7,6 +8,14 @@ import { formatBytes } from '@panel/archive/file-size.js';
  * for by the time anybody reads it.
  */
 export interface SettledRemoveTest {
+	/**
+	 * Which scope settled — added when a **group's** became the second one (#277).
+	 *
+	 * The two share no phrase (see {@link said}), so the line has to know which it is saying; and it
+	 * cannot be read off the answer, the group's arms being the test's arms plus one field. So the
+	 * screen labels what it received, exactly as it labels what it built (`Removal`).
+	 */
+	readonly scope: 'test';
 	/**
 	 * The request that reached nothing never gets here — it settled nothing, and is not one of the
 	 * outcomes (§7's fourth case). It stays in the dialog, which stays open.
@@ -26,6 +35,27 @@ export interface SettledRemoveTest {
 	 */
 	readonly testName: string;
 }
+
+/**
+ * A settled delete and the group it was about — {@link SettledRemoveTest}'s shape one scope over.
+ *
+ * **The group id and not the pair**, for that interface's own reason: a settled group delete leaves
+ * the reader *on the project*, so which project it was is the breadcrumb above this line rather
+ * than something the line has to repeat.
+ */
+export interface SettledRemoveGroup {
+	readonly scope: 'group';
+	/** The request that reached nothing never gets here — it settled nothing (§7's fourth case). */
+	readonly answer: Extract<
+		DeleteArchivedGroupAnswer,
+		{ outcome: 'deleted' | 'partial' | 'not-found' | 'refused' }
+	>;
+	/** The group's own id — what a reader recognises, and what the sentence is about. */
+	readonly groupId: string;
+}
+
+/** Whichever of the two scopes settled, as the region takes it. */
+export type SettledRemove = SettledRemoveTest | SettledRemoveGroup;
 
 /**
  * What a delete settled, said above the content area.
@@ -54,11 +84,11 @@ export interface SettledRemoveTest {
  * its text does — a live region created together with its content is announced unreliably, which
  * `Profile`'s sign-out line settled already.
  */
-export function RemoveTestNotice({
+export function RemoveNotice({
 	settled,
 	onDismiss,
 }: {
-	readonly settled: SettledRemoveTest | undefined;
+	readonly settled: SettledRemove | undefined;
 	readonly onDismiss: () => void;
 }) {
 	return (
@@ -66,7 +96,9 @@ export function RemoveTestNotice({
 			{settled === undefined ? null : (
 				<section className="mt-8 flex items-start justify-between gap-4 border-2 border-outline-variant bg-surface-container-low p-4">
 					<p className="max-w-3xl font-body-md text-body-md text-on-surface">
-						{said(settled.answer, settled.testName)}
+						{settled.scope === 'test'
+							? said(settled.answer, settled.testName)
+							: saidOfGroup(settled.answer, settled.groupId)}
 					</p>
 					{/*
 					 * Recessive, like every other control in this panel, and labelled by what it does to
@@ -177,6 +209,78 @@ function someHalfWent(
 	answer: Extract<SettledRemoveTest['answer'], { outcome: 'partial' }>,
 ): boolean {
 	return answer.archive === 'removed' || answer.keptTests === 'removed';
+}
+
+/**
+ * One sentence per outcome for a **group**, and **no two lines across the two scopes are the same
+ * sentence, each naming its own scope in its leading clause** (D6) — the pairing rule this screen
+ * keeps everywhere, and the reason these are sentences of their own rather than the ones above with
+ * a noun swapped.
+ *
+ * **That claim is deliberately weaker than the within-scope one, and it is the true one** (#284
+ * review). Two of these do share a closing clause with the test's — *What the screen was showing had
+ * gone out of date, and it has been read again.* on `not-found`, and *Wait for the lease to end, or
+ * force-release the device holding it first.* on `refused` — because after either answer the next
+ * move genuinely is identical, and inventing a second wording for one identical instruction would
+ * make the two scopes differ where they do not. What has to differ is what a reader tells the two
+ * apart by, and that is the half that leads: *login-flow* against *one of app-bar-top-space's runs*.
+ * The guard in `remove-notice.test.tsx` enforces exactly that pair of properties rather than
+ * asserting the stronger one this comment used to claim.
+ *
+ * Each says the thing only this scope can say, which is what makes the four different next moves:
+ *
+ * - **`deleted` leads with the run count**, because a group has no directory whose size stands for
+ *   it — *how many runs went* is the figure nobody can recover afterwards. And it says that runs of
+ *   the same tests outside the group stayed, which is D43's surgical reading confirmed after the
+ *   fact rather than only promised before it.
+ * - **`not-found` is not a delete of zero runs**: no run filed under the project named that group,
+ *   so what the reader was looking at had gone out of date.
+ * - **`partial` says *ask again***, and that is the sharpest difference from the test's line. This
+ *   delete is a bounded walk, so a `partial` may mean *a run would not go* **or** *the walk did not
+ *   reach everything* — and in both readings the operator's next move is to run it again once the
+ *   host's log says what stopped it. A `partial` that removed nothing is said as one, for the test
+ *   line's reason: the host puts no floor on how much went.
+ * - **`refused` is a live lease on one of its runs**, with nothing at all touched — said so that
+ *   *refused* is not read as *partly done*.
+ */
+function saidOfGroup(answer: SettledRemoveGroup['answer'], groupId: string): string {
+	if (answer.outcome === 'not-found') {
+		return `No run filed under this project names ${groupId}, so nothing was deleted. What the screen was showing had gone out of date, and it has been read again.`;
+	}
+	if (answer.outcome === 'refused') {
+		return `A lease is filing into one of ${groupId}'s runs right now, so nothing at all was touched — that run directory is what it is writing into. Wait for the lease to end, or force-release the device holding it first.`;
+	}
+	const went = `${runsClause(answer.runsRemoved)}, freeing ${formatBytes(answer.freedBytes)}`;
+	const emptied = emptiedClause(answer.keptTestsRemoved);
+	if (answer.outcome === 'deleted') {
+		return `${groupId} holds nothing any more: ${went}. Runs of the same tests that were not in it are still filed.${emptied}`;
+	}
+	if (answer.runsRemoved === 0) {
+		return `Not one run of ${groupId} could be taken. This host's log says what stopped it — put that right and ask again.`;
+	}
+	return `Only part of ${groupId} could be taken: ${went}. The rest may still be filed.${emptied} This host's log says what stopped it — put that right and ask again.`;
+}
+
+/** How many runs went, with the singular said properly: a group of one run is ordinary. */
+function runsClause(runsRemoved: number): string {
+	return `${runsRemoved} ${runsRemoved === 1 ? 'run went' : 'runs went'}`;
+}
+
+/**
+ * That a test the delete emptied went with its `Keep` mark, said only when one did.
+ *
+ * **This is where the group's line carries what its dialog has no `KEPT` row for.** There is no
+ * group-level flag (D33), and whether a test is emptied is not knowable until the runs have gone —
+ * so the count is news after the fact rather than a field before it, which is exactly what D35's
+ * amendment made the number for.
+ */
+function emptiedClause(removed: number): string {
+	if (removed === 0) {
+		return '';
+	}
+	return removed === 1
+		? ' One test it emptied was marked Keep, and that mark went with it.'
+		: ` ${removed} tests it emptied were marked Keep, and those marks went with them.`;
 }
 
 /**

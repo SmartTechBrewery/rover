@@ -405,6 +405,9 @@ describe('the generated ROVER.md', () => {
 		// the same key: the runs under a test name are what *other* agents' leases wrote, since
 		// `test_name` is deliberately not unique (D22).
 		'delete_archived_test',
+		// And the runs one testing group holds (D43, #277), which is the widest of the three: a
+		// group is several agents' runs held together by a caller's own string.
+		'delete_archived_group',
 		// The operator's `Keep` flag on the host's own archive (D33, #234). Not an agent's to
 		// decide at all — one that could untick a test would be clearing the exemption on
 		// somebody else's run — and its read would enumerate what every other agent has kept.

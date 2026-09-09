@@ -178,9 +178,21 @@ Design work lives in [`DESIGN.md`](./DESIGN.md); the brief that produced the fir
    nothing above the tree. **The screen survives deleting the address it is looking at** — on a
    settled delete the selection moves to the test's parent with `replace` and the level cache
    re-reads, so the breadcrumb and the tree land somewhere that exists; on a `refused` neither
-   happens, nothing having been touched. A **group's** card carries the tick and no `Remove` yet:
-   that is R51's phase 3, and §9 records it as a phase boundary rather than a gap. Still no polling
-   and still no refresh control.
+   happens, nothing having been touched. **And since #277 a group's card carries one too** (R51
+   phase 3, D43), which closed the phase boundary this item recorded — it read *a group's card
+   carries the tick and no `Remove` yet: that is R51's phase 3*, and it has landed.
+   `delete_archived_group` takes a project component and the group id a lease named and removes
+   **the runs whose group id matches and nothing else**: a test's runs that are in another group or
+   in none stay, and a test the deletion empties goes with its `Keep`. It reuses phase 2's control,
+   dialog, notice, re-read and navigation whole — what is the group's own is its figures (`RUNS` off
+   the grouping answer, read as *at least n runs* whenever that answer was truncated, because the
+   two walks are bounded differently and the delete can take more than the listing saw; `ON DISK`
+   off `measure_archive_groups`, and **no `KEPT` row**, there being no group-level flag) and its
+   words, which say that runs of the same tests outside the group stay. A
+   settled outcome re-reads **both** caches, the levels one and the grouping answer this view draws
+   its own levels from, and lands the selection on the project; a group whose runs are not listed
+   gets no control, which is the rule its tick already keeps. Still no polling and still no refresh
+   control.
 6. **Live lease state** — **done** (#113). A held card carries the `owner`, the `project`, the
    `test_name` and the grant instant, with a countdown to the expiry that ticks once a second and
    **goes back up** when activity renews the lease (`PROJECT.md` D8) — verified against a running
@@ -232,10 +244,11 @@ Design work lives in [`DESIGN.md`](./DESIGN.md); the brief that produced the fir
     `list_kept_tests` and `set_kept_tests` here and from `rover keep`. **A *named* delete is on this
     surface now and the untargeted prune still is not** (2026-09-09, #276):
     `delete_archived_test` joined `PANEL_METHODS` with the `Remove` control beside the `Keep` tick
-    (item 5, `PROJECT.md` D43, R51 phase 2), and what admits it where `sweep_archive` is refused is
-    D42's distinction rather than a softer reading of the same risk — one test by name, with the
-    runs and the bytes stated before it fires, against a policy deciding what goes across every
-    project on the host. The policy is
+    (item 5, `PROJECT.md` D43, R51 phase 2), `delete_archived_group` joined it with the same control
+    on a group's card (#277, R51 phase 3), and what admits both where `sweep_archive` is refused is
+    D42's distinction rather than a softer reading of the same risk — one test or one group by name,
+    with the runs and the bytes stated before it fires, against a policy deciding what goes across
+    every project on the host. The policy is
     `ROVER_ARTIFACTS_BUDGET_MB` and `ROVER_ARTIFACTS_MAX_AGE_DAYS` with `sweep_archive` behind them
     (D34–D36, #238) — and that row is deliberately **not** on `PANEL_METHODS`: it deletes an
     operator's runs permanently, so a browser is not where it belongs while D27's role model is

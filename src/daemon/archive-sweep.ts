@@ -778,9 +778,24 @@ function removalLine(address: readonly string[], bytes: number): string {
 	);
 }
 
-/** What the subtree at one address *is*, for a sentence a person reads. */
+/**
+ * What the subtree at one address *is*, for a sentence a person reads.
+ *
+ * **Three components is a `run`** and not the catch-all, because D34 makes a run directory the unit
+ * of deletion and every other line in this module names its level: `<project>/<test_name>/<run>` is
+ * the deepest thing an operator ever has deleted for them, and a group's delete goes through here
+ * once per matched run (`delete-archived-group.ts`). `address` stays as the fallback for anything
+ * deeper so the catch-all still exists — but it is now genuinely a fallback rather than the word
+ * the reachable case gets.
+ */
 function nounFor(address: readonly string[]): string {
-	return address.length === 1 ? 'project' : address.length === 2 ? 'test' : 'address';
+	if (address.length === 1) {
+		return 'project';
+	}
+	if (address.length === 2) {
+		return 'test';
+	}
+	return address.length === 3 ? 'run' : 'address';
 }
 
 /** One address as a person reads it, every component escaped — {@link deletionLine}'s form. */
@@ -897,8 +912,9 @@ function escapedAddressWarning(requested: string, resolved: string): string {
 /**
  * The subtree at one address the host would not remove. It stays, and the answer says so.
  *
- * Depth-keyed like {@link removalLine} and for its reason: *the archived project at …* and *the
- * archived test at …* are two different things an operator is being told did not go.
+ * Depth-keyed like {@link removalLine} and for its reason: *the archived project at …*, *the
+ * archived test at …* and *the archived run at …* are three different things an operator is being
+ * told did not go.
  */
 function unremovedSubtreeWarning(address: readonly string[], path: string, error: unknown): string {
 	return (

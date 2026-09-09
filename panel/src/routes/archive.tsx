@@ -21,7 +21,7 @@ import {
 	useGroupedArchiveSize,
 } from '@panel/archive/archive-size.js';
 import { useArchivedArtifact } from '@panel/archive/artifact.js';
-import type { DeleteArchivedTestAnswer, TestRemoval } from '@panel/archive/delete-archived-test.js';
+import type { GroupRemoval } from '@panel/archive/delete-archived-group.js';
 import { type ArchivedDeviceInfo, useArchivedDeviceInfo } from '@panel/archive/device-info.js';
 import { groupedSearch } from '@panel/archive/group-search.js';
 import { groupRowsAt, groupRunSerial, testNamesOfGroup } from '@panel/archive/group-tree.js';
@@ -55,10 +55,8 @@ import {
 import { DirectoryTree } from '@panel/components/archive/directory-tree.js';
 import { HeaderBadge } from '@panel/components/archive/header-badge.js';
 import { LevelContents } from '@panel/components/archive/level-contents.js';
-import {
-	RemoveTestNotice,
-	type SettledRemoveTest,
-} from '@panel/components/archive/remove-notice.js';
+import type { Removal, SettledRemoval } from '@panel/components/archive/remove-control.js';
+import { RemoveNotice, type SettledRemove } from '@panel/components/archive/remove-notice.js';
 import { RunPanel, type RunSerial } from '@panel/components/archive/run-panel.js';
 import { type ArchiveView, ArchiveViewToggle } from '@panel/components/archive/view-toggle.js';
 import type { BreadcrumbSegment } from '@panel/components/layout/breadcrumb.js';
@@ -146,7 +144,7 @@ export function ArchiveScreen({ view }: { readonly view: ArchiveView }) {
 	 * draws down to a run cost exactly one round trip — and `view === 'groups'` is what keeps a
 	 * reader who never opens it from paying for a walk of the archive they will not look at.
 	 */
-	const groups = useArchiveGroups(view === 'groups');
+	const { groups, reread: rereadGroups } = useArchiveGroups(view === 'groups');
 	/*
 	 * **Which branches are open, held here rather than in the tree card** (#198). It is state for the
 	 * reason the search text is — a reload and a shared link land on the *address* and not on somebody
@@ -186,12 +184,13 @@ export function ArchiveScreen({ view }: { readonly view: ArchiveView }) {
 		levelsWanted(view, selected, known, groups, branches),
 	);
 	/*
-	 * **What a `Remove` settled, said above the content area** (#276, D43). It is state of this
-	 * screen and not of a card, because three of the four outcomes take the card the control was on
-	 * out from under the answer: a deleted test has no address, and a run inside it has none either.
-	 * `remove-notice.tsx` is the region, and it outlives whatever it was about.
+	 * **What a `Remove` settled, said above the content area** (#276, #277, D43). It is state of
+	 * this screen and not of a card, because three of the four outcomes take the card the control was
+	 * on out from under the answer: a deleted test has no address, a run inside it has none either,
+	 * and a group whose runs went has none. `remove-notice.tsx` is the region, and it outlives
+	 * whatever it was about — of either scope, which is why what is held here says which.
 	 */
-	const [removed, setRemoved] = useState<SettledRemoveTest | undefined>(undefined);
+	const [removed, setRemoved] = useState<SettledRemove | undefined>(undefined);
 	/*
 	 * **The panel's first programmatic navigation.** Every other move on this screen is a `Link` in
 	 * the tree, because the address *is* the selection; this one is the screen putting the reader
@@ -321,48 +320,58 @@ export function ArchiveScreen({ view }: { readonly view: ArchiveView }) {
 				: measured;
 
 	/*
-	 * **What a settled delete does to the screen** (#276, §9's *the screen re-reads rather than
-	 * assuming*).
+	 * **What a settled delete does to the screen** (#276, #277, §9's *the screen re-reads rather
+	 * than assuming*).
 	 *
 	 * All four outcomes are reported, and three of them move and re-read. `refused` is the one that
 	 * does not: a live lease means nothing at all was touched, so what is filed is exactly what the
-	 * screen already shows, and both a navigation and a second `list_archive` would be the panel
-	 * acting on a change that did not happen.
+	 * screen already shows, and both a navigation and a second read would be the panel acting on a
+	 * change that did not happen.
 	 *
 	 * The other three each changed something or proved the screen wrong, and all three mean **the
-	 * address the reader is on may not exist** — a test's card *is* that test, and a run's card is
-	 * inside it. So the selection moves onto the test's **parent** (the project in the `All` view,
-	 * the group in the groups view) with `replace`, so Back does not return to an address the host
-	 * now refuses; and every level still drawn is asked for again, because the parent listing named
-	 * the test as a row and editing that array here would draw a listing nothing on the host ever
-	 * answered with.
+	 * address the reader is on may not exist** — a test's card *is* that test, a run's card is inside
+	 * it, and a group's card *is* that group. So the selection moves onto the removal's own parent
+	 * with `replace`, so Back does not return to an address the host now refuses; and everything the
+	 * screen still draws is asked for again, because a listing that named what went as a row is not
+	 * the panel's to edit.
+	 *
+	 * **A group re-reads *both* caches, and that is not belt-and-braces.** The levels cache is what
+	 * every depth from a run downwards is drawn from, and the **grouping answer** is what the groups
+	 * view draws its own three levels from — so a group whose runs went is stale in the second one,
+	 * and a test the delete emptied is stale in both.
 	 *
 	 * **The request that reached nothing settles nothing, so it never arrives here.** It stays in
 	 * the dialog, which stays open with the control usable again, and the panel reports no deletion
 	 * it did not get (§7's fourth case).
 	 */
-	const onRemoveSettled = (answer: DeleteArchivedTestAnswer, removal: TestRemoval): void => {
-		if (answer.outcome === 'unanswered' || answer.outcome === 'access-ended') {
-			return;
-		}
-		setRemoved({ answer, testName: removal.testName });
-		if (answer.outcome === 'refused') {
+	const onRemoveSettled = (settled: SettledRemoval): void => {
+		setRemoved(
+			settled.kind === 'test'
+				? { scope: 'test', answer: settled.answer, testName: settled.removal.testName }
+				: { scope: 'group', answer: settled.answer, groupId: settled.removal.groupId },
+		);
+		if (settled.answer.outcome === 'refused') {
 			return;
 		}
 		/*
-		 * The parent of the **test**, not of the selection: from a run's card the run's own parent is
-		 * the test that just went. `splatFromComponents` joins and the router does the encoding
-		 * (`archive-path.ts`), and the slice is this view's own offset — one component in the groups
-		 * view, none in the `All` view — so the two views land a level up by the same arithmetic
-		 * every other depth on this screen uses.
+		 * The parent of **what went**, not of the selection: from a run's card the run's own parent
+		 * is the test that just went, and a group's parent is the project it is under.
+		 * `splatFromComponents` joins and the router does the encoding (`archive-path.ts`), and the
+		 * depth is this view's own offset — one component in the groups view, none in the `All` view
+		 * — so both views land a level up by the same arithmetic every other depth here uses. A
+		 * group has no `OFFSET` term because it exists in one view only and its depth is already
+		 * counted in that view's address.
 		 */
-		const parent = splatFromComponents(selected.slice(0, TEST_NAME_DEPTH + OFFSET[view] - 1));
+		const depth = settled.kind === 'group' ? GROUP_DEPTH : TEST_NAME_DEPTH + OFFSET[view];
 		navigate({
 			to: view === 'groups' ? '/groups/$' : '/archive/$',
-			params: { _splat: parent },
+			params: { _splat: splatFromComponents(selected.slice(0, depth - 1)) },
 			replace: true,
 		});
 		reread();
+		if (settled.kind === 'group') {
+			rereadGroups();
+		}
 	};
 
 	return (
@@ -393,7 +402,7 @@ export function ArchiveScreen({ view }: { readonly view: ArchiveView }) {
 			 * address the line is about may be gone — three of the four outcomes move the selection —
 			 * so a line inside either column would go with the thing it was about.
 			 */}
-			<RemoveTestNotice onDismiss={() => setRemoved(undefined)} settled={removed} />
+			<RemoveNotice onDismiss={() => setRemoved(undefined)} settled={removed} />
 			<Content
 				artifact={artifact}
 				onRemoveSettled={onRemoveSettled}
@@ -475,7 +484,7 @@ function Content({
 	/** Which tests the reader has ticked `Keep` on — {@link usePinnedTests}. */
 	readonly pinned: PinnedTests;
 	/** What a settled `Remove` is reported to — the screen's own ({@link ArchiveScreen}). */
-	readonly onRemoveSettled: (answer: DeleteArchivedTestAnswer, removal: TestRemoval) => void;
+	readonly onRemoveSettled: (settled: SettledRemoval) => void;
 }) {
 	if (selected.length < depthsOf(view).below) {
 		if (root === 'loading') {
@@ -580,7 +589,7 @@ function Preview({
 	/** Which tests the reader has ticked `Keep` on — {@link usePinnedTests}. */
 	readonly pinned: PinnedTests;
 	/** What a settled `Remove` is reported to — the screen's own ({@link ArchiveScreen}). */
-	readonly onRemoveSettled: (answer: DeleteArchivedTestAnswer, removal: TestRemoval) => void;
+	readonly onRemoveSettled: (settled: SettledRemoval) => void;
 }) {
 	const depths = depthsOf(view);
 	const address = view === 'groups' ? archiveAddressOf(selected) : selected;
@@ -590,7 +599,7 @@ function Preview({
 	 * wherever this card is not about a test. Asked once here and handed to whichever of the two
 	 * cards is drawn, because both are about the same test at two depths.
 	 */
-	const removal = levelRemoval(view, selected, address, levels, pinned);
+	const removal = levelRemoval(view, selected, address, levels, groups, pinned);
 
 	if (selected.length >= depths.below) {
 		if (open === 'artifact') {
@@ -626,9 +635,13 @@ function Preview({
 				 * **The same test the tick above is about, and never the run** (D43). A run's card
 				 * carries a control that deletes the whole test, which is why the confirmation opened
 				 * from here says so in as many words — {@link levelRemoval} is what sets `card: 'run'`.
+				 *
+				 * The narrowing is a type's and not a branch's: at a run's depth {@link levelRemoval}
+				 * only ever answers a test's removal, and saying so here is what keeps a group's out
+				 * of a card that has no group in its address.
 				 */
 				onRemoveSettled={onRemoveSettled}
-				removal={removal ?? undefined}
+				removal={removal?.kind === 'test' ? removal : undefined}
 				run={address}
 				serial={serial}
 			/>
@@ -655,11 +668,11 @@ function Preview({
 			pin={pin?.state}
 			pinScope={pin?.scope}
 			/*
-			 * **At a test name and nowhere else this card draws** — it also draws the root, a project,
-			 * a group and every directory below the `<serial>`, none of which is one test.
-			 * {@link levelRemoval} is the whole of that decision, exactly as {@link levelPin} is the
-			 * tick's — and a group's card deliberately carries the tick without the control in this
-			 * phase (§9, R51 phase 3).
+			 * **At a test name and at a group, and nowhere else this card draws** — it also draws the
+			 * root, a project and every directory below the `<serial>`, none of which is one test or
+			 * one group. {@link levelRemoval} is the whole of that decision, exactly as
+			 * {@link levelPin} is the tick's — and since #277 the two are on the same set of cards,
+			 * which is the phase boundary #276 recorded now closed (§9, R51 phase 3).
 			 */
 			onRemoveSettled={onRemoveSettled}
 			removal={removal ?? undefined}
@@ -844,7 +857,7 @@ function levelPin(
 
 /**
  * What the level card's or the run card's `Remove` control would delete, or `null` where that card
- * is not about one test (D43, #276).
+ * is about neither one test nor one group (D43, #276, #277).
  *
  * Here beside {@link levelPin} and for its reason — the one place that already owns the depth
  * arithmetic, so no card works out whether it should have a control (`force-release-control.tsx`'s
@@ -852,14 +865,15 @@ function levelPin(
  *
  * | the level | the control |
  * | --- | --- |
- * | a test name, in either view | `{ project, testName, … }`, from the address |
+ * | a test name, in either view | `{ kind: 'test', project, testName, … }`, from the address |
  * | a run, in either view | the same, from `address[0]`/`address[1]`, which a run's address always has |
- * | the root, a project, a group, a directory below the `<serial>` | none |
+ * | a group, in the groups view | `{ kind: 'group', project, groupId, runs, runsTruncated }` — {@link groupRemoval} |
+ * | the root, a project, a directory below the `<serial>` | none |
  *
- * **A group's card carries none in this phase**, and that is a phase boundary rather than a gap
- * (`docs/DESIGN.md` §9, R51): the tick is there because one press writes one array, and a group's
- * `Remove` is several tests — which is phase 3's, not this one's. So the tick and the control are
- * deliberately not on the same set of cards yet.
+ * **A group's card carries one since #277**, which closed the phase boundary #276 recorded
+ * (`docs/DESIGN.md` §9, R51): the tick was there first because one press writes one array, and the
+ * control needed the surgical run-by-run walk D43 settled. So the tick and the control are now on
+ * the same set of cards.
  *
  * **`runs` is the run count off the *archive's* own listing of the project**, which is where the
  * host's `childCount` for the test lives — and `null` wherever the screen has no such listing.
@@ -876,12 +890,16 @@ function levelRemoval(
 	selected: readonly string[],
 	address: readonly string[],
 	levels: ArchiveLevels,
+	groups: ArchiveGroups,
 	pinned: PinnedTests,
-): TestRemoval | null {
-	// A group's own depth in the groups view is two components, exactly as a test name's is in the
-	// `All` view — so the depth alone does not say which of the two a card is about.
+): Removal | null {
+	/*
+	 * **A group's own depth in the groups view is two components, exactly as a test name's is in the
+	 * `All` view** — so the depth alone does not say which of the two a card is about, and the view
+	 * is what decides. This is also the reason `Removal` carries a `kind` at all.
+	 */
 	if (view === 'groups' && selected.length === GROUP_DEPTH) {
-		return null;
+		return groupRemoval(groups, selected);
 	}
 	const depths = depthsOf(view);
 	const card =
@@ -892,11 +910,57 @@ function levelRemoval(
 	const project = address[0] ?? '';
 	const testName = address[1] ?? '';
 	return {
+		kind: 'test',
 		project,
 		testName,
 		runs: runsUnder(levels, [project, testName]),
 		kept: pinned.stateFor([project, testName])?.checked ?? null,
 		card,
+	};
+}
+
+/**
+ * What the `Remove` on a **group's** card would delete, or `null` when this view cannot say what
+ * that is (D43, R51 phase 3, #277).
+ *
+ * **A group whose runs are not listed gets no control**, which is the rule its tick already keeps
+ * ({@link levelPin}): the walk is still out, the answer is unreadable, or the group holds nothing
+ * this host can see. There is nothing to delete, and a control over an unlisted group would be a
+ * press about runs nobody has seen.
+ *
+ * **`runs` is the total off the grouping answer** — the sum over the group's test-name rows, each of
+ * which counts the runs of that test *in this group* (`group-tree.ts`, `testNamesOfGroup`). That is
+ * the same answer the `ON DISK` badge at this depth measures, so the two figures in the confirmation
+ * are two questions about one set rather than two ideas of what the group is. It costs no request,
+ * the view holding this answer for the tree it draws already.
+ *
+ * **And it is a number rather than `null`**, which is where it parts company with a test's `runs`: a
+ * test's count comes off a `list_archive` listing the groups view does not have, while a group's is
+ * the very answer that decided the control exists.
+ *
+ * **But it is only a lower bound when that answer was truncated**, and `runsTruncated` carries which
+ * (#284 review). The grouping walk is bounded per group and over the whole archive and *drops* runs
+ * at either bound; the delete's walk is bounded per project, so it reaches runs this sum never saw
+ * and takes them. The control is not withheld on that ground — a truncated answer still lists the
+ * group and the delete is still correct — the confirmation just has to say *at least*, exactly as
+ * the `ON DISK` row beside it already does off the same flag.
+ */
+function groupRemoval(groups: ArchiveGroups, selected: readonly string[]): GroupRemoval | null {
+	if (groups.status !== 'listed') {
+		return null;
+	}
+	const project = selected[0] ?? '';
+	const groupId = selected[1] ?? '';
+	const tests = testNamesOfGroup(groups.groups, project, groupId);
+	if (tests.length === 0) {
+		return null;
+	}
+	return {
+		kind: 'group',
+		project,
+		groupId,
+		runs: tests.reduce((total, test) => total + test.runs, 0),
+		runsTruncated: groups.truncated,
 	};
 }
 
