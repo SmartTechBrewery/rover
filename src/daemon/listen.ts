@@ -34,6 +34,7 @@ import { createIpcServer } from '../ipc/server.js';
 import { type ArtifactArchive, createArtifactArchive } from './archive.js';
 import { type ArchiveFileReader, createArchiveFileReader } from './archive-file.js';
 import type { RetentionPolicy } from './archive-retention.js';
+import { createArchiveSizeHandler } from './archive-size.js';
 import { type ArchiveSweeper, createArchiveSweeper, sweepAfterLease } from './archive-sweep.js';
 import { type HttpListener, startHttpListener } from './http-listen.js';
 import { createDeviceInventory, type DeviceInventory } from './inventory.js';
@@ -286,6 +287,12 @@ export type StartResult = RunningDaemon | DaemonAlreadyRunning;
  * All three read the one `artifactsRoot` below, so none can be pointed at a different tree from
  * the writer.
  *
+ * The **fourth** method that reads the archive is the one that answers *how much* rather than
+ * *what*: `./archive-size.ts` (R49, #259) measures one address, walking a directory over the very
+ * primitive `./archive-sweep.ts` uses so a badge and the sweep's own log cannot hold two
+ * differently-bounded ideas of what the archive weighs. It reads the same `artifactsRoot` as the
+ * other three, so the measure and the listing cannot be pointed at two trees.
+ *
  * It also answers **what this host is configured to do** around a lease: `./list-projects.ts`
  * (R39) reads the projects root and says which projects are registered, which is the read half of
  * D31 and the only row that is about host-operator configuration. Nothing on this surface writes
@@ -339,6 +346,7 @@ export function createDaemonHandlers(
 		...createListArchiveHandler({ root: artifactsRoot }),
 		...createSearchArchiveHandler({ root: artifactsRoot }),
 		...createListArchiveGroupsHandler({ root: artifactsRoot }),
+		...createArchiveSizeHandler({ root: artifactsRoot }),
 		...createListProjectsHandler({ root: projectsRoot }),
 		...createKeptTestsHandlers({ path: keptTestsPath }),
 		...createSweepArchiveHandler({ sweeper }),

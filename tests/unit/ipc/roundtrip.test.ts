@@ -41,6 +41,9 @@ function statusHandlers(overrides: Partial<IpcHandlers> = {}): IpcHandlers {
 		list_archive: () => ({ outcome: 'listed', entries: [] }),
 		search_archive: () => ({ outcome: 'searched', matches: [], truncated: false }),
 		list_archive_groups: () => ({ outcome: 'listed', groups: [], truncated: false }),
+		// And the measurement of one of its addresses, whose cheapest real answer is `missing`
+		// for the same reason: a host with no archive root has nothing at any address.
+		measure_archive: () => ({ outcome: 'missing' }),
 		// And the projects row, for the same reason: these suites have no projects root either,
 		// and `missing` is the honest answer of a host that has none.
 		list_projects: () => ({ outcome: 'missing' }),

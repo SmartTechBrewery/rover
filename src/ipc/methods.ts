@@ -793,6 +793,65 @@ export const ListArchiveResultSchema = z.discriminatedUnion('outcome', [
 export type ListArchiveResult = z.infer<typeof ListArchiveResultSchema>;
 
 /**
+ * `.strict()` and one key, {@link ListArchiveParamsSchema}'s own shape and its own reason — the
+ * address is the components a previous answer returned, and `[]` is the root.
+ *
+ * **There is deliberately no second key.** No `depth`, no `limit`, no `refresh`: the bound on the
+ * walk is the **host's** ({@link MAX_ARCHIVE_PATH_DEPTH}, `src/daemon/archive-size.ts`) for
+ * `search_archive`'s reason, and what the caller gets instead is `truncated`, so a bounded answer
+ * says it is bounded. A caller-settable bound is precisely the parameter D24 refused.
+ */
+export const MeasureArchiveParamsSchema = z
+	.object({
+		/** The level to measure, as the components a previous answer returned. `[]` is the root. */
+		path: z.array(ArchivePathSegmentSchema).max(MAX_ARCHIVE_PATH_DEPTH),
+	})
+	.strict();
+export type MeasureArchiveParams = z.infer<typeof MeasureArchiveParamsSchema>;
+
+/**
+ * How much disk one address takes — the archive's fourth read, and the one that answers *how
+ * much* rather than *what* (R49).
+ *
+ * Three answers, `list_archive`'s own three so the archive keeps one vocabulary across all of its
+ * reads: *nothing is filed here* and *the host cannot say* must never render alike, which is the
+ * distinction {@link ListArchiveResultSchema} is built around. And **no `message` field anywhere**
+ * for that schema's stated reason: a `message: string` is a field a host path or an `errno` fits
+ * in, and `src/ipc/server.ts` could not catch one put there (D19). The diagnosis goes to the
+ * host's own log, where the path already belongs.
+ *
+ * `bytes: 0` is a true claim about an empty directory and is never what a failed `stat` answers —
+ * a size the host could not take is `unreadable`, not a zero.
+ *
+ * **`truncated` has exactly one meaning: at least one directory that exists was not fully
+ * examined**, so `bytes` is a lower bound. `search_archive`'s own sentence, because it is the same
+ * fact: the depth bound does it, and so does a level the host could not read. A file that vanished
+ * between the `readdir` and the `stat` does **not** — the archive is written to while it is being
+ * read, which is the line `sizeOfTree` already draws between what it warns about and what it
+ * passes over.
+ *
+ * **There is still no index.** The walk *is* the measurement — no cached total, no catalogue and
+ * no memo of a previous answer (D6, D23, D24), which is the half of D24 that stands and what makes
+ * the bound and this flag necessary rather than optional.
+ */
+export const MeasureArchiveResultSchema = z.discriminatedUnion('outcome', [
+	z
+		.object({
+			outcome: z.literal('measured'),
+			/** The bytes of every regular file under the address, following no link. */
+			bytes: z.number().int().nonnegative(),
+			/** At least one directory that exists was not fully examined — `bytes` is a lower bound. */
+			truncated: z.boolean(),
+		})
+		.strict(),
+	/** Nothing is at that path. Never conflated with either of the other two. */
+	z.object({ outcome: z.literal('missing') }).strict(),
+	/** It is there and the host **cannot size it** — no permission, or not a file or directory. */
+	z.object({ outcome: z.literal('unreadable') }).strict(),
+]);
+export type MeasureArchiveResult = z.infer<typeof MeasureArchiveResultSchema>;
+
+/**
  * The longest needle {@link SearchArchiveParamsSchema} accepts.
  *
  * Mirrors {@link MAX_ARCHIVE_PATH_SEGMENT_LENGTH} because a component is what is matched: a
@@ -1451,6 +1510,21 @@ export type SweepArchiveResult = z.infer<typeof SweepArchiveResultSchema>;
  * and deliberately **not** an MCP tool, for `search_archive`'s reason: one call would hand an agent
  * every other agent's run names on the host.
  *
+ * **`measure_archive` is the fourth method that reads the archive, and the one that answers *how
+ * much* rather than *what*** (R49, #259). It takes one address — the same component array
+ * `list_archive` takes, `[]` being the root — and answers the bytes under it with a flag saying
+ * whether the walk that produced them was cut short. A directory is walked, a regular file answers
+ * its own size, and anything else is `unreadable`; a size the host could not take is never a `0`,
+ * because `0` is a true claim about an empty directory. The walk is `src/daemon/archive-sweep.ts`'s
+ * own `sizeOfTree`, moved to `src/daemon/archive-size.ts` and shared rather than copied, so the
+ * badge on a screen and the sweep's own log can never hold two differently-bounded ideas of what
+ * the archive weighs. **There is still no index** — the walk *is* the measurement (D6, D24), which
+ * is why the host's depth bound is the bound and why a bounded answer says so. No host path and no
+ * `errno` is on any answer, and there is no field either would fit in (D19). It is on
+ * `PANEL_METHODS` (D29) and deliberately **not** an MCP tool, for `list_archive`'s reason: how much
+ * disk an operator's archive takes is the operator's browser's question, and an agent that could
+ * ask it could size every other agent's project on the host.
+ *
  * **`list_projects` is the read side of D31**, and the one row that answers what the *host
  * operator* configured rather than what is attached to the host or what a run left behind. It
  * takes nothing and answers every registration under the projects root — the identifier, the
@@ -1553,6 +1627,7 @@ export const IPC_METHODS = {
 		params: ListArchiveGroupsParamsSchema,
 		result: ListArchiveGroupsResultSchema,
 	},
+	measure_archive: { params: MeasureArchiveParamsSchema, result: MeasureArchiveResultSchema },
 	list_projects: { params: ListProjectsParamsSchema, result: ListProjectsResultSchema },
 	list_kept_tests: { params: ListKeptTestsParamsSchema, result: ListKeptTestsResultSchema },
 	set_kept_tests: { params: SetKeptTestsParamsSchema, result: SetKeptTestsResultSchema },

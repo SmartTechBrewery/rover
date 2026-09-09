@@ -138,6 +138,7 @@ const NOT_YET_EXPOSED = [
 	'list_archive',
 	'search_archive',
 	'list_archive_groups',
+	'measure_archive',
 	'list_projects',
 	'list_kept_tests',
 	'set_kept_tests',
