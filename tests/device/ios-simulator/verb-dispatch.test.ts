@@ -33,18 +33,29 @@ import {
  *   crosses the boundary as bytes. What only a device can prove is that the file is *finished*
  *   when it arrives — `simctl` exits 0 on a recording that produced nothing at all, so neither the
  *   exit code nor the length separates the two.
- * - **the honest refusal**, which is what `ios-simulator` is the repository's first registered
- *   example of. `set_wifi` and `set_airplane_mode` come back as `missing-capability` naming
- *   `canControlNetwork` — *not* as a cosmetic status bar, which `simctl status_bar override
- *   --wifiMode failed` would happily draw (`ai/RULES.md` §2,
- *   `src/backends/ios-simulator/capabilities.ts`). Every earlier assertion of that shape in this
- *   repository was made against a synthetic backend; this one is against a device.
+ * - **the honest refusals**, which is what `ios-simulator` is the repository's first registered
+ *   example of, and there are now two kinds. `set_wifi` and `set_airplane_mode` come back as
+ *   `missing-capability` naming `canControlNetwork` — *not* as a cosmetic status bar, which
+ *   `simctl status_bar override --wifiMode failed` would happily draw (`ai/RULES.md` §2,
+ *   `src/backends/ios-simulator/capabilities.ts`). `press_key` with `back` or `recents` comes back
+ *   as **`unsupported-key`** naming the key, from a backend whose `canInput` is `true` and whose
+ *   other three input verbs work. Every earlier assertion of either shape in this repository was
+ *   made against a synthetic backend; these are against a device.
  *
  * Gated on `ROVER_TEST_SIMULATOR` (`tests/device/setup.ts`), so a host with no booted simulator
- * **skips rather than fails** (ai/TESTING.md). The recording cases carry a second gate,
- * `ROVER_TEST_FRAME_EXTRACTION`: `record_video` and `stop_recording` answer with the normalised
- * recording *and* the frames sliced out of it or with neither, so there is no half of either left
- * to check on a host with no decoder — and the run says so loudly rather than passing in silence.
+ * **skips rather than fails** (ai/TESTING.md). Two cases carry a second gate, because one Xcode
+ * is not the whole of what this backend needs:
+ *
+ * - `ROVER_TEST_FRAME_EXTRACTION` on the recording cases: `record_video` and `stop_recording`
+ *   answer with the normalised recording *and* the frames sliced out of it or with neither, so
+ *   there is no half of either left to check on a host with no decoder.
+ * - `ROVER_TEST_IDB` on the keys this platform answers: a press goes out over a supervised
+ *   `idb_companion` and the post-state comes back over the same one, so a host with Xcode but
+ *   without idb's release tarball has nothing to send it through. The **refusals** are
+ *   deliberately not gated on it — `back` and `recents` come back before any round trip, and
+ *   they are worth asserting exactly on the host that cannot make one.
+ *
+ * Either way the run says so loudly rather than passing in silence.
  *
  * **It boots nothing, shuts nothing down, installs nothing and launches nothing.** A recording of
  * a screen nobody touched is a true answer about the device and is all this suite asks for; the
@@ -208,6 +219,80 @@ describe.skipIf(!process.env.ROVER_TEST_SIMULATOR)(
 				},
 			});
 		});
+
+		/**
+		 * **The first per-key refusal in this repository that comes from a device rather than from a
+		 * synthetic backend**, and the second kind of honest refusal this backend is the example of.
+		 *
+		 * `canInput` is `true` and this device really does take input — tapping, swiping and typing
+		 * all work against it (`./input.test.ts`) — so a caller asking for a key it has no
+		 * equivalent for must be told **which key**, not that the device takes no input. That is
+		 * `unsupported-key` rather than `missing-capability` (#215,
+		 * `src/backends/ios-simulator/input.ts` carries what each key was measured doing), and the
+		 * difference matters to whoever reads it: one says stop asking for that key, the other says
+		 * find another device.
+		 *
+		 * Neither refusal costs a round trip to the device, which is why this case takes a lease and
+		 * asks nothing else of the simulator.
+		 */
+		it.each([
+			'back',
+			'recents',
+		] as const)('refuses the %s key by name rather than sending a gesture that is not it', async (key) => {
+			const client = await startHost();
+			const device = await freeSimulator(client);
+			const leaseId = await lease(client, device.serial);
+
+			const refused = await client.request('press_key', { leaseId, key });
+
+			expect(refused).toMatchObject({
+				outcome: 'failed',
+				failure: { kind: 'unsupported-key', serial: device.serial, key },
+			});
+		});
+
+		/**
+		 * And the two keys this platform *does* answer, over the same wire — because a suite that
+		 * only asserted the refusals would be green on a backend that refused all four.
+		 *
+		 * `home` is asserted through the verb's own post-state rather than by a second read of our
+		 * own: `press_key` answers with the screen after itself (D12(c)), which on this backend is a
+		 * real `read_screen`. `wake` is the idempotent one and this device is awake, so what it does
+		 * here is nothing at all — which is the answer, and the case is that asking for it is not an
+		 * error.
+		 *
+		 * **Both rows assert `after.kind === 'screen'`, and that is what makes the `wake` row worth
+		 * running.** `captureAfterState` never throws (`src/verbs/result.ts`), so a post-state read
+		 * that failed still arrives inside an `outcome: 'ok'` answer — and `wake` on a lit screen
+		 * sends nothing, so `outcome` alone would be green on a host where the companion never
+		 * started. The post-state is the only part of this row that has to reach the device.
+		 *
+		 * Gated on `ROVER_TEST_IDB` for that same reason. Whether the screen is *blanked* first, and
+		 * what the second `wake` must then not do, is `./input.test.ts`'s case — this suite drives
+		 * nothing on the device.
+		 */
+		it.skipIf(!process.env.ROVER_TEST_IDB).each(['home', 'wake'] as const)(
+			'answers the %s key it has an equivalent for',
+			async (key) => {
+				const client = await startHost();
+				const device = await freeSimulator(client);
+				const leaseId = await lease(client, device.serial);
+
+				const pressed = await client.request('press_key', { leaseId, key });
+
+				expect(pressed).toMatchObject({
+					outcome: 'ok',
+					result: { verb: 'press_key', device: { serial: device.serial } },
+				});
+				if (pressed.outcome !== 'ok') {
+					throw new Error('the assertion above should have caught this');
+				}
+				// Separate from the `toMatchObject` above rather than folded into it: a `failed`
+				// post-state carries the reason, and putting it in the assertion message is the
+				// difference between "the press did nothing" and "no companion".
+				expect(pressed.result.after.kind, JSON.stringify(pressed.result.after)).toBe('screen');
+			},
+		);
 
 		/**
 		 * The recording over the wire. What only a device can prove is that the file is finished
