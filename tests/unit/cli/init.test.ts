@@ -381,10 +381,16 @@ describe('the generated ROVER.md', () => {
 		// And that reason again: one call answers which runs share a group and which of their
 		// artifacts share a label, across every project on the host (R41, #178).
 		'list_archive_groups',
-		// The fourth read of that archive, on `list_archive`'s terms (R49, #259): how much disk
+		// The fourth read of that archive, and the first that answers a number, on `list_archive`'s
+		// terms (R49, #259): how much disk
 		// the operator's archive takes is the operator's question, and an agent that could ask it
 		// could size every other agent's project on the host.
 		'measure_archive',
+		// And the fifth read, which is that same question over the *grouped* runs of everything, of
+		// one project or of one group (R49, #262) — the badge on the operator's own groups view. An
+		// agent already knows its own group, having chosen it, and one call here would size every
+		// other agent's grouped work on the host.
+		'measure_archive_groups',
 		// Not MCP tools: neither has a form that carries no bytes (R19 phase 3, #104).
 		'push_file',
 		'pull_file',

@@ -1032,7 +1032,7 @@ about an empty directory. The toggle is the one thing in that row that is always
 **last** so a badge appearing moves neither it nor the count a reader is reading — which is why the
 size badge, the later arrival, leads on the left.
 
-### The size badge — settled here, not designed (#259, #261)
+### The size badge — settled here, not designed (#259, #261, #262)
 
 **The second badge says how much disk the selection takes, as a full capitalised sentence naming its
 own scope**: `All tests take 7.7 MB on disk` at the root, down to `This file takes 411 KB on disk`.
@@ -1047,8 +1047,10 @@ replaced it has never drawn either — a tree row carries a name and nothing els
 not that measure coming back into a row: it is one fact about one address, in the row where a fact
 about the whole selection belongs.
 
-**Nine rows, and they are the whole of what it says.** The groups view's own scopes are phase 3's
-and are deliberately not here (above).
+**Nine rows, and they are the whole of what it says** — for the `All` view. The groups view's own
+three scopes are the table below it, added in place by #262; every depth of that view at a group and
+below reuses a row of *this* table, because the address there is the archive's own once the group id
+is dropped.
 
 | the context | the badge |
 | --- | --- |
@@ -1061,6 +1063,23 @@ and are deliberately not here (above).
 | any of those six, from a walk that was cut short | `… takes **at least** 7.7 MB on disk` |
 | any of those six, where the host could not take the size | `The host could not measure what this test takes on disk` |
 | any of those six, while the answer is still out, or where nothing is at the address | **no badge** |
+
+**And three rows for the groups view's own depths** (#262). Each describes the runs that named a
+`group_id` and therefore a **subset** of the archive, which is why none of the three may say *all*:
+
+| the context, in the groups view | the badge |
+| --- | --- |
+| the root | `Grouped tests take 7.7 MB on disk` |
+| a project | `Grouped tests in this project take 7.7 MB on disk` |
+| a group | `Tests in this group take 7.7 MB on disk` |
+| a test name, a run, the `<serial>`, a folder, an artifact | the table above, unchanged |
+
+**The first two wordings are decided here and are open to correction.** They are the two cells the
+operator did not specify. *Grouped tests* and *Grouped tests in this project* say what they say
+because this view lists only the runs that named a `group_id`: `All tests` would be a claim about
+the whole archive made over a subset of it, and *This project* would be the `All` view's own
+sentence about a figure that is not the `All` view's number. The three sentence *forms* are the
+table above's, so the truncated and unmeasurable variants of all three come for free.
 
 **The truncation rule: a bounded walk renders a lower bound or nothing, and never a plain figure.**
 `truncated` on the host's answer means at least one directory that exists was not fully examined, so
@@ -1106,6 +1125,13 @@ as a reader browsed and was wrong at every point before the last — and an **ar
 request at all, because `list_archive` already carries a `sizeBytes` for every file it lists and the
 parent level is the thing that classified the address in the first place.
 
+**That holds for a group too, and it is the same rule rather than an exception** (#262). A group's
+runs are on the grouping answer and summing them would be one `reduce` away — and it is exactly the
+pre-walk *lazily, one `readdir` at a time* exists to prevent, with no sizes on that answer to reduce
+in any case. So a group's badge is **one** call to a second host method, `measure_archive_groups`,
+which walks the runs that named a `group_id` at one of three scopes; the panel keeps one cache
+across both methods, so navigating from a group down to a run and back again re-asks for neither.
+
 ### The two views — settled here, not designed (#165, #181)
 
 The screen has **two views**, and everything else in §9 describes the first of them:
@@ -1142,14 +1168,16 @@ same rule that makes it absent at a run, with its reason rewritten now that the 
 (#181; *the badge* became *the count badge* in place when a second one landed, #261). That view is
 one **bounded** walk of the archive, so what it holds at any level is what the host could examine
 rather than what is filed; a badge over it would read as a count of a set and
-could be short without saying so. **The size badge is absent there too, and that is a deferral
-rather than a rule** (#261): #259 lands in three phases, the `All` view's badge is the second of
-them and the groups view's is the third, so what that arrangement's scopes are called — a *group*
-is not a directory and has no address to measure — is settled with its own content in front of
-whoever settles it. Where the shortfall matters it is said where the reader is looking
-at the rows it is short of — one line above them in the tree — and not as a number in the header
-that would need the same caveat beside it. The toggle itself is always there, so the header row's
-shape is still the same in every state.
+could be short without saying so. Where the shortfall matters it is said where the reader is
+looking at the rows it is short of — one line above them in the tree — and not as a number in the
+header that would need the same caveat beside it. **The size badge *is* drawn there, at every
+depth** (corrected in place, #262 — this said *absent there too, and that is a deferral rather than
+a rule*, and the deferral has been settled). The two are not inconsistent, and the difference is
+the whole reason one can be drawn where the other cannot: a bounded walk **cannot** be honestly
+rendered as a count of a set, and it **can** be rendered as a lower bound, which is exactly what
+`truncated` is for. A grouped total whose walk hit a bound says *at least*; a count that was short
+would have nothing to say it with. The toggle itself is always there, so the header row's shape is
+still the same in every state.
 
 **And the choice is in the URL, which is the question #165 deliberately left open.** It recorded
 that the groups arrangement had *no addresses of its own yet … Whoever builds the arrangement
@@ -2274,9 +2302,10 @@ tests use.
 written while a lease is live and nothing is added once it ends, and this screen makes no claim to
 show a run appearing. A level is fetched when a navigation or a click first draws it and cached for
 the life of the screen, the grouping walk is fetched **once**, only in the view that reads it, and
-**the size answer is fetched once per scope on exactly those terms** (#261) — one `measure_archive`
-when a navigation first draws that badge, kept for the life of the screen, so navigating back to a
-scope costs nothing and nothing re-measures behind the reader. This
+**the size answer is fetched once per scope on exactly those terms** (#261, #262) — one
+`measure_archive` for an address, or one `measure_archive_groups` for one of the groups view's three
+shallow scopes, when a navigation first draws that badge, kept for the life of the screen, so
+navigating back to a scope costs nothing and nothing re-measures behind the reader. This
 is the one place the panel's data differs from the Devices screen's, which polls because *what is
 attached* changes under the reader.
 

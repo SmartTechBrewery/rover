@@ -30,6 +30,15 @@
  * parse — that last one because such a run *is* grouped, so an incomplete group would otherwise
  * render as a complete one.
  *
+ * **What a group id *is* on disk is {@link readGroupId}'s, and it is shared** (R49, #262).
+ * `./measure-archive-groups.ts` answers how much disk a group takes from a walk of its own, and it
+ * reads each run's `group_id.json` through that one function rather than through a second copy of
+ * the read and the parse — the same argument the size badge makes for `sizeOfTree`, because two
+ * answers about which runs are in a group disagreeing about which runs are in a group is the one
+ * failure sharing it prevents. What is *not* shared is this walk's bookkeeping: a run whose claim
+ * the host cannot read drops out of a listing here and leaves its bytes out of a total there, so
+ * each caller warns in its own words and sets its own `truncated`.
+ *
  * **An ungrouped run costs one `readFile` and no artifact directory at all.** The walk reads
  * `group_id.json` before it reads a single artifact directory, so the archive of a caller who
  * never grouped anything is walked at the cost of its run directories alone — one `readdir` per
@@ -315,27 +324,72 @@ async function examineRun(walk: Walk, runPath: readonly string[]): Promise<void>
  * because a run that *is* grouped is then missing from a group that would otherwise look whole.
  */
 async function groupIdOf(walk: Walk, serialDirectory: string): Promise<string | null> {
+	const read = await readGroupId(serialDirectory);
+	if (read.outcome === 'grouped') {
+		return read.groupId;
+	}
+	if (read.outcome === 'ungrouped') {
+		// This run named no group. Not a shortfall, and the common case on most hosts.
+		return null;
+	}
+	walk.warn(
+		read.outcome === 'unparseable'
+			? unparseableWarning(read.path)
+			: unreadableWarning(read.path, read.error, TRUNCATED_ANSWER),
+	);
+	walk.truncated = true;
+	return null;
+}
+
+/**
+ * What one run's `group_id.json` says, or why the host cannot tell — **the four cases a caller has
+ * to keep apart**, and the reason this is a type rather than a `string | null`.
+ *
+ * `ungrouped` and the two failures are all *no group id* to whoever asked, and they are not the
+ * same fact about the host: an absent file is the ordinary case and shortens nothing, while a file
+ * that is there and unusable means a run that **is** grouped is missing from whatever was counted.
+ * Each carries the `path` it was read from, because the diagnosis belongs on the host's own log and
+ * a caller writes that line in its own words (D19).
+ */
+export type GroupIdRead =
+	| { readonly outcome: 'grouped'; readonly groupId: string }
+	/** No `group_id.json` at all: this run named no group. */
+	| { readonly outcome: 'ungrouped' }
+	/** The file is there and the host could not read it. */
+	| { readonly outcome: 'unreadable'; readonly path: string; readonly error: unknown }
+	/** It read, and it is not `{ "groupId": <string> }`. */
+	| { readonly outcome: 'unparseable'; readonly path: string };
+
+/**
+ * **The one function that reads a group id off disk**, shared by this walk and by
+ * `./measure-archive-groups.ts` (R49, #262).
+ *
+ * Exported for that module and for that module alone, and it is deliberately the **narrow** half
+ * of what {@link groupIdOf} used to be: the file read and the parse, with none of the walk's own
+ * bookkeeping — no `warn`, no `truncated`, no `Walk`. Two answers about which runs are in a group
+ * must not be able to disagree about what a group id *is* on disk, which is the same argument the
+ * issue makes for `sizeOfTree`; and the bookkeeping is exactly what the two callers do differently
+ * — one drops a run from a listing, the other leaves its bytes out of a total.
+ *
+ * Nothing about the file's shape is this function's to decide either: {@link GroupIdFileSchema} is
+ * the wire's own key (D26) and is deliberately not `.strict()`, so a key added to that file later
+ * does not make every group already on disk vanish.
+ */
+export async function readGroupId(serialDirectory: string): Promise<GroupIdRead> {
 	const path = join(serialDirectory, 'group_id.json');
 	let contents: string;
 	try {
 		contents = await readFile(path, 'utf8');
 	} catch (error) {
-		if (codeOf(error) === 'ENOENT') {
-			// This run named no group. Not a shortfall, and the common case on most hosts.
-			return null;
-		}
-		walk.warn(unreadableWarning(path, error, TRUNCATED_ANSWER));
-		walk.truncated = true;
-		return null;
+		return codeOf(error) === 'ENOENT'
+			? { outcome: 'ungrouped' as const }
+			: { outcome: 'unreadable' as const, path, error };
 	}
 
 	const parsed = GroupIdFileSchema.safeParse(parseJson(contents));
-	if (!parsed.success) {
-		walk.warn(unparseableWarning(path));
-		walk.truncated = true;
-		return null;
-	}
-	return parsed.data.groupId;
+	return parsed.success
+		? { outcome: 'grouped' as const, groupId: parsed.data.groupId }
+		: { outcome: 'unparseable' as const, path };
 }
 
 /**

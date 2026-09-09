@@ -45,6 +45,7 @@ import { createListArchiveHandler } from './list-archive.js';
 import { createListArchiveGroupsHandler } from './list-archive-groups.js';
 import { createListDevicesHandler } from './list-devices.js';
 import { createListProjectsHandler } from './list-projects.js';
+import { createMeasureArchiveGroupsHandler } from './measure-archive-groups.js';
 import type { HttpListenerConfig, NetworkListenerConfig } from './network-config.js';
 import { type NetworkListener, startNetworkListener } from './network-listen.js';
 import { createProjectInstall, type ProjectInstall } from './project-install.js';
@@ -293,6 +294,15 @@ export type StartResult = RunningDaemon | DaemonAlreadyRunning;
  * differently-bounded ideas of what the archive weighs. It reads the same `artifactsRoot` as the
  * other three, so the measure and the listing cannot be pointed at two trees.
  *
+ * The **fifth** asks that same question over the three scopes an address cannot name:
+ * `./measure-archive-groups.ts` (R49, #262) measures the *grouped* runs of everything, of one
+ * project, or of one group — a subset of the archive rather than a subtree of it, so it is a second
+ * method beside the fourth on the `list_archive` / `list_archive_groups` precedent and not a
+ * parameter on it. Its walk is the third method's with the third method's bounds, it reads each
+ * run's `group_id.json` through that module's own `readGroupId`, and every matching run adds the
+ * fourth method's own `sizeOfTree` — so the two measures and the sweep are one primitive with one
+ * bound. It reads the same `artifactsRoot` as the other four.
+ *
  * It also answers **what this host is configured to do** around a lease: `./list-projects.ts`
  * (R39) reads the projects root and says which projects are registered, which is the read half of
  * D31 and the only row that is about host-operator configuration. Nothing on this surface writes
@@ -347,6 +357,7 @@ export function createDaemonHandlers(
 		...createSearchArchiveHandler({ root: artifactsRoot }),
 		...createListArchiveGroupsHandler({ root: artifactsRoot }),
 		...createArchiveSizeHandler({ root: artifactsRoot }),
+		...createMeasureArchiveGroupsHandler({ root: artifactsRoot }),
 		...createListProjectsHandler({ root: projectsRoot }),
 		...createKeptTestsHandlers({ path: keptTestsPath }),
 		...createSweepArchiveHandler({ sweeper }),

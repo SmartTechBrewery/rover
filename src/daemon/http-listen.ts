@@ -219,12 +219,20 @@ import { findUserByToken, type UserRecord } from './user-store.js';
  * an address `list_archive` and `GET /artifact/…` already accept (D19).
  *
  * `measure_archive` joined it with the badge that draws what it answers (R49, #259), and it is here
- * on those same terms: it is the fourth method that reads the archive and the one that answers *how
- * much* rather than *what*, over an address the other three already answer with. It is not an MCP
+ * on those same terms: it is the fourth method that reads the archive and the first that answers
+ * *how much* rather than *what*, over an address the other three already answer with. It is not an MCP
  * tool for `list_archive`'s reason — how much disk the operator's archive takes is that operator's
  * browser's question, and an agent that could ask it could size every other agent's project on the
  * host. It reads and it composes nothing: no path of any kind is on its answer, and there is no
  * field a host path or an `errno` would fit in.
+ *
+ * `measure_archive_groups` is here beside it (R49, #262), because it is the same question over the
+ * three scopes an address cannot name — the *grouped* runs of everything, of one project, or of one
+ * group — and the same screen's badge is what asks it. It is not an MCP tool for that row's reason
+ * with `list_archive_groups`' force: an agent already knows its own group, having chosen it, and one
+ * call here would size every other agent's grouped work on the host. It composes nothing for a
+ * caller either — it takes one `project` component and a `groupId` that names no directory at all
+ * — and no path and no `errno` is on its answer, which is the fourth row's schema reused.
  */
 const PANEL_METHODS: readonly IpcMethodName[] = [
 	'list_devices',
@@ -233,6 +241,7 @@ const PANEL_METHODS: readonly IpcMethodName[] = [
 	'search_archive',
 	'list_archive_groups',
 	'measure_archive',
+	'measure_archive_groups',
 	'list_projects',
 	'list_kept_tests',
 	'set_kept_tests',

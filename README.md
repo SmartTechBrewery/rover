@@ -1141,7 +1141,7 @@ package argument on it — the byte-carrying form stays the CLI's, because a who
 argument means an agent producing several megabytes of base64. That is what `push_file` and
 `pull_file` are still waiting for and why they are not tools: `PROJECT.md` R24 phase 2 owns how a
 client supplies and receives a file, and neither of those rows has a second form that carries
-none. `force_release_device` is the third of eleven rows with no tool, and its reason will not expire:
+none. `force_release_device` is the third of twelve rows with no tool, and its reason will not expire:
 **an agent must not be able to end another agent's lease.** It is authority over the shared pool
 rather than a step in one caller's work, which is what makes it an operator action (D27, D28)
 reached from the CLI and, later, the panel. `list_archive` is the fourth, and its reason is
@@ -1177,7 +1177,12 @@ not on the panel's surface either, while D27's role model is still deferred.
 one address of the **host's** archive takes, which is the operator's browser's question — an agent
 already receives its own artifacts as bytes, so there is no total there it needs, and one that could
 ask this could size every other agent's project on the host. It is on the panel's surface.
-`tests/unit/mcp/verb-declarations.test.ts` records all eleven as
+`measure_archive_groups` is the twelfth, and it is that row's reason with `list_archive_groups`'
+force: it answers the same question over the *grouped* runs of everything, of one project or of one
+group, so one call would size every other agent's grouped work on the host — while an agent already
+knows its own group, having chosen it. It is on the panel's surface too, which is where the badge
+that draws it lives.
+`tests/unit/mcp/verb-declarations.test.ts` records all twelve as
 decisions, so no row can quietly land with no tool. The `rover` command is published through `package.json`'s `bin` and reaches a `PATH`
 only through `npm link`, which `PROJECT.md` §9.4 records the reasoning for; `bin/rover-mcp.mjs`
 is a path an MCP config states absolutely and not that.
