@@ -22,6 +22,8 @@ import {
 	readKeptTests,
 	resolveKeptTestsPath,
 	temporaryKeptTestsPath,
+	withKeptTestsLock,
+	withoutProject,
 	writeKeptTests,
 } from '@/daemon/kept-tests.js';
 import {
@@ -29,6 +31,7 @@ import {
 	removeTempSocket,
 	type TempSocket,
 } from '../../helpers/daemon-socket.js';
+import { createGate } from '../../helpers/timing.js';
 
 let temp: TempSocket;
 let path: string;
@@ -300,6 +303,103 @@ describe('applyKeep', () => {
 		// `project` is in the identity because `test_name` alone is not one — the archive's top
 		// level partitions precisely so two projects may reuse a name (`PROJECT.md` §10).
 		expect(pairsOf(next)).toEqual(['rover/checkout flow', 'swarm/checkout flow']);
+	});
+});
+
+describe('withoutProject', () => {
+	it('takes exactly one project’s entries and counts them', () => {
+		const next = withoutProject(
+			[
+				kept('rover', 'alpha'),
+				kept('rover', 'beta'),
+				kept('storefront', 'alpha'),
+				kept('storefront-2', 'alpha'),
+			],
+			'rover',
+		);
+
+		// Exact string equality and nothing prefix-shaped: `storefront-2` is a different project
+		// from `storefront`, and the store is keyed on the archive's own components (D33).
+		expect(pairsOf(next.tests)).toEqual(['storefront/alpha', 'storefront-2/alpha']);
+		expect(next.removed).toBe(2);
+	});
+
+	it('removes nothing, and says so, for a project it does not hold', () => {
+		const held = [kept('rover', 'alpha')];
+
+		const next = withoutProject(held, 'storefront');
+
+		expect(pairsOf(next.tests)).toEqual(['rover/alpha']);
+		// `0` is what lets the handler answer `absent` rather than rewriting a document it has no
+		// business in.
+		expect(next.removed).toBe(0);
+	});
+
+	it('leaves the other projects’ attribution untouched', () => {
+		const next = withoutProject(
+			[kept('rover', 'alpha'), kept('storefront', 'alpha', { keptBy: 'bob', keptAt: AT })],
+			'rover',
+		);
+
+		expect(next.tests).toEqual([
+			{ project: 'storefront', testName: 'alpha', keptBy: 'bob', keptAt: AT },
+		]);
+	});
+});
+
+describe('the write lock two writers share', () => {
+	/*
+	 * **This is the test that would fail if the lock were not shared.** `set_kept_tests` and
+	 * `delete_project` are two read-modify-writes of one document (D42, #271); two chains keyed on
+	 * one path would serialise each writer against itself and neither against the other, so the
+	 * later read would not see the earlier write and one of the two would be silently dropped with
+	 * both callers answered success.
+	 */
+	it('keeps two overlapping read-modify-writes from dropping each other', async () => {
+		await writeKeptTests(path, [kept('rover', 'alpha'), kept('storefront', 'alpha')]);
+
+		// One writer adds a test; the other takes a project. Each reads, yields, then writes —
+		// which is precisely the interleaving the lock exists to prevent.
+		const adding = withKeptTestsLock(path, async () => {
+			const held = await readKeptTests(path);
+			await Promise.resolve();
+			await writeKeptTests(
+				path,
+				applyKeep(held, [{ project: 'rover', testName: 'beta' }], true, {
+					actor: 'alice',
+					at: AT,
+				}),
+			);
+		});
+		const deleting = withKeptTestsLock(path, async () => {
+			const held = await readKeptTests(path);
+			await Promise.resolve();
+			await writeKeptTests(path, withoutProject(held, 'storefront').tests);
+		});
+		await Promise.all([adding, deleting]);
+
+		// Both landed: the addition is there and the deleted project is gone. Either write alone
+		// winning would leave one of those two false.
+		expect(pairsOf(await readKeptTests(path))).toEqual(['rover/alpha', 'rover/beta']);
+	});
+
+	it('does not make two different stores wait on each other', async () => {
+		const other = join(temp.dir, 'other-kept-tests.json');
+		const order: string[] = [];
+		const gate = createGate();
+
+		const first = withKeptTestsLock(path, async () => {
+			await gate.reached;
+			order.push('first');
+		});
+		const second = withKeptTestsLock(other, async () => {
+			order.push('second');
+			gate.reach();
+		});
+		await Promise.all([first, second]);
+
+		// Keyed by the path: the store nobody is holding is not queued behind the one that is.
+		expect(order).toEqual(['second', 'first']);
 	});
 });
 

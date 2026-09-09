@@ -19,6 +19,7 @@ import { UsageError } from './_shared/flags.js';
 import * as out from './_shared/output.js';
 import * as acquire from './commands/acquire.js';
 import * as archive from './commands/archive.js';
+import * as deleteProject from './commands/delete-project.js';
 import * as doctor from './commands/doctor.js';
 import * as forceRelease from './commands/force-release.js';
 import * as init from './commands/init.js';
@@ -75,6 +76,7 @@ const COMMANDS: Record<string, Command | undefined> = Object.assign(Object.creat
 	archive,
 	keep,
 	sweep,
+	'delete-project': deleteProject,
 	status,
 	users,
 	init,
@@ -121,6 +123,12 @@ Commands:
                            nothing). The host runs the same policy itself: the disk budget
                            after every lease ends, and both bounds at local midnight and
                            at start
+  delete-project <project>
+                           Remove a project's registration and everything filed under it —
+                           its hook file, its own subtree of the artifact archive and its
+                           kept-test entries (--actor required). No undo, no trash
+                           directory, no dry run; a kept test is taken too, and a live
+                           lease on the project is refused
   status                   Which host answered, its pid, uptime and protocol version
   init [<path>]            Set up a project so an agent working in it can drive a device:
                            its hook file, its .mcp.json, a generated ROVER.md, and the
@@ -160,8 +168,9 @@ Exit codes:
   1   the operation did not succeed — a refused acquire, a release that found no live
       lease, a force-release that found no lease on the device, a verb the host refused
       or that failed, an archive level that is not there or that the host cannot read,
-      a sweep of an archive the host has none of or cannot walk, an unreachable host, or a
-      request the host rejected
+      a sweep of an archive the host has none of or cannot walk, a delete-project that found
+      no such registration, could not remove all of it, or was refused because a lease on
+      the project is live, an unreachable host, or a request the host rejected
   2   usage error — unknown command, unknown flag, a missing required option, an
       attribution string longer than the host accepts, an --out that names a directory
       or has no directory to write into, a file to push or install that is missing,

@@ -673,6 +673,25 @@ describe('only the panel’s methods are reachable, and no table gained a row', 
 		});
 	});
 
+	it('refuses delete_project, which waits for the screen that calls it', async () => {
+		registerFakeBackend();
+		await withStore();
+		const daemon = await startWithHttp();
+
+		const answer = await call(daemon, 'delete_project', { project: 'checkout', actor: 'alice' });
+
+		// Deliberately **not** on the allowlist in this phase (D42, #271): the row exists on the one
+		// table and is reached from the CLI, and it joins this transport with the panel's own
+		// confirmation dialog, exactly as `force_release_device` joined it with the screen that
+		// calls it (R35, #122). So the refusal is before dispatch and nothing ran — this assertion
+		// is the one the panel's phase deliberately flips.
+		expect(envelopeOf(answer)).toMatchObject({
+			type: 'error',
+			id: 'req-1',
+			error: { code: 'unknown_method' },
+		});
+	});
+
 	it('reaches the Keep flag\u2019s two rows, the read and the write', async () => {
 		registerFakeBackend();
 		await withStore();

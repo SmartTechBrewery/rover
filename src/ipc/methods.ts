@@ -1358,6 +1358,107 @@ export const ListProjectsResultSchema = z.discriminatedUnion('outcome', [
 export type ListProjectsResult = z.infer<typeof ListProjectsResultSchema>;
 
 /**
+ * Which project to delete, and who is deleting it.
+ *
+ * **The identifier `list_projects` answered with, never a path** (D19). {@link
+ * AttributionStringSchema} rather than a project-identifier shape, matching what
+ * {@link ProjectRegistrationSchema}'s own `project` answers: what is an identifier stays a
+ * property of the host's own lookup, where the path is built (`src/daemon/project-hooks.ts`'s
+ * `projectHooksPath` answers `null` for anything that is not one), and containment under the
+ * archive root is `pathSegment`'s, as it is everywhere else in this tree. So a string that names
+ * no hook file is answered `not-registered` rather than refused as malformed — the same reading
+ * D22 gives every other project string on this surface.
+ *
+ * **`actor` is attribution and not authorisation** (D20, D28), exactly as
+ * {@link ForceReleaseDeviceParamsSchema}'s, {@link SetKeptTestsParamsSchema}'s and
+ * {@link SweepArchiveParamsSchema}'s are: the host records who deleted a project and derives it
+ * from nothing. What authorizes the call is reaching this surface — the local socket is a shell
+ * on the host (D25, D28).
+ *
+ * `.strict()` so a typo'd key is `invalid_params` rather than a delete of something nobody named.
+ */
+export const DeleteProjectParamsSchema = z
+	.object({
+		/** The identifier `list_projects` answered with — never a path (D19). */
+		project: AttributionStringSchema,
+		/** Who is deleting it. Attribution only — it authorizes nothing (D20, D28). */
+		actor: AttributionStringSchema,
+	})
+	.strict();
+export type DeleteProjectParams = z.infer<typeof DeleteProjectParamsSchema>;
+
+/**
+ * Whether one half of the delete went, was never there, or would not go.
+ *
+ * Three values rather than a boolean, because *there was nothing here* and *the host would not
+ * remove it* are the two facts an operator does something different about — and telling them
+ * apart is what lets {@link DeleteProjectResultSchema} promise that a request which reached
+ * nothing is never answered `deleted`.
+ */
+export const DeletedPartSchema = z.enum(['removed', 'absent', 'failed']);
+export type DeletedPart = z.infer<typeof DeletedPartSchema>;
+
+/**
+ * What every answer that reached the disk says: which halves went, what the archive weighed and
+ * how many exemptions went with it.
+ *
+ * Shared by the `deleted` and `partial` arms rather than declared twice, because the two differ
+ * only in whether one half would not go — the fields say *which*, and a `partial` that reported
+ * less than a `deleted` would make the failure the least legible answer of the four.
+ */
+const DELETION_REPORT = {
+	/** The hook file under the projects root. */
+	registration: DeletedPartSchema,
+	/** This project's own subtree of the artifact archive. */
+	archive: DeletedPartSchema,
+	/** This project's entries in the host's kept-tests store. */
+	keptTests: DeletedPartSchema,
+	/** What the archive subtree weighed, measured immediately before it went. `0` when absent. */
+	freedBytes: z.number().int().nonnegative(),
+	/** How many kept entries went — the number D35's amendment exists to make sayable. */
+	keptTestsRemoved: z.number().int().nonnegative(),
+};
+
+/**
+ * Four answers, four next moves — {@link ForceReleaseDeviceResultSchema}'s rule and
+ * {@link SweepArchiveResultSchema}'s idiom, and the criterion this row exists to hold.
+ *
+ * **`deleted` is never answered for a request that reached nothing.** Every half `absent` is
+ * `not-registered`, and that is structural rather than a handler's discipline: the two are
+ * different arms, so *there was no such project* cannot render as a successful delete of zero
+ * bytes. `partial` is *some of it would not go*, with the fields saying which — a real state on a
+ * host whose archive subtree is read-only, and the direction that leaves the host doing **less**,
+ * since the registration goes first and a project whose hook file went starts no more services
+ * and runs no more teardown.
+ *
+ * **A hook file that is gone but an archive subtree that is not is `deleted`**, with
+ * `registration: 'absent'`: a lease may name any project string (D22), so a subtree with no
+ * registration is ordinary, and taking it is a delete that did something.
+ *
+ * **`refused` is a live lease, reported as data** ({@link AcquireDeviceResultSchema}'s reasoning)
+ * and nothing at all is touched on that branch — not the hook file, which carries the `teardown`
+ * D9 still owes that lease, and not the archive subtree, which is the directory it is filing into
+ * right now (D35). The next move is obvious and is the operator's: wait, or force-release first.
+ *
+ * **No `message`, no host path and no `errno` on any arm** (D19), and there is no field one would
+ * fit in — `src/ipc/server.ts` parses every handler's return value against this `.strict()`
+ * schema, so a path smuggled onto a result is `invalid_result` on the host rather than a
+ * disclosure. The diagnosis goes to a warning on the host, exactly as `list_projects`' and the
+ * sweep's do.
+ */
+export const DeleteProjectResultSchema = z.discriminatedUnion('outcome', [
+	/** At least one half went and none failed. */
+	z.object({ outcome: z.literal('deleted'), ...DELETION_REPORT }).strict(),
+	/** At least one half would not go. The others may still have gone — the fields say which. */
+	z.object({ outcome: z.literal('partial'), ...DELETION_REPORT }).strict(),
+	/** No hook file, no archive subtree and no kept entries. Nothing was reached. */
+	z.object({ outcome: z.literal('not-registered') }).strict(),
+	/** A lease on this project is live, so nothing was touched. */
+	z.object({ outcome: z.literal('refused'), reason: z.literal('lease-live') }).strict(),
+]);
+export type DeleteProjectResult = z.infer<typeof DeleteProjectResultSchema>;
+
+/**
  * How many tests one host may keep — the bound on the store and therefore the bound on both
  * rows' arrays.
  *
@@ -1688,6 +1789,30 @@ export type SweepArchiveResult = z.infer<typeof SweepArchiveResultSchema>;
  * own browser, and what the host is configured to run is not something every agent on it needs
  * to enumerate.
  *
+ * **`delete_project` is D31's write half, and the write is a *removal*** (D42, #271). It takes the
+ * identifier `list_projects` answered with plus a caller-supplied `actor`, and removes in one
+ * operator action the hook file under the projects root, that project's own subtree of the
+ * artifact archive, and its entries in the host's kept-tests store — nothing outside that subtree,
+ * not another project's runs, not `users.json`, not another project's exemptions. **The other
+ * writes stay shut**: no method creates, edits or renames a hook file, and none takes a path into
+ * the projects directory. D31's code-execution reason does not transfer to a removal — a delete
+ * makes the host run strictly less and names no program, the request carrying an identifier the
+ * host composes its own path from — and its privilege reason is answered by the request being
+ * **named and bounded**, which is the line that separates this from `sweep_archive`'s untargeted
+ * policy run below. **Four answers, four next moves** ({@link DeleteProjectResultSchema}), and a
+ * request that reached nothing is `not-registered` rather than a success that removed nothing; a
+ * live lease on the project is `refused` with reason `lease-live` and nothing is touched, because
+ * the hook file carries the `teardown` D9 still owes that lease and the archive subtree is what it
+ * is filing into right now (D35). **An explicit delete overrides `Keep`** (D35 as amended): the
+ * exemption is from the two retention bounds, an operator naming one project is not one of those
+ * bounds, and the answer says how many kept entries went so nobody is surprised by it. No
+ * `message`, no host path and no `errno` is on any answer and there is no field one would fit in
+ * (D19); the diagnosis is a warning on the host and one audit line names the actor, with no token
+ * in scope on this path at all (D20, D28). It is deliberately **not** an MCP tool, for
+ * `sweep_archive`'s reason in a sharper key — an agent deleting a project would be destroying
+ * somebody else's evidence — and it is deliberately **not** on `PANEL_METHODS` yet: that lands
+ * with the screen that calls it, exactly as `force_release_device` did (R35, #122).
+ *
  * **`list_kept_tests` and `set_kept_tests` are the `Keep` flag's two directions** (D33, #234),
  * and the pair is where this surface first *writes* something of the host's own that is not a
  * lease. The flag is per **test** — `<project>/<test_name>`, the archive's own two leading
@@ -1780,6 +1905,7 @@ export const IPC_METHODS = {
 		result: MeasureArchiveResultSchema,
 	},
 	list_projects: { params: ListProjectsParamsSchema, result: ListProjectsResultSchema },
+	delete_project: { params: DeleteProjectParamsSchema, result: DeleteProjectResultSchema },
 	list_host_tooling: {
 		params: ListHostToolingParamsSchema,
 		result: ListHostToolingResultSchema,

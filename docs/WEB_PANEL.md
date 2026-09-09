@@ -39,10 +39,22 @@ Design work lives in [`DESIGN.md`](./DESIGN.md); the brief that produced the fir
    no handler, no confirmation, no call, so *nothing on it writes* is still literally true. The
    affordance is settled ahead of the action on purpose; `docs/DESIGN.md` §10 carries its shape and
    the reasoning that replaced the screen's old *no control of any kind*.
-   **Editing and deleting a registration wait on the role model** D27 defers — a hook file names programs the host spawns, so writing one over the
-   wire is a far larger privilege than force-releasing a lease, and today every named user holds
-   every panel privilege. Registering stays `rover init`'s job; R40 is the open question of it
-   doing that against a host it is not running on.
+   **The action behind it now exists on the host, and this paragraph is corrected in place**
+   (2026-09-09, #271): `deleting a registration waits on the role model` stopped being true.
+   `delete_project` (`PROJECT.md` D42, R50 phase 1) takes the hook file, that project's own subtree
+   of the artifact archive and its kept-test entries in one operator action, refusing while a lease
+   on the project is live — and it does not wait on D27, because the privilege question is answered
+   by the request being **named and bounded** rather than by a role model (D31 as amended). It is
+   reached from the CLI, `rover delete-project` (D4). **The panel's control is still wired to
+   nothing until phase 2**: `delete_project` is deliberately off `PANEL_METHODS` and joins it with
+   the confirmation dialog that calls it, exactly as `force_release_device` joined it with the
+   screen that calls it (R35, #122). So *nothing on this screen writes* is still true today, and
+   phase 2 is what changes that.
+   **Editing a registration still waits on the role model** D27 defers — a hook file names programs
+   the host spawns, so writing one over the wire is a far larger privilege than force-releasing a
+   lease, and today every named user holds every panel privilege. That reason is untouched by the
+   delete, which makes the host run strictly *less* and names no program. Registering stays
+   `rover init`'s job; R40 is the open question of it doing that against a host it is not running on.
 3. **List of devices available in the system** — **done** (#113). Android only for now, whatever the
    host's `adb` reports (`PROJECT.md` §4 `list_devices`): the Devices screen polls `list_devices`
    over the HTTP surface and renders every device the host reports as one card — model, serial,
