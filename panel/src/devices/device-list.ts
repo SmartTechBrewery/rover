@@ -1,7 +1,9 @@
 import { z } from 'zod';
 
 /**
- * `list_devices`' answer, as much of it as the Devices screen reads.
+ * `list_devices`' answer, as much of it as the Devices screen reads — **and the one derivation
+ * the screen makes from it**, {@link toDeviceListView}, which is the order the grid draws and the
+ * counts the badge says, out of a single partition.
  *
  * **Deliberately re-declared rather than imported from `src/ipc/methods.ts`**, for the reason
  * `host-client.ts` gives about `ResponseEnvelopeSchema`: the panel is a separate tree with its own
@@ -128,3 +130,51 @@ export const ListDevicesResultSchema = z.object({
 	staleReason: StaleReasonSchema.nullish().default(null),
 });
 export type ListDevicesResult = z.infer<typeof ListDevicesResultSchema>;
+
+/** The host's devices as the Devices screen shows them: one order, and the counts of it. */
+export interface DeviceListView {
+	/** The grid's order — see {@link toDeviceListView}. */
+	readonly devices: readonly ListedDevice[];
+	readonly held: number;
+	readonly free: number;
+	readonly notReady: number;
+}
+
+/**
+ * The three groups the Devices screen is made of, in the order it draws them: **held, then free,
+ * then not ready** (#267).
+ *
+ * **Held first because held is what the screen is read for** — who has what, and how long is
+ * left. Everything else on a free card is on every other free card, while a lease is the one
+ * thing on this screen somebody is looking for, and it was previously wherever the host happened
+ * to return it.
+ *
+ * **Then free, then not ready**, which is the order the counter badge already says its terms in
+ * and the emphasis `docs/DESIGN.md` §5 settled: this screen answers *what can I use right now*,
+ * so the usable device outranks the greyed-out one. A device that is not `ready` and holds no
+ * lease cannot be leased at all (`not-ready`, `src/daemon/lease-handlers.ts`), so it is last —
+ * and it is still **listed**, because that row is the only clue its operator gets about why the
+ * phone is unusable.
+ *
+ * **A held device stays in the held group whatever the hardware is doing** (#124). A lease on a
+ * device that has since gone `offline` is still a lease and still the answer to "who do I ask".
+ *
+ * **The order and the counts come out of one partition, so the badge cannot disagree with the
+ * grid.** They are the same three arrays: the counts are their lengths and the order is their
+ * concatenation, which is what makes "the counter agrees with the cards" structural rather than
+ * something to keep in step. Ordering lives here, in the panel's own view model, and never in
+ * the host's answer — it is a presentation decision, and `rover list`'s table may reasonably
+ * differ. Within a group the host's own order is kept.
+ */
+export function toDeviceListView(devices: readonly ListedDevice[]): DeviceListView {
+	const held = devices.filter((device) => device.heldBy !== null);
+	const free = devices.filter((device) => device.heldBy === null && device.state === 'ready');
+	const notReady = devices.filter((device) => device.heldBy === null && device.state !== 'ready');
+
+	return {
+		devices: [...held, ...free, ...notReady],
+		held: held.length,
+		free: free.length,
+		notReady: notReady.length,
+	};
+}

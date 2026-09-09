@@ -3,6 +3,7 @@ import { IosSimulatorDeviceBackend } from '@/backends/ios-simulator/backend.js';
 import { isPng } from '@/backends/ios-simulator/parsers/png.js';
 import type { Device } from '@/core/device.js';
 import { parseDeviceSerial } from '@/core/ids.js';
+import { shutDownSimulator } from '../../helpers/simulators.js';
 
 /**
  * The capture against a real booted simulator. Gated on `ROVER_TEST_SIMULATOR`
@@ -36,18 +37,6 @@ async function bootedDevice(): Promise<Device> {
 	const ready = (await backend.listDevices()).filter((device) => device.state === 'ready');
 	expect(ready.length).toBeGreaterThan(0);
 	return ready[0] as Device;
-}
-
-/**
- * A simulator that is **not** booted, or `null` when this host has none.
- *
- * Every device but one is `Shutdown` on an ordinary Mac, so this is nearly always there; the
- * `null` is for a host carrying exactly one simulator, and the case that needs it says out loud
- * that it did not run rather than passing quietly (ai/RULES.md §6).
- */
-async function shutDownDevice(): Promise<Device | null> {
-	const down = (await backend.listDevices()).filter((device) => device.state !== 'ready');
-	return down[0] ?? null;
 }
 
 describe.skipIf(!process.env.ROVER_TEST_SIMULATOR)('the capture against a real simulator', () => {
@@ -106,7 +95,7 @@ describe.skipIf(!process.env.ROVER_TEST_SIMULATOR)('the capture against a real s
 	 * the only work involved.
 	 */
 	it('refuses a simulator that is not booted in well under a second', async () => {
-		const device = await shutDownDevice();
+		const device = await shutDownSimulator();
 		if (device === null) {
 			console.warn(
 				'no shut-down simulator on this host: the 60-second-hang refusal was NOT exercised',

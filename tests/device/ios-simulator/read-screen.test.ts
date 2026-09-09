@@ -2,6 +2,7 @@ import { afterAll, describe, expect, it } from 'vitest';
 import { IosSimulatorDeviceBackend } from '@/backends/ios-simulator/backend.js';
 import type { Device } from '@/core/device.js';
 import { parseDeviceSerial } from '@/core/ids.js';
+import { shutDownSimulator } from '../../helpers/simulators.js';
 
 /**
  * The screen read against a real booted simulator, through a real `idb_companion`.
@@ -31,11 +32,6 @@ async function bootedDevice(): Promise<Device> {
 	const ready = (await backend.listDevices()).filter((device) => device.state === 'ready');
 	expect(ready.length).toBeGreaterThan(0);
 	return ready[0] as Device;
-}
-
-/** A simulator that is **not** booted, or `null` on a host carrying exactly one. */
-async function shutDownDevice(): Promise<Device | null> {
-	return (await backend.listDevices()).find((device) => device.state !== 'ready') ?? null;
 }
 
 describe.skipIf(!process.env.ROVER_TEST_SIMULATOR || !process.env.ROVER_TEST_IDB)(
@@ -130,7 +126,7 @@ describe.skipIf(!process.env.ROVER_TEST_SIMULATOR || !process.env.ROVER_TEST_IDB
 		 * what it is really here to catch is a companion having been started anyway.
 		 */
 		it('refuses a simulator that is not booted, quickly and by name', async () => {
-			const device = await shutDownDevice();
+			const device = await shutDownSimulator();
 			if (device === null) {
 				console.warn('no shut-down simulator on this host: the read refusal was NOT exercised');
 				return;

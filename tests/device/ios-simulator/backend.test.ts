@@ -167,6 +167,12 @@ describe.skipIf(!process.env.ROVER_TEST_SIMULATOR)(
 		 * path the platform word is the only evidence about which platform a target belongs to
 		 * (`src/backends/ios-simulator/devices.ts`). So the watch's set is a subset of the
 		 * enumeration's, and the `ready` devices in it match device for device.
+		 *
+		 * Since #267 both sides are the **borrowable** set — every device either one answers is
+		 * `ready`, because a simulator that is not booted is in neither (D41). That makes the
+		 * `ready` filter below a no-op on a passing host and it is kept anyway: it is what fails
+		 * loudly, rather than by an off-by-one in a length, if one of the two sources ever starts
+		 * publishing a device the other narrowed out.
 		 */
 		it('delivers the full current set on subscription', async () => {
 			const devices = await backend.listDevices();

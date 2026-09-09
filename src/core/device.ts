@@ -441,11 +441,28 @@ export interface DeviceWatch {
 export interface DeviceBackend {
 	// --- Required: every backend answers these (ai/ARCHITECTURE.md "The device abstraction") ---
 
-	/** Every device of this backend's platform currently attached to this host. */
+	/**
+	 * Every device of this backend's platform currently attached to this host.
+	 *
+	 * **It is an inventory of what can be borrowed now, not a catalogue of what this machine
+	 * could run** (D41, #267). The distinction is invisible on a platform whose own tooling
+	 * lists only what is running, and it is a decision on one whose tooling lists everything
+	 * ever created: a virtual device that is not running is not a device this host has, in the
+	 * same way a physical one nobody plugged in is not, so it is not listed either. Which
+	 * platform is which is `PROJECT.md` §5's business and never this file's.
+	 *
+	 * **That is not licence to drop a device that is not `ready`.** A device that is present and
+	 * unusable is still present and still says so — a device waiting on an authorization prompt
+	 * is `unauthorized` here, and that row is the only clue its operator gets about why it cannot
+	 * be leased. What a backend narrows on is presence, and it answers with a state.
+	 */
 	listDevices(): Promise<Device[]>;
 
 	/**
 	 * Watch the device set, calling `watcher` with the full set now and on every change.
+	 *
+	 * The set is {@link listDevices}' set, so the rule above is this method's rule too: what
+	 * arrives and leaves is what can be borrowed.
 	 *
 	 * Required rather than capability-gated, for the same reason enumeration is: keeping
 	 * one device off two agents is what this host exists to do, and a backend that cannot
@@ -473,6 +490,12 @@ export interface DeviceBackend {
 	 * bringing hardware online is the host operator's physical work and never a verb, so
 	 * the only lifecycle a backend observes is whether a device is still there and still
 	 * usable. That is exactly the question D6's re-verification asks at every lease grant.
+	 *
+	 * **A backend may answer here for a device {@link listDevices} does not list**, and the two
+	 * are not in disagreement when it does: that method answers "what is there to borrow" and
+	 * this one answers "what is *this* device", asked by a caller who already has one in mind.
+	 * The state is the answer either way, so a device narrowed out of the inventory says why —
+	 * which is what a lease grant reports and what a refusal naming a state is made of.
 	 */
 	describeDevice(serial: DeviceSerial): Promise<Device | null>;
 

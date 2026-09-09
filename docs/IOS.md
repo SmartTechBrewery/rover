@@ -81,9 +81,9 @@ startup of ~60–90 ms that a Node backend talking gRPC directly would not pay.
 
 | Interface method | How | Measured | Verdict |
 |---|---|---|---|
-| `listDevices` | `simctl list -j devices` | 0.10–0.76 s, 11 devices | ✅ |
-| `watchDevices` | `idb_companion --notify stdout` | full-set JSON per change | ✅ **a stream, not a poll** |
-| `describeDevice` | `simctl list -j devices`, filter udid | 0.10 s | ✅ |
+| `listDevices` | `simctl list -j devices`, keeping the booted ones | 0.10–0.76 s, 11 listed → **1 booted** | ✅ what can be borrowed now (#267, D41) |
+| `watchDevices` | `idb_companion --notify stdout` | full-set JSON per change, narrowed the same way | ✅ **a stream, not a poll** |
+| `describeDevice` | `simctl list -j devices`, filter udid | 0.10 s | ✅ not narrowed — one named device answers its state |
 | `deviceInfo` | `profile.plist` + `simctl getenv` | <1 ms | ✅ px, dpi and scale all exact |
 | `installApp` | `simctl install <path.app>` | 0.3 s reinstall, 2.7–5.2 s first | ✅ |
 | `launchApp` | `simctl launch <bundle>` | 0.35 s, returns pid | ✅ |
@@ -864,7 +864,9 @@ rather than an implementation detail:
 `listDevices`, `describeDevice` and `deviceInfo` still read `simctl`, and deliberately: idb is not
 a second source of truth for an enumeration a lease grant re-verifies through `simctl` (D6). What
 makes the two safe to mix is that `src/backends/ios-simulator/devices.ts` normalises the notify
-path's `os_version` onto `simctl`'s spelling rather than publishing both.
+path's `os_version` onto `simctl`'s spelling rather than publishing both — and, since #267, that
+both narrow through the same `borrowableNow`, so the stream and the poll cannot disagree about
+which simulators this host has.
 
 **Driven end to end on this bench, 2026-09-08** (companion v1.5.2, Xcode 26.6, macOS 26.6.2), with
 `watchDevices` subscribed and one `iPhone 17 Pro` booted and shut down again through `simctl boot`
@@ -883,6 +885,16 @@ frame is not missing — it is collapsed**, and that is the delivery rule rather
 event: `Booting` and `Shutdown` both map to `offline`, so the set the caller would have been handed
 was the one it already had. The companion emits per change *it* sees; the watch delivers per change
 a **caller** can see. Trap 15 in §8 is what had to be fixed before any of this arrived at all.
+
+**The three deliveries stand; the sets in them are narrower now** (#267, D41), and this is written
+as the derivation it is rather than as a second run: the companion's frames are unchanged and are
+committed as `tests/fixtures/ios-simulator/idb-notify.idbcompanion1.5.2-xcode26.6-ios26.5.txt`, so
+what moved is only what the watch publishes off them. The bench had one *other* simulator booted
+throughout, so the same run now reads `1 device` / `2 devices` / `1 device` — the target arriving
+when it is up and leaving when it is not, with `Booting` and `Shutting Down` collapsed by the same
+rule as before for a sharper reason: neither is a device anyone can borrow, so neither changes the
+set. `tests/unit/backends/ios-simulator/{devices,backend}.test.ts` pin exactly that off those
+frames, which is where a change to it fails.
 
 **D18 is harder on iOS than on Android, and the field that decides it is `transportType`.**
 `devicectl list devices` on this machine — with no phone plugged in and none nearby — reported:

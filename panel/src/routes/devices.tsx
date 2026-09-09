@@ -7,7 +7,11 @@ import { HeldFreeCounter } from '@panel/components/devices/held-free-counter.js'
 import { PageHeader } from '@panel/components/layout/page-header.js';
 import { QuietBanner } from '@panel/components/quiet-banner.js';
 import { QuietPanel } from '@panel/components/quiet-panel.js';
-import type { ListedDevice, StaleReason } from '@panel/devices/device-list.js';
+import {
+	type ListedDevice,
+	type StaleReason,
+	toDeviceListView,
+} from '@panel/devices/device-list.js';
 import { useDeviceList } from '@panel/devices/device-list-provider.js';
 import type { ForceReleaseAnswer } from '@panel/devices/force-release.js';
 import { createRoute } from '@tanstack/react-router';
@@ -37,7 +41,9 @@ import { rootRoute } from './__root.js';
  * | either, with a `staleReason` | the same block, saying what will not clear on its own (#168) |
  *
  * The counter is derived from the very array the cards come from, so "the counter agrees with the
- * cards" is structural rather than something to keep in step.
+ * cards" is structural rather than something to keep in step. Since #267 it is the same
+ * *partition*: `toDeviceListView` groups the devices held, free and not ready, the badge says
+ * those three sizes and the grid draws those three groups in that order.
  *
  * **The one operator action's outcome is said here rather than on a card** (#122). This screen holds
  * it because the card that was acted on is about to go free or leave the grid, and it asks the poll
@@ -52,16 +58,13 @@ export function DevicesScreen() {
 	const [settled, setSettled] = useState<SettledForceRelease | undefined>(undefined);
 	const devices = state.status === 'ready' ? state.devices : [];
 	/*
-	 * Three buckets that sum to the grid, in the order they exclude each other (#123). A device the
-	 * host reports as anything but `ready` cannot be leased, so counting it as free would claim a
-	 * pool the host would refuse — the same wrong answer the card's `free` panel used to give.
-	 * Held first, because a lease on a device that has since gone `offline` is still a lease and
-	 * still the answer to "who do I ask".
+	 * Three buckets that sum to the grid, in the order they exclude each other (#123) — and, since
+	 * #267, the order it is *drawn* in as well: `toDeviceListView` is one partition serving both,
+	 * so the badge here and the cards below cannot come to disagree. A device the host reports as
+	 * anything but `ready` cannot be leased, so counting it as free would claim a pool the host
+	 * would refuse — the same wrong answer the card's `free` panel used to give.
 	 */
-	const held = devices.filter((device) => device.heldBy !== null).length;
-	const notReady = devices.filter(
-		(device) => device.heldBy === null && device.state !== 'ready',
-	).length;
+	const counts = toDeviceListView(devices);
 
 	/*
 	 * The answer, and the fresh look that makes it visible. `refresh()` is what turns "the lease
@@ -88,11 +91,7 @@ export function DevicesScreen() {
 				description="Monitoring attached physical and virtual devices."
 				aside={
 					devices.length === 0 ? undefined : (
-						<HeldFreeCounter
-							held={held}
-							free={devices.length - held - notReady}
-							notReady={notReady}
-						/>
+						<HeldFreeCounter held={counts.held} free={counts.free} notReady={counts.notReady} />
 					)
 				}
 			/>
@@ -176,7 +175,14 @@ function Content({
 					state.stale ? 'opacity-75' : ''
 				}`}
 			>
-				{state.devices.map((device) => (
+				{/*
+				 * Held first, then free, then not ready (#267) — the counter badge's own order, out
+				 * of the same partition the badge's numbers come from (`device-list.ts`). The
+				 * ordering is this screen's and not the host's: `list_devices` answers what is
+				 * attached, and which of those rows an operator is looking for is a question about
+				 * this view.
+				 */}
+				{toDeviceListView(state.devices).devices.map((device) => (
 					<DeviceCard
 						device={device}
 						key={device.serial}

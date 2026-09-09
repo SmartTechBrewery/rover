@@ -232,6 +232,22 @@ function listing(edit: (parsed: Listing) => void = () => {}): string {
 	return JSON.stringify(parsed);
 }
 
+/**
+ * The capture with **exactly** these simulators booted, and every other one `Shutdown`.
+ *
+ * `Booted` is the one state that puts a row in the enumeration (#267, D41), so this is how a case
+ * says what the host has to lend — and saying it positively is what lets a set lose a device
+ * without becoming empty.
+ */
+function onlyBooted(...serials: DeviceSerial[]): string {
+	const booted = new Set<unknown>(serials);
+	return listing((parsed) => {
+		for (const entry of entriesOf(parsed)) {
+			entry.state = booted.has(entry.udid) ? 'Booted' : 'Shutdown';
+		}
+	});
+}
+
 /** The same capture with one device deleted — a simulator somebody removed. */
 const withoutDevice = (serial: DeviceSerial): string =>
 	listing((parsed) => {
@@ -302,25 +318,48 @@ describe('listDevices', () => {
 		expect(runSimctl.mock.calls[0]?.[0]).toEqual(ENUMERATE);
 	});
 
-	// Counted so a mapping that silently read nothing cannot pass: 22 devices across the two
-	// installed runtimes, exactly one of them booted.
-	it('answers the neutral device set, mapped off the capture', async () => {
+	/**
+	 * **The acceptance criterion of #267, on the capture that motivated it.** The bench carries 22
+	 * simulators across the two installed runtimes and exactly one of them is booted: the
+	 * enumeration names that one and no others, because this is an inventory of what can be
+	 * borrowed now rather than a catalogue of what the machine could run (D41).
+	 *
+	 * The whole device is asserted rather than a count, so the narrowing cannot be mistaken for a
+	 * mapping that silently read nothing — 21 rows went away and every field of the one that
+	 * stayed is still here.
+	 */
+	it('answers only the booted simulator, mapped off the capture', async () => {
 		answers(listing());
 
 		const devices = await backend.listDevices();
 
-		expect(devices).toHaveLength(22);
-		expect(devices.filter((device) => device.state === 'ready')).toHaveLength(1);
-		expect(devices.find((device) => device.serial === BOOTED)).toEqual({
-			serial: BOOTED,
-			platform: 'ios-simulator',
-			model: 'iPhone 17',
-			// The runtime's own `version`, never the map key's `iOS-26-4`.
-			osVersion: '26.4.1',
-			osApiLevel: null,
-			state: 'ready',
-			attachment: 'this-host',
-		});
+		expect(devices).toEqual([
+			{
+				serial: BOOTED,
+				platform: 'ios-simulator',
+				model: 'iPhone 17',
+				// The runtime's own `version`, never the map key's `iOS-26-4`.
+				osVersion: '26.4.1',
+				osApiLevel: null,
+				state: 'ready',
+				attachment: 'this-host',
+			},
+		]);
+	});
+
+	/**
+	 * The other half of the same rule, and the one this suite can only state negatively: the 21
+	 * simulators the capture carries that are not booted are not *some* other state in the
+	 * listing, they are absent from it. A row an `acquire` would refuse is a dead end for an
+	 * agent and an invitation for a human (D21, D41).
+	 */
+	it('names none of the simulators the machine merely has', async () => {
+		answers(listing());
+
+		const devices = await backend.listDevices();
+
+		expect(devices.some((device) => device.serial === IPHONE_17_PRO)).toBe(false);
+		expect(devices.every((device) => device.state === 'ready')).toBe(true);
 	});
 
 	// D6: the device list is never cached, so a second call is a second invocation.
@@ -398,6 +437,24 @@ describe('describeDevice', () => {
 		answers(withoutDevice(BOOTED));
 
 		expect(await backend.describeDevice(BOOTED)).toBeNull();
+	});
+
+	/**
+	 * **The one enumeration #267 did not narrow, and the criterion that says so.** `listDevices`
+	 * asks what there is to borrow, where a simulator that is not booted is nothing to borrow;
+	 * this asks what *this* device is, of a caller who already has one in mind — so a simulator
+	 * somebody shut down answers `offline` rather than vanishing, which is what the refusals
+	 * naming a state are made of and what a lease grant then reports. `null` here stays what it
+	 * has always been: no such device on this host at all.
+	 */
+	it('answers for a simulator that is not booted, with the state that says so', async () => {
+		answers(listing());
+
+		const device = await backend.describeDevice(IPHONE_17_PRO);
+
+		expect(device?.serial).toBe(IPHONE_17_PRO);
+		expect(device?.state).toBe('offline');
+		expect(await backend.listDevices()).not.toContainEqual(device);
 	});
 });
 
@@ -482,19 +539,22 @@ describe('watchDevices', () => {
 			expect(streamIdbCompanion.mock.calls[0]?.[0]).toEqual(['--notify', 'stdout']);
 		});
 
-		it('delivers the full current set on subscription', () => {
+		/**
+		 * The set is `listDevices`' set, so the eleven targets of the frame are the **one** booted
+		 * simulator here (#267, D41). The device that is booted later in the run is absent rather
+		 * than `offline`: a row nothing can be done with is not what this list is of.
+		 */
+		it('delivers the borrowable set on subscription', () => {
 			const listener = watcher();
 
 			backend.watchDevices(listener);
 			live().onStdout(frame(0));
 
 			expect(sets(listener)).toHaveLength(1);
-			expect(sets(listener)[0]).toHaveLength(11);
+			expect(sets(listener)[0]?.map((device) => device.model)).toEqual(['iPhone 17']);
 			// The set as the capture found it: the simulator that was booted during the run had
 			// not been booted yet.
-			expect(sets(listener)[0]?.find((device) => device.serial === TRANSITIONING)?.state).toBe(
-				'offline',
-			);
+			expect(sets(listener)[0]?.some((device) => device.serial === TRANSITIONING)).toBe(false);
 		});
 
 		/**
@@ -512,7 +572,7 @@ describe('watchDevices', () => {
 			expect(runSimctl).not.toHaveBeenCalled();
 		});
 
-		/** Never a delta: every frame is the full set, and a state change is 11 devices again. */
+		/** Never a delta: every frame is the whole set, so a device booting is two devices again. */
 		it('delivers the full set again on every change, never a delta', () => {
 			const listener = watcher();
 
@@ -521,7 +581,7 @@ describe('watchDevices', () => {
 			live().onStdout(frame(2));
 
 			expect(sets(listener)).toHaveLength(2);
-			expect(sets(listener)[1]).toHaveLength(11);
+			expect(sets(listener)[1]).toHaveLength(2);
 			expect(sets(listener)[1]?.find((device) => device.serial === TRANSITIONING)?.state).toBe(
 				'ready',
 			);
@@ -534,12 +594,29 @@ describe('watchDevices', () => {
 			live().onStdout(Buffer.concat([frame(0), frame(2)]));
 
 			expect(sets(listener)).toHaveLength(2);
-			expect(sets(listener)[0]?.find((device) => device.serial === TRANSITIONING)?.state).toBe(
-				'offline',
-			);
+			expect(sets(listener)[0]?.some((device) => device.serial === TRANSITIONING)).toBe(false);
 			expect(sets(listener)[1]?.find((device) => device.serial === TRANSITIONING)?.state).toBe(
 				'ready',
 			);
+		});
+
+		/**
+		 * **The transitional decision, over the whole captured run** (#267). The five frames are
+		 * `Shutdown → Booting → Booted → Shutting Down → Shutdown` for one simulator, and what a
+		 * caller sees is **two** deliveries: the device arriving when it is up and leaving when it
+		 * is not. `Booting` and `Shutting Down` are not `Booted`, so they are not borrowable and
+		 * not listed — which is what keeps a device from appearing and vanishing across a single
+		 * boot. The collapse is the delivery rule this watch already had, not a dropped event.
+		 */
+		it('shows a simulator arriving booted and leaving, and nothing in between', () => {
+			const listener = watcher();
+
+			backend.watchDevices(listener);
+			for (const index of [0, 1, 2, 3, 4]) live().onStdout(frame(index));
+
+			expect(
+				sets(listener).map((set) => set.some((device) => device.serial === TRANSITIONING)),
+			).toEqual([false, true, false]);
 		});
 
 		/**
@@ -588,7 +665,9 @@ describe('watchDevices', () => {
 			await settle();
 
 			expect(sets(listener)).toHaveLength(2);
-			expect(sets(listener)[1]).toHaveLength(22);
+			// The `simctl` capture's own booted simulator — a different bench from the notify
+			// capture's, which is what makes this a second set rather than the same one again.
+			expect(sets(listener)[1]?.map((device) => device.serial)).toEqual([BOOTED]);
 		});
 
 		/**
@@ -730,11 +809,11 @@ describe('watchDevices', () => {
 			backend.watchDevices(listener);
 			dies();
 			await settle();
-			expect(sets(listener)[0]).toHaveLength(22);
+			expect(sets(listener)[0]?.map((device) => device.serial)).toEqual([BOOTED]);
 
 			await vi.advanceTimersByTimeAsync(250);
 			live().onStdout(frame(0));
-			expect(sets(listener)[1]).toHaveLength(11);
+			expect(sets(listener)[1]?.map((device) => device.model)).toEqual(['iPhone 17']);
 
 			runSimctl.mockClear();
 			await nextPoll();
@@ -836,7 +915,7 @@ describe('watchDevices', () => {
 			expect(runSimctl.mock.calls[0]?.[0]).toEqual(ENUMERATE);
 		});
 
-		it('delivers the full current set on subscription', async () => {
+		it('delivers the borrowable set on subscription', async () => {
 			answers(listing());
 			const listener = watcher();
 
@@ -844,8 +923,10 @@ describe('watchDevices', () => {
 			await settle();
 
 			expect(sets(listener)).toHaveLength(1);
-			expect(sets(listener)[0]).toHaveLength(22);
-			expect(sets(listener)[0]?.find((device) => device.serial === BOOTED)?.state).toBe('ready');
+			// `listDevices`' own answer, which is what the poll is (#267): 22 simulators on the
+			// capturing bench, one of them booted.
+			expect(sets(listener)[0]?.map((device) => device.serial)).toEqual([BOOTED]);
+			expect(sets(listener)[0]?.[0]?.state).toBe('ready');
 		});
 
 		it('delivers nothing when the next poll finds the same device set', async () => {
@@ -883,27 +964,33 @@ describe('watchDevices', () => {
 			expect(sets(listener)).toHaveLength(1);
 		});
 
-		it('delivers the full set again when a device changes state', async () => {
-			answers(listing());
+		/**
+		 * Never a delta: a simulator shutting down is the whole remaining set, not the one that
+		 * went — and under #267 shutting down *is* leaving the set, because the enumeration is of
+		 * what can be borrowed now.
+		 */
+		it('delivers the whole remaining set when a booted device shuts down, never a delta', async () => {
+			answers(onlyBooted(BOOTED, IPHONE_17_PRO));
 			const listener = watcher();
 
 			watchPolling(listener);
 			await settle();
+			expect(sets(listener)[0]).toHaveLength(2);
 
-			answers(
-				listing((parsed) => {
-					entryOf(parsed, BOOTED).state = 'Shutdown';
-				}),
-			);
+			answers(onlyBooted(IPHONE_17_PRO));
 			await nextPoll();
 
 			expect(sets(listener)).toHaveLength(2);
-			expect(sets(listener)[1]).toHaveLength(22);
-			expect(sets(listener)[1]?.find((device) => device.serial === BOOTED)?.state).toBe('offline');
+			expect(sets(listener)[1]?.map((device) => device.serial)).toEqual([IPHONE_17_PRO]);
 		});
 
-		/** Never a delta: a device leaving is the whole remaining set, not the one that went. */
-		it('delivers the whole remaining set when a device goes away, never a delta', async () => {
+		/**
+		 * **An empty set is a real answer here, and it is not the lost view above.** A Mac whose
+		 * last booted simulator has gone has nothing to lend, which is exactly what *no devices
+		 * attached* means on the Android half of the same list — so it is delivered, and the
+		 * inventory's `stale` stays false. Only `onInterrupted` says "no view" (D6).
+		 */
+		it('delivers an empty set when the last booted simulator goes away', async () => {
 			answers(listing());
 			const listener = watcher();
 
@@ -913,8 +1000,8 @@ describe('watchDevices', () => {
 			answers(withoutDevice(BOOTED));
 			await nextPoll();
 
-			expect(sets(listener)[1]).toHaveLength(21);
-			expect(sets(listener)[1]?.some((device) => device.serial === BOOTED)).toBe(false);
+			expect(sets(listener)[1]).toEqual([]);
+			expect(listener.onInterrupted).not.toHaveBeenCalled();
 		});
 
 		/**
@@ -1181,13 +1268,17 @@ describe('deviceInfo', () => {
 	 * A property of reading the screen off the device type rather than off the device: it needs no
 	 * booted simulator. Both devices asserted above are `Shutdown` in the capture, and this says
 	 * so deliberately rather than leaving it to be noticed.
+	 *
+	 * **It is also why the narrowing of #267 stops at the inventory.** `listDevices` does not name
+	 * this simulator — it is nothing anybody can borrow — while `describeDevice` says what it is
+	 * and this answers its screen, because both are asked about a device the caller already has in
+	 * mind. Dropping that would have thrown away a fact the platform gives away for free.
 	 */
 	it('answers for a device that is not booted', async () => {
 		answers(listing());
 
-		const device = (await backend.listDevices()).find((entry) => entry.serial === IPHONE_17_PRO);
-
-		expect(device?.state).toBe('offline');
+		expect((await backend.describeDevice(IPHONE_17_PRO))?.state).toBe('offline');
+		expect(await backend.listDevices()).toEqual([expect.objectContaining({ serial: BOOTED })]);
 		expect((await backend.deviceInfo(IPHONE_17_PRO)).screen.widthPx).toBe(1206);
 	});
 

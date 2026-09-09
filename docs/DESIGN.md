@@ -270,6 +270,16 @@ here.
   on a row holding a tree, a grid or a table.
 - Cards must survive a realistic host. Three devices look fine; **eight phones attached is an
   ordinary machine**, and tall cards scroll badly at that count.
+- **The grid's order is held, then free, then not ready** (#267), and it is the counter badge's own
+  term order read left to right. Held first because held is what this screen is read for — who has
+  what, and how long is left — and it was previously wherever the host happened to return it.
+  Then free, then not ready, which is §5's emphasis rule: this screen answers *what can I use right
+  now*, so the usable device outranks the greyed-out one. Within a group the host's order stands;
+  nothing sorts by serial, model or lease clock. It is one **partition** rather than a sort, and the
+  badge's three numbers are the sizes of the very three groups the cards are drawn in, which is what
+  makes the badge and the grid agree by construction (`panel/src/devices/device-list.ts`). Ordering
+  is the panel's and never the host's: `list_devices` says what is attached, and `rover list`'s own
+  table may reasonably differ.
 
 *As built* (#111): `<main>` carries `p-(--margin-desktop)`, which is the equal-margins rule in one
 declaration — the gap from the sidebar's border to the content is the same token as the gap from
@@ -361,6 +371,15 @@ as `unauthorized` or `offline` is listed, holds no lease, and would be refused a
 (`not-ready`), so it may not carry the free green — and the rule two paragraphs down says it may not
 carry a warning colour either. Grey is what is left and it is the honest one: nothing has failed,
 there is simply nothing here to take.
+
+**It stopped being a tone this screen routinely shows, and it is still reachable** (#267). The rows
+that made it ordinary were shut-down simulators, and the host no longer reports one: the device list
+is an inventory of what can be borrowed now, so a simulator that is not running is not listed at all
+(`PROJECT.md` D41). What is left is the case the tone was designed for — a phone plugged in with USB
+debugging unauthorized, whose card is the only clue its operator gets about why it is unusable. So
+the row above stays, the counter's third term stays conditional on being non-zero, and neither is
+documented as unreachable: an ordinary screen is now two tones, and the third is a real answer that
+happens to be rare.
 
 **There is no red or orange device state, and there will not be one.** A device that disappears
 from the host is simply not listed. Orange in this palette (`secondary-container`, `#ff5e07`) is the
@@ -460,6 +479,11 @@ one before the held count, the free one in place of the separator. No `·`, no g
 agree with the cards below it. *As built* (#123) it grows a third term, `● 1 not ready`, **only when
 that count is non-zero** — the three buckets sum to the grid, so the badge still agrees with the
 cards structurally, and on the ordinary screen it is exactly the two terms above.
+
+Since **#267 those three buckets are also the order the cards are drawn in** (§4), so the badge is
+read left to right and the grid top to bottom in the same order, out of one partition. Its terms
+were the argument for that order rather than a consequence of it: the badge had said *held* first
+since it was drawn, while the grid said whatever the host said.
 
 *As built* (#113, its first row rewritten in place by #223):
 `panel/src/components/devices/device-card.tsx`, and five things the design's mock data never had to

@@ -138,7 +138,9 @@ Design work lives in [`DESIGN.md`](./DESIGN.md); the brief that produced the fir
    `test_name` and the grant instant, with a countdown to the expiry that ticks once a second and
    **goes back up** when activity renews the lease (`PROJECT.md` D8) — verified against a running
    host, not only in a test. A held/free counter above the grid is derived from the same array the
-   cards come from, so it cannot disagree with them.
+   cards come from, so it cannot disagree with them — and since #267 from the same **partition**:
+   the cards are drawn held, then free, then not ready, and the badge's three numbers are the sizes
+   of those very three groups. Held first because held is what this screen is read for.
 7. **Force-release a stuck lease** — **done** (#122). Before its TTL naturally runs out, an operator
    action rather than something a client can do to another client's lease. The host method landed
    first (R31, #109): `force_release_device`, keyed on the device serial rather than on the holder's
