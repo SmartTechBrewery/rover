@@ -23,8 +23,6 @@ agent's job.
 
 ## Quick installation
 
-Three steps, and the third is run **inside the project you want an agent to be able to test**.
-
 ```bash
 git clone git@github.com:SmartTechBrewery/rover.git
 cd rover
@@ -32,41 +30,51 @@ npm install     # installs the git hooks, and checks this machine has an adb Rov
 npm link        # puts `rover` on your PATH, running this checkout
 ```
 
-`npm link` is a symlink into your global `bin`, not a copy: the command keeps running the checkout
-you linked it from, so `git pull` updates it in place and `npm unlink -g rover` takes it away
-again. The package stays `"private": true` and nothing is published to a registry — linking a
-private package is what `npm link` is for.
+Skip `npm link` and every `rover` below is typed `npm run rover --` from inside this checkout —
+except `rover init`, which has to run in *another* project's directory.
 
-Then once per project, in that project's own directory:
+### If this machine lends iOS simulators
+
+One more program: `read_screen` and all four input verbs go through `idb_companion`, and Homebrew
+no longer carries it. Unpack the release and put it on your `PATH`:
+
+```bash
+mkdir -p ~/.rover/idb-companion-1.5.2 ~/.local/bin
+curl -L https://github.com/facebook/idb/releases/download/v1.5.2/idb-companion.macos-arm64.tar.gz \
+  | tar xz -C ~/.rover/idb-companion-1.5.2
+ln -s ~/.rover/idb-companion-1.5.2/idb_companion ~/.local/bin/idb_companion
+```
+
+The binary needs the `Resources/` and `.bundle`s it unpacks beside, so link it rather than moving
+it. `ROVER_IDB_COMPANION_PATH` is the other way to name it — but the daemon starts itself and
+inherits the environment of whichever client woke it, which may be your agent rather than your
+terminal, so a symlink on `PATH` is the one that always holds. Full search order:
+[where Rover looks for `idb_companion`](#where-rover-looks-for-idb_companion).
+
+### Once per project
 
 ```bash
 cd ~/Projects/my-app
 rover init --write
 ```
 
-That writes four things and says what it did to each:
-
 | Where | What |
 | --- | --- |
-| `~/.rover/projects/my-app.json` | the project's hook file: what the host installs and stops for a lease on it (D13). The application id and the install command are detected from a Gradle wrapper where there is one, reported with the file they came from, and an existing hook file is **never** overwritten without `--force` |
-| `my-app/.mcp.json` | the `rover` MCP server, merged into whatever was already there. Other servers, and other variables in ours, are left alone |
-| `my-app/ROVER.md` | the page an agent reads before its first call — the lease loop, the verb set, and the rules. **Generated**: re-run `rover init` rather than editing it. **Move it wherever it belongs** — `docs/`, `ai/`, under another name — and the next run finds it there and rewrites it in place, by a marker inside the file rather than by its name. A markdown file init did not write is never overwritten, and `--document <path>` places the page by hand |
-| `CLAUDE.md`, `AGENTS.md`, `GEMINI.md` | a short block saying that a **manual test** means Rover and that the page comes first, by the path the page is actually at. `--write` inserts it between markers, so running init again replaces it instead of adding a second copy; without the flag it is printed for you to place |
+| `~/.rover/projects/my-app.json` | the project's hook file — what the host installs and stops for a lease on it (D13), detected from a Gradle wrapper where there is one |
+| `my-app/.mcp.json` | the `rover` MCP server, merged into whatever was already there |
+| `my-app/ROVER.md` | the page an agent reads before its first call. Generated — re-run `init` rather than editing it, and move it wherever it belongs |
+| `CLAUDE.md`, `AGENTS.md`, `GEMINI.md` | a short block saying that a manual test means Rover. `--write` inserts it; without the flag it is printed |
 
-Nothing there asks a host, so none of it needs a daemon running or a device attached. Prove the
-wiring separately, once:
+Nothing there asks a host, so it needs no daemon and no device. `rover init --help` has the flags.
+
+### Check the wiring
 
 ```bash
 rover status    # which host answered, its pid and uptime
 rover list      # what is attached, what is free, and who holds what
 ```
 
-**Without `npm link` everything still works**, typed `npm run rover --` from inside this checkout;
-the CLI renders every pasteable line through one constant that answers from how the process was
-started, so its own output always names the form that works for its reader. The one thing that
-genuinely needs the link is `rover init` in *another* repository — `npm run` there would run that
-project's own `package.json`. `PROJECT.md` §9.4 carries that decision and the reasoning it
-reversed.
+Nothing to start by hand — the first command that asks a host brings the daemon up (D5).
 
 ## Quick start
 
