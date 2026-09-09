@@ -1111,12 +1111,21 @@ function that already obeys it. The lower-case subject in the *could not measure
 carried in the table rather than folded at render, for the same reason: a `toLowerCase()` follows
 the viewer's locale, and nine words are cheaper to write out than one more fold to reason about.
 
-**One pill, drawn by both badges.** `header-badge.tsx` owns the treatment — `rounded-sm border-2
+**One pill, drawn by three badges** (amended in place, #260 — it was *by both badges*, said while
+the two in this row were all of them). `header-badge.tsx` owns the treatment — `rounded-sm border-2
 border-outline-variant bg-surface-container`, `px-3 py-1`, twelve pixels in the code face — and the
 view toggle composes its own frame from the same exported constant, since it needs the frame without
 the padding. No new colour and no new measure: every value was already in `archive.tsx` before this
 badge existed, which is what a second badge in a row no approved screen shows is allowed to cost
 (§1, §11's third list).
+
+**And the `archive` row of the table above is drawn on a second screen** (#260). The System screen's
+`ARCHIVE SETTINGS` card says what the whole archive takes in its own header strip, which is this
+badge's root scope over the same walk of the same directory — so it takes `sizeSentence`'s words
+rather than writing a second sentence for one number (§13). That is also why the root's `All` is
+not shortened away: it is what holds this table's first row apart from the groups view's
+`Grouped tests take …` below it, and the shorter `Tests take …` proposed for that card lost to it
+on exactly that ground.
 
 **One request per scope, nothing summed in the browser, and the deepest context is free.** The host
 walks the address once and the answer is cached for the life of the screen (*Routing, and no
@@ -3357,7 +3366,9 @@ nothing else yet, in one card headed `ARCHIVE SETTINGS`.
 strip of its own — `bg-surface-container-high` above a `border-b-2`, in the tree card's
 `DIRECTORY` heading step — and the body beneath it. Reused rather than re-invented, because a card
 that says what it holds in a strip is what every other card in this panel already is, and a title
-floating inside the body would make this the one that is not.
+floating inside the body would make this the one that is not. **At the other end of that strip is
+what the archive already takes on disk** (#260, below), which is the row the Archive's own cards
+already are.
 
 **Inside the body the order is a decision**: the two notes, a subtle rule, then the fields. The
 notes say what the card is *for*, so they are read before the numbers they are about rather than
@@ -3474,17 +3485,68 @@ sit under the title rather than under the fields — see the arrangement above.
 fields — so *not built yet* would now be false of it, and the one temporary fact belongs beside the
 fields it is about rather than in a panel above them.
 
+### What the archive already takes (#259, #260)
+
+A badge at the right end of the header strip, opposite the title:
+
+```
+┌─ ARCHIVE SETTINGS ──────────────────── All tests take 7.7 MB on disk ─┐
+│  Whichever of the two is reached first is the one that acts. …        │
+```
+
+**In the strip, because it is a fact about the host's disk and not the value of either field.**
+Beside the disk field it would read as that field's own figure and invite exactly the `X of Y`
+comparison the list below refuses; in the strip it is what the card is *about* — which is where the
+Archive's own cards put the `Keep` tick (§9). It is the strip's second child and the title's
+opposite, and it wraps under the title rather than crowding it once the sentence outgrows the row.
+
+**One pill and one sentence, and both are the Archive header's.** `HeaderBadge` draws it — the
+third badge on that one component, so two screens cannot drift apart by a border width — and the
+words are `sizeSentence`'s `archive` scope, which is what the Archive screen says at its own root
+over the same walk of the same directory. **`All tests take 7.7 MB on disk` is the wording, and
+`Tests take …` is what it was weighed against**: the operator proposed the shorter one for this
+card, and the longer one won because *all* is what holds the archive's root apart from the groups
+view's `Grouped tests take …` over a subset of it (§9). One number with two phrasings on two
+screens is drift rather than variety, so there is one table of words and this screen is one more
+reader of it.
+
+**The unit steps by itself and the field's does not.** `formatBytes` is 1024-based and moves to `GB`
+above 1024 MB, so the card may read `1024` MB in the field and `1.4 GB` in the badge at the same
+time. That mismatch is **accepted rather than fixed**: the setting *is* an integer count of
+megabytes because the host is handed a number and not a unit to parse (above), while the badge is a
+measurement for a person to read. A reader comparing the two converts in their head, which is the
+trade this takes in exchange for a figure nobody has to read as seven digits. It is **not** the
+units toggle the list below rejects, and that row is amended in place to say so: nothing here lets
+a reader choose a unit.
+
+**Absent rather than invented, and #259's honesty rules unchanged.** While the answer is still out,
+and where nothing is filed at all, no badge is drawn — no placeholder figure, no `0`, no `—`. A
+walk that was cut short renders `All tests take at least 7.7 MB on disk`, because a total from a
+bounded walk is not a total; and a size the host could not take gets *The host could not measure
+what all tests take on disk* rather than the word `unknown` dropped into the value slot. All three
+are §9's rules over the same answer, kept by drawing the same sentence rather than by restating
+them.
+
 ### What is deliberately absent
 
 - **No `Save`, no `Apply`, no `Reset`** — see above. Nothing to write to.
-- **No current usage figure.** *Using 3.4 GB of 10 GB* is the obvious companion to a disk budget and
-  the panel cannot have it: no answer carries the archive's size **or its budget**, and a number
-  computed in a browser from a bounded directory walk would be a measurement presented as a fact
-  (D19, and §9's rule that nothing on the archive screen is invented). `sweep_archive` deliberately
-  carries neither setting for exactly this reason, so **neither the sweep landing nor its two
-  unattended triggers change this row** (#238, #245, #246): what would is an answer that carries
-  the figure, and there is still none. A host that sweeps every midnight has *more* to say about
-  its own disk than one that never did, and it says none of it here.
+- **No *`X of Y`*, which is what is left of *no current usage figure*.** *Corrected in place,
+  2026-09-09 (#260), with its reasoning rewritten rather than deleted (`ai/RULES.md` §1).* This row
+  refused a usage figure outright, and it named the exact condition that would end it: *no answer
+  carries the archive's size **or its budget***, so anything drawn here would be a browser's
+  arithmetic over a bounded directory walk presented as a fact (D19, and §9's rule that nothing on
+  the archive screen is invented). **One half of that condition has been met and the other has
+  not.** `measure_archive` has carried the archive's size since #259 — with its own truncation and
+  unmeasurable outcomes, so the honesty the row was protecting is in the answer rather than in the
+  absence — and the badge above draws it. No answer carries the **budget**, because the number in
+  the field is a draft nobody has saved and nothing writes it anywhere. So *Using 3.4 GB of 10 GB*
+  stays absent for precisely the reason it always was: the `of 10 GB` half would present a typed-in
+  number as the bound the sweep enforces. With it go every percentage, every progress bar and every
+  *over budget* colour or word — the sweep's own over-budget case is the sweep's, and it says so in
+  the host's log (#238). `sweep_archive` still deliberately carries neither setting, so **neither
+  the sweep landing nor its two unattended triggers changed this row** (#238, #245, #246) and they
+  are not what changed it now. When a method takes these two numbers the comparison becomes
+  possible, and it is a decision of its own then rather than the completion of this one.
 - **No preview of what would be deleted.** *Corrected in place, 2026-09-08 (#238): the sweep does
   exist now and can be asked what it would take* — `sweep_archive` takes a `dryRun`. **And it now
   runs whether anybody previews it or not** (#245, #246), which makes a preview here more
@@ -3493,8 +3555,11 @@ fields it is about rather than in a panel above them.
   the same call with `dryRun: false` deletes an operator's runs permanently, so a browser is not
   where it belongs while D27's role model is still deferred. A preview control here would be one
   boolean away from the destructive form. It is reached from the CLI (`rover sweep --dry-run`).
-- **No units toggle**, no GB/MB switch. The setting is a count of megabytes; a second unit is a
-  second place a number can be wrong.
+- **No units toggle**, no GB/MB switch — **and the badge above is not one** (amended in place,
+  #260). The setting is a count of megabytes and stays one. What the badge renders is a
+  *measurement*, and its unit is picked from the bytes by `formatBytes` rather than by anybody at
+  the keyboard. What this row refuses is a **control**: a switch is a second place a number can be
+  wrong, and a formatter that answers the same way for the same bytes on both screens is not.
 - **Nothing about the daemon, the host's ports, the users or the projects root.** They are settings
   in the ordinary sense and none of them is writable from a browser (D31, D27's deferred role
   model). When any of them becomes readable here it is a second card on this screen, not a rewrite

@@ -2,8 +2,8 @@ import type { ArchiveSize } from './archive-size.js';
 import { formatBytes } from './file-size.js';
 
 /**
- * What the Archive header's size badge says — **one full sentence naming its own scope** (#261,
- * #262, `docs/DESIGN.md` §9).
+ * What a size badge says — **one full sentence naming its own scope** (#261, #262, #260,
+ * `docs/DESIGN.md` §9 and §13).
  *
  * `All tests take 7.7 MB on disk` at the root, `This project takes …` one level down, and so on to
  * `This file takes …` — and `Grouped tests take …`, `Grouped tests in this project take …` and
@@ -22,7 +22,15 @@ import { formatBytes } from './file-size.js';
  * **`formatBytes` is the only formatter and nothing here calls `toLocaleString`** (#223). The
  * decimal separator is a dot on every machine, because the figure is a fact about the host's disk
  * and not a quantity rendered for whoever happens to be reading — the fixed-format rule that issue
- * settled, kept by importing the one function that already obeys it.
+ * settled, kept by importing the one function that already obeys it. It is also why the badge steps
+ * to `1.4 GB` by itself: the unit follows the bytes rather than the screen it is drawn on.
+ *
+ * **Two screens read this, and the `archive` scope is the one they share** (#260). The System
+ * screen's `ARCHIVE SETTINGS` card says what the whole archive weighs, which is the same walk of
+ * the same directory the Archive screen's root badge names — so it takes the sentence from here
+ * rather than writing a second one. Two phrasings of one number on two screens is drift, not
+ * variety: `Tests take …` was the wording proposed for the System card and `All tests take …` is
+ * what won, because *all* is what holds the root apart from the groups view's subset scopes below.
  */
 
 /**

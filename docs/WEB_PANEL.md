@@ -184,10 +184,14 @@ Design work lives in [`DESIGN.md`](./DESIGN.md); the brief that produced the fir
     `ROVER_ARTIFACTS_BUDGET_MB` and `ROVER_ARTIFACTS_MAX_AGE_DAYS` with `sweep_archive` behind them
     (D34–D36, #238) — and that row is deliberately **not** on `PANEL_METHODS`: it deletes an
     operator's runs permanently, so a browser is not where it belongs while D27's role model is
-    still deferred, and the prune action here waits on that model rather than on the mechanism. The
-    **disk-usage view** is still this item's and still blocked on the same thing it always was: no
-    answer carries the archive's size or its budget, and `sweep_archive` deliberately carries
-    neither (`docs/DESIGN.md` §13). **Nothing is left open on the policy itself**: the budget runs
+    still deferred, and the prune action here waits on that model rather than on the mechanism. **How
+    much space the archive is using is answered and drawn** (corrected in place, #259, #260): the
+    host measures one scope on request (`measure_archive`, R49) and the System screen's
+    `ARCHIVE SETTINGS` card says what the whole archive takes in its own header strip, in the same
+    sentence the Archive screen's root badge uses. What is still this item's and still blocked is
+    the half that was always the harder one — *`X of Y`*, a percentage, a usage bar: no answer
+    carries the archive's **budget**, the number in that field is a draft nobody has saved, and
+    `sweep_archive` deliberately carries neither setting (`docs/DESIGN.md` §13). **Nothing is left open on the policy itself**: the budget runs
     after every lease ends and both bounds run at local midnight and at daemon start (`PROJECT.md`
     D37, D38, R48), so *who runs it unattended* — the last open question here — is answered and the
     host needs nobody. Every named user may set the flag, exactly as every named user
