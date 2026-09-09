@@ -120,8 +120,14 @@ export function useRegisteredProjects(): RegisteredProjectsHook {
 
 	/*
 	 * Stable across renders, so a screen may hand it to an effect or a callback without it becoming
-	 * a dependency that changes every time. The updater form rather than `nonce + 1`, so two
-	 * settled deletes in one tick are two reads rather than one.
+	 * a dependency that changes every time. And **the updater form is what makes that stability
+	 * safe**: `nonce + 1` inside a callback with an empty dependency list would read the nonce of
+	 * the render that built it — `0`, for the life of the screen — so the second reload and every
+	 * one after it would set a value the state already held, and the effect would never run again.
+	 * No increment can be lost to a stale closure this way. It is deliberately *not* a claim about
+	 * request counts: two deletes settling in one tick are one read either way, because React
+	 * batches and the effect body runs once per value the nonce settles on — and one fresh
+	 * `list_projects` after them is exactly what is wanted.
 	 */
 	const reload = useCallback(() => {
 		setNonce((previous) => previous + 1);

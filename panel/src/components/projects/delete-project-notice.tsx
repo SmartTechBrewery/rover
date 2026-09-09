@@ -93,6 +93,15 @@ export function DeleteProjectNotice({
  * `deleted` does: the fields say what did go, so this is the fuller sentence rather than the
  * thinner one.
  *
+ * **And a `partial` where no half went is said as one, in words of its own.** The host's `partial`
+ * arm has **no floor on how many halves went** (`src/daemon/delete-project.ts`: the outcome is
+ * `partial` the moment any one of the three is `failed`), so all three failing is an ordinary
+ * answer — a read-only `~/.rover`, or three roots owned by another user — and it is a delete that
+ * removed nothing. *The rest went, with 0 B back* would then be a removal claimed where the host's
+ * own audit line says `NOT removed` three times, which is the one thing this screen must never do
+ * (D42). So the removal clause and the bytes are said only when some half is `removed`, and the
+ * all-failed state is a fifth wording rather than the `partial` wording with an empty referent.
+ *
  * **`refused` is a live lease, and the next move is obvious and the operator's**: wait for it, or
  * force-release it first on the Devices screen. Nothing at all was touched, which the sentence says
  * so that *refused* is not read as *partly done*.
@@ -119,7 +128,31 @@ function said(answer: SettledDeleteProject['answer'], project: string): string {
 	if (answer.outcome === 'deleted') {
 		return `${project} is gone: the registration and everything the archive held for it, with ${freed}.${kept}`;
 	}
+	/*
+	 * No half `removed` means nothing went, so there is no *rest* to have gone and no figure to
+	 * state — `0 B` is what `freedBytes` carries there, and printing it beside *the rest went* would
+	 * read as a removal that came to nothing rather than as no removal at all. An `absent` half is
+	 * not a removal either: there was nothing of it to take.
+	 */
+	if (!someHalfWent(answer)) {
+		return `Nothing of ${project} could be removed: ${halvesThatStayed(answer)}. This host's log says what stopped it.`;
+	}
 	return `Some of ${project} could not be removed: ${halvesThatStayed(answer)}. The rest went, with ${freed}.${kept} This host's log says what stopped it.`;
+}
+
+/**
+ * Whether any half of this delete actually went, which is what the removal clause is a claim about.
+ *
+ * `removed` and nothing else: `absent` is *there was nothing here*, so counting it would put *the
+ * rest went* on a delete that took nothing — the same flattening `not-registered` is a separate arm
+ * to avoid.
+ */
+function someHalfWent(answer: Extract<DeleteProjectAnswer, { outcome: 'partial' }>): boolean {
+	return (
+		answer.registration === 'removed' ||
+		answer.archive === 'removed' ||
+		answer.keptTests === 'removed'
+	);
 }
 
 /**

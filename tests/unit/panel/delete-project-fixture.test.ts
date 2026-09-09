@@ -32,10 +32,12 @@ import fixture from '../../fixtures/panel/delete-project.json' with { type: 'jso
  *
  * **Every entry is constructed rather than captured, and that is stated here and in
  * `ai/TESTING.md`** beside the rule it bends (§"A wire answer is a fixture too"). It bends it as
- * far as `force-release.json` does and for the same kind of reason: the five entries need five
- * different host states, and three of them cannot be arranged without breaking a host on purpose —
- * an archive subtree the daemon's user may not remove, a kept-tests store that will not read, and
- * a live lease on a project whose registration is being deleted. What keeps them honest is this
+ * far as `force-release.json` does and for the same kind of reason: the six entries need six
+ * different host states, and four of them cannot be arranged without breaking a host on purpose —
+ * an archive subtree the daemon's user may not remove, a kept-tests store that will not read, a
+ * projects root, archive root and kept-tests store that all three refuse the write at once (the
+ * `partial` in which nothing went, which the panel says in words of its own), and a live lease on a
+ * project whose registration is being deleted. What keeps them honest is this
  * half: the schema below is `.strict()`, so a field this file invents fails here rather than
  * teaching the panel a shape the host never sends, and every value is one
  * `src/daemon/delete-project.ts` composes — `removed`/`absent`/`failed` per half, `freedBytes: 0`
@@ -100,6 +102,41 @@ describe("the panel's delete_project fixture", () => {
 		});
 
 		expect([...new Set(fates)].sort()).toEqual([...DeletedPartSchema.options].sort());
+	});
+
+	/*
+	 * **Both sides of the branch the `partial` line draws.** The panel says a `partial` in which
+	 * some half went differently from one in which none did — *the rest went, with N back* against
+	 * *nothing of it could be removed* — because the host's `partial` arm has no floor on how many
+	 * halves went (`src/daemon/delete-project.ts`). Asserted on the file so the combination the
+	 * wording branches on is a host answer this fixture carries, per `ai/TESTING.md`'s rule that the
+	 * fixture holds every combination the code branches on.
+	 */
+	it('carries a partial that removed something and one that removed nothing', () => {
+		const partials = ANSWERS.map((answer) => DeleteProjectResultSchema.parse(answer.result)).filter(
+			(answer): answer is Extract<typeof answer, { outcome: 'partial' }> =>
+				answer.outcome === 'partial',
+		);
+		const went = partials.map(
+			(answer) =>
+				answer.registration === 'removed' ||
+				answer.archive === 'removed' ||
+				answer.keptTests === 'removed',
+		);
+
+		expect(went).toContain(true);
+		expect(went).toContain(false);
+		// And the one where nothing went freed nothing and took no exemption with it, which is what
+		// makes the panel's silence about both figures the truth rather than a choice.
+		for (const answer of partials.filter(
+			(partial) =>
+				partial.registration !== 'removed' &&
+				partial.archive !== 'removed' &&
+				partial.keptTests !== 'removed',
+		)) {
+			expect(answer.freedBytes).toBe(0);
+			expect(answer.keptTestsRemoved).toBe(0);
+		}
 	});
 
 	/*

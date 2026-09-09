@@ -61,22 +61,38 @@ export function useKeptTestCount(project: string): KeptTestCount {
 	const { call } = useSession();
 	const [count, setCount] = useState<KeptTestCount>(LOADING);
 	/*
-	 * A ref rather than state, `archive-size.ts`'s guard verbatim: React 19's StrictMode runs a
-	 * mount effect twice and a guard held in state would not have been written back before the
+	 * A ref rather than state, `archive-size.ts`'s guard for its reason: React 19's StrictMode runs
+	 * a mount effect twice and a guard held in state would not have been written back before the
 	 * second run, so one dialog would read the host's store twice — visible in the daemon's own
 	 * log.
+	 *
+	 * **It carries which project it was asked for, rather than a boolean**, which is the shape
+	 * `archive-size.ts` keys on a `Set` of scopes for: `project` is in the dependency list below, so
+	 * a changed identifier on a mounted instance re-runs the effect, and a boolean guard would
+	 * refuse the read and leave `count` holding the *previous* project's number for the dialog to
+	 * draw as this one's. No caller reaches that today — the dialog is mounted only while `asking`
+	 * is true and each card is keyed on its identifier — but a dependency list that advertises a
+	 * re-read the guard then refuses is what the next caller copies out of here.
 	 */
-	const asked = useRef(false);
+	const askedFor = useRef<string | null>(null);
 	const live = useRef(true);
 
 	useEffect(() => {
 		live.current = true;
-		if (!asked.current) {
-			asked.current = true;
+		if (askedFor.current !== project) {
+			askedFor.current = project;
+			// Back to *reading…* rather than the previous project's number, for the whole of the
+			// window this read is out. `LOADING` is one constant, so the first mount's set is a no-op.
+			setCount(LOADING);
 			void (async () => {
 				// No parameter at all — the method answers the whole set, and the filter is here.
 				const answer = await listKeptTests(call);
-				if (!live.current || answer.outcome === 'access-ended') {
+				/*
+				 * A superseded read lands on nothing: `live.current` is true again after the effect
+				 * re-runs, so the guard has to be the identifier this answer was asked for — two
+				 * reads' answers are not ordered by the requests that asked for them.
+				 */
+				if (!live.current || askedFor.current !== project || answer.outcome === 'access-ended') {
 					return;
 				}
 				setCount(

@@ -82,6 +82,36 @@ describe('the one read this makes', () => {
 		expect(host.call).toHaveBeenCalledTimes(1);
 	});
 
+	/*
+	 * **A changed project is one more read, never the previous project's number.** `project` is in
+	 * the effect's dependency list, so this is a render React can produce; a boolean guard would
+	 * refuse the read and leave the count as it was, which the dialog would draw as this project's.
+	 * No caller mounts the dialog that way today — that is why this is pinned here rather than in
+	 * `projects.test.tsx`.
+	 */
+	it('reads again for a changed project, and says nothing about it in between', async () => {
+		host.call.mockReset();
+		host.call.mockResolvedValue(THREE);
+		const { rerender } = render(<Probe project="checkout-web" />);
+		await waitFor(() => expect(screen.getByTestId('count').textContent).toBe('counted:2'));
+
+		let answer: (value: unknown) => void = () => undefined;
+		host.call.mockReturnValue(
+			new Promise((resolve) => {
+				answer = resolve;
+			}),
+		);
+		rerender(<Probe project="rover-sandbox" />);
+
+		// *reading…* while the second read is out, rather than `checkout-web`'s two.
+		expect(screen.getByTestId('count').textContent).toBe('loading');
+		await act(async () => {
+			answer(THREE);
+		});
+		expect(screen.getByTestId('count').textContent).toBe('counted:1');
+		expect(host.call).toHaveBeenCalledTimes(2);
+	});
+
 	// An answer that outlives the dialog lands on nothing rather than on an unmounted tree.
 	it('sets nothing when the answer arrives after the dialog is gone', async () => {
 		host.call.mockReset();

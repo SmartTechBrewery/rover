@@ -37,6 +37,18 @@
       }
     },
     {
+      "case": "none of the three halves would go, so the delete removed nothing",
+      "params": { "project": "checkout-web", "actor": "alice" },
+      "result": {
+        "outcome": "partial",
+        "registration": "failed",
+        "archive": "failed",
+        "keptTests": "failed",
+        "freedBytes": 0,
+        "keptTestsRemoved": 0
+      }
+    },
+    {
       "case": "nothing of this project was on the host",
       "params": { "project": "never-registered", "actor": "alice" },
       "result": { "outcome": "not-registered" }

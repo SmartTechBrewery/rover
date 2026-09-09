@@ -476,6 +476,11 @@ describe('what this screen asks the host, and what it never does', () => {
  * This is the D6 pairing assertion this file already makes between its two empty states, applied to
  * the one action on the screen: four different pieces of news and four different next moves, so a
  * sentence that appeared in two of them would be one of them saying the wrong thing.
+ *
+ * **Five sentences over four outcomes**, because `partial` carries two pieces of news: a delete
+ * that took some of it, and a delete that took none of it. The host answers both on the same arm
+ * (`src/daemon/delete-project.ts` has no floor on how many halves went), so the second is held
+ * apart from the first here rather than trusted to read correctly with the first's words.
  */
 describe('what a delete settles, said above the list', () => {
 	const OUTCOMES = [
@@ -498,6 +503,23 @@ describe('what a delete settles, said above the list', () => {
 				registration: 'removed',
 				archive: 'failed',
 				keptTests: 'absent',
+				freedBytes: 0,
+				keptTestsRemoved: 0,
+			},
+		],
+		/*
+		 * The `partial` in which **no** half went is a fifth piece of news, not a sixth outcome: the
+		 * host answers `partial` the moment any half fails and puts no floor on how many went, so a
+		 * delete that removed nothing arrives on this arm and must not borrow the sentence that says
+		 * *the rest went*. It is here so the pairing rule below holds it apart from the other four.
+		 */
+		[
+			'a partial where nothing went',
+			{
+				outcome: 'partial',
+				registration: 'failed',
+				archive: 'failed',
+				keptTests: 'failed',
 				freedBytes: 0,
 				keptTestsRemoved: 0,
 			},
@@ -532,8 +554,8 @@ describe('what a delete settles, said above the list', () => {
 			unmount();
 		}
 
-		expect(said).toHaveLength(4);
-		expect(new Set(said).size).toBe(4);
+		expect(said).toHaveLength(5);
+		expect(new Set(said).size).toBe(5);
 		// No sentence is a substring of another either, which is the sharper form of the same rule:
 		// two lines that differ only by a clause would read as one piece of news with a footnote.
 		for (const [at, one] of said.entries()) {

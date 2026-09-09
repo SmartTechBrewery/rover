@@ -2211,8 +2211,14 @@ not current, over a list; a host view that is not current over an *empty* list, 
 cannot say what is attached rather than that nothing is; and the host being unreachable, which
 replaces the whole page.
 
-**Force-releasing a stuck lease is the panel's one operator action**, and it is the only request it
-makes that changes anything on the host. Each held card carries one recessive control below the lease
+**Force-releasing a stuck lease was the panel's first operator action, and it is no longer its only
+one.** This paragraph read *the panel's one operator action, and … the only request it makes that
+changes anything on the host*, and it is rewritten in place rather than deleted because the reason it
+said that is still the reason the panel's writes are counted at all: everything else the panel does
+is a read, and a request that changes the host is admitted one at a time on D27's test — named,
+bounded, and stated before it fires. Three of them are on the panel's surface now: `force_release_device`
+below, `set_kept_tests` (the `Keep` flag, above), and `delete_project` from the Projects screen.
+Each held card carries one recessive control below the lease
 data it acts on; it asks first, in a dialog that names the device, its serial, the owner, the project
 and the test name, shows the time to auto release, and says in plain words what confirming does — the
 lease ends immediately, the device is restored to a clean state, and the agent holding it fails on
@@ -2227,6 +2233,26 @@ release that reached nothing released nothing: the dialog stays open, the contro
 the panel says so rather than announcing an ending it never got. The call is attributed to the
 signed-in user's identifier, so
 `rover force-release`'s audit line on the host names a person and not a browser.
+
+**Projects lists what is registered on this host, and its cards carry the delete.** One
+`list_projects` on navigation — no polling, no refresh control — and a card per project: its
+identifier, the apps it names, its helper services by name, and whether there is an `install` and a
+`teardown`. No `env` value and no host path is on that answer, and there is nothing on the screen
+that edits a hook file: registering one is still `rover init`'s, and the one write here is a removal.
+**It asks first, and it says what will go in numbers** — the identifier verbatim, what the archive
+holds for that project, and how many of its tests are marked `Keep`, all three before the control
+fires and `0` drawn rather than omitted, because *none of its tests are kept* is the fact that stops
+the line beside it being alarming. `Cancel` is the prominent control and the destructive one
+recessive, as on the Devices screen. What the host answered is then said above the list, and the four
+answers read differently because they mean different things — the project went (with the bytes the
+archive gave back and how many `Keep` flags went with them), there was no such registration (so the
+list was out of date and has been read again), some of it would not go (naming which half stayed, and
+a delete where *no* half went says that rather than claiming a remainder), or a lease on it is live
+and nothing at all was touched. **A confirmed delete that reached nothing is not one of those four**:
+the dialog stays open, the control comes back, and the panel reports no deletion it did not get. After
+a settled delete the list is `list_projects`' answer again rather than the panel's own edit of what it
+had. The call is attributed to the signed-in user's identifier, so the host's audit line for
+`rover delete-project` — above — names a person and not a browser.
 
 **Archive is a file explorer over what past runs wrote.** A tree on the left expands one directory
 at a time as you go down it and reaches every address in the archive — a project, a test name, a

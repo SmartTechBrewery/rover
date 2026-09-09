@@ -80,8 +80,12 @@ describe('a delete that left something behind', () => {
 		);
 	});
 
-	// More than one, joined and each named: *which* half is what makes *look at this host's log*
-	// actionable, so a `partial` that named only the first would be the thinner sentence.
+	/*
+	 * More than one, joined and each named: *which* half is what makes *look at this host's log*
+	 * actionable, so a `partial` that named only the first would be the thinner sentence. Asserted
+	 * as the **whole** sentence rather than the substring, because the substring is exactly what
+	 * let *the rest went* sit unread on the tail of a delete that removed nothing.
+	 */
 	it('names every half that stayed, in the order the host removes them', () => {
 		expect(
 			said({
@@ -93,8 +97,52 @@ describe('a delete that left something behind', () => {
 				freedBytes: 0,
 				keptTestsRemoved: 0,
 			}),
-		).toContain(
-			'its registration is still there, part of its archive is still there, its Keep flags are still set',
+		).toBe(
+			"Nothing of checkout-web could be removed: its registration is still there, part of its archive is still there, its Keep flags are still set. This host's log says what stopped it.",
+		);
+	});
+
+	/*
+	 * **A `partial` where no half went is a delete that removed nothing**, and the host answers it
+	 * whenever all three halves fail — a read-only `~/.rover` is enough, and the `partial` arm has
+	 * no floor on how many went (`src/daemon/delete-project.ts`). So no removal is claimed and no
+	 * figure is stated: `freedBytes` is `0` there, and `0 B back` beside *the rest went* would say a
+	 * removal happened where the host's own audit line says `NOT removed` three times.
+	 */
+	it('claims no removal and no bytes when no half went', () => {
+		const line = said({
+			outcome: 'partial',
+			...REPORT,
+			registration: 'failed',
+			archive: 'failed',
+			keptTests: 'failed',
+			freedBytes: 0,
+			keptTestsRemoved: 0,
+		});
+
+		expect(line).not.toContain('The rest went');
+		expect(line).not.toContain('0 B');
+		expect(line).toContain('Nothing of checkout-web could be removed');
+	});
+
+	/*
+	 * An `absent` half is not a removal either — there was nothing of it to take — so a `partial`
+	 * whose only non-`failed` halves were never there is still a delete that removed nothing.
+	 */
+	it('claims no removal when the halves that did not fail were never there', () => {
+		const line = said({
+			outcome: 'partial',
+			...REPORT,
+			registration: 'absent',
+			archive: 'failed',
+			keptTests: 'absent',
+			freedBytes: 0,
+			keptTestsRemoved: 0,
+		});
+
+		expect(line).not.toContain('The rest went');
+		expect(line).toContain(
+			'Nothing of checkout-web could be removed: part of its archive is still there',
 		);
 	});
 
@@ -105,6 +153,27 @@ describe('a delete that left something behind', () => {
 
 		expect(line).toContain('The rest went, with 7.4 MB back.');
 		expect(line).toContain("This host's log says what stopped it.");
+	});
+
+	/*
+	 * And the mixed case keeps the removal clause, the bytes and the kept count, so the fix above
+	 * did not make a `partial` that *did* remove something report less than a `deleted` does. The
+	 * combination is the fixture's own third entry — the archive half stayed, the other two went, so
+	 * `0 B` came back and the kept count is one the host really would send.
+	 */
+	it('still says what went, in bytes and in kept tests, for a partial that removed something', () => {
+		expect(
+			said({
+				outcome: 'partial',
+				registration: 'removed',
+				archive: 'failed',
+				keptTests: 'removed',
+				freedBytes: 0,
+				keptTestsRemoved: 1,
+			}),
+		).toBe(
+			"Some of checkout-web could not be removed: part of its archive is still there. The rest went, with 0 B back. One test marked Keep went with it. This host's log says what stopped it.",
+		);
 	});
 });
 
