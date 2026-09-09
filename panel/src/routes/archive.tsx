@@ -14,6 +14,7 @@ import {
 	splatFromComponents,
 } from '@panel/archive/archive-path.js';
 import { type ArchiveSearch, useArchiveSearch } from '@panel/archive/archive-search.js';
+import { type ArchiveSize, useArchiveSize } from '@panel/archive/archive-size.js';
 import { useArchivedArtifact } from '@panel/archive/artifact.js';
 import { type ArchivedDeviceInfo, useArchivedDeviceInfo } from '@panel/archive/device-info.js';
 import { groupedSearch } from '@panel/archive/group-search.js';
@@ -27,6 +28,7 @@ import {
 	type TestPath,
 	usePinnedTests,
 } from '@panel/archive/pinned-tests.js';
+import { type SizeScope, sizeSentence } from '@panel/archive/size-sentence.js';
 import {
 	type ArchivedTestDescription,
 	useArchivedTestDescription,
@@ -45,6 +47,7 @@ import {
 	ContentsCard,
 } from '@panel/components/archive/contents-card.js';
 import { DirectoryTree } from '@panel/components/archive/directory-tree.js';
+import { HeaderBadge } from '@panel/components/archive/header-badge.js';
 import { LevelContents } from '@panel/components/archive/level-contents.js';
 import { RunPanel, type RunSerial } from '@panel/components/archive/run-panel.js';
 import { type ArchiveView, ArchiveViewToggle } from '@panel/components/archive/view-toggle.js';
@@ -256,6 +259,23 @@ export function ArchiveScreen({ view }: { readonly view: ArchiveView }) {
 		view === 'groups' ? { ...search, state: groupedSearch(search.state, groups) } : search;
 	/** Where the tree's rows come from — the one thing the two views differ in (`tree-source.ts`). */
 	const source = sourceFor(view, groups, levels);
+	/**
+	 * **What the size badge's sentence is about** — {@link sizeScopeFor} — and `null` wherever there
+	 * is no badge to draw: the whole groups view in this phase, and an address the parent listing has
+	 * not classified yet.
+	 */
+	const sizeScope = sizeScopeFor(view, selected, open);
+	/*
+	 * **One `measure_archive` per scope, and none at all for an artifact** (#261). The host walks the
+	 * address; nothing is summed here, because a total added up out of the levels the tree happens to
+	 * have listed would grow as a reader browsed and be wrong at every point before the last.
+	 *
+	 * The `file` scope is the exception that costs no round trip: its figure is the `sizeBytes` the
+	 * parent listing already carries, so the hook is called with `null` there and {@link fileSizeOf}
+	 * answers instead — the deepest context on the screen is free.
+	 */
+	const measured = useArchiveSize(sizeScope === null || sizeScope === 'file' ? null : address);
+	const size = sizeScope === 'file' ? fileSizeOf(levels, address) : measured;
 
 	return (
 		<>
@@ -264,12 +284,17 @@ export function ArchiveScreen({ view }: { readonly view: ArchiveView }) {
 				description={descriptionFor(view, selected, open, comparison)}
 				aside={
 					/*
-					 * The toggle is the one thing in this row that is always there; the badge still comes
-					 * and goes beside it, and it is absent in the groups view for the reason it is absent
-					 * at a run — see {@link badgeFor}. The toggle sits last so a badge appearing does not
-					 * move it.
+					 * **Two badges now, and the toggle is still last** (#261). Each of them comes and goes
+					 * for its own reason — the count where there is nothing to count ({@link badgeFor}),
+					 * the size while the answer is still out or where there is nothing to measure
+					 * ({@link sizeSentence}) — and the toggle is the one thing in this row that is always
+					 * there.
+					 *
+					 * The size badge **leads** the row, so the one that appears last appears on the left:
+					 * it moves neither the count a reader is reading nor the toggle they are reaching for.
 					 */
 					<div className="flex items-center gap-3">
+						{sizeBadgeFor(sizeScope, size)}
 						{view === 'all' ? badgeFor(selected.length, levelAt(levels, selected)) : undefined}
 						<ArchiveViewToggle view={view} />
 					</div>
@@ -949,7 +974,10 @@ function descriptionFor(
 const COUNTED = ['project', 'test', 'run'] as const;
 
 /**
- * The one number on the screen, and it is in the header rather than in the tree.
+ * The one **count** on the screen, and it is in the header rather than in the tree (corrected in
+ * place, #261: it was *the one number on the screen*, and since the size badge landed beside it
+ * there are two — this is still the only one that counts anything, and the tree still draws
+ * neither).
  *
  * **Absent rather than `0`**, exactly as §7 leaves the held/free counter absent: a `0 tests
  * archived` describes a set, and a level that is empty or unreadable is not a set of none. Absent
@@ -970,11 +998,110 @@ function badgeFor(depth: number, level: ArchiveLevel) {
 		return undefined;
 	}
 	const count = level.entries.length;
-	return (
-		<div className="rounded-sm border-2 border-outline-variant bg-surface-container px-3 py-1 font-code-md text-[12px] text-on-surface">
-			{`${count} ${noun}${count === 1 ? '' : 's'} archived`}
-		</div>
-	);
+	// The pill is `header-badge.tsx`'s since #261, because there are two badges in this row and a
+	// second copy of that class string is how two pills drift apart by a border width. The wording,
+	// the placement and the rule above are untouched by that extraction.
+	return <HeaderBadge>{`${count} ${noun}${count === 1 ? '' : 's'} archived`}</HeaderBadge>;
+}
+
+/**
+ * The other number, and it is a **sentence** — `All tests take 7.7 MB on disk` at the root, down to
+ * `This file takes …` (#261, R49, `docs/DESIGN.md` §9).
+ *
+ * The wording is `size-sentence.ts`'s and the pill is the count badge's; what is here is the one
+ * decision this file already owns — *which scope is selected* — and the rule that a scope with
+ * nothing to say draws nothing. A badge is absent while the answer is still out, absent where there
+ * is nothing at the address to have a size, and never a `0` invented for either: the count badge's
+ * own absent-rather-than-`0` rule over the other kind of number.
+ */
+function sizeBadgeFor(scope: SizeScope | null, size: ArchiveSize) {
+	if (scope === null) {
+		return undefined;
+	}
+	const sentence = sizeSentence(scope, size);
+	return sentence === null ? undefined : <HeaderBadge>{sentence}</HeaderBadge>;
+}
+
+/**
+ * The `All` view's scopes by depth, in the order the address grows — the root, a project, a test
+ * name, a run, and the `<serial>`, which is a **directory** because that is what it is: a fact
+ * about the run rather than a level of the tree (§9), and a folder to whoever measures it.
+ *
+ * Indexed by `selected.length`, so it is the same depth arithmetic {@link depthsOf} already owns
+ * rather than a second table of numbers.
+ */
+const SIZE_SCOPES = [
+	'archive',
+	'project',
+	'test',
+	'run',
+	'directory',
+] as const satisfies readonly SizeScope[];
+
+/**
+ * Which scope the size badge names, or `null` where it draws nothing at all.
+ *
+ * **Below the `<serial>` the entry's own `kind` decides**, exactly as the describing line and the
+ * card beside it do: a folder is a `directory` and everything else is a `file`. And **`null` while
+ * the parent listing has not classified the address** — a badge drawn then would be naming a scope
+ * nobody has answered for, which is the guess D22 forbids and the same reason the describing line
+ * falls back to the run's own sentence there.
+ *
+ * **`null` throughout the groups view in this phase** (#261). That view's badge is phase 3's: its
+ * arrangement is one bounded walk, so what it holds at a level is what the host could examine, and
+ * the count badge is absent there for that reason already — the size badge's own answer to it needs
+ * settling rather than assuming, and drawing nothing is what this phase promised.
+ */
+function sizeScopeFor(
+	view: ArchiveView,
+	selected: readonly string[],
+	open: OpenEntry,
+): SizeScope | null {
+	if (view === 'groups') {
+		return null;
+	}
+	if (selected.length >= depthsOf(view).below) {
+		if (open === 'unanswered') {
+			return null;
+		}
+		return open === 'directory' ? 'directory' : 'file';
+	}
+	return SIZE_SCOPES[selected.length] ?? null;
+}
+
+/**
+ * One open artifact's size, **out of the listing that named it and not out of a request** (#261).
+ *
+ * `list_archive` already carries a `sizeBytes` for every file it lists, so the deepest context on
+ * the screen is the one that costs nothing: the parent level is read anyway — it is what classified
+ * the address in the first place ({@link openEntryOf}) — and a `measure_archive` for one file would
+ * be a walk of a directory to re-derive a number already in hand.
+ *
+ * What the listing says folds onto {@link ArchiveSize} the way the host's own answer would:
+ *
+ * | the listing | the badge |
+ * | --- | --- |
+ * | a file with a size | `This file takes …` |
+ * | a file whose size the host could not `stat` | *could not measure* — never `0 B` |
+ * | an entry that is neither a file nor a directory | *could not measure*, which is the host's own answer for one |
+ * | a name the level does not list | nothing is at that address |
+ * | a level that has not answered, or cannot be read | no badge, because nothing has said anything yet |
+ */
+function fileSizeOf(levels: ArchiveLevels, address: readonly string[]): ArchiveSize {
+	const parent = levelAt(levels, address.slice(0, -1));
+	if (parent.status !== 'listed') {
+		return { status: 'loading' };
+	}
+	const entry = parent.entries.find((candidate) => candidate.name === address.at(-1));
+	if (entry === undefined) {
+		return { status: 'absent' };
+	}
+	if (entry.kind !== 'file') {
+		return { status: 'unmeasurable' };
+	}
+	return entry.sizeBytes === null
+		? { status: 'unmeasurable' }
+		: { status: 'measured', bytes: entry.sizeBytes, truncated: false };
 }
 
 /**

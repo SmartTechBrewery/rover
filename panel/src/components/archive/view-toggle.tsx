@@ -1,3 +1,4 @@
+import { BADGE_FRAME } from '@panel/components/archive/header-badge.js';
 import { Link } from '@tanstack/react-router';
 
 /**
@@ -30,16 +31,17 @@ const VIEWS = [
 }[];
 
 /**
- * The frame is the header badge's own — `rounded-sm border-2 border-outline-variant
- * bg-surface-container`, minus the padding, which belongs to each segment so the two of them
- * divide one block rather than sitting as two chips in a row.
+ * The frame is the header badge's own — **and it is now that badge's own constant** rather than the
+ * same classes written twice (#261, amended in place). {@link BADGE_FRAME} is the frame; the
+ * padding is deliberately not taken with it, because it belongs to each segment so the two of them
+ * divide one block rather than sitting as two chips in a row. `p-0` and `m-0` reset the
+ * `<fieldset>`'s two UA measures, since the frame here is the badge's and not the browser's.
  *
  * **No approved Stitch screen shows this control** (`ai/RULES.md` §8), so nothing about it is
  * invented: every value here is already on this screen or in §3. That is what keeps the deviation
  * small enough to reconcile in one edit once a design for it exists.
  */
-const FRAME =
-	'm-0 inline-flex shrink-0 rounded-sm border-2 border-outline-variant bg-surface-container p-0';
+const FRAME = `m-0 inline-flex shrink-0 ${BADGE_FRAME} p-0`;
 
 /**
  * 12px from Tailwind's own `--text-xs` rather than from `text-label-caps`, for the reason
@@ -78,8 +80,7 @@ const SEGMENT_OTHER = 'text-on-surface-variant transition-colors hover:text-on-s
  *
  * A `<fieldset>` rather than a `div` with `role="group"` — the element the role exists for, named by
  * `aria-label` because a `<legend>` would be a visible heading over a control that needs none. Its
- * two UA measures are reset in {@link FRAME}, since the frame here is the badge's and not the
- * browser's.
+ * two UA measures are reset in {@link FRAME}.
  */
 export function ArchiveViewToggle({ view }: { readonly view: ArchiveView }) {
 	return (
