@@ -1,6 +1,6 @@
 import type { HostAnswer, RpcEnvelope } from '@panel/session/host-client.js';
 import { useSession } from '@panel/session/session-provider.js';
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { type ArchiveEntry, ListArchiveResultSchema } from './archive-listing.js';
 import { keyOf } from './archive-path.js';
 
@@ -30,6 +30,17 @@ import { keyOf } from './archive-path.js';
  * this screen makes no claim to show a run appearing. So a level is fetched once — when a navigation
  * **or a click** first draws it (#198) — and cached for the life of the screen. That is the one thing this hook does differently from
  * `device-list-provider.tsx`, which polls because *what is attached* changes under the reader.
+ *
+ * **And it reads again when this screen has itself changed what is filed** (#276) — amended in
+ * place, exactly as `registered-projects.ts` was amended for the same reason (`ai/RULES.md` §1).
+ * {@link ArchiveLevelsHook.reread} is **not** a refresh control and is not reachable as one: it has
+ * one caller and one trigger, a settled `Remove` that took a test (`routes/archive.tsx`). The
+ * screen has just changed what is filed, so it asks the host what is filed — and every level it
+ * still draws is `list_archive`'s answer again rather than the panel's own edit of what it had
+ * (§9's *the screen re-reads rather than assuming*). Editing the listing in hand would draw a
+ * level nothing on the host ever answered with, and it would be wrong in both directions: a
+ * `partial` may have left the directory exactly where it was, and a `not-found` means the listing
+ * being edited was already stale.
  *
  * **No deadline either**, for the reason `host-client.ts` gives: a budget belongs to a repeating
  * caller with an interval to spend, and this caller has neither.
@@ -104,16 +115,48 @@ export function runContentsLevel(
  */
 export type WantedLevels = (known: ArchiveLevels) => readonly (readonly string[])[];
 
-export function useArchiveLevels(want: WantedLevels): ArchiveLevels {
+/** What the screen has, and the one way it asks for all of it again. */
+export interface ArchiveLevelsHook {
+	readonly levels: ArchiveLevels;
+	/**
+	 * Ask `list_archive` once more for every level the screen still draws, because this screen has
+	 * changed what is filed.
+	 *
+	 * **Every level, and not one named address**, which is what a delete of a whole test subtree
+	 * needs: the address that went is not the only listing it appears in — its parent named it as a
+	 * row, and the tree may have its own listing open beside it. Clearing the cache and asking again
+	 * for whatever the selector still wants is the shape that cannot leave a stale row behind, and
+	 * it costs exactly the levels still on screen because the selector is what bounds it.
+	 *
+	 * A re-read that answers `unreadable` **replaces the level**, and that is correct rather than a
+	 * regression: it is the host's answer to the question the screen just asked, and a screen
+	 * holding on to a listing the host will no longer confirm would be showing runs it has no
+	 * current evidence for.
+	 */
+	readonly reread: () => void;
+}
+
+export function useArchiveLevels(want: WantedLevels): ArchiveLevelsHook {
 	const { call } = useSession();
 	const [levels, setLevels] = useState<ArchiveLevels>(() => new Map());
 	/*
-	 * Every key ever asked about, terminal or not — the in-flight guard and the cache in one.
-	 * A ref rather than state because React 19's StrictMode runs an effect twice on mount and a
-	 * guard that lived in state would not have been written back before the second run: the point
-	 * of this hook is one `readdir` per level, and two would be visible in the daemon's own log.
+	 * **How many reads have been asked for**, which is deliberately a nonce in the effect's
+	 * dependency list rather than a mutation of the guard below — `registered-projects.ts`'s shape
+	 * verbatim, and for its reason. A re-read implemented by clearing `asked` would depend on a
+	 * re-render arriving between the clear and the next effect run, and it would put the guard's own
+	 * meaning in two places. A nonce makes a re-read *one more request per drawn level* by
+	 * construction: the effect body runs once per value of it, and StrictMode's double mount is
+	 * still one because the guard is keyed on the nonce it has already served.
 	 */
-	const asked = useRef<Set<string>>(new Set());
+	const [nonce, setNonce] = useState(0);
+	/*
+	 * Every key ever asked about, terminal or not — the in-flight guard and the cache in one, keyed
+	 * on the nonce that asked. A ref rather than state because React 19's StrictMode runs an effect
+	 * twice on mount and a guard that lived in state would not have been written back before the
+	 * second run: the point of this hook is one `readdir` per level, and two would be visible in the
+	 * daemon's own log.
+	 */
+	const asked = useRef<Map<string, number>>(new Map());
 	const live = useRef(true);
 
 	// Keyed on the paths themselves rather than on the array's identity, which is rebuilt every
@@ -125,13 +168,19 @@ export function useArchiveLevels(want: WantedLevels): ArchiveLevels {
 		live.current = true;
 		for (const path of JSON.parse(wanted) as string[][]) {
 			const key = keyOf(path);
-			if (asked.current.has(key)) {
+			if (asked.current.get(key) === nonce) {
 				continue;
 			}
-			asked.current.add(key);
+			asked.current.set(key, nonce);
 			void (async () => {
 				const answer = await call('list_archive', { path });
-				if (!live.current) {
+				/*
+				 * A superseded answer lands on nothing. The answers of two reads of one level are not
+				 * ordered by the requests that asked for them, so the later request's answer arriving
+				 * first would otherwise let the earlier one overwrite it — a listing from before the
+				 * delete, drawn after the one from after it.
+				 */
+				if (!live.current || asked.current.get(key) !== nonce) {
 					return;
 				}
 				const state = read(answer);
@@ -144,9 +193,24 @@ export function useArchiveLevels(want: WantedLevels): ArchiveLevels {
 		return () => {
 			live.current = false;
 		};
-	}, [wanted, call]);
+	}, [wanted, call, nonce]);
 
-	return levels;
+	/*
+	 * Stable across renders, so a screen may hand it to a callback without it becoming a dependency
+	 * that changes every time. And **the updater form is what makes that stability safe**:
+	 * `nonce + 1` inside a callback with an empty dependency list would read the nonce of the render
+	 * that built it — `0`, for the life of the screen — so the second re-read and every one after it
+	 * would set a value the state already held, and the effect would never run again. No increment
+	 * can be lost to a stale closure this way. It is deliberately *not* a claim about request
+	 * counts: two deletes settling in one tick are one pass either way, because React batches and
+	 * the effect body runs once per value the nonce settles on — and one fresh listing per drawn
+	 * level after them is exactly what is wanted.
+	 */
+	const reread = useCallback(() => {
+		setNonce((previous) => previous + 1);
+	}, []);
+
+	return { levels, reread };
 }
 
 /** One answer, mapped onto {@link ArchiveLevel} — or nothing at all, for a `refused`. */

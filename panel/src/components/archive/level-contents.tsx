@@ -1,5 +1,6 @@
 import type { ArchiveLevel } from '@panel/archive/archive-levels.js';
 import type { ArchiveEntry } from '@panel/archive/archive-listing.js';
+import type { DeleteArchivedTestAnswer, TestRemoval } from '@panel/archive/delete-archived-test.js';
 import { UNKNOWN } from '@panel/archive/file-size.js';
 import { orderedEntries } from '@panel/archive/level-order.js';
 import type { PinState } from '@panel/archive/pinned-tests.js';
@@ -13,6 +14,7 @@ import {
 	NotReadableInCard,
 	ReadingLevel,
 } from './contents-card.js';
+import { RemoveControl } from './remove-control.js';
 
 /**
  * What is in the selected level — the root, a project, or a test name (`docs/DESIGN.md` §9).
@@ -46,6 +48,8 @@ export function LevelContents({
 	depth = path.length,
 	pin,
 	pinScope,
+	removal,
+	onRemoveSettled,
 }: {
 	readonly path: readonly string[];
 	readonly level: ArchiveLevel;
@@ -79,19 +83,47 @@ export function LevelContents({
 	 * sentence the control shows has to be about the right one (`archive-checkbox.tsx`).
 	 */
 	readonly pinScope?: 'test' | 'group';
+	/**
+	 * The `Remove` control for this level, bound to the test it would delete — **given only at a
+	 * test name**, and `undefined` at every other depth this card draws (`remove-control.tsx`,
+	 * D43).
+	 *
+	 * A prop for {@link pin}'s reason and the same rule: the depth in this component decides which
+	 * columns a row carries and nothing else, and `routes/archive.tsx` already owns the depth
+	 * arithmetic (`levelRemoval`). So this card draws the control when it is handed one and never
+	 * works out whether it should exist.
+	 *
+	 * **A group's card carries none in this phase**, which is a phase boundary rather than a gap: a
+	 * group is several tests, and one call per test is not what one press should become
+	 * (`docs/DESIGN.md` §9, R51 phase 3).
+	 */
+	readonly removal?: TestRemoval;
+	/** What a settled delete is reported to — the screen, never this card (`routes/archive.tsx`). */
+	readonly onRemoveSettled?: (answer: DeleteArchivedTestAnswer, removal: TestRemoval) => void;
 }) {
 	return (
 		<ContentsCard
 			header={
-				/* The name at one end of the strip and the control at the other, which is the only
+				/* The name at one end of the strip and the controls at the other, which is the only
 				   thing that puts them in a row rather than a stack. `min-w-0` lets a 40-character
-				   name wrap instead of pushing the control out of the card — the control is a tick,
-				   a word and a glyph, so it is one line and the row can centre on it. */
+				   name wrap instead of pushing them out of the card — each control is a word and a
+				   glyph, so the pair is one line and the row can centre on it.
+
+				   **The pair is wrapped in one `shrink-0` box** so it moves together and the heading
+				   keeps its wrap: two children of the outer row would each negotiate their own width
+				   against the name, and the tick would be the one that lost it. `Keep` first and
+				   `Remove` outermost — the safe control is the one under the pointer on the way to
+				   the other, and the destructive one is at the end of the strip (§5). */
 				<div className="flex items-center justify-between gap-4">
 					<div className="min-w-0">
 						<CardHeading>{path.at(-1) ?? 'Archive'}</CardHeading>
 					</div>
-					{pin === undefined ? null : <ArchiveCheckbox pin={pin} scope={pinScope} />}
+					<div className="flex shrink-0 items-center gap-3">
+						{pin === undefined ? null : <ArchiveCheckbox pin={pin} scope={pinScope} />}
+						{removal === undefined || onRemoveSettled === undefined ? null : (
+							<RemoveControl onSettled={onRemoveSettled} removal={removal} />
+						)}
+					</div>
 				</div>
 			}
 		>

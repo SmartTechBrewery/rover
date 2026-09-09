@@ -1,10 +1,24 @@
+import type { TestRemoval } from '@panel/archive/delete-archived-test.js';
 import type { ArchivedDeviceInfo } from '@panel/archive/device-info.js';
 import type { PinState } from '@panel/archive/pinned-tests.js';
 import type { ArchivedTestDescription } from '@panel/archive/test-description.js';
 import { formatInstant } from '@panel/time/instant.js';
 import { fireEvent, render, screen, within } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import fixture from '../../../../tests/fixtures/panel/device-info.json';
+
+/*
+ * The session the strip's second control reads — it attributes its call with the signed-in identity
+ * and asks nothing at all until somebody presses it (`remove-control.tsx`). What the control does
+ * with an answer is `remove-control.test.tsx`'s; this file is about what the *strip* holds.
+ */
+vi.mock('@panel/session/session-provider.js', () => ({
+	useSession: () => ({
+		state: { status: 'signed-in', identity: { identifier: 'karolina', displayName: 'Karolina' } },
+		call: async () => await new Promise(() => undefined),
+	}),
+}));
+
 import { RunPanel, type RunSerial } from './run-panel.js';
 
 const RUN = ['checkout-app', 'login-flow', '20260830T170501Z-issue-112-9f1c2ab4'] as const;
@@ -328,13 +342,18 @@ describe('what is not on this panel', () => {
  * depth now and reaches every address in the archive, so this column is what a **selected run** is:
  * two cards, no listing, and no way in or out of it at all.
  *
- * **The strip carries one control now, and the claim above is unchanged** (amended in place): the
- * `Keep` checkbox ticks a flag about the test this run belongs to and **navigates nowhere**. What
- * #161 settled was that the tree is the only way to *move* — a card that offered a second route
- * through the archive was the objection — and a checkbox is the Devices screen's force-release
- * shape instead: an operator control inside the card that owns the data it acts on
- * (`docs/DESIGN.md` §7). So the assertions below keep testing for a link and drop only the part
- * that read *no control of any kind*.
+ * **The strip carries two controls now, and the claim above is unchanged** (amended in place a
+ * second time, #276): the `Keep` checkbox ticks a flag about the test this run belongs to and
+ * `Remove` deletes that test — and **neither navigates anywhere**. What #161 settled was that the
+ * tree is the only way to *move*: a card that offered a second route through the archive was the
+ * objection, and an operator control inside the card that owns the data it acts on is the Devices
+ * screen's force-release shape (`docs/DESIGN.md` §7, §9). So the assertions below keep testing for
+ * a link, and the part that read *no control of any kind* is gone rather than the part that
+ * matters.
+ *
+ * `Remove` **is** a `<button>`, so the strip's own no-button assertion is scoped to the strip
+ * drawn *without* one — which is the state the screen puts this card in whenever it has no scope
+ * to hand over (`routes/archive.tsx`, `levelRemoval`).
  */
 describe('the run column', () => {
 	it('is headed by `Run Details`, with the tick at the other end and no way out', () => {
@@ -473,5 +492,69 @@ describe('the run column', () => {
 			expect(container.querySelectorAll('button')).toHaveLength(0);
 			unmount();
 		}
+	});
+
+	/**
+	 * The `Remove` control (#276, D43) — **the same strip as a test name's card**, which is the one
+	 * property this card has kept for the tick since #237 and now keeps for the pair.
+	 */
+	const REMOVAL: TestRemoval = {
+		project: 'checkout-app',
+		testName: 'login-flow',
+		runs: 42,
+		kept: false,
+		card: 'run',
+	};
+
+	function withControls() {
+		return render(
+			<RunPanel
+				description={DESCRIBED}
+				device={DEVICE}
+				onRemoveSettled={() => undefined}
+				pin={UNPINNED}
+				removal={REMOVAL}
+				run={RUN}
+				serial={NAMED}
+			/>,
+		);
+	}
+
+	it('carries `Remove` beside the tick, at the same end and in the same order', () => {
+		const { container } = withControls();
+		const strip = container.querySelector('section > div:first-child') as HTMLElement;
+
+		expect(strip.querySelector('h2')?.textContent).toBe('Run Details');
+		expect(
+			[...strip.querySelectorAll('input[type="checkbox"], button')].map((node) => node.tagName),
+		).toEqual(['INPUT', 'BUTTON']);
+		// The control is about the **test**, not the run, which is what its accessible name says.
+		expect(screen.getByRole('button', { name: 'Remove test login-flow' }).textContent).toBe(
+			'Remove',
+		);
+	});
+
+	/*
+	 * **The pair is one `shrink-0` box here too**, so the row does not differ between the two cards
+	 * that carry it — `Run Details` is two fixed words and cannot crowd anything, and the strip is
+	 * still the same strip for exactly that reason (`level-contents.tsx`).
+	 */
+	it('wraps the pair the way the other card does', () => {
+		const { container } = withControls();
+
+		const pair = container.querySelector('section > div:first-child div:has(> button)');
+		expect(pair?.className).toContain('shrink-0');
+		expect(pair?.className).toContain('gap-3');
+		expect(pair?.querySelectorAll('input[type="checkbox"], button')).toHaveLength(2);
+	});
+
+	// Nothing is asked of the host by the control being drawn, and nothing on this card navigates:
+	// the strip's one `<button>` opens a confirmation and is not a route (§9, #161).
+	it('adds no link with it, and asks nothing by being drawn', () => {
+		const { container } = withControls();
+
+		expect(container.querySelectorAll('a')).toHaveLength(0);
+		expect(container.querySelectorAll('button')).toHaveLength(1);
+		expect(screen.queryByRole('dialog')).toBeNull();
 	});
 });

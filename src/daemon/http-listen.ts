@@ -234,6 +234,19 @@ import { findUserByToken, type UserRecord } from './user-store.js';
  * caller either — it takes one `project` component and a `groupId` that names no directory at all
  * — and no path and no `errno` is on its answer, which is the fourth row's schema reused.
  *
+ * `delete_archived_test` joined it with the control that calls it (D43, R51, #276), on
+ * `delete_project`'s exact terms one level down: the row landed on the one table a phase earlier
+ * and was deliberately held off this list until there was a panel surface asking for it (#272), and
+ * it is the **fourth action** here, after `force_release_device`, `set_kept_tests` and
+ * `delete_project`. D27's test comes out the same way for the same reason — naming one finished
+ * test of this host's own archive is the operator's authority over a shared resource rather than a
+ * step in one agent's work, and it is **named and bounded** where `sweep_archive` is untargeted,
+ * which is the distinction that keeps that row off this list. It is a *narrower* privilege than the
+ * row above it, not a wider one: everything it can reach is inside one project's own subtree, and
+ * there is no hook file at this address to remove. It is deliberately **not** an MCP tool, which is
+ * `delete_project`'s reason in the same key — an agent deleting a test's artifacts destroys the
+ * evidence another agent's run produced.
+ *
  * `delete_project` joined it with the confirmation dialog that calls it (D42, R50, #273), exactly
  * as `force_release_device` joined it with the screen that calls it — the row landed on the one
  * table a phase earlier and was deliberately held off this list until there was a panel surface
@@ -251,8 +264,9 @@ import { findUserByToken, type UserRecord } from './user-store.js';
  * it. So the list now reads: the panel reads the pool, ends a stuck lease in it, reads the artifact
  * archive one directory level at a time, searches the whole of it, asks which of its runs share a
  * group, asks how much disk a scope of it takes, reads what this host has registered and deletes
- * one of those registrations with everything filed under it, and reads and sets which of the
- * archive's tests are kept — and D27 still keeps every acquire and every verb off a browser.
+ * one of those registrations with everything filed under it, deletes one archived test with every
+ * run filed under it, and reads and sets which of the archive's tests are kept — and D27 still
+ * keeps every acquire and every verb off a browser.
  */
 const PANEL_METHODS: readonly IpcMethodName[] = [
 	'list_devices',
@@ -264,6 +278,7 @@ const PANEL_METHODS: readonly IpcMethodName[] = [
 	'measure_archive_groups',
 	'list_projects',
 	'delete_project',
+	'delete_archived_test',
 	'list_kept_tests',
 	'set_kept_tests',
 ];

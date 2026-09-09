@@ -7,7 +7,20 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
  * module builds two at import. `useParams` is what puts the screen at a level — the path is the
  * whole of this screen's state, so one test is one address.
  */
-const { at } = vi.hoisted(() => ({ at: { splat: undefined as string | undefined } }));
+const { at, navigated } = vi.hoisted(() => ({
+	at: { splat: undefined as string | undefined },
+	/**
+	 * Every programmatic navigation this screen made — the panel's first, and the one a settled
+	 * `Remove` performs (#276).
+	 *
+	 * A spy rather than a real router, for `Link`'s reason: what is worth asserting is *where* the
+	 * screen sent the reader and *that it replaced* the entry, not that TanStack can route. Nothing
+	 * here moves `useParams`, so a navigation in this file is recorded and leaves the address where
+	 * the test put it — which is what lets one case assert the destination and the re-read
+	 * separately from what the destination would then draw.
+	 */
+	navigated: { calls: [] as unknown[] },
+}));
 vi.mock('@tanstack/react-router', () => ({
 	/*
 	 * It keeps the one half of the real `Link` a row's click depends on (#198): the real one calls
@@ -45,6 +58,9 @@ vi.mock('@tanstack/react-router', () => ({
 	useRouterState: ({ select }: { select: (s: { location: { pathname: string } }) => string }) =>
 		select({ location: { pathname: '/archive' } }),
 	useParams: () => ({ _splat: at.splat }),
+	useNavigate: () => (options: unknown) => {
+		navigated.calls.push(options);
+	},
 }));
 
 /**
@@ -128,6 +144,15 @@ const { host, HANGS } = vi.hoisted(() => ({
 		keptAnswer: null as unknown,
 		/** What `set_kept_tests` answers instead of the new set — a press the host did not make. */
 		pressAnswer: null as unknown,
+		/**
+		 * Every `delete_archived_test` this screen asked for, in order — logged apart from the
+		 * listings for the reason the search and the measures are: *one call per confirmed press*,
+		 * and *nothing is deleted by a control being drawn*, are assertable only if it is counted
+		 * separately (#276).
+		 */
+		deletes: [] as unknown[],
+		/** What the host answers a delete with, or `null` for the ask that reached nothing. */
+		deleted: null as unknown,
 		/** Accepts every request and never answers it — the state before the first answer. */
 		hangs: false,
 	},
@@ -205,6 +230,20 @@ vi.mock('@panel/session/session-provider.js', () => {
 	 */
 	const keptKeyOf = (test: { project: string; testName: string }) =>
 		`${test.project}\u0000${test.testName}`;
+	/**
+	 * One confirmed `Remove`, logged apart — see `route` below. `null` is the fifth case rather than
+	 * an outcome: no answer at all, which is what leaves the dialog open and the screen untouched.
+	 */
+	const deleteTest = async (params: unknown) => {
+		host.deletes.push(params);
+		if (host.hangs) {
+			return await new Promise(() => undefined);
+		}
+		if (host.deleted === null) {
+			return { ok: false, refusal: 'unanswered' };
+		}
+		return { ok: true, value: { type: 'result', result: host.deleted } };
+	};
 	const keepPress = async (params: {
 		tests: readonly { project: string; testName: string }[];
 		kept: boolean;
@@ -262,6 +301,9 @@ vi.mock('@panel/session/session-provider.js', () => {
 		}
 		if (method === 'set_kept_tests') {
 			return await keepPress(params as Parameters<typeof keepPress>[0]);
+		}
+		if (method === 'delete_archived_test') {
+			return await deleteTest(params);
 		}
 		return await listing(params.path);
 	};
@@ -438,7 +480,13 @@ function besideTheTree(container: HTMLElement) {
  * that check for one say so rather than counting every button on the screen.
  */
 function contentArea(container: HTMLElement) {
-	const content = container.querySelector('header + *');
+	/*
+	 * **What follows the settled-`Remove` region**, which is always in the DOM and empty when there
+	 * is nothing to say (#276): a live region announced reliably has to exist before its text does,
+	 * so it cannot be mounted with the line. It is chrome above the content area exactly as the
+	 * header is, and a state's claim to offer *no control* is a claim about neither of them.
+	 */
+	const content = container.querySelector(':scope > div[aria-live="polite"] + *');
 	if (content === null) {
 		throw new Error('the screen drew nothing below its header');
 	}
@@ -468,6 +516,9 @@ beforeEach(() => {
 	host.keptAnswer = null;
 	host.pressAnswer = null;
 	host.hangs = false;
+	host.deleted = null;
+	host.deletes = [];
+	navigated.calls = [];
 });
 
 describe('each level', () => {
@@ -1065,12 +1116,27 @@ describe('the two states with nothing to browse', () => {
 		}
 	});
 
+	/*
+	 * **The claim is *no retry and no error code*, and it is amended in place rather than dropped**
+	 * (#276, `ai/RULES.md` §1). It read *no button at all* while these two states were the only
+	 * things at this depth; a test name's card carries the `Remove` control now (§9), which is about
+	 * the test rather than about either of these answers and is drawn here whatever the level turned
+	 * out to be. So what is asserted is that neither state grew a retry, and that the `error` accent
+	 * in the markup belongs to that one control (§10's recorded departure) rather than to a level
+	 * the host could not read.
+	 */
 	it('offer no retry and carry no error code', async () => {
 		for (const levels of [EMPTY_DEEPER, UNREADABLE_DEEPER]) {
 			const { container, unmount } = await showing('checkout-app/login-flow', levels);
+			const area = contentArea(container);
 
-			expect(contentArea(container).querySelectorAll('button')).toHaveLength(0);
-			expect(container.innerHTML).not.toContain('error');
+			expect(
+				[...area.querySelectorAll('button')].map((button) => button.getAttribute('aria-label')),
+			).toEqual(['Remove test login-flow']);
+			expect([...area.querySelectorAll('[class*="error"]')].map((node) => node.tagName)).toEqual([
+				'BUTTON',
+			]);
+			expect(area.textContent).not.toContain('error');
 			unmount();
 		}
 	});
@@ -3213,5 +3279,313 @@ describe('the Keep tick on a group', () => {
 			expect(screen.queryAllByRole('checkbox', { name: 'Keep' })).toHaveLength(0);
 			unmount();
 		}
+	});
+});
+
+/**
+ * `Remove` — the control on the two cards a test's tick is on, driven through the whole chain
+ * (#276, D43, `docs/DESIGN.md` §9).
+ *
+ * What each component says on its own is its own suite's (`remove-control.test.tsx`,
+ * `remove-dialog.test.tsx`, `remove-notice.test.tsx`). What only this file can assert is the three
+ * things that are the *screen's*: which card is handed which scope, what a settled delete does to
+ * the address the reader is on, and that the line outlives the card it was about.
+ */
+describe('the Remove control', () => {
+	/** Press the control on whichever card is drawn, and let the dialog's measurement land. */
+	async function askToRemove(name = 'Remove test login-flow'): Promise<void> {
+		await act(async () => {
+			fireEvent.click(screen.getByRole('button', { name }));
+		});
+	}
+
+	/** The value under one of the confirmation's caps labels. */
+	function valueUnder(label: string): string {
+		return screen.getByText(label).nextElementSibling?.textContent ?? '';
+	}
+
+	/**
+	 * **Which card gets a control, and it is the two whose tick is about a test** (`levelRemoval`).
+	 * The level card draws six different levels and only one of them is a test.
+	 */
+	it.each([
+		['the root', undefined, false],
+		['a project', 'checkout-app', false],
+		['a test name', 'checkout-app/login-flow', true],
+		['a run', `checkout-app/login-flow/${RUN}`, true],
+		[
+			'a directory below the `<serial>`',
+			`checkout-app/login-flow/${RUN}/${SERIAL}/screenshots`,
+			false,
+		],
+	])('is on %s: %s', async (_case, splat, drawn) => {
+		const { container } = await showing(splat);
+
+		expect(
+			besideTheTree(container).queryAllByRole('button', { name: /^Remove test / }),
+		).toHaveLength(drawn ? 1 : 0);
+	});
+
+	/*
+	 * **A group's card carries the tick and not the control**, which §9 records as a phase boundary
+	 * rather than a gap: one press over several tests is phase 3's, and the tick's own array write
+	 * already is one.
+	 */
+	it('is not on a group’s card, whose tick is over several tests', async () => {
+		const { container } = await grouped(`checkout-app/${GROUP}`);
+
+		expect(besideTheTree(container).getByRole('checkbox', { name: 'Keep' })).toBeDefined();
+		expect(
+			besideTheTree(container).queryAllByRole('button', { name: /^Remove test / }),
+		).toHaveLength(0);
+	});
+
+	/**
+	 * **The scope the screen hands over**, read back off the confirmation because that is where every
+	 * field of it is visible — the two components, the run count off the listing the tree already
+	 * had, and the `Keep` mark off the set the ticks are drawn from.
+	 */
+	it('hands the test, its run count and its Keep mark to the confirmation', async () => {
+		host.kept = [{ project: 'checkout-app', testName: 'login-flow' }];
+		await showing('checkout-app/login-flow');
+
+		await askToRemove();
+
+		expect(valueUnder('PROJECT')).toBe('checkout-app');
+		expect(valueUnder('TEST')).toBe('login-flow');
+		// 42 is the `childCount` the project's own listing carries for this test — no second request.
+		expect(valueUnder('RUNS')).toBe('42 runs');
+		expect(valueUnder('KEPT')).toBe('yes');
+		expect(host.asked).not.toContainEqual(['checkout-app', 'login-flow', 'childCount']);
+	});
+
+	/*
+	 * **From a run's card it is the same test**, and the confirmation says in as many words that the
+	 * run on screen goes with the rest (D43) — the control is bound to `<project>/<test_name>` out of
+	 * the run's own address, exactly as the tick above it is.
+	 */
+	it('is bound to the test above a run, and says the run goes with it', async () => {
+		await showing(`checkout-app/login-flow/${RUN}`);
+
+		await askToRemove();
+
+		expect(valueUnder('TEST')).toBe('login-flow');
+		expect(screen.getByRole('dialog').textContent).toContain(
+			'The run you are looking at is one of them.',
+		);
+	});
+
+	/*
+	 * **In the groups view the run count is *the host cannot say* rather than a number**, and that is
+	 * honest rather than a gap: that view asks `list_archive` for nothing above a run, and the count
+	 * on a group's row is the runs of this test *in this group* — which would understate a delete
+	 * that takes every run of it.
+	 */
+	it('says the host cannot say for a run count the groups view has no listing for', async () => {
+		await grouped(`checkout-app/${GROUP}/login-flow`);
+
+		await askToRemove();
+
+		expect(valueUnder('TEST')).toBe('login-flow');
+		expect(valueUnder('RUNS')).toBe('the host cannot say');
+	});
+
+	// Nothing is asked of the host by the controls being drawn — §9's *one request on navigation*,
+	// which is what makes the dialog's own measurement the only extra one and only on a press.
+	it('asks the host nothing until it is pressed', async () => {
+		await showing('checkout-app/login-flow');
+
+		expect(host.deletes).toHaveLength(0);
+		expect(host.measures).toHaveLength(1);
+
+		await askToRemove();
+
+		expect(host.deletes).toHaveLength(0);
+		expect(host.measures).toEqual([
+			['checkout-app', 'login-flow'],
+			['checkout-app', 'login-flow'],
+		]);
+	});
+});
+
+/**
+ * **Where the screen lands after a settled delete** — the half of this that only the screen can do
+ * (#276, §9's *the screen re-reads rather than assuming*).
+ */
+describe('a settled Remove', () => {
+	const DELETED = {
+		outcome: 'deleted',
+		archive: 'removed',
+		keptTests: 'removed',
+		freedBytes: 4_180_532,
+		keptTestsRemoved: 1,
+	};
+	const PARTIAL = {
+		outcome: 'partial',
+		archive: 'failed',
+		keptTests: 'removed',
+		freedBytes: 0,
+		keptTestsRemoved: 1,
+	};
+
+	async function removeFrom(splat: string, answer: unknown): Promise<void> {
+		host.deleted = answer;
+		await showing(splat);
+		await act(async () => {
+			fireEvent.click(screen.getByRole('button', { name: 'Remove test login-flow' }));
+		});
+		await act(async () => {
+			fireEvent.click(screen.getByRole('button', { name: 'Remove test' }));
+		});
+		for (let turn = 0; turn < 6; turn += 1) {
+			await act(async () => undefined);
+		}
+	}
+
+	/** The line above the content area, or `''` when there is nothing to say. */
+	function noticed(): string {
+		return document.querySelector('div[aria-live="polite"] section p')?.textContent ?? '';
+	}
+
+	/*
+	 * **Onto the parent of the *test*, with `replace`.** From a test name's card that is the project;
+	 * from a run's card it is still the project, because the run's own parent is the test that just
+	 * went. `replace` so Back does not return to an address the host now refuses.
+	 */
+	it.each([
+		['a test name’s card', 'checkout-app/login-flow'],
+		['a run’s card', `checkout-app/login-flow/${RUN}`],
+	])('moves the selection to the parent address from %s', async (_case, splat) => {
+		await removeFrom(splat, DELETED);
+
+		expect(navigated.calls).toEqual([
+			{ to: '/archive/$', params: { _splat: 'checkout-app' }, replace: true },
+		]);
+	});
+
+	// The groups view lands on the **group**, which is the level a test name sits under there — the
+	// same arithmetic, over this view's own offset.
+	it('moves to the group in the groups view, on that view’s own route', async () => {
+		host.deleted = DELETED;
+		await grouped(`checkout-app/${GROUP}/login-flow`);
+		await act(async () => {
+			fireEvent.click(screen.getByRole('button', { name: 'Remove test login-flow' }));
+		});
+		await act(async () => {
+			fireEvent.click(screen.getByRole('button', { name: 'Remove test' }));
+		});
+
+		expect(navigated.calls).toEqual([
+			{ to: '/groups/$', params: { _splat: `checkout-app/${GROUP}` }, replace: true },
+		]);
+	});
+
+	/*
+	 * **And the levels are read again**, so the parent listing is `list_archive`'s answer rather than
+	 * the panel's edit of what it had: the project's listing named the test as a row, and editing
+	 * that array here would draw a listing nothing on the host ever answered with.
+	 */
+	it('reads every level it still draws again', async () => {
+		await showing('checkout-app/login-flow');
+		const before = host.asked.length;
+		host.deleted = DELETED;
+
+		await act(async () => {
+			fireEvent.click(screen.getByRole('button', { name: 'Remove test login-flow' }));
+		});
+		await act(async () => {
+			fireEvent.click(screen.getByRole('button', { name: 'Remove test' }));
+		});
+		for (let turn = 0; turn < 6; turn += 1) {
+			await act(async () => undefined);
+		}
+
+		expect(host.asked.length).toBeGreaterThan(before);
+		expect(host.asked.slice(before)).toContainEqual([]);
+		expect(host.asked.slice(before)).toContainEqual(['checkout-app']);
+	});
+
+	// `partial` and `not-found` are settled too, and both mean the address may not exist: one left
+	// part of it filed, and the other proves the screen was already out of date.
+	it.each([
+		['a delete that could not take all of it', PARTIAL],
+		['an address there was nothing at', { outcome: 'not-found' }],
+	])('moves and re-reads for %s as well', async (_case, answer) => {
+		await removeFrom('checkout-app/login-flow', answer);
+
+		expect(navigated.calls).toHaveLength(1);
+		expect(noticed().length).toBeGreaterThan(0);
+	});
+
+	/*
+	 * **A `refused` does neither**, and that is not an inconsistency: a live lease means nothing at
+	 * all was touched, so what is filed is exactly what the screen already shows — a navigation and a
+	 * second `list_archive` would both be the panel acting on a change that did not happen.
+	 */
+	it('neither moves nor re-reads for a live lease, and still says so', async () => {
+		await showing('checkout-app/login-flow');
+		const before = host.asked.length;
+		host.deleted = { outcome: 'refused', reason: 'lease-live' };
+
+		await act(async () => {
+			fireEvent.click(screen.getByRole('button', { name: 'Remove test login-flow' }));
+		});
+		await act(async () => {
+			fireEvent.click(screen.getByRole('button', { name: 'Remove test' }));
+		});
+		for (let turn = 0; turn < 6; turn += 1) {
+			await act(async () => undefined);
+		}
+
+		expect(navigated.calls).toHaveLength(0);
+		expect(host.asked).toHaveLength(before);
+		expect(noticed()).toContain('nothing at all was touched');
+	});
+
+	/*
+	 * **The request that reached nothing settles nothing** (§7's fourth case): the dialog stays open
+	 * with the control usable again, the screen does not move, nothing is re-read, and **nothing is
+	 * said above the tree** — the panel never reports a deletion it did not get.
+	 */
+	it('says nothing above the tree for a request that reached nothing', async () => {
+		await showing('checkout-app/login-flow');
+		const before = host.asked.length;
+		// `host.deleted` is `null` in `beforeEach`, which is the host answering nothing usable.
+
+		await act(async () => {
+			fireEvent.click(screen.getByRole('button', { name: 'Remove test login-flow' }));
+		});
+		await act(async () => {
+			fireEvent.click(screen.getByRole('button', { name: 'Remove test' }));
+		});
+
+		expect(screen.getByRole('dialog')).toBeDefined();
+		expect(screen.getByRole('button', { name: 'Remove test' }).getAttribute('disabled')).toBeNull();
+		expect(navigated.calls).toHaveLength(0);
+		expect(host.asked).toHaveLength(before);
+		expect(noticed()).toBe('');
+	});
+
+	/**
+	 * **The line outlives the card it was about**, which is why it is above the content area rather
+	 * than in either column: the address it names may be gone, and it stays until dismissed because
+	 * this screen does not poll (§9).
+	 */
+	it('says what went above the content area, and stays until dismissed', async () => {
+		await removeFrom('checkout-app/login-flow', DELETED);
+
+		expect(noticed()).toContain('login-flow is gone');
+		expect(noticed()).toContain('4.0 MB');
+		expect(noticed()).toContain('Keep mark');
+
+		// Above both columns, so nothing in the tree or the card can be its ancestor.
+		const region = document.querySelector('div[aria-live="polite"]');
+		expect(region?.querySelector('aside')).toBeNull();
+		expect(region?.closest('aside')).toBeNull();
+
+		await act(async () => {
+			fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }));
+		});
+		expect(noticed()).toBe('');
 	});
 });

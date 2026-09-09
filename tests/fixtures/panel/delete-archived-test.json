@@ -1,0 +1,82 @@
+{
+  "answers": [
+    {
+      "case": "the test directory and its kept entry both went",
+      "params": {
+        "project": "checkout-web",
+        "testName": "the checkout flow",
+        "actor": "karolina"
+      },
+      "result": {
+        "outcome": "deleted",
+        "archive": "removed",
+        "keptTests": "removed",
+        "freedBytes": 4180532,
+        "keptTestsRemoved": 1
+      }
+    },
+    {
+      "case": "a test nobody had ticked Keep, so there was no entry to prune",
+      "params": {
+        "project": "checkout-web",
+        "testName": "the basket",
+        "actor": "karolina"
+      },
+      "result": {
+        "outcome": "deleted",
+        "archive": "removed",
+        "keptTests": "absent",
+        "freedBytes": 412306,
+        "keptTestsRemoved": 0
+      }
+    },
+    {
+      "case": "the directory would not go, and the kept entry did",
+      "params": {
+        "project": "legacy-kiosk",
+        "testName": "the pairing screen",
+        "actor": "alice"
+      },
+      "result": {
+        "outcome": "partial",
+        "archive": "failed",
+        "keptTests": "removed",
+        "freedBytes": 0,
+        "keptTestsRemoved": 1
+      }
+    },
+    {
+      "case": "neither half would go, so the delete removed nothing",
+      "params": {
+        "project": "legacy-kiosk",
+        "testName": "the checkout flow",
+        "actor": "alice"
+      },
+      "result": {
+        "outcome": "partial",
+        "archive": "failed",
+        "keptTests": "failed",
+        "freedBytes": 0,
+        "keptTestsRemoved": 0
+      }
+    },
+    {
+      "case": "nothing was filed at that address and nothing kept it",
+      "params": {
+        "project": "checkout-web",
+        "testName": "a test that was never run",
+        "actor": "alice"
+      },
+      "result": { "outcome": "not-found" }
+    },
+    {
+      "case": "a lease is filing into this test right now, so nothing was touched",
+      "params": {
+        "project": "statistics-deliveries",
+        "testName": "the nightly export",
+        "actor": "karolina"
+      },
+      "result": { "outcome": "refused", "reason": "lease-live" }
+    }
+  ]
+}

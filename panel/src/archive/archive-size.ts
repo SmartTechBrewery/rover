@@ -3,6 +3,7 @@ import { useSession } from '@panel/session/session-provider.js';
 import { useEffect, useRef, useState } from 'react';
 import { MeasureArchiveResultSchema } from './archive-listing.js';
 import { keyOf } from './archive-path.js';
+import { formatBytes } from './file-size.js';
 
 /**
  * How much disk one archive scope takes — **one host call per scope, and nothing summed in the
@@ -200,4 +201,43 @@ function read(answer: HostAnswer<RpcEnvelope>): ArchiveSize | undefined {
 		bytes: parsed.data.bytes,
 		truncated: parsed.data.truncated,
 	} as const;
+}
+
+/**
+ * What a scope takes on disk **as a labelled field reads it**, in all four readings of one answer.
+ *
+ * | the answer | the value |
+ * | --- | --- |
+ * | `measured`, complete | `7.7 MB` |
+ * | `measured`, truncated | `at least 7.7 MB` |
+ * | `absent` | *nothing is filed here* |
+ * | `unmeasurable` | *the host cannot say* |
+ * | `loading` | *measuring…* |
+ *
+ * **Here rather than in either dialog that draws it**, because two destructive confirmations ask
+ * this question now — `Delete project` about a project's subtree and `Remove` about one test's
+ * directory (§10, §9) — and this is the mapping D6 is *about*. Two copies of it would be two
+ * chances for a later edit to make one of the readings agree with another.
+ *
+ * **`absent` is not `0 B` and neither of them is *the host cannot say***: a scope with no
+ * directory, an empty one and a host that could not walk it are three different facts about what a
+ * delete would take, and the middle one is the only one `0 B` is true of.
+ *
+ * **A truncated answer never renders a plain figure** — `truncated` means at least one directory
+ * that exists was not fully examined, so `bytes` is a lower bound and *at least* is the only
+ * honest way to say it. `size-sentence.ts` keeps the same rule for the Archive screen's badge; the
+ * words differ because that is a sentence naming its own scope and this sits under a caps label
+ * that has already named it.
+ */
+export function sizeFieldReading(size: ArchiveSize): string {
+	if (size.status === 'loading') {
+		return 'measuring…';
+	}
+	if (size.status === 'absent') {
+		return 'nothing is filed here';
+	}
+	if (size.status === 'unmeasurable') {
+		return 'the host cannot say';
+	}
+	return `${size.truncated ? 'at least ' : ''}${formatBytes(size.bytes)}`;
 }

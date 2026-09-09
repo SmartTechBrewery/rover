@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { StrictMode } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -46,15 +46,25 @@ function listed(...names: readonly string[]) {
  * answer` is the one that exercises the derivation.
  */
 function Levels({ paths }: { readonly paths: readonly (readonly string[])[] }) {
-	const levels: ArchiveLevels = useArchiveLevels(() => paths);
+	const { levels, reread } = useArchiveLevels(() => paths);
 	return (
-		<ul>
-			{paths.map((path) => (
-				<li key={path.join('/')} data-testid={path.join('/') || 'root'}>
-					{describeLevel(levels, path)}
-				</li>
-			))}
-		</ul>
+		<>
+			{/*
+			 * The hook's one trigger, given a control here so a case can fire it. On the screen it
+			 * has exactly one caller and it is not a control at all — a settled `Remove`
+			 * (`routes/archive.tsx`), which is what keeps *no refresh control* true of §9.
+			 */}
+			<button onClick={reread} type="button">
+				reread
+			</button>
+			<ul>
+				{paths.map((path) => (
+					<li key={path.join('/')} data-testid={path.join('/') || 'root'}>
+						{describeLevel(levels, path)}
+					</li>
+				))}
+			</ul>
+		</>
 	);
 }
 
@@ -136,6 +146,114 @@ describe('the levels a selection needs', () => {
 
 		await waitFor(() => expect(host.call).toHaveBeenCalledTimes(1));
 		expect(host.call.mock.calls[0]?.[2]).toBeUndefined();
+	});
+});
+
+/**
+ * `reread()` — **one more request per drawn level, and one only** (#276).
+ *
+ * The one caller is a settled `Remove` on the Archive screen, which has just changed what is
+ * filed, so the levels it still draws have to be `list_archive`'s answer again rather than the
+ * panel's edit of what it had (§9). What makes that safe is the nonce: the guard is keyed on the
+ * read that asked, so a second pass is one request per level and StrictMode's double mount is
+ * still one.
+ */
+describe('reading every drawn level again', () => {
+	function reread(): void {
+		fireEvent.click(screen.getByRole('button', { name: 'reread' }));
+	}
+
+	it('asks once more for each level the screen still draws, and no more than once', async () => {
+		host.call.mockResolvedValue(listed('checkout-app'));
+		render(<Levels paths={ROOT_AND_PROJECT} />);
+		await waitFor(() => expect(host.call).toHaveBeenCalledTimes(2));
+
+		act(() => reread());
+
+		await waitFor(() => expect(host.call).toHaveBeenCalledTimes(4));
+		expect(host.call.mock.calls.map((call) => call[1])).toEqual([
+			{ path: [] },
+			{ path: ['checkout-app'] },
+			{ path: [] },
+			{ path: ['checkout-app'] },
+		]);
+		// And nothing further: a re-read is one pass, not an interval (§9 — no polling).
+		await act(async () => undefined);
+		expect(host.call).toHaveBeenCalledTimes(4);
+	});
+
+	/*
+	 * The nonce and not a mutation of the guard, which is the whole reason the second press works at
+	 * all: a `reread` built with a stale closure would set a value the state already held, and the
+	 * effect would never run again (`registered-projects.ts` records the same trap).
+	 */
+	it('asks again on every press, not only on the first', async () => {
+		host.call.mockResolvedValue(listed('checkout-app'));
+		render(<Levels paths={[[]]} />);
+		await waitFor(() => expect(host.call).toHaveBeenCalledTimes(1));
+
+		act(() => reread());
+		await waitFor(() => expect(host.call).toHaveBeenCalledTimes(2));
+		act(() => reread());
+
+		await waitFor(() => expect(host.call).toHaveBeenCalledTimes(3));
+	});
+
+	// StrictMode's double mount is still one request per level per read, which is the property the
+	// nonce buys and the one a cleared guard would have lost.
+	it('is still one request per level under StrictMode', async () => {
+		host.call.mockResolvedValue(listed('checkout-app'));
+		render(
+			<StrictMode>
+				<Levels paths={ROOT_AND_PROJECT} />
+			</StrictMode>,
+		);
+		await waitFor(() => expect(host.call).toHaveBeenCalledTimes(2));
+
+		act(() => reread());
+
+		await waitFor(() => expect(host.call).toHaveBeenCalledTimes(4));
+	});
+
+	/*
+	 * **A superseded answer lands on nothing.** Two reads of one level are not ordered by the
+	 * requests that asked for them, so the first read's answer arriving after the second's must not
+	 * overwrite it — a listing from before the delete, drawn after the one from after it.
+	 */
+	it('lets the newer answer stand when the older one arrives last', async () => {
+		let answerFirstRead: (value: unknown) => void = () => undefined;
+		host.call
+			.mockReturnValueOnce(
+				new Promise((resolve) => {
+					answerFirstRead = resolve;
+				}),
+			)
+			.mockResolvedValue(listed('after-the-delete'));
+		render(<Levels paths={[[]]} />);
+		await waitFor(() => expect(host.call).toHaveBeenCalledTimes(1));
+
+		act(() => reread());
+		await waitFor(() =>
+			expect(screen.getByTestId('root').textContent).toBe('listed:after-the-delete'),
+		);
+		await act(async () => {
+			answerFirstRead(listed('before-the-delete'));
+		});
+
+		expect(screen.getByTestId('root').textContent).toBe('listed:after-the-delete');
+	});
+
+	// The host's answer to the question just asked, whatever it is: a level the host will no longer
+	// confirm must not stay drawn out of a listing from before the delete.
+	it('replaces a level the host can no longer read', async () => {
+		host.call.mockResolvedValueOnce(listed('checkout-app'));
+		render(<Levels paths={[[]]} />);
+		await waitFor(() => expect(screen.getByTestId('root').textContent).toBe('listed:checkout-app'));
+
+		host.call.mockResolvedValue(result({ outcome: 'unreadable' }));
+		act(() => reread());
+
+		await waitFor(() => expect(screen.getByTestId('root').textContent).toBe('unreadable'));
 	});
 });
 
