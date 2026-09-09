@@ -1,5 +1,8 @@
 # Rover
 
+<img width="1166" height="612" alt="rover1" src="https://github.com/user-attachments/assets/65dd14f2-e776-4042-a8e9-505b21cd8c6a" />
+
+
 Hands and eyes on a real mobile device, for coding agents — and a way to share those devices
 between several agents working at once.
 
