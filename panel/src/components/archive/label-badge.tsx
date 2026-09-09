@@ -1,6 +1,6 @@
 /**
  * One artifact's label badge — the small numbered pill beside its name in the groups view's tree
- * (#182, numbered by #206, `docs/DESIGN.md` §9).
+ * (#182, numbered by #206, the bare number by #269, `docs/DESIGN.md` §9).
  *
  * **The number carries the meaning, never the colour alone.** Every badge says which label it is in
  * text, at badge size, and the fill is a second channel for something already written — the rule
@@ -18,18 +18,27 @@
  *
  * **A badge is not the artifact's own sequence number**, which is the confusion numbering could
  * have bought. An archived artifact leads with a zero-padded ordinal inside its file name
- * (`002_remaining-deliveries_screenshot.png`), so a bare `2` beside a row named `007_…` would
- * invite exactly the wrong reading. Three things separate them and the first is the decisive one:
- * the badge carries a leading `#`, which a file's ordinal never does; it is a filled pill rather
- * than text in the row's name; and it is never zero-padded. `#` is the number sign — *this is
- * label number two* — and not an ordinal or a place: nothing here is compared, so no badge can be a
- * rank, a score or an order of merit (`docs/DESIGN.md` §2, `ai/RULES.md` §1).
+ * (`002_remaining-deliveries_screenshot.png`), so a `2` beside a row named `007_…` is the reading
+ * this has to rule out. **Two channels rule it out, and the leading `#` that used to be a third is
+ * gone** (#269, reversing #206 in place): the badge is a filled coloured pill between the row's
+ * glyph and its name at the design's smallest type step, where a file's ordinal is plain text
+ * inside the name; and a badge is never zero-padded where an ordinal always is. `12` beside
+ * `012_home-screen_screenshot.png` is unambiguous on both counts.
+ *
+ * **What #206 argued for the `#` is kept here because it is the record of why it was there.** `#`
+ * is the number sign — *this is label number two* — and it was the one channel a file's ordinal
+ * never has, bought for one glyph in a pill that had to grow for two digits anyway. The bare digit
+ * was weighed against it then and rejected on exactly the ambiguity above. What #269 saw that #206
+ * did not is that the pill and the absence of padding already carry that claim on their own, so the
+ * `#` was a third channel doing no work in a pill whose width is its digits. Either way nothing
+ * here is an ordinal or a place: nothing is compared, so no badge can be a rank, a score or an
+ * order of merit (`docs/DESIGN.md` §2, `ai/RULES.md` §1).
  *
  * **No colour here may read as an outcome** (`docs/DESIGN.md` §5, §9). §5 already spends the
  * tertiary green on *a free device*, the primary-container blue on *held* and the
  * secondary-container orange on *warning*, and `error` is excluded outright — so every fill below is
  * a `-fixed` step, a neutral, or a step derived from one of those, and no two of them can pair into
- * the pass/fail verdict Rover does not have (`ai/RULES.md` §1). A green `#1` beside a red `#2` is
+ * the pass/fail verdict Rover does not have (`ai/RULES.md` §1). A green `1` beside a red `2` is
  * exactly the thing this palette is chosen to make unavailable. Since #200 that is a measurement
  * rather than an argument: `tests/unit/panel/label-badge-palette.test.ts` fails if any fill comes
  * within ΔE 10 of the free-device green, the held blue, the warning orange, the not-ready grey,
@@ -52,7 +61,7 @@
  * | tertiary | `3`, `7`, `11`, … | `bg-tertiary-fixed` | mint |
  * | neutral | `4`, `8`, `12`, … | `bg-inverse-surface` | neutral |
  *
- * Only `#1`…`#4` draw those fills as written; every family's later numbers are the same hue a cycle
+ * Only `1`…`4` draw those fills as written; every family's later numbers are the same hue a cycle
  * deeper, which is {@link CYCLE_FAMILIES} below.
  *
  * Each fill is paired with the `on-` step the design system pairs it with, so the number is legible
@@ -64,7 +73,7 @@
  * nothing. There is nothing left that distinguishes nothing, so the token is unspent rather than
  * retained for a case that can no longer arise.
  *
- * **This is cycle 1 and only cycle 1** (#200). It is what `#1`…`#4` draw, verbatim and
+ * **This is cycle 1 and only cycle 1** (#200). It is what `1`…`4` draw, verbatim and
  * byte-identical to what #182 shipped, and it is the light end of every ramp {@link cycleStep}
  * modulates — mixing at 100% is the identity, so the utility pair here and the ramp there cannot
  * disagree about what the first cycle is.
@@ -78,8 +87,8 @@ const CYCLED_FILLS = [
 
 /**
  * Cycles 2…7 — the same four families, **each cycle a step deeper into the family's own dark
- * step** (#200, `docs/DESIGN.md` §9), which is what makes `#5` onwards a different step of the same
- * hue rather than a plain repeat of `#1`…`#4`.
+ * step** (#200, `docs/DESIGN.md` §9), which is what makes `5` onwards a different step of the same
+ * hue rather than a plain repeat of `1`…`4`.
  *
  * Not a colour: every step is `color-mix(in srgb, …)` over two tokens of one family, in
  * `panel/src/index.css` beside the panel's other derived colours, and
@@ -94,7 +103,7 @@ const CYCLED_FILLS = [
  * the cycle boundary — `D`'s neutral `#e2e2e6` beside `E`'s lavender `#dde1ff`, ΔE 13.6 apart,
  * because `E` was a plain repeat of `A`. Every fifth number is now a step off the first, so that
  * pair is ΔE 19.7; and because the sequence of fills is periodic in twenty-eight, the gate asserts
- * all twenty-eight consecutive pairs — the wrap from `#28` back to `#1`'s fill included.
+ * all twenty-eight consecutive pairs — the wrap from `28` back to `1`'s fill included.
  *
  * **The `-fixed-dim` tokens are not this cycle, though they look like a free one.**
  * `--color-tertiary-fixed-dim` is byte-identical to `--color-tertiary`, §5's *free device* green;
@@ -114,14 +123,14 @@ const CYCLE_FAMILIES = ['primary', 'secondary', 'tertiary', 'neutral'] as const;
  * Each family reaches exactly as far as its own constraints allow and no further — the neutral
  * stops where it is still clear of §5's not-ready grey, the tertiary where it is still clear of the
  * free-device green — so a cycle 8 is not a number to raise here but four new steps somebody would
- * have to measure. Since the numbers are unbounded and the steps are not, `#29` draws `#1`'s fill:
+ * have to measure. Since the numbers are unbounded and the steps are not, `29` draws `1`'s fill:
  * the colour repeats and the digit is what distinguishes them.
  * `tests/unit/panel/label-badge-palette.test.ts` reads this constant back out of this file and
  * fails if `index.css` stops defining exactly that many.
  */
 export const PALETTE_CYCLES = 7;
 
-/** The class triple a number past `#4` is drawn with — the ramp, its family, and its cycle. */
+/** The class triple a number past `4` is drawn with — the ramp, its family, and its cycle. */
 function cycleStep(family: number, cycle: number): string {
 	return `label-badge-step label-badge-${CYCLE_FAMILIES[family]} label-badge-cycle-${cycle}`;
 }
@@ -147,7 +156,7 @@ function fillOf(number: number): string {
  * **The height is fixed and the width is not** (#206). `h-4.5` is 18px against the row's 14px
  * monospace line, so a badged row is the height of an unbadged one and a level does not jump where
  * a label starts — the property `size-4.5` was chosen for. What `size-4.5` also fixed was the
- * width, and `#12` does not fit an 18px circle; so the pill grows horizontally on the design's own
+ * width, and `12` does not fit an 18px circle; so the pill grows horizontally on the design's own
  * spacing step and `rounded-full` keeps it a pill at every width rather than becoming a rectangle.
  *
  * The type step is the design's own smallest — `label-caps`, 12px in the monospace face — rather
@@ -180,11 +189,8 @@ export function LabelBadge({
 }) {
 	const said = `Filed under the label ${label}`;
 	return (
-		<span
-			aria-label={said}
-			className={`${BADGE} ${fillOf(number)}`}
-			role="img"
-			title={said}
-		>{`#${number}`}</span>
+		<span aria-label={said} className={`${BADGE} ${fillOf(number)}`} role="img" title={said}>
+			{number}
+		</span>
 	);
 }

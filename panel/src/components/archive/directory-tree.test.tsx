@@ -1330,8 +1330,8 @@ describe('the label badges', () => {
 			grouped(A_VARIANT, RUN, [BASELINE, AFTER]),
 		]);
 
-		expect(badgeOn(container, `001_${BASELINE}.png`)).toBe('#1');
-		expect(badgeOn(container, `002_${AFTER}.png`)).toBe('#2');
+		expect(badgeOn(container, `001_${BASELINE}.png`)).toBe('1');
+		expect(badgeOn(container, `002_${AFTER}.png`)).toBe('2');
 		expect(badgeOn(container, 'device_info.json')).toBeNull();
 		expect(badgeOn(container, SHOTS)).toBeNull();
 		expect(badgeOn(container, RUN)).toBeNull();
@@ -1351,13 +1351,13 @@ describe('the label badges', () => {
 		];
 
 		const first = showingGroups(shotsIn(A_VARIANT, OLDER), runs);
-		expect(badgeOn(first.container, `001_${BASELINE}.png`)).toBe('#1');
-		expect(badgeOn(first.container, `002_${AFTER}.png`)).toBe('#2');
+		expect(badgeOn(first.container, `001_${BASELINE}.png`)).toBe('1');
+		expect(badgeOn(first.container, `002_${AFTER}.png`)).toBe('2');
 		first.unmount();
 
 		const second = showingGroups(shotsIn(B_VARIANT, RUN), runs);
-		expect(badgeOn(second.container, `002_${BASELINE}.png`)).toBe('#1');
-		expect(badgeOn(second.container, `001_${AFTER}.png`)).toBe('#2');
+		expect(badgeOn(second.container, `002_${BASELINE}.png`)).toBe('1');
+		expect(badgeOn(second.container, `001_${AFTER}.png`)).toBe('2');
 	});
 
 	/*
@@ -1367,15 +1367,18 @@ describe('the label badges', () => {
 	 * `group-labels.test.ts`.
 	 *
 	 * **And a badge is not the file's own ordinal**, which is the reading numbering could have
-	 * bought: `#3` sits beside a row named `003_three.png` here, so the two are asserted on one row
-	 * — the badge leads with `#` and is never zero-padded, and the row's own name is untouched.
+	 * bought: `3` sits beside a row named `003_three.png` here, so the two are asserted on one row.
+	 * The badge is a pill between the glyph and the name and is never zero-padded; the leading `#`
+	 * that used to be the third channel here is gone (#269, reversing #206 in place), because those
+	 * two already carry the claim. What this row still proves is that the badge and the name are two
+	 * different numbers said two different ways — and that the row's own name is untouched.
 	 */
 	it('numbers every label of a nine-label group, and still says which artifact it is', () => {
 		const labels = ['one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine'];
 		const { container } = showingGroups(shotsIn(A_VARIANT, RUN), [grouped(A_VARIANT, RUN, labels)]);
 
 		expect(labels.map((label, index) => badgeOn(container, `00${index + 1}_${label}.png`))).toEqual(
-			['#1', '#2', '#3', '#4', '#5', '#6', '#7', '#8', '#9'],
+			['1', '2', '3', '4', '5', '6', '7', '8', '9'],
 		);
 		expect(screen.getByText('001_one.png')).toBeDefined();
 		expect(screen.getByText('009_nine.png')).toBeDefined();

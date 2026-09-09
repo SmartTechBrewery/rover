@@ -108,8 +108,8 @@ Design work lives in [`DESIGN.md`](./DESIGN.md); the brief that produced the fir
    named no group is not drawn and neither is a project with none: this view answers *what groups
    exist*, and the `All` view still lists every run. **The label badges completed it** (#182): inside
    one group every distinct filed label takes a **number** — `1`, `2`, `3`, … in the order the host
-   answered them — drawn as a small `#`-prefixed pill beside the artifact's name, with the number
-   carrying the meaning and never the colour alone, and the filed label reachable by hover and by
+   answered them — drawn as a small pill beside the artifact's name, with the number carrying the
+   meaning and never the colour alone, and the filed label reachable by hover and by
    screen reader. Nothing about a number is stable across groups, an artifact with no label carries
    no badge, and no badge colour may read as an outcome.
    **There is no ceiling and no overflow value, because #206 removed the last one in place**: #182
@@ -119,14 +119,17 @@ Design work lives in [`DESIGN.md`](./DESIGN.md); the brief that produced the fir
    kind of answer, and `@` survived it. An integer has no last value, so `@` is deleted rather than
    moved further out and nothing a group files is left undistinguished. **The palette keeps a ceiling
    of its own, and every cycle is a step off the last** (#200): the four colours are cycled
-   family-first so consecutive numbers are always different families, and `#5` onwards is the same
+   family-first so consecutive numbers are always different families, and `5` onwards is the same
    four families modulated a step deeper into each family's own dark step, derived with `color-mix`
    over the tokens — so a later cycle is recognisably the same hue at another level rather than a
    plain repeat, which is what closes the one weak adjacency #197 had to record, the cycle boundary
-   at `#4`/`#5`. Four families over seven steps is twenty-eight fills, and past the twenty-eighth
-   the colour **repeats** while the digits distinguish; the badge is `#`-prefixed and never
-   zero-padded so it cannot be read as the artifact's own ordinal in its file name. What did not move
-   is that no badge colour may read as an outcome — nor may a number read as a rank — and that a
+   at `4`/`5`. Four families over seven steps is twenty-eight fills, and past the twenty-eighth
+   the colour **repeats** while the digits distinguish. **The badge draws the bare number** — it is a
+   filled pill between the row's glyph and its name and is never zero-padded, which is what keeps it
+   from being read as the artifact's own ordinal in its file name; it led with a `#` as a third
+   channel under #206 and does not since #269, because those two already separate the two on their
+   own. What did not move is that no badge colour may read as an outcome — nor may a number read as
+   a rank — and that a
    **new hue** would still be a commissioned categorical ramp rather than a colour picked at the
    keyboard; the derived steps are measured against exactly that by
    `tests/unit/panel/label-badge-palette.test.ts`. `docs/DESIGN.md` §9 records all of it — which of

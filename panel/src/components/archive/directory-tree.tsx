@@ -98,8 +98,9 @@ import { type MouseEvent, type ReactNode, type RefObject, useRef } from 'react';
  *   none by construction; an artifact with no label has none either, so an archive that never used
  *   labels draws the tree it drew before. It is not a verdict, nothing is ranked by it, and the
  *   number — never the colour alone — is what carries it (`label-badge.tsx`). It is also **not the
- *   file's own ordinal**, which is why it is a `#`-prefixed pill rather than a bare digit beside a
- *   name that already starts with one (#206).
+ *   file's own ordinal**, which is why it is a **pill between the glyph and the name and is never
+ *   zero-padded** beside a name that always is — two channels that need no third, so the leading
+ *   `#` #206 added is gone (#269, reversed in place there and in `docs/DESIGN.md` §9).
  *
  * Every row is a `<Link>` and there is no nested interactive element: the triangle is `aria-hidden`
  * decoration saying *this opens*, not a second control. **Collapsing stays the row's** (#175, and

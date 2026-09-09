@@ -90,7 +90,7 @@ describe('the numbers one group hands out', () => {
 	 * that used to collapse into `@` — first at the fifth distinct label, then at the twenty-seventh
 	 * — and there is now nothing for it to collapse into: a hundred distinct labels are a hundred
 	 * distinct numbers, none of them repeated and none of them standing for *not distinguished*.
-	 * The palette's own ceiling is a separate thing and is `label-badge.tsx`'s (`#29` repeats `#1`'s
+	 * The palette's own ceiling is a separate thing and is `label-badge.tsx`'s (`29` repeats `1`'s
 	 * fill and differs by its digits).
 	 */
 	it('numbers a hundred labels without repeating one or reaching an overflow', () => {

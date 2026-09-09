@@ -34,8 +34,8 @@ import { readPanelSources } from '../../helpers/panel-source-scan.js';
  *   (`#00e29d`): 9.9. That pair shipped in #182 and #200 does not touch it, so 10 is the floor it
  *   sets — *a derived step may never be closer to a meaning-bearing colour than the shipped palette
  *   already is*. Cycle 1 is asserted separately to be the token itself, which is what exempts it.
- * - **ΔE ≥ 15 between the fills of two consecutive numbers.** A plain repeat — what `#1`…`#4` gave
- *   `#5`…`#8` before #200 — puts `#4`'s neutral `#e2e2e6` beside `#5`'s `#dde1ff` at 13.6, the
+ * - **ΔE ≥ 15 between the fills of two consecutive numbers.** A plain repeat — what `1`…`4` gave
+ *   `5`…`8` before #200 — puts `4`'s neutral `#e2e2e6` beside `5`'s `#dde1ff` at 13.6, the
  *   pair #197 had to record as the weak one. The threshold is set above it, so this gate fails if
  *   the modulation is ever removed or flattened back into a repeat.
  *
@@ -76,7 +76,7 @@ interface Family {
  *
  * Read from the comment-stripped source, so a percentage discussed in a docblock is not mistaken
  * for a declaration. Cycle 1 has no rule of its own — it is the utility pair the component draws
- * `#1`…`#4` with — so it enters here as the 100% that makes the mix the identity.
+ * `1`…`4` with — so it enters here as the 100% that makes the mix the identity.
  */
 function familiesOf(css: string): ReadonlyMap<string, Family> {
 	const ends = new Map<string, { hue: string; shade: string; ink: string }>();
@@ -251,8 +251,8 @@ const DERIVED = STEPS.filter((step) => step.cycle > 1);
  * utility pairs are declared in the component; `label-badge.test.tsx` is what pins the two
  * together at the class name.
  *
- * One period **plus one**: the fills repeat every `families × cycles` numbers, so `#29` is `#1`'s
- * fill again and the pair `#28`/`#29` is the wrap boundary. Including it is what makes the
+ * One period **plus one**: the fills repeat every `families × cycles` numbers, so `29` is `1`'s
+ * fill again and the pair `28`/`29` is the wrap boundary. Including it is what makes the
  * adjacency claim below cover every consecutive pair an unbounded numbering can reach, rather than
  * every pair up to some number somebody chose.
  */
@@ -368,13 +368,13 @@ describe('the label badge palette, recomputed from the tokens', () => {
 
 	/*
 	 * **No two consecutive numbers read as one colour, every boundary included** — the cycle
-	 * boundaries #200 closed, and the **wrap** #206 adds. Before #200, `#4`/`#5` was `#e2e2e6`
+	 * boundaries #200 closed, and the **wrap** #206 adds. Before #200, `4`/`5` was `#e2e2e6`
 	 * beside `#dde1ff` at ΔE 13.6, the weakest adjacency in the set.
 	 *
 	 * One period plus one is the whole claim rather than a sample: the fills repeat every
-	 * twenty-eight numbers, so `#1`/`#2` … `#28`/`#29` is every consecutive pair that exists, and
-	 * `#28`/`#29` is the wrap — a neutral cycle 7 beside cycle 1's lavender, which is the same kind
-	 * of boundary as `#4`/`#5` and is measured as one.
+	 * twenty-eight numbers, so `1`/`2` … `28`/`29` is every consecutive pair that exists, and
+	 * `28`/`29` is the wrap — a neutral cycle 7 beside cycle 1's lavender, which is the same kind
+	 * of boundary as `4`/`5` and is measured as one.
 	 */
 	it('separates every pair of consecutive numbers, the wrap included', () => {
 		const failures: string[] = [];
@@ -396,7 +396,7 @@ describe('the label badge palette, recomputed from the tokens', () => {
 
 		expect(failures).toEqual([]);
 		expect(DRAWN).toHaveLength(29);
-		// `#29` is `#1`'s fill again: the colour repeats and the digits are what distinguish them.
+		// `29` is `1`'s fill again: the colour repeats and the digits are what distinguish them.
 		expect(DRAWN.at(-1)).toEqual({ ...DRAWN[0], number: PERIOD + 1 });
 		// No boundary is the plain repeat's 13.6 any more, the wrap least of all.
 		expect(closest.distance).toBeGreaterThan(ADJACENT_DELTA_E);
@@ -404,7 +404,7 @@ describe('the label badge palette, recomputed from the tokens', () => {
 
 	/*
 	 * **The cycle is a cycle**: seven stops of one hue, each a perceptible step off the last, so
-	 * `#5` is recognisably `#1`'s family at another level rather than a repeat of it or a new
+	 * `5` is recognisably `1`'s family at another level rather than a repeat of it or a new
 	 * colour. Two stops of one family are four numbers apart, never adjacent, which is why this
 	 * floor is the perceptible one and not the adjacency one.
 	 */

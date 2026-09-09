@@ -103,7 +103,7 @@ describe('a label’s artifacts side by side', () => {
 		expect(screen.getByRole('heading', { level: 2 }).textContent).toBe(LABEL);
 		const strip = container.querySelector('section > div:first-child');
 		// The caption, then the tree's badge, then the name it belongs to — and nothing else.
-		expect(strip?.textContent).toBe(`LABEL#${NUMBER}${LABEL}`);
+		expect(strip?.textContent).toBe(`LABEL${NUMBER}${LABEL}`);
 		// No count, no glyph and no control in the strip.
 		expect(strip?.querySelectorAll('button')).toHaveLength(0);
 		expect(strip?.querySelectorAll('a')).toHaveLength(0);
@@ -210,7 +210,7 @@ describe('a label’s artifacts side by side', () => {
 		const badges = [...container.querySelectorAll('[role="img"]')];
 		expect(badges).toHaveLength(1);
 		const badge = badges[0];
-		expect(badge?.textContent).toBe(`#${NUMBER}`);
+		expect(badge?.textContent).toBe(String(NUMBER));
 		// The number is a code local to one group; the label is the thing that means something.
 		expect(badge?.getAttribute('aria-label')).toBe(`Filed under the label ${LABEL}`);
 		expect(badge?.getAttribute('title')).toBe(`Filed under the label ${LABEL}`);

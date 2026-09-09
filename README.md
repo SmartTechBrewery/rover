@@ -2260,9 +2260,12 @@ no ceiling and no overflow value** (#206): an integer has no last value, so no l
 undistinguished — the `@` that four letters and then twenty-six needed is gone rather than moved
 further out. The number is what carries it and never the colour alone, so the label the archive
 filed is on every badge as a tooltip and to a screen reader; an artifact with no label carries no
-badge at all. The badge leads with `#` and is never zero-padded, which is what keeps it from reading
-as the artifact's own ordinal in its file name. The fills run on four colours cycled under the
-numbers, **each cycle a step off the last** — so `#5` is `#1`'s colour at another level rather than
+badge at all. **The badge draws the bare number and is never zero-padded**, and it is a filled pill
+between the row's glyph and its name — those two are what keep it from reading as the artifact's own
+ordinal in its file name, which is plain text inside that name and always padded. It used to lead
+with a `#` as a third channel (#206) and does not since #269, because the pill and the absence of
+padding already separate the two on their own. The fills run on four colours cycled under the
+numbers, **each cycle a step off the last** — so `5` is `1`'s colour at another level rather than
 a repeat of it — and past the twenty-eighth they repeat while the digits distinguish. None of them
 can read as an outcome, and no number is a rank, because Rover reports neither.
 
