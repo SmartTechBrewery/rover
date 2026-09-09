@@ -140,10 +140,10 @@ export function ArtifactBodyView({
 	if (body.kind === 'image') {
 		return (
 			/*
-			 * Contained, centred, at its natural aspect ratio — **never stretched and never cropped**.
-			 * `max-*` caps it and **no dimension is set at all**, which is what keeps a small screenshot
-			 * at its own pixels: an enlarged screenshot is a blurrier version of the evidence somebody
-			 * opened it to read (§10). The hairline border is the whole of what is laid around it.
+			 * Contained, horizontally centred, at its natural aspect ratio — **never stretched and never
+			 * cropped**. `max-*` caps it and **no dimension is set at all**, which is what keeps a small
+			 * screenshot at its own pixels: an enlarged screenshot is a blurrier version of the evidence
+			 * somebody opened it to read (§10). The hairline border is the whole of what is laid around it.
 			 */
 			<Region>
 				<img
@@ -192,13 +192,27 @@ export function ArtifactBodyView({
 /**
  * The clean region the artifact sits in.
  *
- * `bg-surface` and centring, and **nothing else** — see this module's header for the list of what
- * may not be added here. `min-h-full` so a small screenshot is centred in the whole column rather
- * than pinned to its top.
+ * `bg-surface` and horizontal centring, and **nothing else** — see this module's header for the
+ * list of what may not be added here.
+ *
+ * ***`min-h-full` so a small screenshot is centred in the whole column rather than pinned to its
+ * top* is reversed on the vertical axis** (#279, edited in place with its reason rewritten rather
+ * than deleted). That held while the card was roughly the artifact's own size — a small screenshot
+ * in a 400px card reads better centred than pinned to the top. It stopped holding when #160 put the
+ * tree beside the preview and the row became `xl:items-stretch` (`routes/archive.tsx`, `Columns`):
+ * the card is then as tall as the *tree*, which with several branches expanded is several thousand
+ * pixels, so the midpoint of the region is below the fold and opening a screenshot cost a scroll to
+ * find the thing that was just opened. `items-start` puts the artifact where the reader is already
+ * looking, and `p-6` is what keeps top-aligned from meaning flush against the card's border.
+ *
+ * **Only the vertical axis changed.** `justify-center` still centres the artifact horizontally,
+ * `min-h-full` stays because it is what keeps `bg-surface` covering the card's whole body rather
+ * than ending under the artifact, and {@link ARTIFACT_MAX_HEIGHT} still bounds it — this is where
+ * the artifact sits, not how big it is.
  */
 function Region({ children }: { readonly children: ReactNode }) {
 	return (
-		<div className="flex min-h-full items-center justify-center bg-surface p-6">{children}</div>
+		<div className="flex min-h-full items-start justify-center bg-surface p-6">{children}</div>
 	);
 }
 
