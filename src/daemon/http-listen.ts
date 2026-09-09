@@ -217,6 +217,14 @@ import { findUserByToken, type UserRecord } from './user-store.js';
  * which of their artifacts share a label, and one call would hand an agent every other agent's run
  * names on the host. Like the other two it composes no path for a caller — every run and artifact it answers is
  * an address `list_archive` and `GET /artifact/…` already accept (D19).
+ *
+ * `measure_archive` joined it with the badge that draws what it answers (R49, #259), and it is here
+ * on those same terms: it is the fourth method that reads the archive and the one that answers *how
+ * much* rather than *what*, over an address the other three already answer with. It is not an MCP
+ * tool for `list_archive`'s reason — how much disk the operator's archive takes is that operator's
+ * browser's question, and an agent that could ask it could size every other agent's project on the
+ * host. It reads and it composes nothing: no path of any kind is on its answer, and there is no
+ * field a host path or an `errno` would fit in.
  */
 const PANEL_METHODS: readonly IpcMethodName[] = [
 	'list_devices',
@@ -224,6 +232,7 @@ const PANEL_METHODS: readonly IpcMethodName[] = [
 	'list_archive',
 	'search_archive',
 	'list_archive_groups',
+	'measure_archive',
 	'list_projects',
 	'list_kept_tests',
 	'set_kept_tests',

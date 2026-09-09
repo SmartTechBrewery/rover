@@ -1,0 +1,114 @@
+{
+	"scopes": [
+		{
+			"path": [],
+			"result": {
+				"outcome": "measured",
+				"bytes": 565660,
+				"truncated": false
+			}
+		},
+		{
+			"path": [
+				"checkout-app",
+				"login-flow"
+			],
+			"result": {
+				"outcome": "measured",
+				"bytes": 516494,
+				"truncated": false
+			}
+		},
+		{
+			"path": [
+				"checkout-app",
+				"login-flow",
+				"20260830T170501Z-issue-112-9f1c2ab4"
+			],
+			"result": {
+				"outcome": "measured",
+				"bytes": 485489,
+				"truncated": false
+			}
+		},
+		{
+			"path": [
+				"checkout-app",
+				"login-flow",
+				"20260830T170501Z-issue-112-9f1c2ab4",
+				"R5CT30ABCDE",
+				"screenshots"
+			],
+			"result": {
+				"outcome": "measured",
+				"bytes": 62934,
+				"truncated": false
+			}
+		},
+		{
+			"path": [
+				"checkout-app",
+				"login-flow",
+				"20260830T170501Z-issue-112-9f1c2ab4",
+				"R5CT30ABCDE",
+				"recordings",
+				"001_recording.mp4"
+			],
+			"result": {
+				"outcome": "measured",
+				"bytes": 412663,
+				"truncated": false
+			}
+		},
+		{
+			"path": [
+				"checkout-app",
+				"sealed-test"
+			],
+			"result": {
+				"outcome": "measured",
+				"bytes": 0,
+				"truncated": false
+			}
+		},
+		{
+			"path": [
+				"checkout-app",
+				"no-such-test"
+			],
+			"result": {
+				"outcome": "missing"
+			}
+		},
+		{
+			"path": [
+				"checkout-app",
+				"sealed-test"
+			],
+			"result": {
+				"outcome": "unreadable"
+			}
+		},
+		{
+			"path": [
+				"checkout-app",
+				"half-read"
+			],
+			"result": {
+				"outcome": "measured",
+				"bytes": 80,
+				"truncated": true
+			}
+		},
+		{
+			"path": [
+				"checkout-app"
+			],
+			"result": {
+				"outcome": "measured",
+				"bytes": 535020,
+				"truncated": true
+			}
+		}
+	]
+}

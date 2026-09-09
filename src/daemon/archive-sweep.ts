@@ -71,14 +71,25 @@
  *
  * **There is still no index.** The walk *is* the measurement — no cached total, no catalogue, no
  * memo of a previous sweep (D6, D24, and the three existing readers all say so).
+ *
+ * **The subtree measurement itself lives in `./archive-size.ts` and is shared** (R49, #259). It
+ * left this module unchanged — the same walk, the same depth bound, the same dirent test that
+ * keeps it from following a link, the same rule that an `ENOENT` mid-walk is ordinary — and gained
+ * only a flag saying whether it was cut short, which this module ignores and `measure_archive`
+ * reports. It is shared rather than copied on purpose: the badge a screen draws beside a scope and
+ * the byte counts in this module's own log would otherwise be two differently-bounded ideas of
+ * what the archive weighs. The two numbers are still not arithmetically equal, and that is stated
+ * where it belongs — this module totals *run subtrees*, so a stray file beside a project counts
+ * for the measurement and not for the budget.
  */
 
 import type { Dirent } from 'node:fs';
-import { readdir, rm, rmdir, stat } from 'node:fs/promises';
+import { readdir, rm, rmdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { MAX_ARCHIVE_PATH_DEPTH } from '../ipc/methods.js';
 import { leaseRunDirectory, runDirectoryPrecedes } from './archive-path.js';
 import { ageCutoffMs, budgetBytesOf, type RetentionPolicy } from './archive-retention.js';
+import { sizeOfTree } from './archive-size.js';
 import { keptTestKey, readKeptTests } from './kept-tests.js';
 import type { Lease } from './leases.js';
 
@@ -419,7 +430,11 @@ async function walkArchive(root: string, warn: (message: string) => void): Promi
 			const testPath = join(projectPath, test.name);
 			for (const run of await directoriesIn(testPath, warn)) {
 				const path = join(testPath, run.name);
-				const sizeBytes = await sizeOfTree(path, MAX_ARCHIVE_PATH_DEPTH, warn);
+				// `.bytes` alone: a walk cut short says so, and the sweep does not act on it. An
+				// under-measured archive deletes *less*, which this function's docblock already
+				// calls the benign direction for a budget — and `measure_archive` is the caller
+				// that reports the shortfall instead (`./archive-size.ts`).
+				const sizeBytes = (await sizeOfTree(path, MAX_ARCHIVE_PATH_DEPTH, warn)).bytes;
 				runs.push({
 					project: project.name,
 					testName: test.name,
@@ -448,63 +463,6 @@ async function directoriesIn(
 			warn(unreadableWarning(directory, error));
 		}
 		return [];
-	}
-}
-
-/**
- * The bytes under one directory, files only, following no link.
- *
- * `depth` is a floor under `MAX_ARCHIVE_PATH_DEPTH` and the tree never reaches it (§10): a run's
- * subtree is `<serial>/<kind>/<file>`. It is here so a hand-made loop of directories under a run
- * cannot make one sweep walk forever, which is the one failure a measurement must not have.
- */
-async function sizeOfTree(
-	directory: string,
-	depth: number,
-	warn: (message: string) => void,
-): Promise<number> {
-	if (depth <= 0) {
-		return 0;
-	}
-	let dirents: Dirent[];
-	try {
-		dirents = await readdir(directory, { withFileTypes: true });
-	} catch (error) {
-		if (codeOf(error) !== 'ENOENT') {
-			warn(unreadableWarning(directory, error));
-		}
-		return 0;
-	}
-
-	let bytes = 0;
-	for (const dirent of dirents) {
-		const child = join(directory, dirent.name);
-		if (dirent.isDirectory()) {
-			bytes += await sizeOfTree(child, depth - 1, warn);
-		} else if (dirent.isFile()) {
-			bytes += await fileSizeOf(child, warn);
-		}
-		// Anything else — a symlink, a socket, a device node — contributes nothing and is not
-		// followed. `readdir`'s dirent type answers that with no `stat` at all.
-	}
-	return bytes;
-}
-
-/**
- * One file's size, or nothing.
- *
- * A file removed between the `readdir` and the `stat` is ordinary here rather than exceptional —
- * the archive is written to while it is being read, which is what `./list-archive.ts` already says
- * about its own `sizeOf`.
- */
-async function fileSizeOf(path: string, warn: (message: string) => void): Promise<number> {
-	try {
-		return (await stat(path)).size;
-	} catch (error) {
-		if (codeOf(error) !== 'ENOENT') {
-			warn(unreadableWarning(path, error));
-		}
-		return 0;
 	}
 }
 

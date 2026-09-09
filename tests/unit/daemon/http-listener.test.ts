@@ -619,6 +619,24 @@ describe('only the panel’s methods are reachable, and no table gained a row', 
 		});
 	});
 
+	it('reaches measure_archive, how much disk one archive address takes', async () => {
+		registerFakeBackend();
+		await withStore();
+		const daemon = await startWithHttp();
+
+		const answer = await call(daemon, 'measure_archive', { path: [] });
+
+		// On the allowlist since #259, on `list_archive`'s exact terms: the badge beside a scope is
+		// the operator's browser's question (R49, D27), and an agent that could ask it could size
+		// every other agent's project on the host. Nothing archived here yet, so `missing` and not
+		// a refusal is what proves it reached the handler.
+		expect(envelopeOf(answer)).toMatchObject({
+			type: 'result',
+			id: 'req-1',
+			result: { outcome: 'missing' },
+		});
+	});
+
 	it('reaches list_projects, what this host has registered', async () => {
 		registerFakeBackend();
 		await withStore();

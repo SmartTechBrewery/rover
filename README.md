@@ -1141,7 +1141,7 @@ package argument on it — the byte-carrying form stays the CLI's, because a who
 argument means an agent producing several megabytes of base64. That is what `push_file` and
 `pull_file` are still waiting for and why they are not tools: `PROJECT.md` R24 phase 2 owns how a
 client supplies and receives a file, and neither of those rows has a second form that carries
-none. `force_release_device` is the third of nine rows with no tool, and its reason will not expire:
+none. `force_release_device` is the third of eleven rows with no tool, and its reason will not expire:
 **an agent must not be able to end another agent's lease.** It is authority over the shared pool
 rather than a step in one caller's work, which is what makes it an operator action (D27, D28)
 reached from the CLI and, later, the panel. `list_archive` is the fourth, and its reason is
@@ -1173,7 +1173,11 @@ reason with the stakes raised (§9.4): it **deletes an operator's data** on a sh
 directories, permanently, with no undo and no trash directory. That is authority over the host's own
 disk rather than any agent's step of work, so it is reached from the CLI alone; it is deliberately
 not on the panel's surface either, while D27's role model is still deferred.
-`tests/unit/mcp/verb-declarations.test.ts` records all ten as
+`measure_archive` is the eleventh, on `list_archive`'s exact terms (R49): it answers how much disk
+one address of the **host's** archive takes, which is the operator's browser's question — an agent
+already receives its own artifacts as bytes, so there is no total there it needs, and one that could
+ask this could size every other agent's project on the host. It is on the panel's surface.
+`tests/unit/mcp/verb-declarations.test.ts` records all eleven as
 decisions, so no row can quietly land with no tool. The `rover` command is published through `package.json`'s `bin` and reaches a `PATH`
 only through `npm link`, which `PROJECT.md` §9.4 records the reasoning for; `bin/rover-mcp.mjs`
 is a path an MCP config states absolutely and not that.
