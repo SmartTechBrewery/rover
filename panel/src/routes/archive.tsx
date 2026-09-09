@@ -14,7 +14,12 @@ import {
 	splatFromComponents,
 } from '@panel/archive/archive-path.js';
 import { type ArchiveSearch, useArchiveSearch } from '@panel/archive/archive-search.js';
-import { type ArchiveSize, useArchiveSize } from '@panel/archive/archive-size.js';
+import {
+	type ArchiveSize,
+	type GroupedSizeScope,
+	useArchiveSize,
+	useGroupedArchiveSize,
+} from '@panel/archive/archive-size.js';
 import { useArchivedArtifact } from '@panel/archive/artifact.js';
 import { type ArchivedDeviceInfo, useArchivedDeviceInfo } from '@panel/archive/device-info.js';
 import { groupedSearch } from '@panel/archive/group-search.js';
@@ -261,21 +266,39 @@ export function ArchiveScreen({ view }: { readonly view: ArchiveView }) {
 	const source = sourceFor(view, groups, levels);
 	/**
 	 * **What the size badge's sentence is about** — {@link sizeScopeFor} — and `null` wherever there
-	 * is no badge to draw: the whole groups view in this phase, and an address the parent listing has
-	 * not classified yet.
+	 * is no badge to draw: an address the parent listing has not classified yet, and nothing else
+	 * since #262 gave the groups view its own three scopes.
 	 */
 	const sizeScope = sizeScopeFor(view, selected, open);
+	/**
+	 * And **which of the two questions that scope is**, or `null` for the ones that are an address
+	 * (#262). The groups view's three shallow depths describe a *subset* of the archive — the runs
+	 * that named a `group_id` — which no address walk can answer; everything at a group's depth and
+	 * below is the archive's own address, so it goes through the address hook.
+	 */
+	const groupedScope = groupedScopeFor(sizeScope, selected);
 	/*
-	 * **One `measure_archive` per scope, and none at all for an artifact** (#261). The host walks the
-	 * address; nothing is summed here, because a total added up out of the levels the tree happens to
-	 * have listed would grow as a reader browsed and be wrong at every point before the last.
+	 * **One host call per scope, and none at all for an artifact** (#261, #262). The host walks the
+	 * address, or the grouped runs of the scope; nothing is summed here, because a total added up out
+	 * of the levels the tree happens to have listed would grow as a reader browsed and be wrong at
+	 * every point before the last — and a group's own runs are on the grouping answer, one `reduce`
+	 * away, with no sizes on them to reduce in any case.
 	 *
 	 * The `file` scope is the exception that costs no round trip: its figure is the `sizeBytes` the
-	 * parent listing already carries, so the hook is called with `null` there and {@link fileSizeOf}
-	 * answers instead — the deepest context on the screen is free.
+	 * parent listing already carries, so both hooks are called with `null` there and
+	 * {@link fileSizeOf} answers instead — the deepest context on the screen is free. Each hook is
+	 * `null` wherever the other is answering, so exactly one request is ever out for one scope.
 	 */
-	const measured = useArchiveSize(sizeScope === null || sizeScope === 'file' ? null : address);
-	const size = sizeScope === 'file' ? fileSizeOf(levels, address) : measured;
+	const measured = useArchiveSize(
+		sizeScope === null || sizeScope === 'file' || groupedScope !== null ? null : address,
+	);
+	const measuredGroups = useGroupedArchiveSize(groupedScope);
+	const size =
+		sizeScope === 'file'
+			? fileSizeOf(levels, address)
+			: groupedScope !== null
+				? measuredGroups
+				: measured;
 
 	return (
 		<>
@@ -1023,20 +1046,25 @@ function sizeBadgeFor(scope: SizeScope | null, size: ArchiveSize) {
 }
 
 /**
- * The `All` view's scopes by depth, in the order the address grows — the root, a project, a test
- * name, a run, and the `<serial>`, which is a **directory** because that is what it is: a fact
- * about the run rather than a level of the tree (§9), and a folder to whoever measures it.
+ * Each view's scopes by depth, in the order its address grows.
  *
- * Indexed by `selected.length`, so it is the same depth arithmetic {@link depthsOf} already owns
- * rather than a second table of numbers.
+ * The `All` view's are the root, a project, a test name, a run, and the `<serial>` — which is a
+ * **directory** because that is what it is: a fact about the run rather than a level of the tree
+ * (§9), and a folder to whoever measures it.
+ *
+ * The groups view's are its own three above a group and then **the same four again** (#262), which
+ * is the whole of why that view needed no second address vocabulary: its depth 3 is a test name,
+ * its depth 4 a run and its depth 5 the `<serial>`, at the archive's own address once the group id
+ * is dropped ({@link archiveAddressOf}). Only the three shallow ones are new, because only they
+ * describe something the archive has no directory for.
+ *
+ * Indexed by `selected.length` in each view's own count, so it is the same depth arithmetic
+ * {@link depthsOf} already owns rather than a second table of numbers.
  */
-const SIZE_SCOPES = [
-	'archive',
-	'project',
-	'test',
-	'run',
-	'directory',
-] as const satisfies readonly SizeScope[];
+const SIZE_SCOPES: Record<ArchiveView, readonly SizeScope[]> = {
+	all: ['archive', 'project', 'test', 'run', 'directory'],
+	groups: ['grouped', 'grouped-project', 'group', 'test', 'run', 'directory'],
+};
 
 /**
  * Which scope the size badge names, or `null` where it draws nothing at all.
@@ -1047,26 +1075,53 @@ const SIZE_SCOPES = [
  * nobody has answered for, which is the guess D22 forbids and the same reason the describing line
  * falls back to the run's own sentence there.
  *
- * **`null` throughout the groups view in this phase** (#261). That view's badge is phase 3's: its
- * arrangement is one bounded walk, so what it holds at a level is what the host could examine, and
- * the count badge is absent there for that reason already — the size badge's own answer to it needs
- * settling rather than assuming, and drawing nothing is what this phase promised.
+ * **The groups view draws one at every depth** (#262, reversing #261's *`null` throughout the
+ * groups view in this phase* in place, which was a deferral and said so). What that phase left to
+ * settle was what its shallow scopes are *called*, since a group is not a directory and has no
+ * address to measure: they are `grouped`, `grouped-project` and `group`, answered by a second host
+ * method over the runs that named a `group_id`. The count badge stays absent there and that is not
+ * inconsistent: a bounded walk cannot be honestly rendered as a count of a set, and it *can* be
+ * rendered as a lower bound, which is what `truncated` is for.
  */
 function sizeScopeFor(
 	view: ArchiveView,
 	selected: readonly string[],
 	open: OpenEntry,
 ): SizeScope | null {
-	if (view === 'groups') {
-		return null;
-	}
 	if (selected.length >= depthsOf(view).below) {
 		if (open === 'unanswered') {
 			return null;
 		}
 		return open === 'directory' ? 'directory' : 'file';
 	}
-	return SIZE_SCOPES[selected.length] ?? null;
+	return SIZE_SCOPES[view][selected.length] ?? null;
+}
+
+/**
+ * The grouped scope one of those three names, or `null` for every scope that is an address (#262).
+ *
+ * **Read straight off `selected`, with no component parsed and none composed** (D22): the project
+ * is the groups view's own first component and the group id its second, which is exactly what
+ * {@link archiveAddressOf} drops to reach the archive's address. So the two questions this screen
+ * asks are the same two components read two ways, rather than two vocabularies.
+ *
+ * It takes the scope rather than the depth so there is **one** table of depths — whichever depth
+ * `grouped-project` turns out to be, this and the badge's sentence agree about it by construction.
+ */
+function groupedScopeFor(
+	scope: SizeScope | null,
+	selected: readonly string[],
+): GroupedSizeScope | null {
+	if (scope === 'grouped') {
+		return { scope: 'all' };
+	}
+	if (scope === 'grouped-project') {
+		return { scope: 'project', project: selected[0] ?? '' };
+	}
+	if (scope === 'group') {
+		return { scope: 'group', project: selected[0] ?? '', groupId: selected[1] ?? '' };
+	}
+	return null;
 }
 
 /**

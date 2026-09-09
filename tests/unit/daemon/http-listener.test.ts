@@ -637,6 +637,24 @@ describe('only the panel’s methods are reachable, and no table gained a row', 
 		});
 	});
 
+	it('reaches measure_archive_groups, how much disk the grouped runs take', async () => {
+		registerFakeBackend();
+		await withStore();
+		const daemon = await startWithHttp();
+
+		const answer = await call(daemon, 'measure_archive_groups', { scope: 'all' });
+
+		// On the allowlist since #262, beside the row above and for its reason with
+		// `list_archive_groups`' force: the groups view's badge is the operator's browser's
+		// question, and an agent already knows its own group. Nothing archived here yet, so
+		// `missing` and not a refusal is what proves it reached the handler.
+		expect(envelopeOf(answer)).toMatchObject({
+			type: 'result',
+			id: 'req-1',
+			result: { outcome: 'missing' },
+		});
+	});
+
 	it('reaches list_projects, what this host has registered', async () => {
 		registerFakeBackend();
 		await withStore();

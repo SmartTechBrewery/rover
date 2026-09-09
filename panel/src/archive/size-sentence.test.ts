@@ -16,6 +16,16 @@ const SCOPES = [
 	'run',
 	'directory',
 	'file',
+	'grouped',
+	'grouped-project',
+	'group',
+] as const satisfies readonly SizeScope[];
+
+/** The three the groups view's own depths name (#262) — a subset of the archive in every case. */
+const GROUPED_SCOPES = [
+	'grouped',
+	'grouped-project',
+	'group',
 ] as const satisfies readonly SizeScope[];
 
 describe('the badge’s sentence', () => {
@@ -28,6 +38,35 @@ describe('the badge’s sentence', () => {
 		expect(sizeSentence('run', MEASURED)).toBe('This run takes 7.7 MB on disk');
 		expect(sizeSentence('directory', MEASURED)).toBe('This directory takes 7.7 MB on disk');
 		expect(sizeSentence('file', MEASURED)).toBe('This file takes 7.7 MB on disk');
+	});
+
+	// The groups view's own three, whose subjects are plural for the reason the root's is — and
+	// whose two shallow wordings are decided in #262 rather than specified.
+	it('names the grouped scopes without ever saying `all`', () => {
+		expect(sizeSentence('grouped', MEASURED)).toBe('Grouped tests take 7.7 MB on disk');
+		expect(sizeSentence('grouped-project', MEASURED)).toBe(
+			'Grouped tests in this project take 7.7 MB on disk',
+		);
+		expect(sizeSentence('group', MEASURED)).toBe('Tests in this group take 7.7 MB on disk');
+	});
+
+	/*
+	 * **The gate this phase turns on**: the groups view lists only the runs that named a
+	 * `group_id`, so every one of its scopes describes a **subset** of the archive — and a subset
+	 * described with the word *all* is the one thing this badge must not do. Asserted over every
+	 * state, because the *could not measure* sentence is a second place the word could get in.
+	 */
+	it('never says `all` for a grouped scope, in any state', () => {
+		const states: readonly ArchiveSize[] = [MEASURED, TRUNCATED, { status: 'unmeasurable' }];
+
+		for (const scope of GROUPED_SCOPES) {
+			for (const state of states) {
+				expect(sizeSentence(scope, state) ?? '').not.toMatch(/\ball\b/i);
+			}
+		}
+		// And the `All` view's root scope still does say it, so the gate is about the subset and not
+		// about the word.
+		expect(sizeSentence('archive', MEASURED)).toContain('All tests');
 	});
 
 	/*
@@ -51,6 +90,12 @@ describe('the badge’s sentence', () => {
 		);
 		expect(sizeSentence('archive', { status: 'unmeasurable' })).toBe(
 			'The host could not measure what all tests take on disk',
+		);
+		expect(sizeSentence('grouped', { status: 'unmeasurable' })).toBe(
+			'The host could not measure what grouped tests take on disk',
+		);
+		expect(sizeSentence('group', { status: 'unmeasurable' })).toBe(
+			'The host could not measure what tests in this group take on disk',
 		);
 		for (const scope of SCOPES) {
 			expect(sizeSentence(scope, { status: 'unmeasurable' })).not.toContain('unknown');

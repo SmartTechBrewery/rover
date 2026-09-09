@@ -93,6 +93,15 @@ const { host, HANGS } = vi.hoisted(() => ({
 		/** What the host answers a measurement with — the size badge's own three outcomes. */
 		measure: { outcome: 'measured', bytes: 8_074_035, truncated: false } as unknown,
 		/**
+		 * Every scope `measure_archive_groups` was asked to walk (#262) — logged apart from the
+		 * addresses above for that log's own reason, one step further: *a group's badge is one
+		 * request and not one per run*, and *the groups view's depths below a group go to the
+		 * address method*, are assertable only if the two measures are counted separately.
+		 */
+		groupMeasures: [] as unknown[],
+		/** What the host answers a grouped measurement with — the same three outcomes. */
+		groupMeasure: { outcome: 'measured', bytes: 8_074_035, truncated: false } as unknown,
+		/**
 		 * How many times `list_archive_groups` was asked (#181) — counted rather than logged,
 		 * because it takes no parameter and what is worth asserting is *once, and only in the view
 		 * that reads it*.
@@ -154,6 +163,14 @@ vi.mock('@panel/session/session-provider.js', () => {
 		}
 		return { ok: true, value: { type: 'result', result: host.measure } };
 	};
+	/** One grouped scope's measurement, logged apart — see `call` below (#262). */
+	const measureGroups = async (params: unknown) => {
+		host.groupMeasures.push(params);
+		if (host.hangs || host.groupMeasure === HANGS) {
+			return await new Promise(() => undefined);
+		}
+		return { ok: true, value: { type: 'result', result: host.groupMeasure } };
+	};
 	/** The one grouping walk, counted apart for the same reason (#181). */
 	const grouping = async () => {
 		host.groupings += 1;
@@ -206,6 +223,49 @@ vi.mock('@panel/session/session-provider.js', () => {
 		return { ok: true, value: { type: 'result', result } };
 	};
 
+	/**
+	 * Which of the seven methods a call is (#146, #181, #237, #261, #262) — read off `method` rather
+	 * than assumed to be a listing: the tree card's field asks `search_archive`, the groups view
+	 * asks `list_archive_groups`, the `Keep` tick reads and writes the host's kept set, and the size
+	 * badge asks `measure_archive` for an address and `measure_archive_groups` for one of the groups
+	 * view's three shallow scopes. *Searching issues no extra `list_archive`*, *the groups view
+	 * lists nothing above a run*, *a group's press is one request*, *a group's badge is one request*
+	 * and *an artifact is measured out of the listing* are assertable only because each is logged
+	 * apart.
+	 *
+	 * It is out here rather than inline on `call` below so the dispatch is one branch per method at
+	 * one nesting level; `call` is what a screen holds and this is what it asks.
+	 */
+	const route = async (
+		method: string,
+		params: {
+			path: readonly string[];
+			text?: string;
+			tests?: readonly { project: string; testName: string }[];
+			kept?: boolean;
+		},
+	) => {
+		if (method === 'search_archive') {
+			return await search(params.text);
+		}
+		if (method === 'list_archive_groups') {
+			return await grouping();
+		}
+		if (method === 'measure_archive') {
+			return await measure(params.path);
+		}
+		if (method === 'measure_archive_groups') {
+			return await measureGroups(params);
+		}
+		if (method === 'list_kept_tests') {
+			return await keptTests();
+		}
+		if (method === 'set_kept_tests') {
+			return await keepPress(params as Parameters<typeof keepPress>[0]);
+		}
+		return await listing(params.path);
+	};
+
 	return {
 		useSession: () => ({
 			/*
@@ -217,41 +277,7 @@ vi.mock('@panel/session/session-provider.js', () => {
 				status: 'signed-in',
 				identity: { identifier: 'karolina', displayName: 'Karolina' },
 			},
-			/*
-			 * Six methods now (#146, #181, #237, #261), so this reads `method` rather than assuming a
-			 * listing: the tree card's field asks `search_archive`, the groups view asks
-			 * `list_archive_groups`, the `Keep` tick reads and writes the host's kept set, and the
-			 * size badge asks `measure_archive`. *Searching issues no extra `list_archive`*, *the
-			 * groups view lists nothing above a run*, *a group's press is one request* and *an
-			 * artifact is measured out of the listing* are assertable only because each is logged
-			 * apart.
-			 */
-			call: async (
-				method: string,
-				params: {
-					path: readonly string[];
-					text?: string;
-					tests?: readonly { project: string; testName: string }[];
-					kept?: boolean;
-				},
-			) => {
-				if (method === 'search_archive') {
-					return await search(params.text);
-				}
-				if (method === 'list_archive_groups') {
-					return await grouping();
-				}
-				if (method === 'measure_archive') {
-					return await measure(params.path);
-				}
-				if (method === 'list_kept_tests') {
-					return await keptTests();
-				}
-				if (method === 'set_kept_tests') {
-					return await keepPress(params as Parameters<typeof keepPress>[0]);
-				}
-				return await listing(params.path);
-			},
+			call: route,
 			readArtifactText: async (path: readonly string[]) => {
 				host.files.push(path);
 				if (host.hangs) {
@@ -427,6 +453,8 @@ beforeEach(() => {
 	host.search = { outcome: 'searched', matches: [], truncated: false };
 	host.measures = [];
 	host.measure = { outcome: 'measured', bytes: 8_074_035, truncated: false };
+	host.groupMeasures = [];
+	host.groupMeasure = { outcome: 'measured', bytes: 8_074_035, truncated: false };
 	host.groupings = 0;
 	host.groups = groupings();
 	host.file = { outcome: 'missing' };
@@ -2373,26 +2401,29 @@ describe('the testing groups view', () => {
 	});
 
 	/*
-	 * **Neither badge, at any depth** (amended in place, #261 — it was *no badge*, and there are two
-	 * now). This view is one bounded walk, so a count over it would read as a count of a set and
-	 * could be short without saying so — the same rule that makes the count badge absent at a run
-	 * rather than an exception to it. The size badge is phase 3's and is absent here in this phase,
-	 * which is what makes its absence a decision rather than an oversight.
+	 * **The count badge, at no depth** (amended in place a second time, #262 — it was *neither
+	 * badge*, and before that *no badge*). This view is one bounded walk, so a *count* over it would
+	 * read as a count of a set and could be short without saying so — the same rule that makes the
+	 * count badge absent at a run rather than an exception to it.
+	 *
+	 * **The size badge is drawn at every depth now, and the two are consistent rather than
+	 * contradictory**: a bounded walk cannot be honestly rendered as a count of a set, and it *can*
+	 * be rendered as a lower bound, which is what `truncated` is for.
 	 */
-	it('shows neither badge at the root, where the All view shows both', async () => {
+	it('shows the size badge but no count badge at the root', async () => {
 		const { container } = await grouped(undefined);
 
+		expect(screen.getByText('Grouped tests take 7.7 MB on disk')).toBeDefined();
 		expect(container.textContent).not.toContain('archived');
-		expect(container.textContent).not.toContain('on disk');
-		expect(host.measures).toEqual([]);
 	});
 
-	it('shows neither badge at a project either', async () => {
+	it('shows no count badge at a project either, and never says `all` there', async () => {
 		const { container } = await grouped('checkout-app');
 
+		expect(screen.getByText('Grouped tests in this project take 7.7 MB on disk')).toBeDefined();
 		expect(container.textContent).not.toContain('archived');
-		expect(container.textContent).not.toContain('on disk');
-		expect(host.measures).toEqual([]);
+		// The one thing this badge must not do: the view lists only the runs that named a group.
+		expect(container.textContent).not.toContain('All tests');
 	});
 
 	// A partial arrangement must not read like a complete one — said above the rows, as the
@@ -2408,6 +2439,159 @@ describe('the testing groups view', () => {
 		await grouped(undefined);
 
 		expect(screen.getByText(/More is filed here than the host could examine/)).toBeDefined();
+	});
+});
+
+/**
+ * **The size badge in the groups view** — one sentence per depth, and the two questions behind them
+ * (#262, R49, `docs/DESIGN.md` §9).
+ *
+ * The three shallow depths describe a **subset** of the archive — the runs that named a `group_id`
+ * — which no address walk can answer, so they go to `measure_archive_groups`. A group's depth and
+ * everything below it is the archive's own address once the group id is dropped, so those go to
+ * `measure_archive`, at the same addresses the `All` view uses. Which method a depth asks is
+ * asserted beside the sentence, because *no second address vocabulary appears* is the whole reason
+ * this view needed only three new scopes.
+ */
+describe('what the size badge says in the testing groups view', () => {
+	const GROUP_ROOT = ['checkout-app', GROUP];
+	const TEST_NAME = [...GROUP_ROOT, 'login-flow'];
+
+	// The two wordings the operator did not specify, decided in this phase: they say *grouped* and
+	// never *all*, because this view lists only the runs that named a group.
+	it('names the grouped runs at the root, and one project’s at a project', async () => {
+		await grouped(undefined);
+		expect(screen.getByText('Grouped tests take 7.7 MB on disk')).toBeDefined();
+		expect(host.groupMeasures).toEqual([{ scope: 'all' }]);
+		expect(host.measures).toEqual([]);
+		cleanup();
+
+		host.groupMeasures = [];
+		await grouped('checkout-app');
+		expect(screen.getByText('Grouped tests in this project take 7.7 MB on disk')).toBeDefined();
+		expect(host.groupMeasures).toEqual([{ scope: 'project', project: 'checkout-app' }]);
+		expect(host.measures).toEqual([]);
+	});
+
+	it('names the group at a group', async () => {
+		await grouped(GROUP_ROOT.join('/'));
+
+		expect(screen.getByText('Tests in this group take 7.7 MB on disk')).toBeDefined();
+		expect(host.groupMeasures).toEqual([
+			{ scope: 'group', project: 'checkout-app', groupId: GROUP },
+		]);
+	});
+
+	/*
+	 * **Below a group it is the `All` view's own four sentences, at the `All` view's own addresses**
+	 * — the group id dropped, which is the same function every other read below a group already
+	 * goes through (`archiveAddressOf`).
+	 */
+	it('says the All view’s own sentences below a group, at the archive’s own addresses', async () => {
+		await grouped(TEST_NAME.join('/'));
+		expect(screen.getByText('This test takes 7.7 MB on disk')).toBeDefined();
+		expect(host.measures).toEqual([['checkout-app', 'login-flow']]);
+		expect(host.groupMeasures).toEqual([]);
+		cleanup();
+
+		host.measures = [];
+		await grouped([...TEST_NAME, RUN].join('/'));
+		expect(screen.getByText('This run takes 7.7 MB on disk')).toBeDefined();
+		expect(host.measures).toEqual([['checkout-app', 'login-flow', RUN]]);
+		cleanup();
+
+		host.measures = [];
+		await grouped([...TEST_NAME, RUN, SERIAL].join('/'));
+		expect(screen.getByText('This directory takes 7.7 MB on disk')).toBeDefined();
+		expect(host.measures).toEqual([['checkout-app', 'login-flow', RUN, SERIAL]]);
+		expect(host.groupMeasures).toEqual([]);
+	});
+
+	// And the two depths the parent listing classifies, on the same terms as the `All` view's: a
+	// folder is a directory, and a file is measured out of the listing at no request at all.
+	it('classifies a directory and a file below the `<serial>` out of the listing', async () => {
+		await grouped([...TEST_NAME, RUN, SERIAL, 'screenshots'].join('/'));
+		expect(screen.getByText('This directory takes 7.7 MB on disk')).toBeDefined();
+		expect(host.measures).toEqual([['checkout-app', 'login-flow', RUN, SERIAL, 'screenshots']]);
+		cleanup();
+
+		host.measures = [];
+		await grouped([...TEST_NAME, RUN, SERIAL, 'device_info.json'].join('/'));
+		expect(screen.getByText('This file takes 80 B on disk')).toBeDefined();
+		expect(host.measures).toEqual([]);
+		expect(host.groupMeasures).toEqual([]);
+	});
+
+	/*
+	 * **A group's badge is one request, not one per run** — the whole reason this is a host method
+	 * and not a `reduce` over the grouping answer. `GROUP` holds two runs on that answer, and it
+	 * would be one `reduce` away with no sizes on it to reduce (§9's *lazily, one `readdir` at a
+	 * time*).
+	 */
+	it('measures a group in one request, whatever the group holds', async () => {
+		await grouped(GROUP_ROOT.join('/'));
+
+		expect(host.groupMeasures).toHaveLength(1);
+		expect(host.measures).toEqual([]);
+	});
+
+	/*
+	 * **A bounded walk renders a lower bound, never a plain figure**, and this view is where that
+	 * matters most: the grouping walk is bounded, so a grouped total is far likelier to be short
+	 * than an address's is.
+	 */
+	it('renders a truncated grouped total as an explicit lower bound', async () => {
+		host.groupMeasure = { outcome: 'measured', bytes: 8_074_035, truncated: true };
+
+		const { container } = await grouped(undefined);
+
+		expect(screen.getByText('Grouped tests take at least 7.7 MB on disk')).toBeDefined();
+		expect(container.textContent).not.toContain('take 7.7 MB');
+	});
+
+	// The `unmeasurable` sentence of a grouped scope, which is a sentence of its own like every
+	// other — and still never the word *all*.
+	it('says the host could not measure the grouped runs, rather than a figure', async () => {
+		host.groupMeasure = { outcome: 'unreadable' };
+
+		const { container } = await grouped('checkout-app');
+
+		expect(
+			screen.getByText(
+				'The host could not measure what grouped tests in this project take on disk',
+			),
+		).toBeDefined();
+		expect(container.textContent).not.toContain('7.7 MB');
+	});
+
+	// Absent rather than `0 B` while the walk is out and where there is nothing to measure — the
+	// count badge's own rule, which this view keeps at its own depths too.
+	it('draws nothing while the grouped walk is out, and nothing where there is none', async () => {
+		host.groupMeasure = HANGS;
+		const { container } = await grouped(undefined);
+		expect(container.textContent).not.toContain('on disk');
+		cleanup();
+
+		host.groupMeasure = { outcome: 'missing' };
+		const second = await grouped(undefined);
+		expect(second.container.textContent).not.toContain('on disk');
+		expect(second.container.textContent).not.toContain('0 B');
+	});
+
+	// The count badge is absent at every depth of this view, size badge or no size badge — the rule
+	// #181 settled, unchanged by this phase.
+	it('carries no count badge at any depth', async () => {
+		for (const splat of [
+			undefined,
+			'checkout-app',
+			GROUP_ROOT.join('/'),
+			TEST_NAME.join('/'),
+			[...TEST_NAME, RUN].join('/'),
+		]) {
+			const { container } = await grouped(splat);
+			expect(container.textContent).not.toContain('archived');
+			cleanup();
+		}
 	});
 });
 
@@ -2521,8 +2705,9 @@ describe('a labelled artifact open in the testing groups view', () => {
 	});
 
 	// The header claims the order out loud, the way *most recent first* is claimed one level up —
-	// and the badge is still absent, at this depth as at every other in this view.
-	it('describes the card, and still carries no badge', async () => {
+	// and the *count* badge is still absent, at this depth as at every other in this view (amended
+	// in place, #262: the size badge is drawn here, out of the listing that named the artifact).
+	it('describes the card, and still carries no count badge', async () => {
 		const { container } = await grouped(splatFor(COMPARED), withScreenshots());
 
 		expect(

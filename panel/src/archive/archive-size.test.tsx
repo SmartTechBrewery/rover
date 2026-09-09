@@ -12,7 +12,12 @@ vi.mock('@panel/session/session-provider.js', () => ({
 	useSession: () => ({ call: host.call }),
 }));
 
-import { type ArchiveSize, useArchiveSize } from './archive-size.js';
+import {
+	type ArchiveSize,
+	type GroupedSizeScope,
+	useArchiveSize,
+	useGroupedArchiveSize,
+} from './archive-size.js';
 
 function result(value: unknown) {
 	return { ok: true as const, value: { type: 'result' as const, result: value } };
@@ -30,7 +35,18 @@ function describe_(size: ArchiveSize): string {
 	return size.status === 'measured' ? `measured:${size.bytes}:${size.truncated}` : size.status;
 }
 
+/** Renders one grouped scope's state as text, on {@link Size}'s exact terms (#262). */
+function GroupedSize({ scope }: { readonly scope: GroupedSizeScope | null }) {
+	const size: ArchiveSize = useGroupedArchiveSize(scope);
+	return <p data-testid="size">{describe_(size)}</p>;
+}
+
 const PROJECT = ['checkout-app'];
+const GROUP: GroupedSizeScope = {
+	scope: 'group',
+	project: 'checkout-app',
+	groupId: 'app-bar-top-space',
+};
 
 describe('the size of one scope', () => {
 	it('asks `measure_archive` once, for the scope it was given and no other', async () => {
@@ -118,6 +134,110 @@ describe('the size of one scope', () => {
 
 		await waitFor(() => expect(host.call).toHaveBeenCalledTimes(1));
 		expect(host.call.mock.calls[0]?.[2]).toBeUndefined();
+	});
+});
+
+/**
+ * **The second entry point** (#262) — the groups view's three scopes, which describe a subset of
+ * the archive rather than a directory in it, so they name a second host method and not a path.
+ *
+ * Everything else about them is the entry point above's, because it is the same implementation:
+ * one call per scope, the answer kept for the life of the screen, `null` asking for nothing, and
+ * one call under StrictMode rather than two.
+ */
+describe('the size of one grouped scope', () => {
+	it('asks `measure_archive_groups` once, with the scope it was given verbatim', async () => {
+		host.call.mockReset();
+		host.call.mockResolvedValue(MEASURED);
+
+		render(<GroupedSize scope={GROUP} />);
+
+		await waitFor(() => {
+			expect(screen.getByTestId('size').textContent).toBe('measured:8074035:false');
+		});
+		expect(host.call.mock.calls).toEqual([['measure_archive_groups', GROUP]]);
+	});
+
+	// The three scopes go over the wire as the host's own params and nothing is composed here: a
+	// `groupId` names no directory, so it is never joined into a path (R41, D22).
+	it('asks each of the three scopes in the host’s own shape', async () => {
+		host.call.mockReset();
+		host.call.mockResolvedValue(MEASURED);
+		const { rerender } = render(<GroupedSize scope={{ scope: 'all' }} />);
+		await waitFor(() => expect(host.call).toHaveBeenCalledTimes(1));
+
+		rerender(<GroupedSize scope={{ scope: 'project', project: 'checkout-app' }} />);
+		await waitFor(() => expect(host.call).toHaveBeenCalledTimes(2));
+		rerender(<GroupedSize scope={GROUP} />);
+		await waitFor(() => expect(host.call).toHaveBeenCalledTimes(3));
+
+		expect(host.call.mock.calls.map((call) => call[1])).toEqual([
+			{ scope: 'all' },
+			{ scope: 'project', project: 'checkout-app' },
+			GROUP,
+		]);
+	});
+
+	it('asks for nothing at all, and stays `loading`, for a `null` scope', async () => {
+		host.call.mockReset();
+		host.call.mockResolvedValue(MEASURED);
+
+		render(<GroupedSize scope={null} />);
+		await act(async () => undefined);
+
+		expect(host.call).not.toHaveBeenCalled();
+		expect(screen.getByTestId('size').textContent).toBe('loading');
+	});
+
+	it('asks once under StrictMode, not twice', async () => {
+		host.call.mockReset();
+		host.call.mockResolvedValue(MEASURED);
+
+		render(
+			<StrictMode>
+				<GroupedSize scope={GROUP} />
+			</StrictMode>,
+		);
+
+		await waitFor(() => expect(host.call).toHaveBeenCalled());
+		expect(host.call).toHaveBeenCalledTimes(1);
+	});
+
+	/*
+	 * **Two groups of one project are two scopes and one group is one**, which is what the key's
+	 * shape is for: the opaque `groupId` comes last, so no pair of projects and group ids can
+	 * collide, and navigating back to a group it has answered for is free.
+	 */
+	it('asks once per group, and no second time for one it has answered', async () => {
+		host.call.mockReset();
+		host.call.mockResolvedValue(MEASURED);
+		const { rerender } = render(<GroupedSize scope={GROUP} />);
+		await waitFor(() => expect(host.call).toHaveBeenCalledTimes(1));
+
+		rerender(<GroupedSize scope={{ ...GROUP, groupId: 'basket-total' }} />);
+		await waitFor(() => expect(host.call).toHaveBeenCalledTimes(2));
+		rerender(<GroupedSize scope={{ ...GROUP }} />);
+		await act(async () => undefined);
+
+		expect(host.call).toHaveBeenCalledTimes(2);
+		expect(screen.getByTestId('size').textContent).toBe('measured:8074035:false');
+	});
+
+	// The same fold, because it is the same function: a grouped scope the host could not read is
+	// `unmeasurable`, and a scope it measured as holding nothing grouped is a measured `0`.
+	it('folds the host’s answer exactly as an address’s is folded', async () => {
+		host.call.mockReset();
+		host.call.mockResolvedValue(result({ outcome: 'measured', bytes: 0, truncated: false }));
+		const { unmount } = render(<GroupedSize scope={{ scope: 'all' }} />);
+		await act(async () => undefined);
+		expect(screen.getByTestId('size').textContent).toBe('measured:0:false');
+		unmount();
+
+		host.call.mockReset();
+		host.call.mockResolvedValue(result({ outcome: 'unreadable' }));
+		render(<GroupedSize scope={{ scope: 'all' }} />);
+		await act(async () => undefined);
+		expect(screen.getByTestId('size').textContent).toBe('unmeasurable');
 	});
 });
 

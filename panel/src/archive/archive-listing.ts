@@ -1,10 +1,17 @@
 import { z } from 'zod';
 
 /**
- * The archive's four reads, as much of them as the Archive screen needs — `list_archive`'s answer
+ * The archive's five reads, as much of them as the Archive screen needs — `list_archive`'s answer
  * one level at a time, `search_archive`'s matching entries of the whole of it (R38, #146),
  * `list_archive_groups`'s account of which runs share a group (R41, #178), and — since #261 —
  * `measure_archive`'s answer to *how much disk does this take* (R49, #259).
+ *
+ * **The fifth adds no schema here, and that is the point of it** (#262): `measure_archive_groups`
+ * answers *how much disk do the grouped runs of this scope take* in
+ * {@link MeasureArchiveResultSchema} unchanged, so the two measures speak one vocabulary in the
+ * browser exactly as they do on the host. Its *params* are the host's own shape, built where the
+ * badge is drawn (`archive-size.ts`) rather than mirrored here, because nothing in this module
+ * declares a request.
  *
  * **Deliberately re-declared rather than imported from `src/ipc/methods.ts`**, for the reason
  * `panel/src/devices/device-list.ts` gives at length: the panel is a separate tree with its own

@@ -104,6 +104,15 @@ const DEVICE_METHODS = ['status', 'list_devices', 'acquire_device', 'release_dev
  * bytes came back in the verb's own answer (D19). The arrangement is the operator's browser's
  * (D27, D29).
  *
+ * `measure_archive` and `measure_archive_groups` are here on `list_archive`'s exact terms (R49,
+ * #259, #262) — the two rows that answer *how much* rather than *what*, one over an address and one
+ * over the **grouped** runs of everything, of one project or of one group. How much disk the
+ * operator's archive takes is that operator's browser's question, and an agent that could ask
+ * either could size every other agent's project — or every other agent's grouped work — on the
+ * host. An agent needs neither: its own artifacts came back as bytes in the verb's own answer
+ * (D19), and it already knows its own group, having chosen it. Both are on `PANEL_METHODS` instead
+ * (D27, D29).
+ *
  * `list_projects` is here for a reason of the same kind and not the same one: it is not about a
  * device at all, and it is not about the archive either — it answers what the **host operator**
  * configured this machine to run around a lease (R39, D31). An agent already gets everything its
@@ -139,6 +148,7 @@ const NOT_YET_EXPOSED = [
 	'search_archive',
 	'list_archive_groups',
 	'measure_archive',
+	'measure_archive_groups',
 	'list_projects',
 	'list_kept_tests',
 	'set_kept_tests',

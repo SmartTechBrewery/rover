@@ -810,8 +810,9 @@ export const MeasureArchiveParamsSchema = z
 export type MeasureArchiveParams = z.infer<typeof MeasureArchiveParamsSchema>;
 
 /**
- * How much disk one address takes — the archive's fourth read, and the one that answers *how
- * much* rather than *what* (R49).
+ * How much disk one address takes — the archive's fourth read, and the first that answers *how
+ * much* rather than *what* (R49). {@link MeasureArchiveGroupsParamsSchema} is the fifth and shares
+ * this schema.
  *
  * Three answers, `list_archive`'s own three so the archive keeps one vocabulary across all of its
  * reads: *nothing is filed here* and *the host cannot say* must never render alike, which is the
@@ -850,6 +851,55 @@ export const MeasureArchiveResultSchema = z.discriminatedUnion('outcome', [
 	z.object({ outcome: z.literal('unreadable') }).strict(),
 ]);
 export type MeasureArchiveResult = z.infer<typeof MeasureArchiveResultSchema>;
+
+/**
+ * How much disk the **grouped** runs of one scope take — the same question
+ * {@link MeasureArchiveParamsSchema} asks, over the three scopes a *path* cannot name (R49, #262).
+ *
+ * **A second method rather than a parameter on the first**, which is the `list_archive` /
+ * `list_archive_groups` precedent exactly: two of these three scopes describe a **subset** of the
+ * archive — the runs that named a `group_id` — and no address walk can answer one. The two walks
+ * are genuinely different, a subtree sum against a walk that reads `group_id.json` per run, and a
+ * `scope` bolted onto `measure_archive` would be the parameter D24 refuses in the shape that
+ * argument always pointed to.
+ *
+ * **Three scopes, and each is what a depth of the groups view selects** — everything grouped, one
+ * project's grouped runs, one group's runs. `.strict()` on each arm so a typo'd key is
+ * `invalid_params`, and `z.discriminatedUnion` so a `group` scope cannot arrive without the two
+ * things that name a group.
+ *
+ * **`project` is an `ArchivePathSegmentSchema` and `groupId` is not, because only one of them is a
+ * directory.** The archive has no `<group_id>/` level — that was considered and not taken (R41) —
+ * so a group id is matched against the **contents** of each run's `group_id.json` and is never
+ * joined into a path. It is `GroupIdSchema`, the opaque caller string a lease supplied (D22),
+ * parsed by nothing.
+ *
+ * **There is deliberately no fourth key**: no `depth`, no `limit`, no bound of the caller's. The
+ * walk's bounds are the host's (`src/daemon/measure-archive-groups.ts`, on
+ * `list_archive_groups`' own number) and what a caller gets instead is `truncated`.
+ *
+ * **The answer is {@link MeasureArchiveResultSchema} reused unchanged** — `measured
+ * { bytes, truncated } | missing | unreadable`. One vocabulary for both measures, as all four
+ * reads of this archive already share `list_archive`'s three outcomes, and one meaning of
+ * `truncated`: the number is a lower bound. A grouping walk is bounded where a path walk is not,
+ * so that flag carries more of the weight here — which is a fact about this walk rather than a
+ * second vocabulary for it.
+ */
+export const MeasureArchiveGroupsParamsSchema = z.discriminatedUnion('scope', [
+	/** Every grouped run on the host, whatever project or group it is in. */
+	z.object({ scope: z.literal('all') }).strict(),
+	/** Every grouped run under one project — the components a previous answer returned. */
+	z.object({ scope: z.literal('project'), project: ArchivePathSegmentSchema }).strict(),
+	/** One group's runs. A group is a `(project, groupId)` pair and never one of them (R41). */
+	z
+		.object({
+			scope: z.literal('group'),
+			project: ArchivePathSegmentSchema,
+			groupId: GroupIdSchema,
+		})
+		.strict(),
+]);
+export type MeasureArchiveGroupsParams = z.infer<typeof MeasureArchiveGroupsParamsSchema>;
 
 /**
  * The longest needle {@link SearchArchiveParamsSchema} accepts.
@@ -1510,7 +1560,7 @@ export type SweepArchiveResult = z.infer<typeof SweepArchiveResultSchema>;
  * and deliberately **not** an MCP tool, for `search_archive`'s reason: one call would hand an agent
  * every other agent's run names on the host.
  *
- * **`measure_archive` is the fourth method that reads the archive, and the one that answers *how
+ * **`measure_archive` is the fourth method that reads the archive, and the first that answers *how
  * much* rather than *what*** (R49, #259). It takes one address — the same component array
  * `list_archive` takes, `[]` being the root — and answers the bytes under it with a flag saying
  * whether the walk that produced them was cut short. A directory is walked, a regular file answers
@@ -1524,6 +1574,22 @@ export type SweepArchiveResult = z.infer<typeof SweepArchiveResultSchema>;
  * `PANEL_METHODS` (D29) and deliberately **not** an MCP tool, for `list_archive`'s reason: how much
  * disk an operator's archive takes is the operator's browser's question, and an agent that could
  * ask it could size every other agent's project on the host.
+ *
+ * **`measure_archive_groups` is the same question over the three scopes an address cannot name**
+ * (R49, #262), and it is the `list_archive` / `list_archive_groups` precedent a second time rather
+ * than a parameter on the row above. Two of its three scopes — everything grouped, everything
+ * grouped in one project — describe a **subset** of the archive, the runs that named a `group_id`,
+ * and no path walk can answer one; the third is one group, which has no directory to address
+ * either (R41). So its walk is `list_archive_groups`' walk with `list_archive_groups`' bounds,
+ * reading each run's `group_id.json` through that module's own reader, and every matching run adds
+ * the **same** `sizeOfTree` the row above and the sweep use — so a group's total, an address's
+ * total and the sweep's log cannot hold three ideas of what a run weighs. It answers
+ * {@link MeasureArchiveResultSchema} unchanged, and a bounded walk that was cut short is
+ * `truncated` — which is what lets a subset be reported honestly as a lower bound rather than not
+ * at all. A scope that matches no run answers `bytes: 0`, because *nothing grouped here* is a true
+ * claim about zero bytes and is not a failed `stat`. It is on `PANEL_METHODS` (D29) and
+ * deliberately **not** an MCP tool, for the row above's reason with `list_archive_groups`' force:
+ * an agent already knows its own group, having chosen it.
  *
  * **`list_projects` is the read side of D31**, and the one row that answers what the *host
  * operator* configured rather than what is attached to the host or what a run left behind. It
@@ -1628,6 +1694,10 @@ export const IPC_METHODS = {
 		result: ListArchiveGroupsResultSchema,
 	},
 	measure_archive: { params: MeasureArchiveParamsSchema, result: MeasureArchiveResultSchema },
+	measure_archive_groups: {
+		params: MeasureArchiveGroupsParamsSchema,
+		result: MeasureArchiveResultSchema,
+	},
 	list_projects: { params: ListProjectsParamsSchema, result: ListProjectsResultSchema },
 	list_kept_tests: { params: ListKeptTestsParamsSchema, result: ListKeptTestsResultSchema },
 	set_kept_tests: { params: SetKeptTestsParamsSchema, result: SetKeptTestsResultSchema },

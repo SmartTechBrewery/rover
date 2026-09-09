@@ -2,7 +2,7 @@
  * The `measure_archive` handler and the walk it shares with the sweep — **how much disk one
  * archive address takes** (R49, `PROJECT.md` §10).
  *
- * **This is the archive's fourth read, and the only one that answers a number.**
+ * **This is the archive's fourth read, and the first that answers a number.**
  * `./list-archive.ts` answers what is at a level, `./search-archive.ts` where a name appears and
  * `./list-archive-groups.ts` which runs belong together; this one answers *how much*, for the
  * badge the Archive screen draws beside a scope. It takes the same address vocabulary all three
@@ -13,7 +13,9 @@
  * module exists as a module: two measurements of one tree would eventually disagree about it, and
  * a badge that says one thing while the sweep's log says another is worse than no badge at all.
  * The only thing added to it is {@link TreeSize.complete}, so a walk that was cut short can say so
- * — the sweep ignores that flag and this handler is what it is for.
+ * — the sweep ignores that flag and this handler is what it is for. **There are three callers
+ * now** (#262): `./measure-archive-groups.ts` adds a matching run's whole run directory through it,
+ * so a group's total, an address's total and the sweep's log are one primitive with one bound.
  *
  * **Every scope gets the full `MAX_ARCHIVE_PATH_DEPTH` below itself**, which is exactly the budget
  * the sweep gives a run today. That makes one guarantee and not two: the root scope and the
@@ -190,7 +192,8 @@ async function measureDirectory(
 
 /**
  * The bytes under one directory, files only, following no link — **the sweep's own walk**
- * (`./archive-sweep.ts`, which still calls this) with one flag added.
+ * (`./archive-sweep.ts`, which still calls this, as does `./measure-archive-groups.ts`) with one
+ * flag added.
  *
  * `depth` is a floor under `MAX_ARCHIVE_PATH_DEPTH` and the archive's own tree never reaches it
  * (§10): a run's subtree is `<serial>/<kind>/<file>`. It is here so a hand-made loop of
