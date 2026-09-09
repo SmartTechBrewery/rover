@@ -1671,9 +1671,16 @@ byte-less form alone, leaving `push_file` and `pull_file` out.
   whoever picks the row up will look.
 - **Swarm integration (D16).** Nothing to build now; R6 and R8 only have to keep the road open —
   daemon state queryable from outside MCP, and a lease with an explicit owner.
-- **A `Planning` column on the board.** Swarm maps such a status in its project configuration and
-  our board does not have one (`ai/RULES.md` §5). To be settled when onboarding Rover into Swarm:
-  add the column or configure that phase away. Do not add a column nobody uses in the meantime.
+- **A `Planning` column on the board — closed, and it exists (2026-09-09).** This bullet is edited
+  in place with its reasoning rewritten rather than deleted (`ai/RULES.md` §1). It read: *Swarm maps
+  such a status in its project configuration and our board does not have one; to be settled when
+  onboarding Rover into Swarm — add the column or configure that phase away. Do not add a column
+  nobody uses in the meantime.* The deferral was right and its condition has since been met: Rover
+  is onboarded, so the column was added rather than configured away, and it is Swarm that moves
+  cards through it. The board's own order is now `Backlog → Planning → ToDo → In progress → In
+  review → Done`, and `ai/RULES.md` §5 carries the option ids — including that `Ready` was renamed
+  `ToDo` and kept its id. **Nothing here is an agent's to set**: a filed issue still goes on as
+  `Backlog`, and the three columns a human moves are unchanged.
 - **Retention policy for the artifact archive — closed, and moved into the backlog proper as R48
   (2026-09-08).** This bullet is edited in place with its reasoning rewritten rather than deleted
   (`ai/RULES.md` §1): the record of *why* the row sat outside the backlog for six weeks, and what

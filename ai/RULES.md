@@ -146,10 +146,11 @@ Two obligations follow from committing them:
 
 The backlog lives in **GitHub Projects**: <https://github.com/orgs/SmartTechBrewery/projects/7> — "Rover Kanban Board", owner `SmartTechBrewery` (org-level, so a plain org webhook can deliver `projects_v2_item`), project number `7`, project node id `PVT_kwDODb1Ycc4BhrDR`. Every task is a GitHub issue in `SmartTechBrewery/rover`.
 
-- **Status field** `PVTSSF_lADODb1Ycc4BhrDRzhgl7cM` — `Backlog` (`f75ad846`), `Ready` (`61e4505c`), `In progress` (`47fc9ee4`), `In review` (`df73e18b`), `Done` (`98236657`).
+- **Status field** `PVTSSF_lADODb1Ycc4BhrDRzhgl7cM` — in board order: `Backlog` (`f75ad846`), `Planning` (`0b6750b7`), `ToDo` (`61e4505c`), `In progress` (`47fc9ee4`), `In review` (`df73e18b`), `Done` (`98236657`). **`ToDo` was called `Ready` and kept its id**, so a stale copy of the name still selects the right option — which is exactly why an id and not a name is what these instructions carry.
 - **Size field** `PVTSSF_lADODb1Ycc4BhrDRzhgl7fY` — XS `6c6483d2`, S `f784b110`, M `7515a9f1`, L `817d0097`, XL `db339eb2`. **Estimate** (number, half-days) `PVTF_lADODb1Ycc4BhrDRzhgl7fc`.
 - **`Priority` has no options defined** — it is a single-select with an empty option list, so there is nothing valid to assign. Leave it alone until someone defines the vocabulary.
-- **There is no `Planning` column.** Swarm's own board has one and its config maps a `planning` status; onboarding Rover into Swarm will mean either adding the column here or configuring that phase away. Decide it then — don't add a column nobody uses in the meantime.
+- **There is a `Planning` column now, and it is Swarm's** (settled 2026-09-09; this bullet is edited in place with its reasoning rewritten rather than deleted, per §1). It said *there is no `Planning` column*, with the deferral spelled out: Swarm's own board has one, its config maps a `planning` status, and the choice between adding the column here and configuring that phase away was to be made when Rover was onboarded into Swarm — *don't add a column nobody uses in the meantime*. That reasoning held and the condition it waited for has happened. The onboarding is done, so the column exists and is used.
+  **What follows for an agent: `Planning` and `ToDo` are not yours to set.** Swarm moves cards through them on its own — observed repeatedly on 2026-09-09, with issues walking `Backlog → Planning → ToDo → In progress` while nothing but Swarm touched the board. A newly filed issue still goes on with Status `Backlog` and nothing else, exactly as below.
 
 **Every newly created issue carries the `swarm` label and goes on the board immediately with Status `Backlog`.** The label is Swarm's `pipeline.automationLabel`: an item without it is skipped at **every** dispatch — no worktree, no agent, zero tokens. It is an automation opt-in and grants no access to anything; removing it is the supported way to take an item off automation. Leave it off only when the user says the issue is theirs to do by hand.
 
@@ -157,7 +158,7 @@ Also give every issue a type label (`bug`, `enhancement`, `feature`) and, where 
 
 **Record dependencies natively.** Rover is built in layers — the verb layer cannot precede the device interface, and no backend registers before the conformance suite exists to gate it. Use GitHub's **Blocked by** relationship, not prose, and keep the Backlog column ordered so prerequisites sit ahead of what they block.
 
-Move a card's Status as work progresses: **In progress** when implementation starts, **In review** when a PR is open, **Done** only on merge. Interact through `gh` as the account in §3. The `/write-issue` and `/solve-issue` skills automate all of the above and carry the same ids.
+Move a card's Status as work progresses: **In progress** when implementation starts, **In review** when a PR is open, **Done** only on merge. Those three are the ones a human or an agent sets by hand; `Planning` and `ToDo` are Swarm's own phases and it moves cards into them itself. Interact through `gh` as the account in §3. The `/write-issue` and `/solve-issue` skills automate all of the above and carry the same ids.
 
 ---
 
