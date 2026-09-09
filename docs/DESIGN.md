@@ -1012,8 +1012,9 @@ design's `rounded` is Tailwind v4's `rounded-sm` (§1's radius rename).
 ### The shell and the two cards
 
 The header is `PageHeader`'s two rows unchanged (§3): the breadcrumb, then the describing line on the
-left and **one badge** on the right over the `border-b-2` rule — with the view toggle beside that
-badge since #165, below. The content area is
+left and **two badges** on the right over the `border-b-2` rule — the **size** badge leading, then
+the count, then the view toggle (amended in place, #165 put the toggle beside one badge, #261 put
+the size badge in front of it; both are below). The content area is
 **the content box's full width** — it carried `max-w-(--container-max)` until #240, and takes the
 width `<main>` gives it since (§4) — holding a tree `<aside>` beside a contents `<section>` that
 **share the row 0.4 / 0.6** (#172, below), both
@@ -1021,8 +1022,89 @@ width `<main>` gives it since (§4) — holding a tree `<aside>` beside a conten
 header strip.
 
 **Every state below is a state of this one screen**, exactly as §7 requires of the Devices screen.
-The breadcrumb, the describing line and the header row's shape are the same in all of them; the
-badge is the only thing in the header that comes and goes, and it **goes rather than reading `0`**.
+The breadcrumb, the describing line and the header row's shape are the same in all of them; **the
+two badges are the only things in the header that come and go, and each goes for its own reason**
+(corrected in place, #261 — it was *the badge is the only thing*, said while there was one). The
+count badge **goes rather than reading `0`**, because a level that is empty or unreadable is not a
+set of none. The size badge goes while the answer is still out and where there is nothing at the
+address to have a size, on the same terms and for the same reason: an invented `0 B` is a claim
+about an empty directory. The toggle is the one thing in that row that is always there, and it sits
+**last** so a badge appearing moves neither it nor the count a reader is reading — which is why the
+size badge, the later arrival, leads on the left.
+
+### The size badge — settled here, not designed (#259, #261)
+
+**The second badge says how much disk the selection takes, as a full capitalised sentence naming its
+own scope**: `All tests take 7.7 MB on disk` at the root, down to `This file takes 411 KB on disk`.
+A sentence rather than a labelled figure, because it sits beside a badge that already reads
+`N tests archived` and a bare `7.7 MB` in that row would be a measure of *something* — the level,
+the selection, the whole archive — with nothing on the screen saying which. The scope is the whole
+point of the number, so it is in the words.
+
+**It is the header's fact about the whole selection, and the only measure on the screen.** #161 took
+the `CONTENTS` card out, which was where a size and a child count were said, and the tree that
+replaced it has never drawn either — a tree row carries a name and nothing else (below). So this is
+not that measure coming back into a row: it is one fact about one address, in the row where a fact
+about the whole selection belongs.
+
+**Nine rows, and they are the whole of what it says.** The groups view's own scopes are phase 3's
+and are deliberately not here (above).
+
+| the context | the badge |
+| --- | --- |
+| the root | `All tests take 7.7 MB on disk` |
+| a project | `This project takes 7.7 MB on disk` |
+| a test name | `This test takes 7.7 MB on disk` |
+| a run | `This run takes 7.7 MB on disk` |
+| a directory inside a run — the `<serial>`, and every folder below it | `This directory takes 7.7 MB on disk` |
+| an artifact | `This file takes 411 KB on disk` |
+| any of those six, from a walk that was cut short | `… takes **at least** 7.7 MB on disk` |
+| any of those six, where the host could not take the size | `The host could not measure what this test takes on disk` |
+| any of those six, while the answer is still out, or where nothing is at the address | **no badge** |
+
+**The truncation rule: a bounded walk renders a lower bound or nothing, and never a plain figure.**
+`truncated` on the host's answer means at least one directory that exists was not fully examined, so
+the number is short — the depth bound does it, and so does a level the host could not read mid-walk
+(`PROJECT.md` R49). *At least* is the only honest way to draw it, and it is the same rule the tree
+keeps one line above a set of rows a bounded walk was short of.
+
+**An unmeasurable size gets a sentence of its own, and never the word `unknown`.** `unknown` is what
+a *field* says where the host has no fact — `SIZE` reading it beside a label that already says what
+is missing. This badge has no label, so `unknown` in the value slot would be a sentence with a hole
+in it. `file-size.ts`'s `UNKNOWN` is deliberately unused here, which `size-sentence.ts`'s own header
+records.
+
+**A measured `0 B` is drawn and *nothing there* is not**, which is the pair D6 forbids rendering
+alike, over the other kind of number. A readable directory holding nothing took no disk and the host
+said so; an address with nothing at it has no size to state. That is why the host answers three
+outcomes rather than a nullable number, and why the badge renders all three differently.
+
+**Two of the states with nothing to browse now carry it, and the table below is amended in place for
+that** (#261). The size answer and the listing are two independent host answers about one address:
+an archive root the host cannot read is `ARCHIVE NOT READABLE` in the content area **and** *the host
+could not measure what all tests take on disk* in the header, which is one fact stated in each
+row's own words rather than a contradiction. Where nothing is filed at all there is nothing to
+measure, so that state stays bare.
+
+**The decimal separator is a dot on every machine.** `formatBytes` is the only formatter and nothing
+in the badge calls `toLocaleString` — the fixed-format rule #223 settled, kept by importing the one
+function that already obeys it. The lower-case subject in the *could not measure* sentence is
+carried in the table rather than folded at render, for the same reason: a `toLowerCase()` follows
+the viewer's locale, and nine words are cheaper to write out than one more fold to reason about.
+
+**One pill, drawn by both badges.** `header-badge.tsx` owns the treatment — `rounded-sm border-2
+border-outline-variant bg-surface-container`, `px-3 py-1`, twelve pixels in the code face — and the
+view toggle composes its own frame from the same exported constant, since it needs the frame without
+the padding. No new colour and no new measure: every value was already in `archive.tsx` before this
+badge existed, which is what a second badge in a row no approved screen shows is allowed to cost
+(§1, §11's third list).
+
+**One request per scope, nothing summed in the browser, and the deepest context is free.** The host
+walks the address once and the answer is cached for the life of the screen (*Routing, and no
+polling*, below). Adding the levels the tree happens to have listed would produce a figure that grew
+as a reader browsed and was wrong at every point before the last — and an **artifact** costs no
+request at all, because `list_archive` already carries a `sizeBytes` for every file it lists and the
+parent level is the thing that classified the address in the first place.
 
 ### The two views — settled here, not designed (#165, #181)
 
@@ -1055,11 +1137,16 @@ which one you are on, the same word the breadcrumb and the nav item already use.
 two arrangements share no vocabulary below the project — one has a group id where the other has a
 test name — so *the same place in the other view* is a claim neither can make honestly.
 
-**The badge still comes and goes beside it, and is absent throughout the groups view** — the same
-rule that makes it absent at a run, with its reason rewritten now that the view lists something
-(#181). That view is one **bounded** walk of the archive, so what it holds at any level is what the
-host could examine rather than what is filed; a badge over it would read as a count of a set and
-could be short without saying so. Where the shortfall matters it is said where the reader is looking
+**The count badge still comes and goes beside it, and is absent throughout the groups view** — the
+same rule that makes it absent at a run, with its reason rewritten now that the view lists something
+(#181; *the badge* became *the count badge* in place when a second one landed, #261). That view is
+one **bounded** walk of the archive, so what it holds at any level is what the host could examine
+rather than what is filed; a badge over it would read as a count of a set and
+could be short without saying so. **The size badge is absent there too, and that is a deferral
+rather than a rule** (#261): #259 lands in three phases, the `All` view's badge is the second of
+them and the groups view's is the third, so what that arrangement's scopes are called — a *group*
+is not a directory and has no address to measure — is settled with its own content in front of
+whoever settles it. Where the shortfall matters it is said where the reader is looking
 at the rows it is short of — one line above them in the tree — and not as a number in the header
 that would need the same caveat beside it. The toggle itself is always there, so the header row's
 shape is still the same in every state.
@@ -1960,9 +2047,13 @@ browser.
   row is a toggle, so this is the change that had to notice. **A run whose parent named no single
   child gets none of the three — no open folder, no triangle, and no `aria-expanded`**: there is no
   level to open, and drawing one over nothing is the same class of claim as an invented `0`.
-- **No count.** `childCount` is on the wire and is deliberately not drawn here. The header badge
-  carries the one number for whatever is selected, which is what keeps the tree a tree rather than a
-  report. `directory-tree.test.tsx` asserts the tree's exact text, so a number cannot creep back in.
+- **No count, and no measure either.** `childCount` is on the wire and is deliberately not drawn
+  here, and neither is a file's `sizeBytes`. **The header's two badges carry the numbers for
+  whatever is selected** — corrected in place (#261: it read *the header badge carries the one
+  number*, said while there was one; there are two now, a count and a size, and the correction is
+  that there are two rather than that the tree gained either). What keeps the tree a tree rather
+  than a report is that **no number of any kind is in a row**, which is the half of this bullet that
+  did not move. `directory-tree.test.tsx` asserts the tree's exact text, so one cannot creep back in.
 - **No status icon of any kind** — no tick, no cross, no dot, no play glyph, no colour that means an
   outcome. Rover has no verdicts to report (§2), and green ticks beside runs in the tree are exactly
   what the superseded `Archive — Browsing (V2)` got wrong.
@@ -2135,8 +2226,8 @@ ever parsed to decide either** (D22).
 
 | Where | The answer | What renders |
 | --- | --- | --- |
-| the root | empty, or not there | `QuietPanel` — **Nothing in the archive**. No badge, **no tree card**, no control. |
-| the root | unreadable | `QuietBanner` — **`ARCHIVE NOT READABLE`**. No badge, **no tree card**, no retry, no error code. |
+| the root | empty, or not there | `QuietPanel` — **Nothing in the archive**. No count badge, **no tree card**, no control. |
+| the root | unreadable | `QuietBanner` — **`ARCHIVE NOT READABLE`**. No count badge, **no tree card**, no retry, no error code. |
 | deeper | empty, or not there | one plain line inside the contents card, tree still beside it. |
 | deeper | unreadable | the same banner inside the contents card, tree still beside it. |
 | anywhere | nothing yet | one quiet line, `aria-live="polite"`, **no spinner** (§5). |
@@ -2182,8 +2273,10 @@ tests use.
 **There is no polling and no refresh control.** The archive is finished data: a run directory is
 written while a lease is live and nothing is added once it ends, and this screen makes no claim to
 show a run appearing. A level is fetched when a navigation or a click first draws it and cached for
-the life of the screen, and the grouping walk is fetched **once**, only in the view that reads it,
-on exactly those terms. This
+the life of the screen, the grouping walk is fetched **once**, only in the view that reads it, and
+**the size answer is fetched once per scope on exactly those terms** (#261) — one `measure_archive`
+when a navigation first draws that badge, kept for the life of the screen, so navigating back to a
+scope costs nothing and nothing re-measures behind the reader. This
 is the one place the panel's data differs from the Devices screen's, which polls because *what is
 attached* changes under the reader.
 
@@ -2271,7 +2364,17 @@ phases that would otherwise each renumber it.
   above.
 - **The `LATEST` column** in `b91c300d…`'s contents table. One `readdir` per test row is exactly the
   walk D24 refuses; `list_archive` cannot answer it and must not grow a parameter that can.
-- **No aggregate of any kind** — no total size, no run count across projects, no retention figure.
+- **No aggregate in a *row*, and the total is no longer absent** (reversed in place, #261). It read
+  **no aggregate of any kind — no total size, no run count across projects, no retention figure**,
+  and the half of that which still stands is the half about rows: the tree has never drawn a count
+  or a measure, #161 took the `CONTENTS` card that did, and nothing per-row has come back. What is
+  reversed is the **total**. Retention is built — the sweeper runs on the budget after every lease
+  and on both bounds at midnight (D37, D38) — and the budget itself is typed on the System screen
+  (§13), so *how close am I to it* became a question an operator has every reason to ask and this
+  screen could not answer. It answers it now, in the header, as one sentence about whatever is
+  selected (*The size badge*, above). The run count across projects stays absent: a count of runs
+  spanning projects is not a fact about any address, and there is nowhere on this screen it would be
+  a fact *about* anything.
 - **Nothing invented**: no duration, no trigger, no author, no environment panel, no network figure
   and no file name that was not in a listing. `run-panel.test.tsx` asserts the absence of each. The
   device card is held to the same rule from the other side — it may only say what its file says.
@@ -2460,9 +2563,11 @@ That address is where you are, file or folder alike: last, `text-tertiary`, not 
 full and wrapping rather than shortening. The serial is not a tree level, so there is no address to
 link it to.
 
-**The header row's counter slot is empty, and that is the rule rather than an exception.** The badge
-is a counter and one file has nothing to count — exactly as §7 leaves the held/free counter absent
-rather than showing `0 held · 0 free`.
+**The header row's counter slot is empty, and that is the rule rather than an exception.** The count
+badge is a counter and one file has nothing to count — exactly as §7 leaves the held/free counter
+absent rather than showing `0 held · 0 free`. **The size badge is drawn here** (#261), and it is the
+one context that costs no request: `This file takes 411 KB on disk`, out of the `sizeBytes` the
+folder's own listing already carried.
 
 **The preview region is clean, and this is the rule that must not be traded away.** Nothing is laid
 over or around the artifact: no scanline, no dotted pattern, no gradient, no tint, no

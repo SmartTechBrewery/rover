@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import listings from '../../../tests/fixtures/panel/list-archive.json';
 import groupings from '../../../tests/fixtures/panel/list-archive-groups.json';
+import measurements from '../../../tests/fixtures/panel/measure-archive.json';
 import searches from '../../../tests/fixtures/panel/search-archive.json';
 import {
 	ListArchiveGroupsResultSchema,
 	ListArchiveResultSchema,
+	MeasureArchiveResultSchema,
 	SearchArchiveResultSchema,
 } from './archive-listing.js';
 
@@ -283,5 +285,87 @@ describe("the panel's mirror of list_archive_groups", () => {
 			groups: [{ project: 'rover', groupId: 'g', runs: [{ path: ['rover'], artifacts: [] }] }],
 			truncated: false,
 		});
+	});
+});
+
+/**
+ * The panel's half of the drift gate `tests/unit/panel/measure-archive-fixture.test.ts` opens
+ * (#259, closed here by #261).
+ *
+ * The same ten captured scopes, parsed here by the mirror and there by the daemon's own schemas.
+ * The other half proves the file is a set of answers the daemon could really give, and that every
+ * scope is an address a listing would accept; this half proves every field the badge is drawn from
+ * survives the parse — which is the whole of the wire being pinned before a sentence is built out
+ * of it.
+ */
+describe("the panel's mirror of measure_archive", () => {
+	it('reads every scope of a real capture', () => {
+		for (const scope of measurements.scopes) {
+			expect(MeasureArchiveResultSchema.safeParse(scope.result).success).toBe(true);
+		}
+	});
+
+	// The two fields the sentence is built from, off the root's own answer — the one scope whose
+	// badge says `All tests take …`.
+	it('reads a measurement down to the two fields the badge draws', () => {
+		const root = measurements.scopes.find((scope) => scope.path.length === 0);
+
+		expect(MeasureArchiveResultSchema.parse(root?.result)).toEqual({
+			outcome: 'measured',
+			bytes: 565_660,
+			truncated: false,
+		});
+	});
+
+	/*
+	 * The load-bearing one, and the pair the fixture captures one directory twice for: `0 B` is a
+	 * true claim about an empty directory, and *the host could not say* is not a size at all. A
+	 * badge that drew the second as `0 B` would report an unreadable archive as an empty one (D6).
+	 */
+	it('keeps an empty measurement apart from one that could not be taken', () => {
+		const sealed = measurements.scopes.filter(
+			(scope) => scope.path.join('/') === 'checkout-app/sealed-test',
+		);
+
+		expect(sealed.map((scope) => MeasureArchiveResultSchema.parse(scope.result))).toEqual([
+			{ outcome: 'measured', bytes: 0, truncated: false },
+			{ outcome: 'unreadable' },
+		]);
+	});
+
+	// The flag the badge's `at least` is drawn from, in both of its states — a partial total must
+	// never render like a whole one.
+	it('reads a truncated answer as truncated and a complete one as complete', () => {
+		const flags = measurements.scopes.flatMap((scope) => {
+			const parsed = MeasureArchiveResultSchema.parse(scope.result);
+			return parsed.outcome === 'measured' ? [parsed.truncated] : [];
+		});
+
+		expect(new Set(flags)).toEqual(new Set([true, false]));
+	});
+
+	// The three answers the badge's three renderings come off, and *nothing is filed here* is its
+	// own outcome rather than a measurement of nothing.
+	it('reads all three outcomes', () => {
+		const outcomes = measurements.scopes.map(
+			(scope) => MeasureArchiveResultSchema.parse(scope.result).outcome,
+		);
+
+		expect(new Set(outcomes)).toEqual(new Set(['measured', 'missing', 'unreadable']));
+	});
+
+	/*
+	 * The one deliberate difference from the host's copy, a fourth time: nothing here is `.strict()`,
+	 * so a field a newer daemon adds is stripped rather than blanking a working screen.
+	 */
+	it('strips a field it does not know rather than refusing the answer', () => {
+		const parsed = MeasureArchiveResultSchema.parse({
+			outcome: 'measured',
+			bytes: 565_660,
+			truncated: false,
+			directoriesRead: 12,
+		});
+
+		expect(parsed).toEqual({ outcome: 'measured', bytes: 565_660, truncated: false });
 	});
 });

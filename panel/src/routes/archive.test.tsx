@@ -85,6 +85,14 @@ const { host, HANGS } = vi.hoisted(() => ({
 		/** What the host answers a search with. */
 		search: { outcome: 'searched', matches: [], truncated: false } as unknown,
 		/**
+		 * Every scope `measure_archive` was asked to walk (#261) — logged apart from the listings for
+		 * the reason the search is: *one call per scope*, and *an artifact costs no request at all*,
+		 * are assertable only if the two are counted separately.
+		 */
+		measures: [] as unknown[],
+		/** What the host answers a measurement with — the size badge's own three outcomes. */
+		measure: { outcome: 'measured', bytes: 8_074_035, truncated: false } as unknown,
+		/**
 		 * How many times `list_archive_groups` was asked (#181) — counted rather than logged,
 		 * because it takes no parameter and what is worth asserting is *once, and only in the view
 		 * that reads it*.
@@ -137,6 +145,14 @@ vi.mock('@panel/session/session-provider.js', () => {
 			return await new Promise(() => undefined);
 		}
 		return { ok: true, value: { type: 'result', result: host.search } };
+	};
+	/** One scope's measurement, logged apart — see `call` below (#261). */
+	const measure = async (path: readonly string[]) => {
+		host.measures.push(path);
+		if (host.hangs || host.measure === HANGS) {
+			return await new Promise(() => undefined);
+		}
+		return { ok: true, value: { type: 'result', result: host.measure } };
 	};
 	/** The one grouping walk, counted apart for the same reason (#181). */
 	const grouping = async () => {
@@ -202,11 +218,12 @@ vi.mock('@panel/session/session-provider.js', () => {
 				identity: { identifier: 'karolina', displayName: 'Karolina' },
 			},
 			/*
-			 * Five methods now (#146, #181, #237), so this reads `method` rather than assuming a
+			 * Six methods now (#146, #181, #237, #261), so this reads `method` rather than assuming a
 			 * listing: the tree card's field asks `search_archive`, the groups view asks
-			 * `list_archive_groups`, and the `Keep` tick reads and writes the host's kept set.
-			 * *Searching issues no extra `list_archive`*, *the groups view lists nothing above a
-			 * run*, and *a group's press is one request* are assertable only because each is logged
+			 * `list_archive_groups`, the `Keep` tick reads and writes the host's kept set, and the
+			 * size badge asks `measure_archive`. *Searching issues no extra `list_archive`*, *the
+			 * groups view lists nothing above a run*, *a group's press is one request* and *an
+			 * artifact is measured out of the listing* are assertable only because each is logged
 			 * apart.
 			 */
 			call: async (
@@ -223,6 +240,9 @@ vi.mock('@panel/session/session-provider.js', () => {
 				}
 				if (method === 'list_archive_groups') {
 					return await grouping();
+				}
+				if (method === 'measure_archive') {
+					return await measure(params.path);
 				}
 				if (method === 'list_kept_tests') {
 					return await keptTests();
@@ -405,6 +425,8 @@ beforeEach(() => {
 	host.artifacts = [];
 	host.searches = [];
 	host.search = { outcome: 'searched', matches: [], truncated: false };
+	host.measures = [];
+	host.measure = { outcome: 'measured', bytes: 8_074_035, truncated: false };
 	host.groupings = 0;
 	host.groups = groupings();
 	host.file = { outcome: 'missing' };
@@ -444,14 +466,20 @@ describe('each level', () => {
 		expect(screen.getByText('2 runs archived')).toBeDefined();
 	});
 
-	// The badge is the one number for whatever is selected, and a run is not a count of anything.
-	it('describes a run and shows no badge at all', async () => {
+	/*
+	 * The count badge is the one count for whatever is selected, and a run is not a count of
+	 * anything — corrected in place (#261): *no badge at all* was true while there was one badge,
+	 * and the size badge is drawn here, because *how much disk did this run take* is a question a
+	 * run has an answer to.
+	 */
+	it('describes a run, shows no count badge, and still says what the run takes', async () => {
 		const { container } = await showing(`checkout-app/login-flow/${RUN}`);
 
 		expect(
 			screen.getByText('Everything this lease wrote; nothing is added once it ends.'),
 		).toBeDefined();
 		expect(container.textContent).not.toContain('archived');
+		expect(screen.getByText('This run takes 7.7 MB on disk')).toBeDefined();
 		expect(screen.getByText('R5CT30ABCDE')).toBeDefined();
 	});
 
@@ -459,6 +487,182 @@ describe('each level', () => {
 		await showing('checkout-app', { ...archive(), '["checkout-app"]': listed(directory('x', 1)) });
 
 		expect(screen.getByText('1 test archived')).toBeDefined();
+	});
+});
+
+/**
+ * **The size badge** — the second badge in the header, and the one that says *how much* (#261, R49,
+ * `docs/DESIGN.md` §9).
+ *
+ * One sentence naming its own scope, one `measure_archive` behind it, and nothing summed here: the
+ * badge is what the host answered about one address, or it is not drawn.
+ */
+describe('what the size badge says', () => {
+	/** The header's right-hand slot, in the order it draws — the one row both badges share. */
+	function headerAside(container: HTMLElement): readonly (string | null)[] {
+		const aside = container.querySelector('header > div > div');
+		if (aside === null) {
+			throw new Error('the header drew no right-hand slot');
+		}
+		return [...aside.children].map((child) => child.textContent);
+	}
+
+	// One case per depth of the `All` view, because the scope is the whole point of the number and
+	// the depth is the whole of what decides it.
+	it('names the whole archive at the root', async () => {
+		await showing(undefined);
+
+		expect(screen.getByText('All tests take 7.7 MB on disk')).toBeDefined();
+	});
+
+	it('names the project, the test name and the run at their own depths', async () => {
+		await showing('checkout-app');
+		expect(screen.getByText('This project takes 7.7 MB on disk')).toBeDefined();
+		cleanup();
+
+		await showing('checkout-app/login-flow');
+		expect(screen.getByText('This test takes 7.7 MB on disk')).toBeDefined();
+		cleanup();
+
+		await showing(`checkout-app/login-flow/${RUN}`);
+		expect(screen.getByText('This run takes 7.7 MB on disk')).toBeDefined();
+	});
+
+	// The `<serial>` is a directory to whoever measures it, even though it is not a level of the
+	// tree — and a folder the reader opened below it is the same sentence one depth further down.
+	it('names a directory inside a run, at the `<serial>` and below it', async () => {
+		await showing(`checkout-app/login-flow/${RUN}/R5CT30ABCDE`);
+		expect(screen.getByText('This directory takes 7.7 MB on disk')).toBeDefined();
+		cleanup();
+
+		await showing(`checkout-app/login-flow/${RUN}/R5CT30ABCDE/screenshots`);
+		expect(screen.getByText('This directory takes 7.7 MB on disk')).toBeDefined();
+	});
+
+	/*
+	 * **The deepest context costs no request at all** — the issue's own observation. `list_archive`
+	 * already carries a `sizeBytes` for every file it lists, and the parent level is read anyway
+	 * because it is what classified the address; a walk to re-derive that number would be a round
+	 * trip for a fact in hand.
+	 */
+	it('names a file, out of the listing and at no `measure_archive` at all', async () => {
+		const SCREENSHOTS = ['checkout-app', 'login-flow', RUN, 'R5CT30ABCDE', 'screenshots'];
+		const levels = {
+			...archive(),
+			[JSON.stringify(SCREENSHOTS)]: listed({
+				kind: 'file',
+				name: '001_screenshot.png',
+				sizeBytes: 421_112,
+			}),
+		};
+
+		await showing([...SCREENSHOTS, '001_screenshot.png'].join('/'), levels);
+
+		expect(screen.getByText('This file takes 411 KB on disk')).toBeDefined();
+		expect(host.measures).toEqual([]);
+	});
+
+	// A `sizeBytes` the host could not `stat` is a gap, and the badge says whose it is rather than
+	// closing it up with a `0 B` — which is a claim about an empty file.
+	it('says a file it could not size could not be sized, never `0 B`', async () => {
+		const SCREENSHOTS = ['checkout-app', 'login-flow', RUN, 'R5CT30ABCDE', 'screenshots'];
+		const levels = {
+			...archive(),
+			[JSON.stringify(SCREENSHOTS)]: listed({
+				kind: 'file',
+				name: '001_screenshot.png',
+				sizeBytes: null,
+			}),
+		};
+
+		const { container } = await showing([...SCREENSHOTS, '001_screenshot.png'].join('/'), levels);
+
+		expect(
+			screen.getByText('The host could not measure what this file takes on disk'),
+		).toBeDefined();
+		expect(container.textContent).not.toContain('0 B');
+	});
+
+	// Absent, not `0`, while the walk is still out — the count badge's own rule over the other kind
+	// of number, and the reason a slow archive draws no figure rather than a wrong one.
+	it('is absent while the answer is still out, with the count badge still there', async () => {
+		host.measure = HANGS;
+
+		const { container } = await showing('checkout-app');
+
+		expect(container.textContent).not.toContain('on disk');
+		expect(screen.getByText('2 tests archived')).toBeDefined();
+	});
+
+	// Nothing is at the address, so there is nothing to have a size — and `0 B` would be a claim
+	// about an empty directory, which is a different fact (D6).
+	it('is absent where there is nothing at the address to measure', async () => {
+		host.measure = { outcome: 'missing' };
+
+		const { container } = await showing('checkout-app');
+
+		expect(container.textContent).not.toContain('on disk');
+		expect(container.textContent).not.toContain('0 B');
+	});
+
+	// A sentence of its own, rather than the word `unknown` dropped into a value slot: this badge
+	// has no label, so a hole in it would be a hole in a sentence.
+	it('says the host could not measure it, rather than `unknown`', async () => {
+		host.measure = { outcome: 'unreadable' };
+
+		const { container } = await showing('checkout-app');
+
+		expect(
+			screen.getByText('The host could not measure what this project takes on disk'),
+		).toBeDefined();
+		expect(container.textContent).not.toContain('unknown');
+	});
+
+	/*
+	 * **A bounded walk renders a lower bound, never a plain figure.** `truncated` means at least one
+	 * directory that exists was not fully examined, so the number is short and the sentence says so
+	 * — the tree's own truncation rule over a total instead of over a set of rows.
+	 */
+	it('renders a truncated answer as an explicit lower bound', async () => {
+		host.measure = { outcome: 'measured', bytes: 8_074_035, truncated: true };
+
+		const { container } = await showing('checkout-app');
+
+		expect(screen.getByText('This project takes at least 7.7 MB on disk')).toBeDefined();
+		expect(container.textContent).not.toContain('takes 7.7 MB');
+	});
+
+	// **Nothing is summed in the browser**: one walk, of the selected scope, and of no other — not
+	// of the levels the tree happens to have listed on the way down to it.
+	it('measures the selected scope once, and no other', async () => {
+		await showing('checkout-app/login-flow');
+
+		expect(host.measures).toEqual([['checkout-app', 'login-flow']]);
+	});
+
+	/*
+	 * **The size leads the row and the toggle is still last** (#261). The badge that comes and goes
+	 * appears on the left, so it moves neither the count a reader is reading nor the control they
+	 * are reaching for.
+	 */
+	it('leads the header row — size, then count, then the view toggle', async () => {
+		const { container } = await showing('checkout-app');
+
+		expect(headerAside(container)).toEqual([
+			'This project takes 7.7 MB on disk',
+			'2 tests archived',
+			'AllTesting groups',
+		]);
+	});
+
+	// Both badges are one component now, so the pill is one class string rather than two that drift
+	// apart by a border width — and the toggle's frame is that same constant.
+	it('draws both badges in one pill treatment', async () => {
+		const { container } = await showing('checkout-app');
+		const [size, count] = [...(container.querySelector('header > div > div')?.children ?? [])];
+
+		expect(size?.className).toBe(count?.className);
+		expect(size?.className).toContain('border-outline-variant');
 	});
 });
 
@@ -871,6 +1075,17 @@ describe('nothing in the archive', () => {
 		const panel = container.querySelector('section > div');
 		expect(panel?.className).toContain('bg-surface-container-lowest');
 	});
+
+	// The size answer is the same host's answer about the same address (#261): an archive nothing
+	// has ever been filed in has nothing to measure, so this state stays as bare as it claims.
+	it('carries neither badge, because there is nothing to measure either', async () => {
+		host.measure = { outcome: 'missing' };
+
+		const { container } = await showing(undefined, EMPTY_ROOT);
+
+		expect(container.textContent).not.toContain('archived');
+		expect(container.textContent).not.toContain('on disk');
+	});
 });
 
 describe('the archive cannot be read', () => {
@@ -900,6 +1115,23 @@ describe('the archive cannot be read', () => {
 		await showing(undefined, { '[]': { outcome: 'a new outcome' } });
 
 		expect(screen.getByText('ARCHIVE NOT READABLE')).toBeDefined();
+	});
+
+	/*
+	 * **The header says it in the header's own words** (#261, `docs/DESIGN.md` §9). The listing and
+	 * the measurement are two independent answers about one address, and a host that cannot read the
+	 * archive cannot size it either — so the badge states that, rather than a figure it does not
+	 * have, over a banner stating the other half.
+	 */
+	it('says the host could not measure it either, rather than a figure', async () => {
+		host.measure = { outcome: 'unreadable' };
+
+		const { container } = await showing(undefined, UNREADABLE_ROOT);
+
+		expect(
+			screen.getByText('The host could not measure what all tests take on disk'),
+		).toBeDefined();
+		expect(container.textContent).not.toContain('7.7 MB');
 	});
 });
 
@@ -1281,11 +1513,12 @@ describe('an artifact open inside a run', () => {
 	});
 
 	/*
-	 * **The counter slot is empty, and that is the rule rather than an exception**: the badge is a
-	 * counter and one file has nothing to count — exactly as §7 leaves the held/free counter absent
-	 * rather than showing `0 held · 0 free`.
+	 * **The counter slot is empty, and that is the rule rather than an exception**: the count badge
+	 * is a counter and one file has nothing to count — exactly as §7 leaves the held/free counter
+	 * absent rather than showing `0 held · 0 free`. The *size* badge is drawn (#261), out of the
+	 * listing that named the file and at no request at all.
 	 */
-	it('carries no badge, and describes itself as one artifact', async () => {
+	it('carries no count badge, and describes itself as one artifact', async () => {
 		host.artifact = PNG;
 
 		const { container } = await showing(AT_THE_FILE, withScreenshots());
@@ -2140,20 +2373,26 @@ describe('the testing groups view', () => {
 	});
 
 	/*
-	 * **No badge, at any depth.** This view is one bounded walk, so a count over it would read as a
-	 * count of a set and could be short without saying so — the same rule that makes the badge
-	 * absent at a run rather than an exception to it.
+	 * **Neither badge, at any depth** (amended in place, #261 — it was *no badge*, and there are two
+	 * now). This view is one bounded walk, so a count over it would read as a count of a set and
+	 * could be short without saying so — the same rule that makes the count badge absent at a run
+	 * rather than an exception to it. The size badge is phase 3's and is absent here in this phase,
+	 * which is what makes its absence a decision rather than an oversight.
 	 */
-	it('shows no badge at the root, where the All view shows one', async () => {
+	it('shows neither badge at the root, where the All view shows both', async () => {
 		const { container } = await grouped(undefined);
 
 		expect(container.textContent).not.toContain('archived');
+		expect(container.textContent).not.toContain('on disk');
+		expect(host.measures).toEqual([]);
 	});
 
-	it('shows no badge at a project either', async () => {
+	it('shows neither badge at a project either', async () => {
 		const { container } = await grouped('checkout-app');
 
 		expect(container.textContent).not.toContain('archived');
+		expect(container.textContent).not.toContain('on disk');
+		expect(host.measures).toEqual([]);
 	});
 
 	// A partial arrangement must not read like a complete one — said above the rows, as the

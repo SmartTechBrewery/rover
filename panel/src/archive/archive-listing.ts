@@ -1,9 +1,10 @@
 import { z } from 'zod';
 
 /**
- * The archive's three reads, as much of them as the Archive screen needs — `list_archive`'s answer
- * one level at a time, `search_archive`'s matching entries of the whole of it (R38, #146), and
- * `list_archive_groups`'s account of which runs share a group (R41, #178).
+ * The archive's four reads, as much of them as the Archive screen needs — `list_archive`'s answer
+ * one level at a time, `search_archive`'s matching entries of the whole of it (R38, #146),
+ * `list_archive_groups`'s account of which runs share a group (R41, #178), and — since #261 —
+ * `measure_archive`'s answer to *how much disk does this take* (R49, #259).
  *
  * **Deliberately re-declared rather than imported from `src/ipc/methods.ts`**, for the reason
  * `panel/src/devices/device-list.ts` gives at length: the panel is a separate tree with its own
@@ -15,8 +16,10 @@ import { z } from 'zod';
  * `tests/fixtures/panel/list-archive.json` is parsed by the **daemon's**
  * `ListArchiveResultSchema` in `tests/unit/panel/list-archive-fixture.test.ts` and by the mirror
  * below in `archive-listing.test.ts`, `tests/fixtures/panel/search-archive.json` is parsed the
- * same way twice for the search, and `tests/fixtures/panel/list-archive-groups.json` the same way
- * again for the groups. One fixture per method, two projects, no cross-tree import.
+ * same way twice for the search, `tests/fixtures/panel/list-archive-groups.json` the same way
+ * again for the groups, and `tests/fixtures/panel/measure-archive.json` the same way a fourth time
+ * for the measurement — the half of that gate the host wrote with the method (#259), closed here by
+ * the screen that draws it (#261). One fixture per method, two projects, no cross-tree import.
  *
  * **Nothing here is `.strict()`**, and that is the same deliberate difference from the host's copy
  * the device mirror makes: a browser that blanks a working screen because a newer daemon added a
@@ -209,3 +212,24 @@ export const ListArchiveGroupsResultSchema = z.discriminatedUnion('outcome', [
 	z.object({ outcome: z.literal('unreadable') }),
 ]);
 export type ListArchiveGroupsResult = z.infer<typeof ListArchiveGroupsResultSchema>;
+
+/**
+ * `measure_archive`'s answer — **how much disk one address takes**, and the archive's own three
+ * words a fourth time so all four of its reads speak one vocabulary (R49, #259, #261).
+ *
+ * `bytes: 0` is a true claim about an empty directory and is never what a size the host could not
+ * take answers: that is `unreadable`, and the pair D6 forbids rendering alike is exactly this one.
+ * `missing` is *nothing is filed at that address*, which has no size rather than a size of nothing.
+ *
+ * **`truncated` has exactly one meaning**: at least one directory that exists was not fully
+ * examined, so `bytes` is a **lower bound**. Any of the host's bounds does it, and so does a level
+ * it could not read mid-walk — `search_archive`'s own sentence, because it is the same fact. It is
+ * what keeps a partial total from rendering like a whole one, which is why the badge says *at
+ * least* where it is set (`size-sentence.ts`).
+ */
+export const MeasureArchiveResultSchema = z.discriminatedUnion('outcome', [
+	z.object({ outcome: z.literal('measured'), bytes: z.number(), truncated: z.boolean() }),
+	z.object({ outcome: z.literal('missing') }),
+	z.object({ outcome: z.literal('unreadable') }),
+]);
+export type MeasureArchiveResult = z.infer<typeof MeasureArchiveResultSchema>;
