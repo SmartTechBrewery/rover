@@ -126,6 +126,10 @@ const SWEEP_LOG_MARKERS: readonly string[] = [
 	// module's third trigger, which is not a bound and is not on any schedule.
 	'Deleted archived project ',
 	'The archived project at ',
+	// And the same two again for one test taken whole at the finer address (D43), which is that
+	// same trigger and not a fourth one.
+	'Deleted archived test ',
+	'The archived test at ',
 	// A budget that cannot be met with only kept and live runs left.
 	'The artifact archive is still ',
 	// The sweep's own two failures, each named by the clause only it writes.

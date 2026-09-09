@@ -36,6 +36,7 @@ import { type ArchiveFileReader, createArchiveFileReader } from './archive-file.
 import type { RetentionPolicy } from './archive-retention.js';
 import { createArchiveSizeHandler } from './archive-size.js';
 import { type ArchiveSweeper, createArchiveSweeper, sweepAfterLease } from './archive-sweep.js';
+import { createDeleteArchivedTestHandler } from './delete-archived-test.js';
 import { createDeleteProjectHandler } from './delete-project.js';
 import { type HttpListener, startHttpListener } from './http-listen.js';
 import { createDeviceInventory, type DeviceInventory } from './inventory.js';
@@ -371,6 +372,11 @@ export function createDaemonHandlers(
 		...createListProjectsHandler({ root: projectsRoot }),
 		...createDeleteProjectHandler({
 			projectsRoot,
+			keptTestsPath,
+			sweeper,
+			liveLeases: () => leases.live(),
+		}),
+		...createDeleteArchivedTestHandler({
 			keptTestsPath,
 			sweeper,
 			liveLeases: () => leases.live(),

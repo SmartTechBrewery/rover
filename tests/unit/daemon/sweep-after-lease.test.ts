@@ -369,7 +369,7 @@ describe('a sweep that cannot run', () => {
 			sweep: () => Promise.reject(thrown),
 			// A lease's end asks for the budget and nothing else: taking a whole project is an
 			// operator naming one (D42), on this same module's third trigger.
-			removeProject: async () => ({ outcome: 'absent' as const }),
+			remove: async () => ({ outcome: 'absent' as const }),
 			settle: () => Promise.resolve(),
 		};
 		const lease = createMockLease({ serial: FIRST });

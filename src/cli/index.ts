@@ -20,6 +20,7 @@ import * as out from './_shared/output.js';
 import * as acquire from './commands/acquire.js';
 import * as archive from './commands/archive.js';
 import * as deleteProject from './commands/delete-project.js';
+import * as deleteTest from './commands/delete-test.js';
 import * as doctor from './commands/doctor.js';
 import * as forceRelease from './commands/force-release.js';
 import * as init from './commands/init.js';
@@ -77,6 +78,7 @@ const COMMANDS: Record<string, Command | undefined> = Object.assign(Object.creat
 	keep,
 	sweep,
 	'delete-project': deleteProject,
+	'delete-test': deleteTest,
 	status,
 	users,
 	init,
@@ -129,6 +131,12 @@ Commands:
                            kept-test entries (--actor required). No undo, no trash
                            directory, no dry run; a kept test is taken too, and a live
                            lease on the project is refused
+  delete-test <project> <test-name>
+                           Remove one archived test and every run filed under it, plus its
+                           kept-test entry (--actor required; the arguments are the
+                           components an \`archive\` listing named). No undo, no trash
+                           directory, no dry run; a kept test is taken too, and a live
+                           lease filing into the test is refused
   status                   Which host answered, its pid, uptime and protocol version
   init [<path>]            Set up a project so an agent working in it can drive a device:
                            its hook file, its .mcp.json, a generated ROVER.md, and the
@@ -170,7 +178,9 @@ Exit codes:
       or that failed, an archive level that is not there or that the host cannot read,
       a sweep of an archive the host has none of or cannot walk, a delete-project that found
       no such registration, could not remove all of it, or was refused because a lease on
-      the project is live, an unreachable host, or a request the host rejected
+      the project is live, a delete-test that found no such test, could not remove all of
+      it, or was refused because a lease filing into it is live, an unreachable host, or a
+      request the host rejected
   2   usage error — unknown command, unknown flag, a missing required option, an
       attribution string longer than the host accepts, an --out that names a directory
       or has no directory to write into, a file to push or install that is missing,

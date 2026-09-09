@@ -460,12 +460,14 @@ describe('two sweeps of one tree', () => {
 	});
 });
 
-describe('taking one project because an operator named it', () => {
+describe('taking the subtree at one address because an operator named it', () => {
 	/*
-	 * **Not a bound and not a policy** (D42, #271): the subtree goes whole, kept tests included,
-	 * because an explicit delete is not one of the two retention bounds D35 exempts a test from.
-	 * It is here rather than in a module of its own so it inherits this module's serialisation and
-	 * its `settle()`, which is what the two suites below are about.
+	 * **Not a bound and not a policy** (D42, D43, #271, #272): the subtree goes whole, kept tests
+	 * included, because an explicit delete is not one of the two retention bounds D35 exempts a
+	 * test from. It is here rather than in a module of its own so it inherits this module's
+	 * serialisation and its `settle()`, which is what the two suites below are about — and it is
+	 * **one** method taking an address rather than one per level, so a project and a test cannot
+	 * come to disagree about what containment means.
 	 */
 	it('takes the whole subtree and reports the bytes sizeOfTree measured', async () => {
 		await fileRun('rover', 'home-screen', runNameAt(NOW_MS - DAY_MS), 1024);
@@ -481,7 +483,7 @@ describe('taking one project because an operator named it', () => {
 			},
 		]);
 
-		const removal = await sweeperFor({ budgetMb: 1024, maxAgeDays: 30 }).removeProject('rover');
+		const removal = await sweeperFor({ budgetMb: 1024, maxAgeDays: 30 }).remove(['rover']);
 
 		expect(removal).toEqual({ outcome: 'removed', bytes: 3072 });
 		expect(await remainingRuns()).toEqual([`storefront/home-screen/${runNameAt(NOW_MS - DAY_MS)}`]);
@@ -494,11 +496,11 @@ describe('taking one project because an operator named it', () => {
 
 		// Ordinary rather than a failure: a lease may name any project string (D22), so a
 		// registration with nothing filed under it is the common case.
-		expect(await sweeper.removeProject('never-filed')).toEqual({ outcome: 'absent' });
+		expect(await sweeper.remove(['never-filed'])).toEqual({ outcome: 'absent' });
 		expect(warned).toEqual([]);
 
 		await rm(root, { recursive: true, force: true });
-		expect(await sweeper.removeProject('rover')).toEqual({ outcome: 'absent' });
+		expect(await sweeper.remove(['rover'])).toEqual({ outcome: 'absent' });
 		expect(warned).toEqual([]);
 	});
 
@@ -534,7 +536,7 @@ describe('taking one project because an operator named it', () => {
 		});
 
 		const sweeping = sweeper.sweep({ dryRun: false, bounds: 'both' });
-		const removing = sweeper.removeProject('rover').then((removal) => {
+		const removing = sweeper.remove(['rover']).then((removal) => {
 			trace.push(`remove:${removal.outcome}`);
 			return removal;
 		});
@@ -567,7 +569,7 @@ describe('taking one project because an operator named it', () => {
 		await fileRun(filed, 'home-screen', runNameAt(NOW_MS - DAY_MS), 1024);
 		await fileRun('storefront', 'home-screen', runNameAt(NOW_MS - DAY_MS), 512);
 
-		const removal = await sweeperFor({ budgetMb: 1024, maxAgeDays: 30 }).removeProject(filed);
+		const removal = await sweeperFor({ budgetMb: 1024, maxAgeDays: 30 }).remove([filed]);
 
 		expect(removal).toEqual({ outcome: 'removed', bytes: 1024 });
 		expect(await remainingRuns()).toEqual([`storefront/home-screen/${runNameAt(NOW_MS - DAY_MS)}`]);
@@ -584,7 +586,7 @@ describe('taking one project because an operator named it', () => {
 		const sweeper = sweeperFor({ budgetMb: 1024, maxAgeDays: 30 });
 
 		for (const asked of ['..', '.', 'a/b', '\u0000rover', '']) {
-			expect(await sweeper.removeProject(asked)).toEqual({ outcome: 'absent' });
+			expect(await sweeper.remove([asked])).toEqual({ outcome: 'absent' });
 		}
 
 		expect(await remainingRuns()).toEqual([`rover/home-screen/${runNameAt(NOW_MS - DAY_MS)}`]);
@@ -607,8 +609,8 @@ describe('taking one project because an operator named it', () => {
 		await symlink(root, join(root, 'self'), 'dir');
 		const sweeper = sweeperFor({ budgetMb: 1024, maxAgeDays: 30 });
 
-		expect(await sweeper.removeProject('escape')).toEqual({ outcome: 'failed' });
-		expect(await sweeper.removeProject('self')).toEqual({ outcome: 'failed' });
+		expect(await sweeper.remove(['escape'])).toEqual({ outcome: 'failed' });
+		expect(await sweeper.remove(['self'])).toEqual({ outcome: 'failed' });
 
 		// Nothing on either side of either link went, and the answer said so.
 		await expect(stat(join(outside, 'keep-me'))).resolves.toBeDefined();
@@ -618,12 +620,162 @@ describe('taking one project because an operator named it', () => {
 		).toHaveLength(2);
 	});
 
+	/*
+	 * **The same method one level down** (D43, #272): `[project, testName]` takes that test's
+	 * directory with every run under it, and nothing else — not a sibling test of the same
+	 * project, and not the same test name filed under another project, which is precisely why the
+	 * address is a pair and not a name (D22).
+	 */
+	it('takes one test of a project and leaves its siblings and its namesakes standing', async () => {
+		await fileRun('rover', 'home-screen', runNameAt(NOW_MS - DAY_MS), 1024);
+		await fileRun('rover', 'home-screen', runNameAt(NOW_MS - 2 * DAY_MS), 2048);
+		await fileRun('rover', 'login-flow', runNameAt(NOW_MS - DAY_MS), 512);
+		await fileRun('storefront', 'home-screen', runNameAt(NOW_MS - DAY_MS), 256);
+
+		const removal = await sweeperFor({ budgetMb: 1024, maxAgeDays: 30 }).remove([
+			'rover',
+			'home-screen',
+		]);
+
+		expect(removal).toEqual({ outcome: 'removed', bytes: 3072 });
+		expect(await remainingRuns()).toEqual([
+			`rover/login-flow/${runNameAt(NOW_MS - DAY_MS)}`,
+			`storefront/home-screen/${runNameAt(NOW_MS - DAY_MS)}`,
+		]);
+		expect(logged.join('\n')).toContain(
+			'Deleted archived test "rover"/"home-screen" — 3072 bytes.',
+		);
+	});
+
+	/*
+	 * **A level left holding nothing is scaffolding rather than a record** (D34, module header) —
+	 * the sweep's own rule, applied to the one deletion that can newly empty a level. And **the
+	 * root never goes**, which is the half of that rule this method could have got wrong.
+	 */
+	it('removes the project level its last test emptied, and never the root', async () => {
+		await fileRun('rover', 'home-screen', runNameAt(NOW_MS - DAY_MS), 1024);
+		await fileRun('storefront', 'home-screen', runNameAt(NOW_MS - DAY_MS), 256);
+
+		await expect(
+			sweeperFor({ budgetMb: 1024, maxAgeDays: 30 }).remove(['rover', 'home-screen']),
+		).resolves.toEqual({ outcome: 'removed', bytes: 1024 });
+
+		expect(await readdir(root)).toEqual(['storefront']);
+	});
+
+	it('leaves a project standing when the test it took was not its last', async () => {
+		await fileRun('rover', 'home-screen', runNameAt(NOW_MS - DAY_MS), 1024);
+		await fileRun('rover', 'login-flow', runNameAt(NOW_MS - DAY_MS), 512);
+
+		await expect(
+			sweeperFor({ budgetMb: 1024, maxAgeDays: 30 }).remove(['rover', 'home-screen']),
+		).resolves.toMatchObject({ outcome: 'removed' });
+
+		expect((await readdir(join(root, 'rover'))).sort()).toEqual(['login-flow']);
+	});
+
+	it('answers absent for a test that filed nothing under a project that did', async () => {
+		await fileRun('rover', 'home-screen', runNameAt(NOW_MS - DAY_MS), 1024);
+		const sweeper = sweeperFor({ budgetMb: 1024, maxAgeDays: 30 });
+
+		expect(await sweeper.remove(['rover', 'never-filed'])).toEqual({ outcome: 'absent' });
+
+		expect(warned).toEqual([]);
+		expect(await remainingRuns()).toEqual([`rover/home-screen/${runNameAt(NOW_MS - DAY_MS)}`]);
+	});
+
+	/*
+	 * **Every component is checked, not just the first.** A `..` in the second position is exactly
+	 * the escape a per-address method could have opened while a per-project one could not.
+	 */
+	it('answers absent for a component of any depth that is not one directory name', async () => {
+		await fileRun('rover', 'home-screen', runNameAt(NOW_MS - DAY_MS), 1024);
+		const sweeper = sweeperFor({ budgetMb: 1024, maxAgeDays: 30 });
+
+		for (const address of [
+			['rover', '..'],
+			['rover', 'a/b'],
+			['rover', ''],
+			['..', 'home-screen'],
+		]) {
+			expect(await sweeper.remove(address)).toEqual({ outcome: 'absent' });
+		}
+
+		expect(await remainingRuns()).toEqual([`rover/home-screen/${runNameAt(NOW_MS - DAY_MS)}`]);
+		expect(warned.filter((line) => line.includes('not one directory name'))).toHaveLength(4);
+	});
+
+	/** The archive root is not addressable by a delete, and an empty address is how it would be. */
+	it('answers absent for an address naming no component at all', async () => {
+		await fileRun('rover', 'home-screen', runNameAt(NOW_MS - DAY_MS), 1024);
+		const sweeper = sweeperFor({ budgetMb: 1024, maxAgeDays: 30 });
+
+		expect(await sweeper.remove([])).toEqual({ outcome: 'absent' });
+
+		expect(await remainingRuns()).toEqual([`rover/home-screen/${runNameAt(NOW_MS - DAY_MS)}`]);
+		expect(warned.filter((line) => line.includes('never a delete target'))).toHaveLength(1);
+	});
+
+	/** Containment holds at the deeper address too, and it is the resolved path that says so. */
+	it('refuses a test component that is a link out of the archive root', async () => {
+		await fileRun('rover', 'home-screen', runNameAt(NOW_MS - DAY_MS), 1024);
+		const outside = join(dir, 'outside');
+		await mkdir(join(outside, 'keep-me'), { recursive: true });
+		await symlink(outside, join(root, 'rover', 'escape'), 'dir');
+
+		expect(
+			await sweeperFor({ budgetMb: 1024, maxAgeDays: 30 }).remove(['rover', 'escape']),
+		).toEqual({ outcome: 'failed' });
+
+		await expect(stat(join(outside, 'keep-me'))).resolves.toBeDefined();
+		expect(
+			warned.filter((line) => line.includes('not a directory under the archive root')),
+		).toHaveLength(1);
+	});
+
+	/** The deeper address runs in the same critical section, which is the whole point of one method. */
+	it('does not interleave with a sweep of the same root at the test address either', async () => {
+		for (let index = 0; index < 3; index += 1) {
+			await fileRun('rover', `old-${index}`, runNameAt(NOW_MS - (90 + index) * DAY_MS), 1024);
+		}
+		await fileRun('rover', 'current', runNameAt(NOW_MS - DAY_MS), 256);
+
+		const trace: string[] = [];
+		const sweeper = createArchiveSweeper({
+			root,
+			keptTestsPath,
+			retention: { budgetMb: 1024, maxAgeDays: 30 },
+			liveLeases: () => [],
+			now: () => NOW_MS,
+			log: () => undefined,
+			warn: (line) => warned.push(line),
+			onDelete: async () => {
+				trace.push('sweep:in');
+				await Promise.resolve();
+				trace.push('sweep:out');
+			},
+		});
+
+		const sweeping = sweeper.sweep({ dryRun: false, bounds: 'both' });
+		const removing = sweeper.remove(['rover', 'current']).then((removal) => {
+			trace.push(`remove:${removal.outcome}`);
+			return removal;
+		});
+		await Promise.all([sweeping, removing]);
+
+		expect(trace.at(-1)).toBe('remove:removed');
+		for (let index = 0; index < trace.length - 1; index += 2) {
+			expect(trace[index + 1]).toBe(`${trace[index]?.split(':')[0]}:out`);
+		}
+		expect(await readdir(root)).toEqual([]);
+	});
+
 	/** And `settle()` covers it, which is what keeps a `process.exit` out of the middle of an `rm`. */
 	it('is what settle() waits for', async () => {
 		await fileRun('rover', 'home-screen', runNameAt(NOW_MS - DAY_MS), 1024);
 		const sweeper = sweeperFor({ budgetMb: 1024, maxAgeDays: 30 });
 
-		const removing = sweeper.removeProject('rover');
+		const removing = sweeper.remove(['rover']);
 		await sweeper.settle();
 
 		await expect(removing).resolves.toMatchObject({ outcome: 'removed' });
