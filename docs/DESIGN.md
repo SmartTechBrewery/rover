@@ -1398,7 +1398,7 @@ because they are true in both; only the claim narrows. This is `Searched`'s rule
 archive contains that text* about a search that was cut short — and it is why a truncated grouping
 answer is not a fourth empty-handed state.
 
-### The label badges — settled here, not designed (#182, amended in place by #197, #200 and #206)
+### The label badges — settled here, not designed (#182, amended in place by #197, #200, #206 and #269)
 
 **Settled in this document rather than by a Stitch round**, and which of the two was chosen is said
 out loud because §1 requires it — the same call the arrangement above it is: the row anatomy and the
@@ -1418,7 +1418,7 @@ badge is the row it was.
 **The height is fixed and the width is not** (#206). 18px against the row's 14px monospace line is
 what keeps a badged row the height of an unbadged one, so a level of the tree does not jump where a
 label starts — the property `size-4.5` was chosen for. What `size-4.5` *also* fixed was the width,
-and `#12` does not fit an 18px circle; so the pill grows horizontally on the design's own spacing
+and `12` does not fit an 18px circle; so the pill grows horizontally on the design's own spacing
 step (`px-1.5`) and `rounded-full` keeps it a pill at every width rather than becoming a rectangle.
 The height and the smallest type step are what hold.
 
@@ -1446,17 +1446,31 @@ label anywhere, and the only answer there is is **one bounded walk that says whe
 the walk stopped a directory earlier. A number that never claimed to travel is the smaller promise
 and the one that can be kept.
 
-**A badge must not read as the artifact's own sequence number** (#206). Archived artifacts lead with
-a zero-padded ordinal inside their file names — `002_remaining-deliveries_screenshot.png`,
-`009_transferred-to-courier_screenshot.png` — so a bare `2` beside a row named `007_…` invites
-exactly the wrong reading. Three things separate them and the first is decisive: **the badge carries
-a leading `#`**, which a file's ordinal never does; it is a filled pill rather than text inside the
-row's name; and it is never zero-padded. `#` is the number sign — *this is label number two* — and
-was chosen over the bare digit for precisely that: it reads as a code and costs one glyph in a pill
-that had to grow anyway. It is **not** an ordinal or a place. Nothing here is compared, so no number
-can be a rank, a score or an order of merit (§2, `ai/RULES.md` §1); `1` is a code for a label, not a
-first place. The number is also deliberately absent from what a screen reader says, which is where
-`#1` and `001_…` would otherwise be confusable by ear.
+**A badge must not read as the artifact's own sequence number** (#206, and the badge is a bare
+number since #269). Archived artifacts lead with a zero-padded ordinal inside their file names —
+`002_remaining-deliveries_screenshot.png`, `009_transferred-to-courier_screenshot.png` — so a `2`
+beside a row named `007_…` is the reading this has to rule out.
+
+**Two channels rule it out, and there used to be a third.** A badge is a **filled coloured pill
+sitting between the row's glyph and its name**, at the design's smallest type step, where a file's
+ordinal is plain text inside the row's own name; and a badge is **never zero-padded** where an
+ordinal always is. `12` beside `012_home-screen_screenshot.png` is ambiguous on neither count.
+
+**The third was a leading `#`, which #206 called the decisive one, and #269 removed it — amended in
+place rather than rewritten from scratch, because the record of why the glyph was there is what
+makes its removal a decision.** #206's argument was sound as far as it went: `#` is the number sign
+— *this is label number two* — it is the one channel a file's ordinal never has, and it cost one
+glyph in a pill that had to grow for two digits anyway. What #269 saw is that the two channels above
+already do that work on their own, so the `#` was a third channel adding nothing while spending a
+glyph in a pill whose width is its digits. The bare digit was weighed under #206 and rejected on the
+ordinal confusion; the pill and the absence of padding answer that same confusion, so the objection
+no longer reaches.
+
+**Neither reading was ever that a badge is a place.** Nothing here is compared, so no number can be
+a rank, a score or an order of merit (§2, `ai/RULES.md` §1) — `1` is a code for a label and not a
+first place, with the glyph or without it, and the objection #206 weighed against the bare digit was
+the ordinal one rather than this. The number is also deliberately absent from what a screen reader
+says, which is where a spoken `1` and `001_…` would otherwise be confusable by ear.
 
 **The number carries the meaning, never the colour alone.** Every badge says which label it is in
 text, so the fill is a second channel for something already written — the rule §5's status LED keeps
@@ -1480,9 +1494,9 @@ number's position modulo four, so the four families take the numbers family-firs
 | `3`, `7`, `11`, `15`, `19`, `23`, `27` | tertiary | `bg-tertiary-fixed` | `text-on-tertiary-fixed` | mint |
 | `4`, `8`, `12`, `16`, `20`, `24`, `28` | neutral | `bg-inverse-surface` | `text-inverse-on-surface` | neutral |
 
-That table is **cycle 1**, which is `#1`…`#4` and is byte-identical to what #182 shipped. Every
+That table is **cycle 1**, which is `1`…`4` and is byte-identical to what #182 shipped. Every
 later cycle is the *same four families a step deeper into each family's own dark step* (#200), so
-`#5` is `#1`'s lavender at another level rather than a repeat of it. A step is
+`5` is `1`'s lavender at another level rather than a repeat of it. A step is
 `color-mix(in srgb, var(--color-<family>-fixed) <n>%, var(--color-on-<family>-fixed-variant))` in
 `panel/src/index.css` — the same file's `.scanline` and `.wordmark-chroma` are the precedent — and
 the component writes only a family and a cycle: `label-badge-step label-badge-<family>
@@ -1497,7 +1511,7 @@ for a fifth case.
 **The colour ramp keeps its own ceiling, and the number is what disambiguates past it** (#206). The
 numbers are unbounded; four families across seven honest steps is **twenty-eight** fills and no
 more. Beyond the last cycle the colour therefore **repeats** rather than a new step being invented:
-`#29` draws `#1`'s fill, `#30` draws `#2`'s, and so on. Two badges far apart may share a fill; their
+`29` draws `1`'s fill, `30` draws `2`'s, and so on. Two badges far apart may share a fill; their
 digits differ, and the digit is the identity. No new colour is invented at the keyboard and no
 `error` step is reached (`ai/RULES.md` §8). `PALETTE_CYCLES` in `label-badge.tsx` is that ceiling
 written down as a constant rather than left implicit in a modulo, and
@@ -1510,13 +1524,13 @@ family's own light token and the byte-rounded result; each ramp's dark end is in
 
 | cycle | numbers | primary → `#0035be` | secondary → `#802a00` | tertiary → `#005236` | neutral → `#2f3034` |
 | --- | --- | --- | --- | --- | --- |
-| 1 | `#1`…`#4` | 100% `#dde1ff` | 100% `#ffdbce` | 100% `#47ffb8` | 100% `#e2e2e6` |
-| 2 | `#5`…`#8` | 91% `#c9d2f9` | 91% `#f4cbbb` | 72% `#33cf94` | 94% `#d7d7db` |
-| 3 | `#9`…`#12` | 82% `#b5c2f3` | 82% `#e8bba9` | 66% `#2fc48c` | 88% `#cdcdd1` |
-| 4 | `#13`…`#16` | 73% `#a1b3ed` | 73% `#ddab96` | 60% `#2bba84` | 82% `#c2c2c6` |
-| 5 | `#17`…`#20` | 64% `#8da3e8` | 64% `#d19b84` | 54% `#26af7c` | 76% `#b7b7bb` |
-| 6 | `#21`…`#24` | 55% `#7a94e2` | 55% `#c68b71` | 48% `#22a574` | 70% `#acadb1` |
-| 7 | `#25`…`#28` | 46% `#6684dc` | 46% `#ba7b5f` | 42% `#1e9b6d` | 64% `#a2a2a6` |
+| 1 | `1`…`4` | 100% `#dde1ff` | 100% `#ffdbce` | 100% `#47ffb8` | 100% `#e2e2e6` |
+| 2 | `5`…`8` | 91% `#c9d2f9` | 91% `#f4cbbb` | 72% `#33cf94` | 94% `#d7d7db` |
+| 3 | `9`…`12` | 82% `#b5c2f3` | 82% `#e8bba9` | 66% `#2fc48c` | 88% `#cdcdd1` |
+| 4 | `13`…`16` | 73% `#a1b3ed` | 73% `#ddab96` | 60% `#2bba84` | 82% `#c2c2c6` |
+| 5 | `17`…`20` | 64% `#8da3e8` | 64% `#d19b84` | 54% `#26af7c` | 76% `#b7b7bb` |
+| 6 | `21`…`24` | 55% `#7a94e2` | 55% `#c68b71` | 48% `#22a574` | 70% `#acadb1` |
+| 7 | `25`…`28` | 46% `#6684dc` | 46% `#ba7b5f` | 42% `#1e9b6d` | 64% `#a2a2a6` |
 
 Mixing at 100% is the identity, which is what makes "cycle 1 is unchanged" a computation rather
 than a claim: the first stop of every ramp *is* the token the utility class above draws. **The
@@ -1561,19 +1575,19 @@ that gate while painting the free-device green onto a badge.
 **Consecutive numbers never carry one colour**, and cycling family-first is what makes that true by
 construction rather than by inspection: two numbers next to each other are always two different
 accent families, and two steps of one family always sit exactly four numbers apart. **The cycle
-boundary used to be the exception and no longer is.** `#4`'s `bg-inverse-surface` (`#e2e2e6`) beside
-`#5`'s fill was ΔE 13.6 while `#5` was a plain repeat of `#1` — the one weak pair #197 had to
-record, and every weak adjacency was one of these boundaries. `#5` is now a step off `#1`, which
+boundary used to be the exception and no longer is.** `4`'s `bg-inverse-surface` (`#e2e2e6`) beside
+`5`'s fill was ΔE 13.6 while `5` was a plain repeat of `1` — the one weak pair #197 had to
+record, and every weak adjacency was one of these boundaries. `5` is now a step off `1`, which
 puts that pair at ΔE 19.7 and makes it no longer the closest thing in the set to a collision. The
-weakest adjacency anywhere is now 19.7, and **that now includes the wrap**: `#28`'s deepest neutral
-beside `#29`'s cycle 1 lavender is the same kind of boundary and is measured as one.
+weakest adjacency anywhere is now 19.7, and **that now includes the wrap**: `28`'s deepest neutral
+beside `29`'s cycle 1 lavender is the same kind of boundary and is measured as one.
 
 **And all of that is checked rather than eyeballed.**
 `tests/unit/panel/label-badge-palette.test.ts` reads the tokens and the percentages out of the two
 CSS files, recomputes all twenty-eight fills by the byte arithmetic `in srgb` performs, and fails
 on a contrast below either floor, on any derived fill within ΔE 10 of a colour that already means
 something, on any pair of consecutive fills within ΔE 15, or on a cycle 1 that is no longer its own
-token. Because the fills are periodic in twenty-eight, it walks `#1`…`#29` — one period plus one —
+token. Because the fills are periodic in twenty-eight, it walks `1`…`29` — one period plus one —
 which is *every* consecutive pair an unbounded numbering can produce rather than every pair up to
 some number somebody chose. Both thresholds are calibrated against colours already in the repository
 rather than picked off a table: 10 is the margin cycle 1 already lives with (`tertiary-fixed` is 9.9
@@ -1583,11 +1597,15 @@ from the free green), and 15 is above the 13.6 a plain repeat gives.
 `bg-tertiary` green on *a free device*, `bg-primary-container` blue on *held* and
 `secondary-container` orange on *warning*, and `error` is not available at all — so every fill above
 is a `-fixed` step, a neutral, or a derived step of one of those, none is one of the three §5 gives a
-meaning to, and **no two of them can pair into a red/green verdict**. A green `#1` beside a red `#2`
+meaning to, and **no two of them can pair into a red/green verdict**. A green `1` beside a red `2`
 is precisely the pass/fail semantics Rover does not have (§2, `ai/RULES.md` §1), and this palette is
 chosen to make it unavailable rather than discouraged. The same rule reaches the digits now that
-they are digits: nothing about a badge is sorted, scored or compared, `1` is *the first label this
-group's walk met*, and the `#` is what says so.
+they are digits: nothing about a badge is sorted, scored or compared, and `1` is *the first label
+this group's walk met*. **What says so is the frame, not a glyph** (amended in place, #269 — it read
+*and the `#` is what says so*, written while the badge carried one). The `#` was never load-bearing
+here: what makes a number a code rather than a rank is that there is nothing in this screen to rank
+against — no order, no score, no verdict (§2) — and an accessible name that says *Filed under the
+label …* and never the number.
 
 **Why four colours, and why the glyphs are not counted at all** (reversed in place twice — #197
 took the alphabet to `Z`, #206 dropped the alphabet; the original conclusions are kept because the
@@ -1622,13 +1640,28 @@ keeps its ceiling because the palette's ceiling was always the real one: four fa
 honest steps, and past the twenty-eighth the fill repeats while the digit distinguishes. Counting
 the glyphs is the mistake this section made twice; there is now nothing to count.
 
-*Why a bare digit was not enough, and what `#` buys.* Archived artifacts already lead with a
+*Why a bare digit was not enough, and what `#` bought — reversed in place by #269, which made the
+badges bare digits after all.* #206 concluded this: archived artifacts already lead with a
 zero-padded ordinal in their file names, so `2` beside a row named `007_…` reads as a second copy of
-the row's own number. The leading `#` is the one channel the file's ordinal never has, and in a pill
-that already had to grow for `#12` it costs one glyph. `#1` was considered against exactly one
-objection — that it could read as *first place* — and it does not: the frame is a set nothing
-compares, the accessible name says *Filed under the label …* and never the number, and §2's rule
-that Rover reports no verdicts is what the whole badge is built under.
+the row's own number; the leading `#` is the one channel the file's ordinal never has, and in a pill
+that already had to grow for two digits it costs one glyph. The bare digit was considered there
+against exactly one objection — that it could read as *first place* — and dismissed on that count,
+correctly: the frame is a set nothing compares, the accessible name says *Filed under the label …*
+and never the number, and §2's rule that Rover reports no verdicts is what the whole badge is built
+under.
+
+*Why that was wrong, and what #269 replaced it with.* The `#` was counted as the **decisive** one
+of three channels when it was the one carrying no weight. A badge is a filled coloured pill between
+the row's glyph and its name at the design's smallest type step; a file ordinal is plain text inside
+the row's name and is always zero-padded where a badge never is. Either of those separates the two
+on its own, and together they leave nothing for a third to disambiguate — `12` beside
+`012_home-screen_screenshot.png` does not read as a second copy of anything. So the `#` spent a
+glyph in a pill whose width is its digits and bought a distinction already made twice. **The badges
+are the bare number** (#269) — `12`, not `#12`; `1`, not `#1` — everywhere a badge is drawn, which
+is the groups tree and the comparison card, both taking the same component. Note what did *not* move
+with it: the objection #206 weighed against the bare digit was the ordinal confusion, and the rank
+objection it also dismissed is answered the same way it always was — by §2, and by an accessible
+name that never carries the number.
 
 *What survives all three, unchanged.* **No badge colour may read as an outcome.** `error` stays
 excluded outright, §5's three device-state steps (tertiary green, primary-container blue,
@@ -1649,10 +1682,14 @@ modulation was a follow-up rather than a thing this section forbids. **That foll
   be discovered.
 - **No legend.** A number and a hover that names it is the whole vocabulary; a legend would be a
   second, staler copy of what every badge already says.
-- **No zero-padding on a badge, and no alignment to the widest one.** Padding `#1` to `#01` would
-  make it look like the file ordinals it must not be confused with, and reserving the width of the
+- **No zero-padding on a badge, and no alignment to the widest one.** Padding `1` to `01` would make
+  it look like the file ordinals it must not be confused with, and reserving the width of the
   group's largest number would put a variable indent on every row for a set most groups never
-  reach.
+  reach. **This bullet is load-bearing since #269** and was amended in place to say so: it used to
+  read *padding `#1` to `#01`*, one rule among several while the leading `#` was doing the
+  separating. With that glyph gone the absence of padding is one of the **two** things keeping a
+  badge from reading as the row's own ordinal — the pill is the other — so this is no longer a
+  preference about looks.
 - **No filter by label, no compare-these-two control, and nothing that ranks or scores an artifact**
   (`ai/RULES.md` §1). A label is a caller's claim that two artifacts are the same thing at two
   moments; what to make of them is the agent's judgement and not Rover's.

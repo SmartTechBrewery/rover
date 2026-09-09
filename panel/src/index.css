@@ -92,11 +92,11 @@
 	 *
 	 * **These twenty-eight steps are the palette's whole ceiling** (#206). The badges themselves
 	 * are numbers and have none, so `label-badge.tsx` wraps at the last cycle declared here rather
-	 * than naming a `label-badge-cycle-8` no rule defines: badge `#29` repeats `#1`'s fill and its
+	 * than naming a `label-badge-cycle-8` no rule defines: badge `29` repeats `1`'s fill and its
 	 * digit is what distinguishes the two. A cycle 8 is therefore not a number to raise in the
 	 * component but four new steps somebody has to measure against §5's own colours, below.
 	 *
-	 * `#1`…`#4` are deliberately **not** here: cycle 1 keeps the four Tailwind utility pairs
+	 * `1`…`4` are deliberately **not** here: cycle 1 keeps the four Tailwind utility pairs
 	 * `label-badge.tsx` has always drawn it with, which is what makes "cycle 1 is unchanged"
 	 * provable rather than claimed. Every later number composes three classes —
 	 * `label-badge-step label-badge-<family> label-badge-cycle-<n>`.

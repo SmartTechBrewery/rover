@@ -52,23 +52,30 @@ describe('the label badge', () => {
 	it('draws the number as text, at one, two and three digits', () => {
 		for (const number of [2, 12, 123]) {
 			const { unmount } = render(<LabelBadge label={LABEL} number={number} />);
-			expect(screen.getByRole('img').textContent).toBe(`#${number}`);
+			expect(screen.getByRole('img').textContent).toBe(String(number));
 			unmount();
 		}
 	});
 
 	/*
-	 * **A badge must not read as the artifact's own sequence number** (#206). An archived artifact
-	 * leads with a zero-padded ordinal inside its file name, so `2` beside a row named `007_…` is
-	 * exactly the wrong reading. The badge's own separations are asserted here at the level markup
-	 * can reach: a leading `#`, which a file's ordinal never carries, and no zero-padding.
+	 * **A badge must not read as the artifact's own sequence number** (#206) — the claim survives
+	 * #269 and so does this case, with what it asserts moved rather than dropped. An archived
+	 * artifact leads with a zero-padded ordinal inside its file name, so `2` beside a row named
+	 * `007_…` is the reading to rule out.
+	 *
+	 * **This used to assert a leading `#` as well, and that channel is gone** (#269, reversing #206
+	 * in place). Of the three separations #206 named, two do the work: the badge is a filled pill
+	 * between the glyph and the name, which markup can only reach as the pill's own classes (pinned
+	 * in *keeps one height at every width* below), and it is never zero-padded where an ordinal
+	 * always is — which is exactly what is asserted here, now over the bare number the badge draws.
 	 */
-	it('leads with `#` and never pads the number', () => {
+	it('draws the number alone and never pads it', () => {
 		for (const number of upTo(12)) {
 			const { unmount } = render(<LabelBadge label={LABEL} number={number} />);
 			const drawn = screen.getByRole('img').textContent ?? '';
-			expect(drawn).toBe(`#${number}`);
-			expect(drawn).not.toMatch(/^#0/);
+			expect(drawn).toBe(String(number));
+			// No `#`, no prefix of any kind, and no leading zero — the digits and nothing else.
+			expect(drawn).toMatch(/^[1-9]\d*$/);
 			unmount();
 		}
 	});
@@ -94,7 +101,7 @@ describe('the label badge', () => {
 	 * colours costs nothing: the first four badges draw on the same four fills, in the same order.
 	 * Pinned exactly, so the cycle cannot drift under a later edit.
 	 */
-	it('draws `#1`…`#4` on the four colours it draws them on today', () => {
+	it('draws `1`…`4` on the four colours it draws them on today', () => {
 		expect(classesOf(1)).toContain('bg-primary-fixed');
 		expect(classesOf(1)).toContain('text-on-primary-fixed');
 		expect(classesOf(2)).toContain('bg-secondary-fixed');
@@ -119,7 +126,7 @@ describe('the label badge', () => {
 
 		for (const [index, fill] of fills.entries()) {
 			if (index > 0) {
-				expect(fill, `#${index + 1}`).not.toBe(fills[index - 1]);
+				expect(fill, `badge ${index + 1}`).not.toBe(fills[index - 1]);
 			}
 		}
 	});
@@ -128,7 +135,7 @@ describe('the label badge', () => {
 	 * **The colour ramp keeps its own ceiling, and the number is what disambiguates past it**
 	 * (#206). Four families across {@link PALETTE_CYCLES} honest steps is twenty-eight fills and no
 	 * more; a twenty-ninth step would be a colour nobody commissioned, so the fill **repeats** and
-	 * the digits are the identity. That is a wrap rather than a fallback: `#29` is a badge like any
+	 * the digits are the identity. That is a wrap rather than a fallback: `29` is a badge like any
 	 * other and says its own label, where `@` said nothing at all.
 	 */
 	it('wraps the fill at the last cycle instead of inventing a step', () => {
@@ -142,7 +149,7 @@ describe('the label badge', () => {
 			for (const name of classesOf(number)) {
 				const cycle = /^label-badge-cycle-(\d+)$/.exec(name);
 				if (cycle !== null) {
-					expect(Number(cycle[1]), `#${number}`).toBeLessThanOrEqual(PALETTE_CYCLES);
+					expect(Number(cycle[1]), `badge ${number}`).toBeLessThanOrEqual(PALETTE_CYCLES);
 				}
 			}
 		}
@@ -174,10 +181,10 @@ describe('the label badge', () => {
 	});
 
 	/*
-	 * **Every number past `#4` is a family and a step of it** (#200), which is the whole of what the
+	 * **Every number past `4` is a family and a step of it** (#200), which is the whole of what the
 	 * component decides: the family is the position modulo four and the cycle is the position over
 	 * four wrapped at the last one, so two numbers of one family never draw the same step inside a
-	 * period and `#5` is `#1`'s family one step deeper rather than a repeat of `#1`.
+	 * period and `5` is `1`'s family one step deeper rather than a repeat of `1`.
 	 *
 	 * The colours those two classes compose are `panel/src/index.css`'s, and
 	 * `tests/unit/panel/label-badge-palette.test.ts` recomputes every one of them from the tokens.
@@ -193,9 +200,9 @@ describe('the label badge', () => {
 			if (cycle === 1) continue;
 
 			const classes = classesOf(number);
-			expect(classes, `#${number}`).toContain('label-badge-step');
-			expect(classes, `#${number}`).toContain(`label-badge-${family}`);
-			expect(classes, `#${number}`).toContain(`label-badge-cycle-${cycle}`);
+			expect(classes, `badge ${number}`).toContain('label-badge-step');
+			expect(classes, `badge ${number}`).toContain(`label-badge-${family}`);
+			expect(classes, `badge ${number}`).toContain(`label-badge-cycle-${cycle}`);
 			drawn.get(family)?.push(`cycle-${cycle}`);
 		}
 
@@ -228,7 +235,7 @@ describe('the label badge', () => {
 			]),
 		);
 		for (const number of upTo(DISTINCT_FILLS + 1)) {
-			expect(classesOf(number), `#${number}`).not.toContain('bg-surface-container-highest');
+			expect(classesOf(number), `badge ${number}`).not.toContain('bg-surface-container-highest');
 		}
 	});
 
