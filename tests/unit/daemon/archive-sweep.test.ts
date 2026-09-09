@@ -15,12 +15,17 @@
  * out** — which is what a shutdown does with the one no caller is holding (#245).
  */
 
-import { mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { type Observation, waitForCondition } from '@/core/wait.js';
-import { leaseDirectoryName, leaseRunDirectory } from '@/daemon/archive-path.js';
+import {
+	leaseDirectoryName,
+	leaseRunDirectory,
+	MAX_SEGMENT_LENGTH,
+	pathSegment,
+} from '@/daemon/archive-path.js';
 import type { RetentionPolicy } from '@/daemon/archive-retention.js';
 import { type ArchiveSweeper, createArchiveSweeper } from '@/daemon/archive-sweep.js';
 import { writeKeptTests } from '@/daemon/kept-tests.js';
@@ -542,6 +547,75 @@ describe('taking one project because an operator named it', () => {
 			expect(trace[index + 1]).toBe(`${trace[index]?.split(':')[0]}:out`);
 		}
 		expect(await remainingRuns()).toEqual([`storefront/home-screen/${runNameAt(NOW_MS - DAY_MS)}`]);
+	});
+
+	/*
+	 * **The component is used verbatim, and that is the whole of this case** (PROJECT.md §6, #274).
+	 * `pathSegment` is the *writer's* function and is not idempotent: it truncates at 64 and then
+	 * appends a hash of the original, so its own output runs to 73 characters, and re-running it
+	 * over that output truncates the 73 to 64 and hashes the 73 — a directory nothing was ever
+	 * filed under. A removal that rewrote the name it was given therefore missed the whole subtree
+	 * of every project whose filed component is over the bound, and answered `absent` about it.
+	 */
+	it('takes a subtree whose filed component is longer than the segment bound', async () => {
+		const raw = 'checkout web end to end regression suite for storefront and cart';
+		const filed = pathSegment(raw);
+		// The premise, asserted rather than assumed: this is what the archive filed, it is over
+		// the bound, and running the writer's function over it again names something else.
+		expect(filed.length).toBeGreaterThan(MAX_SEGMENT_LENGTH);
+		expect(pathSegment(filed)).not.toBe(filed);
+		await fileRun(filed, 'home-screen', runNameAt(NOW_MS - DAY_MS), 1024);
+		await fileRun('storefront', 'home-screen', runNameAt(NOW_MS - DAY_MS), 512);
+
+		const removal = await sweeperFor({ budgetMb: 1024, maxAgeDays: 30 }).removeProject(filed);
+
+		expect(removal).toEqual({ outcome: 'removed', bytes: 1024 });
+		expect(await remainingRuns()).toEqual([`storefront/home-screen/${runNameAt(NOW_MS - DAY_MS)}`]);
+	});
+
+	/*
+	 * **A string that is not one directory name reached nothing, so it is `absent` and not
+	 * `failed`**: nothing here can be filed under it, so nothing refused to go. The shape check is
+	 * `ArchivePathSegmentSchema`'s, the same one every other archive-addressed method applies to a
+	 * component the host itself answered with.
+	 */
+	it('answers absent for a string no directory of this archive could be named', async () => {
+		await fileRun('rover', 'home-screen', runNameAt(NOW_MS - DAY_MS), 1024);
+		const sweeper = sweeperFor({ budgetMb: 1024, maxAgeDays: 30 });
+
+		for (const asked of ['..', '.', 'a/b', '\u0000rover', '']) {
+			expect(await sweeper.removeProject(asked)).toEqual({ outcome: 'absent' });
+		}
+
+		expect(await remainingRuns()).toEqual([`rover/home-screen/${runNameAt(NOW_MS - DAY_MS)}`]);
+		// The diagnosis is on the host, where a path and a caller string already belong (D19).
+		expect(warned.filter((line) => line.includes('not one directory name'))).toHaveLength(5);
+	});
+
+	/*
+	 * **Containment is the resolved path and not only the schema**, `./list-archive.ts`'s rule: a
+	 * symlink leaves the root with no `.`, `..` or separator in the name, and `rm` resolves the
+	 * link in its own argument. The root *itself* is refused too, which is where a delete parts
+	 * company with a listing — addressing the root is legitimate, deleting it would take every
+	 * project on the host.
+	 */
+	it('refuses a component resolving out of the archive root, and one resolving onto it', async () => {
+		await fileRun('rover', 'home-screen', runNameAt(NOW_MS - DAY_MS), 1024);
+		const outside = join(dir, 'outside');
+		await mkdir(join(outside, 'keep-me'), { recursive: true });
+		await symlink(outside, join(root, 'escape'), 'dir');
+		await symlink(root, join(root, 'self'), 'dir');
+		const sweeper = sweeperFor({ budgetMb: 1024, maxAgeDays: 30 });
+
+		expect(await sweeper.removeProject('escape')).toEqual({ outcome: 'failed' });
+		expect(await sweeper.removeProject('self')).toEqual({ outcome: 'failed' });
+
+		// Nothing on either side of either link went, and the answer said so.
+		await expect(stat(join(outside, 'keep-me'))).resolves.toBeDefined();
+		expect((await readdir(root)).sort()).toEqual(['escape', 'rover', 'self']);
+		expect(
+			warned.filter((line) => line.includes('not a directory under the archive root')),
+		).toHaveLength(2);
 	});
 
 	/** And `settle()` covers it, which is what keeps a `process.exit` out of the middle of an `rm`. */

@@ -95,10 +95,10 @@
  */
 
 import type { Dirent } from 'node:fs';
-import { readdir, rm, rmdir, stat } from 'node:fs/promises';
-import { join } from 'node:path';
-import { MAX_ARCHIVE_PATH_DEPTH } from '../ipc/methods.js';
-import { leaseRunDirectory, pathSegment, runDirectoryPrecedes } from './archive-path.js';
+import { readdir, realpath, rm, rmdir } from 'node:fs/promises';
+import { join, sep } from 'node:path';
+import { ArchivePathSegmentSchema, MAX_ARCHIVE_PATH_DEPTH } from '../ipc/methods.js';
+import { leaseRunDirectory, runDirectoryPrecedes } from './archive-path.js';
 import { ageCutoffMs, budgetBytesOf, type RetentionPolicy } from './archive-retention.js';
 import { sizeOfTree } from './archive-size.js';
 import { keptTestKey, readKeptTests } from './kept-tests.js';
@@ -187,14 +187,24 @@ export interface ArchiveSweeper {
 	 * **Nothing is selected and nothing is exempt.** This is not a bound and it is not a policy: an
 	 * operator named one project (D42), so the directory goes whole — kept tests included, an
 	 * explicit delete not being one of the two bounds D35 exempts one from. Nothing outside that
-	 * one subtree is touched, and the subtree is `pathSegment`'s (`./archive-path.ts`), which is
-	 * the whole of the containment guarantee: the writer's own function answers where this
-	 * project's runs are, so a caller's string never composes a path here.
+	 * one subtree is touched.
+	 *
+	 * **The parameter is a filed component — validated, then used verbatim.** It is one directory
+	 * name as *this archive already spells it*, the same thing `list_archive` answers with and
+	 * `set_kept_tests` refers to, so it is checked against `ArchivePathSegmentSchema` and joined
+	 * to the root unchanged. `pathSegment` is deliberately **not** applied to it: that function
+	 * invents a name from an opaque caller string and is not idempotent — its own output can run
+	 * to 73 characters, and feeding that back in truncates to 64 and hashes the 73, resolving a
+	 * directory nothing was ever filed under. Containment is therefore the schema *plus* the
+	 * resolved-path check below, which is what `./list-archive.ts` and `./archive-size.ts` already
+	 * do with a component the host itself answered with.
 	 *
 	 * A subtree that is not there is `absent` rather than a failure — a lease may name any project
-	 * string (D22), so a registration with nothing filed under it is ordinary — and a subtree the
-	 * host would not remove is `failed` with one warning naming the path, the way an undeleted run
-	 * already is.
+	 * string (D22), so a registration with nothing filed under it is ordinary, and a string no
+	 * directory of this archive could be named is the same answer for the same reason: nothing was
+	 * reached, so nothing refused to go. A subtree the host would not remove, and one that
+	 * resolves out of the root, are `failed` with one warning naming the path, the way an
+	 * undeleted run already is.
 	 */
 	removeProject(project: string): Promise<ProjectRemoval>;
 	/**
@@ -357,29 +367,22 @@ export function createArchiveSweeper(options: ArchiveSweeperOptions): ArchiveSwe
 			// this tree and a project being taken out of it must not interleave, and `settle()`
 			// has to cover this `rm` exactly as it covers a sweep's.
 			return serialised(options.root, async (): Promise<ProjectRemoval> => {
-				// The writer's own function, never a caller-composed path — see the interface.
-				const directory = join(options.root, pathSegment(project));
-
-				// Absence is its own `stat`, because neither of the two calls below surfaces it:
-				// `sizeOfTree` answers `{ bytes: 0 }` for an `ENOENT` (a `0` is a true claim about
-				// an empty directory) and `rm` with `force` swallows it. Without this, *nothing was
-				// filed under this project* would be indistinguishable from *it went and weighed
-				// nothing*, which is the distinction the answer exists to make.
-				try {
-					await stat(directory);
-				} catch (error) {
-					if (codeOf(error) === 'ENOENT') {
-						return { outcome: 'absent' as const };
-					}
-					warn(unremovedProjectWarning(directory, error));
-					return { outcome: 'failed' as const };
+				const subtree = await resolveProjectSubtree(options.root, project, warn);
+				if (subtree.outcome !== 'resolved') {
+					return subtree;
 				}
+				const directory = subtree.directory;
 
 				// Measured before it goes, with the primitive the two `measure_archive` rows and
 				// this module's own walk share, so the number in the log line and the number in the
 				// answer are one idea of what the subtree weighed. Its `.bytes` alone, which is
 				// `walkArchive`'s convention: a walk cut short reports a lower bound rather than
 				// stopping the delete, and the subtree is going either way.
+				//
+				// Both go through the **resolved** path, so there is no second resolution to race
+				// between the check above and the `rm` — `./list-archive.ts`'s rule, and the
+				// honest one for the byte count too: `rm` on an unresolved link would unlink the
+				// link and report the bytes on the far side of it as freed.
 				const bytes = (await sizeOfTree(directory, MAX_ARCHIVE_PATH_DEPTH, warn)).bytes;
 				try {
 					await rm(directory, { recursive: true, force: true });
@@ -736,6 +739,91 @@ function projectDeletionLine(project: string, bytes: number): string {
 	return (
 		`Deleted archived project ${JSON.stringify(project)} — ${bytes} bytes. ` +
 		`An operator asked for it by name, so nothing was selected and nothing was exempt.`
+	);
+}
+
+/** Where this project's runs are, resolved — or the answer to give instead of a deletion. */
+type ResolvedSubtree =
+	| { readonly outcome: 'resolved'; readonly directory: string }
+	| { readonly outcome: 'absent' }
+	| { readonly outcome: 'failed' };
+
+/**
+ * Turn one filed component into the directory to delete, or into the reason not to.
+ *
+ * **The component is used verbatim** — see {@link ArchiveSweeper.removeProject}: it is a name this
+ * archive already answered with, so its *shape* is checked (`ArchivePathSegmentSchema`, the same
+ * one `list_archive` and `set_kept_tests` apply) and it is joined to the root unchanged. Running
+ * `pathSegment` over it would name a directory nothing was ever filed under, that function not
+ * being idempotent (`PROJECT.md` §6).
+ *
+ * **Absence is its own resolution**, because neither of `removeProject`'s two calls surfaces it:
+ * `sizeOfTree` answers `{ bytes: 0 }` for an `ENOENT` — a `0` is a true claim about an empty
+ * directory — and `rm` with `force` swallows it. Without this, *nothing was filed under this
+ * project* would be indistinguishable from *it went and weighed nothing*, which is the whole
+ * distinction the answer exists to make. A string no directory here could be named is that same
+ * `absent`: nothing was reached, so nothing refused to go.
+ *
+ * **Containment is the resolved path and not only the schema**, `./list-archive.ts`'s and
+ * `./archive-size.ts`'s rule for the reason those two give: the schema stops a *string* escaping
+ * the root, while a symlink escapes it with no `.`, `..` or separator anywhere, and `rm` resolves
+ * the link in its own argument. Strictly *under* the root rather than under-or-equal, which is
+ * where a delete parts company with those two reads: addressing the root is legitimate and
+ * **deleting it is not**, so a component resolving onto the root itself is refused rather than
+ * taking every project on the host with it.
+ */
+async function resolveProjectSubtree(
+	root: string,
+	project: string,
+	warn: (message: string) => void,
+): Promise<ResolvedSubtree> {
+	if (!ArchivePathSegmentSchema.safeParse(project).success) {
+		warn(unaddressableProjectWarning(project));
+		return { outcome: 'absent' as const };
+	}
+	const requested = join(root, project);
+
+	let resolvedRoot: string;
+	let directory: string;
+	try {
+		resolvedRoot = await realpath(root);
+		directory = await realpath(requested);
+	} catch (error) {
+		// The root's own absence is this case too: nothing has ever been archived here.
+		if (codeOf(error) === 'ENOENT') {
+			return { outcome: 'absent' as const };
+		}
+		warn(unremovedProjectWarning(requested, error));
+		return { outcome: 'failed' as const };
+	}
+	if (!directory.startsWith(resolvedRoot + sep)) {
+		warn(escapedProjectWarning(requested, directory));
+		return { outcome: 'failed' as const };
+	}
+	return { outcome: 'resolved' as const, directory };
+}
+
+/**
+ * A string that no directory of this archive could be named, so nothing was looked for.
+ *
+ * Said on the host and not on the wire, where every other path and reason on this path goes
+ * (D19), and through `JSON.stringify` for `./list-archive.ts`'s reason: a component may legally
+ * carry a `\n`, and interpolated raw it would forge a line in the host's own record.
+ */
+function unaddressableProjectWarning(project: string): string {
+	return (
+		`The artifact archive was asked to remove ${JSON.stringify(project)}, which is not one ` +
+		`directory name — nothing here can be filed under it, so nothing was looked for and ` +
+		`nothing was removed. The name to give is the one a listing of the archive answers with.`
+	);
+}
+
+/** A component resolving out of the archive root, or onto the root itself. Nothing is removed. */
+function escapedProjectWarning(requested: string, resolved: string): string {
+	return (
+		`The artifact archive was asked to remove ${JSON.stringify(requested)}, which resolves to ` +
+		`${JSON.stringify(resolved)} — not a directory under the archive root. Nothing was ` +
+		`removed; a link out of the root, or onto the root itself, is never followed by a delete.`
 	);
 }
 

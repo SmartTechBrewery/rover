@@ -26,7 +26,7 @@ import {
 } from '@/backends/registry.js';
 import type { DeviceBackend, DeviceWatch, DeviceWatcher } from '@/core/device.js';
 import { parseDeviceSerial } from '@/core/ids.js';
-import { pathSegment } from '@/daemon/archive-path.js';
+import { MAX_SEGMENT_LENGTH, pathSegment } from '@/daemon/archive-path.js';
 import { readKeptTests, writeKeptTests } from '@/daemon/kept-tests.js';
 import { type RunningDaemon, startDaemon } from '@/daemon/listen.js';
 import type { IpcClient } from '@/ipc/client.js';
@@ -278,6 +278,44 @@ describe('a delete takes the registration and everything filed under it', () => 
 		]);
 	});
 
+	/*
+	 * **A project addressed by the name the archive filed it under, over the segment bound**
+	 * (PROJECT.md §6, #274). `pathSegment` is not idempotent — its own output runs to 73 characters
+	 * and re-running it over that names a directory nothing was ever filed under — so an archive
+	 * half that rewrote the component it was handed missed the entire subtree and answered
+	 * `absent` about it, while the kept-tests half, which matches verbatim, stripped the `Keep`
+	 * exemption from data nothing had removed.
+	 */
+	it('removes the subtree of a project whose filed name is over the segment bound', async () => {
+		const raw = 'checkout web end to end regression suite for storefront and cart';
+		const filed = pathSegment(raw);
+		expect(filed.length).toBeGreaterThan(MAX_SEGMENT_LENGTH);
+		await fileARun(filed, 'home-screen', '20260901T101010Z-issue-1-abcd1234', 1024);
+		await writeKeptTests(temp.keptTestsPath, [
+			{
+				project: filed,
+				testName: 'home-screen',
+				keptBy: 'bob',
+				keptAt: '2026-09-01T00:00:00.000Z',
+			},
+		]);
+
+		const result = await deleteProject(filed);
+
+		expect(result).toEqual({
+			outcome: 'deleted',
+			// No hook file: 73 characters is not a project identifier, and a lease may name any
+			// project string (D22), so a subtree with no registration beside it is ordinary.
+			registration: 'absent',
+			archive: 'removed',
+			keptTests: 'removed',
+			freedBytes: 1024,
+			keptTestsRemoved: 1,
+		});
+		expect(await exists(join(temp.artifactsRoot, filed))).toBe(false);
+		await expect(readKeptTests(temp.keptTestsPath)).resolves.toEqual([]);
+	});
+
 	it('stops being answered by list_projects afterwards', async () => {
 		await register('checkout-web');
 
@@ -326,6 +364,32 @@ describe('the four outcomes never collapse into each other', () => {
 			freedBytes: 256,
 			keptTestsRemoved: 0,
 		});
+	});
+
+	/*
+	 * **The negative form of the criterion, asserted directly.** `archive: 'absent'` is a claim
+	 * about the disk and not about a lookup: whenever an answer says it, there is no directory for
+	 * that project left in the archive root. The bug this pins is the one shape that could report
+	 * `absent` while the subtree sat there — a name the host rewrote before looking for it.
+	 */
+	it('never answers an absent archive while a directory for that project is still there', async () => {
+		const filed = pathSegment('checkout web end to end regression suite for storefront and cart');
+		await register('checkout-web');
+		await fileARun(filed, 'home-screen', '20260901T101010Z-issue-1-abcd1234', 512);
+		await fileARun('ad-hoc', 'home-screen', '20260901T101010Z-issue-2-abcd9999', 256);
+
+		for (const project of ['checkout-web', filed, 'ad-hoc', 'never-anything']) {
+			const result = await deleteProject(project);
+			if (result.outcome !== 'deleted' && result.outcome !== 'partial') {
+				continue;
+			}
+			if (result.archive === 'absent') {
+				expect(await exists(join(temp.artifactsRoot, project))).toBe(false);
+			}
+		}
+		// And every subtree that existed went, rather than every answer being vacuously absent.
+		expect(await exists(join(temp.artifactsRoot, filed))).toBe(false);
+		expect(await exists(join(temp.artifactsRoot, 'ad-hoc'))).toBe(false);
 	});
 
 	it('answers partial with the registration still removed when the subtree will not go', async () => {

@@ -1360,14 +1360,18 @@ export type ListProjectsResult = z.infer<typeof ListProjectsResultSchema>;
 /**
  * Which project to delete, and who is deleting it.
  *
- * **The identifier `list_projects` answered with, never a path** (D19). {@link
- * AttributionStringSchema} rather than a project-identifier shape, matching what
- * {@link ProjectRegistrationSchema}'s own `project` answers: what is an identifier stays a
- * property of the host's own lookup, where the path is built (`src/daemon/project-hooks.ts`'s
- * `projectHooksPath` answers `null` for anything that is not one), and containment under the
- * archive root is `pathSegment`'s, as it is everywhere else in this tree. So a string that names
- * no hook file is answered `not-registered` rather than refused as malformed — the same reading
- * D22 gives every other project string on this surface.
+ * **A name this host answered with, never a path** (D19) — the identifier `list_projects` names a
+ * registration by, or the component `list_archive` names a project's subtree by, which for a
+ * registered project are the same string. {@link AttributionStringSchema} rather than a
+ * project-identifier or an {@link ArchivePathSegmentSchema} shape, matching what
+ * {@link ProjectRegistrationSchema}'s own `project` answers: **which shape a name has to have
+ * stays a property of the store being asked**, and each store applies its own where its path is
+ * built — `src/daemon/project-hooks.ts`'s `projectHooksPath` answers `null` for anything that is
+ * not an identifier, and `src/daemon/archive-sweep.ts`'s `removeProject` checks its argument
+ * against `ArchivePathSegmentSchema` and resolves it against the archive root. So a string that
+ * names nothing in a given store is answered `absent` for that half rather than refused as
+ * malformed, and a request that named nothing anywhere is `not-registered` — the same reading D22
+ * gives every other project string on this surface.
  *
  * **`actor` is attribution and not authorisation** (D20, D28), exactly as
  * {@link ForceReleaseDeviceParamsSchema}'s, {@link SetKeptTestsParamsSchema}'s and

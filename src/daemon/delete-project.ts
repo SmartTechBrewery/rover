@@ -42,11 +42,18 @@
  * exempts absolutely. So the answer is `refused`/`lease-live` in `AcquireDeviceResultSchema`'s
  * idiom, with an obvious next move: wait, or force-release first.
  *
- * **Which leases count: the union of both spellings.** A registration is looked up by exact string
- * (`projectHooksPath`) while the archive subtree is `pathSegment(lease.project)`, so both matter.
- * For a registered identifier the two collapse — `pathSegment` is the identity on a project
- * identifier — and they come apart only for a caller string `pathSegment` rewrote into something
- * that happens to read as one, which is exactly the case a single-sided check would miss.
+ * **One name, asked of two stores, and the refusal asks both questions.** The `project` on the
+ * request is a name *this host answered with*: the identifier `list_projects` names a registration
+ * by, or the component the archive filed a project's runs under. Each half looks it up in its own
+ * store and neither rewrites it — the hook file by exact string (`projectHooksPath`), the archive
+ * subtree by that component verbatim (`./archive-sweep.ts`'s `removeProject`, which validates it
+ * and never re-runs `pathSegment` over it, that function not being idempotent), the kept entries
+ * by exact match (`./kept-tests.ts`'s `withoutProject`, over a store whose components are already
+ * the archive's own spelling). For a registered identifier the two names collapse, `pathSegment`
+ * being the identity on one, and they come apart only for a caller string the archive rewrote.
+ * That is why {@link holdsALiveLease} asks **both** questions of every live lease — is this the
+ * project it named, or the subtree it is filing into — since a single-sided check would miss the
+ * case where they differ.
  *
  * **The residual window is the one the sweep already lives with**: a lease granted between the
  * check and the removal. `liveLeases` is a callback resolved at the moment of the call, exactly as
@@ -162,9 +169,11 @@ export function createDeleteProjectHandler(options: DeleteProjectOptions): Delet
 /**
  * Whether any live lease names this project, **under either spelling** — see the module header.
  *
- * `pathSegment` is applied to the *lease's* string rather than to the caller's, because that is
- * the direction the archive filed it in: the rewrite is not reversible, so the only question that
- * can be asked is whether a live lease's project lands in the subtree being deleted.
+ * `pathSegment` is applied to the *lease's* string and never to the caller's, which is the
+ * direction the archive filed it in and the direction the archive half now reads it: the rewrite
+ * is not reversible and not idempotent, so the only question that can be asked of it is whether a
+ * live lease's project lands in the subtree being deleted. The first arm is the registration's own
+ * question, asked of the same exact string `projectHooksPath` is given.
  */
 function holdsALiveLease(leases: readonly Lease[], project: string): boolean {
 	return leases.some(

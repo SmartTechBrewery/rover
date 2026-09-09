@@ -2,9 +2,10 @@
  * `rover delete-project` — take one project's registration and everything the host holds for it
  * (D42, #271).
  *
- * The argument is the **identifier** a `rover list`-style read of the host answered with — what
- * `list_projects` names a registration by — and never a path: the host composes its own paths from
- * its own roots, and nothing on this surface takes one (D19). One call removes the hook file under
+ * The argument is a **name the host itself answered with** — the identifier `list_projects` names a
+ * registration by, or the component `rover archive` lists a project's subtree under, which are one
+ * string for a registered project — and never a path: the host composes its own paths from its own
+ * roots, and nothing on this surface takes one (D19). One call removes the hook file under
  * the host's projects directory, that project's own subtree of the artifact archive, and its
  * entries in the host's kept-tests record.
  *
@@ -45,8 +46,9 @@ Usage: rover delete-project <project> --actor <string> [--host <name>] [--json]
   --actor  Who is deleting it. Required and never derived: it records who removed somebody's
            project, so a value guessed for you would attribute the decision to nobody.
 
-The argument is the project identifier the host answers with, never a path on the host: the
-host builds its own paths from its own roots and this command sends none.
+The argument is a project name the host answers with — the identifier it lists a registration
+by, or the name \`rover archive\` lists a project's artifacts under — and never a path on the
+host: the host builds its own paths from its own roots and this command sends none.
 
 Three things go, in one action: the project's hook file, its own subtree of the host's artifact
 archive, and its entries in the host's record of which tests are kept. Nothing outside that
