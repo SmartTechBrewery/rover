@@ -162,6 +162,25 @@ Design work lives in [`DESIGN.md`](./DESIGN.md); the brief that produced the fir
    in place, and the cost that shapes the preview: an authenticated byte route cannot be an
    `<img src>`, so the panel fetches the bytes with the session header and renders an object URL,
    and the whole artifact is therefore buffered in the tab.
+   **And the screen performs one destructive operator action now** (#276, `PROJECT.md` D43, R51
+   phase 2): a `Remove` control beside the `Keep` tick on the two cards whose tick is about a test —
+   a test name's card in both views and a run's `Run Details` — which takes that test's directory
+   with every run filed under it and its kept-test entry, in one call to `delete_archived_test`. It
+   **asks first**, in the confirmation shape `docs/DESIGN.md` §7 settled and §10 built for a
+   registration — and it is literally the *same component*, because that frame was extracted into
+   `panel/src/components/confirm-destructive-dialog.tsx` when this landed rather than described
+   twice. The confirmation states what will go in numbers before it fires — the test, how many runs,
+   what they take on disk and whether it is marked `Keep` — with **no new host read** beyond the one
+   `measure_archive` it makes on opening; opened from a run's card it says in as many words that the
+   run on screen goes with the rest. The four outcomes are said as four in one polite live region
+   above the content area, so the line **outlives the card it was about**, and a request that reached
+   nothing is not one of them: it leaves the dialog open with the control usable again and says
+   nothing above the tree. **The screen survives deleting the address it is looking at** — on a
+   settled delete the selection moves to the test's parent with `replace` and the level cache
+   re-reads, so the breadcrumb and the tree land somewhere that exists; on a `refused` neither
+   happens, nothing having been touched. A **group's** card carries the tick and no `Remove` yet:
+   that is R51's phase 3, and §9 records it as a phase boundary rather than a gap. Still no polling
+   and still no refresh control.
 6. **Live lease state** — **done** (#113). A held card carries the `owner`, the `project`, the
    `test_name` and the grant instant, with a countdown to the expiry that ticks once a second and
    **goes back up** when activity renews the lease (`PROJECT.md` D8) — verified against a running
@@ -210,7 +229,13 @@ Design work lives in [`DESIGN.md`](./DESIGN.md); the brief that produced the fir
     prune action. **Both the exemption and the policy now exist on the host, and neither is on this
     surface.** The exemption is the `Keep` flag (`PROJECT.md` D33, #234): per
     `<project>/<test_name>`, in a file of the host's own outside the artifact tree, read and set over
-    `list_kept_tests` and `set_kept_tests` here and from `rover keep`. The policy is
+    `list_kept_tests` and `set_kept_tests` here and from `rover keep`. **A *named* delete is on this
+    surface now and the untargeted prune still is not** (2026-09-09, #276):
+    `delete_archived_test` joined `PANEL_METHODS` with the `Remove` control beside the `Keep` tick
+    (item 5, `PROJECT.md` D43, R51 phase 2), and what admits it where `sweep_archive` is refused is
+    D42's distinction rather than a softer reading of the same risk — one test by name, with the
+    runs and the bytes stated before it fires, against a policy deciding what goes across every
+    project on the host. The policy is
     `ROVER_ARTIFACTS_BUDGET_MB` and `ROVER_ARTIFACTS_MAX_AGE_DAYS` with `sweep_archive` behind them
     (D34–D36, #238) — and that row is deliberately **not** on `PANEL_METHODS`: it deletes an
     operator's runs permanently, so a browser is not where it belongs while D27's role model is

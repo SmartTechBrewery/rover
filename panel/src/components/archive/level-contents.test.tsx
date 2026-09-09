@@ -1,8 +1,24 @@
 import type { ArchiveLevel } from '@panel/archive/archive-levels.js';
 import type { ArchiveEntry } from '@panel/archive/archive-listing.js';
+import type { TestRemoval } from '@panel/archive/delete-archived-test.js';
+import type { PinState } from '@panel/archive/pinned-tests.js';
 import { formatInstant } from '@panel/time/instant.js';
 import { render, screen } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+
+/*
+ * The session the strip's second control reads — it attributes its call with the signed-in identity
+ * and asks nothing at all until somebody presses it (`remove-control.tsx`). Everything this file
+ * asserts about that control is about the *strip*; what the control does with an answer is
+ * `remove-control.test.tsx`'s.
+ */
+vi.mock('@panel/session/session-provider.js', () => ({
+	useSession: () => ({
+		state: { status: 'signed-in', identity: { identifier: 'karolina', displayName: 'Karolina' } },
+		call: async () => await new Promise(() => undefined),
+	}),
+}));
+
 import { LevelContents } from './level-contents.js';
 
 function directory(name: string, childCount: number | null = 3): ArchiveEntry {
@@ -45,6 +61,114 @@ function readOnly(container: HTMLElement): void {
 	expect(container.querySelectorAll('a')).toHaveLength(0);
 	expect(container.querySelectorAll('button')).toHaveLength(0);
 }
+
+/**
+ * The header strip — **a name at one end and the two controls at the other** (`docs/DESIGN.md` §9,
+ * #276).
+ *
+ * `readOnly` above still holds for every level drawn without them, which is the arrangement the
+ * screen relies on: this card draws six different levels and only a test name's is about one test,
+ * so it is handed a control there and at no other depth (`routes/archive.tsx`, `levelRemoval`).
+ */
+describe('the header strip', () => {
+	const UNPINNED: PinState = { checked: false, toggle: () => undefined };
+	const REMOVAL: TestRemoval = {
+		project: 'checkout-app',
+		testName: 'login-flow',
+		runs: 42,
+		kept: false,
+		card: 'test',
+	};
+
+	function withControls(path: readonly string[] = ['checkout-app', 'login-flow']) {
+		return render(
+			<LevelContents
+				level={listed(...RUNS)}
+				onRemoveSettled={() => undefined}
+				path={path}
+				pin={UNPINNED}
+				removal={REMOVAL}
+			/>,
+		);
+	}
+
+	/** The strip is the card's first child — the bordered row above the body. */
+	function strip(container: HTMLElement): HTMLElement {
+		return container.querySelector('section > div:first-child') as HTMLElement;
+	}
+
+	it('carries the name, then the tick, then Remove — in that order', () => {
+		const { container } = withControls();
+		const row = strip(container);
+
+		expect(row.querySelector('h2')?.textContent).toBe('login-flow');
+		expect(row.querySelectorAll('input[type="checkbox"]')).toHaveLength(1);
+		expect(
+			[...row.querySelectorAll('input[type="checkbox"], button')].map((node) => node.tagName),
+		).toEqual(['INPUT', 'BUTTON']);
+		expect(screen.getByRole('button', { name: 'Remove test login-flow' }).textContent).toBe(
+			'Remove',
+		);
+	});
+
+	/*
+	 * **One `shrink-0` box around the pair**, which is what keeps the heading's own wrap: two children
+	 * of the outer row would each negotiate their width against a 40-character name, and the tick
+	 * would be the one that lost it (§9's *the sentence did not fit* finding, in the other direction).
+	 */
+	it('keeps the pair together and leaves the heading the wrap', () => {
+		const { container } = withControls();
+		const row = strip(container);
+
+		const pair = row.querySelector('div:has(> button)');
+		expect(pair?.className).toContain('shrink-0');
+		expect(pair?.querySelectorAll('input[type="checkbox"], button')).toHaveLength(2);
+		expect(row.querySelector('div.min-w-0')?.querySelector('h2')).not.toBeNull();
+	});
+
+	// A 40-character name is the length that forced §9's popover, and the strip has to survive it
+	// with two controls in it: the name wraps and neither control is pushed out of the card.
+	it('survives a 40-character name in the heading', () => {
+		const { container } = withControls([
+			'checkout-app',
+			'20260830T170501Z-issue-112-9f1c2ab4-long',
+		]);
+
+		expect(container.querySelector('h2')?.className).toContain('break-words');
+		expect(screen.getByRole('button', { name: 'Remove test login-flow' }).className).toContain(
+			'shrink-0',
+		);
+	});
+
+	/*
+	 * **No control at a depth that is not about a test**, and this card draws four such depths. The
+	 * decision is the screen's (`levelRemoval`), so what is asserted here is that a card handed
+	 * nothing draws nothing — the rule `force-release-control.tsx` records: no branch for a control
+	 * that cannot exist.
+	 */
+	it('draws neither control at a depth it was handed nothing for', () => {
+		const { container } = showing([], listed(directory('checkout-app')));
+
+		expect(container.querySelectorAll('button')).toHaveLength(0);
+		expect(container.querySelectorAll('input')).toHaveLength(0);
+	});
+
+	// And the tick without the control is a real arrangement: it is a group's card in the groups
+	// view, where the tick writes an array and `Remove` is phase 3's (§9's phase boundary).
+	it('draws the tick without Remove when it is handed only the tick', () => {
+		const { container } = render(
+			<LevelContents
+				level={listed(...RUNS)}
+				path={['checkout-app', 'a-group']}
+				pin={UNPINNED}
+				pinScope="group"
+			/>,
+		);
+
+		expect(container.querySelectorAll('input[type="checkbox"]')).toHaveLength(1);
+		expect(container.querySelectorAll('button')).toHaveLength(0);
+	});
+});
 
 describe('the root', () => {
 	it('names itself `Archive` and lists one row per project', () => {

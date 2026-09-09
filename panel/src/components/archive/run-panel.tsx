@@ -1,3 +1,4 @@
+import type { DeleteArchivedTestAnswer, TestRemoval } from '@panel/archive/delete-archived-test.js';
 import {
 	type ArchivedDeviceInfo,
 	type DeviceFacts,
@@ -9,6 +10,7 @@ import { decomposeRunName } from '@panel/archive/run-identity.js';
 import type { ArchivedTestDescription } from '@panel/archive/test-description.js';
 import { ArchiveCheckbox } from './archive-checkbox.js';
 import { CardHeading, ContentsCard, Field } from './contents-card.js';
+import { RemoveControl } from './remove-control.js';
 
 /**
  * The run's `<serial>` **together with the state of the answer it was read out of**.
@@ -68,6 +70,8 @@ export function RunPanel({
 	device,
 	description,
 	pin,
+	removal,
+	onRemoveSettled,
 }: {
 	readonly run: readonly string[];
 	/** The run directory's `onlyChild`, with the state of the answer it came from — {@link RunSerial}. */
@@ -90,6 +94,21 @@ export function RunPanel({
 	 * kept* about a test the panel cannot ask about (`docs/DESIGN.md` §9).
 	 */
 	readonly pin: PinState | null;
+	/**
+	 * The `Remove` control, bound to **the test this run belongs to** rather than to the run — the
+	 * same scope the tick above is, and for the same reason (`remove-control.tsx`, D43).
+	 *
+	 * A run is one lease's output and the archive has no delete of one: what the host takes is the
+	 * test directory with every run filed under it, which is why the confirmation opened from here
+	 * says in as many words that the run on screen goes with the rest
+	 * ({@link TestRemoval.card}).
+	 *
+	 * `undefined` where the screen has no scope to hand over — it is the screen that owns the
+	 * arithmetic (`routes/archive.tsx`, `levelRemoval`), exactly as it owns the tick's.
+	 */
+	readonly removal?: TestRemoval;
+	/** What a settled delete is reported to — the screen, never this card (`routes/archive.tsx`). */
+	readonly onRemoveSettled?: (answer: DeleteArchivedTestAnswer, removal: TestRemoval) => void;
 }) {
 	const name = run.at(-1) ?? '';
 	const identity = decomposeRunName(name);
@@ -98,11 +117,17 @@ export function RunPanel({
 		<ContentsCard
 			header={
 				/* `Run Details` is a fixed two words, so unlike a level's name it cannot crowd the
-				   control — but the row is the same one, because the strip must not differ between
-				   the two cards that carry this checkbox. */
+				   controls — but the row is the same one, down to the `shrink-0` wrapper around the
+				   pair, because the strip must not differ between the two cards that carry them
+				   (`level-contents.tsx`, which records why the wrapper is one box). */
 				<div className="flex items-center justify-between gap-4">
 					<CardHeading>Run Details</CardHeading>
-					{pin === null ? null : <ArchiveCheckbox pin={pin} />}
+					<div className="flex shrink-0 items-center gap-3">
+						{pin === null ? null : <ArchiveCheckbox pin={pin} />}
+						{removal === undefined || onRemoveSettled === undefined ? null : (
+							<RemoveControl onSettled={onRemoveSettled} removal={removal} />
+						)}
+					</div>
 				</div>
 			}
 		>

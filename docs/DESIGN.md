@@ -2968,6 +2968,15 @@ and every directory below the `<serial>`, and those addresses pass *through* a t
 about one, so they carry no checkbox. `ContentsCard`'s header being a slot rather than a title
 (#133) is what makes this an argument to that slot instead of a fourth card component.
 
+**And the strip is no longer the tick's alone** — corrected in place rather than left to be
+inferred (`ai/RULES.md` §1, #276). It read as though that end of the strip held one control, which
+was true of every state until `Remove` landed beside it (below). What is unchanged is the *place*:
+the name at one end, the controls at the other, and the same row on both of the two cards that
+carry them. What changed is that the tick is now the **first** of two children of a single
+`shrink-0` box, so the pair moves together and the heading keeps the `min-w-0` wrap a 40-character
+name needs. The tick's own behaviour, its sentence, its popover and the three levels it is drawn at
+are all untouched by that.
+
 **A group's tick is the same flag over all of its tests, and part-kept is a real state.** Pressing
 it keeps every test in that group — in **one** request carrying every one of them, never one per
 test, which is the shape `set_kept_tests` takes an array for; pressing it again, from kept, stops
@@ -3029,7 +3038,146 @@ clickable* was about **navigation**: the tree is the one way to move through the
 offering a second route was the objection. This checkbox navigates nowhere. It is the Devices
 screen's force-release shape instead — an operator control inside the card that owns the data it
 acts on (§7) — and the assertions that stood are the ones that matter: no `<a>` and no `<button>` on
-that card, in any state.
+that card, in any state. **`Remove` is a `<button>` and does not reverse it further** (below): it
+opens a confirmation and is not a second route through the archive, so *this card moves nobody
+anywhere* is still the claim and still holds.
+
+### `Remove` — the control beside the tick, on the two cards a test's tick is on
+
+A test the operator is finished with, taken with every run filed under it (D43, R51 phase 2, #276).
+It is the Archive screen's second operator action, after the `Keep` tick, and the panel's fourth
+overall.
+
+**Where it is: beside `Keep`, at the same end of the same strip, on the two cards whose tick is
+about a test** — a test name's card in both views, and a run's `Run Details`. The tick comes first
+and `Remove` is outermost, because the safe control is the one under the pointer on the way to the
+other and §5 puts the destructive one at the end of the strip. The pair is wrapped in one
+`flex items-center gap-3 shrink-0` box: two children of the outer row would each negotiate their
+width against the name, and the tick would be the one that lost it.
+
+**A group's card carries the tick and no `Remove` in this phase, and that is a phase boundary
+rather than a gap.** A group's tick writes one array in one request; a group's `Remove` is the
+surgical run-by-run walk D43 settles, which is phase 3's. So the two controls are deliberately not
+yet on the same set of cards, and nothing on a group's card hints at one that is not there — no
+disabled control and no explanation, for the reason §10 records about a disabled affordance: it
+promises a press that is coming and withholds it.
+
+**It is the badge treatment §10 settled, not a new one.** `BADGE_SHAPE` and `BADGE_TYPE` out of
+`header-badge.tsx`, so this control and the Projects card's cannot drift apart by a border width;
+the `error` accent on the glyph and the words with the frame `outline-variant` until the pointer is
+on it, and **never a fill**; `Trash2` at 14px and `aria-hidden`, because the words are already
+there. §10 carries the reasoning for every one of those and it is not relitigated here. **Its
+accessible name carries the test** — `Remove test statistics-deliveries` — because the visible word
+is `Remove` on every card and on both of the two that draw it.
+
+**The confirmation is the *same component* as the Projects screen's, not the same description of
+one.** §7's frame — the overlay, the `aria-modal` card, the `TriangleAlert` header, the `<dl>` of
+labelled fields, the `Gavel` sentence, the polite *nothing came back* line, and the footer with the
+recessive confirm beside the prominent `Cancel` — was extracted out of `delete-project-dialog.tsx`
+into `panel/src/components/confirm-destructive-dialog.tsx` when this landed, and both dialogs render
+it. That is what makes *two destructive actions in one product get one way of asking* true in code
+rather than only in prose, and the Projects dialog's own suite passing unmodified is the guard on
+the extraction. Everything §7 records holds unchanged: `Cancel` filled and prominent with the
+destructive control recessive, a `secondary-container` header rather than red, `Escape` cancels,
+focus lands on `Cancel`, there is no focus trap, and the backdrop is not a control.
+
+**What it says, in numbers** — §10's departure from §7's dialog, one level down, and **no host read
+was added for it** beyond the one measurement:
+
+| The field | What it says |
+| --- | --- |
+| `PROJECT` | the archive's first component, monospace and verbatim |
+| `TEST` | its second — the test directory's own name |
+| `RUNS` | `42 runs`, `1 run`, **`none`**, or *the host cannot say* |
+| `ON DISK` | `4.0 MB`, or `at least 4.0 MB` for a truncated walk, or *nothing is filed here*, or *the host cannot say* |
+| `KEPT` | `yes`, `no`, or *the host cannot say* |
+
+- **The four `measure_archive` readings must not render alike** (D6), and that mapping is
+  `archive-size.ts`'s own (`sizeFieldReading`) rather than a second copy of the Projects dialog's:
+  a figure, a lower bound, *there is nothing at this address* and *the host could not measure it*
+  are four different facts, and only the third is what `0 B` is a true claim about.
+- **`RUNS` is `null` rather than `0` wherever nothing on screen can count**, and the two must not
+  read alike: *no runs* and *nobody has counted* are different things to be told before confirming
+  a permanent delete. The figure is the `childCount` the project's own listing carries for that
+  test, so it costs no request — and in the groups view it is *the host cannot say*, because that
+  view lists nothing of the archive above a run and the count on a group's row is the runs of this
+  test **in this group**, which would understate what the delete takes.
+- **`KEPT` is stated even when it is `no`**, because the sentence beside these fields says a marked
+  test goes anyway (D35 as amended) and a reader has to be able to see the clause is not about
+  them. A kept set the panel could not read says *the host cannot say* and never `no` — the same
+  reason no tick is drawn then.
+- **The one read is made when the dialog opens**, not per row: a screen full of rows asks the host
+  nothing extra until somebody presses a control, which is what keeps *one request on navigation*
+  true. A second `measure_archive` for a scope the badge may already have measured is accepted,
+  exactly as the Projects dialog accepts one — the hook's cache is per instance and the dialog is
+  transient.
+- The recessive control reads `Remove test`, and `Removing…` while the ask is out — §5's pending
+  state, and never a spinner.
+
+**The sentence, unsoftened**: *this removes every run of this test and everything filed under them,
+permanently. There is no undo. A test marked `Keep` goes with it.* Opened from a run's card, one
+further clause: *the run you are looking at is one of them.* That clause is the whole of what the
+two cards say differently, and it is the answer to D43's trap — `Remove` on a run's card takes the
+**test**, because it stands over what the tick beside it stands over.
+
+### What a `Remove` settles, and where the screen lands
+
+**Four outcomes that must not collapse into one**, plus a fifth case that is not an outcome — §7's
+arrangement and D43's four. Each is ordinary text in one polite live region **above the content
+area**, with no colour of alarm and no icon of alarm.
+
+| The answer | What the line says |
+| --- | --- |
+| `deleted` | the test is gone with every run filed under it, and **what it came to**: the bytes freed, and that its `Keep` mark went too |
+| `not-found` | there was nothing at that address and no `Keep` mark named it, so **nothing was deleted**, and the screen was out of date |
+| `partial` | some of it could not be removed, **naming which half stayed**; the rest went, and this host's log says what stopped it |
+| `refused` | a lease is filing into it right now, so **nothing at all was touched**; wait for it, or force-release the device holding it first |
+
+- **The region is above the content area, which here means above the tree as well as above the
+  card** — the one place this differs from §10's arrangement, and it differs because of what a
+  settled delete does to this screen: three of the four outcomes move the selection, so a line
+  inside either column would go with the thing it was about.
+- **`not-found` is not a delete of zero bytes**, and a `partial` where **neither** half went is a
+  fifth wording rather than the `partial` wording with an empty referent: the host answers `partial`
+  the moment either half fails and puts no floor on how many went, so *the rest went, with 0 B back*
+  would claim a removal where the host's own audit line says `NOT removed` twice.
+- **It stays until dismissed.** This screen does not poll, so nothing else would clear it — which
+  makes the dismiss control the whole of how it goes.
+- **The fifth case, and it is not an outcome: the request that reached nothing.** No answer, an
+  `error` envelope, or a result the panel cannot read — all three deleted nothing, so the dialog
+  **stays open** with the control usable again, says exactly that, and **nothing is said above the
+  content area**. The panel never reports a deletion it did not get. A session the host refused is
+  not this case either: the bounce to *access ended* is already happening, and the panel says
+  nothing over it.
+
+**The screen survives deleting the address it is looking at.** On `deleted`, `partial` and
+`not-found` — all three settled, and all three meaning the address the reader is on may not exist —
+the screen moves the selection onto the **test's parent** (the project in the `All` view, the group
+in the groups view) with `replace`, so Back does not return to an address the host now refuses. From
+a run's card that is still the project: the run's own parent is the test that just went. This is the
+panel's first programmatic navigation; every other move on this screen is a `Link` in the tree,
+because the address *is* the selection.
+
+**And it re-reads rather than assuming.** `useArchiveLevels` asks `list_archive` again for every
+level the screen still draws, so the parent listing is the host's answer rather than the panel's
+edit of what it had — editing the array in hand would draw a listing nothing on the host ever
+answered with, and it would be wrong in both directions: a `partial` may have left the directory
+exactly where it was, and a `not-found` proves the listing was already stale. **A `refused` does
+neither**, and that is not an inconsistency: nothing at all was touched, so what is filed is exactly
+what the screen already shows. **This is not a refresh control and does not become one** — it
+re-reads on a settled delete and on nothing else, which leaves *no polling, and no refresh control*
+above intact.
+
+The **actor** on the wire is the signed-in user's `identifier`, and there is no field for it on the
+dialog. D28 forbids *the host* deriving attribution from whoever authenticated; a client saying who
+it is, is the opposite of that, and it is what makes the daemon's audit line name a person rather
+than a browser. Never a constant like `panel`.
+
+**There is no Stitch screen for either the control or its confirmation, and that is deliberate**
+(§1, §11's list): by the time this was built §7 had settled the dialog's frame and §10 had settled
+this exact control's shape for a Projects card, so a design round would have re-derived both and
+settled only *which five rows the `<dl>` carries*, which is a table rather than a screen. So it is
+built from this document, and what it settled is written down here.
 
 ---
 

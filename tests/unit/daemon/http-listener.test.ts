@@ -549,6 +549,14 @@ describe('only the panel’s methods are reachable, and no table gained a row', 
 		['tap'],
 		['release_device'],
 		['status'],
+		/*
+		 * **The neighbour of the two deletes that stays off the list**, asserted rather than only
+		 * named in the paragraphs beside them (§9.4, #238, #276): what admits `delete_project` and
+		 * `delete_archived_test` is that each is *named and bounded*, and the sweep is a policy run
+		 * across every project on the host. A row added here by accident would be an untargeted,
+		 * irreversible deletion reachable from a browser tab.
+		 */
+		['sweep_archive'],
 	])('refuses %s before dispatch, with the closed vocabulary', async (method) => {
 		registerFakeBackend();
 		await withStore();
@@ -693,6 +701,36 @@ describe('only the panel’s methods are reachable, and no table gained a row', 
 			type: 'result',
 			id: 'req-1',
 			result: { outcome: 'not-registered' },
+		});
+	});
+
+	it('reaches delete_archived_test, the control that calls it having landed', async () => {
+		registerFakeBackend();
+		await withStore();
+		const daemon = await startWithHttp();
+
+		const answer = await call(daemon, 'delete_archived_test', {
+			project: 'checkout',
+			testName: 'the checkout flow',
+			actor: 'alice',
+		});
+
+		/*
+		 * On the allowlist since #276, and it is the **fourth action** on it after
+		 * `force_release_device`, `set_kept_tests` and `delete_project` (D43, D27): it joined this
+		 * transport with the `Remove` control on the two Archive cards a test's tick is on, exactly
+		 * as `delete_project` joined it with the confirmation dialog that calls it (R50, R51). What
+		 * admits it where `sweep_archive` is still refused is D42's distinction one level down —
+		 * named and bounded, one test's own directory — rather than a softer reading of the same
+		 * risk, and it is a *narrower* privilege than the row above it: there is no hook file at
+		 * this address at all. Nothing pre-creates the archive root or the kept-tests store, so
+		 * `not-found` and not a refusal is what proves it reached the handler: nothing at all was
+		 * there to reach, which is a *different arm* from a delete of zero bytes.
+		 */
+		expect(envelopeOf(answer)).toMatchObject({
+			type: 'result',
+			id: 'req-1',
+			result: { outcome: 'not-found' },
 		});
 	});
 
