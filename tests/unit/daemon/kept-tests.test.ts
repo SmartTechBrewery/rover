@@ -19,11 +19,13 @@ import {
 	type KeptTest,
 	keptTestKey,
 	MAX_KEPT_TESTS,
+	pruneKeptTests,
 	readKeptTests,
 	resolveKeptTestsPath,
 	temporaryKeptTestsPath,
 	withKeptTestsLock,
 	withoutProject,
+	withoutTest,
 	writeKeptTests,
 } from '@/daemon/kept-tests.js';
 import {
@@ -344,6 +346,130 @@ describe('withoutProject', () => {
 		expect(next.tests).toEqual([
 			{ project: 'storefront', testName: 'alpha', keptBy: 'bob', keptAt: AT },
 		]);
+	});
+});
+
+describe('withoutTest', () => {
+	it('takes exactly the one pair and counts it', () => {
+		const next = withoutTest(
+			[kept('rover', 'alpha'), kept('rover', 'beta'), kept('storefront', 'alpha')],
+			'rover',
+			'alpha',
+		);
+
+		// Both fields, on the same entry: `test_name` alone is not an identity (D22), so the same
+		// test name under another project keeps its exemption and a sibling test keeps its own.
+		expect(pairsOf(next.tests)).toEqual(['rover/beta', 'storefront/alpha']);
+		expect(next.removed).toBe(1);
+	});
+
+	it('removes nothing, and says so, for a pair it does not hold', () => {
+		const held = [kept('rover', 'alpha')];
+
+		expect(withoutTest(held, 'rover', 'beta')).toEqual({ tests: held, removed: 0 });
+		expect(withoutTest(held, 'storefront', 'alpha')).toEqual({ tests: held, removed: 0 });
+	});
+
+	it('matches the component exactly, with nothing prefix-shaped and no rewriting', () => {
+		// The entries were written from what `list_archive` answered, so the string in the store is
+		// the directory's own name — `pathSegment` near either side would be a second idea of
+		// identity in the one place the store's whole meaning is the directory's name (D33).
+		const held = [kept('rover', 'checkout flow'), kept('rover', 'checkout flow-2')];
+
+		expect(pairsOf(withoutTest(held, 'rover', 'checkout flow').tests)).toEqual([
+			'rover/checkout flow-2',
+		]);
+	});
+});
+
+describe('pruneKeptTests, the one routine both deletes run', () => {
+	it('removes what the predicate drops and reports removed with the count', async () => {
+		await writeKeptTests(path, [kept('rover', 'alpha'), kept('storefront', 'alpha')]);
+
+		const pruned = await pruneKeptTests(
+			path,
+			(tests) => withoutTest(tests, 'rover', 'alpha'),
+			() => {
+				throw new Error('nothing should have been warned about');
+			},
+		);
+
+		expect(pruned).toEqual({ part: 'removed', removed: 1 });
+		expect(pairsOf(await readKeptTests(path))).toEqual(['storefront/alpha']);
+	});
+
+	it('answers absent and does not rewrite a store with nothing to remove', async () => {
+		await writeKeptTests(path, [kept('rover', 'alpha')]);
+		const before = await readFile(path, 'utf8');
+
+		const pruned = await pruneKeptTests(
+			path,
+			(tests) => withoutTest(tests, 'rover', 'never-kept'),
+			() => undefined,
+		);
+
+		// Not a rewrite of an unchanged document: this delete has no business touching a file it
+		// removed nothing from.
+		expect(pruned).toEqual({ part: 'absent', removed: 0 });
+		expect(await readFile(path, 'utf8')).toBe(before);
+	});
+
+	it('answers failed and leaves a store it cannot read byte-identical', async () => {
+		await writeFile(path, '{ not json', 'utf8');
+		const warned: string[] = [];
+
+		const pruned = await pruneKeptTests(
+			path,
+			(tests) => withoutTest(tests, 'rover', 'alpha'),
+			(line) => warned.push(line),
+		);
+
+		// `set_kept_tests`' own promise: resetting the file would delete every exemption on the
+		// host to make one call succeed.
+		expect(pruned).toEqual({ part: 'failed', removed: 0 });
+		expect(await readFile(path, 'utf8')).toBe('{ not json');
+		// And the path is said on the host, which is the one place it may be (D19).
+		expect(warned).toHaveLength(1);
+		expect(warned[0]).toContain(path);
+	});
+
+	it('answers absent for a store that is not there at all', async () => {
+		expect(
+			await pruneKeptTests(
+				path,
+				(tests) => withoutTest(tests, 'rover', 'alpha'),
+				() => undefined,
+			),
+		).toEqual({ part: 'absent', removed: 0 });
+	});
+
+	/*
+	 * **It runs inside the lock `set_kept_tests` writes under**, which is the whole reason it lives
+	 * in this module: a prune and a press that interleaved would each write a document the other
+	 * had not seen, with both callers answered success.
+	 */
+	it('does not interleave with another read-modify-write of the same store', async () => {
+		await writeKeptTests(path, [kept('rover', 'alpha'), kept('storefront', 'alpha')]);
+
+		const adding = withKeptTestsLock(path, async () => {
+			const held = await readKeptTests(path);
+			await Promise.resolve();
+			await writeKeptTests(
+				path,
+				applyKeep(held, [{ project: 'rover', testName: 'beta' }], true, {
+					actor: 'alice',
+					at: AT,
+				}),
+			);
+		});
+		const pruning = pruneKeptTests(
+			path,
+			(tests) => withoutTest(tests, 'storefront', 'alpha'),
+			() => undefined,
+		);
+		await Promise.all([adding, pruning]);
+
+		expect(pairsOf(await readKeptTests(path))).toEqual(['rover/alpha', 'rover/beta']);
 	});
 });
 

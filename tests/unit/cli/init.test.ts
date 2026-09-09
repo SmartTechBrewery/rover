@@ -401,6 +401,10 @@ describe('the generated ROVER.md', () => {
 		// entries, because an operator named it. An agent calling that would be destroying somebody
 		// else's evidence in one request.
 		'delete_project',
+		// And removing one archived test at the finer address (D43, #272), for the same reason in
+		// the same key: the runs under a test name are what *other* agents' leases wrote, since
+		// `test_name` is deliberately not unique (D22).
+		'delete_archived_test',
 		// The operator's `Keep` flag on the host's own archive (D33, #234). Not an agent's to
 		// decide at all — one that could untick a test would be clearing the exemption on
 		// somebody else's run — and its read would enumerate what every other agent has kept.

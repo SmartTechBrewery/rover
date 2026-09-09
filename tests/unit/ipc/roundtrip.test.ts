@@ -54,6 +54,10 @@ function statusHandlers(overrides: Partial<IpcHandlers> = {}): IpcHandlers {
 		// row's own reason: with no projects root, no archive and no kept-tests store, a delete
 		// reaches nothing at all — which is deliberately not a success that removed nothing.
 		delete_project: () => ({ outcome: 'not-registered' }),
+		// And the row that deletes one archived test, whose cheapest real answer is `not-found`
+		// for that row's own reason: with no archive and no kept-tests store, that address reaches
+		// nothing at all — which is deliberately not a success that removed nothing either.
+		delete_archived_test: () => ({ outcome: 'not-found' }),
 		// The two host-tooling rows: a host that reports no programs and an install nothing offers
 		// are the cheapest real answers, and these suites register no backend at all.
 		list_host_tooling: () => ({ tools: [] }),

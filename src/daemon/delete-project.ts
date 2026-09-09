@@ -19,13 +19,18 @@
  * **Three halves, and the order is load-bearing.** The registration goes first, so a project stops
  * starting services and running teardown even if the archive half then fails — a `partial` where
  * the registration went is the direction that leaves the host doing less. Then this project's own
- * subtree of the archive, through `./archive-sweep.ts`'s `removeProject`: a **third trigger on the
- * deletion path that already exists** rather than a second place the archive is removed, so it
+ * subtree of the archive, through `./archive-sweep.ts`'s `remove([project])`: a **third trigger on
+ * the deletion path that already exists** rather than a second place the archive is removed, so it
  * inherits that module's per-root serialisation, its `settle()` (which keeps a `process.exit` out
  * of the middle of an `rm`) and its shared `sizeOfTree`. Then the kept-tests store, through
- * `./kept-tests.ts`'s `withKeptTestsLock` — the **same** lock `set_kept_tests` writes under, not a
- * second one, because two chains on one path would serialise each writer against itself and
- * neither against the other.
+ * `./kept-tests.ts`'s `pruneKeptTests` — which runs inside the **same** lock `set_kept_tests`
+ * writes under, not a second one, because two chains on one path would serialise each writer
+ * against itself and neither against the other.
+ *
+ * **The two shared halves are shared with `./delete-archived-test.ts`** (D43, #272), which deletes
+ * at a finer address: one `ArchiveSweeper.remove(address)` and one `pruneKeptTests`, differing
+ * only in the address and in the predicate saying which entries go. Nothing about what this
+ * handler does changed when they were extracted, which is what its own suite is the guard on.
  *
  * **An explicit delete overrides `Keep`.** D35 makes a kept test exempt from the two retention
  * *bounds*, absolutely; an operator naming one project is not one of those bounds, and the same
@@ -46,8 +51,8 @@
  * request is a name *this host answered with*: the identifier `list_projects` names a registration
  * by, or the component the archive filed a project's runs under. Each half looks it up in its own
  * store and neither rewrites it — the hook file by exact string (`projectHooksPath`), the archive
- * subtree by that component verbatim (`./archive-sweep.ts`'s `removeProject`, which validates it
- * and never re-runs `pathSegment` over it, that function not being idempotent), the kept entries
+ * subtree by that component verbatim (`./archive-sweep.ts`'s `remove`, which validates it and
+ * never re-runs `pathSegment` over it, that function not being idempotent), the kept entries
  * by exact match (`./kept-tests.ts`'s `withoutProject`, over a store whose components are already
  * the archive's own spelling). For a registered identifier the two names collapse, `pathSegment`
  * being the identity on one, and they come apart only for a caller string the archive rewrote.
@@ -82,13 +87,7 @@ import type {
 } from '../ipc/methods.js';
 import { pathSegment } from './archive-path.js';
 import type { ArchiveSweeper } from './archive-sweep.js';
-import {
-	type KeptTest,
-	readKeptTests,
-	withKeptTestsLock,
-	withoutProject,
-	writeKeptTests,
-} from './kept-tests.js';
+import { pruneKeptTests, withoutProject } from './kept-tests.js';
 import type { Lease } from './leases.js';
 import { projectHooksPath } from './project-hooks.js';
 
@@ -133,8 +132,12 @@ export function createDeleteProjectHandler(options: DeleteProjectOptions): Delet
 			}
 
 			const registration = await removeRegistration(options.projectsRoot, params.project, warn);
-			const archive = await options.sweeper.removeProject(params.project);
-			const keptTests = await pruneKeptTests(options.keptTestsPath, params.project, warn);
+			const archive = await options.sweeper.remove([params.project]);
+			const keptTests = await pruneKeptTests(
+				options.keptTestsPath,
+				(tests) => withoutProject(tests, params.project),
+				warn,
+			);
 
 			const report = {
 				registration,
@@ -207,44 +210,6 @@ async function removeRegistration(
 		warn(unremovedRegistrationWarning(path, error));
 		return 'failed';
 	}
-}
-
-/**
- * Take every entry naming this project out of the store, inside the lock `set_kept_tests` writes
- * under.
- *
- * **A store that will not read is `failed` and is never overwritten**, which is `set_kept_tests`'
- * own promise for its own reason: resetting the file would delete every exemption on the host to
- * make one call succeed. A store with no entry for this project is `absent` and is not rewritten
- * either — there is nothing to write, and rewriting it would touch a document this delete has no
- * business in.
- */
-async function pruneKeptTests(
-	path: string,
-	project: string,
-	warn: (message: string) => void,
-): Promise<{ readonly part: DeletedPart; readonly removed: number }> {
-	return withKeptTestsLock(path, async () => {
-		let held: KeptTest[];
-		try {
-			held = await readKeptTests(path);
-		} catch (error) {
-			warn(unremovedKeptTestsWarning(path, error));
-			return { part: 'failed' as const, removed: 0 };
-		}
-
-		const next = withoutProject(held, project);
-		if (next.removed === 0) {
-			return { part: 'absent' as const, removed: 0 };
-		}
-		try {
-			await writeKeptTests(path, next.tests);
-		} catch (error) {
-			warn(unremovedKeptTestsWarning(path, error));
-			return { part: 'failed' as const, removed: 0 };
-		}
-		return { part: 'removed' as const, removed: next.removed };
-	});
 }
 
 /** What one half's fate reads as in a sentence a person is meant to act on. */
@@ -337,19 +302,6 @@ function unremovedRegistrationWarning(path: string, error: unknown): string {
 		`${codeOf(error) ?? 'unknown error'}. The project is still registered on this host, and ` +
 		`the answer said only that this half did not go — no path and no reason leaves it.`
 	);
-}
-
-/** The same, for the store the exemptions live in. A store that will not read is never reset. */
-function unremovedKeptTestsWarning(path: string, error: unknown): string {
-	return (
-		`The kept-tests store at ${JSON.stringify(path)} was not pruned: ${messageOf(error)} ` +
-		`It was left exactly as it is — a store this host cannot read is never overwritten to ` +
-		`make one call succeed — and no path and no reason leaves this host.`
-	);
-}
-
-function messageOf(error: unknown): string {
-	return error instanceof Error ? error.message : String(error);
 }
 
 /** The errno of a filesystem failure, or `null` for anything that is not one. */

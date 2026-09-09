@@ -34,14 +34,20 @@
  * (D38): a store that will not parse now stops a pass nobody would otherwise notice was due.
  * {@link MAX_KEPT_TESTS} bounds the *document*, not the archive.
  *
- * **There are two writers of this document now, and the lock they share lives here** (D42, #271).
- * `set_kept_tests` toggles the flag; `delete_project` takes every entry naming one project, because
- * an operator deleting a project is not one of the two retention bounds D35 exempts a kept test
- * from, and a tick that outlived the directory it names would leave the store pointing at nothing.
- * Both are read-modify-write of the whole file, so {@link withKeptTestsLock} is declared in this
- * module rather than privately in either handler: two chains keyed on one path would serialise
- * each writer against itself and neither against the other, which silently drops one of two
- * overlapping writes with both callers answered success.
+ * **There are three writers of this document now, and the lock they share lives here** (D42, D43,
+ * #271, #272). `set_kept_tests` toggles the flag; `delete_project` takes every entry naming one
+ * project and `delete_archived_test` takes the one entry naming one test, because an operator
+ * deleting either is not one of the two retention bounds D35 exempts a kept test from, and a tick
+ * that outlived the directory it names would leave the store pointing at nothing. All three are
+ * read-modify-write of the whole file, so {@link withKeptTestsLock} is declared in this module
+ * rather than privately in any handler: two chains keyed on one path would serialise each writer
+ * against itself and neither against the other, which silently drops one of two overlapping writes
+ * with both callers answered success.
+ *
+ * **The two deletes' pruning is one routine here too** ({@link pruneKeptTests}), and for the same
+ * reason: what varies between them is *which* entries go, which is a predicate, while what a store
+ * that will not read means and when the file is left untouched are promises both have to keep
+ * identically.
  */
 
 import { randomUUID } from 'node:crypto';
@@ -52,6 +58,7 @@ import { z } from 'zod';
 import {
 	ArchivePathSegmentSchema,
 	AttributionStringSchema,
+	type DeletedPart,
 	type KeptTestRef,
 	MAX_KEPT_TESTS,
 } from '../ipc/methods.js';
@@ -346,6 +353,89 @@ export function withoutProject(
 ): { readonly tests: KeptTest[]; readonly removed: number } {
 	const kept = tests.filter((test) => test.project !== project);
 	return { tests: sortedForStorage(kept), removed: tests.length - kept.length };
+}
+
+/**
+ * The set with one named test's entry gone, and how many that was (D43, #272).
+ *
+ * **Matched on both fields exactly, with no `pathSegment` anywhere near either** —
+ * {@link withoutProject}'s recorded reason, which applies with more force to a pair: the store's
+ * whole meaning is *the directory's name*, and the archive's own rewrite is not idempotent. The
+ * `<project>/<test_name>` pair is the identity because `test_name` alone is not one (D22), so a
+ * different project's identically-named test keeps its exemption untouched.
+ *
+ * The count is `0` or `1` today — {@link readKeptTests} collapses duplicates on the way in and
+ * {@link applyKeep} cannot write a pair twice — and is answered as a number rather than a boolean
+ * so it composes with {@link pruneKeptTests}, whose report is shared with `delete_project`'s
+ * project-wide prune.
+ */
+export function withoutTest(
+	tests: readonly KeptTest[],
+	project: string,
+	testName: string,
+): { readonly tests: KeptTest[]; readonly removed: number } {
+	const kept = tests.filter((test) => test.project !== project || test.testName !== testName);
+	return { tests: sortedForStorage(kept), removed: tests.length - kept.length };
+}
+
+/**
+ * Take whichever entries `select` drops out of the store, inside the lock `set_kept_tests` writes
+ * under — the one pruning routine **both** deletes run (D42, D43, #271, #272).
+ *
+ * It lives here rather than in either handler for {@link withKeptTestsLock}'s own reason one level
+ * up: the two deletes are read-modify-writes of the same document, and two implementations of that
+ * would be two chances to answer differently about one file — one of them rewriting a store the
+ * other would have left alone.
+ *
+ * **A store that will not read is `failed` and is never overwritten**, which is `set_kept_tests`'
+ * own promise for its own reason: resetting the file would delete every exemption on the host to
+ * make one call succeed. **A store with nothing to remove is `absent` and is not rewritten
+ * either** — there is nothing to write, and rewriting it would touch a document this delete has no
+ * business in.
+ *
+ * The one warning that names the path stays on the host, where a path belongs (D19); `warn` is the
+ * caller's so each delete's own sentence says which call left the store as it is.
+ */
+export async function pruneKeptTests(
+	path: string,
+	select: (tests: readonly KeptTest[]) => { readonly tests: KeptTest[]; readonly removed: number },
+	warn: (message: string) => void,
+): Promise<{ readonly part: DeletedPart; readonly removed: number }> {
+	return withKeptTestsLock(path, async () => {
+		let held: KeptTest[];
+		try {
+			held = await readKeptTests(path);
+		} catch (error) {
+			warn(unprunedKeptTestsWarning(path, error));
+			return { part: 'failed' as const, removed: 0 };
+		}
+
+		const next = select(held);
+		if (next.removed === 0) {
+			return { part: 'absent' as const, removed: 0 };
+		}
+		try {
+			await writeKeptTests(path, next.tests);
+		} catch (error) {
+			warn(unprunedKeptTestsWarning(path, error));
+			return { part: 'failed' as const, removed: 0 };
+		}
+		return { part: 'removed' as const, removed: next.removed };
+	});
+}
+
+/**
+ * What the operator is told, on the host, about a store this delete left exactly as it is.
+ *
+ * Names the path, which is exactly what neither delete's answer may carry: the wire says only that
+ * this half did not go, and this is where the diagnosis lives instead (D19).
+ */
+function unprunedKeptTestsWarning(path: string, error: unknown): string {
+	return (
+		`The kept-tests store at ${JSON.stringify(path)} was not pruned: ${describeError(error)} ` +
+		`It was left exactly as it is — a store this host cannot read is never overwritten to ` +
+		`make one call succeed — and no path and no reason leaves this host.`
+	);
 }
 
 function describeError(error: unknown): string {

@@ -147,6 +147,15 @@ const DEVICE_METHODS = ['status', 'list_devices', 'acquire_device', 'release_dev
  * `PANEL_METHODS` yet either — that lands with the screen that calls it, exactly as
  * `force_release_device` did (R35, #122).
  *
+ * `delete_archived_test` is here for the row above's reason in the same key (D43, #272). It is
+ * that action at a finer address — one test's directory, every run filed under it and its `Keep`
+ * entry — and being finer changes nothing about why an agent may not call it: the runs under a
+ * test name are what *other* agents' leases wrote (`test_name` is deliberately not unique, D22),
+ * so a tool here would let one agent destroy the before/after pair another is about to read. It
+ * needs nothing here in any case, its own artifacts having come back as bytes in the verb's own
+ * answer (D19). It is not on `PANEL_METHODS` yet either — that lands with the control that calls
+ * it, exactly as `force_release_device` and `delete_project` did (R35, R50).
+ *
  * The two host-tooling rows are here for a reason of their own, and it is not authority: an agent
  * has nothing to do with them. `list_host_tooling` answers what the **host machine** has
  * installed, in paths on that machine — a question about somebody's laptop rather than about a
@@ -171,6 +180,7 @@ const NOT_YET_EXPOSED = [
 	'measure_archive_groups',
 	'list_projects',
 	'delete_project',
+	'delete_archived_test',
 	'list_kept_tests',
 	'set_kept_tests',
 	'sweep_archive',

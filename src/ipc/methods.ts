@@ -1403,24 +1403,41 @@ export const DeletedPartSchema = z.enum(['removed', 'absent', 'failed']);
 export type DeletedPart = z.infer<typeof DeletedPartSchema>;
 
 /**
+ * The four fields **every** archive delete that reached the disk reports, whatever it was
+ * addressed by (D43, #272).
+ *
+ * Declared once rather than per row because the two deletes are one shape: a subtree of the
+ * archive went or did not, the host's kept-tests store was pruned or was not, and both halves are
+ * a fate plus a number. `delete_project` adds a third half above them — the registration — and
+ * nothing else.
+ */
+const ARCHIVE_DELETION_REPORT = {
+	/** The addressed subtree of the artifact archive. */
+	archive: DeletedPartSchema,
+	/** The entries this delete's address covers in the host's kept-tests store. */
+	keptTests: DeletedPartSchema,
+	/** What the archive subtree weighed, measured immediately before it went. `0` when absent. */
+	freedBytes: z.number().int().nonnegative(),
+	/** How many kept entries went — the number D35's amendment exists to make sayable. */
+	keptTestsRemoved: z.number().int().nonnegative(),
+};
+
+/**
  * What every answer that reached the disk says: which halves went, what the archive weighed and
  * how many exemptions went with it.
  *
  * Shared by the `deleted` and `partial` arms rather than declared twice, because the two differ
  * only in whether one half would not go — the fields say *which*, and a `partial` that reported
  * less than a `deleted` would make the failure the least legible answer of the four.
+ *
+ * The registration is this row's own half; the three below it are
+ * {@link ARCHIVE_DELETION_REPORT}'s, shared verbatim with `delete_archived_test` so the two
+ * deletes cannot come to report the same two stores differently.
  */
 const DELETION_REPORT = {
 	/** The hook file under the projects root. */
 	registration: DeletedPartSchema,
-	/** This project's own subtree of the artifact archive. */
-	archive: DeletedPartSchema,
-	/** This project's entries in the host's kept-tests store. */
-	keptTests: DeletedPartSchema,
-	/** What the archive subtree weighed, measured immediately before it went. `0` when absent. */
-	freedBytes: z.number().int().nonnegative(),
-	/** How many kept entries went — the number D35's amendment exists to make sayable. */
-	keptTestsRemoved: z.number().int().nonnegative(),
+	...ARCHIVE_DELETION_REPORT,
 };
 
 /**
@@ -1461,6 +1478,77 @@ export const DeleteProjectResultSchema = z.discriminatedUnion('outcome', [
 	z.object({ outcome: z.literal('refused'), reason: z.literal('lease-live') }).strict(),
 ]);
 export type DeleteProjectResult = z.infer<typeof DeleteProjectResultSchema>;
+
+/**
+ * Which archived test to delete, and who is deleting it (D43, #272).
+ *
+ * **{@link ArchivePathSegmentSchema} for both components, and that is the difference from
+ * `delete_project`'s looser `project`.** That row's string may be either a registration
+ * identifier or an archive component, which is why it takes the wider shape; these two are only
+ * ever names *this archive answered with* — `list_archive`'s own vocabulary, exactly as
+ * {@link KeptTestRefSchema} takes them — so the shape a directory name has is what they are held
+ * to. `pathSegment` is never run over either: it is the *writer's* function and is not
+ * idempotent, so re-running it over a name the archive already filed resolves a directory
+ * nothing was ever filed under (`PROJECT.md` §6, and it bit #271's first cut).
+ *
+ * **`actor` is attribution and not authorisation** (D20, D28), exactly as
+ * {@link DeleteProjectParamsSchema}'s is: the host records who deleted a test and derives it from
+ * nothing.
+ *
+ * `.strict()` so a typo'd key is `invalid_params` rather than a delete of something nobody named.
+ */
+export const DeleteArchivedTestParamsSchema = z
+	.object({
+		/** The project directory's name, as the archive filed it — never a path (D19). */
+		project: ArchivePathSegmentSchema,
+		/** The test directory's name, as the archive filed it. */
+		testName: ArchivePathSegmentSchema,
+		/** Who is deleting it. Attribution only — it authorizes nothing (D20, D28). */
+		actor: AttributionStringSchema,
+	})
+	.strict();
+export type DeleteArchivedTestParams = z.infer<typeof DeleteArchivedTestParamsSchema>;
+
+/**
+ * Four answers, four next moves — {@link DeleteProjectResultSchema}'s vocabulary one level down,
+ * and deliberately the same four rather than a fifth idea of what a delete can say.
+ *
+ * **`not-found` rather than `not-registered`**, because there is no registration in this row's
+ * world: no directory at that address and no kept entry for it means nothing was reached, and it
+ * is a *different arm* rather than a delete of zero bytes. That is D42's rule held one level
+ * down — **never a success that removed nothing**.
+ *
+ * **`partial` is one half refusing to go**, with the fields saying which: a real state on a host
+ * whose archive subtree is read-only, or whose kept-tests store will not parse. The directory
+ * goes **first**, which is the direction that leaves the host holding *less* — a tick cannot
+ * outlive the directory it names, while a directory that went with its tick still in the store is
+ * recovered by asking again.
+ *
+ * **`refused` is a live lease filing into this test**, reported as data
+ * ({@link AcquireDeviceResultSchema}'s reasoning), and nothing at all is touched on that branch:
+ * the directory is what that lease is writing into right now, which D35 exempts absolutely. The
+ * next move is the operator's — wait, or force-release first.
+ *
+ * **No `runsRemoved`, deliberately.** How many run directories were under the test is not on
+ * `delete_project`'s answer either, and the one consumer that wants it has the test's own listing
+ * in hand; adding it would mean a `readdir` this delete does not otherwise need.
+ *
+ * **No `message`, no host path and no `errno` on any arm** (D19), and there is no field one would
+ * fit in — `src/ipc/server.ts` parses every handler's return value against this `.strict()`
+ * schema, so a path smuggled onto a result is `invalid_result` on the host rather than a
+ * disclosure. The diagnosis is a warning on the host, exactly as `delete_project`'s is.
+ */
+export const DeleteArchivedTestResultSchema = z.discriminatedUnion('outcome', [
+	/** At least one half went and none failed. */
+	z.object({ outcome: z.literal('deleted'), ...ARCHIVE_DELETION_REPORT }).strict(),
+	/** At least one half would not go. The other may still have gone — the fields say which. */
+	z.object({ outcome: z.literal('partial'), ...ARCHIVE_DELETION_REPORT }).strict(),
+	/** No directory at that address and no kept entry for it. Nothing was reached. */
+	z.object({ outcome: z.literal('not-found') }).strict(),
+	/** A lease is filing into this test right now, so nothing was touched. */
+	z.object({ outcome: z.literal('refused'), reason: z.literal('lease-live') }).strict(),
+]);
+export type DeleteArchivedTestResult = z.infer<typeof DeleteArchivedTestResultSchema>;
 
 /**
  * How many tests one host may keep — the bound on the store and therefore the bound on both
@@ -1817,6 +1905,29 @@ export type SweepArchiveResult = z.infer<typeof SweepArchiveResultSchema>;
  * somebody else's evidence — and it is deliberately **not** on `PANEL_METHODS` yet: that lands
  * with the screen that calls it, exactly as `force_release_device` did (R35, #122).
  *
+ * **`delete_archived_test` is the same action at a finer address** (D43, #272). It takes the two
+ * components a listing of the archive answered with — `<project>/<test_name>`, exactly as
+ * `set_kept_tests` takes them — plus a caller-supplied `actor`, and removes the test directory
+ * with every run filed under it and that test's entry in the kept-tests store. Nothing else: not
+ * a sibling test of the same project, not the same test name under another project, and no hook
+ * file — there is no registration at this address, which is why a request that reached nothing is
+ * **`not-found`** rather than `not-registered`, and why it is a *different arm* rather than a
+ * success that removed nothing (D42's rule one level down). `partial` is one half refusing to go,
+ * with the fields saying which; `refused`/`lease-live` is a lease filing into this test right now,
+ * and nothing at all is touched on that branch because the directory is what that lease is
+ * writing into (D35). **An explicit delete overrides `Keep`** (D35 as amended): an operator
+ * naming one test is not one of the two retention bounds, and the answer says how many kept
+ * entries went so nobody is surprised by it. **It shares `delete_project`'s machinery rather than
+ * repeating it** — one `ArchiveSweeper.remove(address)` for a project and a test alike, inside
+ * that module's per-root serialisation and its `settle()`, and one prune under `set_kept_tests`'
+ * own write lock. No `message`, no host path and no `errno` is on any answer and there is no field
+ * one would fit in (D19); the diagnosis is a warning on the host and one audit line names the
+ * actor, with no token in scope on this path at all (D20, D28). Reachable from the CLI as
+ * `rover delete-test` (D4). It is deliberately **not** an MCP tool, for `delete_project`'s reason
+ * in the same key — an agent deleting a test's artifacts destroys the evidence another agent's run
+ * produced — and deliberately **not** on `PANEL_METHODS` yet: that lands with the control that
+ * calls it, exactly as `force_release_device` and `delete_project` did (R35, R50).
+ *
  * **`list_kept_tests` and `set_kept_tests` are the `Keep` flag's two directions** (D33, #234),
  * and the pair is where this surface first *writes* something of the host's own that is not a
  * lease. The flag is per **test** — `<project>/<test_name>`, the archive's own two leading
@@ -1910,6 +2021,10 @@ export const IPC_METHODS = {
 	},
 	list_projects: { params: ListProjectsParamsSchema, result: ListProjectsResultSchema },
 	delete_project: { params: DeleteProjectParamsSchema, result: DeleteProjectResultSchema },
+	delete_archived_test: {
+		params: DeleteArchivedTestParamsSchema,
+		result: DeleteArchivedTestResultSchema,
+	},
 	list_host_tooling: {
 		params: ListHostToolingParamsSchema,
 		result: ListHostToolingResultSchema,

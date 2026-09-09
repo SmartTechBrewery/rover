@@ -10,15 +10,23 @@
  * about it.
  *
  * **One more thing deletes through this module, and it is not a bound at all.**
- * {@link ArchiveSweeper.removeProject} takes one project's whole subtree because an operator said
- * to (D42, `./delete-project.ts`, #271) — no walk, no selection, no exemption, and `Keep` does not
- * apply, an explicit delete not being one of the two retention bounds D35 exempts a kept test from.
- * It is **here** rather than in a module of its own for the reason the three triggers are one
- * sweeper: the per-root `serialised` chain below is what keeps two deletions off one tree, and
- * {@link ArchiveSweeper.settle} — which `./listen.ts`'s `closeServer` already awaits — is what
- * keeps a `process.exit` out of the middle of an `rm`. A parallel deletion path would have neither.
- * It reuses `sizeOfTree` for the same reason everything else here does, so a delete's log line, its
- * answer and a badge on a screen cannot hold three ideas of what one subtree weighs.
+ * {@link ArchiveSweeper.remove} takes the subtree at one **archive address** whole because an
+ * operator said to (D42, D43, `./delete-project.ts`, `./delete-archived-test.ts`, #271, #272) — no
+ * walk, no selection, no exemption, and `Keep` does not apply, an explicit delete not being one of
+ * the two retention bounds D35 exempts a kept test from. It is **here** rather than in a module of
+ * its own for the reason the three triggers are one sweeper: the per-root `serialised` chain below
+ * is what keeps two deletions off one tree, and {@link ArchiveSweeper.settle} — which
+ * `./listen.ts`'s `closeServer` already awaits — is what keeps a `process.exit` out of the middle
+ * of an `rm`. A parallel deletion path would have neither. It reuses `sizeOfTree` for the same
+ * reason everything else here does, so a delete's log line, its answer and a badge on a screen
+ * cannot hold three ideas of what one subtree weighs.
+ *
+ * **One method for a project and for a test, rather than one per level** (D43, #272). The address
+ * is what varies — `[project]` or `[project, testName]` — and everything else about the deletion
+ * is identical: the same validation of each component, the same containment check on the resolved
+ * path, the same measurement, the same `rm`, the same critical section. A second entry point per
+ * level would be a second idea of what containment means, on the one operation where the cost of
+ * two ideas is a subtree nobody meant to lose.
  *
  * **Three triggers, and they do not all take the same bounds.** An operator asks for the whole
  * policy through `sweep_archive` and `rover sweep`; a **clock** asks for the whole policy at local
@@ -96,7 +104,7 @@
 
 import type { Dirent } from 'node:fs';
 import { readdir, realpath, rm, rmdir } from 'node:fs/promises';
-import { join, sep } from 'node:path';
+import { dirname, join, sep } from 'node:path';
 import { ArchivePathSegmentSchema, MAX_ARCHIVE_PATH_DEPTH } from '../ipc/methods.js';
 import { leaseRunDirectory, runDirectoryPrecedes } from './archive-path.js';
 import { ageCutoffMs, budgetBytesOf, type RetentionPolicy } from './archive-retention.js';
@@ -154,15 +162,15 @@ export type SweepOutcome =
 	| { readonly outcome: 'unreadable' };
 
 /**
- * What removing one project's subtree answers: it went and what it weighed, it was never there, or
- * the host would not remove it.
+ * What removing the subtree at one archive address answers: it went and what it weighed, it was
+ * never there, or the host would not remove it.
  *
- * Three arms rather than a boolean for {@link SweepOutcome}'s reason — *nothing was filed under
- * this project* and *the host would not delete it* are the two facts an operator does something
+ * Three arms rather than a boolean for {@link SweepOutcome}'s reason — *nothing was filed at this
+ * address* and *the host would not delete it* are the two facts an operator does something
  * different about — and no path and no `errno` on any of them, both going to the host's own log
  * where a path already belongs (D19).
  */
-export type ProjectRemoval =
+export type ArchiveRemoval =
 	| { readonly outcome: 'removed'; readonly bytes: number }
 	| { readonly outcome: 'absent' }
 	| { readonly outcome: 'failed' };
@@ -182,31 +190,43 @@ export interface ArchiveSweeper {
 		readonly bounds: 'both' | 'budget';
 	}): Promise<SweepOutcome>;
 	/**
-	 * Remove one project's whole subtree of the archive, inside the same per-root critical section.
+	 * Remove the whole subtree at one archive address, inside the same per-root critical section.
 	 *
 	 * **Nothing is selected and nothing is exempt.** This is not a bound and it is not a policy: an
-	 * operator named one project (D42), so the directory goes whole — kept tests included, an
-	 * explicit delete not being one of the two bounds D35 exempts one from. Nothing outside that
-	 * one subtree is touched.
+	 * operator named one project (D42) or one test (D43), so the directory goes whole — kept tests
+	 * included, an explicit delete not being one of the two bounds D35 exempts one from. Nothing
+	 * outside that one subtree is touched.
 	 *
-	 * **The parameter is a filed component — validated, then used verbatim.** It is one directory
+	 * **The address is filed components — validated, then used verbatim.** Each is one directory
 	 * name as *this archive already spells it*, the same thing `list_archive` answers with and
-	 * `set_kept_tests` refers to, so it is checked against `ArchivePathSegmentSchema` and joined
-	 * to the root unchanged. `pathSegment` is deliberately **not** applied to it: that function
-	 * invents a name from an opaque caller string and is not idempotent — its own output can run
-	 * to 73 characters, and feeding that back in truncates to 64 and hashes the 73, resolving a
-	 * directory nothing was ever filed under. Containment is therefore the schema *plus* the
-	 * resolved-path check below, which is what `./list-archive.ts` and `./archive-size.ts` already
-	 * do with a component the host itself answered with.
+	 * `set_kept_tests` refers to, so **every** component is checked against
+	 * `ArchivePathSegmentSchema` and joined to the root unchanged. `pathSegment` is deliberately
+	 * **not** applied to any of them: that function invents a name from an opaque caller string
+	 * and is not idempotent — its own output can run to 73 characters, and feeding that back in
+	 * truncates to 64 and hashes the 73, resolving a directory nothing was ever filed under.
+	 * Containment is therefore the schema *plus* the resolved-path check below, which is what
+	 * `./list-archive.ts` and `./archive-size.ts` already do with components the host itself
+	 * answered with.
+	 *
+	 * **An empty address is `absent`, and the root is never a delete target.** That is the existing
+	 * rule generalised rather than weakened: the resolved subtree has to be strictly *under* the
+	 * resolved root, so a component resolving onto the root is refused, and an address naming no
+	 * component at all is refused before anything is resolved.
+	 *
+	 * **A deeper address tidies up what it emptied.** After the `rm`, every strict ancestor of the
+	 * address — never the root — is removed if it is now empty, through the same `removeIfEmpty`
+	 * the sweep's own cleanup uses. That is this module's existing rule (*a test name or a project
+	 * left holding nothing is removed, and the root never is*, D34) applied to the one deletion
+	 * that can newly empty a level.
 	 *
 	 * A subtree that is not there is `absent` rather than a failure — a lease may name any project
-	 * string (D22), so a registration with nothing filed under it is ordinary, and a string no
+	 * string (D22), so a registration with nothing filed under it is ordinary, and a component no
 	 * directory of this archive could be named is the same answer for the same reason: nothing was
 	 * reached, so nothing refused to go. A subtree the host would not remove, and one that
 	 * resolves out of the root, are `failed` with one warning naming the path, the way an
 	 * undeleted run already is.
 	 */
-	removeProject(project: string): Promise<ProjectRemoval>;
+	remove(address: readonly string[]): Promise<ArchiveRemoval>;
 	/**
 	 * Resolve when no sweep of **this tree** is in flight — the queue's tail, not just the walk
 	 * that happens to be running.
@@ -362,12 +382,12 @@ export function createArchiveSweeper(options: ArchiveSweeperOptions): ArchiveSwe
 			});
 		},
 
-		removeProject(project: string): Promise<ProjectRemoval> {
+		remove(address: readonly string[]): Promise<ArchiveRemoval> {
 			// The same critical section a sweep runs in, keyed by the same root: a sweep walking
-			// this tree and a project being taken out of it must not interleave, and `settle()`
+			// this tree and a subtree being taken out of it must not interleave, and `settle()`
 			// has to cover this `rm` exactly as it covers a sweep's.
-			return serialised(options.root, async (): Promise<ProjectRemoval> => {
-				const subtree = await resolveProjectSubtree(options.root, project, warn);
+			return serialised(options.root, async (): Promise<ArchiveRemoval> => {
+				const subtree = await resolveSubtree(options.root, address, warn);
 				if (subtree.outcome !== 'resolved') {
 					return subtree;
 				}
@@ -387,10 +407,22 @@ export function createArchiveSweeper(options: ArchiveSweeperOptions): ArchiveSwe
 				try {
 					await rm(directory, { recursive: true, force: true });
 				} catch (error) {
-					warn(unremovedProjectWarning(directory, error));
+					warn(unremovedSubtreeWarning(address, directory, error));
 					return { outcome: 'failed' as const };
 				}
-				log(projectDeletionLine(project, bytes));
+				// The levels this delete may have emptied, deepest first and **never the root** —
+				// walked up the *resolved* path and stopped the moment it is no longer strictly
+				// under the resolved root, which is the same containment test that admitted the
+				// deletion. For a one-component address the first candidate is already the root,
+				// so nothing here runs at all.
+				for (
+					let parent = dirname(directory);
+					parent.startsWith(subtree.root + sep);
+					parent = dirname(parent)
+				) {
+					await removeIfEmpty(parent, warn);
+				}
+				log(removalLine(address, bytes));
 				return { outcome: 'removed' as const, bytes };
 			});
 		},
@@ -730,58 +762,83 @@ function deletionLine(run: DoomedRun, dryRun: boolean): string {
 }
 
 /**
- * One line for a project taken whole, in {@link deletionLine}'s form one level up.
+ * One line for the subtree at one address taken whole, in {@link deletionLine}'s form further up
+ * the tree.
  *
- * The identifier goes through `JSON.stringify` for that function's reason: the daemon's stderr is
- * the host's only accountability trail, and a name may legally carry a newline.
+ * **Keyed on the address's depth**, so a project reads exactly as it did before this method was
+ * generalised and a test reads as a test: the two are different operator actions and the host's
+ * accountability trail has to say which one happened. Each component goes through
+ * `JSON.stringify` for that function's reason: the daemon's stderr is the host's only
+ * accountability trail, and a name may legally carry a newline.
  */
-function projectDeletionLine(project: string, bytes: number): string {
+function removalLine(address: readonly string[], bytes: number): string {
 	return (
-		`Deleted archived project ${JSON.stringify(project)} — ${bytes} bytes. ` +
+		`Deleted archived ${nounFor(address)} ${namedAddress(address)} — ${bytes} bytes. ` +
 		`An operator asked for it by name, so nothing was selected and nothing was exempt.`
 	);
 }
 
-/** Where this project's runs are, resolved — or the answer to give instead of a deletion. */
+/** What the subtree at one address *is*, for a sentence a person reads. */
+function nounFor(address: readonly string[]): string {
+	return address.length === 1 ? 'project' : address.length === 2 ? 'test' : 'address';
+}
+
+/** One address as a person reads it, every component escaped — {@link deletionLine}'s form. */
+function namedAddress(address: readonly string[]): string {
+	return address.map((component) => JSON.stringify(component)).join('/');
+}
+
+/** Where the addressed subtree is, resolved — or the answer to give instead of a deletion. */
 type ResolvedSubtree =
-	| { readonly outcome: 'resolved'; readonly directory: string }
+	| { readonly outcome: 'resolved'; readonly directory: string; readonly root: string }
 	| { readonly outcome: 'absent' }
 	| { readonly outcome: 'failed' };
 
 /**
- * Turn one filed component into the directory to delete, or into the reason not to.
+ * Turn one address of filed components into the directory to delete, or into the reason not to.
  *
- * **The component is used verbatim** — see {@link ArchiveSweeper.removeProject}: it is a name this
+ * **Every component is used verbatim** — see {@link ArchiveSweeper.remove}: each is a name this
  * archive already answered with, so its *shape* is checked (`ArchivePathSegmentSchema`, the same
  * one `list_archive` and `set_kept_tests` apply) and it is joined to the root unchanged. Running
- * `pathSegment` over it would name a directory nothing was ever filed under, that function not
+ * `pathSegment` over one would name a directory nothing was ever filed under, that function not
  * being idempotent (`PROJECT.md` §6).
  *
- * **Absence is its own resolution**, because neither of `removeProject`'s two calls surfaces it:
+ * **An empty address is `absent` before anything is resolved**, because the root is not a delete
+ * target: `join(root)` is the root itself, and every deeper guard below would have to catch it.
+ * Refusing it here is the same rule said once rather than twice.
+ *
+ * **Absence is its own resolution**, because neither of `remove`'s two calls surfaces it:
  * `sizeOfTree` answers `{ bytes: 0 }` for an `ENOENT` — a `0` is a true claim about an empty
- * directory — and `rm` with `force` swallows it. Without this, *nothing was filed under this
- * project* would be indistinguishable from *it went and weighed nothing*, which is the whole
- * distinction the answer exists to make. A string no directory here could be named is that same
- * `absent`: nothing was reached, so nothing refused to go.
+ * directory — and `rm` with `force` swallows it. Without this, *nothing was filed at this address*
+ * would be indistinguishable from *it went and weighed nothing*, which is the whole distinction
+ * the answer exists to make. A component no directory here could be named is that same `absent`:
+ * nothing was reached, so nothing refused to go.
  *
  * **Containment is the resolved path and not only the schema**, `./list-archive.ts`'s and
  * `./archive-size.ts`'s rule for the reason those two give: the schema stops a *string* escaping
  * the root, while a symlink escapes it with no `.`, `..` or separator anywhere, and `rm` resolves
  * the link in its own argument. Strictly *under* the root rather than under-or-equal, which is
  * where a delete parts company with those two reads: addressing the root is legitimate and
- * **deleting it is not**, so a component resolving onto the root itself is refused rather than
+ * **deleting it is not**, so an address resolving onto the root itself is refused rather than
  * taking every project on the host with it.
  */
-async function resolveProjectSubtree(
+async function resolveSubtree(
 	root: string,
-	project: string,
+	address: readonly string[],
 	warn: (message: string) => void,
 ): Promise<ResolvedSubtree> {
-	if (!ArchivePathSegmentSchema.safeParse(project).success) {
-		warn(unaddressableProjectWarning(project));
+	if (address.length === 0) {
+		warn(rootIsNotADeleteTargetWarning());
 		return { outcome: 'absent' as const };
 	}
-	const requested = join(root, project);
+	const unaddressable = address.find(
+		(component) => !ArchivePathSegmentSchema.safeParse(component).success,
+	);
+	if (unaddressable !== undefined) {
+		warn(unaddressableWarning(address, unaddressable));
+		return { outcome: 'absent' as const };
+	}
+	const requested = join(root, ...address);
 
 	let resolvedRoot: string;
 	let directory: string;
@@ -793,33 +850,43 @@ async function resolveProjectSubtree(
 		if (codeOf(error) === 'ENOENT') {
 			return { outcome: 'absent' as const };
 		}
-		warn(unremovedProjectWarning(requested, error));
+		warn(unremovedSubtreeWarning(address, requested, error));
 		return { outcome: 'failed' as const };
 	}
 	if (!directory.startsWith(resolvedRoot + sep)) {
-		warn(escapedProjectWarning(requested, directory));
+		warn(escapedAddressWarning(requested, directory));
 		return { outcome: 'failed' as const };
 	}
-	return { outcome: 'resolved' as const, directory };
+	return { outcome: 'resolved' as const, directory, root: resolvedRoot };
 }
 
 /**
- * A string that no directory of this archive could be named, so nothing was looked for.
+ * A component that no directory of this archive could be named, so nothing was looked for.
  *
  * Said on the host and not on the wire, where every other path and reason on this path goes
  * (D19), and through `JSON.stringify` for `./list-archive.ts`'s reason: a component may legally
  * carry a `\n`, and interpolated raw it would forge a line in the host's own record.
  */
-function unaddressableProjectWarning(project: string): string {
+function unaddressableWarning(address: readonly string[], component: string): string {
 	return (
-		`The artifact archive was asked to remove ${JSON.stringify(project)}, which is not one ` +
-		`directory name — nothing here can be filed under it, so nothing was looked for and ` +
-		`nothing was removed. The name to give is the one a listing of the archive answers with.`
+		`The artifact archive was asked to remove ${namedAddress(address)}, and ` +
+		`${JSON.stringify(component)} is not one directory name — nothing here can be filed ` +
+		`under it, so nothing was looked for and nothing was removed. The names to give are the ` +
+		`ones a listing of the archive answers with.`
 	);
 }
 
-/** A component resolving out of the archive root, or onto the root itself. Nothing is removed. */
-function escapedProjectWarning(requested: string, resolved: string): string {
+/** An address naming no component at all. The archive root is never what a delete takes. */
+function rootIsNotADeleteTargetWarning(): string {
+	return (
+		`The artifact archive was asked to remove nothing in particular — an address with no ` +
+		`component names the archive root itself, which is never a delete target. Nothing was ` +
+		`removed. The names to give are the ones a listing of the archive answers with.`
+	);
+}
+
+/** An address resolving out of the archive root, or onto the root itself. Nothing is removed. */
+function escapedAddressWarning(requested: string, resolved: string): string {
 	return (
 		`The artifact archive was asked to remove ${JSON.stringify(requested)}, which resolves to ` +
 		`${JSON.stringify(resolved)} — not a directory under the archive root. Nothing was ` +
@@ -827,10 +894,15 @@ function escapedProjectWarning(requested: string, resolved: string): string {
 	);
 }
 
-/** A project's subtree the host would not remove. It stays, and the answer says so. */
-function unremovedProjectWarning(path: string, error: unknown): string {
+/**
+ * The subtree at one address the host would not remove. It stays, and the answer says so.
+ *
+ * Depth-keyed like {@link removalLine} and for its reason: *the archived project at …* and *the
+ * archived test at …* are two different things an operator is being told did not go.
+ */
+function unremovedSubtreeWarning(address: readonly string[], path: string, error: unknown): string {
 	return (
-		`The archived project at ${JSON.stringify(path)} was not deleted: ` +
+		`The archived ${nounFor(address)} at ${JSON.stringify(path)} was not deleted: ` +
 		`${codeOf(error) ?? 'unknown error'}. It is still there and is not counted as freed.`
 	);
 }
