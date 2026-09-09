@@ -130,12 +130,10 @@ const SWEEP_LOG_MARKERS: readonly string[] = [
 	// same trigger and not a fourth one.
 	'Deleted archived test ',
 	'The archived test at ',
-	// And the same two once more for a **run** taken because an operator named the group it is in
-	// (D43, #277). A group's delete goes run by run through this module's own addressed removal, and
-	// `nounFor` calls a three-component address exactly that — so these are the sweeper's lines for
-	// that trigger, not a fourth trigger of its own.
-	'Deleted archived address ',
-	'The archived address at ',
+	// A **run** taken because an operator named the group it is in (D43, #277) needs no rows of its
+	// own: a group's delete goes run by run through this module's addressed removal, and `nounFor`
+	// calls a three-component address a `run` — so it writes the two lines already listed above for
+	// the sweep's own per-run removals. One trigger more, the same two markers.
 	// A budget that cannot be met with only kept and live runs left.
 	'The artifact archive is still ',
 	// The sweep's own two failures, each named by the clause only it writes.

@@ -3444,6 +3444,25 @@ describe('the Remove control', () => {
 		expect(dialog.queryByText('KEPT')).toBeNull();
 	});
 
+	/*
+	 * **And when the grouping walk was cut short, the count it hands over is a bound** (#284 review).
+	 * That walk drops runs at its bounds while the delete's own walk is scoped to one project and
+	 * reaches runs the listing never did — so a plain figure here would understate an irreversible
+	 * action. The control stays: the group is still listed and the delete is still correct about
+	 * what it takes.
+	 */
+	it('hands over a bound rather than a figure when the grouping walk was cut short', async () => {
+		host.groups = { ...(groupings() as object), truncated: true };
+		await grouped(`checkout-app/${GROUP}`);
+
+		await act(async () => {
+			fireEvent.click(screen.getByRole('button', { name: `Remove group ${GROUP}` }));
+		});
+
+		const dialog = within(screen.getByRole('dialog'));
+		expect(dialog.getByText('RUNS').nextElementSibling?.textContent).toBe('at least 2 runs');
+	});
+
 	// And it calls the group's method, with the group's params — never the test's (R41: the group
 	// id is content and not a second path component).
 	it('asks the group’s method when the group’s control is confirmed', async () => {

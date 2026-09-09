@@ -437,6 +437,7 @@ describe("the group's confirmation", () => {
 		project: 'checkout-web',
 		groupId: 'app-bar-top-space',
 		runs: 7,
+		runsTruncated: false,
 	};
 
 	async function askingAboutTheGroup(
@@ -472,6 +473,21 @@ describe("the group's confirmation", () => {
 		[1, '1 run'],
 	])('says how many runs go, in the singular when there is one (%i)', async (runs, said) => {
 		await askingAboutTheGroup({ removal: { runs } });
+
+		expect(valueUnder('RUNS')).toBe(said);
+	});
+
+	/*
+	 * **And a bound is rendered as a bound**, the rule `ON DISK` on the row below already keeps and
+	 * off the same flag (#284 review): the grouping walk drops runs at its bounds while this delete's
+	 * walk is scoped to one project, so the sum is a floor on what will go. A prefix and nothing
+	 * else, so the plural still follows the number.
+	 */
+	it.each([
+		[7, 'at least 7 runs'],
+		[1, 'at least 1 run'],
+	])('says at least when the grouping answer was truncated (%i)', async (runs, said) => {
+		await askingAboutTheGroup({ removal: { runs, runsTruncated: true } });
 
 		expect(valueUnder('RUNS')).toBe(said);
 	});

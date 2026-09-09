@@ -137,6 +137,23 @@ export interface GroupRemoval {
 	 * is not a state a group's confirmation can be opened in (`routes/archive.tsx`, `levelRemoval`).
 	 */
 	readonly runs: number;
+	/**
+	 * Whether {@link runs} is a **lower bound** rather than the count — `truncated` on the grouping
+	 * answer it was summed from.
+	 *
+	 * **The two walks are not the same walk, and this is the field that says so** (#284 review). The
+	 * listing stops at `MAX_ARCHIVE_GROUP_RUNS` per group and at `MAX_ARCHIVE_GROUP_DIRECTORIES`
+	 * counted over the *whole* archive, dropping runs when it does; the delete's own walk is scoped
+	 * to **one project** with the same numeric bound, so it routinely reaches runs the listing never
+	 * did. A group whose card was drawn off a truncated answer can therefore lose more runs than the
+	 * confirmation counted — which is the one thing an irreversible action's figures must not do.
+	 *
+	 * So the figure renders as a bound whenever the answer was bounded, the rule `ON DISK` on the
+	 * row below already keeps (`archive-size.ts`, `sizeFieldReading`, D6). **The control is not
+	 * withheld on this ground**: a truncated answer still lists the group and the delete still takes
+	 * every run of it, so the action is correct and only its arithmetic needed the marker.
+	 */
+	readonly runsTruncated: boolean;
 }
 
 /**

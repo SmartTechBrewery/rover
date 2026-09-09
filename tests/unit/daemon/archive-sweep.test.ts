@@ -648,6 +648,29 @@ describe('taking the subtree at one address because an operator named it', () =>
 	});
 
 	/*
+	 * **One level further down again**, which is the address a group's delete composes per matched
+	 * run (D43, #277) — and the line it writes says `run`, the word D34 makes this level's, rather
+	 * than the `address` catch-all that is now only for anything deeper.
+	 */
+	it('takes one run of a test by address and calls it a run in the log', async () => {
+		const taken = runNameAt(NOW_MS - DAY_MS);
+		await fileRun('rover', 'home-screen', taken, 1024);
+		await fileRun('rover', 'home-screen', runNameAt(NOW_MS - 2 * DAY_MS), 2048);
+
+		const removal = await sweeperFor({ budgetMb: 1024, maxAgeDays: 30 }).remove([
+			'rover',
+			'home-screen',
+			taken,
+		]);
+
+		expect(removal).toEqual({ outcome: 'removed', bytes: 1024 });
+		expect(await remainingRuns()).toEqual([`rover/home-screen/${runNameAt(NOW_MS - 2 * DAY_MS)}`]);
+		expect(logged.join('\n')).toContain(
+			`Deleted archived run "rover"/"home-screen"/${JSON.stringify(taken)} — 1024 bytes.`,
+		);
+	});
+
+	/*
 	 * **A level left holding nothing is scaffolding rather than a record** (D34, module header) —
 	 * the sweep's own rule, applied to the one deletion that can newly empty a level. And **the
 	 * root never goes**, which is the half of that rule this method could have got wrong.

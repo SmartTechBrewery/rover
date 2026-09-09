@@ -329,6 +329,7 @@ describe('the same control on a group', () => {
 		project: 'checkout-web',
 		groupId: 'app-bar-top-space',
 		runs: 7,
+		runsTruncated: false,
 	};
 
 	async function askAboutTheGroup(onSettled = vi.fn()) {

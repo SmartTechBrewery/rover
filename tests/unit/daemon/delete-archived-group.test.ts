@@ -41,6 +41,7 @@ import {
 } from '@/daemon/delete-archived-group.js';
 import { type KeptTest, readKeptTests, writeKeptTests } from '@/daemon/kept-tests.js';
 import type { Lease } from '@/daemon/leases.js';
+import { createListArchiveGroupsHandler } from '@/daemon/list-archive-groups.js';
 import {
 	type DeleteArchivedGroupParams,
 	DeleteArchivedGroupParamsSchema,
@@ -451,6 +452,40 @@ describe('the four outcomes never collapse into each other', () => {
 		expect(result).toMatchObject({ outcome: 'partial', archive: 'failed', runsRemoved: 2 });
 		// The run whose claim could not be read is left exactly where it was.
 		expect(await exists(join(root, 'checkout-web', 'login-flow', RUN_D))).toBe(true);
+	});
+});
+
+/*
+ * **The two walks are not the same walk**, and a client that renders the listing's run count as
+ * *what this delete will take* is stating a figure this host never promised (#284 review).
+ *
+ * `list_archive_groups` walks the **whole** archive and drops runs at `maxRuns` per group and at
+ * `maxDirectories` over everything; `delete_archived_group` walks **one project** with a bound of
+ * its own. So the listing's count is a floor and the delete's `runsRemoved` can exceed it, on an
+ * ordinary archive and with no setting to avoid it. The host is right on both sides — each answer
+ * says `truncated` — and this case exists so the asymmetry is pinned here rather than rediscovered
+ * in the panel: it is why the group's confirmation renders a truncated count as *at least n runs*
+ * (`panel/src/components/archive/remove-dialog.tsx`, `docs/DESIGN.md` §9).
+ */
+describe('the listing that a client counts runs from can see fewer than this delete takes', () => {
+	beforeEach(seed);
+
+	it('lists one run of the group as truncated, then removes both', async () => {
+		const listing = await createListArchiveGroupsHandler({
+			root,
+			warn: (line) => warned.push(line),
+			maxRuns: 1,
+		}).list_archive_groups({});
+
+		// What a client would draw the card and sum the confirmation's figure from.
+		expect(listing).toMatchObject({ outcome: 'listed', truncated: true });
+		const listed = (listing as Extract<typeof listing, { outcome: 'listed' }>).groups.find(
+			(group) => group.project === 'checkout-web' && group.groupId === GROUP,
+		);
+		expect(listed?.runs).toHaveLength(1);
+
+		// And what the delete then takes: every run of the group under this project.
+		expect(await deleteTheGroup()).toMatchObject({ outcome: 'deleted', runsRemoved: 2 });
 	});
 });
 

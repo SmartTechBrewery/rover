@@ -165,7 +165,7 @@ function keptReading(kept: boolean | null): string {
  * | --- | --- |
  * | `PROJECT` | the archive's first component, monospace and verbatim |
  * | `GROUP` | the group id a lease named — a caller's own string, shown verbatim |
- * | `RUNS` | `7 runs` or `1 run`, off the grouping answer the screen already holds |
+ * | `RUNS` | `7 runs`, `1 run`, or the same prefixed `at least `, off the grouping answer the screen already holds |
  * | `ON DISK` | `4.0 MB`, `at least 4.0 MB`, *nothing is filed here*, or *the host cannot say* |
  *
  * **There is no `KEPT` row, and its absence is the point.** There is no group-level `Keep` flag and
@@ -177,7 +177,11 @@ function keptReading(kept: boolean | null): string {
  * **`RUNS` is never *the host cannot say***, which is the one place this differs from the test
  * dialog's own field. The control exists only where the grouping answer lists the group's runs — the
  * rule its tick already keeps — so the figure is always the count the same answer the `ON DISK`
- * badge measures is built from (`routes/archive.tsx`, `levelRemoval`).
+ * badge measures is built from (`routes/archive.tsx`, `levelRemoval`). **It can still be a lower
+ * bound**, and then it says so: a truncated grouping answer dropped runs this delete's own
+ * per-project walk will reach and take, so *at least* is the only honest reading of the sum
+ * ({@link runsFieldReading}, `GroupRemoval.runsTruncated`, #284 review). Three readings, then, and
+ * never a fourth.
  *
  * **The one read is `measure_archive_groups` and not `measure_archive`**, because a group is not a
  * directory: the archive has no `<group_id>/` level (R41), so its size is a walk over the runs that
@@ -215,7 +219,7 @@ export function RemoveGroupDialog({
 	const fields: readonly DialogField[] = [
 		{ label: 'PROJECT', value: removal.project, wide: true },
 		{ label: 'GROUP', value: removal.groupId, wide: true },
-		{ label: 'RUNS', value: removal.runs === 1 ? '1 run' : `${removal.runs} runs` },
+		{ label: 'RUNS', value: runsFieldReading(removal) },
 		{ label: 'ON DISK', value: sizeFieldReading(size) },
 	];
 
@@ -252,4 +256,27 @@ export function RemoveGroupDialog({
 			}
 		/>
 	);
+}
+
+/**
+ * The `RUNS` field of a group's confirmation, in all three readings of one grouping answer.
+ *
+ * | the answer | the value |
+ * | --- | --- |
+ * | complete | `7 runs`, or `1 run` |
+ * | truncated | `at least 7 runs`, or `at least 1 run` |
+ *
+ * **A truncated answer never renders a plain figure**, `sizeFieldReading`'s own rule one row up and
+ * in its own words (D6, `archive-size.ts`): the grouping walk drops runs at either of its bounds
+ * while this delete's walk is scoped to one project, so the sum is a floor on what will go rather
+ * than a count of it. The two fields the operator confirms on therefore read alike — *at least 7
+ * runs* beside *at least 8.1 MB* — instead of one hedging while the other states.
+ *
+ * **A prefix and nothing else**, exactly as `sizeFieldReading` does it: the plural still follows the
+ * number, because *at least 1 runs* would trade one wrong reading for a worse-written one and *at
+ * least* is already the whole of the claim being made.
+ */
+function runsFieldReading(removal: GroupRemoval): string {
+	const counted = removal.runs === 1 ? '1 run' : `${removal.runs} runs`;
+	return `${removal.runsTruncated ? 'at least ' : ''}${counted}`;
 }

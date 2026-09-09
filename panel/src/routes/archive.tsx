@@ -867,7 +867,7 @@ function levelPin(
  * | --- | --- |
  * | a test name, in either view | `{ kind: 'test', project, testName, … }`, from the address |
  * | a run, in either view | the same, from `address[0]`/`address[1]`, which a run's address always has |
- * | a group, in the groups view | `{ kind: 'group', project, groupId, runs }` — {@link groupRemoval} |
+ * | a group, in the groups view | `{ kind: 'group', project, groupId, runs, runsTruncated }` — {@link groupRemoval} |
  * | the root, a project, a directory below the `<serial>` | none |
  *
  * **A group's card carries one since #277**, which closed the phase boundary #276 recorded
@@ -937,6 +937,13 @@ function levelRemoval(
  * **And it is a number rather than `null`**, which is where it parts company with a test's `runs`: a
  * test's count comes off a `list_archive` listing the groups view does not have, while a group's is
  * the very answer that decided the control exists.
+ *
+ * **But it is only a lower bound when that answer was truncated**, and `runsTruncated` carries which
+ * (#284 review). The grouping walk is bounded per group and over the whole archive and *drops* runs
+ * at either bound; the delete's walk is bounded per project, so it reaches runs this sum never saw
+ * and takes them. The control is not withheld on that ground — a truncated answer still lists the
+ * group and the delete is still correct — the confirmation just has to say *at least*, exactly as
+ * the `ON DISK` row beside it already does off the same flag.
  */
 function groupRemoval(groups: ArchiveGroups, selected: readonly string[]): GroupRemoval | null {
 	if (groups.status !== 'listed') {
@@ -953,6 +960,7 @@ function groupRemoval(groups: ArchiveGroups, selected: readonly string[]): Group
 		project,
 		groupId,
 		runs: tests.reduce((total, test) => total + test.runs, 0),
+		runsTruncated: groups.truncated,
 	};
 }
 

@@ -324,10 +324,17 @@ describe('the region itself', () => {
 /**
  * The **group's** five sentences (D43, R51 phase 3, #277).
  *
- * They are five and not four for the test line's reason, and they share no phrase with the test's —
- * which is the pairing rule (D6) applied across the two scopes rather than only within one: a group
- * and a test are different things to have deleted, and two lines that read alike would make the
+ * They are five and not four for the test line's reason, and **no one of them is the same sentence
+ * as any of the test's, each naming its own scope in its leading clause** — which is the pairing
+ * rule (D6) applied across the two scopes rather than only within one: a group and a test are
+ * different things to have deleted, and two lines a reader could not tell apart would make the
  * screen's news ambiguous about which happened.
+ *
+ * **Across the scopes that is the claim, and within one it is the stronger no-shared-phrase one**
+ * (#284 review). Two of these end on a clause the test's line also ends on, because after a
+ * `not-found` or a `refused` the next move genuinely is identical; what tells the two apart is the
+ * half that leads, and that is what the guard below asserts instead of a property the code does not
+ * have.
  */
 describe("a group's settled delete", () => {
 	/*
@@ -426,10 +433,14 @@ describe("a group's settled delete", () => {
 	});
 
 	/*
-	 * **And no phrase with the test's five** (D6 across the two scopes): the screen draws one region,
-	 * so a reader has to be able to tell from the sentence which of the two they just did.
+	 * **And across the two scopes** (D6): the screen draws one region, so a reader has to be able to
+	 * tell from the sentence which of the two they just did. Both halves of the claim are asserted —
+	 * no line is the same sentence as another scope's, and the scope's own name is in the clause that
+	 * leads, which is what a reader actually reads first. The within-scope guard above is the
+	 * stronger `not.toContain`; this one is deliberately not, because the `not-found` and `refused`
+	 * lines share their closing instruction with the test's on purpose (`remove-notice.tsx`).
 	 */
-	it('shares no sentence with the test’s five', () => {
+	it('is never the same sentence as one of the test’s five, and leads with its own scope', () => {
 		const groups = GROUP_OUTCOMES.map(([, answer]) => saidOfGroup(answer));
 		const tests = OUTCOMES.map(([, answer]) => said(answer));
 
@@ -437,6 +448,20 @@ describe("a group's settled delete", () => {
 			for (const test of tests) {
 				expect(group).not.toBe(test);
 			}
+			expect(leadingClauseOf(group)).toContain('app-bar-top-space');
+		}
+		for (const test of tests) {
+			expect(leadingClauseOf(test)).toContain('login-flow');
 		}
 	});
 });
+
+/**
+ * The sentence a reader reads first, which is where each line has to name what it is about.
+ *
+ * Split on the first full stop that ends a sentence rather than on any `.`, so a figure like `4.0
+ * MB` inside the clause does not cut it short.
+ */
+function leadingClauseOf(line: string): string {
+	return line.split(/\.\s|\.$/)[0] ?? line;
+}

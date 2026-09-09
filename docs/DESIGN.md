@@ -3144,13 +3144,23 @@ there would be a press about runs nobody has seen.
 | --- | --- |
 | `PROJECT` | the archive's first component, monospace and verbatim |
 | `GROUP` | the group id a lease named — a caller's own string, shown verbatim |
-| `RUNS` | `7 runs` or `1 run`, off the grouping answer the size badge at this depth also measures |
+| `RUNS` | `7 runs` or `1 run`, prefixed `at least ` when the grouping answer was truncated — off the same grouping answer the size badge at this depth measures |
 | `ON DISK` | `4.0 MB`, `at least 4.0 MB`, *nothing is filed here*, or *the host cannot say* |
 
 - **`RUNS` is never *the host cannot say***, which is the one field that reads differently from a
   test's. The control exists only where the grouping answer lists the group's runs, so the figure is
   always there — and it is the sum over the group's test-name rows, which costs no request because
   the view holds that answer for the tree it draws.
+- **But it is a bound whenever that answer was truncated**, and then it says *at least 7 runs* — the
+  rule the `ON DISK` row beside it already keeps, in the same words and off the same flag (#284
+  review). The two walks are not the same walk: the grouping walk is bounded per group and over the
+  whole archive and **drops runs** at either bound, while the delete's walk is scoped to one project
+  with the same numeric bound, so it reaches runs the listing never did and takes them. Rendering
+  the sum as a plain figure would understate an irreversible action on the default path. The control
+  is **not** withheld on this ground — a truncated answer still lists the group and the delete is
+  still correct about what it takes — so it is the arithmetic that carries the marker, not the
+  action that disappears. It is a prefix and nothing else, the way `ON DISK` does it: the plural
+  still follows the number, so a bounded one reads *at least 1 run*.
 - **The read is `measure_archive_groups` and not `measure_archive`**, over `{ scope: 'group',
   project, groupId }`: a group is not a directory, so no address walk can size it. Made when the
   dialog opens, not per row.
@@ -3167,8 +3177,9 @@ in this group stay. There is no undo. A test that has nothing left afterwards go
 and all.* That is the whole of D43's surgical reading said to the person about to press it, and the
 middle clause is the one a reader would otherwise get wrong — a test name is not unique to one group.
 
-**What it settles**, in the same region above the content area, in five sentences that share no
-phrase with the test's five:
+**What it settles**, in the same region above the content area, in five sentences of which **no one
+is the same sentence as any of the test's five, and each names its own scope in its leading
+clause**:
 
 | The answer | What the line says |
 | --- | --- |

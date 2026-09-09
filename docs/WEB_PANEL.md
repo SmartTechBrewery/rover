@@ -185,8 +185,10 @@ Design work lives in [`DESIGN.md`](./DESIGN.md); the brief that produced the fir
    **the runs whose group id matches and nothing else**: a test's runs that are in another group or
    in none stay, and a test the deletion empties goes with its `Keep`. It reuses phase 2's control,
    dialog, notice, re-read and navigation whole — what is the group's own is its figures (`RUNS` off
-   the grouping answer, `ON DISK` off `measure_archive_groups`, and **no `KEPT` row**, there being no
-   group-level flag) and its words, which say that runs of the same tests outside the group stay. A
+   the grouping answer, read as *at least n runs* whenever that answer was truncated, because the
+   two walks are bounded differently and the delete can take more than the listing saw; `ON DISK`
+   off `measure_archive_groups`, and **no `KEPT` row**, there being no group-level flag) and its
+   words, which say that runs of the same tests outside the group stay. A
    settled outcome re-reads **both** caches, the levels one and the grouping answer this view draws
    its own levels from, and lands the selection on the project; a group whose runs are not listed
    gets no control, which is the rule its tick already keeps. Still no polling and still no refresh

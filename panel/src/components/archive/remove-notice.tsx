@@ -212,9 +212,20 @@ function someHalfWent(
 }
 
 /**
- * One sentence per outcome for a **group**, and **no phrase is shared with the test's** (D6) — the
- * pairing rule this screen keeps everywhere, and the reason these are four sentences of their own
- * rather than the four above with a noun swapped.
+ * One sentence per outcome for a **group**, and **no two lines across the two scopes are the same
+ * sentence, each naming its own scope in its leading clause** (D6) — the pairing rule this screen
+ * keeps everywhere, and the reason these are sentences of their own rather than the ones above with
+ * a noun swapped.
+ *
+ * **That claim is deliberately weaker than the within-scope one, and it is the true one** (#284
+ * review). Two of these do share a closing clause with the test's — *What the screen was showing had
+ * gone out of date, and it has been read again.* on `not-found`, and *Wait for the lease to end, or
+ * force-release the device holding it first.* on `refused` — because after either answer the next
+ * move genuinely is identical, and inventing a second wording for one identical instruction would
+ * make the two scopes differ where they do not. What has to differ is what a reader tells the two
+ * apart by, and that is the half that leads: *login-flow* against *one of app-bar-top-space's runs*.
+ * The guard in `remove-notice.test.tsx` enforces exactly that pair of properties rather than
+ * asserting the stronger one this comment used to claim.
  *
  * Each says the thing only this scope can say, which is what makes the four different next moves:
  *
