@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { StrictMode } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -29,16 +29,30 @@ function registered(project: string) {
 	};
 }
 
-/** One line, so the hook's state is assertable as text. */
+/**
+ * One line, so the hook's state is assertable as text — and one control, so its `reload` is
+ * pressable without a screen. The button is the probe's own and not the panel's: `reload` is
+ * deliberately not a refresh control anywhere in the UI (`registered-projects.ts`), and what this
+ * file asserts is what one more read does.
+ */
 function Probe() {
-	const state = useRegisteredProjects();
+	const { state, reload } = useRegisteredProjects();
 	return (
-		<p data-testid="state">
-			{state.status === 'listed'
-				? `listed:${state.projects.map((project) => project.project).join(',')}`
-				: state.status}
-		</p>
+		<>
+			<p data-testid="state">
+				{state.status === 'listed'
+					? `listed:${state.projects.map((project) => project.project).join(',')}`
+					: state.status}
+			</p>
+			<button onClick={reload} type="button">
+				read again
+			</button>
+		</>
 	);
+}
+
+function readAgain(): void {
+	fireEvent.click(screen.getByRole('button', { name: 'read again' }));
 }
 
 describe('the one request this screen makes', () => {
@@ -178,5 +192,106 @@ describe('what one answer becomes', () => {
 	// would be the panel's last word being the wrong one.
 	it('sets nothing at all on a refused session', async () => {
 		expect(await stateFrom({ ok: false, refusal: 'refused' })).toBe('loading');
+	});
+});
+
+/**
+ * **The re-read** (#273), and it is one more request rather than a second hook.
+ *
+ * The screen calls this on a settled delete and on nothing else, so what matters is that the list
+ * afterwards is the host's *second* answer — never a locally filtered first one — and that a screen
+ * that never deletes anything still makes exactly one request.
+ */
+describe('reading again after this screen has changed what is registered', () => {
+	it('asks `list_projects` a second time and takes the second answer', async () => {
+		host.call.mockReset();
+		host.call
+			.mockResolvedValueOnce(
+				result({
+					outcome: 'listed',
+					projects: [registered('checkout-web'), registered('rover-sandbox')],
+				}),
+			)
+			.mockResolvedValueOnce(
+				result({ outcome: 'listed', projects: [registered('rover-sandbox')] }),
+			);
+		render(<Probe />);
+		await waitFor(() =>
+			expect(screen.getByTestId('state').textContent).toBe('listed:checkout-web,rover-sandbox'),
+		);
+
+		readAgain();
+
+		await waitFor(() =>
+			expect(screen.getByTestId('state').textContent).toBe('listed:rover-sandbox'),
+		);
+		expect(host.call.mock.calls).toEqual([
+			['list_projects', {}],
+			['list_projects', {}],
+		]);
+	});
+
+	// One read per press, and StrictMode's double mount is still one: the guard is keyed on the
+	// nonce it has already served rather than on whether it has ever run.
+	it('asks once per read, under StrictMode too', async () => {
+		host.call.mockReset();
+		host.call.mockResolvedValue(result({ outcome: 'listed', projects: [registered('a')] }));
+		render(
+			<StrictMode>
+				<Probe />
+			</StrictMode>,
+		);
+		await waitFor(() => expect(host.call).toHaveBeenCalledTimes(1));
+
+		readAgain();
+		await waitFor(() => expect(host.call).toHaveBeenCalledTimes(2));
+
+		readAgain();
+		await waitFor(() => expect(host.call).toHaveBeenCalledTimes(3));
+	});
+
+	/*
+	 * **A re-read that answers `unreadable` replaces the list**, which is correct rather than a
+	 * regression: it is the host's answer to the question the screen just asked, and a screen
+	 * holding on to a listing the host will no longer confirm would be showing registrations it has
+	 * no current evidence for.
+	 */
+	it('lets the host’s second answer replace the list, even when it is `unreadable`', async () => {
+		host.call.mockReset();
+		host.call
+			.mockResolvedValueOnce(result({ outcome: 'listed', projects: [registered('a')] }))
+			.mockResolvedValueOnce(result({ outcome: 'unreadable' }));
+		render(<Probe />);
+		await waitFor(() => expect(screen.getByTestId('state').textContent).toBe('listed:a'));
+
+		readAgain();
+
+		await waitFor(() => expect(screen.getByTestId('state').textContent).toBe('unreadable'));
+	});
+
+	/*
+	 * A superseded read lands on nothing. Two answers are not ordered by the requests that asked
+	 * for them, so the later request answering first must not let the earlier one overwrite it — a
+	 * list from before the delete, drawn after the one from after it.
+	 */
+	it('ignores the first read’s answer when it arrives after the second’s', async () => {
+		host.call.mockReset();
+		let answerFirst: (value: unknown) => void = () => undefined;
+		host.call
+			.mockReturnValueOnce(
+				new Promise((resolve) => {
+					answerFirst = resolve;
+				}),
+			)
+			.mockResolvedValueOnce(result({ outcome: 'listed', projects: [registered('after')] }));
+		render(<Probe />);
+		await waitFor(() => expect(host.call).toHaveBeenCalledTimes(1));
+
+		readAgain();
+		await waitFor(() => expect(screen.getByTestId('state').textContent).toBe('listed:after'));
+		answerFirst(result({ outcome: 'listed', projects: [registered('before')] }));
+		await act(async () => undefined);
+
+		expect(screen.getByTestId('state').textContent).toBe('listed:after');
 	});
 });

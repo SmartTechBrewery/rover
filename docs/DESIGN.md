@@ -610,8 +610,19 @@ correct state rather than a fault.
 
 ### The force-release confirmation — settled, for the asking
 
-The only destructive action in the product, and it asks before it fires. It is a **modal over the
-working panel** — the rest of the panel still works, so by §7's rule it keeps the shell.
+The **first** destructive action in the product, and it asks before it fires. It is a **modal over
+the working panel** — the rest of the panel still works, so by §7's rule it keeps the shell.
+
+**It is no longer the only one, and this arrangement is what the second one copied** — the sentence
+above read *the only destructive action in the product*, and is corrected in place rather than
+deleted (`ai/RULES.md` §1, #273). `Delete project` on the Projects card is the second (§10, D42), and
+it takes every rule below unchanged: the filled `Cancel` against the recessive destructive control,
+the `secondary-container` header rather than a red one, plain unsoftened words about what happens,
+`Escape` and no focus trap, the settled outcomes said in one polite live region **above** the set
+rather than on the card that was acted on, that line staying until it is dismissed, and the request
+that reached nothing being not an outcome at all. What §10 records is one deliberate departure —
+that dialog carries **numbers about what goes**, because a delete is decided on *how much* where a
+force-release is decided on *what is running* — and nothing else.
 
 - **`TIME TO AUTO RELEASE`, not "remaining time".** "Remaining" does not say remaining until what,
   and the number's whole job here is to answer the comparison the operator is actually making: am I
@@ -649,7 +660,8 @@ working panel** — the rest of the panel still works, so by §7's rule it keeps
 The asking is above; this is what happens after it. **Three outcomes that must not collapse into
 one**, plus a fourth case that is not an outcome at all. Each is ordinary text, `aria-live="polite"`,
 with no colour of alarm and no icon of alarm — nothing here has gone wrong, and §5's no-red rule
-holds through the panel's one destructive action.
+holds through **both** of the panel's destructive actions (#273; this clause read *the panel's one
+destructive action*, and §10's delete says its own four outcomes the same way).
 
 - **The lease ended.** The card changing *is* the outcome, and it happens without a reload: the
   dialog closes and the screen asks the poll again rather than waiting up to `POLL_MS` for it. One
@@ -3109,20 +3121,29 @@ read **no control of any kind, and no disabled one** — no `Add`, no `Edit`, no
 menu, the cards not links — on the ground that *a greyed-out `Delete` promises a permission tier that
 does not exist*, since editing and deleting a registration wait on the role model D27 defers (D31).
 
-**What survives of that reasoning is the whole of it except the conclusion about the affordance.**
-The privilege is genuinely not there: deleting a registration means the host removing a file that
-names programs it spawns, D31 refuses that write on every transport, and no role model distinguishes
-who may ask. So the control is **wired to nothing** — no `onClick`, no confirmation, no call, and
-pressed it does exactly nothing — and it is here so the row's shape is settled before the action
-behind it exists rather than after. The old rule's mistake was treating *the shape of a control* and
-*the privilege it would exercise* as one decision; they are two, and this is the first of them. When
-the action lands it takes `ForceReleaseControl`'s shape — a confirmation that asks first, an answer
-that says what actually happened — and this paragraph is where that gets written down.
+**What survived of that reasoning was the whole of it except the conclusion about the affordance**,
+and **the second of its two decisions has now been taken** — this paragraph and the next are edited
+in place with their reasoning rewritten (`ai/RULES.md` §1, #273). They read: *the privilege is
+genuinely not there: deleting a registration means the host removing a file that names programs it
+spawns, D31 refuses that write on every transport, and no role model distinguishes who may ask. So
+the control is wired to nothing — no `onClick`, no confirmation, no call, and pressed it does
+exactly nothing.* The framing that made that a coherent position is what stands: the old rule's
+mistake was treating **the shape of a control** and **the privilege it would exercise** as one
+decision, they are two, and the affordance was settled first on purpose.
 
-**It is deliberately not `disabled`.** A disabled control is the thing the old rule was right about:
-it promises a press that is coming and withholds it, which is a claim about permission. An ordinary
-control that does nothing yet makes no such claim, and it keeps the pointer affordance §5 gives every
-button.
+**The privilege is there now, and it arrived by the second decision being taken rather than by the
+first being revisited.** D31 was amended for the write that is a *removal* (D42): a delete makes
+the host run strictly less and names no program at all, so the code-execution reason does not reach
+it, and the privilege reason is answered by the request being **named and bounded** — one project by
+name, nothing outside its own subtree — rather than by the role model D27 still defers. So the
+control has its action, and it is exactly the shape this paragraph promised: `ForceReleaseControl`'s
+— a confirmation that asks first, and an answer that says what actually happened.
+
+**It was deliberately not `disabled` then, and there is nothing to disable now.** A disabled control
+is the thing the old rule was right about: it promises a press that is coming and withholds it,
+which is a claim about permission. That is why the affordance shipped as an ordinary control, and it
+is why nothing had to change about it when the action landed — the markup is the same markup, with an
+`onClick`.
 
 **It is the badge treatment, not a new one.** `BADGE_SHAPE` and `BADGE_TYPE` come out of
 `header-badge.tsx` — the Archive header's own pill — so the radius, the border width, the padding,
@@ -3158,6 +3179,114 @@ one draw as *a project whose configuration will not parse* rather than as a diff
 either would fit in (D19), because this answer reaches a browser and a hook file's `env` may hold
 anything an operator put there. So a card cannot grow a command, a `cwd`, a port or an environment
 value without changing the wire first.
+
+### The delete confirmation — settled
+
+Pressing `Delete project` opens a confirmation in the shape §7 settled for force-releasing, which is
+the pattern rather than a coincidence: two destructive actions in one product get one way of asking.
+
+**There is no Stitch screen for it, and that is deliberate rather than an omission** — §11's list is
+where this belongs and it is on it. By the time this was built §7 had already settled the dialog's
+frame, its two controls, its header colour and its tone, and §6's field anatomy had settled what a
+label over a value looks like; a design round would have re-derived all of that and settled only
+*which three rows the `<dl>` carries*, which is a table rather than a screen. So it is built from
+this document, and what it settled is written down here.
+
+Everything §7 records so it would not be "fixed" back holds here unchanged —
+
+- **`Cancel` is the filled, prominent control and `Delete project` is the recessive one.** The safe
+  exit is the easier target.
+- **The header bar is `secondary-container`, not red.** §5's no-red rule holds through the second
+  destructive action as it did through the first. The card's control carries the `error` accent
+  (above) and this surface carries none: the accent belongs to the affordance in a list of
+  registrations, not to the one surface that is already about nothing else.
+- **`TriangleAlert` in the header, `Gavel` beside the sentence**, `Escape` cancels, focus lands on
+  `Cancel`, there is no focus trap, and the backdrop is not a control.
+- **It says in plain words what confirming does, unsoftened**: *this removes the registration and
+  everything the archive holds for this project, permanently. There is no undo. A test marked `Keep`
+  goes with it.*
+
+**The one deliberate departure from §7's dialog: this one carries numbers about what goes.**
+Force-releasing ends a lease, and what an operator needs in order to decide is the *run* — a device,
+a holder, a test name. A delete removes data that cannot be got back, so the fact that decides it is
+**how much**, and a figure is the honest way to say that where a warning adjective is not. Three
+fields, all of them said as numbers rather than as adjectives:
+
+| The field | What it says |
+| --- | --- |
+| `PROJECT` | the identifier, monospace, verbatim — the whole of what is being named |
+| `IN THE ARCHIVE` | `7.4 MB`, or `at least 7.4 MB` for a truncated walk, or *nothing is filed here*, or *the host cannot say* |
+| `KEPT TESTS` | `3 tests`, `1 test`, **`none`**, or *the host cannot say* |
+
+- **The three `measure_archive` answers must not render alike** (D6): a size, *there is nothing at
+  this address* and *the host could not measure it* are three different facts about what this delete
+  would take, and only the middle one is what `0 B` is a true claim about. A `truncated` answer reads
+  as *at least*, because its figure is a lower bound.
+- **`0` draws the `KEPT TESTS` row rather than hiding it**, which is this dialog's one departure
+  from the badges' absent-rather-than-`0` rule and is deliberate: *none of this project's tests are
+  kept* is precisely the fact that stops the sentence below being alarming. A count the host could
+  not give must not read as `0` either — that would claim something about the operator's own
+  decisions that nothing has established.
+- **Neither figure is a new host read.** `measure_archive` is on `PANEL_METHODS` for the Archive
+  screen's size badge (R49, #259) and `list_kept_tests` for the `Keep` flag (D33, #234); the count
+  is filtered out of the whole set in the browser rather than asked for. The reads are made **when
+  the dialog opens** and not before, so a screen listing fourteen registrations still asks the host
+  one thing on navigation.
+- The recessive control reads `Delete project`, and `Deleting…` while the ask is out — §5's pending
+  state, and never a spinner.
+
+### What a delete settles — settled
+
+**Four outcomes that must not collapse into one**, plus a fifth case that is not an outcome — §7's
+own arrangement, and the four are D42's. Each is ordinary text in one polite live region **above the
+list**, with no colour of alarm and no icon of alarm.
+
+| The answer | What the line says |
+| --- | --- |
+| `deleted` | the project is gone — the registration and everything the archive held for it — with **what it came to**: the bytes freed, and how many tests marked `Keep` went with them |
+| `not-registered` | there was no registration and nothing filed under it, so **nothing was deleted**, and the list was out of date |
+| `partial` | some of it could not be removed, **naming which half stayed**; the rest went, and this host's log says what stopped it |
+| `refused` | a lease on it is live, so **nothing at all was touched**; wait for it, or force-release the device holding it first |
+
+- **`not-registered` is not a delete of zero bytes** and must never read as one. The host keeps them
+  apart structurally — the arm carries no report at all — and the line keeps them apart in words.
+- **A `deleted` says what it came to rather than that it worked.** `0 B` freed is the truth about a
+  registration with nothing filed under it, and saying so keeps the line a report rather than a
+  congratulation.
+- **A `partial` reports no *less* than a `deleted`.** The fields say which halves went, so the one
+  answer whose next move is *look at this host's log* is the fuller sentence rather than the thinner
+  one.
+- **The line lives above the list and outlives the card it was about.** Two of the four outcomes take
+  that card out of the next answer, and a line inside the branch that just emptied would go with it.
+  **It stays until dismissed**, rather than until something else replaces it: this is the only place
+  the panel explains why a confirmed action changed nothing, and the screen does not poll, so the
+  dismiss control is the whole of how it goes.
+- **The fifth case, and it is not an outcome: the request that reached nothing.** No answer, an
+  `error` envelope, or a result the panel cannot read — all three deleted nothing, so the dialog
+  **stays open** with the control usable again, says exactly that, and **nothing is said above the
+  list**. §8's rule applies unchanged: the panel never reports a deletion it did not get. A session
+  the host refused is not this case either — the bounce to *access ended* is already happening, and
+  the panel says nothing over it.
+
+The **actor** on the wire is the signed-in user's `identifier`, and there is no field for it on the
+dialog. D28 forbids *the host* deriving attribution from whoever authenticated; a client saying who
+it is, is the opposite of that, and it is what makes the daemon's audit line name a person rather
+than a browser. Never a constant like `panel`.
+
+### The screen re-reads rather than assuming
+
+**After a settled delete the list is `list_projects`' answer again**, never the panel's own edit of
+what it had. Filtering the deleted identifier out of the array in hand would draw a list nothing on
+the host ever answered with, and it would be wrong in both directions: a `partial` may have left the
+registration exactly where it was, and a `not-registered` proves the list being filtered was already
+out of date.
+
+**A `refused` does not re-read**, and that is not an inconsistency: nothing at all was touched, so
+what is registered is exactly what the list already says.
+
+**This is not a refresh control and does not become one.** There is still nothing on this screen for
+a reader to press, no interval and no retry — it re-reads on a settled delete and on nothing else,
+which leaves *no polling, and no refresh control* below intact.
 
 ### The card order is the host's order
 
@@ -3308,6 +3437,15 @@ top of this file). Do not commission a Stitch screen for them.
 - **The force-release action's three outcomes — done** (#122). Built from this document, and what
   they settled is written into §7 above, together with the fourth case the issue did not name: the
   request that reached nothing, which released nothing and says so.
+- **The delete-project confirmation and its four outcomes — done** (#273). Neither had an approved
+  screen and neither was commissioned one, for the reason the two Archive views belong here: §7 had
+  already settled the dialog's frame, its filled `Cancel` against a recessive destructive control,
+  its `secondary-container` header and its tone, and §6 had settled a label over a value — so a
+  design round would have settled only which three rows the `<dl>` carries, which is a table rather
+  than a screen. The *control* is the exception that proves the method worked: its shape came out of
+  a design round a phase earlier (§10, #157) and did not change when the action landed. What the
+  build settled is written into §10 above: the three fields and the four wordings, the three
+  `measure_archive` answers kept apart, `0` drawing the kept-tests row, and the re-read.
 - **The Archive screen's root level, and its three states with nothing to browse — done** (#132).
   The three levels had approved screens; the root level and the empty-ish states did not, and were
   built from this document as this list intends. What they settled is written into §9 above.

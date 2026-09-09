@@ -1,7 +1,7 @@
-import { BADGE_SHAPE, BADGE_TYPE } from '@panel/components/archive/header-badge.js';
+import { DeleteProjectControl } from '@panel/components/projects/delete-project-control.js';
 import { type DeclaredField, declaredFieldsOf } from '@panel/projects/declared-fields.js';
+import type { DeleteProjectAnswer } from '@panel/projects/delete-project.js';
 import type { ProjectRegistration } from '@panel/projects/project-list.js';
-import { Trash2 } from 'lucide-react';
 
 /**
  * One registration under this host's projects root, exactly to `docs/DESIGN.md` §10.
@@ -14,12 +14,18 @@ import { Trash2 } from 'lucide-react';
  * registration the host cannot read draw as *that* — a project, named, whose configuration will
  * not parse — rather than as a failure of the panel or as a project declaring nothing (D6, D31).
  *
- * **One control, and it is `Delete project` in the header strip** — the affordance, deliberately
- * ahead of the action it names: it is wired to nothing, writes nothing and asks the host nothing.
- * The card is still not a link and carries no other control, no overflow menu and no form control.
- * The action itself is unchanged by its presence: deleting a registration means a write into the
- * projects root over the wire, which D31 refuses on every transport, and it waits on the role model
- * D27 defers. See {@link DeleteProjectButton} for what this does and does not promise.
+ * **One control, and it is `Delete project` in the header strip** — and it has its action now
+ * (#273). This paragraph is rewritten in place rather than replaced, per `ai/RULES.md` §1: it said
+ * the control was *wired to nothing, writing nothing and asking the host nothing*, an affordance
+ * deliberately settled ahead of its action while deleting a registration was a write D31 refused on
+ * every transport. **D31 was amended and the write that is a *removal* is admitted** (D42): a
+ * delete makes the host run strictly less, it names no program, and the privilege question is
+ * answered by the request being named and bounded rather than by the role model D27 defers. So the
+ * control asks first and then calls `delete_project` — `ForceReleaseControl`'s own arrangement, and
+ * exactly the shape that paragraph said it would take when the action landed. What is unchanged is
+ * everything else: the card is still not a link and carries no other control, no overflow menu and
+ * no form control, and registering or editing a registration is still `rover init`'s.
+ * See {@link DeleteProjectControl} for what it does.
  *
  * **No LED, no dot, no status glyph and no colour on any field.** The device card's LED means
  * *held or free*, a live fact about hardware; a registration has no such state, and borrowing that
@@ -29,7 +35,21 @@ import { Trash2 } from 'lucide-react';
  * `held-free-counter.tsx` and the rule `app-shell.test.tsx` already asserts: the texture is
  * confined to the navigation chrome and nothing inside `<main>` carries it (§5).
  */
-export function ProjectCard({ project }: { readonly project: ProjectRegistration }) {
+export function ProjectCard({
+	project,
+	onDeleteSettled,
+}: {
+	readonly project: ProjectRegistration;
+	/**
+	 * A delete this card's control settled, on its way to the screen — never said here.
+	 *
+	 * The card is about to disappear underneath the answer for two of the four outcomes, so the
+	 * outcome is reported above the list where it survives the card it was about (§7,
+	 * `delete-project-notice.tsx`). The request that reached nothing never arrives: it settled
+	 * nothing and stays in the dialog.
+	 */
+	readonly onDeleteSettled: (answer: DeleteProjectAnswer, project: string) => void;
+}) {
 	return (
 		<article className="flex flex-col overflow-hidden rounded-sm border-2 border-outline-variant bg-surface-container">
 			{/*
@@ -62,63 +82,15 @@ export function ProjectCard({ project }: { readonly project: ProjectRegistration
 						{project.project}
 					</span>
 				</div>
-				<DeleteProjectButton className="ml-auto" project={project.project} />
+				<DeleteProjectControl
+					className="ml-auto"
+					onSettled={onDeleteSettled}
+					project={project.project}
+				/>
 			</div>
 
 			{project.kind === 'registered' ? <DeclaredBody project={project} /> : <NotReadableBody />}
 		</article>
-	);
-}
-
-/**
- * `Delete project` — the strip's one control, **the affordance and not yet the action**.
- *
- * **It is wired to nothing on purpose.** No `onClick`, no confirmation, no call: pressed, it does
- * exactly nothing, and it is here so the shape of the row can be settled before the write behind it
- * exists. That write is a different privilege in kind — deleting a registration means the host
- * removing a file that names programs it spawns, which D31 refuses on every transport and which
- * waits on the role model D27 defers — so **nothing about this control claims the privilege is
- * there**, and it must not grow a handler that pretends otherwise. What it will grow, when the
- * action lands, is `ForceReleaseControl`'s shape: a confirmation that asks first, and an answer that
- * says what actually happened.
- *
- * **It is the badge treatment, not a new one** — `BADGE_SHAPE` and `BADGE_TYPE` are the Archive
- * header's own pill (`header-badge.tsx`), so the radius, the border width, the padding, the face and
- * the 12px step are shared rather than copied, and the glyph-beside-12px-words arrangement is
- * `artifact-body-view.tsx`'s *Open in a new window*. Nothing here is invented at the keyboard
- * (`ai/RULES.md` §8).
- *
- * **The accent is `error`, and that is a departure recorded rather than assumed.** §5 has no red
- * *device state* and never will — a device that vanished is simply not listed — and the
- * force-release control drops the design's red hover for that reason. Neither rule is about a
- * destructive control's own accent, which is what this is: `error` is Analog Horizon's own red
- * (`--color-error`), it is on the glyph and the words rather than in a fill, and the frame stays
- * `outline-variant` until the pointer is on it. §5's *destructive actions are recessive* is what
- * that shape is for — the loudest thing on a Projects card is still the identifier it is about, and
- * a solid red pill repeated down a list of registrations is exactly the full-width orange button §5
- * records as the mistake.
- */
-function DeleteProjectButton({
-	project,
-	className,
-}: {
-	/** The identifier this control is about — for the accessible name, so a screen reader hears
-	 *  which of the cards' identical labels it has landed on. */
-	readonly project: string;
-	readonly className: string;
-}) {
-	return (
-		<button
-			// `aria-label` overrides the visible words rather than adding to them, which is what a
-			// list of same-labelled controls needs: `Delete project checkout-web`, not `Delete
-			// project` eight times.
-			aria-label={`Delete project ${project}`}
-			className={`${BADGE_SHAPE} ${BADGE_TYPE} ${className} flex shrink-0 items-center gap-2 border-outline-variant bg-surface-container text-error transition-colors hover:border-error`}
-			type="button"
-		>
-			<Trash2 aria-hidden="true" size={14} strokeWidth={2} />
-			Delete project
-		</button>
 	);
 }
 

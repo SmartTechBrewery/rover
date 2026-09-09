@@ -233,6 +233,26 @@ import { findUserByToken, type UserRecord } from './user-store.js';
  * call here would size every other agent's grouped work on the host. It composes nothing for a
  * caller either — it takes one `project` component and a `groupId` that names no directory at all
  * — and no path and no `errno` is on its answer, which is the fourth row's schema reused.
+ *
+ * `delete_project` joined it with the confirmation dialog that calls it (D42, R50, #273), exactly
+ * as `force_release_device` joined it with the screen that calls it — the row landed on the one
+ * table a phase earlier and was deliberately held off this list until there was a panel surface
+ * asking for it (#271). It is the **third action** on this list, after `force_release_device` and
+ * `set_kept_tests`, and it is admitted on D27's own test: naming one finished project of this
+ * host's own is the operator's authority over a shared resource rather than a step in one agent's
+ * work. **What holds it apart from `sweep_archive`, which stays off this list, is D42's
+ * distinction and not a softer reading of the same risk**: the sweep is *untargeted* — a policy
+ * decides what goes, across every project on the host — while this is **named and bounded**, one
+ * project by name with nothing outside its own subtree touched, and the panel states the size
+ * before it fires. It is deliberately **not** an MCP tool, which is `sweep_archive`'s reason in a
+ * sharper key: an agent calling it would be an agent destroying somebody else's evidence. Nothing
+ * on this list still creates, edits or renames a hook file, and none of it takes a path into the
+ * projects directory — D31's write half is a *removal*, by identifier, and that is the whole of
+ * it. So the list now reads: the panel reads the pool, ends a stuck lease in it, reads the artifact
+ * archive one directory level at a time, searches the whole of it, asks which of its runs share a
+ * group, asks how much disk a scope of it takes, reads what this host has registered and deletes
+ * one of those registrations with everything filed under it, and reads and sets which of the
+ * archive's tests are kept — and D27 still keeps every acquire and every verb off a browser.
  */
 const PANEL_METHODS: readonly IpcMethodName[] = [
 	'list_devices',
@@ -243,6 +263,7 @@ const PANEL_METHODS: readonly IpcMethodName[] = [
 	'measure_archive',
 	'measure_archive_groups',
 	'list_projects',
+	'delete_project',
 	'list_kept_tests',
 	'set_kept_tests',
 ];
