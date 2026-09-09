@@ -1,0 +1,50 @@
+{
+  "answers": [
+    {
+      "case": "the registration, its archive subtree and its kept entries all went",
+      "params": { "project": "checkout-web", "actor": "karolina" },
+      "result": {
+        "outcome": "deleted",
+        "registration": "removed",
+        "archive": "removed",
+        "keptTests": "removed",
+        "freedBytes": 7723471,
+        "keptTestsRemoved": 3
+      }
+    },
+    {
+      "case": "an archive subtree a lease named, with no registration and no kept entries",
+      "params": { "project": "rover-sandbox", "actor": "karolina" },
+      "result": {
+        "outcome": "deleted",
+        "registration": "absent",
+        "archive": "removed",
+        "keptTests": "absent",
+        "freedBytes": 412306,
+        "keptTestsRemoved": 0
+      }
+    },
+    {
+      "case": "the archive subtree would not go, and the other two halves did",
+      "params": { "project": "legacy-kiosk", "actor": "alice" },
+      "result": {
+        "outcome": "partial",
+        "registration": "removed",
+        "archive": "failed",
+        "keptTests": "removed",
+        "freedBytes": 0,
+        "keptTestsRemoved": 1
+      }
+    },
+    {
+      "case": "nothing of this project was on the host",
+      "params": { "project": "never-registered", "actor": "alice" },
+      "result": { "outcome": "not-registered" }
+    },
+    {
+      "case": "a lease on it is live, so nothing at all was touched",
+      "params": { "project": "statistics-deliveries", "actor": "karolina" },
+      "result": { "outcome": "refused", "reason": "lease-live" }
+    }
+  ]
+}

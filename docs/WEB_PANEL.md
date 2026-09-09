@@ -34,22 +34,31 @@ Design work lives in [`DESIGN.md`](./DESIGN.md); the brief that produced the fir
    hook file that will not parse **that it will not parse** — with no `env` value and no host path
    on any answer — and the screen draws one card per registration in the host's own order, with a
    registration it cannot read drawn as *that* rather than as a project declaring nothing
-   (`docs/DESIGN.md` §10). Nothing on it writes, and it does not poll.
-   **The card carries a `Delete project` control as of 2026-09-09, and it is wired to nothing** —
-   no handler, no confirmation, no call, so *nothing on it writes* is still literally true. The
-   affordance is settled ahead of the action on purpose; `docs/DESIGN.md` §10 carries its shape and
-   the reasoning that replaced the screen's old *no control of any kind*.
-   **The action behind it now exists on the host, and this paragraph is corrected in place**
-   (2026-09-09, #271): `deleting a registration waits on the role model` stopped being true.
-   `delete_project` (`PROJECT.md` D42, R50 phase 1) takes the hook file, that project's own subtree
-   of the artifact archive and its kept-test entries in one operator action, refusing while a lease
-   on the project is live — and it does not wait on D27, because the privilege question is answered
-   by the request being **named and bounded** rather than by a role model (D31 as amended). It is
-   reached from the CLI, `rover delete-project` (D4). **The panel's control is still wired to
-   nothing until phase 2**: `delete_project` is deliberately off `PANEL_METHODS` and joins it with
-   the confirmation dialog that calls it, exactly as `force_release_device` joined it with the
-   screen that calls it (R35, #122). So *nothing on this screen writes* is still true today, and
-   phase 2 is what changes that.
+   (`docs/DESIGN.md` §10). It still does not poll.
+   ***Nothing on it writes* has stopped being true, and this paragraph is rewritten in place rather
+   than deleted** (2026-09-09, #273, `ai/RULES.md` §1). It read that the screen's `Delete project`
+   control was **wired to nothing** — no handler, no confirmation, no call — so *nothing on it
+   writes* was still literally true, the affordance having been settled ahead of the action on
+   purpose. Both halves of the delete are built now, so **the panel deletes**: pressing the control
+   opens a confirmation, and confirming calls `delete_project`.
+   **What the delete is** (`PROJECT.md` D42, R50): the hook file, that project's own subtree of the
+   artifact archive and its kept-test entries, in one operator action, refusing while a lease on the
+   project is live. It does not wait on D27, because the privilege question is answered by the
+   request being **named and bounded** rather than by a role model (D31 as amended). Phase 1 (#271)
+   put it on the one method table and on the CLI as `rover delete-project` (D4); phase 2 (#273) put
+   it on `PANEL_METHODS` with the confirmation that calls it, exactly as `force_release_device`
+   joined that list with the screen that calls it (R35, #122). It is deliberately still **not** an
+   MCP tool.
+   **What the panel's own half settled** (`docs/DESIGN.md` §10): the confirmation is §7's shape —
+   `Cancel` filled and prominent, the destructive control recessive, a `secondary-container` header
+   rather than a red one — with one deliberate departure, that it **states what will go in numbers**
+   before it fires: the identifier, what the archive holds for this project, and how many of its
+   tests are marked `Keep`. Both figures come off reads the panel already had (`measure_archive`,
+   #259; `list_kept_tests`, #234), so no host read was added. The four outcomes are said as four in
+   one polite live region above the list; a request that reached nothing is not one of them and
+   leaves the dialog open. And **the screen re-reads rather than editing what it had** — the list
+   after a settled delete is `list_projects`' answer again — while still not polling and still
+   offering no refresh control.
    **Editing a registration still waits on the role model** D27 defers — a hook file names programs
    the host spawns, so writing one over the wire is a far larger privilege than force-releasing a
    lease, and today every named user holds every panel privilege. That reason is untouched by the

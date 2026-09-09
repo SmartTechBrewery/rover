@@ -1,31 +1,49 @@
 import { PageHeader } from '@panel/components/layout/page-header.js';
+import {
+	DeleteProjectNotice,
+	type SettledDeleteProject,
+} from '@panel/components/projects/delete-project-notice.js';
 import { ProjectCard } from '@panel/components/projects/project-card.js';
 import { QuietBanner } from '@panel/components/quiet-banner.js';
 import { QuietPanel } from '@panel/components/quiet-panel.js';
+import type { DeleteProjectAnswer } from '@panel/projects/delete-project.js';
 import {
 	type RegisteredProjects,
 	useRegisteredProjects,
 } from '@panel/projects/registered-projects.js';
 import { createRoute } from '@tanstack/react-router';
 import { EyeOff } from 'lucide-react';
+import { useState } from 'react';
 import { rootRoute } from './__root.js';
 
 /**
- * The panel's fourth destination — **what is registered on this host, read-only**
- * (`docs/DESIGN.md` §10, `PROJECT.md` R42, D31).
+ * The panel's fourth destination — **what is registered on this host, and the one write that is a
+ * removal** (`docs/DESIGN.md` §10, `PROJECT.md` R42, R50, D31, D42).
  *
  * It answers one question with one call: `list_projects` reads the whole projects root in a single
  * request (R39, #152), so unlike the Archive there is no tree, no expansion, no second column and
  * no navigation — there is nowhere to navigate to. A registration is a leaf, and this screen is
  * the list of them.
  *
- * **Nothing on it writes.** No `Add`, no `Edit`, no `Delete`, no overflow menu, and not a disabled
- * one either: a hook file names programs the host spawns, so writing one is a different privilege
- * in kind and waits on the role model D27 defers (D31). The cards are not links.
+ * **One thing on it writes, and the write is a *removal*** — this paragraph is rewritten in place
+ * with its reasoning rather than deleted (`ai/RULES.md` §1, #273). It read *nothing on it writes:
+ * no `Add`, no `Edit`, no `Delete`, no overflow menu, and not a disabled one either*, on the ground
+ * that a hook file names programs the host spawns, so writing one is a different privilege in kind
+ * and waits on the role model D27 defers. **That ground is unchanged and still shuts the other
+ * three**: nothing here creates, edits or renames a registration, and registering is still
+ * `rover init`'s. What it never covered is a *delete*, which makes the host run strictly less and
+ * names no program — so D31 was amended and the card's `Delete project` control has its action
+ * (D42). The cards are still not links.
  *
- * **No polling and no refresh control**, which is the Archive's rule rather than the Devices
- * screen's: a registration changes when a person runs `rover init` or edits a file on the host,
- * and this screen makes no claim to see that happen.
+ * **The screen re-reads rather than editing what it had.** A settled delete calls `reload()`, and
+ * the list afterwards is `list_projects`' answer again: a locally filtered array would be a list
+ * nothing on the host answered with, and it would be wrong for a `partial` that left the
+ * registration in place and for a `not-registered` that proves the list was already stale.
+ *
+ * **Still no polling and no refresh control**, which is the Archive's rule rather than the Devices
+ * screen's: a registration changes when a person runs `rover init` or edits a file on the host, and
+ * this screen makes no claim to see that happen. It re-reads on a settled delete and on nothing
+ * else, so there is nothing for a reader to press.
  *
  * | The host's answer | What the content area is |
  * | --- | --- |
@@ -39,7 +57,31 @@ import { rootRoute } from './__root.js';
  * which state renders what.
  */
 export function ProjectsScreen() {
-	const state = useRegisteredProjects();
+	const { state, reload } = useRegisteredProjects();
+	const [settled, setSettled] = useState<SettledDeleteProject | undefined>(undefined);
+
+	/*
+	 * What a delete settled, and the fresh read that makes it visible.
+	 *
+	 * **All four outcomes are reported and three of them re-read.** `refused` is the one that does
+	 * not: a live lease means nothing at all was touched, so what is registered is exactly what the
+	 * list already says and a second `list_projects` would ask the host a question whose answer the
+	 * screen is holding. The other three each changed something or proved the list wrong —
+	 * `not-registered` most of all, since it says the registration was already gone.
+	 *
+	 * **The request that reached nothing settles nothing, so it never arrives here.** It stays in
+	 * the dialog, which stays open with the control usable again, and the panel reports no deletion
+	 * it did not get (§7's fourth case).
+	 */
+	const onDeleteSettled = (answer: DeleteProjectAnswer, project: string): void => {
+		if (answer.outcome === 'unanswered' || answer.outcome === 'access-ended') {
+			return;
+		}
+		setSettled({ answer, project });
+		if (answer.outcome !== 'refused') {
+			reload();
+		}
+	};
 
 	return (
 		<>
@@ -48,12 +90,24 @@ export function ProjectsScreen() {
 				description="Projects registered on this host."
 				trail={[{ label: 'Projects' }]}
 			/>
-			<Content state={state} />
+			{/*
+			 * Above the content area, so it is above the list — and still there when the list is not.
+			 * Deleting the only registration on this host empties it, and the line saying which
+			 * project went must not sit inside the branch it just emptied.
+			 */}
+			<DeleteProjectNotice onDismiss={() => setSettled(undefined)} settled={settled} />
+			<Content onDeleteSettled={onDeleteSettled} state={state} />
 		</>
 	);
 }
 
-function Content({ state }: { readonly state: RegisteredProjects }) {
+function Content({
+	state,
+	onDeleteSettled,
+}: {
+	readonly state: RegisteredProjects;
+	readonly onDeleteSettled: (answer: DeleteProjectAnswer, project: string) => void;
+}) {
 	if (state.status === 'loading') {
 		// One line, and no spinner (§5). It is not an empty projects root and must not read as one.
 		return (
@@ -84,7 +138,7 @@ function Content({ state }: { readonly state: RegisteredProjects }) {
 	return (
 		<div className="mt-8 flex flex-col gap-(--gutter)">
 			{state.projects.map((project) => (
-				<ProjectCard key={project.project} project={project} />
+				<ProjectCard key={project.project} onDeleteSettled={onDeleteSettled} project={project} />
 			))}
 		</div>
 	);

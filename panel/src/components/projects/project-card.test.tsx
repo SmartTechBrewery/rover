@@ -1,8 +1,43 @@
 import { BADGE_SHAPE, BADGE_TYPE } from '@panel/components/archive/header-badge.js';
 import type { ProjectRegistration } from '@panel/projects/project-list.js';
-import { fireEvent, render, screen } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
+import type { HostAnswer, RpcEnvelope } from '@panel/session/host-client.js';
+import { act, fireEvent, render, screen } from '@testing-library/react';
+import { describe, expect, it, vi } from 'vitest';
+
+/*
+ * The session the strip's one control reads — the identity it attributes a delete with, and the
+ * two reads its confirmation makes as it opens. Mocked rather than provided, because what this
+ * file is about is the card: `delete-project-control.test.tsx` owns what the control does with an
+ * answer, and `delete-project-dialog.test.tsx` owns what the confirmation says.
+ */
+vi.mock('@panel/session/session-provider.js', () => ({
+	useSession: () => ({
+		state: {
+			status: 'signed-in',
+			identity: { identifier: 'karolina', displayName: 'Karolina Waldon' },
+		},
+		call: async (method: string): Promise<HostAnswer<RpcEnvelope>> => ({
+			ok: true,
+			value: {
+				type: 'result',
+				result:
+					method === 'measure_archive'
+						? { outcome: 'measured', bytes: 412_306, truncated: false }
+						: { outcome: 'listed', tests: [] },
+			},
+		}),
+	}),
+}));
+
 import { ProjectCard } from './project-card.js';
+
+/**
+ * One card, with the delete's outcome going nowhere: this file asserts the row, and the screen is
+ * where a settled outcome is said (`routes/projects.tsx`).
+ */
+function card(project: ProjectRegistration) {
+	return render(<ProjectCard onDeleteSettled={() => undefined} project={project} />);
+}
 
 /** A registration that asks the host to do nothing — the common, correct case (D13). */
 function declaresNothing(
@@ -34,7 +69,7 @@ describe('the header strip, on both arms', () => {
 	// and the exact string a lease carries as its `project` (D22, `docs/DESIGN.md` §10).
 	it('labels the identifier `PROJECT` whichever arm it is', () => {
 		for (const project of [CHECKOUT_WEB, NOT_READABLE]) {
-			const { unmount } = render(<ProjectCard project={project} />);
+			const { unmount } = card(project);
 
 			expect(screen.getByText('Project')).toBeDefined();
 			expect(screen.getByText(project.project)).toBeDefined();
@@ -44,7 +79,7 @@ describe('the header strip, on both arms', () => {
 
 	it('wraps a long identifier rather than truncating it', () => {
 		const long = 'a-very-long-project-identifier-nobody-would-shorten-by-hand';
-		render(<ProjectCard project={declaresNothing({ project: long })} />);
+		card(declaresNothing({ project: long }));
 
 		const identifier = screen.getByText(long);
 		expect(identifier.className).toContain('break-words');
@@ -60,7 +95,7 @@ describe('the header strip, on both arms', () => {
 	 * left to right and the control is what is pushed away from them.
 	 */
 	it('puts the one control on the right of the strip, and no status', () => {
-		const { container } = render(<ProjectCard project={CHECKOUT_WEB} />);
+		const { container } = card(CHECKOUT_WEB);
 
 		const strip = container.querySelector('article > div');
 		expect(strip?.className).not.toContain('justify-between');
@@ -73,7 +108,7 @@ describe('the header strip, on both arms', () => {
 	// The design's markup layers one in the header strip; the texture is confined to the
 	// navigation chrome (§5), which `app-shell.test.tsx` already asserts for the whole of `<main>`.
 	it('carries no scanline', () => {
-		const { container } = render(<ProjectCard project={CHECKOUT_WEB} />);
+		const { container } = card(CHECKOUT_WEB);
 
 		expect(container.querySelectorAll('.scanline')).toHaveLength(0);
 	});
@@ -81,14 +116,14 @@ describe('the header strip, on both arms', () => {
 
 describe('a registration the host read', () => {
 	it('draws the four declared fields and nothing else', () => {
-		const { container } = render(<ProjectCard project={CHECKOUT_WEB} />);
+		const { container } = card(CHECKOUT_WEB);
 
 		const labels = Array.from(container.querySelectorAll('dt')).map((dt) => dt.textContent);
 		expect(labels).toEqual(['Apps', 'Services', 'Install', 'Teardown']);
 	});
 
 	it('puts one identifier per line, in the order the host answered', () => {
-		const { container } = render(<ProjectCard project={CHECKOUT_WEB} />);
+		const { container } = card(CHECKOUT_WEB);
 
 		const values = Array.from(container.querySelectorAll('dd')).map((dd) =>
 			Array.from(dd.querySelectorAll('span')).map((span) => span.textContent),
@@ -100,7 +135,7 @@ describe('a registration the host read', () => {
 	});
 
 	it('answers `declared` for an install and a teardown that are there', () => {
-		render(<ProjectCard project={CHECKOUT_WEB} />);
+		card(CHECKOUT_WEB);
 
 		expect(screen.getAllByText('declared')).toHaveLength(2);
 	});
@@ -111,7 +146,7 @@ describe('a registration the host read', () => {
 	 * empty, faded, unloaded or pending.
 	 */
 	it('draws a project that declares nothing as a complete answer, not as missing data', () => {
-		const { container } = render(<ProjectCard project={declaresNothing()} />);
+		const { container } = card(declaresNothing());
 
 		expect(screen.getAllByText('none declared')).toHaveLength(4);
 		expect(container.innerHTML).not.toContain('opacity-');
@@ -122,7 +157,7 @@ describe('a registration the host read', () => {
 
 	// The gutter separates the cells; a rule under one of them reads as a line across the card.
 	it('carries no rule between the fields', () => {
-		const { container } = render(<ProjectCard project={CHECKOUT_WEB} />);
+		const { container } = card(CHECKOUT_WEB);
 
 		for (const cell of container.querySelectorAll('dl > div')) {
 			expect(cell.className).not.toContain('border');
@@ -132,7 +167,7 @@ describe('a registration the host read', () => {
 
 describe('a registration the host cannot read', () => {
 	it('says so, and says it is not the same as declaring nothing', () => {
-		render(<ProjectCard project={NOT_READABLE} />);
+		card(NOT_READABLE);
 
 		expect(screen.getByText('Configuration not readable')).toBeDefined();
 		expect(screen.getByText(/the file is there and the host cannot read it/)).toBeDefined();
@@ -140,7 +175,7 @@ describe('a registration the host cannot read', () => {
 
 	// §10 forbids a slab across a full-width card, which is why this is not `QuietBanner`.
 	it('draws the chip at its own width, left-aligned', () => {
-		render(<ProjectCard project={NOT_READABLE} />);
+		card(NOT_READABLE);
 
 		const chip = screen.getByText('Configuration not readable');
 		expect(chip.className).toContain('self-start');
@@ -153,11 +188,11 @@ describe('a registration the host cannot read', () => {
 	 * appear in the other.
 	 */
 	it('shares no copy with a project that declares nothing', () => {
-		const { unmount } = render(<ProjectCard project={declaresNothing()} />);
+		const { unmount } = card(declaresNothing());
 		const nothing = document.body.textContent ?? '';
 		unmount();
 
-		render(<ProjectCard project={NOT_READABLE} />);
+		card(NOT_READABLE);
 		const unreadable = document.body.textContent ?? '';
 
 		expect(nothing).toContain('none declared');
@@ -177,7 +212,7 @@ describe('a registration the host cannot read', () => {
 	 * about is what the reader is told — no code, no path, no errno, nothing to press for a retry.
 	 */
 	it('carries no error code, no path and no retry', () => {
-		const { container } = render(<ProjectCard project={NOT_READABLE} />);
+		const { container } = card(NOT_READABLE);
 
 		const words = container.textContent ?? '';
 		expect(words.toLowerCase()).not.toContain('error');
@@ -199,7 +234,7 @@ describe('a registration the host cannot read', () => {
 describe('the card, on either arm', () => {
 	it('carries the one control and nothing else, and is not a link', () => {
 		for (const project of [CHECKOUT_WEB, declaresNothing(), NOT_READABLE]) {
-			const { container, unmount } = render(<ProjectCard project={project} />);
+			const { container, unmount } = card(project);
 
 			expect(container.querySelectorAll('button')).toHaveLength(1);
 			expect(container.querySelectorAll('[role="button"]')).toHaveLength(0);
@@ -212,17 +247,20 @@ describe('the card, on either arm', () => {
 });
 
 /*
- * `Delete project` — the affordance, deliberately ahead of the action it names. Deleting a
- * registration means the host removing a file that names programs it spawns, which D31 refuses on
- * every transport and which waits on the role model D27 defers; this control claims none of that,
- * so what is asserted here is the shape and the *absence* of behaviour.
+ * `Delete project` — the affordance, **and its action** (#273). This block's framing is rewritten
+ * in place rather than replaced: it said the control claimed no privilege, so what was asserted was
+ * the shape and the *absence* of behaviour, since D31 refused the write on every transport. D31 was
+ * amended for the write that is a *removal* (D42), so what is asserted here now is that the shape
+ * is unchanged and that pressing it **asks** — the answer's own handling belongs to
+ * `delete-project-control.test.tsx` and the confirmation's words to
+ * `delete-project-dialog.test.tsx`.
  */
 describe('the `Delete project` control', () => {
 	// The header strip is identical on both arms, which is what makes an unreadable registration
 	// draw as a project whose configuration will not parse rather than as a different kind of thing.
 	it('is on both arms, named for the project it is about', () => {
 		for (const project of [CHECKOUT_WEB, NOT_READABLE]) {
-			const { unmount } = render(<ProjectCard project={project} />);
+			const { unmount } = card(project);
 
 			const control = screen.getByRole('button', { name: `Delete project ${project.project}` });
 			// The words are the same on every card; the accessible name is what tells them apart.
@@ -232,7 +270,7 @@ describe('the `Delete project` control', () => {
 	});
 
 	it('carries the trash glyph, hidden from a screen reader that already has the words', () => {
-		render(<ProjectCard project={CHECKOUT_WEB} />);
+		card(CHECKOUT_WEB);
 
 		const glyph = screen.getByRole('button').querySelector('svg');
 		expect(glyph).not.toBeNull();
@@ -245,7 +283,7 @@ describe('the `Delete project` control', () => {
 	 * the constants rather than as their letters, which is what makes this a claim about sharing.
 	 */
 	it('takes the header badge’s own shape and type', () => {
-		render(<ProjectCard project={CHECKOUT_WEB} />);
+		card(CHECKOUT_WEB);
 
 		const { className } = screen.getByRole('button');
 		for (const shared of [...BADGE_SHAPE.split(' '), ...BADGE_TYPE.split(' ')]) {
@@ -259,7 +297,7 @@ describe('the `Delete project` control', () => {
 	 * The frame stays neutral until the pointer is on it.
 	 */
 	it('accents in `error` without filling with it', () => {
-		render(<ProjectCard project={CHECKOUT_WEB} />);
+		card(CHECKOUT_WEB);
 
 		const { className } = screen.getByRole('button');
 		expect(className).toContain('text-error');
@@ -269,23 +307,41 @@ describe('the `Delete project` control', () => {
 	});
 
 	/*
-	 * **Nothing is wired**, and this is the assertion that says so: pressed, it does not throw, does
-	 * not navigate and has no handler to run. A control that quietly grew one would promise a
-	 * privilege D31 refuses — so the promise is asserted absent rather than left to a reading of the
-	 * component.
+	 * **Pressed, it asks** — and it is not `disabled`, which §10 records as the one form of this
+	 * control that would have promised a permission tier nobody has. What it opens is a
+	 * confirmation over the working panel, mounted outside this card's own tree, and nothing is
+	 * asked of the host about the project until that confirmation is answered.
 	 */
-	it('does nothing when pressed, and is not disabled either', () => {
-		render(<ProjectCard project={CHECKOUT_WEB} />);
+	it('opens a confirmation when pressed, and is not disabled', async () => {
+		const { container } = card(CHECKOUT_WEB);
 
 		const control = screen.getByRole('button');
 		expect(control.getAttribute('type')).toBe('button');
 		expect(control.hasAttribute('disabled')).toBe(false);
-		expect(control.getAttribute('onclick')).toBeNull();
 
-		const before = document.body.innerHTML;
 		fireEvent.click(control);
+		await act(async () => undefined);
 
-		// Nothing changed, because there is nothing behind it yet.
-		expect(document.body.innerHTML).toBe(before);
+		const dialog = screen.getByRole('dialog');
+		expect(dialog.getAttribute('aria-modal')).toBe('true');
+		// The card is not where it is mounted, and the card itself has not changed.
+		expect(container.contains(dialog)).toBe(false);
+		expect(container.querySelectorAll('button')).toHaveLength(1);
+	});
+
+	/*
+	 * The strip is identical on both arms, so the control is pressable on both — a registration the
+	 * host cannot read is exactly the one an operator is most likely to want gone, and the delete is
+	 * keyed on an identifier the host answered rather than on anything inside the file.
+	 */
+	it('asks on a registration the host cannot read, too', async () => {
+		card(NOT_READABLE);
+
+		fireEvent.click(screen.getByRole('button', { name: 'Delete project legacy-kiosk' }));
+		await act(async () => undefined);
+
+		// The identifier is on the card and again in the dialog, which is the point of both.
+		expect(screen.getByRole('dialog').textContent).toContain('legacy-kiosk');
+		expect(screen.getAllByText('legacy-kiosk')).toHaveLength(2);
 	});
 });
