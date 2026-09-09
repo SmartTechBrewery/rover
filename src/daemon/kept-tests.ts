@@ -33,6 +33,15 @@
  * — and more so since the *whole* policy runs on a clock, at local midnight and at daemon start
  * (D38): a store that will not parse now stops a pass nobody would otherwise notice was due.
  * {@link MAX_KEPT_TESTS} bounds the *document*, not the archive.
+ *
+ * **There are two writers of this document now, and the lock they share lives here** (D42, #271).
+ * `set_kept_tests` toggles the flag; `delete_project` takes every entry naming one project, because
+ * an operator deleting a project is not one of the two retention bounds D35 exempts a kept test
+ * from, and a tick that outlived the directory it names would leave the store pointing at nothing.
+ * Both are read-modify-write of the whole file, so {@link withKeptTestsLock} is declared in this
+ * module rather than privately in either handler: two chains keyed on one path would serialise
+ * each writer against itself and neither against the other, which silently drops one of two
+ * overlapping writes with both callers answered success.
  */
 
 import { randomUUID } from 'node:crypto';
@@ -99,6 +108,52 @@ export function defaultKeptTestsPath(): string {
 export function resolveKeptTestsPath(env: NodeJS.ProcessEnv = process.env): string {
 	const configured = env[KEPT_TESTS_PATH_ENV_VAR];
 	return configured === undefined || configured === '' ? defaultKeptTestsPath() : configured;
+}
+
+/**
+ * The in-flight write chain per store path, so no two read-modify-writes of one store interleave.
+ *
+ * Keyed by path rather than held on a handler instance because the **file** is what is being
+ * serialised: two handler factories on one path — a test starting a second daemon on the same
+ * store — must share the queue, and two on different paths must not wait on each other. The entry
+ * is dropped once it is the settled tail, so this map does not grow with the calls a long-lived
+ * daemon serves.
+ */
+const keptWrites = new Map<string, Promise<unknown>>();
+
+/**
+ * Run `work` with no other write of this store in flight, and hand back what it answered.
+ *
+ * **The read has to be inside it.** `src/ipc/server.ts` dispatches frames without awaiting them
+ * and every connection is independent besides, so two writes — a panel tick and a
+ * `rover keep add`, or a `set_kept_tests` and a `delete_project` — really do arrive at once. Each
+ * is a read-modify-write of the whole document, so left to interleave the later read would not see
+ * the earlier write and the earlier write would be silently dropped, both callers having been
+ * answered success.
+ *
+ * **This holds a promise, not a document.** Nothing is cached between calls and every call still
+ * reads the file, so D6 is untouched — it is a lock on a file rather than state in the daemon.
+ * Nothing serialises the *reads*: {@link writeKeptTests} renames a complete file into place, so a
+ * read already sees the whole of one version or the whole of the other, and putting reads in the
+ * queue would only make them wait behind a write.
+ */
+export function withKeptTestsLock<T>(path: string, work: () => Promise<T>): Promise<T> {
+	const previous = keptWrites.get(path) ?? Promise.resolve();
+	// `then(work, work)` because a rejected predecessor must not cancel the queue — nothing here
+	// rejects today (every failure is answered as an outcome), and a future one that did would
+	// otherwise leave the flag unwritable until a restart.
+	const run = previous.then(work, work);
+	const tail = run.then(
+		() => undefined,
+		() => undefined,
+	);
+	keptWrites.set(path, tail);
+	void tail.then(() => {
+		if (keptWrites.get(path) === tail) {
+			keptWrites.delete(path);
+		}
+	});
+	return run;
 }
 
 /**
@@ -270,6 +325,27 @@ export function applyKeep(
 		}
 	}
 	return sortedForStorage([...held.values()]);
+}
+
+/**
+ * The set with every entry for one project gone, and how many that was.
+ *
+ * **Matched on `project` exactly, with no `pathSegment` anywhere near it.** Entries were written
+ * from what `list_archive` answered, which is already the component as the archive filed it (D33),
+ * so the string a caller names one project's registration by is the string its entries carry —
+ * running the archive's own rewrite over it here would be a second, different idea of identity in
+ * the one place the store's whole meaning is *the directory's name*.
+ *
+ * Pure, beside {@link applyKeep}, and the count is answered rather than left to be derived: it is
+ * the number D35's amendment exists to make sayable, so the operator deleting a project is told how
+ * many exemptions went with it instead of discovering it later.
+ */
+export function withoutProject(
+	tests: readonly KeptTest[],
+	project: string,
+): { readonly tests: KeptTest[]; readonly removed: number } {
+	const kept = tests.filter((test) => test.project !== project);
+	return { tests: sortedForStorage(kept), removed: tests.length - kept.length };
 }
 
 function describeError(error: unknown): string {

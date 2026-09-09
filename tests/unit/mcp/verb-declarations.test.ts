@@ -137,6 +137,16 @@ const DEVICE_METHODS = ['status', 'list_devices', 'acquire_device', 'release_dev
  * needs nothing here in any case — its own artifacts came back as bytes in the verb's own answer
  * (D19).
  *
+ * `delete_project` is here on `sweep_archive`'s terms in a sharper key (D42, #271). That row
+ * deletes runs a *policy* selected; this one deletes a project and **everything the host holds for
+ * it** — the registration, the whole archive subtree and the `Keep` entries — because an operator
+ * named it. Being named and bounded is what makes it an operator's action rather than an
+ * untargeted one, and it is exactly what makes it unthinkable as a tool: an agent that could call
+ * it would be destroying somebody else's evidence in one request, and it needs nothing here in any
+ * case, its own artifacts having come back as bytes in the verb's own answer (D19). It is not on
+ * `PANEL_METHODS` yet either — that lands with the screen that calls it, exactly as
+ * `force_release_device` did (R35, #122).
+ *
  * The two host-tooling rows are here for a reason of their own, and it is not authority: an agent
  * has nothing to do with them. `list_host_tooling` answers what the **host machine** has
  * installed, in paths on that machine — a question about somebody's laptop rather than about a
@@ -160,6 +170,7 @@ const NOT_YET_EXPOSED = [
 	'measure_archive',
 	'measure_archive_groups',
 	'list_projects',
+	'delete_project',
 	'list_kept_tests',
 	'set_kept_tests',
 	'sweep_archive',

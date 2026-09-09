@@ -111,6 +111,9 @@ function recordingSweeper(asked: Request[]): ArchiveSweeper {
 			asked.push({ dryRun: request.dryRun, bounds: request.bounds });
 			return { outcome: 'missing' as const };
 		},
+		// This schedule asks for a sweep and nothing else — a project the operator deleted by name
+		// is `./delete-project.ts`'s trigger on the same module (D42), never the clock's.
+		removeProject: async () => ({ outcome: 'absent' as const }),
 		settle: () => Promise.resolve(),
 	};
 }
@@ -341,7 +344,11 @@ describe('a pass that fails', () => {
 		const timer = createTestTimer();
 
 		createRetentionSchedule({
-			sweeper: { sweep: () => Promise.reject(thrown), settle: () => Promise.resolve() },
+			sweeper: {
+				sweep: () => Promise.reject(thrown),
+				removeProject: async () => ({ outcome: 'absent' as const }),
+				settle: () => Promise.resolve(),
+			},
 			now: () => NOON_MS,
 			warn: (line) => warned.push(line),
 			armTimer: timer.armTimer,

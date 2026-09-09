@@ -25,12 +25,19 @@
  * panel tick and a `rover keep add`, or two operators — really do arrive at once. Each is a
  * read-modify-write of the whole document, so left to interleave the later read would not see the
  * earlier press and the earlier press would be silently dropped, both callers having been
- * answered `set`. {@link keptWrites} therefore chains every `set_kept_tests` for one path behind
- * the last, so the read a write depends on is inside the same critical section. **Neither the
- * chain nor anything else holds the state** — it holds a promise, not a document, and every call
- * still reads the file (D6). Nothing serialises `list_kept_tests`: `writeKeptTests` renames a
- * complete file into place, so a read already sees the whole of one version or the whole of the
- * other, and putting reads in the queue would only make them wait behind a write.
+ * answered `set`. `./kept-tests.ts`'s {@link withKeptTestsLock} therefore chains every write of
+ * one path behind the last, so the read a write depends on is inside the same critical section.
+ * **Neither the chain nor anything else holds the state** — it holds a promise, not a document,
+ * and every call still reads the file (D6). Nothing serialises `list_kept_tests`: `writeKeptTests`
+ * renames a complete file into place, so a read already sees the whole of one version or the whole
+ * of the other, and putting reads in the queue would only make them wait behind a write.
+ *
+ * **The lock is shared with a second writer and lives in the store's own module** (D42, #271).
+ * `delete_project` takes every entry naming one project — an operator naming a project is not one
+ * of the two retention bounds D35 exempts a kept test from — so it is a second read-modify-write of
+ * this same document. A chain private to this module would serialise each writer against itself and
+ * neither against the other, which drops one of two overlapping writes with both callers answered
+ * success; so the queue is `./kept-tests.ts`'s, keyed by path, and both writers enter it.
  *
  * **Two presses that overlap both land, and both are answered `set`** with a set that includes
  * both. Not one refused as a loser: the group tick's whole contract is that a client renders the
@@ -59,38 +66,13 @@ import type {
 	SetKeptTestsResult,
 } from '../ipc/methods.js';
 import { MAX_KEPT_TESTS } from '../ipc/methods.js';
-import { applyKeep, type KeptTest, readKeptTests, writeKeptTests } from './kept-tests.js';
-
-/**
- * The in-flight write chain per store path, so a `set_kept_tests` never interleaves with another
- * one on the same file. See the module header for why the read has to be inside it.
- *
- * Keyed by path rather than held on the handler instance because the *file* is what is being
- * serialised: two `createKeptTestsHandlers` on one path — a test starting a second daemon on the
- * same store — must share the queue, and two on different paths must not wait on each other. The
- * entry is dropped once it is the settled tail, so this map does not grow with the calls a
- * long-lived daemon serves.
- */
-const keptWrites = new Map<string, Promise<unknown>>();
-
-function serialised<T>(path: string, work: () => Promise<T>): Promise<T> {
-	const previous = keptWrites.get(path) ?? Promise.resolve();
-	// `then(work, work)` because a rejected predecessor must not cancel the queue — nothing here
-	// rejects today (both failures are answered as outcomes), and a future one that did would
-	// otherwise leave the flag unwritable until a restart.
-	const run = previous.then(work, work);
-	const tail = run.then(
-		() => undefined,
-		() => undefined,
-	);
-	keptWrites.set(path, tail);
-	void tail.then(() => {
-		if (keptWrites.get(path) === tail) {
-			keptWrites.delete(path);
-		}
-	});
-	return run;
-}
+import {
+	applyKeep,
+	type KeptTest,
+	readKeptTests,
+	withKeptTestsLock,
+	writeKeptTests,
+} from './kept-tests.js';
 
 export interface KeptTestsHandlerOptions {
 	/**
@@ -135,9 +117,9 @@ export function createKeptTestsHandlers(options: KeptTestsHandlerOptions): KeptT
 		},
 
 		set_kept_tests(params: SetKeptTestsParams): Promise<SetKeptTestsResult> {
-			// The read, the cap check and the write are one critical section per store path: see
-			// the module header for what interleaving them costs.
-			return serialised(options.path, async () => {
+			// The read, the cap check and the write are one critical section per store path, shared
+			// with `delete_project`: see the module header for what interleaving them costs.
+			return withKeptTestsLock(options.path, async () => {
 				let held: KeptTest[];
 				try {
 					held = await readKeptTests(options.path);

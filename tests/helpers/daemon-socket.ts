@@ -122,6 +122,10 @@ const SWEEP_LOG_MARKERS: readonly string[] = [
 	'Deleted archived run ',
 	'Would delete archived run ',
 	'The archived run at ',
+	// And the same two for a project taken whole because an operator named it (D42) — this
+	// module's third trigger, which is not a bound and is not on any schedule.
+	'Deleted archived project ',
+	'The archived project at ',
 	// A budget that cannot be met with only kept and live runs left.
 	'The artifact archive is still ',
 	// The sweep's own two failures, each named by the clause only it writes.

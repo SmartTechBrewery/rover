@@ -50,6 +50,10 @@ function statusHandlers(overrides: Partial<IpcHandlers> = {}): IpcHandlers {
 		// And the projects row, for the same reason: these suites have no projects root either,
 		// and `missing` is the honest answer of a host that has none.
 		list_projects: () => ({ outcome: 'missing' }),
+		// And the row that deletes one, whose cheapest real answer is `not-registered` for that
+		// row's own reason: with no projects root, no archive and no kept-tests store, a delete
+		// reaches nothing at all — which is deliberately not a success that removed nothing.
+		delete_project: () => ({ outcome: 'not-registered' }),
 		// The two host-tooling rows: a host that reports no programs and an install nothing offers
 		// are the cheapest real answers, and these suites register no backend at all.
 		list_host_tooling: () => ({ tools: [] }),

@@ -15,12 +15,17 @@
  * out** — which is what a shutdown does with the one no caller is holding (#245).
  */
 
-import { mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { type Observation, waitForCondition } from '@/core/wait.js';
-import { leaseDirectoryName, leaseRunDirectory } from '@/daemon/archive-path.js';
+import {
+	leaseDirectoryName,
+	leaseRunDirectory,
+	MAX_SEGMENT_LENGTH,
+	pathSegment,
+} from '@/daemon/archive-path.js';
 import type { RetentionPolicy } from '@/daemon/archive-retention.js';
 import { type ArchiveSweeper, createArchiveSweeper } from '@/daemon/archive-sweep.js';
 import { writeKeptTests } from '@/daemon/kept-tests.js';
@@ -451,6 +456,177 @@ describe('two sweeps of one tree', () => {
 			expect(trace[index + 1]).toBe(`${trace[index]?.split(':')[0]}:out`);
 		}
 		// And the second sweep really ran on the tree the first one left, rather than joining it.
+		expect(await remainingRuns()).toEqual([]);
+	});
+});
+
+describe('taking one project because an operator named it', () => {
+	/*
+	 * **Not a bound and not a policy** (D42, #271): the subtree goes whole, kept tests included,
+	 * because an explicit delete is not one of the two retention bounds D35 exempts a test from.
+	 * It is here rather than in a module of its own so it inherits this module's serialisation and
+	 * its `settle()`, which is what the two suites below are about.
+	 */
+	it('takes the whole subtree and reports the bytes sizeOfTree measured', async () => {
+		await fileRun('rover', 'home-screen', runNameAt(NOW_MS - DAY_MS), 1024);
+		await fileRun('rover', 'login-flow', runNameAt(NOW_MS - DAY_MS), 2048);
+		await fileRun('storefront', 'home-screen', runNameAt(NOW_MS - DAY_MS), 512);
+		// Kept, and taken anyway: the exemption is from the age limit and the disk budget.
+		await writeKeptTests(keptTestsPath, [
+			{
+				project: 'rover',
+				testName: 'home-screen',
+				keptBy: 'bob',
+				keptAt: '2026-09-01T00:00:00.000Z',
+			},
+		]);
+
+		const removal = await sweeperFor({ budgetMb: 1024, maxAgeDays: 30 }).removeProject('rover');
+
+		expect(removal).toEqual({ outcome: 'removed', bytes: 3072 });
+		expect(await remainingRuns()).toEqual([`storefront/home-screen/${runNameAt(NOW_MS - DAY_MS)}`]);
+		expect(logged.join('\n')).toContain('Deleted archived project "rover" — 3072 bytes.');
+	});
+
+	it('answers absent for a project that filed nothing, and for a root that is not there', async () => {
+		await fileRun('rover', 'home-screen', runNameAt(NOW_MS - DAY_MS), 1024);
+		const sweeper = sweeperFor({ budgetMb: 1024, maxAgeDays: 30 });
+
+		// Ordinary rather than a failure: a lease may name any project string (D22), so a
+		// registration with nothing filed under it is the common case.
+		expect(await sweeper.removeProject('never-filed')).toEqual({ outcome: 'absent' });
+		expect(warned).toEqual([]);
+
+		await rm(root, { recursive: true, force: true });
+		expect(await sweeper.removeProject('rover')).toEqual({ outcome: 'absent' });
+		expect(warned).toEqual([]);
+	});
+
+	/*
+	 * **It is serialised against a sweep of the same tree**, which is the whole reason it lives on
+	 * this interface: a sweep is a walk and a selection over a tree this removal is changing, so
+	 * the two interleaved would each answer about an archive the other had already altered.
+	 */
+	it('does not interleave with a sweep of the same root', async () => {
+		for (let index = 0; index < 3; index += 1) {
+			await fileRun('rover', `old-${index}`, runNameAt(NOW_MS - (90 + index) * DAY_MS), 1024);
+		}
+		// One run the sweep will not take, so the project still exists when the removal reaches
+		// it: `deleteRuns` tidies up a project it emptied, and a subtree the sweep had already
+		// removed would answer `absent` and prove nothing about the order.
+		await fileRun('rover', 'current', runNameAt(NOW_MS - DAY_MS), 256);
+		await fileRun('storefront', 'home-screen', runNameAt(NOW_MS - DAY_MS), 512);
+
+		const trace: string[] = [];
+		const sweeper = createArchiveSweeper({
+			root,
+			keptTestsPath,
+			retention: { budgetMb: 1024, maxAgeDays: 30 },
+			liveLeases: () => [],
+			now: () => NOW_MS,
+			log: () => undefined,
+			warn: (line) => warned.push(line),
+			onDelete: async () => {
+				trace.push('sweep:in');
+				await Promise.resolve();
+				trace.push('sweep:out');
+			},
+		});
+
+		const sweeping = sweeper.sweep({ dryRun: false, bounds: 'both' });
+		const removing = sweeper.removeProject('rover').then((removal) => {
+			trace.push(`remove:${removal.outcome}`);
+			return removal;
+		});
+		await Promise.all([sweeping, removing]);
+
+		// The removal is the last entry: it was queued behind the sweep and every one of that
+		// sweep's deletions ran, uninterrupted, before it started.
+		expect(trace.at(-1)).toBe('remove:removed');
+		for (let index = 0; index < trace.length - 1; index += 2) {
+			expect(trace[index + 1]).toBe(`${trace[index]?.split(':')[0]}:out`);
+		}
+		expect(await remainingRuns()).toEqual([`storefront/home-screen/${runNameAt(NOW_MS - DAY_MS)}`]);
+	});
+
+	/*
+	 * **The component is used verbatim, and that is the whole of this case** (PROJECT.md §6, #274).
+	 * `pathSegment` is the *writer's* function and is not idempotent: it truncates at 64 and then
+	 * appends a hash of the original, so its own output runs to 73 characters, and re-running it
+	 * over that output truncates the 73 to 64 and hashes the 73 — a directory nothing was ever
+	 * filed under. A removal that rewrote the name it was given therefore missed the whole subtree
+	 * of every project whose filed component is over the bound, and answered `absent` about it.
+	 */
+	it('takes a subtree whose filed component is longer than the segment bound', async () => {
+		const raw = 'checkout web end to end regression suite for storefront and cart';
+		const filed = pathSegment(raw);
+		// The premise, asserted rather than assumed: this is what the archive filed, it is over
+		// the bound, and running the writer's function over it again names something else.
+		expect(filed.length).toBeGreaterThan(MAX_SEGMENT_LENGTH);
+		expect(pathSegment(filed)).not.toBe(filed);
+		await fileRun(filed, 'home-screen', runNameAt(NOW_MS - DAY_MS), 1024);
+		await fileRun('storefront', 'home-screen', runNameAt(NOW_MS - DAY_MS), 512);
+
+		const removal = await sweeperFor({ budgetMb: 1024, maxAgeDays: 30 }).removeProject(filed);
+
+		expect(removal).toEqual({ outcome: 'removed', bytes: 1024 });
+		expect(await remainingRuns()).toEqual([`storefront/home-screen/${runNameAt(NOW_MS - DAY_MS)}`]);
+	});
+
+	/*
+	 * **A string that is not one directory name reached nothing, so it is `absent` and not
+	 * `failed`**: nothing here can be filed under it, so nothing refused to go. The shape check is
+	 * `ArchivePathSegmentSchema`'s, the same one every other archive-addressed method applies to a
+	 * component the host itself answered with.
+	 */
+	it('answers absent for a string no directory of this archive could be named', async () => {
+		await fileRun('rover', 'home-screen', runNameAt(NOW_MS - DAY_MS), 1024);
+		const sweeper = sweeperFor({ budgetMb: 1024, maxAgeDays: 30 });
+
+		for (const asked of ['..', '.', 'a/b', '\u0000rover', '']) {
+			expect(await sweeper.removeProject(asked)).toEqual({ outcome: 'absent' });
+		}
+
+		expect(await remainingRuns()).toEqual([`rover/home-screen/${runNameAt(NOW_MS - DAY_MS)}`]);
+		// The diagnosis is on the host, where a path and a caller string already belong (D19).
+		expect(warned.filter((line) => line.includes('not one directory name'))).toHaveLength(5);
+	});
+
+	/*
+	 * **Containment is the resolved path and not only the schema**, `./list-archive.ts`'s rule: a
+	 * symlink leaves the root with no `.`, `..` or separator in the name, and `rm` resolves the
+	 * link in its own argument. The root *itself* is refused too, which is where a delete parts
+	 * company with a listing — addressing the root is legitimate, deleting it would take every
+	 * project on the host.
+	 */
+	it('refuses a component resolving out of the archive root, and one resolving onto it', async () => {
+		await fileRun('rover', 'home-screen', runNameAt(NOW_MS - DAY_MS), 1024);
+		const outside = join(dir, 'outside');
+		await mkdir(join(outside, 'keep-me'), { recursive: true });
+		await symlink(outside, join(root, 'escape'), 'dir');
+		await symlink(root, join(root, 'self'), 'dir');
+		const sweeper = sweeperFor({ budgetMb: 1024, maxAgeDays: 30 });
+
+		expect(await sweeper.removeProject('escape')).toEqual({ outcome: 'failed' });
+		expect(await sweeper.removeProject('self')).toEqual({ outcome: 'failed' });
+
+		// Nothing on either side of either link went, and the answer said so.
+		await expect(stat(join(outside, 'keep-me'))).resolves.toBeDefined();
+		expect((await readdir(root)).sort()).toEqual(['escape', 'rover', 'self']);
+		expect(
+			warned.filter((line) => line.includes('not a directory under the archive root')),
+		).toHaveLength(2);
+	});
+
+	/** And `settle()` covers it, which is what keeps a `process.exit` out of the middle of an `rm`. */
+	it('is what settle() waits for', async () => {
+		await fileRun('rover', 'home-screen', runNameAt(NOW_MS - DAY_MS), 1024);
+		const sweeper = sweeperFor({ budgetMb: 1024, maxAgeDays: 30 });
+
+		const removing = sweeper.removeProject('rover');
+		await sweeper.settle();
+
+		await expect(removing).resolves.toMatchObject({ outcome: 'removed' });
 		expect(await remainingRuns()).toEqual([]);
 	});
 });

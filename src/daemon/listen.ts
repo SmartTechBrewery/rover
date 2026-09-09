@@ -36,6 +36,7 @@ import { type ArchiveFileReader, createArchiveFileReader } from './archive-file.
 import type { RetentionPolicy } from './archive-retention.js';
 import { createArchiveSizeHandler } from './archive-size.js';
 import { type ArchiveSweeper, createArchiveSweeper, sweepAfterLease } from './archive-sweep.js';
+import { createDeleteProjectHandler } from './delete-project.js';
 import { type HttpListener, startHttpListener } from './http-listen.js';
 import { createDeviceInventory, type DeviceInventory } from './inventory.js';
 import { createKeptTestsHandlers } from './kept-tests-handlers.js';
@@ -306,8 +307,16 @@ export type StartResult = RunningDaemon | DaemonAlreadyRunning;
  *
  * It also answers **what this host is configured to do** around a lease: `./list-projects.ts`
  * (R39) reads the projects root and says which projects are registered, which is the read half of
- * D31 and the only row that is about host-operator configuration. Nothing on this surface writes
- * one.
+ * D31 and the only row that is about host-operator configuration.
+ *
+ * And it now **deletes** one of those registrations, which is the first thing on this surface that
+ * writes into the projects root at all: `./delete-project.ts` (D42, #271) takes one project's hook
+ * file, its own subtree of the archive and its entries in the kept-tests store, in one operator
+ * action, refusing while a lease on it is live. The write is a **removal** and nothing else — no
+ * method creates, edits or renames a hook file, and none takes a path into that directory. It is
+ * handed the same `projectsRoot` the restoration, the install and the listing resolve against, the
+ * same `sweeper` every other deletion goes through and the same `keptTestsPath` the `Keep` rows
+ * write, so what a delete takes and what a listing shows can never be different trees.
  *
  * And it answers — and, for the first time on this surface outside a lease, **writes** — which of
  * the archive's tests the operator has said to keep: `./kept-tests-handlers.ts` (D33, #234), one
@@ -360,6 +369,12 @@ export function createDaemonHandlers(
 		...createArchiveSizeHandler({ root: artifactsRoot }),
 		...createMeasureArchiveGroupsHandler({ root: artifactsRoot }),
 		...createListProjectsHandler({ root: projectsRoot }),
+		...createDeleteProjectHandler({
+			projectsRoot,
+			keptTestsPath,
+			sweeper,
+			liveLeases: () => leases.live(),
+		}),
 		...createKeptTestsHandlers({ path: keptTestsPath }),
 		...createSweepArchiveHandler({ sweeper }),
 		...createToolingHandlers(),
