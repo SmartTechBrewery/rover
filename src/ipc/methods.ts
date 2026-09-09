@@ -1551,6 +1551,95 @@ export const DeleteArchivedTestResultSchema = z.discriminatedUnion('outcome', [
 export type DeleteArchivedTestResult = z.infer<typeof DeleteArchivedTestResultSchema>;
 
 /**
+ * Which archived group to delete, and who is deleting it (D43, #277).
+ *
+ * **The two components are not the same *kind* of string, and that is the whole of this row's
+ * shape.** `project` is an {@link ArchivePathSegmentSchema} because it names a directory —
+ * `list_archive`'s own first component, exactly as {@link DeleteArchivedTestParamsSchema} takes
+ * it. `groupId` is {@link GroupIdSchema}, the opaque caller string a lease supplied (D22), and it
+ * is **never joined into a path**: the archive has no `<group_id>/` level (R41), so which runs are
+ * in a group is read out of each run's `group_id.json` and matched as *contents*. A group id
+ * carrying a separator, a NUL or a newline is therefore an ordinary value here rather than a
+ * refusal, which is the same reading {@link MeasureArchiveGroupsParamsSchema}'s `group` scope
+ * already gives the pair.
+ *
+ * **`actor` is attribution and not authorisation** (D20, D28), exactly as
+ * {@link DeleteArchivedTestParamsSchema}'s is: the host records who deleted a group's runs and
+ * derives it from nothing.
+ *
+ * `.strict()` so a typo'd key is `invalid_params` rather than a delete of something nobody named.
+ */
+export const DeleteArchivedGroupParamsSchema = z
+	.object({
+		/** The project directory's name, as the archive filed it — never a path (D19). */
+		project: ArchivePathSegmentSchema,
+		/** The group id a lease named, matched against file contents and never against a path. */
+		groupId: GroupIdSchema,
+		/** Who is deleting it. Attribution only — it authorizes nothing (D20, D28). */
+		actor: AttributionStringSchema,
+	})
+	.strict();
+export type DeleteArchivedGroupParams = z.infer<typeof DeleteArchivedGroupParamsSchema>;
+
+/**
+ * Four answers, four next moves — {@link DeleteArchivedTestResultSchema}'s vocabulary over a
+ * *set of runs* rather than a subtree, plus the one figure only this scope can state.
+ *
+ * **`runsRemoved` is intrinsic here where it was deliberately absent one row up.** A test's delete
+ * is one `rm` of one directory, so *how many runs went* is a `readdir` it does not otherwise need;
+ * a group's delete **is** a run-by-run walk (D43), so the count is already in hand and it is the
+ * only figure that says what the operator actually took — a group has no directory whose bytes
+ * stand for it, and `freedBytes` alone cannot distinguish one empty run from ten.
+ *
+ * **`partial` also carries the walk that was cut short**, and that is this row's sharpest promise.
+ * `list_archive_groups`' directory bound can truncate, and a truncated walk means *at least one
+ * directory that exists was not fully examined* — so runs of this group may never have been
+ * reached. Answering `deleted` there would claim a group is gone when part of it may not be, so a
+ * truncated walk is `partial` with the runs that did go reported, and the operator's next move is
+ * to run it again.
+ *
+ * **`not-found` is a different arm rather than a delete of zero runs**: no run of this project
+ * named that group and no kept entry went, so nothing was reached — D42's rule two levels down.
+ *
+ * **`refused` is a live lease filing into any matched run**, reported as data, with nothing at all
+ * touched: that run directory is what the lease is writing into right now (D35).
+ *
+ * **A test left standing keeps its `Keep` exemption**, which is why the report's `keptTests` half
+ * is about the tests the deletion *emptied* and nothing else. There is no group-level `Keep` flag
+ * and none is invented.
+ *
+ * **No `message`, no host path and no `errno` on any arm** (D19), and there is no field one would
+ * fit in — `src/ipc/server.ts` parses every handler's return value against this `.strict()`
+ * schema, so a path smuggled onto a result is `invalid_result` on the host rather than a
+ * disclosure. The diagnosis is a warning on the host, exactly as the two rows above it.
+ */
+export const DeleteArchivedGroupResultSchema = z.discriminatedUnion('outcome', [
+	/** Every run of the group went, and the walk that found them was complete. */
+	z
+		.object({
+			outcome: z.literal('deleted'),
+			...ARCHIVE_DELETION_REPORT,
+			/** How many run directories went. Never `0` on this arm — that is `not-found`. */
+			runsRemoved: z.number().int().nonnegative(),
+		})
+		.strict(),
+	/** A run would not go, a half would not go, or the walk was cut short — the fields say which. */
+	z
+		.object({
+			outcome: z.literal('partial'),
+			...ARCHIVE_DELETION_REPORT,
+			/** How many run directories did go, which is what makes a `partial` actionable. */
+			runsRemoved: z.number().int().nonnegative(),
+		})
+		.strict(),
+	/** No run of this project named that group, and no kept entry went. Nothing was reached. */
+	z.object({ outcome: z.literal('not-found') }).strict(),
+	/** A lease is filing into one of this group's runs, so nothing was touched. */
+	z.object({ outcome: z.literal('refused'), reason: z.literal('lease-live') }).strict(),
+]);
+export type DeleteArchivedGroupResult = z.infer<typeof DeleteArchivedGroupResultSchema>;
+
+/**
  * How many tests one host may keep — the bound on the store and therefore the bound on both
  * rows' arrays.
  *
@@ -1925,8 +2014,35 @@ export type SweepArchiveResult = z.infer<typeof SweepArchiveResultSchema>;
  * actor, with no token in scope on this path at all (D20, D28). Reachable from the CLI as
  * `rover delete-test` (D4). It is deliberately **not** an MCP tool, for `delete_project`'s reason
  * in the same key — an agent deleting a test's artifacts destroys the evidence another agent's run
- * produced — and deliberately **not** on `PANEL_METHODS` yet: that lands with the control that
- * calls it, exactly as `force_release_device` and `delete_project` did (R35, R50).
+ * produced — and it is on `PANEL_METHODS` since #276 (D29), which joined it with the control that
+ * calls it exactly as `force_release_device` and `delete_project` did (R35, R50).
+ *
+ * **`delete_archived_group` is the third of those deletes and the only one that is not an
+ * address** (D43, R51 phase 3, #277). It takes one `project` component plus the `groupId` a lease
+ * named, and removes **the runs whose group id matches and nothing else** — the surgical reading
+ * D43 settled rather than *every test the group touches*, because `test_name` is deliberately not
+ * unique (D22) and a test directory may hold runs of other groups and of none. What that costs is
+ * that this row is a **walk** and not one `rm`: `list_archive_groups`' walk with its bounds,
+ * sharing that module's own `readGroupId` so *which runs are in this group* stays one fact across
+ * the three methods that ask it, and each matched run goes whole through
+ * `ArchiveSweeper.remove([project, testName, run])` so the unit of deletion is still a run
+ * directory (D34) inside the sweeper's per-root serialisation and its `settle()`. A test level the
+ * deletion empties is removed and **only then** is its kept-test entry pruned; a test left standing
+ * with runs from elsewhere keeps those runs **and its `Keep` exemption**, which is D35's *what was
+ * not named keeps its exemption* held one scope over. `groupId` is **never joined into a path**
+ * (R41: there is no `<group_id>/` level), so a group id carrying a separator, a NUL or a newline is
+ * matched as content and is not a refusal. **Four answers plus one figure only this scope can
+ * state**: `deleted`/`partial` with the report and `runsRemoved`, `not-found` when no run of this
+ * project named that group and no kept entry went, and `refused`/`lease-live` when a live lease is
+ * filing into any matched run — with nothing at all touched on that branch. **A walk that was cut
+ * short answers `partial` and never `deleted`** ({@link DeleteArchivedGroupResultSchema}), because
+ * a truncated walk may not have reached every run of the group and a `deleted` there would claim a
+ * group is gone when part of it may not be. No `message`, no host path and no `errno` is on any
+ * answer and there is no field one would fit in (D19); the diagnosis is a warning on the host and
+ * one audit line names the actor, with no token in scope on this path at all (D20, D28). Reachable
+ * from the CLI as `rover delete-group` (D4). It is on `PANEL_METHODS` (D29) with the `Remove` on
+ * the group's own card, and deliberately **not** an MCP tool for `delete_archived_test`'s reason in
+ * a wider key — a group is several agents' runs held together by a caller's own string.
  *
  * **`list_kept_tests` and `set_kept_tests` are the `Keep` flag's two directions** (D33, #234),
  * and the pair is where this surface first *writes* something of the host's own that is not a
@@ -2024,6 +2140,10 @@ export const IPC_METHODS = {
 	delete_archived_test: {
 		params: DeleteArchivedTestParamsSchema,
 		result: DeleteArchivedTestResultSchema,
+	},
+	delete_archived_group: {
+		params: DeleteArchivedGroupParamsSchema,
+		result: DeleteArchivedGroupResultSchema,
 	},
 	list_host_tooling: {
 		params: ListHostToolingParamsSchema,

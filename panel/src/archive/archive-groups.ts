@@ -1,6 +1,6 @@
 import type { HostAnswer, RpcEnvelope } from '@panel/session/host-client.js';
 import { useSession } from '@panel/session/session-provider.js';
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { type ArchiveGroup, ListArchiveGroupsResultSchema } from './archive-listing.js';
 
 /**
@@ -22,6 +22,17 @@ import { type ArchiveGroup, ListArchiveGroupsResultSchema } from './archive-list
  * the hook is mounted in both; a hook that fetched on mount would spend a walk of the whole archive
  * on every reader who never opens the groups view. `false` asks for nothing and answers `loading`,
  * which nothing draws, because the `All` view reads none of this.
+ *
+ * **And it walks again when this screen has itself changed what is filed** (#277) — amended in
+ * place, exactly as `archive-levels.ts` was amended for the same reason (`ai/RULES.md` §1).
+ * {@link ArchiveGroupsHook.reread} is **not** a refresh control and is not reachable as one: it has
+ * one caller and one trigger, a settled `Remove` on a group's card (`routes/archive.tsx`). The
+ * groups view draws its whole arrangement above a run out of this one answer, so a delete that took
+ * a group's runs has changed every level of it — and asking the host again is the same *re-read
+ * rather than assume* rule the level cache keeps, for the same reason: editing the answer in hand
+ * would draw an arrangement nothing on the host ever answered with, and it would be wrong in both
+ * directions, a `partial` having possibly left runs exactly where they were and a `not-found`
+ * proving the answer being edited was already stale.
  */
 
 /**
@@ -60,29 +71,62 @@ export type ArchiveGroups =
 
 const LOADING: ArchiveGroups = { status: 'loading' };
 
-export function useArchiveGroups(wanted: boolean): ArchiveGroups {
+/** What the screen has, and the one way it asks for the whole arrangement again. */
+export interface ArchiveGroupsHook {
+	readonly groups: ArchiveGroups;
+	/**
+	 * Walk the archive's groupings once more, because this screen has changed what is filed.
+	 *
+	 * **The whole answer and not one group**, which is what a delete of a group's runs needs: the
+	 * group that went is not the only level it appears in — its project's row counts it, and a test
+	 * name it emptied is a row of its own. One request is the whole arrangement here, so asking
+	 * again is both the cheapest and the only correct shape.
+	 *
+	 * A re-read that answers `unreadable` **replaces the answer**, and that is correct rather than a
+	 * regression: it is the host's answer to the question the screen just asked, and holding on to
+	 * an arrangement the host will no longer confirm would draw groups it has no current evidence
+	 * for.
+	 */
+	readonly reread: () => void;
+}
+
+export function useArchiveGroups(wanted: boolean): ArchiveGroupsHook {
 	const { call } = useSession();
 	const [groups, setGroups] = useState<ArchiveGroups>(LOADING);
 	/*
-	 * Whether the one call has been made. A ref rather than state for `archive-levels.ts`'s reason:
-	 * React 19's StrictMode runs an effect twice on mount, and a guard that lived in state would not
-	 * have been written back before the second run — two walks of the whole archive, visible in the
-	 * daemon's own log.
+	 * **How many walks have been asked for**, which is deliberately a nonce in the effect's
+	 * dependency list rather than a mutation of the guard below — `archive-levels.ts`' shape
+	 * verbatim, and for its reason: a re-read implemented by clearing the guard would depend on a
+	 * re-render arriving between the clear and the next effect run, and it would put the guard's own
+	 * meaning in two places.
 	 */
-	const asked = useRef(false);
+	const [nonce, setNonce] = useState(0);
+	/*
+	 * Which nonce the one call has been made for. A ref rather than state for `archive-levels.ts`'s
+	 * reason: React 19's StrictMode runs an effect twice on mount, and a guard that lived in state
+	 * would not have been written back before the second run — two walks of the whole archive,
+	 * visible in the daemon's own log.
+	 */
+	const asked = useRef<number | null>(null);
 	const live = useRef(true);
 
 	useEffect(() => {
 		live.current = true;
-		if (!wanted || asked.current) {
+		if (!wanted || asked.current === nonce) {
 			return () => {
 				live.current = false;
 			};
 		}
-		asked.current = true;
+		asked.current = nonce;
 		void (async () => {
 			const answer = await call('list_archive_groups', {});
-			if (!live.current) {
+			/*
+			 * A superseded answer lands on nothing, `archive-levels.ts`' rule: the answers of two
+			 * walks are not ordered by the requests that asked for them, so the later request's
+			 * answer arriving first would otherwise let the earlier one overwrite it — an
+			 * arrangement from before the delete, drawn after the one from after it.
+			 */
+			if (!live.current || asked.current !== nonce) {
 				return;
 			}
 			const state = read(answer);
@@ -93,9 +137,19 @@ export function useArchiveGroups(wanted: boolean): ArchiveGroups {
 		return () => {
 			live.current = false;
 		};
-	}, [wanted, call]);
+	}, [wanted, call, nonce]);
 
-	return groups;
+	/*
+	 * Stable across renders, and the updater form is what makes that stability safe —
+	 * `archive-levels.ts`' recorded reason: `nonce + 1` inside a callback with an empty dependency
+	 * list would read the nonce of the render that built it, so every re-read after the first would
+	 * set a value the state already held and the effect would never run again.
+	 */
+	const reread = useCallback(() => {
+		setNonce((previous) => previous + 1);
+	}, []);
+
+	return { groups, reread };
 }
 
 /** One answer, mapped onto {@link ArchiveGroups} — or nothing at all, for a `refused`. */

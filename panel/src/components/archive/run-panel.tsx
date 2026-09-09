@@ -1,4 +1,4 @@
-import type { DeleteArchivedTestAnswer, TestRemoval } from '@panel/archive/delete-archived-test.js';
+import type { TestRemoval } from '@panel/archive/delete-archived-test.js';
 import {
 	type ArchivedDeviceInfo,
 	type DeviceFacts,
@@ -10,7 +10,7 @@ import { decomposeRunName } from '@panel/archive/run-identity.js';
 import type { ArchivedTestDescription } from '@panel/archive/test-description.js';
 import { ArchiveCheckbox } from './archive-checkbox.js';
 import { CardHeading, ContentsCard, Field } from './contents-card.js';
-import { RemoveControl } from './remove-control.js';
+import { RemoveControl, type SettledRemoval } from './remove-control.js';
 
 /**
  * The run's `<serial>` **together with the state of the answer it was read out of**.
@@ -108,7 +108,7 @@ export function RunPanel({
 	 */
 	readonly removal?: TestRemoval;
 	/** What a settled delete is reported to — the screen, never this card (`routes/archive.tsx`). */
-	readonly onRemoveSettled?: (answer: DeleteArchivedTestAnswer, removal: TestRemoval) => void;
+	readonly onRemoveSettled?: (settled: SettledRemoval) => void;
 }) {
 	const name = run.at(-1) ?? '';
 	const identity = decomposeRunName(name);

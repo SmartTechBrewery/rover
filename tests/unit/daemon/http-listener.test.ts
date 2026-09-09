@@ -550,11 +550,12 @@ describe('only the panel’s methods are reachable, and no table gained a row', 
 		['release_device'],
 		['status'],
 		/*
-		 * **The neighbour of the two deletes that stays off the list**, asserted rather than only
-		 * named in the paragraphs beside them (§9.4, #238, #276): what admits `delete_project` and
-		 * `delete_archived_test` is that each is *named and bounded*, and the sweep is a policy run
-		 * across every project on the host. A row added here by accident would be an untargeted,
-		 * irreversible deletion reachable from a browser tab.
+		 * **The neighbour of the three deletes that stays off the list**, asserted rather than only
+		 * named in the paragraphs beside them (§9.4, #238, #276, #277): what admits
+		 * `delete_project`, `delete_archived_test` and `delete_archived_group` is that each is
+		 * *named and bounded*, and the sweep is a policy run across every project on the host. A row
+		 * added here by accident would be an untargeted, irreversible deletion reachable from a
+		 * browser tab.
 		 */
 		['sweep_archive'],
 	])('refuses %s before dispatch, with the closed vocabulary', async (method) => {
@@ -726,6 +727,34 @@ describe('only the panel’s methods are reachable, and no table gained a row', 
 		 * this address at all. Nothing pre-creates the archive root or the kept-tests store, so
 		 * `not-found` and not a refusal is what proves it reached the handler: nothing at all was
 		 * there to reach, which is a *different arm* from a delete of zero bytes.
+		 */
+		expect(envelopeOf(answer)).toMatchObject({
+			type: 'result',
+			id: 'req-1',
+			result: { outcome: 'not-found' },
+		});
+	});
+
+	it('reaches delete_archived_group, the control on the group\u2019s card having landed', async () => {
+		registerFakeBackend();
+		await withStore();
+		const daemon = await startWithHttp();
+
+		const answer = await call(daemon, 'delete_archived_group', {
+			project: 'checkout',
+			groupId: 'app-bar-top-space',
+			actor: 'alice',
+		});
+
+		/*
+		 * On the allowlist since #277, and it is the **fifth action** on it (D43, D27). It is the
+		 * same authority as the row above it over a shape that is not an address: *the runs whose
+		 * group id matches*, which is why it is a walk rather than an `rm`. What admits it where
+		 * `sweep_archive` is still refused is D42's distinction again — named and bounded, one
+		 * group's own runs, with the runs and the bytes stated before it fires. Nothing pre-creates
+		 * the archive root, so `not-found` and not a refusal is what proves it reached the handler:
+		 * no run of any project names that group, which is a *different arm* from a delete of zero
+		 * runs.
 		 */
 		expect(envelopeOf(answer)).toMatchObject({
 			type: 'result',

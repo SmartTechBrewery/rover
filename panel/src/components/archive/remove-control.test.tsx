@@ -1,3 +1,4 @@
+import type { GroupRemoval } from '@panel/archive/delete-archived-group.js';
 import type { TestRemoval } from '@panel/archive/delete-archived-test.js';
 import { BADGE_SHAPE, BADGE_TYPE } from '@panel/components/archive/header-badge.js';
 import type { HostAnswer, RpcEnvelope } from '@panel/session/host-client.js';
@@ -23,7 +24,7 @@ vi.mock('@panel/session/session-provider.js', () => ({
 		},
 		call: async (method: string, params: unknown): Promise<HostAnswer<RpcEnvelope>> => {
 			host.calls.push([method, params]);
-			if (method === 'measure_archive') {
+			if (method === 'measure_archive' || method === 'measure_archive_groups') {
 				return {
 					ok: true,
 					value: {
@@ -57,6 +58,7 @@ const DELETED = {
 };
 
 const TEST: TestRemoval = {
+	kind: 'test',
 	project: 'checkout-web',
 	testName: 'login-flow',
 	runs: 42,
@@ -64,7 +66,7 @@ const TEST: TestRemoval = {
 	card: 'test',
 };
 
-function control(onSettled = vi.fn(), removal: TestRemoval = TEST) {
+function control(onSettled = vi.fn(), removal: TestRemoval | GroupRemoval = TEST) {
 	const rendered = render(<RemoveControl onSettled={onSettled} removal={removal} />);
 	return { ...rendered, onSettled };
 }
@@ -246,8 +248,17 @@ describe('confirming', () => {
 		confirm();
 
 		await waitFor(() => expect(onSettled).toHaveBeenCalledTimes(1));
-		expect(onSettled.mock.calls[0]?.[0]).toEqual(result);
-		expect(onSettled.mock.calls[0]?.[1]).toEqual(TEST);
+		/*
+		 * **One object rather than two arguments, discriminated at the top** (#277): a group's
+		 * `Remove` is this same control, and narrowing the removal inside the pair would tell
+		 * TypeScript nothing about the answer beside it. So the scope, what it was about and what
+		 * came back travel together.
+		 */
+		expect(onSettled.mock.calls[0]?.[0]).toEqual({
+			kind: 'test',
+			removal: TEST,
+			answer: result,
+		});
 		expect(screen.queryByRole('dialog')).toBeNull();
 	});
 });
@@ -301,5 +312,104 @@ describe('the ask that reached nothing', () => {
 		await waitFor(() => expect(deleteCalls()).toHaveLength(1));
 		expect(onSettled).not.toHaveBeenCalled();
 		expect(screen.queryByText(/nothing was deleted/i)).toBeNull();
+	});
+});
+
+/**
+ * **The same control over a group's scope** (D43, R51 phase 3, #277), which is the one thing this
+ * component gained: everything above — the treatment, the asking, the pending state, the answer that
+ * settles nothing — is scope-blind and is not re-asserted here.
+ *
+ * What is worth a suite is the three places the scope decides something: the accessible name, the
+ * method the confirmed press calls, and the pair it hands up.
+ */
+describe('the same control on a group', () => {
+	const GROUP: GroupRemoval = {
+		kind: 'group',
+		project: 'checkout-web',
+		groupId: 'app-bar-top-space',
+		runs: 7,
+	};
+
+	async function askAboutTheGroup(onSettled = vi.fn()) {
+		const rendered = control(onSettled, GROUP);
+		await act(async () => {
+			fireEvent.click(screen.getByRole('button', { name: 'Remove group app-bar-top-space' }));
+		});
+		return rendered;
+	}
+
+	// The noun is in the accessible name as well as the name itself, because the two scopes are
+	// drawn at the same depth in their two views and take different things.
+	it('carries the group in its accessible name, with the group’s own noun', () => {
+		control(vi.fn(), GROUP);
+
+		expect(screen.getByRole('button', { name: 'Remove group app-bar-top-space' }).textContent).toBe(
+			'Remove',
+		);
+	});
+
+	/*
+	 * **The group's method, with the group's params** — one path component and the opaque id a lease
+	 * named, which is never a path and never a second component (R41).
+	 */
+	it('asks the group’s method when confirmed, and never the test’s', async () => {
+		host.answer = {
+			ok: true,
+			value: { type: 'result', result: { outcome: 'refused', reason: 'lease-live' } },
+		};
+		await askAboutTheGroup();
+
+		await act(async () => {
+			fireEvent.click(screen.getByRole('button', { name: 'Remove group' }));
+		});
+
+		const asked = host.calls.filter(([method]) => String(method).startsWith('delete_'));
+		expect(asked).toEqual([
+			[
+				'delete_archived_group',
+				{ project: 'checkout-web', groupId: 'app-bar-top-space', actor: 'karolina' },
+			],
+		]);
+	});
+
+	// And the pair it hands up says which scope settled, so the screen can say a group's sentence
+	// about a group's answer.
+	it('hands up the group scope beside the group’s answer', async () => {
+		const answer = {
+			outcome: 'deleted',
+			archive: 'removed',
+			keptTests: 'absent',
+			freedBytes: 8_451_208,
+			keptTestsRemoved: 0,
+			runsRemoved: 7,
+		};
+		host.answer = { ok: true, value: { type: 'result', result: answer } };
+		const { onSettled } = await askAboutTheGroup();
+
+		await act(async () => {
+			fireEvent.click(screen.getByRole('button', { name: 'Remove group' }));
+		});
+
+		await waitFor(() => expect(onSettled).toHaveBeenCalledTimes(1));
+		expect(onSettled.mock.calls[0]?.[0]).toEqual({
+			kind: 'group',
+			removal: GROUP,
+			answer,
+		});
+	});
+
+	// The request that reached nothing settles nothing here either: the dialog stays open, in the
+	// group's own words.
+	it('keeps the dialog open when the ask reached nothing', async () => {
+		host.answer = { ok: false, refusal: 'unanswered' };
+		const { onSettled } = await askAboutTheGroup();
+
+		await act(async () => {
+			fireEvent.click(screen.getByRole('button', { name: 'Remove group' }));
+		});
+
+		expect(onSettled).not.toHaveBeenCalled();
+		expect(screen.getByRole('dialog').textContent).toContain('runs are still filed');
 	});
 });

@@ -1,6 +1,6 @@
 import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
-import { RemoveTestNotice, type SettledRemoveTest } from './remove-notice.js';
+import { RemoveNotice, type SettledRemoveGroup, type SettledRemoveTest } from './remove-notice.js';
 
 /**
  * The line above the content area, and the sentences it is made of.
@@ -20,12 +20,64 @@ const REPORT = {
 
 function said(answer: SettledRemoveTest['answer'], testName = 'login-flow'): string {
 	const { container, unmount } = render(
-		<RemoveTestNotice onDismiss={() => undefined} settled={{ answer, testName }} />,
+		<RemoveNotice onDismiss={() => undefined} settled={{ scope: 'test', answer, testName }} />,
 	);
 	const line = container.querySelector('section p')?.textContent ?? '';
 	unmount();
 	return line;
 }
+
+/** The same, for a **group's** settled delete — the second scope this region reports (#277). */
+function saidOfGroup(answer: SettledRemoveGroup['answer'], groupId = 'app-bar-top-space'): string {
+	const { container, unmount } = render(
+		<RemoveNotice onDismiss={() => undefined} settled={{ scope: 'group', answer, groupId }} />,
+	);
+	const line = container.querySelector('section p')?.textContent ?? '';
+	unmount();
+	return line;
+}
+
+/** The group's own report, at the two figures its line is built on. */
+const GROUP_REPORT = {
+	archive: 'removed',
+	keptTests: 'removed',
+	freedBytes: 8_451_208,
+	keptTestsRemoved: 1,
+	runsRemoved: 7,
+} as const;
+
+/** The five pieces of news a **group's** line can carry, in the host's own order. */
+const GROUP_OUTCOMES = [
+	['deleted', { outcome: 'deleted', ...GROUP_REPORT }],
+	['not-found', { outcome: 'not-found' }],
+	[
+		'partial',
+		{
+			outcome: 'partial',
+			archive: 'failed',
+			keptTests: 'removed',
+			freedBytes: 90_114,
+			keptTestsRemoved: 2,
+			runsRemoved: 2,
+		},
+	],
+	/*
+	 * A `partial` that took **no** run is a fifth piece of news for the test line's reason, and it
+	 * is the ordinary shape of a walk that was cut short before it reached anything.
+	 */
+	[
+		'a partial where no run went',
+		{
+			outcome: 'partial',
+			archive: 'failed',
+			keptTests: 'absent',
+			freedBytes: 0,
+			keptTestsRemoved: 0,
+			runsRemoved: 0,
+		},
+	],
+	['refused', { outcome: 'refused', reason: 'lease-live' }],
+] as const satisfies readonly (readonly [string, SettledRemoveGroup['answer']])[];
 
 /** The five pieces of news this line can carry, in the order the host's own union puts them. */
 const OUTCOMES = [
@@ -226,9 +278,7 @@ describe('the region itself', () => {
 	// It exists before its text does, or it is announced unreliably — `Profile`'s sign-out line
 	// settled that already.
 	it('is a polite live region even with nothing to say', () => {
-		const { container } = render(
-			<RemoveTestNotice onDismiss={() => undefined} settled={undefined} />,
-		);
+		const { container } = render(<RemoveNotice onDismiss={() => undefined} settled={undefined} />);
 
 		const region = container.querySelector('[aria-live="polite"]');
 		expect(region).not.toBeNull();
@@ -240,9 +290,13 @@ describe('the region itself', () => {
 	// what there was to do instead (§5).
 	it('carries no colour of alarm and no glyph', () => {
 		const { container } = render(
-			<RemoveTestNotice
+			<RemoveNotice
 				onDismiss={() => undefined}
-				settled={{ answer: { outcome: 'refused', reason: 'lease-live' }, testName: 'login-flow' }}
+				settled={{
+					scope: 'test',
+					answer: { outcome: 'refused', reason: 'lease-live' },
+					testName: 'login-flow',
+				}}
 			/>,
 		);
 
@@ -255,14 +309,134 @@ describe('the region itself', () => {
 	it('is dismissed by its own control, which is labelled by what it does to this line', () => {
 		const onDismiss = vi.fn();
 		render(
-			<RemoveTestNotice
+			<RemoveNotice
 				onDismiss={onDismiss}
-				settled={{ answer: { outcome: 'not-found' }, testName: 'login-flow' }}
+				settled={{ scope: 'test', answer: { outcome: 'not-found' }, testName: 'login-flow' }}
 			/>,
 		);
 
 		fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }));
 
 		expect(onDismiss).toHaveBeenCalledTimes(1);
+	});
+});
+
+/**
+ * The **group's** five sentences (D43, R51 phase 3, #277).
+ *
+ * They are five and not four for the test line's reason, and they share no phrase with the test's —
+ * which is the pairing rule (D6) applied across the two scopes rather than only within one: a group
+ * and a test are different things to have deleted, and two lines that read alike would make the
+ * screen's news ambiguous about which happened.
+ */
+describe("a group's settled delete", () => {
+	/*
+	 * **The run count leads**, because a group has no directory whose size stands for it — how many
+	 * runs went is the figure nobody can recover afterwards. And what *stayed* is said, because that
+	 * is D43's surgical reading confirmed after the fact rather than only promised before it.
+	 */
+	it('says how many runs went, what they freed, and that runs outside the group stayed', () => {
+		const line = saidOfGroup({ outcome: 'deleted', ...GROUP_REPORT });
+
+		expect(line).toContain('7 runs went');
+		expect(line).toContain('8.1 MB');
+		expect(line).toContain('Runs of the same tests that were not in it are still filed');
+	});
+
+	it('says the singular for a group of one run', () => {
+		expect(
+			saidOfGroup({ outcome: 'deleted', ...GROUP_REPORT, runsRemoved: 1, keptTestsRemoved: 0 }),
+		).toContain('1 run went');
+	});
+
+	/*
+	 * **The `Keep` clause is where the group's line carries what its dialog has no row for**: there
+	 * is no group-level flag, and whether a test is emptied is not knowable until the runs have gone
+	 * (D35 as amended).
+	 */
+	it.each([
+		[0, null],
+		[1, 'One test it emptied was marked Keep'],
+		[2, '2 tests it emptied were marked Keep'],
+	])('says what happened to the emptied tests’ Keep marks (%i)', (removed, said) => {
+		const line = saidOfGroup({ outcome: 'deleted', ...GROUP_REPORT, keptTestsRemoved: removed });
+
+		if (said === null) {
+			expect(line).not.toContain('Keep');
+		} else {
+			expect(line).toContain(said);
+		}
+	});
+
+	/*
+	 * **`not-found` is not a delete of zero runs** and must never read as one: no run filed under the
+	 * project named that group, so the news is that the screen had gone out of date.
+	 */
+	it('says nothing named the group rather than that nothing went', () => {
+		const line = saidOfGroup({ outcome: 'not-found' });
+
+		expect(line).toContain('No run filed under this project names');
+		expect(line).toContain('gone out of date');
+		expect(line).not.toContain('freeing');
+	});
+
+	/*
+	 * **A `partial` says *ask again***, and that is this scope's own next move: the delete is a
+	 * bounded walk, so part of the group may never have been reached.
+	 */
+	it('says how much went, that the rest may still be filed, and to ask again', () => {
+		const line = saidOfGroup(GROUP_OUTCOMES[2][1]);
+
+		expect(line).toContain('2 runs went');
+		expect(line).toContain('The rest may still be filed');
+		expect(line).toContain('ask again');
+	});
+
+	// And a `partial` that took no run says so in words of its own, rather than *the rest went*.
+	it('says not one run could be taken when none was', () => {
+		const line = saidOfGroup(GROUP_OUTCOMES[3][1]);
+
+		expect(line).toContain('Not one run');
+		expect(line).not.toContain('went');
+		expect(line).not.toContain('0 B');
+	});
+
+	// A live lease on one of its runs, with nothing at all touched — said so that *refused* is not
+	// read as *partly done*.
+	it('says a lease is filing into one of its runs and nothing was touched', () => {
+		const line = saidOfGroup({ outcome: 'refused', reason: 'lease-live' });
+
+		expect(line).toContain("one of app-bar-top-space's runs");
+		expect(line).toContain('nothing at all was touched');
+		expect(line).toContain('force-release');
+	});
+
+	it('shares no phrase between any two of its five, and names the group in all of them', () => {
+		const lines = GROUP_OUTCOMES.map(([, answer]) => saidOfGroup(answer));
+
+		expect(new Set(lines).size).toBe(5);
+		for (const [at, one] of lines.entries()) {
+			for (const [other, two] of lines.entries()) {
+				if (at !== other) {
+					expect(one).not.toContain(two);
+				}
+			}
+			expect(one).toContain('app-bar-top-space');
+		}
+	});
+
+	/*
+	 * **And no phrase with the test's five** (D6 across the two scopes): the screen draws one region,
+	 * so a reader has to be able to tell from the sentence which of the two they just did.
+	 */
+	it('shares no sentence with the test’s five', () => {
+		const groups = GROUP_OUTCOMES.map(([, answer]) => saidOfGroup(answer));
+		const tests = OUTCOMES.map(([, answer]) => said(answer));
+
+		for (const group of groups) {
+			for (const test of tests) {
+				expect(group).not.toBe(test);
+			}
+		}
 	});
 });

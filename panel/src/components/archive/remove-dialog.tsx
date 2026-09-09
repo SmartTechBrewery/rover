@@ -1,4 +1,9 @@
-import { sizeFieldReading, useArchiveSize } from '@panel/archive/archive-size.js';
+import {
+	sizeFieldReading,
+	useArchiveSize,
+	useGroupedArchiveSize,
+} from '@panel/archive/archive-size.js';
+import type { GroupRemoval } from '@panel/archive/delete-archived-group.js';
 import type { TestRemoval } from '@panel/archive/delete-archived-test.js';
 import {
 	ConfirmDestructiveDialog,
@@ -145,4 +150,106 @@ function keptReading(kept: boolean | null): string {
 		return 'the host cannot say';
 	}
 	return kept ? 'yes' : 'no';
+}
+
+/**
+ * The asking, before the runs one group holds go (`docs/DESIGN.md` §9, D43, R51 phase 3, #277).
+ *
+ * **The same frame, the same five-row `<dl>` idiom and the same rules as {@link RemoveTestDialog}**
+ * — `confirm-destructive-dialog.tsx` is the component, so `Cancel` filled and prominent with the
+ * destructive control recessive, `Escape`, focus on `Cancel`, no focus trap and a backdrop that is
+ * not a control are all §7's and are not relitigated here. What is here is the four rows, the one
+ * read behind them, and the sentence.
+ *
+ * | the field | what it says |
+ * | --- | --- |
+ * | `PROJECT` | the archive's first component, monospace and verbatim |
+ * | `GROUP` | the group id a lease named — a caller's own string, shown verbatim |
+ * | `RUNS` | `7 runs` or `1 run`, off the grouping answer the screen already holds |
+ * | `ON DISK` | `4.0 MB`, `at least 4.0 MB`, *nothing is filed here*, or *the host cannot say* |
+ *
+ * **There is no `KEPT` row, and its absence is the point.** There is no group-level `Keep` flag and
+ * none is invented (D33, D43): the flag is per test, and this delete does not take a test unless it
+ * empties it. A row here would either invent a state the host does not hold or answer about tests
+ * this delete may well leave standing — so the sentence below carries what a marked test's operator
+ * needs to know instead.
+ *
+ * **`RUNS` is never *the host cannot say***, which is the one place this differs from the test
+ * dialog's own field. The control exists only where the grouping answer lists the group's runs — the
+ * rule its tick already keeps — so the figure is always the count the same answer the `ON DISK`
+ * badge measures is built from (`routes/archive.tsx`, `levelRemoval`).
+ *
+ * **The one read is `measure_archive_groups` and not `measure_archive`**, because a group is not a
+ * directory: the archive has no `<group_id>/` level (R41), so its size is a walk over the runs that
+ * named it. `useGroupedArchiveSize` is the hook the size badge at this depth already uses, and its
+ * four readings are kept apart by the same `sizeFieldReading` (D6). It is made when the question
+ * opens and not before, §10's rule, and a second measurement of a scope the badge may already have
+ * measured is accepted for {@link RemoveTestDialog}'s recorded reason.
+ */
+export function RemoveGroupDialog({
+	removal,
+	removing,
+	unanswered,
+	onCancel,
+	onConfirm,
+}: {
+	/** The group, and what the screen already knows about it — {@link GroupRemoval}. */
+	readonly removal: GroupRemoval;
+	/** A confirmed delete is in flight: the control is disabled and says so (§5, no spinner). */
+	readonly removing: boolean;
+	/** The last ask reached nothing, so nothing was deleted and this dialog stays open. */
+	readonly unanswered: boolean;
+	readonly onCancel: () => void;
+	readonly onConfirm: () => void;
+}) {
+	/*
+	 * **The scope measured is the scope the delete will take** — the `(project, groupId)` pair that
+	 * goes on the wire, so neither side re-derives the other's idea of what a group is.
+	 */
+	const size = useGroupedArchiveSize({
+		scope: 'group',
+		project: removal.project,
+		groupId: removal.groupId,
+	});
+
+	const fields: readonly DialogField[] = [
+		{ label: 'PROJECT', value: removal.project, wide: true },
+		{ label: 'GROUP', value: removal.groupId, wide: true },
+		{ label: 'RUNS', value: removal.runs === 1 ? '1 run' : `${removal.runs} runs` },
+		{ label: 'ON DISK', value: sizeFieldReading(size) },
+	];
+
+	return (
+		<ConfirmDestructiveDialog
+			confirmLabel="Remove group"
+			fields={fields}
+			onCancel={onCancel}
+			onConfirm={onConfirm}
+			pending={removing}
+			pendingLabel="Removing…"
+			title="Confirm group deletion"
+			unanswered={
+				unanswered
+					? 'Nothing came back from the host, so nothing was deleted and this group’s runs are still filed. Ask again — and if the host stays unreachable the panel says so in place of this page.'
+					: undefined
+			}
+			warning={
+				/*
+				 * **D43's surgical reading, said in full to the person about to press it** — and it
+				 * must not be softened into the test card's wording. Three clauses that are not on
+				 * that dialog at all: only the runs *of this group* go, runs of the same tests that
+				 * are not in it **stay**, and a test with nothing left afterwards goes with them,
+				 * `Keep` and all. The second is the one a reader would otherwise get wrong, because
+				 * a test name is not unique to one group (D22); the third is why there is no `KEPT`
+				 * row above.
+				 */
+				<>
+					This removes the runs filed under this group and everything in them,{' '}
+					<strong className="text-on-surface">permanently</strong>. Runs of the same tests that are
+					not in this group stay. There is no undo. A test that has nothing left afterwards goes
+					with them, <span className="font-code-md">Keep</span> and all.
+				</>
+			}
+		/>
+	);
 }

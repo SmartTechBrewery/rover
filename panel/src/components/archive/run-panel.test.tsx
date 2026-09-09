@@ -499,6 +499,7 @@ describe('the run column', () => {
 	 * property this card has kept for the tick since #237 and now keeps for the pair.
 	 */
 	const REMOVAL: TestRemoval = {
+		kind: 'test',
 		project: 'checkout-app',
 		testName: 'login-flow',
 		runs: 42,

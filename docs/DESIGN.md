@@ -3055,12 +3055,15 @@ other and §5 puts the destructive one at the end of the strip. The pair is wrap
 `flex items-center gap-3 shrink-0` box: two children of the outer row would each negotiate their
 width against the name, and the tick would be the one that lost it.
 
-**A group's card carries the tick and no `Remove` in this phase, and that is a phase boundary
-rather than a gap.** A group's tick writes one array in one request; a group's `Remove` is the
-surgical run-by-run walk D43 settles, which is phase 3's. So the two controls are deliberately not
-yet on the same set of cards, and nothing on a group's card hints at one that is not there — no
-disabled control and no explanation, for the reason §10 records about a disabled affordance: it
-promises a press that is coming and withholds it.
+**A group's card carries one too since #277, and the phase boundary this section recorded is
+closed.** It read *a group's card carries the tick and no `Remove` in this phase, and that is a
+phase boundary rather than a gap* — a group's tick writes one array in one request, and a group's
+`Remove` is the surgical run-by-run walk D43 settles, which was phase 3's. That reasoning held and
+the phase has landed, so the tick and the control are now on the same set of cards, and the group's
+own control, confirmation and line are below. Nothing about the treatment changed to serve it: the
+same badge, the same `error` accent, the same asking. What differs is the noun in its accessible
+name — `Remove group app-bar-top-space` — because the two scopes are drawn at the same depth in
+their two views and take different things.
 
 **It is the badge treatment §10 settled, not a new one.** `BADGE_SHAPE` and `BADGE_TYPE` out of
 `header-badge.tsx`, so this control and the Projects card's cannot drift apart by a border width;
@@ -3119,6 +3122,83 @@ permanently. There is no undo. A test marked `Keep` goes with it.* Opened from a
 further clause: *the run you are looking at is one of them.* That clause is the whole of what the
 two cards say differently, and it is the answer to D43's trap — `Remove` on a run's card takes the
 **test**, because it stands over what the tick beside it stands over.
+
+### `Remove` on a group's card — settled here, not designed (#277)
+
+The same control, over a scope that is not an address (D43, R51 phase 3). A group is a set of runs,
+each naming it in its own `group_id.json`, and the archive has no `<group_id>/` level (R41) — so
+what this takes is **the runs whose group id matches and nothing else**, and everything on this
+screen follows from that one sentence.
+
+**Where it is: on the group's card in the groups view, beside its tick**, in the strip and the order
+above. A group's card gets one and no other card in that view does: the root and a project are
+levels of an arrangement rather than one group, and a test name and a run below it are about a test.
+
+**A group whose runs are not listed gets no control**, which is the rule its tick already keeps: the
+walk is still out, the answer is unreadable, or nothing on this host named that group. A control
+there would be a press about runs nobody has seen.
+
+**What its confirmation says**, in the same frame and with the same four-reading size rule:
+
+| The field | What it says |
+| --- | --- |
+| `PROJECT` | the archive's first component, monospace and verbatim |
+| `GROUP` | the group id a lease named — a caller's own string, shown verbatim |
+| `RUNS` | `7 runs` or `1 run`, off the grouping answer the size badge at this depth also measures |
+| `ON DISK` | `4.0 MB`, `at least 4.0 MB`, *nothing is filed here*, or *the host cannot say* |
+
+- **`RUNS` is never *the host cannot say***, which is the one field that reads differently from a
+  test's. The control exists only where the grouping answer lists the group's runs, so the figure is
+  always there — and it is the sum over the group's test-name rows, which costs no request because
+  the view holds that answer for the tree it draws.
+- **The read is `measure_archive_groups` and not `measure_archive`**, over `{ scope: 'group',
+  project, groupId }`: a group is not a directory, so no address walk can size it. Made when the
+  dialog opens, not per row.
+- **There is no `KEPT` row, and its absence is the point.** There is no group-level `Keep` flag and
+  none is invented (D33): the flag is per test, and this delete only takes a test when it empties
+  one. A row here would either invent a state the host does not hold or answer about tests this
+  delete may well leave standing. What a marked test's operator needs to know is in the sentence
+  instead.
+- The recessive control reads `Remove group`, and `Removing…` while the ask is out.
+
+**The sentence, unsoftened, and it must not be softened into the test card's**: *this removes the
+runs filed under this group and everything in them, permanently. Runs of the same tests that are not
+in this group stay. There is no undo. A test that has nothing left afterwards goes with them, `Keep`
+and all.* That is the whole of D43's surgical reading said to the person about to press it, and the
+middle clause is the one a reader would otherwise get wrong — a test name is not unique to one group.
+
+**What it settles**, in the same region above the content area, in five sentences that share no
+phrase with the test's five:
+
+| The answer | What the line says |
+| --- | --- |
+| `deleted` | the group holds nothing any more, **how many runs went** and what they freed, and that runs of the same tests outside it are still filed |
+| `not-found` | no run filed under this project names that group, so nothing was deleted and the screen was out of date |
+| `partial` | how much did go, that the rest may still be filed, and to **ask again** once this host's log says what stopped it |
+| `partial`, no run taken | not one run could be taken — a fifth wording rather than the fourth with an empty referent |
+| `refused` | a lease is filing into one of its runs, so **nothing at all was touched** |
+
+- **The run count leads**, because a group has no directory whose size stands for it: *how many runs
+  went* is the figure nobody can recover afterwards, which is why the host answers it at all.
+- **`partial` means *ask again* here where it means *look at the log* for a test.** This delete is a
+  bounded walk, so a `partial` may be *a run would not go* **or** *the walk did not reach
+  everything* — and both have the same next move.
+- **The `Keep` clause is after the fact rather than a field before it**: whether a test is emptied is
+  not knowable until the runs have gone, so the line says how many emptied tests were marked `Keep`
+  and the dialog says nothing about it.
+
+**Where the screen lands: on the project**, in the groups view's own address, with `replace` — a
+group's card *is* that group, so the address may not exist once its runs have gone. And a settled
+outcome re-reads **both** caches: the levels cache, as a test's delete does, and the **grouping
+answer**, because that one answer is what this view draws its own three levels from. A `refused`
+does neither. §10's destructive-control treatment is what all of this is drawn in and is not
+restated here.
+
+**There is no Stitch screen for any of it, and that is deliberate** for the reason the section above
+gives one phase earlier: the control's shape, the dialog's frame and the region were all settled by
+the time this landed, so a design round would have settled only which four rows this `<dl>` carries
+and which five sentences the line has — a table rather than a screen. So it is built from this
+document, and what it settled is written down here.
 
 ### What a `Remove` settles, and where the screen lands
 

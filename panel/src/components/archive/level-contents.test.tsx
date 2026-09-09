@@ -73,6 +73,7 @@ function readOnly(container: HTMLElement): void {
 describe('the header strip', () => {
 	const UNPINNED: PinState = { checked: false, toggle: () => undefined };
 	const REMOVAL: TestRemoval = {
+		kind: 'test',
 		project: 'checkout-app',
 		testName: 'login-flow',
 		runs: 42,

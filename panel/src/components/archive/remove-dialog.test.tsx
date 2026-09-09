@@ -1,3 +1,4 @@
+import type { GroupRemoval } from '@panel/archive/delete-archived-group.js';
 import type { TestRemoval } from '@panel/archive/delete-archived-test.js';
 import type { HostAnswer, RpcEnvelope } from '@panel/session/host-client.js';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
@@ -30,7 +31,7 @@ vi.mock('@panel/session/session-provider.js', () => ({
 	}),
 }));
 
-import { RemoveTestDialog } from './remove-dialog.js';
+import { RemoveGroupDialog, RemoveTestDialog } from './remove-dialog.js';
 
 /**
  * The asking, in the shape `docs/DESIGN.md` §7 settled for force-releasing, §10 built again for a
@@ -45,6 +46,7 @@ import { RemoveTestDialog } from './remove-dialog.js';
  * to suit one of them.
  */
 const TEST: TestRemoval = {
+	kind: 'test',
 	project: 'checkout-web',
 	testName: 'login-flow',
 	runs: 42,
@@ -418,5 +420,139 @@ describe('what the dialog asks the host', () => {
 		const methods = host.calls.map(([method]) => method);
 		expect(methods).not.toContain('list_archive');
 		expect(methods).not.toContain('list_kept_tests');
+	});
+});
+
+/**
+ * The **group's** confirmation, and what it says that the test's does not (D43, R51 phase 3, #277).
+ *
+ * The frame is asserted above and is not re-asserted here: it is literally the same component
+ * (`confirm-destructive-dialog.tsx`), so what is worth a suite is the four rows, the read behind
+ * them, and the sentence — which is the whole of D43's surgical reading said to the person about to
+ * press it.
+ */
+describe("the group's confirmation", () => {
+	const GROUP: GroupRemoval = {
+		kind: 'group',
+		project: 'checkout-web',
+		groupId: 'app-bar-top-space',
+		runs: 7,
+	};
+
+	async function askingAboutTheGroup(
+		overrides: { readonly removal?: Partial<GroupRemoval>; readonly unanswered?: boolean } = {},
+	) {
+		const rendered = render(
+			<RemoveGroupDialog
+				onCancel={() => undefined}
+				onConfirm={() => undefined}
+				removal={{ ...GROUP, ...overrides.removal }}
+				removing={false}
+				unanswered={overrides.unanswered ?? false}
+			/>,
+		);
+		await waitFor(() => expect(host.calls).toHaveLength(1));
+		return rendered;
+	}
+
+	it('names the project and the group id it is about, verbatim', async () => {
+		await askingAboutTheGroup();
+
+		expect(valueUnder('PROJECT')).toBe('checkout-web');
+		expect(valueUnder('GROUP')).toBe('app-bar-top-space');
+	});
+
+	/*
+	 * **The run count is a figure and never *the host cannot say***, which is the one field that
+	 * reads differently from the test dialog's: the control exists only where the grouping answer
+	 * lists the group's runs, so there is always a number (`routes/archive.tsx`, `levelRemoval`).
+	 */
+	it.each([
+		[7, '7 runs'],
+		[1, '1 run'],
+	])('says how many runs go, in the singular when there is one (%i)', async (runs, said) => {
+		await askingAboutTheGroup({ removal: { runs } });
+
+		expect(valueUnder('RUNS')).toBe(said);
+	});
+
+	/*
+	 * **The one read is `measure_archive_groups`, over this group's own scope** — a group is not a
+	 * directory, so no address walk can size it (R41). It is made when the dialog opens and not
+	 * before, §10's rule.
+	 */
+	it('measures this group and nothing else, in one request made on opening', async () => {
+		await askingAboutTheGroup();
+
+		expect(host.calls).toEqual([
+			[
+				'measure_archive_groups',
+				{ scope: 'group', project: 'checkout-web', groupId: 'app-bar-top-space' },
+			],
+		]);
+		expect(valueUnder('ON DISK')).toBe('4.0 MB');
+	});
+
+	// The four readings must not render alike (D6) — the shared `sizeFieldReading`, one scope over.
+	it.each([
+		[{ outcome: 'measured', bytes: 4_180_532, truncated: true }, 'at least 4.0 MB'],
+		[{ outcome: 'missing' }, 'nothing is filed here'],
+		[{ outcome: 'unreadable' }, 'the host cannot say'],
+	])('keeps the size readings apart (%#)', async (size, said) => {
+		host.size = size;
+
+		await askingAboutTheGroup();
+
+		expect(valueUnder('ON DISK')).toBe(said);
+	});
+
+	/*
+	 * **There is no `KEPT` row, and its absence is the point.** There is no group-level `Keep` flag
+	 * and none is invented (D33, D43): a row here would either invent a state the host does not hold
+	 * or answer about tests this delete may well leave standing.
+	 */
+	it('carries no KEPT row, there being no group-level flag to report', async () => {
+		await askingAboutTheGroup();
+
+		expect(screen.queryByText('KEPT')).toBeNull();
+		expect(screen.queryByText('TEST')).toBeNull();
+	});
+
+	/*
+	 * **The sentence, unsoftened, and it must not be the test card's.** Three clauses are this
+	 * dialog's alone: only the runs *of this group* go, runs of the same tests that are not in it
+	 * **stay**, and a test with nothing left afterwards goes with them, `Keep` and all.
+	 */
+	it('says what goes and what stays, in words the test dialog does not use', async () => {
+		await askingAboutTheGroup();
+
+		const said = screen.getByRole('dialog').textContent ?? '';
+		expect(said).toContain('the runs filed under this group');
+		expect(said).toContain('Runs of the same tests that are not in this group stay');
+		expect(said).toContain('There is no undo');
+		expect(said).toContain('has nothing left afterwards goes with them');
+		// And not the test card's sentence, which would soften exactly the clause that matters.
+		expect(said).not.toContain('every run of this test');
+	});
+
+	it('labels its destructive control for the group, and its safe exit is still prominent', async () => {
+		await askingAboutTheGroup();
+
+		expect(screen.getByRole('button', { name: 'Remove group' })).toBeDefined();
+		expect(screen.getByRole('button', { name: 'Cancel' })).toBeDefined();
+	});
+
+	// Nothing is deleted by opening the question: the write happens on `onConfirm` and nowhere else.
+	it('deletes nothing by being open', async () => {
+		await askingAboutTheGroup();
+
+		expect(host.calls.map(([method]) => method)).not.toContain('delete_archived_group');
+	});
+
+	// The request that reached nothing is said in this dialog's own words, about this dialog's scope.
+	it('says nothing was deleted when the last ask reached nothing', async () => {
+		await askingAboutTheGroup({ unanswered: true });
+
+		expect(screen.getByRole('dialog').textContent).toContain('runs are still filed');
 	});
 });

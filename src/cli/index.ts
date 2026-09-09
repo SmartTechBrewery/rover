@@ -19,6 +19,7 @@ import { UsageError } from './_shared/flags.js';
 import * as out from './_shared/output.js';
 import * as acquire from './commands/acquire.js';
 import * as archive from './commands/archive.js';
+import * as deleteGroup from './commands/delete-group.js';
 import * as deleteProject from './commands/delete-project.js';
 import * as deleteTest from './commands/delete-test.js';
 import * as doctor from './commands/doctor.js';
@@ -79,6 +80,7 @@ const COMMANDS: Record<string, Command | undefined> = Object.assign(Object.creat
 	sweep,
 	'delete-project': deleteProject,
 	'delete-test': deleteTest,
+	'delete-group': deleteGroup,
 	status,
 	users,
 	init,
@@ -137,6 +139,13 @@ Commands:
                            components an \`archive\` listing named). No undo, no trash
                            directory, no dry run; a kept test is taken too, and a live
                            lease filing into the test is refused
+  delete-group <project> <group-id>
+                           Remove the runs one testing group holds, and nothing else
+                           (--actor required; the group id is the one a lease named). A
+                           test's runs that are not in this group stay; a test this
+                           empties is removed, kept flag and all. No undo, no trash
+                           directory, no dry run; a live lease filing into any of those
+                           runs is refused
   status                   Which host answered, its pid, uptime and protocol version
   init [<path>]            Set up a project so an agent working in it can drive a device:
                            its hook file, its .mcp.json, a generated ROVER.md, and the
@@ -179,7 +188,9 @@ Exit codes:
       a sweep of an archive the host has none of or cannot walk, a delete-project that found
       no such registration, could not remove all of it, or was refused because a lease on
       the project is live, a delete-test that found no such test, could not remove all of
-      it, or was refused because a lease filing into it is live, an unreachable host, or a
+      it, or was refused because a lease filing into it is live, a delete-group no run of
+      the project named, that the host could not finish, or that was refused because a
+      lease filing into one of its runs is live, an unreachable host, or a
       request the host rejected
   2   usage error — unknown command, unknown flag, a missing required option, an
       attribution string longer than the host accepts, an --out that names a directory

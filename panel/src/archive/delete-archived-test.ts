@@ -127,6 +127,16 @@ export type ArchiveDeletionReport = Extract<DeleteArchivedTestResult, { outcome:
  * is off the set the ticks are drawn from (§9, §10's *the reads happen when the dialog opens*).
  */
 export interface TestRemoval {
+	/**
+	 * Which scope this removal is — added when a **group's** became the second one (#277).
+	 *
+	 * A group's card in the groups view and a test name's card in the `All` view sit at the same
+	 * depth, so the depth alone cannot say which of the two a card is about; and what the two differ
+	 * in is the method, the wording, the figures and where the screen lands. So the screen labels
+	 * what it built and `remove-control.tsx` dispatches on the label
+	 * (`GroupRemoval`, `delete-archived-group.ts`).
+	 */
+	readonly kind: 'test';
 	/** The archive's first component, and the `project` that goes on the wire. */
 	readonly project: string;
 	/** The archive's second component — the test directory's own name, as the host filed it. */
@@ -194,6 +204,19 @@ export type DeleteArchivedTestAnswer =
 	 * say anything over it, the way the device poll deliberately does not.
 	 */
 	| { readonly outcome: 'access-ended' };
+
+/**
+ * The four of those six that **settled** something — the host's own arms, without the two that are
+ * not outcomes at all.
+ *
+ * Named here rather than `Extract`ed at each reader, because two now have it: the control, which
+ * promises never to hand up a request that reached nothing (`remove-control.tsx`), and the line
+ * above the content area, which is what that promise exists to protect (`remove-notice.tsx`).
+ */
+export type SettledDeleteArchivedTest = Extract<
+	DeleteArchivedTestAnswer,
+	{ outcome: 'deleted' | 'partial' | 'not-found' | 'refused' }
+>;
 
 /**
  * Ask the host to delete one archived test, and narrow every way that can go to six answers.
