@@ -43,10 +43,19 @@ import {
  *   made against a synthetic backend; these are against a device.
  *
  * Gated on `ROVER_TEST_SIMULATOR` (`tests/device/setup.ts`), so a host with no booted simulator
- * **skips rather than fails** (ai/TESTING.md). The recording cases carry a second gate,
- * `ROVER_TEST_FRAME_EXTRACTION`: `record_video` and `stop_recording` answer with the normalised
- * recording *and* the frames sliced out of it or with neither, so there is no half of either left
- * to check on a host with no decoder — and the run says so loudly rather than passing in silence.
+ * **skips rather than fails** (ai/TESTING.md). Two cases carry a second gate, because one Xcode
+ * is not the whole of what this backend needs:
+ *
+ * - `ROVER_TEST_FRAME_EXTRACTION` on the recording cases: `record_video` and `stop_recording`
+ *   answer with the normalised recording *and* the frames sliced out of it or with neither, so
+ *   there is no half of either left to check on a host with no decoder.
+ * - `ROVER_TEST_IDB` on the keys this platform answers: a press goes out over a supervised
+ *   `idb_companion` and the post-state comes back over the same one, so a host with Xcode but
+ *   without idb's release tarball has nothing to send it through. The **refusals** are
+ *   deliberately not gated on it — `back` and `recents` come back before any round trip, and
+ *   they are worth asserting exactly on the host that cannot make one.
+ *
+ * Either way the run says so loudly rather than passing in silence.
  *
  * **It boots nothing, shuts nothing down, installs nothing and launches nothing.** A recording of
  * a screen nobody touched is a true answer about the device and is all this suite asks for; the
@@ -251,22 +260,39 @@ describe.skipIf(!process.env.ROVER_TEST_SIMULATOR)(
 		 * real `read_screen`. `wake` is the idempotent one and this device is awake, so what it does
 		 * here is nothing at all — which is the answer, and the case is that asking for it is not an
 		 * error.
+		 *
+		 * **Both rows assert `after.kind === 'screen'`, and that is what makes the `wake` row worth
+		 * running.** `captureAfterState` never throws (`src/verbs/result.ts`), so a post-state read
+		 * that failed still arrives inside an `outcome: 'ok'` answer — and `wake` on a lit screen
+		 * sends nothing, so `outcome` alone would be green on a host where the companion never
+		 * started. The post-state is the only part of this row that has to reach the device.
+		 *
+		 * Gated on `ROVER_TEST_IDB` for that same reason. Whether the screen is *blanked* first, and
+		 * what the second `wake` must then not do, is `./input.test.ts`'s case — this suite drives
+		 * nothing on the device.
 		 */
-		it.each([
-			'home',
-			'wake',
-		] as const)('answers the %s key it has an equivalent for', async (key) => {
-			const client = await startHost();
-			const device = await freeSimulator(client);
-			const leaseId = await lease(client, device.serial);
+		it.skipIf(!process.env.ROVER_TEST_IDB).each(['home', 'wake'] as const)(
+			'answers the %s key it has an equivalent for',
+			async (key) => {
+				const client = await startHost();
+				const device = await freeSimulator(client);
+				const leaseId = await lease(client, device.serial);
 
-			const pressed = await client.request('press_key', { leaseId, key });
+				const pressed = await client.request('press_key', { leaseId, key });
 
-			expect(pressed).toMatchObject({
-				outcome: 'ok',
-				result: { verb: 'press_key', device: { serial: device.serial } },
-			});
-		});
+				expect(pressed).toMatchObject({
+					outcome: 'ok',
+					result: { verb: 'press_key', device: { serial: device.serial } },
+				});
+				if (pressed.outcome !== 'ok') {
+					throw new Error('the assertion above should have caught this');
+				}
+				// Separate from the `toMatchObject` above rather than folded into it: a `failed`
+				// post-state carries the reason, and putting it in the assertion message is the
+				// difference between "the press did nothing" and "no companion".
+				expect(pressed.result.after.kind, JSON.stringify(pressed.result.after)).toBe('screen');
+			},
+		);
 
 		/**
 		 * The recording over the wire. What only a device can prove is that the file is finished
