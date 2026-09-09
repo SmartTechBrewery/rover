@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { IosSimulatorDeviceBackend, LOG_WINDOWS } from '@/backends/ios-simulator/backend.js';
 import { SimctlCommandError } from '@/backends/ios-simulator/simctl.js';
 import { type Device, LogLevelSchema } from '@/core/device.js';
+import { shutDownSimulator } from '../../helpers/simulators.js';
 
 /**
  * The log read against a real booted simulator. Gated on `ROVER_TEST_SIMULATOR`
@@ -139,9 +140,8 @@ describe.skipIf(!process.env.ROVER_TEST_SIMULATOR)('the log read against a real 
 	 * carrying only the one booted simulator rather than passing quietly (ai/RULES.md §6).
 	 */
 	it('lets the tool refuse a simulator that is not booted, loudly and at once', async () => {
-		const down = (await backend.listDevices()).filter((device) => device.state !== 'ready');
-		const device = down[0];
-		if (device === undefined) {
+		const device = await shutDownSimulator();
+		if (device === null) {
 			console.warn('no shut-down simulator on this host: the log-read refusal was NOT exercised');
 			return;
 		}

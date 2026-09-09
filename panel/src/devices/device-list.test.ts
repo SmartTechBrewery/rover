@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import fixture from '../../../tests/fixtures/panel/list-devices.json';
-import { ListDevicesResultSchema } from './device-list.js';
+import { ListDevicesResultSchema, type ListedDevice, toDeviceListView } from './device-list.js';
 
 /**
  * The panel's half of the drift gate `tests/unit/panel/list-devices-fixture.test.ts` opens.
@@ -162,6 +162,21 @@ describe("the panel's mirror of list_devices", () => {
 		expect(parsed.staleReason).toBeNull();
 	});
 
+	/**
+	 * The order and the counts come out of the mirror's own answer, so this half of the drift gate
+	 * covers the derivation too: a real `list_devices` answer, grouped the way the screen draws it.
+	 */
+	it('groups a real answer held first, and counts the groups it grouped', () => {
+		const view = toDeviceListView(ListDevicesResultSchema.parse(fixture).devices);
+
+		expect(view.devices.map((device) => device.serial)).toEqual([
+			'emulator-5554',
+			'emulator-5556',
+			'emulator-5558',
+		]);
+		expect([view.held, view.free, view.notReady]).toEqual([2, 0, 1]);
+	});
+
 	// Including the state itself. Tolerating its absence would put the card back to guessing that a
 	// device with no lease is free, which is the answer the host refuses.
 	it('refuses an answer that does not say what state the device is in', () => {
@@ -179,5 +194,93 @@ describe("the panel's mirror of list_devices", () => {
 		});
 
 		expect(parsed.success).toBe(false);
+	});
+});
+
+/**
+ * The one derivation the Devices screen makes from the host's answer: the order the grid is drawn
+ * in and the numbers the counter badge says, out of one partition (#267).
+ *
+ * Held first because held is what the screen is read for; then free, then not ready, which is the
+ * badge's own term order. What these cases are really about is that the two cannot disagree — the
+ * counts are the group sizes and the order is the groups concatenated.
+ */
+describe('the Devices screen’s view of that answer', () => {
+	const device = (overrides: Partial<ListedDevice> = {}): ListedDevice => ({
+		serial: 'emulator-5554',
+		platform: 'android',
+		model: 'sdk_gphone64_arm64',
+		osVersion: '16',
+		state: 'ready',
+		heldBy: null,
+		...overrides,
+	});
+
+	const lease = (serial: string): NonNullable<ListedDevice['heldBy']> => ({
+		serial,
+		owner: 'issue-267',
+		project: 'rover',
+		testName: 'the devices grid',
+		grantedAt: '2026-09-09T09:12:00.000Z',
+		expiresInMs: 600_000,
+	});
+
+	const held = device({ serial: 'held', heldBy: lease('held') });
+	const free = device({ serial: 'free' });
+	const notReady = device({ serial: 'not-ready', state: 'unauthorized' });
+
+	it('puts every held device before every free one', () => {
+		const view = toDeviceListView([free, held]);
+
+		expect(view.devices.map((entry) => entry.serial)).toEqual(['held', 'free']);
+	});
+
+	it('puts a device the host would refuse a lease on last, and keeps it in the list', () => {
+		const view = toDeviceListView([notReady, free, held]);
+
+		expect(view.devices.map((entry) => entry.serial)).toEqual(['held', 'free', 'not-ready']);
+	});
+
+	/*
+	 * A lease on a device that has since gone `offline` is still a lease and still the answer to
+	 * "who do I ask" (#124), so the hardware state does not move it out of the held group.
+	 */
+	it('sorts a held device by its lease and never by its hardware state', () => {
+		const offline = device({
+			serial: 'held-offline',
+			state: 'offline',
+			heldBy: lease('held-offline'),
+		});
+		const view = toDeviceListView([free, offline]);
+
+		expect(view.devices.map((entry) => entry.serial)).toEqual(['held-offline', 'free']);
+		expect([view.held, view.free, view.notReady]).toEqual([1, 1, 0]);
+	});
+
+	/*
+	 * The criterion the badge exists under: the three numbers are the sizes of the three groups
+	 * the cards are drawn in, so they sum to the grid and no device is counted twice or missed.
+	 */
+	it('counts the three groups it drew, and they sum to the list', () => {
+		const devices = [notReady, free, held, device({ serial: 'free-2' })];
+		const view = toDeviceListView(devices);
+
+		expect([view.held, view.free, view.notReady]).toEqual([1, 2, 1]);
+		expect(view.held + view.free + view.notReady).toBe(devices.length);
+		expect(view.devices).toHaveLength(devices.length);
+	});
+
+	/* Within a group the host's own order is what is drawn — nothing here re-sorts a group. */
+	it('keeps the host’s order inside a group', () => {
+		const first = device({ serial: 'first', heldBy: lease('first') });
+		const second = device({ serial: 'second', heldBy: lease('second') });
+		const view = toDeviceListView([second, first]);
+
+		expect(view.devices.map((entry) => entry.serial)).toEqual(['second', 'first']);
+	});
+
+	// An empty list is a state of its own on this screen and must not become a shape with holes.
+	it('answers an empty list as an empty list', () => {
+		expect(toDeviceListView([])).toEqual({ devices: [], held: 0, free: 0, notReady: 0 });
 	});
 });

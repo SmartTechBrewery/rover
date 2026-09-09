@@ -13,6 +13,7 @@ import {
 } from '@/core/errors.js';
 import { type DeviceSerial, parseDeviceSerial, unwrap } from '@/core/ids.js';
 import { readRecordingContainer } from '@/verbs/recording-container.js';
+import { shutDownSimulator } from '../../helpers/simulators.js';
 
 /**
  * The recorder against a real booted simulator — the half of this phase no mock can answer.
@@ -57,17 +58,6 @@ async function booted(): Promise<Device> {
 	const ready = (await backend.listDevices()).filter((device) => device.state === 'ready');
 	expect(ready.length).toBeGreaterThan(0);
 	return ready[0] as Device;
-}
-
-/**
- * A simulator that is **not** booted, or `null` when this host has only one.
- *
- * The case that needs it says out loud that it did not run rather than passing quietly
- * (ai/RULES.md §6), which is `./screenshot.test.ts`'s stance on the same question.
- */
-async function shutDown(): Promise<Device | null> {
-	const down = (await backend.listDevices()).filter((device) => device.state !== 'ready');
-	return down[0] ?? null;
 }
 
 /** Whether this host is running a recorder for `serial`, asked the way the backend asks. */
@@ -242,7 +232,7 @@ describe.skipIf(!process.env.ROVER_TEST_SIMULATOR)('the recorder against a real 
 	 * is here to catch is a recorder that ran, not a slow host.
 	 */
 	it('refuses a simulator that is not booted rather than recording nothing', async () => {
-		const device = await shutDown();
+		const device = await shutDownSimulator();
 		if (device === null) {
 			console.warn(
 				'no shut-down simulator on this host: the records-nothing refusal was NOT exercised',

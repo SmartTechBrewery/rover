@@ -14,6 +14,9 @@
  * be decided. Where they cannot agree, this file is where the reconciliation is written down and
  * argued: `osVersion` is the one that needed it.
  *
+ * **A third export, {@link borrowableNow}, is what the inventory narrows through** — and both
+ * mappings go through the same one, for the same reason they share `toDeviceState`.
+ *
  * The platform's vocabulary stops at this file. Everything above it sees only
  * `Device`, and `DeviceSchema.parse` on every result is what makes that a checked claim
  * rather than a convention.
@@ -79,9 +82,55 @@ const IOS_VERSION_PREFIX = `${IOS_PLATFORM} `;
  * token is the true one either way: visible to the host, and no verb can run on it. A
  * `Booting` device in particular is not usable — capture on a device that is not `Booted`
  * hangs for a minute and then fails (`docs/IOS.md` §8, trap 1).
+ *
+ * What the **inventory** does with an `offline` simulator is a separate decision, one level up:
+ * it does not list it at all ({@link borrowableNow}). This function is still what decides that,
+ * and it is still the one place the tokens are read.
  */
 function toDeviceState(state: string): DeviceState {
 	return state === BOOTED_STATE ? 'ready' : 'offline';
+}
+
+/**
+ * The devices of a mapped set this host will lend **right now** — every `Booted` simulator, and
+ * nothing else (#267).
+ *
+ * **The narrowing belongs to the inventory, not to the vocabulary**, which is why it is a
+ * function here rather than a `continue` inside the two mappings below. `simctl list devices`
+ * answers *what could this machine run* — every simulator ever created, eleven rows on the bench
+ * this was written against with one of them usable — while `adb devices` answers *what can you
+ * borrow now*: an unplugged phone simply stops being listed. Those are two different questions,
+ * and the device list is the second one, so this platform's enumeration is narrowed onto it
+ * rather than the other half of the list being widened (`PROJECT.md` D41 records the symmetric
+ * alternative and why it was rejected).
+ *
+ * **This is not a rule about devices that are not `ready`, and it is not applied anywhere else.**
+ * An Android phone plugged in with USB debugging unauthorized is `unauthorized`, and that row is
+ * the only clue its operator gets about why the phone is unusable — a device that is present but
+ * unusable is still present, and still says so. What makes the narrowing honest on *this*
+ * platform is narrower than the state: the only thing that makes a simulator not `ready` is not
+ * running, and a simulator that is not running is not a device this host has, in the same way an
+ * unplugged phone is not.
+ *
+ * **A simulator in a transitional state is out, deliberately.** `Booting` and `Shutting Down` are
+ * not `Booted`, so neither is listed, and that is a choice between two consistent answers rather
+ * than an accident of the mapping. A `Booting` device cannot be borrowed — a capture on one hangs
+ * for a minute and then fails (`docs/IOS.md` §8, trap 1) — so listing it would put a row in the
+ * list that an `acquire` would refuse, and it would then appear and vanish across a single boot,
+ * which is worse than either answer. The cost is the boot's own duration of not seeing a
+ * simulator somebody is starting; the watch delivers it the moment it is up.
+ *
+ * Applied to the **inventory** — `listDevices` and the watch — and never to a question asked
+ * about a *named* device. `describeDevice` and `deviceInfo` are asked by a caller who already has
+ * one device in mind, where the honest answer is what that device is: a lease grant that says
+ * *'offline' rather than ready* names something to fix, and `deviceInfo` reads its screen off the
+ * device type rather than off a running system, so it needs no booted simulator at all
+ * (`./backend.js`).
+ */
+export function borrowableNow(devices: Device[]): Device[] {
+	// The state {@link toDeviceState} already decided, rather than the token read a second time:
+	// `ready` is exactly `Booted` here, and two readings of one fact is how they come to disagree.
+	return devices.filter((device) => device.state === 'ready');
 }
 
 /**

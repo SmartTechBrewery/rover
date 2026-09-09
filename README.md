@@ -555,7 +555,10 @@ daemon runs: it binds a unix socket, serves
 the schema-checked IPC surface over it, and **starts itself on the first call**, with two
 concurrent callers producing exactly one daemon. It now holds a **device inventory** — one entry
 per device, fed by each registered backend's change stream, refusing anything attached to another
-host — and answers `list_devices` alongside `status`. The inventory is a cache and never the
+host — and answers `list_devices` alongside `status`. It is an inventory of **what can be borrowed
+now**, not a catalogue of what the machine could run: a virtual device nobody has started is not in
+it, in the same way an unplugged phone is not, while a device that is attached and unusable stays
+listed with the state that says why (`PROJECT.md` D41). The inventory is a cache and never the
 authority: a lease re-verifies its device against the backend at grant time (`PROJECT.md` D6),
 and `list_devices` says `stale` whenever the list is not known to be current — with a `staleReason`
 beside it in the one case that will **not** clear on its own, `tooling-missing`, which names the
@@ -1313,7 +1316,10 @@ answer for it.
 **Three things drive this program today: the device watch, the screen read and every
 injection.** The iOS-simulator backend watches the attached set through
 `idb_companion --notify stdout`, which reports every simulator on every change with no polling at
-all, and falls back to polling `simctl list` on a host that has no companion. `read_screen` is
+all, and falls back to polling `simctl list` on a host that has no companion. What either source
+*publishes* is the **booted** simulators — `list_devices` is an inventory of what can be borrowed
+now rather than a catalogue of what this Mac could run, so a simulator nobody has started is not
+in it (`PROJECT.md` D41), exactly as an unplugged phone is not. `read_screen` is
 answered by `accessibility_info` over gRPC against one supervised companion per simulator (#251),
 and `tap`, `swipe`, `type_text` and `press_key` by one client-streaming `hid` call on that same
 companion (#252) — and **neither of those halves has a fallback**: `simctl` cannot dump a
@@ -2126,10 +2132,12 @@ host serves those files, that command becomes a URL rather than a server.
 method the surface lets it call, and shows every attached device as a card — model, serial,
 platform, OS version, and either *free* or the lease holding it, with the holder's `owner`,
 `project` and `test name`, the grant instant as the host wrote it, and a countdown that ticks down
-once a second and **goes back up** when activity renews the lease. A device the host reports as
-`unauthorized` or `offline` is neither: it says so in the free panel's place, in grey, and it is
-counted apart from the free ones — the daemon would refuse a lease on it, so calling it free would
-be a claim the host will not honour. Four states of that one screen
+once a second and **goes back up** when activity renews the lease. **Held cards come first**, then
+free, then the ones no lease can be taken on — the order the counter badge above the grid already
+said its terms in, out of the same partition its three numbers are the sizes of. A device the host
+reports as `unauthorized` or `offline` is neither held nor free: it says so in the free panel's
+place, in grey, and it is counted apart from the free ones — the daemon would refuse a lease on it,
+so calling it free would be a claim the host will not honour. Four states of that one screen
 are distinguished on purpose, and the last two are the reason: nothing attached; a host view that is
 not current, over a list; a host view that is not current over an *empty* list, which means Rover
 cannot say what is attached rather than that nothing is; and the host being unreachable, which

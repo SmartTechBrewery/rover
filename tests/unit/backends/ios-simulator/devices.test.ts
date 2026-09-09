@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import {
+	borrowableNow,
 	IOS_SIMULATOR_PLATFORM_ID,
 	toDevices,
 	toNotifiedDevices,
@@ -238,6 +239,79 @@ describe('toDevices, on shapes no capture on this machine carries', () => {
 		);
 
 		expect(mapped.map((device) => device.state)).toEqual(['offline', 'offline', 'offline']);
+	});
+});
+
+/**
+ * The narrowing the inventory goes through (#267, D41) — asserted here, over both mappings, for
+ * the reason they share `toDeviceState`: it is one rule, and a second place to decide it is how
+ * the poll and the stream come to disagree about what this host has.
+ */
+describe('borrowableNow', () => {
+	/**
+	 * The acceptance criterion, on the capture that motivated the issue: 22 simulators created on
+	 * the bench, one of them booted, and the inventory names that one and no others.
+	 */
+	it('answers the booted simulator and nothing else', () => {
+		expect(borrowableNow(CAPTURED)).toEqual([
+			{
+				serial: '997FA43E-FF9F-4109-BEF0-53D3F46653E7',
+				platform: 'ios-simulator',
+				model: 'iPhone 17',
+				osVersion: '26.4.1',
+				osApiLevel: null,
+				state: 'ready',
+				attachment: 'this-host',
+			},
+		]);
+		expect(CAPTURED).toHaveLength(22);
+	});
+
+	/** The same answer off the other source, so the two cannot disagree about the set. */
+	it('answers the same one simulator off a notify frame', () => {
+		expect(borrowableNow(NOTIFIED).map((device) => device.model)).toEqual(['iPhone 17']);
+	});
+
+	/**
+	 * **The transitional decision, over the whole captured run.** `Shutdown → Booting → Booted →
+	 * Shutting Down → Shutdown` for one simulator is one frame in which it can be borrowed, and
+	 * four in which it is simply not there. Neither `Booting` nor `Shutting Down` is listed: a
+	 * device that appeared and vanished across a single boot would be worse than either consistent
+	 * answer, and a row `acquire` would refuse is a dead end for an agent (D21).
+	 */
+	it('lists a simulator only while it is booted, never while it is on the way', () => {
+		const transitioning = 'D85C3449-4D0C-4E93-B8EC-77FD0E5A8F3F';
+		const listed = NOTIFY_FRAMES.map((frame) => [
+			frame.find((entry) => entry.udid === transitioning)?.state,
+			borrowableNow(toNotifiedDevices(frame)).some((device) => device.serial === transitioning),
+		]);
+
+		expect(listed).toEqual([
+			['Shutdown', false],
+			['Booting', false],
+			['Booted', true],
+			['Shutting Down', false],
+			['Shutdown', false],
+		]);
+	});
+
+	/**
+	 * A host with nothing booted is an empty inventory, and an empty inventory is a real answer —
+	 * *no devices attached*, which is exactly what the Android half of the same list says when
+	 * nothing is plugged in (D21). It is not the *no view* an interruption reports (D6).
+	 */
+	it('answers an empty inventory for a machine with simulators but none booted', () => {
+		const mapped = toDevices(
+			devices({
+				[BOOTED_RUNTIME]: [
+					{ udid: 'A1B2C3D4-0000-0000-0000-000000000007', name: 'iPhone 17', state: 'Shutdown' },
+				],
+			}),
+			runtimes({ identifier: BOOTED_RUNTIME, version: '26.4.1', platform: 'iOS' }),
+		);
+
+		expect(mapped).toHaveLength(1);
+		expect(borrowableNow(mapped)).toEqual([]);
 	});
 });
 

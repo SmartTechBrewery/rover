@@ -121,6 +121,20 @@ function gridOf(container: HTMLElement): HTMLElement {
 }
 
 /**
+ * The cards in the order they are drawn, named by the one field every card carries whatever the
+ * host could read about it (#267). Read out of the DOM rather than off the props, because the
+ * order the grid is *in* is the thing being asserted.
+ */
+function serialsOf(container: HTMLElement): string[] {
+	return [...container.querySelectorAll('article')].map((card) => {
+		const label = [...card.querySelectorAll('dt')].find(
+			(term) => term.textContent === 'Serial',
+		) as HTMLElement;
+		return label.nextElementSibling?.textContent ?? '';
+	});
+}
+
+/**
  * The three numbers §4's column ceiling is made of, read back out of the grid's class list: the
  * track floor from its `minmax`, and the column count and card maximum from the `calc` its
  * `max-w-` carries. Reading them rather than restating them is what makes the assertion that
@@ -229,6 +243,52 @@ describe('with devices attached', () => {
 		showing(ready([HELD]));
 
 		expect(describing()).toBeDefined();
+	});
+
+	/**
+	 * **Held before free** (#267). Held is what this screen is read for — who has what, and how
+	 * long is left — and it was previously wherever the host happened to return it.
+	 */
+	it('lists every held device before every free one, whatever order the host sent', () => {
+		const { container } = showing(ready([FREE, HELD, { ...FREE, serial: 'R5CT10ABCDE' }]));
+
+		expect(serialsOf(container)).toEqual([HELD.serial, FREE.serial, 'R5CT10ABCDE']);
+	});
+
+	/**
+	 * Then free, then not ready: the counter badge's own term order, and the emphasis
+	 * `docs/DESIGN.md` §5 settled — this screen answers *what can I use right now*, so the usable
+	 * device outranks the greyed-out one. The not-ready device is still **listed**, because that
+	 * row is the only clue its operator gets about why the phone is unusable.
+	 */
+	it('puts a device the host cannot lease last, and still lists it', () => {
+		const { container } = showing(ready([UNAUTHORIZED, FREE, HELD]));
+
+		expect(serialsOf(container)).toEqual([HELD.serial, FREE.serial, UNAUTHORIZED.serial]);
+	});
+
+	/**
+	 * A lease on a device that has since gone `offline` is still a lease and still the answer to
+	 * "who do I ask" (#124), so it is sorted with the held ones rather than with the unusable ones.
+	 */
+	it('keeps a held device that went offline in the held group', () => {
+		const { container } = showing(ready([UNAUTHORIZED, HELD_OFFLINE]));
+
+		expect(serialsOf(container)).toEqual([HELD_OFFLINE.serial, UNAUTHORIZED.serial]);
+	});
+
+	/**
+	 * **The badge and the grid come out of one partition**, so the three counts are the sizes of
+	 * the three groups the cards are drawn in and there is no second source that could disagree.
+	 * Asserted together on the awkward list — one of each, sent in the wrong order.
+	 */
+	it('counts the groups it drew, in the order it drew them', () => {
+		const { container } = showing(ready([UNAUTHORIZED, FREE, HELD]));
+
+		expect(serialsOf(container)).toEqual([HELD.serial, FREE.serial, UNAUTHORIZED.serial]);
+		expect(screen.getByText('1 held')).toBeDefined();
+		expect(screen.getByText('1 free')).toBeDefined();
+		expect(screen.getByText('1 not ready')).toBeDefined();
 	});
 });
 

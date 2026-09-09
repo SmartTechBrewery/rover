@@ -87,7 +87,12 @@ import { type AppId, type DeviceSerial, unwrap } from '../../core/ids.js';
 import { waitForCondition } from '../../core/wait.js';
 import { hostPathOf } from './containers.js';
 import { SIMCTL_MISSING, SimctlNotFoundError } from './developer-dir.js';
-import { IOS_SIMULATOR_PLATFORM_ID, toDevices, toNotifiedDevices } from './devices.js';
+import {
+	borrowableNow,
+	IOS_SIMULATOR_PLATFORM_ID,
+	toDevices,
+	toNotifiedDevices,
+} from './devices.js';
 import { IdbCompanions, type IdbStreamRpc, type IdbUnaryRpc } from './idb-client.js';
 import {
 	IDB_COMPANION_STDERR_TAIL_CHARS,
@@ -998,16 +1003,20 @@ export class IosSimulatorDeviceBackend implements DeviceBackend {
 	private readonly companions = new IdbCompanions();
 
 	/**
-	 * One `simctl list -j devices runtimes`, mapped onto the neutral vocabulary.
+	 * One `simctl list -j devices runtimes`, mapped onto the neutral vocabulary and narrowed to
+	 * the simulators this host will lend right now (D41, `./devices.js`'s `borrowableNow`).
+	 *
+	 * **The narrowing is what makes this an inventory rather than a catalogue** (#267). `simctl`
+	 * lists every simulator ever created on the machine, which answers *what could this host
+	 * run*; `listDevices` answers *what can be borrowed now*, which is the question `adb devices`
+	 * answers for the other half of the same list. Without it a Mac reports one usable simulator
+	 * and ten rows nobody can act on.
 	 *
 	 * Nothing about the device set is held between calls, which is D6 one level down: every
 	 * answer here is this listing, read again.
 	 */
 	async listDevices(): Promise<Device[]> {
-		const result = await runSimctl([...ENUMERATE_ARGV]);
-		const { devices, runtimes } = parseListings(ENUMERATE_ARGV, result, false);
-
-		return toDevices(devices, runtimes);
+		return borrowableNow(await this.enumerate());
 	}
 
 	/**
@@ -1015,10 +1024,29 @@ export class IosSimulatorDeviceBackend implements DeviceBackend {
 	 * re-verification in its cheapest form, and the whole of what lifecycle means after D21.
 	 * `null` rather than a throw: a device that is no longer there is a lookup miss
 	 * (ai/CODING_STANDARDS.md "Error handling").
+	 *
+	 * **The one enumeration this backend does not narrow, and the reason is the question being
+	 * asked** (#267). {@link listDevices} answers "what is there to borrow", where a simulator
+	 * that is not running is nothing to borrow; this answers "what is *this* device", asked by a
+	 * caller who already has one in mind — and the honest answer for a simulator somebody shut
+	 * down is that it is `offline`, which is what the refusals naming a state are made of and what
+	 * a lease grant then reports (`../../daemon/lease-handlers.js`). A `null` here is what it has
+	 * always been: no such device on this host at all.
 	 */
 	async describeDevice(serial: DeviceSerial): Promise<Device | null> {
-		const devices = await this.listDevices();
+		const devices = await this.enumerate();
 		return devices.find((device) => device.serial === serial) ?? null;
+	}
+
+	/**
+	 * Every simulator this host has, whatever state it is in — the reading both enumerations
+	 * above are made of, and the only place their one `simctl` invocation is spelled out.
+	 */
+	private async enumerate(): Promise<Device[]> {
+		const result = await runSimctl([...ENUMERATE_ARGV]);
+		const { devices, runtimes } = parseListings(ENUMERATE_ARGV, result, false);
+
+		return toDevices(devices, runtimes);
 	}
 
 	/**
@@ -1032,6 +1060,13 @@ export class IosSimulatorDeviceBackend implements DeviceBackend {
 	 * the design, which is what keeps a host with no idb watching the devices it has — and the
 	 * two agree device for device, including on the `osVersion` spelling, because `./devices.js`
 	 * normalises the notify path onto `simctl`'s rather than publishing two.
+	 *
+	 * **"The set" is {@link listDevices}' set — the booted simulators** (#267, D41), on both
+	 * sources and for the same reason they agree about everything else. So a state change the
+	 * narrowing collapses delivers nothing: `Shutdown → Booting` is two frames from the companion
+	 * and one unchanged set here, which is the delivery rule this method already had rather than a
+	 * dropped event. What a caller sees is a simulator arriving when it is up and leaving when it
+	 * is not, never a row it can do nothing with.
 	 *
 	 * Synchronous and never rejecting, as the contract requires: whether either source can be
 	 * established is reported through the listener, never as a rejection nothing is written to
@@ -1196,7 +1231,11 @@ export class IosSimulatorDeviceBackend implements DeviceBackend {
 						backoffMs = NOTIFY_RESTART_MIN_DELAY_MS;
 						stopPolling();
 
-						for (const targets of frames) deliver(toNotifiedDevices(targets));
+						// Narrowed exactly as `listDevices` is, and by the same function: the watch
+						// and the enumeration answer one question, so a simulator that is not
+						// booted has to be absent from both or the poll and the stream would
+						// disagree about what this host has (#267, `./devices.js`).
+						for (const targets of frames) deliver(borrowableNow(toNotifiedDevices(targets)));
 					},
 					onStderr(chunk) {
 						stderrTail = `${stderrTail}${chunk}`.slice(-IDB_COMPANION_STDERR_TAIL_CHARS);
