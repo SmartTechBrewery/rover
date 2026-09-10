@@ -1226,6 +1226,7 @@ describe('deviceInfo', () => {
 				densityScale: 3,
 				widthDp: 402,
 				heightDp: 874,
+				systemBars: null,
 			},
 			osVersion: '26.4.1',
 			osApiLevel: null,
@@ -1248,6 +1249,7 @@ describe('deviceInfo', () => {
 			densityScale: 2,
 			widthDp: 1032,
 			heightDp: 1376,
+			systemBars: null,
 		});
 	});
 

@@ -1,4 +1,4 @@
-import { act, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 /**
@@ -15,8 +15,35 @@ const { host } = vi.hoisted(() => ({
 		byName: {} as Record<string, unknown>,
 		/** Every address the byte route was asked for, in order. */
 		asked: [] as readonly (readonly string[])[],
+		/** What `device_info.json` says, per run directory name. */
+		deviceByRun: {} as Record<string, unknown>,
+		/** Every address the text route was asked for, in order. */
+		textAsked: [] as readonly (readonly string[])[],
 	},
 }));
+/**
+ * The decoder, scripted **by call order** rather than by address (`bitmap.ts`).
+ *
+ * The pair's two decodes are one `Promise.all`, so the reference is asked for first and the
+ * compared one second, which is a stabler key than the `blob:` strings `tests/panel-setup.ts` hands
+ * out. Mocked at all because **jsdom has no canvas**: the real module would answer `null` for both
+ * files here, and every assertion about a mark would pass vacuously against *no pixels to compare*.
+ */
+const { decode } = vi.hoisted(() => ({
+	decode: {
+		/** What the next two calls answer, in order. Anything unscripted answers `null`. */
+		answers: [] as unknown[],
+		/** Every address the decoder was asked for, in order — how *once per pair* is asserted. */
+		asked: [] as string[],
+	},
+}));
+vi.mock('@panel/archive/bitmap.js', () => ({
+	bitmapOf: async (url: string) => {
+		decode.asked = [...decode.asked, url];
+		return decode.answers.shift() ?? null;
+	},
+}));
+
 vi.mock('@panel/session/session-provider.js', () => ({
 	useSession: () => ({
 		readArtifactBytes: async (path: readonly string[]) => {
@@ -24,6 +51,24 @@ vi.mock('@panel/session/session-provider.js', () => ({
 			return {
 				ok: true,
 				value: host.byName[path.at(-1) ?? ''] ?? { outcome: 'missing' },
+			};
+		},
+		/*
+		 * The other half of the byte route: `device_info.json`, which the card reads for each run of
+		 * a pair once the reader asks for the marks, for the one field that says where that device
+		 * draws its system bars (`archive/device-info.ts`). Scripted per run directory, because the
+		 * two runs of a pair are exactly what may disagree about it.
+		 */
+		readArtifactText: async (path: readonly string[]) => {
+			host.textAsked = [...host.textAsked, path];
+			const run = path.at(-3) ?? '';
+			const body = host.deviceByRun[run];
+			return {
+				ok: true,
+				value:
+					body === undefined
+						? { outcome: 'missing' }
+						: { outcome: 'read', text: JSON.stringify(body) },
 			};
 		},
 	}),
@@ -87,25 +132,94 @@ function fileOf(drawn: HTMLElement | undefined): string | null | undefined {
 	return drawn?.querySelector('img')?.getAttribute('alt');
 }
 
+/** A bitmap of one flat shade — a pair of these differs everywhere or nowhere. */
+function flat(width: number, height: number, shade: number) {
+	const pixels = new Uint8ClampedArray(width * height * 4);
+	pixels.fill(shade);
+	for (let at = 3; at < pixels.length; at += 4) {
+		pixels[at] = 255;
+	}
+	return { width, height, pixels };
+}
+
+/**
+ * A bitmap of one flat shade with some rows lit — enough to place a difference in a band and a
+ * difference in the content, which is what an ignored edge has to be able to tell apart.
+ */
+function litRows(width: number, height: number, rows: readonly (readonly [number, number])[]) {
+	const bitmap = flat(width, height, 0);
+	for (const [from, to] of rows) {
+		bitmap.pixels.fill(255, from * width * 4, to * width * 4);
+	}
+	for (let at = 3; at < bitmap.pixels.length; at += 4) {
+		bitmap.pixels[at] = 255;
+	}
+	return bitmap;
+}
+
+/** The control, by the name a screen reader would find it under. */
+function control() {
+	return screen.getByRole('button', { name: 'Differences' });
+}
+
+/** Presses the control and lets the decode and the comparison settle. */
+async function press() {
+	fireEvent.click(control());
+	for (let turn = 0; turn < 4; turn += 1) {
+		await act(async () => undefined);
+	}
+}
+
+/**
+ * The overlay over one pane's artifact, if it has one.
+ *
+ * `img + svg` and not `svg`: the pane head's **Open in a new window** carries a lucide glyph, which
+ * is an `<svg>` too and is the one `querySelector('svg')` finds first. The overlay is the element
+ * immediately after the image, inside the wrapper `difference-marks.tsx` shrink-wraps around it.
+ */
+function overlayOn(drawn: HTMLElement | undefined) {
+	return drawn?.querySelector('img + svg') ?? null;
+}
+
+/** The boxes drawn over one pane — one `<g>` per region, two strokes inside each. */
+function marksOn(drawn: HTMLElement | undefined) {
+	return [...(overlayOn(drawn)?.querySelectorAll('g') ?? [])];
+}
+
 beforeEach(() => {
 	host.byName = {
 		'before.png': bytes('image/png', 'before'),
 		'after.png': bytes('image/png', 'after'),
 	};
 	host.asked = [];
+	/*
+	 * **Neither run reports its bars by default**, so every test that is not about them compares
+	 * the whole image — which is also what a run archived before the host recorded them looks like.
+	 */
+	host.deviceByRun = {
+		[FIRST]: { serial: SERIAL, platform: 'android' },
+		[SECOND]: { serial: SERIAL, platform: 'android' },
+	};
+	host.textAsked = [];
+	decode.answers = [];
+	decode.asked = [];
 });
 
 describe('a label’s artifacts side by side', () => {
 	// The label names the card, and it is the label **as the archive filed it**.
-	it('is headed by the filed label, and by nothing else in that strip', async () => {
+	it('is headed by the filed label, and by one control opposite it', async () => {
 		const { container } = await showing();
 
 		expect(screen.getByRole('heading', { level: 2 }).textContent).toBe(LABEL);
 		const strip = container.querySelector('section > div:first-child');
-		// The caption, then the tree's badge, then the name it belongs to — and nothing else.
-		expect(strip?.textContent).toBe(`LABEL${NUMBER}${LABEL}`);
-		// No count, no glyph and no control in the strip.
-		expect(strip?.querySelectorAll('button')).toHaveLength(0);
+		/*
+		 * The caption, the tree's badge, the name it belongs to — and, since the marks landed, the
+		 * one control (2026-09-10, amended in place per `ai/RULES.md` §1; this asserted *and nothing
+		 * else in that strip*, which was true of a card that had nothing to press). **No count and
+		 * no glyph still**, and the control's own word is the whole of what was added: the sentence
+		 * beside it is absent until the reader presses it.
+		 */
+		expect(strip?.textContent).toBe(`LABEL${NUMBER}${LABEL}Differences`);
 		expect(strip?.querySelectorAll('a')).toHaveLength(0);
 		expect(strip?.textContent).not.toContain('2');
 	});
@@ -377,17 +491,27 @@ describe('nothing on this card is a verdict, and nothing is invented', () => {
 		}
 	});
 
-	// No diff, no score, no highlight, and no second explorer: the tree is how another artifact is
-	// chosen (#160). No zoom, pan, rotate, filmstrip or next/previous either.
-	it('offers no control of its own at all', async () => {
+	/*
+	 * **One control and no second explorer** (2026-09-10, amended in place per `ai/RULES.md` §1).
+	 * This asserted *no control of its own at all*, with *no diff* in its own reasoning and `diff`
+	 * in the forbidden vocabulary below; the operator reversed the diff and the control is what the
+	 * reversal is reachable through, so the assertion is now that there is **exactly one** of them
+	 * and that it is the difference lamp. `diff` leaves the list because it is the control's own
+	 * name; **everything the reversal did not buy stays on it** — no score, no verdict, no
+	 * percentage — and so does the whole of the second half: the tree is still how another artifact
+	 * is chosen (#160), and there is still no zoom, pan, rotate, filmstrip or next/previous.
+	 */
+	it('offers one control of its own, and nothing else', async () => {
 		const { container } = await showing();
 
-		expect(container.querySelectorAll('button')).toHaveLength(0);
+		expect(container.querySelectorAll('button')).toHaveLength(1);
+		expect(control()).toBeTruthy();
 		expect(container.querySelectorAll('input')).toHaveLength(0);
 		const text = (container.textContent ?? '').toLowerCase();
 		for (const absent of [
-			'diff',
 			'score',
+			'percent',
+			'%',
 			'zoom',
 			'rotate',
 			'next',
@@ -461,5 +585,231 @@ describe('nothing on this card is a verdict, and nothing is invented', () => {
 		for (const colour of ['border-error', 'border-tertiary', 'border-secondary-container']) {
 			expect([...classes][0]).not.toContain(colour);
 		}
+	});
+});
+
+/**
+ * **The marks** — the boxes over the second artifact of a pair, and the six things the card says
+ * about them (`docs/DESIGN.md` §9, `image-diff.ts` for what a region is).
+ *
+ * What is asserted here is mostly what the reversal did **not** buy: nothing decodes until somebody
+ * asks, nothing is drawn on the first pane, nothing touches the artifact itself, and every *there
+ * is nothing to compare* is its own sentence rather than an empty overlay reading as *these are the
+ * same*.
+ */
+describe('where the second artifact differs from the first', () => {
+	/** A pair that differs everywhere — one region over the whole image. */
+	function differsEverywhere() {
+		decode.answers = [flat(64, 64, 0), flat(64, 64, 255)];
+	}
+
+	it('decodes nothing until the control is pressed', async () => {
+		differsEverywhere();
+		const { container } = await showing();
+
+		expect(decode.asked).toEqual([]);
+		expect(marksOn(panes(container)[1])).toHaveLength(0);
+	});
+
+	it('marks the second pane and never the first', async () => {
+		differsEverywhere();
+		const { container } = await showing();
+		await press();
+
+		const drawn = panes(container);
+		expect(marksOn(drawn[0])).toHaveLength(0);
+		expect(marksOn(drawn[1])).toHaveLength(1);
+		// Two strokes per region, dark under bright, so one box is legible over any screenshot.
+		expect(overlayOn(drawn[1])?.querySelectorAll('rect')).toHaveLength(2);
+	});
+
+	/**
+	 * **The coordinate space is the artifact's own pixels** and never the rendered ones, which is
+	 * what keeps a box on what it marks in a 240px pane and in a full window alike, with nothing
+	 * measured (`difference-marks.tsx`).
+	 */
+	it('draws the boxes in the artifact’s own pixel coordinates', async () => {
+		differsEverywhere();
+		const { container } = await showing();
+		await press();
+
+		const overlay = overlayOn(panes(container)[1]);
+		expect(overlay?.getAttribute('viewBox')).toBe('0 0 64 64');
+		const box = overlay?.querySelector('rect');
+		expect(box?.getAttribute('width')).toBe('64');
+		expect(box?.getAttribute('height')).toBe('64');
+		// Stated in rendered pixels rather than source ones, or a box would go sub-pixel in a pane.
+		expect(box?.getAttribute('vector-effect')).toBe('non-scaling-stroke');
+	});
+
+	/**
+	 * **The artifact underneath is the artifact**, which is the whole reason this is an overlay: the
+	 * same element, the same `src`, the same hairline border, and nothing composited into the bytes.
+	 */
+	it('leaves the artifact itself untouched, and takes the marks away again', async () => {
+		differsEverywhere();
+		const { container } = await showing();
+		const image = panes(container)[1]?.querySelector('img');
+		const src = image?.getAttribute('src');
+		const classes = image?.getAttribute('class');
+
+		await press();
+		expect(panes(container)[1]?.querySelector('img')?.getAttribute('src')).toBe(src);
+		expect(panes(container)[1]?.querySelector('img')?.getAttribute('class')).toBe(classes);
+
+		await press();
+		expect(marksOn(panes(container)[1])).toHaveLength(0);
+	});
+
+	/** Once per pair: the answer is held against the two handles it was measured from. */
+	it('decodes once for a pair however often the control is pressed', async () => {
+		differsEverywhere();
+		await showing();
+		await press();
+		await press();
+		await press();
+
+		expect(decode.asked).toHaveLength(2);
+	});
+
+	it('says how many regions differ, and never a score', async () => {
+		differsEverywhere();
+		const { container } = await showing();
+		await press();
+
+		expect(container.textContent).toContain('1 region differs.');
+		expect(container.textContent).not.toContain('%');
+	});
+
+	it('says plainly when two artifacts do not differ', async () => {
+		decode.answers = [flat(64, 64, 0), flat(64, 64, 0)];
+		const { container } = await showing();
+		await press();
+
+		expect(container.textContent).toContain('These two do not differ.');
+		expect(marksOn(panes(container)[1])).toHaveLength(0);
+	});
+
+	/**
+	 * **Two different screens are not compared** (D14), and the card says which of the four *nothing
+	 * to compare* answers this is — an empty overlay would have read as *these are the same*.
+	 */
+	it('says when the two ran on different screens', async () => {
+		decode.answers = [flat(64, 64, 0), flat(32, 32, 0)];
+		const { container } = await showing();
+		await press();
+
+		expect(container.textContent).toContain('different screens');
+		expect(marksOn(panes(container)[1])).toHaveLength(0);
+	});
+
+	/** A browser that will not give up the pixels, in its own sentence and with no alarm. */
+	it('says when there are no pixels to compare', async () => {
+		decode.answers = [];
+		const { container } = await showing();
+		await press();
+
+		expect(container.textContent).toContain('no pixels to compare');
+	});
+
+	/**
+	 * **The control is absent for anything but a pair.** A difference is pairwise, and with three
+	 * arms there is no pair to take without naming one of them the one the others are measured
+	 * against — which is the `BASELINE` this card refuses to have.
+	 */
+	it('offers no control at all for a card that is not a pair', async () => {
+		const { container } = await showing(
+			comparison(
+				pane(ARM_A, FIRST, 'before.png'),
+				pane(ARM_B, SECOND, 'after.png'),
+				pane(ARM_B, SECOND, 'third.png'),
+			),
+		);
+
+		expect(screen.queryByRole('button', { name: 'Differences' })).toBeNull();
+		expect(container.querySelectorAll('button')).toHaveLength(0);
+		expect(panes(container)).toHaveLength(3);
+	});
+});
+
+/**
+ * **The system bars, set aside because two runs always differ in them** (`docs/DESIGN.md` §9).
+ *
+ * The band is the *device's* own, read out of each run's `device_info.json`, and the two runs have
+ * to agree about it before anything is set aside — so what is asserted here is the reading, the
+ * agreement, and that nothing is ever hidden without the card saying so.
+ */
+describe('the bands the two runs’ own system bars take off the answer', () => {
+	/** A pair differing in the top 16 rows and again in the middle: one band, one content region. */
+	function differsInTheBarAndBelow() {
+		decode.answers = [
+			flat(64, 64, 0),
+			litRows(64, 64, [
+				[0, 16],
+				[32, 48],
+			]),
+		];
+	}
+
+	/** What `device_info.json` carries for a device with a 16px top bar and nothing else. */
+	const BAR = { screen: { systemBars: { top: 16, bottom: 0, left: 0, right: 0 } } };
+
+	it('reads no device facts until the control is pressed', async () => {
+		differsInTheBarAndBelow();
+		await showing();
+
+		expect(host.textAsked).toEqual([]);
+	});
+
+	it('reads each run’s own device_info.json once the control is pressed', async () => {
+		differsInTheBarAndBelow();
+		await showing();
+		await press();
+
+		expect(host.textAsked.map((path) => path.at(-3))).toEqual([FIRST, SECOND]);
+		expect(host.textAsked.map((path) => path.at(-1))).toEqual([
+			'device_info.json',
+			'device_info.json',
+		]);
+	});
+
+	it('sets the agreed band aside, and says how many regions that took', async () => {
+		host.deviceByRun = { [FIRST]: BAR, [SECOND]: BAR };
+		differsInTheBarAndBelow();
+		const { container } = await showing();
+		await press();
+
+		expect(marksOn(panes(container)[1])).toHaveLength(1);
+		expect(container.textContent).toContain('1 region differs.');
+		expect(container.textContent).toContain('1 more is in the system bars.');
+	});
+
+	/**
+	 * **Two runs that disagree get nothing set aside**, and nothing hidden with it: two arms may
+	 * have run on devices with different screens (D14), and one device's chrome laid over another
+	 * device's pixels is not a band this card can claim.
+	 */
+	it('compares the whole image when the two runs disagree about their bars', async () => {
+		host.deviceByRun = {
+			[FIRST]: BAR,
+			[SECOND]: { screen: { systemBars: { top: 32, bottom: 0, left: 0, right: 0 } } },
+		};
+		differsInTheBarAndBelow();
+		const { container } = await showing();
+		await press();
+
+		expect(marksOn(panes(container)[1])).toHaveLength(2);
+		expect(container.textContent).toContain('2 regions differ.');
+		expect(container.textContent).not.toContain('system bars');
+	});
+
+	/** A run archived before the host recorded the bars, which is every run already on disk. */
+	it('compares the whole image for a run whose file carries no bars at all', async () => {
+		differsInTheBarAndBelow();
+		const { container } = await showing();
+		await press();
+
+		expect(marksOn(panes(container)[1])).toHaveLength(2);
+		expect(container.textContent).not.toContain('system bars');
 	});
 });

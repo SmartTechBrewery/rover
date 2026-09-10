@@ -77,6 +77,7 @@ const SIZE_OVERRIDE = fixture('wm-size.override.api37-sdk-gphone16k-arm64.txt');
 const DENSITY = fixture('wm-density.api37-sdk-gphone16k-arm64.txt');
 const DENSITY_OVERRIDE = fixture('wm-density.override.api37-sdk-gphone16k-arm64.txt');
 const GETPROP = fixture('getprop.api37-sdk-gphone16k-arm64.txt');
+const DISPLAYS = fixture('dumpsys-window-d.api37-sdk-gphone16k-arm64.txt');
 const OS_VERSION = fixture('getprop-version.api37-sdk-gphone16k-arm64.txt');
 const OS_VERSION_ABSENT = fixture('getprop-version.absent.api37-sdk-gphone16k-arm64.txt');
 const STAT_FILE = fixture('stat.file.api37-sdk-gphone16k-arm64.txt');
@@ -147,6 +148,7 @@ const FACTS = {
 	'shell wm size': SIZE,
 	'shell wm density': DENSITY,
 	'shell getprop': GETPROP,
+	'shell dumpsys window d': DISPLAYS,
 };
 
 describe('listDevices', () => {
@@ -851,6 +853,9 @@ describe('deviceInfo', () => {
 			density: 480,
 			densityScale: 3,
 			heightDp: 952,
+			// The device's own bars, off the same dump — 156 px is 52 dp at this scale, which is
+			// the measurement that stopped this being a constant (PROJECT.md §6).
+			systemBars: { top: 156, bottom: 72, left: 0, right: 0 },
 		});
 		// Unrounded on purpose: 1280 ÷ 3 is not a whole number of dp, and rounding it here
 		// would leave no way to ask what the device actually said.
@@ -862,6 +867,14 @@ describe('deviceInfo', () => {
 	it('measures what the device renders at when an override is set', async () => {
 		answers({ ...FACTS, 'shell wm size': SIZE_OVERRIDE, 'shell wm density': DENSITY_OVERRIDE });
 
+		/*
+		 * **The insets come out `null` here, and that is the assertion rather than a gap.** The
+		 * dump in `FACTS` states its frames against the device's *physical* 1280x2856, and this
+		 * device renders at an override of 720x1600 — so no source spans an edge of the screen it
+		 * is being measured against, and the parser declines to turn any of them into a band
+		 * (`parsers/insets.ts`). Reporting a 156 px top on a 1600 px-tall screen would have hidden
+		 * a tenth of it on the strength of a rectangle that is not on it.
+		 */
 		expect((await backend.deviceInfo(SERIAL)).screen).toEqual({
 			widthPx: 720,
 			heightPx: 1600,
@@ -869,6 +882,7 @@ describe('deviceInfo', () => {
 			densityScale: 2,
 			widthDp: 360,
 			heightDp: 800,
+			systemBars: { top: 0, bottom: 0, left: 0, right: 0 },
 		});
 	});
 
@@ -876,11 +890,17 @@ describe('deviceInfo', () => {
 		answers(FACTS);
 		await backend.deviceInfo(SERIAL);
 
-		expect(runAdbOnDevice.mock.calls.map((call) => call[0])).toEqual([SERIAL, SERIAL, SERIAL]);
+		expect(runAdbOnDevice.mock.calls.map((call) => call[0])).toEqual([
+			SERIAL,
+			SERIAL,
+			SERIAL,
+			SERIAL,
+		]);
 		expect(runAdbOnDevice.mock.calls.map((call) => call[1].join(' '))).toEqual([
 			'shell wm size',
 			'shell wm density',
 			'shell getprop',
+			'shell dumpsys window d',
 		]);
 	});
 

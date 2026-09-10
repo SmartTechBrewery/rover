@@ -18,6 +18,7 @@ import {
 	type DeviceInfoFile,
 	DeviceInfoFileSchema,
 	deviceFactsFrom,
+	systemBarsShared,
 	useArchivedDeviceInfo,
 } from './device-info.js';
 
@@ -35,12 +36,12 @@ function facts(info: DeviceInfoFile) {
 describe("the panel's mirror of device_info.json", () => {
 	it('reads a real capture down to every field the card renders', () => {
 		expect(facts(CAPTURED)).toEqual({
-			model: 'sdk_gphone64_arm64',
+			model: 'sdk_gphone16k_arm64',
 			platform: 'android',
-			osVersion: '15',
-			apiLevel: '35',
-			screen: '1080 x 2400 px',
-			density: '2.625x — 411 x 914 dp',
+			osVersion: '17',
+			apiLevel: '37',
+			screen: '1280 x 2856 px',
+			density: '3x — 427 x 952 dp',
 		});
 	});
 
@@ -94,8 +95,8 @@ describe('a fact the device could not answer', () => {
 describe('the two fields composed out of several numbers', () => {
 	it('rounds the dp quotients here, where rounding is a presentation decision', () => {
 		// The host keeps them exact on purpose (`ScreenInfoSchema`), so nothing earlier may round.
-		expect(CAPTURED.screen?.widthDp).toBe(411.42857142857144);
-		expect(facts(CAPTURED).density).toBe('2.625x — 411 x 914 dp');
+		expect(CAPTURED.screen?.widthDp).toBe(426.6666666666667);
+		expect(facts(CAPTURED).density).toBe('3x — 427 x 952 dp');
 	});
 
 	it('says `unknown` rather than half a screen size', () => {
@@ -157,7 +158,7 @@ describe("reading one run's device_info.json", () => {
 		await showing();
 
 		expect(host.readArtifactText).toHaveBeenCalledWith([...LEVEL, 'device_info.json']);
-		await waitFor(() => expect(state()).toBe('read:sdk_gphone64_arm64'));
+		await waitFor(() => expect(state()).toBe('read:sdk_gphone16k_arm64'));
 	});
 
 	/*
@@ -243,5 +244,61 @@ describe('what the host answered about the file', () => {
 		await showing();
 
 		expect(state()).toBe('reading');
+	});
+});
+
+/**
+ * **The one field this file carries that the card never draws** — where the device puts its own
+ * system bars, which the comparison card sets aside so the status bar's clock stops counting as a
+ * difference between two runs (`docs/DESIGN.md` §9).
+ *
+ * Two runs have to **agree** before anything is set aside, and every way of not agreeing lands on
+ * `null`, because the consumer does the same thing for all of them: compare the whole image and say
+ * nothing about bars. Nothing is ever hidden on a partial answer.
+ */
+describe('the system bars two runs agree about', () => {
+	const read = (bars: unknown): ArchivedDeviceInfo => ({
+		status: 'read',
+		info: DeviceInfoFileSchema.parse({ serial: SERIAL, screen: { systemBars: bars } }),
+	});
+	const BARS = { top: 156, bottom: 72, left: 0, right: 0 };
+
+	it('are the bands themselves when both runs report the same ones', () => {
+		expect(systemBarsShared(read(BARS), read(BARS))).toEqual(BARS);
+	});
+
+	it('are read off the real capture, in the same pixels as the screenshot', () => {
+		expect(
+			systemBarsShared({ status: 'read', info: CAPTURED }, { status: 'read', info: CAPTURED }),
+		).toEqual(BARS);
+	});
+
+	/** Two arms may have run on devices with different screens (D14); neither one's chrome is both. */
+	it('are nothing when the two runs disagree', () => {
+		expect(systemBarsShared(read(BARS), read({ ...BARS, top: 96 }))).toBeNull();
+	});
+
+	/** A run archived before the host recorded them, which is every run already on disk. */
+	it('are nothing when a file carries none', () => {
+		expect(systemBarsShared(read(null), read(BARS))).toBeNull();
+		expect(
+			systemBarsShared({ status: 'read', info: DeviceInfoFileSchema.parse({}) }, read(BARS)),
+		).toBeNull();
+	});
+
+	/**
+	 * A partial answer is not an answer: three sides of a band would set aside a rectangle the
+	 * device never described, and a negative one would set aside the opposite of one.
+	 */
+	it('are nothing when a side is missing, negative or not a number', () => {
+		expect(systemBarsShared(read({ top: 156, bottom: 72, left: 0 }), read(BARS))).toBeNull();
+		expect(systemBarsShared(read({ ...BARS, bottom: -1 }), read(BARS))).toBeNull();
+	});
+
+	/** A file that is not there, or that the host would not read, says nothing about bars either. */
+	it('are nothing for a run whose file was never read', () => {
+		expect(systemBarsShared({ status: 'missing' }, read(BARS))).toBeNull();
+		expect(systemBarsShared({ status: 'unreadable' }, read(BARS))).toBeNull();
+		expect(systemBarsShared({ status: 'reading' }, read(BARS))).toBeNull();
 	});
 });

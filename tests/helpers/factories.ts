@@ -246,6 +246,14 @@ export function createMockDeviceInfo(overrides: Partial<DeviceInfo> = {}): Devic
 			densityScale: 3,
 			widthDp: 360,
 			heightDp: 800,
+			/*
+			 * A 24 dp status bar and a 48 dp gesture bar at this 3x scale — a shape a device
+			 * really has, so a test that reads them is reading plausible geometry. **The real
+			 * numbers are not these**: the emulator this field was built against reports 52 dp at
+			 * the top (`src/backends/android/parsers/insets.ts`), which is exactly why nothing in
+			 * Rover carries a default for them.
+			 */
+			systemBars: { top: 72, bottom: 144, left: 0, right: 0 },
 		},
 		osVersion: '1.0',
 		osApiLevel: 1,

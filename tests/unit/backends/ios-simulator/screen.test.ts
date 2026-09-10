@@ -97,6 +97,7 @@ describe('toScreenInfo, against the real captures', () => {
 			densityScale: 3,
 			widthDp: 402,
 			heightDp: 874,
+			systemBars: null,
 		});
 	});
 
@@ -132,6 +133,7 @@ describe('toScreenInfo, against the real captures', () => {
 			densityScale: 2,
 			widthDp: 1032,
 			heightDp: 1376,
+			systemBars: null,
 		});
 	});
 });

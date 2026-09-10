@@ -249,8 +249,26 @@ Design work lives in [`DESIGN.md`](./DESIGN.md); the brief that produced the fir
    the caller's. What is built is the Testing groups view's comparison card
    (`docs/DESIGN.md` §9): one label names it, one pane per artifact filed under that label in that
    group, side by side, oldest run on the left. **Two is the common case and nothing caps it** — a
-   group may hold seven runs — and there is no diff, no score and no verdict, because the comparison
-   is visual and human-judged (`ai/RULES.md` §1).
+   group may hold seven runs — and there is no score and no verdict, because the comparison is
+   visual and human-judged (`ai/RULES.md` §1). **There is a diff now, and this clause is edited in
+   place rather than deleted** (2026-09-10): it read *there is no diff, no score and no verdict*,
+   and the operator reversed the first of the three on the ground that where two files differ is
+   arithmetic rather than a judgement. On **exactly two** panes, and only once the reader presses
+   the lamp in the card's header strip, boxes are drawn over the second artifact where it differs
+   from the first — computed in the browser from the bytes the panes already hold, so still no
+   second request and still no host change. What the reversal deliberately does not buy is the rest
+   of that clause: no score, no percentage, no threshold, no baseline arm, nothing red or green, and
+   no region ranked above another. Three panes get no control at all, because choosing which of them
+   the others are measured against would be inventing the `BASELINE` this card refuses to have.
+   `docs/DESIGN.md` §9 settles it; `panel/src/archive/image-diff.ts` carries the arithmetic and the
+   measurement that shaped it. **And the two runs' own system bars are set aside**, because the
+   status bar differs between any two runs — time having passed between them — so the clock and the
+   signal glyph came out as two of the four regions on the first real pair. The bands are the
+   *device's* own, off `device_info.json`'s new `screen.systemBars` (D14, `PROJECT.md` §6 for the
+   measurement: 52 dp where the documentation says 24), both runs have to agree about them, and the
+   card says how many regions that took. **That half is not panel-only** — it is one new nullable
+   field on `device_info`, filled by asking the device, `null` from a backend with no route to the
+   fact, and no consumer branching on a platform to tell the difference.
 10. **Archive disk usage / retention view** — how much space the archive is using, and a manual
     prune action. **Both the exemption and the policy now exist on the host, and neither is on this
     surface.** The exemption is the `Keep` flag (`PROJECT.md` D33, #234): per
