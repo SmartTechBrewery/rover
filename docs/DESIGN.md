@@ -1209,8 +1209,8 @@ not shortened away: it is what holds this table's first row apart from the group
 on exactly that ground.
 
 **One request per scope, nothing summed in the browser, and the deepest context is free.** The host
-walks the address once and the answer is cached for the life of the screen (*Routing, and no
-polling*, below). Adding the levels the tree happens to have listed would produce a figure that grew
+walks the address once and the answer is cached for the life of the screen (*Routing, and what
+refreshes*, below). Adding the levels the tree happens to have listed would produce a figure that grew
 as a reader browsed and was wrong at every point before the last — and an **artifact** costs no
 request at all, because `list_archive` already carries a `sizeBytes` for every file it lists and the
 parent level is the thing that classified the address in the first place.
@@ -2192,8 +2192,9 @@ browser.
   flag exists for, and the operator with a permissions problem is the one who would otherwise get it.
 - **No request per keystroke.** The text is debounced (300 ms), one request is in flight at a time,
   and an answer to text that is no longer in the field is dropped rather than rendered
-  (`panel/src/archive/archive-search.ts`). There is no polling and no refresh, for the same reason a
-  level has none: the archive is finished data.
+  (`panel/src/archive/archive-search.ts`). It is not re-issued on the clock the levels are on, and
+  no longer for their reason (#287): a search answers a question the reader asked with text that has
+  settled, and re-asking it under them would move a hit list nobody touched.
 - **The accepted cost, checked against a real answer**: the searched tree reuses the browsing tree's
   own indent (`pl-5 ml-2.5 border-l-2` per level), and a hit six levels down therefore has little of
   the column left for its name, which wraps. That is `break-words` doing what it is there for
@@ -2440,7 +2441,7 @@ makes and documents, for the same reason: what the screen has to decide is narro
 *runs may well be filed here* is true either way. A **`refused`** sets nothing at all, because
 `Session.call` has already fired `onRefusal` and the router is coming down.
 
-### Routing, and no polling
+### Routing, and what refreshes
 
 **Four routes, two families, one component** (amended in place, #181): `/archive` and `/archive/$`
 for the file explorer, `/groups` and `/groups/$` for the group-first arrangement, all four
@@ -2457,16 +2458,72 @@ directory name may legally carry a space, a `%` or a `#`, and `archive-path.test
 round trip for **both** splats against a **real** router rather than the mocked `Link` the screen
 tests use.
 
-**There is no polling and no refresh control.** The archive is finished data: a run directory is
-written while a lease is live and nothing is added once it ends, and this screen makes no claim to
-show a run appearing. A level is fetched when a navigation or a click first draws it and cached for
-the life of the screen, the grouping walk is fetched **once**, only in the view that reads it, and
-**the size answer is fetched once per scope on exactly those terms** (#261, #262) — one
-`measure_archive` for an address, or one `measure_archive_groups` for one of the groups view's three
-shallow scopes, when a navigation first draws that badge, kept for the life of the screen, so
-navigating back to a scope costs nothing and nothing re-measures behind the reader. This
-is the one place the panel's data differs from the Devices screen's, which polls because *what is
-attached* changes under the reader.
+**The listings refresh while something is being written, and nothing else does** — rewritten in
+place with its reason rewritten (#287, `ai/RULES.md` §1). It read: *there is no polling and no
+refresh control; the archive is finished data — a run directory is written while a lease is live and
+nothing is added once it ends, and this screen makes no claim to show a run appearing.* The second
+half of that premise is true of a run whose lease has ended and **false for the window a lease is
+open in**: the listings went stale while runs were being filed under the reader, and only a browser
+reload corrected them, which also threw away their place. What replaces it:
+
+> **A level the screen draws is re-read on a clock that runs only while a lease is live. Every other
+> read on this screen is still taken once, and each says why in its own terms rather than by citing
+> finality.**
+
+- **The drawn levels.** Every level the screen draws is asked again every `ARCHIVE_POLL_MS` (5 s,
+  `panel/src/archive/archive-levels.ts`) — the ancestors of the address and the branches the reader
+  has opened, which is the same laziness rule as before: a tick never asks for a level nobody drew,
+  and never twice for one level. The clock runs **only while a lease is live**, which is answered
+  for free from the `list_devices` poll this page already runs above the router
+  (`panel/src/archive/live-writes.ts`): any device the host lists as held, whatever project it is
+  holding, because the refresh re-reads *what is drawn* wholesale rather than one address. **No
+  lease, no interval, no requests** — the idle cost is exactly what it was before there was a clock.
+  A tick arriving while the last one's requests are still out is dropped rather than queued, and
+  **a request made while the clock is running carries the tick as its deadline**, so that guard can
+  never be held for the life of the tab (#125). A request made while it is *not* — the first read of
+  a level on a screen mounted with no lease live — carries **no** deadline, and does not enter that
+  guard either: a budget is only spendable by a caller that will ask again, and abandoning a listing
+  the host was merely slow to produce would state *Rover cannot see into this directory* about a
+  host that would have read it, with nothing left to correct it. **A refresh is invisible until it
+  lands**: the listings on screen are untouched
+  until an answer arrives, so no level that has an answer ever falls back to *Reading this level.*,
+  and a request nothing answered leaves such a level alone and is asked again next tick. The host's
+  own `unreadable` still replaces, that being the host answering the question the screen asked.
+  The cost, stated: one `readdir` per drawn level per five seconds while a lease is live — a reader
+  sitting on a run costs four to six per tick — and a write landing in the seconds after the gate
+  closes is seen on the reader's next navigation, as is a `rover sweep` deletion made while no lease
+  is live.
+- **The grouping walk is not on it, and that is a known gap** (#287 phase 2). It is fetched **once**,
+  only in the view that reads it, because it is a bounded walk of the *whole* archive rather than one
+  `readdir` — so its cadence is a decision with its own cost, and *a poll must never walk the
+  archive* is the one rule this section will not break to close the gap early. While a lease is live
+  the groups view's arrangement above a run therefore goes stale, and a run that lands is seen there
+  on the reader's next navigation.
+- **The size answer is fetched once per scope** (#261, #262) — one `measure_archive` for an address,
+  or one `measure_archive_groups` for one of the groups view's three shallow scopes, when a
+  navigation first draws that badge, kept for the life of the screen. Not on the clock, and for the
+  grouping walk's reason: it is a disk walk per scope, and a badge that re-walked the archive every
+  five seconds while runs land is a worse bug than a stale figure. The cost, stated: `ON DISK`
+  under-reports while runs are landing, until the reader navigates to another scope and back.
+- **The run's two files and an open artifact's bytes are not re-read**, and here the reason is
+  stronger than a cadence: `src/daemon/archive.ts` writes `device_info.json`,
+  `test_description.json` and `group_id.json` **once, with `wx`, and never rewrites them**, and every
+  artifact is filed under a fresh per-lease sequence number and never rewritten. They cannot change
+  under the reader, so there is nothing for a refresh to notice. The cost, stated: a run listed
+  inside the millisecond window between its `mkdir` and those writes caches *no device info* for the
+  life of the screen.
+- **The search is not re-issued.** It answers a question the reader asked with text that has
+  settled, and re-asking it under them would move a hit list nobody touched. The cost, stated: a hit
+  list can miss a run that landed after the search; clearing the field puts the reader back on the
+  levels, which do refresh.
+- **There is still no refresh control, anywhere on this screen**, and the clock is not one: it has no
+  caller a reader can reach, exactly as the settled-`Remove` re-read below has none. And there is no
+  `document.visibilityState` handling — the device poll does not do it either, and if it is worth
+  doing it is worth doing for both, which is its own small question.
+
+**Nothing the reader is doing moves across a refresh.** The selection is the URL, the open set and
+the search text are state no answer writes, and the tree's rows are keyed by path — so a new row
+appends and no row the reader was reading is remounted, moved or closed.
 
 **The `Keep` set is not polled either, and its reason is a different one** (#237). It is not
 finished data — a press changes it, and it is the host's, so another operator's press changes it too
@@ -2618,7 +2675,9 @@ what the device *was*, not what it is.
   prefetch for a run nobody selected, and no caching across runs. Since #148 a run has **two** such
   files — this one and `test_description.json` — so a selected run costs **four listings and two
   files**, and both go through the one hook that owns the address and the read-once rule
-  (`panel/src/archive/archived-file.ts`).
+  (`panel/src/archive/archived-file.ts`). **The clock the listings are on does not touch either of
+  them** (#287), and for a stronger reason than a cadence: both are written once with `wx` and never
+  rewritten, so neither can change under the reader.
 
 ### The run's description — settled (#148)
 
@@ -3376,8 +3435,10 @@ area**, with no colour of alarm and no icon of alarm.
   fifth wording rather than the `partial` wording with an empty referent: the host answers `partial`
   the moment either half fails and puts no floor on how many went, so *the rest went, with 0 B back*
   would claim a removal where the host's own audit line says `NOT removed` twice.
-- **It stays until dismissed.** This screen does not poll, so nothing else would clear it — which
-  makes the dismiss control the whole of how it goes.
+- **It stays until dismissed**, and nothing else could clear it in any case: it is state of the
+  screen rather than anything an answer carries, so the clock re-reading every drawn level leaves it
+  exactly where it is (#287 — the old clause said *this screen does not poll*, which has stopped
+  being true, and the conclusion is unchanged). The dismiss control is the whole of how it goes.
 - **The fifth case, and it is not an outcome: the request that reached nothing.** No answer, an
   `error` envelope, or a result the panel cannot read — all three deleted nothing, so the dialog
   **stays open** with the control usable again, says exactly that, and **nothing is said above the
@@ -3400,8 +3461,9 @@ answered with, and it would be wrong in both directions: a `partial` may have le
 exactly where it was, and a `not-found` proves the listing was already stale. **A `refused` does
 neither**, and that is not an inconsistency: nothing at all was touched, so what is filed is exactly
 what the screen already shows. **This is not a refresh control and does not become one** — it
-re-reads on a settled delete and on nothing else, which leaves *no polling, and no refresh control*
-above intact.
+re-reads on a settled delete and on nothing else, which leaves *Routing, and what refreshes* above
+intact: it is the same request the clock there makes, on the same nonce, and neither of the two is
+reachable by a press.
 
 The **actor** on the wire is the signed-in user's `identifier`, and there is no field for it on the
 dialog. D28 forbids *the host* deriving attribution from whoever authenticated; a client saying who
@@ -3669,7 +3731,7 @@ what is registered is exactly what the list already says.
 
 **This is not a refresh control and does not become one.** There is still nothing on this screen for
 a reader to press, no interval and no retry — it re-reads on a settled delete and on nothing else,
-which leaves *no polling, and no refresh control* below intact.
+which leaves *No polling, and nothing that writes a registration* below intact.
 
 ### What happens to the card that went — settled (#285)
 
@@ -3761,12 +3823,15 @@ one warning on the daemon's stderr; this card is where that becomes visible.
   both already make. A `refused` sets nothing, because `Session.call` has fired `onRefusal` and the
   router is coming down.
 
-### No polling, and no refresh control
+### No polling, and nothing that writes a registration
 
-A registration changes when a person runs `rover init` or edits a file on the host, which is not
-something this screen makes a claim about seeing. It is fetched on navigation and cached for the
-life of the screen — the Archive's rule, not the Devices screen's, and for the Archive's reason:
-`list_devices` polls because *what is attached* changes under the reader, and nothing here does.
+**This screen's behaviour is unchanged and its reason is now its own** — rewritten in place, because
+it used to cite the Archive's rule and that rule changed under it (#287, `ai/RULES.md` §1). A
+registration changes when a person runs `rover init` or edits a hook file on the host, which is not
+something this screen makes a claim about seeing; and **no lease writes one**, so the live-lease gate
+the Archive's clock runs behind has no counterpart here — there is nothing for such a clock to be
+gated on. It is fetched on navigation and cached for the life of the screen. `list_devices` polls
+because *what is attached* changes under the reader, and nothing here does.
 
 ### As built (#157)
 

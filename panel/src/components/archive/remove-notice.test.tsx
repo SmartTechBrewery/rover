@@ -304,8 +304,9 @@ describe('the region itself', () => {
 		expect(container.querySelectorAll('svg')).toHaveLength(0);
 	});
 
-	// It stays until dismissed (§7, §9 — the screen does not poll), so the dismiss control is the
-	// whole of how it goes.
+	// It stays until dismissed (§7, §9), so the dismiss control is the whole of how it goes — and
+	// nothing else could clear it in any case: it is state of the screen, so the Archive's own clock
+	// re-reading every drawn level leaves it where it is (#287).
 	it('is dismissed by its own control, which is labelled by what it does to this line', () => {
 		const onDismiss = vi.fn();
 		render(

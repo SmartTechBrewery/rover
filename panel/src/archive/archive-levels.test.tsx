@@ -1,6 +1,6 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { StrictMode } from 'react';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 /**
  * The host, scripted per level. `useSession` is mocked rather than driven through the real
@@ -17,6 +17,7 @@ vi.mock('@panel/session/session-provider.js', () => ({
 }));
 
 import {
+	ARCHIVE_POLL_MS,
 	type ArchiveLevel,
 	type ArchiveLevels,
 	levelAt,
@@ -45,14 +46,26 @@ function listed(...names: readonly string[]) {
  * degenerate selector, which is what every case below wants; `asks for a level derived from an
  * answer` is the one that exercises the derivation.
  */
-function Levels({ paths }: { readonly paths: readonly (readonly string[])[] }) {
-	const { levels, reread } = useArchiveLevels(() => paths);
+function Levels({
+	paths,
+	writing = false,
+}: {
+	readonly paths: readonly (readonly string[])[];
+	/**
+	 * Whether a lease is live, which is what runs the clock (`live-writes.ts`, #287). Defaulted to
+	 * `false` here so every case that predates the clock still pins *once per level* — the hook's
+	 * own parameter has no default, precisely so no call site is opted out by accident.
+	 */
+	readonly writing?: boolean;
+}) {
+	const { levels, reread } = useArchiveLevels(() => paths, writing);
 	return (
 		<>
 			{/*
-			 * The hook's one trigger, given a control here so a case can fire it. On the screen it
-			 * has exactly one caller and it is not a control at all — a settled `Remove`
-			 * (`routes/archive.tsx`), which is what keeps *no refresh control* true of §9.
+			 * The hook's one *press-able* trigger, given a control here so a case can fire it. On the
+			 * screen it has exactly one caller and it is not a control at all — a settled `Remove`
+			 * (`routes/archive.tsx`) — and the clock has no caller to press either, which together
+			 * are what keep *no refresh control* true of §9 (#287).
 			 */}
 			<button onClick={reread} type="button">
 				reread
@@ -76,6 +89,38 @@ function describeLevel(levels: ArchiveLevels, path: readonly string[]): string {
 }
 
 const ROOT_AND_PROJECT = [[], ['checkout-app']] as const;
+
+/**
+ * Let every pending promise settle without letting the clock fire — `device-list-provider.test.tsx`'s
+ * own helper, copied for its reason: the interval and the request deadline are the same length, so
+ * advancing by anything at all is advancing the tick.
+ */
+async function settle(): Promise<void> {
+	await act(async () => {
+		await vi.advanceTimersByTimeAsync(0);
+		await vi.advanceTimersByTimeAsync(0);
+	});
+}
+
+/**
+ * A host that accepts the request and never answers it — **answering `unanswered` when the caller
+ * abandons it**, which is `host-client.ts`'s own contract for an aborted request and the whole
+ * reason a deadline changes anything on screen.
+ */
+async function abandoned(
+	_method: string,
+	_params: unknown,
+	signal?: AbortSignal,
+): Promise<unknown> {
+	return await new Promise((resolve) => {
+		signal?.addEventListener('abort', () => resolve({ ok: false, refusal: 'unanswered' }));
+	});
+}
+
+/** Fake timers are opted into per case; nothing here may leak them into the next file. */
+afterEach(() => {
+	vi.useRealTimers();
+});
 
 describe('the levels a selection needs', () => {
 	it('asks once per level, and for no level it was not given', async () => {
@@ -113,8 +158,11 @@ describe('the levels a selection needs', () => {
 		expect(host.call).toHaveBeenCalledTimes(2);
 	});
 
-	// The archive is finished data: a level is read on navigation and never on an interval, and a
-	// re-render is not a reason to ask again.
+	/*
+	 * A re-render is not a reason to ask again, and never was. What has changed since #287 is the
+	 * reason: it is no longer *the archive is finished data*, which was false while a lease was
+	 * live — the only thing that asks again is the clock, and the clock is gated on a live lease.
+	 */
 	it('asks nothing further on a re-render with the same levels', async () => {
 		host.call.mockResolvedValue(listed('checkout-app'));
 		const { rerender } = render(<Levels paths={ROOT_AND_PROJECT} />);
@@ -137,15 +185,333 @@ describe('the levels a selection needs', () => {
 		expect(host.call.mock.calls[2]?.[1]).toEqual({ path: ['checkout-app', 'login-flow'] });
 	});
 
-	// No deadline: a budget belongs to a repeating caller with an interval to spend, and this one
-	// has neither (`host-client.ts`).
-	it('sets no deadline on the request', async () => {
+	/*
+	 * **No clock, no budget** (#125, #287, #289 review) — rewritten in place from *sets no deadline
+	 * on the request*, whose reason was that a budget belongs to a repeating caller with an interval
+	 * to spend and this one had neither (`host-client.ts`). Half of that reason survived the clock
+	 * and this is the half: with the gate shut nothing will ask again, so abandoning a request at
+	 * five seconds would cache *not readable* over a host that was merely slow — a claim about the
+	 * host, wrong, and correctable only by the browser reload #287 exists to remove. The gated case
+	 * is `while the archive is being written` below.
+	 */
+	it('gives a request no budget while no lease is live', async () => {
 		host.call.mockResolvedValue(listed('checkout-app'));
 
 		render(<Levels paths={[[]]} />);
 
 		await waitFor(() => expect(host.call).toHaveBeenCalledTimes(1));
 		expect(host.call.mock.calls[0]?.[2]).toBeUndefined();
+	});
+
+	// And so a slow answer is still the answer: five seconds pass with nothing said, the level is
+	// still *Reading this level.* rather than *not readable*, and the listing lands when it lands.
+	it('draws a slow listing rather than abandoning it while no lease is live', async () => {
+		vi.useFakeTimers();
+		let answer: (value: unknown) => void = () => {};
+		host.call.mockImplementation(
+			async () =>
+				await new Promise((resolve) => {
+					answer = resolve;
+				}),
+		);
+
+		render(<Levels paths={[[]]} />);
+		await settle();
+
+		await act(async () => {
+			await vi.advanceTimersByTimeAsync(ARCHIVE_POLL_MS * 2);
+		});
+		expect(screen.getByTestId('root').textContent).toBe('loading');
+
+		await act(async () => {
+			answer(listed('checkout-app'));
+			await vi.advanceTimersByTimeAsync(0);
+		});
+		expect(screen.getByTestId('root').textContent).toBe('listed:checkout-app');
+	});
+});
+
+/**
+ * The clock — **every drawn level read again while a lease is live, and nothing at all otherwise**
+ * (#287).
+ *
+ * A tick is the same request a settled `Remove`'s re-read makes, on the same nonce, which is why
+ * the laziness rule and the *once per level* guard hold over it unchanged. What is new is when it
+ * fires, what bounds it, and what it may not do to a level that already has an answer.
+ *
+ * Fake timers throughout, because the interval and the request deadline are the same length: the
+ * pairing matters and is asserted rather than assumed.
+ */
+describe('while the archive is being written', () => {
+	async function tick(): Promise<void> {
+		await act(async () => {
+			await vi.advanceTimersByTimeAsync(ARCHIVE_POLL_MS);
+		});
+	}
+
+	function paths(): readonly unknown[] {
+		return host.call.mock.calls.map((call) => call[1]);
+	}
+
+	// The laziness rule, restated for the tick: every level the selector names, and no level it
+	// does not (#198). A poll of the archive is not something any caller here can ask for.
+	it('asks for every drawn level again, and for no level it was not given', async () => {
+		vi.useFakeTimers();
+		host.call.mockResolvedValue(listed('checkout-app'));
+		render(<Levels paths={ROOT_AND_PROJECT} writing={true} />);
+		await settle();
+		expect(host.call).toHaveBeenCalledTimes(2);
+
+		await tick();
+
+		expect(host.call).toHaveBeenCalledTimes(4);
+		expect(paths()).toEqual([
+			{ path: [] },
+			{ path: ['checkout-app'] },
+			{ path: [] },
+			{ path: ['checkout-app'] },
+		]);
+	});
+
+	// The idle cost, pinned: no lease live means no interval and no requests, however far the clock
+	// is advanced. This is the decision #287 asked to be recorded rather than left implicit.
+	it('asks nothing at all while no lease is live', async () => {
+		vi.useFakeTimers();
+		host.call.mockResolvedValue(listed('checkout-app'));
+		render(<Levels paths={ROOT_AND_PROJECT} writing={false} />);
+		await settle();
+		expect(host.call).toHaveBeenCalledTimes(2);
+
+		await tick();
+		await tick();
+		await tick();
+
+		expect(host.call).toHaveBeenCalledTimes(2);
+	});
+
+	/*
+	 * **The gated request is the one with a budget**, and it is spent (#125, #289 review). This is
+	 * the guard's bound: a request the host accepted and never answered is abandoned at one tick's
+	 * length, so `outstanding` cannot be held for the life of the tab and the next tick is due.
+	 */
+	it('gives every request the tick’s own budget while a lease is live', async () => {
+		vi.useFakeTimers();
+		host.call.mockImplementation(abandoned);
+
+		render(<Levels paths={[[]]} writing={true} />);
+		await settle();
+		expect(host.call.mock.calls[0]?.[2]).toBeInstanceOf(AbortSignal);
+		expect(screen.getByTestId('root').textContent).toBe('loading');
+
+		await tick();
+
+		expect((host.call.mock.calls[0]?.[2] as AbortSignal).aborted).toBe(true);
+		// And the clock, not a reload, is what asks again — the level is not cached as `unreadable`
+		// for the life of the screen the way an ungated abandonment would have cached it.
+		expect(host.call.mock.calls.length).toBeGreaterThan(1);
+	});
+
+	/*
+	 * **A request issued before the gate opened does not hold the guard** (#289 review). It has no
+	 * budget, because nothing was going to ask it again when it went out; counting it would let one
+	 * such request drop every tick for the rest of the tab, which is #125 reached through the gate
+	 * opening rather than through the clock.
+	 */
+	it('keeps ticking when a request from before the gate opened never answers', async () => {
+		vi.useFakeTimers();
+		host.call.mockImplementation(abandoned);
+		const { rerender } = render(<Levels paths={[[]]} writing={false} />);
+		await settle();
+		expect(host.call).toHaveBeenCalledTimes(1);
+
+		rerender(<Levels paths={[[]]} writing={true} />);
+		await settle();
+		await tick();
+
+		expect(host.call).toHaveBeenCalledTimes(2);
+	});
+
+	// The nonce doing its work: one request per level per tick, and StrictMode's double mount is
+	// still one — which a clock built by clearing the `asked` guard would have lost.
+	it('asks once per level per tick, including under StrictMode', async () => {
+		vi.useFakeTimers();
+		host.call.mockResolvedValue(listed('checkout-app'));
+		render(
+			<StrictMode>
+				<Levels paths={ROOT_AND_PROJECT} writing={true} />
+			</StrictMode>,
+		);
+		await settle();
+		expect(host.call).toHaveBeenCalledTimes(2);
+
+		await tick();
+
+		// One interval and not two: StrictMode mounts the effect twice and the cleanup clears the
+		// first interval, so a tick is two requests and never four.
+		expect(host.call).toHaveBeenCalledTimes(4);
+	});
+
+	/*
+	 * **A refresh is invisible until it lands.** The map is untouched until an answer arrives, so a
+	 * level that has a listing never falls back to *Reading this level.* while it re-reads — which
+	 * is the whole difference between a refresh and a reload.
+	 */
+	it('never reads `loading` over a level that already has an answer', async () => {
+		vi.useFakeTimers();
+		host.call.mockResolvedValue(listed('checkout-app'));
+		render(<Levels paths={[[]]} writing={true} />);
+		await settle();
+		expect(screen.getByTestId('root').textContent).toBe('listed:checkout-app');
+
+		let answerTheRefresh: (value: unknown) => void = () => undefined;
+		host.call.mockReturnValueOnce(
+			new Promise((resolve) => {
+				answerTheRefresh = resolve;
+			}),
+		);
+		await tick();
+		expect(host.call).toHaveBeenCalledTimes(2);
+		expect(screen.getByTestId('root').textContent).toBe('listed:checkout-app');
+
+		await act(async () => {
+			answerTheRefresh(listed('checkout-app', 'payments-web'));
+		});
+
+		expect(screen.getByTestId('root').textContent).toBe('listed:checkout-app,payments-web');
+	});
+
+	/*
+	 * **A tick arriving while the last one's requests are still out is dropped, not queued** (#125).
+	 * A host that stops answering is asked at most once per tick and never has two outstanding.
+	 *
+	 * The counts are the pairing the device poll's own test carries, and they are the pairing rather
+	 * than an arbitrary sequence: **the deadline and the next tick fall due at the same instant**,
+	 * and the interval was registered before that request's own budget was, so the tick is what
+	 * fires first — it finds the request still out and is dropped, the budget then runs out, and the
+	 * recovery is the tick **after** it. Which is why the guard is released in `finally` and not at
+	 * the abort: releasing it there would let the abandoned request's answer land after the next
+	 * tick's good one.
+	 *
+	 * So a host that stops answering costs one request per two ticks and never a backlog, which is
+	 * the state #125 was actually about — there, an unbounded guard froze the screen for the life of
+	 * the tab.
+	 */
+	it('drops a tick that arrives while the last one’s requests are still out', async () => {
+		vi.useFakeTimers();
+		host.call.mockResolvedValue(listed('checkout-app'));
+		render(<Levels paths={[[]]} writing={true} />);
+		await settle();
+		expect(host.call).toHaveBeenCalledTimes(1);
+
+		// The tick that is swallowed by the host: it goes out, and nothing comes back.
+		host.call.mockImplementation(abandoned);
+		await tick();
+		expect(host.call).toHaveBeenCalledTimes(2);
+
+		// This tick finds it still out and is dropped; the request's budget then runs out.
+		await tick();
+		expect(host.call).toHaveBeenCalledTimes(2);
+
+		// And the clock comes back on its own, one request and not a backlog of the dropped ones.
+		await tick();
+		expect(host.call).toHaveBeenCalledTimes(3);
+		await tick();
+		expect(host.call).toHaveBeenCalledTimes(3);
+		await tick();
+		expect(host.call).toHaveBeenCalledTimes(4);
+	});
+
+	/*
+	 * **A refresh that misses its budget leaves the level exactly where it was**, and is asked again
+	 * on the next tick. Nothing answered over a level that has an answer is not news about the
+	 * archive: the listing on screen is still the last thing the host confirmed.
+	 */
+	it('leaves a level alone when its refresh misses the budget, and asks again', async () => {
+		vi.useFakeTimers();
+		host.call.mockResolvedValue(listed('checkout-app'));
+		render(<Levels paths={[[]]} writing={true} />);
+		await settle();
+
+		host.call.mockImplementation(abandoned);
+		// The refresh goes out; nothing comes back, and its budget runs out on the tick after it —
+		// which is itself dropped, the request having still been outstanding when it fired.
+		await tick();
+		expect(host.call).toHaveBeenCalledTimes(2);
+		await tick();
+		// The `unanswered` landed on a level that already has a listing, so the listing stays.
+		expect(screen.getByTestId('root').textContent).toBe('listed:checkout-app');
+		expect(host.call).toHaveBeenCalledTimes(2);
+
+		host.call.mockResolvedValue(listed('checkout-app', 'payments-web'));
+		// And the next tick asks again, which is what makes the miss a miss rather than a state.
+		await tick();
+
+		expect(host.call).toHaveBeenCalledTimes(3);
+		expect(screen.getByTestId('root').textContent).toBe('listed:checkout-app,payments-web');
+	});
+
+	// The host's **own** `unreadable` still replaces, which is what keeps that word meaning what it
+	// means everywhere else: it is the answer to the question the screen just asked.
+	it('replaces a level the host itself answers `unreadable` for on a tick', async () => {
+		vi.useFakeTimers();
+		host.call.mockResolvedValue(listed('checkout-app'));
+		render(<Levels paths={[[]]} writing={true} />);
+		await settle();
+		expect(screen.getByTestId('root').textContent).toBe('listed:checkout-app');
+
+		host.call.mockResolvedValue(result({ outcome: 'unreadable' }));
+		await tick();
+
+		expect(screen.getByTestId('root').textContent).toBe('unreadable');
+	});
+
+	// A run that lands appears without a reload — the acceptance criterion, at the hook's own level.
+	it('draws a run that landed between two ticks', async () => {
+		vi.useFakeTimers();
+		host.call.mockResolvedValue(listed('20260910T091403Z-issue-287-1a2b3c4d'));
+		render(<Levels paths={[[]]} writing={true} />);
+		await settle();
+
+		host.call.mockResolvedValue(
+			listed('20260910T091403Z-issue-287-1a2b3c4d', '20260910T092911Z-issue-287-9f1c2ab4'),
+		);
+		await tick();
+
+		expect(screen.getByTestId('root').textContent).toBe(
+			'listed:20260910T091403Z-issue-287-1a2b3c4d,20260910T092911Z-issue-287-9f1c2ab4',
+		);
+	});
+
+	// The clock stops when the last lease ends, which is the other half of the idle cost being
+	// nothing: the gate closing clears the interval rather than leaving it running until unmount.
+	it('stops asking once the last lease has ended', async () => {
+		vi.useFakeTimers();
+		host.call.mockResolvedValue(listed('checkout-app'));
+		const { rerender } = render(<Levels paths={[[]]} writing={true} />);
+		await settle();
+		await tick();
+		expect(host.call).toHaveBeenCalledTimes(2);
+
+		rerender(<Levels paths={[[]]} writing={false} />);
+		await tick();
+		await tick();
+
+		expect(host.call).toHaveBeenCalledTimes(2);
+	});
+
+	// And it starts when a lease begins, without a remount: the gate is a prop of the render.
+	it('starts asking once a lease begins', async () => {
+		vi.useFakeTimers();
+		host.call.mockResolvedValue(listed('checkout-app'));
+		const { rerender } = render(<Levels paths={[[]]} writing={false} />);
+		await settle();
+		await tick();
+		expect(host.call).toHaveBeenCalledTimes(1);
+
+		rerender(<Levels paths={[[]]} writing={true} />);
+		await tick();
+
+		expect(host.call).toHaveBeenCalledTimes(2);
 	});
 });
 
@@ -177,7 +543,8 @@ describe('reading every drawn level again', () => {
 			{ path: [] },
 			{ path: ['checkout-app'] },
 		]);
-		// And nothing further: a re-read is one pass, not an interval (§9 — no polling).
+		// And nothing further: a re-read is one pass and not a clock of its own — the clock is
+		// `writing`'s, which is `false` here (#287).
 		await act(async () => undefined);
 		expect(host.call).toHaveBeenCalledTimes(4);
 	});

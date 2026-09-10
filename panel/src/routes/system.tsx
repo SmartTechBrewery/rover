@@ -42,9 +42,13 @@ const WHOLE_ARCHIVE: readonly string[] = [];
  * **This screen does read one host fact, and exactly one** (#260): what the whole archive weighs.
  * It is the request `measure_archive` has answered since #259, and it is asked **here** rather than
  * in the card, so the card stays what it is — a thing given its data — and the one round trip this
- * destination makes is visible in the screen that makes it. Nothing polls it: the archive is
- * finished data, so the answer is taken once per mount, exactly as the Archive screen's own badge
- * takes it (`archive/archive-size.ts`).
+ * destination makes is visible in the screen that makes it. **Nothing polls it**, and since #287
+ * that is for `measure_archive`'s own reason rather than *the archive is finished data*, which was
+ * false while a lease was live (`ai/RULES.md` §1): the measurement is a **disk walk**, so a figure
+ * that re-walked the archive every few seconds while runs land would be a worse bug than a stale
+ * one. The answer is taken once per mount, exactly as the Archive screen's own badge takes it and
+ * for exactly its reason (`archive/archive-size.ts`) — the cost being that the figure under-reports
+ * while runs are landing, until this destination is opened again.
  *
  * **No `CalmNotice` any more.** The screen is not *empty*: it has the two fields, so the *not built
  * yet* wording would now be false of it, and the one temporary fact — that the numbers are not kept

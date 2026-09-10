@@ -191,8 +191,18 @@ Design work lives in [`DESIGN.md`](./DESIGN.md); the brief that produced the fir
    words, which say that runs of the same tests outside the group stay. A
    settled outcome re-reads **both** caches, the levels one and the grouping answer this view draws
    its own levels from, and lands the selection on the project; a group whose runs are not listed
-   gets no control, which is the rule its tick already keeps. Still no polling and still no refresh
-   control.
+   gets no control, which is the rule its tick already keeps.
+   ***Still no polling* has stopped being true, and this clause is rewritten in place rather than
+   deleted** (2026-09-10, #287, `ai/RULES.md` §1). It read *still no polling and still no refresh
+   control*, on the premise that the archive was finished data — which was false for exactly the
+   window a lease is open in: the listings went stale while runs were being filed under the reader,
+   and only a browser reload corrected them. So **the levels the screen draws re-read themselves
+   every 5 s while a lease is live**, gated off the `list_devices` poll the page already runs, and
+   nothing at all while no lease is — the idle cost is unchanged. Every other read on the screen is
+   still taken once, each for its own recorded reason, and there is **still no refresh control**:
+   the clock has no caller a reader can reach. The grouping walk above a run is deliberately not on
+   that clock and is #287's phase 2, because it walks the whole archive rather than one directory.
+   `docs/DESIGN.md` §9 carries the whole of it.
 6. **Live lease state** — **done** (#113). A held card carries the `owner`, the `project`, the
    `test_name` and the grant instant, with a countdown to the expiry that ticks once a second and
    **goes back up** when activity renews the lease (`PROJECT.md` D8) — verified against a running

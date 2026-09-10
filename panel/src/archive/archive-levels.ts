@@ -25,11 +25,28 @@ import { keyOf } from './archive-path.js';
  * paths are then one list against one cache, and a level asked for at one depth is not asked for
  * again at the next.
  *
- * **There is no polling and no refresh control** (`docs/DESIGN.md` §9). The archive is finished
- * data: a run directory is written while a lease is live and nothing is added once it ends, and
- * this screen makes no claim to show a run appearing. So a level is fetched once — when a navigation
- * **or a click** first draws it (#198) — and cached for the life of the screen. That is the one thing this hook does differently from
- * `device-list-provider.tsx`, which polls because *what is attached* changes under the reader.
+ * **Every drawn level re-reads itself while something is being written, and nothing else does**
+ * (#287, `docs/DESIGN.md` §9) — this paragraph is **rewritten in place with its reason rewritten**
+ * rather than deleted (`ai/RULES.md` §1). It read *there is no polling and no refresh control*,
+ * because *the archive is finished data: a run directory is written while a lease is live and
+ * nothing is added once it ends, and this screen makes no claim to show a run appearing.* That
+ * premise is true of a run whose lease has ended and **false for the window this hook is now
+ * about**: while a lease is live the archive grows under the reader, the listings went stale, and
+ * only a browser reload corrected them — which also threw away the reader's place. So a level is
+ * still fetched when a navigation **or a click** first draws it (#198), and it is now asked again
+ * every {@link ARCHIVE_POLL_MS} for as long as `writing` says a lease is live
+ * (`live-writes.ts`). What has *not* changed is which levels: a tick asks for exactly the drawn
+ * ones, so the laziness rule bounds the clock as it bounds the mount.
+ *
+ * **The clock is the nonce, not a second mechanism.** A tick is *ask for every drawn level again*,
+ * which is precisely what {@link ArchiveLevelsHook.reread} already means, so incrementing the same
+ * nonce gives *never twice for one level within one tick* and *never a level nobody drew* for free,
+ * and StrictMode's double mount stays one request per level. No second cache, and nothing that
+ * clears `asked`.
+ *
+ * **And a refresh is invisible until it lands.** The levels map is untouched until an answer
+ * arrives, so no level that has an answer ever falls back to *Reading this level.* — see the
+ * `unanswered` branch in the effect for what a missed budget does and does not replace.
  *
  * **And it reads again when this screen has itself changed what is filed** (#276) — amended in
  * place, exactly as `registered-projects.ts` was amended for the same reason (`ai/RULES.md` §1).
@@ -42,9 +59,54 @@ import { keyOf } from './archive-path.js';
  * `partial` may have left the directory exactly where it was, and a `not-found` means the listing
  * being edited was already stale.
  *
- * **No deadline either**, for the reason `host-client.ts` gives: a budget belongs to a repeating
- * caller with an interval to spend, and this caller has neither.
+ * **A request carries the tick as its deadline exactly while the tick exists** (#125, #289 review)
+ * — rewritten in place too, the old clause having been *no deadline either, because a budget
+ * belongs to a repeating caller with an interval to spend and this caller has neither*
+ * (`host-client.ts`). Half of that reason survived the clock: a budget is only ever spendable by a
+ * caller that will ask again, and this one asks again **only while `writing`**. So a gated request
+ * gets a deadline and a no-lease request gets none, which is the behaviour it had before there was
+ * a clock. Giving one to both was the first draft's bug: with the gate shut, a listing the host was
+ * merely slow to produce — `list_archive` is one `readdir` per entry (`src/daemon/list-archive.ts`)
+ * and a level of several hundred runs is that many — was abandoned at five seconds and cached as
+ * *Rover cannot see into this directory*, a claim about the host that was false, with no clock to
+ * ever correct it and only the browser reload #287 exists to remove.
+ *
+ * The deadline is what bounds the tick guard below: without one, a single request the host accepted
+ * and never answered would hold that guard for the life of the tab, every tick after it dropped and
+ * the screen frozen on the last good listing with nothing saying so. That is what #125 actually
+ * was, on the other screen. Which is why an **ungated request does not enter that guard either**:
+ * the two go together, and a request with no budget holding a guard it cannot be released from
+ * would be #125 again, entered through the gate opening rather than through the clock. It costs at
+ * most one extra request per level — a lease starting while the mount's own listings are still out
+ * — and that is bounded by the drawn levels like every other tick.
  */
+
+/**
+ * How often a drawn level is read again while the archive is being written (#287).
+ *
+ * Five seconds, matching the device poll's interval — and **a separate constant rather than an
+ * import of `POLL_MS`**, because these are two decisions that happen to agree: one about how soon
+ * a run that has just landed should appear, one about how fresh a lease countdown must be. The
+ * agreement is not a coincidence worth deleting either: the gate is derived from `list_devices`,
+ * whose answer is already up to one `POLL_MS` old, so a faster archive tick would be refreshing
+ * against knowledge that is stale anyway.
+ *
+ * **The cost, stated rather than hidden**: while a lease is live, one `readdir` per **drawn** level
+ * every five seconds — a reader sitting on a run costs four to six per tick, a reader with several
+ * branches open one per open row. It is bounded by #198's laziness rule and by nothing else, and it
+ * is nothing at all while no lease is live. A poll never walks the archive: `measure_archive` and
+ * `list_archive_groups` are deliberately **not** on this clock (`docs/DESIGN.md` §9).
+ *
+ * **No leading tick and no trailing one.** The first fire is one cadence after the gate opens,
+ * because the mount has just read every drawn level and the clock's job is what happens after that.
+ * Nothing is added for the end of a lease either, and nothing needs to be: the gate follows an
+ * answer that lags the host by up to one device-poll interval, so the clock keeps running for a few
+ * seconds past the real end of the lease, which covers the last writes. What that leaves is stated:
+ * a write landing after the gate closes is seen on the reader's next navigation, and so is a
+ * `rover sweep` deletion made while no lease is live — the archive can shrink unasked, and this
+ * hook makes no claim about noticing that.
+ */
+export const ARCHIVE_POLL_MS = 5_000;
 
 /**
  * What one level is, and it is deliberately four states rather than the host's three.
@@ -132,11 +194,21 @@ export interface ArchiveLevelsHook {
 	 * regression: it is the host's answer to the question the screen just asked, and a screen
 	 * holding on to a listing the host will no longer confirm would be showing runs it has no
 	 * current evidence for.
+	 *
+	 * **Still not a refresh control, and neither is the clock** (#287): this has one caller and one
+	 * trigger, and the tick has no caller at all — neither is reachable by a press, and nothing on
+	 * the Archive screen offers one.
 	 */
 	readonly reread: () => void;
 }
 
-export function useArchiveLevels(want: WantedLevels): ArchiveLevelsHook {
+/**
+ * @param want which levels the caller wants read, evaluated against every level read so far.
+ * @param writing whether anything is being written into the archive, which is what runs the clock
+ *   (`live-writes.ts`). **Required, with no default**, so no call site is silently opted out and the
+ *   tests that pin *once per level* have to say `false` out loud.
+ */
+export function useArchiveLevels(want: WantedLevels, writing: boolean): ArchiveLevelsHook {
 	const { call } = useSession();
 	const [levels, setLevels] = useState<ArchiveLevels>(() => new Map());
 	/*
@@ -158,6 +230,23 @@ export function useArchiveLevels(want: WantedLevels): ArchiveLevelsHook {
 	 */
 	const asked = useRef<Map<string, number>>(new Map());
 	const live = useRef(true);
+	/*
+	 * **How many *budgeted* `list_archive` requests this hook has out**, which is what a tick is
+	 * dropped for (#125, #287). A tick arriving while the last one's requests are still in flight is
+	 * dropped rather than queued, so a host slower than the interval cannot have requests stacked on
+	 * it — and this guard is **bounded**, by the deadline those requests carry. An unbounded one is
+	 * what #125 was on the Devices screen: one request the host accepted and never answered held it
+	 * for the life of the tab.
+	 *
+	 * Only the gated requests are counted, because only they have a deadline (#289 review). A
+	 * request issued while no lease was live has none, so counting it would let one such request —
+	 * still out when a lease starts — drop every tick for the rest of the tab: the same unbounded
+	 * guard, reached through the gate opening instead of through the clock.
+	 *
+	 * A count rather than a boolean because a tick is *n* requests, one per drawn level, and they
+	 * answer independently: the next tick is due once they all have.
+	 */
+	const outstanding = useRef(0);
 
 	// Keyed on the paths themselves rather than on the array's identity, which is rebuilt every
 	// render. `JSON.stringify` is injective over string arrays, which is all this needs to be — and
@@ -172,28 +261,65 @@ export function useArchiveLevels(want: WantedLevels): ArchiveLevelsHook {
 				continue;
 			}
 			asked.current.set(key, nonce);
+			if (writing) {
+				outstanding.current += 1;
+			}
 			void (async () => {
-				const answer = await call('list_archive', { path });
-				/*
-				 * A superseded answer lands on nothing. The answers of two reads of one level are not
-				 * ordered by the requests that asked for them, so the later request's answer arriving
-				 * first would otherwise let the earlier one overwrite it — a listing from before the
-				 * delete, drawn after the one from after it.
-				 */
-				if (!live.current || asked.current.get(key) !== nonce) {
-					return;
+				const budget = budgetFor(writing);
+				try {
+					const answer = await call('list_archive', { path }, budget.signal);
+					/*
+					 * A superseded answer lands on nothing. The answers of two reads of one level are not
+					 * ordered by the requests that asked for them, so the later request's answer arriving
+					 * first would otherwise let the earlier one overwrite it — a listing from before the
+					 * delete, drawn after the one from after it.
+					 */
+					if (!live.current || asked.current.get(key) !== nonce) {
+						return;
+					}
+					const state = read(answer);
+					if (state === undefined) {
+						return;
+					}
+					/*
+					 * **Nothing answered inside the budget leaves a level that has an answer exactly where
+					 * it is** (#287), and it is asked again on the next tick. That is not news about the
+					 * archive: the listing on screen is still the last thing the host confirmed, and
+					 * replacing it with *not readable* over a request that timed out would make a refresh
+					 * visible as a regression. A level with nothing yet still lands on `unreadable`, which
+					 * is what it landed on before there was a clock — and it is only ever a *budget* that
+					 * put it there under the clock, where the next tick asks again; with the gate shut the
+					 * request has no budget to miss, so an `unanswered` there is the host or the network
+					 * and means what it says (#289 review). The host's **own** `unreadable` still replaces
+					 * in either case — that is the host answering the question the screen asked.
+					 * `!answer.ok` here is exactly `refusal === 'unanswered'`, a `refused` having already
+					 * returned `undefined` above, and an abort arrives as an `unanswered` by contract
+					 * (`host-client.ts`).
+					 */
+					const unanswered = !answer.ok;
+					setLevels((previous) =>
+						unanswered && previous.has(key) ? previous : new Map(previous).set(key, state),
+					);
+				} finally {
+					/*
+					 * The budget is released in `finally` and **nowhere else**: releasing it when the
+					 * deadline fires would let the abandoned request's answer land after the next tick's
+					 * good one. Aborting is enough, because an aborted `fetch` rejects promptly.
+					 */
+					budget.release();
+					if (writing) {
+						outstanding.current -= 1;
+					}
 				}
-				const state = read(answer);
-				if (state === undefined) {
-					return;
-				}
-				setLevels((previous) => new Map(previous).set(key, state));
 			})();
 		}
 		return () => {
 			live.current = false;
 		};
-	}, [wanted, call, nonce]);
+		// `writing` is here because it decides whether the requests this run makes carry a budget
+		// (#289 review), not because the gate is a reason to read anything: a run triggered by the
+		// gate alone asks for nothing, every drawn level already being at this nonce in `asked`.
+	}, [wanted, call, nonce, writing]);
 
 	/*
 	 * Stable across renders, so a screen may hand it to a callback without it becoming a dependency
@@ -210,7 +336,65 @@ export function useArchiveLevels(want: WantedLevels): ArchiveLevelsHook {
 		setNonce((previous) => previous + 1);
 	}, []);
 
+	/**
+	 * One tick of the clock — **the same request `reread` makes**, which is why it moves the same
+	 * nonce and there is no second mechanism (#287).
+	 *
+	 * A tick arriving while this hook's own requests are still out is **dropped rather than
+	 * queued** (#125): the nonce does not move, so nothing is asked, and the level that has not
+	 * answered is not asked a second time on top of the first. What makes that safe is the deadline
+	 * the requests in that guard carry — every request counted into it was issued with the gate
+	 * open, so it is only ever as temporary as its own budget, and a host that stops answering
+	 * costs one tick and then recovers on its own.
+	 */
+	const tick = useCallback(() => {
+		if (outstanding.current > 0) {
+			return;
+		}
+		setNonce((previous) => previous + 1);
+	}, []);
+
+	/*
+	 * **No lease live, no interval** — the idle cost of this hook is exactly what it was before
+	 * there was a clock, which is the decision #287 asked to be recorded rather than left implicit.
+	 * `writing` is `false` for a device list that has not answered yet as well as for one that names
+	 * no lease (`live-writes.ts`), and the mount has just read every drawn level either way.
+	 */
+	useEffect(() => {
+		if (!writing) {
+			return;
+		}
+		const ticking = setInterval(tick, ARCHIVE_POLL_MS);
+		return () => clearInterval(ticking);
+	}, [writing, tick]);
+
 	return { levels, reread };
+}
+
+/**
+ * **A budget only where a clock will retry** (#125, #289 review): `writing` is what the tick is
+ * gated on, so it is what the deadline is gated on too.
+ *
+ * With the gate open a request is abandoned after one tick's length, which is what keeps the
+ * outstanding-request guard bounded. With it shut there is no signal at all — the behaviour every
+ * other one-shot read on this screen has (`archive-size.ts`, `archived-file.ts`, `artifact.ts`),
+ * and the behaviour this hook had before #287 — because abandoning a listing the host was merely
+ * slow to produce would cache *not readable* over it with nothing left to ask again.
+ *
+ * `setTimeout` rather than `AbortSignal.timeout`, so the panel suite's fake timers can advance to
+ * the deadline instead of waiting it out — `device-list-provider.tsx`'s own recorded reason, and
+ * `tests/unit/no-sleep.test.ts`'s.
+ */
+function budgetFor(writing: boolean): {
+	readonly signal?: AbortSignal;
+	readonly release: () => void;
+} {
+	if (!writing) {
+		return { release: () => undefined };
+	}
+	const controller = new AbortController();
+	const deadline = setTimeout(() => controller.abort(), ARCHIVE_POLL_MS);
+	return { signal: controller.signal, release: () => clearTimeout(deadline) };
 }
 
 /** One answer, mapped onto {@link ArchiveLevel} — or nothing at all, for a `refused`. */

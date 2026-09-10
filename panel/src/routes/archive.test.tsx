@@ -1,3 +1,4 @@
+import type { DeviceListState } from '@panel/devices/device-list-provider.js';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import type { AnchorHTMLAttributes, ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -61,6 +62,20 @@ vi.mock('@tanstack/react-router', () => ({
 	useNavigate: () => (options: unknown) => {
 		navigated.calls.push(options);
 	},
+}));
+
+/**
+ * **The device list, mocked to *no lease live* by default** (#287) — not optional, because
+ * `useDeviceList` throws outside its provider and this screen reads it for one bit: whether
+ * anything is being written into the archive, which is what runs the level cache's clock
+ * (`archive/live-writes.ts`). `devices.test.tsx`'s own shape, and the default is what keeps every
+ * case below counting the requests it counted before there was a clock.
+ */
+const { list } = vi.hoisted(() => ({
+	list: { state: { status: 'loading' } as DeviceListState },
+}));
+vi.mock('@panel/devices/device-list-provider.js', () => ({
+	useDeviceList: () => ({ state: list.state, refresh: () => undefined }),
 }));
 
 /**
@@ -131,6 +146,14 @@ const { host, HANGS } = vi.hoisted(() => ({
 		 */
 		groupsGate: null as null | Promise<void>,
 		/**
+		 * The same, one method over: a gate every **listing** waits behind, so a case can watch this
+		 * screen while a refresh of the drawn levels is still out (#287). That is the one thing a
+		 * clock adds that has to be looked at mid-flight — *no level that has an answer falls back
+		 * to reading* is a claim about exactly that moment, and `hangs` cannot express it because a
+		 * request it swallows is never answered at all.
+		 */
+		listingGate: null as null | Promise<void>,
+		/**
 		 * **Which tests this host keeps** — the `Keep` flag, which is host state since #237. The
 		 * mock applies each press to it the way `src/daemon/kept-tests.ts` does, so *ticking a test's
 		 * card lights its run's* is a fact about one set rather than about two mocked answers.
@@ -168,10 +191,26 @@ const { host, HANGS } = vi.hoisted(() => ({
 }));
 vi.mock('@panel/session/session-provider.js', () => {
 	/** One level's listing, logged as asked for. */
-	const listing = async (path: readonly string[]) => {
+	const listing = async (path: readonly string[], signal?: AbortSignal) => {
 		host.asked.push(path);
 		if (host.hangs) {
 			return await new Promise(() => undefined);
+		}
+		if (host.listingGate !== null) {
+			/*
+			 * **A caller that abandons the request is answered `unanswered`**, which is
+			 * `host-client.ts`'s own contract for an aborted `fetch` (#289 review). Without it the
+			 * request deadline is invisible to this file, and *a slow host is not an unreadable one*
+			 * could not be asserted at the screen's level at all — the gate would simply answer late
+			 * and the screen would never see the difference.
+			 */
+			const abandoned = new Promise<{ ok: false; refusal: 'unanswered' }>((resolve) => {
+				signal?.addEventListener('abort', () => resolve({ ok: false, refusal: 'unanswered' }));
+			});
+			const raced = await Promise.race([host.listingGate.then(() => null), abandoned]);
+			if (raced !== null) {
+				return raced;
+			}
 		}
 		const answer = host.answers.get(JSON.stringify(path));
 		if (answer === HANGS) {
@@ -303,6 +342,8 @@ vi.mock('@panel/session/session-provider.js', () => {
 			tests?: readonly { project: string; testName: string }[];
 			kept?: boolean;
 		},
+		/** The caller's deadline, which only a listing carries and only under the clock (#287). */
+		signal?: AbortSignal,
 	) => {
 		if (method === 'search_archive') {
 			return await search(params.text);
@@ -320,7 +361,7 @@ vi.mock('@panel/session/session-provider.js', () => {
 			return await keptTests();
 		}
 		const written = await wrote(method, params);
-		return written ?? (await listing(params.path));
+		return written ?? (await listing(params.path, signal));
 	};
 
 	/**
@@ -380,8 +421,36 @@ vi.mock('@panel/session/session-provider.js', () => {
 	};
 });
 
+import { ARCHIVE_POLL_MS } from '@panel/archive/archive-levels.js';
 import { SEARCH_DEBOUNCE_MS } from '@panel/archive/archive-search.js';
 import { ArchiveScreen } from './archive.js';
+
+/** One held device, which is the whole of *something is being written into the archive*. */
+function leaseIsLive(): DeviceListState {
+	return {
+		status: 'ready',
+		stale: false,
+		staleReason: null,
+		receivedAtMs: 1_757_000_000_000,
+		devices: [
+			{
+				serial: SERIAL,
+				platform: 'android',
+				model: 'Pixel 7',
+				osVersion: '16',
+				state: 'ready',
+				heldBy: {
+					serial: SERIAL,
+					owner: 'issue-287',
+					project: 'checkout-app',
+					testName: 'login-flow',
+					grantedAt: '2026-09-10T09:14:03.000Z',
+					expiresInMs: 540_000,
+				},
+			},
+		],
+	};
+}
 
 function directory(name: string, childCount: number | null = 3, onlyChild: string | null = null) {
 	return { kind: 'directory', name, childCount, onlyChild };
@@ -563,6 +632,7 @@ beforeEach(() => {
 	host.artifact = { outcome: 'missing' };
 	host.artifactByName = {};
 	host.groupsGate = null;
+	host.listingGate = null;
 	host.kept = [];
 	host.keptReads = 0;
 	host.presses = [];
@@ -574,6 +644,9 @@ beforeEach(() => {
 	host.groupDeleted = null;
 	host.groupDeletes = [];
 	navigated.calls = [];
+	// No lease live, which is no clock and no requests of its own (#287) — every case below that
+	// counts requests counts them against this default.
+	list.state = { status: 'loading' };
 });
 
 describe('each level', () => {
@@ -3817,8 +3890,9 @@ describe('a settled Remove', () => {
 
 	/**
 	 * **The line outlives the card it was about**, which is why it is above the content area rather
-	 * than in either column: the address it names may be gone, and it stays until dismissed because
-	 * this screen does not poll (§9).
+	 * than in either column: the address it names may be gone, and it stays until dismissed. Nothing
+	 * else could clear it in any case — it is state of the screen, so the clock re-reading every
+	 * drawn level leaves it where it is (§9, #287).
 	 */
 	it('says what went above the content area, and stays until dismissed', async () => {
 		await removeFrom('checkout-app/login-flow', DELETED);
@@ -3836,5 +3910,314 @@ describe('a settled Remove', () => {
 			fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }));
 		});
 		expect(noticed()).toBe('');
+	});
+});
+
+/**
+ * **A slow host is not an unreadable one** (#289 review), and with the gate shut nothing will ever
+ * ask again — so a listing that takes longer than a tick has to be waited for, not abandoned.
+ *
+ * This is the screen's side of *no clock, no budget* (`archive-levels.ts`). `list_archive` is one
+ * `readdir` per entry (`src/daemon/list-archive.ts`), so a level holding several hundred runs, or a
+ * host across the network (D17), is an ordinary slow answer rather than a broken one — and *Rover
+ * cannot see into this directory* is a claim about the host that would be false, cached for the
+ * life of the mounted screen, and correctable only by the reload #287 exists to remove.
+ */
+describe('the host is slow and no lease is live', () => {
+	beforeEach(() => {
+		vi.useFakeTimers();
+	});
+
+	afterEach(() => {
+		host.listingGate = null;
+		vi.useRealTimers();
+	});
+
+	it('waits for a listing that outlasts a tick rather than calling the level unreadable', async () => {
+		at.splat = 'checkout-app/login-flow';
+		host.answers = new Map(Object.entries(archive()));
+		let answerAtLast: () => void = () => undefined;
+		host.listingGate = new Promise((resolve) => {
+			answerAtLast = () => resolve();
+		});
+
+		const { container } = render(<ArchiveScreen view="all" />);
+		await act(async () => {
+			await vi.advanceTimersByTimeAsync(ARCHIVE_POLL_MS * 3);
+		});
+
+		expect(container.textContent).not.toContain('ARCHIVE NOT READABLE');
+
+		host.listingGate = null;
+		await act(async () => {
+			answerAtLast();
+		});
+		for (let turn = 0; turn < 6; turn += 1) {
+			await act(async () => undefined);
+		}
+
+		expect(container.textContent).not.toContain('ARCHIVE NOT READABLE');
+		expect(treeRows()).toEqual([
+			'checkout-app',
+			'login-flow',
+			RUN,
+			OLDER,
+			'unlabeled',
+			'payments-web',
+		]);
+	});
+});
+
+/**
+ * **The listings keep up while a lease is live** (#287) — the acceptance criterion this screen is
+ * judged on, and the four things that must not move while it happens.
+ *
+ * The gate is the device list's own answer (`archive/live-writes.ts`): the page polls
+ * `list_devices` above the router, so *is anything being written* costs this screen no request. Every
+ * other case in this file runs with that gate **shut**, which is what keeps their request counts the
+ * counts they were before there was a clock.
+ */
+describe('while a lease is writing into the archive', () => {
+	beforeEach(() => {
+		vi.useFakeTimers();
+		list.state = leaseIsLive();
+	});
+
+	afterEach(() => {
+		vi.useRealTimers();
+	});
+
+	/** One turn of the clock, and enough settling for a level below one to answer after it. */
+	async function tick(): Promise<void> {
+		await act(async () => {
+			await vi.advanceTimersByTimeAsync(ARCHIVE_POLL_MS);
+		});
+		for (let turn = 0; turn < 6; turn += 1) {
+			await act(async () => undefined);
+		}
+	}
+
+	/** What the host answers from here on — a run landing is a level answering differently. */
+	function nowHolding(levels: Record<string, unknown>): void {
+		host.answers = new Map(Object.entries(levels));
+	}
+
+	/** The archive with a second run filed under `login-flow`, as a lease would leave it. */
+	const NEWER = '20260910T091403Z-issue-287-1a2b3c4d';
+	function withANewRun(): Record<string, unknown> {
+		return {
+			...archive(),
+			'["checkout-app","login-flow"]': listed(
+				directory(OLDER, 1, 'emulator-5554'),
+				directory(RUN, 1, SERIAL),
+				directory(NEWER, 1, SERIAL),
+			),
+		};
+	}
+
+	// The bug, stated as a pass: the run that landed is drawn without a reload — in both panes, and
+	// with the count in the header agreeing with them.
+	it('draws a run that landed, in the tree and in the card, without a reload', async () => {
+		const { container } = await showing('checkout-app/login-flow');
+		expect(treeRows()).toEqual([
+			'checkout-app',
+			'login-flow',
+			RUN,
+			OLDER,
+			'unlabeled',
+			'payments-web',
+		]);
+
+		nowHolding(withANewRun());
+		let answerTheRefresh: () => void = () => undefined;
+		host.listingGate = new Promise((resolve) => {
+			answerTheRefresh = () => resolve();
+		});
+		await tick();
+
+		/*
+		 * **A refresh is invisible until it lands.** Every drawn level is out and none has answered,
+		 * and the screen is still exactly the screen it was: no level falls back to *reading*, and
+		 * the header still counts what the last answer said.
+		 */
+		expect(screen.queryByText('Reading this level of the archive.')).toBeNull();
+		expect(screen.queryByText('Reading this level.')).toBeNull();
+		expect(screen.getByText('2 runs archived')).toBeDefined();
+
+		host.listingGate = null;
+		await act(async () => {
+			answerTheRefresh();
+		});
+		for (let turn = 0; turn < 6; turn += 1) {
+			await act(async () => undefined);
+		}
+
+		// Most recent first, which is the screen's own order over the host's ascending one — and the
+		// new row **appends** into a tree whose other rows are exactly where they were.
+		expect(treeRows()).toEqual([
+			'checkout-app',
+			'login-flow',
+			NEWER,
+			RUN,
+			OLDER,
+			'unlabeled',
+			'payments-web',
+		]);
+		// The card's rows carry each run's own owner and grant instant, so it is the leading name
+		// that says which run a row is.
+		expect(cardRows(container).map((row) => row?.slice(0, NEWER.length))).toEqual([
+			NEWER,
+			RUN,
+			OLDER,
+		]);
+		expect(screen.getByText('3 runs archived')).toBeDefined();
+	});
+
+	/*
+	 * **Nothing the reader is doing moves.** The selection is the URL, the open set is state nothing
+	 * here writes, and the tree's rows are keyed by path — so a new row appends and no row the
+	 * reader was reading is remounted, moved or closed.
+	 */
+	it('leaves the open branch and the selection where the reader put them', async () => {
+		const twoProjects = { ...archive(), '["payments-web"]': listed(directory('refund-flow', 2)) };
+		await showing(undefined, twoProjects);
+		const tree = document.querySelector('aside') as HTMLElement;
+		fireEvent.click(within(tree).getByRole('link', { name: 'payments-web' }));
+		await tick();
+		expect(treeRows()).toEqual(['checkout-app', 'payments-web', 'refund-flow']);
+
+		nowHolding({
+			...twoProjects,
+			'["payments-web"]': listed(directory('refund-flow', 2), directory('chargeback', 1)),
+		});
+		await tick();
+
+		// `checkout-app` is still shut, `payments-web` is still open, and the new row appended
+		// under it in the host's own order — the reader's browsing is untouched and the address
+		// never moved.
+		expect(treeRows()).toEqual(['checkout-app', 'payments-web', 'refund-flow', 'chargeback']);
+		expect(screen.getByText('Projects with runs filed on this host.')).toBeDefined();
+		expect(navigated.calls).toEqual([]);
+	});
+
+	/*
+	 * **The search is not re-issued under the reader** (#287's recorded decision). It answers a
+	 * question asked with text that has settled, and re-asking it on a clock would move a hit list
+	 * nobody touched. The stated cost: a hit list can miss a run that landed after the search.
+	 */
+	it('leaves the search text and its hits alone, and does not search again', async () => {
+		host.search = {
+			outcome: 'searched',
+			matches: [{ path: ['checkout-app', 'login-flow'], kind: 'directory' }],
+			truncated: false,
+		};
+		await showing('checkout-app');
+		const field = screen.getByRole('textbox') as HTMLInputElement;
+		fireEvent.change(field, { target: { value: 'login' } });
+		await act(async () => {
+			await vi.advanceTimersByTimeAsync(SEARCH_DEBOUNCE_MS);
+			await vi.advanceTimersByTimeAsync(0);
+		});
+		expect(host.searches).toEqual(['login']);
+		const hits = treeRows();
+
+		nowHolding(withANewRun());
+		await tick();
+		await tick();
+
+		expect((screen.getByRole('textbox') as HTMLInputElement).value).toBe('login');
+		expect(host.searches).toEqual(['login']);
+		expect(treeRows()).toEqual(hits);
+	});
+
+	/*
+	 * **The clock reads the listings and nothing else** — the four decisions #287 asked to be
+	 * recorded rather than left, pinned here so none of them can be lost to a refactor:
+	 *
+	 * - `measure_archive` is a **disk walk per scope**, and a badge that re-walked the archive every
+	 *   five seconds while runs land is a worse bug than a stale figure. The cost is stated: the
+	 *   `ON DISK` figure under-reports until the reader navigates to another scope and back.
+	 * - The run's two files are written **once, with `wx`, and never rewritten**
+	 *   (`src/daemon/archive.ts`), so they cannot grow under the reader and there is nothing for a
+	 *   refresh to notice.
+	 * - An artifact is filed under a fresh per-lease sequence number and never rewritten, so a file
+	 *   on screen cannot change.
+	 */
+	it('re-reads the listings and re-reads nothing else', async () => {
+		await showing(`checkout-app/login-flow/${RUN}`);
+		const listings = host.asked.length;
+		const measures = [...host.measures];
+		const files = [...host.files];
+		expect(listings).toBe(4);
+		expect(files).toHaveLength(2);
+		expect(measures).toHaveLength(1);
+
+		await tick();
+		await tick();
+
+		// The listings were read again, twice over — every drawn level and no other.
+		expect(host.asked.length).toBe(listings * 3);
+		// And nothing else was asked for a second time.
+		expect(host.measures).toEqual(measures);
+		expect(host.files).toEqual(files);
+		expect(host.keptReads).toBe(1);
+	});
+
+	// The same for an open artifact's bytes, which are megabytes rather than a listing: an artifact
+	// is filed under a fresh per-lease sequence number and never rewritten, so a file on screen
+	// cannot change and there is nothing for a refresh to notice.
+	it('asks the byte route for nothing new while an artifact is open', async () => {
+		host.artifact = { outcome: 'read', mediaType: 'image/png', bytes: new Blob(['png']) };
+		const screenshots = ['checkout-app', 'login-flow', RUN, SERIAL, 'screenshots'];
+		await showing([...screenshots, '001_screenshot.png'].join('/'), {
+			...archive(),
+			[JSON.stringify(screenshots)]: listed({
+				kind: 'file',
+				name: '001_screenshot.png',
+				sizeBytes: 4,
+			}),
+		});
+		const artifacts = [...host.artifacts];
+		const listings = host.asked.length;
+		expect(artifacts).toHaveLength(1);
+
+		await tick();
+		await tick();
+
+		expect(host.asked.length).toBe(listings * 3);
+		expect(host.artifacts).toEqual(artifacts);
+	});
+
+	/*
+	 * **The grouping walk is not on this clock, and that is phase 2's** (#287). It is a bounded walk
+	 * of the whole archive rather than one `readdir`, so its cadence is a decision with its own cost
+	 * — and *a poll must never walk the archive* is the one thing this task's criteria forbid
+	 * outright. So the groups view's arrangement above a run stays as stale as it is today, said
+	 * plainly rather than left to be discovered.
+	 */
+	it('walks no group and measures no group on a tick', async () => {
+		await grouped(`checkout-app/${GROUP}`);
+		expect(host.groupings).toBe(1);
+		const groupMeasures = [...host.groupMeasures];
+
+		await tick();
+		await tick();
+
+		expect(host.groupings).toBe(1);
+		expect(host.groupMeasures).toEqual(groupMeasures);
+	});
+
+	// And the idle cost, from the screen's side: gate shut, no interval, no requests, however long
+	// the reader sits there.
+	it('asks nothing at all once no lease is live', async () => {
+		list.state = { status: 'loading' };
+		await showing('checkout-app/login-flow');
+		const listings = host.asked.length;
+
+		await tick();
+		await tick();
+		await tick();
+
+		expect(host.asked.length).toBe(listings);
 	});
 });

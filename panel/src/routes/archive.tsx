@@ -26,6 +26,7 @@ import { type ArchivedDeviceInfo, useArchivedDeviceInfo } from '@panel/archive/d
 import { groupedSearch } from '@panel/archive/group-search.js';
 import { groupRowsAt, groupRunSerial, testNamesOfGroup } from '@panel/archive/group-tree.js';
 import { comparisonAt, type LabelComparison } from '@panel/archive/label-comparison.js';
+import { archiveIsBeingWritten } from '@panel/archive/live-writes.js';
 import { type OpenBranches, useOpenBranches } from '@panel/archive/open-branches.js';
 import {
 	type PinnedTests,
@@ -62,6 +63,7 @@ import { type ArchiveView, ArchiveViewToggle } from '@panel/components/archive/v
 import type { BreadcrumbSegment } from '@panel/components/layout/breadcrumb.js';
 import { PageHeader } from '@panel/components/layout/page-header.js';
 import { QuietPanel } from '@panel/components/quiet-panel.js';
+import { useDeviceList } from '@panel/devices/device-list-provider.js';
 import { createRoute, useNavigate, useParams } from '@tanstack/react-router';
 import { type ReactNode, useState } from 'react';
 import { rootRoute } from './__root.js';
@@ -179,9 +181,17 @@ export function ArchiveScreen({ view }: { readonly view: ArchiveView }) {
 	 * folder — and a second hook instance for those gave the screen two caches that each re-read what
 	 * the other held (#140 review). `levelsWanted` is that derivation, run against what has answered
 	 * so far.
+	 *
+	 * **And it re-reads itself on a clock while a lease is live** (#287). `writing` is the gate, and
+	 * it is answerable here for free: the page already polls `list_devices` above the router, and a
+	 * held device's lease is what writes a run (`live-writes.ts`, `docs/DESIGN.md` §9). So no host
+	 * method is added, no request of this screen's own is spent on the question, and nothing here
+	 * draws a device — this screen reads one bit of that answer and nothing else.
 	 */
-	const { levels, reread } = useArchiveLevels((known) =>
-		levelsWanted(view, selected, known, groups, branches),
+	const { state: attached } = useDeviceList();
+	const { levels, reread } = useArchiveLevels(
+		(known) => levelsWanted(view, selected, known, groups, branches),
+		archiveIsBeingWritten(attached),
 	);
 	/*
 	 * **What a `Remove` settled, said above the content area** (#276, #277, D43). It is state of

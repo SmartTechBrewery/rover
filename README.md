@@ -2300,7 +2300,11 @@ any depth, and the only thing that collapses one is a second click on that same 
 address says; which branches are open is not in it, the way the search text below is not, so a reload
 and a shared link land on the address with the branch it names open and nobody else's browsing.
 Browsing reads one level at a time: each level is one `list_archive` call for a level
-actually on the screen, so opening a project reads that project and nothing else. **And the tree card
+actually on the screen, so opening a project reads that project and nothing else. **While a lease is
+live anywhere on the host, every level on screen re-reads itself every five seconds**, so a run that
+lands appears where it belongs without a reload and without losing your place; while no lease is,
+nothing is asked at all. The rest of the screen is still read once: the size badge, the two files a
+run is described by, an artifact you open, and the search below. **And the tree card
 has a field that searches the whole archive on the host** — one `search_archive` call for the text
 once it settles, never one per keystroke, with every match drawn in the tree in place: each matching
 entry visible, its ancestors expanded, and branches holding no match not drawn. Selecting a hit goes

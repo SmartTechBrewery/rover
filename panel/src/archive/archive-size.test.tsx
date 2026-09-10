@@ -93,8 +93,14 @@ describe('the size of one scope', () => {
 		expect(host.call).toHaveBeenCalledTimes(1);
 	});
 
-	// The archive is finished data: a scope is measured on navigation and never on an interval, and
-	// a re-render naming the same scope is not a reason to walk it again.
+	/*
+	 * A scope is measured on navigation and never on an interval, and a re-render naming the same
+	 * scope is not a reason to walk it again. **The reason is no longer *the archive is finished
+	 * data*** (#287): the drawn listings refresh on a clock while a lease is live, and this
+	 * deliberately does not, because a measurement is a **disk walk per scope** and a badge that
+	 * re-walked the archive every few seconds while runs land is a worse bug than a stale figure.
+	 * So this gate stays, and it is now pinning a decision rather than a premise.
+	 */
 	it('asks nothing further on a re-render with the same scope', async () => {
 		host.call.mockReset();
 		host.call.mockResolvedValue(MEASURED);
