@@ -94,8 +94,12 @@ import { keyOf } from './archive-path.js';
  * **The cost, stated rather than hidden**: while a lease is live, one `readdir` per **drawn** level
  * every five seconds — a reader sitting on a run costs four to six per tick, a reader with several
  * branches open one per open row. It is bounded by #198's laziness rule and by nothing else, and it
- * is nothing at all while no lease is live. A poll never walks the archive: `measure_archive` and
- * `list_archive_groups` are deliberately **not** on this clock (`docs/DESIGN.md` §9).
+ * is nothing at all while no lease is live. **Nothing on this clock walks the archive** — amended in
+ * place (#288, `ai/RULES.md` §1), having read *a poll never walks the archive: `measure_archive` and
+ * `list_archive_groups` are deliberately not on this clock*. The two measurements are still on no
+ * clock at all, and `list_archive_groups` now has one of its own at six times this interval
+ * (`archive-groups.ts`, `GROUPS_WALK_MS`) — precisely **because** it is a walk, which is a cadence
+ * decision rather than a reason to share this one (`docs/DESIGN.md` §9).
  *
  * **No leading tick and no trailing one.** The first fire is one cadence after the gate opens,
  * because the mount has just read every drawn level and the clock's job is what happens after that.

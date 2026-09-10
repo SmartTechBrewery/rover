@@ -2458,17 +2458,23 @@ directory name may legally carry a space, a `%` or a `#`, and `archive-path.test
 round trip for **both** splats against a **real** router rather than the mocked `Link` the screen
 tests use.
 
-**The listings refresh while something is being written, and nothing else does** — rewritten in
-place with its reason rewritten (#287, `ai/RULES.md` §1). It read: *there is no polling and no
-refresh control; the archive is finished data — a run directory is written while a lease is live and
-nothing is added once it ends, and this screen makes no claim to show a run appearing.* The second
-half of that premise is true of a run whose lease has ended and **false for the window a lease is
-open in**: the listings went stale while runs were being filed under the reader, and only a browser
-reload corrected them, which also threw away their place. What replaces it:
+**What the screen draws refreshes while something is being written, and on two clocks rather than
+one** — rewritten in place with its reason rewritten (#287, #288, `ai/RULES.md` §1), twice now. It
+first read: *there is no polling and no refresh control; the archive is finished data — a run
+directory is written while a lease is live and nothing is added once it ends, and this screen makes
+no claim to show a run appearing.* The second half of that premise is true of a run whose lease has
+ended and **false for the window a lease is open in**: the listings went stale while runs were being
+filed under the reader, and only a browser reload corrected them, which also threw away their place.
+#287 replaced it with *a level the screen draws is re-read on a clock; every other read is still
+taken once*, which left the groups view's own arrangement above a run — project, group, test name,
+and the run rows under them, all of them pure functions over one `list_archive_groups` answer —
+still taken once per screen, and said so as a known gap. #288 closed it, at a cadence of its own.
+What replaces both:
 
-> **A level the screen draws is re-read on a clock that runs only while a lease is live. Every other
-> read on this screen is still taken once, and each says why in its own terms rather than by citing
-> finality.**
+> **What the screen draws is re-read on a clock that runs only while a lease is live — the listings
+> on one, the groups view's arrangement on a slower one of its own, because the two answers cost
+> different things. Every other read on this screen is still taken once, and each says why in its
+> own terms rather than by citing finality.**
 
 - **The drawn levels.** Every level the screen draws is asked again every `ARCHIVE_POLL_MS` (5 s,
   `panel/src/archive/archive-levels.ts`) — the ancestors of the address and the branches the reader
@@ -2493,17 +2499,41 @@ reload corrected them, which also threw away their place. What replaces it:
   sitting on a run costs four to six per tick — and a write landing in the seconds after the gate
   closes is seen on the reader's next navigation, as is a `rover sweep` deletion made while no lease
   is live.
-- **The grouping walk is not on it, and that is a known gap** (#287 phase 2). It is fetched **once**,
-  only in the view that reads it, because it is a bounded walk of the *whole* archive rather than one
-  `readdir` — so its cadence is a decision with its own cost, and *a poll must never walk the
-  archive* is the one rule this section will not break to close the gap early. While a lease is live
-  the groups view's arrangement above a run therefore goes stale, and a run that lands is seen there
-  on the reader's next navigation.
+- **The grouping walk is on a clock of its own, and a slower one** (#288) — this bullet is rewritten
+  in place, having read *it is not on it, and that is a known gap*. It is walked when the groups
+  view is opened and again every `GROUPS_WALK_MS` (**30 s**,
+  `panel/src/archive/archive-groups.ts`), only in the view that reads it and only while a lease is
+  live. Thirty seconds is **six times the listings' interval**, and the asymmetry is the whole
+  decision: `list_archive` is one `readdir` of a directory the reader is looking at, while
+  `list_archive_groups` is a bounded walk of the *whole* archive (R41,
+  `src/daemon/list-archive-groups.ts`) — which is exactly what *a poll must never walk the archive*
+  was about — so the two answers cannot share a cadence. What that buys is the arrangement keeping
+  up: a run filed under the group the reader has open appears there without a reload, and the
+  group's and the test name's run counts follow it, all three being one answer replaced. The tick
+  carries phase 1's two guarantees unchanged — a tick arriving while the walk is still out is
+  **dropped rather than queued**, and a gated walk **carries its cadence as its deadline**, so that
+  guard can never be held for the life of the tab (#125). **A walk is invisible until it lands**:
+  the arrangement is replaced by a newer answer or left alone, never by *Reading the testing groups
+  on this host's archive.*, and the selection, the open branches, the search text and the scroll
+  position survive it. A walk nothing answered inside its budget leaves the arrangement standing and
+  is asked again next tick; the host's own `unreadable` still replaces, that being the host
+  answering the question the screen asked (#277). **Nothing at all is asked in the `All` view** —
+  `wanted` gates the clock as it gates the mount, so a reader who never opens this view pays for no
+  tick they could not see — and nothing at all while no lease is live. The cost, stated: one bounded
+  whole-archive walk per thirty seconds while a lease is live *and* the groups view is open, against
+  one `readdir` per drawn level per five seconds for the listings; the arrangement is therefore up
+  to thirty seconds behind the `All` view's, so a run already visible in a listing can be a tick or
+  two from appearing under its group. **The alternative considered and rejected**: a host method
+  answering one group's runs, which would make the refresh proportional to what the reader has open
+  rather than to the archive and could then run closer to the listings' cadence — a **new host
+  method**, out of #287's scope by the issue's own words, so a second issue rather than a decision
+  taken here. Nothing about the constant precludes it.
 - **The size answer is fetched once per scope** (#261, #262) — one `measure_archive` for an address,
   or one `measure_archive_groups` for one of the groups view's three shallow scopes, when a
-  navigation first draws that badge, kept for the life of the screen. Not on the clock, and for the
-  grouping walk's reason: it is a disk walk per scope, and a badge that re-walked the archive every
-  five seconds while runs land is a worse bug than a stale figure. The cost, stated: `ON DISK`
+  navigation first draws that badge, kept for the life of the screen. On **neither** clock, and the
+  reason is now its own rather than the grouping walk's (amended in place, #288): it is a disk walk
+  per scope, so it costs what the grouping walk costs and buys a figure a reader glances at once —
+  a stale badge is a better bug than a re-walk beside every refresh. The cost, stated: `ON DISK`
   under-reports while runs are landing, until the reader navigates to another scope and back.
 - **The run's two files and an open artifact's bytes are not re-read**, and here the reason is
   stronger than a cadence: `src/daemon/archive.ts` writes `device_info.json`,
@@ -2516,10 +2546,10 @@ reload corrected them, which also threw away their place. What replaces it:
   settled, and re-asking it under them would move a hit list nobody touched. The cost, stated: a hit
   list can miss a run that landed after the search; clearing the field puts the reader back on the
   levels, which do refresh.
-- **There is still no refresh control, anywhere on this screen**, and the clock is not one: it has no
-  caller a reader can reach, exactly as the settled-`Remove` re-read below has none. And there is no
-  `document.visibilityState` handling — the device poll does not do it either, and if it is worth
-  doing it is worth doing for both, which is its own small question.
+- **There is still no refresh control, anywhere on this screen**, and neither clock is one: neither
+  has a caller a reader can reach, exactly as the settled-`Remove` re-reads below have none. And
+  there is no `document.visibilityState` handling — the device poll does not do it either, and if it
+  is worth doing it is worth doing for all of them, which is its own small question.
 
 **Nothing the reader is doing moves across a refresh.** The selection is the URL, the open set and
 the search text are state no answer writes, and the tree's rows are keyed by path — so a new row

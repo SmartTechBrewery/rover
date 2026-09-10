@@ -32,8 +32,13 @@ import { formatBytes } from './file-size.js';
  * listings now re-read themselves while a lease is live. **A measurement still does not**, and the
  * reason is now its own: this is a **disk walk per scope**, not one `readdir`, so a badge that
  * re-walked the archive every few seconds while runs land would be a worse bug than a stale figure
- * — and *a poll must never walk the archive* is the one thing #287's criteria forbid outright. So a
- * scope is measured when a navigation first draws its badge and never again.
+ * — and a walk of the archive may not run at the listings' cadence, which is what #287's *a poll
+ * must never walk the archive* was actually protecting. Amended in place for #288 (`ai/RULES.md`
+ * §1), where that clause read as an outright prohibition: `list_archive_groups` **does** repeat now,
+ * on a clock six times slower than the listings' (`archive-groups.ts`), because its answer is the
+ * arrangement a reader is looking at. A measurement still does not repeat at all, and that is the
+ * asymmetry: this walk costs the same and buys a figure glanced at once. So a scope is measured when
+ * a navigation first draws its badge and never again.
  *
  * **The cost, stated rather than hidden**: while runs are landing, the `ON DISK` figure
  * under-reports until the reader navigates to another scope and back. It is a decision and not a

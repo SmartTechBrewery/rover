@@ -245,13 +245,26 @@ vi.mock('@panel/session/session-provider.js', () => {
 		return { ok: true, value: { type: 'result', result: host.groupMeasure } };
 	};
 	/** The one grouping walk, counted apart for the same reason (#181). */
-	const grouping = async () => {
+	const grouping = async (signal?: AbortSignal) => {
 		host.groupings += 1;
 		if (host.hangs || host.groups === HANGS) {
 			return await new Promise(() => undefined);
 		}
 		if (host.groupsGate !== null) {
-			await host.groupsGate;
+			/*
+			 * **A caller that abandons the walk is answered `unanswered`**, exactly as a listing's own
+			 * gate answers it (#289 review, #288). The walk carries a deadline of its own while a lease
+			 * is live, so a gate that could only ever answer late would make that deadline invisible
+			 * to this file — and *the arrangement is left standing rather than replaced* is a claim
+			 * about precisely the moment it is spent.
+			 */
+			const abandoned = new Promise<{ ok: false; refusal: 'unanswered' }>((resolve) => {
+				signal?.addEventListener('abort', () => resolve({ ok: false, refusal: 'unanswered' }));
+			});
+			const raced = await Promise.race([host.groupsGate.then(() => null), abandoned]);
+			if (raced !== null) {
+				return raced;
+			}
 		}
 		return { ok: true, value: { type: 'result', result: host.groups } };
 	};
@@ -342,14 +355,17 @@ vi.mock('@panel/session/session-provider.js', () => {
 			tests?: readonly { project: string; testName: string }[];
 			kept?: boolean;
 		},
-		/** The caller's deadline, which only a listing carries and only under the clock (#287). */
+		/**
+		 * The caller's deadline, which only a listing and the grouping walk carry, and only under
+		 * their own clocks (#287, #288).
+		 */
 		signal?: AbortSignal,
 	) => {
 		if (method === 'search_archive') {
 			return await search(params.text);
 		}
 		if (method === 'list_archive_groups') {
-			return await grouping();
+			return await grouping(signal);
 		}
 		if (method === 'measure_archive') {
 			return await measure(params.path);
@@ -421,6 +437,7 @@ vi.mock('@panel/session/session-provider.js', () => {
 	};
 });
 
+import { GROUPS_WALK_MS } from '@panel/archive/archive-groups.js';
 import { ARCHIVE_POLL_MS } from '@panel/archive/archive-levels.js';
 import { SEARCH_DEBOUNCE_MS } from '@panel/archive/archive-search.js';
 import { ArchiveScreen } from './archive.js';
@@ -3987,10 +4004,25 @@ describe('while a lease is writing into the archive', () => {
 		vi.useRealTimers();
 	});
 
-	/** One turn of the clock, and enough settling for a level below one to answer after it. */
+	/** One turn of the listings' clock, and enough settling for a level below one to answer after it. */
 	async function tick(): Promise<void> {
 		await act(async () => {
 			await vi.advanceTimersByTimeAsync(ARCHIVE_POLL_MS);
+		});
+		for (let turn = 0; turn < 6; turn += 1) {
+			await act(async () => undefined);
+		}
+	}
+
+	/**
+	 * One turn of the **grouping walk's** clock, which is six of the above (#288) — and the reason
+	 * there are two helpers here rather than one: a cadence the two answers shared is exactly what
+	 * this screen may not have, so a case advancing by one of them must not be able to reach the
+	 * other by accident.
+	 */
+	async function walkTick(): Promise<void> {
+		await act(async () => {
+			await vi.advanceTimersByTimeAsync(GROUPS_WALK_MS);
 		});
 		for (let turn = 0; turn < 6; turn += 1) {
 			await act(async () => undefined);
@@ -4188,23 +4220,176 @@ describe('while a lease is writing into the archive', () => {
 		expect(host.artifacts).toEqual(artifacts);
 	});
 
-	/*
-	 * **The grouping walk is not on this clock, and that is phase 2's** (#287). It is a bounded walk
-	 * of the whole archive rather than one `readdir`, so its cadence is a decision with its own cost
-	 * — and *a poll must never walk the archive* is the one thing this task's criteria forbid
-	 * outright. So the groups view's arrangement above a run stays as stale as it is today, said
-	 * plainly rather than left to be discovered.
+	/**
+	 * **The grouping walk is on a clock of its own, and a slower one** (#288) — this case is the
+	 * opposite of the one it replaces in place (`ai/RULES.md` §1). That one read *walks no group and
+	 * measures no group on a tick*, on the reasoning that a cadence for a bounded walk of the
+	 * **whole** archive was a decision phase 2 would have to make. It has been made:
+	 * `GROUPS_WALK_MS` is six times `ARCHIVE_POLL_MS`, so the listings' tick still walks no group
+	 * and the walk's own tick is what does. The half of that case's claim which survives — the
+	 * asymmetry — is asserted here rather than dropped.
+	 *
+	 * **And the size badges are still on neither clock**, which is phase 1's recorded decision and
+	 * stays pinned here: `measure_archive_groups` is a disk walk per scope, and a badge that
+	 * re-walked the archive every few seconds while runs land is a worse bug than a stale figure.
 	 */
-	it('walks no group and measures no group on a tick', async () => {
+	it('walks the groups on its own slower clock, and measures no group on either', async () => {
 		await grouped(`checkout-app/${GROUP}`);
 		expect(host.groupings).toBe(1);
 		const groupMeasures = [...host.groupMeasures];
+		expect(groupMeasures).toHaveLength(1);
 
+		// Two listing ticks walk no group: the fast clock is the listings' and nothing else's.
 		await tick();
 		await tick();
-
 		expect(host.groupings).toBe(1);
+
+		await walkTick();
+
+		expect(host.groupings).toBe(2);
 		expect(host.groupMeasures).toEqual(groupMeasures);
+	});
+
+	/**
+	 * **The groups view's arrangement keeps up** (#288) — the acceptance criterion this screen is
+	 * judged on, and the four things that must not move while it happens.
+	 *
+	 * Every level of it above a run is `group-tree.ts`'s pure function over the one grouping answer,
+	 * so *the run appears*, *the tree keeps its shape* and *the counts follow* are all one answer
+	 * being replaced — which is why they are asserted about the same walk rather than separately.
+	 */
+	describe('and the reader is in the testing groups view', () => {
+		/** The grouping answer with a third run of `login-flow` filed under the group. */
+		function withANewGroupedRun(): unknown {
+			return {
+				outcome: 'listed',
+				truncated: false,
+				groups: [
+					{
+						project: 'checkout-app',
+						groupId: GROUP,
+						runs: [
+							groupRun('login-flow', OLDER, 'emulator-5554'),
+							groupRun('login-flow', RUN),
+							groupRun('login-flow', NEWER),
+						],
+					},
+					{ project: 'checkout-app', groupId: OTHER_GROUP, runs: [groupRun('basket', RUN)] },
+				],
+			};
+		}
+
+		/** Opens a branch of the tree without moving the address — a click, and nothing else. */
+		function open(name: string): void {
+			const tree = document.querySelector('aside') as HTMLElement;
+			fireEvent.click(within(tree).getByRole('link', { name }));
+		}
+
+		/*
+		 * The bug, stated as a pass: the run filed under the group the reader has open is drawn
+		 * without a reload, the test name's count follows it, and **the walk is invisible until it
+		 * lands** — the arrangement is never replaced by *Reading the testing groups on this host's
+		 * archive.* on the way, which here would take the tree, the card and the reader's place all
+		 * at once.
+		 */
+		it('draws a run that landed under the group, with the test name’s count following it', async () => {
+			const { container } = await grouped(`checkout-app/${GROUP}`);
+			open('login-flow');
+			expect(treeRows()).toEqual(['checkout-app', GROUP, 'login-flow', RUN, OLDER, OTHER_GROUP]);
+			expect(cardRows(container)).toEqual(['login-flowRUNS2']);
+
+			host.groups = withANewGroupedRun();
+			let answerTheWalk: () => void = () => undefined;
+			host.groupsGate = new Promise((resolve) => {
+				answerTheWalk = () => resolve();
+			});
+			await walkTick();
+
+			// The walk is out and nothing has answered it, and the screen is still exactly the
+			// screen it was — no level falls back to reading, and the count still says what the last
+			// answer said.
+			expect(screen.queryByText("Reading the testing groups on this host's archive.")).toBeNull();
+			expect(treeRows()).toEqual(['checkout-app', GROUP, 'login-flow', RUN, OLDER, OTHER_GROUP]);
+			expect(cardRows(container)).toEqual(['login-flowRUNS2']);
+
+			host.groupsGate = null;
+			await act(async () => {
+				answerTheWalk();
+			});
+
+			// Most recent first, which is the screen's own order over the host's ascending one — and
+			// the new row **appends** into a tree whose other rows are exactly where they were.
+			expect(treeRows()).toEqual([
+				'checkout-app',
+				GROUP,
+				'login-flow',
+				NEWER,
+				RUN,
+				OLDER,
+				OTHER_GROUP,
+			]);
+			expect(cardRows(container)).toEqual(['login-flowRUNS3']);
+		});
+
+		// And the group's own count, one level up, off the same answer — a group's row counts every
+		// run under every test name in it, so it follows a run that landed too.
+		it('follows the group’s own run count at the project it is under', async () => {
+			const { container } = await grouped('checkout-app');
+			expect(cardRows(container)).toEqual([`${GROUP}RUNS2`, `${OTHER_GROUP}RUNS1`]);
+
+			host.groups = withANewGroupedRun();
+			await walkTick();
+
+			expect(cardRows(container)).toEqual([`${GROUP}RUNS3`, `${OTHER_GROUP}RUNS1`]);
+		});
+
+		/*
+		 * **Nothing the reader is doing moves.** The selection is the URL, the open set and the
+		 * search text are state no answer writes, and the tree's rows are keyed by path — so a new
+		 * row appends and no row the reader was reading is remounted, moved or closed. The search is
+		 * not re-issued either, which is #287's own recorded decision and this clock changes nothing
+		 * about it.
+		 */
+		it('leaves the selection, the open branch and the search text where the reader put them', async () => {
+			host.search = {
+				outcome: 'searched',
+				matches: [{ path: ['checkout-app', 'login-flow'], kind: 'directory' }],
+				truncated: false,
+			};
+			await grouped(`checkout-app/${GROUP}`);
+			open('login-flow');
+			const field = screen.getByRole('textbox') as HTMLInputElement;
+			fireEvent.change(field, { target: { value: 'login' } });
+			await act(async () => {
+				await vi.advanceTimersByTimeAsync(SEARCH_DEBOUNCE_MS);
+				await vi.advanceTimersByTimeAsync(0);
+			});
+			expect(host.searches).toEqual(['login']);
+			const hits = treeRows();
+
+			host.groups = withANewGroupedRun();
+			await walkTick();
+
+			expect((screen.getByRole('textbox') as HTMLInputElement).value).toBe('login');
+			expect(host.searches).toEqual(['login']);
+			expect(treeRows()).toEqual(hits);
+			expect(navigated.calls).toEqual([]);
+			// And clearing the field puts the reader back on an arrangement that did keep up: the
+			// walk landed under the search, so the run is there when the hits go.
+			await act(async () => {
+				fireEvent.change(screen.getByRole('textbox'), { target: { value: '' } });
+				await vi.advanceTimersByTimeAsync(SEARCH_DEBOUNCE_MS);
+			});
+			expect(treeRows()).toEqual([
+				'checkout-app',
+				GROUP,
+				'login-flow',
+				NEWER,
+				RUN,
+				OLDER,
+				OTHER_GROUP,
+			]);
+		});
 	});
 
 	// And the idle cost, from the screen's side: gate shut, no interval, no requests, however long
