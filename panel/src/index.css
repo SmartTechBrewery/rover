@@ -11,6 +11,32 @@
 	}
 
 	/*
+	 * **How long a one-shot transition in this panel runs for**, declared once (#285).
+	 *
+	 * It arrived with the Archive tree's branches as `--tree-branch-motion`, declared inside
+	 * `.tree-branch` and named for the tree (#280). A second motion then wanted the same number —
+	 * the Projects screen's card leaving (`.card-collapse` below) — and a second motion reading a
+	 * property named for the first would have been the wrong shape twice over: the tree does not
+	 * own the panel's motion vocabulary, and a duplicated `160ms` is two numbers that have to be
+	 * kept equal by hand. So the number is here, under a panel-level name, and both motions read
+	 * it. `.tree-branch` keeps its own property as the local alias it always was, because the
+	 * closing direction's `visibility` delay has to be written in terms of *something*.
+	 *
+	 * **Here rather than in `tokens.css`.** That file is Analog Horizon captured verbatim
+	 * (`ai/RULES.md` §8) and the design system defines no motion duration, so a duration invented
+	 * at the keyboard would be the one value in there nobody harvested.
+	 *
+	 * 160ms: long enough to read as movement, short enough that nothing feels held up.
+	 * `tests/unit/panel/branch-motion-is-a-transition.test.ts` and
+	 * `tests/unit/panel/card-leaves-by-a-transition.test.ts` both pin it to that band, and the
+	 * second also pins it against the timer `drawn-registrations.ts` has to run for the same
+	 * length.
+	 */
+	:root {
+		--panel-motion: 160ms;
+	}
+
+	/*
 	 * A pointer on what can be pressed, and nothing on what cannot — `docs/DESIGN.md` §5.
 	 *
 	 * Tailwind v4's preflight carries no `cursor: pointer` for `button` the way v3's did, so every
@@ -314,16 +340,22 @@
 	 * screen reader while leaving them tabbable, and not `inert`, a second attribute that can
 	 * disagree with the CSS.
 	 *
-	 * **160ms, declared once and read by both rules.** The panel has no motion-duration token and
-	 * `tokens.css` is Analog Horizon captured verbatim, which defines none, so the number lives here
-	 * beside `.control-tactile`'s own `0.1s`. `ease-out` because the motion is a reveal.
+	 * **160ms, declared once and read by both rules — and the number moved up to `:root`** (#285,
+	 * and this sentence is rewritten in place rather than left standing, `ai/RULES.md` §1). It said
+	 * the panel has no motion-duration token and `tokens.css` defines none, so *the number lives
+	 * here beside `.control-tactile`'s own `0.1s`*. The second half of that still holds and is why
+	 * it is not in `tokens.css`; what changed is that a second motion now reads the same duration
+	 * (`.card-collapse` below), so it is `--panel-motion` at `:root` under a name that is not the
+	 * tree's. `--tree-branch-motion` stays as the local alias, because the closing direction's
+	 * `visibility` delay has to be written in terms of something. `ease-out` because the motion is
+	 * a reveal.
 	 *
 	 * The clipping and the chrome are two further elements *inside* this one
 	 * (`directory-tree.tsx`, `BRANCH_CHROME`): a rail and a vertical padding on **this** box would
 	 * still occupy a dozen pixels under every shut row.
 	 */
 	.tree-branch {
-		--tree-branch-motion: 160ms;
+		--tree-branch-motion: var(--panel-motion);
 		display: grid;
 		grid-template-rows: 0fr;
 		visibility: hidden;
@@ -359,15 +391,95 @@
 	}
 
 	/*
+	 * A card leaving the Projects screen — `docs/DESIGN.md` §5 and §10 (#285).
+	 *
+	 * A settled delete makes the screen re-read, and the deleted registration is simply not in the
+	 * next `list_projects` answer — so the card was unmounted in a single commit and every card
+	 * below it travelled up by a full card height. A project card is a two-column `<dl>` of declared
+	 * fields rather than a line, so that is a long way, and nothing on screen connected the card
+	 * that went to the space that closed over it.
+	 *
+	 * **The mechanism is `.tree-branch`'s, run the other way** — one grid whose single track goes
+	 * `1fr` → `0fr`, with `min-height: 0; overflow: clip` on the inner item because a grid item's
+	 * automatic minimum size only stops applying once its `overflow` is not `visible`. And `fr`
+	 * rather than a `max-height` for the branch's reason: a card's height is whatever its fields
+	 * wrap to, so there is no ceiling to guess, while an `fr` track in an auto-height grid is sized
+	 * to its own content.
+	 *
+	 * Three things do not carry over, and each one is forced:
+	 *
+	 * - **the box is mounted open, on every card, and shuts later.** A CSS transition does not run
+	 *   on an element's first style computation, so the card has to be on screen in a box that
+	 *   already exists before it can be seen to leave — a box that appeared already shut would take
+	 *   the card away in the single frame this exists to remove. `Subtree` has the same requirement
+	 *   in the opening direction and answers it the same way (`directory-tree.tsx`). A card mounted
+	 *   for the first time therefore gets no motion at all, which is right: nothing on this screen
+	 *   adds a registration, so there is no insertion to design for;
+	 * - **the gutter between two cards collapses with the card.** The list is a flex column with
+	 *   `gap-(--gutter)` (`projects.tsx`), and a zero-height item still has a gap on each side of
+	 *   it — so a card shrunk to nothing would leave a stray gutter standing, and the list would
+	 *   jump by one the instant it unmounted. The shut box carries a bottom margin of exactly minus
+	 *   one gutter, transitioned over the same duration, which cancels the one gap its own row is
+	 *   responsible for. The arithmetic is uniform in every position because the gap a card owns is
+	 *   the one *below* it, last card included: a container of *n* items has *n − 1* gaps, and
+	 *   removing one item and one gutter is what the two declarations here do together;
+	 * - **taking the card out of the tab order is not CSS.** A shut branch can be
+	 *   `visibility: hidden` because it is not on screen at all; a card that is leaving has to stay
+	 *   visible for the length of the motion, so nothing in the cascade can hide it from assistive
+	 *   technology at the same time. `inert` on this box does both jobs — no clicks, no focus, out
+	 *   of the accessibility tree — and `projects.tsx` sets it from the same condition that adds
+	 *   `.card-collapse-shut`, so the attribute and the class cannot disagree. It matters: the
+	 *   registration is already gone, and a second confirmation over a card that no longer exists
+	 *   is the one failure this must not introduce.
+	 *
+	 * **A transition, never an animation** — `.control-tactile`'s sentence and `.tree-branch`'s, for
+	 * their reason: it runs once, as a response to the confirmation that asked for it, which is the
+	 * category §5 permits alongside hover and press feedback. No `@keyframes`, no `animation`
+	 * declaration and no `animate-*` utility, so `no-looping-animation.test.ts` stays exactly as
+	 * strict as it was.
+	 *
+	 * `ease-in` rather than the branch's `ease-out`: that motion is a reveal and this one is a
+	 * departure.
+	 *
+	 * **What drops the card is a JavaScript timer, so that timer reads `prefers-reduced-motion`
+	 * itself** (`drawn-registrations.ts`). The block at the foot of this file floors the transition,
+	 * but nothing in CSS reaches a `setTimeout` — under `reduce` the card is never held on screen at
+	 * all, so there is nothing half-collapsed for the floor to have to catch.
+	 *
+	 * One thing the clip would break if it were ever moved: the confirmation is mounted on
+	 * `document.body` rather than inside the card (`delete-project-control.tsx`), so it is not a
+	 * descendant of this box and is not clipped by it.
+	 */
+	.card-collapse {
+		display: grid;
+		grid-template-rows: 1fr;
+		transition:
+			grid-template-rows var(--panel-motion) ease-in,
+			margin-bottom var(--panel-motion) ease-in;
+	}
+
+	.card-collapse-clip {
+		min-height: 0;
+		overflow: clip;
+	}
+
+	.card-collapse-shut {
+		grid-template-rows: 0fr;
+		margin-bottom: calc(-1 * var(--gutter));
+	}
+
+	/*
 	 * There is no looping animation anywhere in the panel (`docs/DESIGN.md` §5), so the only motion
-	 * this can reach is hover and press feedback and the Archive tree's branches above. It is still
-	 * declared over everything, because the rule has to survive the next component someone adds.
+	 * this can reach is hover and press feedback, the Archive tree's branches and the Projects
+	 * screen's card leaving, all above. It is still declared over everything, because the rule has
+	 * to survive the next component someone adds.
 	 *
 	 * **The delay is floored as well as the duration** (#280), and that is not tidiness: a floored
 	 * duration does not reach `.tree-branch`'s delayed `visibility`, so under `reduce` a shut branch
 	 * would stay focusable for 160ms after collapsing — nothing on screen, and a state that must not
-	 * exist. Nothing else in the panel declares a transition delay, so this reaches only the rule it
-	 * was added for.
+	 * exist. `.tree-branch` is still the only rule in the panel that declares a transition delay, so
+	 * this line reaches only the rule it was added for; `.card-collapse` declares none, and what it
+	 * needed instead was for its own timer to read this query in JavaScript (#285).
 	 */
 	@media (prefers-reduced-motion: reduce) {
 		*,

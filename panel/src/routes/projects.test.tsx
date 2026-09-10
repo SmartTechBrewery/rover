@@ -86,6 +86,7 @@ vi.mock('@panel/session/session-provider.js', () => ({
 	}),
 }));
 
+import { PANEL_MOTION_MS } from '@panel/projects/drawn-registrations.js';
 import { ProjectsScreen } from './projects.js';
 
 function registered(project: string, overrides: Record<string, unknown> = {}) {
@@ -139,9 +140,24 @@ function listReads(): number {
 	return host.calls.filter(([method]) => method === 'list_projects').length;
 }
 
-/** The identifiers of the cards on screen, in the order they are drawn. */
+/**
+ * The identifiers of the cards on screen, in the order they are drawn — **the ones the host's
+ * answer carries, which is what this list claims to be** (§10).
+ *
+ * A card the answer has stopped carrying is still in the document for the length of its collapse
+ * (#285) and is deliberately not counted here: it is `inert`, so nothing can reach it and nothing
+ * reads it, and it is on its way out rather than part of the listing. {@link leaving} is what
+ * asserts over those, and the two helpers together are the whole of what is on screen.
+ */
 function listed(container: HTMLElement): (string | null)[] {
-	return Array.from(container.querySelectorAll('article')).map(
+	return Array.from(container.querySelectorAll('article'))
+		.filter((card) => card.closest('[inert]') === null)
+		.map((card) => card.querySelector('div > span:nth-of-type(2)')?.textContent ?? null);
+}
+
+/** The identifiers of the cards on their way out, in the order they are drawn. */
+function leaving(container: HTMLElement): (string | null)[] {
+	return Array.from(container.querySelectorAll('.card-collapse-shut article')).map(
 		(card) => card.querySelector('div > span:nth-of-type(2)')?.textContent ?? null,
 	);
 }
@@ -175,13 +191,19 @@ describe('what is registered on this host', () => {
 		expect(screen.getByText('rover-sandbox')).toBeDefined();
 	});
 
-	// The list is the cards' one parent, so it is reached through a card rather than by class —
-	// `devices.test.tsx`'s trick. It takes no measure of its own, so it ends where the header
-	// above it ends (§4, #240).
+	/*
+	 * The list is reached through a card rather than by class — `devices.test.tsx`'s trick. It takes
+	 * no measure of its own, so it ends where the header above it ends (§4, #240).
+	 *
+	 * **Through the box the card leaves in**, since #285: every card is drawn inside a
+	 * `.card-collapse` and the list is that box's parent rather than the card's. The gutter is still
+	 * the list's own, which is what the leaving card's cancelling margin is written against.
+	 */
 	it('lets the list take the content box, so it ends where the header does', async () => {
 		const { container } = await showing(THREE);
 
-		const list = container.querySelector('article')?.parentElement as HTMLElement;
+		const list = container.querySelector('article')?.closest('.card-collapse')
+			?.parentElement as HTMLElement;
 		expect(list.className).toContain('gap-(--gutter)');
 		expect(list.className).not.toMatch(/\bmax-w-/);
 	});
@@ -678,6 +700,14 @@ describe('the list after a settled delete', () => {
 
 		expect(listReads()).toBe(2);
 		expect(listed(container)).toEqual(['checkout-web', 'newly-registered']);
+		/*
+		 * The two the second answer dropped are on screen, collapsing — and that is the sharpest
+		 * form of the same claim rather than a hole in it (#285). `rover-sandbox` is the one that was
+		 * deleted and `legacy-kiosk` is one the host simply stopped listing, and the screen treats
+		 * them identically: the trigger is *the row is no longer listed*, never *the outcome was
+		 * `deleted`*.
+		 */
+		expect(leaving(container)).toEqual(['legacy-kiosk', 'rover-sandbox']);
 	});
 
 	it.each([
@@ -751,6 +781,190 @@ describe('the list after a settled delete', () => {
 		expect(container.querySelector('div[aria-live="polite"]')?.textContent).toContain(
 			'checkout-web',
 		);
+	});
+});
+
+/**
+ * **A card the answer no longer carries leaves rather than vanishing** (#285, §5 and §10) — the
+ * acceptance criteria of the motion, against the real component.
+ *
+ * `card-leaves-by-a-transition.test.ts` is the other half and takes the questions this one cannot
+ * ask: jsdom runs no clock and resolves no transition, so *how* the card collapses is a question
+ * about the declarations in `index.css`. What is here is what the screen does — which card is held,
+ * which is untouched, what a held card is allowed to be reached by, and when it goes.
+ */
+describe('the card the host’s answer stopped carrying', () => {
+	const DELETED = {
+		outcome: 'deleted',
+		registration: 'removed',
+		archive: 'removed',
+		keptTests: 'absent',
+		freedBytes: 412_306,
+		keptTestsRemoved: 0,
+	};
+
+	/** The box a card is drawn in, by the identifier on the card. */
+	function boxFor(container: HTMLElement, project: string): HTMLElement {
+		const card = Array.from(container.querySelectorAll('article')).find((article) =>
+			Array.from(article.querySelectorAll('span')).some((span) => span.textContent === project),
+		);
+		return card?.closest('.card-collapse') as HTMLElement;
+	}
+
+	/*
+	 * The headline: the card is still on screen after the re-read, in a box that has shut. The cards
+	 * below it are therefore moved by the box rather than by being re-laid-out one card height up,
+	 * which is the whole of what the issue asked for.
+	 */
+	it('is still on screen, in a box that has shut', async () => {
+		host.deleted = DELETED;
+		host.later = { outcome: 'listed', projects: [CHECKOUT_WEB, NOT_READABLE] };
+		const { container } = await showing(THREE);
+
+		await deleteFromTheCard('rover-sandbox');
+
+		expect(leaving(container)).toEqual(['rover-sandbox']);
+		expect(boxFor(container, 'rover-sandbox').className).toContain('card-collapse-shut');
+	});
+
+	/*
+	 * **A card the answer still carries does not move at all.** Not a weaker claim than it sounds:
+	 * the box is on every card from the first render, so *does not move* is *its box is not shut*,
+	 * and a box that had never been drawn open could not have transitioned in the first place.
+	 */
+	it('leaves every card the answer still carries exactly where it was', async () => {
+		host.deleted = DELETED;
+		host.later = { outcome: 'listed', projects: [CHECKOUT_WEB, NOT_READABLE] };
+		const { container } = await showing(THREE);
+
+		await deleteFromTheCard('rover-sandbox');
+
+		for (const project of ['checkout-web', 'legacy-kiosk']) {
+			expect(boxFor(container, project).className).not.toContain('card-collapse-shut');
+			expect(boxFor(container, project).hasAttribute('inert')).toBe(false);
+		}
+	});
+
+	/*
+	 * **The trigger is `the row is no longer listed`, never `the outcome was deleted`** — the
+	 * criterion, in the two shapes that would break an implementation that read the outcome instead.
+	 * A `refused` touched nothing at all and does not even re-read; a `partial` can leave the
+	 * registration exactly where it was (`src/daemon/delete-project.ts` — `partial` means one of
+	 * registration, archive or kept tests failed to go), and the host answering it with the row
+	 * still listed is the host saying the card belongs on screen.
+	 */
+	it.each([
+		['refused', { outcome: 'refused', reason: 'lease-live' } as const],
+		[
+			'a partial that left the registration in place',
+			{
+				outcome: 'partial',
+				registration: 'failed',
+				archive: 'removed',
+				keptTests: 'absent',
+				freedBytes: 412_306,
+				keptTestsRemoved: 0,
+			} as const,
+		],
+	])('is not held for %s, because the row is still listed', async (_case, answer) => {
+		host.deleted = answer;
+		const { container } = await showing(THREE);
+
+		await deleteFromTheCard('checkout-web');
+
+		expect(leaving(container)).toEqual([]);
+		expect(listed(container)).toEqual(['checkout-web', 'legacy-kiosk', 'rover-sandbox']);
+	});
+
+	/*
+	 * **It is not interactive and not in the accessibility tree while it collapses.** `inert` is
+	 * what does both — no click, no focus, and out of the accessibility tree — and it has to be an
+	 * attribute rather than a rule in the cascade, because a card that is leaving stays *visible*
+	 * for the length of the motion and `visibility: hidden` is not available to it.
+	 *
+	 * The registration is already gone, so a second confirmation over this card is the failure the
+	 * attribute exists to prevent.
+	 */
+	it('is inert, so its own Delete project control cannot be reached again', async () => {
+		host.deleted = DELETED;
+		host.later = { outcome: 'listed', projects: [CHECKOUT_WEB, NOT_READABLE] };
+		const { container } = await showing(THREE);
+
+		await deleteFromTheCard('rover-sandbox');
+
+		const box = boxFor(container, 'rover-sandbox');
+		expect(box.hasAttribute('inert')).toBe(true);
+		// The control is inside the inert box rather than having been swapped out from under the
+		// reader: the card looks exactly as it did, and is reachable by nothing.
+		const control = box.querySelector('button[aria-label="Delete project rover-sandbox"]');
+		expect(control).not.toBeNull();
+		expect(control?.closest('[inert]')).toBe(box);
+	});
+
+	/*
+	 * **The badge and the notice do not wait on the motion.** The badge counts the answer, so a card
+	 * held on screen must not be in it; the notice is the panel's only word about what a delete came
+	 * to, and it appears when the delete settles.
+	 */
+	it('is not counted by the badge, and does not hold up the notice', async () => {
+		host.deleted = DELETED;
+		host.later = { outcome: 'listed', projects: [CHECKOUT_WEB, NOT_READABLE] };
+		const { container } = await showing(THREE);
+
+		await deleteFromTheCard('rover-sandbox');
+
+		expect(screen.getByText('2 registered')).toBeDefined();
+		expect(container.querySelector('div[aria-live="polite"]')?.textContent).toContain(
+			'rover-sandbox',
+		);
+	});
+
+	// And then it goes. Fake timers because the wait is the transition's own length and a test that
+	// slept for it would be a test that sleeps.
+	it('goes when the motion is over', async () => {
+		vi.useFakeTimers({ shouldAdvanceTime: true });
+		try {
+			host.deleted = DELETED;
+			host.later = { outcome: 'listed', projects: [CHECKOUT_WEB, NOT_READABLE] };
+			const { container } = await showing(THREE);
+
+			await deleteFromTheCard('rover-sandbox');
+			expect(leaving(container)).toEqual(['rover-sandbox']);
+
+			await act(async () => {
+				vi.advanceTimersByTime(PANEL_MOTION_MS);
+			});
+
+			expect(leaving(container)).toEqual([]);
+			expect(listed(container)).toEqual(['checkout-web', 'legacy-kiosk']);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	/*
+	 * **Under `prefers-reduced-motion` the card goes outright.** The global block in `index.css`
+	 * floors the transition, so the CSS half inherits the suppression — but the unmount is a
+	 * `setTimeout` and nothing in the cascade reaches one, so the timer reads the query itself. A
+	 * card held on screen with no transition running is exactly the half-collapsed state under
+	 * `reduce` that must not exist.
+	 */
+	it('goes outright under prefers-reduced-motion, with nothing left half-collapsed', async () => {
+		vi.stubGlobal('matchMedia', (query: string) => ({
+			matches: query === '(prefers-reduced-motion: reduce)',
+			media: query,
+			addEventListener: () => undefined,
+			removeEventListener: () => undefined,
+		}));
+		host.deleted = DELETED;
+		host.later = { outcome: 'listed', projects: [CHECKOUT_WEB, NOT_READABLE] };
+		const { container } = await showing(THREE);
+
+		await deleteFromTheCard('rover-sandbox');
+
+		expect(leaving(container)).toEqual([]);
+		expect(container.querySelectorAll('[inert]')).toHaveLength(0);
+		expect(listed(container)).toEqual(['checkout-web', 'legacy-kiosk']);
 	});
 });
 
