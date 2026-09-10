@@ -55,11 +55,18 @@ rover init --write
 git add -A && git commit -m "chore: set up Rover"   # .mcp.json, ROVER.md and the agent notes
 ```
 
-Nothing to start by hand afterwards — the first command that asks for a device brings the host up
-itself.
+Then keep a host running in a terminal of its own. Any `rover` command starts one by itself when
+none is running, but the one you started is the one whose log you can watch — and the only one
+that serves the panel:
 
 ```bash
-rover status    # which host answered
+rover users add panel                 # the browser's own credential, printed once
+ROVER_HTTP_PORT=4712 rover server     # terminal 1 — the host; Ctrl-C stops it
+rover panel                           # terminal 2 — the panel, on :5174
+```
+
+```bash
+rover status    # terminal 3 — which host answered
 rover list      # what is attached, what is free, and who holds what
 rover doctor    # the programs that host needs, and where it found them
 ```
@@ -68,15 +75,6 @@ On a Mac lending **iOS simulators**, one more program:
 
 ```bash
 rover doctor --fix --actor "$(whoami)"
-```
-
-The **web panel** is two halves — the host answers the data, `rover panel` serves the page — so it
-is two terminals:
-
-```bash
-rover users add panel                 # the browser's own credential, printed once
-ROVER_HTTP_PORT=4712 rover server     # one terminal
-rover panel                           # another, on :5174
 ```
 
 ## Using it
