@@ -406,6 +406,25 @@ describe('nothing on this card is a verdict, and nothing is invented', () => {
 	});
 
 	/*
+	 * **Every pane top-aligns its artifact, because it is the same frame** (#279, §9). A labelled
+	 * artifact drawn differently from an unlabelled one is the failure *three bodies share one frame*
+	 * exists to prevent, so this reads the same class off the pane's region that
+	 * `artifact-preview.test.tsx` reads off the single preview's.
+	 */
+	it('starts every pane’s artifact at the top of the pane', async () => {
+		const { container } = await showing();
+
+		const regions = panes(container).map((drawn) => drawn.querySelector('img')?.parentElement);
+		expect(regions).toHaveLength(2);
+		for (const region of regions) {
+			const utilities = (region?.className ?? '').split(' ');
+			expect(utilities).toContain('items-start');
+			expect(utilities).not.toContain('items-center');
+			expect(utilities).toContain('justify-center');
+		}
+	});
+
+	/*
 	 * **The region around each artifact is clean** — the rule that is not traded away (§5, §9), and
 	 * it holds for every pane. The reference screen's own coloured pane borders, its simulated phone
 	 * status bar and its `object-cover` crop are all in this list.

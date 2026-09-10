@@ -54,6 +54,15 @@ artifacts/
 # Razem ~67 KB i nigdy się nie zmienią — historia od tego nie spuchnie.
 !tests/fixtures/adb/*.mp4
 
+# ── Katalogi pomiarowe ─────────────────────────────────────────────────────
+# Profil przeglądarki, którym headless Chrome mierzy panel — jak `artifacts/`,
+# dowód z jednego przebiegu, nie źródło. `Local State` w takim profilu nosi
+# identyfikatory telemetryczne maszyny (`machine_id`, `provisional_client_id`,
+# źródła entropii), więc commit przez `git add -A` wpuszcza odcisk palca jednego
+# operatora do publicznej historii repozytorium — nieodwracalnie, bo usunięcie
+# pliku nie usuwa blobu.
+.probe-*/
+
 # ── Edytory ────────────────────────────────────────────────────────────────
 .idea/
 .vscode/

@@ -93,7 +93,7 @@ describe('an artifact preview', () => {
 		}
 	});
 
-	it('shows an image contained and centred at its natural ratio, with one hairline border', () => {
+	it('shows an image contained and horizontally centred at its natural ratio, with a hairline border', () => {
 		const { container } = showing(IMAGE);
 
 		const image = screen.getByAltText('001_screenshot.png');
@@ -109,7 +109,26 @@ describe('an artifact preview', () => {
 		const utilities = image.className.split(' ');
 		expect(utilities).not.toContain('w-full');
 		expect(utilities).not.toContain('h-full');
-		expect(region(container).className).toContain('items-center');
+		expect(region(container).className).toContain('justify-center');
+	});
+
+	/*
+	 * **The vertical axis, reversed in place** (#279, `docs/DESIGN.md` §9). The row is
+	 * `xl:items-stretch`, so the card is as tall as the *tree* beside it; with several branches open
+	 * that is several thousand pixels and an artifact at the region's midpoint landed below the fold,
+	 * which made scrolling the price of opening a file. Only the cross axis moved — `justify-center`
+	 * above still centres it horizontally, and `p-6` is what keeps top-aligned from meaning flush.
+	 */
+	it('starts an artifact at the top of the card rather than at its middle', () => {
+		for (const artifact of [IMAGE, RECORDING]) {
+			const { container, unmount } = showing(artifact);
+
+			const utilities = region(container).className.split(' ');
+			expect(utilities).toContain('items-start');
+			expect(utilities).not.toContain('items-center');
+			expect(utilities).toContain('p-6');
+			unmount();
+		}
 	});
 
 	/*

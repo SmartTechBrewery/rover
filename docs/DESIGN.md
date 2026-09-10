@@ -2736,9 +2736,10 @@ thing the user opened the screen to look at* — and this is where it is cashed 
 
 **Three bodies share one frame** (`ContentsCard`), and only what sits inside it differs:
 
-- **An image** — a screenshot or an extracted frame — `max-h-full max-w-full object-contain`, centred
-  in the region. Contained, at its natural aspect ratio, never stretched and never cropped, and
-  **never scaled up past its own pixels**, which `max-*` gives for free.
+- **An image** — a screenshot or an extracted frame — `max-h-full max-w-full object-contain`,
+  horizontally centred in the region and against its top (below). Contained, at its natural aspect
+  ratio, never stretched and never cropped, and **never scaled up past its own pixels**, which
+  `max-*` gives for free.
 - **A recording** — a plain `<video controls>`, the browser's own controls, and **no `autoPlay`, no
   `loop`, no `muted`**. §5 forbids anything that loops on its own; a video a person pressed play on is
   a response to something real, exactly as the lease countdown is.
@@ -2846,6 +2847,25 @@ arrive (`directory-tree.tsx`).
   `aria-live="polite"` line under the address's own last component, **no spinner** (§5), and
   neither the word *level* nor the word *artifact*, which is the whole point. `ReadingThisAddress`
   is back, and it is back as a card rather than as an arrangement.
+
+***An image … centred in the region* is reversed on the vertical axis alone** (#279, edited in place
+with its reason rewritten rather than deleted). Centring was right while the card was roughly the
+artifact's own size: a small screenshot in a 400px card reads better centred than pinned to the top.
+It stopped being right when #160 put the tree beside the preview and the row became
+`xl:items-stretch` (`panel/src/routes/archive.tsx`, `Columns`) — the card is then as tall as the
+*tree*, which with several branches expanded is several thousand pixels, so the midpoint of the
+region is below the fold and opening a screenshot cost a scroll to find the thing just opened. The
+region is `items-start` now (`artifact-body-view.tsx`, `Region`): the artifact starts at the top of
+the card, under the `p-6` that keeps top-aligned from meaning flush against the border. Measured in
+headless Chrome at 1400x900 on the built chain, with a 3 000 px tree beside a 3 036 px card: the
+image's top was **1322 px** down a window 813 px tall — off screen — and it is **139 px** now, at the
+same **257x569** either way, which is the bound below doing its work and not this. **Only the
+vertical axis changed** — `justify-center` still centres the artifact horizontally, `min-h-full`
+still keeps `bg-surface` covering the card's whole body rather than ending under the artifact, the
+height bound below is untouched, and the region is exactly as clean as it was. The comparison card's
+panes draw the same `ArtifactBodyView`, so they align the same way, which is what *three bodies share
+one frame* asks for; the text body never centred, because `Lines` scrolls inside its own bounded box
+and always started at the top.
 
 **The artifact's height bound is `max-h-[70vh]`, and it is viewport-relative because a percentage
 one does not resolve here.** `max-h-full` was the first attempt and it is inert: nothing above the
