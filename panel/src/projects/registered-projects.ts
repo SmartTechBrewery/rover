@@ -8,11 +8,15 @@ import { ListProjectsResultSchema, type ProjectRegistration } from './project-li
  * screen — and read again when this screen has itself changed what is registered** (#273,
  * `docs/DESIGN.md` §10).
  *
- * **There is still no polling and no refresh control**, which is the Archive's rule rather than the
- * Devices screen's, and for the Archive's reason: `list_devices` polls because *what is attached*
- * changes under the reader, and a registration changes when a person runs `rover init` or edits a
- * file on the host — something this screen makes no claim to see happen. Nothing here holds an
- * interval, and there is nothing for a reader to press.
+ * **There is still no polling and no refresh control, and the reason is this screen's own** —
+ * rewritten in place, because it used to be *the Archive's rule, for the Archive's reason*, and the
+ * Archive's rule changed under it (#287, `ai/RULES.md` §1). Nothing about this screen's behaviour
+ * changes: a registration changes when a person runs `rover init` or edits a hook file on the host,
+ * which is not something this screen makes a claim to see happen, and there is no lease that writes
+ * one — which is exactly the gate the Archive's clock runs behind, so there would be nothing here
+ * for such a clock to be gated on. `list_devices` polls because *what is attached* changes under
+ * the reader; nothing here does. Nothing holds an interval, and there is nothing for a reader to
+ * press.
  *
  * **{@link RegisteredProjectsHook.reload} is not a refresh control and is not reachable as one.**
  * It has exactly one caller and one trigger: a delete this screen settled (`routes/projects.tsx`).

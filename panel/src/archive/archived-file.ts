@@ -13,11 +13,21 @@ import { keyOf } from './archive-path.js';
  * parses, the states it folds an answer into, and the sentences the card draws. What is here is
  * only the part that must not differ: which address is asked for, when, and how many times.
  *
- * **One request per run, cached for the life of the screen** and never re-read on an interval, for
- * the reason `archive-levels.ts` gives: a run directory is written while a lease is live and
- * nothing is added once it ends, so there is nothing for a poll to notice. The `asked` guard is a
- * ref rather than state for that file's other reason — React 19's StrictMode runs an effect twice
- * on mount, and a guard written back on render would let one file be fetched twice.
+ * **One request per run, cached for the life of the screen** and never re-read on an interval —
+ * and since #287 that is **not** for `archive-levels.ts`'s reason any more, because the levels are
+ * now re-read on a clock while a lease is live. The reason here is narrower and stronger, and this
+ * paragraph is rewritten in place to say it (`ai/RULES.md` §1): both of these files are written
+ * **once, with the `wx` flag, and never rewritten** (`src/daemon/archive.ts`), before the first
+ * artifact the lease produces. They cannot grow under the reader, so there is nothing for a refresh
+ * to notice — not *nothing is being written*, which was the old claim and was false while a lease
+ * was live.
+ *
+ * **The cost, stated**: a run listed inside the millisecond window between its `mkdir` and those
+ * writes caches *no device info* for the life of the screen. Named, not fixed.
+ *
+ * The `asked` guard is a ref rather than state for that file's other reason — React 19's
+ * StrictMode runs an effect twice on mount, and a guard written back on render would let one file
+ * be fetched twice.
  */
 
 /**

@@ -25,11 +25,22 @@ import { formatBytes } from './file-size.js';
  * happens to have listed would produce a figure that grew as a reader browsed and was wrong at
  * every point before the last.
  *
- * **There is no polling, no deadline and no refresh control** (`docs/DESIGN.md` §9). The archive is
- * finished data — a run directory is written while a lease is live and nothing is added once it
- * ends — so a scope is measured when a navigation first draws its badge and never again. No
- * `signal` either, for the reason `host-client.ts` gives: a budget belongs to a repeating caller
- * with an interval to spend, and this caller has neither.
+ * **This is deliberately not on the clock the levels are now on** (#287, `docs/DESIGN.md` §9) —
+ * rewritten in place with its reason rewritten (`ai/RULES.md` §1), the old one having been *the
+ * archive is finished data: a run directory is written while a lease is live and nothing is added
+ * once it ends*. That premise was false for exactly the window #287 is about, and the drawn
+ * listings now re-read themselves while a lease is live. **A measurement still does not**, and the
+ * reason is now its own: this is a **disk walk per scope**, not one `readdir`, so a badge that
+ * re-walked the archive every few seconds while runs land would be a worse bug than a stale figure
+ * — and *a poll must never walk the archive* is the one thing #287's criteria forbid outright. So a
+ * scope is measured when a navigation first draws its badge and never again.
+ *
+ * **The cost, stated rather than hidden**: while runs are landing, the `ON DISK` figure
+ * under-reports until the reader navigates to another scope and back. It is a decision and not a
+ * leftover, which is why a test pins it.
+ *
+ * No `signal` either, and that reason is untouched (`host-client.ts`): a budget belongs to a
+ * repeating caller with an interval to spend, and this caller still has neither.
  */
 
 /**

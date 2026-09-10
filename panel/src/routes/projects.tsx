@@ -48,10 +48,12 @@ import { rootRoute } from './__root.js';
  * the moment the motion is over. {@link ProjectList} owns it, and `useDrawnRegistrations` is why
  * holding a card for 160ms is not the locally filtered array the paragraph above refuses.
  *
- * **Still no polling and no refresh control**, which is the Archive's rule rather than the Devices
- * screen's: a registration changes when a person runs `rover init` or edits a file on the host, and
- * this screen makes no claim to see that happen. It re-reads on a settled delete and on nothing
- * else, so there is nothing for a reader to press.
+ * **Still no polling and no refresh control, for this screen's own reason** — rewritten in place,
+ * because it used to cite the Archive's rule and that rule changed under it (#287, `ai/RULES.md`
+ * §1). The behaviour is untouched: a registration changes when a person runs `rover init` or edits
+ * a hook file on the host, which this screen makes no claim to see happen, and no lease writes one
+ * — so the live-lease gate the Archive's clock runs behind has no counterpart here. It re-reads on
+ * a settled delete and on nothing else, so there is nothing for a reader to press.
  *
  * | The host's answer | What the content area is |
  * | --- | --- |

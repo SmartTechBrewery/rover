@@ -13,10 +13,21 @@ import { type ArchiveGroup, ListArchiveGroupsResultSchema } from './archive-list
  * are `group-tree.ts`'s pure functions over the answer, and only *inside* a run does the groups
  * view fall back to `useArchiveLevels`, at and below the `<serial>`.
  *
- * **There is no polling, no refresh and no deadline** (`docs/DESIGN.md` §9). The archive is
- * finished data — a run directory is written while a lease is live and nothing is added once it
- * ends — so the answer is fetched once, on the view being opened, and cached for the life of the
- * screen. That is `archive-levels.ts`'s discipline exactly, and for its reason.
+ * **This walk is deliberately not on the clock the levels are now on** (#287, `docs/DESIGN.md`
+ * §9) — rewritten in place with its reason rewritten (`ai/RULES.md` §1), the old one having been
+ * *there is no polling, no refresh and no deadline, because the archive is finished data: a run
+ * directory is written while a lease is live and nothing is added once it ends*. That premise was
+ * false for exactly the window #287 is about, and `archive-levels.ts` re-reads its drawn levels
+ * while a lease is live. This answer still does not, and the reason is now its own: it is a
+ * **bounded walk of the whole archive** rather than one `readdir`, so its cadence is a decision
+ * with its own cost — and *a poll must never walk the archive* is the one thing #287's criteria
+ * forbid outright. So the answer is fetched once, on the view being opened, and cached for the life
+ * of the screen.
+ *
+ * **The cost, stated rather than hidden, and it is a known gap**: while a lease is live the groups
+ * view's arrangement above a run goes stale, and a run that lands is seen there on the reader's
+ * next navigation. Giving this walk a cadence of its own is #287's phase 2, and nothing here should
+ * be given one before that decision is made.
  *
  * **`wanted` is what keeps the `All` view from paying for it.** Both views are one component, so
  * the hook is mounted in both; a hook that fetched on mount would spend a walk of the whole archive

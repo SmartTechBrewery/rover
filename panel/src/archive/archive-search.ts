@@ -28,8 +28,17 @@ import { type ArchiveSearchMatch, SearchArchiveResultSchema } from './archive-li
  * **Empty text is `idle` and issues nothing**, which is also what clearing the field does — the
  * tree goes straight back to the levels the URL describes, with no request spent saying so.
  *
- * **There is no polling and no refresh** (`docs/DESIGN.md` §9). The archive is finished data, so a
- * search is fetched when the text settles and not again.
+ * **A search is not re-issued on the clock the levels are on** (#287, `docs/DESIGN.md` §9) —
+ * rewritten in place with its reason rewritten (`ai/RULES.md` §1), the old one having been *there
+ * is no polling and no refresh, because the archive is finished data*. That premise was false while
+ * a lease was live and the drawn listings now refresh. A search still does not, for a reason of its
+ * own: it answers a question **the reader asked**, with text that has settled, and re-asking it
+ * under them would move a hit list nobody touched. So it is fetched when the text settles and not
+ * again.
+ *
+ * **The cost, stated rather than hidden**: a hit list can miss a run that landed after the search.
+ * Retyping — or clearing the field, which puts the reader back on the levels the URL describes and
+ * those *do* refresh — is what corrects it.
  *
  * **No `AbortSignal`**, for the reason `host-client.ts` gives: a budget belongs to a repeating
  * caller with an interval to spend, and this caller has neither. A superseded answer is dropped on

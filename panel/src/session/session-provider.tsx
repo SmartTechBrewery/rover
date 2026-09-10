@@ -114,8 +114,11 @@ export interface Session {
 	 * a method rather than a credential, and the bounce to *access ended* happens by construction.
 	 * With no session held it answers `unanswered`: nothing was asked, so nothing came back.
 	 *
-	 * No `signal`, because the caller has no deadline to give. The archive is finished data read
-	 * once on navigation, not a poll with an interval to spend (`host-client.ts`, `rpc`).
+	 * No `signal`, because the caller has no deadline to give — and since #287 that is a claim about
+	 * **this** read rather than about the archive as a whole (`ai/RULES.md` §1): the two files a run
+	 * carries are written once with `wx` and never rewritten, so `archived-file.ts` reads each of
+	 * them once on navigation and has no interval to spend. The drawn *listings* do refresh on a
+	 * clock now, and `list_archive` goes through {@link call}, which takes one.
 	 */
 	readonly readArtifactText: (path: readonly string[]) => Promise<HostAnswer<ArchivedFile>>;
 	/**

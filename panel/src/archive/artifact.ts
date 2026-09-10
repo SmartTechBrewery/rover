@@ -20,8 +20,13 @@ import { type ArtifactBodyKind, bodyKindFor, linesOf } from './artifact-body.js'
  * name. So the URL's lifetime *is* the state that holds it, and it is revoked when the address
  * changes and on unmount.
  *
- * **No polling, no prefetch and no deadline**, for the reasons those two modules give: the archive
- * is finished data read once on navigation, and a budget belongs to a repeating caller.
+ * **No polling, no prefetch and no deadline** — and since #287 the first of those has its own
+ * reason rather than `archive-levels.ts`'s, which no longer holds (`ai/RULES.md` §1): the drawn
+ * levels refresh while a lease is live, but **an artifact is filed under a fresh per-lease sequence
+ * number and never rewritten** (`src/daemon/archive.ts`), so the file on screen cannot change and
+ * there is nothing for a refresh to notice. A new artifact appearing is a *listing* changing, which
+ * is the levels' business and not this one's. The deadline's reason is untouched: a budget belongs
+ * to a repeating caller, and one press of a row is not one.
  */
 
 /**

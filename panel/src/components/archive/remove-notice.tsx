@@ -74,8 +74,11 @@ export type SettledRemove = SettledRemoveTest | SettledRemoveGroup;
  *
  * **It stays until dismissed**, rather than until the next thing replaces it: this is the only
  * place the panel explains why a confirmed action changed nothing, and a line something else clears
- * is a line the operator may never have read. The Archive screen does not poll (§9), so nothing
- * would clear it anyway — which makes the dismiss control the whole of how it goes.
+ * is a line the operator may never have read. **And nothing else could clear it in any case**: it
+ * is state of the screen rather than anything an answer carries, so the Archive screen's own clock
+ * re-reading every drawn level leaves it exactly where it is (#287 — the old clause said *the
+ * Archive screen does not poll*, which has stopped being true, and the conclusion is unchanged).
+ * The dismiss control is the whole of how it goes.
  *
  * Ordinary text, no colour of alarm and no icon of alarm — the panel did what was asked, or says
  * what there was to do instead (§5).
