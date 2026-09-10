@@ -164,13 +164,20 @@ describe('and it opens and closes by a transition rather than by an animation', 
 	/*
 	 * One duration, declared once as a custom property and read by both rules — so the closing
 	 * direction's `visibility` delay cannot drift from the shrink it is waiting for.
+	 *
+	 * **The number moved to `:root` as `--panel-motion`** (#285): a second motion reads the same
+	 * duration now, and one named for the tree would have been the wrong place for it to read it
+	 * from. `--tree-branch-motion` stays as the local alias both rules below are written in terms
+	 * of, so what this asserts is unchanged in substance — one number, in the band, and both rules
+	 * reading it rather than repeating it.
 	 */
 	it('keeps the duration in the 120–200ms band, in one place', () => {
-		const declared = /--tree-branch-motion:\s*(\d+)ms/.exec(ruleFor('.tree-branch'));
+		const declared = /--panel-motion:\s*(\d+)ms/.exec(ruleFor(':root'));
 		const ms = Number(declared?.[1]);
 
 		expect(ms).toBeGreaterThanOrEqual(SHORTEST_MS);
 		expect(ms).toBeLessThanOrEqual(LONGEST_MS);
+		expect(ruleFor('.tree-branch')).toContain('--tree-branch-motion: var(--panel-motion)');
 		expect(ruleFor('.tree-branch')).toContain('visibility 0s linear var(--tree-branch-motion)');
 		expect(ruleFor('.tree-branch-open')).toContain('visibility 0s linear 0s');
 	});

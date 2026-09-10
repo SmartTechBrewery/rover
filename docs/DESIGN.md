@@ -317,9 +317,10 @@ The direction is a dark CRT/terminal reading of the Analog Horizon system. It is
 The first design shipped a `crt-flicker` animating the whole document's opacity on a 0.15 s loop —
 roughly seven flickers a second, inside the frequency band that matters for photosensitivity, and a
 full-page repaint every frame. The motion in the interface is the lease countdown changing its
-digits once a second, ordinary hover/press feedback, and **a branch of the Archive tree opening and
-closing over a short transition** (§9): all three are responses to something real. Whatever remains
-is suppressed under `prefers-reduced-motion`.
+digits once a second, ordinary hover/press feedback, **a branch of the Archive tree opening and
+closing over a short transition** (§9), and **a card leaving the Projects screen when the host's
+next answer no longer carries it** (§10): all four are responses to something real. Whatever
+remains is suppressed under `prefers-reduced-motion`.
 
 *As built* (#113): the countdown needs **nothing added** for `prefers-reduced-motion`. It changes
 text, with no transition and no animation on it, so the global block in `index.css` has nothing to
@@ -338,6 +339,36 @@ added**: `transition-delay`, because a floored duration does not reach the delay
 takes a shut branch out of the tab order, and under `reduce` a branch must close outright with
 nothing half-open left on screen. `tests/unit/panel/branch-motion-is-a-transition.test.ts` is that
 paragraph as a gate.
+
+*As built* (#285, and the sentence above is edited in place again rather than left standing at
+three): a card leaving the Projects screen is the **fourth** thing that moves, and the **rule still
+did not change, only its inventory**. It is the branch's mechanism run the other way —
+`grid-template-rows` `1fr` → `0fr` on a box around every card, `.card-collapse` in `index.css` —
+and three things about it are worth carrying forward to whatever moves fifth:
+
+- **the duration moved to `:root` as `--panel-motion`.** #280 declared `160ms` inside
+  `.tree-branch`, named for the tree; the second motion to want the same number is where a duration
+  named for the first stops being the right place to read it from. `--tree-branch-motion` stays as
+  the branch's local alias, because its closing `visibility` delay has to be written in terms of
+  something. It is **not** in `tokens.css`: that file is Analog Horizon captured verbatim
+  (`ai/RULES.md` §8) and the design system defines no motion duration, so a number invented at the
+  keyboard would be the one value in there nobody harvested;
+- **an element has to be on screen before it can be seen to leave.** A CSS transition does not run
+  on an element's first style computation, which #280 met by mounting a branch shut; the same trap
+  in reverse is met by mounting the box **open on every card**, so a card leaving is a class change
+  on a box that was already there. The corollary is free and is the behaviour wanted anyway: a card
+  drawn for the first time gets no motion, and nothing on this screen adds a registration;
+- **suppressing a motion is not always CSS's job.** The transition inherits the global `reduce`
+  block, but what drops the card is a `setTimeout` — no stylesheet reaches one, so it reads
+  `(prefers-reduced-motion: reduce)` itself and holds nothing at all. A card held on screen with no
+  transition running is exactly the half-collapsed state under `reduce` that must not exist. #280's
+  floored `transition-delay` is still the only line in that block written for one specific rule.
+
+The card also cannot use the branch's `visibility: hidden` to leave the tab order, because it has to
+stay visible while it moves — `inert` on the box does that job instead, set from the same condition
+as the class so the two cannot disagree.
+`tests/unit/panel/card-leaves-by-a-transition.test.ts` is this paragraph as a gate, and
+`no-looping-animation.test.ts` again stayed exactly as strict rather than being widened.
 
 **The scanline texture stays, but only on chrome.** It carries the CRT character and costs nothing
 to read against because it does not move. It must never be a fixed full-viewport layer in a blend
@@ -3639,6 +3670,45 @@ what is registered is exactly what the list already says.
 **This is not a refresh control and does not become one.** There is still nothing on this screen for
 a reader to press, no interval and no retry — it re-reads on a settled delete and on nothing else,
 which leaves *no polling, and no refresh control* below intact.
+
+### What happens to the card that went — settled (#285)
+
+**It leaves over a short transition rather than vanishing between two frames.** The re-read above is
+what makes this necessary: the next `list_projects` answer simply does not carry the row, so the
+card was unmounted in one commit and every card below it travelled up by a full card height — and a
+project card is a two-column `<dl>` of declared fields, not a line, so that is a long way. The
+reader confirmed a deletion in a modal, the modal closed, and the list beneath them jumped, with
+nothing on screen connecting the card that went to the space that closed over it. §5 carries the
+mechanism and the three lessons in it; what is settled here is the behaviour.
+
+**The trigger is *the row is no longer listed*, never *the outcome was `deleted`*.** That is the
+whole of it, and it is what makes the motion agree with the four outcomes above without knowing they
+exist: a `refused` touched nothing and does not even re-read, and a `partial` can leave the
+registration exactly where it was — both answer with the row still listed, so both leave every card
+exactly where it is. A card the answer still carries does not move at all.
+
+**Holding the card on screen is not a second opinion about what is registered.** The list drawn is
+still the host's answer, in the host's own order, and nothing is filtered out of it (D42, #273 —
+the section above is the rule this had to be built around). The one card that is not from the answer
+is marked as leaving, and everything follows from that mark: it is `inert`, so its own
+`Delete project` control cannot be reached by tab or by click while it collapses — the registration
+is already gone and a second confirmation over it is the failure this must not introduce — and it is
+dropped the moment the motion is over. The `N registered` badge still counts the answer, so a card
+on its way out is not in it.
+
+**The notice does not wait on the motion.** `DeleteProjectNotice` appears when the delete settles,
+which is before the re-read lands, let alone before the card has finished leaving. It is the panel's
+only word about what a delete came to and it is never queued behind an animation.
+
+**Deleting the last registration on a host still swaps straight to *No projects registered*,** and
+that is the boundary rather than a gap in it. The motion belongs to the list; when the answer stops
+being a listing at all the screen changes state, and there is no card below the one that went for
+anything to move. Same for a re-read that answers `unreadable`: the banner replaces the list, as the
+section above settled.
+
+**There is no insertion counterpart and there should not be one.** Nothing on this screen adds a
+registration — `rover init` does, on the host — so a card appearing is a load or a re-read finding
+something new, and neither is a gesture this screen made. The motion is one-directional.
 
 ### The card order is the host's order
 

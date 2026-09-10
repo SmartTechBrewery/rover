@@ -7,6 +7,8 @@ import { ProjectCard } from '@panel/components/projects/project-card.js';
 import { QuietBanner } from '@panel/components/quiet-banner.js';
 import { QuietPanel } from '@panel/components/quiet-panel.js';
 import type { DeleteProjectAnswer } from '@panel/projects/delete-project.js';
+import { useDrawnRegistrations } from '@panel/projects/drawn-registrations.js';
+import type { ProjectRegistration } from '@panel/projects/project-list.js';
 import {
 	type RegisteredProjects,
 	useRegisteredProjects,
@@ -39,6 +41,12 @@ import { rootRoute } from './__root.js';
  * the list afterwards is `list_projects`' answer again: a locally filtered array would be a list
  * nothing on the host answered with, and it would be wrong for a `partial` that left the
  * registration in place and for a `not-registered` that proves the list was already stale.
+ *
+ * **And the card the answer stopped carrying leaves rather than vanishing** (#285, §5). That is a
+ * motion and not a second opinion about what is registered: the cards drawn are still the host's
+ * answer in the host's order, and the one on its way out is marked as such, `inert`, and dropped
+ * the moment the motion is over. {@link ProjectList} owns it, and `useDrawnRegistrations` is why
+ * holding a card for 160ms is not the locally filtered array the paragraph above refuses.
  *
  * **Still no polling and no refresh control**, which is the Archive's rule rather than the Devices
  * screen's: a registration changes when a person runs `rover init` or edits a file on the host, and
@@ -123,22 +131,70 @@ function Content({
 		return <RootNotReadable />;
 	}
 
-	/*
-	 * **One card per row, never a grid** (§10), and **the order is the host's own**: code-unit
-	 * ascending, from `src/daemon/list-projects.ts`. Nothing here sorts, partitions or filters, so
-	 * a registration that will not parse sorts among the others rather than being grouped last —
-	 * and `list_projects` takes no parameter, so there is no other ordering available and no sort
-	 * control to build.
-	 *
-	 * **The list carries no maximum of its own** (§4, #240), so it ends where the header above it
-	 * ends. A registration's card is therefore as wide as the content box — which is what an admin
-	 * list is — and its body is a two-column `<dl>` (§10, *As built* #157) rather than one stretched
-	 * line, so the width goes to the value columns instead of making a single string very long.
-	 */
+	return <ProjectList onDeleteSettled={onDeleteSettled} projects={state.projects} />;
+}
+
+/**
+ * The listing itself — **one card per row, never a grid** (§10), and **the order is the host's
+ * own**: code-unit ascending, from `src/daemon/list-projects.ts`. Nothing here sorts, partitions or
+ * filters, so a registration that will not parse sorts among the others rather than being grouped
+ * last — and `list_projects` takes no parameter, so there is no other ordering available and no
+ * sort control to build.
+ *
+ * **The list carries no maximum of its own** (§4, #240), so it ends where the header above it ends.
+ * A registration's card is therefore as wide as the content box — which is what an admin list is —
+ * and its body is a two-column `<dl>` (§10, *As built* #157) rather than one stretched line, so the
+ * width goes to the value columns instead of making a single string very long.
+ *
+ * **And a card the host's next answer no longer carries leaves rather than vanishing** (#285, §5).
+ * It is its own component for that and only that: the holding is state, and the states above it —
+ * *nothing yet*, *nothing registered*, *not readable* — are not a list at all, so a hook called in
+ * `Content` would have had to be called in branches that never draw a card. What follows from that
+ * boundary is deliberate and is the honest reading of it: **a delete whose answer stops being a
+ * listing takes this component down with it**, so deleting the last registration on a host still
+ * swaps straight to *No projects registered*. The screen has changed state there rather than a card
+ * having left a list, and there is nothing below the card for a motion to move.
+ *
+ * See {@link useDrawnRegistrations} for what a leaving row is and why holding it is not a claim
+ * about what is registered.
+ */
+function ProjectList({
+	projects,
+	onDeleteSettled,
+}: {
+	readonly projects: readonly ProjectRegistration[];
+	readonly onDeleteSettled: (answer: DeleteProjectAnswer, project: string) => void;
+}) {
+	const rows = useDrawnRegistrations(projects);
+
 	return (
 		<div className="mt-8 flex flex-col gap-(--gutter)">
-			{state.projects.map((project) => (
-				<ProjectCard key={project.project} onDeleteSettled={onDeleteSettled} project={project} />
+			{rows.map((row) => (
+				/*
+				 * **The box is on every card and is mounted open**, because a CSS transition does not
+				 * run on an element's first style computation: a wrapper that appeared already shut
+				 * would take the card away in the one frame this exists to remove. So the card that
+				 * leaves is the class changing on a box that was already there — `Subtree`'s
+				 * arrangement in the archive tree (`directory-tree.tsx`), in the other direction.
+				 * `.card-collapse` in `index.css` carries the reason for every declaration, the
+				 * cancelled gutter included.
+				 *
+				 * **`inert` is the accessibility half and it is set from the same condition.** A card
+				 * on its way out is visible and nothing else: its `Delete project` control is not
+				 * reachable by tab or by click, and the card is out of the accessibility tree — the
+				 * registration is already gone, and a second confirmation over it is the failure this
+				 * must not introduce. A branch of the tree uses `visibility: hidden` for the same job;
+				 * that is not available to something that has to stay on screen while it moves.
+				 */
+				<div
+					className={row.leaving ? 'card-collapse card-collapse-shut' : 'card-collapse'}
+					inert={row.leaving}
+					key={row.project.project}
+				>
+					<div className="card-collapse-clip">
+						<ProjectCard onDeleteSettled={onDeleteSettled} project={row.project} />
+					</div>
+				</div>
 			))}
 		</div>
 	);
