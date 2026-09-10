@@ -11,6 +11,7 @@ repository. `ai/RULES.md` is where an agent starts.
 
 ## Contents
 
+- [Installation, beyond the README](#installation-beyond-the-readme)
 - [Quick start](#quick-start)
   - [What you need](#what-you-need)
   - [Take a device on this machine](#take-a-device-on-this-machine)
@@ -39,6 +40,38 @@ repository. `ai/RULES.md` is where an agent starts.
 - [Working on this repo](#working-on-this-repo)
   - [The web panel](#the-web-panel)
     - [Pointing it at a host and signing in](#pointing-it-at-a-host-and-signing-in)
+
+## Installation, beyond the README
+
+[`README.md`](../README.md) carries the commands; this is what they do and what they leave behind.
+
+**`npm link` is optional.** Skip it and every `rover` in this document is typed `npm run rover --`
+from inside the checkout — with `-s` in anything that reads the output, because `npm run` prints
+its own two-line banner on stdout ahead of the command. The CLI's own usage text says which of the
+two it is for you. `rover init` is the exception either way: it has to run in *another* project's
+directory.
+
+**On a Mac lending iOS simulators**, one more program. Simulators are macOS-only and so is this
+step — off macOS Rover looks for none of it. `read_screen` and all four input verbs go through
+`idb_companion`, which has no package manager and no installer, so Rover keeps its own:
+`rover doctor --fix --actor "$(whoami)"` downloads a pinned release **on the host**, checks it
+against the checksum the release publishes, and unpacks it under that host's `~/.rover`, where the
+search looks last — so there is no `PATH` to arrange and no variable to export. Run it twice and it
+downloads nothing the second time; without `--fix` it only reports. Already have a companion, or on
+an Intel mac the release has no build for? Point Rover at it with `ROVER_IDB_COMPANION_PATH` and
+yours wins over anything Rover installed — see [where Rover looks for
+`idb_companion`](#where-rover-looks-for-idb_companion).
+
+**What `rover init --write` writes**, once per project:
+
+| Where | What |
+| --- | --- |
+| `~/.rover/projects/my-app.json` | the project's hook file — what the host installs and stops for a lease on it (D13), detected from a Gradle wrapper where there is one |
+| `my-app/.mcp.json` | the `rover` MCP server, merged into whatever was already there |
+| `my-app/ROVER.md` | the page an agent reads before its first call. Generated — re-run `init` rather than editing it, and move it wherever it belongs |
+| `CLAUDE.md`, `AGENTS.md`, `GEMINI.md` | a short block saying that a manual test means Rover. `--write` inserts it; without the flag it is printed |
+
+Nothing there asks a host, so it needs no daemon and no device. `rover init --help` has the flags.
 
 ## Quick start
 
