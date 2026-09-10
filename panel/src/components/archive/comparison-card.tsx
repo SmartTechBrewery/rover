@@ -1,9 +1,16 @@
 import { keyOf } from '@panel/archive/archive-path.js';
-import { useArchivedArtifact } from '@panel/archive/artifact.js';
+import { type ArchivedArtifactState, useArchivedArtifact } from '@panel/archive/artifact.js';
 import type { ComparisonPane, LabelComparison } from '@panel/archive/label-comparison.js';
+import {
+	type ImageMarks,
+	type MarkedDifferences,
+	useMarkedDifferences,
+} from '@panel/archive/marked-differences.js';
 import { variantPhrase } from '@panel/archive/variant-name.js';
+import { useState } from 'react';
 import { ArtifactBodyView, OpenInANewWindow } from './artifact-body-view.js';
 import { CardHeading, ContentsCard } from './contents-card.js';
+import { DifferenceToggle } from './difference-toggle.js';
 import { LabelBadge } from './label-badge.js';
 
 /**
@@ -43,13 +50,28 @@ import { LabelBadge } from './label-badge.js';
  * `FORCE_RELEASE`, its mid-sidebar `Profile`, its per-arm orange/green pane borders (a red/green
  * pairing by another name), its simulated phone status bar and its `object-cover` crop.
  *
- * **No diff, no score, no verdict, no highlight of what changed.** The comparison is visual and
- * human-judged (`docs/DESIGN_INITIAL_PROMPT.md` §4): Rover puts the artifacts next to each other and
- * the person decides, because judging is the agent's job (`ai/RULES.md` §1). Nothing here reads as an
- * outcome, **neither arm is authoritative** — Rover has no baseline, so there is no `BASELINE` and
- * no `CURRENT` — and **no fact Rover does not have** is drawn: no commit hash and no git branch,
- * because what the archive knows is the project, the test name, the run's own directory name, the
- * device serial and the run's two files.
+ * **No score, no verdict, and no arm that is the right one — but a diff the reader can ask for**
+ * (2026-09-10, edited in place with its reasoning rewritten rather than deleted, per
+ * `ai/RULES.md` §1). This paragraph read *no diff, no score, no verdict, no highlight of what
+ * changed*, on the reasoning that the comparison is visual and human-judged
+ * (`docs/DESIGN_INITIAL_PROMPT.md` §4) and that judging is the agent's job (`ai/RULES.md` §1). **The
+ * second half of that stands and is untouched**; the first half was doing more work than its own
+ * argument supported, and the operator reversed it. *Where two artifacts differ* is not a judgement
+ * — it is arithmetic over two files, the same class of fact as `411 KB on disk`. What would have
+ * been a verdict is everything the reversal does **not** buy: there is still no score, no
+ * percentage, no threshold anybody passes or fails, no arm that is the baseline and no arm that is
+ * the current one, nothing coloured red or green, and no region ranked above another. The marks say
+ * *here*, in one colour, and the person still decides what that means.
+ *
+ * **They are off until asked for, on exactly two panes, and never on the first of them.** The
+ * control is a lamp in the header strip (`difference-toggle.tsx`), the boxes are chrome over the
+ * artifact rather than pixels composited into it (`difference-marks.tsx`), and what is compared is
+ * decided by `image-diff.ts` — where the alignment, and the measurement that forced it, are argued
+ * out.
+ *
+ * **And still no fact Rover does not have**: no commit hash and no git branch, because what the
+ * archive knows is the project, the test name, the run's own directory name, the device serial and
+ * the run's two files.
  *
  * **No second navigation and nothing that becomes an explorer.** No zoom, pan, rotate, filmstrip or
  * next/previous arrows, and no picker: **the tree is how another artifact is chosen** (#160). The
@@ -90,44 +112,166 @@ import { LabelBadge } from './label-badge.js';
 const PANE_MIN = 'min-w-[240px]';
 
 export function ComparisonCard({ comparison }: { readonly comparison: LabelComparison }) {
+	const pair = pairOf(comparison);
+	const [asked, setAsked] = useState(false);
+	/*
+	 * **The pair's two reads live here rather than in its panes**, and that is the whole structural
+	 * cost of the marks: comparing two artifacts needs both of them in one place, and a hook cannot
+	 * be called in a loop. `useArchivedArtifact` takes `null` for *there is no artifact open* and
+	 * fetches nothing for it, so the two calls are unconditional and a card of three or nine panes
+	 * makes no request from here — its panes still each own their own read, unchanged.
+	 *
+	 * The object-URL lifecycle survives the move: the hook revokes on the URL itself rather than on
+	 * unmount (`artifact.ts`), so an address that changes under a pane frees the handle it held
+	 * whether or not the component holding it was keyed.
+	 */
+	const reference = useArchivedArtifact(pair === null ? null : pair[0].path);
+	const compared = useArchivedArtifact(pair === null ? null : pair[1].path);
+	const differences = useMarkedDifferences(asked && pair !== null, reference, compared);
+
 	return (
 		<ContentsCard
 			header={
 				/*
-				 * **The label is what names the card**, and it is the label *as the archive filed it* —
-				 * never the caller's own string, which `pathSegment` truncated and rewrote irreversibly
-				 * (`archive-listing.ts`, and the rule §9 already states for `OWNER`). The caption above
-				 * it is the `Field` label's own treatment, so the strip says *what the name is* without
-				 * inventing one. No count, no glyph and no control in it.
+				 * **The label names the card and the control sits opposite it** — the arrangement `Keep`
+				 * and `Remove` already have on this screen (§10): the name on the left, the one thing a
+				 * reader can press at the right end of the strip.
 				 */
-				<div className="flex flex-col gap-1">
-					<span className="font-label-caps text-[10px] text-outline uppercase">LABEL</span>
-					<div className="flex items-center gap-2">
-						{/*
-						 * **The tree's own badge, in front of the name it belongs to.** One label heads the
-						 * whole card, so the badge belongs in the one strip that spans every pane rather
-						 * than repeated down the row — and here it does the job it exists for, tying the
-						 * card to the row a reader clicked in the tree. The number is a code local to this
-						 * group; the name beside it is the thing that means something, which is why the
-						 * badge is in front of it and not instead of it.
-						 */}
-						<LabelBadge label={comparison.label} number={comparison.number} />
-						<CardHeading>{comparison.label}</CardHeading>
+				<div className="flex items-center justify-between gap-3">
+					{/*
+					 * **The label is the label *as the archive filed it*** — never the caller's own string,
+					 * which `pathSegment` truncated and rewrote irreversibly (`archive-listing.ts`, and the
+					 * rule §9 already states for `OWNER`). The caption above it is the `Field` label's own
+					 * treatment, so the strip says *what the name is* without inventing one. No count and
+					 * no glyph in it.
+					 */}
+					<div className="flex min-w-0 flex-col gap-1">
+						<span className="font-label-caps text-[10px] text-outline uppercase">LABEL</span>
+						<div className="flex items-center gap-2">
+							{/*
+							 * **The tree's own badge, in front of the name it belongs to.** One label heads
+							 * the whole card, so the badge belongs in the one strip that spans every pane
+							 * rather than repeated down the row — and here it does the job it exists for,
+							 * tying the card to the row a reader clicked in the tree. The number is a code
+							 * local to this group; the name beside it is the thing that means something,
+							 * which is why the badge is in front of it and not instead of it.
+							 */}
+							<LabelBadge label={comparison.label} number={comparison.number} />
+							<CardHeading>{comparison.label}</CardHeading>
+						</div>
 					</div>
+					{/*
+					 * **The control is drawn for two panes and for nothing else.** A difference is
+					 * pairwise, and with three panes there is no pair to take without naming one of them
+					 * the one the others are measured against — which is the `BASELINE` this card refuses
+					 * to have (§9). So a group of seven arms gets the card it already had, and the absence
+					 * is the honest answer rather than a control that would have to invent a reference.
+					 */}
+					{pair === null ? null : (
+						<div className="flex shrink-0 items-center gap-3">
+							<DifferenceSentence differences={differences} />
+							<DifferenceToggle on={asked} onPress={() => setAsked(!asked)} />
+						</div>
+					)}
 				</div>
 			}
 		>
 			<div className="flex gap-(--gutter) overflow-x-auto p-4">
-				{comparison.panes.map((pane) => (
-					/*
-					 * Keyed on the artifact's own address, so a pane whose address changes is a new
-					 * component and the object URL it held is revoked by the unmount rather than reused.
-					 */
-					<Pane key={keyOf(pane.path)} pane={pane} />
-				))}
+				{pair === null ? (
+					comparison.panes.map((pane) => (
+						/*
+						 * Keyed on the artifact's own address, so a pane whose address changes is a new
+						 * component and the object URL it held is revoked by the unmount rather than reused.
+						 */
+						<Pane key={keyOf(pane.path)} pane={pane} />
+					))
+				) : (
+					<>
+						{/*
+						 * **The marks go on the second pane and never on the first.** The first is what the
+						 * second is being read against, so boxing it would be marking a file against
+						 * itself — and *oldest on the left* is what makes the second the later one rather
+						 * than the chosen one.
+						 */}
+						<PaneFrame artifact={reference} pane={pair[0]} />
+						<PaneFrame
+							artifact={compared}
+							marks={differences.status === 'marked' ? differences.marks : null}
+							pane={pair[1]}
+						/>
+					</>
+				)}
 			</div>
 		</ContentsCard>
 	);
+}
+
+/**
+ * The two panes to compare, or `null` for a card that is not a pair.
+ *
+ * **Two is what a difference is defined over**, and nothing about the rest of the card narrows to
+ * it: N panes is still N panes, `label-comparison.ts` still caps nothing, and a group of seven arms
+ * still draws seven of them (R41).
+ */
+function pairOf(comparison: LabelComparison): readonly [ComparisonPane, ComparisonPane] | null {
+	const [first, second] = comparison.panes;
+	return comparison.panes.length === 2 && first !== undefined && second !== undefined
+		? [first, second]
+		: null;
+}
+
+/**
+ * What the card says about the comparison, in the strip beside the control.
+ *
+ * **Every answer is a sentence and none of them is an alarm** — `NothingFiledHere`'s language and
+ * weight (§9), no colour, no icon, no error code, no retry. Four of the six are *there is nothing
+ * to compare*, and they are four different sentences because they are four different facts: two
+ * screens of different sizes, a labelled recording, a file the host would not serve, and two files
+ * that are simply the same.
+ *
+ * **`aria-live` because this text is the answer**, and for a reader who cannot see the boxes it is
+ * the *whole* answer — which is why it is `sr-only` below `sm` and never `hidden`. The strip has no
+ * room for a sentence beside the label and the control at a narrow window, but `hidden` would take
+ * the one channel that carries the answer out of the accessibility tree along with the pixels. The count is the one number the marks produce and it is stated plainly rather
+ * than as a score: `4 regions differ` and never `96% identical`, which is the sentence a threshold
+ * would be hiding in.
+ */
+function DifferenceSentence({ differences }: { readonly differences: MarkedDifferences }) {
+	const said = sentenceFor(differences);
+	if (said === null) {
+		return null;
+	}
+	return (
+		<span
+			aria-live="polite"
+			className="sr-only font-code-md text-[12px] text-on-surface-variant sm:not-sr-only sm:inline"
+		>
+			{said}
+		</span>
+	);
+}
+
+function sentenceFor(differences: MarkedDifferences): string | null {
+	if (differences.status === 'idle') {
+		return null;
+	}
+	if (differences.status === 'reading') {
+		return 'Reading both files.';
+	}
+	if (differences.status === 'measuring') {
+		return 'Comparing.';
+	}
+	if (differences.status === 'different-dimensions') {
+		return 'These two ran on different screens, so there is nothing to compare.';
+	}
+	if (differences.status === 'unavailable') {
+		return 'These two have no pixels to compare.';
+	}
+	const marked = differences.marks.regions.length;
+	if (marked === 0) {
+		return 'These two do not differ.';
+	}
+	return marked === 1 ? '1 region differs.' : `${marked} regions differ.`;
 }
 
 /**
@@ -179,6 +323,28 @@ export function ComparisonCard({ comparison }: { readonly comparison: LabelCompa
  */
 function Pane({ pane }: { readonly pane: ComparisonPane }) {
 	const artifact = useArchivedArtifact(pane.path);
+	return <PaneFrame artifact={artifact} pane={pane} />;
+}
+
+/**
+ * One pane, **handed the artifact rather than reading it** — the same `<article>`, the same head and
+ * the same body, for a pane that owns its read and for one of a pair whose reads the card owns.
+ *
+ * The split exists so that the two arrangements cannot drift: what a reader sees must not depend on
+ * whether the card happened to be a pair, and the only thing that differs between them is
+ * {@link PaneFrame.marks} — which is `null` for every pane but the second of two, and `null` there
+ * too until the reader asks.
+ */
+function PaneFrame({
+	pane,
+	artifact,
+	marks = null,
+}: {
+	readonly pane: ComparisonPane;
+	readonly artifact: ArchivedArtifactState;
+	/** The difference boxes, for the second pane of a pair and nothing else. */
+	readonly marks?: ImageMarks | null;
+}) {
 	const name = pane.path.at(-1) ?? '';
 
 	return (
@@ -219,7 +385,7 @@ function Pane({ pane }: { readonly pane: ComparisonPane }) {
 			 * labelled `read_logs` compare the way a screenshot does, and `opaque` still creates no
 			 * object URL and still says so in one sentence (`artifact-body-view.tsx`).
 			 */}
-			<ArtifactBodyView artifact={artifact} name={name} />
+			<ArtifactBodyView artifact={artifact} marks={marks} name={name} />
 		</article>
 	);
 }

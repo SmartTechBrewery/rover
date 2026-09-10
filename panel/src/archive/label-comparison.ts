@@ -22,10 +22,14 @@ import { variantOf } from './variant-name.js';
  * normalises it (D22): two labels are the same label exactly when the host answered the same
  * string for both, so two labels differing only in case are two labels.
  *
- * **Nothing about a diff, a score or a verdict is computed here or anywhere else.** The comparison
- * is visual and human-judged (`docs/DESIGN_INITIAL_PROMPT.md` §4): Rover puts the artifacts next to
- * each other and the person decides, because judging is the agent's job (`ai/RULES.md` §1). This
- * module answers *which artifacts* and *in what order*, and that is the whole of it.
+ * **Nothing about a score or a verdict is computed here or anywhere else, and the diff is not this
+ * module's** (amended in place 2026-09-10, per `ai/RULES.md` §1 — this said *nothing about a diff, a
+ * score or a verdict is computed here or anywhere else*). The reversal is the card's and is argued
+ * out there (`comparison-card.tsx`): a reader may now ask for boxes over the second of two panes,
+ * computed by `image-diff.ts` from the bytes the panes already hold. **What is untouched is this
+ * module's own job** — it answers *which artifacts* and *in what order*, over one host answer, and
+ * that is still the whole of it. It reads no bytes, caps no arity, and knows nothing about pixels.
+ * Judging what a difference means is still the person's (`docs/DESIGN_INITIAL_PROMPT.md` §4).
  */
 
 /** One pane of the card: the artifact, and the run that filed it. */

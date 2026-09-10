@@ -155,9 +155,22 @@ Two runs of the same test name, shown side by side, so a user can see what chang
 between them. Typically the two most recent runs of that name: one from before a code
 change and one from after.
 
-The comparison is visual and human-judged. Rover computes no diff and reports no
-verdict — the panel puts the two sets of screenshots next to each other and the person
-decides.
+The comparison is visual and human-judged. Rover reports no verdict — the panel puts the
+two sets of screenshots next to each other and the person decides.
+
+**This paragraph said Rover computes no diff either, and that half was reversed on
+2026-09-10** (edited in place with its reasoning rewritten rather than deleted, per
+`ai/RULES.md` §1). It was written on the reasoning that judging is the agent's job, and
+**that reasoning stands** — what it did not survive is the observation that *where two
+files differ* is not a judgement at all. It is arithmetic over two artifacts, of the same
+class as their size on disk, and refusing it made the reader do by eye the one part of the
+comparison a machine does better. So the panel may now draw boxes where the second of two
+screenshots differs from the first, on the reader's own request, and everything the old
+sentence was actually protecting is untouched: no score, no percentage, no threshold, no
+baseline arm, no red and no green, nothing ranked. `docs/DESIGN.md` §9 is where the
+control, the marks and their one deliberate exception to the clean-region rule are settled;
+`panel/src/archive/image-diff.ts` is the arithmetic, and the measurement that decided its
+shape.
 
 ## Visual direction
 

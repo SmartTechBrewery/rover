@@ -1937,9 +1937,13 @@ it would not look like one until somebody labelled a recording.
 
 **What this card must not do**, and every one of these is asserted:
 
-- **no diff, no score, no verdict, no highlight of what changed.** The comparison is visual and
-  human-judged (`docs/DESIGN_INITIAL_PROMPT.md` §4): Rover puts the artifacts next to each other and
-  the person decides, because judging is the agent's job (`ai/RULES.md` §1);
+- **no score and no verdict.** The comparison is visual and human-judged
+  (`docs/DESIGN_INITIAL_PROMPT.md` §4): Rover puts the artifacts next to each other and the person
+  decides, because judging is the agent's job (`ai/RULES.md` §1). **This row read *no diff, no
+  score, no verdict, no highlight of what changed*, and the first and last of those four were
+  reversed on 2026-09-10** — edited in place with the reasoning rewritten rather than deleted, per
+  `ai/RULES.md` §1. See *The difference marks* below for what replaced them and why; what stays on
+  this list is the score and the verdict, and they are not softened by the reversal;
 - **nothing that reads as an outcome** — no `PASS`/`SUCCESS`/`COMPLETE` chip, no tick, no cross, no
   red/green pairing, and not the words *Visual Regression* (§2, §5);
 - **no `BASELINE` / `CURRENT` framing.** Neither arm is authoritative; Rover has no baseline. The
@@ -1988,6 +1992,97 @@ nothing about what the archive writes moves — the property #178 and #182 both 
 - **The selected artifact is read once when the comparison *is* drawn**, because the screen's own
   hook is gated on it. Without that gate the file would be read by the screen and again by its own
   pane.
+
+### The difference marks — settled here, not designed (2026-09-10)
+
+**A reversal, and the reversed rows above are edited in place rather than deleted** (`ai/RULES.md`
+§1). The card refused four things that are now three: *no diff* and *no highlight of what changed*
+are gone, *no score* and *no verdict* stand. The operator made the call, and the argument that
+moved it is that **where two files differ is not a judgement** — it is arithmetic over two
+artifacts, the same class of fact as `411 KB on disk`, and refusing it left the reader doing by eye
+the one part of a comparison a machine does better than a person. What a verdict would have been is
+everything the reversal deliberately does not buy: no score, no percentage, no threshold anything
+passes or fails, no baseline arm and no current one, nothing red and nothing green, and no region
+ranked above another. The boxes say *here*, in one colour, and the person still decides what that
+means.
+
+**Off until asked for, and the control is a lamp in the header strip.** `Differences`, a
+`<button aria-pressed>` drawn as the two-cell pill `Keep` and `Remove` already use — `BADGE_SHAPE`,
+`BADGE_TYPE`, a lamp divided off by the frame's own border — at the right end of the strip opposite
+the label (§10, `panel/src/components/archive/difference-toggle.tsx`). **The lamp is `secondary` and
+not `tertiary`**: green means *kept* and *you are here* everywhere in this panel, and a green lamp
+over an artifact would read as a judgement about it. It lights in the colour the boxes are drawn in,
+which is the whole of what it has to say. A `<button>` and not a checkbox, `view-toggle.tsx`'s
+distinction: this changes what the card draws, never where the reader is, and nothing about it is
+filed anywhere.
+
+**On exactly two panes, and on nothing else.** A difference is pairwise, and with three arms there
+is no pair to take without naming one of them the one the others are measured against — which is the
+`BASELINE` this card refuses to have. So a group of seven arms gets the card it already had, with no
+control at all, and the absence is the honest answer rather than a control that would have to invent
+a reference. Nothing else narrows: `label-comparison.ts` still caps nothing and N panes is still N
+panes (R41).
+
+**The marks go on the second pane and never the first.** The first is what the second is read
+against, so boxing it would be marking a file against itself — and *oldest on the left* is what
+makes the second one the later one rather than the chosen one.
+
+**An overlay, never a drawing — and this is the one deliberate exception to the clean region.** The
+`<img>` is the same element with the same `src` on the same bytes the host filed; the boxes are DOM
+on top of it, and turning them off leaves the artifact exactly as it was with nothing to decode
+again. Compositing them into a canvas would have made the panel show an image no file in the archive
+contains, on the one screen whose rule is *what you are looking at is the file*. The clean-region
+rule below — nothing laid over or around the artifact — was written against **decoration**: a
+scanline, a tint, a bezel, a gradient, each of which costs the reader contrast over the exact thing
+they opened the screen to look at and gives nothing back. The marks are not decoration and not a
+verdict: they answer a question somebody pressed a control to ask, and they are absent until then.
+**Everything else on that list stays forbidden, here and everywhere**, and nothing may be added on
+this precedent.
+
+**One `<svg>` in the artifact's own pixel coordinates, and nothing is measured.** The `viewBox` is
+the file's natural size, so a region is written into the markup unconverted and the browser's own
+scaling puts it over the pixels it is about — which is what makes it survive `object-contain`, a
+240px pane, a 700px one, a resize and a zoom with no `ResizeObserver`, no `getBoundingClientRect`
+and no layout effect. `vector-effect="non-scaling-stroke"` states the stroke in *rendered* pixels,
+because a weight in source pixels goes sub-pixel in a narrow pane and vanishes. Two strokes per
+region, dark under bright, because one colour cannot sit over arbitrary screenshot colours — which
+is §5's own warning about this screen. Measured in headless Chrome on this exact markup with a
+1280x2856 screenshot: the overlay covers the image's content box to within 0.02px at a 240px pane
+and at a 700px one, and the stroke is the same weight in both.
+
+**The alignment is the whole design decision, and it was settled by measuring the archive**
+(`panel/src/archive/image-diff.ts`). Against the two arms of
+`giotto-ai-demo/home-composer-suggestions` — 1280x2856, one emulator, runs of 2026-09-09 — a plain
+per-pixel threshold marks **38 regions covering 38% of the screen** on a pair whose real difference
+is a clock and a scroll offset: variant B's list sits a few dozen pixels lower, so every line of
+text below the shift registers as changed. Aligning the rows first gives **4 regions over 18%** on
+the same pair, and they are the right four: the clock, the signal glyph, the band the arms actually
+differ at, and the shifted tail. A screenshot is a flowing layout, an arm that adds one element
+pushes everything under it down, and a diff that cannot say so marks the tail of the screen instead
+of the insertion. So rows are signed, unique signatures anchor the two images together, equal gaps
+between anchors pair up one-to-one, unequal ones are an insertion marked whole, and differing pixels
+are counted per 16px tile rather than per pixel — because antialiased text differs along every glyph
+edge, and a per-pixel mask marks the typography rather than the change.
+
+**Four sentences for four ways there is nothing to compare**, in the strip beside the control, in
+`NothingFiledHere`'s language and weight: *these two ran on different screens* (D14 — both
+measurements are correct and scaling one onto the other would invent an answer neither device
+supports), *these two have no pixels to compare* (a labelled recording or log, or a browser that
+will not give up a canvas), *these two do not differ*, and the count itself — `4 regions differ`,
+never `96% identical`, which is the sentence a threshold would be hiding in. An empty overlay must
+never stand in for any of them, because it reads as *these are the same*. `aria-live`, because for a
+reader who cannot see the boxes this text is the whole answer.
+
+**Two costs, stated rather than hidden.** RGBA is four bytes a pixel, so a 1280x2856 screenshot is
+14 MB decoded and a pair is 29 MB on top of the artifacts the panes already hold — which is why
+nothing decodes until the control is pressed, and why the answer is held against the two object URLs
+it was measured from so a second press draws rather than recomputes. And the comparison itself is
+~50 ms of the main thread for that pair, measured in Node, once.
+
+**Panel-only, and still no host change.** Both files are already buffered by the panes that drew
+them, a `blob:` handle is same-origin so the canvas reading them is not tainted, and there is no new
+method, no new request and no second walk. The card is still a pure function over the one
+`list_archive_groups` answer, plus two decodes of bytes the tab already has.
 
 ### The tree — expansion is an open set, over the selection's own ancestors
 
@@ -2820,7 +2915,10 @@ folder's own listing already carried.
 over or around the artifact: no scanline, no dotted pattern, no gradient, no tint, no
 `mix-blend-mode`, no vignette, no glow, no phone frame or device bezel, no drop shadow, no coloured
 frame, no watermark. **A hairline border is the most that is permitted**, and it is on the image
-alone. §5 wrote that rule before there was a screen to apply it to — *an overlay tints the exact
+alone. **The comparison card's difference marks are the one exception, and it is argued out where
+they are** (*The difference marks*, above): they are not on this region at all — the single preview
+never draws them — they are absent until a reader presses a control, and every item on the list
+above stays forbidden on both cards. §5 wrote that rule before there was a screen to apply it to — *an overlay tints the exact
 thing the user opened the screen to look at* — and this is where it is cashed in;
 `artifact-preview.test.tsx` asserts the region's class list carries none of them, in all four bodies.
 

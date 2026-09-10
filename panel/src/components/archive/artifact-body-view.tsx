@@ -1,6 +1,8 @@
 import type { ArchivedArtifactState, ArtifactBody } from '@panel/archive/artifact.js';
+import type { ImageMarks } from '@panel/archive/marked-differences.js';
 import { ExternalLink } from 'lucide-react';
 import type { ReactNode } from 'react';
+import { DifferenceMarks } from './difference-marks.js';
 
 /**
  * **What one artifact's bytes look like on this screen, and the one control over them** — extracted
@@ -18,12 +20,19 @@ import type { ReactNode } from 'react';
  * region around the artifact carries the same classes, in the same nesting, so
  * `artifact-preview.test.tsx`'s region selector and its clean-region assertions hold untouched.
  *
- * **The region around the artifact is clean, and that is the rule that is not traded away.** Nothing
- * is laid over or around it: no scanline, no dotted pattern, no gradient, no tint, no
- * `mix-blend-mode`, no vignette, no glow, no phone frame or device bezel, no drop shadow, no
- * coloured frame, no watermark. A hairline border is the most that is permitted, and it is on the
- * image alone. §5 wrote that rule before there was a screen to apply it to — *an overlay tints the
- * exact thing the user opened the screen to look at* — and this is where it is cashed in.
+ * **The region around the artifact is clean, and that stays the rule.** Nothing is laid over or
+ * around it: no scanline, no dotted pattern, no gradient, no tint, no `mix-blend-mode`, no vignette,
+ * no glow, no phone frame or device bezel, no drop shadow, no coloured frame, no watermark. A
+ * hairline border is the most that is permitted, and it is on the image alone. §5 wrote that rule
+ * before there was a screen to apply it to — *an overlay tints the exact thing the user opened the
+ * screen to look at* — and this is where it is cashed in.
+ *
+ * **{@link ArtifactBodyView.marks} is the one exception, and it is narrow on purpose**: the
+ * comparison card's difference boxes, over the second image of a pair, **only** once the reader has
+ * asked for them. Every item on the list above is decoration that costs contrast and returns
+ * nothing; the marks are an answer to a question somebody pressed a control to ask, they are absent
+ * until then, and `difference-marks.tsx` is where the distinction is argued out. Nothing else may
+ * be added here on that precedent.
  *
  * **Which body a file gets comes from the host's own content type** (`artifact-body.ts`,
  * `src/daemon/archive-file.ts`), so a labelled recording and a labelled `read_logs` compare the way
@@ -102,9 +111,20 @@ export function OpenInANewWindow({
 export function ArtifactBodyView({
 	artifact,
 	name,
+	marks = null,
 }: {
 	readonly artifact: ArchivedArtifactState;
 	readonly name: string;
+	/**
+	 * The comparison card's difference boxes, for an **image** body and nothing else — `null`
+	 * everywhere else in the panel, which is every caller but one and the state the single preview is
+	 * always in.
+	 *
+	 * `null` renders the DOM this component has always rendered, down to the class list, which is
+	 * what keeps the clean-region assertions in `artifact-preview.test.tsx` about the region they
+	 * were written for.
+	 */
+	readonly marks?: ImageMarks | null;
 }) {
 	if (artifact.status === 'reading') {
 		return (
@@ -138,19 +158,22 @@ export function ArtifactBodyView({
 
 	const body = artifact.body;
 	if (body.kind === 'image') {
+		/*
+		 * Contained, horizontally centred, at its natural aspect ratio — **never stretched and never
+		 * cropped**. `max-*` caps it and **no dimension is set at all**, which is what keeps a small
+		 * screenshot at its own pixels: an enlarged screenshot is a blurrier version of the evidence
+		 * somebody opened it to read (§10). The hairline border is the whole of what is laid around it.
+		 */
+		const image = (
+			<img
+				alt={name}
+				className={`block ${ARTIFACT_MAX_HEIGHT} max-w-full border border-outline-variant object-contain`}
+				src={body.url}
+			/>
+		);
 		return (
-			/*
-			 * Contained, horizontally centred, at its natural aspect ratio — **never stretched and never
-			 * cropped**. `max-*` caps it and **no dimension is set at all**, which is what keeps a small
-			 * screenshot at its own pixels: an enlarged screenshot is a blurrier version of the evidence
-			 * somebody opened it to read (§10). The hairline border is the whole of what is laid around it.
-			 */
 			<Region>
-				<img
-					alt={name}
-					className={`block ${ARTIFACT_MAX_HEIGHT} max-w-full border border-outline-variant object-contain`}
-					src={body.url}
-				/>
+				{marks === null ? image : <DifferenceMarks marks={marks}>{image}</DifferenceMarks>}
 			</Region>
 		);
 	}
