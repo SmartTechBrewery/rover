@@ -141,12 +141,28 @@ export function ArchiveScreen({ view }: { readonly view: ArchiveView }) {
 	const selected = componentsFromSplat(params._splat, OFFSET[view]);
 	const depths = depthsOf(view);
 	/*
+	 * **Whether anything is being written into the archive**, which is what runs both of this
+	 * screen's clocks (#287, #288). It is answerable here for free: the page already polls
+	 * `list_devices` above the router, and a held device's lease is what writes a run
+	 * (`live-writes.ts`, `docs/DESIGN.md` §9). So no host method is added, no request of this
+	 * screen's own is spent on the question, and nothing here draws a device — this screen reads one
+	 * bit of that answer and nothing else.
+	 */
+	const { state: attached } = useDeviceList();
+	const writing = archiveIsBeingWritten(attached);
+	/*
 	 * **The whole of the groups arrangement above a run, in one request** (#181). It takes no
 	 * parameter and there is no shape in which a second call could be made, so the levels this view
 	 * draws down to a run cost exactly one round trip — and `view === 'groups'` is what keeps a
 	 * reader who never opens it from paying for a walk of the archive they will not look at.
+	 *
+	 * **And that one request is taken again every `GROUPS_WALK_MS` while a lease is live** (#288) —
+	 * six times the interval the listings below are on, because it is a bounded walk of the *whole*
+	 * archive rather than one `readdir`, so the two answers cannot share a cadence
+	 * (`archive-groups.ts`). `view === 'groups'` gates the clock as it gates the mount: a reader in
+	 * the `All` view pays for no tick they could not see.
 	 */
-	const { groups, reread: rereadGroups } = useArchiveGroups(view === 'groups');
+	const { groups, reread: rereadGroups } = useArchiveGroups(view === 'groups', writing);
 	/*
 	 * **Which branches are open, held here rather than in the tree card** (#198). It is state for the
 	 * reason the search text is — a reload and a shared link land on the *address* and not on somebody
@@ -182,16 +198,13 @@ export function ArchiveScreen({ view }: { readonly view: ArchiveView }) {
 	 * the other held (#140 review). `levelsWanted` is that derivation, run against what has answered
 	 * so far.
 	 *
-	 * **And it re-reads itself on a clock while a lease is live** (#287). `writing` is the gate, and
-	 * it is answerable here for free: the page already polls `list_devices` above the router, and a
-	 * held device's lease is what writes a run (`live-writes.ts`, `docs/DESIGN.md` §9). So no host
-	 * method is added, no request of this screen's own is spent on the question, and nothing here
-	 * draws a device — this screen reads one bit of that answer and nothing else.
+	 * **And it re-reads itself on a clock while a lease is live** (#287), on the `writing` gate
+	 * derived above — every drawn level every `ARCHIVE_POLL_MS`, which is the fast half of this
+	 * screen's refresh and the cheap one: one `readdir` per level the reader has on screen.
 	 */
-	const { state: attached } = useDeviceList();
 	const { levels, reread } = useArchiveLevels(
 		(known) => levelsWanted(view, selected, known, groups, branches),
-		archiveIsBeingWritten(attached),
+		writing,
 	);
 	/*
 	 * **What a `Remove` settled, said above the content area** (#276, #277, D43). It is state of

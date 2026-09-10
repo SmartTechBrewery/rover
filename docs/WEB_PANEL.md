@@ -193,16 +193,20 @@ Design work lives in [`DESIGN.md`](./DESIGN.md); the brief that produced the fir
    its own levels from, and lands the selection on the project; a group whose runs are not listed
    gets no control, which is the rule its tick already keeps.
    ***Still no polling* has stopped being true, and this clause is rewritten in place rather than
-   deleted** (2026-09-10, #287, `ai/RULES.md` §1). It read *still no polling and still no refresh
-   control*, on the premise that the archive was finished data — which was false for exactly the
-   window a lease is open in: the listings went stale while runs were being filed under the reader,
-   and only a browser reload corrected them. So **the levels the screen draws re-read themselves
-   every 5 s while a lease is live**, gated off the `list_devices` poll the page already runs, and
-   nothing at all while no lease is — the idle cost is unchanged. Every other read on the screen is
-   still taken once, each for its own recorded reason, and there is **still no refresh control**:
-   the clock has no caller a reader can reach. The grouping walk above a run is deliberately not on
-   that clock and is #287's phase 2, because it walks the whole archive rather than one directory.
-   `docs/DESIGN.md` §9 carries the whole of it.
+   deleted** (2026-09-10, #287 then #288, `ai/RULES.md` §1). It read *still no polling and still no
+   refresh control*, on the premise that the archive was finished data — which was false for exactly
+   the window a lease is open in: the listings went stale while runs were being filed under the
+   reader, and only a browser reload corrected them. So **the levels the screen draws re-read
+   themselves every 5 s while a lease is live**, gated off the `list_devices` poll the page already
+   runs, and nothing at all while no lease is — the idle cost is unchanged. **And the grouping walk
+   this view's own arrangement comes out of is re-walked every 30 s** on the same gate (#288,
+   amended in place — it read *deliberately not on that clock and #287's phase 2*), only while this
+   view is open: six times the listings' interval, because it walks the whole archive rather than
+   one directory, and two answers that cost different things cannot share a cadence. So a run filed
+   under the group the reader has open appears there without a reload, with the group's and the test
+   name's counts following it. Every other read on the screen is still taken once, each for its own
+   recorded reason, and there is **still no refresh control**: neither clock has a caller a reader
+   can reach. `docs/DESIGN.md` §9 carries the whole of it.
 6. **Live lease state** — **done** (#113). A held card carries the `owner`, the `project`, the
    `test_name` and the grant instant, with a countdown to the expiry that ticks once a second and
    **goes back up** when activity renews the lease (`PROJECT.md` D8) — verified against a running
