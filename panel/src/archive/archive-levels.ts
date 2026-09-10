@@ -59,13 +59,26 @@ import { keyOf } from './archive-path.js';
  * `partial` may have left the directory exactly where it was, and a `not-found` means the listing
  * being edited was already stale.
  *
- * **Every request carries the tick as its deadline** (#125) — rewritten in place too, the old
- * clause having been *no deadline either, because a budget belongs to a repeating caller with an
- * interval to spend and this caller has neither* (`host-client.ts`). This caller now has an
- * interval, and the deadline is what bounds the tick guard below: without one, a single request the
- * host accepted and never answered would hold that guard for the life of the tab, every tick after
- * it dropped and the screen frozen on the last good listing with nothing saying so. That is what
- * #125 actually was, on the other screen.
+ * **A request carries the tick as its deadline exactly while the tick exists** (#125, #289 review)
+ * — rewritten in place too, the old clause having been *no deadline either, because a budget
+ * belongs to a repeating caller with an interval to spend and this caller has neither*
+ * (`host-client.ts`). Half of that reason survived the clock: a budget is only ever spendable by a
+ * caller that will ask again, and this one asks again **only while `writing`**. So a gated request
+ * gets a deadline and a no-lease request gets none, which is the behaviour it had before there was
+ * a clock. Giving one to both was the first draft's bug: with the gate shut, a listing the host was
+ * merely slow to produce — `list_archive` is one `readdir` per entry (`src/daemon/list-archive.ts`)
+ * and a level of several hundred runs is that many — was abandoned at five seconds and cached as
+ * *Rover cannot see into this directory*, a claim about the host that was false, with no clock to
+ * ever correct it and only the browser reload #287 exists to remove.
+ *
+ * The deadline is what bounds the tick guard below: without one, a single request the host accepted
+ * and never answered would hold that guard for the life of the tab, every tick after it dropped and
+ * the screen frozen on the last good listing with nothing saying so. That is what #125 actually
+ * was, on the other screen. Which is why an **ungated request does not enter that guard either**:
+ * the two go together, and a request with no budget holding a guard it cannot be released from
+ * would be #125 again, entered through the gate opening rather than through the clock. It costs at
+ * most one extra request per level — a lease starting while the mount's own listings are still out
+ * — and that is bounded by the drawn levels like every other tick.
  */
 
 /**
@@ -218,12 +231,17 @@ export function useArchiveLevels(want: WantedLevels, writing: boolean): ArchiveL
 	const asked = useRef<Map<string, number>>(new Map());
 	const live = useRef(true);
 	/*
-	 * **How many `list_archive` requests this hook has out**, which is what a tick is dropped for
-	 * (#125, #287). A tick arriving while the last one's requests are still in flight is dropped
-	 * rather than queued, so a host slower than the interval cannot have requests stacked on it —
-	 * and this guard is **bounded**, by the deadline every request below carries. An unbounded one
-	 * is what #125 was on the Devices screen: one request the host accepted and never answered held
-	 * it for the life of the tab.
+	 * **How many *budgeted* `list_archive` requests this hook has out**, which is what a tick is
+	 * dropped for (#125, #287). A tick arriving while the last one's requests are still in flight is
+	 * dropped rather than queued, so a host slower than the interval cannot have requests stacked on
+	 * it — and this guard is **bounded**, by the deadline those requests carry. An unbounded one is
+	 * what #125 was on the Devices screen: one request the host accepted and never answered held it
+	 * for the life of the tab.
+	 *
+	 * Only the gated requests are counted, because only they have a deadline (#289 review). A
+	 * request issued while no lease was live has none, so counting it would let one such request —
+	 * still out when a lease starts — drop every tick for the rest of the tab: the same unbounded
+	 * guard, reached through the gate opening instead of through the clock.
 	 *
 	 * A count rather than a boolean because a tick is *n* requests, one per drawn level, and they
 	 * answer independently: the next tick is due once they all have.
@@ -243,21 +261,13 @@ export function useArchiveLevels(want: WantedLevels, writing: boolean): ArchiveL
 				continue;
 			}
 			asked.current.set(key, nonce);
-			outstanding.current += 1;
+			if (writing) {
+				outstanding.current += 1;
+			}
 			void (async () => {
-				/*
-				 * `setTimeout` rather than `AbortSignal.timeout`, so the panel suite's fake timers can
-				 * advance to the deadline instead of waiting it out — `device-list-provider.tsx`'s own
-				 * recorded reason, and `tests/unit/no-sleep.test.ts`'s.
-				 *
-				 * The guard is released in `finally` and **nowhere else**: releasing it when the
-				 * deadline fires would let the abandoned request's answer land after the next tick's
-				 * good one. Aborting is enough, because an aborted `fetch` rejects promptly.
-				 */
-				const controller = new AbortController();
-				const deadline = setTimeout(() => controller.abort(), ARCHIVE_POLL_MS);
+				const budget = budgetFor(writing);
 				try {
-					const answer = await call('list_archive', { path }, controller.signal);
+					const answer = await call('list_archive', { path }, budget.signal);
 					/*
 					 * A superseded answer lands on nothing. The answers of two reads of one level are not
 					 * ordered by the requests that asked for them, so the later request's answer arriving
@@ -276,27 +286,40 @@ export function useArchiveLevels(want: WantedLevels, writing: boolean): ArchiveL
 					 * it is** (#287), and it is asked again on the next tick. That is not news about the
 					 * archive: the listing on screen is still the last thing the host confirmed, and
 					 * replacing it with *not readable* over a request that timed out would make a refresh
-					 * visible as a regression. A level with nothing yet still lands on `unreadable`,
-					 * which is what it landed on before there was a clock, and the host's **own**
-					 * `unreadable` still replaces in either case — that is the host answering the question
-					 * the screen asked. `!answer.ok` here is exactly `refusal === 'unanswered'`, a
-					 * `refused` having already returned `undefined` above, and an abort arrives as an
-					 * `unanswered` by contract (`host-client.ts`).
+					 * visible as a regression. A level with nothing yet still lands on `unreadable`, which
+					 * is what it landed on before there was a clock — and it is only ever a *budget* that
+					 * put it there under the clock, where the next tick asks again; with the gate shut the
+					 * request has no budget to miss, so an `unanswered` there is the host or the network
+					 * and means what it says (#289 review). The host's **own** `unreadable` still replaces
+					 * in either case — that is the host answering the question the screen asked.
+					 * `!answer.ok` here is exactly `refusal === 'unanswered'`, a `refused` having already
+					 * returned `undefined` above, and an abort arrives as an `unanswered` by contract
+					 * (`host-client.ts`).
 					 */
 					const unanswered = !answer.ok;
 					setLevels((previous) =>
 						unanswered && previous.has(key) ? previous : new Map(previous).set(key, state),
 					);
 				} finally {
-					clearTimeout(deadline);
-					outstanding.current -= 1;
+					/*
+					 * The budget is released in `finally` and **nowhere else**: releasing it when the
+					 * deadline fires would let the abandoned request's answer land after the next tick's
+					 * good one. Aborting is enough, because an aborted `fetch` rejects promptly.
+					 */
+					budget.release();
+					if (writing) {
+						outstanding.current -= 1;
+					}
 				}
 			})();
 		}
 		return () => {
 			live.current = false;
 		};
-	}, [wanted, call, nonce]);
+		// `writing` is here because it decides whether the requests this run makes carry a budget
+		// (#289 review), not because the gate is a reason to read anything: a run triggered by the
+		// gate alone asks for nothing, every drawn level already being at this nonce in `asked`.
+	}, [wanted, call, nonce, writing]);
 
 	/*
 	 * Stable across renders, so a screen may hand it to a callback without it becoming a dependency
@@ -320,8 +343,9 @@ export function useArchiveLevels(want: WantedLevels, writing: boolean): ArchiveL
 	 * A tick arriving while this hook's own requests are still out is **dropped rather than
 	 * queued** (#125): the nonce does not move, so nothing is asked, and the level that has not
 	 * answered is not asked a second time on top of the first. What makes that safe is the deadline
-	 * every request carries — the guard is only ever as temporary as the requests behind it, so a
-	 * host that stops answering costs one tick and then recovers on its own.
+	 * the requests in that guard carry — every request counted into it was issued with the gate
+	 * open, so it is only ever as temporary as its own budget, and a host that stops answering
+	 * costs one tick and then recovers on its own.
 	 */
 	const tick = useCallback(() => {
 		if (outstanding.current > 0) {
@@ -345,6 +369,32 @@ export function useArchiveLevels(want: WantedLevels, writing: boolean): ArchiveL
 	}, [writing, tick]);
 
 	return { levels, reread };
+}
+
+/**
+ * **A budget only where a clock will retry** (#125, #289 review): `writing` is what the tick is
+ * gated on, so it is what the deadline is gated on too.
+ *
+ * With the gate open a request is abandoned after one tick's length, which is what keeps the
+ * outstanding-request guard bounded. With it shut there is no signal at all — the behaviour every
+ * other one-shot read on this screen has (`archive-size.ts`, `archived-file.ts`, `artifact.ts`),
+ * and the behaviour this hook had before #287 — because abandoning a listing the host was merely
+ * slow to produce would cache *not readable* over it with nothing left to ask again.
+ *
+ * `setTimeout` rather than `AbortSignal.timeout`, so the panel suite's fake timers can advance to
+ * the deadline instead of waiting it out — `device-list-provider.tsx`'s own recorded reason, and
+ * `tests/unit/no-sleep.test.ts`'s.
+ */
+function budgetFor(writing: boolean): {
+	readonly signal?: AbortSignal;
+	readonly release: () => void;
+} {
+	if (!writing) {
+		return { release: () => undefined };
+	}
+	const controller = new AbortController();
+	const deadline = setTimeout(() => controller.abort(), ARCHIVE_POLL_MS);
+	return { signal: controller.signal, release: () => clearTimeout(deadline) };
 }
 
 /** One answer, mapped onto {@link ArchiveLevel} — or nothing at all, for a `refused`. */

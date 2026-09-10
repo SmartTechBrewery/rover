@@ -191,13 +191,26 @@ const { host, HANGS } = vi.hoisted(() => ({
 }));
 vi.mock('@panel/session/session-provider.js', () => {
 	/** One level's listing, logged as asked for. */
-	const listing = async (path: readonly string[]) => {
+	const listing = async (path: readonly string[], signal?: AbortSignal) => {
 		host.asked.push(path);
 		if (host.hangs) {
 			return await new Promise(() => undefined);
 		}
 		if (host.listingGate !== null) {
-			await host.listingGate;
+			/*
+			 * **A caller that abandons the request is answered `unanswered`**, which is
+			 * `host-client.ts`'s own contract for an aborted `fetch` (#289 review). Without it the
+			 * request deadline is invisible to this file, and *a slow host is not an unreadable one*
+			 * could not be asserted at the screen's level at all — the gate would simply answer late
+			 * and the screen would never see the difference.
+			 */
+			const abandoned = new Promise<{ ok: false; refusal: 'unanswered' }>((resolve) => {
+				signal?.addEventListener('abort', () => resolve({ ok: false, refusal: 'unanswered' }));
+			});
+			const raced = await Promise.race([host.listingGate.then(() => null), abandoned]);
+			if (raced !== null) {
+				return raced;
+			}
 		}
 		const answer = host.answers.get(JSON.stringify(path));
 		if (answer === HANGS) {
@@ -329,6 +342,8 @@ vi.mock('@panel/session/session-provider.js', () => {
 			tests?: readonly { project: string; testName: string }[];
 			kept?: boolean;
 		},
+		/** The caller's deadline, which only a listing carries and only under the clock (#287). */
+		signal?: AbortSignal,
 	) => {
 		if (method === 'search_archive') {
 			return await search(params.text);
@@ -346,7 +361,7 @@ vi.mock('@panel/session/session-provider.js', () => {
 			return await keptTests();
 		}
 		const written = await wrote(method, params);
-		return written ?? (await listing(params.path));
+		return written ?? (await listing(params.path, signal));
 	};
 
 	/**
@@ -3895,6 +3910,61 @@ describe('a settled Remove', () => {
 			fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }));
 		});
 		expect(noticed()).toBe('');
+	});
+});
+
+/**
+ * **A slow host is not an unreadable one** (#289 review), and with the gate shut nothing will ever
+ * ask again — so a listing that takes longer than a tick has to be waited for, not abandoned.
+ *
+ * This is the screen's side of *no clock, no budget* (`archive-levels.ts`). `list_archive` is one
+ * `readdir` per entry (`src/daemon/list-archive.ts`), so a level holding several hundred runs, or a
+ * host across the network (D17), is an ordinary slow answer rather than a broken one — and *Rover
+ * cannot see into this directory* is a claim about the host that would be false, cached for the
+ * life of the mounted screen, and correctable only by the reload #287 exists to remove.
+ */
+describe('the host is slow and no lease is live', () => {
+	beforeEach(() => {
+		vi.useFakeTimers();
+	});
+
+	afterEach(() => {
+		host.listingGate = null;
+		vi.useRealTimers();
+	});
+
+	it('waits for a listing that outlasts a tick rather than calling the level unreadable', async () => {
+		at.splat = 'checkout-app/login-flow';
+		host.answers = new Map(Object.entries(archive()));
+		let answerAtLast: () => void = () => undefined;
+		host.listingGate = new Promise((resolve) => {
+			answerAtLast = () => resolve();
+		});
+
+		const { container } = render(<ArchiveScreen view="all" />);
+		await act(async () => {
+			await vi.advanceTimersByTimeAsync(ARCHIVE_POLL_MS * 3);
+		});
+
+		expect(container.textContent).not.toContain('ARCHIVE NOT READABLE');
+
+		host.listingGate = null;
+		await act(async () => {
+			answerAtLast();
+		});
+		for (let turn = 0; turn < 6; turn += 1) {
+			await act(async () => undefined);
+		}
+
+		expect(container.textContent).not.toContain('ARCHIVE NOT READABLE');
+		expect(treeRows()).toEqual([
+			'checkout-app',
+			'login-flow',
+			RUN,
+			OLDER,
+			'unlabeled',
+			'payments-web',
+		]);
 	});
 });
 

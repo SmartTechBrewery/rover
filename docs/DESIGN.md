@@ -2479,8 +2479,13 @@ reload corrected them, which also threw away their place. What replaces it:
   holding, because the refresh re-reads *what is drawn* wholesale rather than one address. **No
   lease, no interval, no requests** — the idle cost is exactly what it was before there was a clock.
   A tick arriving while the last one's requests are still out is dropped rather than queued, and
-  every request carries the tick as its deadline, so that guard can never be held for the life of
-  the tab (#125). **A refresh is invisible until it lands**: the listings on screen are untouched
+  **a request made while the clock is running carries the tick as its deadline**, so that guard can
+  never be held for the life of the tab (#125). A request made while it is *not* — the first read of
+  a level on a screen mounted with no lease live — carries **no** deadline, and does not enter that
+  guard either: a budget is only spendable by a caller that will ask again, and abandoning a listing
+  the host was merely slow to produce would state *Rover cannot see into this directory* about a
+  host that would have read it, with nothing left to correct it. **A refresh is invisible until it
+  lands**: the listings on screen are untouched
   until an answer arrives, so no level that has an answer ever falls back to *Reading this level.*,
   and a request nothing answered leaves such a level alone and is asked again next tick. The host's
   own `unreadable` still replaces, that being the host answering the question the screen asked.

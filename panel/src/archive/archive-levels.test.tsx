@@ -186,39 +186,48 @@ describe('the levels a selection needs', () => {
 	});
 
 	/*
-	 * **Every request carries the tick as its budget** (#125, #287) — rewritten in place from *sets
-	 * no deadline on the request*, whose reason was that a budget belongs to a repeating caller
-	 * with an interval to spend and this one had neither (`host-client.ts`). It has one now, and the
-	 * deadline is what bounds the tick guard: without it, one request the host accepted and never
-	 * answered would hold that guard for the life of the tab. The signal is given whether or not a
-	 * lease is live, because a request outliving the gate closing is the same abandoned request.
+	 * **No clock, no budget** (#125, #287, #289 review) — rewritten in place from *sets no deadline
+	 * on the request*, whose reason was that a budget belongs to a repeating caller with an interval
+	 * to spend and this one had neither (`host-client.ts`). Half of that reason survived the clock
+	 * and this is the half: with the gate shut nothing will ask again, so abandoning a request at
+	 * five seconds would cache *not readable* over a host that was merely slow — a claim about the
+	 * host, wrong, and correctable only by the browser reload #287 exists to remove. The gated case
+	 * is `while the archive is being written` below.
 	 */
-	it('gives every request the tick’s own budget', async () => {
+	it('gives a request no budget while no lease is live', async () => {
 		host.call.mockResolvedValue(listed('checkout-app'));
 
 		render(<Levels paths={[[]]} />);
 
 		await waitFor(() => expect(host.call).toHaveBeenCalledTimes(1));
-		expect(host.call.mock.calls[0]?.[2]).toBeInstanceOf(AbortSignal);
-		expect((host.call.mock.calls[0]?.[2] as AbortSignal).aborted).toBe(false);
+		expect(host.call.mock.calls[0]?.[2]).toBeUndefined();
 	});
 
-	// And the budget is spent: a level nothing answered for lands on `unreadable` at the deadline
-	// rather than reading *Reading this level.* for the life of the tab.
-	it('abandons a request nothing answered when its budget runs out', async () => {
+	// And so a slow answer is still the answer: five seconds pass with nothing said, the level is
+	// still *Reading this level.* rather than *not readable*, and the listing lands when it lands.
+	it('draws a slow listing rather than abandoning it while no lease is live', async () => {
 		vi.useFakeTimers();
-		host.call.mockImplementation(abandoned);
+		let answer: (value: unknown) => void = () => {};
+		host.call.mockImplementation(
+			async () =>
+				await new Promise((resolve) => {
+					answer = resolve;
+				}),
+		);
 
 		render(<Levels paths={[[]]} />);
 		await settle();
+
+		await act(async () => {
+			await vi.advanceTimersByTimeAsync(ARCHIVE_POLL_MS * 2);
+		});
 		expect(screen.getByTestId('root').textContent).toBe('loading');
 
 		await act(async () => {
-			await vi.advanceTimersByTimeAsync(ARCHIVE_POLL_MS);
+			answer(listed('checkout-app'));
+			await vi.advanceTimersByTimeAsync(0);
 		});
-
-		expect((host.call.mock.calls[0]?.[2] as AbortSignal).aborted).toBe(true);
-		expect(screen.getByTestId('root').textContent).toBe('unreadable');
+		expect(screen.getByTestId('root').textContent).toBe('listed:checkout-app');
 	});
 });
 
@@ -275,6 +284,48 @@ describe('while the archive is being written', () => {
 
 		await tick();
 		await tick();
+		await tick();
+
+		expect(host.call).toHaveBeenCalledTimes(2);
+	});
+
+	/*
+	 * **The gated request is the one with a budget**, and it is spent (#125, #289 review). This is
+	 * the guard's bound: a request the host accepted and never answered is abandoned at one tick's
+	 * length, so `outstanding` cannot be held for the life of the tab and the next tick is due.
+	 */
+	it('gives every request the tick’s own budget while a lease is live', async () => {
+		vi.useFakeTimers();
+		host.call.mockImplementation(abandoned);
+
+		render(<Levels paths={[[]]} writing={true} />);
+		await settle();
+		expect(host.call.mock.calls[0]?.[2]).toBeInstanceOf(AbortSignal);
+		expect(screen.getByTestId('root').textContent).toBe('loading');
+
+		await tick();
+
+		expect((host.call.mock.calls[0]?.[2] as AbortSignal).aborted).toBe(true);
+		// And the clock, not a reload, is what asks again — the level is not cached as `unreadable`
+		// for the life of the screen the way an ungated abandonment would have cached it.
+		expect(host.call.mock.calls.length).toBeGreaterThan(1);
+	});
+
+	/*
+	 * **A request issued before the gate opened does not hold the guard** (#289 review). It has no
+	 * budget, because nothing was going to ask it again when it went out; counting it would let one
+	 * such request drop every tick for the rest of the tab, which is #125 reached through the gate
+	 * opening rather than through the clock.
+	 */
+	it('keeps ticking when a request from before the gate opened never answers', async () => {
+		vi.useFakeTimers();
+		host.call.mockImplementation(abandoned);
+		const { rerender } = render(<Levels paths={[[]]} writing={false} />);
+		await settle();
+		expect(host.call).toHaveBeenCalledTimes(1);
+
+		rerender(<Levels paths={[[]]} writing={true} />);
+		await settle();
 		await tick();
 
 		expect(host.call).toHaveBeenCalledTimes(2);
