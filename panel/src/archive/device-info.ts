@@ -2,6 +2,7 @@ import { UNKNOWN } from '@panel/archive/file-size.js';
 import type { ArchivedFile, HostAnswer } from '@panel/session/host-client.js';
 import { z } from 'zod';
 import { useArchivedRunFile } from './archived-file.js';
+import type { EdgeInsets } from './image-diff.js';
 
 /**
  * The run's `device_info.json` — the one thing on the Archive screen that a directory listing
@@ -41,6 +42,23 @@ const ScreenSchema = z.object({
 	densityScale: z.number().nullish(),
 	widthDp: z.number().nullish(),
 	heightDp: z.number().nullish(),
+	/**
+	 * Where the device draws its own system bars, in physical pixels.
+	 *
+	 * **Read but never drawn**, which makes it the first field in this file that is not one of the
+	 * card's six values: the comparison card sets these bands aside so the status bar's clock stops
+	 * counting as a difference between two runs (`docs/DESIGN.md` §9). Nullish like everything else
+	 * here, and each number too — a run archived before the host recorded them carries none, and
+	 * that must leave the device card exactly as it was.
+	 */
+	systemBars: z
+		.object({
+			top: z.number().nullish(),
+			bottom: z.number().nullish(),
+			left: z.number().nullish(),
+			right: z.number().nullish(),
+		})
+		.nullish(),
 });
 
 /**
@@ -212,4 +230,57 @@ function fromFile(file: ArchivedFile): ArchivedDeviceInfo {
 	return parsed.success
 		? { status: 'read', info: parsed.data }
 		: ({ status: 'unreadable' } as const);
+}
+
+/**
+ * The system bars **two runs agree about**, or `null` when there is no agreed answer to use.
+ *
+ * Three ways to get `null`, and they are one answer here because the consumer does the same thing
+ * for all three — compares the whole image and says nothing about bars:
+ *
+ * - either file is not there, not readable, or carries no `systemBars` at all. A run archived
+ *   before the host recorded them is the ordinary case, and so is a backend with no route to the
+ *   fact (`src/core/device.ts`);
+ * - a number is missing, negative or not finite. A partial answer is not an answer: three sides of
+ *   a band would set aside a rectangle the device never described;
+ * - **the two runs disagree.** Two arms may have run on devices with different screens (D14), and
+ *   using either one's bars over both images would be applying one device's chrome to another
+ *   device's pixels. Nothing is set aside, and nothing is hidden, which is the safe direction.
+ */
+export function systemBarsShared(
+	first: ArchivedDeviceInfo,
+	second: ArchivedDeviceInfo,
+): EdgeInsets | null {
+	const mine = systemBarsOf(first);
+	const theirs = systemBarsOf(second);
+	if (mine === null || theirs === null) {
+		return null;
+	}
+	const same =
+		mine.top === theirs.top &&
+		mine.bottom === theirs.bottom &&
+		mine.left === theirs.left &&
+		mine.right === theirs.right;
+	return same ? mine : null;
+}
+
+/** One run's four bands, if the file carries all four as usable numbers. */
+function systemBarsOf(state: ArchivedDeviceInfo): EdgeInsets | null {
+	if (state.status !== 'read') {
+		return null;
+	}
+	const bars = state.info.screen?.systemBars;
+	if (bars === null || bars === undefined) {
+		return null;
+	}
+	const sides = [bars.top, bars.bottom, bars.left, bars.right];
+	if (sides.some((side) => typeof side !== 'number' || !Number.isFinite(side) || side < 0)) {
+		return null;
+	}
+	return {
+		top: bars.top as number,
+		bottom: bars.bottom as number,
+		left: bars.left as number,
+		right: bars.right as number,
+	};
 }

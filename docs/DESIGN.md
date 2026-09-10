@@ -2079,10 +2079,41 @@ nothing decodes until the control is pressed, and why the answer is held against
 it was measured from so a second press draws rather than recomputes. And the comparison itself is
 ~50 ms of the main thread for that pair, measured in Node, once.
 
-**Panel-only, and still no host change.** Both files are already buffered by the panes that drew
-them, a `blob:` handle is same-origin so the canvas reading them is not tainted, and there is no new
-method, no new request and no second walk. The card is still a pure function over the one
-`list_archive_groups` answer, plus two decodes of bytes the tab already has.
+**The two runs' own system bars are set aside, and the count is said out loud.** Two runs of one
+app always differ in the status bar, because time passed between them: on the first real pair this
+was measured against, the clock and the signal glyph were **two of the four regions**, and neither is
+a difference between the two arms of an investigation. So the bands are left out of the comparison —
+and **the numbers are the device's own**, `screen.systemBars` off each run's `device_info.json`
+(D14), never a constant and never a fraction of the screen. That is not a preference: the device
+this was built against reports a **52 dp** status bar where the documented figure for its platform
+is 24 (`PROJECT.md` §6), so a remembered number would have been wrong by more than half on the first
+device it met.
+
+- **Both runs have to agree about the bands.** Two arms may have run on devices with different
+  screens, so one device's chrome laid over another device's pixels is not a band this card can
+  claim; when they disagree, when a file carries no bars, or when a backend has no route to the
+  fact at all, **nothing is set aside and nothing is hidden** — which is the safe direction.
+- **The mask is applied to the tiles and not to the answer**, so a region *straddling* a band — an
+  element that starts under the status bar and continues into the content — survives, trimmed to the
+  part that is not in the band. A tile is only set aside when all of it is inside the band.
+- **The count is on the sentence**: `1 region differs. 1 more is in the system bars.` Setting a band
+  aside hides real differences inside it, and a reader who is not told has no way to know a mark was
+  ever there.
+
+**Panel-only was true of the marks and is not true of the bands, and this paragraph is edited in
+place rather than deleted.** It read *panel-only, and still no host change*, and the marks
+themselves still are: both files are already buffered by the panes that drew them, a `blob:` handle
+is same-origin so the canvas reading them is not tainted, and there is no new method and no second
+walk. **The bands cost two things the card did not cost before**, and both are stated rather than
+hidden:
+
+- **A host change.** `screen.systemBars` is a new field on `device_info`, filled by asking the
+  device (`PROJECT.md` §6) and `null` from a backend with no route to the fact — nullable for that
+  asymmetry rather than for failure, and **nothing anywhere branches on the platform** to find out
+  which (`ai/RULES.md` §2).
+- **Two requests.** The card read nothing of its own; it now reads each run's `device_info.json` —
+  but **only once the reader presses the control**, so a reader who never asks for the marks still
+  costs the card nothing, which is the property that mattered rather than the literal zero.
 
 ### The tree — expansion is an open set, over the selection's own ancestors
 

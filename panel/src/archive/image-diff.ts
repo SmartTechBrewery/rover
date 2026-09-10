@@ -73,8 +73,39 @@ export interface DiffRegion {
  * drawing an empty overlay that would read as *nothing differs*.
  */
 export type ImageDifference =
-	| { readonly outcome: 'compared'; readonly regions: readonly DiffRegion[] }
+	| {
+			readonly outcome: 'compared';
+			readonly regions: readonly DiffRegion[];
+			/**
+			 * How many regions {@link EdgeInsets} took off the answer — `0` when none were given.
+			 *
+			 * **Reported rather than swallowed.** Setting a band aside hides real differences inside
+			 * it, so the count is what lets the card say so in words instead of quietly drawing a
+			 * smaller answer (`docs/DESIGN.md` §9). A region that merely *shrank* at its edge is not
+			 * counted: it is still on the answer.
+			 */
+			readonly setAside: number;
+	  }
 	| { readonly outcome: 'different-dimensions' };
+
+/**
+ * A band along each edge to leave out of the comparison, in the compared image's own pixels.
+ *
+ * **This exists for the system bars and for nothing else.** Two runs of one app always differ in
+ * the status bar, because time passed between them — the clock and the signal glyph came out as two
+ * of the four regions on the first real pair this was measured against — and neither is a difference
+ * between the two arms of an investigation. The numbers are the device's own
+ * (`device_info.json`'s `screen.systemBars`, D14), never a constant and never a fraction of the
+ * screen: the device that produced that pair reports a 52 dp status bar where the documentation for
+ * its platform says 24, so a remembered number would have been wrong by more than half on the first
+ * device it met.
+ */
+export interface EdgeInsets {
+	readonly top: number;
+	readonly bottom: number;
+	readonly left: number;
+	readonly right: number;
+}
 
 /**
  * How many columns a row is reduced to before it is hashed.
@@ -134,18 +165,71 @@ const MIN_TILES = 2;
  * what the overlay draws in; nothing downstream may depend on the order clustering happened to
  * find them in.
  */
-export function differenceBetween(before: Bitmap, after: Bitmap): ImageDifference {
+export function differenceBetween(
+	before: Bitmap,
+	after: Bitmap,
+	ignore: EdgeInsets | null = null,
+): ImageDifference {
 	if (before.width !== after.width || before.height !== after.height) {
 		return { outcome: 'different-dimensions' };
 	}
 	const { width, height } = after;
 	if (width === 0 || height === 0) {
-		return { outcome: 'compared', regions: [] };
+		return { outcome: 'compared', regions: [], setAside: 0 };
 	}
 	const across = Math.ceil(width / TILE);
 	const down = Math.ceil(height / TILE);
 	const marked = markedTiles(before, after, across, down);
-	return { outcome: 'compared', regions: regionsOf(marked, across, down, width, height) };
+	const found = regionsOf(marked, across, down, width, height);
+	if (ignore === null) {
+		return { outcome: 'compared', regions: found, setAside: 0 };
+	}
+	/*
+	 * **The bands are applied to the tiles, not to the answer.** Dropping whole regions that fall
+	 * inside a band would take a region *straddling* one with it — an element that starts under the
+	 * status bar and continues into the content — so the mask is applied before the clustering and
+	 * a straddling region survives, trimmed to the part that is not in the band.
+	 *
+	 * And a tile is only masked when **all** of it is inside a band: at 16px a band's own edge lands
+	 * mid-tile, and rounding that tile away would hide 15 rows of content on the strength of one row
+	 * of chrome.
+	 */
+	const kept = withoutEdges(marked, across, width, height, ignore);
+	const regions = regionsOf(kept, across, down, width, height);
+	return {
+		outcome: 'compared',
+		regions,
+		setAside: Math.max(0, found.length - regions.length),
+	};
+}
+
+/** The marked tiles again, with every tile that lies wholly inside an ignored band cleared. */
+function withoutEdges(
+	marked: Uint8Array,
+	across: number,
+	width: number,
+	height: number,
+	ignore: EdgeInsets,
+): Uint8Array {
+	const kept = new Uint8Array(marked);
+	for (let tile = 0; tile < kept.length; tile += 1) {
+		if (kept[tile] === 0) {
+			continue;
+		}
+		const left = (tile % across) * TILE;
+		const top = Math.floor(tile / across) * TILE;
+		const right = Math.min(left + TILE, width);
+		const bottom = Math.min(top + TILE, height);
+		const inside =
+			bottom <= ignore.top ||
+			top >= height - ignore.bottom ||
+			right <= ignore.left ||
+			left >= width - ignore.right;
+		if (inside) {
+			kept[tile] = 0;
+		}
+	}
+	return kept;
 }
 
 /**

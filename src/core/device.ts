@@ -107,6 +107,31 @@ export type Device = z.infer<typeof DeviceSchema>;
  * The dp values are exact quotients, deliberately unrounded: rounding is a presentation
  * decision, and a backend that rounds leaves no way to ask what the device actually said.
  */
+/**
+ * How far into the screen the system bars reach on each side, **in physical pixels** — the
+ * same unit as {@link ScreenInfoSchema}'s `widthPx` and as a screenshot's own coordinates,
+ * which is the whole point: a consumer comparing two screenshots must not have to multiply
+ * by anything to use this.
+ *
+ * `0` on a side is a real answer and means *nothing reaches in from there*, which is the
+ * ordinary case for left and right in portrait.
+ *
+ * **In the core vocabulary and not in a backend**, because it crosses the IPC boundary
+ * inside `device_info` and is written into the archive beside every run (D14). Where the
+ * numbers come from is each backend's own business (`PROJECT.md` §5): one that can ask its
+ * device answers the four, and one with no route to the fact answers `null` rather than a
+ * plausible-looking zero.
+ */
+export const SystemBarInsetsSchema = z
+	.object({
+		top: z.number().int().nonnegative(),
+		bottom: z.number().int().nonnegative(),
+		left: z.number().int().nonnegative(),
+		right: z.number().int().nonnegative(),
+	})
+	.strict();
+export type SystemBarInsets = z.infer<typeof SystemBarInsetsSchema>;
+
 export const ScreenInfoSchema = z
 	.object({
 		/** Width in physical pixels, as currently rendered. */
@@ -121,6 +146,27 @@ export const ScreenInfoSchema = z
 		widthDp: z.number().positive(),
 		/** `heightPx / densityScale`. */
 		heightDp: z.number().positive(),
+		/**
+		 * Where this device draws its own system bars, in physical pixels — or `null` for a
+		 * device that did not say.
+		 *
+		 * **`null` is *not answered* and four zeros are *no bars*, and they must not fold
+		 * together**: the first leaves a consumer with nothing to set aside and the second tells
+		 * it there is nothing to set aside. The panel's comparison card branches on exactly that
+		 * difference (`docs/DESIGN.md` §9) — it is what decides whether the status bar's clock
+		 * gets marked as a difference between two runs on every pair.
+		 *
+		 * **Nullable because the backends are genuinely asymmetric, not because a query might
+		 * fail** (`ai/RULES.md` §2, `PROJECT.md` §5). One of them asks the system service that
+		 * owns the screen's layout and gets the frames back. Another builds this whole shape from
+		 * a static device-type description whose keys carry the screen and its scale and **nothing
+		 * about the bars**, so there is nothing there to read — and writing a table of insets per
+		 * device type from documentation is exactly the remembered fact `PROJECT.md` §6 exists to
+		 * forbid, since the one platform that *can* be asked reports more than twice what the
+		 * documentation for it says. A backend that cannot say answers `null`, and **no consumer
+		 * anywhere branches on the platform to find that out**.
+		 */
+		systemBars: SystemBarInsetsSchema.nullable(),
 	})
 	.strict();
 export type ScreenInfo = z.infer<typeof ScreenInfoSchema>;

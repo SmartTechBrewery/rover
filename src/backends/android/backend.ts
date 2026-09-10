@@ -124,6 +124,7 @@ import {
 } from './parsers/getprop.js';
 import { parseUiHierarchy, type UiHierarchy } from './parsers/hierarchy.js';
 import { acceptedInput } from './parsers/input.js';
+import { parseSystemBarInsets } from './parsers/insets.js';
 import { parseLogcat } from './parsers/logcat.js';
 import { acceptedNetworkChange } from './parsers/network.js';
 import { isPng } from './parsers/screencap.js';
@@ -1011,19 +1012,26 @@ export class AndroidDeviceBackend implements DeviceBackend {
 	}
 
 	/**
-	 * Three queries, in parallel — the size, the density and the properties.
+	 * Four queries, in parallel — the size, the density, the properties and the display's insets.
 	 *
 	 * The **effective** size and density are what the answer is built from, not the
 	 * physical ones: an override is what the device actually renders at, so it is the one a
 	 * coordinate and the dp scale belong to (PROJECT.md §6). A device that has gone away
 	 * throws from `./adb.js` naming the command and both streams, rather than answering
 	 * `null` — see the contract comment on {@link DeviceBackend.deviceInfo}.
+	 *
+	 * **The fourth is `dumpsys window d`**, and it is in this batch rather than behind a caller
+	 * asking for it because `device_info` is the answer the archive files beside every run (D14)
+	 * and the insets are a screen fact of exactly that kind. The parser answers `null` for a dump
+	 * with no insets state, so an Android that does not report them costs the rest of this answer
+	 * nothing (`./parsers/insets.js`).
 	 */
 	async deviceInfo(serial: DeviceSerial): Promise<DeviceInfo> {
-		const [size, density, properties] = await Promise.all([
+		const [size, density, properties, displays] = await Promise.all([
 			runAdbOnDevice(serial, ['shell', 'wm', 'size']),
 			runAdbOnDevice(serial, ['shell', 'wm', 'density']),
 			runAdbOnDevice(serial, ['shell', 'getprop']),
+			runAdbOnDevice(serial, ['shell', 'dumpsys', 'window', 'd']),
 		]);
 
 		const screen = parseWmSize(size.stdout);
@@ -1041,6 +1049,9 @@ export class AndroidDeviceBackend implements DeviceBackend {
 				densityScale: dpi.scale,
 				widthDp: screen.effective.width / dpi.scale,
 				heightDp: screen.effective.height / dpi.scale,
+				// Against the **effective** dimensions, because that is what the device renders at
+				// and therefore what the window manager states these frames against.
+				systemBars: parseSystemBarInsets(displays.stdout, screen.effective),
 			},
 			osVersion: props.androidRelease,
 			osApiLevel: props.apiLevel,

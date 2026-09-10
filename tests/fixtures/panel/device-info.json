@@ -3,29 +3,36 @@
     {
       "serial": "emulator-5554",
       "platform": "android",
-      "model": "sdk_gphone64_arm64",
+      "model": "sdk_gphone16k_arm64",
       "screen": {
-        "widthPx": 1080,
-        "heightPx": 2400,
-        "density": 420,
-        "densityScale": 2.625,
-        "widthDp": 411.42857142857144,
-        "heightDp": 914.2857142857143
+        "widthPx": 1280,
+        "heightPx": 2856,
+        "density": 480,
+        "densityScale": 3,
+        "widthDp": 426.6666666666667,
+        "heightDp": 952,
+        "systemBars": {
+          "top": 156,
+          "bottom": 72,
+          "left": 0,
+          "right": 0
+        }
       },
-      "osVersion": "15",
-      "osApiLevel": 35
+      "osVersion": "17",
+      "osApiLevel": 37
     },
     {
       "serial": "emulator-5554",
       "platform": "android",
       "model": null,
       "screen": {
-        "widthPx": 1080,
-        "heightPx": 2400,
-        "density": 420,
-        "densityScale": 2.625,
-        "widthDp": 411.42857142857144,
-        "heightDp": 914.2857142857143
+        "widthPx": 1280,
+        "heightPx": 2856,
+        "density": 480,
+        "densityScale": 3,
+        "widthDp": 426.6666666666667,
+        "heightDp": 952,
+        "systemBars": null
       },
       "osVersion": null,
       "osApiLevel": null

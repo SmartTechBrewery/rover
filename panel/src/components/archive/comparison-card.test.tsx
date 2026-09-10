@@ -15,6 +15,10 @@ const { host } = vi.hoisted(() => ({
 		byName: {} as Record<string, unknown>,
 		/** Every address the byte route was asked for, in order. */
 		asked: [] as readonly (readonly string[])[],
+		/** What `device_info.json` says, per run directory name. */
+		deviceByRun: {} as Record<string, unknown>,
+		/** Every address the text route was asked for, in order. */
+		textAsked: [] as readonly (readonly string[])[],
 	},
 }));
 /**
@@ -47,6 +51,24 @@ vi.mock('@panel/session/session-provider.js', () => ({
 			return {
 				ok: true,
 				value: host.byName[path.at(-1) ?? ''] ?? { outcome: 'missing' },
+			};
+		},
+		/*
+		 * The other half of the byte route: `device_info.json`, which the card reads for each run of
+		 * a pair once the reader asks for the marks, for the one field that says where that device
+		 * draws its system bars (`archive/device-info.ts`). Scripted per run directory, because the
+		 * two runs of a pair are exactly what may disagree about it.
+		 */
+		readArtifactText: async (path: readonly string[]) => {
+			host.textAsked = [...host.textAsked, path];
+			const run = path.at(-3) ?? '';
+			const body = host.deviceByRun[run];
+			return {
+				ok: true,
+				value:
+					body === undefined
+						? { outcome: 'missing' }
+						: { outcome: 'read', text: JSON.stringify(body) },
 			};
 		},
 	}),
@@ -120,6 +142,21 @@ function flat(width: number, height: number, shade: number) {
 	return { width, height, pixels };
 }
 
+/**
+ * A bitmap of one flat shade with some rows lit — enough to place a difference in a band and a
+ * difference in the content, which is what an ignored edge has to be able to tell apart.
+ */
+function litRows(width: number, height: number, rows: readonly (readonly [number, number])[]) {
+	const bitmap = flat(width, height, 0);
+	for (const [from, to] of rows) {
+		bitmap.pixels.fill(255, from * width * 4, to * width * 4);
+	}
+	for (let at = 3; at < bitmap.pixels.length; at += 4) {
+		bitmap.pixels[at] = 255;
+	}
+	return bitmap;
+}
+
 /** The control, by the name a screen reader would find it under. */
 function control() {
 	return screen.getByRole('button', { name: 'Differences' });
@@ -155,6 +192,15 @@ beforeEach(() => {
 		'after.png': bytes('image/png', 'after'),
 	};
 	host.asked = [];
+	/*
+	 * **Neither run reports its bars by default**, so every test that is not about them compares
+	 * the whole image — which is also what a run archived before the host recorded them looks like.
+	 */
+	host.deviceByRun = {
+		[FIRST]: { serial: SERIAL, platform: 'android' },
+		[SECOND]: { serial: SERIAL, platform: 'android' },
+	};
+	host.textAsked = [];
 	decode.answers = [];
 	decode.asked = [];
 });
@@ -683,5 +729,87 @@ describe('where the second artifact differs from the first', () => {
 		expect(screen.queryByRole('button', { name: 'Differences' })).toBeNull();
 		expect(container.querySelectorAll('button')).toHaveLength(0);
 		expect(panes(container)).toHaveLength(3);
+	});
+});
+
+/**
+ * **The system bars, set aside because two runs always differ in them** (`docs/DESIGN.md` §9).
+ *
+ * The band is the *device's* own, read out of each run's `device_info.json`, and the two runs have
+ * to agree about it before anything is set aside — so what is asserted here is the reading, the
+ * agreement, and that nothing is ever hidden without the card saying so.
+ */
+describe('the bands the two runs’ own system bars take off the answer', () => {
+	/** A pair differing in the top 16 rows and again in the middle: one band, one content region. */
+	function differsInTheBarAndBelow() {
+		decode.answers = [
+			flat(64, 64, 0),
+			litRows(64, 64, [
+				[0, 16],
+				[32, 48],
+			]),
+		];
+	}
+
+	/** What `device_info.json` carries for a device with a 16px top bar and nothing else. */
+	const BAR = { screen: { systemBars: { top: 16, bottom: 0, left: 0, right: 0 } } };
+
+	it('reads no device facts until the control is pressed', async () => {
+		differsInTheBarAndBelow();
+		await showing();
+
+		expect(host.textAsked).toEqual([]);
+	});
+
+	it('reads each run’s own device_info.json once the control is pressed', async () => {
+		differsInTheBarAndBelow();
+		await showing();
+		await press();
+
+		expect(host.textAsked.map((path) => path.at(-3))).toEqual([FIRST, SECOND]);
+		expect(host.textAsked.map((path) => path.at(-1))).toEqual([
+			'device_info.json',
+			'device_info.json',
+		]);
+	});
+
+	it('sets the agreed band aside, and says how many regions that took', async () => {
+		host.deviceByRun = { [FIRST]: BAR, [SECOND]: BAR };
+		differsInTheBarAndBelow();
+		const { container } = await showing();
+		await press();
+
+		expect(marksOn(panes(container)[1])).toHaveLength(1);
+		expect(container.textContent).toContain('1 region differs.');
+		expect(container.textContent).toContain('1 more is in the system bars.');
+	});
+
+	/**
+	 * **Two runs that disagree get nothing set aside**, and nothing hidden with it: two arms may
+	 * have run on devices with different screens (D14), and one device's chrome laid over another
+	 * device's pixels is not a band this card can claim.
+	 */
+	it('compares the whole image when the two runs disagree about their bars', async () => {
+		host.deviceByRun = {
+			[FIRST]: BAR,
+			[SECOND]: { screen: { systemBars: { top: 32, bottom: 0, left: 0, right: 0 } } },
+		};
+		differsInTheBarAndBelow();
+		const { container } = await showing();
+		await press();
+
+		expect(marksOn(panes(container)[1])).toHaveLength(2);
+		expect(container.textContent).toContain('2 regions differ.');
+		expect(container.textContent).not.toContain('system bars');
+	});
+
+	/** A run archived before the host recorded the bars, which is every run already on disk. */
+	it('compares the whole image for a run whose file carries no bars at all', async () => {
+		differsInTheBarAndBelow();
+		const { container } = await showing();
+		await press();
+
+		expect(marksOn(panes(container)[1])).toHaveLength(2);
+		expect(container.textContent).not.toContain('system bars');
 	});
 });

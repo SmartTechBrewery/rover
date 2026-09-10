@@ -257,7 +257,14 @@ Design work lives in [`DESIGN.md`](./DESIGN.md); the brief that produced the fir
    no region ranked above another. Three panes get no control at all, because choosing which of them
    the others are measured against would be inventing the `BASELINE` this card refuses to have.
    `docs/DESIGN.md` §9 settles it; `panel/src/archive/image-diff.ts` carries the arithmetic and the
-   measurement that shaped it.
+   measurement that shaped it. **And the two runs' own system bars are set aside**, because the
+   status bar differs between any two runs — time having passed between them — so the clock and the
+   signal glyph came out as two of the four regions on the first real pair. The bands are the
+   *device's* own, off `device_info.json`'s new `screen.systemBars` (D14, `PROJECT.md` §6 for the
+   measurement: 52 dp where the documentation says 24), both runs have to agree about them, and the
+   card says how many regions that took. **That half is not panel-only** — it is one new nullable
+   field on `device_info`, filled by asking the device, `null` from a backend with no route to the
+   fact, and no consumer branching on a platform to tell the difference.
 10. **Archive disk usage / retention view** — how much space the archive is using, and a manual
     prune action. **Both the exemption and the policy now exist on the host, and neither is on this
     surface.** The exemption is the `Keep` flag (`PROJECT.md` D33, #234): per

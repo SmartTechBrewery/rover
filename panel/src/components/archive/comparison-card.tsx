@@ -1,5 +1,6 @@
 import { keyOf } from '@panel/archive/archive-path.js';
 import { type ArchivedArtifactState, useArchivedArtifact } from '@panel/archive/artifact.js';
+import { useArchivedDeviceInfo } from '@panel/archive/device-info.js';
 import type { ComparisonPane, LabelComparison } from '@panel/archive/label-comparison.js';
 import {
 	type ImageMarks,
@@ -127,7 +128,24 @@ export function ComparisonCard({ comparison }: { readonly comparison: LabelCompa
 	 */
 	const reference = useArchivedArtifact(pair === null ? null : pair[0].path);
 	const compared = useArchivedArtifact(pair === null ? null : pair[1].path);
-	const differences = useMarkedDifferences(asked && pair !== null, reference, compared);
+	/*
+	 * **The two runs' own device facts, read only once the reader has asked**, which is what keeps
+	 * *the card makes no request of its own* true for everybody who never presses the control. They
+	 * are here for one field — `screen.systemBars` — because the status bar differs between any two
+	 * runs, time having passed between them, and the band to set aside is a fact only the device
+	 * has (D14, `archive/device-info.ts`). `null` fetches nothing, the same contract the artifact
+	 * reads above are gated on.
+	 */
+	const wanted = asked && pair !== null;
+	const referenceDevice = useArchivedDeviceInfo(wanted && pair !== null ? [...pair[0].run] : null);
+	const comparedDevice = useArchivedDeviceInfo(wanted && pair !== null ? [...pair[1].run] : null);
+	const differences = useMarkedDifferences(
+		wanted,
+		reference,
+		compared,
+		referenceDevice,
+		comparedDevice,
+	);
 
 	return (
 		<ContentsCard
@@ -268,10 +286,28 @@ function sentenceFor(differences: MarkedDifferences): string | null {
 		return 'These two have no pixels to compare.';
 	}
 	const marked = differences.marks.regions.length;
+	const aside = setAsideClause(differences.setAside);
 	if (marked === 0) {
-		return 'These two do not differ.';
+		return `These two do not differ.${aside}`;
 	}
-	return marked === 1 ? '1 region differs.' : `${marked} regions differ.`;
+	return marked === 1 ? `1 region differs.${aside}` : `${marked} regions differ.${aside}`;
+}
+
+/**
+ * What the sentence says about the bands the two runs' own system bars took off the answer.
+ *
+ * **It is named rather than left out**, which is the whole reason the count travels this far: two
+ * runs always differ in the status bar because time passed between them, so setting that band aside
+ * is what makes the rest of the answer readable — but it does hide real differences inside it, and a
+ * reader who is not told would have no way to know a mark was ever there.
+ */
+function setAsideClause(setAside: number): string {
+	if (setAside === 0) {
+		return '';
+	}
+	return setAside === 1
+		? ' 1 more is in the system bars.'
+		: ` ${setAside} more are in the system bars.`;
 }
 
 /**

@@ -92,6 +92,20 @@ export function toScreenInfo(profile: DeviceTypeProfile): ScreenInfo {
 		densityScale: mainScreenScale,
 		widthDp: mainScreenWidth / mainScreenScale,
 		heightDp: mainScreenHeight / mainScreenScale,
+		/*
+		 * **`null`, and it is the honest answer rather than a gap left for later.** The profile
+		 * this whole function reads is a device-type plist: it carries the screen, its scale and
+		 * its two DPI values, and **no safe area of any kind**. There is nothing here to read, and
+		 * a table of insets per device type written from documentation is exactly the remembered
+		 * fact `PROJECT.md` §6 exists to forbid — the Android side of this field measured 52 dp
+		 * where every guide says 24, on the first device it met.
+		 *
+		 * So the consumer is told *not answered* and behaves accordingly (`core/device.ts`,
+		 * `docs/DESIGN.md` §9), and **nothing branches on the platform to discover it**
+		 * (`ai/RULES.md` §2). What would change this is a verified route to a booted simulator's
+		 * own safe area; until somebody runs one, this stays `null`.
+		 */
+		systemBars: null,
 	});
 }
 

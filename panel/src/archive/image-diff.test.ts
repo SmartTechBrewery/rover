@@ -32,7 +32,7 @@ function band(from: number, height: number, shade: string): readonly string[] {
 	return Array.from({ length: height }, (_, step) => row(from + step, shade));
 }
 
-function bitmapOf(rows: readonly string[]): Bitmap {
+function bitmapFrom(rows: readonly string[]): Bitmap {
 	const width = rows[0]?.length ?? 0;
 	const pixels = new Uint8ClampedArray(width * rows.length * 4);
 	rows.forEach((line, y) => {
@@ -59,15 +59,15 @@ function regionsOf(before: Bitmap, after: Bitmap) {
 
 describe('two artifacts of one label, compared', () => {
 	it('finds nothing between an artifact and itself', () => {
-		const image = bitmapOf(band(0, 64, DARK));
+		const image = bitmapFrom(band(0, 64, DARK));
 
 		expect(regionsOf(image, image)).toEqual([]);
 	});
 
 	it('marks a block that changed where it stood', () => {
-		const before = bitmapOf(band(0, 64, DARK));
+		const before = bitmapFrom(band(0, 64, DARK));
 		// The middle sixteen rows, right across the width, so the change spans two tiles.
-		const after = bitmapOf([...band(0, 16, DARK), ...band(16, 16, LIGHT), ...band(32, 32, DARK)]);
+		const after = bitmapFrom([...band(0, 16, DARK), ...band(16, 16, LIGHT), ...band(32, 32, DARK)]);
 
 		expect(regionsOf(before, after)).toEqual([{ x: 0, y: 16, width: 32, height: 16 }]);
 	});
@@ -80,8 +80,8 @@ describe('two artifacts of one label, compared', () => {
 	 * inserted band is marked, and **the rows that merely moved are not**.
 	 */
 	it('marks an inserted band and not the rows it pushed down', () => {
-		const before = bitmapOf(band(0, 64, DARK));
-		const after = bitmapOf([
+		const before = bitmapFrom(band(0, 64, DARK));
+		const after = bitmapFrom([
 			...band(0, 16, DARK),
 			...band(100, 16, LIGHT),
 			// The same rows as `before` carried at y16 — the same stamps, sixteen rows lower.
@@ -96,8 +96,8 @@ describe('two artifacts of one label, compared', () => {
 	 * what is marked is the seam it left, and the rows below it are again left alone.
 	 */
 	it('marks the seam a deleted band left behind', () => {
-		const before = bitmapOf(band(0, 64, DARK));
-		const after = bitmapOf([
+		const before = bitmapFrom(band(0, 64, DARK));
+		const after = bitmapFrom([
 			...band(0, 16, DARK),
 			// `before`'s rows 32 onwards, sixteen rows higher, and a new band taking up the slack.
 			...band(32, 32, DARK),
@@ -116,8 +116,8 @@ describe('two artifacts of one label, compared', () => {
 	 * instead of the change.
 	 */
 	it('leaves a few stray pixels unmarked', () => {
-		const before = bitmapOf(band(0, 64, DARK));
-		const after = bitmapOf(band(0, 64, DARK));
+		const before = bitmapFrom(band(0, 64, DARK));
+		const after = bitmapFrom(band(0, 64, DARK));
 		for (let x = 0; x < 4; x += 1) {
 			const at = (20 * WIDE + STAMP + x) * 4;
 			after.pixels[at] = 255;
@@ -134,8 +134,8 @@ describe('two artifacts of one label, compared', () => {
 	 * *never stretched and never cropped* about the same pixels.
 	 */
 	it('refuses two artifacts of different dimensions', () => {
-		const before = bitmapOf(band(0, 64, DARK));
-		const after = bitmapOf(band(0, 48, DARK));
+		const before = bitmapFrom(band(0, 64, DARK));
+		const after = bitmapFrom(band(0, 48, DARK));
 
 		expect(differenceBetween(before, after)).toEqual({ outcome: 'different-dimensions' });
 		expect(differenceBetween(after, before)).toEqual({ outcome: 'different-dimensions' });
@@ -144,13 +144,63 @@ describe('two artifacts of one label, compared', () => {
 	it('answers an empty image with no regions rather than a refusal', () => {
 		const empty: Bitmap = { width: 0, height: 0, pixels: new Uint8ClampedArray(0) };
 
-		expect(differenceBetween(empty, empty)).toEqual({ outcome: 'compared', regions: [] });
+		expect(differenceBetween(empty, empty)).toEqual({
+			outcome: 'compared',
+			regions: [],
+			setAside: 0,
+		});
+	});
+
+	/**
+	 * **The system bars, set aside and *counted*** (`docs/DESIGN.md` §9). Two runs always differ in
+	 * the status bar because time passed between them, and the numbers come from the device rather
+	 * than from a constant — so the band here is stated the way `device_info.json` states it.
+	 */
+	it('leaves an ignored edge band out of the answer, and says how many regions that took', () => {
+		const before = bitmapFrom(band(0, 96, DARK));
+		const after = bitmapFrom([
+			// One band inside the top inset — the clock's own tile row — and one in the content.
+			...band(0, 16, LIGHT),
+			...band(16, 16, DARK),
+			...band(32, 16, LIGHT),
+			...band(48, 48, DARK),
+		]);
+
+		expect(differenceBetween(before, after)).toMatchObject({
+			regions: [
+				{ y: 0, height: 16 },
+				{ y: 32, height: 16 },
+			],
+			setAside: 0,
+		});
+		expect(differenceBetween(before, after, { top: 16, bottom: 0, left: 0, right: 0 })).toEqual({
+			outcome: 'compared',
+			regions: [{ x: 0, y: 32, width: 32, height: 16 }],
+			setAside: 1,
+		});
+	});
+
+	/**
+	 * **A tile is only set aside when all of it is inside the band.** A band's own edge lands
+	 * mid-tile at this grain, and rounding that tile away would hide fifteen rows of content on the
+	 * strength of one row of chrome — so a region straddling the band survives, trimmed.
+	 */
+	it('keeps a region that straddles the band, trimmed rather than dropped', () => {
+		const before = bitmapFrom(band(0, 96, DARK));
+		const after = bitmapFrom([...band(0, 32, LIGHT), ...band(32, 64, DARK)]);
+
+		// The band ends eight rows into the second tile row, so that row is compared and kept.
+		expect(differenceBetween(before, after, { top: 24, bottom: 0, left: 0, right: 0 })).toEqual({
+			outcome: 'compared',
+			regions: [{ x: 0, y: 16, width: 32, height: 16 }],
+			setAside: 0,
+		});
 	});
 
 	/** Top to bottom, then left to right — the order the overlay draws in and a test can assert. */
 	it('gives its regions in reading order', () => {
-		const before = bitmapOf(band(0, 96, DARK));
-		const after = bitmapOf([
+		const before = bitmapFrom(band(0, 96, DARK));
+		const after = bitmapFrom([
 			...band(0, 16, DARK),
 			...band(16, 16, LIGHT),
 			...band(32, 32, DARK),

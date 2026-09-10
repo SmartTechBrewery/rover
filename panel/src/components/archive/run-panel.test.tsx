@@ -147,11 +147,11 @@ describe('the device the lease held', () => {
 		for (const label of ['MODEL', 'PLATFORM', 'OS VERSION', 'API LEVEL', 'SCREEN', 'DENSITY']) {
 			expect(screen.getByText(label)).toBeDefined();
 		}
-		expect(screen.getByText('sdk_gphone64_arm64')).toBeDefined();
-		expect(screen.getByText('15')).toBeDefined();
-		expect(screen.getByText('35')).toBeDefined();
-		expect(screen.getByText('1080 x 2400 px')).toBeDefined();
-		expect(screen.getByText('2.625x — 411 x 914 dp')).toBeDefined();
+		expect(screen.getByText('sdk_gphone16k_arm64')).toBeDefined();
+		expect(screen.getByText('17')).toBeDefined();
+		expect(screen.getByText('37')).toBeDefined();
+		expect(screen.getByText('1280 x 2856 px')).toBeDefined();
+		expect(screen.getByText('3x — 427 x 952 dp')).toBeDefined();
 	});
 
 	// The wire's own word. A display table mapping it onto `Android` would be a platform branch in

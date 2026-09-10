@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import type { ArchivedArtifactState } from './artifact.js';
 import { bitmapOf } from './bitmap.js';
-import { type DiffRegion, differenceBetween } from './image-diff.js';
+import { type ArchivedDeviceInfo, systemBarsShared } from './device-info.js';
+import { type DiffRegion, differenceBetween, type EdgeInsets } from './image-diff.js';
 
 /**
  * **The comparison card's marks, from the moment the reader asks for them** — the one hook between
@@ -34,7 +35,18 @@ export type MarkedDifferences =
 	/** Both files are here and the comparison is running. */
 	| { readonly status: 'measuring' }
 	/** Where the second differs from the first — **empty when they do not differ at all**. */
-	| { readonly status: 'marked'; readonly marks: ImageMarks }
+	| {
+			readonly status: 'marked';
+			readonly marks: ImageMarks;
+			/**
+			 * How many regions the two runs' own system bars took off the answer.
+			 *
+			 * **Said out loud rather than swallowed** (`docs/DESIGN.md` §9): setting a band aside
+			 * hides real differences inside it — the clock, and an arm that hid the bar altogether —
+			 * so the card names the count instead of quietly drawing a smaller answer.
+			 */
+			readonly setAside: number;
+	  }
 	/**
 	 * The two artifacts are different sizes, so there is no comparison to draw. Not an error: two
 	 * arms may have run on devices with different screens, both measurements are correct, and
@@ -71,14 +83,35 @@ export function useMarkedDifferences(
 	asked: boolean,
 	reference: ArchivedArtifactState,
 	compared: ArchivedArtifactState,
+	referenceDevice: ArchivedDeviceInfo,
+	comparedDevice: ArchivedDeviceInfo,
 ): MarkedDifferences {
+	/*
+	 * **The bands come from the two runs' own `device_info.json`**, and the two device reads are
+	 * arguments for the same reason the two artifact states are: this hook decides *when* there is
+	 * a pair to compare, and a run whose device facts are still in flight is not one yet. Reading
+	 * without them and re-reading with them would decode 29 MB twice for one press.
+	 */
+	const bars = systemBarsShared(referenceDevice, comparedDevice);
+	/*
+	 * **Nothing may be measured while any of the four reads is still out**, and this is a
+	 * correction rather than a belt-and-braces check: without it a press while the device files
+	 * were in flight measured once against *no* bands, then again when they landed and the key
+	 * changed — two decodes and two comparisons of 29 MB for one press, which is the cost this
+	 * whole hook is arranged to spend once. `comparison-card.test.tsx` pins it.
+	 */
+	const waiting =
+		reference.status === 'reading' ||
+		compared.status === 'reading' ||
+		referenceDevice.status === 'reading' ||
+		comparedDevice.status === 'reading';
 	/*
 	 * The two handles as one string, which is both the cache key and the whole of what the effect
 	 * needs — `useArchivedArtifact`'s `JSON.stringify(path)` idiom, and for its reason: an array
 	 * rebuilt every render cannot be a dependency, and a newline separates two `blob:` URLs
 	 * unambiguously because neither can contain one.
 	 */
-	const key = keyOfPixels(reference, compared);
+	const key = keyOfPixels(reference, compared, bars);
 	const [held, setHeld] = useState<{ readonly of: string; readonly answer: MarkedDifferences }>({
 		of: '',
 		answer: IDLE,
@@ -91,13 +124,14 @@ export function useMarkedDifferences(
 	const measured = useRef<string | null>(null);
 
 	useEffect(() => {
-		if (!asked || key === null || measured.current === key) {
+		if (!asked || waiting || key === null || measured.current === key) {
 			return;
 		}
 		measured.current = key;
 		setHeld({ of: key, answer: MEASURING });
 		let live = true;
 		const [reading, against] = key.split('\n');
+		const ignore = ignoreOf(key);
 		void (async () => {
 			const [first, second] = await Promise.all([bitmapOf(reading), bitmapOf(against)]);
 			if (!live) {
@@ -107,7 +141,7 @@ export function useMarkedDifferences(
 				setHeld({ of: key, answer: UNAVAILABLE });
 				return;
 			}
-			const difference = differenceBetween(first, second);
+			const difference = differenceBetween(first, second, ignore);
 			setHeld({
 				of: key,
 				answer:
@@ -115,6 +149,7 @@ export function useMarkedDifferences(
 						? {
 								status: 'marked',
 								marks: { regions: difference.regions, width: second.width, height: second.height },
+								setAside: difference.setAside,
 							}
 						: { status: 'different-dimensions' },
 			});
@@ -122,12 +157,12 @@ export function useMarkedDifferences(
 		return () => {
 			live = false;
 		};
-	}, [asked, key]);
+	}, [asked, key, waiting]);
 
 	if (!asked) {
 		return IDLE;
 	}
-	if (reference.status === 'reading' || compared.status === 'reading') {
+	if (waiting) {
 		return READING;
 	}
 	if (key === null) {
@@ -147,6 +182,7 @@ export function useMarkedDifferences(
 function keyOfPixels(
 	reference: ArchivedArtifactState,
 	compared: ArchivedArtifactState,
+	bars: EdgeInsets | null,
 ): string | null {
 	if (reference.status !== 'read' || compared.status !== 'read') {
 		return null;
@@ -154,5 +190,12 @@ function keyOfPixels(
 	if (reference.body.kind !== 'image' || compared.body.kind !== 'image') {
 		return null;
 	}
-	return `${reference.body.url}\n${compared.body.url}`;
+	// The bands are **in** the key: an answer measured with a band set aside is not an answer about
+	// the same question as one measured without it, so the two must never be served for each other.
+	return `${reference.body.url}\n${compared.body.url}\n${JSON.stringify(bars)}`;
+}
+
+/** The bands back out of the key, so the effect depends on one string and not on an object. */
+function ignoreOf(key: string): EdgeInsets | null {
+	return JSON.parse(key.split('\n')[2] ?? 'null') as EdgeInsets | null;
 }
