@@ -37,13 +37,21 @@
 	 * exactly the class the next checkbox forgets, and `pointer-on-what-can-be-pressed.test.ts`
 	 * refuses it. The **label** is in the selector too, because it is the larger half of the hit
 	 * area: the word `Archive` toggles the box, and an arrow over it while the box itself points
-	 * would say the text is not part of the control. `:has(> input…)` keeps that to a label that
+	 * would say the text is not part of the control. `:has(input…)` keeps that to a label that
 	 * actually wraps one, so a `<label>` over a text field is untouched, and `:not(:disabled)`
 	 * carries over for the reason it exists above.
+	 *
+	 * **The combinator went, and it had to** (corrected in place). It was `:has(> input…)`, and the
+	 * one label in the panel this rule exists for does not wrap its input directly — it is nested in
+	 * the cell that draws the lamp (`archive-checkbox.tsx`) — so the child combinator matched the
+	 * test's own fixture and nothing on the screen. That went unseen while the label was a word
+	 * beside a box; it stopped being invisible when the label became `Remove`'s pill, with padding
+	 * and a frame that are plainly part of the control. A descendant `:has()`
+	 * still tells the two labels apart, which is all the combinator was ever there for.
 	 */
 	button:not(:disabled),
 	input[type='checkbox']:not(:disabled),
-	label:has(> input[type='checkbox']:not(:disabled)) {
+	label:has(input[type='checkbox']:not(:disabled)) {
 		cursor: pointer;
 	}
 

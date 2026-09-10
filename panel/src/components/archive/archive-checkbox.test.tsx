@@ -124,10 +124,12 @@ describe('the Keep tick', () => {
 
 		expect(tick().checked).toBe(false);
 		expect(tick().indeterminate).toBe(true);
-		// Filled like a kept box, so *some* reads as closer to on than to off, and the glyph is what
-		// tells them apart.
-		expect(tick().className).toContain('bg-tertiary');
-		expect(container.querySelector('svg')).not.toBeNull();
+		// The lamp is lit like a kept one, so *some* reads as closer to on than to off, and the glyph
+		// is what tells them apart — a dash rather than the tick an unlit lamp already carries.
+		// **On the input's parent and not on the input**: the box is not drawn any more (the input is
+		// `opacity-0` across the whole pill), and what fills is the cell it sits in.
+		expect(tick().parentElement?.className).toContain('bg-tertiary');
+		expect(container.querySelector('svg')?.getAttribute('class')).toContain('lucide-minus');
 	});
 
 	it('takes the group’s wording from the scope, and nothing else from it', () => {

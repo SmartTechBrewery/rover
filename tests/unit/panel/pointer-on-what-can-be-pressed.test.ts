@@ -75,12 +75,16 @@ beforeAll(() => {
 	// a `<div>` inside an `<li>`, read and not followed (#161, `docs/DESIGN.md` §9) — and the last
 	// two are the Archive screen's `Keep` tick with the label that wraps it (§9), beside a
 	// `<label>` over a text field, which the rule must leave alone.
+	//
+	// **The tick's input is inside a span, because it is on the screen too** — the real control
+	// nests it in the cell that draws the lamp (`archive-checkbox.tsx`). A flat fixture is what let
+	// `:has(> input…)` pass here while matching nothing in the panel.
 	document.body.innerHTML = `
 		<button id="pressable" type="button">All</button>
 		<button disabled id="unpressable" type="submit">Checking…</button>
 		<ul><li><div id="row">20260826T101155Z-issue-104-2fd913c7</div></li></ul>
 		<a href="/archive" id="link">checkout-app</a>
-		<label id="tick"><input id="box" type="checkbox" /><span>Archive</span></label>
+		<label id="tick"><span><input id="box" type="checkbox" /></span><span>Keep</span></label>
 		<label id="field-label">Search<input id="field" type="text" /></label>
 	`;
 });
@@ -130,7 +134,7 @@ describe('the panel points at what can be pressed', () => {
 	});
 
 	/*
-	 * `:has(> input[type='checkbox'])` is what keeps that to a label over a checkbox. A label over
+	 * `:has(input[type='checkbox'])` is what keeps that to a label over a checkbox. A label over
 	 * a text field is not a press, and the archive search field's is one of them.
 	 */
 	it('points at nothing on a label over a text field', () => {
@@ -162,7 +166,7 @@ describe('and nothing in the panel takes that pointer away', () => {
 		}
 
 		expect(declared).toEqual([
-			"panel/src/index.css: button:not(:disabled),\n\tinput[type='checkbox']:not(:disabled),\n\tlabel:has(> input[type='checkbox']:not(:disabled))",
+			"panel/src/index.css: button:not(:disabled),\n\tinput[type='checkbox']:not(:disabled),\n\tlabel:has(input[type='checkbox']:not(:disabled))",
 		]);
 	});
 

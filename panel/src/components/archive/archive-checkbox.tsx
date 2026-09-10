@@ -1,4 +1,5 @@
 import type { PinState } from '@panel/archive/pinned-tests.js';
+import { BADGE_SHAPE, BADGE_TYPE } from '@panel/components/archive/header-badge.js';
 import { Check, Minus } from 'lucide-react';
 import { useId } from 'react';
 
@@ -40,12 +41,34 @@ import { useId } from 'react';
  * `group-focus-visible` variant, because the thing that takes focus is the input *inside* the
  * group, not the group.
  *
- * **A native `<input type="checkbox">`**, not a `<button role="checkbox">`: the element already
- * carries the role, the tick state, the space bar and the label association, and re-implementing
- * those is how a control ends up almost accessible. `appearance-none` takes the browser's own box
- * away so the frame can be the panel's, and the glyph is drawn over it — a checked native box
- * cannot be recoloured to `tertiary` on every platform, which is the one thing this control has to
- * agree with the rest of the screen about.
+ * **It is drawn as a two-cell pill, not as a checkbox** — `Remove`'s frame from the same
+ * `BADGE_SHAPE` and `BADGE_TYPE` (`header-badge.tsx`, §10), divided by that frame's own border into
+ * a **lamp** on the left and the word on the right. Two attempts stand behind that: a bare box and
+ * a word, which read as a stray tick loose in a strip beside a bordered control; and the same box
+ * put inside the pill, which is what a checkbox dropped into a button looks like — a control inside
+ * a control, with two frames and two radii nested a pixel apart. The lamp is the one that is not
+ * either: a square well at the pill's left edge that fills `tertiary` when the test is kept, so the
+ * whole control reads as one pressable thing whose left end is lit or unlit.
+ *
+ * **The constants are shared and not copied**, which is the half that keeps this from drifting: the
+ * radius, the border width, the padding and the 12px face are the declarations `Remove` and the
+ * header badges read, so an edit to one moves all of them. Only the padding sits somewhere else
+ * than on `Remove` — the lamp has to reach the frame, so `BADGE_TYPE` goes on the word's cell,
+ * exactly as `view-toggle.tsx` puts it on a segment rather than on its own frame.
+ *
+ * **The word is one colour in every state, and that is a reversal.** It used to be
+ * `on-surface-variant` warming on hover and going `tertiary` when on — the whole of the state, back
+ * when there was nothing else to carry it. The lamp carries it now, and a word that also changed
+ * was the state said twice: it made a settled control look like it was still reacting, and it put
+ * green in two places when green means *kept* in one. `Remove`'s word does not move either.
+ *
+ * **Still a native `<input type="checkbox">`**, not a `<button role="checkbox">`: the element
+ * already carries the role, the tick state, the space bar and the label association, and
+ * re-implementing those is how a control ends up almost accessible. It is no longer *drawn*,
+ * though — `opacity-0` across the whole pill instead of `appearance-none` at the size of a box,
+ * because the lamp is what a reader sees and no native box can be made into one. Spanning the pill
+ * rather than the lamp is deliberate: the input is the hit area, so the entire control presses and
+ * there is no dead strip between the lamp and the word.
  */
 export function ArchiveCheckbox({
 	pin,
@@ -65,6 +88,9 @@ export function ArchiveCheckbox({
 	readonly scope?: 'test' | 'group';
 }) {
 	const describedBy = useId();
+	// `on` covers both states the control is drawn lit in — a tick, and a group's dash — and it is
+	// one name because the frame, the box, the glyph and the word must never disagree about it.
+	const on = pin.checked || pin.mixed === true;
 
 	return (
 		/*
@@ -80,21 +106,63 @@ export function ArchiveCheckbox({
 		 * `getByRole('checkbox', { name: 'Keep' })`, which is the query a screen reader performs.
 		 */
 		<span className="group relative flex shrink-0 items-center gap-2">
-			<label className="flex items-center gap-2 select-none">
-				<span className="relative inline-flex size-4 shrink-0">
+			{/*
+			 * **The pill is the `<label>`, and it is two cells rather than a box beside a word** — the
+			 * lamp on the left, the word on the right, divided by the frame's own border. So the
+			 * padding cannot be on the label the way `BADGE_TYPE` writes it (the lamp has to reach
+			 * the frame on three sides), and it is on the word's cell instead — the arrangement
+			 * `view-toggle.tsx` already uses with `BADGE_FRAME` and `p-0`, for the same reason.
+			 *
+			 * `overflow-hidden` so the lamp's fill is clipped by the pill's own radius, and
+			 * `items-stretch` so it is the word's line height that sets how tall both cells are —
+			 * neither cell states a height, so the control cannot end up a pixel off `Remove`.
+			 *
+			 * `has-[:focus-visible]` puts the keyboard's ring on the *frame*, because the input it
+			 * belongs to is invisible: `:focus-visible` rather than `:focus` for the reason it always
+			 * was — the click that toggles a checkbox also focuses it, and a ring drawn then reads as
+			 * an error.
+			 *
+			 * **The frame itself does not light with the state**, and that is the point of the lamp:
+			 * `outline-variant` at rest warming to `tertiary` under the pointer, the mirror of
+			 * `Remove` warming to `error`, so hover means *this can be pressed* on both controls and
+			 * green on this one means *kept* in exactly one place.
+			 */}
+			<label
+				className={`${BADGE_SHAPE} relative flex items-stretch overflow-hidden border-outline-variant bg-surface-container transition-colors select-none hover:border-tertiary has-[:focus-visible]:border-tertiary`}
+			>
+				{/*
+				 * The lamp. `border-r-2 border-outline-variant` is the frame continued inwards rather
+				 * than a rule of its own, so it stays the frame's colour in both states — a green
+				 * divider would draw the eye to the join rather than to the fill. At rest the cell is
+				 * `bg-surface` — a well sunk below the pill's own `surface-container` — with the glyph
+				 * at the frame's weight, and on it fills `tertiary` with `on-tertiary` over it, the
+				 * pairing the panel uses everywhere something is lit (§3).
+				 *
+				 * **The glyph is drawn in both states**, unlike the box this replaced: an empty well
+				 * says *there is a light here and it is off*, where an empty box said only that
+				 * something was unticked. The dash still stands for a group that is part-kept.
+				 */}
+				<span
+					className={`flex items-center justify-center border-outline-variant border-r-2 px-2 transition-colors ${
+						on ? 'bg-tertiary text-on-tertiary' : 'bg-surface text-outline-variant'
+					}`}
+				>
 					{/*
-					 * The search field's own frame, at checkbox size — `rounded-sm border-2
-					 * border-outline-variant bg-surface`, warming to `tertiary` when it is on, which is
-					 * the green that means *active* everywhere else in the panel (§3: the breadcrumb's
-					 * last segment, the current nav item, this screen's view toggle).
+					 * **Still a native `<input type="checkbox">`**, and still the only thing that holds
+					 * the state: the element carries the role, the tick, the space bar and the label
+					 * association, and re-implementing those is how a control ends up almost
+					 * accessible. What changed is that it is no longer *drawn* — `opacity-0` over the
+					 * whole pill rather than `appearance-none` at the size of a box, because the lamp
+					 * is now what a reader sees and no native checkbox can be made to look like one.
 					 *
-					 * `focus-visible` rather than `focus`: the field beside it takes a caret and shows
-					 * its ring on any focus, while a checkbox is also focused by the click that just
-					 * toggled it, and a ring drawn then reads as an error.
+					 * `absolute inset-0` is deliberate on top of that: the input is the hit area, so
+					 * the whole pill presses like the button it now resembles, and there is no dead
+					 * strip between the lamp and the word.
 					 */}
 					<input
 						aria-describedby={describedBy}
 						checked={pin.checked}
+						className="absolute inset-0 m-0 appearance-none opacity-0"
 						/*
 						 * **`indeterminate` is a property and not an attribute**, so React cannot set it
 						 * from JSX — this ref is the only way to reach it. It is what a group's tick says
@@ -106,53 +174,26 @@ export function ArchiveCheckbox({
 								box.indeterminate = pin.mixed ?? false;
 							}
 						}}
-						className={`size-4 appearance-none rounded-sm border-2 bg-surface transition-colors focus-visible:border-tertiary ${
-							pin.checked || pin.mixed === true
-								? 'border-tertiary bg-tertiary'
-								: 'border-outline-variant'
-						}`}
 						onChange={pin.toggle}
 						type="checkbox"
 					/>
-					{pin.checked || pin.mixed === true
-						? /*
-							 * `lucide-react`'s glyph over the box, not the design's Material Symbols one (§9),
-							 * and `on-tertiary` because that is the token paired with the fill underneath it.
-							 * `pointer-events-none` so the glyph never eats the click meant for the input.
-							 *
-							 * **A dash for `mixed`**, which is the glyph a half-ticked box has carried since
-							 * long before this panel: *some of what this stands over*, drawn as neither a tick
-							 * nor an empty box, so the three states are three things a reader can see.
-							 */
-							(() => {
-								const Glyph = pin.checked ? Check : Minus;
-								return (
-									<Glyph
-										aria-hidden="true"
-										className="pointer-events-none absolute inset-0 text-on-tertiary"
-										size={16}
-										strokeWidth={3}
-									/>
-								);
-							})()
-						: null}
+					{(() => {
+						const Glyph = pin.mixed === true ? Minus : Check;
+						return <Glyph aria-hidden="true" size={14} strokeWidth={3} />;
+					})()}
 				</span>
 				{/*
-				 * 12px in the code face, which is the view toggle's `SEGMENT` — and for the reason
-				 * recorded there, from Tailwind's own `--text-xs` rather than the caps step, whose 700
-				 * weight and 0.1em tracking would come along with the size. The label warms on hover the
-				 * way an inactive toggle segment does, and goes green when it is on, so the state is
-				 * legible without the box.
+				 * The word, in `BADGE_TYPE` — the padding and the 12px code face `Remove` and the
+				 * header badges read from the same constant.
+				 *
+				 * **It does not change colour any more, in any state.** It was `on-surface-variant`
+				 * warming on hover and going `tertiary` when on, which was the whole of the state
+				 * before the lamp existed; with a lamp beside it that is the state said twice, and the
+				 * second saying was the one that made a settled control look like it was still
+				 * reacting. `Remove`'s word is one colour whatever the pointer is doing, and this is
+				 * now the same.
 				 */}
-				<span
-					className={`font-code-md text-xs transition-colors ${
-						pin.checked || pin.mixed === true
-							? 'text-tertiary'
-							: 'text-on-surface-variant group-hover:text-on-surface'
-					}`}
-				>
-					Keep
-				</span>
+				<span className={`${BADGE_TYPE} text-on-surface`}>Keep</span>
 			</label>
 			{/*
 			 * **Always in the DOM, shown by CSS rather than mounted**, because it is the checkbox's

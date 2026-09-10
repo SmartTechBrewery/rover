@@ -3048,7 +3048,7 @@ it keeps every test in that group — in **one** request carrying every one of t
 test, which is the shape `set_kept_tests` takes an array for; pressing it again, from kept, stops
 keeping them. It does **not** lock the tests underneath it — a reader may untick one afterwards, which is deliberately not
 prevented — and the group's own tick then says *some* through the platform's own third state,
-`indeterminate`, drawn as a dash in a filled box. Neither of the two roundings was acceptable: *off*
+`indeterminate`, drawn as a dash in a lit lamp. Neither of the two roundings was acceptable: *off*
 would say nothing in the group is kept, *on* would say all of it is. There is no *group is kept*
 flag anywhere; the truth is which tests are kept, and the group's tick both reads and writes exactly
 that. A group whose tests are not listed — the walk still out, an unreadable answer, or no runs at
@@ -3067,21 +3067,61 @@ is one lease's output; what a reader recognises across runs, and what a sweep wo
 test. It is keyed on `<project>/<test_name>` out of the **archive** address, so the same test is the
 same tick in the groups view, where the URL carries a group id the archive has no directory for.
 
+**It is drawn as a two-cell pill and no longer as a checkbox, and that is a correction in place**
+(`ai/RULES.md` §1). The tick was a bare box and a word for as long as it was the only thing at that
+end of the strip; once `Remove` landed beside it (below) the pair stopped reading as a pair — a
+stray tick next to a bordered control, at two different heights. **Two arrangements were tried and
+the first is recorded because the second looks arbitrary without it.** Putting the box *inside*
+`Remove`'s pill fixed the height and nothing else: a bordered box inside a bordered pill is a
+control inside a control, two frames and two radii nested a pixel apart. What replaced it divides
+the pill instead — the frame's own border run vertically down it, a **lamp** on the left and the
+word on the right:
+
+- **The lamp** is a square well at the pill's left edge, `bg-surface` sunk below the pill's own
+  `surface-container`, carrying `lucide-react`'s `Check` at the frame's own weight. Kept fills it
+  `tertiary` with the glyph in `on-tertiary`, the pairing used everywhere in the panel something is
+  lit (§3). The glyph is there in **both** states, which the box it replaced could not manage: an
+  unlit lamp says *there is a light here and it is off*, where an empty box said only *unticked*. A
+  group that is part-kept lights the same way and swaps the tick for a dash.
+- **The frame does not light**, and that is the point of the lamp. `outline-variant` at rest,
+  warming to `tertiary` under the pointer — the mirror of `Remove` warming to `error` — so hover
+  means *this can be pressed* on both controls, and green on this one means *kept* in exactly one
+  place. The keyboard's ring goes on the frame too, via `has-[:focus-visible]`, because the input
+  it belongs to is no longer visible.
+- **The word does not change colour in any state**, which reverses what it did before. It was
+  `on-surface-variant` warming on hover and going `tertiary` when on — the whole of the state, back
+  when nothing else carried it. With the lamp beside it that is the state said twice: it made a
+  settled control look like it was still reacting, and it put green in two places. `Remove`'s word
+  does not move either.
+- **`BADGE_SHAPE` and `BADGE_TYPE` are shared and not copied** (`header-badge.tsx`, §10), so the
+  radius, the border width, the padding and the 12px face are one declaration for the badges,
+  `Remove` and this. The one thing placed differently from `Remove` is that padding: the lamp has
+  to reach the frame, so `BADGE_TYPE` goes on the **word's cell**, exactly as `view-toggle.tsx`
+  puts it on a segment rather than on its own frame.
+
+The sentence, the popover, the flag itself and the three levels it is drawn at are untouched by any
+of this.
+
 **No approved Stitch screen shows a checkbox** — none was commissioned, exactly as for the view
 toggle above (§1, §11's third list) — so nothing about it is invented and every value is already on
-this screen: the search field's frame at checkbox size (`rounded-sm border-2 border-outline-variant
-bg-surface`), warming to the `tertiary` green that means *active* in the breadcrumb, the nav item
-and the view toggle; `lucide-react`'s `Check` over it in `on-tertiary`, the token paired with that
-fill; the label twelve pixels in the code face, the view toggle's own step, warming on hover the way
-an inactive segment does and going green when it is on. That is what keeps the deviation small
+this screen: `Remove`'s own frame around it, the lamp's well in `bg-surface` under the frame's
+`outline-variant`, the `tertiary` green that means *active* in the breadcrumb, the nav item and the
+view toggle, `lucide-react`'s glyph in `on-tertiary` — the token paired with that fill — and the
+word twelve pixels in the code face, the view toggle's own step. (**Amended in place** along with
+the arrangement above: this list used to read *the search field's frame at checkbox size*, with the
+word warming on hover and going green when on, which described the box and the coloured label that
+are both gone.) That is what keeps the deviation small
 enough to reconcile in one edit once a design for it exists.
 
-**It is a native `<input type="checkbox">`** with `appearance-none`, not a `<button
-role="checkbox">`: the element already carries the role, the tick state, the space bar and the
-label association. The glyph is drawn over the box rather than left to the browser, because a
-checked native box cannot be recoloured to `tertiary` on every platform — and the ring is
-`focus-visible` rather than `focus`, since a checkbox is also focused by the click that just toggled
-it and a ring drawn then reads as an error.
+**It is still a native `<input type="checkbox">`**, not a `<button role="checkbox">`: the element
+already carries the role, the tick state, the space bar and the label association, and
+re-implementing those is how a control ends up almost accessible. **It is no longer drawn, though**
+— `opacity-0` across the whole pill rather than `appearance-none` at the size of a box, because the
+lamp is what a reader sees and no native box can be made into one. That it spans the pill rather
+than the lamp is deliberate: the input is the hit area, so the whole control presses and there is no
+dead strip between the lamp and the word. The ring is `focus-visible` rather than `focus`, since a
+checkbox is also focused by the click that just toggled it and a ring drawn then reads as an
+error.
 
 **The sentence sits outside the `<label>`, and that is not cosmetic.** An accessible name is
 computed from the label's own text, so the sentence — written inside it first — became part of the
@@ -3094,10 +3134,17 @@ scroll.
 
 **The cursor came from the base rule, not from a utility on this control.** §5's *a pointer on what
 can be pressed* is one rule in `index.css`, and a checkbox is pressable — so
-`input[type='checkbox']:not(:disabled)` and `label:has(> input[type='checkbox']:not(:disabled))`
+`input[type='checkbox']:not(:disabled)` and `label:has(input[type='checkbox']:not(:disabled))`
 joined that selector rather than this component carrying a `cursor-pointer`. The label is in it
-because the word `Archive` toggles the box and is the larger half of the hit area;
-`pointer-on-what-can-be-pressed.test.ts` gates both, and refuses the utility.
+because the word `Keep` toggles the box and is the larger half of the hit area;
+`pointer-on-what-can-be-pressed.test.ts` gates both, and refuses the utility. **The label's half of
+it did not actually work until the pill landed**, and the reason is worth keeping: the selector was
+`:has(> input…)`, and this label does not wrap its input directly — it is nested in the cell that
+draws the lamp — so the child combinator matched the test's own flat fixture and nothing on the
+screen. Invisible while the label was a word beside a box; obvious the moment the label became a
+frame with padding. The combinator is gone, the fixture nests its box the way the
+control does, and a descendant `:has()` still leaves a `<label>` over a text field alone, which is
+all the combinator was there for.
 
 **It reverses one sentence of #161 in place, and only one.** *Nothing on the run's card is
 clickable* was about **navigation**: the tree is the one way to move through the archive, and a card
