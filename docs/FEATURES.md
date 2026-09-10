@@ -954,7 +954,7 @@ raises its own request timeout past the recording, so a long recording is never 
 
 Everything host-level comes from the environment, and **every row mirrors a Zod schema, which is the
 source of truth** (`ai/RULES.md` §7): the daemon and the CLI fail at startup naming the variable and
-the reason rather than binding something surprising. `README.md` carries the full table with each
+the reason rather than binding something surprising. `docs/MANUAL.md` carries the full table with each
 row's reasoning; this is the map.
 
 | Group | Variables |

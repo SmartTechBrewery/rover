@@ -16,7 +16,7 @@ So the rule is about **verdicts, not about arithmetic**, and it is unchanged in 
 
 **Read `PROJECT.md` before writing code.** It carries the twenty decisions this design rests on, with the reasoning behind each, plus adb recipes verified against a real device. When a rule here is underspecified, the decision table there is the tie-breaker.
 
-**Keep `PROJECT.md` and `README.md` current.** If a change makes either inaccurate — a renamed verb, a changed lease rule, a decision reversed — update it in the same change. A reversed decision is edited **in place with its reason rewritten**, not deleted: the record of what was considered and rejected is most of that document's value.
+**Keep `PROJECT.md`, `README.md` and `docs/MANUAL.md` current.** The README is the short version — what Rover is, what you get, and how to install it — and [`docs/MANUAL.md`](../docs/MANUAL.md) is everything else that used to live below it: the walk-throughs, the configuration reference, the hooks, the archive, the panel and the state of what is built. [`docs/FEATURES.md`](../docs/FEATURES.md) is the feature catalogue those two are written from, and it is kept current on the same terms. If a change makes any of them inaccurate — a renamed verb, a changed lease rule, a decision reversed — update it in the same change. A reversed decision is edited **in place with its reason rewritten**, not deleted: the record of what was considered and rejected is most of that document's value.
 
 ### Rover is modelled on Swarm
 
