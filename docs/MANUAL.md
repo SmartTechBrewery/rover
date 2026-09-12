@@ -2104,7 +2104,10 @@ rover-server-agent uninstall                       # stop it gracefully and remo
 
 Each takes an optional `<checkout>`, defaulting to the current directory. `ROVER_HTTP_PORT` defaults
 to `4712`, and the other six variables the agent can carry — the network listener's port and
-address, the TLS pair, and the socket path — are read from the shell you run `install` in.
+address, the TLS pair, and the socket path — are read from the shell you run `install` in. To change
+any of them afterwards, run `install` again with the new value set: the agent's own host holding the
+socket is recognised and reinstalled over, and only a host this agent does **not** own (one a client
+autostarted, or another checkout's agent) makes `install` refuse.
 
 **The convenience is the smaller half of it.** Every client call autostarts a daemon with
 `ROVER_LISTEN_PORT` and `ROVER_HTTP_PORT` cleared (D40), so an MCP server that got there first

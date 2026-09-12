@@ -992,10 +992,15 @@ apart from this agent's own host is the failure this tool exists around.
   checkout's own search (`scripts/device-tool-dirs.mjs`, #171) rather than `command -v`, because the
   installing shell usually cannot find `adb` either. For `adb` this is belt-and-braces — the SDK
   locations already find it; for a hand-installed `idb_companion` it is the only thing that does.
-- **`install` refuses while any host holds the socket, and names the pid.** Under `KeepAlive`,
-  losing that race is an infinite thirty-second crash loop rather than a message. The check is the
-  one `rover server` already makes (`src/daemon/host-on-socket.ts`), never a second one — and never
-  `rover status`, which autostarts a daemon and would cause the very damage the guard prevents.
+- **`install` refuses while a host it does not own holds the socket, and names the pid.** Under
+  `KeepAlive`, losing that race is an infinite thirty-second crash loop rather than a message. The
+  check is the one `rover server` already makes (`src/daemon/host-on-socket.ts`), never a second one
+  — and never `rover status`, which autostarts a daemon and would cause the very damage the guard
+  prevents. **Its own host is the exception, and reinstalling over it is the point**: re-running
+  `install` with a variable set is how a port, an address or the TLS pair is changed, the host on
+  the socket then is the one the reinstall is about to stop, and `KeepAlive` would undo a `kill`
+  anyway. The two are told apart by the launchd pid for this label and the socket holder's
+  ancestry, the same pair `status` uses.
 - **Readiness is `GET /` on `ROVER_HTTP_PORT`, everywhere.** One request proves the process is up,
   kept its port, and is serving the panel. It is pre-auth by design (D29), so no credential is
   involved in a liveness check.
@@ -1011,6 +1016,13 @@ had turned airplane mode on and a graceful stop left the device in airplane mode
 now ends live leases too, through the same path a caller's release takes (D9 as amended) — which
 matters far more under launchd, where the host is stopped at logout, at reboot and on every
 `reload`, than it did for a foreground host somebody was watching.
+
+**The plist names its own `ExitTimeOut` (60s)**, rather than inheriting the system default of 20s
+that nobody chose, because that graceful stop is not instantaneous: the restorations and the archive
+sweep are each bounded at 10s in `src/daemon/listen.ts` and awaited in sequence before the backends
+stop. No measured stop has come near it — this is sized against a default, not an observed overrun
+— and the sweep is why it matters: a `SIGKILL` partway through its `rm` leaves a run directory
+holding a subset of what its lease wrote.
 
 **macOS only**, because launchd is. Off macOS the script says so and names the equivalent: a
 `systemd --user` unit running the same command.

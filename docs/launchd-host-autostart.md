@@ -51,7 +51,7 @@ inside the checkout.
 `<hash8>` is the first eight characters of the sha256 of the checkout's realpath, so two clones
 sharing a basename (`~/work/rover` and `~/oss/rover`) get distinct labels rather than one silently
 overwriting the other. **There is still only one host per machine** (D18): the second one would lose
-the socket, and `install` refuses rather than letting that happen — see below.
+the socket, and `install` refuses a host it does not own rather than letting that happen — see below.
 
 ## What the agent carries, and why
 
@@ -77,7 +77,11 @@ ROVER_LISTEN_PORT=7031 ROVER_TLS_CERT=… ROVER_TLS_KEY=… rover-server-agent i
 ```
 
 Changing any of them is `install` again with the new value set; the plist is rewritten and the host
-restarted.
+restarted. **That works while the agent's own host is up** — `install` recognises it (the launchd pid
+for this label, and the socket holder's ancestry, the same pair `status` uses) and reinstalls over it,
+because the host holding the socket is the one the reinstall is about to stop. A host that is *not*
+this agent's — one a client autostarted, or another checkout's agent — is still refused by name, since
+losing the socket race to it would leave the agent crash-looping under `KeepAlive`.
 
 **No secret is written into a plist, and there is no field where one could be.** A plist is
 world-readable, so the list above is a fixed allowlist in the script — there is no `--env`, no
@@ -117,10 +121,10 @@ Which of the two this actually rescues, since both searches look in more than `P
 project hook needs from a login shell — a proxy, `JAVA_HOME`, an extra API key — is still not
 inherited, and belongs in that project's hook file rather than here.
 
-### `install` refuses while a host already holds the socket
+### `install` refuses while a host it does not own holds the socket
 
 ```
-rover-server-agent: a Rover host (pid 84832) is already serving this machine, up 43s.
+rover-server-agent: a Rover host (pid 84832) that this agent does not own is already serving this machine, up 43s.
   The agent would lose the socket to it and crash-loop under KeepAlive, so nothing was installed.
   Stop that host -- kill 84832 -- and run install again. …
 ```
@@ -129,6 +133,20 @@ Under `KeepAlive`, losing the socket race is not an error message: it is a host 
 restarted every thirty seconds forever, with a panel nobody can explain the absence of. The check is
 **the one `rover server` already makes** — `src/daemon/host-on-socket.ts`, reached from the shell
 through `scripts/host-on-socket.mjs` — rather than a second one in bash that could disagree with it.
+
+**The agent's own host is deliberately not refused**, and `install` prints that it is reinstalling
+over it instead:
+
+```
+rover-server-agent: reinstalling over this agent's own host (pid 84832, up 43s)
+```
+
+There is no race to lose in that case — the host on the socket is the one the `launchctl bootout` a
+few lines further down is about to stop — and refusing it would break the only documented way to
+change a port, an address or the TLS pair. The remedy the refusal suggests would not work there
+either: `KeepAlive` is true, so killing the daemon has launchd put a replacement straight back on
+the socket. The two are told apart by the launchd pid for this label and the socket holder's
+ancestry, the same pair `status` uses below and for the same reason.
 
 **It is never `rover status`.** That is a client call, so it *autostarts* a daemon when none is
 running — with the ports cleared — which is exactly the damage this guard exists to prevent. Using
@@ -213,6 +231,16 @@ indefinitely, because the shutdown only swept leases that had *expired*. `src/da
 releases live ones too, through the same path a caller's own release takes, and the same check runs
 clean. It matters much more under launchd than it did before: a foreground host was stopped by
 somebody who was looking at it, and this one is stopped at logout, at reboot and on every `reload`.
+
+**The plist states its own `ExitTimeOut` (60s) rather than inheriting one.** That is how long
+launchd waits after the `SIGTERM` before `SIGKILL`, and the default is system-defined — 20s on
+macOS today, a number nobody here chose. The shutdown above is not instantaneous: it bounds the
+restorations at 10s and the archive sweep at 10s (`RESTORE_SETTLE_TIMEOUT_MS` and
+`SWEEP_SETTLE_TIMEOUT_MS` in `src/daemon/listen.ts`), awaits them in sequence and then stops the
+backends, so 60 sits comfortably past the worst case they add up to. No stop measured here has come
+close — this is against the default, not against an observed overrun — but the sweep is the sharp
+end: a `SIGKILL` partway through its `rm` leaves a run directory holding a subset of what its lease
+wrote, and logout, reboot and every `reload` now run that path.
 
 ## Gotchas
 

@@ -376,17 +376,32 @@ cmd_install() {
 
 	# **The guard.** Under `KeepAlive`, losing the socket race is not an error message — it is an
 	# agent that starts, exits 1, and is restarted every thirty seconds forever, with a panel
-	# nobody can explain the absence of. So refuse while anything holds the socket, and name it.
-	local found outcome pid
+	# nobody can explain the absence of. So refuse while a host this agent does not own holds the
+	# socket, and name it.
+	#
+	# **This agent's own host is not that case, and must not be refused.** Re-running `install`
+	# with a variable set is the documented way to change a port, an address or the TLS pair
+	# (see {@link usage}), and the host holding the socket then is the one the `bootout` below is
+	# about to stop — so the race the guard exists for cannot happen. Telling the operator to
+	# `kill` it would not help either: `KeepAlive` is true, so launchd starts a replacement that
+	# retakes the socket. The pid launchd has for this label and the ancestry walk are what tell
+	# the two apart — the same pair {@link cmd_status} uses, and for the same reason.
+	local found outcome pid agent
 	found=$(host_on_socket)
 	outcome=$(json_string "$found" outcome)
 	case "$outcome" in
 		host)
 			pid=$(json_number "$found" pid)
-			die "a Rover host (pid $pid) is already serving this machine, up $(duration "$(json_number "$found" uptimeMs)").
+			agent=$(launchd_pid)
+			if [ -n "$agent" ] && descends_from "$pid" "$agent"; then
+				printf "rover-server-agent: reinstalling over this agent's own host (pid %s, up %s)\n" \
+					"$pid" "$(duration "$(json_number "$found" uptimeMs)")"
+			else
+				die "a Rover host (pid $pid) that this agent does not own is already serving this machine, up $(duration "$(json_number "$found" uptimeMs)").
   The agent would lose the socket to it and crash-loop under KeepAlive, so nothing was installed.
   Stop that host -- kill $pid -- and run install again. If a client autostarted it, it has no
   ports at all (D40) and no browser can reach it, which is what this agent exists to fix."
+			fi
 			;;
 		foreign)
 			die "something is holding this machine's Rover socket but did not answer as a host.
@@ -433,6 +448,17 @@ $(agent_env)
 
 	<key>ThrottleInterval</key>
 	<integer>30</integer>
+
+	<!-- How long launchd waits after SIGTERM before SIGKILL. Stated rather than inherited: the
+	     default is system-defined (20s on macOS today), and this feature is built on the graceful
+	     stop completing. src/daemon/listen.ts bounds the restoration settle at
+	     RESTORE_SETTLE_TIMEOUT_MS = 10s and the archive sweep at SWEEP_SETTLE_TIMEOUT_MS = 10s,
+	     awaited in sequence and then stopBackends(), so 60 sits comfortably past the worst case
+	     those add up to. The sweep is the sharper end: a SIGKILL inside its rm leaves a run
+	     directory holding a subset of what its lease wrote, and every logout, reboot and reload
+	     now runs that path. -->
+	<key>ExitTimeOut</key>
+	<integer>60</integer>
 
 	<key>StandardOutPath</key>
 	<string>$(xml_escape "$LOG")</string>

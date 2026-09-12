@@ -88,4 +88,6 @@ yarn.lock
 # `package.json` publikuje w polu `bin`. Bez tego wyjątku `git add -A` na maszynie
 # z taką regułą po cichu pomija nowy plik w tym katalogu — a plik, który nie
 # trafił do commita, jest dla każdego innego checkoutu nieistniejący.
-!bin/
+# Ukośnik na początku kotwiczy wzorzec w katalogu głównym repo — bez niego
+# reguła objęłaby każdy zagnieżdżony `bin/`, a chodzi wyłącznie o ten jeden.
+!/bin/
