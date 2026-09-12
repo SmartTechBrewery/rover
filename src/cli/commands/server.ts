@@ -42,7 +42,7 @@ started. Every other command starts one of these by itself when none is running 
 adds is that you can see it, and that it keeps the two settings an autostarted one drops.
 
   ROVER_LISTEN_PORT   serve the surface to other machines over TCP
-  ROVER_HTTP_PORT     serve the panel's surface to a browser
+  ROVER_HTTP_PORT     serve the panel and its data to a browser — this is the whole of it
   ROVER_SOCKET_PATH   the local socket, when the default is not wanted
 
 Those two ports are exposure somebody has to choose, so a daemon a client autostarts clears

@@ -65,6 +65,18 @@
  * public content **of the same class as `POST /session`** — the pre-auth exception that already
  * existed, and that is already justified there by exactly this necessity.
  *
+ * **And it is bounded three ways too**, because a route in front of the gate is a stranger's
+ * handle on this host and every one of them has to be measured. It is `GET`/`HEAD` only, so no
+ * body is ever read from a peer this host has not identified — the `headersTimeout`/`requestTimeout`
+ * above are the whole of what it can hold. It reads **only** inside `panel/dist`, by
+ * `./contained-file.ts`'s resolve-and-compare, the same one that contains the archive. And **it
+ * writes a bounded number of lines to the host's log**: `./panel-bundle.ts`'s
+ * `MAX_DISTINCT_WARNINGS` says each distinct diagnosis is printed once per daemon and no more,
+ * which is the one bound that had to be *added* for this route — `/assets` is a directory in every
+ * real build, so the archive reader's per-request warning would have been an unauthenticated way
+ * to grow the operator's log without end. The archive route's own warning is per-request still,
+ * and correctly: its callers are all past the gate.
+ *
  * **What that exception does not widen, spelled out because the next reader will ask.** `/rpc`,
  * `/session` and `/artifact/…` keep the gate precisely as it was: resolved per *request* against
  * the user store, never cached, so `rover users revoke` still bites on the very next request over
@@ -684,7 +696,7 @@ type Route =
 	| 'rpc'
 	/** A host address with a verb it does not take. Behind the gate, and never the bundle. */
 	| 'reserved'
-	/** Everything left, on `GET` only: the panel's own files, answered before the gate. */
+	/** Everything left, on `GET` and `HEAD`: the panel's own files, answered before the gate. */
 	| 'panel';
 
 function routeFor(method: string | undefined, path: string): Route {
@@ -703,7 +715,13 @@ function routeFor(method: string | undefined, path: string): Route {
 	if (path.startsWith(ARTIFACT_PATH_PREFIX)) {
 		return method === 'GET' ? 'artifact' : 'reserved';
 	}
-	return method === 'GET' ? 'panel' : 'reserved';
+	// `HEAD` is a `GET` that stops at the headers, and only *here*: the gated routes keep refusing
+	// it exactly as they do now. This arm takes it because the follow-up this whole change exists
+	// to unblock is a launchd agent, and `HEAD /` is the conventional liveness probe for one — an
+	// operator who writes the obvious one and gets a `401` reads it as a broken host. Nothing else
+	// is needed to answer it: Node clears `_hasBody` for a `HEAD` request, so `streamFile`'s pipe
+	// and `writeText`'s `end` emit the headers, the right `content-length`, and no body.
+	return method === 'GET' || method === 'HEAD' ? 'panel' : 'reserved';
 }
 
 /**

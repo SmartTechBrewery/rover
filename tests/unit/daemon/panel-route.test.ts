@@ -19,6 +19,11 @@
  * missing build: one sentence naming `npm run panel:build`, never a silent `404` and never an
  * empty page. And the auth boundary from both sides — the bundle reachable with no credential at
  * all, every gated route still refused without one, in the same bytes as before.
+ *
+ * **A fifth was added in review of #295, and it belongs with the fourth**: a route in front of the
+ * gate is a stranger's handle on the host, so what it can make the host *do* is bounded too — it
+ * takes `GET` and `HEAD` and no other verb, and it says at most one thing per distinct problem on
+ * the operator's log however many times the same refusal is asked for.
  */
 
 import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
@@ -350,9 +355,9 @@ describe('route precedence is stated, not a consequence of ordering', () => {
 	});
 
 	/**
-	 * A `POST` to an address the panel owns is not a page either. The bundle is a `GET` route and
-	 * everything else is the uniform refusal, so there is no verb that turns a document into a
-	 * write target.
+	 * A `POST` to an address the panel owns is not a page either. The bundle is a `GET`/`HEAD`
+	 * route and everything else is the uniform refusal, so there is no verb that turns a document
+	 * into a write target.
 	 */
 	it.each([
 		['POST', '/'],
@@ -365,6 +370,56 @@ describe('route precedence is stated, not a consequence of ordering', () => {
 
 		expect(answer.status).toBe(401);
 		expect(answer.body).toBe(REFUSAL_BODY);
+	});
+
+	/**
+	 * **`HEAD` is the bundle's second verb, and it is the bundle's alone.** The reason it is here
+	 * at all is that the change this route exists to unblock is a launchd agent, and `HEAD /` is
+	 * what a liveness probe for one sends: an operator who writes the obvious probe must not read
+	 * a `401` as a broken host. Nothing was added to answer it — Node writes the headers and no
+	 * body for a `HEAD`, so `content-length` is the file's and the wire carries none of it.
+	 */
+	it.each([
+		['the document', '/', INDEX_HTML.length, 'text/html; charset=utf-8'],
+		['a client route', '/archive', INDEX_HTML.length, 'text/html; charset=utf-8'],
+		['a build asset', `/assets/${SCRIPT_NAME}`, SCRIPT.length, 'text/javascript; charset=utf-8'],
+	])('answers HEAD %s with the headers and no body', async (_what, path, length, type) => {
+		const port = await startServed();
+
+		const answer = await send({ port, path, method: 'HEAD' });
+
+		expect(answer.status).toBe(200);
+		expect(answer.headers['content-type']).toBe(type);
+		expect(answer.headers['content-length']).toBe(String(length));
+		expect(answer.body).toBe('');
+	});
+
+	/** And it is the same route, so a miss under Vite's own directory is still a `404`. */
+	it('answers HEAD for a missing build asset with 404, not the document', async () => {
+		const port = await startServed();
+
+		const answer = await send({ port, path: '/assets/index-GONE.js', method: 'HEAD' });
+
+		expect(answer.status).toBe(404);
+		expect(answer.headers['content-type']).not.toBe('text/html; charset=utf-8');
+	});
+
+	/**
+	 * The other side of it: `HEAD` bought the bundle nothing on the gated routes, which refuse it
+	 * as they refuse every other verb they do not take. The body cannot be asserted here — a
+	 * `HEAD` response carries none by definition — so the status is the whole of the claim.
+	 */
+	it.each([
+		['/rpc'],
+		['/session'],
+		['/artifact'],
+		['/artifact/p/t/r/s/screenshots/001.png'],
+	])('refuses HEAD %s without a credential', async (path) => {
+		const port = await startServed();
+
+		const answer = await send({ port, path, method: 'HEAD' });
+
+		expect(answer.status).toBe(401);
 	});
 
 	/** A signed-in browser reaches the surface exactly as it did: the gate is where it was. */
@@ -456,6 +511,27 @@ describe('nothing escapes the panel bundle root', () => {
 		expect(answer.body).not.toContain(SCRIPT_NAME);
 		expect(answer.body).not.toContain(STYLESHEET_NAME);
 		expect(warnings.join('\n')).toContain('not a regular file');
+	});
+
+	/**
+	 * **The log is not a write surface a stranger holds.** This route answers before the gate, so a
+	 * warning printed once per *request* would be an unauthenticated way to grow the operator's
+	 * disk without end — and `/assets` is a directory in every real `vite build`, so the trigger is
+	 * permanently available. The diagnosis is kept and the repetition is dropped: one line per
+	 * distinct problem per daemon. The archive reader's own per-request warning is deliberately
+	 * unchanged; `artifact-route.test.ts` is what pins that.
+	 */
+	it('says a repeated refusal once, however many times an unauthenticated peer asks', async () => {
+		const port = await startServed();
+
+		for (let attempt = 0; attempt < 8; attempt += 1) {
+			expect((await send({ port, path: '/assets' })).status).toBe(404);
+		}
+
+		const said = warnings.filter((line) => line.includes('not a regular file'));
+		expect(said).toHaveLength(1);
+		// Still the diagnosis, not a truncated stand-in for one.
+		expect(said[0]).toContain('assets');
 	});
 });
 

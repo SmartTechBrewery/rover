@@ -129,10 +129,35 @@ const PANEL_NAMES = { subject: 'The web panel bundle', root: 'the panel bundle r
 const MAX_SEGMENT_LENGTH = 255;
 const MAX_DEPTH = 32;
 
+/**
+ * How many **distinct** warnings about this tree one daemon will ever print.
+ *
+ * **This bound is what makes the pre-auth route safe to have** (#295 review, F1). `./archive-file.ts`
+ * warns once per request and that is right for it — every caller it has is past the gate, so a line
+ * in the log is attributable to somebody this host let in. The panel bundle is answered *before*
+ * the gate (`./http-listen.ts`'s header), so the same per-request warning is a stranger's write
+ * handle on the operator's disk: `/assets` is a directory every real `vite build` produces, so
+ * `GET /assets` in a loop is a permanently available, unauthenticated way to append ~200 bytes per
+ * request to whatever the host's stdout is pointed at — and to bury the warnings this mechanism
+ * exists to surface under noise.
+ *
+ * So the diagnosis is kept and the repetition is dropped: the first occurrence of each distinct
+ * message is printed, every later copy is silent, and after this many distinct messages the host
+ * stops warning about this tree altogether. Both halves matter — deduping alone would still let a
+ * peer who can vary the address (a miss under a directory name they choose) grow the log without
+ * bound. The operator still gets told about the symlink or the stray FIFO they left in `panel/dist`,
+ * which is the only thing these warnings were ever for: the contents of that tree are the
+ * installation's, and they do not change while a daemon runs.
+ */
+const MAX_DISTINCT_WARNINGS = 32;
+
 export interface PanelBundleOptions {
 	/** Defaults to {@link resolvePanelBundleRoot}. A test seam, not a configuration surface. */
 	readonly root?: string;
-	/** Where a file the host will not read is reported. Defaults to `console.warn`. */
+	/**
+	 * Where a file the host will not read is reported. Defaults to `console.warn`, and is bounded
+	 * either way — see {@link MAX_DISTINCT_WARNINGS}.
+	 */
 	readonly warn?: (message: string) => void;
 }
 
@@ -157,7 +182,10 @@ export function createPanelBundle(options: PanelBundleOptions = {}): PanelBundle
 		root: options.root ?? resolvePanelBundleRoot(),
 		contentTypes: PANEL_CONTENT_TYPES,
 		names: PANEL_NAMES,
-		...(options.warn === undefined ? {} : { warn: options.warn }),
+		// The bound is applied here rather than in `./contained-file.ts` on purpose: it is a
+		// property of *this* caller being pre-auth, not of containment. The archive reader's
+		// per-request warning is unchanged, and must stay that way.
+		warn: boundWarnings(options.warn ?? ((message: string) => console.warn(message))),
 	});
 
 	/** `index.html` if there is a bundle at all, `undefined` if there is not. */
@@ -210,6 +238,25 @@ export function createPanelBundle(options: PanelBundleOptions = {}): PanelBundle
 }
 
 /**
+ * The same warning function, told once per distinct message and at most
+ * {@link MAX_DISTINCT_WARNINGS} times in all.
+ *
+ * Keyed on the whole message because the message already carries the address the caller named, so
+ * one key is one problem in the tree; the cap is checked before the insert, so the set is what
+ * bounds the memory as well as the log.
+ */
+function boundWarnings(warn: (message: string) => void): (message: string) => void {
+	const said = new Set<string>();
+	return (message: string) => {
+		if (said.has(message) || said.size >= MAX_DISTINCT_WARNINGS) {
+			return;
+		}
+		said.add(message);
+		warn(message);
+	};
+}
+
+/**
  * A request path as the components of an address inside the bundle, or `undefined` for one no
  * bundle could hold. `/` is `[]`.
  *
@@ -251,7 +298,11 @@ function addressOf(path: string): string[] | undefined {
 	return decoded;
 }
 
-/** One directory name — never `.`, `..`, a separator, a NUL or nothing at all. */
+/**
+ * One directory name — never `.`, `..`, a separator, a NUL or nothing at all, and never longer
+ * than {@link MAX_SEGMENT_LENGTH}, which is the per-component half of the bound {@link MAX_DEPTH}
+ * is the other half of.
+ */
 function isServableComponent(component: string): boolean {
 	return (
 		component.length > 0 &&
@@ -260,6 +311,6 @@ function isServableComponent(component: string): boolean {
 		component !== '..' &&
 		!component.includes('/') &&
 		!component.includes('\\') &&
-		!component.includes(' ')
+		!component.includes('\0')
 	);
 }

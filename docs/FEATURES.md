@@ -790,7 +790,12 @@ defaults to loopback, and `rover list` clears the switch in anything it autostar
   credential, a malformed one, an unknown token, a revoked user, an unreadable store, an unknown
   path and the wrong method alike — authentication happens before routing on every path that
   answers host data, and a refusal that varied would tell a stranger something. The token goes in the header and never in the URL (D20);
-  nothing about a request or a refusal is logged.
+  nothing about one of these requests or refusals is logged — the only interesting thing to log
+  about an attempt is the token that was tried. (**Scoped to the envelope surface, and it has to
+  be**: the static route below reads the filesystem, so a file it will not serve — a symlink out of
+  the bundle, a directory, a stray FIFO — does put one line on the host's log. That is the
+  operator's diagnosis of their own tree and it is bounded to one line per distinct problem per
+  daemon, so an unauthenticated peer cannot replay it into a full disk.)
 - **The store is read on every request**, keep-alive connections and artifact fetches included.
 - **The bundle is the one route in front of the gate, and it is the same exception `POST /session`
   already is** (R52). The login screen *is* the bundle, so a gate in front of `GET /` would refuse
@@ -800,9 +805,15 @@ defaults to loopback, and `rover list` clears the switch in anything it autostar
   the three host routes match by their whole address first and the bundle is only ever what is
   left, so a wrong verb on a gated path is a refusal and never a page. Path containment is the
   artifact route's own, pointed at a second root: no `..`, no symlink escape, no directory listing.
-  The cost, stated rather than hidden: a stranger who reaches the port can tell this is a Rover
-  host, and **off loopback the bundle is readable by anyone who can reach it** — acceptable because
-  it carries no credential and no host data, which is a property that has to stay true.
+  **It is bounded in the three ways a pre-auth route has to be**: `GET` and `HEAD` only, so no body
+  is read from a peer this host has not identified; reads only inside `panel/dist`; and it says at
+  most one thing per distinct problem per daemon on the log, so the diagnosis survives and a peer
+  looping a request cannot fill a disk with it. `HEAD` is taken here and nowhere else, because a
+  launchd agent's liveness probe is a `HEAD /` and an operator who writes the obvious one should
+  not get a `401`. The cost, stated rather than hidden: a stranger who reaches the port can tell
+  this is a Rover host, and **off loopback the bundle is readable by anyone who can reach it** —
+  acceptable because it carries no credential and no host data, which is a property that has to
+  stay true.
 - **The artifact route** takes listing components, never a host path. Content type comes from the
   extension with `nosniff` on every response; nothing escapes the archive root (a traversal is
   `400 invalid_path`, a symlink resolving outside is `500 unreadable`, neither carrying a path); a
