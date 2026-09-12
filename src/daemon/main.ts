@@ -24,7 +24,7 @@ import { resolveArtifactsRoot } from './archive-path.js';
 import { resolveRetentionPolicy } from './archive-retention.js';
 import { resolveKeptTestsPath } from './kept-tests.js';
 import { startDaemon } from './listen.js';
-import { resolveHttpListener, resolveNetworkListener } from './network-config.js';
+import { panelOriginFor, resolveHttpListener, resolveNetworkListener } from './network-config.js';
 import { resolveProjectsRoot } from './project-hooks.js';
 import { resolveSocketPath } from './socket-path.js';
 
@@ -80,16 +80,12 @@ async function main(): Promise<void> {
 	}
 
 	if (daemon.httpPort !== null && http !== undefined) {
-		// The scheme, the address, the port and the one route, and nothing else: never the token,
-		// never the certificate, and nothing about what is attached (D20).
-		const scheme = http.certPath === undefined ? 'http' : 'https';
-		// An IPv6 address needs its brackets back to be a URL somebody can paste. `network-config.ts`
-		// takes them off because `listen()` treats the bracketed form as a hostname and fails with
-		// `ENOTFOUND` — so this is the one place the URL notation belongs.
-		const host = http.address.includes(':') ? `[${http.address}]` : http.address;
-		console.log(
-			`Rover is serving the panel surface on ${scheme}://${host}:${daemon.httpPort}/rpc.`,
-		);
+		// The scheme, the address and the port, and nothing else: never the token, never the
+		// certificate, and nothing about what is attached (D20). It named `/rpc` until this
+		// listener learned to serve `panel/dist` (R52); now the origin *is* the panel, and a line
+		// pointing an operator at a route their browser cannot navigate to was the least useful
+		// address on the host.
+		console.log(`Rover is serving the panel on ${panelOriginFor(http, daemon.httpPort)}/.`);
 	}
 
 	let shuttingDown = false;

@@ -3,23 +3,29 @@
  *
  * The **one** place a client starts a process on purpose. `src/daemon/connect.ts` is the other
  * module allowed to spawn and it is the *automatic* start — a daemon nobody asked for, detached,
- * its output discarded (D5). This is the opposite case in every respect, and both of the commands
- * that need it — `rover server` and `rover panel` — need exactly the same three things, so they
- * share one implementation rather than each growing its own signal handling to get subtly wrong.
+ * its output discarded (D5). This is the opposite case in every respect.
  * `tests/unit/daemon/remote-never-spawns.test.ts` and
  * `tests/unit/no-backend-in-a-client.test.ts` both name this file, which is what keeps the count of
  * such places at two.
  *
- * - **The output is the operator's.** `stdio: 'inherit'`, so a host's warnings and a dev server's
- *   URL arrive in the terminal that asked for them.
+ * **`rover server` is its one caller now** (R52, #293). This paragraph said *both of the commands
+ * that need it — `rover server` and `rover panel` — need exactly the same three things*, and it is
+ * rewritten in place rather than deleted because the reason for sharing has not changed, only the
+ * count: `rover panel` used to spawn Vite and now prints a URL, the host having learned to serve
+ * `panel/dist`. One caller is not a reason to inline this — what it owns is the *contract* a
+ * deliberate start keeps, and the next long-lived foreground command belongs here rather than
+ * growing its own signal handling to get subtly wrong.
+ *
+ * - **The output is the operator's.** `stdio: 'inherit'`, so a host's warnings and the line naming
+ *   the port it opened arrive in the terminal that asked for them.
  * - **It dies with you.** Not detached, and the two signals are forwarded rather than left to the
  *   process group, so a `kill` aimed at this process still reaches the child — which matters for
  *   the daemon, whose shutdown path is what releases the leases and ends what its backends started.
  * - **It exits as a shell expects.** The child's code, or `128 + n` when a signal ended it.
  *
- * It never asks whether the thing is already running. Both children answer that question properly
- * themselves — the daemon by losing the bind, a dev server by failing to take its port — and a
- * check here would be a race with whatever else is coming up at the same moment.
+ * It never asks whether the thing is already running. The child answers that question properly
+ * itself — the daemon by losing the bind — and a check here would be a race with whatever else is
+ * coming up at the same moment.
  */
 
 import { spawn } from 'node:child_process';

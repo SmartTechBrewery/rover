@@ -324,6 +324,24 @@ export function resolveHttpListener(
 }
 
 /**
+ * The origin a browser reaches this host's panel at — scheme, host and port, no path.
+ *
+ * **One place the URL notation lives**, so the line `./main.ts` prints as the host comes up and
+ * the line `rover panel` prints for somebody who has not started one cannot disagree about a
+ * scheme or a bracket. `port` is separate from `config.port` because a configured `0` resolves to
+ * a real port only once the listener has bound, and only the daemon knows which.
+ *
+ * An IPv6 address needs its brackets back to be a URL somebody can paste. {@link withoutBrackets}
+ * takes them off because `listen()` treats the bracketed form as a hostname and fails with
+ * `ENOTFOUND` — so this is the one place the URL notation belongs.
+ */
+export function panelOriginFor(config: HttpListenerConfig, port: number = config.port): string {
+	const scheme = config.certPath === undefined ? 'http' : 'https';
+	const host = config.address.includes(':') ? `[${config.address}]` : config.address;
+	return `${scheme}://${host}:${port}`;
+}
+
+/**
  * Resolve the remote host this client asks for `--host remote`, or `undefined` when none is
  * configured and `local` is the only host it has.
  *

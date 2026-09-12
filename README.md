@@ -57,16 +57,17 @@ git add -A && git commit -m "chore: set up Rover"   # .mcp.json, ROVER.md and th
 
 Then keep a host running in a terminal of its own. Any `rover` command starts one by itself when
 none is running, but the one you started is the one whose log you can watch — and the only one
-that serves the panel:
+that serves the panel. It serves the page and the data from the same port, so it is the only
+thing to start:
 
 ```bash
+npm run panel:build                   # once, here — the host serves what this writes
 rover users add panel                 # the browser's own credential, printed once
-ROVER_HTTP_PORT=4712 rover server     # terminal 1 — the host; Ctrl-C stops it
-rover panel                           # terminal 2 — the panel, on :5174
+ROVER_HTTP_PORT=4712 rover server     # the host; Ctrl-C stops it. The panel is on :4712
 ```
 
 ```bash
-rover status    # terminal 3 — which host answered
+rover status    # in another terminal — which host answered
 rover list      # what is attached, what is free, and who holds what
 rover doctor    # the programs that host needs, and where it found them
 ```
