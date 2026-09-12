@@ -55,16 +55,21 @@ rover init --write
 git add -A && git commit -m "chore: set up Rover"   # .mcp.json, ROVER.md and the agent notes
 ```
 
-Then keep a host running in a terminal of its own. Any `rover` command starts one by itself when
-none is running, but the one you started is the one whose log you can watch — and the only one
-that serves the panel. It serves the page and the data from the same port, so it is the only
-thing to start:
+Then run a host on the machine the devices are plugged into. Any `rover` command starts one by
+itself when none is running, but that one serves no panel and no other machine — the reachable host
+is one you started on purpose. On a Mac, install it once and it starts at login, in no terminal at
+all:
 
 ```bash
-npm run panel:build                   # once, here — the host serves what this writes
+npm run reload                        # here — install the dependencies and build the panel
 rover users add panel                 # the browser's own credential, printed once
-ROVER_HTTP_PORT=4712 rover server     # the host; Ctrl-C stops it. The panel is on :4712
+rover-server-agent install            # the host, from login. The panel is on http://127.0.0.1:4712
 ```
+
+`rover-server-agent status` says whether it is up and the panel is answering, `reload` rebuilds and
+restarts it, and `uninstall` takes it away — [`docs/launchd-host-autostart.md`](docs/launchd-host-autostart.md)
+is all six commands, and what to do off macOS. Prefer a terminal you can watch?
+`ROVER_HTTP_PORT=4712 rover server` is the same host in the foreground, and Ctrl-C stops it.
 
 ```bash
 rover status    # in another terminal — which host answered

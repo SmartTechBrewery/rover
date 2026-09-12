@@ -34,6 +34,7 @@ repository. `ai/RULES.md` is where an agent starts.
   - [Serving the panel surface over HTTP](#serving-the-panel-surface-over-http)
     - [Reading one archived artifact's bytes](#reading-one-archived-artifacts-bytes)
     - [How a browser signs in](#how-a-browser-signs-in)
+  - [Running the host from launchd, so no terminal holds it](#running-the-host-from-launchd-so-no-terminal-holds-it)
   - [Connecting to a remote host](#connecting-to-a-remote-host)
 - [Where things are](#where-things-are)
 - [Shape](#shape)
@@ -2086,6 +2087,36 @@ stranger can reach would put it on the wire in the clear. The certificate is the
 same pair the TCP listener uses, generated the same way as in [expose this machine as a
 host](#expose-this-machine-as-a-host).
 
+### Running the host from launchd, so no terminal holds it
+
+**macOS only.** `rover-server-agent` installs a launchd LaunchAgent that runs `rover server` out of
+this checkout at login, so the reachable host is up before anything else on the machine asks for a
+device — and no window holds it.
+
+```bash
+ROVER_HTTP_PORT=4712 rover-server-agent install    # write the agent and start it
+rover-server-agent status                          # loaded? whose host is on the socket? panel answering?
+rover-server-agent reload                          # npm run reload, then restart
+rover-server-agent restart                         # stop it gracefully and start it again
+rover-server-agent logs                            # tail its stdout + stderr
+rover-server-agent uninstall                       # stop it gracefully and remove the agent
+```
+
+Each takes an optional `<checkout>`, defaulting to the current directory. `ROVER_HTTP_PORT` defaults
+to `4712`, and the other six variables the agent can carry — the network listener's port and
+address, the TLS pair, and the socket path — are read from the shell you run `install` in.
+
+**The convenience is the smaller half of it.** Every client call autostarts a daemon with
+`ROVER_LISTEN_PORT` and `ROVER_HTTP_PORT` cleared (D40), so an MCP server that got there first
+leaves a host that is up, holding devices, and reachable by nobody with a browser — and the
+`rover server` you type afterwards exits 1 because the socket is taken. A host that starts at login
+is always first, so that cannot happen.
+
+[`docs/launchd-host-autostart.md`](launchd-host-autostart.md) is the whole of it: what the plist
+carries and why nothing secret may go in it, why `PATH` has to resolve `adb` and `idb_companion`,
+how `status` tells this agent's host apart from a portless one on the socket, and what to do on
+Linux (a `systemd --user` unit running the same command).
+
 ### Connecting to a remote host
 
 On the machine doing the work, point the client at that host and add `--host remote`.
@@ -2121,6 +2152,7 @@ naming the same address and port. A certificate that verifies but does not carry
 | [`ai/CODING_STANDARDS.md`](../ai/CODING_STANDARDS.md) | Stack, Zod boundaries, error handling, module shape |
 | [`ai/TESTING.md`](../ai/TESTING.md) | Vitest, the real-device gate, fixtures, conformance |
 | [`docs/IOS.md`](../docs/IOS.md) | What the iOS simulator can and cannot do, every claim measured — the recorder, the traps, and why hardware is a different backend |
+| [`docs/launchd-host-autostart.md`](launchd-host-autostart.md) | Running this machine's host from a launchd agent instead of a terminal — every subcommand, the plist, and the Linux equivalent |
 
 In the source tree: `src/core/` holds the device contract and the branded ids, `src/backends/` one
 folder per platform, `src/verbs/` the verb spine with the input verbs, the app verbs, the read verbs

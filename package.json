@@ -5,7 +5,8 @@
 	"description": "Hands and eyes on a real mobile device for coding agents, and a way to share devices between them",
 	"type": "module",
 	"bin": {
-		"rover": "bin/rover.mjs"
+		"rover": "bin/rover.mjs",
+		"rover-server-agent": "bin/rover-server-agent"
 	},
 	"scripts": {
 		"lint": "biome check .",
@@ -18,6 +19,7 @@
 		"panel:dev": "vite --config panel/vite.config.ts",
 		"panel:build": "vite build --config panel/vite.config.ts",
 		"panel:preview": "vite preview --config panel/vite.config.ts",
+		"reload": "npm install && npm run panel:build",
 		"test": "npm run test:unit && npm run test:panel",
 		"test:unit": "vitest run --project unit",
 		"test:panel": "vitest run --project panel",

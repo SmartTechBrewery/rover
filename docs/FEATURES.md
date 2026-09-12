@@ -948,7 +948,80 @@ raises its own request timeout past the recording, so a long recording is never 
 
 ---
 
-## 17. What Rover deliberately will not tell you
+## 17. The host runs from login, so nobody races it for the socket
+
+**The hook.** One command installs this machine's host as a launchd agent, so the panel is on
+`http://127.0.0.1:4712` from the moment you log in — no terminal window holding it, and no client
+able to get to the socket first and leave a host no browser can reach.
+
+**What it is.** `bin/rover-server-agent`, six subcommands, each taking an optional `<checkout>` that
+defaults to the current directory:
+
+| | |
+| --- | --- |
+| `install` | write the LaunchAgent and start it, waiting for the panel to answer |
+| `uninstall` | stop it gracefully and remove the agent (the logs stay) |
+| `status` | is it loaded, whose host is on the socket, is the panel answering |
+| `restart` | stop it gracefully and start it again |
+| `reload` | `npm run reload` in the foreground, then restart — stops on a failed build |
+| `logs` | tail this host's stdout and stderr |
+
+**The convenience is the smaller half, and the correctness the larger one.** Every client call —
+including an MCP server an agent spawns — starts a daemon when none is running, and deliberately
+clears `ROVER_LISTEN_PORT` and `ROVER_HTTP_PORT` in it, because a host that began listening for
+other machines or for browsers as a side effect of `rover list` would be exposure nobody chose
+(D40). That daemon takes the socket, and a `rover server` typed afterwards finds it there and exits
+1 — a host that is up, holding devices, and reachable by nobody. **A host that starts at login is
+always first**, so that race does not arise; and when it does arise anyway — somebody stopped the
+host by hand and then ran a command — `status` is what names it, because telling a portless daemon
+apart from this agent's own host is the failure this tool exists around.
+
+**Four things about it are Rover's own rather than launchd boilerplate.**
+
+- **The plist carries the ports**, because launchd reads no rc file and those two variables are
+  exactly what an autostarted daemon drops. It carries a **fixed allowlist of seven**:
+  `ROVER_HTTP_PORT` (default `4712`), `ROVER_HTTP_ADDRESS`, `ROVER_LISTEN_PORT`,
+  `ROVER_LISTEN_ADDRESS`, `ROVER_TLS_CERT`, `ROVER_TLS_KEY`, `ROVER_SOCKET_PATH` — read from the
+  shell that runs `install`. **Nothing secret may be written into a plist, and there is no field
+  where one could be**: no `--env`, no environment pass-through, no file read into the dict. That is
+  safe because the host holds no secret at all (D25) — its credentials are hashes in
+  `~/.rover/users.json` — and `ROVER_HOST_TOKEN`, the one variable that *is* a secret, is a
+  **client's** and is not on the list.
+- **`PATH` resolves `adb` and `idb_companion`, not just `node`.** The daemon spawns both by name, so
+  a host with only `node` on its `PATH` starts cleanly and fails every verb. `install` asks this
+  checkout's own search (`scripts/device-tool-dirs.mjs`, #171) rather than `command -v`, because the
+  installing shell usually cannot find `adb` either. For `adb` this is belt-and-braces — the SDK
+  locations already find it; for a hand-installed `idb_companion` it is the only thing that does.
+- **`install` refuses while any host holds the socket, and names the pid.** Under `KeepAlive`,
+  losing that race is an infinite thirty-second crash loop rather than a message. The check is the
+  one `rover server` already makes (`src/daemon/host-on-socket.ts`), never a second one — and never
+  `rover status`, which autostarts a daemon and would cause the very damage the guard prevents.
+- **Readiness is `GET /` on `ROVER_HTTP_PORT`, everywhere.** One request proves the process is up,
+  kept its port, and is serving the panel. It is pre-auth by design (D29), so no credential is
+  involved in a liveness check.
+
+**`reload` is one definition, not two.** `npm run reload` is `npm install && npm run panel:build` in
+`package.json`, and the script runs it in the **foreground** and restarts nothing if it fails — so a
+`vite` error lands on your terminal and the host keeps serving the build it already had.
+
+**A graceful stop releases the leases, and that was measured** (#294). `uninstall` and `restart` stop
+the host with `SIGTERM`, which `rover server` forwards to the daemon, which runs its own shutdown.
+That shutdown used to sweep only *expired* leases: against `emulator-5554` on API 37, a lease that
+had turned airplane mode on and a graceful stop left the device in airplane mode indefinitely. It
+now ends live leases too, through the same path a caller's release takes (D9 as amended) — which
+matters far more under launchd, where the host is stopped at logout, at reboot and on every
+`reload`, than it did for a foreground host somebody was watching.
+
+**macOS only**, because launchd is. Off macOS the script says so and names the equivalent: a
+`systemd --user` unit running the same command.
+
+**Where it lives.** `bin/rover-server-agent`, `scripts/host-on-socket.mjs`,
+`scripts/device-tool-dirs.mjs`, `src/daemon/host-on-socket.ts`, `src/daemon/listen.ts`;
+[`docs/launchd-host-autostart.md`](launchd-host-autostart.md); `PROJECT.md` D9, D18, D25, D29, D40.
+
+---
+
+## 18. What Rover deliberately will not tell you
 
 **The hook.** Everything Rover cannot answer, said out loud — because silence reads as *checked*.
 
@@ -985,7 +1058,7 @@ raises its own request timeout past the recording, so a long recording is never 
 
 ---
 
-## 18. Configuration surface
+## 19. Configuration surface
 
 Everything host-level comes from the environment, and **every row mirrors a Zod schema, which is the
 source of truth** (`ai/RULES.md` §7): the daemon and the CLI fail at startup naming the variable and
@@ -1008,14 +1081,15 @@ network host.
 
 ---
 
-## 19. Using this file to write user-facing text
+## 20. Using this file to write user-facing text
 
 **The order features earn on a landing page**, judged by *what would make a reader stay*:
 
 1. **Hands and eyes on a real device for an agent** (§0, §4) — the reason anyone is reading.
 2. **Both platforms, one set of verbs** (§1).
 3. **Devices shared rather than fought over** (§2, §3) — the thing no alternative does.
-4. **Setup is two commands and nothing to start** (§16).
+4. **Setup is two commands and nothing to start** (§16) — and on a Mac the host itself starts at
+   login, in no terminal at all (§17).
 5. **Deterministic by construction** (§5) — the reason to trust what comes back.
 6. **Devices on somebody else's machine** (§7).
 7. **Every run archived, before-and-after comparisons, the panel** (§8, §13, §14, §15).
