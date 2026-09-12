@@ -51,6 +51,7 @@ import { createListProjectsHandler } from './list-projects.js';
 import { createMeasureArchiveGroupsHandler } from './measure-archive-groups.js';
 import type { HttpListenerConfig, NetworkListenerConfig } from './network-config.js';
 import { type NetworkListener, startNetworkListener } from './network-listen.js';
+import { createPanelBundle, type PanelBundle } from './panel-bundle.js';
 import { createProjectInstall, type ProjectInstall } from './project-install.js';
 import { createProjectResolver } from './project-resolver.js';
 import { createProjectServices, type ProjectServices } from './project-services.js';
@@ -246,6 +247,16 @@ export interface StartDaemonOptions {
 	 * suite's roots are `mkdtemp` directories rather than `~/.rover/artifacts`.
 	 */
 	readonly retention: RetentionPolicy;
+	/**
+	 * Where the built web panel is (R52, `./panel-bundle.ts`).
+	 *
+	 * Defaults to the `panel/dist` of the checkout this daemon is running out of, which is **not**
+	 * a setting: the bundle is a property of the installation rather than of the environment, so
+	 * there is deliberately no variable for it and `./main.ts` passes nothing. It is a test seam in
+	 * the spirit of {@link StartDaemonOptions.sweepIntervalMs} — it exists so a suite can serve a
+	 * `mkdtemp` bundle it wrote, rather than whatever the developer last built in this checkout.
+	 */
+	readonly panelBundleRoot?: string;
 }
 
 /** The daemon this process owns. Only the winner of the bind gets one. */
@@ -462,6 +473,13 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartRes
 	// disk on construction — not even to resolve the root, which it does on the first request that
 	// finds it — so a loser of the bind leaves nothing behind here either.
 	const archiveFiles = createArchiveFileReader({ root: options.artifactsRoot });
+	// And the panel's own files (R52), built beside it and on the same terms: it touches no disk on
+	// construction, so a loser of the bind leaves nothing behind here either, and it re-reads the
+	// build on every request — so `npm run panel:build` in a running host's checkout takes effect on
+	// the next reload rather than at the next restart.
+	const panelBundle = createPanelBundle(
+		options.panelBundleRoot === undefined ? {} : { root: options.panelBundleRoot },
+	);
 	// And built before the store for the same reason: the store's end hook drops this lease's
 	// record of what the grant started. It starts nothing on construction — a project's services
 	// only ever come up for a lease that was granted — so a loser of the bind leaves nothing
@@ -553,6 +571,7 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartRes
 	const parts: DaemonParts = {
 		ipcServer,
 		archiveFiles,
+		panelBundle,
 		inventory,
 		leases,
 		restorer,
@@ -582,6 +601,11 @@ interface DaemonParts {
 	readonly ipcServer: IpcServer;
 	/** Only the HTTP listener consumes this: an artifact's bytes are a route, not a method. */
 	readonly archiveFiles: ArchiveFileReader;
+	/**
+	 * Only the HTTP listener consumes this either, and for a sharper version of the same reason:
+	 * the panel's own files are not on any method table and never will be (R52, D29 as amended).
+	 */
+	readonly panelBundle: PanelBundle;
 	readonly inventory: DeviceInventory;
 	readonly leases: LeaseStore;
 	readonly restorer: DeviceRestorer;
@@ -702,7 +726,12 @@ async function running(
 	// degradation, one transport along. `close()` above already takes down whatever did come up.
 	if (parts.http !== undefined) {
 		try {
-			http = await startHttpListener(parts.http, parts.ipcServer, parts.archiveFiles);
+			http = await startHttpListener(
+				parts.http,
+				parts.ipcServer,
+				parts.archiveFiles,
+				parts.panelBundle,
+			);
 		} catch (error) {
 			await close();
 			throw error;

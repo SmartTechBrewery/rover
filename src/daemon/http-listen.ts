@@ -49,14 +49,52 @@
  * request, which is `network-listen.ts`'s trade made once more for the same reason.
  *
  * **Authentication happens before routing, before the body is read, and before anything is
- * dispatched.** An unauthenticated stranger therefore cannot learn which paths exist, cannot make
- * this host buffer a byte on their behalf, and cannot reach a handler. **`POST /session` is the
- * one exception, and it is the exception by necessity**: a sign-in carries its credential in the
- * body, so that body is read before the peer is known. It is bounded three ways — the
+ * dispatched, for every path that answers with host data.** An unauthenticated stranger cannot
+ * make this host buffer a byte on their behalf and cannot reach a handler. **There are exactly
+ * two exceptions, and they are the same exception twice**: `POST /session` and the panel bundle.
+ * `POST /session` is the exception by necessity — a sign-in carries its credential in the body, so
+ * that body is read before the peer is known. It is bounded three ways: the
  * `headersTimeout`/`requestTimeout` above, a tight {@link MAX_SIGN_IN_BYTES}, and the uniform
  * refusal for *every* failure, so no diagnosis of a body a stranger sent ever leaves this host.
  * `/rpc`'s `malformed_frame` wording must never be reused there: the peer is pre-auth, and every
  * diagnosis handed to a pre-auth peer is an oracle.
+ *
+ * **The static route answers before the gate too, and that is a decision rather than a shortcut**
+ * (R52, #293). The login screen *is* the bundle, so it cannot carry a session: a gate in front of
+ * `GET /` would refuse the only page that can obtain a credential. So `panel/dist` is deliberately
+ * public content **of the same class as `POST /session`** — the pre-auth exception that already
+ * existed, and that is already justified there by exactly this necessity.
+ *
+ * **And it is bounded three ways too**, because a route in front of the gate is a stranger's
+ * handle on this host and every one of them has to be measured. It is `GET`/`HEAD` only, so no
+ * body is ever read from a peer this host has not identified — the `headersTimeout`/`requestTimeout`
+ * above are the whole of what it can hold. It reads **only** inside `panel/dist`, by
+ * `./contained-file.ts`'s resolve-and-compare, the same one that contains the archive. And **it
+ * writes a bounded number of lines to the host's log**: `./panel-bundle.ts`'s
+ * `MAX_DISTINCT_WARNINGS` says each distinct diagnosis is printed once per daemon and no more,
+ * which is the one bound that had to be *added* for this route — `/assets` is a directory in every
+ * real build, so the archive reader's per-request warning would have been an unauthenticated way
+ * to grow the operator's log without end. The archive route's own warning is per-request still,
+ * and correctly: its callers are all past the gate.
+ *
+ * **What that exception does not widen, spelled out because the next reader will ask.** `/rpc`,
+ * `/session` and `/artifact/…` keep the gate precisely as it was: resolved per *request* against
+ * the user store, never cached, so `rover users revoke` still bites on the very next request over
+ * a connection the revoked user is already holding (D25, D29) — and every pre-auth failure on
+ * every one of them is still the one byte-identical {@link REFUSAL_BODY}. Nothing about which
+ * methods are reachable moved, and no credential, no lease, no device and no archived byte is
+ * readable without one. See {@link routeFor}: the bundle is what is left *after* those three are
+ * matched, never a catch-all that could swallow one of them.
+ *
+ * **And the consequence, plainly.** Authentication no longer strictly precedes routing for
+ * *every* path, so a stranger who can reach the port can now tell this is a Rover host — the page
+ * says so. **When `ROVER_HTTP_PORT` binds off loopback, the bundle is readable by anyone who can
+ * reach it.** That is acceptable for one reason and only that reason: the bundle carries no
+ * credential and no host data — it is the same JavaScript in every checkout, it holds no token, no
+ * device, no lease and no archive path, and everything it draws it fetches through the gate at
+ * runtime. **That must stay true.** Nothing generated per host, per user or per device may ever be
+ * built into `panel/dist`; the moment something is, this route stops being public content and the
+ * decision above stops holding.
  *
  * **A browser holds a session, not the token** (D30, R34). `POST /session` takes `{"token": …}`,
  * verifies it against the very same store the gate does, and answers `{session, identifier,
@@ -118,9 +156,11 @@
  * shut down. Polling cannot keep a stuck lease alive either: `list_devices` reads the store and
  * never renews (`./leases.ts` — `use()` is the one call that does).
  *
- * **No CORS header is emitted anywhere**, deliberately. The panel is meant to be served by this
- * same listener, so it will be same-origin and needs none — no roadmap row owns serving its assets
- * yet (R33 built the panel, R32 built this route). Emitting one would make this surface readable
+ * **No CORS header is emitted anywhere**, deliberately — and this is now a fact rather than an
+ * intention. The panel is served by this same listener, so it *is* same-origin and needs none;
+ * that clause used to read *is meant to be … no roadmap row owns serving its assets yet*, and it
+ * is rewritten in place because the row landed (R52, #293) rather than because the reasoning
+ * changed. Emitting one would make this surface readable
  * from any page a browser happens to have open. A preflight arrives without the
  * `Authorization` header and so gets the same uniform refusal, which is the correct answer to it.
  * Authentication is header-only and no cookie is read, so there is no CSRF surface here for a
@@ -168,6 +208,7 @@ import {
 import type { IpcServer } from '../ipc/server.js';
 import type { ArchiveByteRange, ArchiveFileReader, OpenedArchiveFile } from './archive-file.js';
 import { type HttpListenerConfig, TLS_CERT_ENV_VAR, TLS_KEY_ENV_VAR } from './network-config.js';
+import { PANEL_NOT_BUILT_MESSAGE, type PanelBundle } from './panel-bundle.js';
 import {
 	createPanelSessionStore,
 	type PanelSessionIdentity,
@@ -351,7 +392,7 @@ const MAX_PANEL_REQUEST_BYTES = 64 * 1024;
  */
 const MAX_SIGN_IN_BYTES = 4 * 1024;
 
-/** The RPC route. Everything unmatched is the uniform refusal, because routing follows the gate. */
+/** The RPC route. See {@link routeFor} for what happens to everything this does not match. */
 const RPC_PATH = '/rpc';
 
 /** The credential-exchange route: `POST` mints a session, `GET` probes one, `DELETE` ends it. */
@@ -362,11 +403,21 @@ const SESSION_PATH = '/session';
  *
  * **Singular, and `/artifact/` rather than `/archive/`.** The panel already owns the client route
  * `/archive` (`panel/src/routes/archive.tsx`), which the preview screen extends with the path of
- * the open file; the panel is same-origin in production — the daemon will serve `panel/dist` from
- * this very listener — and is proxied per prefix in development, so a host route at `/archive/…`
- * would shadow the screen that browses the archive. This one names one artifact.
+ * the open file; the panel is same-origin — this listener serves `panel/dist` (R52) — and is
+ * proxied per prefix in development, so a host route at `/archive/…` would shadow the screen that
+ * browses the archive. That was written as a prediction and is now the thing that is true: with
+ * the bundle served here, a collision would not be a shadow in development, it would be the
+ * archive screen unreachable in production. This one names one artifact.
  */
 const ARTIFACT_PATH_PREFIX = '/artifact/';
+
+/**
+ * The same prefix without its slash, reserved so that `/artifact` — a typo, or a caller who
+ * trimmed the address — is refused rather than answered with the panel's document.
+ *
+ * It is host territory whatever follows it, and {@link routeFor} is where that is enforced.
+ */
+const ARTIFACT_PATH_ROOT = '/artifact';
 
 /**
  * The whole address, as a schema, and **`ArchivePathSegmentSchema` is imported rather than
@@ -399,6 +450,25 @@ const ARTIFACT_HEADERS = {
 	// Advertised on every answer, not only on a `206`: a browser reads it off the first response
 	// and it is what makes Safari attempt a `<video>` at all.
 	'accept-ranges': 'bytes',
+} as const;
+
+/**
+ * Headers every response from the panel bundle carries, whatever its status (R52).
+ *
+ * `nosniff` for {@link ARTIFACT_HEADERS}' reason one origin over: these are the *panel's* own
+ * documents and scripts, so a type a browser is allowed to sniff past is a type this host chose
+ * and then let the browser overrule.
+ *
+ * **`no-store` on the whole bundle, hashed assets included**, which is deliberately not what a CDN
+ * would do. The daemon is upgraded in place, under an operator who reloads a tab they have had
+ * open for a week; a cached `index.html` pointing at an asset the new build does not have is a
+ * blank page with a console error, and it is the failure nobody diagnoses because everything is
+ * green on the host. The cost is re-fetching a few hundred kilobytes over loopback, which is the
+ * cheapest thing in this file.
+ */
+const PANEL_HEADERS = {
+	'x-content-type-options': 'nosniff',
+	'cache-control': 'no-store',
 } as const;
 
 /**
@@ -437,13 +507,14 @@ export interface HttpListenerOptions {
 
 /**
  * Read the TLS material if any was configured, bind `address:port`, and serve every
- * authenticated request through `ipcServer` — or, on the byte route, through `archiveFiles`.
+ * authenticated request through `ipcServer` — or, on the byte route, through `archiveFiles`, or,
+ * on everything left, through `panelBundle`.
  *
- * `archiveFiles` is positional like `ipcServer` and deliberately **not** on
+ * `archiveFiles` and `panelBundle` are positional like `ipcServer` and deliberately **not** on
  * {@link HttpListenerOptions}: that is documented as a test seam rather than a configuration
- * surface, and this is one of the two things the listener serves. The listener is handed the
- * *reader* and not the archive root, which is what keeps every filesystem and path decision in
- * `./archive-file.ts` and out of this module.
+ * surface, and these are the three things the listener serves. The listener is handed the
+ * *readers* and not the roots, which is what keeps every filesystem and path decision in
+ * `./archive-file.ts` and `./panel-bundle.ts` and out of this module.
  *
  * Rejects rather than degrading, exactly as `startNetworkListener` does: unreadable certificate
  * material and a refused bind are both misconfigurations the operator has to see, and a host
@@ -454,6 +525,7 @@ export async function startHttpListener(
 	config: HttpListenerConfig,
 	ipcServer: IpcServer,
 	archiveFiles: ArchiveFileReader,
+	panelBundle: PanelBundle,
 	options: HttpListenerOptions = {},
 ): Promise<HttpListener> {
 	const authTimeoutMs = options.authTimeoutMs ?? AUTH_TIMEOUT_MS;
@@ -496,7 +568,15 @@ export async function startHttpListener(
 		// The `.catch` is a backstop, not a path: everything below answers rather than throwing.
 		// Anything left is a bug, and a bug here must drop the connection rather than become an
 		// unhandled rejection that takes the whole daemon down.
-		void handleRequest(request, response, config, ipcServer, archiveFiles, sessions).catch(() => {
+		void handleRequest(
+			request,
+			response,
+			config,
+			ipcServer,
+			archiveFiles,
+			panelBundle,
+			sessions,
+		).catch(() => {
 			response.destroy();
 		});
 	});
@@ -587,13 +667,72 @@ function bind(server: HttpServer | HttpsServer, config: HttpListenerConfig): Pro
 }
 
 /**
- * One request: sign in, or else authenticate, then route, then read, then dispatch.
+ * Which of this listener's routes a request is, decided **once, in order, before anything runs**.
+ *
+ * **This exists so that precedence is stated rather than inherited from the order of a chain of
+ * `if`s** (R52, #293). The moment the panel bundle became a thing this host serves, the shape
+ * every framework reaches for — a catch-all at the bottom — became the shape most likely to
+ * quietly swallow a typo'd method or a wrong verb on a gated path and answer it with a page. So
+ * the three host routes are matched **first and by their whole address**, the bundle is only ever
+ * what is left, and a request that names a host route with the wrong verb is `'reserved'`: refused
+ * after the gate exactly as it always was, and never a document.
+ *
+ * `'reserved'` is the whole point of the enumeration, and it deliberately covers more than the
+ * addresses that answer: `/artifact` without its slash is host territory too, because a caller who
+ * trimmed the address must not be handed the panel instead of a refusal.
+ *
+ * Reading the path this early leaks nothing. It was already read this early for `POST /session`,
+ * it is the path and never the query (D20), and the two answers a pre-auth peer can get here are
+ * public by construction: the one uniform refusal, and the bundle every checkout of Rover has.
+ */
+type Route =
+	/** `POST /session` — the credential exchange, answered before the gate. */
+	| 'sign-in'
+	/** `GET`/`DELETE /session`, and any other method on it, all behind the gate. */
+	| 'session'
+	/** `GET /artifact/…`, behind the gate. */
+	| 'artifact'
+	/** `POST /rpc`, behind the gate. */
+	| 'rpc'
+	/** A host address with a verb it does not take. Behind the gate, and never the bundle. */
+	| 'reserved'
+	/** Everything left, on `GET` and `HEAD`: the panel's own files, answered before the gate. */
+	| 'panel';
+
+function routeFor(method: string | undefined, path: string): Route {
+	if (path === SESSION_PATH) {
+		// Every other method lands on `describeOrEndSession`, which refuses it — unchanged, and
+		// kept here rather than folded into `'reserved'` so that one route's verbs stay in one
+		// function.
+		return method === 'POST' ? 'sign-in' : 'session';
+	}
+	if (path === RPC_PATH) {
+		return method === 'POST' ? 'rpc' : 'reserved';
+	}
+	if (path === ARTIFACT_PATH_ROOT) {
+		return 'reserved';
+	}
+	if (path.startsWith(ARTIFACT_PATH_PREFIX)) {
+		return method === 'GET' ? 'artifact' : 'reserved';
+	}
+	// `HEAD` is a `GET` that stops at the headers, and only *here*: the gated routes keep refusing
+	// it exactly as they do now. This arm takes it because the follow-up this whole change exists
+	// to unblock is a launchd agent, and `HEAD /` is the conventional liveness probe for one — an
+	// operator who writes the obvious one and gets a `401` reads it as a broken host. Nothing else
+	// is needed to answer it: Node clears `_hasBody` for a `HEAD` request, so `streamFile`'s pipe
+	// and `writeText`'s `end` emit the headers, the right `content-length`, and no body.
+	return method === 'GET' || method === 'HEAD' ? 'panel' : 'reserved';
+}
+
+/**
+ * One request: route, then sign in or serve the bundle, or else authenticate, then read, then
+ * dispatch.
  *
  * Nothing above a step has been examined by the time that step runs — in particular a body is not
  * touched until the peer is known, with the single exception the header names: `POST /session`,
- * whose body *is* the credential. Matching that one route is the only thing the URL is read for
- * before the gate, and everything it does not match falls through to the gate unchanged, so a
- * stranger still learns nothing about which paths exist.
+ * whose body *is* the credential. The two pre-auth routes are {@link routeFor}'s `'sign-in'` and
+ * `'panel'`, and **every other route still reaches the gate before it reaches a handler**, so a
+ * stranger learns nothing about the host beyond the fact that it is one.
  */
 async function handleRequest(
 	request: IncomingMessage,
@@ -601,14 +740,21 @@ async function handleRequest(
 	config: HttpListenerConfig,
 	ipcServer: IpcServer,
 	archiveFiles: ArchiveFileReader,
+	panelBundle: PanelBundle,
 	sessions: PanelSessionStore,
 ): Promise<void> {
 	// Only the path, never the query: a credential must never be readable out of a URL, so there
 	// is deliberately no code here that could read one out of a URL (D20).
 	const path = pathOf(request.url);
+	const route = routeFor(request.method, path);
 
-	if (request.method === 'POST' && path === SESSION_PATH) {
+	if (route === 'sign-in') {
 		await signIn(request, response, config.usersPath, sessions);
+		return;
+	}
+
+	if (route === 'panel') {
+		await servePanel(response, panelBundle, path);
 		return;
 	}
 
@@ -622,20 +768,20 @@ async function handleRequest(
 		return;
 	}
 
-	if (path === SESSION_PATH) {
+	if (route === 'session') {
 		describeOrEndSession(request, response, sessions, authenticated);
 		return;
 	}
 
-	if (request.method === 'GET' && path.startsWith(ARTIFACT_PATH_PREFIX)) {
+	if (route === 'artifact') {
 		await serveArtifact(request, response, archiveFiles, path);
 		return;
 	}
 
-	if (request.method !== 'POST' || path !== RPC_PATH) {
-		// Refused with the same bytes as an unauthenticated caller gets, on purpose: routing
-		// happens after the gate, so a stranger cannot use a `404` to learn which paths exist,
-		// and an authenticated caller learns nothing it did not already know from this file.
+	if (route === 'reserved') {
+		// Refused with the same bytes as an unauthenticated caller gets, on purpose: this is a
+		// host address with a verb it does not take, so an authenticated caller learns nothing it
+		// did not already know from this file — and a stranger learns nothing at all.
 		refuse(response);
 		return;
 	}
@@ -957,18 +1103,61 @@ async function serveArtifact(
 		return;
 	}
 
-	await streamArtifact(
+	await streamFile(
 		response,
 		opened.file,
 		rangeIn(request.headers.range, opened.file.sizeBytes),
+		ARTIFACT_HEADERS,
 	);
 }
 
+/**
+ * `GET <anything the host does not own>`: the panel's own files, **before the gate** (R52).
+ *
+ * Three answers, and each says something the others cannot. `200` and the file. `503` and one
+ * plain sentence naming `npm run panel:build`, for a host whose `panel/dist` is missing or empty
+ * — never a silent `404` and never a blank page, because a host that is up with a page that is not
+ * built is precisely the silent degradation `ai/RULES.md` §2 forbids, and `503` is the status that
+ * says *this host, this part of it, not yet* rather than *no such address*. `404` for an address
+ * inside a bundle that is there — a stale asset, a traversal, a symlink out of the root — with one
+ * sentence and no path in it (D19).
+ *
+ * **These three statuses vary with the reason and are reachable pre-auth, which every other
+ * pre-auth answer on this listener is forbidden from doing.** That is sound here and only here:
+ * there is nothing for them to be an oracle about. Whether this host has a built panel is not a
+ * secret, is the same answer for every peer, and is readable from the `200` anyway.
+ */
+async function servePanel(
+	response: ServerResponse,
+	panelBundle: PanelBundle,
+	path: string,
+): Promise<void> {
+	if (!response.writable) {
+		return;
+	}
+
+	const answer = await panelBundle.resolve(path);
+	if (answer.outcome === 'not-built') {
+		writeText(response, 503, PANEL_NOT_BUILT_MESSAGE);
+		return;
+	}
+	if (answer.outcome === 'missing') {
+		writeText(response, 404, PANEL_NO_SUCH_FILE_MESSAGE);
+		return;
+	}
+
+	await streamFile(response, answer.file, undefined, PANEL_HEADERS);
+}
+
+/** What a bundle that is there answers for an address it does not hold. No path, by D19. */
+const PANEL_NO_SUCH_FILE_MESSAGE = 'The web panel has no such file.\n';
+
 /** Head the response and pump the file into it, releasing the handle whatever happens. */
-async function streamArtifact(
+async function streamFile(
 	response: ServerResponse,
 	file: OpenedArchiveFile,
 	range: ArchiveByteRange | undefined,
+	headers: Readonly<Record<string, string>>,
 ): Promise<void> {
 	if (!response.writable) {
 		await file.close().catch(() => {});
@@ -977,7 +1166,7 @@ async function streamArtifact(
 
 	const length = range === undefined ? file.sizeBytes : range.end - range.start + 1;
 	response.writeHead(range === undefined ? 200 : 206, {
-		...ARTIFACT_HEADERS,
+		...headers,
 		'content-type': file.contentType,
 		'content-length': length,
 		...(range === undefined
@@ -1181,6 +1370,26 @@ function writeOutcome(
 	response.writeHead(status, {
 		...ARTIFACT_HEADERS,
 		'content-type': 'application/json',
+		'content-length': Buffer.byteLength(body, 'utf8'),
+	});
+	response.end(body);
+}
+
+/**
+ * The panel route's non-file answer: a status, and one sentence a person reads in a browser tab.
+ *
+ * Plain text rather than JSON or HTML, deliberately. JSON is the envelope layer's vocabulary and
+ * this is not an envelope; HTML would be a second document this host has to author, style and keep
+ * honest, when the whole message is one sentence. {@link PANEL_HEADERS} rides along so a refusal is
+ * as un-sniffable and as un-cacheable as an answer.
+ */
+function writeText(response: ServerResponse, status: number, body: string): void {
+	if (!response.writable) {
+		return;
+	}
+	response.writeHead(status, {
+		...PANEL_HEADERS,
+		'content-type': 'text/plain; charset=utf-8',
 		'content-length': Buffer.byteLength(body, 'utf8'),
 	});
 	response.end(body);

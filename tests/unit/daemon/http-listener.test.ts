@@ -48,6 +48,7 @@ import {
 	TLS_CERT_ENV_VAR,
 	TLS_KEY_ENV_VAR,
 } from '@/daemon/network-config.js';
+import type { PanelBundle } from '@/daemon/panel-bundle.js';
 import { revokeUser, rotateUserToken } from '@/daemon/user-store.js';
 import type { IpcClient } from '@/ipc/client.js';
 import {
@@ -335,6 +336,17 @@ function envelopeOf(answer: Answer): Record<string, unknown> {
  */
 function noArchiveFiles(): ArchiveFileReader {
 	return { open: async () => ({ outcome: 'missing' }) };
+}
+
+/**
+ * A panel bundle for those same two listeners, neither of which reaches the static route either.
+ *
+ * It answers `not-built` so that a request which somehow did reach it would fail loudly as the
+ * build sentence rather than as a thrown `undefined`. What the static route actually serves is
+ * `panel-route.test.ts`'s subject.
+ */
+function noPanelBundle(): PanelBundle {
+	return { resolve: async () => ({ outcome: 'not-built' }) };
 }
 
 /** A keep-alive agent pinned to one connection, released in `afterEach`. */
@@ -1210,6 +1222,7 @@ describe('every pre-auth failure gets one byte-identical refusal', () => {
 			httpConfig(),
 			{ handleConnection: () => {} },
 			noArchiveFiles(),
+			noPanelBundle(),
 			{ authTimeoutMs: SHORT_AUTH_TIMEOUT_MS },
 		);
 
@@ -1344,6 +1357,7 @@ describe('the body is bounded, and the server owns its own diagnosis', () => {
 				},
 			},
 			noArchiveFiles(),
+			noPanelBundle(),
 		);
 
 		try {

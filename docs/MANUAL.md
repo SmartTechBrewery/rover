@@ -2162,13 +2162,40 @@ label.
 
 ### The web panel
 
-`rover panel` serves it on <http://localhost:5174> — that is `npm run panel:dev` reached from
-anywhere rather than a second thing; `npm run panel:build` writes `panel/dist` and `npm run
-panel:preview` serves that. **The host serves the panel's data surface but not the panel's own
-files** — `POST /rpc` is above, and serving `panel/dist` from that same listener is still a
-separate piece of work — so the panel runs from its development server for now, which is why
-`rover panel` needs this repository's `devDependencies` and says so in its own usage text. When the
-host serves those files, that command becomes a URL rather than a server.
+**The host serves the panel and its data from one origin, so one process is the whole machine.**
+`ROVER_HTTP_PORT=4712 rover server` answers `/rpc`, `/session` and `/artifact/…` *and* `GET /`,
+`GET /assets/*` and the rest of the built bundle, with an SPA fallback to `index.html` for the
+panel's own addresses — so <http://127.0.0.1:4712> is the whole of it and there is nothing else to
+start. This section said the opposite until R52 (#293): the host served the data and not the files,
+`rover panel` was this repository's development server, and the operator ran two terminals. It is
+rewritten in place with its reason rather than deleted — the second process was never a design,
+only the gap, and closing it is what lets the machine run from a single launchd agent.
+
+**The panel is built, not shipped**, and that is the one step this costs you:
+
+```bash
+npm run panel:build                  # in the Rover checkout, once — writes panel/dist
+```
+
+The host re-reads that directory on every request, so building while a host is running takes effect
+on the next reload. A host with **no** build answers one plain sentence naming `npm run
+panel:build`, on every panel address — never a silent `404` and never an empty page.
+
+`rover panel` now prints where the panel is and what has to be up; it starts nothing. `npm run
+panel:dev` is unchanged and is still the development server, on `:5174`, for working on the panel
+itself — it proxies `/rpc`, `/session` and `/artifact` to `ROVER_HTTP_PORT` because a dev server is
+a second origin by nature, and that proxy is scoped to `vite serve` so no built bundle carries one.
+
+**The bundle is the one thing this listener answers before the token gate**, and it is the same
+exception `POST /session` already was: the login screen *is* the bundle, so a gate in front of
+`GET /` would refuse the only page that can obtain a credential. Nothing else moved — `/rpc`,
+`/session` and `/artifact/…` are checked against the user store on every single request, a wrong
+verb on one of them is the same `401` as no credential at all, and a `..`, a symlink out of
+`panel/dist` or a directory is refused rather than served. What it does cost is stated plainly:
+a stranger who can reach the port can tell this is a Rover host, and **if you bind
+`ROVER_HTTP_PORT` off loopback the bundle is readable by anyone who can reach it**. That is safe
+because the bundle carries no credential and no host data — it is the same JavaScript in every
+checkout — and it stays safe only while that is true.
 
 **Devices is the panel's default view and it reads the host.** It polls `list_devices`, the one
 method the surface lets it call, and shows every attached device as a card — model, serial,
@@ -2325,20 +2352,21 @@ Its design comes from Stitch, not from this repository: `ai/RULES.md` §8 is how
 
 #### Pointing it at a host and signing in
 
-The panel talks to the host over **relative** URLs (`/session`, `/rpc`, `/artifact`), because in
-production the daemon will serve it from the very listener that serves the data. In development the
-dev server proxies those three paths to `ROVER_HTTP_PORT` on loopback — the same variable that switches the
-listener on, so there is one number to keep in step rather than two. There is no host field on the
-sign-in screen and no base URL to configure; the host emits no CORS header on purpose
-(`PROJECT.md` D29), so the proxy is what makes two origins into one.
+The panel talks to the host over **relative** URLs (`/session`, `/rpc`, `/artifact`), because the
+daemon serves it from the very listener that serves the data. There is no host field on the sign-in
+screen and no base URL to configure; the host emits no CORS header on purpose (`PROJECT.md` D29),
+and same-origin is why it needs none. In development `npm run panel:dev` proxies those three paths
+to `ROVER_HTTP_PORT` on loopback — the same variable that switches the listener on, so there is one
+number to keep in step rather than two, and the proxy is what makes the dev server's second origin
+into one.
 
 ```bash
 rover users add panel                # prints the token, once
-ROVER_HTTP_PORT=4712 rover server    # in one terminal
-rover panel                          # in another; it reads the same variable
+npm run panel:build                  # in the Rover checkout, once
+ROVER_HTTP_PORT=4712 rover server    # the host — and the panel is on that port
 ```
 
-Open the panel and paste that token into the one field. From then on:
+Open <http://127.0.0.1:4712> and paste that token into the one field. From then on:
 
 - **The browser holds a session, not the token.** It is exchanged once over `POST /session`; only
   the session id is kept, under one `localStorage` key, and a reload restores it with the boot

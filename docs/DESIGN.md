@@ -4061,8 +4061,19 @@ list, not this one.
 
 - **The three font families are loaded from Google Fonts over the network** (#111). On a host with
   no internet the panel falls back to system faces — legible, and wrong. Self-hosting them through
-  `@fontsource` is the fix and has not been done; it is worth doing in the change that first serves
-  the panel from the daemon, since that is when a Rover host stops being assumed to be online.
+  `@fontsource` is still the fix and is still not done. **This entry is edited in place rather than
+  closed** (`ai/RULES.md` §1): it used to say the work was worth doing *in the change that first
+  serves the panel from the daemon, since that is when a Rover host stops being assumed to be
+  online*. That change has landed — #293/R52, the host now serves `panel/dist` itself — and the
+  fonts were deliberately left alone in it, so the instruction is rewritten rather than left
+  pointing at something already merged. **Why it was deferred:** #293 scopes itself to *where the
+  panel's files come from* and adds a route, three dependencies and a build-step import are a
+  different change with a different failure surface, and none of the argument above got weaker by
+  waiting — a host serving its own bundle is exactly the host most likely to be offline, so the gap
+  is now real rather than hypothetical. **What would close it:** add the `@fontsource` packages for
+  the three families, import them from `panel/src`, and delete the two `preconnect` links and the
+  `fonts.googleapis.com` stylesheet from `panel/index.html:15-18`. It is still not blocking
+  anything, and the panel is still legible without it.
 
 ### Leave these to whoever implements them
 

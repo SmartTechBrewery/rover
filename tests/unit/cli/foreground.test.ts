@@ -7,11 +7,16 @@ import { HTTP_PORT_ENV_VAR, LISTEN_PORT_ENV_VAR } from '@/daemon/network-config.
 import { SOCKET_PATH_ENV_VAR } from '@/daemon/socket-path.js';
 
 /**
- * The deliberate start — `rover server` and `rover panel` — and the runner both share.
+ * The deliberate start — `rover server` — and the foreground runner behind it.
  *
- * The child here is always a `node -e`, never a daemon and never a dev server: what these cases
- * are about is the contract around the process (its exit code, the environment it is handed),
- * and starting a real host would make this suite a port allocator.
+ * The child here is always a `node -e`, never a daemon: what these cases are about is the contract
+ * around the process (its exit code, the environment it is handed), and starting a real host would
+ * make this suite a port allocator.
+ *
+ * **`rover panel` is still here and no longer starts anything** (R52, #293). It spawned Vite
+ * through this same runner until the host learned to serve `panel/dist`; what is left of it in
+ * this file is the flag surface the two commands share, because that is the half that did not
+ * change. What it prints is `panel-command.test.ts`'s.
  */
 
 describe('runInForeground', () => {
@@ -84,8 +89,8 @@ describe('what the two commands take', () => {
 	});
 
 	/**
-	 * Neither takes `--host`: one runs a host here and the other serves a page beside it, and a
-	 * flag naming another machine would be a promise neither can keep (D17).
+	 * Neither takes `--host`: one runs a host here and the other says where this machine's own
+	 * page is, and a flag naming another machine would be a promise neither can keep (D17).
 	 */
 	it.each([
 		['server', server],

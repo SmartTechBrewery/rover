@@ -761,14 +761,26 @@ and goes back up when the holder renews, one control to force-release a stuck le
 explorer over every run the host ever filed.
 
 **What it is.** `panel/` is a Vite + React application sharing the repository's single
-`package.json`. `rover panel` serves it on <http://localhost:5174>; the **host** serves the data
-surface, not the panel's own files, so both halves run for now — `ROVER_HTTP_PORT=4712 rover server`
-in one terminal and `rover panel` in another, one variable in both.
+`package.json`. **One process is the whole machine**: `ROVER_HTTP_PORT=4712 rover server` serves the
+panel *and* its data from one origin, so <http://127.0.0.1:4712> is the address and there is nothing
+else to start. This paragraph read *`rover panel` serves it on :5174 … so both halves run for now*,
+and it is rewritten in place with its reasoning rather than deleted (`ai/RULES.md` §1): the second
+process existed only because the host did not serve `panel/dist`, and that gap is closed (R52).
+`rover panel` is now a line printing that URL and what has to be up; `npm run panel:dev` is
+unchanged and is the development server, for working on the panel itself.
+
+**The panel is built, not shipped.** `npm run panel:build` writes `panel/dist` once, in the Rover
+checkout, and the host serves whatever is there — re-read per request, so building while a host is
+running takes effect on the next reload. A host with no build answers **one plain sentence naming
+`npm run panel:build`**, never a silent `404` and never a blank page: a page that is up and empty is
+the silent degradation this project forbids everywhere else, and the host cannot run `vite` on the
+operator's behalf because a copy installed with `--omit=dev` has none.
 
 **The transport** (D29). A browser cannot speak the framed NDJSON greeting the TCP listener
 consumes, so the panel reaches the host through a third transport of the *same* surface:
-`POST /rpc` carrying the same envelopes, plus two additions of its own — the `/session` verbs and
-`GET /artifact/<component>/…`, which answers bytes. It is **off unless `ROVER_HTTP_PORT` is set**,
+`POST /rpc` carrying the same envelopes, plus three additions of its own — the `/session` verbs,
+`GET /artifact/<component>/…`, which answers bytes, and the panel's own files on everything left.
+It is **off unless `ROVER_HTTP_PORT` is set**,
 defaults to loopback, and `rover list` clears the switch in anything it autostarts.
 
 - **Only the panel's methods are reachable** — an allowlist over the one table — so a browser tab
@@ -776,10 +788,32 @@ defaults to loopback, and `rover list` clears the switch in anything it autostar
 - **Two statuses wherever an envelope is the answer**: `200` (read the envelope; its `error.code` is
   the vocabulary every Rover client already reads) and `401`, byte-identical for a missing
   credential, a malformed one, an unknown token, a revoked user, an unreadable store, an unknown
-  path and the wrong method alike — authentication happens before routing, and a refusal that
-  varied would tell a stranger something. The token goes in the header and never in the URL (D20);
-  nothing about a request or a refusal is logged.
+  path and the wrong method alike — authentication happens before routing on every path that
+  answers host data, and a refusal that varied would tell a stranger something. The token goes in the header and never in the URL (D20);
+  nothing about one of these requests or refusals is logged — the only interesting thing to log
+  about an attempt is the token that was tried. (**Scoped to the envelope surface, and it has to
+  be**: the static route below reads the filesystem, so a file it will not serve — a symlink out of
+  the bundle, a directory, a stray FIFO — does put one line on the host's log. That is the
+  operator's diagnosis of their own tree and it is bounded to one line per distinct problem per
+  daemon, so an unauthenticated peer cannot replay it into a full disk.)
 - **The store is read on every request**, keep-alive connections and artifact fetches included.
+- **The bundle is the one route in front of the gate, and it is the same exception `POST /session`
+  already is** (R52). The login screen *is* the bundle, so a gate in front of `GET /` would refuse
+  the only page that can obtain a credential. It widens nothing: `/rpc`, `/session` and
+  `/artifact/…` keep the per-request gate exactly as it was, and every pre-auth failure on them is
+  still the one byte-identical `401`. **Route precedence is stated in code, not left to ordering** —
+  the three host routes match by their whole address first and the bundle is only ever what is
+  left, so a wrong verb on a gated path is a refusal and never a page. Path containment is the
+  artifact route's own, pointed at a second root: no `..`, no symlink escape, no directory listing.
+  **It is bounded in the three ways a pre-auth route has to be**: `GET` and `HEAD` only, so no body
+  is read from a peer this host has not identified; reads only inside `panel/dist`; and it says at
+  most one thing per distinct problem per daemon on the log, so the diagnosis survives and a peer
+  looping a request cannot fill a disk with it. `HEAD` is taken here and nowhere else, because a
+  launchd agent's liveness probe is a `HEAD /` and an operator who writes the obvious one should
+  not get a `401`. The cost, stated rather than hidden: a stranger who reaches the port can tell
+  this is a Rover host, and **off loopback the bundle is readable by anyone who can reach it** —
+  acceptable because it carries no credential and no host data, which is a property that has to
+  stay true.
 - **The artifact route** takes listing components, never a host path. Content type comes from the
   extension with `nosniff` on every response; nothing escapes the archive root (a traversal is
   `400 invalid_path`, a symlink resolving outside is `500 unreadable`, neither carrying a path); a
@@ -853,9 +887,10 @@ download button anywhere** — this is a view, not a transfer. The design system
 `panel/src/tokens.css` is the only file allowed to write a colour value, and `tests/unit/panel/`
 holds the gates that keep it that way.
 
-**Where it lives.** `panel/`, `src/daemon/http-listen.ts`, `panel-session.ts`, `archive-file.ts`,
-`list-archive.ts`, `search-archive.ts`, `list-projects.ts`, `measure-archive-groups.ts`;
-`docs/DESIGN.md` (the screens), `docs/WEB_PANEL.md` (the running list), `PROJECT.md` D27, D29, D30.
+**Where it lives.** `panel/`, `src/daemon/http-listen.ts`, `panel-bundle.ts`, `contained-file.ts`,
+`panel-session.ts`, `archive-file.ts`, `list-archive.ts`, `search-archive.ts`, `list-projects.ts`,
+`measure-archive-groups.ts`, `src/cli/commands/panel.ts`; `docs/DESIGN.md` (the screens),
+`docs/WEB_PANEL.md` (the running list), `PROJECT.md` D27, D29, D30, D40, R52.
 
 ---
 

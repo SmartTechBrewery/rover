@@ -51,7 +51,7 @@ const ALLOWED_TO_SPAWN = [
 	// departure from `adb-path.ts` and the property that lets a machine with no Xcode import it —
 	// and `backends/ios-simulator/idb-companion-path.ts` keeps that property for the same reason.
 	'backends/ios-simulator/simctl.ts',
-	// The client-side foreground start (`rover server`, `rover panel`): one process, spawned
+	// The client-side foreground start (`rover server`): one process, spawned
 	// because somebody typed the command, attached to their terminal and killed with it. It starts
 	// no daemon *behind* anyone, which is what this gate is about — the daemon it can start is the
 	// one the operator asked for, in front of them.

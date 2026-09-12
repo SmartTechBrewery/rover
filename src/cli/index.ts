@@ -156,8 +156,8 @@ Commands:
   server                   Run this machine's host in the foreground, log and all —
                            the deliberate start, and the only one that keeps the two
                            settings that make a host reachable
-  panel                    Serve the web panel in the foreground, beside a host started
-                           with ROVER_HTTP_PORT set
+  panel                    Where the web panel is — the host serves it, so this prints
+                           that URL and what has to be running
 
 \`screenshot\`, \`record\` and \`pull\` write their bytes **here**: the verb runs on the host and
 the answer comes back as bytes, so --out is a path on this machine and the path reported is

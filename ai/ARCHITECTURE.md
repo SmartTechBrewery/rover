@@ -32,7 +32,7 @@ has no Rover client at all because its client is a browser:
 |---|---|---|
 | Local unix socket | `src/daemon/listen.ts` — no token, no configuration | `src/daemon/connect.ts` — **and autostart lives here** (D5) |
 | TCP + TLS | `src/daemon/network-listen.ts` — opt-in via `ROVER_LISTEN_PORT` | `src/daemon/network-connect.ts` — configured by `ROVER_HOST_ADDRESS` |
-| HTTP(S) | `src/daemon/http-listen.ts` — opt-in via `ROVER_HTTP_PORT`, one route `POST /rpc` (D29) | the browser; **no Rover client**, and none is planned |
+| HTTP(S) | `src/daemon/http-listen.ts` — opt-in via `ROVER_HTTP_PORT`: `POST /rpc` (D29), the `/session` verbs (R34), `GET /artifact/…` (R37), and `panel/dist` on everything left (R52) — the last being the **only** route answered before the gate | the browser; **no Rover client**, and none is planned |
 
 `src/daemon/host.ts` is where a client **chooses** between those two client halves, and it is
 single because there are two clients: the CLI asks for a host with `--host` and the MCP server

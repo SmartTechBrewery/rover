@@ -1,57 +1,63 @@
 /**
- * `rover panel` — serve the web panel in the foreground.
+ * `rover panel` — where the web panel is, and what has to be up for it to answer.
  *
- * **What this is not: a second way to reach the host.** The panel is a browser client of the same
- * surface every other client speaks, over the HTTP transport the daemon exposes when
- * `ROVER_HTTP_PORT` is set (D29). This command serves the **page**; the host serves the data, and
- * without one running the panel loads and can ask nobody anything. So the pair is two terminals:
- * `rover server` with that variable set, and this.
+ * **It prints; it no longer serves.** This module used to spawn Vite, and its own header said why
+ * that was a limitation rather than a design: the daemon answered `/rpc`, `/session` and
+ * `/artifact/…` and did not serve `panel/dist`, so the page had to come from somewhere and the
+ * somewhere that existed was this repository's dev server. It closed with *when the daemon learns
+ * to serve `panel/dist`, the honest shape of this command is a line pointing at the host's own
+ * port*. R52 (#293) is that, and this file is the promise kept — edited in place with its
+ * reasoning rewritten rather than deleted (`ai/RULES.md` §1), because the reason it was ever a
+ * server is the reason it is now a line.
  *
- * **It is Vite, and that is a limitation rather than a design.** The daemon does not serve the
- * panel's own assets yet — `src/daemon/http-listen.ts` answers `/rpc`, `/session` and
- * `/artifact/…` and nothing else — so the page has to come from somewhere, and the somewhere that
- * exists is this repository's dev server. Two things follow, both stated rather than hidden: this
- * needs Rover's `devDependencies` installed, so it works from a checkout and not from a copy that
- * ran `npm install --omit=dev`; and it is a **development** server, with the reload and the
- * unminified bundle that implies. When the daemon learns to serve `panel/dist`, the honest shape
- * of this command is a line pointing at the host's own port, and its usage text says so today so
- * nobody builds a workflow on the dev server by accident.
+ * **What that buys is one process, which is the operator-facing point.** `ROVER_HTTP_PORT=4712
+ * rover server` is now the whole machine: the panel and its data from one origin, one thing to
+ * start, one thing to stop, and — the follow-up this unblocks — one launchd agent, which two
+ * foreground processes could never be.
  *
- * **The port it proxies to is `ROVER_HTTP_PORT`**, the daemon's own switch, read by
- * `panel/vite.config.ts` — one number for both halves rather than a second setting here that could
- * disagree with it.
+ * **Why a command at all, rather than nothing.** Two things an operator would otherwise have to
+ * assemble from three documents: the URL, which depends on `ROVER_HTTP_PORT`, on
+ * `ROVER_HTTP_ADDRESS` and on whether TLS material is configured — so it is composed by
+ * `panelOriginFor`, the same function `rover server` prints its own line with, and cannot disagree
+ * with what the daemon binds — and the fact that a browser needs a credential of its own, which is
+ * the first thing anybody gets wrong.
  *
- * Spawned rather than imported, through `../_shared/foreground.ts`, for `./server.ts`' reason.
+ * **It talks to nobody.** No host is asked whether it is up, and there is deliberately no probe:
+ * this command runs in a shell that may have no host at all, the honest answer is *start one*, and
+ * a probe would turn a two-line answer into a connection error. `--host` is refused for
+ * `./server.ts`' reason — it does not talk to a host, it describes this machine's own (D17).
+ *
+ * **`npm run panel:dev` is untouched and is still the development server.** What changed is which
+ * of the two is the ordinary way to look at the panel: the built bundle the host serves is, and
+ * the dev server is for working on the panel itself (`panel/vite.config.ts`).
  */
 
-import { fileURLToPath } from 'node:url';
+import {
+	HTTP_PORT_ENV_VAR,
+	panelOriginFor,
+	resolveHttpListener,
+} from '../../daemon/network-config.js';
 import { EXIT_OK } from '../_shared/exit.js';
 import { expectPositionals, parseCommandArgs } from '../_shared/flags.js';
-import { runInForeground } from '../_shared/foreground.js';
 import * as out from '../_shared/output.js';
 
-/** Rover's own root, because the dev server and its config live here and not in a project. */
-const PACKAGE_ROOT = fileURLToPath(new URL('../../../', import.meta.url));
+/** The port the README's recipe uses, named when nothing is configured so the example is runnable. */
+const EXAMPLE_PORT = 4712;
 
-/** The same invocation `npm run panel:dev` makes, without needing to be typed in this checkout. */
-const VITE_ARGV = ['node_modules/vite/bin/vite.js', '--config', 'panel/vite.config.ts'] as const;
-
-export const USAGE = `rover panel — serve the web panel in the foreground
+export const USAGE = `rover panel — where the web panel is, and what has to be running
 
 Usage: rover panel
 
-The panel is a browser client of the same surface everything else speaks, so it needs a host
-serving that surface to a browser. In another terminal:
+The host serves the panel: with ROVER_HTTP_PORT set, one 'rover server' is the page and the data
+on one origin, and there is no second process. This command prints that address.
 
-  export ROVER_HTTP_PORT=4712
-  rover server
+  rover users add panel                 # the browser's own credential, printed once
+  ROVER_HTTP_PORT=4712 rover server     # the host; Ctrl-C stops it
+  rover panel                           # this — the URL to open
 
-then this. The panel reads the same variable, so one number points both halves at each other.
-A browser needs a credential of its own — \`rover users add panel\` prints one.
-
-Today this is Rover's development server, because the host does not serve the panel's assets
-yet: it needs this repository's devDependencies, and it reloads on edits. When the host serves
-them, this command becomes a URL rather than a server.`;
+The panel is built, not bundled with a release: run 'npm run panel:build' in the Rover checkout
+once, and the host serves it from then on. 'npm run panel:dev' is still the development server,
+for working on the panel itself.`;
 
 export async function run(argv: string[]): Promise<number> {
 	const { values, positionals } = parseCommandArgs('panel', argv, {
@@ -63,5 +69,34 @@ export async function run(argv: string[]): Promise<number> {
 	}
 	expectPositionals('panel', positionals, []);
 
-	return runInForeground({ args: [...VITE_ARGV], cwd: PACKAGE_ROOT });
+	// Throws on a half-configured TLS pair or a plain listener off loopback — the same two
+	// configurations `rover server` refuses to start on, named in the same words. Reporting the URL
+	// of a host that would refuse to bind is the one answer this command must not give.
+	const http = resolveHttpListener();
+	out.info(http === undefined ? nothingConfigured() : whereItIs(panelOriginFor(http)));
+	return EXIT_OK;
+}
+
+/** The answer when this shell has no `ROVER_HTTP_PORT`: there is no address yet, and why. */
+function nothingConfigured(): string {
+	return (
+		`${HTTP_PORT_ENV_VAR} is not set in this shell, so no host here is serving the panel — ` +
+		`it is off unless configured, because a daemon that began answering a browser merely ` +
+		`because somebody upgraded would be a change in exposure nobody chose.\n\n` +
+		`  rover users add panel\n` +
+		`  ${HTTP_PORT_ENV_VAR}=${EXAMPLE_PORT} rover server\n\n` +
+		`Then open http://127.0.0.1:${EXAMPLE_PORT} and sign in with the credential that printed.`
+	);
+}
+
+/** The answer when it is set: the address, and the two things that have to be true. */
+function whereItIs(origin: string): string {
+	return (
+		`The web panel is at ${origin}\n\n` +
+		`Two things have to be true for it to answer:\n` +
+		`  - a host is running with ${HTTP_PORT_ENV_VAR} set — 'rover server' in a terminal of ` +
+		`its own\n` +
+		`  - the panel has been built — 'npm run panel:build' in the Rover checkout, once\n\n` +
+		`The browser signs in with a credential of its own: 'rover users add panel' prints one.`
+	);
 }
