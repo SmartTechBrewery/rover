@@ -1539,8 +1539,10 @@ Parser and its reasoning: `src/backends/android/parsers/insets.ts`.
 
 ### A graceful stop did not release a live lease, and `rover server` is a wrapper (2026-09-12, #294)
 
-Two traps, found while putting the host behind a launchd agent. Both were found by *checking* a
-thing the issue said to check rather than assume, and both were true on this machine.
+Three traps, found while putting the host behind a launchd agent. The first two were found by
+*checking* a thing the issue said to check rather than assume; the third was found in review, and
+all three were true on this machine. **Amended in place on 2026-09-12 with the third**, which
+arrived after the section was written.
 
 **1. `SIGTERM` to the host left a held device in airplane mode, indefinitely.** Verified against
 `emulator-5554`, an `sdk_gphone16k_arm64` emulator on **API 37**: take a lease, call
@@ -1571,6 +1573,24 @@ equality reported the agent's own host as a stranger's, which is the exact oppos
 command exists to say. It walks the parent chain instead. A host whose wrapper died is reparented
 to `launchd` and correctly fails that test: launchd is about to start a wrapper that will lose the
 socket to it, which is the crash loop `status` is there to name.
+
+**3. `launchctl print` exits 113 for a label launchd does not know, and `pipefail` turns that into
+a silent abort.** The exit status is not documented anywhere obvious and the failure does not look
+like one: `launchctl print "$TARGET" 2>/dev/null | awk …` ends in an `awk` that exits 0, so the
+pipeline reads as successful until `set -o pipefail` hands back the 113 — and a bare
+`agent=$(launchd_pid)` takes the substitution's status, so `set -e` kills the script *before* the
+message it was about to print. Measured: driving `cmd_install` with a stranger host on the socket
+and the label genuinely absent printed nothing and exited 113, where the same probe with the label
+loaded printed the whole four-line refusal. **A stub hides this exactly**, which is why the first
+round of probes passed — a stubbed `launchd_pid` returns 0 and the abort never happens. Closed by
+ending that pipeline in `|| true`, which is what every other command substitution in
+`bin/rover-server-agent` already does and what both call sites already assume when they test the
+result for emptiness.
+
+*The reading to take away:* under `set -euo pipefail`, a command substitution whose value is
+legitimately **empty** needs `|| true` as a matter of course, and the machine where the guard has
+nothing to find is the machine the guard exists for. Probe a guard with the condition absent for
+real, not with the lookup stubbed.
 
 ---
 

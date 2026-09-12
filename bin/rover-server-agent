@@ -16,8 +16,9 @@
 # Modelled on `../swarm/bin/swarm-worker-agent` and its `docs/launchd-worker-autostart.md` — same
 # structure, same subcommands, same `<checkout>` argument. Four things are Rover's own and are
 # marked where they appear: the plist carries the ports, `PATH` has to resolve `adb` and
-# `idb_companion` and not just `node`, `install` refuses while any host holds the socket, and
-# `status` tells this agent's host apart from a portless one that autostarted onto it.
+# `idb_companion` and not just `node`, `install` refuses while a host it does not own holds the
+# socket and reinstalls over its own, and `status` tells this agent's host apart from a portless
+# one that autostarted onto it.
 set -euo pipefail
 
 usage() {
@@ -215,8 +216,16 @@ json_number() { printf '%s' "$1" | sed -n "s/.*\"$2\":\\([0-9][0-9]*\\).*/\\1/p"
 # Anchored to **one** tab, because `launchctl print` nests an `endpoints`/`sockets` block under the
 # job whose entries carry keys of the same names; a looser `[[:space:]]+` matches those too and
 # reports whichever came first.
+#
+# **The `|| true` is the whole point of the function, not tidiness.** `launchctl print` exits 113
+# when launchd has no job for the label, the `awk` that swallows the output exits 0, and `pipefail`
+# (:21) hands the 113 back — so a bare `agent=$(launchd_pid)` aborts the script under `set -e`
+# before it can say anything, on exactly the machine where no agent is installed yet. Both callers
+# already read *not loaded* as empty output (`[ -n "$agent" ]`), which is what this returns; every
+# other command substitution in this file is guarded the same way ({@link host_on_socket},
+# {@link plist_env}, {@link launchd_lines}).
 launchd_pid() {
-	launchctl print "$TARGET" 2>/dev/null | awk -F' = ' '/^\tpid = /{ print $2; exit }'
+	launchctl print "$TARGET" 2>/dev/null | awk -F' = ' '/^\tpid = /{ print $2; exit }' || true
 }
 
 # Whether `$1` is the launchd job `$2` or a process that job started.
