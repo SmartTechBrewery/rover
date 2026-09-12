@@ -24,9 +24,8 @@
  */
 
 import { daemonForegroundCommand } from '../../daemon/connect.js';
-import { attemptConnect } from '../../daemon/socket-connect.js';
+import { hostOnSocket } from '../../daemon/host-on-socket.js';
 import { resolveSocketPath } from '../../daemon/socket-path.js';
-import { createIpcClient } from '../../ipc/client.js';
 import { EXIT_FAILED, EXIT_OK } from '../_shared/exit.js';
 import { expectPositionals, parseCommandArgs } from '../_shared/flags.js';
 import { runInForeground } from '../_shared/foreground.js';
@@ -77,38 +76,25 @@ export async function run(argv: string[]): Promise<number> {
 /**
  * The host already holding this socket, described — or `null` when the path is free.
  *
- * **This exists because the daemon's own answer is silence.** Losing the bind is a *success* for
- * the process that loses it (`src/daemon/main.ts`): three clients racing to autostart produce two
- * children that exit 0 saying nothing, which is right for a start nobody asked for and useless for
- * one somebody typed — the terminal would come straight back with no host and no reason.
- *
- * **It probes without starting anything.** `attemptConnect` rather than `connectToHost`, because
- * the latter *is* the autostart (D5) and would make asking whether a host is running the thing
- * that starts one.
- *
- * **The race it leaves is the one it should.** A daemon that appears between this probe and the
- * spawn is not caught here — and lands on exactly the path above, exiting quietly, which is the
- * behaviour this replaces rather than a regression. Reporting the winner accurately in that window
- * would take a handshake with a process that has not started yet.
+ * **The probe itself is `src/daemon/host-on-socket.ts`'s**, and this is only how *this* command
+ * words its refusal. They were one function until `bin/rover-server-agent` needed the same
+ * question answered before writing a `KeepAlive` launchd job: a second check that could disagree
+ * with this one would let an agent be installed against a socket a host already holds, and under
+ * `KeepAlive` that is an infinite crash loop rather than a message. See that module for why
+ * probing must never start anything, and for the race it deliberately leaves.
  */
 async function hostAlreadyThere(socketPath: string): Promise<string | null> {
-	const attempt = await attemptConnect(socketPath);
-	if (attempt.outcome !== 'connected') return null;
-
-	const client = createIpcClient(attempt.socket);
-	try {
-		const status = await client.request('status', {});
-		return (
-			`A Rover host is already serving this machine — pid ${status.pid}, up for ` +
-			`${out.formatDuration(status.uptimeMs)}. Nothing was started. Stop that one first, or ` +
-			'leave it: every command finds it on its own.'
-		);
-	} catch {
-		// Something holds the socket and will not answer the surface. Not this command's to
-		// diagnose or to clear away — `src/daemon/listen.ts` owns a stale path — and starting a
-		// second host at it is the one thing that must not happen either.
-		return `Something is holding this machine's Rover socket but did not answer as a host. Nothing was started.`;
-	} finally {
-		await client.close();
+	const found = await hostOnSocket(socketPath);
+	switch (found.outcome) {
+		case 'free':
+			return null;
+		case 'host':
+			return (
+				`A Rover host is already serving this machine — pid ${found.pid}, up for ` +
+				`${out.formatDuration(found.uptimeMs)}. Nothing was started. Stop that one first, or ` +
+				'leave it: every command finds it on its own.'
+			);
+		case 'foreign':
+			return `Something is holding this machine's Rover socket but did not answer as a host. Nothing was started.`;
 	}
 }

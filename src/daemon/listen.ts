@@ -774,6 +774,27 @@ async function closeServer(
 	// nothing ever will — leases die with the host (D6), so a successor sees no expired holder
 	// at all. Synchronous, and the restorations it starts are what `settleAll` below waits for.
 	leases.sweep();
+	// **And then every lease that is still live, which is the same argument one step further**
+	// (D9 as amended, #294). The paragraph above is right that leases die with the host — and
+	// that is exactly as true of a lease with nineteen minutes left as of one that expired a
+	// second ago. Its holder will never call `release_device`, because the host it would call is
+	// this one; its record goes with this process; and the device is left in whatever state the
+	// lease put it in — in airplane mode, with a recorder running, with the project's services
+	// up — for the next holder to inherit and be unable to explain.
+	//
+	// **It was measured rather than assumed** (ai/RULES.md §6): a lease that had turned airplane
+	// mode on, then a `SIGTERM` to the host, left that device in airplane mode indefinitely.
+	// `PROJECT.md` §6 carries the run and the API level it was made against. What made it worth
+	// fixing now rather than noting is `bin/rover-server-agent`: a host under launchd is stopped
+	// routinely — at logout, at reboot, and on every `rover-server-agent reload` — where a
+	// foreground one was stopped by a person who was looking at it.
+	//
+	// `release` rather than a new path, so this is the *same* end a caller's own release is,
+	// through the same `onLeaseEnded` and the same restorer chain; and before
+	// {@link settleRestorations} is snapshotted below, so the shutdown waits for what it started.
+	for (const lease of leases.live()) {
+		leases.release(lease.id);
+	}
 
 	// Started here, awaited at the end. Stopping the watches and refusing new connections are
 	// independent, and doing them in sequence would leave the socket accepting and dispatching

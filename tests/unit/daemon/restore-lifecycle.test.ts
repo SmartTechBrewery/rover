@@ -231,6 +231,43 @@ describe('shutting the daemon down mid-restoration', () => {
 	});
 });
 
+describe('shutting the daemon down while a lease is still live', () => {
+	/**
+	 * **Measured on a real device before it was written** (#294, `emulator-5554` on API 37): a
+	 * lease that had turned airplane mode on, then a `SIGTERM` to the host, left the device in
+	 * airplane mode indefinitely. The shutdown took its final expiry sweep and waited for the
+	 * restorations already in flight, and a lease with nineteen minutes left was neither.
+	 *
+	 * The argument the sweep is already made on carries straight over: leases die with the host
+	 * (D6), so this lease's holder will never call `release_device` — the host it would call is
+	 * this one — and no successor sees a holder to restore. What made it worth closing now is
+	 * `bin/rover-server-agent`: a host under launchd is stopped at logout, at reboot and on every
+	 * `reload`, where a foreground one was stopped by somebody who was looking at it.
+	 */
+	it('restores the device, with nobody having released it', async () => {
+		const recorded = registerRecordingBackend();
+		const daemon = await start();
+		const client = await connect();
+
+		// The real TTL: this lease has twenty minutes left when the host goes down, so nothing
+		// about expiry can account for the restoration below.
+		const granted = await client.request('acquire_device', {
+			serial: SERIAL,
+			owner: 'issue-294',
+			project: 'rover',
+			testName: 'graceful stop',
+		});
+		if (granted.outcome !== 'granted') throw new Error('expected a granted lease');
+		expect(recorded.performed).toEqual([]);
+
+		await daemon.close();
+
+		// `close()` resolving is a statement that what the daemon owed the device was done — the
+		// same guarantee, and the same restorer chain, an ordinary release gets.
+		expect(recorded.performed).toEqual(['setAirplaneMode false', 'setWifiEnabled true']);
+	});
+});
+
 describe('restoring a device the previous holder is still driving', () => {
 	it('does not begin the teardown until the verb in flight has stopped', async () => {
 		const recorded = registerRecordingBackend();

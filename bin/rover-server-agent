@@ -1,0 +1,584 @@
+#!/usr/bin/env bash
+# `rover-server-agent` — run this machine's Rover host as a launchd LaunchAgent, so it starts at
+# login instead of holding a terminal window (docs/launchd-host-autostart.md).
+#
+# It is a wrapper around `rover server`, not a second launcher: the agent runs that command out of
+# the checkout, so the guard it makes, the environment it passes through and the signal forwarding
+# that releases leases are all still its (D40, `src/cli/commands/server.ts`).
+#
+# **The convenience is the smaller half.** Any client call — including an MCP server an agent
+# spawns — autostarts a daemon with `ROVER_LISTEN_PORT` and `ROVER_HTTP_PORT` deliberately cleared
+# (D40, `src/daemon/connect.ts`). That daemon takes the socket, and a `rover server` typed later
+# finds it already there and exits 1: a host that is up, holding devices, and reachable by nobody
+# with a browser. A host that starts at login removes that race entirely, because it is always
+# first.
+#
+# Modelled on `../swarm/bin/swarm-worker-agent` and its `docs/launchd-worker-autostart.md` — same
+# structure, same subcommands, same `<checkout>` argument. Four things are Rover's own and are
+# marked where they appear: the plist carries the ports, `PATH` has to resolve `adb` and
+# `idb_companion` and not just `node`, `install` refuses while a host it does not own holds the
+# socket and reinstalls over its own, and `status` tells this agent's host apart from a portless
+# one that autostarted onto it.
+set -euo pipefail
+
+usage() {
+	cat <<'EOF'
+rover-server-agent -- launchd autostart for this machine's Rover host (macOS)
+
+Usage:
+  rover-server-agent install   [<checkout>]   write the agent and start it
+  rover-server-agent uninstall [<checkout>]   stop it and remove the agent
+  rover-server-agent status    [<checkout>]   loaded? whose host is on the socket? panel answering?
+  rover-server-agent restart   [<checkout>]   stop it gracefully and start it again
+  rover-server-agent reload    [<checkout>]   npm run reload, then restart -- stops on a failed build
+  rover-server-agent logs      [<checkout>]   tail this host's stdout + stderr
+
+<checkout> is the Rover checkout the host runs out of, and defaults to the current directory.
+
+`install` reads these from your shell and writes them into the agent, because launchd reads no
+rc files and hands a job none of them. They are the whole configuration surface; nothing else
+is carried over, and no secret is among them (see the header of this script):
+
+  ROVER_HTTP_PORT       the panel and its data, for a browser  (default 4712)
+  ROVER_HTTP_ADDRESS    which interface that binds             (default loopback)
+  ROVER_LISTEN_PORT     the surface, for Rover clients on other machines
+  ROVER_LISTEN_ADDRESS  which interface that binds
+  ROVER_TLS_CERT        TLS material for either listener
+  ROVER_TLS_KEY
+  ROVER_SOCKET_PATH     the local socket, when the default is not wanted
+
+There is one Rover host per machine, so there is one agent to install. Change any of the above
+by running `install` again with it set.
+EOF
+}
+
+die() { printf 'rover-server-agent: %s\n' "$1" >&2; exit 1; }
+
+# ---------------------------------------------------------------------------------------------
+# What the agent is, and where it puts things
+
+# The panel's port when the installing shell names none. **The same 4712 the README's recipe
+# types and `panel/vite.config.ts` falls back to** — one number across the project rather than a
+# third one to keep in step. It is only a default: a shell that exports the variable wins.
+DEFAULT_HTTP_PORT=4712
+
+# **The only variables that may reach the plist, and the reason the list is a list.**
+#
+# A plist is world-readable, so the rule is that nothing secret may ever be written into one — and
+# the way to keep that true is to leave no field where a secret *could* go. There is deliberately
+# no `--env`, no pass-through of the caller's whole environment and no file read into the dict:
+# adding an eighth variable means editing this array, which is a change somebody has to defend.
+#
+# **These seven are safe to carry because the host holds no secret** (D25). Its credentials live in
+# `~/.rover/users.json` and only ever as hashes, issued by `rover users add` and revocable by
+# `rover users revoke`; a port, an interface and a path to a certificate are exposure choices, not
+# credentials. `ROVER_HOST_TOKEN` is the one variable in Rover that *is* a secret, and it is a
+# **client's** (D20, D25) — it configures a machine that borrows a device, never a host, so it has
+# no business here and is not on this list.
+#
+# They have to be stated somewhere because launchd reads no rc files, and because two of them are
+# precisely what an autostarted daemon drops: see the header.
+AGENT_ENV_VARS=(
+	ROVER_HTTP_PORT
+	ROVER_HTTP_ADDRESS
+	ROVER_LISTEN_PORT
+	ROVER_LISTEN_ADDRESS
+	ROVER_TLS_CERT
+	ROVER_TLS_KEY
+	ROVER_SOCKET_PATH
+)
+
+# How long readiness is waited for, in one-second attempts. Generous because a cold start is a
+# whole Node process loading the TypeScript loader, this module tree and every schema before it
+# binds — `DEFAULT_START_TIMEOUT_MS` in `src/daemon/connect.ts` is the same allowance, smaller
+# because it is not also paying for `rover server`'s own startup.
+READY_ATTEMPTS=30
+
+LABEL_PREFIX='pl.smarttechbrewery.rover.host'
+
+# The checkout's realpath is the plist's `WorkingDirectory` and the seed for the label. One host
+# per machine means one agent, but the label carries the checkout anyway: an operator with two
+# clones gets two distinct labels rather than one silently overwriting the other, and `install`'s
+# socket guard is what stops the second one from ever running.
+resolve() {
+	[ -d "${1:-$PWD}" ] || die "no such directory: ${1:-$PWD}"
+	CHECKOUT=$(cd "${1:-$PWD}" && pwd -P)
+	local hash
+	hash=$(printf '%s' "$CHECKOUT" | shasum -a 256 | cut -d' ' -f1)
+	LABEL="$LABEL_PREFIX.$(basename "$CHECKOUT").${hash:0:8}"
+	PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
+	LOG="$HOME/Library/Logs/$LABEL.log"
+	TARGET="gui/$(id -u)/$LABEL"
+}
+
+# launchd starts a job with a minimal PATH and none of the login shell's rc files.
+#
+# **`node` is not enough, and this is the failure this project can least afford.** The daemon
+# spawns `adb` and `idb_companion` **by name**, so a host whose PATH resolves only `node` starts
+# perfectly cleanly and then fails every single verb — up, holding devices, useful for nothing.
+#
+# Those two are therefore not looked for with `command -v` alone, because the installing shell is
+# frequently a shell that cannot find them either — an `adb` installed with Android Studio is under
+# `~/Library/Android/sdk/platform-tools` and on nobody's `PATH` by default.
+# `scripts/device-tool-dirs.mjs` asks **this checkout's own search** where each one is, so the
+# plist carries the same binary the daemon would have picked (#171, D32).
+#
+# Which of the two this is belt-and-braces for, since both searches look in more than `PATH`:
+# **`adb` is already found without any of this**, from `ANDROID_HOME`, `ANDROID_SDK_ROOT` or the
+# platform's standard SDK root — putting it on `PATH` only means a bare `adb` in a project hook
+# also resolves. **`idb_companion` is the one that needs it**: the copy `rover doctor --fix`
+# unpacks under `~/.rover` is found with no `PATH` at all, but a companion the operator installed
+# themselves is found on `PATH` and nowhere else.
+#
+# Resolving each on the installing machine rather than hard-coding a prefix is what makes the
+# agent portable: an Intel Homebrew (/usr/local), an Apple Silicon one (/opt/homebrew), an Android
+# SDK under `~/Library/Android`, and a node under nvm/asdf/fnm all land on their real directories.
+#
+# **It sets a variable rather than printing one**, which is not a style choice: `agent_env` is read
+# inside the plist here-document, and a `die` inside a command substitution exits that subshell
+# only — the plist would be written anyway, with a `PATH` that had quietly lost a program. So the
+# `PATH` is computed before anything is written, where a failure can still stop the install.
+AGENT_PATH=''
+agent_path() {
+	local dirs=() bin resolved dir seen tools
+	for bin in node npm git; do
+		resolved=$(command -v "$bin" 2>/dev/null) || continue
+		dirs+=("$(dirname "$resolved")")
+	done
+
+	# Empty output is a legitimate answer — a machine with neither program installed. A resolver
+	# that could not *run* is not, and is refused rather than silently costing the host its verbs.
+	tools=$(node "$CHECKOUT/scripts/device-tool-dirs.mjs" 2>&1) ||
+		die "could not ask $CHECKOUT where adb and idb_companion are, so the agent's PATH would be
+  missing them and every verb on this host would fail. Nothing was installed.
+$tools"
+	while IFS= read -r dir; do
+		if [ -n "$dir" ]; then dirs+=("$dir"); fi
+	done <<EOF
+$tools
+EOF
+
+	dirs+=("$HOME/.local/bin" /opt/homebrew/bin /usr/local/bin /usr/bin /bin /usr/sbin /sbin)
+
+	seen=""
+	for dir in "${dirs[@]}"; do
+		case ":$seen:" in *":$dir:"*) continue ;; esac
+		seen="${seen:+$seen:}$dir"
+	done
+	AGENT_PATH="$seen"
+}
+
+# A path or a port as plist character data. Every value written into the dict goes through this.
+xml_escape() {
+	printf '%s' "$1" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'
+}
+
+# One variable back out of the **installed** plist, empty when it is not there.
+#
+# Read from the plist rather than from the caller's shell on purpose: what the running host is
+# configured with is what was installed, and an operator asking `status` months later is not
+# standing in the shell that installed it.
+plist_env() {
+	plutil -extract "EnvironmentVariables.$1" raw -o - "$PLIST" 2>/dev/null || true
+}
+
+# ---------------------------------------------------------------------------------------------
+# Asking what is there, without starting anything
+
+# Whether a Rover host holds the socket, and which process it is.
+#
+# **This is `rover server`'s own check, not a second one** — `scripts/host-on-socket.mjs` runs
+# `src/daemon/host-on-socket.ts`, the very function `src/cli/commands/server.ts` refuses on. A
+# hand-rolled `lsof`/`nc` equivalent here is the copy that eventually disagrees, and the two
+# disagreeing answers would be *a host is already there* and *install a KeepAlive job anyway*,
+# which is not a message but a thirty-second crash loop forever.
+#
+# **`rover status` is not an alternative and must never become one**: it is a client call, so it
+# *autostarts* a daemon when none is running (D5) — with the ports cleared — which is precisely
+# the damage the install guard exists to prevent. Probing with it would create the problem.
+#
+# Answers one line of JSON: {"outcome":"free"|"host"|"foreign"|"error", …}.
+host_on_socket() {
+	local node socket
+	node=$(command -v node) || die 'node not found on PATH'
+	socket=$(plist_env ROVER_SOCKET_PATH)
+	ROVER_SOCKET_PATH="${socket:-${ROVER_SOCKET_PATH:-}}" \
+		"$node" "$CHECKOUT/scripts/host-on-socket.mjs" 2>/dev/null || true
+}
+
+# One field of the object above. The producer is this repository's own one-line, flat JSON, which
+# is the only reason a sed is enough here rather than a parser.
+json_string() { printf '%s' "$1" | sed -n "s/.*\"$2\":\"\\([^\"]*\\)\".*/\\1/p"; }
+json_number() { printf '%s' "$1" | sed -n "s/.*\"$2\":\\([0-9][0-9]*\\).*/\\1/p"; }
+
+# The pid launchd has for this label, empty when it is not running.
+#
+# Anchored to **one** tab, because `launchctl print` nests an `endpoints`/`sockets` block under the
+# job whose entries carry keys of the same names; a looser `[[:space:]]+` matches those too and
+# reports whichever came first.
+#
+# **The `|| true` is the whole point of the function, not tidiness.** `launchctl print` exits 113
+# when launchd has no job for the label, the `awk` that swallows the output exits 0, and `pipefail`
+# (:21) hands the 113 back — so a bare `agent=$(launchd_pid)` aborts the script under `set -e`
+# before it can say anything, on exactly the machine where no agent is installed yet. Both callers
+# already read *not loaded* as empty output (`[ -n "$agent" ]`), which is what this returns; every
+# other command substitution in this file is guarded the same way ({@link host_on_socket},
+# {@link plist_env}, {@link launchd_lines}).
+launchd_pid() {
+	launchctl print "$TARGET" 2>/dev/null | awk -F' = ' '/^\tpid = /{ print $2; exit }' || true
+}
+
+# Whether `$1` is the launchd job `$2` or a process that job started.
+#
+# **`rover server` is a wrapper, so the pid launchd holds is not the pid on the socket.** It spawns
+# the daemon as a child and stays attached to forward the signals — which is precisely what makes a
+# graceful stop release the leases (`src/cli/_shared/foreground.ts`, D9) — so the host answering the
+# socket is the job's *child*, and comparing the two numbers directly reports this agent's own host
+# as a stranger's. That was observed on a real host while #294 was written, and it is why this walks
+# the parent chain instead: one level today, and it does not break if a launcher is ever added.
+#
+# A host whose wrapper has died is reparented to `launchd` and correctly fails this test: launchd is
+# about to start a new wrapper that will lose the socket to it, which is the crash loop `status`
+# exists to name.
+descends_from() {
+	local pid=$1 ancestor=$2 depth=0
+	while [ -n "$pid" ] && [ "$pid" != '0' ] && [ "$pid" != '1' ] && [ "$depth" -lt 8 ]; do
+		if [ "$pid" = "$ancestor" ]; then return 0; fi
+		pid=$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d '[:space:]' || true)
+		depth=$(( depth + 1 ))
+	done
+	return 1
+}
+
+# What launchd itself says about the job — loaded, running, and how it last stopped — under one
+# `launchd:` key, so the block reads with the rest of `status` rather than as pasted-in output.
+launchd_lines() {
+	local line first=1
+	while IFS= read -r line; do
+		# A here-doc over empty output still yields one empty line, which must not read as a state.
+		if [ -z "$line" ]; then continue; fi
+		if [ "$first" = 1 ]; then
+			printf 'launchd:  %s\n' "$line"
+			first=0
+		else
+			printf '          %s\n' "$line"
+		fi
+	done <<EOF
+$(launchctl print "$TARGET" 2>/dev/null |
+		awk '/^\t(state|pid|last exit code) = /{ sub(/^\t/, ""); print }' || true)
+EOF
+	if [ "$first" = 1 ]; then printf 'launchd:  not loaded\n'; fi
+}
+
+# The address a browser reaches this agent's host at — the bash twin of `panelOriginFor`
+# (`src/daemon/network-config.ts`), and the only thing readiness is ever asked of.
+panel_url() {
+	local port address scheme host
+	port=$(plist_env ROVER_HTTP_PORT)
+	[ -n "$port" ] || die "the installed agent carries no ROVER_HTTP_PORT, so it serves no panel -- re-run install with it set"
+	address=$(plist_env ROVER_HTTP_ADDRESS)
+	[ -n "$address" ] || address='127.0.0.1'
+	# Brackets are URL notation and not part of an address — `resolveHttpListener` takes them off
+	# for the same reason, and they go back on below only for an IPv6 literal.
+	address=${address#[}
+	address=${address%]}
+	# "Every interface" is not an address to connect to: probe the loopback one, which is the only
+	# interface this machine can be sure of reaching itself on.
+	case "$address" in
+		0.0.0.0) address='127.0.0.1' ;;
+		'::') address='::1' ;;
+	esac
+	if [ -n "$(plist_env ROVER_TLS_CERT)" ]; then scheme='https'; else scheme='http'; fi
+	case "$address" in
+		*:*) host="[$address]" ;;
+		*) host="$address" ;;
+	esac
+	printf '%s://%s:%s/' "$scheme" "$host" "$port"
+}
+
+# Wait for the host to answer, then say so; fail naming the log if it never does.
+#
+# **Readiness is `GET /` on `ROVER_HTTP_PORT` and nothing else.** That address answers the panel
+# itself (R52, #293) from the listener that also serves `/rpc`, so one request proves what an
+# operator installed this for: the process is up and it kept the port, which is the pair the
+# autostart race takes away. It is pre-auth by design (D29), so no credential is involved in a
+# liveness check.
+#
+# **What it deliberately does not assert is that the panel was built.** There is no `-f`, so any
+# answer counts — a checkout whose `dist/` is missing answers `503` and is still *ready*, because
+# a running host with an unbuilt panel is a `reload` away from serving and a host that never came
+# up is not. Measured, not assumed (#294): a scratch host with no bundle answers `503` here and
+# `install` correctly reports it as answering. `reload` is what makes the page appear, and it
+# builds before it restarts precisely so this stays true.
+#
+# **Never `rover status`.** See {@link host_on_socket} above: it autostarts a daemon with the ports
+# cleared, so using it as a probe would manufacture the unreachable host this whole script exists
+# to prevent. Anyone who "simplifies" this into `rover status` has re-created the bug.
+#
+# `curl` does the waiting: `--retry` with `--retry-connrefused` is a poll on a condition with a
+# bound, which is the house rule (ai/RULES.md §2 — no sleeping, ever), not a fixed delay.
+# `-k` because a host with TLS on loopback is commonly self-signed and nothing here reads the
+# response — this asks whether the listener answers, not who it is.
+await_ready() {
+	local url
+	url=$(panel_url)
+	if curl -s -k -o /dev/null --max-time 5 \
+		--retry "$READY_ATTEMPTS" --retry-delay 1 --retry-connrefused --retry-all-errors \
+		"$url" 2>/dev/null; then
+		printf 'rover-server-agent: the host is answering on %s\n' "$url"
+	else
+		die "the host did not answer $url within ${READY_ATTEMPTS}s -- rover-server-agent logs '$CHECKOUT'"
+	fi
+}
+
+# `<n>ms` as something an operator reads.
+duration() {
+	local seconds=$(( ${1:-0} / 1000 ))
+	if [ "$seconds" -ge 3600 ]; then
+		printf '%dh %dm' $(( seconds / 3600 )) $(( (seconds % 3600) / 60 ))
+	elif [ "$seconds" -ge 60 ]; then
+		printf '%dm %ds' $(( seconds / 60 )) $(( seconds % 60 ))
+	else
+		printf '%ds' "$seconds"
+	fi
+}
+
+# There is one Rover host per machine (D18), so "no agent for this directory" is nearly always
+# "the agent is installed for another checkout" — naming it saves an operator reading LaunchAgents.
+no_agent_here() {
+	local note='' plist dir
+	for plist in "$HOME/Library/LaunchAgents/$LABEL_PREFIX".*.plist; do
+		[ -f "$plist" ] || continue
+		dir=$(plutil -extract WorkingDirectory raw -o - "$plist" 2>/dev/null || echo '?')
+		note="$note
+  one is installed for $dir"
+	done
+	die "no agent installed for $CHECKOUT$note"
+}
+
+require_installed() { [ -f "$PLIST" ] || no_agent_here; }
+
+# ---------------------------------------------------------------------------------------------
+# The subcommands
+
+# The `EnvironmentVariables` dict's body: `PATH`, a locale, and whatever of the allowlist is set.
+# Nothing reaches this from outside {@link AGENT_ENV_VARS} — see that array for why that matters.
+agent_env() {
+	printf '\t\t<key>PATH</key>\n\t\t<string>%s</string>\n' "$(xml_escape "$AGENT_PATH")"
+	printf '\t\t<key>LANG</key>\n\t\t<string>en_US.UTF-8</string>\n'
+	local name value
+	for name in "${AGENT_ENV_VARS[@]}"; do
+		value=${!name:-}
+		[ -n "$value" ] || continue
+		printf '\t\t<key>%s</key>\n\t\t<string>%s</string>\n' "$name" "$(xml_escape "$value")"
+	done
+}
+
+cmd_install() {
+	# A Rover checkout, with its dependencies: the agent runs this tree from source through the
+	# TypeScript loader (`bin/rover.mjs`), so an un-installed checkout is a host that cannot start.
+	[ -f "$CHECKOUT/bin/rover.mjs" ] || die "not a Rover checkout: $CHECKOUT"
+	[ -d "$CHECKOUT/node_modules" ] || die "no dependencies installed in $CHECKOUT -- run 'npm install' there first, or 'npm run reload' to install and build the panel in one step"
+
+	local node
+	node=$(command -v node) || die 'node not found on PATH'
+
+	# **The guard.** Under `KeepAlive`, losing the socket race is not an error message — it is an
+	# agent that starts, exits 1, and is restarted every thirty seconds forever, with a panel
+	# nobody can explain the absence of. So refuse while a host this agent does not own holds the
+	# socket, and name it.
+	#
+	# **This agent's own host is not that case, and must not be refused.** Re-running `install`
+	# with a variable set is the documented way to change a port, an address or the TLS pair
+	# (see {@link usage}), and the host holding the socket then is the one the `bootout` below is
+	# about to stop — so the race the guard exists for cannot happen. Telling the operator to
+	# `kill` it would not help either: `KeepAlive` is true, so launchd starts a replacement that
+	# retakes the socket. The pid launchd has for this label and the ancestry walk are what tell
+	# the two apart — the same pair {@link cmd_status} uses, and for the same reason.
+	local found outcome pid agent
+	found=$(host_on_socket)
+	outcome=$(json_string "$found" outcome)
+	case "$outcome" in
+		host)
+			pid=$(json_number "$found" pid)
+			agent=$(launchd_pid)
+			if [ -n "$agent" ] && descends_from "$pid" "$agent"; then
+				printf "rover-server-agent: reinstalling over this agent's own host (pid %s, up %s)\n" \
+					"$pid" "$(duration "$(json_number "$found" uptimeMs)")"
+			else
+				die "a Rover host (pid $pid) that this agent does not own is already serving this machine, up $(duration "$(json_number "$found" uptimeMs)").
+  The agent would lose the socket to it and crash-loop under KeepAlive, so nothing was installed.
+  Stop that host -- kill $pid -- and run install again. If a client autostarted it, it has no
+  ports at all (D40) and no browser can reach it, which is what this agent exists to fix."
+			fi
+			;;
+		foreign)
+			die "something is holding this machine's Rover socket but did not answer as a host.
+  Nothing was installed. Clear it, then run install again."
+			;;
+		free) ;;
+		*) die "could not ask whether a host is running: $(json_string "$found" message)" ;;
+	esac
+
+	# The default, applied here so the dict below is written from one set of values.
+	ROVER_HTTP_PORT="${ROVER_HTTP_PORT:-$DEFAULT_HTTP_PORT}"
+	# And the PATH, resolved before a byte is written -- see {@link agent_path}.
+	agent_path
+
+	mkdir -p "$HOME/Library/LaunchAgents" "$HOME/Library/Logs"
+	cat >"$PLIST" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>$LABEL</string>
+
+	<key>ProgramArguments</key>
+	<array>
+		<string>$(xml_escape "$node")</string>
+		<string>$(xml_escape "$CHECKOUT/bin/rover.mjs")</string>
+		<string>server</string>
+	</array>
+
+	<key>WorkingDirectory</key>
+	<string>$(xml_escape "$CHECKOUT")</string>
+
+	<key>EnvironmentVariables</key>
+	<dict>
+$(agent_env)
+	</dict>
+
+	<key>RunAtLoad</key>
+	<true/>
+
+	<key>KeepAlive</key>
+	<true/>
+
+	<key>ThrottleInterval</key>
+	<integer>30</integer>
+
+	<!-- How long launchd waits after SIGTERM before SIGKILL. Stated rather than inherited: the
+	     default is system-defined (20s on macOS today), and this feature is built on the graceful
+	     stop completing. src/daemon/listen.ts bounds the restoration settle at
+	     RESTORE_SETTLE_TIMEOUT_MS = 10s and the archive sweep at SWEEP_SETTLE_TIMEOUT_MS = 10s,
+	     awaited in sequence and then stopBackends(), so 60 sits comfortably past the worst case
+	     those add up to. The sweep is the sharper end: a SIGKILL inside its rm leaves a run
+	     directory holding a subset of what its lease wrote, and every logout, reboot and reload
+	     now runs that path. -->
+	<key>ExitTimeOut</key>
+	<integer>60</integer>
+
+	<key>StandardOutPath</key>
+	<string>$(xml_escape "$LOG")</string>
+	<key>StandardErrorPath</key>
+	<string>$(xml_escape "${LOG%.log}.error.log")</string>
+</dict>
+</plist>
+EOF
+	plutil -lint "$PLIST" >/dev/null || die "generated plist is invalid: $PLIST"
+
+	launchctl bootout "$TARGET" 2>/dev/null || true
+	launchctl bootstrap "gui/$(id -u)" "$PLIST"
+	printf 'rover-server-agent: installed %s\n  checkout: %s\n  log:      %s\n' \
+		"$LABEL" "$CHECKOUT" "$LOG"
+	await_ready
+}
+
+# `bootout` sends `SIGTERM`, which `src/daemon/main.ts` handles and `src/cli/_shared/foreground.ts`
+# forwards to it — so the host runs its own shutdown and the leases it holds are released and the
+# devices restored (D9), rather than being left held until they expire.
+cmd_uninstall() {
+	require_installed
+	launchctl bootout "$TARGET" 2>/dev/null || true
+	rm -f "$PLIST"
+	printf 'rover-server-agent: removed %s (logs kept at %s)\n' "$LABEL" "$LOG"
+}
+
+# **What this answers that `launchctl print` cannot: whose host is on the socket.**
+#
+# The failure this whole script exists around is a *portless* daemon — one a client autostarted
+# with `ROVER_LISTEN_PORT` and `ROVER_HTTP_PORT` cleared (D40) — sitting on the socket while the
+# agent's own host crash-loops behind it. Both are "a Rover host is running", and a status that
+# said `running` for either would be worse than no status at all. The pid launchd has for this
+# label and the pid the socket answers with are what tell them apart.
+cmd_status() {
+	require_installed
+
+	local url socket found outcome pid agent
+	url=$(panel_url)
+	socket=$(plist_env ROVER_SOCKET_PATH)
+	printf 'label:    %s\ncheckout: %s\nplist:    %s\nurl:      %s\nsocket:   %s\n' \
+		"$LABEL" "$CHECKOUT" "$PLIST" "$url" "${socket:-$HOME/.rover/rover.sock (default)}"
+
+	launchd_lines
+
+	agent=$(launchd_pid)
+	found=$(host_on_socket)
+	outcome=$(json_string "$found" outcome)
+	case "$outcome" in
+		host)
+			pid=$(json_number "$found" pid)
+			if [ -n "$agent" ] && descends_from "$pid" "$agent"; then
+				printf "host:     this agent's host, pid %s, up %s\n" \
+					"$pid" "$(duration "$(json_number "$found" uptimeMs)")"
+			else
+				printf 'host:     NOT this agent -- pid %s holds the socket%s.\n' \
+					"$pid" "${agent:+, while this agent runs as pid $agent}"
+				printf '          A daemon a client autostarted has no ports at all (D40), so it serves\n'
+				printf '          no browser and no other machine. Stop it (kill %s), then: restart\n' "$pid"
+			fi
+			;;
+		free) printf 'host:     nothing is holding the socket\n' ;;
+		foreign) printf 'host:     something holds the socket and did not answer as a host\n' ;;
+		*) printf 'host:     could not be asked -- %s\n' "$(json_string "$found" message)" ;;
+	esac
+
+	if curl -s -k -o /dev/null --max-time 5 "$url" 2>/dev/null; then
+		printf 'panel:    answering on %s\n' "$url"
+	else
+		printf 'panel:    no answer on %s\n' "$url"
+	fi
+}
+
+# `kickstart -k` stops the running instance and starts a new one. The stop is a `SIGTERM`, which is
+# the path that releases leases — see {@link cmd_uninstall}.
+cmd_restart() {
+	require_installed
+	launchctl kickstart -k "$TARGET"
+	await_ready
+}
+
+# **The build runs first, in the foreground, and a failure stops here.** Restarting into a broken
+# tree would take the panel down and leave the operator reading launchd logs for a `vite` error
+# they could have seen on their own terminal. `npm run reload` is the single definition of the
+# install-and-build chain (`package.json`), so this script does not carry a second one.
+cmd_reload() {
+	require_installed
+	( cd "$CHECKOUT" && npm run reload ) ||
+		die "'npm run reload' failed in $CHECKOUT -- nothing was restarted, and the host is still serving what it had"
+	cmd_restart
+}
+
+cmd_logs() {
+	[ -f "$LOG" ] || die "no log yet at $LOG"
+	tail -f "$LOG" "${LOG%.log}.error.log"
+}
+
+# ---------------------------------------------------------------------------------------------
+
+[ "$(uname -s)" = 'Darwin' ] || die 'launchd is macOS-only; on Linux use a `systemd --user` unit running the same command -- ExecStart=<node> <checkout>/bin/rover.mjs server, WorkingDirectory=<checkout>, and the ROVER_* variables `rover-server-agent --help` lists as Environment= lines'
+
+case "${1:-}" in
+	install | uninstall | status | restart | reload | logs)
+		action=$1
+		shift
+		resolve "${1:-$PWD}"
+		"cmd_$action"
+		;;
+	-h | --help | help | '') usage ;;
+	*)
+		usage
+		exit 1
+		;;
+esac
