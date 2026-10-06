@@ -52,6 +52,20 @@ export type KeyAnswer =
 	| { readonly noEquivalent: string };
 
 /**
+ * The refusal for a keyboard key this backend has not yet been watched pressing (#302).
+ *
+ * One sentence built three times rather than three hand-written copies, because what they say is
+ * the same and only the key and its candidate HID usage differ.
+ */
+function unmeasuredKey(name: string, usage: number): string {
+	return (
+		`${name} has not been measured through this backend yet — its candidate is HID usage ` +
+		`${usage}, but hid answers success for any usage including one that does nothing, so the ` +
+		'key is refused rather than pressed on faith until it has been watched landing (#302)'
+	);
+}
+
+/**
  * The button each key of the neutral vocabulary presses on this platform, and the reason the two
  * that press nothing press nothing.
  *
@@ -60,7 +74,7 @@ export type KeyAnswer =
  * a compile error here instead of a runtime miss, and a runtime miss on this transport is
  * undetectable — `hid` accepted keycode `9999` with an empty response and did nothing (measured).
  * `back` and `recents` are therefore present as **explicit refusals** rather than absent, so that
- * reading this table answers "what does this device do with that key" for all four.
+ * reading this table answers "what does this device do with that key" for every key.
  *
  * - **`home` → `HOME`.** Works on a home-buttonless iPhone 17 — pressed on the bench from inside
  *   Maps, Safari and Settings, and Springboard came back every time (`docs/IOS.md` §5).
@@ -80,8 +94,14 @@ export type KeyAnswer =
  * - **`recents` has no equivalent and is refused by name.** Accepted 2026-09-08: the app-switcher
  *   gesture needs Indigo's edge bits, which idb's swipe does not set, so there is nothing behind
  *   it that is the app switcher (`docs/IOS.md` §3, §5).
+ * - **`delete`, `enter` and `tab` are refused by name because nobody has watched them land.**
+ *   They are keyboard keys rather than buttons, and the candidates are HID usages 42
+ *   (backspace), 40 (Return) and 43 (Tab) — but `hid` answers success for any usage, including
+ *   one that does nothing, so a key pressed on faith would be indistinguishable from one that
+ *   worked. Refused until #302 measures them through this backend; that is a statement about
+ *   the evidence, not a claim the platform lacks the keys (`docs/IOS.md` §5).
  *
- * Both reasons are this platform's own words, passed to `UnsupportedKeyError` by `./backend.ts` —
+ * Every reason is this platform's own words, passed to `UnsupportedKeyError` by `./backend.ts` —
  * that class names no device's particulars, and the serial it also needs is the caller's rather
  * than this module's.
  */
@@ -101,6 +121,9 @@ export const DEVICE_KEYS = {
 			'switcher recognises a system edge gesture from the injected edge bits, which idb does ' +
 			'not set, so a bottom-edge swipe of any duration does nothing',
 	},
+	delete: { noEquivalent: unmeasuredKey('backspace', 42) },
+	enter: { noEquivalent: unmeasuredKey('Return', 40) },
+	tab: { noEquivalent: unmeasuredKey('Tab', 43) },
 } as const satisfies Record<DeviceKey, KeyAnswer>;
 
 /**

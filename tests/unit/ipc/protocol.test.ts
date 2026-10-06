@@ -5,6 +5,7 @@ import {
 	InstallAppParamsSchema,
 	LongPressParamsSchema,
 	MAX_DEVICE_PATH_LENGTH,
+	MAX_KEY_PRESSES,
 	MAX_LOG_ENTRIES,
 	MAX_TRANSFER_BYTES,
 	MAX_VERB_TIMEOUT_MS,
@@ -300,6 +301,24 @@ describe('keyboard verb params schemas', () => {
 			false,
 		);
 		expect(PressKeyParamsSchema.safeParse({ leaseId: 'lease-1' }).success).toBe(false);
+	});
+
+	it.each(['delete', 'enter', 'tab'] as const)('presses the editing key %s', (key) => {
+		expect(PressKeyParamsSchema.parse({ leaseId: 'lease-1', key }).key).toBe(key);
+	});
+
+	it.each([1, MAX_KEY_PRESSES])('takes a repeat count of %i', (times) => {
+		expect(PressKeyParamsSchema.parse({ leaseId: 'lease-1', key: 'delete', times }).times).toBe(
+			times,
+		);
+	});
+
+	// Zero is refused rather than a no-op: pressing nothing would report a success for a key that
+	// was never pressed. Above the bound, a call could outrun the client's default deadline.
+	it.each([0, MAX_KEY_PRESSES + 1, 2.5, '3'])('refuses a repeat count of %j', (times) => {
+		expect(
+			PressKeyParamsSchema.safeParse({ leaseId: 'lease-1', key: 'delete', times }).success,
+		).toBe(false);
 	});
 
 	it.each([

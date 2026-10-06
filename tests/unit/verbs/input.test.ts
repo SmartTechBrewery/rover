@@ -610,4 +610,46 @@ describe('press_key', () => {
 		// `catch` is what makes this pass with no change to `src/verbs/input.ts`.
 		await expect(pressKey(context, 'recents')).rejects.toThrow(UnsupportedKeyError);
 	});
+
+	/**
+	 * `times` is composed here rather than handed to the backend (#301), so the backend is asked
+	 * for the same one-key primitive each time — and the screen is read once, after the last
+	 * press, because the state between presses is not something the caller asked about.
+	 */
+	it('presses the key times times, and reads the screen once after the last', async () => {
+		const { calls, keys, context } = recording();
+
+		await pressKey(context, 'delete', { times: 3 });
+
+		expect(keys).toEqual(['delete', 'delete', 'delete']);
+		expect(calls).toEqual(['pressKey', 'pressKey', 'pressKey', 'readScreen', 'deviceInfo']);
+	});
+
+	it('presses once when times is absent', async () => {
+		const { keys, context } = recording();
+
+		await pressKey(context, 'enter', {});
+
+		expect(keys).toEqual(['enter']);
+	});
+
+	// The wire bounds `times` already; this is an in-process caller's programming error, and
+	// pressing nothing would answer a success for a key that never went down.
+	it.each([0, -1, 1.5, Number.NaN])('refuses a times of %s, pressing nothing', async (times) => {
+		const { calls, context } = recording();
+
+		await expect(pressKey(context, 'delete', { times })).rejects.toThrow(/positive integer/);
+
+		expect(calls).toEqual([]);
+	});
+
+	it('stops at the first refusal, rather than pressing on', async () => {
+		const { context } = recording();
+		const press = vi.mocked(context.backend.pressKey as NonNullable<DeviceBackend['pressKey']>);
+		press.mockRejectedValue(new UnsupportedKeyError(context.serial, 'tab', 'no tab key here'));
+
+		await expect(pressKey(context, 'tab', { times: 5 })).rejects.toThrow(UnsupportedKeyError);
+
+		expect(press).toHaveBeenCalledTimes(1);
+	});
 });

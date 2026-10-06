@@ -43,12 +43,13 @@
  * that call answers an empty message and answers it just as happily for a keycode that does not
  * exist (`src/backends/ios-simulator/input.ts`).
  *
- * **`pressKey` is where declaring this capability stops being a boolean.** `DeviceKey` has four
- * members and this platform has two of them: `home` and `wake` are pressed, and `back` and
- * `recents` are refused **by name** with `UnsupportedKeyError` (#215), which reaches the agent as
- * an `unsupported-key` failure carrying the serial and the key. That is not a hole in this
- * manifest — it is what the per-key refusal exists for, and the alternative shapes are both worse:
- * a flag per key would put four booleans behind one method and make `canInput` mean nothing (D11),
+ * **`pressKey` is where declaring this capability stops being a boolean.** `DeviceKey` has seven
+ * members and this platform presses two of them: `home` and `wake` are pressed, `back` and
+ * `recents` are refused **by name** with `UnsupportedKeyError` (#215), and so are `delete`,
+ * `enter` and `tab` until #302 measures them — each reaching the agent as an `unsupported-key`
+ * failure carrying the serial and the key. That is not a hole in this manifest — it is what the
+ * per-key refusal exists for, and the alternative shapes are both worse: a flag per key would put
+ * seven booleans behind one method and make `canInput` mean nothing (D11),
  * while declaring `canInput: false` to dodge two keys would refuse tapping, swiping and typing,
  * which work. `wake` is a *conditional* press for the same honesty: the button behind it toggles,
  * so it is pressed only when the screen is off.

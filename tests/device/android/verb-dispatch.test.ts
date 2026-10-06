@@ -474,9 +474,9 @@ describe.skipIf(!process.env.ROVER_TEST_DEVICE)('a daemon runs verbs on its own 
 		const device = await freeDevice(client);
 		const leaseId = await lease(client, device.serial);
 
-		// `home` and not the other three: every key in the vocabulary moves the screen, this is
-		// the only one that moves it somewhere known, and it leaves the device where the next
-		// test expects it. All four are pressed against the backend directly in
+		// `home` and not the others: most keys in the vocabulary move the screen, this is the
+		// only one that moves it somewhere known, and it leaves the device where the next test
+		// expects it. Every key is pressed against the backend directly in
 		// `tests/device/android/input.test.ts`; what is new here is the path they take.
 		const answer = await client.request('press_key', { leaseId, key: 'home' });
 
@@ -492,6 +492,25 @@ describe.skipIf(!process.env.ROVER_TEST_DEVICE)('a daemon runs verbs on its own 
 		});
 		// D12(c): `home` changed what is on screen, and since #13 the answer says what to —
 		// a real read of the device rather than the capability that would have answered.
+		if (answer.outcome !== 'ok') throw new Error('the assertion above should have caught this');
+		expect(answer.result.after.kind).toBe('screen');
+	});
+
+	it('presses a key several times over one call', async () => {
+		const client = await startHost();
+		const device = await freeDevice(client);
+		const leaseId = await lease(client, device.serial);
+
+		// Sent with nothing focused, in `type_text`'s spirit below: what is proved is the path the
+		// count takes — wire, handler, the verb's loop, the backend — and that one answer comes
+		// back carrying one read. What three backspaces do to a focused field was watched by
+		// hand and is recorded in PROJECT.md §6.
+		const answer = await client.request('press_key', { leaseId, key: 'delete', times: 3 });
+
+		expect(answer).toMatchObject({
+			outcome: 'ok',
+			result: { verb: 'press_key', device: { serial: device.serial }, target: null },
+		});
 		if (answer.outcome !== 'ok') throw new Error('the assertion above should have caught this');
 		expect(answer.result.after.kind).toBe('screen');
 	});

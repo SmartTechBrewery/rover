@@ -1859,13 +1859,14 @@ export class IosSimulatorDeviceBackend implements DeviceBackend {
 	}
 
 	/**
-	 * Press one of the four keys of the neutral vocabulary — or refuse it by name, which two of
-	 * them are.
+	 * Press one of the keys of the neutral vocabulary — or refuse it by name, which five of them
+	 * are.
 	 *
 	 * **The refusal comes first, before any round trip**, and that ordering is deliberate: `back`
-	 * and `recents` have no answer on this platform in *any* device state, so asking the
-	 * enumeration about the device first would spend a call to reach the same sentence. What the
-	 * caller is told is which key and why (`./input.js`'s `DEVICE_KEYS`), through
+	 * and `recents` have no answer on this platform in *any* device state, and `delete`, `enter`
+	 * and `tab` have no measured one yet (#302), so asking the enumeration about the device first
+	 * would spend a call to reach the same sentence. What the caller is told is which key and why
+	 * (`./input.js`'s `DEVICE_KEYS`), through
 	 * `UnsupportedKeyError` — never `MissingCapabilityError`, because this device does take input
 	 * and tapping, swiping and typing all work (`src/core/device.ts`).
 	 *

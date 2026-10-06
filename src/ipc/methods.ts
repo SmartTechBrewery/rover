@@ -65,6 +65,7 @@ export {
 	type LongPressParams,
 	LongPressParamsSchema,
 	MAX_DEVICE_PATH_LENGTH,
+	MAX_KEY_PRESSES,
 	MAX_LOG_ENTRIES,
 	MAX_TRANSFER_BYTES,
 	MAX_VERB_TIMEOUT_MS,
