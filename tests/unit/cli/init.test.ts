@@ -76,6 +76,11 @@ function hookFile(): string {
 	return join(projectsRoot, `${project}.json`);
 }
 
+/** The shell line a written hook file's `install` runs — `bash -lc <this>`. */
+function installLine(written: Record<string, unknown>): string {
+	return ((written.install as { args: string[] } | undefined)?.args[1] ?? '') as string;
+}
+
 beforeEach(async () => {
 	temp = await createTempSocket();
 	projectsRoot = join(temp.dir, 'projects');
@@ -124,9 +129,124 @@ describe('rover init', () => {
 		const written = await readJson(hookFile());
 		expect(written.apps).toEqual(['com.example.demo']);
 		expect(written.install).toMatchObject({ command: 'bash', cwd: directory });
+		// A project with no product flavors has the plain debug variant, and keeps its task.
+		expect(installLine(written)).toContain(':app:installDebug');
 		const report = logged.join('\n');
 		expect(report).toContain('from app/build.gradle.kts');
 		expect(report).toContain('from gradlew');
+	});
+
+	it('proposes the one variant a single-flavor project has, and names the file it read', async () => {
+		const directory = await createProject({
+			gradlew: '#!/bin/sh\n',
+			'app/build.gradle.kts':
+				'android {\n  productFlavors {\n    create("free") { dimension = "tier" }\n  }\n}\n',
+		});
+
+		expect(await run(['init', directory])).toBe(EXIT_OK);
+
+		// Not ':app:installDebug': a flavored project does not have that task at all.
+		expect(installLine(await readJson(hookFile()))).toContain(':app:installFreeDebug');
+		expect(logged.join('\n')).toContain('from app/build.gradle.kts');
+	});
+
+	it('registers no install when the flavors give several variants, and lists each one', async () => {
+		const directory = await createProject({
+			gradlew: '#!/bin/sh\n',
+			'app/build.gradle.kts': `android {
+  flavorDimensions += listOf("env", "tier")
+  productFlavors {
+    create("dev") { dimension = "env" }
+    create("prod") { dimension = "env" }
+    create("free") { dimension = "tier" }
+    create("paid") { dimension = "tier" }
+  }
+}
+`,
+		});
+
+		expect(await run(['init', directory])).toBe(EXIT_OK);
+
+		// The hook file carries no install at all — picking one for somebody is the guess init
+		// exists to avoid, and the four lines come back as flags they can paste instead.
+		expect(await readJson(hookFile())).toEqual({ project });
+		const report = logged.join('\n');
+		for (const variant of ['DevFree', 'DevPaid', 'ProdFree', 'ProdPaid']) {
+			expect(report).toContain(`:app:install${variant}Debug`);
+		}
+		expect(report).toContain("--install '");
+		expect(report).not.toContain(':app:installDebug ');
+		expect(errored.join('\n')).toContain('--force');
+	});
+
+	it('registers no install for flavors it cannot read, and says that is why', async () => {
+		const directory = await createProject({
+			gradlew: '#!/bin/sh\n',
+			'app/build.gradle': `android {
+  productFlavors {
+    for (tier in tiers) {
+      create(tier.name) { dimension "tier" }
+    }
+  }
+}
+`,
+		});
+
+		expect(await run(['init', directory])).toBe(EXIT_OK);
+
+		expect(await readJson(hookFile())).toEqual({ project });
+		expect(logged.join('\n')).toContain('could not read');
+		expect(errored.join('\n')).toContain('./gradlew :app:tasks');
+	});
+
+	it('carries the variants it would not pick between into --json', async () => {
+		const directory = await createProject({
+			gradlew: '#!/bin/sh\n',
+			'app/build.gradle.kts': `android {
+  flavorDimensions += listOf("env", "tier")
+  productFlavors {
+    create("dev") { dimension = "env" }
+    create("prod") { dimension = "env" }
+    create("free") { dimension = "tier" }
+    create("paid") { dimension = "tier" }
+  }
+}
+`,
+		});
+
+		expect(await run(['init', directory, '--json'])).toBe(EXIT_OK);
+
+		const document = JSON.parse(logged[0] ?? '') as {
+			install: string | null;
+			installChoices: { source: string; choices: string[] } | null;
+		};
+		expect(document.install).toBeNull();
+		expect(document.installChoices?.source).toBe('app/build.gradle.kts');
+		expect(document.installChoices?.choices).toHaveLength(4);
+	});
+
+	it('registers exactly the --install it was given, flavors or no flavors', async () => {
+		const directory = await createProject({
+			gradlew: '#!/bin/sh\n',
+			'app/build.gradle.kts': `android {
+  flavorDimensions += listOf("env", "tier")
+  productFlavors {
+    create("dev") { dimension = "env" }
+    create("prod") { dimension = "env" }
+    create("free") { dimension = "tier" }
+    create("paid") { dimension = "tier" }
+  }
+}
+`,
+		});
+
+		expect(
+			await run(['init', directory, '--install', './gradlew :app:installDevFreeDebug', '--json']),
+		).toBe(EXIT_OK);
+
+		const document = JSON.parse(logged[0] ?? '') as { installChoices: unknown };
+		expect(document.installChoices).toBeNull();
+		expect(installLine(await readJson(hookFile()))).toBe('./gradlew :app:installDevFreeDebug');
 	});
 
 	it('proposes no install for a project it does not recognise', async () => {

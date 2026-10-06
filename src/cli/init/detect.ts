@@ -15,6 +15,15 @@
  * capability. It is one command recognising a build system in somebody else's repository, and
  * the next build system it learns is another entry beside this one rather than a branch inside
  * a verb. `tests/unit/no-platform-names.test.ts` carries the one name it cannot avoid and why.
+ *
+ * **Product flavors are where that rule earns its keep.** A project that declares any makes the
+ * build plugin name every variant after its flavors, and the install task after the variant —
+ * `:app:installFreeDebug`, never `:app:installDebug`, which simply does not exist there. So the
+ * install is read out of `app/build.gradle(.kts)` rather than assumed: one variant is proposed
+ * like any other detection, **several are listed and none registered** because picking one for
+ * somebody would be the guess this module exists to avoid, and a flavor block that only Gradle
+ * itself could evaluate — a loop, an `all { }` — yields nothing and says so. The report is where
+ * the choice is handed back, as a ready-to-paste `--install` line per variant.
  */
 
 import { access, readFile } from 'node:fs/promises';
@@ -37,12 +46,9 @@ export interface Detected<Value> {
  * `app/` before the root, because a root `build.gradle.kts` in a multi-module project configures
  * the build rather than an application, and a `namespace` found there would be a plugin's.
  */
-const GRADLE_FILES = [
-	'app/build.gradle.kts',
-	'app/build.gradle',
-	'build.gradle.kts',
-	'build.gradle',
-];
+const APP_BUILD_FILES = ['app/build.gradle.kts', 'app/build.gradle'];
+
+const GRADLE_FILES = [...APP_BUILD_FILES, 'build.gradle.kts', 'build.gradle'];
 
 /**
  * `applicationId` is what the package on the device is called; `namespace` is what the generated
@@ -53,17 +59,337 @@ const APPLICATION_ID = /^\s*applicationId\s*=?\s*["']([^"']+)["']/m;
 const NAMESPACE = /^\s*namespace\s*=?\s*["']([^"']+)["']/m;
 
 /**
- * The install a Gradle project gets proposed.
+ * The install a Gradle project gets proposed, for one build variant.
  *
- * Three things in it are load-bearing. `bash` is the program because the line needs a shell to
- * expand a variable and hooks are never word-split (`src/daemon/project-hooks.ts`) — an operator
- * who wants a shell makes the shell the program. The environment variable is what carries the
- * lease's device into the build's own install step, out of the `ROVER_DEVICE_SERIAL` the host
- * sets on every hook child: without it, a host with two devices attached installs onto whichever
- * one the build picks for itself, which is the neighbour's. And `-q`, because the hook's stdout
- * is a build log nobody reads unless it failed, and a failure reports its own stderr tail.
+ * Three things in the line are load-bearing. `bash` is the program because the line needs a shell
+ * to expand a variable and hooks are never word-split (`src/daemon/project-hooks.ts`) — an
+ * operator who wants a shell makes the shell the program. The environment variable is what
+ * carries the lease's device into the build's own install step, out of the `ROVER_DEVICE_SERIAL`
+ * the host sets on every hook child: **without it the install task installs onto every attached
+ * device**, which on a shared host is every neighbour's lease as well as this one's. And `-q`,
+ * because the hook's stdout is a build log nobody reads unless it failed, and a failure reports
+ * its own stderr tail.
+ *
+ * The task's own name is the variant's, capitalised. A variant is its flavors in declared
+ * dimension order followed by the build type — `dev` and `free` under dimensions `env, tier`
+ * give `devFreeDebug`, whose task is `:app:installDevFreeDebug`. A project with no flavors has
+ * the plain `debug` variant and so the `:app:installDebug` this used to be a constant for.
  */
-const GRADLE_INSTALL = 'ANDROID_SERIAL="$ROVER_DEVICE_SERIAL" ./gradlew :app:installDebug -q';
+function gradleInstall(variant: string): string {
+	return `ANDROID_SERIAL="$ROVER_DEVICE_SERIAL" ./gradlew :app:install${upperFirst(variant)} -q`;
+}
+
+/** The build type every proposal names: the one a project is guaranteed to have. */
+const DEBUG = 'debug';
+
+/**
+ * Block heads that read like a flavor and are not one.
+ *
+ * Every one of them declares flavors whose names are not in the file — `all { }` configures
+ * whatever the build produces, a loop produces them from a list — so a parse that took the head
+ * for a flavor would invent a variant nobody declared.
+ */
+const NOT_A_FLAVOR = new Set([
+	'all',
+	'configureEach',
+	'each',
+	'forEach',
+	'whenObjectAdded',
+	'matching',
+	'if',
+	'else',
+	'for',
+	'while',
+	'try',
+	'catch',
+	'finally',
+	'do',
+]);
+
+/** `create("free")`, and the four other container calls that name a flavor in a string. */
+const CONTAINER_CALL = /^(?:create|register|maybeCreate|getByName|named)\s*\(\s*["']([^"']+)["']/;
+
+/** A Groovy block head that is nothing but a name: `free {`. */
+const BARE_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+/** The dimension a flavor body names, in any of the three syntaxes that say it. */
+const DIMENSION = /\bdimension\s*(?:=\s*|\(\s*)?["']([^"']+)["']/;
+
+/** One flavor as the build file declares it. */
+interface Flavor {
+	readonly name: string;
+	/** The dimension its body names, or `undefined` when it names none. */
+	readonly dimension: string | undefined;
+}
+
+/**
+ * Every debug variant an app build file declares, read statically — and the two ways that fails.
+ *
+ * `undefined` means the file declares no `productFlavors` at all, so the project has the plain
+ * `debug` variant and nothing had to be worked out. An **empty array** means flavors are declared
+ * and this function could not resolve them: a loop, an `all { }`, names coming from a variable,
+ * or dimensions the flavors and the `flavorDimensions` declaration disagree about. That is a
+ * deliberate third answer rather than a guess, because the one thing worse than listing no
+ * variant is listing a variant that does not exist.
+ *
+ * Exported for its own unit tests: it is the whole of the parsing, and it is pure.
+ */
+export function gradleDebugVariants(buildFile: string): readonly string[] | undefined {
+	const text = withoutComments(buildFile);
+	if (!/\bproductFlavors\b/.test(text)) {
+		return undefined;
+	}
+	const body = blockBody(text, /\bproductFlavors\s*\{/);
+	if (body === undefined) {
+		return [];
+	}
+	const flavors = flavorsIn(body);
+	if (flavors === undefined || flavors.length === 0) {
+		return [];
+	}
+	return composeVariants(flavors, flavorDimensionsIn(text));
+}
+
+/**
+ * The flavors a `productFlavors` body declares, or `undefined` when something in it is not a
+ * flavor declaration at all.
+ */
+function flavorsIn(body: string): Flavor[] | undefined {
+	const flavors: Flavor[] = [];
+	for (const statement of topLevelStatements(body)) {
+		const head = statement.head.trim();
+		if (head === '') {
+			continue;
+		}
+		const called = CONTAINER_CALL.exec(head)?.[1];
+		if (called !== undefined) {
+			flavors.push({ name: called, dimension: dimensionIn(statement.body) });
+			continue;
+		}
+		if (statement.body !== undefined && BARE_NAME.test(head) && !NOT_A_FLAVOR.has(head)) {
+			flavors.push({ name: head, dimension: dimensionIn(statement.body) });
+			continue;
+		}
+		return undefined;
+	}
+	return flavors;
+}
+
+function dimensionIn(body: string | undefined): string | undefined {
+	return body === undefined ? undefined : DIMENSION.exec(body)?.[1];
+}
+
+/**
+ * The variant names, or `[]` when the flavors and the dimensions do not agree.
+ *
+ * One effective dimension is the common case and every flavor is a variant of its own. With
+ * several, the variant is the cartesian product in **declared** dimension order — which is the
+ * rule that makes the order flavors happen to be written in irrelevant — and a flavor naming a
+ * dimension nothing declared, or a dimension no flavor fills, means the file says something this
+ * parse has not understood.
+ */
+function composeVariants(flavors: readonly Flavor[], declared: readonly string[]): string[] {
+	const dimensions =
+		declared.length > 0
+			? declared
+			: [...new Set(flavors.map((flavor) => flavor.dimension).filter(named))];
+	if (dimensions.length <= 1) {
+		return flavors.map((flavor) => `${flavor.name}${upperFirst(DEBUG)}`);
+	}
+	if (
+		flavors.some(
+			(flavor) => flavor.dimension === undefined || !dimensions.includes(flavor.dimension),
+		)
+	) {
+		return [];
+	}
+	const perDimension = dimensions.map((dimension) =>
+		flavors.filter((flavor) => flavor.dimension === dimension).map((flavor) => flavor.name),
+	);
+	if (perDimension.some((names) => names.length === 0)) {
+		return [];
+	}
+	let variants = [''];
+	for (const names of perDimension) {
+		variants = variants.flatMap((prefix) =>
+			names.map((name) => (prefix === '' ? name : `${prefix}${upperFirst(name)}`)),
+		);
+	}
+	return variants.map((variant) => `${variant}${upperFirst(DEBUG)}`);
+}
+
+function named(value: string | undefined): value is string {
+	return value !== undefined;
+}
+
+/**
+ * The dimensions the file declares, in order and de-duplicated.
+ *
+ * Every syntax that says it reads the same way — the quoted strings of the statement, which is
+ * the rest of the line or, when the argument list spans lines, up to the bracket that closes it.
+ */
+function flavorDimensionsIn(text: string): string[] {
+	const dimensions: string[] = [];
+	const keyword = /\bflavorDimensions\b/g;
+	let match = keyword.exec(text);
+	while (match !== null) {
+		for (const quoted of statementAt(text, match.index).matchAll(/["']([^"']+)["']/g)) {
+			const name = quoted[1];
+			if (name !== undefined && !dimensions.includes(name)) {
+				dimensions.push(name);
+			}
+		}
+		match = keyword.exec(text);
+	}
+	return dimensions;
+}
+
+/** One statement's text, from `start` to the end of its line or of its argument list. */
+function statementAt(text: string, start: number): string {
+	let end = text.indexOf('\n', start);
+	end = end === -1 ? text.length : end;
+	let depth = 0;
+	for (let index = start; index < text.length; index += 1) {
+		const character = text[index] as string;
+		if (character === '(' || character === '[') {
+			depth += 1;
+		} else if (character === ')' || character === ']') {
+			depth -= 1;
+			if (depth === 0 && index >= end) {
+				return text.slice(start, index + 1);
+			}
+		} else if (character === '\n' && depth === 0 && index >= end) {
+			return text.slice(start, index);
+		}
+	}
+	return text.slice(start, end);
+}
+
+/** One top-level statement of a block: whatever preceded its body, and the body when it had one. */
+interface Statement {
+	readonly head: string;
+	readonly body: string | undefined;
+}
+
+/**
+ * The statements at a block's own level, with every nested block consumed whole.
+ *
+ * A statement ends at the `{` that opens its body, or — when it has none — at the newline or `;`
+ * that ends it. That second case is what catches a `val` or an assignment inside `productFlavors`
+ * and turns the whole read into "could not resolve", which is the honest answer for a block whose
+ * names are computed.
+ */
+function topLevelStatements(body: string): Statement[] {
+	const statements: Statement[] = [];
+	let head = '';
+	let index = 0;
+	while (index < body.length) {
+		const character = body[index] as string;
+		const literal = stringAt(body, index);
+		if (literal !== undefined) {
+			head += body.slice(index, literal);
+			index = literal;
+			continue;
+		}
+		if (character === '{') {
+			const close = matchingBrace(body, index);
+			if (close === undefined) {
+				statements.push({ head, body: body.slice(index + 1) });
+				return statements;
+			}
+			statements.push({ head, body: body.slice(index + 1, close) });
+			head = '';
+			index = close + 1;
+			continue;
+		}
+		if (character === '\n' || character === ';') {
+			statements.push({ head, body: undefined });
+			head = '';
+			index += 1;
+			continue;
+		}
+		head += character;
+		index += 1;
+	}
+	statements.push({ head, body: undefined });
+	return statements;
+}
+
+/** The body of the first block whose head matches, or `undefined` when there is no such block. */
+function blockBody(text: string, head: RegExp): string | undefined {
+	const match = head.exec(text);
+	if (match === null) {
+		return undefined;
+	}
+	const open = text.indexOf('{', match.index);
+	const close = matchingBrace(text, open);
+	return close === undefined ? undefined : text.slice(open + 1, close);
+}
+
+/** The index of the `}` closing the `{` at `open`, skipping over string literals. */
+function matchingBrace(text: string, open: number): number | undefined {
+	let depth = 0;
+	let index = open;
+	while (index < text.length) {
+		const literal = stringAt(text, index);
+		if (literal !== undefined) {
+			index = literal;
+			continue;
+		}
+		const character = text[index];
+		if (character === '{') {
+			depth += 1;
+		} else if (character === '}') {
+			depth -= 1;
+			if (depth === 0) {
+				return index;
+			}
+		}
+		index += 1;
+	}
+	return undefined;
+}
+
+/**
+ * The index just past the string literal starting at `index`, or `undefined` when none does.
+ *
+ * Braces and brackets inside a string are not structure — `"${name}"` is one interpolation and
+ * `"https://host/{id}"` is a path — so every scan here steps over a literal whole rather than
+ * counting what is inside it.
+ */
+function stringAt(text: string, index: number): number | undefined {
+	const quote = text[index];
+	if (quote !== '"' && quote !== "'") {
+		return undefined;
+	}
+	for (let at = index + 1; at < text.length; at += 1) {
+		if (text[at] === '\\') {
+			at += 1;
+			continue;
+		}
+		if (text[at] === quote) {
+			return at + 1;
+		}
+		if (text[at] === '\n') {
+			return at;
+		}
+	}
+	return text.length;
+}
+
+/**
+ * The text with its comments removed.
+ *
+ * A `//` only starts one at the beginning of a line or after whitespace, so the `//` inside a
+ * `"https://…"` survives and the URL stays one token rather than half a line.
+ */
+function withoutComments(text: string): string {
+	return text.replaceAll(/\/\*[\s\S]*?\*\//g, ' ').replaceAll(/(^|\s)\/\/[^\n]*/gm, '$1');
+}
+
+function upperFirst(value: string): string {
+	return value.charAt(0).toUpperCase() + value.slice(1);
+}
 
 /**
  * The project identifier for a directory: what was asked for, or the directory's own name.
@@ -112,19 +438,56 @@ export async function detectApps(
 }
 
 /**
+ * What init worked out about installing this project: one proposal, or a choice it will not make.
+ *
+ * `undecided` is not a failure. It is the module's rule — a wrong install is worse than none —
+ * applied to the one case where the right answer exists and there is more than one of it. The
+ * `choices` are the shell lines `--install` takes, ready to paste, and an **empty** `choices` is
+ * the other undecided case: flavors that are declared and cannot be read statically at all.
+ */
+export type InstallDetection =
+	| { readonly kind: 'proposed'; readonly value: HookCommand; readonly source: string }
+	| { readonly kind: 'undecided'; readonly choices: readonly string[]; readonly source: string };
+
+/**
  * What installing this project means, or `undefined` when init has no idea.
  *
- * Both files have to be there: `gradlew` says how the build is run and `app/` says the
- * `:app:installDebug` task exists. A wrapper with no `app` module is a project whose install
- * task has a name only its author knows, and proposing one would be the guess this module exists
- * to avoid.
+ * Both files have to be there: `gradlew` says how the build is run and `app/` says there is an
+ * `:app` module whose install task to name. A wrapper with no `app` module is a project whose
+ * install task has a name only its author knows, and proposing one would be the guess this
+ * module exists to avoid.
+ *
+ * With the module there, the app's own build file decides which task that is — see
+ * {@link gradleDebugVariants}. A file that declares no flavors, and a project that has no app
+ * build file to read, both keep the `:app:installDebug` this command has always proposed.
  */
-export async function detectInstall(directory: string): Promise<Detected<HookCommand> | undefined> {
+export async function detectInstall(directory: string): Promise<InstallDetection | undefined> {
 	const hasWrapper = await exists(join(directory, 'gradlew'));
 	const hasAppModule = await exists(join(directory, 'app'));
-	return hasWrapper && hasAppModule
-		? { value: shellInstall(GRADLE_INSTALL, directory), source: 'gradlew' }
-		: undefined;
+	if (!hasWrapper || !hasAppModule) {
+		return undefined;
+	}
+	const proposed = (line: string, source: string): InstallDetection => ({
+		kind: 'proposed',
+		value: shellInstall(line, directory),
+		source,
+	});
+	for (const relative of APP_BUILD_FILES) {
+		const contents = await readIfPresent(join(directory, relative));
+		if (contents === undefined) {
+			continue;
+		}
+		const variants = gradleDebugVariants(contents);
+		if (variants === undefined) {
+			return proposed(gradleInstall(DEBUG), 'gradlew');
+		}
+		const only = variants.length === 1 ? variants[0] : undefined;
+		if (only !== undefined) {
+			return proposed(gradleInstall(only), relative);
+		}
+		return { kind: 'undecided', choices: variants.map(gradleInstall), source: relative };
+	}
+	return proposed(gradleInstall(DEBUG), 'gradlew');
 }
 
 /** One shell line as a hook command, which is the shape `--install` is given in too. */
@@ -143,6 +506,17 @@ export function shellInstall(line: string, cwd: string): HookCommand {
  */
 export function describeCommand(command: HookCommand): string {
 	return [command.command, ...command.args.map(quoteIfNeeded)].join(' ');
+}
+
+/**
+ * One shell line as the `--install` flag that would register it.
+ *
+ * The report and the stderr caveat print the same form for the same reason `describeCommand`
+ * quotes: what is on the screen has to be what the reader can paste, and an install line is
+ * whitespace all the way through.
+ */
+export function installFlag(line: string): string {
+	return `--install ${quoteIfNeeded(line)}`;
 }
 
 function quoteIfNeeded(argument: string): string {

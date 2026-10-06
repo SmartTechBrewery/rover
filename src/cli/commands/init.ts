@@ -40,6 +40,7 @@ import {
 	describeCommand,
 	detectApps,
 	detectInstall,
+	installFlag,
 	projectIdentifierFor,
 	shellInstall,
 } from '../init/detect.js';
@@ -89,7 +90,9 @@ Options:
                     when omitted
   --install <line>  What installing this project means, as one shell line run on the host
                     with ROVER_DEVICE_SERIAL naming the leased device. Detected from a
-                    Gradle wrapper when omitted
+                    Gradle wrapper when omitted — the variant's own task when the project
+                    has one product flavor; with several, each variant's line is listed and
+                    none is registered
   --no-install      Register no install at all, rather than the detected one
   --document <path> Where the page goes, relative to the project. Only needed to move it
                     somewhere init would not look, or to pick between two pages a project
@@ -150,7 +153,11 @@ export async function run(argv: string[]): Promise<number> {
 	const directory = await projectDirectory(given);
 	const project = projectIdentifierFor(directory, values.project);
 	const apps = await chooseApps(directory, values.app);
-	const install = await chooseInstall(directory, values.install, values['no-install'] === true);
+	const { chosen: install, undecided } = await chooseInstall(
+		directory,
+		values.install,
+		values['no-install'] === true,
+	);
 	const remote = (process.env[HOST_ADDRESS_ENV_VAR] ?? '') !== '';
 	// Before the first write: an ambiguous page, or one this command did not write, is a
 	// refusal with nothing done yet rather than three files written and then a failure.
@@ -178,6 +185,10 @@ export async function run(argv: string[]): Promise<number> {
 			agentFiles,
 			apps: apps.value,
 			install: install === undefined ? null : describeCommand(install.value),
+			installChoices:
+				undecided === undefined
+					? null
+					: { source: undecided.source, choices: [...undecided.choices] },
 			snippet: agentSnippet(where.relative),
 		});
 	} else {
@@ -187,6 +198,7 @@ export async function run(argv: string[]): Promise<number> {
 				directory,
 				apps,
 				install,
+				undecided,
 				hookFile,
 				mcpConfig,
 				document,
@@ -195,7 +207,7 @@ export async function run(argv: string[]): Promise<number> {
 			}),
 		);
 	}
-	reportCaveats(hookFile, remote, values.write === true, agentFiles);
+	reportCaveats(hookFile, remote, values.write === true, agentFiles, undecided);
 	return 0;
 }
 
@@ -238,29 +250,56 @@ async function chooseApps(
 		: { value: detected.value, detectedIn: detected.source };
 }
 
+/** A choice init could not make for the caller, and the lines it would have picked between. */
+interface Undecided {
+	readonly choices: readonly string[];
+	readonly source: string;
+}
+
+/**
+ * What the run registers as the install, and what it hands back for the operator to pick from.
+ *
+ * Exactly one of the two is ever set. `undecided` is a project whose build file declares product
+ * flavors — one install task per variant, and no single one init could register without guessing
+ * which variant agents are meant to get.
+ */
+interface InstallChoice {
+	readonly chosen: Choice<HookCommand> | undefined;
+	readonly undecided: Undecided | undefined;
+}
+
 async function chooseInstall(
 	directory: string,
 	given: string | undefined,
 	none: boolean,
-): Promise<Choice<HookCommand> | undefined> {
+): Promise<InstallChoice> {
 	if (none) {
 		if (given !== undefined) {
 			throw new UsageError(
 				'rover init: --install and --no-install say opposite things. Pass one of them.',
 			);
 		}
-		return undefined;
+		return { chosen: undefined, undecided: undefined };
 	}
 	if (given !== undefined) {
 		if (given.trim() === '') {
 			throw new UsageError('rover init: --install is empty. Pass a shell line, or --no-install.');
 		}
-		return { value: shellInstall(given, directory), detectedIn: undefined };
+		return {
+			chosen: { value: shellInstall(given, directory), detectedIn: undefined },
+			undecided: undefined,
+		};
 	}
 	const detected = await detectInstall(directory);
-	return detected === undefined
-		? undefined
-		: { value: detected.value, detectedIn: detected.source };
+	if (detected === undefined) {
+		return { chosen: undefined, undecided: undefined };
+	}
+	return detected.kind === 'proposed'
+		? {
+				chosen: { value: detected.value, detectedIn: detected.source },
+				undecided: undefined,
+			}
+		: { chosen: undefined, undecided: { choices: detected.choices, source: detected.source } };
 }
 
 /**
@@ -400,6 +439,7 @@ interface Report {
 	readonly directory: string;
 	readonly apps: Choice<readonly string[]>;
 	readonly install: Choice<HookCommand> | undefined;
+	readonly undecided: Undecided | undefined;
 	readonly hookFile: FileReport;
 	readonly mcpConfig: FileReport;
 	readonly document: FileReport;
@@ -426,17 +466,53 @@ function report(what: Report): string {
 				? 'none — pass --app <id> to name one'
 				: `${what.apps.value.join(', ')}${from(what.apps.detectedIn)}`,
 		),
-		field(
-			'install',
-			what.install === undefined
-				? 'none — install_app will answer install-hook-undeclared'
-				: `${describeCommand(what.install.value)}${from(what.install.detectedIn)}`,
-		),
+		...installFields(what.install, what.undecided),
 	];
 	for (const agent of what.agentFiles) {
 		lines.push(field(agent.name, describeAgentFile(agent)));
 	}
 	return [...lines, '', ...snippetSection(what.where.relative, what.agentFiles)].join('\n');
+}
+
+/**
+ * The `install` row — one line, or the list of lines nobody has picked between yet.
+ *
+ * The listed form prints each variant as the whole `--install '…'` flag rather than as a task
+ * name, because the next thing the reader does is run init again with one of them: a report that
+ * made them assemble the flag themselves would be handing back the detection and keeping the
+ * part that is easy to get wrong.
+ */
+function installFields(
+	install: Choice<HookCommand> | undefined,
+	undecided: Undecided | undefined,
+): string[] {
+	if (undecided === undefined) {
+		return [
+			field(
+				'install',
+				install === undefined
+					? 'none — install_app will answer install-hook-undeclared'
+					: `${describeCommand(install.value)}${from(install.detectedIn)}`,
+			),
+		];
+	}
+	if (undecided.choices.length === 0) {
+		return [
+			field(
+				'install',
+				`none — ${undecided.source} declares product flavors init could not read; pass ` +
+					`--install with the variant's task (./gradlew :app:tasks lists them)`,
+			),
+		];
+	}
+	return [
+		field(
+			'install',
+			`none — ${undecided.source} declares product flavors, one install per variant; ` +
+				`init picked none:`,
+		),
+		...undecided.choices.map((line) => field('', installFlag(line))),
+	];
 }
 
 function snippetSection(documentPath: string, agentFiles: readonly AgentReport[]): string[] {
@@ -475,7 +551,11 @@ function reportCaveats(
 	remote: boolean,
 	write: boolean,
 	agentFiles: readonly AgentReport[],
+	undecided: Undecided | undefined,
 ): void {
+	if (undecided !== undefined) {
+		out.warn(installChoiceCaveat(undecided, hookFile.outcome === 'kept'));
+	}
 	if (hookFile.outcome === 'kept') {
 		out.warn(
 			`${hookFile.path} was already there and has been left exactly as it is. It may carry ` +
@@ -507,6 +587,40 @@ function reportCaveats(
 				'in this project has the tools and has not been told when to reach for them.',
 		);
 	}
+}
+
+/**
+ * What to say about a project whose install init would have had to guess.
+ *
+ * It is a warning and not a failure: the run wrote everything else, and exiting non-zero would
+ * make every later re-run of a project with a tuned hook file fail over a field that run was
+ * never going to touch. The fix named is the re-run, and it carries `--force` only when this run
+ * wrote the hook file itself — a kept file is the operator's to edit, and the "kept" warning
+ * below already explains the flag.
+ */
+function installChoiceCaveat(undecided: Undecided, kept: boolean): string {
+	const why =
+		`${undecided.source} declares product flavors, so this project has one install task per ` +
+		`variant and no ':app:installDebug'. No install was registered: which variant agents are ` +
+		`meant to be given is a choice init will not make for you.`;
+	if (undecided.choices.length === 0) {
+		return (
+			`${why} Nor could it read the flavors out of that file — a block built in a loop or by ` +
+			`'all { }' is Gradle's to evaluate and nobody else's. Run './gradlew :app:tasks' for the ` +
+			`real install tasks, then ${registerWith(`--install '<the line you want>'`, kept)}`
+		);
+	}
+	return (
+		`${why} The report above lists one ready-to-paste '--install' line per variant — ` +
+		`${registerWith(installFlag(undecided.choices[0] as string), kept)}`
+	);
+}
+
+function registerWith(flag: string, kept: boolean): string {
+	return kept
+		? `add that line to the hook file as its 'install', or re-run with it: ` +
+				`${out.INVOCATION} init ${flag} --force`
+		: `re-run with the one you want: ${out.INVOCATION} init ${flag} --force`;
 }
 
 async function readIfPresent(file: string): Promise<string | undefined> {
