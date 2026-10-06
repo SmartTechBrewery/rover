@@ -293,7 +293,10 @@ read **yet** — an application still starting, so there is no window to describ
 *not yet*, and both waits poll through it; if it lasts to the deadline the timeout says the
 screen was never readable rather than that the element was not found. A verb that reads once
 instead fails on it by name (`unreadable-screen`), because polling is a wait's job and not a
-primitive's. `wait_until_gone` asks the mirror
+primitive's. **Both backends report it, and each recognises its own platform's version** — on
+Android the screen reader saying it had no root node to walk, on the iOS simulator an
+accessibility read that lists the starting application and nothing in it with a rectangle. Neither
+is an empty screen, and neither is reported as one. `wait_until_gone` asks the mirror
 question of *matches* rather than of a resolution, and will not take a text target's `index`, since
 an index names a slot in the match list and a slot empties the moment any sibling leaves.
 

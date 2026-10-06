@@ -140,6 +140,13 @@ function content(value: string | null): string | null {
  * scale 3 — 402×874 dp exactly. A frame divided by the scale on the way through would land at
  * 134×291, a third of the way from the origin; multiplied, at 1206×2622, off the panel.
  *
+ * **A read whose nodes all have zero-sized frames never reaches here.** That shape is the
+ * launching application before it has drawn, and `./backend.ts` refuses it as
+ * `UnreadableScreenError` rather than handing it down (`noScreenYet`, #300): mapping it would
+ * produce a `ScreenElement` with a rectangle no caller can target and no label to match, which is
+ * indistinguishable from a screen that genuinely holds one nameless thing. So everything below may
+ * assume what the measurement found on every settled screen — at least one node with extent.
+ *
  * So the frame goes **straight through**, unrounded and unclamped, for `toScreenInfo`'s own
  * reason: rounding is a presentation decision, and a backend that rounds leaves no way to ask
  * what the device said. A rectangle extending past the bottom edge survives — the captures

@@ -118,6 +118,15 @@ export type AccessibilityElement = z.infer<typeof AccessibilityElementSchema>;
  * `LEGACY`. An empty array is a real answer and is returned as one: a screen with nothing
  * accessible on it is not a failure to surface, and the caller that has to tell the difference
  * has `ScreenElement[]`'s own length.
+ *
+ * **That paragraph stands, and #300 did not narrow it** — what it added sits one layer up. The
+ * read taken in the first fraction of a second of a cold launch is not empty: it is one
+ * `AXApplication` node with a zero-sized frame, the launching process before it has drawn
+ * (`../backend.ts`'s `noScreenYet`, measured over 2623 reads). `../backend.ts` refuses *that* as
+ * `UnreadableScreenError`, because what the companion **said** and what it **means for
+ * `ScreenElement[]`** are two decisions — the same split that puts `'' → null` in `../screen.ts`
+ * rather than here. An empty array still arrives here as one, is still parsed as one, and was
+ * never observed in any of those reads.
  */
 export const AccessibilityReadSchema = z.array(AccessibilityElementSchema);
 export type AccessibilityRead = z.infer<typeof AccessibilityReadSchema>;
