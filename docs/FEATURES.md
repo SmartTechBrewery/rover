@@ -85,10 +85,13 @@ the only truthful `set_wifi` would change the networking of the machine lending 
 people, and the cosmetic status-bar override `simctl` will happily draw is precisely the
 plausible-looking answer this project refuses. `canReadScreen` (#251) and `canInput` (#252) both
 started `false` and have since flipped to `true`. `canHideKeyboard` (#307) is the second `false`,
-and not a permanent one: it waits on a dismissal nobody has yet watched work on a simulator, so it
-says so by name until one has been. **Half of that reason expired with #298** and this sentence is
-rewritten rather than replaced — the simulator does report its keyboard now, so the read a safe
-dismissal needs exists; what is missing is the gesture.
+and this sentence has been rewritten twice rather than replaced. It said the flag waited on a
+dismissal nobody had watched work; **half of that expired with #298**, which gave the simulator a
+keyboard it can read; and **the other half expired with #321**, which measured the gesture and left
+the flag `false` anyway. The one dismissal this transport can send is Escape, and Escape is iOS's
+generic *cancel* — it closes a keyboard when there is nothing else to close and dismisses the
+presented sheet when there is, which a verb meaning *dismiss the keyboard and nothing else* cannot
+be built on (`docs/IOS.md` §5, `PROJECT.md` §6).
 
 **Refusals get finer than a flag.** `press_key` on a simulator answers `home`, `wake` and the
 editing keys `delete`, `enter` and `tab`, and refuses `back` and `recents` as `unsupported-key`,
@@ -219,8 +222,11 @@ taken at the moment it acts, and *what* to press is that platform's knowledge; b
 backend, and composing it above would mean the verb layer assuming a back key exists. So it is one
 backend method, `hideKeyboard`, documented as *dismiss the keyboard if one is up and do nothing
 otherwise*, behind its own capability `canHideKeyboard` — `true` on Android, `false` on the iOS
-simulator until a recipe is measured there, where the call is `missing-capability` by name rather
-than an `ok` for a keyboard still on the glass. When no keyboard is up it is a no-op answer: the same
+simulator, where the call is `missing-capability` by name rather than an `ok` for a keyboard still
+on the glass. That `false` is measured rather than pending (#321): the simulator's one candidate
+gesture, Escape, is the platform's generic cancel and takes a presented sheet away as readily as a
+keyboard, so declaring the flag on it would turn a dismissal into a discarded form reported as
+success. When no keyboard is up it is a no-op answer: the same
 result shape, nothing pressed.
 
 **`type_text`, `press_key` and `hide_keyboard` address no element**, so their result's `target` is `null` — a fact
@@ -336,7 +342,8 @@ usually up**: Rover never launches `Simulator.app`, and a simulator without it b
 hardware keyboard were attached, so the window in which anything is covered runs from the tap that
 focuses a field to the first character Rover types. It is narrow, it is real, and it answered `ok`
 to a touch that landed on a key until this change. **`hide_keyboard` is still refused there** by
-`canHideKeyboard`, above.
+`canHideKeyboard`, above — and since #321 that refusal is the end of the enquiry rather than a
+placeholder: the gesture was measured, and what it cancels is why.
 
 **A touch the keyboard covers is now refused** (#308), which this paragraph used to defer: it read
 *nothing refuses anything yet — what a verb does about an element the keyboard covers is separate
@@ -350,9 +357,10 @@ one covering half the screen (`PROJECT.md` §6).
 **Where it lives.** `src/verbs/`, `src/ipc/` for the method table, `src/core/device.ts` for the
 keyboard's shape and `hideKeyboard`'s contract, `src/core/capabilities.ts` for `canHideKeyboard`,
 `src/backends/android/parsers/insets.ts` for the read and `src/backends/android/backend.ts` for the
-read-then-press; `src/backends/ios-simulator/parsers/accessibility.ts` for the trait names and
-`src/backends/ios-simulator/screen.ts` for `toOnScreenKeyboard`; `PROJECT.md` §4 and §6, `docs/IOS.md`
-§2, §5 and §8, D11, D14.
+read-then-press; `src/backends/ios-simulator/parsers/accessibility.ts` for the trait names,
+`src/backends/ios-simulator/screen.ts` for `toOnScreenKeyboard` and
+`src/backends/ios-simulator/capabilities.ts` for why that backend declares `canHideKeyboard` `false`
+with a dismissal in hand; `PROJECT.md` §4 and §6, `docs/IOS.md` §2, §5 and §8, D11, D14.
 
 ---
 

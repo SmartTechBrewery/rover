@@ -101,10 +101,12 @@ startup of ~60–90 ms that a Node backend talking gRPC directly would not pay.
 | `canRecordVideo` | `recordVideo` | `simctl io <d> recordVideo --codec h264 --mask ignored <path>` | marker at 0.14–0.23 s; 100,782 bytes for ~2 s of an idle screen | ✅ **no `--time-limit` — the window is host-side** |
 | `canControlRecording` | `start`/`stop`/`discardRecording` | same + `SIGINT`, and the **host's** process table for "is this device recording" | exit 0 in 20–30 ms after the signal; `ps` stops naming the recorder in 39 ms | ✅ |
 | `canControlNetwork` | `setAirplaneMode` `setWifiEnabled` | — | — | ❌ **declare false** |
-| `canHideKeyboard` | `hideKeyboard` | — | **half measured** (#298): the keyboard *is* reported now — `screen.keyboard` is `{shown, bounds}` whenever a read was possible — and no dismissal has been verified against a device | ❌ **declared false** until the dismissal is (#307) |
+| `canHideKeyboard` | `hideKeyboard` | Escape, USB HID usage 41, down then up over the same `hid` stream | **fully measured** (#298, #321): the keyboard *is* reported — `screen.keyboard` is `{shown, bounds}` whenever a read was possible — and Escape *does* close one on a plain screen (47 nodes → 9), but it is iOS's generic **cancel**: over Contacts' new-contact sheet it dismissed the whole sheet, with a keyboard up **and with none** | ❌ **declared false for a measured reason**, see §5 |
 
 19 of 20 probes succeeded; the twentieth is `canControlNetwork`, which failed **on purpose** —
-see §5.
+see §5. **`canHideKeyboard` is a twenty-first row that has since been probed and also fails on
+purpose**: the gesture exists and works, and what it also does is why the flag is still `false`
+(§5, `PROJECT.md` §6, #321).
 
 `clearAppData` deserves its footnote. There is no single call that empties a container the way
 `pm clear` does. Three routes were tried: `simctl uninstall` + `install` works and is what the
@@ -494,6 +496,14 @@ twice per verb. The read itself is 122–143 ms warm over eight samples on this 
 Caching it between calls is `PROJECT.md` D12(a)'s remembered coordinate in another costume and is
 not done. It also opens **one new door into trap 17** — a bare `device_info` on a device booted
 seconds ago — which is named in §8 rather than worked around with a timer.
+
+**What #321 then measured, on the same recipe: the dismissal, which exists and is unusable.**
+Escape (USB HID usage 41) closes a simulator keyboard — on Settings' search field one press took
+the read from 47 nodes to 9 — but it is iOS's generic *cancel*, and over Contacts' presented
+new-contact sheet it dismissed the **sheet**, with a keyboard up and with none. So `canHideKeyboard`
+stays `false` with a measured reason rather than a pending one; §5 carries the argument and
+`PROJECT.md` §6 the reads. One Escape also burns the device the way one `typeText` does (§8,
+trap 20).
 
 ### It is genuinely headless
 
@@ -904,14 +914,43 @@ panel in points. What does not line up is **when**:
   *before* the boot and `Simulator.app` attached *after* it.
 - **Rover's own first keystroke dismisses it for the rest of the device's life.** One `typeText`
   persists `HardwareKeyboardLastSeen = true` inside the device, and neither clearing nor deleting
-  that key brings the keyboard back — only a newly created simulator does.
+  that key brings the keyboard back — only a newly created simulator does. **One Escape does the
+  same** (#321): the flag was `true` in the device's own
+  `data/Library/Preferences/com.apple.keyboard.preferences.plist` after a single press, and
+  re-tapping the same field never brought the panel back.
 
 So the occlusion window is open from the tap that focuses a field until the first character typed,
 and on a headless host it never opens at all. That is why the rectangle is pinned against a
 **capture** in the unit suite and the refusal was driven by hand (`PROJECT.md` §6) rather than
 automated: a test cannot set the state up without touching a device somebody may be looking at.
-`hide_keyboard` is still refused here by `canHideKeyboard`, now because no *dismissal* has been
-measured rather than because the keyboard could not be read.
+
+**`hide_keyboard` is still refused here by `canHideKeyboard`, and the reason has changed twice.**
+This paragraph said *no dismissal has been measured* (#298); one has been now (#321) and the flag
+stays `false` for what the dismissal also does. The candidate — the only one this transport has —
+is **Escape, USB HID usage 41**, sent down-then-up over the same `hid` stream as every other
+primitive. Measured on two throwaway iPhone 17s (iOS 26.4.1 / Xcode 26.4.1 / companion 1.5.2,
+2026-10-06):
+
+- on Settings' search field with a keyboard up, one Escape took the read from 47 nodes to 9 and
+  `screen.keyboard` to `{ shown: false }`, leaving Settings frontmost, still in search mode, with
+  every other node at the same frame — the field alone moved down into the space the panel freed,
+  and lost its caret, because dismissing an iOS keyboard *is* resigning first responder;
+- on Contacts' *Nowy kontakt* — a presented modal sheet with its first field focused and the
+  keyboard over it — one Escape dismissed **the sheet**, landing back on the contacts list with
+  the half-filled contact gone and `screen.keyboard` reporting `{ shown: false }` all the same;
+- and it dismissed that same sheet **with no keyboard up at all**, which is what proves the press
+  is aimed at the presentation rather than at the keyboard;
+- with nothing to cancel it is a true no-op: three in a row left the read identical on Settings'
+  search screen and on Springboard, the opposite of Android's back.
+
+So Escape is this platform's generic **cancel**, and `hideKeyboard`'s contract is *dismiss the
+keyboard if one is up and press nothing otherwise*. The read that would gate the press,
+`screen.keyboard.shown`, cannot tell the two screens apart — both say a keyboard is up, and the
+after-state is `{ shown: false }` whether the panel went or the caller's form did. A bare modifier
+is no way round it (Left Shift, usage 225, left the keyboard up — #298) and there is no
+keyboard-only call to reach for: `hid` sends buttons, touches and HID usages, and `simctl` has no
+keyboard subcommand. What would flip the flag is a dismissal that is **only** a dismissal, verified
+on a screen with a presentation over it.
 
 **`LogLevel` has no `warn` on iOS, and gains a value that is not a level.** The unified log's
 `messageType` is `Debug | Info | Default | Error | Fault` — nothing maps onto `warn` — and entries
@@ -1425,6 +1464,14 @@ full factory reset if state restoration ever needs one.
     rebooting in between all failed on two devices. `xcrun simctl create` is the recipe that works,
     and `PROJECT.md` §6 carries it in full. A fresh device also draws two keyboard onboarding tips
     over the panel that have to be tapped away first.
+
+    **Amended 2026-10-06 (#321): one Escape burns the device the same way a `typeText` does.** HID
+    usage 41 dismisses the panel and persists the same `HardwareKeyboardLastSeen = true`, so a
+    later tap on the same field focuses it and draws no keyboard. Budget **one freshly created
+    simulator per keyboard measurement** — not one per session — and quit `Simulator.app` before
+    creating the next, because it only reads `-CurrentDeviceUDID` at launch. Note what that would
+    have meant had the flag flipped: a successful `hide_keyboard` would have been the last one of
+    that device's life, with every later call finding nothing to dismiss.
 
 21. **A crash report's `procPath` cannot tell two simulators apart, and the report can take tens of
     seconds to appear.** Measured 2026-10-06 on macOS 26.6.2 / Xcode 27.0 / iOS 26.5 (PROJECT.md

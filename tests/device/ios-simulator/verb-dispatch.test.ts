@@ -221,6 +221,36 @@ describe.skipIf(!process.env.ROVER_TEST_SIMULATOR)(
 		});
 
 		/**
+		 * **The second declared opt-out, and the one whose gesture exists** (#321). `set_wifi`
+		 * above is refused because the platform has nothing behind it; `hide_keyboard` is refused
+		 * although this backend reads its keyboard (#298) *and* has a key that dismisses one.
+		 * That key is Escape (HID usage 41), and it is iOS's generic cancel: on Contacts' presented
+		 * new-contact sheet it took the sheet away, with a keyboard up and with none
+		 * (`PROJECT.md` §6, `src/backends/ios-simulator/capabilities.ts`). So the honest answer is
+		 * still `missing-capability` naming `canHideKeyboard` and the device, and this case is what
+		 * says so from the far end of the socket rather than from a manifest literal — the shape an
+		 * agent actually meets when it reaches for the way out a `covered-by-keyboard` refusal
+		 * names.
+		 */
+		it('refuses hide_keyboard by capability, with a dismissal measured and rejected', async () => {
+			const client = await startHost();
+			const device = await freeSimulator(client);
+			const leaseId = await lease(client, device.serial);
+
+			const refused = await client.request('hide_keyboard', { leaseId });
+
+			expect(refused).toMatchObject({
+				outcome: 'failed',
+				failure: {
+					kind: 'missing-capability',
+					capability: 'canHideKeyboard',
+					serial: device.serial,
+					platform: IOS_SIMULATOR_PLATFORM_ID,
+				},
+			});
+		});
+
+		/**
 		 * **The first per-key refusal in this repository that comes from a device rather than from a
 		 * synthetic backend**, and the second kind of honest refusal this backend is the example of.
 		 *

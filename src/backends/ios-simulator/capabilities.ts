@@ -58,7 +58,9 @@
  *
  * **The label moves with it**, to `iOS Simulator (simctl + idb)` — see {@link IOS_SIMULATOR_LABEL}.
  *
- * **Two flags are `false`, and both are honest** — one for good, one until it is measured.
+ * **Two flags are `false`, and both are now measured rather than pending** — one because the
+ * platform has nothing behind it, one because the only gesture that dismisses this platform's
+ * keyboard does more than dismiss it.
  *
  * - **`canControlNetwork`** is the one that is `false` *for good* (`docs/IOS.md` §5, §10 step 1).
  *   A simulator has no airplane mode and no wifi toggle: it uses the **host's** network stack, so
@@ -69,18 +71,43 @@
  *   cannot do that*" `ai/RULES.md` §2 forbids. `MissingCapabilityError` is what a caller gets,
  *   naming this capability and the device, and there is **no** `setAirplaneMode` and **no**
  *   `setWifiEnabled` method beside the flag.
- * - **`canHideKeyboard`** is `false` *for now*, and **half of why has been measured since**
- *   (#298; this bullet is edited in place with its reasoning rewritten rather than replaced,
- *   `ai/RULES.md` §1). It said this backend reports no keyboard at all, so there is nothing to
- *   decide on, *and* that no gesture that closes a simulator keyboard has been measured. The first
- *   half is no longer true: `ScreenInfo.keyboard` is `{shown, bounds}` here whenever an
+ * - **`canHideKeyboard`** is `false`, and **both halves of why are measured now** (#321; this
+ *   bullet is edited in place with its reasoning rewritten rather than replaced, `ai/RULES.md`
+ *   §1). It said this backend reports no keyboard at all so there was nothing to decide on, then
+ *   (#298) that the read existed and only a dismissal was missing. Neither sentence is the reason
+ *   any more.
+ *
+ *   **The read exists** — `ScreenInfo.keyboard` is `{shown, bounds}` here whenever an
  *   accessibility read was possible, because the tree names the software keyboard on every key
- *   node (`./screen.ts`'s `toOnScreenKeyboard`, `./parsers/accessibility.ts`). So the read a safe
- *   dismissal needs **exists**, and what the flag now waits on is only the other half — **no
- *   dismissal has been verified against a device**. Declaring it on that would be the "an agent is
- *   told a device can do something it cannot" failure, so `hide_keyboard` still answers
- *   `missing-capability` naming this flag and the device, and there is still **no** `hideKeyboard`
- *   method beside it. #307 flips it, with the recipe.
+ *   node (`./screen.ts`'s `toOnScreenKeyboard`, `./parsers/accessibility.ts`).
+ *
+ *   **The gesture is what fails, and it fails on what it also does.** The one candidate this
+ *   transport has is **Escape, USB HID usage 41**, sent down-then-up over the same `hid` stream
+ *   every other primitive uses. It does dismiss a keyboard — on a Settings search field with one
+ *   up, one press took the read from 47 nodes to 9 and `screen.keyboard` from
+ *   `{shown: true, bounds: {0, 539, 402, 335.43…}}` to `{shown: false, bounds: null}`, with the
+ *   app, the screen and the search mode otherwise unchanged. But **Escape is iOS's generic
+ *   cancel**, and on a screen that has something to cancel it cancels that instead: over
+ *   Contacts' *Nowy kontakt* sheet, a presented modal with its first field focused and a keyboard
+ *   over it, one Escape **took the whole sheet away** and landed back on the contacts list — and
+ *   it took the same sheet away with **no keyboard up at all**, which is what proves the press is
+ *   aimed at the presentation and not at the keyboard (`PROJECT.md` §6, measured 2026-10-06).
+ *
+ *   That is unusable from a method whose contract is *dismiss the keyboard if one is up, press
+ *   nothing otherwise* (`src/core/device.ts`). The read this method would make — `keyboard.shown`
+ *   — cannot tell the two screens apart: both say a keyboard is up, and on one of them the press
+ *   discards the caller's half-filled form while `screen.keyboard` answers `{shown: false}` and
+ *   the verb answers `ok`. That is the "plausible-looking result where the honest answer is *this
+ *   device cannot do that*" `ai/RULES.md` §2 forbids, in its worst shape: a success that destroyed
+ *   state. A bare modifier is not a way round it either — Left Shift (usage 225, which types
+ *   nothing) did not dismiss the keyboard at all (#298) — and there is no keyboard-only call on
+ *   this transport: `hid` sends buttons, touches and HID usages, and `simctl` has no keyboard
+ *   subcommand. So `hide_keyboard` answers `missing-capability` naming this flag and the device,
+ *   and there is **no** `hideKeyboard` method beside it.
+ *
+ *   What would flip it is a dismissal that is **only** a dismissal, verified on a screen with a
+ *   presentation over it. Escape is not that, and a `canHideKeyboard` declared on Escape would be
+ *   worse than the refusal it replaced.
  *
  * That is the difference between this manifest and `../android/capabilities.ts`, where every flag
  * is `true`: a declared opt-out is not an unfinished backend, and a capability declared before its
