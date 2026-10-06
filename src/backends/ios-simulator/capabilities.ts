@@ -69,13 +69,18 @@
  *   cannot do that*" `ai/RULES.md` §2 forbids. `MissingCapabilityError` is what a caller gets,
  *   naming this capability and the device, and there is **no** `setAirplaneMode` and **no**
  *   `setWifiEnabled` method beside the flag.
- * - **`canHideKeyboard`** is `false` *for now* (#307). Dismissing a keyboard is only safe behind a
- *   read of whether one is up, and this backend reports no keyboard at all yet — `ScreenInfo.keyboard`
- *   is `null` here (`./screen.ts`), so there is nothing to decide on — and no gesture that closes
- *   a simulator keyboard has been measured either. Declaring it before both are verified would be
- *   the "an agent is told a device can do something it cannot" failure;
- *   so `hide_keyboard` answers `missing-capability` naming this flag and the device, and there is
- *   **no** `hideKeyboard` method beside it. Its own issue flips it, with the recipe.
+ * - **`canHideKeyboard`** is `false` *for now*, and **half of why has been measured since**
+ *   (#298; this bullet is edited in place with its reasoning rewritten rather than replaced,
+ *   `ai/RULES.md` §1). It said this backend reports no keyboard at all, so there is nothing to
+ *   decide on, *and* that no gesture that closes a simulator keyboard has been measured. The first
+ *   half is no longer true: `ScreenInfo.keyboard` is `{shown, bounds}` here whenever an
+ *   accessibility read was possible, because the tree names the software keyboard on every key
+ *   node (`./screen.ts`'s `toOnScreenKeyboard`, `./parsers/accessibility.ts`). So the read a safe
+ *   dismissal needs **exists**, and what the flag now waits on is only the other half — **no
+ *   dismissal has been verified against a device**. Declaring it on that would be the "an agent is
+ *   told a device can do something it cannot" failure, so `hide_keyboard` still answers
+ *   `missing-capability` naming this flag and the device, and there is still **no** `hideKeyboard`
+ *   method beside it. #307 flips it, with the recipe.
  *
  * That is the difference between this manifest and `../android/capabilities.ts`, where every flag
  * is `true`: a declared opt-out is not an unfinished backend, and a capability declared before its

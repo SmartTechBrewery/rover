@@ -85,8 +85,10 @@ the only truthful `set_wifi` would change the networking of the machine lending 
 people, and the cosmetic status-bar override `simctl` will happily draw is precisely the
 plausible-looking answer this project refuses. `canReadScreen` (#251) and `canInput` (#252) both
 started `false` and have since flipped to `true`. `canHideKeyboard` (#307) is the second `false`,
-and not a permanent one: the simulator reports no keyboard state yet and no dismissal has been
-measured on it, so it says so by name until both are.
+and not a permanent one: it waits on a dismissal nobody has yet watched work on a simulator, so it
+says so by name until one has been. **Half of that reason expired with #298** and this sentence is
+rewritten rather than replaced — the simulator does report its keyboard now, so the read a safe
+dismissal needs exists; what is missing is the gesture.
 
 **Refusals get finer than a flag.** `press_key` on a simulator answers `home` and `wake` and
 refuses `back` and `recents` as `unsupported-key`, naming the key — and refuses the editing keys
@@ -297,6 +299,23 @@ wrong one. And `null` (*this device did not say*) stays distinct from `{ shown: 
 device says no keyboard is up*), the same distinction the insets draw: a backend with no route to
 the fact must not read as one promising a clear screen.
 
+**Both backends answer it now, by different routes** (#298), and this paragraph is rewritten in
+place rather than appended to: it described the fact as Android's, where it comes out of the
+`InsetsState` block of a `dumpsys window d` the backend already has in hand. The iOS simulator has
+no such block and no IME state anywhere in `simctl`, so it reads the **accessibility tree** instead
+— every key of the software keyboard is a node carrying the trait `KeyboardKey`, each cell of the
+autocorrect strip carries `AutoCorrectCandidate`, and the union of their frames is the drawn panel,
+already in the points the rest of that answer is in. One backend parses a rectangle out of text and
+the other builds one out of 37 of them; the field, its units and its two distinct `null`s are the
+same on both.
+
+The honest extra sentence about iOS is that **in the configuration Rover drives, no keyboard is
+usually up**: Rover never launches `Simulator.app`, and a simulator without it behaves as though a
+hardware keyboard were attached, so the window in which anything is covered runs from the tap that
+focuses a field to the first character Rover types. It is narrow, it is real, and it answered `ok`
+to a touch that landed on a key until this change. **`hide_keyboard` is still refused there** by
+`canHideKeyboard`, above.
+
 **A touch the keyboard covers is now refused** (#308), which this paragraph used to defer: it read
 *nothing refuses anything yet — what a verb does about an element the keyboard covers is separate
 work*. That work is done and catalogued with the other refusals in §5; the fact reported here is
@@ -309,7 +328,9 @@ one covering half the screen (`PROJECT.md` §6).
 **Where it lives.** `src/verbs/`, `src/ipc/` for the method table, `src/core/device.ts` for the
 keyboard's shape and `hideKeyboard`'s contract, `src/core/capabilities.ts` for `canHideKeyboard`,
 `src/backends/android/parsers/insets.ts` for the read and `src/backends/android/backend.ts` for the
-read-then-press; `PROJECT.md` §4 and §6, D11, D14.
+read-then-press; `src/backends/ios-simulator/parsers/accessibility.ts` for the trait names and
+`src/backends/ios-simulator/screen.ts` for `toOnScreenKeyboard`; `PROJECT.md` §4 and §6, `docs/IOS.md`
+§2, §5 and §8, D11, D14.
 
 ---
 

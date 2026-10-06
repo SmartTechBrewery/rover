@@ -1,17 +1,23 @@
 /**
  * A device type's screen as the neutral `ScreenInfo` of `src/core/device.ts`, and an
- * accessibility read as its neutral `ScreenElement[]`.
+ * accessibility read as its neutral `ScreenElement[]` and `OnScreenKeyboard`.
  *
  * Sibling in spirit to `../android/screen.ts`: pure arithmetic and vocabulary, no process.
  * `./parsers/simctl-list.js` owns the listing, `./parsers/device-type-profile.js` owns the
  * plist, `./parsers/accessibility.js` owns the read, and this owns the mapping — so
  * everything below is asserted in `tests/unit/backends/ios-simulator/screen.test.ts` against
- * two captured profiles and three captured reads rather than against a simulator.
+ * two captured profiles and five captured reads rather than against a simulator.
  *
- * **The two halves of that file meet in one place and nowhere else**: the points
- * {@link toScreenElements} hands back are the same unit as the `widthDp`/`heightDp`
- * {@link toScreenInfo} divides out, which is the whole reason one performs a division and the
- * other performs none.
+ * **The halves of that file meet in one place and nowhere else**: the points
+ * {@link toScreenElements} and {@link toOnScreenKeyboard} hand back are the same unit as the
+ * `widthDp`/`heightDp` {@link toScreenInfo} divides out, which is the whole reason one performs a
+ * division and the other two perform none.
+ *
+ * **Two of the three read the same payload and answer different questions about it**, and that is
+ * the split `ScreenInfo` and `ScreenElement[]` already are: `toScreenElements` says what is *in*
+ * the application, `toOnScreenKeyboard` says what the **system** drew on top of it. Nothing
+ * filters the keyboard's nodes out of the element list — they are on the screen and the device
+ * listed them — and `src/verbs/target.ts` is the layer that decides what a touch may reach.
  *
  * **The screen comes from the device type, never from a captured image** — trap 6 of
  * `docs/IOS.md` §8, and the whole reason this layer exists. Two mistakes it forecloses:
@@ -31,9 +37,18 @@
  */
 
 import path from 'node:path';
-import { type ScreenElement, type ScreenInfo, ScreenInfoSchema } from '../../core/device.js';
+import {
+	type OnScreenKeyboard,
+	type ScreenElement,
+	type ScreenInfo,
+	ScreenInfoSchema,
+} from '../../core/device.js';
 import { parseElementId } from '../../core/ids.js';
-import type { AccessibilityRead } from './parsers/accessibility.js';
+import {
+	type AccessibilityRead,
+	KEYBOARD_CANDIDATE_TRAIT,
+	KEYBOARD_KEY_TRAIT,
+} from './parsers/accessibility.js';
 import type { DeviceTypeProfile } from './parsers/device-type-profile.js';
 
 /** Where a `.simdevicetype` bundle keeps its profile, relative to the bundle root. */
@@ -72,8 +87,18 @@ export function deviceTypeProfilePath(bundlePath: string): string {
  * `ScreenInfoSchema.parse` on the way out is what makes "these fields, from these keys" a
  * checked claim: a non-integer DPI that somehow reached here fails there too, having
  * already failed in `DeviceTypeProfileSchema` under the plist key's own name.
+ *
+ * **`keyboard` is a parameter rather than a field of the profile**, and that asymmetry is the
+ * shape of the fact rather than a convenience: a device type says what a screen *is*, and whether
+ * a keyboard is up is the most *now* fact there is, so it cannot come out of this plist. The
+ * caller — `./backend.ts`'s `deviceInfo` — takes one accessibility read and hands down
+ * {@link toOnScreenKeyboard}'s answer, or `null` when it could not. `null` goes straight through
+ * and means *this device did not say*; see the field's own comment below.
  */
-export function toScreenInfo(profile: DeviceTypeProfile): ScreenInfo {
+export function toScreenInfo(
+	profile: DeviceTypeProfile,
+	keyboard: OnScreenKeyboard | null,
+): ScreenInfo {
 	const { mainScreenWidth, mainScreenHeight, mainScreenScale } = profile;
 	const { mainScreenWidthDPI, mainScreenHeightDPI, modelIdentifier } = profile;
 
@@ -107,17 +132,23 @@ export function toScreenInfo(profile: DeviceTypeProfile): ScreenInfo {
 		 */
 		systemBars: null,
 		/*
-		 * **`null` for the same reason, and it is the honest answer.** This profile describes a
-		 * device *type*; it says nothing about what is drawn on the screen right now, and whether
-		 * a keyboard is up is the most *now* fact there is. Answering `{ shown: false }` would be
-		 * this backend promising a clear screen it has not looked at — the silent degradation
-		 * `ai/RULES.md` §2 forbids — so it says *not answered* instead and nothing branches on the
-		 * platform to find that out.
+		 * **Whatever the caller measured, and `null` when it measured nothing** (#298; this block
+		 * is edited in place with its reasoning rewritten rather than deleted, `ai/RULES.md` §1).
 		 *
-		 * What would change this is a verified route to a booted simulator's own IME state. Until
-		 * somebody runs one against a device, this stays `null`.
+		 * It said *this stays `null` until somebody runs a verified route to a booted simulator's
+		 * own IME state against a device*. Somebody did. The profile still cannot answer it — the
+		 * paragraph above about `systemBars` applies here word for word, a device type says what a
+		 * screen *is* and this is a fact about what is drawn on one — but the **accessibility
+		 * read** can: the software keyboard's own nodes carry `KeyboardKey`
+		 * (`./parsers/accessibility.js`), and {@link toOnScreenKeyboard} unions their frames. So
+		 * the route exists and runs one layer up, in the caller that is allowed to touch a device.
+		 *
+		 * `null` is still exactly what a caller gets when no read was possible — no companion on
+		 * this host, a device that is not booted, a wedged bridge — because *not answered* and
+		 * *no keyboard is up* are two different claims and a backend that folded them would be
+		 * promising a clear screen it never looked at (`src/core/device.ts`, `ai/RULES.md` §2).
 		 */
-		keyboard: null,
+		keyboard,
 	});
 }
 
@@ -195,4 +226,71 @@ export function toScreenElements(read: AccessibilityRead): ScreenElement[] {
 			bounds: { x, y, width, height },
 		};
 	});
+}
+
+/**
+ * An accessibility read as the neutral {@link OnScreenKeyboard} — the software keyboard, found by
+ * the name the payload gives it.
+ *
+ * **The tree names the keyboard, and nothing else here does.** Measured on a throwaway iPhone 17
+ * (companion v1.5.2, Xcode 26.4.1 / iOS 26.4.1, 2026-10-06; captured as
+ * `tests/fixtures/ios-simulator/accessibility.uikit-keyboard.*.json`), with the Polish system
+ * keyboard up over Settings' search field: **34** nodes carry `KeyboardKey` and the **3** cells of
+ * the strip above them carry `AutoCorrectCandidate`. The union of those 37 frames is
+ * `{x: 0, y: 539, width: 402, height: 335.434}` on a 402×874-point screen, which is the drawn
+ * panel checked against the screenshot.
+ *
+ * - **`shown` is the keys, not the strip.** A candidate strip can be drawn without a keyboard
+ *   panel, and the claim `ScreenInfo.keyboard` makes is about the thing that covers the screen.
+ * - **`bounds` is both.** Keys alone give `{4.67, 590, 395, 284.43}` — 51 points short at the top,
+ *   missing the whole strip, and therefore a band a touch would land in that nothing would refuse.
+ *
+ * **The node that looks like the panel is deliberately not used.** The only node whose frame
+ * nearly matches is an unlabelled `AXGenericElement` at `{0, 583, 402, 291}` with traits
+ * `["Scrollable", "Spacer"]`: a geometric coincidence rather than a name, missing the strip by 44
+ * points, and indistinguishable from any other spacer on any other screen. The traits are what the
+ * device *said*; the rectangle is what somebody would have recognised.
+ *
+ * **Unrounded and unclamped**, for {@link toScreenElements}' stated reason, and that is not
+ * theoretical here: the union's bottom edge is 874.434 on an 874-point screen, because the bottom
+ * key row is laid out at `y: 805.6989…` with `height: 68.7351…`. `RectSchema` permits it, the
+ * committed captures already carry a row 9.67 points past the bottom, and `isInside` is half-open
+ * — so a backend that rounded or clamped would be editing what the device said to make it tidy.
+ *
+ * **In points, so nothing is divided** — `./parsers/accessibility.js`'s frames are already the
+ * space `OnScreenKeyboard.bounds` is stated in, which is the same absence {@link toScreenElements}
+ * exists to make visible.
+ *
+ * **This function cannot produce `{shown: true, bounds: null}`**, and the schema's state stays
+ * representable for other backends rather than for this one: a node carrying `KeyboardKey` always
+ * has a frame, because `frame` is required by the parser and a read missing one fails there by
+ * name. So on this platform *the keyboard is up* and *here is where* arrive together or not at
+ * all, and a caller seeing that state is reading another device.
+ */
+export function toOnScreenKeyboard(read: AccessibilityRead): OnScreenKeyboard {
+	const panel = read.filter(
+		({ traits }) => claims(traits, KEYBOARD_KEY_TRAIT) || claims(traits, KEYBOARD_CANDIDATE_TRAIT),
+	);
+	const shown = panel.some(({ traits }) => claims(traits, KEYBOARD_KEY_TRAIT));
+	if (!shown) return { shown: false, bounds: null };
+
+	const left = Math.min(...panel.map(({ frame }) => frame.x));
+	const top = Math.min(...panel.map(({ frame }) => frame.y));
+	const right = Math.max(...panel.map(({ frame }) => frame.x + frame.width));
+	const bottom = Math.max(...panel.map(({ frame }) => frame.y + frame.height));
+
+	return { shown: true, bounds: { x: left, y: top, width: right - left, height: bottom - top } };
+}
+
+/**
+ * Whether a node claimed a trait — with *claimed nothing* spelled `null` as well as `[]`.
+ *
+ * `traits` is nullable because one node really answers `null`: the zero-framed `AXApplication`
+ * placeholder of a cold launch (`./parsers/accessibility.js`, `./backend.ts`'s `noScreenYet`).
+ * Both spellings mean the same thing here and neither can be a keyboard key, because a keyboard
+ * key is a node that **said so** — which is the whole premise of {@link toOnScreenKeyboard}, and
+ * why the absent case needs no branch of its own further up.
+ */
+function claims(traits: string[] | null, trait: string): boolean {
+	return traits?.includes(trait) ?? false;
 }

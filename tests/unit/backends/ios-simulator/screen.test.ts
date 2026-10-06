@@ -8,6 +8,7 @@ import { readDeviceTypeProfile } from '@/backends/ios-simulator/parsers/device-t
 import { parseSimctlDeviceTypes } from '@/backends/ios-simulator/parsers/simctl-list.js';
 import {
 	deviceTypeProfilePath,
+	toOnScreenKeyboard,
 	toScreenElements,
 	toScreenInfo,
 } from '@/backends/ios-simulator/screen.js';
@@ -49,13 +50,27 @@ const TOGGLES = read('uikit-toggles');
 const TEXTFIELD = read('uikit-textfield');
 
 /**
+ * The pair #298 captured, on a **throwaway** `iPhone 17` created for the run — companion v1.5.2,
+ * Xcode 26.4.1 / iOS 26.4.1, 2026-10-06 — with the Polish system keyboard up over Settings'
+ * search field, and then the same screen after one `typeText('wifi')`.
+ *
+ * **The pair is the point, and it is why the second file is here at all.** The three captures
+ * above already pin the no-keyboard case, but every one of them was taken on a screen where a
+ * keyboard was never going to be up; the dismissed capture was taken on a screen where one
+ * *was*, one keystroke earlier. That is what makes `shown: false` a measurement rather than the
+ * branch nothing exercised — and it is the same open/closed pairing the Android fixtures carry.
+ */
+const KEYBOARD = read('uikit-keyboard');
+const KEYBOARD_DISMISSED = read('uikit-keyboard-dismissed');
+
+/**
  * The device the reads were taken on and the profile committed here are **two device types with
  * one panel**: `iPhone18,3` and `iPhone18,1` both report 1206×2622 at scale 3 and 460 dpi
  * (measured off both `profile.plist` files, Xcode 26.4.1, 2026-09-08). That is what lets the
  * assertions below join a capture from one to the profile of the other, and it is stated because
  * a reader would otherwise be right to ask.
  */
-const SCREEN = toScreenInfo(IPHONE_17_PRO);
+const SCREEN = toScreenInfo(IPHONE_17_PRO, null);
 
 /** A profile to vary one key of, so an inline case says only what it is about. */
 const VALID = {
@@ -90,7 +105,7 @@ describe('deviceTypeProfilePath', () => {
 
 describe('toScreenInfo, against the real captures', () => {
 	it('maps the iPhone 17 Pro profile onto the neutral screen', () => {
-		expect(toScreenInfo(IPHONE_17_PRO)).toEqual({
+		expect(toScreenInfo(IPHONE_17_PRO, null)).toEqual({
 			widthPx: 1206,
 			heightPx: 2622,
 			density: 460,
@@ -105,7 +120,7 @@ describe('toScreenInfo, against the real captures', () => {
 	// The acceptance criterion's arithmetic, stated on its own so a failure says which half
 	// broke: 1206/3 and 2622/3, both exact.
 	it('divides the captured pixels by the captured scale exactly', () => {
-		const screen = toScreenInfo(IPHONE_17_PRO);
+		const screen = toScreenInfo(IPHONE_17_PRO, null);
 
 		expect(screen.widthDp).toBe(402);
 		expect(screen.heightDp).toBe(874);
@@ -118,16 +133,40 @@ describe('toScreenInfo, against the real captures', () => {
 	 * `density`. The negative half is what catches it.
 	 */
 	it('takes density from the dpi and densityScale from the scale, which are not the same number', () => {
-		const screen = toScreenInfo(IPHONE_17_PRO);
+		const screen = toScreenInfo(IPHONE_17_PRO, null);
 
 		expect(screen.density).toBe(460);
 		expect(screen.densityScale).toBe(3);
 		expect(screen.density).not.toBe(screen.densityScale);
 	});
 
+	/**
+	 * The parameter is passed straight through, and `systemBars` beside it stays `null` — the two
+	 * are different unanswered facts and only one of them has been measured (#298).
+	 */
+	it('reports the keyboard the caller measured, and leaves systemBars null', () => {
+		const keyboard = { shown: true, bounds: { x: 0, y: 539, width: 402, height: 335.5 } };
+
+		expect(toScreenInfo(IPHONE_17_PRO, keyboard).keyboard).toEqual(keyboard);
+		expect(toScreenInfo(IPHONE_17_PRO, keyboard).systemBars).toBeNull();
+	});
+
+	/**
+	 * `null` is *this device did not say* and must stay reachable: it is what a host with no
+	 * companion, a device that is not booted and a wedged bridge all come back as, and folding it
+	 * into `{ shown: false }` would promise a clear screen nothing looked at (`src/core/device.ts`).
+	 */
+	it('keeps null as an answer distinct from no keyboard being up', () => {
+		expect(toScreenInfo(IPHONE_17_PRO, null).keyboard).toBeNull();
+		expect(toScreenInfo(IPHONE_17_PRO, { shown: false, bounds: null }).keyboard).toEqual({
+			shown: false,
+			bounds: null,
+		});
+	});
+
 	// A different product family at a different scale, so none of the above is pinned on 3.
 	it('maps the iPad Pro 13-inch (M5) profile at its own scale', () => {
-		expect(toScreenInfo(IPAD_PRO_13_M5)).toEqual({
+		expect(toScreenInfo(IPAD_PRO_13_M5, null)).toEqual({
 			widthPx: 2064,
 			heightPx: 2752,
 			density: 264,
@@ -148,7 +187,7 @@ describe('toScreenInfo, on profiles no device type here ships', () => {
 	 * said (`ScreenInfoSchema`, `../android/screen.ts`).
 	 */
 	it('keeps a quotient that is not a whole number', () => {
-		const screen = toScreenInfo({ ...VALID, mainScreenWidth: 1205 });
+		const screen = toScreenInfo({ ...VALID, mainScreenWidth: 1205 }, null);
 
 		expect(screen.widthDp).toBeCloseTo(401.6667, 4);
 		expect(screen.widthDp).not.toBe(402);
@@ -160,8 +199,8 @@ describe('toScreenInfo, on profiles no device type here ships', () => {
 	 * two the honest answer is a failure naming the device rather than a silent choice of one.
 	 */
 	it('refuses a device type whose two densities disagree, naming it', () => {
-		expect(() => toScreenInfo({ ...VALID, mainScreenHeightDPI: 458 })).toThrow(/iPhone18,1/);
-		expect(() => toScreenInfo({ ...VALID, mainScreenHeightDPI: 458 })).toThrow(/460.*458/s);
+		expect(() => toScreenInfo({ ...VALID, mainScreenHeightDPI: 458 }, null)).toThrow(/iPhone18,1/);
+		expect(() => toScreenInfo({ ...VALID, mainScreenHeightDPI: 458 }, null)).toThrow(/460.*458/s);
 	});
 });
 
@@ -293,7 +332,7 @@ describe('toScreenElements, on reads no capture here contains', () => {
 	it('turns an empty string into null', () => {
 		expect(
 			toScreenElements([
-				{ frame: { x: 0, y: 0, width: 1, height: 1 }, AXLabel: '', AXValue: '' },
+				{ frame: { x: 0, y: 0, width: 1, height: 1 }, AXLabel: '', AXValue: '', traits: [] },
 			])[0],
 		).toEqual({ id: '0', label: null, text: null, bounds: { x: 0, y: 0, width: 1, height: 1 } });
 	});
@@ -301,5 +340,143 @@ describe('toScreenElements, on reads no capture here contains', () => {
 	/** An empty read is an empty list — a screen with nothing accessible on it, not a failure. */
 	it('answers an empty read with no elements', () => {
 		expect(toScreenElements([])).toEqual([]);
+	});
+});
+
+describe('toOnScreenKeyboard, against the real reads', () => {
+	/**
+	 * **The acceptance criterion of this phase, against the literal numbers.** The union of the 34
+	 * `KeyboardKey` frames and the 3 `AutoCorrectCandidate` ones on the capture is the drawn panel
+	 * as checked against the screenshot it was taken beside: the strip starts at `y: 539` over the
+	 * full 402-point width, and the bottom key row ends at 874.434 on an 874-point screen.
+	 */
+	it('answers the drawn panel on the capture taken with the keyboard up', () => {
+		expect(toOnScreenKeyboard(KEYBOARD)).toEqual({
+			shown: true,
+			bounds: { x: 0, y: 539, width: 402, height: 335.4341207349081 },
+		});
+	});
+
+	/**
+	 * The strip is part of the panel, and this is the assertion that fails rather than merely
+	 * shifting a number if somebody narrows the union to the keys: keys alone start at `y: 590`,
+	 * 51 points below the rectangle's top, and a touch landing in that band would be refused by
+	 * nothing.
+	 */
+	it('covers the candidate strip above the topmost key', () => {
+		const bounds = toOnScreenKeyboard(KEYBOARD).bounds;
+		const topKey = Math.min(
+			...KEYBOARD.filter((node) => node.traits?.includes('KeyboardKey')).map(
+				(node) => node.frame.y,
+			),
+		);
+
+		expect(topKey).toBe(590);
+		expect(bounds?.y).toBeLessThan(topKey);
+	});
+
+	/**
+	 * Unrounded and unclamped, for `toScreenElements`' reason — and not theoretically: the bottom
+	 * key row is laid out at `y: 805.6989…`, so the union ends 0.43 points past the bottom of an
+	 * 874-point screen. `RectSchema` permits it and `src/verbs/target.ts` is the layer that
+	 * decides what is addressable.
+	 */
+	it('keeps the fractional edges the layout engine produced', () => {
+		const bounds = toOnScreenKeyboard(KEYBOARD).bounds;
+
+		expect(bounds?.height).not.toBe(Math.round(bounds?.height ?? 0));
+		expect((bounds?.y ?? 0) + (bounds?.height ?? 0)).toBeGreaterThan(SCREEN.heightDp);
+	});
+
+	/**
+	 * The one place the two halves of this module are checked against each other: the panel spans
+	 * the screen's full width, so the rectangle has to be in the **same space** `widthDp` is.
+	 * A mapping that divided by the scale would answer 134 here and one that multiplied 1206.
+	 */
+	it('answers in the same points as the screen it covers', () => {
+		expect(toOnScreenKeyboard(KEYBOARD).bounds?.width).toBe(SCREEN.widthDp);
+	});
+
+	/**
+	 * The closed half of the pair — the same screen one `typeText` later, which is what dismissed
+	 * the keyboard on this platform. `bounds` is `null` rather than a zero rectangle, because
+	 * *nothing is covered* has no rectangle.
+	 */
+	it('answers no keyboard on the capture taken one keystroke later', () => {
+		expect(toOnScreenKeyboard(KEYBOARD_DISMISSED)).toEqual({ shown: false, bounds: null });
+	});
+
+	// The three captures that predate this function, none of which was taken over a keyboard.
+	it('answers no keyboard on every read captured before this field existed', () => {
+		for (const capture of [COMPOSE, TOGGLES, TEXTFIELD]) {
+			expect(toOnScreenKeyboard(capture)).toEqual({ shown: false, bounds: null });
+		}
+	});
+});
+
+describe('toOnScreenKeyboard, on reads no capture here contains', () => {
+	const node = (
+		traits: string[],
+		frame: { x: number; y: number; width: number; height: number },
+	) => ({
+		frame,
+		AXLabel: null,
+		AXValue: null,
+		traits,
+	});
+
+	/**
+	 * Inline, because no capture can make it: a strip is only ever drawn with keys under it. The
+	 * candidate trait is in the **union** but not in the **test** — `shown` is a claim about the
+	 * panel that covers the screen, and the keys are what that panel is.
+	 */
+	it('does not call a candidate strip on its own a keyboard', () => {
+		expect(
+			toOnScreenKeyboard([
+				node(['AutoCorrectCandidate'], { x: 0, y: 539, width: 402, height: 44 }),
+			]),
+		).toEqual({ shown: false, bounds: null });
+	});
+
+	/** An empty read is a screen with nothing on it, which is a screen with no keyboard on it. */
+	it('answers no keyboard on an empty read', () => {
+		expect(toOnScreenKeyboard([])).toEqual({ shown: false, bounds: null });
+	});
+
+	/**
+	 * **A node whose `traits` is `null` claims no trait, and must not throw** (#298). That value is
+	 * not hypothetical — it is what the launching-app placeholder of a cold launch really answers
+	 * (`./parsers/accessibility.test.ts`), and this read is exactly what `deviceInfo` hands here
+	 * when it catches that device mid-launch. `null` and `[]` are the same claim, so both answer
+	 * the same no-keyboard, and neither can be a key.
+	 */
+	it('reads a node claiming no traits at all as no keyboard, whichever way it says so', () => {
+		const placeholder = {
+			frame: { x: 0, y: 0, width: 0, height: 0 },
+			AXLabel: null,
+			AXValue: null,
+		};
+
+		expect(toOnScreenKeyboard([{ ...placeholder, traits: null }])).toEqual({
+			shown: false,
+			bounds: null,
+		});
+		expect(toOnScreenKeyboard([{ ...placeholder, traits: [] }])).toEqual({
+			shown: false,
+			bounds: null,
+		});
+	});
+
+	/**
+	 * And a `null` beside a real keyboard is skipped rather than fatal: the union is still the
+	 * panel's, which is the property that would break if `claims` had been written as a cast.
+	 */
+	it('unions the keyboard around a node whose traits are null', () => {
+		const withPlaceholder = [
+			{ frame: { x: 0, y: 0, width: 0, height: 0 }, AXLabel: null, AXValue: null, traits: null },
+			...KEYBOARD,
+		];
+
+		expect(toOnScreenKeyboard(withPlaceholder)).toEqual(toOnScreenKeyboard(KEYBOARD));
 	});
 });

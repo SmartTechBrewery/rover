@@ -152,17 +152,17 @@ Working names. All of them take a device handle, and over the wire that handle i
 | `swipe` / `scroll` | **Only where the drag starts** is refused under the keyboard: `swipe`'s `from`, and `scroll`'s own start, which is computed a quarter into the region rather than resolved and so is checked by the verb itself — `scroll` resolves its region with that check off, since the region's centre is a point the gesture never touches and a list laid out whole behind the keyboard would otherwise be refused for a drag starting clear of it. Where a drag ends is not checked — it does not decide who reads the drag |
 | `type_text` | Hides the device shell's quoting, so a space, an apostrophe and a shell metacharacter all arrive verbatim. **Non-ASCII it cannot hide — `input text` cannot type it at all** (§6), so the honest answer is a refusal naming the character rather than a silent drop. That refusal is an `unsupported-text` verb failure carrying the serial, the string and the offending characters as escapes, **not** an `internal_error`: the string is the caller's and it is the caller who can fix it (#61). **No target** — an agent taps the field first. **`clear: true` empties the focused field first** (#309), so the text replaces the old value; with `text: ''` it only clears. That is a fifth `canInput` primitive, `clearText` — select all, then backspace, never a guessed count, because nothing says how long a field's text is and a password field reads back masked (§6) — and the verb calls it before typing inside one action, so a device that cannot clear refuses **before anything is typed**, as an `unsupported-clear` verb failure carrying the serial and the backend's reason: never a silent no-op, never `missing-capability`, never `internal_error`. The iOS simulator refuses it until #302 measures a recipe |
 | `press_key` | Back, home, recents, wake — and, since #301, the editing keys `delete` (backspace, never forward delete), `enter` (whatever the focused control does with it) and `tab` (focus to the next control). An optional `times` (1 to `MAX_KEY_PRESSES`, 20; default 1) repeats the press in one call, **composed in the verb rather than the backend**, with one after-state after the last press; zero is `invalid_params`, because pressing nothing would report a success. **No target**, so it needs no screen read to aim, which makes it the one input verb provable end to end on hardware before `read_screen` (R13). The keys are **one vocabulary, not a promise every platform has all of them**: a backend with no equivalent for one of them refuses **that key by name** — an `unsupported-key` verb failure carrying the serial and the key — deliberately not `missing-capability` and not `internal_error`, because a backend that takes input and lacks one key is a narrower backend rather than a broken one (#215) |
-| `hide_keyboard` | Puts the on-screen keyboard away **if one is up, and presses nothing if none is** (#307). **Never an unconditional `back`**: on Android back closes an open keyboard and, with none open, leaves the screen (§6), so the backend reads the keyboard's state from the same dump `screen.keyboard` comes from and presses only when it says one is up. The decision and the gesture are the backend's; the verb layer neither branches on the platform nor assumes a back key exists. Its own capability, `canHideKeyboard` — `true` on Android, `false` on the iOS simulator until a recipe is measured there, where the call answers `missing-capability` naming the flag and the device. **No target**; the after-state's `screen.keyboard` is the evidence it worked |
+| `hide_keyboard` | Puts the on-screen keyboard away **if one is up, and presses nothing if none is** (#307). **Never an unconditional `back`**: on Android back closes an open keyboard and, with none open, leaves the screen (§6), so the backend reads the keyboard's state from the same dump `screen.keyboard` comes from and presses only when it says one is up. The decision and the gesture are the backend's; the verb layer neither branches on the platform nor assumes a back key exists. Its own capability, `canHideKeyboard` — `true` on Android, `false` on the iOS simulator, where the call answers `missing-capability` naming the flag and the device. **The reporting half of that recipe is measured there now and the dismissal is what the flag still waits on** (#298, §6): the simulator's accessibility tree names the keyboard on every key node, so the read a safe dismissal needs exists, and no gesture that closes a simulator keyboard has been verified against a device. **No target**; the after-state's `screen.keyboard` is the evidence it worked |
 
 ### Reading
 
 | Verb | Notes |
 |---|---|
 | `screenshot` | The captured image, **as bytes on the result rather than as a path** (D19) — base64, its media type and its byte length, so any file written is the client's own. Needs no capability; a capture over the named size bound is refused by name rather than returned cut short. **The client writes the file** (R24 phase 1): `rover screenshot <lease-id> --out <path>` decodes the bytes, checks what decoded against the byte length the host encoded, writes them on the machine running the CLI and reports `path.resolve` of `--out` — never a host-local path. A refused capture, or one that did not survive the trip, exits 1 and leaves no file at `--out` at all. **A black image is a true answer, not a failed capture** (§6): the check that separates a blocked capture from a broken device is a screenshot of the system home screen, and `read_screen` is the read that survives the block |
-| `read_screen` | Texts and element rectangles. **Works even when the app blocks screenshots**. Declares `canReadScreen` as a requirement, so a backend without it fails by name before anything is dispatched rather than answering with an empty screen (D11). **The answer also says whether the on-screen keyboard is up and what rectangle it occupies**, on the `DeviceInfo` half rather than in the element list — an element under the keyboard is still laid out and still has bounds, so it is still an element, and the thing covering it is not one. The rectangle is in the **dp** space element bounds are in, because what it gets compared against is a touch point (#297) |
+| `read_screen` | Texts and element rectangles. **Works even when the app blocks screenshots**. Declares `canReadScreen` as a requirement, so a backend without it fails by name before anything is dispatched rather than answering with an empty screen (D11). **The answer also says whether the on-screen keyboard is up and what rectangle it occupies**, on the `DeviceInfo` half rather than in the element list — an element under the keyboard is still laid out and still has bounds, so it is still an element, and the thing covering it is not one. The rectangle is in the **dp** space element bounds are in, because what it gets compared against is a touch point (#297). **Both backends answer it, by different routes** (#298): Android parses the `ime` `InsetsSource` out of a dump it already has, while the iOS simulator unions the frames of the accessibility nodes marked `KeyboardKey` and `AutoCorrectCandidate` |
 | `record_video` | A recording of the screen, **as bytes on the result rather than as a path** (D19) — base64, `video/mp4` and its byte length, exactly where `screenshot`'s capture rides. **The recording is provably finished before it is pulled**: the backend waits on a condition for the recorder to be gone, then pulls, then checks the container index on the bytes that actually arrived. A recording without that index was still being written when it was copied and is not a shorter video but a file no player will open, so it is refused as `unfinished-recording` naming the device and the byte length — never handed over, and never an `internal_error` (§6). Declares `canRecordVideo` as a requirement, so a backend without it fails by name before anything is dispatched rather than answering with a null artifact (D11). Duration is bounded by what **one answer** can carry (15 s; the default is 5 s), and going over the artifact bound is the same `artifact-too-large` refusal `screenshot` gives rather than a file cut short — a longer recording is R24's chunked transfer. **The client writes the file** (R24 phase 1): `rover record <lease-id> --out <path> [--duration-ms <n>]` writes the video on the machine running the CLI, on the same two modules `screenshot` uses, and raises its own request timeout past the recording so a long one cannot surface as a hang. An `unfinished-recording` refusal leaves no file at `--out`. **The answer also carries frames sliced from the finished recording** (`result.frames`): PNGs in recording order, scaled down and extracted on the **host** after the pull — never sampled during capture and never a second pass over the device. Extraction uses `ffmpeg` from `PATH`; a host without it refuses as `frame-extraction-unavailable` rather than returning an empty list, and no path in the extractor ever answers with an empty one — a decoder that exited cleanly having written nothing is `frame-extraction-failed` too. Frame count, frame width and total frame bytes are bounded; going over the byte budget is `frames-too-large` carrying both numbers, and the count bound — one above the longest recording at the densest sampling, since sampling rounds up — is enforced as a refusal too, because a capture of a still screen declares a longer timeline than it was asked for and can reach it (§6). The CLI exposes both knobs: `rover record <lease-id> --out <path> [--duration-ms <n>] [--frames-per-second <n>]`, each bounded before the call, and the command answers with both the video and the frames or with neither. **The answer also says what the recording contains** (#183): `result.container` carries the encoded sample count and the duration the **container** declares — read out of the pulled bytes on the host with no decoder, never assumed from the `durationMs` that was asked for, since §6 measures those as different numbers. A capture of a screen that never changed comes back as one sample of zero declared duration, and that case is **named** on the answer (`still-screen`) with the reason in words, because every other check in this verb passes for it and an agent that only sees one frame concludes the tool is broken. It stays `ok` with its one frame — recording an idle screen is legitimate — and bytes whose container this host cannot parse answer `unreadable` rather than throwing or claiming zero. **What frames are honest about is §8**: they sample motion. |
 | `start_recording` / `stop_recording` | The same recording asked for as **two calls**, so the device can be driven inside it (#190, R43 phase 2). The start returns while the recorder is still running — the input verbs and `read_screen` work on that device under the same lease and end up in the recording — and the stop signals the recorder, waits on a condition for it to be gone, pulls the file and answers with **exactly what `record_video` answers with**: the same schema, the same normalised video on `result.artifact`, the same frames, the same `container` and the same `normalisation`. `record_video` is untouched; this is a second way to record. Both declare **`canControlRecording`**, which is deliberately not `canRecordVideo` (§5). The start takes no duration — the length is decided by when the stop is called — but the recorder is still given `MAX_RECORDING_MS` as its own kill switch, for the case nothing on the host can cover: since #191 the lease's end stops a recorder the caller walked away from (D9), and the limit is what bounds one whose *host* went away with it. A device holds **one** recording at a time: a second `start_recording`, or a `record_video` during an open session, is `recording-already-running` naming the device and the pids, never queued. Stopping with nothing recording and nothing left behind is `no-recording-running`; a recorder that reached its own limit first is **not** a failure, because the file it left is complete. Nothing on the host remembers that a recording is open — the device is asked (D6) — and because no window was ever named, the stop holds nothing across one: the file follows the recorder's own timeline, and a screen nobody drove is the same `still-screen` `record_video` reports, with nothing to stretch it across. |
-| `device_info` | Size, density, computed width in dp, OS version, the system bar insets, and whether the on-screen keyboard is shown and where. Needs no capability and addresses nothing on the screen — it answers with the `DeviceInfo` every result already carries (D14), asked for on its own. **The keyboard rides here and not on a verb's after-state**, which is what makes it true of *every* verb's answer without a verb changing: `resultAfterAction()` re-reads `device_info` after the action, so a keyboard that opened during a tap is reported by the tap. It is in **dp** where the insets beside it are in pixels, each in the unit its consumer uses — a touch point for one, a screenshot's own coordinates for the other (#297) |
+| `device_info` | Size, density, computed width in dp, OS version, the system bar insets, and whether the on-screen keyboard is shown and where. Needs no capability and addresses nothing on the screen — it answers with the `DeviceInfo` every result already carries (D14), asked for on its own. **The keyboard rides here and not on a verb's after-state**, which is what makes it true of *every* verb's answer without a verb changing: `resultAfterAction()` re-reads `device_info` after the action, so a keyboard that opened during a tap is reported by the tap. It is in **dp** where the insets beside it are in pixels, each in the unit its consumer uses — a touch point for one, a screenshot's own coordinates for the other (#297). **On the iOS simulator this is the one field `device_info` reaches the device for**, so it costs one accessibility read and answers `null` — never a plausible `{ shown: false }` — whenever that read could not be taken, which keeps the verb working on a host with no `idb_companion` and with no new way to throw (#298, §6) |
 
 ### Waiting
 
@@ -243,7 +243,7 @@ Some things worth knowing now, so as not to design into a corner:
   own naming one method, `hideKeyboard` (#307). Its contract is conditional — *dismiss the keyboard
   if one is up, do nothing otherwise* — because on Android the gesture that dismisses it is back,
   which navigates when none is open (§6). Whether to press, and what, is the backend's; the iOS
-  simulator declares `false` until it can both read its keyboard and has a measured dismissal.
+  simulator declares `false` until it has a measured dismissal; it reads its keyboard since #298.
 - **A system log is not one of those divergences**, and `readLogs` is therefore a *required*
   method rather than a capability: every platform this targets keeps one, and a flag that is
   always `true` would be noise (`src/core/capabilities.ts`). What differs between platforms is
@@ -1757,6 +1757,128 @@ One thing it settled: **the list under a keyboard is laid out whole.** The sugge
 to y = 672 dp with ordinary bounds, so nothing in the element list hints that two thirds of them are
 under the keyboard — the rectangle on `ScreenInfo` is the only place that fact exists, which is why
 the check reads it rather than anything about the elements.
+
+---
+
+### The iOS simulator's accessibility tree names the keyboard, and Rover's own configuration hides it (2026-10-06, #298)
+
+The iOS half of #297's contract, measured on a **throwaway iPhone 17** created for the run —
+macOS 26.x / Xcode 26.4.1 (17E202) / iOS 26.4.1 (23E254a) / `idb_companion` 1.5.2 — driving
+`IosSimulatorDeviceBackend` in-process and reading the raw `accessibility_info` payload. The screen
+is 402×874 points at scale 3.
+
+**The payload names the keyboard, in a key the parser used to drop.** Every node's `traits` array
+carries `"KeyboardKey"` on the keys and `"AutoCorrectCandidate"` on the strip above them:
+
+```text
+# with the keyboard up over Settings' search field — 47 nodes
+KeyboardKey           34   every letter, shift, usuń, cyfry, Emoji, the space bar, szukaj,
+                           Następna klawiatura, Dyktuj
+AutoCorrectCandidate   3   the three cells of the strip, { 0|134|268, 539, 134, 44 }
+
+union of all 37  → { x: 0, y: 539, width: 402, height: 335.4341207349081 }   # the drawn panel
+union of the 34  → { x: 4.67, y: 590, width: 395, height: 284.4341207349081 } # 51 points short
+```
+
+Three things it settled:
+
+- **The union needs both traits.** Keys alone start at `y: 590` and miss the whole candidate strip
+  — a 51-point band a touch lands in that nothing would refuse. `shown`, on the other hand, is the
+  **keys**: the claim is about the panel covering the screen.
+- **There is no node that says "I am the keyboard."** The only frame that nearly matches the panel
+  is an unlabelled `AXGenericElement` at `{0, 583, 402, 291}` with traits `["Scrollable", "Spacer"]`
+  — a geometric coincidence, missing the strip by 44 points, and indistinguishable from any other
+  spacer. Rejected: the traits are what the device *said*.
+- **Frames are in points**, the space `widthDp`/`heightDp` and `ScreenElement.bounds` are already
+  in, so nothing is divided — `src/backends/ios-simulator/screen.ts`' standing rule. The union's
+  bottom edge is 874.43 on an 874-point screen and is left unrounded, exactly as the committed
+  captures already carry a row 9.67 points past the bottom.
+
+**Making one appear is a recipe, and the order matters.** `Simulator.app` applies the setting when
+it attaches, so launching it before the boot leaves the keyboard suppressed:
+
+```bash
+U=$(xcrun simctl create rover-kbd com.apple.CoreSimulator.SimDeviceType.iPhone-17 \
+      com.apple.CoreSimulator.SimRuntime.iOS-26-4)        # a device that has never seen one
+/usr/libexec/PlistBuddy -c "Add :DevicePreferences:$U:ConnectHardwareKeyboard bool false" \
+  ~/Library/Preferences/com.apple.iphonesimulator.plist
+killall -u "$USER" cfprefsd                               # PlistBuddy writes the file, not the cache
+xcrun simctl boot "$U"
+open -a Simulator --args -CurrentDeviceUDID "$U"          # attaches, and only now applies it
+# launch Settings, tap the search field at (201, 822), then dismiss the two onboarding tips
+# ("Dalej", twice, at ~(201, 829) and ~(201, 828)) — a fresh device draws them over the panel
+```
+
+**It has to be a device nobody has typed on, and that is the trap that cost the hour.** The
+simulator persists `HardwareKeyboardLastSeen = true` in its own
+`data/Library/Preferences/com.apple.keyboard.preferences.plist`, and **setting it back to `false`
+or deleting the key outright does not bring the keyboard back** — tried both, with a shutdown and a
+reboot in between, on two devices. `xcrun simctl create` is the only route that worked. Rover's own
+`typeText` is what sets it: one `typeText('wifi')` through the idb HID stream put `Wifi` in the
+field and the keyboard was **gone** from the next read, and tapping the field again did not bring it
+back. A bare Left Shift (HID usage 225, which types nothing) did not dismiss it, so it is a
+character-producing key that flips the state.
+
+**So in the configuration Rover actually runs in, no keyboard is ever drawn.** Rover never launches
+`Simulator.app` (`docs/IOS.md` §8 trap 4), and without it the device behaves as though a hardware
+keyboard is attached — the field focuses, a caret appears, the suggestion list opens, and the read
+is 9 nodes with no keyboard trait among them. `ConnectHardwareKeyboard` defaults to on and the key
+is absent from `com.apple.iphonesimulator.plist` on a fresh install. The occlusion window is real
+and reachable but narrow: open from the tap that focuses a field until the first character Rover
+types.
+
+**The refusal, driven by hand through the verb layer** (`tap` in `src/verbs/input.ts` over
+`IosSimulatorDeviceBackend` in-process), for #308's reason — opening a keyboard needs
+`Simulator.app` and a preference change, which trap 4 says never to do to a device somebody may be
+looking at. Three answers, pasted:
+
+```text
+device_info → screen.keyboard = { shown: true,
+                                  bounds: { x: 0, y: 539, width: 402, height: 335.4341207349081 } }
+
+tap { by: 'point', at: { x: 201, y: 700 } }   # inside the rectangle
+  kind: covered-by-keyboard   lookedFor: point (201, 700)   element: null
+  keyboard: { x: 0, y: 539, width: 402, height: 335.4341207349081 }
+  message: The point (201, 700) on device '13B559DC-…' cannot be touched: the point (201, 700)
+           lies under the on-screen keyboard at 0,539 402×335.4341207349081, so the touch would
+           land on a key rather than on the application. Dismiss it with hide_keyboard — which
+           presses nothing when no keyboard is up — and target it again
+
+tap { by: 'point', at: { x: 380, y: 100 } }   # clear of it
+  ok, and the after-state still reports the keyboard up at the same rectangle
+```
+
+**No verb-layer code changed to achieve that**: `requireUncovered` has been platform-neutral since
+#308 and starts firing the moment `ScreenInfo.keyboard` stops being `null`. `hide_keyboard` is still
+refused here — `canHideKeyboard` stays `false`, now for the measured reason that no dismissal has
+been verified rather than because the keyboard could not be read.
+
+**The cost, measured on the same bench.** `deviceInfo` now takes one accessibility read, so it goes
+from **111–159 ms** (a device the state gate skips the read for) to **239–270 ms** warm, 706 ms on
+the call that starts the companion. The read alone is **122–143 ms** warm over eight samples on this
+47-node screen — appreciably more than the 34–47 ms `docs/IOS.md` §2 recorded on 2026-09-08 for a
+smaller screen, and it is recorded here rather than silently dropped. Caching it between calls is
+D12(a)'s remembered coordinate in another costume and is not done.
+
+Fixtures: `tests/fixtures/ios-simulator/accessibility.uikit-keyboard.idbcompanion1.5.2-xcode26.4.1-ios26.4.1.json`
+(keyboard up) beside `…uikit-keyboard-dismissed.…json` (the same screen one `typeText` later), both
+captured unedited. Mapping and its reasoning: `toOnScreenKeyboard` in
+`src/backends/ios-simulator/screen.ts`; the trait names in `./parsers/accessibility.ts`.
+
+**`traits` is nullable, and five captures said otherwise.** The trap this change walked into, worth
+the paragraph because the evidence pointed the wrong way: the key is present with an array value on
+all 102 nodes of all five committed captures, so the schema took it as `z.array(z.string())` and
+every unit test agreed. The device suite then failed `read_screen` — not `device_info` — on the one
+node no capture holds, the zero-framed `AXApplication` placeholder a cold launch reads back before
+the process has drawn (§8 of `docs/IOS.md`, trap 17; `noScreenYet`). It answers `traits: null`, and
+a non-nullable schema turns the commonest transient on this platform into an unreadable payload, in
+a verb that reads no trait at all. It is `z.array(z.string()).nullable()` now, `null` and `[]` are
+read as the same *claims no trait*, and both are pinned in the unit suite.
+
+The general lesson is the one §6 keeps re-learning in a new costume: **a key being present in every
+capture says nothing about its value being non-null**, because a capture is taken of a screen that
+has finished drawing and the interesting states are the ones that have not. It was a device run that
+found it, which is the argument for `tests/device/` existing.
 
 ---
 
