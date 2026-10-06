@@ -43,6 +43,7 @@ import {
 	installFlag,
 	projectIdentifierFor,
 	shellInstall,
+	type Undecided,
 } from '../init/detect.js';
 import {
 	AGENT_FILES,
@@ -89,10 +90,11 @@ Options:
   --app <id>        An application this project drives, repeatable. Detected from Gradle
                     when omitted
   --install <line>  What installing this project means, as one shell line run on the host
-                    with ROVER_DEVICE_SERIAL naming the leased device. Detected from a
-                    Gradle wrapper when omitted — the variant's own task when the project
-                    has one product flavor; with several, each variant's line is listed and
-                    none is registered
+                    with ROVER_DEVICE_SERIAL naming the leased device. Detected when omitted
+                    from a Gradle wrapper — the variant's own task when the project has one
+                    product flavor — or from an Xcode project or workspace's shared scheme,
+                    built for the leased simulator and installed onto it. With several
+                    candidates, each line is listed and none is registered
   --no-install      Register no install at all, rather than the detected one
   --document <path> Where the page goes, relative to the project. Only needed to move it
                     somewhere init would not look, or to pick between two pages a project
@@ -250,18 +252,13 @@ async function chooseApps(
 		: { value: detected.value, detectedIn: detected.source };
 }
 
-/** A choice init could not make for the caller, and the lines it would have picked between. */
-interface Undecided {
-	readonly choices: readonly string[];
-	readonly source: string;
-}
-
 /**
  * What the run registers as the install, and what it hands back for the operator to pick from.
  *
- * Exactly one of the two is ever set. `undecided` is a project whose build file declares product
- * flavors — one install task per variant, and no single one init could register without guessing
- * which variant agents are meant to get.
+ * Exactly one of the two is ever set. `undecided` is a project with more than one right install —
+ * Gradle product flavors, several shared Xcode application schemes, or both build systems at once
+ * — or with candidates init could not read, and no single one it could register without guessing
+ * which one agents are meant to get.
  */
 interface InstallChoice {
 	readonly chosen: Choice<HookCommand> | undefined;
@@ -299,7 +296,15 @@ async function chooseInstall(
 				chosen: { value: detected.value, detectedIn: detected.source },
 				undecided: undefined,
 			}
-		: { chosen: undefined, undecided: { choices: detected.choices, source: detected.source } };
+		: {
+				chosen: undefined,
+				undecided: {
+					choices: detected.choices,
+					source: detected.source,
+					reason: detected.reason,
+					listWith: detected.listWith,
+				},
+			};
 }
 
 /**
@@ -477,8 +482,8 @@ function report(what: Report): string {
 /**
  * The `install` row — one line, or the list of lines nobody has picked between yet.
  *
- * The listed form prints each variant as the whole `--install '…'` flag rather than as a task
- * name, because the next thing the reader does is run init again with one of them: a report that
+ * The listed form prints each candidate as the whole `--install '…'` flag rather than as a task
+ * or scheme name, because the next thing the reader does is run init again with one of them: a report that
  * made them assemble the flag themselves would be handing back the detection and keeping the
  * part that is easy to get wrong.
  */
@@ -500,17 +505,13 @@ function installFields(
 		return [
 			field(
 				'install',
-				`none — ${undecided.source} declares product flavors init could not read; pass ` +
-					`--install with the variant's task (./gradlew :app:tasks lists them)`,
+				`none — ${undecided.source} ${undecided.reason}; pass --install with the line you ` +
+					`want (${undecided.listWith.join(' and ')} in the project lists what there is)`,
 			),
 		];
 	}
 	return [
-		field(
-			'install',
-			`none — ${undecided.source} declares product flavors, one install per variant; ` +
-				`init picked none:`,
-		),
+		field('install', `none — ${undecided.source} ${undecided.reason}; init picked none:`),
 		...undecided.choices.map((line) => field('', installFlag(line))),
 	];
 }
@@ -592,6 +593,9 @@ function reportCaveats(
 /**
  * What to say about a project whose install init would have had to guess.
  *
+ * The why is the detection's own `reason`, so this reads the same for every build system init
+ * recognises.
+ *
  * It is a warning and not a failure: the run wrote everything else, and exiting non-zero would
  * make every later re-run of a project with a tuned hook file fail over a field that run was
  * never going to touch. The fix named is a re-run with `--force` either way, since without it a
@@ -600,20 +604,18 @@ function reportCaveats(
  * below spells out.
  */
 function installChoiceCaveat(undecided: Undecided, kept: boolean): string {
-	const why =
-		`${undecided.source} declares product flavors, so this project has one install task per ` +
-		`variant and no ':app:installDebug'. No install was registered: which variant agents are ` +
-		`meant to be given is a choice init will not make for you.`;
+	const listWith = undecided.listWith.map((command) => `'${command}'`).join(' and ');
 	if (undecided.choices.length === 0) {
 		return (
-			`${why} Nor could it read the flavors out of that file — a block built in a loop or by ` +
-			`'all { }', or dimensions whose order is declared somewhere else, is Gradle's to ` +
-			`evaluate and nobody else's. Run './gradlew :app:tasks' for the ` +
-			`real install tasks, then ${registerWith(`--install '<the line you want>'`, kept)}`
+			`${undecided.source} ${undecided.reason}, so no install was registered. Run ` +
+			`${listWith} in the project to see the real candidates, then ` +
+			`${registerWith(`--install '<the line you want>'`, kept)}`
 		);
 	}
 	return (
-		`${why} The report above lists one ready-to-paste '--install' line per variant — ` +
+		`${undecided.source} ${undecided.reason}. No install was registered: which one agents are ` +
+		`meant to be given is a choice init will not make for you. The report above lists one ` +
+		`ready-to-paste '--install' line per candidate — ` +
 		`${registerWith(installFlag(undecided.choices[0] as string), kept)}`
 	);
 }

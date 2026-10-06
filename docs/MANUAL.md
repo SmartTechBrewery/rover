@@ -25,6 +25,7 @@ repository. `ai/RULES.md` is where an agent starts.
   - [Where Rover looks for `idb_companion`](#where-rover-looks-for-idb_companion)
   - [Project hooks](#project-hooks)
     - [A Gradle install, and why it names the device](#a-gradle-install-and-why-it-names-the-device)
+    - [An Xcode install, and why it names the simulator](#an-xcode-install-and-why-it-names-the-simulator)
     - [Every lease gets a slot, and its own ports](#every-lease-gets-a-slot-and-its-own-ports)
   - [The artifact archive](#the-artifact-archive)
     - [Sweeping the archive](#sweeping-the-archive)
@@ -68,7 +69,7 @@ yours wins over anything Rover installed — see [where Rover looks for
 
 | Where | What |
 | --- | --- |
-| `~/.rover/projects/my-app.json` | the project's hook file — what the host installs and stops for a lease on it (D13), detected from a Gradle wrapper where there is one, and from the app's own build file where that declares product flavors |
+| `~/.rover/projects/my-app.json` | the project's hook file — what the host installs and stops for a lease on it (D13), detected from a Gradle wrapper where there is one, and from the app's own build file where that declares product flavors — or from an Xcode project or workspace's shared scheme, built for the leased simulator |
 | `my-app/.mcp.json` | the `rover` MCP server, merged into whatever was already there |
 | `my-app/ROVER.md` | the page an agent reads before its first call. Generated — re-run `init` rather than editing it, and move it wherever it belongs |
 | `CLAUDE.md`, `AGENTS.md`, `GEMINI.md` | a short block saying that a manual test means Rover. `--write` inserts it; without the flag it is printed |
@@ -1100,7 +1101,8 @@ that project), `install-hook-undeclared` (it has one and it declares no `install
 command's own stderr. **`install-hook-undeclared` tells the agent not to install around the hook**,
 because a build tool's install task that names no device installs onto every device attached to the
 host — see ["A Gradle install, and why it names the
-device"](#a-gradle-install-and-why-it-names-the-device) for what declaring one looks like. A call
+device"](#a-gradle-install-and-why-it-names-the-device) and ["An Xcode install, and why it names the
+simulator"](#an-xcode-install-and-why-it-names-the-simulator) for what declaring one looks like. A call
 that *does* carry bytes is unchanged in every respect. **Both clients
 reach this shape.** `rover install <lease-id>` with no path is it — the CLI raises its own request
 timeout past the host's five minutes so a build that is merely compiling is never reported here as
@@ -1577,7 +1579,7 @@ after it, under `ROVER_PROJECTS_PATH`:
 by reading the directory and reporting the file each detection came from — see [Quick
 installation](../README.md#quick-installation). Everything below is what one looks like written by hand, and
 what init cannot guess for you: `services`, `teardown`, any install more involved than a
-build command, and which variant a project with several product flavors should install.
+build command, and which variant or scheme a project with several of them should install.
 
 ```jsonc
 {
@@ -1729,6 +1731,79 @@ declared in that file as a literal `flavorDimensions` (a convention plugin, an a
 `flavorDimensions += dims`) — get the same treatment and a report saying why. In both
 cases the fix is one re-run: `rover init --install '<the line you want>' --force`, or the line
 written into the hook file by hand.
+
+#### An Xcode install, and why it names the simulator
+
+The same job for a simulator: build the app for the device the lease holds and install it there,
+and nowhere else. A workspace `ios/Runner.xcworkspace` whose shared scheme `Runner` runs
+`Runner.app` in `Debug`:
+
+```jsonc
+{
+  "project": "checkout-ios",
+  "install": {
+    "command": "bash",
+    "args": [
+      "-lc",
+      "d=\"$HOME/Library/Developer/Xcode/DerivedData/rover-$ROVER_PROJECT-$ROVER_SLOT\" && xcodebuild -workspace ios/Runner.xcworkspace -scheme Runner -configuration Debug -destination \"id=$ROVER_DEVICE_SERIAL\" -derivedDataPath \"$d\" -quiet build >&2 && xcrun simctl install \"$ROVER_DEVICE_SERIAL\" \"$d/Build/Products/Debug-iphonesimulator/Runner.app\""
+    ],
+    "cwd": "/srv/checkout-ios"
+  }
+}
+```
+
+**`$ROVER_DEVICE_SERIAL` names the simulator in both halves, and `booted` never does.** On the
+simulator backend a device's serial is its UDID, so `-destination "id=…"` builds for exactly that
+simulator and `simctl install "…"` installs onto exactly that one. `booted` in its place means
+whichever booted simulator the tool picks — on a shared host, quite possibly a neighbour's lease —
+and a hard-coded UDID is the hard-coded serial of the Gradle section in another form: right until
+the first lease that got a different simulator.
+
+**Derived data is per project and per slot, outside the checkout.** Two leases on one project can
+install at once, and two builds sharing one derived-data directory contend for its build database.
+A slot is never held by two live leases and is reused, so `rover-$ROVER_PROJECT-$ROVER_SLOT` gives
+each concurrent install its own directory while an incremental build still survives from one lease
+to the next — the same namespacing contract the helper services keep below. It sits under Xcode's
+own `DerivedData`, which leaves the project's tree unwritten and is a place Xcode users already
+treat as a disposable cache.
+
+**`-configuration` is the scheme's own**, so the products directory is the one the second half
+names: `<configuration>-iphonesimulator/<App>.app` under `Build/Products`. A target that moves its
+products elsewhere (`CONFIGURATION_BUILD_DIR`, `SYMROOT`) breaks that loudly — `simctl install`
+cannot find the bundle — and the line wants that path edited. **`-quiet build >&2`** is because a
+hook's stdout is drained and dropped and only the tail of its stderr reaches `install-hook-failed`:
+`-quiet` keeps the build to warnings and errors, and `>&2` sends them where the agent will read
+them. `-workspace` builds through the workspace a dependency manager wired its projects into;
+a project with no workspace is built with `-project App.xcodeproj` instead.
+
+Two host facts the hook cannot fix for itself, and both fail as `install-hook-failed` naming the
+problem in the stderr tail. **The developer directory**: a hook inherits the daemon's environment,
+not the backend's own resolution of Xcode, so on a host whose `xcode-select -p` points at the
+Command Line Tools `xcodebuild` and `xcrun simctl` both refuse — fix it with `sudo xcode-select -s
+/Applications/Xcode.app/Contents/Developer`, or with `"env": { "DEVELOPER_DIR":
+"/Applications/Xcode.app/Contents/Developer" }` on the hook. **The licence**: an Xcode whose licence
+has not been accepted refuses the same way until `sudo xcodebuild -license accept` is run once. And
+the five-minute bound applies: a cold build of a large app can outrun it, after which the next
+install is incremental.
+
+**This line has not been run end to end yet.** It was written on a host whose Xcode licence had not
+been accepted, so neither half has been executed against a booted simulator; until that run is
+recorded in `PROJECT.md` §6, treat it as a reasoned proposal and check the first install by hand.
+
+**What `rover init` does with all this.** It looks for a `.xcworkspace` or `.xcodeproj` in the
+project's root and its immediate subdirectories (`ios/`, `iosApp/`), and reads **shared schemes
+only** — the ones under `xcshareddata/`, which a checkout carries; a scheme that lives in
+somebody's `xcuserdata/`, or one Xcode would create from the targets on the fly, is a build that
+works on one machine or on none. A project a workspace names is built through the workspace and not
+offered again on its own. A scheme counts when its Run action launches a `.app`, so frameworks,
+app extensions, test-only schemes and a dependency manager's own schemes fall out. **Exactly one
+app scheme: it proposes this line**, naming the scheme file. **Several: it registers none** and
+lists each as a ready-to-paste `--install` line, for the reason several Gradle variants get none.
+**None shared**: it says so — tick *Shared* for the scheme in Xcode's *Manage Schemes…*, or pass
+`--install`; `xcodebuild -list` lists what there is. **A Gradle wrapper with an `app` module and an
+Xcode container in one project** gets no install and every candidate from both listed, because one
+install hook serves one build system. A Swift package on its own gets nothing: it cannot produce an
+application bundle for the simulator.
 
 The **helper services** are the one hook the host runs *without being asked*, at both ends of a
 lease. A grant starts them in the order they are declared, after the device has been re-verified

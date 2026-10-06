@@ -81,6 +81,28 @@ function installLine(written: Record<string, unknown>): string {
 	return ((written.install as { args: string[] } | undefined)?.args[1] ?? '') as string;
 }
 
+/** A shared scheme whose Run action launches `product`, built in Debug. */
+function xcodeScheme(product: string): string {
+	return `<?xml version="1.0" encoding="UTF-8"?>
+<Scheme version = "1.7">
+   <LaunchAction
+      buildConfiguration = "Debug">
+      <BuildableProductRunnable>
+         <BuildableReference
+            BuildableName = "${product}">
+         </BuildableReference>
+      </BuildableProductRunnable>
+   </LaunchAction>
+</Scheme>
+`;
+}
+
+/** A workspace naming `projects`, relative to the folder it sits in. */
+function xcodeWorkspace(...projects: string[]): string {
+	const refs = projects.map((project) => `   <FileRef location = "group:${project}"></FileRef>`);
+	return `<?xml version="1.0" encoding="UTF-8"?>\n<Workspace version = "1.0">\n${refs.join('\n')}\n</Workspace>\n`;
+}
+
 beforeEach(async () => {
 	temp = await createTempSocket();
 	projectsRoot = join(temp.dir, 'projects');
@@ -268,6 +290,120 @@ describe('rover init', () => {
 		const document = JSON.parse(logged[0] ?? '') as { installChoices: unknown };
 		expect(document.installChoices).toBeNull();
 		expect(installLine(await readJson(hookFile()))).toBe('./gradlew :app:installDevFreeDebug');
+	});
+
+	describe('an Xcode project (#306)', () => {
+		it('proposes a build for the leased simulator from the one shared app scheme', async () => {
+			const directory = await createProject({
+				'App.xcodeproj/project.pbxproj': '',
+				'App.xcodeproj/xcshareddata/xcschemes/App.xcscheme': xcodeScheme('App.app'),
+			});
+
+			expect(await run(['init', directory])).toBe(EXIT_OK);
+
+			const written = await readJson(hookFile());
+			expect(ProjectHooksSchema.parse(written).install).toMatchObject({
+				command: 'bash',
+				cwd: directory,
+			});
+			const line = installLine(written);
+			expect(line).toContain('xcodebuild -project App.xcodeproj -scheme App ');
+			expect(line).toContain('-destination "id=$ROVER_DEVICE_SERIAL"');
+			expect(line).toContain('Debug-iphonesimulator/App.app');
+			expect(line).not.toContain('booted');
+			expect(logged.join('\n')).toContain('from App.xcodeproj/xcshareddata/xcschemes/App.xcscheme');
+		});
+
+		it('builds through the workspace that names the project, and skips its dependencies', async () => {
+			const directory = await createProject({
+				'App.xcworkspace/contents.xcworkspacedata': xcodeWorkspace(
+					'App.xcodeproj',
+					'Pods/Pods.xcodeproj',
+				),
+				'App.xcodeproj/xcshareddata/xcschemes/App.xcscheme': xcodeScheme('App.app'),
+				'Pods/Pods.xcodeproj/xcshareddata/xcschemes/Kit.xcscheme': xcodeScheme('Kit.framework'),
+			});
+
+			expect(await run(['init', directory])).toBe(EXIT_OK);
+
+			const line = installLine(await readJson(hookFile()));
+			expect(line).toContain('xcodebuild -workspace App.xcworkspace -scheme App ');
+			expect(line).not.toContain('-project');
+			expect(line).not.toContain('Kit');
+		});
+
+		it('finds a workspace one folder down, and runs from the project root', async () => {
+			const directory = await createProject({
+				'mobile/Runner.xcworkspace/contents.xcworkspacedata': xcodeWorkspace('Runner.xcodeproj'),
+				'mobile/Runner.xcodeproj/xcshareddata/xcschemes/Runner.xcscheme': xcodeScheme('Runner.app'),
+			});
+
+			expect(await run(['init', directory])).toBe(EXIT_OK);
+
+			const written = await readJson(hookFile());
+			expect(written.install).toMatchObject({ cwd: directory });
+			expect(installLine(written)).toContain(
+				'-workspace mobile/Runner.xcworkspace -scheme Runner ',
+			);
+		});
+
+		it('registers no install for several app schemes, and lists each one', async () => {
+			const directory = await createProject({
+				'App.xcodeproj/xcshareddata/xcschemes/App.xcscheme': xcodeScheme('App.app'),
+				'App.xcodeproj/xcshareddata/xcschemes/App Staging.xcscheme': xcodeScheme('App.app'),
+			});
+
+			expect(await run(['init', directory])).toBe(EXIT_OK);
+
+			expect(await readJson(hookFile())).toEqual({ project });
+			const report = logged.join('\n');
+			expect(report).toContain('-scheme App -configuration');
+			expect(report).toContain("-scheme '\\''App Staging'\\''");
+			expect(report).toContain("--install '");
+			expect(errored.join('\n')).toContain('--force');
+		});
+
+		it('says so when no scheme is shared, and names the command that lists them', async () => {
+			const directory = await createProject({ 'App.xcodeproj/project.pbxproj': '' });
+
+			expect(await run(['init', directory])).toBe(EXIT_OK);
+
+			expect(await readJson(hookFile())).toEqual({ project });
+			expect(logged.join('\n')).toContain('shares no scheme');
+			expect(errored.join('\n')).toContain('xcodebuild -list');
+		});
+
+		it('registers neither install when Gradle and Xcode are both here, and lists both', async () => {
+			const directory = await createProject({
+				gradlew: '#!/bin/sh\n',
+				'app/build.gradle.kts': 'android {\n  applicationId = "com.example.demo"\n}\n',
+				'App.xcodeproj/xcshareddata/xcschemes/App.xcscheme': xcodeScheme('App.app'),
+			});
+
+			expect(await run(['init', directory])).toBe(EXIT_OK);
+
+			expect((await readJson(hookFile())).install).toBeUndefined();
+			const report = logged.join('\n');
+			expect(report).toContain(':app:installDebug');
+			expect(report).toContain('xcodebuild -project App.xcodeproj');
+		});
+
+		it('carries the schemes it would not pick between into --json', async () => {
+			const directory = await createProject({
+				'App.xcodeproj/xcshareddata/xcschemes/App.xcscheme': xcodeScheme('App.app'),
+				'App.xcodeproj/xcshareddata/xcschemes/Demo.xcscheme': xcodeScheme('Demo.app'),
+			});
+
+			expect(await run(['init', directory, '--json'])).toBe(EXIT_OK);
+
+			const document = JSON.parse(logged[0] ?? '') as {
+				install: string | null;
+				installChoices: { source: string; choices: string[] } | null;
+			};
+			expect(document.install).toBeNull();
+			expect(document.installChoices?.source).toBe('App.xcodeproj');
+			expect(document.installChoices?.choices).toHaveLength(2);
+		});
 	});
 
 	it('proposes no install for a project it does not recognise', async () => {
@@ -724,6 +860,14 @@ describe('the generated ROVER.md', () => {
 		for (const text of [page, BARE_PAGE]) {
 			expect(text).toContain('Never run a build tool');
 			expect(text).toContain('`install_app`');
+		}
+	});
+
+	// #306: the same bypass on the simulator, where `booted` is whichever one the tool picks.
+	it('names the simulator route to that bypass too', () => {
+		for (const text of [page, BARE_PAGE]) {
+			expect(text).toContain('`xcodebuild`');
+			expect(text).toContain('xcrun simctl install booted');
 		}
 	});
 
