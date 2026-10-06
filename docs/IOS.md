@@ -379,6 +379,77 @@ flat ordinal is the only truthful id available. Both reads are committed —
 `tests/fixtures/ios-simulator/accessibility.compose…json` and `…accessibility.uikit-textfield…json`
 — so this is checkable rather than remembered.
 
+### What #300 measured: the screen read in the first moments of a cold launch
+
+The question was whether this platform has an equivalent of the Android transient `wait_for` was
+taught to poll through — an `accessibility_info` that errors, answers an empty tree, or answers the
+previous app's, while an application is starting. It does, it is none of those three, and the
+second half of the measurement is the more useful one.
+
+A **third bench**, neither §1's nor `tests/fixtures/ios-simulator/README.md`'s, 2026-10-06:
+
+| | |
+|---|---|
+| Host | macOS 27.0.1 (26A434), Apple silicon |
+| Xcode | 26.4.1 (17E202), `xcode-select -p` → `/Applications/Xcode.app/Contents/Developer` |
+| Runtimes | iOS **26.4.1** (identifier `…SimRuntime.iOS-26-4`) and iOS **26.1**, 11 device types each |
+| Devices under test | `iPhone 17` on each runtime, 1206×2622 px, scale 3 |
+| Apps under test | Settings (`com.apple.Preferences`) and Safari (`com.apple.mobilesafari`) |
+| idb | `idb_companion` **1.5.2**, installed by `rover doctor --fix` into `~/.rover` |
+
+**30 cold launches, 2623 reads taken as fast as the companion would answer them**, the companion
+warmed first so the 3.34 s first-read cost was not inside any window:
+
+```
+outcome of every one of the 2623 reads          ok — no gRPC failure, no parse refusal
+reads that came back as the empty array `[]`    0
+reads with no node carrying any rectangle       40   (11 Settings/26.4.1, 11 Safari/26.4.1,
+                                                      18 Settings/26.1)
+shape of each of those 40                       exactly one node: AXApplication,
+                                                frame {x:0, y:0, width:0, height:0},
+                                                AXLabel null, AXValue null, the launching pid
+when                                            from the instant `launchApp` returned to
+                                                ~250 ms after it; settled by ~500 ms
+every other read                                15–16 nodes (Settings), 6–7 (Safari),
+                                                always one covering the whole panel
+```
+
+- **The transient is a placeholder, not an absence and not a failure.** idb could describe the
+  application object of the process that had been told to start, and nothing inside it, because
+  nothing had been drawn. It is a *non-empty* read made entirely of nodes with no extent — nothing
+  a caller can read, target or tap.
+- **So `readScreen` refuses it**, as the `UnreadableScreenError` `src/core/device.ts` requires of
+  every backend for this case, and the two waits poll through it
+  (`src/backends/ios-simulator/backend.ts`'s `noScreenYet`). Handing it down as a one-element
+  `ScreenElement[]` was the alternative, and it is the plausible-looking empty answer
+  `ai/RULES.md` §2 forbids: a caller cannot tell it from a screen that really holds one nameless
+  thing, and `wait_until_gone` would read it as the element having left.
+- **The empty tree is *not* this case, and that is the measurement rather than a choice.** `[]`
+  was never observed — not in those 2623 reads, not on any settled screen, and not in any of the
+  three committed captures. What a settled screen always has is the opposite: an `AXApplication`
+  node covering the whole panel, 402×874 points, in all 40 settled reads of SpringBoard and of
+  Settings taken here and in every capture in `tests/fixtures/ios-simulator/`. That is what makes
+  "no node has any area" safe to refuse on and "the list is empty" wrong to refuse on, so `[]`
+  still comes back as an empty list the caller reads by its own length.
+- **Through the `read_screen` *verb*, the window is too narrow to meet on this bench, and that is
+  worth stating rather than leaving to be rediscovered.** One verb-level `read_screen` costs
+  294–310 ms here, against a placeholder that lives ~250 ms from the moment `launchApp` returns,
+  so a `launch_app` immediately followed by a `read_screen` got a real screen in **24 of 24**
+  rounds across two applications. The refusal is for the reads that *do* land inside the window —
+  reading as fast as the backend answers caught it in 2 of 3 runs of
+  `tests/device/ios-simulator/read-screen.test.ts` — and on a slower host, a heavier app or a
+  busier device that window is wider, not narrower.
+- **`wait_for` across a cold launch resolves**, measured end to end through the verb on the
+  26.4.1 device: `stop_app` → `press_key HOME` → `launch_app com.apple.Preferences` with a
+  `wait_for` issued against it, resolved on a Settings row in **2.34 s**. The two things it had to
+  poll through on the way are the previous screen (SpringBoard, which was already handled, see the
+  bullet about this read not being scopable to an app) and, where it lands in it, the placeholder
+  above.
+
+The other transient this platform has is in §8, trap 17, and it is deliberately **not** mapped onto
+the same type: the boot window looks like a "not yet" and must not be polled, because one read
+taken inside it wedges the device.
+
 ### It is genuinely headless
 
 `Simulator.app` was quit for this, and everything above still works:
@@ -1084,6 +1155,32 @@ full factory reset if state restoration ever needs one.
     bad argument — is its own answer and is passed straight on, and a grace that runs out with the
     process still running stays the plain failure: reporting an interruption there would promise a
     replacement companion that nothing is going to start.
+
+17. **One `accessibility_info` taken before SpringBoard is up wedges that simulator's
+    accessibility bridge until it is shut down and booted again — and `simctl` calls the device
+    `Booted` long before it is safe to ask.** Measured while answering #300 (2026-10-06, iPhone 17
+    / iOS 26.4.1, companion 1.5.2). After `simctl boot`, `simctl list` reports the device `Booted`
+    in **0.7–2.4 s**, which is the state `readScreen`'s own check passes; `simctl bootstatus -b`
+    does not return until **~9 s**. A read issued in that gap fails at gRPC `INTERNAL` with
+    *"SpringBoard is not running on the simulator, so there is no foreground application to
+    describe. Boot/relaunch the simulator (or restart SpringBoard) and retry."* — and **a single
+    one of those is enough**: from then on every read answers `INTERNAL` *"No translation object
+    returned for simulator. This means you have likely specified a point onscreen that is invalid
+    or invisible due to a fullscreen dialog"*, over a **fully drawn home screen** (confirmed with
+    `simctl io screenshot`), through a **freshly started companion**, for as long as that boot
+    lasts. One read at 2.4 s did it; so did three; a run that took none and waited for
+    `bootstatus -b` read 14 elements at 9.3 s, every time. It is specifically the accessibility
+    read — a companion started in the same window and asked `describe` six times wedged nothing,
+    and reads afterwards were fine.
+
+    **What follows is a design rule, and it is why #300 did *not* give this window a type.**
+    `UnreadableScreenError` tells its caller to read again or to wait, which polls
+    (`src/core/errors.ts`), and here polling is what breaks the device: the first poll takes the
+    bridge out for the rest of the boot and every later poll reports a misleading message about a
+    dialog that is not there. So the `INTERNAL` refusal stays the plain failure it has always
+    been — seen once, not polled — while the launch-window placeholder §2 measures, which is
+    harmless to re-read, is the one shape that is typed. The recovery is `simctl shutdown` then
+    `simctl boot`; nothing short of that brings it back.
 
 ---
 
