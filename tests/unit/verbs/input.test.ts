@@ -25,10 +25,11 @@ import {
 } from '@/core/device.js';
 import {
 	MissingCapabilityError,
+	UnreadableScreenError,
 	UnsupportedKeyError,
 	UnsupportedTextError,
 } from '@/core/errors.js';
-import { parseElementId } from '@/core/ids.js';
+import { parseDeviceSerial, parseElementId } from '@/core/ids.js';
 import type { VerbContext } from '@/verbs/context.js';
 import { TargetNotFoundError } from '@/verbs/errors.js';
 import {
@@ -221,6 +222,26 @@ describe('tap', () => {
 		expect(result.target?.source).toBe('caller-point');
 		// No screen read before the tap: a point is the one address with no screen behind it.
 		expect(calls).toEqual(['deviceInfo', 'tap', 'readScreen', 'deviceInfo']);
+	});
+
+	/**
+	 * A verb that reads the screen **once** has no licence to poll (#299): it fails with the
+	 * error's own name, which reaches the agent as the `unreadable-screen` failure, rather
+	 * than quietly reading again. Polling is `wait_for`'s job and its alone (D12(b)).
+	 */
+	it('fails by name on a screen the device had not got yet, without reading twice', async () => {
+		const readScreen = vi.fn<NonNullable<DeviceBackend['readScreen']>>(async () => {
+			throw new UnreadableScreenError(
+				parseDeviceSerial('test-serial-1'),
+				'the screen reader had no window to dump',
+			);
+		});
+		const context = createMockVerbContext({ backend: createMockDeviceBackend({ readScreen }) });
+
+		await expect(tap(context, { by: 'text', text: 'Save' })).rejects.toBeInstanceOf(
+			UnreadableScreenError,
+		);
+		expect(readScreen).toHaveBeenCalledTimes(1);
 	});
 
 	it('never taps when nothing on the screen matches', async () => {

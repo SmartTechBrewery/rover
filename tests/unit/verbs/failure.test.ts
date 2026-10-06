@@ -15,6 +15,7 @@ import {
 	NoRecordingRunningError,
 	RecordingAlreadyRunningError,
 	UnfinishedRecordingError,
+	UnreadableScreenError,
 	UnsupportedKeyError,
 	UnsupportedTextError,
 	WaitTimeoutError,
@@ -126,6 +127,21 @@ describe('a verb-layer error becomes a failure a client can branch on', () => {
 			element: save,
 			point: { x: 60, y: 40 },
 			reason: 'clipped',
+		});
+	});
+
+	/**
+	 * Without this branch the error falls out of `toVerbFailure` as unknown and the host
+	 * reports that it broke, for a device that is merely still drawing its first frame (#299).
+	 */
+	it('maps a screen the device had not got yet, rather than letting it read as a host bug', () => {
+		const error = new UnreadableScreenError(SERIAL, 'the screen reader had no window to dump');
+
+		expect(failureOf(error)).toEqual({
+			kind: 'unreadable-screen',
+			serial: SERIAL,
+			reason: 'the screen reader had no window to dump',
+			message: error.message,
 		});
 	});
 
@@ -486,6 +502,7 @@ describe('a failure survives the trip to the agent', () => {
 			),
 		],
 		['wait-timeout', new WaitTimeoutError("element 'save'", 'an empty screen', 5_000, 21)],
+		['unreadable-screen', new UnreadableScreenError(SERIAL, 'no window to dump')],
 		[
 			'unsupported-text',
 			new UnsupportedTextError(

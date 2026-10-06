@@ -689,6 +689,41 @@ correct; what follows is what building on it measured.
   does **not** retry — a retry loop is a wait, and waiting belongs to `src/core/wait.ts` and the
   wait verbs rather than inside a primitive. No fixture was invented for it
   (`tests/fixtures/adb/README.md` says so).
+- **`ERROR: null root node returned by UiTestAutomationBridge` is the dump with no window to
+  walk, and it is the one non-confirmation that means *not yet*.** Reported from a **physical
+  Android 13 device (API 33)** in #299, on a `read_screen` issued immediately after a cold
+  `launch_app`: the process is up and nothing has drawn, so the automation bridge hands the
+  dump no root node. The platform prints this line and returns normally — **exit 0, the line on
+  stderr, no confirmation line at all** — which is exactly the shape `could not get idle state`
+  lands in, so before #299 it reached the verb layer as the same anonymous `refused(...)`
+  `Error`. That ended a `wait_for` on its **first poll** when one more poll would have passed,
+  which is the wait failing at the one job it has.
+  `readScreen` now recognises this shape by itself and throws `UnreadableScreenError`
+  (`src/core/errors.ts`), reading **both** streams for it because adb's choice of stream is not
+  predictable in this family (the first bullet above). The two waits read that error as "not
+  yet" and poll through it to their own deadline, where the timeout says the screen was never
+  readable rather than that the element was missing (`src/verbs/wait-for.ts`); a verb that reads
+  once fails with it by name, as the `unreadable-screen` failure (`src/verbs/failure.ts`). It
+  does **not** retry inside the primitive, for the reason the idle-state bullet gives.
+  Contrast the two deliberately: *will not settle* stays an untyped refusal and only *has
+  nothing to show yet* is typed, because only the second is a condition further polling
+  changes.
+  **Reproduced and captured on 2026-10-06**, on a different device from the report and by a
+  different route: an **API 36 / Android 16** emulator (`sdk_gphone64_arm64`, adb 1.0.41) with
+  its **screen off** — `input keyevent 26`, then the ordinary dump. The bridge has no root node
+  for the same reason it has none during a cold launch, so this is the way to hold that state
+  on demand rather than racing it. Measured exactly as described above: the line on **stderr**,
+  stdout empty, exit 0, no `\r`. The capture is
+  `tests/fixtures/adb/uiautomator-dump.null-root.api36-sdk-gphone64-arm64.txt`.
+  The whole path was then run against that device: `readScreen` threw `UnreadableScreenError`;
+  `tap` by text failed with it and serialized as `{"kind":"unreadable-screen", …}`;
+  `read_screen` answered with a `failed` after-state carrying the message, having asked the
+  device once; `wait_for` on a screen that stayed asleep timed out saying *a screen that could
+  not be read*; and `wait_for` on a device woken two seconds into the wait **polled through the
+  unreadable screen and resolved**, which is the bug in #299 directly. The cold-launch half was
+  run separately on the same device — ten `stop_app` / `launch_app` / `wait_for` rounds, ten
+  answers of `ok` — but that device never produced the null-root line from a launch, so the
+  *API 33 physical* half of the report is still only reproduced by proxy.
 - **Two `uiautomator dump`s at once on one device get one of them killed — exit 137, both
   streams empty.** Two `adb -s … shell uiautomator dump /sdcard/window_dump.xml` started
   together: one printed the ordinary confirmation at exit 0 and the other exited **137** having

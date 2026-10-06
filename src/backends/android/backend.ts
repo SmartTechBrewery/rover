@@ -64,6 +64,7 @@ import {
 	NoRecordingRunningError,
 	RecordingAlreadyRunningError,
 	UnfinishedRecordingError,
+	UnreadableScreenError,
 	UnsupportedTextError,
 } from '../../core/errors.js';
 import {
@@ -131,7 +132,7 @@ import { isPng } from './parsers/screencap.js';
 import { isFinishedRecording, isRecorderRunning, recorderPids } from './parsers/screenrecord.js';
 import { type DeviceStat, parseDeviceStat } from './parsers/stat.js';
 import { TrackFrameDecoder } from './parsers/track.js';
-import { dumpedPath } from './parsers/uiautomator.js';
+import { dumpedPath, nullRootReport } from './parsers/uiautomator.js';
 import { parseWmDensity, parseWmSize } from './parsers/wm.js';
 import { toScreenElements } from './screen.js';
 
@@ -1468,6 +1469,21 @@ export class AndroidDeviceBackend implements DeviceBackend {
 	 * The default ten-second timeout: a dump is a query on the order of a `wm size`, not a
 	 * capture of the framebuffer.
 	 *
+	 * **One non-confirmation is typed, and only one.** A dump that reported no root node had
+	 * no window to walk — the device is attached and answering, and what it has not got yet
+	 * is a screen, which is what reading in the instant after an application starts looks
+	 * like (PROJECT.md §6). That is {@link UnreadableScreenError}, so the two waits poll
+	 * through it and a one-shot read fails with it by name instead of reporting that the
+	 * host broke. Every other non-confirmation is still `refused(...)` as a plain `Error`,
+	 * `ERROR: could not get idle state` included: a screen that will not settle is a
+	 * different fact from a screen that is not there yet, and widening the typed case to
+	 * cover it would turn the waits' "not yet" into a catch-all.
+	 *
+	 * **There is no retry here**, and the typed error is what makes that affordable: a retry
+	 * loop is a wait, waits live in the wait vocabulary (D12(b), ai/RULES.md §2), and a
+	 * primitive that quietly read twice would hide from its caller that the first read found
+	 * nothing.
+	 *
 	 * `DUMP_PATH` takes no `shellArg` — it is a literal this file owns, the case this file's
 	 * header names. If it ever becomes a caller's value it takes a quoter.
 	 */
@@ -1482,6 +1498,16 @@ export class AndroidDeviceBackend implements DeviceBackend {
 				const dumped = await runAdbOnDevice(serial, ['shell', 'uiautomator', 'dump', DUMP_PATH]);
 
 				if (dumpedPath(dumped.stdout) !== DUMP_PATH) {
+					// Both streams, because which one adb puts real output on is not stable
+					// (`refused`'s own header, PROJECT.md §6) — the platform writes this one to
+					// stderr, and that is a fact about the platform rather than about adb.
+					const noRoot = nullRootReport(dumped.stderr) ?? nullRootReport(dumped.stdout);
+					if (noRoot !== null) {
+						throw new UnreadableScreenError(
+							serial,
+							`uiautomator had no window to dump — it said '${noRoot}'`,
+						);
+					}
 					throw refused(`uiautomator dump ${DUMP_PATH}`, serial, dumped);
 				}
 

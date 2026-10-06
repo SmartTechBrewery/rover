@@ -32,6 +32,7 @@
  */
 
 import { requireCapability } from '../core/capabilities.js';
+import { UnreadableScreenError } from '../core/errors.js';
 import { type Observation, waitForCondition } from '../core/wait.js';
 import type { VerbContext } from './context.js';
 import { describeElement, describeScreen, UnaddressableElementError } from './errors.js';
@@ -100,7 +101,8 @@ export async function waitFor(
 					? { met: false, found: describeScreen(resolution.screen) }
 					: { met: true, value: resolution.resolved };
 			} catch (error) {
-				// The one throw this loop reads as "not yet", and only this one. An element
+				// The one throw *this* probe reads as "not yet" — the other is the unreadable
+				// screen, read in {@link pollScreen} because it belongs to both waits. An element
 				// clipped out of its scrolling container is a screen still moving — which is
 				// what a wait is for — so failing on it would end a wait that one more poll
 				// would have passed. Nothing is swallowed: if it never becomes addressable, the
@@ -172,6 +174,27 @@ function reasonOf(error: UnaddressableElementError): string {
  * changes. A backend that cannot read its screen can never answer either verb, so it is
  * told so before the loop starts rather than by a poll that happens to ask the right
  * question.
+ *
+ * **A screen the device could not read *yet* is read as "not yet" here, for both verbs.**
+ * It is the mirror of the clipped element {@link waitFor}'s own probe absorbs, and it sits
+ * at this level because it is a fact about the read rather than about the target — a
+ * device that has no window to describe cannot answer either question. A wait exists
+ * precisely to absorb a screen that is not ready, so ending one on poll one because an
+ * application was still starting defeats the verb; and absorbing it *here* rather than by
+ * retrying inside the backend is D12(b) — the only thing allowed to wait is the wait
+ * vocabulary (ai/RULES.md §2).
+ *
+ * **It is a translation and not a swallow**, which is what keeps `waitForCondition`'s
+ * contract that a throwing probe propagates unchanged intact: the error becomes an
+ * observation the loop already understands, carrying the backend's own reason into the
+ * timeout's `found` half — so a screen that was never readable times out saying *that*,
+ * rather than claiming the element was not on it. For {@link waitUntilGone} the `met: false`
+ * is load-bearing in the other direction: an unreadable screen is "cannot tell yet", never
+ * "gone", or the verb would answer that an element had left a screen nobody could see.
+ *
+ * Nothing else is caught. A device that vanished, a backend without the capability, an
+ * ambiguous target and a plain `Error` all end the wait, because none of them is a
+ * condition further polling changes.
  */
 async function pollScreen<T>(
 	context: VerbContext,
@@ -187,6 +210,15 @@ async function pollScreen<T>(
 		pollIntervalMs: options.pollIntervalMs,
 		now: options.now,
 		delay: options.delay,
-		probe,
+		probe: async () => {
+			try {
+				return await probe();
+			} catch (error) {
+				if (error instanceof UnreadableScreenError) {
+					return { met: false, found: `a screen that could not be read — ${error.reason}` };
+				}
+				throw error;
+			}
+		},
 	});
 }
