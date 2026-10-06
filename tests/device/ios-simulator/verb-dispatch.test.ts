@@ -256,6 +256,23 @@ describe.skipIf(!process.env.ROVER_TEST_SIMULATOR)(
 		});
 
 		/**
+		 * `clear` is refused the same way, for `delete`'s reason (#302): its candidate has not been
+		 * watched landing, so the answer is `unsupported-clear` — and nothing is typed.
+		 */
+		it('refuses type_text with clear by name rather than typing over the field', async () => {
+			const client = await startHost();
+			const device = await freeSimulator(client);
+			const leaseId = await lease(client, device.serial);
+
+			const refused = await client.request('type_text', { leaseId, text: 'x', clear: true });
+
+			expect(refused).toMatchObject({
+				outcome: 'failed',
+				failure: { kind: 'unsupported-clear', serial: device.serial },
+			});
+		});
+
+		/**
 		 * And the two keys this platform *does* answer, over the same wire — because a suite that
 		 * only asserted the refusals would be green on a backend that refused all four.
 		 *

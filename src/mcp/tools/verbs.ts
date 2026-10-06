@@ -224,7 +224,12 @@ const VERB_TOOLS: readonly VerbToolRow[] = [
 			'field first.** The device shell’s quoting is hidden — a space, an apostrophe and a ' +
 			'metacharacter all arrive verbatim — and text the device cannot type at all comes back ' +
 			'as an `unsupported-text` failure naming the offending characters as escapes, never as a ' +
-			'silent drop. Leading and trailing spaces are content and are kept.',
+			'silent drop. Leading and trailing spaces are content and are kept. **`clear: true` ' +
+			"empties the focused field first**, so the text replaces what was there (with `text: ''` " +
+			'it only clears). It does not need to know how long the text is, so a password field ' +
+			'clears too. A device that cannot clear answers an `unsupported-clear` failure ' +
+			'before anything is typed; then `press_key` `delete` with `times` empties a field whose ' +
+			'length you know.',
 	},
 	{
 		method: 'press_key',

@@ -1,6 +1,6 @@
 /**
  * The device backend for this platform: every required method of `DeviceBackend`, the recorder,
- * the screen read and the four input primitives.
+ * the screen read and the five input primitives (one of which, `clearText`, refuses by name).
  *
  * **This is the backend that registers** (`./index.ts`, `./capabilities.ts`, and one import line
  * in `../index.ts`), which is why the four recording methods land in the same change as the
@@ -83,6 +83,7 @@ import {
 	RecordingAlreadyRunningError,
 	UnfinishedRecordingError,
 	UnreadableScreenError,
+	UnsupportedClearError,
 	UnsupportedKeyError,
 	UnsupportedTextError,
 } from '../../core/errors.js';
@@ -105,6 +106,7 @@ import {
 import { IDB_COMPANION_MISSING, IdbCompanionNotFoundError } from './idb-companion-path.js';
 import {
 	buttonEvents,
+	CLEAR_TEXT_REFUSAL,
 	DEVICE_KEYS,
 	isScreenBlanked,
 	READ_SCREEN_BLANKED_ARGV,
@@ -260,10 +262,10 @@ const READ_SCREEN_RPC: IdbUnaryRpc = 'accessibility_info';
 const READ_SCREEN_REQUEST = { format: ACCESSIBILITY_FORMAT } as const;
 
 /**
- * The RPC every one of the four input primitives goes through — the only client-streaming call
+ * The RPC every input primitive that sends anything goes through — the only client-streaming call
  * this backend makes.
  *
- * One RPC for all four because that is what the companion offers: there is no tap call and no text
+ * One RPC for all of them because that is what the companion offers: there is no tap call and no text
  * call, only a stream of HID events (`./idb/idb.proto`), so the difference between a tap, a swipe,
  * a key and a line of text is entirely which events `./input.js` builds. That is also why the
  * vocabulary is worth its own module rather than four argv constants here.
@@ -1962,6 +1964,16 @@ export class IosSimulatorDeviceBackend implements DeviceBackend {
 		if (answer.onlyWhenBlanked && !(await this.screenIsBlanked(serial))) return;
 
 		await this.companions.stream(serial, HID_RPC, buttonEvents(answer.button));
+	}
+
+	/**
+	 * Refused by name, before any round trip: `./input.js`'s `CLEAR_TEXT_REFUSAL` says why — the
+	 * candidate is unmeasured through `hid`, which answers success for usages that do nothing
+	 * (#302). `UnsupportedClearError` rather than `MissingCapabilityError` for {@link pressKey}'s
+	 * reason: this device does take input.
+	 */
+	async clearText(serial: DeviceSerial): Promise<void> {
+		throw new UnsupportedClearError(serial, CLEAR_TEXT_REFUSAL);
 	}
 
 	/**

@@ -500,7 +500,8 @@ short form:
   and the device. Input is where that honesty gets finer-grained than a flag: `press_key` answers
   `home` and `wake` and refuses `back` and `recents` **by name**, naming the key rather than
   sending some other navigation that happens to be reachable — and refuses `delete`, `enter` and
-  `tab` the same way until they have been measured on a simulator (#302). Physical iPhones are not supported at
+  `tab` the same way until they have been measured on a simulator (#302), as it does `type_text`'s
+  `clear`, as `unsupported-clear` (#309). Physical iPhones are not supported at
   all — hardware cannot answer `screenshot`, which is why the backend is named `ios-simulator` and
   not `ios`.
 - **Pixels are gone whenever an app blocks screen capture** — the system hands back a valid, all
@@ -764,8 +765,8 @@ and each of them is one `performAction()` call: not one reads a screen of its ow
 has nothing to remember and nothing to get wrong. `long_press` is a drag from a point to that same
 point, held past the device's own long-press timeout — never the long-press flag on a key event,
 which applies to keys and not to touch — and `scroll` is a drag across the middle of a region, so
-neither needs anything new from a backend: the device interface keeps its four input primitives and
-the composition happens once, above them. `scroll`'s direction is where the **content** goes, the
+neither needs anything new from a backend: the composition happens once, above the device
+interface's input primitives (five since #309, which added `clearText` for `type_text`'s `clear`). `scroll`'s direction is where the **content** goes, the
 sense a scrollbar and a wheel already have, so `scroll 'down'` drags *upwards*; it scrolls the
 element it was pointed at, or the screen when it was pointed at nothing, and it will not take a
 coordinate, because a point has no extent and so cannot say how far a scroll may travel. `swipe` is
@@ -833,6 +834,16 @@ the backend, and a string this layer had helpfully escaped would arrive on scree
 in it. What a device cannot type at all — every non-ASCII character on the Android backend today —
 comes back as an `unsupported-text` failure naming the characters as escapes, so an agent is told
 which one to change rather than that the host broke.
+
+**`type_text` with `clear: true` replaces what the focused field holds** (#309): the field is
+emptied first and the text typed after it, and `text: ''` only empties it, so the answer's screen
+read shows the field's new value. Clearing selects everything and deletes it — the backend's fifth
+input primitive, `clearText` — so it needs no length and works on a password field, whose screen
+read is bullets with only the last character visible. A device that cannot clear answers an
+`unsupported-clear` failure naming the serial and its reason, **before anything is typed**; the
+fallback is `press_key` `delete` with `times`, when you know how long the text is. The simulator
+refuses it until #302 has watched a recipe land; Android clears (`PROJECT.md` §6). On Android an
+emptied field reads back as its hint text, when it has one.
 
 **`launch_app`, `stop_app` and `clear_app_data` are that same spine used three more times**
 (`src/verbs/app.ts`), and they are what a verb looks like when it addresses **a package rather than
@@ -1208,7 +1219,8 @@ and it is filed as its own issue.
 `start_recording` — including the refusal of a second one and the release teardown that stops an
 abandoned recorder — the two `missing-capability` refusals, and `press_key`: `home` and `wake`
 answered, `back` and `recents` refused as `unsupported-key` carrying the key (and `delete`, `enter`
-and `tab` refused the same way, before any round trip, until #302 measures them), which are this
+and `tab` refused the same way, before any round trip, until #302 measures them — and `type_text`'s
+`clear` with them, as `unsupported-clear`), which are this
 repository's first per-key refusals from a device rather than from a synthetic backend;
 `record_video` and
 `stop_recording` over a lease are gated on a host that has `ffmpeg`, since the verb answers with

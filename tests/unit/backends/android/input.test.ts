@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { shellText } from '@/backends/android/adb.js';
 import {
+	CLEAR_TEXT_STEPS,
 	KEY_CODES,
 	toDevicePixels,
 	toSwipeDuration,
@@ -61,6 +62,26 @@ describe('KEY_CODES', () => {
 	it('wakes with KEYCODE_WAKEUP rather than the toggle', () => {
 		expect(KEY_CODES.wake).toBe('KEYCODE_WAKEUP');
 		expect(Object.values(KEY_CODES)).not.toContain('KEYCODE_POWER');
+	});
+});
+
+describe('CLEAR_TEXT_STEPS', () => {
+	/**
+	 * Pinned literally, for `KEY_CODES`'s reason: every step is an `input` call that exits 0 with
+	 * zero bytes whether or not it did anything, so a wrong keycode here is a clear that reports
+	 * success and leaves the field as it was. Measured on a physical API 33 device against a plain
+	 * and a password field (PROJECT.md §6).
+	 */
+	it('selects all, then backspaces — nothing else, in that order', () => {
+		expect(CLEAR_TEXT_STEPS).toEqual([
+			['input', 'keycombination', 'KEYCODE_CTRL_LEFT', 'KEYCODE_A'],
+			['input', 'keyevent', 'KEYCODE_DEL'],
+		]);
+	});
+
+	// The delete is the same backspace `delete` presses, never forward delete.
+	it('deletes with the keycode the delete key uses', () => {
+		expect(CLEAR_TEXT_STEPS.at(-1)?.at(-1)).toBe(KEY_CODES.delete);
 	});
 });
 

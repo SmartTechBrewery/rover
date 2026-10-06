@@ -97,7 +97,7 @@ startup of ~60–90 ms that a Node backend talking gRPC directly would not pay.
 | Capability | Gated methods | How | Measured | Verdict |
 |---|---|---|---|---|
 | `canReadScreen` | `readScreen` | `accessibility_info {format: LEGACY}` over gRPC — the RPC `idb ui describe-all` wraps | 34–47 ms warm on an established channel, 3.34 s for a companion's **first** read; labels + frames in **points** | ✅ **declared true** (#251) |
-| `canInput` | `tap` `swipe` `typeText` `pressKey` | one client-streaming `hid` call per injection, over the same channel as the read — the RPC `idb ui tap/swipe/text/button` all wrap | through this backend: tap 106–144 ms, `typeText` 102–154 ms for a word and 219–315 ms for all 95 printable ASCII, `pressKey('home')` 104–197 ms, a 250 ms swipe 452 ms | ✅ **declared true** (#252); `back` and `recents` refused **by name**, and `delete`, `enter` and `tab` until #302 measures them, see §5 |
+| `canInput` | `tap` `swipe` `typeText` `pressKey` `clearText` | one client-streaming `hid` call per injection, over the same channel as the read — the RPC `idb ui tap/swipe/text/button` all wrap | through this backend: tap 106–144 ms, `typeText` 102–154 ms for a word and 219–315 ms for all 95 printable ASCII, `pressKey('home')` 104–197 ms, a 250 ms swipe 452 ms | ✅ **declared true** (#252); `back` and `recents` refused **by name**, and `delete`, `enter` and `tab` until #302 measures them, see §5; `clearText` (#309) refused by name as `unsupported-clear` for `delete`'s reason |
 | `canRecordVideo` | `recordVideo` | `simctl io <d> recordVideo --codec h264 --mask ignored <path>` | marker at 0.14–0.23 s; 100,782 bytes for ~2 s of an idle screen | ✅ **no `--time-limit` — the window is host-side** |
 | `canControlRecording` | `start`/`stop`/`discardRecording` | same + `SIGINT`, and the **host's** process table for "is this device recording" | exit 0 in 20–30 ms after the signal; `ps` stops naming the recorder in 39 ms | ✅ |
 | `canControlNetwork` | `setAirplaneMode` `setWifiEnabled` | — | — | ❌ **declare false** |
@@ -806,6 +806,15 @@ and refuses the ones it does not, without lying in either direction:
 
 D11 is untouched by any of it: capabilities still name *methods*, the keys are that method's
 arguments, and no per-key flag was added (`PROJECT.md` §5).
+
+**`clearText`, `canInput`'s fifth method (#309), is refused the way `delete` is.** It empties the
+focused field for `type_text`'s `clear: true`, and on Android it is select-all then backspace. The
+candidate here is the same shape — Cmd+A (HID usages 227 + 4), then Backspace (42) — over the
+same `hid` call, and it is unmeasured for `delete`'s reason: `hid` answers success for a usage that
+does nothing, so a clear sent on faith would report a field emptied that never was. So this backend
+answers it, before any round trip, with `UnsupportedClearError`, which reaches the agent as an
+`unsupported-clear` verb failure carrying the serial — never `missing-capability`, since typing
+works — and nothing is typed after it. #302 is where it is measured.
 
 **`LogLevel` has no `warn` on iOS, and gains a value that is not a level.** The unified log's
 `messageType` is `Debug | Info | Default | Error | Fault` — nothing maps onto `warn` — and entries

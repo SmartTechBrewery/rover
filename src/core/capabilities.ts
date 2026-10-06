@@ -145,7 +145,7 @@ export type CapabilityGatedMethod = {
  */
 export const CAPABILITY_METHODS = {
 	canReadScreen: ['readScreen'],
-	canInput: ['tap', 'swipe', 'typeText', 'pressKey'],
+	canInput: ['tap', 'swipe', 'typeText', 'pressKey', 'clearText'],
 	canControlNetwork: ['setAirplaneMode', 'setWifiEnabled'],
 	canRecordVideo: ['recordVideo'],
 	canControlRecording: ['startRecording', 'stopRecording', 'discardRecording'],

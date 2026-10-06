@@ -211,9 +211,14 @@ export const TYPE_TEXT_MAX_LENGTH = 4_096;
  * the device for it — typing nothing on a device that has gone away should report the device.
  *
  * No refinement over the characters, deliberately. See {@link TYPE_TEXT_MAX_LENGTH}.
+ *
+ * `clear: true` empties the focused field before typing (#309), so `text` replaces what was
+ * there; with `text: ''` it only clears. Absent or `false` types into what is there, as before. A
+ * device that cannot clear answers an `unsupported-clear` failure, before anything is typed.
  */
 export const TypeTextParamsSchema = VerbCallBaseSchema.extend({
 	text: z.string().max(TYPE_TEXT_MAX_LENGTH),
+	clear: z.boolean().optional(),
 }).strict();
 export type TypeTextParams = z.infer<typeof TypeTextParamsSchema>;
 

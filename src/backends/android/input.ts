@@ -1,5 +1,5 @@
 /**
- * Argument construction for `adb shell input` — the pure half of the four `canInput`
+ * Argument construction for `adb shell input` — the pure half of the five `canInput`
  * primitives.
  *
  * Separate from `./backend.ts` for the reason the parsers are: this owns arithmetic and
@@ -50,6 +50,30 @@ export const KEY_CODES = {
 	enter: 'KEYCODE_ENTER',
 	tab: 'KEYCODE_TAB',
 } as const satisfies Record<DeviceKey, string>;
+
+/**
+ * The `input` calls that empty the focused text field, in order — select all, then backspace
+ * (#309). Each is one `adb shell` call, so a refusal can name the step it stopped at.
+ *
+ * **Measured, not assumed**, on a physical API 33 device (PROJECT.md §6): this emptied a plain
+ * `EditText` and a **password** one — the field #301 could not clear without counting — with
+ * the caret at the end and in the middle, and with the soft keyboard up and hidden. Both calls
+ * printed zero bytes on both streams at exit 0, the shape {@link KEY_CODES} has. On a field
+ * that was already empty both were accepted and nothing visible happened.
+ *
+ * Select-all and not a count of `KEYCODE_DEL`, because nothing says how long the text is: the
+ * screen read reports a password field as bullets with the last character shown, and no field
+ * reports where the caret is. `KEYCODE_FORWARD_DEL` would do as well as `DEL` with a selection
+ * up and is not used, so the one keycode for "backspace" here is the one `delete` presses.
+ *
+ * `input keycombination` is what makes the select-all one call rather than a held modifier; it
+ * exists on API 33 and on 37 (PROJECT.md §6). An `input` too old to know it answers `Unknown
+ * command`, which `./parsers/input.js` catches like any other refusal.
+ */
+export const CLEAR_TEXT_STEPS = [
+	['input', 'keycombination', 'KEYCODE_CTRL_LEFT', 'KEYCODE_A'],
+	['input', 'keyevent', KEY_CODES.delete],
+] as const;
 
 /**
  * The one sequence `input text` reads rather than types: it substitutes a **space** for

@@ -1,6 +1,6 @@
 /**
- * The HID events behind the four `canInput` primitives — the pure half of this platform's input
- * vocabulary.
+ * The HID events behind four of the five `canInput` primitives — the pure half of this platform's
+ * input vocabulary. The fifth, `clearText`, sends nothing yet: {@link CLEAR_TEXT_REFUSAL}.
  *
  * `../android/input.ts`'s sibling and deliberately its shape: arithmetic and vocabulary, no
  * process. `./idb-client.js` owns the channel, `./backend.ts` is the join, and everything here is
@@ -125,6 +125,21 @@ export const DEVICE_KEYS = {
 	enter: { noEquivalent: unmeasuredKey('Return', 40) },
 	tab: { noEquivalent: unmeasuredKey('Tab', 43) },
 } as const satisfies Record<DeviceKey, KeyAnswer>;
+
+/**
+ * Why this backend refuses `clearText`, in the words `./backend.ts` hands `UnsupportedClearError`
+ * (#309).
+ *
+ * The same refusal `delete` gets in {@link DEVICE_KEYS} and for the same reason: the candidate is
+ * Cmd+A then backspace (HID usages 227 + 4, then 42), and `hid` answers success for any usage,
+ * including one that does nothing — so a clear sent on faith would report an empty field that
+ * was never emptied. Refused until #302 watches it land.
+ */
+export const CLEAR_TEXT_REFUSAL =
+	'select-all then backspace has not been measured through this backend yet — its candidate is ' +
+	'Cmd+A then HID usage 42, but hid answers success for any usage including one that does ' +
+	'nothing, so the clear is refused rather than sent on faith until it has been watched ' +
+	'emptying a field (#302)';
 
 /**
  * The Darwin notification whose state says whether this device's screen is off.

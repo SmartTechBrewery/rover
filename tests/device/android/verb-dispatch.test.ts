@@ -532,6 +532,22 @@ describe.skipIf(!process.env.ROVER_TEST_DEVICE)('a daemon runs verbs on its own 
 		});
 	});
 
+	it('clears the focused field before typing, over one call (#309)', async () => {
+		const client = await startHost();
+		const device = await freeDevice(client);
+		const leaseId = await lease(client, device.serial);
+
+		// Nothing focused, for the reason the case above gives: this proves the path `clear` takes
+		// — the row, the handler, the verb's clear-then-type, both backend calls accepted. What it
+		// does to a plain and a password field was watched by hand (PROJECT.md §6).
+		const answer = await client.request('type_text', { leaseId, text: 'x', clear: true });
+
+		expect(answer).toMatchObject({
+			outcome: 'ok',
+			result: { verb: 'type_text', device: { serial: device.serial }, target: null },
+		});
+	});
+
 	it('answers text this device cannot type as a failure about the string', async () => {
 		const client = await startHost();
 		const device = await freeDevice(client);

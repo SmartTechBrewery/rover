@@ -32,6 +32,7 @@ import {
 	RecordingAlreadyRunningError,
 	UnfinishedRecordingError,
 	UnreadableScreenError,
+	UnsupportedClearError,
 	UnsupportedKeyError,
 	UnsupportedTextError,
 } from '@/core/errors.js';
@@ -2302,6 +2303,23 @@ describe('the input primitives', () => {
 		expect(companionStream).not.toHaveBeenCalled();
 	});
 
+	/**
+	 * `clearText` is refused the way `delete` is, for its reason: its candidate (Cmd+A, then
+	 * backspace) has not been watched landing through `hid`, which answers success for usages
+	 * that do nothing (#302). `UnsupportedClearError`, never `MissingCapabilityError`, and before
+	 * any round trip.
+	 */
+	it('refuses clearText by name, without asking the device anything', async () => {
+		const thrown = await backend.clearText(BOOTED).catch((error: unknown) => error);
+
+		expect(thrown).toBeInstanceOf(UnsupportedClearError);
+		expect((thrown as UnsupportedClearError).serial).toBe(BOOTED);
+		expect((thrown as UnsupportedClearError).message).toContain('#302');
+		expect(runSimctl).not.toHaveBeenCalled();
+		expect(runSimctlOnDevice).not.toHaveBeenCalled();
+		expect(companionStream).not.toHaveBeenCalled();
+	});
+
 	/** A companion that died is an interruption and reaches the caller as itself, never a device fault. */
 	it('lets a companion interruption through as itself', async () => {
 		companionStream.mockRejectedValue(
@@ -3250,12 +3268,13 @@ describe('the capabilities this backend does not declare', () => {
 	});
 
 	/**
-	 * And the read and the four injections *are* here now, which is the assertion that keeps this
+	 * And the read and the five input methods *are* here now, which is the assertion that keeps this
 	 * pair honest: all five used to be absent beside `setAirplaneMode` and `setWifiEnabled`, so a
 	 * change that flipped a flag and forgot a method would otherwise have left this file agreeing
 	 * with the old shape. **`canInput` cannot move by halves** —
-	 * `CAPABILITY_METHODS.canInput` names all four, so a manifest declaring it with three of them
-	 * implemented fails the conformance gate.
+	 * `CAPABILITY_METHODS.canInput` names all five, so a manifest declaring it with four of them
+	 * implemented fails the conformance gate. `clearText` is present and refuses by name (#309),
+	 * which is an answer; absent would not be.
 	 */
 	it('ships every method the manifest declares a capability for', () => {
 		expect(contract().readScreen).toBeTypeOf('function');
@@ -3263,5 +3282,6 @@ describe('the capabilities this backend does not declare', () => {
 		expect(contract().swipe).toBeTypeOf('function');
 		expect(contract().typeText).toBeTypeOf('function');
 		expect(contract().pressKey).toBeTypeOf('function');
+		expect(contract().clearText).toBeTypeOf('function');
 	});
 });

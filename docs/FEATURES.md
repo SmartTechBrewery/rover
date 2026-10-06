@@ -74,7 +74,7 @@ The two registered backends:
 - **`android`**, over `adb`. Answers everything the contract asks for, including the network
   toggles, and reads its own screen through the view hierarchy.
 - **`ios-simulator`**, over `simctl`, with **`idb_companion` beside it** for the screen read and
-  the four input primitives. Named `ios-simulator` and not `ios` on purpose: a physical iPhone
+  the input primitives. Named `ios-simulator` and not `ios` on purpose: a physical iPhone
   cannot answer `screenshot` at all, so hardware is a different backend, not a gap in this one.
 
 **Capabilities are a Zod manifest per backend**, gated by a conformance suite that now runs over
@@ -93,6 +93,8 @@ refuses `back` and `recents` as `unsupported-key`, naming the key — and refuse
 `delete`, `enter` and `tab` the same way until #302 has watched them land — a device that takes input
 saying so about *one key* rather than claiming it takes none. That is a different answer from
 `missing-capability` on purpose: one says try another key, the other says try another device.
+`type_text`'s `clear` is refused there the same way, as `unsupported-clear`, and for the same
+reason (#309, #302).
 
 **Where it lives.** `src/core/device.ts`, `src/core/capabilities.ts`, `src/backends/`,
 `docs/IOS.md` (every iOS claim measured, with the traps), `PROJECT.md` D10, §5.
@@ -193,7 +195,13 @@ credential.
 **Composition happens once, above the backends.** `long_press` is a drag from a point to that same
 point held past the device's long-press timeout — never the long-press flag on a key event, which
 applies to keys and not to touch. `scroll` is a drag across the middle of a region. So neither
-needs anything new from a backend: the device interface keeps its four input primitives.
+needs anything new from a backend. **The device interface has five input primitives, and it had
+four until #309**: `tap`, `swipe`, `typeText` and `pressKey` were all a backend owed, and emptying
+a text field is the one thing that could not be composed from them — the key vocabulary has no
+select-all, and a screen read says neither which field has focus nor how long its text is, so a
+count of backspaces would be a guess. `clearText` is the fifth, and it is a method rather than an
+option on `typeText` because naming it under `canInput` is what makes the conformance gate force
+every backend that takes input to answer it, where an option could be silently ignored.
 `scroll`'s direction is where the **content** goes — the sense a scrollbar and a wheel already
 have — so `scroll 'down'` drags upwards; it scrolls the element it was pointed at, or the screen
 when pointed at nothing, and it refuses a bare coordinate, because a point has no extent and cannot
@@ -218,6 +226,16 @@ about the verb, not a resolution that failed. There is deliberately no target op
 string to the backend **byte for byte** — a string this layer had helpfully escaped would arrive on
 screen with the escaping in it — and what a device cannot type at all comes back as
 `unsupported-text` naming the characters as escapes.
+
+**`type_text` can replace what a field holds** (#309). `clear: true` empties the focused field
+before typing, so the text replaces the old value instead of landing beside it, and with `text: ''`
+it only clears — the answer's screen read shows the field's new value. It selects everything and
+deletes it, so it needs no length and works on a **password field**, which reads back as bullets
+with only the last character shown and so cannot be measured by eye. Both happen in one action,
+clear first, so a device that cannot clear refuses with `unsupported-clear` **before anything is
+typed**, naming the serial and its reason; it is never a silent no-op and never
+`missing-capability`, because that device still types. On Android an emptied field reads back as
+its hint, when it has one — that is the platform's screen read, not left-over text.
 
 **`press_key` edits text as well as navigating** (#301). Beside `back`, `home`, `recents` and
 `wake` it takes `delete` — backspace, the character before the caret, never forward delete —

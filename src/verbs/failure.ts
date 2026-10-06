@@ -41,6 +41,7 @@ import {
 	RecordingAlreadyRunningError,
 	UnfinishedRecordingError,
 	UnreadableScreenError,
+	UnsupportedClearError,
 	UnsupportedKeyError,
 	UnsupportedTextError,
 	WaitTimeoutError,
@@ -227,6 +228,22 @@ export const VerbFailureSchema = z.discriminatedUnion('kind', [
 			kind: z.literal('unsupported-key'),
 			serial: DeviceSerialSchema,
 			key: DeviceKeySchema,
+			message: z.string().min(1),
+		})
+		.strict(),
+	/**
+	 * The device takes input, and cannot empty the focused text field (#309).
+	 *
+	 * `unsupported-key`'s sibling, kept apart from `missing-capability` for that branch's reason:
+	 * typing and the keys still work, so the move is a different route to an empty field — the
+	 * message names `delete` presses with a count — not a different device. No argument travels
+	 * because `clear` is a flag: the serial and the backend's reason, inside `message`, are all
+	 * there is to say.
+	 */
+	z
+		.object({
+			kind: z.literal('unsupported-clear'),
+			serial: DeviceSerialSchema,
 			message: z.string().min(1),
 		})
 		.strict(),
@@ -717,13 +734,11 @@ function screenAddressFailure(error: unknown): VerbFailure | null {
  * The three failures where the device *can* do the thing and not with **this argument**, split
  * out of {@link toVerbFailure} for {@link hostToolFailure}'s reason.
  *
- * They belong together on their own terms: none of them is a `missing-capability` (D11) — the
- * first two come from a backend that declares `canInput` and does take input, the third from one
- * that reads its log like every backend does. One says send a different string, one asks for a
- * different key, one says read without that filter, and all of them name the offending argument
- * because that is the only thing a caller can act on. The pair was the reason the second one was
- * cheap to add — `unsupported-key` is `unsupported-text` one argument down (#215) — and
- * `log-filter-refused` is the same shape on `read_logs` (#303).
+ * They belong together on their own terms: none is a `missing-capability` (D11). The first
+ * three come from a backend that declares `canInput` and does take input; the last comes from
+ * one that reads its log like every backend does. They say, respectively, send a different
+ * string, ask for a different key, clear the field another way, or read without that filter.
+ * Each names the offending argument because that is the only thing a caller can act on.
  *
  * Returns `null` for anything else, so the caller carries on down its own list.
  */
@@ -747,6 +762,9 @@ function unsupportedArgumentFailure(error: unknown): VerbFailure | null {
 			key: error.key,
 			message: error.message,
 		};
+	}
+	if (error instanceof UnsupportedClearError) {
+		return { kind: 'unsupported-clear', serial: error.serial, message: error.message };
 	}
 	if (error instanceof LogFilterRefusedError) {
 		return {
