@@ -27,8 +27,15 @@
 
 import { z } from 'zod';
 import { CapabilityIdSchema } from '../core/capabilities.js';
-import { DeviceKeySchema, PointSchema, RectSchema, ScreenElementSchema } from '../core/device.js';
 import {
+	DeviceKeySchema,
+	LogFilterSchema,
+	PointSchema,
+	RectSchema,
+	ScreenElementSchema,
+} from '../core/device.js';
+import {
+	LogFilterRefusedError,
 	MissingCapabilityError,
 	NoRecordingRunningError,
 	RecordingAlreadyRunningError,
@@ -220,6 +227,21 @@ export const VerbFailureSchema = z.discriminatedUnion('kind', [
 			kind: z.literal('unsupported-key'),
 			serial: DeviceSerialSchema,
 			key: DeviceKeySchema,
+			message: z.string().min(1),
+		})
+		.strict(),
+	/**
+	 * The device reads its log, and cannot apply this selection to the read (#303).
+	 *
+	 * `unsupported-key` for `read_logs`, and kept apart from `missing-capability` for that
+	 * branch's reason: every device reads its log, so the way out is the same read without this
+	 * filter or with a value the device can apply — never another device. `filter` names which.
+	 */
+	z
+		.object({
+			kind: z.literal('log-filter-refused'),
+			serial: DeviceSerialSchema,
+			filter: LogFilterSchema,
 			message: z.string().min(1),
 		})
 		.strict(),
@@ -511,7 +533,7 @@ export type VerbFailure = z.infer<typeof VerbFailureSchema>;
  * five, and each group genuinely belongs together: the six failures between a caller's
  * address and a point on the screen to act on ({@link screenAddressFailure}), the four about
  * a **host tool** rather than a device ({@link hostToolFailure}), the two about whether a
- * device has a recording open ({@link openRecordingFailure}), and the two where the device
+ * device has a recording open ({@link openRecordingFailure}), and the three where the device
  * can do the thing and not with *this argument* ({@link unsupportedArgumentFailure}).
  */
 export function toVerbFailure(error: unknown): VerbFailure | null {
@@ -692,14 +714,16 @@ function screenAddressFailure(error: unknown): VerbFailure | null {
 }
 
 /**
- * The two failures where the device *can* do the thing and not with **this argument**, split
+ * The three failures where the device *can* do the thing and not with **this argument**, split
  * out of {@link toVerbFailure} for {@link hostToolFailure}'s reason.
  *
- * They belong together on their own terms: both come from a backend that declares `canInput`
- * and does take input, so neither is a `missing-capability` (D11) — one says send a different
- * string, the other says ask for a different key, and both name the offending argument because
- * that is the only thing a caller can act on. The pair is the reason the second one was cheap
- * to add: `unsupported-key` is `unsupported-text` one argument down (#215).
+ * They belong together on their own terms: none of them is a `missing-capability` (D11) — the
+ * first two come from a backend that declares `canInput` and does take input, the third from one
+ * that reads its log like every backend does. One says send a different string, one asks for a
+ * different key, one says read without that filter, and all of them name the offending argument
+ * because that is the only thing a caller can act on. The pair was the reason the second one was
+ * cheap to add — `unsupported-key` is `unsupported-text` one argument down (#215) — and
+ * `log-filter-refused` is the same shape on `read_logs` (#303).
  *
  * Returns `null` for anything else, so the caller carries on down its own list.
  */
@@ -721,6 +745,14 @@ function unsupportedArgumentFailure(error: unknown): VerbFailure | null {
 			kind: 'unsupported-key',
 			serial: error.serial,
 			key: error.key,
+			message: error.message,
+		};
+	}
+	if (error instanceof LogFilterRefusedError) {
+		return {
+			kind: 'log-filter-refused',
+			serial: error.serial,
+			filter: error.filter,
 			message: error.message,
 		};
 	}

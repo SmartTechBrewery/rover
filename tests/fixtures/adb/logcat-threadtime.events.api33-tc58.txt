@@ -1,0 +1,21 @@
+--------- beginning of events
+10-06 10:40:11.416   724   724 I auditd  : type=1400 audit(0.0:3162): avc: denied { read } for comm="binder:724_6" name="wakeup46" dev="sysfs" ino=100197 scontext=u:r:system_suspend:s0 tcontext=u:object_r:sysfs:s0 tclass=dir permissive=0
+10-06 10:40:11.440   724   724 I auditd  : type=1400 audit(0.0:3163): avc: denied { read } for comm="binder:724_6" name="wakeup39" dev="sysfs" ino=80323 scontext=u:r:system_suspend:s0 tcontext=u:object_r:sysfs_gpio_keys:s0 tclass=dir permissive=0
+10-06 10:40:11.516  1972  2070 I commit_sys_config_file: [batterystats,26]
+10-06 10:40:11.519  1972  2070 I commit_sys_config_file: [batterystats,3]
+10-06 10:40:35.500  3729  3729 I auditd  : type=1400 audit(0.0:3164): avc: denied { write } for comm="ThreadPoolForeg" name="traced_producer" dev="tmpfs" ino=25967 scontext=u:r:gmscore_app:s0:c512,c768 tcontext=u:object_r:traced_producer_socket:s0 tclass=sock_file permissive=0 app=com.google.android.gms
+10-06 10:40:35.759  1972  2070 I am_pss  : [26363,10049,com.google.android.euicc,18387968,14254080,3039232,82833408,0,19,20]
+10-06 10:40:35.783  1972  2070 I commit_sys_config_file: [procstats,46]
+10-06 10:40:36.032  7180  7180 I auditd  : type=1400 audit(0.0:3165): avc: denied { write } for comm="ThreadPoolForeg" name="traced_producer" dev="tmpfs" ino=25967 scontext=u:r:gmscore_app:s0:c512,c768 tcontext=u:object_r:traced_producer_socket:s0 tclass=sock_file permissive=0 app=com.google.android.gms
+10-06 10:40:50.879  1972  2070 I am_pss  : [6915,10157,com.google.android.apps.messaging,108037120,64663552,22259712,202444800,0,19,33]
+10-06 10:40:59.465  1972  2070 I am_pss  : [11686,10156,com.google.android.googlequicksearchbox:search,72662016,35569664,8975360,185565184,0,19,32]
+10-06 10:41:05.504  3729  3729 I auditd  : type=1400 audit(0.0:3166): avc: denied { write } for comm="ThreadPoolForeg" name="traced_producer" dev="tmpfs" ino=25967 scontext=u:r:gmscore_app:s0:c512,c768 tcontext=u:object_r:traced_producer_socket:s0 tclass=sock_file permissive=0 app=com.google.android.gms
+10-06 10:41:06.036  7180  7180 I auditd  : type=1400 audit(0.0:3167): avc: denied { write } for comm="ThreadPoolForeg" name="traced_producer" dev="tmpfs" ino=25967 scontext=u:r:gmscore_app:s0:c512,c768 tcontext=u:object_r:traced_producer_socket:s0 tclass=sock_file permissive=0 app=com.google.android.gms
+10-06 10:41:22.307  1972  2143 I commit_sys_config_file: [appops,7235858]
+10-06 10:41:35.512  3729  3729 I auditd  : type=1400 audit(0.0:3168): avc: denied { write } for comm="ThreadPoolForeg" name="traced_producer" dev="tmpfs" ino=25967 scontext=u:r:gmscore_app:s0:c512,c768 tcontext=u:object_r:traced_producer_socket:s0 tclass=sock_file permissive=0 app=com.google.android.gms
+10-06 10:41:36.068  7180  7180 I auditd  : type=1400 audit(0.0:3169): avc: denied { write } for comm="ThreadPoolForeg" name="traced_producer" dev="tmpfs" ino=25967 scontext=u:r:gmscore_app:s0:c512,c768 tcontext=u:object_r:traced_producer_socket:s0 tclass=sock_file permissive=0 app=com.google.android.gms
+10-06 10:41:41.943  1972  2298 I netstats_mobile_sample: [0,0,0,0,0,0,0,0,0,0,0,0,1791276101945]
+10-06 10:41:41.944  1972  2298 I netstats_wifi_sample: [121251268,106346,9746377,44873,121251268,106346,9746377,44873,119206505,98806,9745975,44866,1791276101945]
+10-06 10:41:54.360  1972  2070 I am_pss  : [16705,1000,com.android.settings,71447552,64471040,233472,172769280,0,2,25]
+10-06 10:42:05.520  3729  3729 I auditd  : type=1400 audit(0.0:3170): avc: denied { write } for comm="ThreadPoolForeg" name="traced_producer" dev="tmpfs" ino=25967 scontext=u:r:gmscore_app:s0:c512,c768 tcontext=u:object_r:traced_producer_socket:s0 tclass=sock_file permissive=0 app=com.google.android.gms
+10-06 10:42:06.072  7180  7180 I auditd  : type=1400 audit(0.0:3171): avc: denied { write } for comm="ThreadPoolForeg" name="traced_producer" dev="tmpfs" ino=25967 scontext=u:r:gmscore_app:s0:c512,c768 tcontext=u:object_r:traced_producer_socket:s0 tclass=sock_file permissive=0 app=com.google.android.gms

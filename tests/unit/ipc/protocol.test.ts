@@ -431,11 +431,43 @@ describe('read_logs params schema', () => {
 
 	it.each([
 		['a serial beside the lease id', { serial: 'emulator-5554' }],
-		// The two knobs this row deliberately does not have: a follow is a wait with no
-		// condition and a stream over IPC, and neither arrives as a silently ignored key.
+		// The knob this row deliberately does not have: a follow is a wait with no condition and
+		// a stream over IPC, and it does not arrive as a silently ignored key.
 		['a request to follow the log', { follow: true }],
-		['a tag filter', { tag: 'AndroidRuntime' }],
 	])('rejects %s rather than silently stripping it', (_label, extra) => {
+		expect(ReadLogsParamsSchema.safeParse({ leaseId: 'lease-1', ...extra }).success).toBe(false);
+	});
+
+	// #303: the selections, every one optional and all of them combinable — so a call carrying
+	// every one at once is the case that proves no cross-field rule was smuggled in.
+	it('takes every selection at once, verbatim', () => {
+		const call = {
+			leaseId: 'lease-1',
+			appId: 'com.example.app',
+			pid: 0,
+			minLevel: 'warn',
+			tag: 'AndroidRuntime',
+			since: '10-06 10:05:54.264',
+			buffers: ['crash', 'events'],
+		};
+
+		expect(ReadLogsParamsSchema.parse(call)).toEqual(call);
+	});
+
+	it.each([
+		// An empty list reads nothing — a caller sending it means something else.
+		['no buffers at all', { buffers: [] }],
+		['a buffer outside the shared vocabulary', { buffers: ['radio'] }],
+		['more buffers than the vocabulary has', { buffers: ['main', 'main', 'main', 'main', 'main'] }],
+		['a level outside the shared vocabulary', { minLevel: 'critical' }],
+		['an empty tag, which would select nothing', { tag: '' }],
+		['an over-long tag', { tag: 'x'.repeat(257) }],
+		['an empty since', { since: '' }],
+		['an over-long since', { since: '1'.repeat(65) }],
+		['a negative pid', { pid: -1 }],
+		['a fractional pid', { pid: 1.5 }],
+		['an app id that is not one', { appId: 'not an app' }],
+	])('rejects %s', (_label, extra) => {
 		expect(ReadLogsParamsSchema.safeParse({ leaseId: 'lease-1', ...extra }).success).toBe(false);
 	});
 

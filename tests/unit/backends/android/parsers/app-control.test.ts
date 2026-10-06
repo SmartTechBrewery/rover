@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
 	isSilent,
 	outputLines,
+	parsePids,
 	parseResolvedActivity,
 	saysSuccess,
 	startedActivity,
@@ -211,5 +212,21 @@ describe('parseResolvedActivity', () => {
 		['no class half', 'com.android.settings\n'],
 	])('answers null to %s', (_case, stdout) => {
 		expect(parseResolvedActivity(stdout)).toBeNull();
+	});
+});
+
+/**
+ * `pidof <app>` on a TC58 at API 33 (PROJECT.md §6): one pid and a newline for a running app,
+ * nothing at all — and exit 1, which the backend's `|| true` absorbs — for one that is not.
+ */
+describe('parsePids', () => {
+	it.each([
+		['one pid', '16705\n', [16705]],
+		['several pids', '3729 7180\n', [3729, 7180]],
+		['nothing, for an app that is not running', '', []],
+		['a pty line ending', '16705\r\n', [16705]],
+		['a word that is not a pid', 'pidof: not found\n', []],
+	])('reads %s', (_label, stdout, pids) => {
+		expect(parsePids(stdout)).toEqual(pids);
 	});
 });

@@ -406,7 +406,10 @@ Verbs live above the backends and below the adapters, and this is where determin
   a `truncated` flag it cannot decide for itself keeps a short read from reading as a quiet device.
   Like the app verbs it requires no capability and resolves no target, and like every bounded read
   in this repository it does not follow — a tail that stays open is a wait with no condition and a
-  stream over a protocol built for request and response.
+  stream over a protocol built for request and response. Its selections (#303 — app, process,
+  level, tag, `since`, buffers) are passed down and applied **by the backend, before the count
+  bound**, with the shared meaning of level, tag and process in `src/core/log-filter.ts`; a
+  selection a backend cannot apply is refused by name (`LogFilterRefusedError`), never ignored.
 - **`recordVideo()`** (`src/verbs/record.ts`) is the second verb whose answer carries more than an
   `ActionResult`, and it reuses `readLogs`' machinery rather than forking it:
   `RecordVideoResultSchema` is `ActionResultSchema.extend({ frames, container })`, its row's answer

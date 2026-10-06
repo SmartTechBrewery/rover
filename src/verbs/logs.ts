@@ -26,13 +26,24 @@
  * a wait with no condition (ai/RULES.md §2) plus a stream over IPC (D19): this is a bounded
  * dump, and `logs.truncated` says when the device had more.
  *
+ * **Selecting is the backend's, sizing is this module's** (#303). An app, a process, a level, a
+ * tag, a point in time and the streams to read are passed straight down and applied before the
+ * count bound, so the byte bound below only ever measures entries that matched — a filtered
+ * read is not truncated by lines it would have thrown away. Filters only select; nothing here
+ * ranks or judges an entry (ai/RULES.md §1).
+ *
  * **The read is bounded twice — in entries and in bytes** ({@link MAX_LOG_BYTES}), because
  * an entry has no fixed size and the answer travels as one frame. Both bounds report the
  * same way: the oldest go and `logs.truncated` says so.
  */
 
 import type { z } from 'zod';
-import { type LogEntry, type LogRead, LogReadSchema } from '../core/device.js';
+import {
+	type LogEntry,
+	type LogRead,
+	LogReadSchema,
+	type ReadLogsOptions,
+} from '../core/device.js';
 import type { VerbContext } from './context.js';
 import { performAction } from './perform.js';
 import { ActionResultSchema } from './result.js';
@@ -113,7 +124,8 @@ function withinByteBudget(read: LogRead): LogRead {
 export const ReadLogsResultSchema = ActionResultSchema.extend({ logs: LogReadSchema }).strict();
 export type ReadLogsResult = z.infer<typeof ReadLogsResultSchema>;
 
-export interface ReadLogsVerbOptions {
+/** The backend's options, with the bound made optional: the selections pass through as they are. */
+export interface ReadLogsVerbOptions extends Omit<ReadLogsOptions, 'maxEntries'> {
 	/** Defaults to {@link DEFAULT_MAX_LOG_ENTRIES}. */
 	readonly maxEntries?: number;
 }
@@ -137,7 +149,7 @@ export async function readLogs(
 		verb: 'read_logs',
 		requires: [],
 		act: async () => {
-			read.logs = await context.backend.readLogs(context.serial, { maxEntries });
+			read.logs = await context.backend.readLogs(context.serial, { ...options, maxEntries });
 		},
 	});
 

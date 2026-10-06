@@ -21,6 +21,9 @@
 
 import { type LogEntry, LogEntrySchema, type LogLevel } from '../../../core/device.js';
 
+/** `MM-DD HH:MM:SS.mmm` — the timestamp `threadtime` prints, with no year. */
+const TIMESTAMP = /\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3}/;
+
 /**
  * One `threadtime` line: `MM-DD HH:MM:SS.mmm  <pid>  <tid> <L> <tag>: <message>`.
  *
@@ -35,8 +38,23 @@ import { type LogEntry, LogEntrySchema, type LogLevel } from '../../../core/devi
  * some other letter falls to {@link unparseable} rather than being mapped to a level
  * nobody observed.
  */
-const THREADTIME =
-	/^(\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3})\s+(\d+)\s+\d+\s+([VDIWEF])\s+(.*?): ?(.*)$/;
+const THREADTIME = new RegExp(
+	`^(${TIMESTAMP.source})\\s+(\\d+)\\s+\\d+\\s+([VDIWEF])\\s+(.*?): ?(.*)$`,
+);
+
+/**
+ * Whether `value` is a timestamp in the shape this log's own entries carry — what a `since`
+ * selection must be, since it is taken from an entry and compared against entries.
+ *
+ * The same pattern {@link THREADTIME} reads a timestamp with, so what an entry carries and what
+ * a read accepts back cannot drift apart. Fixed-width and zero-padded, which is what makes two
+ * of them order correctly as strings — within one year, since logcat prints none.
+ */
+export function isLogcatTimestamp(value: string): boolean {
+	return WHOLE_TIMESTAMP.test(value);
+}
+
+const WHOLE_TIMESTAMP = new RegExp(`^${TIMESTAMP.source}$`);
 
 /**
  * logcat's own framing, printed once per buffer it was asked for: `--------- beginning of

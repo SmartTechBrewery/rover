@@ -1,6 +1,6 @@
 /**
  * Parsers for the output of the app-lifecycle commands — `adb install`, `am start`,
- * `am force-stop`, `pm clear` and `cmd package resolve-activity`.
+ * `am force-stop`, `pm clear`, `cmd package resolve-activity` and `pidof <app>`.
  *
  * Lives here rather than in `../backend.ts` for the reason `ai/CODING_STANDARDS.md`
  * gives: output gets "a parser module with its own tests and its own fixture files
@@ -140,4 +140,21 @@ export function startedActivity(result: AdbResult): boolean {
 export function parseResolvedActivity(stdout: string): string | null {
 	const answer = outputLines(stdout).at(-1) ?? '';
 	return COMPONENT.test(answer) ? answer : null;
+}
+
+/**
+ * The pids `pidof <app>` named — the processes a log read selects an app by (#303).
+ *
+ * `pidof` prints the pids space-separated on one line, and **nothing at all** when no process
+ * has that exact name, where it also exits 1 — the backend runs it with `|| true`, so the empty
+ * answer arrives here as an empty list rather than as a failed command (PROJECT.md §6). The name
+ * is matched whole, so an app's secondary processes (`<app>:remote`) are not among them —
+ * measured on API 33. Anything that is not a whole number is not a pid and is not kept.
+ */
+export function parsePids(stdout: string): number[] {
+	return stdout
+		.trim()
+		.split(/\s+/)
+		.filter((word) => /^\d+$/.test(word))
+		.map(Number);
 }

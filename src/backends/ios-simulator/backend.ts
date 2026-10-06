@@ -66,6 +66,7 @@ import {
 	type DeviceWatch,
 	type DeviceWatcher,
 	type InterruptionCause,
+	LogFilterSchema,
 	type LogRead,
 	type Point,
 	type PullFileOptions,
@@ -77,6 +78,7 @@ import {
 import {
 	DeviceVanishedError,
 	FileTooLargeError,
+	LogFilterRefusedError,
 	NoRecordingRunningError,
 	RecordingAlreadyRunningError,
 	UnfinishedRecordingError,
@@ -274,10 +276,11 @@ const HID_RPC: IdbStreamRpc = 'hid';
  *
  * That section's measurement stands: a read that filters *after* the fact spends seconds
  * serialising noise before `maxEntries` throws it away, so the bound belongs in the query. What
- * it named as the pushdown was `--predicate 'process == "…"'` — and `ReadLogsOptions` carries
- * `maxEntries` and nothing else (`src/core/device.js`), so there is no process to filter *by*.
- * Inventing one would answer a narrower question than the caller asked; widening the contract to
- * pass one is a contract change and its own issue.
+ * it named as the pushdown was `--predicate 'process == "…"'` — and when this was written
+ * `ReadLogsOptions` carried `maxEntries` and nothing else (`src/core/device.js`), so there was no
+ * process to filter *by*. #303 widened the contract with selections (an app, a process, a level,
+ * a tag, `since`, buffers); this backend refuses each by name until #304 maps them, so the
+ * predicate pushdown is that issue's to take up.
  *
  * So the pushdown is the other bound `log show` offers — its window — and **half of it is
  * already the device**. `simctl spawn` runs the query *inside* the simulator: a 20-second read
@@ -345,8 +348,8 @@ const HID_RPC: IdbStreamRpc = 'hid';
  * **`5m` is the horizon, and a read that exhausts it answers `truncated: false` honestly.**
  * That is the same claim the Android side makes when the ring buffer holds less than the cap:
  * nothing was dropped *for the cap's sake*. What neither platform can offer is an unbounded
- * lookback, and a caller has no way to ask for one — `ReadLogsOptions` carries `maxEntries` and
- * nothing else, and widening that is a contract change rather than something to improvise here.
+ * lookback, and a caller has no way to ask for one — `ReadLogsOptions`' selections (#303) narrow a
+ * read rather than reach past its horizon, and this backend refuses them until #304 maps them.
  *
  * **The unit is spelled out because the tool's default is not what its help says.** `log show
  * --help` lists `--last <num>[m|h|d]` and no `s`, yet `s` is honoured — `--last 60s` and `--last
@@ -1599,6 +1602,11 @@ export class IosSimulatorDeviceBackend implements DeviceBackend {
 	 * to ask for, and giving it one is a contract change (`ReadLogsOptions`, `src/core/device.js`)
 	 * rather than something to improvise here.
 	 *
+	 * **Every selection #303 added is refused by name, before anything runs** — an app, a
+	 * process, a level, a tag, `since` and buffers. This backend does not map them yet (#304), and
+	 * an unfiltered answer to a filtered question would look exactly like a right one
+	 * (ai/RULES.md §2). The first one present is the one named, in `LogFilterSchema`'s order.
+	 *
 	 * **No state check, unlike {@link screenshot}, and that is measured too**: `log show` on a
 	 * device that is not booted fails in **0.15 s** at exit 149 with *"Process spawn via launchd
 	 * failed because device is not booted"* (same bench). There is nothing to pre-empt — the tool
@@ -1614,6 +1622,15 @@ export class IosSimulatorDeviceBackend implements DeviceBackend {
 	 * log from the wrong device is worse than no log, since nothing about it looks wrong.
 	 */
 	async readLogs(serial: DeviceSerial, options: ReadLogsOptions): Promise<LogRead> {
+		const unapplied = LogFilterSchema.options.find((filter) => options[filter] !== undefined);
+		if (unapplied !== undefined) {
+			throw new LogFilterRefusedError(
+				serial,
+				unapplied,
+				'this backend does not apply it to its log read yet',
+			);
+		}
+
 		let entries: LogRead['entries'] = [];
 		let answered = false;
 

@@ -104,6 +104,26 @@ describe('read_logs', () => {
 		expect(bounds).toEqual([7]);
 	});
 
+	// #303: the selections are the backend's to apply before its bound, so the verb hands them
+	// down verbatim — and one a caller did not send is not there to be misread as "nothing".
+	it('passes a caller’s selections straight through, and adds none of its own', async () => {
+		const { context } = recording();
+		const selections = {
+			pid: 42,
+			minLevel: 'warn',
+			tag: 'CrashReporter',
+			since: '10-06 10:05:54.264',
+			buffers: ['crash'],
+		} as const;
+
+		await readLogs(context, selections);
+		await readLogs(context);
+
+		const calls = vi.mocked(context.backend.readLogs).mock.calls;
+		expect(calls[0][1]).toEqual({ ...selections, maxEntries: DEFAULT_MAX_LOG_ENTRIES });
+		expect(calls[1][1]).toEqual({ maxEntries: DEFAULT_MAX_LOG_ENTRIES });
+	});
+
 	/**
 	 * The log first, the screen after. Reversed, the "state after the action" (D12(c)) would
 	 * be the state before the read — and for this verb in particular the screen is the thing
