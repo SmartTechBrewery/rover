@@ -27,6 +27,7 @@ import {
 	createMockCapabilities,
 	createMockCapabilityManifest,
 	createMockDeviceBackend,
+	createMockDeviceInfo,
 	createMockScreenElement,
 	createMockVerbContext,
 } from '../../helpers/factories.js';
@@ -179,6 +180,63 @@ describe('waitFor', () => {
 		const result = await waitFor(context, { by: 'text', text: 'Save' }, fakeClock());
 
 		expect(result.target?.element).toEqual(save);
+	});
+
+	/**
+	 * #308: an element under the on-screen keyboard is not one a caller can touch yet, and a
+	 * keyboard animating closed is a screen still moving — so it is polled through, exactly as
+	 * a clipped element is, rather than ending the wait on poll one.
+	 */
+	it('keeps polling an element under the on-screen keyboard until the keyboard is gone', async () => {
+		const field = createMockScreenElement({
+			id: 'field',
+			text: 'Search',
+			bounds: { x: 10, y: 600, width: 100, height: 40 },
+		});
+		const context = contextShowing([field]);
+		const info = createMockDeviceInfo();
+		vi.mocked(context.backend.deviceInfo).mockResolvedValueOnce({
+			...info,
+			screen: {
+				...info.screen,
+				keyboard: { shown: true, bounds: { x: 0, y: 500, width: 360, height: 300 } },
+			},
+		});
+
+		const result = await waitFor(context, { by: 'text', text: 'Search' }, fakeClock());
+
+		expect(result.target?.element).toEqual(field);
+		// Two polls — covered, then clear — and the after-state's own read.
+		expect(reads(context)).toBe(3);
+	});
+
+	it('says the element was under the keyboard when it never comes out from under it', async () => {
+		const field = createMockScreenElement({
+			id: 'field',
+			text: 'Search',
+			bounds: { x: 10, y: 600, width: 100, height: 40 },
+		});
+		const context = contextShowing([field]);
+		const info = createMockDeviceInfo();
+		vi.mocked(context.backend.deviceInfo).mockResolvedValue({
+			...info,
+			screen: {
+				...info.screen,
+				keyboard: { shown: true, bounds: { x: 0, y: 500, width: 360, height: 300 } },
+			},
+		});
+
+		const thrown = await waitFor(
+			context,
+			{ by: 'text', text: 'Search' },
+			{ ...fakeClock(), timeoutMs: 500 },
+		).catch((error: unknown) => error);
+
+		expect(thrown).toBeInstanceOf(WaitTimeoutError);
+		expect((thrown as WaitTimeoutError).found).toContain(
+			'matching but under the on-screen keyboard at 0,500 360×300',
+		);
+		expect((thrown as WaitTimeoutError).polls).toBeGreaterThan(1);
 	});
 
 	it('says the element was there but unreachable when it never becomes addressable', async () => {

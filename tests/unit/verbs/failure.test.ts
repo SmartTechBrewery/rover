@@ -25,6 +25,7 @@ import { parseDeviceSerial, parsePlatformId } from '@/core/ids.js';
 import {
 	AmbiguousTargetError,
 	ArtifactTooLargeError,
+	CoveredByKeyboardError,
 	FrameExtractionFailedError,
 	FrameExtractionUnavailableError,
 	FramesTooLargeError,
@@ -129,6 +130,42 @@ describe('a verb-layer error becomes a failure a client can branch on', () => {
 			point: { x: 60, y: 40 },
 			reason: 'clipped',
 		});
+	});
+
+	/**
+	 * #308. Without this branch a device that is merely showing a keyboard would answer as a
+	 * host that broke. Both shapes: an element behind the point, and none — a caller's point
+	 * or `scroll`'s computed start.
+	 */
+	it('maps a touch under the on-screen keyboard with every field, with and without an element', () => {
+		const keyboard = { x: 0, y: 500, width: 360, height: 300 };
+		const onElement = new CoveredByKeyboardError(
+			SERIAL,
+			"text containing 'Save'",
+			save,
+			{ x: 60, y: 620 },
+			keyboard,
+		);
+		const onPoint = new CoveredByKeyboardError(
+			SERIAL,
+			'start of a scroll down across the screen',
+			null,
+			{ x: 180, y: 600 },
+			keyboard,
+		);
+
+		expect(failureOf(onElement)).toEqual({
+			kind: 'covered-by-keyboard',
+			serial: SERIAL,
+			lookedFor: "text containing 'Save'",
+			element: save,
+			point: { x: 60, y: 620 },
+			keyboard,
+			message: onElement.message,
+		});
+		expect(failureOf(onPoint)).toMatchObject({ kind: 'covered-by-keyboard', element: null });
+		expect(onPoint.message).toContain('start of a scroll down across the screen');
+		expect(onPoint.message).toContain('hide_keyboard');
 	});
 
 	/**
@@ -418,6 +455,18 @@ describe('a verb-layer error becomes a failure a client can branch on', () => {
 		});
 	});
 
+	/**
+	 * #312: this message is the only place an agent meets this failure, so it carries the steer
+	 * off the bypass — running the build's own install task, which unpinned lands on every device
+	 * attached to the host — and names the remedy that is actually available.
+	 */
+	it('tells the agent not to install around the hook, and where a hook comes from', () => {
+		const error = new InstallHookUndeclaredError(SERIAL, 'checkout-web');
+
+		expect(error.message).toMatch(/every device attached/);
+		expect(error.message).toContain('rover init');
+	});
+
 	// The exit code and the stderr tail travel together, because a non-zero exit is data and
 	// neither half says on its own why a build refused.
 	it('maps an install command that ran and failed, carrying its exit code and stderr', () => {
@@ -518,6 +567,36 @@ describe('a failure survives the trip to the agent', () => {
 				360,
 				800,
 				'off-screen',
+			),
+		],
+		[
+			'covered-by-keyboard',
+			new CoveredByKeyboardError(
+				SERIAL,
+				"element 'save'",
+				save,
+				{ x: 60, y: 620 },
+				{
+					x: 0,
+					y: 500,
+					width: 360,
+					height: 300,
+				},
+			),
+		],
+		[
+			'covered-by-keyboard with no element',
+			new CoveredByKeyboardError(
+				SERIAL,
+				'point (60, 620)',
+				null,
+				{ x: 60, y: 620 },
+				{
+					x: 0,
+					y: 500,
+					width: 360,
+					height: 300,
+				},
 			),
 		],
 		['wait-timeout', new WaitTimeoutError("element 'save'", 'an empty screen', 5_000, 21)],

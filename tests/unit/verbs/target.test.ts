@@ -8,12 +8,13 @@
  */
 
 import { describe, expect, it, vi } from 'vitest';
-import type { DeviceBackend, ScreenElement } from '@/core/device.js';
+import type { DeviceBackend, OnScreenKeyboard, ScreenElement } from '@/core/device.js';
 import { MissingCapabilityError } from '@/core/errors.js';
 import { parseElementId } from '@/core/ids.js';
 import type { VerbContext } from '@/verbs/context.js';
 import {
 	AmbiguousTargetError,
+	CoveredByKeyboardError,
 	OffScreenPointError,
 	TargetNotFoundError,
 	UnaddressableElementError,
@@ -22,6 +23,8 @@ import {
 	type AbsenceTarget,
 	AbsenceTargetSchema,
 	centreOf,
+	isInside,
+	keyboardCovering,
 	requireTarget,
 	resolveTarget,
 	type ScreenTarget,
@@ -31,6 +34,7 @@ import {
 	createMockCapabilities,
 	createMockCapabilityManifest,
 	createMockDeviceBackend,
+	createMockDeviceInfo,
 	createMockScreenElement,
 	createMockVerbContext,
 } from '../../helpers/factories.js';
@@ -45,6 +49,26 @@ function contextShowing(...screens: ScreenElement[][]): VerbContext {
 	});
 	return createMockVerbContext({ backend: createMockDeviceBackend({ readScreen }) });
 }
+
+/**
+ * {@link contextShowing}, on a device whose `deviceInfo` reports `keyboard` — the field the
+ * covered-touch check reads, and nothing else about the screen changes.
+ */
+function contextWithKeyboard(
+	keyboard: OnScreenKeyboard | null,
+	...screens: ScreenElement[][]
+): VerbContext {
+	const context = contextShowing(...screens);
+	const info = createMockDeviceInfo();
+	vi.mocked(context.backend.deviceInfo).mockResolvedValue({
+		...info,
+		screen: { ...info.screen, keyboard },
+	});
+	return context;
+}
+
+/** The lower 300 dp of the 360×800 mock screen — a keyboard's ordinary shape. */
+const KEYBOARD = { x: 0, y: 500, width: 360, height: 300 };
 
 const save = createMockScreenElement({ id: 'save', text: 'Save' });
 const cancel = createMockScreenElement({
@@ -392,5 +416,150 @@ describe('the narrowed target schemas', () => {
 	it('refuses an unknown field, exactly as the full target union does', () => {
 		expect(() => ScreenTargetSchema.parse({ by: 'text', text: 'Save', exactly: true })).toThrow();
 		expect(() => AbsenceTargetSchema.parse({ by: 'element', id: 'save', index: 0 })).toThrow();
+	});
+});
+
+describe('the on-screen keyboard over a touch point (#308)', () => {
+	const send = createMockScreenElement({
+		id: 'send',
+		text: 'Send',
+		bounds: { x: 260, y: 600, width: 80, height: 40 },
+	});
+
+	it('refuses an element whose centre is under the keyboard, naming the target and the keyboard', async () => {
+		const context = contextWithKeyboard({ shown: true, bounds: KEYBOARD }, [save, send]);
+
+		const thrown = await resolveTarget(context, { by: 'text', text: 'Send' }).catch(
+			(error: unknown) => error,
+		);
+
+		expect(thrown).toBeInstanceOf(CoveredByKeyboardError);
+		const error = thrown as CoveredByKeyboardError;
+		expect(error.element?.id).toBe('send');
+		expect(error.point).toEqual({ x: 300, y: 620 });
+		expect(error.keyboard).toEqual(KEYBOARD);
+		expect(error.lookedFor).toBe("text containing 'Send'");
+		expect(error.message).toContain("'Send'");
+		expect(error.message).toContain('0,500 360×300');
+		expect(error.message).toContain('hide_keyboard');
+	});
+
+	it('resolves an element clear of the keyboard on the same screen', async () => {
+		const context = contextWithKeyboard({ shown: true, bounds: KEYBOARD }, [save, send]);
+
+		const resolved = await resolveTarget(context, { by: 'text', text: 'Save' });
+
+		expect(resolved?.element?.id).toBe('save');
+	});
+
+	it('does not refuse an element half under the keyboard whose centre is clear', async () => {
+		const straddling = createMockScreenElement({
+			id: 'straddling',
+			text: 'Send',
+			bounds: { x: 10, y: 460, width: 100, height: 60 },
+		});
+		const context = contextWithKeyboard({ shown: true, bounds: KEYBOARD }, [straddling]);
+
+		const resolved = await resolveTarget(context, { by: 'text', text: 'Send' });
+
+		expect(resolved?.point).toEqual({ x: 60, y: 490 });
+	});
+
+	it('still reports a clipped element under the keyboard as clipped, never as covered', async () => {
+		const clipped = createMockScreenElement({
+			id: 'row',
+			text: 'Send',
+			bounds: { x: 100, y: 700, width: 100, height: -10 },
+		});
+		const context = contextWithKeyboard({ shown: true, bounds: KEYBOARD }, [clipped]);
+
+		const thrown = await resolveTarget(context, { by: 'text', text: 'Send' }).catch(
+			(error: unknown) => error,
+		);
+
+		expect(thrown).toBeInstanceOf(UnaddressableElementError);
+		expect((thrown as UnaddressableElementError).reason).toBe('clipped');
+	});
+
+	it('refuses a caller-supplied point under the keyboard, with no element behind it', async () => {
+		const context = contextWithKeyboard({ shown: true, bounds: KEYBOARD }, [save]);
+
+		const thrown = await resolveTarget(context, { by: 'point', at: { x: 100, y: 650 } }).catch(
+			(error: unknown) => error,
+		);
+
+		expect(thrown).toBeInstanceOf(CoveredByKeyboardError);
+		const error = thrown as CoveredByKeyboardError;
+		expect(error.element).toBeNull();
+		expect(error.lookedFor).toBe('point (100, 650)');
+		expect(error.point).toEqual({ x: 100, y: 650 });
+	});
+
+	it('reports an off-screen point as off-screen first, before any keyboard', async () => {
+		const context = contextWithKeyboard({ shown: true, bounds: KEYBOARD }, [save]);
+
+		const thrown = await resolveTarget(context, { by: 'point', at: { x: 100, y: 800 } }).catch(
+			(error: unknown) => error,
+		);
+
+		expect(thrown).toBeInstanceOf(OffScreenPointError);
+	});
+
+	it('lets a drag end under the keyboard — only where a touch starts is refused', async () => {
+		const context = contextWithKeyboard({ shown: true, bounds: KEYBOARD }, [save, send]);
+
+		const resolved = await requireTarget(
+			context,
+			{ by: 'text', text: 'Send' },
+			{ touchStartsHere: false },
+		);
+
+		expect(resolved.element?.id).toBe('send');
+	});
+
+	it.each<[string, OnScreenKeyboard | null]>([
+		['the device did not say (keyboard: null)', null],
+		['no keyboard is up', { shown: false, bounds: null }],
+		['a keyboard is up with no rectangle the device would give', { shown: true, bounds: null }],
+	])('refuses nothing when %s — there is no rectangle to test a point against', async (_what, keyboard) => {
+		const context = contextWithKeyboard(keyboard, [send]);
+
+		expect((await resolveTarget(context, { by: 'text', text: 'Send' }))?.element?.id).toBe('send');
+		expect((await resolveTarget(context, { by: 'point', at: { x: 100, y: 650 } }))?.source).toBe(
+			'caller-point',
+		);
+	});
+
+	it('pins the half-open convention on the rectangle: near edges inside, far edges outside', () => {
+		expect(isInside({ x: 0, y: 500 }, KEYBOARD)).toBe(true);
+		expect(isInside({ x: 359.9, y: 799.9 }, KEYBOARD)).toBe(true);
+		expect(isInside({ x: 360, y: 600 }, KEYBOARD)).toBe(false);
+		expect(isInside({ x: 100, y: 800 }, KEYBOARD)).toBe(false);
+		expect(isInside({ x: 100, y: 499.9 }, KEYBOARD)).toBe(false);
+		expect(isInside({ x: -0.1, y: 600 }, KEYBOARD)).toBe(false);
+	});
+
+	it('answers the rectangle only when a keyboard is shown and covers the point', () => {
+		const screen = createMockDeviceInfo().screen;
+
+		expect(
+			keyboardCovering(
+				{ x: 10, y: 500 },
+				{ ...screen, keyboard: { shown: true, bounds: KEYBOARD } },
+			),
+		).toEqual(KEYBOARD);
+		expect(
+			keyboardCovering(
+				{ x: 10, y: 499 },
+				{ ...screen, keyboard: { shown: true, bounds: KEYBOARD } },
+			),
+		).toBeNull();
+		// A rectangle left over from a keyboard the device says is down is not a keyboard.
+		expect(
+			keyboardCovering(
+				{ x: 10, y: 600 },
+				{ ...screen, keyboard: { shown: false, bounds: KEYBOARD } },
+			),
+		).toBeNull();
 	});
 });

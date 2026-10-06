@@ -28,7 +28,7 @@ import { type CapabilityId, requireCapability } from '../core/capabilities.js';
 import type { VerbContext } from './context.js';
 import type { ResolvedTarget } from './result.js';
 import { type ActionResult, resultAfterAction } from './result.js';
-import { requireTarget, type Target } from './target.js';
+import { type ResolveOptions, requireTarget, type Target } from './target.js';
 
 export interface PerformActionOptions {
 	/** The verb's own name, as the agent asked for it — `tap`, not the method underneath. */
@@ -48,6 +48,22 @@ export interface PerformActionOptions {
 	 * failed.
 	 */
 	readonly target?: Target;
+	/**
+	 * How that target is resolved, for the one verb whose spine target is not where its touch
+	 * starts.
+	 *
+	 * Absent means the default, which is what every verb aimed at a point it then touches wants:
+	 * the resolved point is checked against the on-screen keyboard. `scroll` is the exception —
+	 * its spine target is a *region*, and the point it actually drags from is computed a quarter
+	 * into that region rather than taken from its centre (`./input.ts`), so the centre is a
+	 * coordinate no touch lands on and refusing it by the keyboard would be a false explanation
+	 * of a gesture the keyboard was never in the way of (#318 review). It passes
+	 * `touchStartsHere: false` and checks its own computed start instead.
+	 *
+	 * Deliberately narrow: this forwards {@link ResolveOptions} and nothing else, so a verb can
+	 * only turn off a check that does not apply to it, never add one the spine does not make.
+	 */
+	readonly resolve?: ResolveOptions;
 	/** The action itself, handed the point that was resolved for it. */
 	readonly act: (target: ResolvedTarget | null) => Promise<void>;
 }
@@ -67,7 +83,10 @@ export async function performAction(
 		requireCapability(context.manifest, capability, context.serial);
 	}
 
-	const target = options.target === undefined ? null : await requireTarget(context, options.target);
+	const target =
+		options.target === undefined
+			? null
+			: await requireTarget(context, options.target, options.resolve);
 
 	await options.act(target);
 

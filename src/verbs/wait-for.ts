@@ -35,7 +35,12 @@ import { requireCapability } from '../core/capabilities.js';
 import { UnreadableScreenError } from '../core/errors.js';
 import { type Observation, waitForCondition } from '../core/wait.js';
 import type { VerbContext } from './context.js';
-import { describeElement, describeScreen, UnaddressableElementError } from './errors.js';
+import {
+	CoveredByKeyboardError,
+	describeElement,
+	describeScreen,
+	UnaddressableElementError,
+} from './errors.js';
 import { type ActionResult, type ResolvedTarget, resultAfterAction } from './result.js';
 import {
 	type AbsenceTarget,
@@ -101,18 +106,20 @@ export async function waitFor(
 					? { met: false, found: describeScreen(resolution.screen) }
 					: { met: true, value: resolution.resolved };
 			} catch (error) {
-				// The one throw *this* probe reads as "not yet" — the other is the unreadable
+				// The two throws *this* probe reads as "not yet" — the other is the unreadable
 				// screen, read in {@link pollScreen} because it belongs to both waits. An element
 				// clipped out of its scrolling container is a screen still moving — which is
 				// what a wait is for — so failing on it would end a wait that one more poll
-				// would have passed. Nothing is swallowed: if it never becomes addressable, the
-				// timeout says so in those words. Everything else propagates unchanged, an
-				// ambiguous target most of all — two elements matching one target is an
-				// under-specified request, and no amount of further polling specifies it.
-				if (error instanceof UnaddressableElementError) {
+				// would have passed. An element under the on-screen keyboard is the same case
+				// (#308): a keyboard animating closed is a screen still moving too. Nothing is
+				// swallowed: if it never becomes touchable, the timeout says so in those words.
+				// Everything else propagates unchanged, an ambiguous target most of all — two
+				// elements matching one target is an under-specified request, and no amount of
+				// further polling specifies it.
+				if (error instanceof UnaddressableElementError || error instanceof CoveredByKeyboardError) {
 					return {
 						met: false,
-						found: `${describeElement(error.element)}, matching but ${reasonOf(error)}`,
+						found: `${error.element === null ? error.lookedFor : describeElement(error.element)}, matching but ${reasonOf(error)}`,
 					};
 				}
 				throw error;
@@ -159,8 +166,12 @@ export async function waitUntilGone(
 	return resultAfterAction(context, 'wait_until_gone', null);
 }
 
-/** Why an element that matched still has no point on it to act on, in three words. */
-function reasonOf(error: UnaddressableElementError): string {
+/** Why an element that matched still has no point on it to act on, in a few words. */
+function reasonOf(error: UnaddressableElementError | CoveredByKeyboardError): string {
+	if (error instanceof CoveredByKeyboardError) {
+		const { x, y, width, height } = error.keyboard;
+		return `under the on-screen keyboard at ${x},${y} ${width}×${height}`;
+	}
 	return error.reason === 'clipped' ? 'clipped out of view' : 'centred off the screen';
 }
 
