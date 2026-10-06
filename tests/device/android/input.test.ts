@@ -47,6 +47,11 @@ import type { Device, DeviceKey } from '@/core/device.js';
  *   application, which this suite has no fixture application for; it was **proved by hand**
  *   against a real keyboard on API 33 and is recorded in PROJECT.md §6, with the dump on each
  *   side of it committed as fixtures (`tests/fixtures/adb/dumpsys-window-d.keyboard-*.api33-*`).
+ * - **The refusal of a touch under an open keyboard (#308) is not proved here either**, for the
+ *   same reason: it needs a keyboard up over a target. It was **reproduced and refused by hand**
+ *   on the same TC58, API 33 — a `tap` that typed a letter and answered `ok` before the change,
+ *   and `covered-by-keyboard` after it — and is recorded in PROJECT.md §6. It is a verb-layer
+ *   check, so the unit suite pins it (`tests/unit/verbs/target.test.ts`, `input.test.ts`).
  *
  * The device is left on its home screen in `afterEach`, unconditionally, including after a
  * failed assertion — this suite taps and types on whatever happens to be in front of it.

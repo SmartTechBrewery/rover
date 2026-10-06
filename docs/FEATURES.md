@@ -261,11 +261,14 @@ wrong one. And `null` (*this device did not say*) stays distinct from `{ shown: 
 device says no keyboard is up*), the same distinction the insets draw: a backend with no route to
 the fact must not read as one promising a clear screen.
 
-**Nothing refuses anything yet.** This is the device reporting a fact; what a verb does about an
-element the keyboard covers is separate work. **Dismissing it is no longer**: `hide_keyboard` (#307,
-above) is the way out, and it reads this same fact to decide whether there is anything to dismiss —
-which is also why the API 33 spelling of the source (`ITYPE_IME`, no `id=`) had to be read, since a
-parser that missed it answered *no keyboard* with one covering half the screen (`PROJECT.md` §6).
+**A touch the keyboard covers is now refused** (#308), which this paragraph used to defer: it read
+*nothing refuses anything yet — what a verb does about an element the keyboard covers is separate
+work*. That work is done and catalogued with the other refusals in §5; the fact reported here is
+what it reads, from the same `ScreenInfo` the screen-range check already had in hand. **Dismissing
+it** is `hide_keyboard` (#307, above), the way out the refusal names, and it reads this same fact to
+decide whether there is anything to dismiss — which is also why the API 33 spelling of the source
+(`ITYPE_IME`, no `id=`) had to be read, since a parser that missed it answered *no keyboard* with
+one covering half the screen (`PROJECT.md` §6).
 
 **Where it lives.** `src/verbs/`, `src/ipc/` for the method table, `src/core/device.ts` for the
 keyboard's shape and `hideKeyboard`'s contract, `src/core/capabilities.ts` for `canHideKeyboard`,
@@ -290,7 +293,24 @@ agent gets a false green are closed in the tool rather than left to the agent's 
   documented fallback and is marked in the result as not having come from a screen. Every resolved
   point is range-checked against the device — an element scrolled out of its container comes back
   with an inverted rectangle, and the midpoint of that is arithmetic rather than a place to tap, so
-  it is refused by name.
+  it is refused by name. **And every point a touch starts at is checked against the on-screen
+  keyboard** (#308): the keyboard is drawn *over* the application, so an element under it is still
+  in the read with its laid-out bounds and a centre on the device, and a tap there lands on a key
+  that the device accepts and the verb used to report as done — measured on a TC58, where it typed
+  a letter into the search field instead of opening the suggestion it named (`PROJECT.md` §6).
+  `tap`, `long_press`, the start of `swipe` and the start of `scroll` — computed a quarter into the
+  region rather than resolved, so `scroll` checks it itself — fail as **`covered-by-keyboard`**,
+  naming the target, the point and the keyboard's rectangle, and pointing at `hide_keyboard`. It is
+  its own failure kind rather than a third reason on the clipped-element one, because a caller's
+  point and a scroll's computed start have no element behind them. **Never a silent re-target** to
+  something visible and **never an automatic dismissal** — both are the same lie told differently.
+  Three limits are deliberate and stated: only the **point** is checked, so an element half under
+  the keyboard whose centre is clear is tapped; the **end** of a drag is not checked, because where
+  a drag lets go does not decide who reads it; and a device that says a keyboard is up **without a
+  rectangle** refuses nothing, because there is no rectangle to test a point against and refusing
+  every touch would be a guess at its extent. Degenerate and off-screen are still reported first —
+  a clipped node's midpoint can land under a keyboard, and naming the keyboard for it would be a
+  false explanation.
 - **No `sleep`, anywhere.** `src/core/wait.ts` is the only module allowed to construct a delay:
   `waitForCondition` polls a probe until the condition is met or the deadline passes, and a probe
   reporting *unmet* is required **by its own type** to say what it found instead, so a timeout
@@ -307,7 +327,9 @@ agent gets a false green are closed in the tool rather than left to the agent's 
 before it acts and for a wait the resolution *is* the work. **Every poll reads the screen again** —
 a wait over one cached read is the stale-coordinate failure with a timer attached. `wait_for` waits
 until the target is there *and* actionable, so an element still clipped out of its scrolling
-container is *not yet* rather than a failure, while an ambiguous target is refused outright,
+container is *not yet* rather than a failure — and so is one under the on-screen keyboard, since a
+keyboard animating closed is a screen still moving, with the timeout saying *under the on-screen
+keyboard* if it never clears — while an ambiguous target is refused outright,
 because more polling cannot specify an under-specified request. A screen the device could not
 read **yet** — an application still starting, so there is no window to describe — is the second
 *not yet*, and both waits poll through it; if it lasts to the deadline the timeout says the
@@ -317,8 +339,10 @@ primitive's. `wait_until_gone` asks the mirror
 question of *matches* rather than of a resolution, and will not take a text target's `index`, since
 an index names a slot in the match list and a slot empties the moment any sibling leaves.
 
-**Where it lives.** `src/verbs/perform.ts`, `target.ts`, `wait-for.ts`, `src/core/wait.ts`,
-`tests/unit/no-sleep.test.ts`; `PROJECT.md` D12.
+**Where it lives.** `src/verbs/perform.ts`, `target.ts` (the keyboard check is `keyboardCovering`
+and `requireUncovered`), `input.ts` (`scroll`'s own start check), `wait-for.ts`, `errors.ts`
+(`CoveredByKeyboardError`), `failure.ts`, `src/core/wait.ts`, `tests/unit/no-sleep.test.ts`;
+`PROJECT.md` D12 and §6.
 
 ---
 

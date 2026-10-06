@@ -20,6 +20,7 @@ import type { Capabilities } from '@/core/capabilities.js';
 import {
 	type DeviceBackend,
 	DeviceKeySchema,
+	type OnScreenKeyboard,
 	type Point,
 	type ScreenElement,
 } from '@/core/device.js';
@@ -31,7 +32,7 @@ import {
 } from '@/core/errors.js';
 import { parseDeviceSerial, parseElementId } from '@/core/ids.js';
 import type { VerbContext } from '@/verbs/context.js';
-import { TargetNotFoundError } from '@/verbs/errors.js';
+import { CoveredByKeyboardError, TargetNotFoundError } from '@/verbs/errors.js';
 import {
 	hideKeyboard,
 	LONG_PRESS_DURATION_MS,
@@ -94,7 +95,12 @@ interface Recording {
 
 /** A context whose backend records every call on one shared log, in order. */
 function recording(
-	options: { screen?: readonly ScreenElement[]; capabilities?: Capabilities } = {},
+	options: {
+		screen?: readonly ScreenElement[];
+		capabilities?: Capabilities;
+		/** What `deviceInfo` reports for the on-screen keyboard — none up, when absent. */
+		keyboard?: OnScreenKeyboard | null;
+	} = {},
 ): Recording {
 	const calls: string[] = [];
 	const taps: Point[] = [];
@@ -110,7 +116,10 @@ function recording(
 		}),
 		deviceInfo: vi.fn<DeviceBackend['deviceInfo']>(async (serial) => {
 			calls.push('deviceInfo');
-			return createMockDeviceInfo({ serial });
+			const info = createMockDeviceInfo({ serial });
+			return options.keyboard === undefined
+				? info
+				: { ...info, screen: { ...info.screen, keyboard: options.keyboard } };
 		}),
 		tap: vi.fn<NonNullable<DeviceBackend['tap']>>(async (_serial, at) => {
 			calls.push('tap');
@@ -400,7 +409,7 @@ describe('scroll', () => {
 		expect(calls).toEqual(['deviceInfo', 'swipe', 'readScreen', 'deviceInfo']);
 	});
 
-	it('crosses the region it was given, and asks the device for no screen box at all', async () => {
+	it('crosses the region it was given rather than the screen', async () => {
 		const { calls, drags, context } = recording();
 
 		await scroll(context, 'down', { target: { by: 'text', text: 'Save' } });
@@ -409,9 +418,17 @@ describe('scroll', () => {
 		expect(drags).toEqual([
 			{ from: { x: 60, y: 50 }, to: { x: 60, y: 30 }, durationMs: SCROLL_DURATION_MS },
 		]);
-		// The region came from the element the spine already resolved: the only `deviceInfo`
-		// calls are the range check that resolution does and the device the result names.
-		expect(calls).toEqual(['readScreen', 'deviceInfo', 'swipe', 'readScreen', 'deviceInfo']);
+		// The region came from the element the spine already resolved. The `deviceInfo` calls are
+		// the range check that resolution does, the keyboard check on the computed start (#308),
+		// and the device the result names.
+		expect(calls).toEqual([
+			'readScreen',
+			'deviceInfo',
+			'deviceInfo',
+			'swipe',
+			'readScreen',
+			'deviceInfo',
+		]);
 	});
 
 	it('drags slowly enough not to fling, and takes an override', async () => {
@@ -705,5 +722,86 @@ describe('hide_keyboard', () => {
 		await hideKeyboard(context);
 
 		expect(calls[0]).toBe('hideKeyboard');
+	});
+});
+
+/**
+ * The refusal #308 adds: a touch that would start under the on-screen keyboard is refused by
+ * name, before anything reaches the device, instead of landing on a key and answering `ok`.
+ */
+describe('a touch under the on-screen keyboard', () => {
+	/** The lower half of the 360×800 mock screen. */
+	const lowerHalf: OnScreenKeyboard = {
+		shown: true,
+		bounds: { x: 0, y: 400, width: 360, height: 400 },
+	};
+	/** Centre (100, 600) — under {@link lowerHalf}. */
+	const send = createMockScreenElement({
+		id: 'send',
+		text: 'Send',
+		bounds: { x: 60, y: 580, width: 80, height: 40 },
+	});
+
+	it.each<[string, (context: VerbContext) => Promise<ActionResult>]>([
+		['tap', (context) => tap(context, { by: 'text', text: 'Send' })],
+		['tap by point', (context) => tap(context, { by: 'point', at: { x: 100, y: 600 } })],
+		['long_press', (context) => longPress(context, { by: 'text', text: 'Send' })],
+		[
+			'swipe from it',
+			(context) => swipe(context, { by: 'text', text: 'Send' }, { by: 'text', text: 'Save' }),
+		],
+	])('refuses %s, and touches nothing', async (_verb, run) => {
+		const { taps, drags, context } = recording({ screen: [save, send], keyboard: lowerHalf });
+
+		const thrown = await run(context).catch((error: unknown) => error);
+
+		expect(thrown).toBeInstanceOf(CoveredByKeyboardError);
+		expect((thrown as CoveredByKeyboardError).point).toEqual({ x: 100, y: 600 });
+		expect((thrown as CoveredByKeyboardError).keyboard).toEqual(lowerHalf.bounds);
+		expect(taps).toEqual([]);
+		expect(drags).toEqual([]);
+	});
+
+	it('lets a swipe end under the keyboard — only its start is checked', async () => {
+		const { drags, context } = recording({ screen: [save, send], keyboard: lowerHalf });
+
+		await swipe(context, { by: 'text', text: 'Save' }, { by: 'text', text: 'Send' });
+
+		expect(drags).toEqual([
+			{ from: { x: 60, y: 40 }, to: { x: 100, y: 600 }, durationMs: SWIPE_DURATION_MS },
+		]);
+	});
+
+	it('refuses a scroll of the whole screen whose computed start is under the keyboard', async () => {
+		const { drags, context } = recording({ keyboard: lowerHalf });
+
+		const thrown = await scroll(context, 'down').catch((error: unknown) => error);
+
+		expect(thrown).toBeInstanceOf(CoveredByKeyboardError);
+		const error = thrown as CoveredByKeyboardError;
+		// A quarter up from the bottom of the 800 dp screen, down its middle.
+		expect(error.point).toEqual({ x: 180, y: 600 });
+		expect(error.element).toBeNull();
+		expect(error.lookedFor).toBe('start of a scroll down across the screen');
+		expect(error.message).toContain('hide_keyboard');
+		expect(drags).toEqual([]);
+	});
+
+	it('lets a scroll start clear of the keyboard and end over it', async () => {
+		const { drags, context } = recording({ keyboard: lowerHalf });
+
+		await scroll(context, 'up');
+
+		expect(drags).toEqual([
+			{ from: { x: 180, y: 200 }, to: { x: 180, y: 600 }, durationMs: SCROLL_DURATION_MS },
+		]);
+	});
+
+	it('scrolls a named region clear of the keyboard', async () => {
+		const { drags, context } = recording({ screen: [save, send], keyboard: lowerHalf });
+
+		await scroll(context, 'down', { target: { by: 'text', text: 'Save' } });
+
+		expect(drags).toHaveLength(1);
 	});
 });

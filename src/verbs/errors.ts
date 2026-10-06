@@ -1,13 +1,13 @@
 /**
- * Verb-layer error types — the four ways a target fails to become one point, the two ways an
- * answer is too big to give, and the ways this host cannot produce one at all.
+ * Verb-layer error types — the five ways a target fails to become one point to touch, the two
+ * ways an answer is too big to give, and the ways this host cannot produce one at all.
  *
  * Device-layer errors (a missing capability, a device that vanished) stay in
  * `src/core/errors.ts`; these are about what the caller asked for, and every one of them
  * exists because the alternative is a **silent** answer: a first match among two, a tap
- * into nowhere, a truncated image, a frame list missing its middle, an install nobody ran, or
- * an empty result where the honest answer is that the screen no longer holds what was named
- * (ai/RULES.md §2).
+ * into nowhere or onto a keyboard, a truncated image, a frame list missing its middle, an
+ * install nobody ran, or an empty result where the honest answer is that the screen no longer
+ * holds what was named (ai/RULES.md §2).
  *
  * The last five are about a **host** rather than a device, and that is deliberate rather than
  * a stray. Frame extraction runs on the machine holding the hardware and needs a program that
@@ -24,7 +24,7 @@
  * the candidates can travel whole rather than as a formatted string.
  */
 
-import type { Point, ScreenElement } from '../core/device.js';
+import type { Point, Rect, ScreenElement } from '../core/device.js';
 import type { DeviceSerial } from '../core/ids.js';
 
 /** How many elements an excerpt names before it says how many more there were. */
@@ -201,6 +201,60 @@ export class UnaddressableElementError extends Error {
 		this.widthDp = widthDp;
 		this.heightDp = heightDp;
 		this.reason = reason;
+	}
+}
+
+/**
+ * Thrown when the point a touch would start at lies under the on-screen keyboard (#308).
+ *
+ * **The false green this closes**: the keyboard is drawn *over* the application, so an element
+ * under it is still in the screen read with the bounds it was laid out at, still resolves, and
+ * still has a centre on the device. A tap dispatched there lands on a key, the device accepts
+ * it, and the verb reported `ok` for a button nothing touched (`PROJECT.md` §6). Refusing by name is the only answer that is not that,
+ * and it is never a silent re-target to something visible, which would be the same lie told
+ * about a different element.
+ *
+ * Kept apart from {@link UnaddressableElementError} rather than added as a third reason on it,
+ * because the two describe different things. That one is an element with no point on it at
+ * all — a rectangle with no interior, or a centre off the device. This is a well-formed point,
+ * on the screen, with something drawn over it — and it has to work **with no element**:
+ * `tap { by: 'point' }` names none, and `scroll`'s start is computed rather than resolved, so
+ * `element` is `null` there and `lookedFor` says what the point was instead.
+ *
+ * The way out is part of the message for {@link AmbiguousTargetError}'s reason, and it is
+ * `hide_keyboard` rather than generic advice: that verb presses nothing when no keyboard is up,
+ * so it is safe to send without reading the screen first, where a `back` press is not.
+ */
+export class CoveredByKeyboardError extends Error {
+	readonly serial: DeviceSerial;
+	readonly lookedFor: string;
+	readonly element: ScreenElement | null;
+	readonly point: Point;
+	readonly keyboard: Rect;
+
+	constructor(
+		serial: DeviceSerial,
+		lookedFor: string,
+		element: ScreenElement | null,
+		point: Point,
+		keyboard: Rect,
+	) {
+		const what =
+			element === null
+				? `The ${lookedFor} on device '${serial}'`
+				: `${describeElement(element)} on device '${serial}' matches ${lookedFor} but`;
+		super(
+			`${what} cannot be touched: the point (${point.x}, ${point.y}) lies under the ` +
+				`on-screen keyboard at ${keyboard.x},${keyboard.y} ${keyboard.width}×${keyboard.height}, ` +
+				'so the touch would land on a key rather than on the application. Dismiss it with ' +
+				'hide_keyboard — which presses nothing when no keyboard is up — and target it again',
+		);
+		this.name = 'CoveredByKeyboardError';
+		this.serial = serial;
+		this.lookedFor = lookedFor;
+		this.element = element;
+		this.point = point;
+		this.keyboard = keyboard;
 	}
 }
 

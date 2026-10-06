@@ -46,7 +46,13 @@ import type { DeviceKey, Point, Rect } from '../core/device.js';
 import { capabilityMethod, type VerbContext } from './context.js';
 import { performAction } from './perform.js';
 import type { ActionResult, ResolvedTarget } from './result.js';
-import { requireTarget, type ScreenTarget, type Target } from './target.js';
+import {
+	describeTarget,
+	requireTarget,
+	requireUncovered,
+	type ScreenTarget,
+	type Target,
+} from './target.js';
 
 /**
  * How long {@link longPress} holds, when the caller does not say.
@@ -168,6 +174,11 @@ export async function longPress(
  * has happened on the device between the two reads — the gesture is still ahead of both — so
  * the whole cost is one extra screen read. Widening `PerformActionOptions` to carry a second
  * target would generalise the spine every verb shares for the one verb that needs it.
+ *
+ * **Only `from` is refused under the on-screen keyboard** (#308). It is where the touch starts,
+ * and a touch that starts on the keyboard is read by the keyboard; where a drag ends does not
+ * decide who reads it, so `to` may legitimately lie over the keyboard and is resolved with that
+ * one check off.
  */
 export async function swipe(
 	context: VerbContext,
@@ -182,7 +193,7 @@ export async function swipe(
 		requires: ['canInput'],
 		target: from,
 		act: async (resolved) => {
-			const destination = await requireTarget(context, to);
+			const destination = await requireTarget(context, to, { touchStartsHere: false });
 			const drag = capabilityMethod(context, 'canInput', 'swipe');
 			await drag(context.serial, pointOf(resolved), destination.point, durationMs);
 		},
@@ -198,10 +209,19 @@ export async function swipe(
  * remembered from an earlier turn (D12(a)).
  *
  * **With no target this scrolls whatever occupies the middle of the screen**, which is not
- * always the list the caller meant: a drag that starts over an on-screen keyboard is read by
- * the keyboard, and PROJECT.md §6 records one that typed a word into a search field instead of
- * scrolling anything. Naming the region is what makes it the list's scroll rather than the
- * screen's, and nothing here can tell the two apart until a screen read is available (#13).
+ * always the list the caller meant. Naming the region is what makes it the list's scroll rather
+ * than the screen's, and nothing here can tell the two apart until a screen read is available
+ * (#13).
+ *
+ * **A drag that would start under the on-screen keyboard is refused** (#308), by name, before
+ * anything is dispatched. The keyboard reads such a drag as its own — PROJECT.md §6 records one
+ * that typed a word into a search field instead of scrolling anything, and answered `ok` — so
+ * this used to be recorded here as a trap and is now a `CoveredByKeyboardError` (`./errors.ts`)
+ * naming the start point and the keyboard. The start is checked here rather than by the spine
+ * because it is **computed**, a quarter into the region, not resolved: the spine only ever saw
+ * the region's centre, which it checks too. The end is deliberately not checked — where a drag
+ * lets go does not decide who reads it. One `deviceInfo` answers both this check and, when no
+ * region was named, the screen's box.
  *
  * The region is also taken as it was reported. A container whose rectangle extends past the
  * panel is dragged across its own middle, so an end of the gesture can land off the screen,
@@ -222,8 +242,22 @@ export async function scroll(
 		requires: ['canInput'],
 		target: options.target,
 		act: async (resolved) => {
-			const box = resolved?.element?.bounds ?? (await screenBox(context));
+			const { screen } = await context.backend.deviceInfo(context.serial);
+			const box = resolved?.element?.bounds ?? {
+				x: 0,
+				y: 0,
+				width: screen.widthDp,
+				height: screen.heightDp,
+			};
 			const { from, to } = dragAcross(box, direction);
+			const across = options.target === undefined ? 'the screen' : describeTarget(options.target);
+			requireUncovered(
+				context,
+				`start of a scroll ${direction} across ${across}`,
+				null,
+				from,
+				screen,
+			);
 			const drag = capabilityMethod(context, 'canInput', 'swipe');
 			await drag(context.serial, from, to, durationMs);
 		},
@@ -367,12 +401,6 @@ export async function hideKeyboard(context: VerbContext): Promise<ActionResult> 
  * looks exactly like a scroll that went the wrong way.
  */
 const SCROLL_INSET = 0.25;
-
-/** The screen as a rectangle in the one coordinate space points and bounds share. */
-async function screenBox(context: VerbContext): Promise<Rect> {
-	const { screen } = await context.backend.deviceInfo(context.serial);
-	return { x: 0, y: 0, width: screen.widthDp, height: screen.heightDp };
-}
 
 /**
  * The two ends of a scroll's drag across `box` — the module header's convention as arithmetic.
