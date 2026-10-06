@@ -91,6 +91,7 @@ import { type AppId, type DeviceSerial, unwrap } from '../../core/ids.js';
 import { type LogEntrySelection, selectsLogEntry } from '../../core/log-filter.js';
 import { waitForCondition } from '../../core/wait.js';
 import { hostPathOf } from './containers.js';
+import { mergeCrashes, readCrashReports } from './crash-reports.js';
 import { SIMCTL_MISSING, SimctlNotFoundError } from './developer-dir.js';
 import {
 	borrowableNow,
@@ -387,14 +388,16 @@ const HID_RPC: IdbStreamRpc = 'hid';
 export const LOG_WINDOWS = ['30s', '2m', '5m'] as const;
 
 /**
- * The one stream this backend's log read answers from, in the neutral vocabulary (#303).
+ * The two streams this backend's log read answers from, in the neutral vocabulary (#303).
  *
  * **The unified log *is* `main`** — ordinary chatter and the system's own arrive in the same
  * store on this platform, and it is what every read here has always answered from, so naming it
- * changes nothing about an unselected read. The other three are refused by name
- * ({@link IosSimulatorDeviceBackend.readLogs}) rather than quietly mapped onto this one.
+ * changes nothing about an unselected read. **`crash` is this host's crash reports** (#323,
+ * `./crash-reports.ts`), scoped to this device and to the current lease. The other two are
+ * refused by name ({@link IosSimulatorDeviceBackend.readLogs}) rather than quietly mapped onto
+ * one of these.
  */
-const LOG_BUFFERS: readonly LogBuffer[] = ['main'];
+const LOG_BUFFERS: readonly LogBuffer[] = ['main', 'crash'];
 
 /**
  * The gap between two polls of the device set.
@@ -733,29 +736,65 @@ function capped(matching: readonly LogEntry[], maxEntries: number): LogRead {
 }
 
 /**
- * A log read asking for a stream this platform does not keep — or, for `crash`, one it keeps
- * somewhere `log show` does not look.
+ * A log read asking for a stream this platform does not keep.
  *
  * All of them are named at once rather than one at a time, because a caller that asked for two
  * unreadable streams has two things to change and a refusal naming one of them sends it round
  * again. `LogFilterRefusedError`'s own wording already says nothing was read.
- *
- * **`crash` is the one that is a gap rather than a mismatch**, and it says so: a simulator's
- * crashes are `.ips` reports written to this *host*, outside the unified log entirely, so
- * answering `crash` from `log show` would hand back ordinary chatter under the one name a caller
- * reaches for after something died. Reading those reports is the second half of #304.
  */
 function unreadableBuffers(serial: DeviceSerial, buffers: readonly LogBuffer[]): Error {
 	const asked = buffers.map((buffer) => `'${buffer}'`).join(', ');
-	const crash = buffers.includes('crash')
-		? " — 'crash' is this device's crash reports, which are files on the host lending it rather " +
-			'than part of its log stream, and this backend does not read them yet'
-		: '';
 
 	return new LogFilterRefusedError(
 		serial,
 		'buffers',
-		`this device keeps one log stream, 'main', and has nothing to answer ${asked} from${crash}`,
+		`this device keeps its log in 'main' and its crashes in 'crash', and has nothing to ` +
+			`answer ${asked} from`,
+	);
+}
+
+/**
+ * Which of the two streams one read answers from — refusing, before anything runs, a buffer this
+ * device lacks and a `crash` with no bound to scope it by.
+ *
+ * `crashesSinceMs` is the bound when the crash reports are to be read and `undefined` when they
+ * are not, so the reports can never be read unscoped. **The default read includes them exactly
+ * when there is a bound**: with one, `DeviceBackend.readLogs` requires the crash stream in a read
+ * with no `buffers`; without one, no report can be told apart from a previous holder's.
+ */
+function streamsOf(
+	serial: DeviceSerial,
+	options: ReadLogsOptions,
+): { readonly readsLog: boolean; readonly crashesSinceMs: number | undefined } {
+	const { buffers, recordsSinceMs } = options;
+	if (buffers === undefined) return { readsLog: true, crashesSinceMs: recordsSinceMs };
+
+	const asked = new Set(buffers);
+	const unreadable = [...asked].filter((buffer) => !LOG_BUFFERS.includes(buffer));
+	if (unreadable.length > 0) throw unreadableBuffers(serial, unreadable);
+	if (asked.has('crash') && recordsSinceMs === undefined) throw unscopedCrashes(serial);
+
+	return {
+		readsLog: asked.has('main'),
+		crashesSinceMs: asked.has('crash') ? recordsSinceMs : undefined,
+	};
+}
+
+/**
+ * A read of `crash` that carries no bound saying which of this host's crash reports are the
+ * caller's (`ReadLogsOptions.recordsSinceMs`).
+ *
+ * The daemon always sets one from the lease, so this is what an in-process caller or a test
+ * meets. Answering without it would hand back every crash this device ever had on this host,
+ * a previous holder's included — the leak #323 is scoped against — so it is refused by name.
+ */
+function unscopedCrashes(serial: DeviceSerial): Error {
+	return new LogFilterRefusedError(
+		serial,
+		'buffers',
+		"'crash' is this device's crash reports, which are files on the host lending it, and this " +
+			'read carries no lease bound to scope crash reports to, so none of them can be told apart ' +
+			"from a previous holder's",
 	);
 }
 
@@ -1704,13 +1743,20 @@ export class IosSimulatorDeviceBackend implements DeviceBackend {
 	 *   past the ten-second budget, so such a read fails loudly rather than answering short. With
 	 *   a predicate beside it the same two anchors cost 6.6 MB / 1.2 s and 14.8 MB / 1.6 s.
 	 * - **`buffers`** accepts `main`, which *is* the unified log on this platform
-	 *   ({@link LOG_BUFFERS}) and so changes nothing about the read. `system` and `events` are
-	 *   refused by name: there is no second stream here to point them at, and answering them from
-	 *   the unified log would be the plausible-looking wrong answer. **`crash` is refused too**,
-	 *   and that one is a real gap rather than a missing counterpart — a simulator's crash reports
-	 *   are `.ips` files on *this host*, outside the log store `log show` reads, and reading them
-	 *   is #304's second phase. Refusing it by name is what keeps a crash read from coming back
-	 *   as ordinary chatter in the meantime.
+	 *   ({@link LOG_BUFFERS}) and so changes nothing about the read, and **`crash`, which is this
+	 *   host's crash reports** (#323): a simulator's crashes are `.ips` files the Mac writes, outside
+	 *   the log store `log show` reads, so they come from `./crash-reports.ts` and never from the
+	 *   unified log. They are scoped to this device by the report's own `coalitionName` and to the
+	 *   current lease by `recordsSinceMs`, and **with no bound they are not read at all**: an
+	 *   explicit `crash` is refused by name, and the default read is the unified log alone. With
+	 *   the bound, the default read includes them, as `DeviceBackend.readLogs` requires of a read
+	 *   with no `buffers`; they are merged into the log by instant **before** the selections and
+	 *   the cap, so `pid`, `minLevel`, `since` and `maxEntries` mean the same thing for both. A
+	 *   crash entry is `fatal`, carries the report's pid and no tag, and an `appId` selects it
+	 *   only while one of the app's processes still runs — as on Android, the way to a process
+	 *   that has exited is its `pid`. `crash` alone runs no `log show`. `system` and `events` are
+	 *   refused by name: there is no stream here to point them at, and answering them from the
+	 *   unified log would be the plausible-looking wrong answer.
 	 *
 	 * The refusals that need no device come first and in `LogFilterSchema`'s order — `since`'s
 	 * shape, then the buffers — so the one a caller is told about does not depend on timing.
@@ -1742,10 +1788,7 @@ export class IosSimulatorDeviceBackend implements DeviceBackend {
 			);
 		}
 
-		const unreadable = [...new Set(options.buffers ?? LOG_BUFFERS)].filter(
-			(buffer) => !LOG_BUFFERS.includes(buffer),
-		);
-		if (unreadable.length > 0) throw unreadableBuffers(serial, unreadable);
+		const { readsLog, crashesSinceMs } = streamsOf(serial, options);
 
 		const selection: LogEntrySelection = {
 			...(options.appId === undefined ? {} : { pids: await this.appPids(serial, options.appId) }),
@@ -1759,14 +1802,21 @@ export class IosSimulatorDeviceBackend implements DeviceBackend {
 			matches: (entry) => selectsLogEntry(entry, selection) && isAtOrAfter(entry, since),
 		};
 
+		const crashes =
+			crashesSinceMs === undefined
+				? []
+				: (await readCrashReports(serial, crashesSinceMs)).filter(query.matches);
+		if (!readsLog) return capped(crashes, maxEntries);
+
 		// `--start` already reaches from the caller's own anchor to now, so there is no lookback
 		// left to widen: one read, and more matching entries than the cap is exactly `truncated`.
 		if (since !== undefined) {
 			const result = await this.runLogShow(serial, { start: startOf(since) }, query);
-			return capped(parseUnifiedLog(result.stdout).filter(query.matches), maxEntries);
+			const log = parseUnifiedLog(result.stdout).filter(query.matches);
+			return capped(mergeCrashes(log, crashes), maxEntries);
 		}
 
-		return this.widenedRead(serial, query, maxEntries);
+		return this.widenedRead(serial, query, maxEntries, crashes);
 	}
 
 	/**
@@ -1776,12 +1826,14 @@ export class IosSimulatorDeviceBackend implements DeviceBackend {
 	 * **What it counts is *matching* entries**, after the host filter, because the cap is on what
 	 * the caller asked about (`ReadLogsOptions.maxEntries`): a width holding thousands of lines
 	 * and three matching ones has not filled a cap of two hundred, and stopping there would
-	 * answer three entries with `truncated: true`.
+	 * answer three entries with `truncated: true`. `crashes` are matching entries too, merged into
+	 * every width, since the cap counts the merged answer.
 	 */
 	private async widenedRead(
 		serial: DeviceSerial,
 		query: LogQuery,
 		maxEntries: number,
+		crashes: readonly LogEntry[],
 	): Promise<LogRead> {
 		let entries: LogRead['entries'] = [];
 		let answered = false;
@@ -1801,7 +1853,7 @@ export class IosSimulatorDeviceBackend implements DeviceBackend {
 				return { entries: entries.slice(-maxEntries), truncated: true };
 			}
 
-			entries = parseUnifiedLog(result.stdout).filter(query.matches);
+			entries = mergeCrashes(parseUnifiedLog(result.stdout).filter(query.matches), crashes);
 			answered = true;
 			if (entries.length > maxEntries) return capped(entries, maxEntries);
 		}
@@ -1838,10 +1890,8 @@ export class IosSimulatorDeviceBackend implements DeviceBackend {
 	 * against its `UIKitApplication:` label, and every one of the 1,151 entries a
 	 * `processIdentifier == 49847` read came back with carried that `processID`.
 	 *
-	 * The refusal deliberately does **not** point at the crash buffer the way
-	 * `../android/backend.ts`'s does: this backend refuses that buffer by name for now
-	 * ({@link readLogs}), and naming it as a way out would be sending the caller somewhere that
-	 * also says no.
+	 * The refusal points at the crash buffer the way `../android/backend.ts`'s does: a crash
+	 * report is where an app that died is answered (#323), by its pid like any other entry.
 	 */
 	private async appPids(serial: DeviceSerial, appId: AppId): Promise<number[]> {
 		const result = await runSimctlOnDevice(serial, 'spawn', ['launchctl', 'list']);
@@ -1851,7 +1901,8 @@ export class IosSimulatorDeviceBackend implements DeviceBackend {
 				serial,
 				'appId',
 				`'${unwrap(appId)}' has no running process on this device, so there is no pid to ` +
-					'select by — a process that has exited is reachable by its pid',
+					'select by — a process that has exited is reachable by its pid, or through the crash ' +
+					'buffer',
 			);
 		}
 		return pids;

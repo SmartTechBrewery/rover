@@ -1901,6 +1901,19 @@ describe('readLogs', () => {
 	});
 
 	/**
+	 * The bound on what a *host* keeps about the device (#323) has nothing to scope here: this
+	 * platform's crashes are in the device's own log, so the read is the same with it as without.
+	 */
+	it('ignores the bound on host-kept records', async () => {
+		answers({ [argv(11).join(' ')]: LOGCAT });
+
+		const bounded = await backend.readLogs(SERIAL, { maxEntries: 10, recordsSinceMs: Date.now() });
+
+		expect(runAdbOnDevice.mock.calls[0][1]).toEqual(argv(11));
+		expect(bounded).toEqual(await backend.readLogs(SERIAL, { maxEntries: 10 }));
+	});
+
+	/**
 	 * `-t` counts logcat entries and a caller counts lines, so the cap is enforced on this
 	 * side too: the capture holds sixty, the caller asked for ten, and the ten it gets are
 	 * the **newest** — a log is read after something happened, not before.

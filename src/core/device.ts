@@ -414,6 +414,19 @@ export interface ReadLogsOptions {
 	 * must include the stream crashes land in.
 	 */
 	readonly buffers?: readonly LogBuffer[];
+	/**
+	 * The earliest moment, in this host's epoch milliseconds, from which records **this host
+	 * keeps about the device** — as opposed to the device's own log — belong to the caller.
+	 * Older ones are somebody else's and are never answered (#323).
+	 *
+	 * **Not a selection and never a caller's**: whoever serves the call sets it from when the
+	 * device was lent, and a caller cannot reach it — `ReadLogsParamsSchema` has no such field.
+	 * Absent means nothing scopes those records, so a backend that keeps its crashes in them
+	 * reads none of them rather than answering a neighbour's. A backend whose crashes are in the
+	 * device's own log ignores it. It is a host instant compared with host instants, so it is not
+	 * the client clock D17 refuses.
+	 */
+	readonly recordsSinceMs?: number;
 }
 
 /**
@@ -421,12 +434,14 @@ export interface ReadLogsOptions {
  * refusal to apply one names (`LogFilterRefusedError` in `./errors.ts`).
  *
  * Pinned to the interface in both directions by the line below it, so a selection added to one
- * without the other is a compile error rather than a key nobody can be told was refused.
+ * without the other is a compile error rather than a key nobody can be told was refused. The two
+ * bounds are the exclusions: `maxEntries` sizes the answer and `recordsSinceMs` scopes it, and
+ * neither is something a caller is told was refused.
  */
 export const LogFilterSchema = z.enum(['appId', 'pid', 'minLevel', 'tag', 'since', 'buffers']);
 export type LogFilter = z.infer<typeof LogFilterSchema>;
 
-type LogFilterKey = Exclude<keyof ReadLogsOptions, 'maxEntries'>;
+type LogFilterKey = Exclude<keyof ReadLogsOptions, 'maxEntries' | 'recordsSinceMs'>;
 true satisfies [LogFilterKey] extends [LogFilter]
 	? [LogFilter] extends [LogFilterKey]
 		? true
