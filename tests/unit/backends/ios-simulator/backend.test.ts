@@ -2364,6 +2364,34 @@ describe('readLogs', () => {
 	);
 	const CAPTURED_ENTRIES = 52;
 
+	/** All five level words in one capture: `Default` 29, absent 19, `Info` 14, `Error` 3, `Debug` 3, `Fault` 1. */
+	const LEVELS_LOG = readFileSync(
+		fixtureUrl('unified-log-ndjson.levels.xcode26.4.1-ios26.4.1.json'),
+		'utf8',
+	);
+	const LEVELS_ENTRIES = 69;
+
+	/** A real `launchctl list` from inside a booted simulator, Settings running at pid 50111. */
+	const LAUNCHCTL_LISTING = readFileSync(
+		fixtureUrl('launchctl-list.xcode26.4.1-ios26.4.1.txt'),
+		'utf8',
+	);
+
+	/** The argv a read that selected nothing sends — unchanged by #304, which is the point of it. */
+	const UNSELECTED_ARGV = [
+		'log',
+		'show',
+		'--style',
+		'ndjson',
+		'--info',
+		'--debug',
+		'--last',
+		'30s',
+	];
+
+	/** The oldest entry of the capture, so an anchor on it selects the whole of it. */
+	const OLDEST = '2026-09-08 10:11:34.092155+0200';
+
 	/** The trailer alone — what a window in which the device said nothing comes back as. */
 	const NOTHING = '{"count":0,"finished":1}\n';
 
@@ -2567,23 +2595,231 @@ describe('readLogs', () => {
 	});
 
 	/**
-	 * #303's selections are not mapped on this backend yet (#304), and an unfiltered answer to a
-	 * filtered question would look exactly like a right one — so each is refused by name, before
-	 * `simctl` runs at all.
+	 * The buffers this device has nothing to answer from, refused by name before `simctl` runs at
+	 * all — the unified log is one stream, and answering any of these out of it would be the
+	 * plausible-looking wrong answer (ai/RULES.md §2). `crash` is refused for a sharper reason
+	 * than the other two: a simulator's crash reports are `.ips` files on the *host*, outside the
+	 * log store entirely, and reading them is #304's second phase.
 	 */
 	it.each([
-		['appId', { appId: parseAppId('com.apple.Preferences') }],
-		['pid', { pid: 1 }],
-		['minLevel', { minLevel: 'error' }],
-		['tag', { tag: 'SpringBoard' }],
-		['since', { since: '2026-10-06 10:40:11.516' }],
-		['buffers', { buffers: ['main'] }],
-	] as const)('refuses %s by name, without reading anything', async (filter, selection) => {
-		const failure = backend.readLogs(BOOTED, { maxEntries: 200, ...selection });
+		['crash', ['crash']],
+		['system', ['system']],
+		['events', ['events']],
+		['main alongside crash', ['main', 'crash']],
+	] as const)('refuses the %s buffer by name, without reading anything', async (_name, buffers) => {
+		const failure = backend.readLogs(BOOTED, { maxEntries: 200, buffers });
 
 		await expect(failure).rejects.toBeInstanceOf(LogFilterRefusedError);
-		await expect(failure).rejects.toMatchObject({ filter, serial: BOOTED });
+		await expect(failure).rejects.toMatchObject({ filter: 'buffers', serial: BOOTED });
 		expect(runSimctlOnDevice).not.toHaveBeenCalled();
+	});
+
+	/** The `crash` refusal says where crashes actually are, since it is a gap rather than a mismatch. */
+	it('says why the crash buffer is refused rather than only that it is', async () => {
+		const failure = backend.readLogs(BOOTED, { maxEntries: 200, buffers: ['crash'] });
+
+		await expect(failure).rejects.toThrow(/crash reports/);
+	});
+
+	/**
+	 * `main` **is** the unified log here, so asking for it by name changes nothing — including
+	 * when it is asked for twice, which de-duplication is what keeps from looking like two streams.
+	 */
+	it.each([
+		['the one buffer this device has', ['main']],
+		['the same buffer twice', ['main', 'main']],
+	] as const)('reads %s exactly as an unselected read does', async (_name, buffers) => {
+		await backend.readLogs(BOOTED, { maxEntries: 5, buffers });
+
+		expect(runSimctlOnDevice.mock.calls[0]?.slice(0, 3)).toEqual([
+			BOOTED,
+			'spawn',
+			UNSELECTED_ARGV,
+		]);
+	});
+
+	/**
+	 * An anchor in the shape the *Android* log prints is the one a caller is most likely to bring
+	 * by mistake, and it is refused by name rather than silently ordering against nothing.
+	 */
+	it('refuses a since that is not in this log’s own shape, without reading anything', async () => {
+		const failure = backend.readLogs(BOOTED, { maxEntries: 200, since: '10-06 14:54:08.135' });
+
+		await expect(failure).rejects.toBeInstanceOf(LogFilterRefusedError);
+		await expect(failure).rejects.toMatchObject({ filter: 'since', serial: BOOTED });
+		expect(runSimctlOnDevice).not.toHaveBeenCalled();
+	});
+
+	/**
+	 * The pushdown, at every width — a predicate narrows a window's *contents*, so it joins each
+	 * read of the escalation rather than replacing it. The exact strings are
+	 * `log-query.test.ts`'s subject; what this pins is that they reach the device, on every read.
+	 */
+	it('pushes a pid selection into every width’s query', async () => {
+		await backend.readLogs(BOOTED, { maxEntries: 200, pid: 4337 });
+
+		expect(runSimctlOnDevice).toHaveBeenCalledTimes(LOG_WIDTHS);
+		for (const call of runSimctlOnDevice.mock.calls) {
+			expect(call[2]).toEqual([
+				'log',
+				'show',
+				'--style',
+				'ndjson',
+				'--info',
+				'--debug',
+				'--predicate',
+				'processIdentifier == 4337',
+				'--last',
+				expect.any(String),
+			]);
+		}
+	});
+
+	/** A tag is the subsystem, which is the field the answer's own `tag` is filled from. */
+	it('pushes a tag down as the subsystem the entry was attributed to', async () => {
+		await backend.readLogs(BOOTED, { maxEntries: 5, tag: 'com.apple.SpringBoard' });
+
+		expect(runSimctlOnDevice.mock.calls[0]?.[2]).toContain('subsystem == "com.apple.SpringBoard"');
+	});
+
+	/**
+	 * A level is pushed down as *flags* as well as a clause, and the flags are a lookback over
+	 * levels: dropping one can only narrow. `--info` survives `minLevel: 'info'` because an entry
+	 * carrying no `messageType` is an `info` entry (`parsers/unified-log.ts`).
+	 */
+	it.each([
+		['info', ['log', 'show', '--style', 'ndjson', '--info', '--last', '30s']],
+		[
+			'error',
+			[
+				'log',
+				'show',
+				'--style',
+				'ndjson',
+				'--predicate',
+				'(messageType == error OR messageType == fault)',
+				'--last',
+				'30s',
+			],
+		],
+	] as const)('sends minLevel %s as its measured flags and clause', async (minLevel, argv) => {
+		await backend.readLogs(BOOTED, { maxEntries: 5, minLevel });
+
+		expect(runSimctlOnDevice.mock.calls[0]?.[2]).toEqual(argv);
+	});
+
+	/**
+	 * `appId` is two calls: launchd is asked which processes the app has, and only then is the
+	 * log read — with those pids in the predicate. The listing is a capture of a real
+	 * `launchctl list` inside a simulator (`parsers/launchctl-list.test.ts`).
+	 */
+	it('resolves an app to the pids launchd has for it, then selects on them', async () => {
+		runSimctlOnDevice.mockResolvedValueOnce({ stdout: LAUNCHCTL_LISTING, stderr: '' });
+
+		await backend.readLogs(BOOTED, { maxEntries: 5, appId: parseAppId('com.apple.Preferences') });
+
+		expect(runSimctlOnDevice.mock.calls[0]?.slice(0, 3)).toEqual([
+			BOOTED,
+			'spawn',
+			['launchctl', 'list'],
+		]);
+		expect(runSimctlOnDevice.mock.calls[1]?.[2]).toContain('(processIdentifier == 50111)');
+	});
+
+	/**
+	 * No running process is refused by name rather than answered empty: an empty answer would read
+	 * as an app that said nothing, which is the one thing a log read must never fake
+	 * (ai/RULES.md §2). The refusal does not send the caller to the crash buffer the way the
+	 * Android side's does, because this backend refuses that buffer too.
+	 */
+	it('refuses an app with no running process by name, and reads no log', async () => {
+		runSimctlOnDevice.mockResolvedValueOnce({ stdout: LAUNCHCTL_LISTING, stderr: '' });
+
+		const refusal = await backend
+			.readLogs(BOOTED, { maxEntries: 5, appId: parseAppId('com.rover.testapp') })
+			.then(() => null)
+			.catch((cause: unknown) => cause);
+
+		expect(refusal).toBeInstanceOf(LogFilterRefusedError);
+		expect(refusal).toMatchObject({ filter: 'appId', serial: BOOTED });
+		expect(String(refusal)).not.toContain('crash');
+		expect(runSimctlOnDevice).toHaveBeenCalledTimes(1);
+	});
+
+	/**
+	 * **The host filter is what decides**, not the pushdown. A device that answered more than the
+	 * predicate asked for — a release that read a keyword differently, a clause that was too
+	 * generous — still gets an answer holding exactly what was selected, because
+	 * `src/core/log-filter.ts` re-applies it here. That is what makes this backend's answer mean
+	 * the same thing the Android one does (D10).
+	 */
+	it('applies the selection again on this side, whatever the device answered', async () => {
+		reads(LEVELS_LOG);
+
+		const read = await backend.readLogs(BOOTED, { maxEntries: 200, minLevel: 'error' });
+
+		expect(read.entries.length).toBeGreaterThan(0);
+		expect(read.entries.length).toBeLessThan(LEVELS_ENTRIES);
+		for (const entry of read.entries) expect(['error', 'fatal']).toContain(entry.level);
+	});
+
+	/**
+	 * The cap is on **matching** entries (`ReadLogsOptions.maxEntries`), so the widening counts
+	 * what survived the host filter. A width holding 52 lines of which four match has not filled a
+	 * cap of ten, and stopping there would answer four entries flagged `truncated: true`.
+	 */
+	it('widens while the matching entries are under the cap, not the lines', async () => {
+		reads(LEVELS_LOG);
+
+		const read = await backend.readLogs(BOOTED, { maxEntries: 10, minLevel: 'error' });
+
+		expect(windowsAsked()).toEqual([...LOG_WINDOWS]);
+		expect(read.truncated).toBe(false);
+	});
+
+	/**
+	 * `--start` reaches from the caller's own anchor to now, so there is no lookback left to
+	 * widen: one read, no `--last`, and no escalation even under the cap.
+	 */
+	it('anchors a since read with --start, once, and never widens it', async () => {
+		const read = await backend.readLogs(BOOTED, { maxEntries: 200, since: OLDEST });
+
+		expect(runSimctlOnDevice).toHaveBeenCalledTimes(1);
+		expect(runSimctlOnDevice.mock.calls[0]?.[2]).toEqual([
+			'log',
+			'show',
+			'--style',
+			'ndjson',
+			'--info',
+			'--debug',
+			'--start',
+			OLDEST.slice(0, 19) + OLDEST.slice(-5),
+		]);
+		expect(read.entries).toHaveLength(CAPTURED_ENTRIES);
+	});
+
+	/**
+	 * `--start` floors to the second — the tool rejects a fraction outright — so the device answers
+	 * a superset and the host comparison is what makes the boundary exact, down to the microsecond.
+	 */
+	it('drops the entries before the anchor that the floored query let through', async () => {
+		const all = (await backend.readLogs(BOOTED, { maxEntries: CAPTURED_ENTRIES })).entries;
+		const anchor = all[25]?.timestamp as string;
+		runSimctlOnDevice.mockClear();
+
+		const read = await backend.readLogs(BOOTED, { maxEntries: 200, since: anchor });
+
+		expect(read.entries).toEqual(all.slice(25));
+		expect(read.truncated).toBe(false);
+	});
+
+	/** The caller's anchor is the lower bound, so `truncated` off a `since` read is exact. */
+	it('says a since read was truncated when more entries than the cap matched', async () => {
+		const read = await backend.readLogs(BOOTED, { maxEntries: 5, since: OLDEST });
+
+		expect(read.entries).toHaveLength(5);
+		expect(read.truncated).toBe(true);
+		expect(runSimctlOnDevice).toHaveBeenCalledTimes(1);
 	});
 
 	it('answers a device that said nothing as empty rather than as a failure', async () => {

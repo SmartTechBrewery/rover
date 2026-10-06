@@ -268,12 +268,26 @@ filter elsewhere was well over 100k characters. `since` is a `timestamp` taken f
 device already answered with — read once with `maxEntries: 1` before acting — because the agent's
 own clock may be on another machine and is not the device's (D17). Filters only select; nothing is
 ranked or judged (§1 of `ai/RULES.md`). A selection a device cannot apply, or an app with no running
-process, is a `log-filter-refused` failure naming it, never a silently unfiltered answer — which is
-what the iOS simulator answers for every selection until #304 maps them. Clearing a buffer before a
-step was considered and left out: `since` answers the same question without destroying anything.
+process, is a `log-filter-refused` failure naming it, never a silently unfiltered answer. Clearing a
+buffer before a step was considered and left out: `since` answers the same question without
+destroying anything.
+
+**On the iOS simulator every selection is pushed into `log show` as well as applied on the host**
+(#304; this sentence replaces *"which is what the iOS simulator answers for every selection until
+#304 maps them"*, and the whole of that refusal is gone). The processes, the level and the tag
+become a `--predicate`, `since` becomes `--start`, and the device therefore serialises candidates
+rather than its whole log — a 30-second window went from 4,316 entries to 1,151 when scoped to one
+process, measured. The host filter still decides, which is what keeps one `read_logs` call meaning
+the same thing on both platforms. Two specifics a caller needs: **`tag` is the *subsystem*** there,
+because that is the field an entry's own `tag` is filled from; and of the buffers only **`main`** is
+answered — it *is* the unified log — while `system`, `events` and **`crash`** are refused by name.
+The crash refusal is the one real gap rather than a missing counterpart: a simulator's crashes are
+`.ips` reports on the host, outside the log store entirely, so a dead process is reached there by
+its `pid` until that half lands.
 
 **Where it lives.** `src/verbs/`, `src/ipc/` for the method table, `PROJECT.md` §4; the log
-selections in `src/core/log-filter.ts` and each backend's `readLogs`.
+selections in `src/core/log-filter.ts` and each backend's `readLogs`, with the iOS pushdown in
+`src/backends/ios-simulator/log-query.ts`.
 **The screen a verb reports now includes what the system drew on *top* of it** (#297). This
 paragraph is new rather than a rewrite, because the gap it closes was never described: the element
 list says where an application laid its controls out, and an on-screen keyboard covering the bottom

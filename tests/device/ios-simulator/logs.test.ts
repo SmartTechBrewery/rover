@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { IosSimulatorDeviceBackend, LOG_WINDOWS } from '@/backends/ios-simulator/backend.js';
 import { SimctlCommandError } from '@/backends/ios-simulator/simctl.js';
 import { type Device, LogLevelSchema } from '@/core/device.js';
+import { LogFilterRefusedError } from '@/core/errors.js';
+import { type AppId, parseAppId } from '@/core/ids.js';
 import { shutDownSimulator } from '../../helpers/simulators.js';
 
 /**
@@ -14,8 +16,11 @@ import { shutDownSimulator } from '../../helpers/simulators.js';
  * into the query — and that what comes back off a *live* log parses into entries rather than into
  * lines the parser could not read.
  *
- * **Read-only, and it changes nothing**: a log read is the one verb that cannot alter the device.
- * Nothing here boots, shuts down, installs or launches anything (`docs/IOS.md` §8, trap 4).
+ * **Read-only but for one case**: a log read is the one verb that cannot alter the device, and
+ * nothing here boots, shuts down or installs anything (`docs/IOS.md` §8, trap 4). The `appId`
+ * case is the exception — it **launches Settings and stops it again** in a `finally`, because the
+ * one claim only a device can settle is that the pid launchd reports for a running app is the
+ * `processID` that app's log entries carry, and an app has to be running to have either.
  *
  * **Nothing asserts an absolute count or a level**, and that is deliberate rather than shy. What
  * a device says in a given window belongs to whatever is running on it: the same simulator
@@ -33,6 +38,9 @@ const backend = new IosSimulatorDeviceBackend();
 
 /** The contract's own ceiling on one read (`MAX_LOG_ENTRIES`, `src/ipc/verb-methods.ts`). */
 const CEILING = 5_000;
+
+/** The one app every simulator runtime ships, so the `appId` case needs nothing installed. */
+const SETTINGS: AppId = parseAppId('com.apple.Preferences');
 
 async function bootedDevice(): Promise<Device> {
 	const ready = (await backend.listDevices()).filter((device) => device.state === 'ready');
@@ -152,5 +160,170 @@ describe.skipIf(!process.env.ROVER_TEST_SIMULATOR)('the log read against a real 
 			/exited 149|not booted/,
 		);
 		expect(Date.now() - started).toBeLessThan(5_000);
+	});
+
+	/**
+	 * A `pid` selection, against a pid the device itself just named. What a capture cannot prove
+	 * is that `processIdentifier == <n>` is a clause this `log` binary still reads the way it did
+	 * on the bench — a predicate it stopped understanding would answer *fewer* entries rather
+	 * than fail, which is the quiet wrong answer the pushdown has to be checked against.
+	 */
+	it('selects one process, and answers only that process’ entries', async () => {
+		const device = await bootedDevice();
+		const seed = await backend.readLogs(device.serial, { maxEntries: 50 });
+		const pid = seed.entries.map((entry) => entry.pid).find((value) => value !== null);
+		expect(pid).not.toBeUndefined();
+
+		const read = await backend.readLogs(device.serial, { maxEntries: 50, pid: pid as number });
+
+		expect(read.entries.length).toBeGreaterThan(0);
+		for (const entry of read.entries) expect(entry.pid).toBe(pid);
+	});
+
+	/**
+	 * A `tag` selection is a *subsystem* selection on this platform, which is the decision
+	 * `log-query.ts` carries: `LogEntry.tag` is filled from `subsystem`, so a tag taken out of an
+	 * entry is a value the device will select on. This takes one from a live read rather than
+	 * naming a subsystem, because which ones are talking belongs to the host's mood.
+	 */
+	it('selects a tag the device itself attributed an entry to', async () => {
+		const device = await bootedDevice();
+		const seed = await backend.readLogs(device.serial, { maxEntries: 200 });
+		const tag = seed.entries.map((entry) => entry.tag).find((value) => value !== '');
+		if (tag === undefined) {
+			console.warn(
+				'no entry of this read carried a subsystem: the tag selection was NOT exercised',
+			);
+			return;
+		}
+
+		const read = await backend.readLogs(device.serial, { maxEntries: 50, tag });
+
+		expect(read.entries.length).toBeGreaterThan(0);
+		for (const entry of read.entries) expect(entry.tag).toBe(tag);
+	});
+
+	/**
+	 * The level pushdown: both flags are dropped and a `messageType` clause takes their place, so
+	 * this is the case where a predicate the tool read differently would show up as an answer
+	 * holding the wrong levels. **No count is asserted** — whether an idle simulator says anything
+	 * severe in five minutes is the host's business, so an empty answer is warned about rather
+	 * than failed (this suite's own rule).
+	 */
+	it('selects a minimum level, and answers nothing below it', async () => {
+		const device = await bootedDevice();
+
+		const read = await backend.readLogs(device.serial, { maxEntries: 50, minLevel: 'error' });
+
+		for (const entry of read.entries) expect(['error', 'fatal']).toContain(entry.level);
+		if (read.entries.length === 0) {
+			console.warn(
+				'this simulator said nothing at error or above: the level pushdown ran, ' +
+					'but selected nothing to check',
+			);
+		}
+	});
+
+	/**
+	 * `since` becomes `--start`, and the two halves of it are what this proves against a live log:
+	 * that the tool accepts the floored, offset-carrying form the backend builds (it rejects the
+	 * fractional one outright, measured), and that the host comparison then makes the boundary
+	 * exact — an anchor taken from the middle of a read drops everything before it.
+	 */
+	it('anchors a read on an entry’s own timestamp, exactly', async () => {
+		const device = await bootedDevice();
+		const all = await backend.readLogs(device.serial, { maxEntries: 50 });
+		expect(all.entries.length).toBeGreaterThan(1);
+		const anchor = all.entries[Math.floor(all.entries.length / 2)]?.timestamp as string;
+
+		const read = await backend.readLogs(device.serial, { maxEntries: 5_000, since: anchor });
+
+		expect(read.entries.length).toBeGreaterThan(0);
+		for (const entry of read.entries) expect(entry.timestamp >= anchor).toBe(true);
+	});
+
+	/**
+	 * The buffers, both ways round. `main` *is* the unified log here, so naming it changes
+	 * nothing; the other three have nothing on this device to answer from and are refused by
+	 * name — **quickly**, because every one of those refusals is decided before `simctl` runs.
+	 */
+	it('reads the one buffer this device has, and refuses the three it does not', async () => {
+		const device = await bootedDevice();
+
+		const read = await backend.readLogs(device.serial, { maxEntries: 10, buffers: ['main'] });
+		expect(read.entries.length).toBeGreaterThan(0);
+
+		const started = Date.now();
+		for (const buffer of ['system', 'events', 'crash'] as const) {
+			const failure = backend.readLogs(device.serial, { maxEntries: 10, buffers: [buffer] });
+			await expect(failure).rejects.toBeInstanceOf(LogFilterRefusedError);
+			await expect(failure).rejects.toMatchObject({ filter: 'buffers' });
+		}
+		expect(Date.now() - started).toBeLessThan(1_000);
+	});
+
+	/**
+	 * `appId`, end to end — and the one claim in this backend that only a device can settle: that
+	 * the pid `launchctl list` reports for an app is the `processID` its log entries carry. The
+	 * unit suite pins the parser and the predicate against captures; what it cannot pin is that
+	 * the two numbers are the same number.
+	 *
+	 * **This case launches Settings and stops it again**, which is why the suite header no longer
+	 * claims to change nothing. The stop is in a `finally` so a failed assertion still leaves the
+	 * device as it was found.
+	 */
+	it('selects an app by resolving it to the processes launchd is running it under', async () => {
+		const device = await bootedDevice();
+		await backend.launchApp(device.serial, SETTINGS);
+
+		try {
+			const read = await backend.readLogs(device.serial, { maxEntries: 200, appId: SETTINGS });
+
+			if (read.entries.length === 0) {
+				console.warn(
+					'Settings said nothing in the widest window: the appId read ran, but ' +
+						'selected nothing to check',
+				);
+				return;
+			}
+			const pids = new Set(read.entries.map((entry) => entry.pid));
+			expect(pids.size).toBe(1);
+		} finally {
+			await backend.stopApp(device.serial, SETTINGS);
+		}
+	});
+
+	/**
+	 * An app with no running process is refused by name rather than answered empty: an empty
+	 * answer would read as an app that said nothing (ai/RULES.md §2). Refused after the listing
+	 * and before any log read, so it is fast.
+	 */
+	it('refuses an app that is not running by name, rather than answering it empty', async () => {
+		const device = await bootedDevice();
+
+		const failure = backend.readLogs(device.serial, {
+			maxEntries: 10,
+			appId: parseAppId('com.rover.never.installed'),
+		});
+
+		await expect(failure).rejects.toBeInstanceOf(LogFilterRefusedError);
+		await expect(failure).rejects.toMatchObject({ filter: 'appId' });
+	});
+
+	/**
+	 * The `since` shape is the backend's to check, and it is checked before anything runs — an
+	 * anchor in the *Android* log's shape is the mistake a caller actually makes, and it comes
+	 * back named rather than ordering against nothing.
+	 */
+	it('refuses an anchor that is not in this log’s own shape, at once', async () => {
+		const device = await bootedDevice();
+
+		const failure = backend.readLogs(device.serial, {
+			maxEntries: 10,
+			since: '10-06 14:54:08.135',
+		});
+
+		await expect(failure).rejects.toBeInstanceOf(LogFilterRefusedError);
+		await expect(failure).rejects.toMatchObject({ filter: 'since' });
 	});
 });

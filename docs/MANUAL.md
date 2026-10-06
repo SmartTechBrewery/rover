@@ -1075,6 +1075,20 @@ read_logs { buffers: ["crash"], since: T }           → whether anything crashe
 After a crash the app's process is gone, so `appId` has nothing to select by and is refused; the
 crash buffer, or the dead process's `pid` taken from the crash entry, is how to read it.
 
+**Three of those selections mean something platform-specific, and the shapes differ** (#304):
+
+- **`since` is an entry's own `timestamp` string, and that string is not the same shape on both
+  platforms** — `MM-DD HH:MM:SS.mmm` on Android, `YYYY-MM-DD HH:MM:SS.ffffff±HHMM` on the iOS
+  simulator. Take it from a read of the device you are about to read again, and an anchor from the
+  wrong platform comes back refused by name rather than quietly matching nothing. On the simulator
+  an anchor far in the past is also an expensive read and may fail outright rather than answer
+  short — pair an old anchor with another selection.
+- **`tag` is the *subsystem* on the iOS simulator**, which is the field its entries' own `tag` is
+  filled from. Copy one out of a read rather than guessing a name.
+- **The simulator answers `main` only**, that being its unified log; `system`, `events` and
+  **`crash`** are refused by name there. So the crash recipe above is Android's: on a simulator,
+  read a dead process by the `pid` you noted while it was alive.
+
 **`install_app`, `push_file` and `pull_file` are the family whose whole subject is *which machine a
 file is on*** (`src/verbs/files.ts`). The agent is somewhere else, the device is here, and the host
 is in between — so a package to install and a file to push arrive **as bytes from the caller's

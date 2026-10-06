@@ -76,6 +76,12 @@ the versions rather than the folder doing it once.
 into a scratch directory **outside this repository** (`docs/IOS.md` §4). Eleven simulators, all
 under the one installed runtime.
 
+**A third bench arrived with the `launchctl list` capture** (#304, 2026-10-06): macOS **27.0.1**
+(26A434) with the **same** Xcode 26.4.1 (17E202) and iOS 26.4.1 (23E254a) as most of this folder.
+That is why its filename carries no new pair — the convention names the versions that govern the
+*format*, and a host OS update is not one of them. It is named here all the same, because what a
+re-capture has to reproduce is the bench and not just the filename.
+
 **The companion's version is not something the program will tell you.** `idb_companion --version`
 prints `{"build_date":"Sep 1 2026","build_time":"08:51:20"}` and no version at all, so the `1.5.2`
 in that filename is the **release tag the asset was downloaded from**. Record it from the download,
@@ -101,6 +107,7 @@ not from the binary.
 | `accessibility.compose.idbcompanion1.5.2-xcode26.4.1-ios26.4.1.json` | `accessibility_info` (below) | 26.4.1 | 26.4.1 | 2026-09-08 |
 | `accessibility.uikit-toggles.idbcompanion1.5.2-xcode26.4.1-ios26.4.1.json` | `accessibility_info` (below) | 26.4.1 | 26.4.1 | 2026-09-08 |
 | `accessibility.uikit-textfield.idbcompanion1.5.2-xcode26.4.1-ios26.4.1.json` | `accessibility_info` (below) | 26.4.1 | 26.4.1 | 2026-09-08 |
+| `launchctl-list.xcode26.4.1-ios26.4.1.txt` | `simctl spawn … launchctl list` (below) | 26.4.1 | 26.4.1 | **2026-10-06** |
 
 The all-listings capture is the primary one — there are now two, on two Xcode releases, and the
 second one's reason is its own section below: `xcrun simctl list -j` with no type argument answers
@@ -434,6 +441,45 @@ ps -A -o pid=,command= | grep recordVideo
   a reader can see rather than anywhere the code can reach. This run exited **0**, and so does a
   recording that produced nothing at all — which is exactly why the container is checked on the
   bytes (`docs/IOS.md` §8 trap 12).
+
+## The `launchctl list` capture
+
+Taken for #304, which resolves a `read_logs` selection on `appId` into the pids the device is
+running that app under. **A third bench**, and the filename convention carries it the way the other
+two are carried: macOS **27.0.1** (26A434), Xcode **26.4.1** (17E202) — the same Xcode as most of
+this folder — iOS **26.4.1** (`23E254a`), on 2026-10-06.
+
+```bash
+udid=<a booted device>
+
+xcrun simctl launch $udid com.apple.Preferences   # → com.apple.Preferences: 50111
+xcrun simctl spawn $udid launchctl list \
+  > tests/fixtures/ios-simulator/launchctl-list.xcode26.4.1-ios26.4.1.txt
+```
+
+| Fixture | Lines | Jobs | `UIKitApplication:` labels | What it pins |
+|---|---|---|---|---|
+| `launchctl-list.xcode26.4.1-ios26.4.1.txt` | 380 | 379 | 4 | The label shape, the exact bundle-id match, and the `-` a registered-but-idle job carries |
+
+- **The first line is a header, not a job** — `PID\tStatus\tLabel`, tab-separated like every row
+  under it. It is the one line `src/backends/ios-simulator/parsers/launchctl-list.ts` drops by name.
+- **An app's label is `UIKitApplication:<bundle id>[<four hex>][rb-legacy]`**, and the bundle id is
+  what sits between the colon and the **first** `[`. The capture carries
+  `com.apple.chrono.WidgetRenderer-Default` and no `com.apple.chrono`, which is deliberate: it is
+  the negative case for a prefix match, and a prefix match here would attribute one app's log lines
+  to another with nothing in the answer to say so.
+- **Settings was launched on purpose, just before the capture, and is the positive case** — pid
+  50111 against its label. That pid is also the one `simctl launch` reported, which is half of what
+  this fixture's consumer depends on; the other half (that the log prints the same number as
+  `processID`) is a device claim and lives in `tests/device/ios-simulator/logs.test.ts`.
+- **`-` in the PID column is a registered job that is not running**, and 198 of the 379 rows carry
+  it. None of those is a `UIKitApplication:` row here, because on this bench a terminated app's job
+  left the listing altogether — `simctl terminate com.apple.Preferences` then a fresh listing turned
+  four application labels into three. So the `-` case for an *app* is pinned by an inline case in
+  `tests/unit/backends/ios-simulator/parsers/launchctl-list.test.ts` rather than by this capture,
+  and is named as inline there, the same way the unified-log parser's `"None"` case is.
+- **It names no path and no home directory**, unlike the listings below: a job label is a bundle id
+  and a service name. Committed verbatim all the same, like everything here.
 
 ## Two things about the contents
 
