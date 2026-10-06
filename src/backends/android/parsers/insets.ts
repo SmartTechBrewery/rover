@@ -1,5 +1,11 @@
 /**
- * The parser for `dumpsys window d` — **where this device draws its own system bars**.
+ * The parser for `dumpsys window d` — **the screen facts only the window manager has**.
+ *
+ * Two of them now: where this device draws its own system bars, and whether its on-screen
+ * keyboard is up. Both come out of the one `InsetsState` block, off the one line shape
+ * {@link SOURCE_LINE} matches, so this module is about *that dump* rather than about the bars
+ * alone — a second file with a copy of the same regex would be a second thing to keep in sync
+ * with a format neither of them owns.
  *
  * Pure, like `./wm.js` and `./devices.js`: the runner (R5) owns the process, this owns the text.
  *
@@ -24,21 +30,44 @@
  * two identical frames in the output do not become two answers.
  */
 
-import { type SystemBarInsets, SystemBarInsetsSchema } from '../../../core/device.js';
+import {
+	type OnScreenKeyboard,
+	OnScreenKeyboardSchema,
+	type SystemBarInsets,
+	SystemBarInsetsSchema,
+} from '../../../core/device.js';
 import { type Dimensions, DimensionsSchema } from './wm.js';
 
 /** The two source types a reader means by *the system bars*. */
 const BAR_TYPES = new Set(['statusBars', 'navigationBars']);
 
 /**
+ * The source types the window manager gives the on-screen keyboard — `ime` from the API level that
+ * gave every source an `id=`, `ITYPE_IME` before it.
+ *
+ * **Both, because the older spelling is not a guess.** On API 33 / Android 13 (a Zebra TC58,
+ * 2026-10-06, `PROJECT.md` §6) the line reads `InsetsSource type=ITYPE_IME frame=[0,1251][1080,2160]
+ * visibleFrame=… visible=true` — no `id=`, and the old constant's name for the type. A parser that
+ * knew only the newer line found no keyboard source in that block and answered *no keyboard is up*
+ * while one covered half the screen, which is the one wrong answer `hide_keyboard` cannot survive:
+ * it would never dismiss anything on that device, and say `ok` every time.
+ *
+ * The bar sources have the same older names (`ITYPE_STATUS_BAR`, `ITYPE_NAVIGATION_BAR`) and are
+ * deliberately not added to {@link BAR_TYPES} here: that changes what `systemBars` reports, which is
+ * a different fact with a different consumer, and it belongs to the change that measures it.
+ */
+const IME_TYPES = new Set(['ime', 'ITYPE_IME']);
+
+/**
  * One `InsetsSource` line of the `InsetsState` block.
  *
  * Anchored at a line start followed by whitespace and `InsetsSource`, so the `mSource=` repeats
- * under `InsetsSourceProviders` do not match. `flags` and `sideHint` are deliberately not captured
+ * under `InsetsSourceProviders` do not match. The `id=` is optional because API 33 prints none
+ * ({@link IME_TYPES}). `flags` and `sideHint` are deliberately not captured
  * — see {@link sideOf} for why the geometry decides the side rather than the hint.
  */
 const SOURCE_LINE =
-	/^[ \t]*InsetsSource id=\S+ type=(\w+) frame=\[(\d+),(\d+)\]\[(\d+),(\d+)\][^\n]*?visible=(true|false)/gm;
+	/^[ \t]*InsetsSource (?:id=\S+ )?type=(\w+) frame=\[(\d+),(\d+)\]\[(\d+),(\d+)\][^\n]*?visible=(true|false)/gm;
 
 /** The marker for the block whose sources are the display's own. */
 const INSETS_STATE = /^[ \t]*InsetsState\b/m;
@@ -93,6 +122,86 @@ export function parseSystemBarInsets(
 		}
 	}
 	return SystemBarInsetsSchema.parse(insets);
+}
+
+/**
+ * Whether this device's on-screen keyboard is up, and where — or `null` when the dump says
+ * nothing about insets at all.
+ *
+ * **No second device query.** The `type=ime` source sits in the same `InsetsState` block as the
+ * two bar sources above, printed by the dump `deviceInfo()` already runs, so this is a read of
+ * text that is in hand rather than another round trip to the device. `dumpsys input_method`'s
+ * `mInputShown` is the other route and is deliberately not taken: it is a second query for a fact
+ * this dump already carries, and a second source is a second thing that can disagree with the
+ * first.
+ *
+ * **`frame` and never `visibleFrame`.** Captured on API 37 / Android 17 (2026-10-06, `PROJECT.md`
+ * §6) with a text field focused, the source reads
+ * `type=ime frame=[0,1848][1280,2856] visibleFrame=[0,1848][1280,2856] visible=true` — both fields
+ * carry the keyboard. With the keyboard dismissed the same source reads
+ * `frame=[0,0][0,0] visibleFrame=[0,2712][1280,2856] visible=false`: `frame` collapses to the
+ * empty rectangle the dump uses for an absent source, while `visibleFrame` keeps a band that is
+ * not a keyboard and not anything else either. So `frame` is the field that means what it says,
+ * and it is the one {@link SOURCE_LINE} already captures.
+ *
+ * The three answers are distinct on purpose, on {@link parseSystemBarInsets}' terms:
+ *
+ * - **`null`** — no `InsetsState` in the dump. *This device did not say*, and it is not a failure:
+ *   it answered every other screen fact perfectly well.
+ * - **`{ shown: false, bounds: null }`** — the block is there and either carries no `ime` source
+ *   (observed on this device after an application restart) or carries one with `visible=false`.
+ *   *This device says no keyboard is up*, which is a different thing from not saying. The frame of
+ *   a keyboard that is down is not a rectangle anything may be refused against, so it is dropped
+ *   rather than reported.
+ * - **`{ shown: true, bounds }`** — `visible=true`, with the frame divided by `scale` into the dp
+ *   space `ScreenElement.bounds` is stated in. A degenerate frame answers `shown: true` with
+ *   `bounds: null`: the device said the keyboard is up and gave no rectangle, and inventing one is
+ *   worse than saying so (`core/device.ts` spells out why that state is not *nothing is covered*).
+ *
+ * `scale` is `WmDensity.scale`, the same number `../screen.ts`'s `toScreenElements` divides by,
+ * and the quotients are exact and unrounded for its reason: rounding is a presentation decision,
+ * and a backend that rounds leaves no way to ask what the device said.
+ */
+export function parseKeyboard(stdout: string, scale: number): OnScreenKeyboard | null {
+	if (!Number.isFinite(scale) || scale <= 0) {
+		throw new Error(
+			`Cannot read the on-screen keyboard at density scale ${scale}: it must be a positive number`,
+		);
+	}
+	const text = normalise(stdout);
+	if (!INSETS_STATE.test(text)) {
+		return null;
+	}
+
+	SOURCE_LINE.lastIndex = 0;
+	for (const source of text.matchAll(SOURCE_LINE)) {
+		const [, type, left, top, right, bottom, visible] = source;
+		if (!IME_TYPES.has(type)) {
+			continue;
+		}
+		if (visible !== 'true') {
+			return OnScreenKeyboardSchema.parse({ shown: false, bounds: null });
+		}
+		const frame = {
+			left: Number(left),
+			top: Number(top),
+			right: Number(right),
+			bottom: Number(bottom),
+		};
+		const degenerate = frame.right <= frame.left || frame.bottom <= frame.top;
+		return OnScreenKeyboardSchema.parse({
+			shown: true,
+			bounds: degenerate
+				? null
+				: {
+						x: frame.left / scale,
+						y: frame.top / scale,
+						width: (frame.right - frame.left) / scale,
+						height: (frame.bottom - frame.top) / scale,
+					},
+		});
+	}
+	return OnScreenKeyboardSchema.parse({ shown: false, bounds: null });
 }
 
 /** One source's frame, in the display's own pixels. */

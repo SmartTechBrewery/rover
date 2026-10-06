@@ -26,6 +26,7 @@ import {
 	AppVerbParamsSchema,
 	DeviceInfoParamsSchema,
 	EnvironmentVerbParamsSchema,
+	HideKeyboardParamsSchema,
 	InstallAppParamsSchema,
 	LongPressParamsSchema,
 	PressKeyParamsSchema,
@@ -60,6 +61,8 @@ export {
 	DevicePathSchema,
 	type EnvironmentVerbParams,
 	EnvironmentVerbParamsSchema,
+	type HideKeyboardParams,
+	HideKeyboardParamsSchema,
 	type InstallAppParams,
 	InstallAppParamsSchema,
 	type LongPressParams,
@@ -2087,7 +2090,7 @@ export type SweepArchiveResult = z.infer<typeof SweepArchiveResultSchema>;
  * is that. `actor` is caller-supplied attribution and never derived (D20, D28); one audit line
  * names it and whether the call was a dry run.
  *
- * The verb rows are the two waits, the six input verbs, the three read verbs, the three
+ * The verb rows are the two waits, the seven input verbs, the three read verbs, the three
  * app-lifecycle verbs, the log read, the three recording rows, the two environment verbs and
  * the three file transfers; each further verb family is one more row beside them and one more
  * entry in `src/daemon/verb-handlers.ts`. All but two answer with `VerbCallResultSchema`,
@@ -2095,8 +2098,8 @@ export type SweepArchiveResult = z.infer<typeof SweepArchiveResultSchema>;
  * and `device_info` answer with the state every other verb already reports, while
  * `screenshot`, `record_video` and `pull_file` carry their bytes on `ActionResult.artifact` —
  * which is why no path of any kind is in a transfer's result. The verbs that address no
- * element — those two reads, `type_text`, `press_key`, and both environment rows because a
- * radio is not something on the screen — answer with a null `target`. The three app rows
+ * element — those two reads, `type_text`, `press_key`, `hide_keyboard`, and both environment
+ * rows because a radio is not something on the screen — answer with a null `target`. The three app rows
  * share one params schema, and the two environment rows share a lease id and boolean schema.
  *
  * `read_logs`, `record_video` and `stop_recording` are the exceptions that prove the rule: their
@@ -2165,6 +2168,7 @@ export const IPC_METHODS = {
 	scroll: { params: ScrollParamsSchema, result: VerbCallResultSchema },
 	type_text: { params: TypeTextParamsSchema, result: VerbCallResultSchema },
 	press_key: { params: PressKeyParamsSchema, result: VerbCallResultSchema },
+	hide_keyboard: { params: HideKeyboardParamsSchema, result: VerbCallResultSchema },
 	read_screen: { params: ReadScreenParamsSchema, result: VerbCallResultSchema },
 	device_info: { params: DeviceInfoParamsSchema, result: VerbCallResultSchema },
 	screenshot: { params: ScreenshotParamsSchema, result: VerbCallResultSchema },

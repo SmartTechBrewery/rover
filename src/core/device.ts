@@ -94,6 +94,22 @@ export const DeviceSchema = z.object({
 });
 export type Device = z.infer<typeof DeviceSchema>;
 
+/** A point in device-independent screen coordinates. */
+export const PointSchema = z.object({
+	x: z.number(),
+	y: z.number(),
+});
+export type Point = z.infer<typeof PointSchema>;
+
+/** An axis-aligned rectangle in the same coordinate space as {@link PointSchema}. */
+export const RectSchema = z.object({
+	x: z.number(),
+	y: z.number(),
+	width: z.number(),
+	height: z.number(),
+});
+export type Rect = z.infer<typeof RectSchema>;
+
 /**
  * The screen facts of one device, as the device itself reports them.
  *
@@ -132,6 +148,37 @@ export const SystemBarInsetsSchema = z
 	.strict();
 export type SystemBarInsets = z.infer<typeof SystemBarInsetsSchema>;
 
+/**
+ * Whether the **on-screen** keyboard is up, and the rectangle it occupies while it is.
+ *
+ * Never a hardware keyboard: this is the software one the system draws *over* the application,
+ * so the elements under it are still on the screen a read reports and still carry the bounds the
+ * application laid them out at. That gap — present in the element list, covered on the glass — is
+ * the whole reason the device has to say this at all.
+ *
+ * **`bounds` is in dp**, the device-independent space {@link PointSchema} and
+ * {@link ScreenElementSchema}'s `bounds` are stated in — *not* the physical pixels
+ * {@link SystemBarInsetsSchema} beside it uses. The asymmetry is deliberate and follows the
+ * consumer: the insets are compared against a screenshot's own pixels, while this rectangle is
+ * compared against a **touch point**, and `src/verbs/target.ts` may not do scale arithmetic — a
+ * conversion in the verb layer is precisely the hidden scale error `PROJECT.md` §6 warns about.
+ * So the backend that knows the scale divides by it, once, here.
+ *
+ * **`shown: true` with `bounds: null` is a real state**: the device said the keyboard is up and
+ * gave no usable frame for it. It must not be read as *nothing is covered* — it is *something is
+ * covered and this device did not say where*.
+ *
+ * Nothing here says whether any particular element is reachable. That is a question about a
+ * target, and it belongs to the verb layer rather than to the device's report of itself.
+ */
+export const OnScreenKeyboardSchema = z
+	.object({
+		shown: z.boolean(),
+		bounds: RectSchema.nullable(),
+	})
+	.strict();
+export type OnScreenKeyboard = z.infer<typeof OnScreenKeyboardSchema>;
+
 export const ScreenInfoSchema = z
 	.object({
 		/** Width in physical pixels, as currently rendered. */
@@ -167,6 +214,29 @@ export const ScreenInfoSchema = z
 		 * anywhere branches on the platform to find that out**.
 		 */
 		systemBars: SystemBarInsetsSchema.nullable(),
+		/**
+		 * The on-screen keyboard this device is drawing, in dp — or `null` for a device that did
+		 * not say.
+		 *
+		 * **`null` is *not answered* and `{ shown: false }` is *no keyboard is up*, and they must
+		 * not fold together**, exactly the distinction `systemBars` draws one field above. The
+		 * first leaves a consumer knowing nothing about what covers the screen; the second is the
+		 * device stating that nothing does. Reading `null` as "no keyboard" would turn a backend
+		 * with no route to the fact into one that quietly promises a clear screen, which is the
+		 * silent degradation `ai/RULES.md` §2 forbids.
+		 *
+		 * **Nullable because the backends are genuinely asymmetric**, for `systemBars`' reason:
+		 * one asks the system service that owns the screen's layout, and one builds this whole
+		 * shape from a static device-type description that says nothing about what is drawn on
+		 * the screen.
+		 *
+		 * This rides on `ScreenInfo` rather than on a verb's after-state branch because
+		 * `ScreenInfo` is what `DeviceInfo` carries and `DeviceInfo` is what D14 puts on **every**
+		 * `ActionResult` — `resultAfterAction()` re-reads it after the action, so a keyboard that
+		 * opened or closed during a tap is reported by the tap, with no verb knowing this field
+		 * exists.
+		 */
+		keyboard: OnScreenKeyboardSchema.nullable(),
 	})
 	.strict();
 export type ScreenInfo = z.infer<typeof ScreenInfoSchema>;
@@ -200,22 +270,6 @@ export const DeviceInfoSchema = z
 	})
 	.strict();
 export type DeviceInfo = z.infer<typeof DeviceInfoSchema>;
-
-/** A point in device-independent screen coordinates. */
-export const PointSchema = z.object({
-	x: z.number(),
-	y: z.number(),
-});
-export type Point = z.infer<typeof PointSchema>;
-
-/** An axis-aligned rectangle in the same coordinate space as {@link PointSchema}. */
-export const RectSchema = z.object({
-	x: z.number(),
-	y: z.number(),
-	width: z.number(),
-	height: z.number(),
-});
-export type Rect = z.infer<typeof RectSchema>;
 
 /**
  * One element of a screen read — the smallest shape a verb can resolve a target from.
@@ -798,6 +852,28 @@ export interface DeviceBackend {
 	 * one-digit code boxes, for instance — may act on it. That is stated, not defended against.
 	 */
 	clearText?(serial: DeviceSerial): Promise<void>;
+
+	/**
+	 * Dismiss the on-screen keyboard **if one is up, and do nothing otherwise**. Gated by
+	 * `canHideKeyboard`.
+	 *
+	 * **The condition is the contract, not an implementation detail.** The gesture that closes a
+	 * keyboard is, on at least one platform, the same one that navigates back when no keyboard is
+	 * open (PROJECT.md §6) — so a backend that pressed it unconditionally would leave the screen
+	 * the caller was on, report success, and turn "get the keyboard out of the way" into "lose my
+	 * place". The backend reads the keyboard's state from the device first, at the moment it acts
+	 * (D6), and resolves without touching the device when nothing is up.
+	 *
+	 * **Which gesture, and when it is safe, is this backend's knowledge** and nobody else's: the
+	 * verb layer calls this without a branch on the platform and without assuming a back key
+	 * exists (ai/RULES.md §2). A backend that cannot tell whether its keyboard is up has no safe
+	 * way to answer this and declares `canHideKeyboard: false` rather than guessing.
+	 *
+	 * It does not wait for the keyboard to finish leaving and does not confirm it left: the
+	 * after-state every verb returns re-reads `ScreenInfo.keyboard`, which is where a caller sees
+	 * whether it worked (D12(c)).
+	 */
+	hideKeyboard?(serial: DeviceSerial): Promise<void>;
 
 	/**
 	 * Gated by `canControlNetwork`. Together with {@link setWifiEnabled} this is the

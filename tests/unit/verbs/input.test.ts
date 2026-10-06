@@ -1,5 +1,5 @@
 /**
- * The six input verbs, over a backend that records what it was asked to do.
+ * The seven input verbs, over a backend that records what it was asked to do.
  *
  * Two things are asserted here that a correct-looking result cannot show. The first is
  * **order** — the screen read before the gesture, the state after it *after* it — which is
@@ -34,6 +34,7 @@ import { parseDeviceSerial, parseElementId } from '@/core/ids.js';
 import type { VerbContext } from '@/verbs/context.js';
 import { TargetNotFoundError } from '@/verbs/errors.js';
 import {
+	hideKeyboard,
 	LONG_PRESS_DURATION_MS,
 	longPress,
 	pressKey,
@@ -130,6 +131,9 @@ function recording(
 		}),
 		clearText: vi.fn<NonNullable<DeviceBackend['clearText']>>(async () => {
 			calls.push('clearText');
+		}),
+		hideKeyboard: vi.fn<NonNullable<DeviceBackend['hideKeyboard']>>(async () => {
+			calls.push('hideKeyboard');
 		}),
 	});
 
@@ -701,5 +705,55 @@ describe('press_key', () => {
 		await expect(pressKey(context, 'tab', { times: 5 })).rejects.toThrow(UnsupportedKeyError);
 
 		expect(press).toHaveBeenCalledTimes(1);
+	});
+});
+
+describe('hide_keyboard', () => {
+	it('asks the backend to hide the keyboard, and reads the state after it', async () => {
+		const { calls, context } = recording();
+
+		const result = await hideKeyboard(context);
+
+		// No screen read before it — there is nothing to resolve — and no key pressed from here:
+		// whether to press anything is the backend's decision (#307).
+		expect(calls).toEqual(['hideKeyboard', 'readScreen', 'deviceInfo']);
+		expect(result.verb).toBe('hide_keyboard');
+	});
+
+	it('is never a back press from the verb layer', async () => {
+		const { calls, keys, context } = recording();
+
+		await hideKeyboard(context);
+
+		expect(calls).not.toContain('pressKey');
+		expect(keys).toEqual([]);
+	});
+
+	it('addresses no element, so its target is null', async () => {
+		const { context } = recording();
+
+		const result = await hideKeyboard(context);
+
+		expect(result.target).toBeNull();
+	});
+
+	it('is refused by name on a device without canHideKeyboard, before the device is touched', async () => {
+		const { calls, context } = recording({
+			capabilities: createMockCapabilities({ canHideKeyboard: false }),
+		});
+
+		await expect(hideKeyboard(context)).rejects.toThrow(MissingCapabilityError);
+		await expect(hideKeyboard(context)).rejects.toThrow(/canHideKeyboard/);
+		expect(calls).toEqual([]);
+	});
+
+	it('needs canHideKeyboard and not canInput', async () => {
+		const { calls, context } = recording({
+			capabilities: createMockCapabilities({ canInput: false }),
+		});
+
+		await hideKeyboard(context);
+
+		expect(calls[0]).toBe('hideKeyboard');
 	});
 });

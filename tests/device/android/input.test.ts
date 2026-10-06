@@ -41,6 +41,13 @@ import type { Device, DeviceKey } from '@/core/device.js';
  *   `tests/unit/backends/android/input.test.ts` and exhaustive over `DeviceKey` at compile
  *   time; those are the only two things that can catch it.
  *
+ * - **`hideKeyboard` is proved here only on the path where there is nothing to hide.** That is
+ *   the path that matters most — it is the one where a blind back press would navigate — and it
+ *   needs no keyboard to set up. The *open-keyboard* path needs a focused text field in some
+ *   application, which this suite has no fixture application for; it was **proved by hand**
+ *   against a real keyboard on API 33 and is recorded in PROJECT.md §6, with the dump on each
+ *   side of it committed as fixtures (`tests/fixtures/adb/dumpsys-window-d.keyboard-*.api33-*`).
+ *
  * The device is left on its home screen in `afterEach`, unconditionally, including after a
  * failed assertion — this suite taps and types on whatever happens to be in front of it.
  */
@@ -171,5 +178,21 @@ describe.skipIf(!process.env.ROVER_TEST_DEVICE)('input against a real device', (
 		const device = await firstDevice();
 
 		await expect(backend.typeText(device.serial, text)).rejects.toThrow(/printable ASCII/);
+	});
+
+	/**
+	 * On the home screen, with nothing focused: no keyboard is up, so nothing may be pressed — a
+	 * back here would be a navigation the caller never asked for. Read back through the same dump
+	 * the method decides on, before and after.
+	 */
+	it('hides no keyboard when none is up, and leaves none up', async () => {
+		const device = await firstDevice();
+		await backend.pressKey(device.serial, 'home');
+		const before = (await backend.deviceInfo(device.serial)).screen.keyboard;
+		expect(before).toEqual({ shown: false, bounds: null });
+
+		await expect(backend.hideKeyboard(device.serial)).resolves.toBeUndefined();
+
+		expect((await backend.deviceInfo(device.serial)).screen.keyboard).toEqual(before);
 	});
 });

@@ -15,7 +15,7 @@
  * fails at module load rather than at the first verb call.
  *
  * Only genuinely divergent abilities get a flag; a capability that is always `true`
- * would be noise. The five below are the divergences PROJECT.md §5 and
+ * would be noise. The six below are the divergences PROJECT.md §5 and
  * ai/ARCHITECTURE.md actually name.
  */
 
@@ -64,6 +64,19 @@ export const CapabilitiesSchema = z
 		 * keeps meaning exactly that.
 		 */
 		canControlRecording: z.boolean(),
+		/**
+		 * Dismissing the on-screen keyboard **if one is up** — and pressing nothing when none is
+		 * (#307). Names exactly one method, `hideKeyboard`, and keeps meaning exactly that, on
+		 * `canRecordVideo`'s precedent.
+		 *
+		 * **Its own flag rather than a corner of `canInput`**, because how a device puts its
+		 * keyboard away is a fact about that device and not a key every platform has: on one it is
+		 * the back key, which *navigates* when no keyboard is open, so the press is only safe
+		 * behind a read of the keyboard's state — knowledge that lives in the backend, not in the
+		 * verb layer (ai/RULES.md §2). A platform with no verified recipe yet answers
+		 * `missing-capability` by name rather than quietly doing nothing.
+		 */
+		canHideKeyboard: z.boolean(),
 	})
 	.strict();
 export type Capabilities = z.infer<typeof CapabilitiesSchema>;
@@ -136,6 +149,7 @@ export const CAPABILITY_METHODS = {
 	canControlNetwork: ['setAirplaneMode', 'setWifiEnabled'],
 	canRecordVideo: ['recordVideo'],
 	canControlRecording: ['startRecording', 'stopRecording', 'discardRecording'],
+	canHideKeyboard: ['hideKeyboard'],
 } as const satisfies Record<CapabilityId, readonly CapabilityGatedMethod[]>;
 
 /** Non-throwing query — what the verb layer asks before dispatching. */

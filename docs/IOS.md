@@ -101,6 +101,7 @@ startup of ~60–90 ms that a Node backend talking gRPC directly would not pay.
 | `canRecordVideo` | `recordVideo` | `simctl io <d> recordVideo --codec h264 --mask ignored <path>` | marker at 0.14–0.23 s; 100,782 bytes for ~2 s of an idle screen | ✅ **no `--time-limit` — the window is host-side** |
 | `canControlRecording` | `start`/`stop`/`discardRecording` | same + `SIGINT`, and the **host's** process table for "is this device recording" | exit 0 in 20–30 ms after the signal; `ps` stops naming the recorder in 39 ms | ✅ |
 | `canControlNetwork` | `setAirplaneMode` `setWifiEnabled` | — | — | ❌ **declare false** |
+| `canHideKeyboard` | `hideKeyboard` | — | not measured: this backend reports no keyboard state (`screen.keyboard` is `null`), and no dismissal has been tried | ❌ **declared false** (#307) until both are |
 
 19 of 20 probes succeeded; the twentieth is `canControlNetwork`, which failed **on purpose** —
 see §5.

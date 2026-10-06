@@ -1,6 +1,6 @@
 /**
- * The input verbs — `tap`, `long_press`, `swipe`, `scroll`, `type_text` and `press_key`
- * (PROJECT.md §4, "Input").
+ * The input verbs — `tap`, `long_press`, `swipe`, `scroll`, `type_text`, `press_key` and
+ * `hide_keyboard` (PROJECT.md §4, "Input").
  *
  * Every one of them is a call to {@link performAction} (`./perform.ts`) and not one of them
  * reads a screen itself, which is what makes D12 true here **by construction** rather than by
@@ -346,6 +346,36 @@ export async function pressKey(
 			for (let pressed = 0; pressed < times; pressed++) {
 				await press(context.serial, key);
 			}
+		},
+	});
+}
+
+/**
+ * Put the on-screen keyboard away if one is up — and press nothing if none is.
+ *
+ * **Never a `back` press from here.** On the platform where back closes a keyboard it also leaves
+ * the screen when no keyboard is open (PROJECT.md §6), so an agent reaching for `press_key back`
+ * to clear a covered target gambles its place on a state it has not read. This verb takes that
+ * gamble away by asking the backend, which reads whether a keyboard is up and knows its own
+ * gesture for it (`DeviceBackend.hideKeyboard`, `src/core/device.ts`); nothing here branches on the platform or
+ * assumes a back key exists (ai/RULES.md §2).
+ *
+ * Its own capability, `canHideKeyboard`, rather than `canInput`, because a device can take input
+ * and have no verified way to dismiss its keyboard — and that device says so by name, as a
+ * `missing-capability` failure, instead of answering `ok` for a keyboard still on the screen.
+ *
+ * **No target**, for {@link pressKey}'s reason: it addresses nothing on the screen, so the
+ * result's `target` is `null`. The after-state is the evidence — `screen.keyboard` on its device
+ * half says whether the keyboard is still up, and a call that found none reports the same state
+ * it found (D12(c)).
+ */
+export async function hideKeyboard(context: VerbContext): Promise<ActionResult> {
+	return performAction(context, {
+		verb: 'hide_keyboard',
+		requires: ['canHideKeyboard'],
+		act: async () => {
+			const hide = capabilityMethod(context, 'canHideKeyboard', 'hideKeyboard');
+			await hide(context.serial);
 		},
 	});
 }

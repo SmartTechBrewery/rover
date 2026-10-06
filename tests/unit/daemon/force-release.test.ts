@@ -101,6 +101,7 @@ function createHarness(options: HarnessOptions = {}): Harness {
 				canControlNetwork: true,
 				canRecordVideo: true,
 				canControlRecording: true,
+				canHideKeyboard: false,
 			},
 		},
 		backend: createRecordingBackend(performed, options.describeDevice),
