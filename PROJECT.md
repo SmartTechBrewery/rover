@@ -152,7 +152,7 @@ Working names. All of them take a device handle, and over the wire that handle i
 | `swipe` / `scroll` | **Only where the drag starts** is refused under the keyboard: `swipe`'s `from`, and `scroll`'s own start, which is computed a quarter into the region rather than resolved and so is checked by the verb itself — `scroll` resolves its region with that check off, since the region's centre is a point the gesture never touches and a list laid out whole behind the keyboard would otherwise be refused for a drag starting clear of it. Where a drag ends is not checked — it does not decide who reads the drag |
 | `type_text` | Hides the device shell's quoting, so a space, an apostrophe and a shell metacharacter all arrive verbatim. **Non-ASCII it cannot hide — `input text` cannot type it at all** (§6), so the honest answer is a refusal naming the character rather than a silent drop. That refusal is an `unsupported-text` verb failure carrying the serial, the string and the offending characters as escapes, **not** an `internal_error`: the string is the caller's and it is the caller who can fix it (#61). **No target** — an agent taps the field first. **`clear: true` empties the focused field first** (#309), so the text replaces the old value; with `text: ''` it only clears. That is a fifth `canInput` primitive, `clearText` — select all, then backspace, never a guessed count, because nothing says how long a field's text is and a password field reads back masked (§6) — and the verb calls it before typing inside one action, so a device that cannot clear refuses **before anything is typed**, as an `unsupported-clear` verb failure carrying the serial and the backend's reason: never a silent no-op, never `missing-capability`, never `internal_error`. The iOS simulator refused it until a recipe was measured; #302 measured Cmd+A then backspace in one HID stream, and it clears there too (§6) |
 | `press_key` | Back, home, recents, wake — and, since #301, the editing keys `delete` (backspace, never forward delete), `enter` (whatever the focused control does with it) and `tab` (focus to the next control). An optional `times` (1 to `MAX_KEY_PRESSES`, 20; default 1) repeats the press in one call, **composed in the verb rather than the backend**, with one after-state after the last press; zero is `invalid_params`, because pressing nothing would report a success. **No target**, so it needs no screen read to aim, which makes it the one input verb provable end to end on hardware before `read_screen` (R13). The keys are **one vocabulary, not a promise every platform has all of them**: a backend with no equivalent for one of them refuses **that key by name** — an `unsupported-key` verb failure carrying the serial and the key — deliberately not `missing-capability` and not `internal_error`, because a backend that takes input and lacks one key is a narrower backend rather than a broken one (#215) |
-| `hide_keyboard` | Puts the on-screen keyboard away **if one is up, and presses nothing if none is** (#307). **Never an unconditional `back`**: on Android back closes an open keyboard and, with none open, leaves the screen (§6), so the backend reads the keyboard's state from the same dump `screen.keyboard` comes from and presses only when it says one is up. The decision and the gesture are the backend's; the verb layer neither branches on the platform nor assumes a back key exists. Its own capability, `canHideKeyboard` — `true` on Android, `false` on the iOS simulator, where the call answers `missing-capability` naming the flag and the device. **The reporting half of that recipe is measured there now and the dismissal is what the flag still waits on** (#298, §6): the simulator's accessibility tree names the keyboard on every key node, so the read a safe dismissal needs exists, and no gesture that closes a simulator keyboard has been verified against a device. **No target**; the after-state's `screen.keyboard` is the evidence it worked |
+| `hide_keyboard` | Puts the on-screen keyboard away **if one is up, and presses nothing if none is** (#307). **Never an unconditional `back`**: on Android back closes an open keyboard and, with none open, leaves the screen (§6), so the backend reads the keyboard's state from the same dump `screen.keyboard` comes from and presses only when it says one is up. The decision and the gesture are the backend's; the verb layer neither branches on the platform nor assumes a back key exists. Its own capability, `canHideKeyboard` — `true` on Android, `false` on the iOS simulator, where the call answers `missing-capability` naming the flag and the device. **Both halves of that recipe are measured there now and the flag is still `false`** (#298, #321, §6): the simulator's accessibility tree names the keyboard on every key node, so the read exists; the one dismissal this transport can send is **Escape (HID usage 41)**, which does close a keyboard on a plain screen but is iOS's generic *cancel* — over Contacts' new-contact sheet it took the whole sheet away, with and without a keyboard up — and a key that means *cancel whatever is frontmost* cannot implement a verb that means *dismiss the keyboard and nothing else*. **No target**; the after-state's `screen.keyboard` is the evidence it worked |
 
 ### Reading
 
@@ -243,7 +243,8 @@ Some things worth knowing now, so as not to design into a corner:
   own naming one method, `hideKeyboard` (#307). Its contract is conditional — *dismiss the keyboard
   if one is up, do nothing otherwise* — because on Android the gesture that dismisses it is back,
   which navigates when none is open (§6). Whether to press, and what, is the backend's; the iOS
-  simulator declares `false` until it has a measured dismissal; it reads its keyboard since #298.
+  simulator reads its keyboard since #298 and still declares `false`, because the only dismissal
+  its transport can send is Escape and Escape is that platform's generic cancel (#321, §6).
 - **A system log is not one of those divergences**, and `readLogs` is therefore a *required*
   method rather than a capability: every platform this targets keeps one, and a flag that is
   always `true` would be noise (`src/core/capabilities.ts`). What differs between platforms is
@@ -1851,7 +1852,9 @@ tap { by: 'point', at: { x: 380, y: 100 } }   # clear of it
 **No verb-layer code changed to achieve that**: `requireUncovered` has been platform-neutral since
 #308 and starts firing the moment `ScreenInfo.keyboard` stops being `null`. `hide_keyboard` is still
 refused here — `canHideKeyboard` stays `false`, now for the measured reason that no dismissal has
-been verified rather than because the keyboard could not be read.
+been verified rather than because the keyboard could not be read. **#321 measured the dismissal and
+the flag stayed `false` anyway**, for a third reason that replaces this one: the block below it
+carries what Escape does.
 
 **The cost, measured on the same bench.** `deviceInfo` now takes one accessibility read, so it goes
 from **111–159 ms** (a device the state gate skips the read for) to **239–270 ms** warm, 706 ms on
@@ -1880,6 +1883,104 @@ capture says nothing about its value being non-null**, because a capture is take
 has finished drawing and the interesting states are the ones that have not. It was a device run that
 found it, which is the argument for `tests/device/` existing.
 
+---
+
+### Escape dismisses the iOS simulator's keyboard, and dismisses the sheet over it too — so `canHideKeyboard` stays `false` (2026-10-06, #321)
+
+The dismissal half of #298's recipe, measured on **two throwaway iPhone 17s** created for the run —
+macOS 26.x / Xcode 26.4.1 (17E202) / iOS 26.4.1 / `idb_companion` 1.5.2 — set up with the
+`ConnectHardwareKeyboard` recipe above and driven through `IosSimulatorDeviceBackend` in-process,
+reading `accessibility_info` back after every press. The screen is 402×874 points.
+
+**The candidate was Escape, USB HID usage 41**, sent as the down/up pair `press()` already builds,
+over the same `hid` stream every input primitive uses. It is the only candidate this transport has:
+`hid` sends buttons, touches and HID usages and nothing else, `simctl` has no keyboard subcommand,
+and a bare modifier was already measured not to work (Left Shift, usage 225, which types nothing,
+left the keyboard up — #298 above).
+
+**On a plain screen it does exactly what was wanted.** Settings' search field, keyboard up:
+
+```text
+before   47 nodes   keyboard = { shown: true, bounds: { x: 0, y: 539, width: 402,
+                                                        height: 335.4341207349081 } }
+Escape (usage 41, DOWN then UP, one hid stream, 32 ms)
+after     9 nodes   keyboard = { shown: false, bounds: null }
+```
+
+and the nine nodes left are the ten non-keyboard nodes of the before-read minus the keyboard's own
+container: the same header, the same four suggestion rows at the same frames, the search field moved
+from `y: 469` to `y: 788` because the panel it was lifted over is gone. Settings is still frontmost
+and still in search mode. The one difference from Android's `back` is that the field is **no longer
+focused** — the caret is gone — which is inherent rather than incidental: an iOS keyboard is up
+because a field is first responder, so dismissing it is resigning that.
+
+**On a screen with a presentation over it, it takes the presentation.** Contacts, `+` → *Nowy
+kontakt*, a modal sheet with its first field focused and the keyboard over it:
+
+```text
+before   52 nodes   keyboard = { shown: true, bounds: { x: 0, y: 539, width: 402,
+                                                        height: 335.4341207349081 } }
+Escape
+after    17 nodes   keyboard = { shown: false, bounds: null }
+```
+
+and the seventeen nodes are **the contacts list**. The whole sheet is gone, the half-filled contact
+with it, and `screen.keyboard` reports `{ shown: false }` — a `hide_keyboard` built on this would
+have answered `ok` with its own post-state as the proof, having discarded the caller's form.
+
+**And it takes the sheet with no keyboard up at all**, which is what settles the question rather
+than leaving it as a coincidence. Re-opening the same sheet on the same device, now in
+hardware-keyboard mode so no panel is ever drawn:
+
+```text
+before   14 nodes   keyboard = { shown: false, bounds: null }    # the sheet, no keyboard
+Escape
+after    17 nodes   keyboard = { shown: false, bounds: null }    # the contacts list
+```
+
+So Escape is aimed at the **presentation**, not at the keyboard: it is iOS's generic cancel, the
+`Esc` that closes a dialog on every desktop this simulator's UI frameworks also run on. The keyboard
+going away in the first measurement is what cancel does when there is nothing else to cancel.
+
+**That is why `canHideKeyboard` stays `false` and no `hideKeyboard` method is added.** The read the
+method would make — `ScreenInfo.keyboard.shown` — cannot tell the two screens apart. Both say a
+keyboard is up; on one the press is the verb's contract and on the other it destroys state, and the
+caller cannot see which it got, because the after-state is `{ shown: false }` either way. A verb
+whose contract is *dismiss the keyboard if one is up and press nothing otherwise* (§4) cannot be
+built out of a key whose meaning is *cancel whatever is frontmost*. The refusal stays what it is: a
+`missing-capability` naming the flag and the device, which is the honest answer D11 exists for.
+
+**What a caller gets instead, driven by hand through the verb layer** (`hide_keyboard` in
+`src/verbs/input.ts` over `IosSimulatorDeviceBackend` in-process, against the host's booted
+iPhone 17) — #307's and #308's pattern, and the whole of what this task changes for an agent:
+
+```text
+hide_keyboard { leaseId }
+  MissingCapabilityError
+  capability: 'canHideKeyboard'   serial: '997FA43E-…'   platform: 'ios-simulator'
+  backendLabel: 'iOS Simulator (simctl + idb)'
+  message: Device '997FA43E-…' cannot do 'canHideKeyboard': the iOS Simulator (simctl + idb)
+           backend ('ios-simulator') does not declare that capability
+```
+
+which `src/verbs/failure.ts` carries to the agent as a `missing-capability` failure naming the
+flag and the device. `tests/device/ios-simulator/verb-dispatch.test.ts` pins that shape from the
+far end of the socket, beside the two `canControlNetwork` refusals it already had.
+
+**Two further facts, recorded because they are true whatever the flag ends up as.**
+
+- **With nothing to cancel, Escape is a genuine no-op.** Three presses in a row on Settings' search
+  screen with no keyboard up left the accessibility read **byte-identical** (11 nodes before and
+  after, same frames, same traits), with the focused field still focused; three on Springboard left
+  its 14 nodes identical too. It is the opposite of Android's back, which leaves the screen.
+- **One Escape puts the simulator into hardware-keyboard mode for the rest of that device's life.**
+  After the Settings measurement the device's own
+  `data/Library/Preferences/com.apple.keyboard.preferences.plist` carries
+  `HardwareKeyboardLastSeen = true`, and tapping the same field again brought the keyboard **back
+  up never** — the read stayed at 11 nodes with no `KeyboardKey` among them. That is the same
+  persistent side effect one `typeText` has (#298 above), it is why each of the two measurements
+  above needed a device of its own, and it would have been a side effect of a successful
+  `hide_keyboard` too: the second call of a lease would have had nothing to dismiss.
 ---
 
 ### A graceful stop did not release a live lease, and `rover server` is a wrapper (2026-09-12, #294)

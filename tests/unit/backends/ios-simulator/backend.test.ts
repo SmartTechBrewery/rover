@@ -8,6 +8,7 @@ import {
 	LOG_WINDOWS,
 	WATCH_POLL_INTERVAL_MS,
 } from '@/backends/ios-simulator/backend.js';
+import { iosSimulatorCapabilityManifest } from '@/backends/ios-simulator/capabilities.js';
 import { SimctlNotFoundError } from '@/backends/ios-simulator/developer-dir.js';
 import { IdbCompanionInterruptedError } from '@/backends/ios-simulator/idb-client.js';
 import type { IdbCompanionStreamHandlers } from '@/backends/ios-simulator/idb-companion.js';
@@ -3780,6 +3781,23 @@ describe('the capabilities this backend does not declare', () => {
 	it('ships no network methods at all rather than ones that draw an icon', () => {
 		expect(contract().setAirplaneMode).toBeUndefined();
 		expect(contract().setWifiEnabled).toBeUndefined();
+	});
+
+	/**
+	 * The same shape for the second `false` flag, and it is here because that flag's reason changed
+	 * while the answer did not (#321). `canHideKeyboard` was `false` because this backend could not
+	 * read its keyboard, then because no dismissal had been measured; one has been now — Escape,
+	 * HID usage 41 — and the flag is still `false`, because Escape is iOS's generic *cancel* and
+	 * dismissed Contacts' presented new-contact sheet with a keyboard up and with none
+	 * (`./capabilities.ts`, `PROJECT.md` §6). A `hideKeyboard` built on it would answer `ok` for a
+	 * call that discarded the caller's form, which is the `ai/RULES.md` §2 failure in its worst
+	 * shape. So the absence of the method is the deliberate artifact here, not an omission, and
+	 * this case is what fails if somebody adds one without moving the flag — the conformance gate
+	 * only catches the opposite mistake.
+	 */
+	it('ships no hideKeyboard beside the keyboard it can already read', () => {
+		expect(contract().hideKeyboard).toBeUndefined();
+		expect(iosSimulatorCapabilityManifest.capabilities.canHideKeyboard).toBe(false);
 	});
 
 	/**

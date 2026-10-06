@@ -73,8 +73,14 @@ export const CapabilitiesSchema = z
 		 * keyboard away is a fact about that device and not a key every platform has: on one it is
 		 * the back key, which *navigates* when no keyboard is open, so the press is only safe
 		 * behind a read of the keyboard's state — knowledge that lives in the backend, not in the
-		 * verb layer (ai/RULES.md §2). A platform with no verified recipe yet answers
-		 * `missing-capability` by name rather than quietly doing nothing.
+		 * verb layer (ai/RULES.md §2). A platform with no verified recipe answers
+		 * `missing-capability` by name rather than quietly doing nothing — and "no verified recipe"
+		 * covers more than *nothing has been tried*. One backend here declares `false` with a
+		 * working dismissal in hand (#321), because the key that performs it is also that
+		 * platform's generic *cancel*: it closes the keyboard when there is nothing else to close
+		 * and discards the presented sheet when there is, and the read that gates the press cannot
+		 * tell those screens apart. A gesture that does **more** than this flag names is not a
+		 * recipe for it; each backend's own manifest carries which case it is in.
 		 */
 		canHideKeyboard: z.boolean(),
 	})

@@ -898,9 +898,12 @@ only when that read says a keyboard is up; a dump that says nothing about the ke
 rather than guessed at. It takes the lease id alone — no target, and no key, because *how* a device
 puts its keyboard away is that device's knowledge — and its answer is the usual one, whose
 `screen.keyboard` says whether the keyboard is still there. It is gated on its own capability,
-`canHideKeyboard`: `true` on Android, `false` on the iOS simulator for now, where the call answers
+`canHideKeyboard`: `true` on Android, `false` on the iOS simulator, where the call answers
 `missing-capability` naming the flag and the device instead of answering `ok` for a keyboard still on
-the glass.
+the glass. That iOS `false` is a measured decision rather than unfinished work: the one key that
+dismisses a simulator keyboard is Escape, which is the platform's generic *cancel* and takes a
+presented sheet away just as readily, so there is no press that means only *put the keyboard away*
+(`docs/IOS.md` §5).
 
 **`screenshot` is the third read, and the one whose answer is a payload** rather than a state the
 result already carries. It sits on the same spine and needs no capability either, and what it adds
