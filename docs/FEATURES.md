@@ -244,7 +244,12 @@ before it acts and for a wait the resolution *is* the work. **Every poll reads t
 a wait over one cached read is the stale-coordinate failure with a timer attached. `wait_for` waits
 until the target is there *and* actionable, so an element still clipped out of its scrolling
 container is *not yet* rather than a failure, while an ambiguous target is refused outright,
-because more polling cannot specify an under-specified request. `wait_until_gone` asks the mirror
+because more polling cannot specify an under-specified request. A screen the device could not
+read **yet** — an application still starting, so there is no window to describe — is the second
+*not yet*, and both waits poll through it; if it lasts to the deadline the timeout says the
+screen was never readable rather than that the element was not found. A verb that reads once
+instead fails on it by name (`unreadable-screen`), because polling is a wait's job and not a
+primitive's. `wait_until_gone` asks the mirror
 question of *matches* rather than of a resolution, and will not take a text target's `index`, since
 an index names a slot in the match list and a slot empties the moment any sibling leaves.
 

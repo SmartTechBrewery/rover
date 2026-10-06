@@ -26,6 +26,17 @@
  * `saysSuccess`/`startedActivity` are: adb prints real output on whichever stream it likes
  * (PROJECT.md §6), so the fixture was taken with `> f 2>&1` and the *stream* recorded
  * rather than assumed. It is stdout, and stderr was empty.
+ *
+ * **A second shape lives here, and it is the one non-confirmation that means "not yet".**
+ * {@link nullRootReport} recognises the line `uiautomator dump` prints when the automation
+ * bridge hands it no root node — there is no window to walk, which is what reading the
+ * screen in the instant after an application starts looks like. It is kept apart from
+ * {@link dumpedPath} answering `null` because the two are different facts: *the command
+ * named no path* covers everything from a crashed dump to a newer API printing something
+ * new, while this one says specifically that the device was asked and had nothing to show
+ * yet. Only the second is a thing a wait should poll through (`src/verbs/wait-for.ts`), and
+ * telling them apart is the whole reason this is a separate predicate rather than a wider
+ * reading of the first.
  */
 
 /**
@@ -66,4 +77,44 @@ export function dumpedPath(output: string): string | null {
 	}
 
 	return path;
+}
+
+/**
+ * The wording, verbatim from the platform.
+ *
+ * AOSP's `DumpCommand` prints this and returns normally when `UiTestAutomationBridge` has
+ * no root node for it — so the exit code is 0, nothing is written, and the confirmation
+ * line {@link DUMPED_LINE} matches is simply absent. The trailing full stop is optional in
+ * the pattern because it is the kind of detail a platform release edits, and trailing
+ * whitespace is allowed for the same reason {@link dumpedPath} trims `\r`.
+ */
+const NULL_ROOT_LINE = /^ERROR: null root node returned by UiTestAutomationBridge\.?[ \t]*$/;
+
+/**
+ * The line `uiautomator dump` prints when it had no window to dump, or `null`.
+ *
+ * A **string rather than a boolean**, which is {@link dumpedPath}'s choice and made for its
+ * reason: this module reports what the command *said*, and the caller quotes those words
+ * back so the refusal it raises carries the device's own account rather than this file's
+ * paraphrase of it.
+ *
+ * Anchored at the start of a line, so the phrase echoed back inside a path or a
+ * `content-desc` cannot supply one — the same guard `dumpedPath` has, and it matters more
+ * here, because what this answer unlocks is a caller polling instead of failing.
+ *
+ * `\r` is trimmed for `dumpedPath`'s reason: a pty-backed shell ends every line `\r\n`, and
+ * a pattern anchored at the end of the line is exactly the one that then stops matching.
+ *
+ * The **last** match wins, as above: adb's own client chatter precedes the command's output
+ * and nothing follows the line the command ends with.
+ */
+export function nullRootReport(output: string): string | null {
+	let report: string | null = null;
+
+	for (const line of output.split('\n')) {
+		const trimmed = line.replace(/\r+$/, '');
+		if (NULL_ROOT_LINE.test(trimmed)) report = trimmed.trimEnd();
+	}
+
+	return report;
 }

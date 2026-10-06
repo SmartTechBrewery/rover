@@ -698,6 +698,22 @@ export interface DeviceBackend {
 	 * the one read that survives an application blocking screen capture. A backend that
 	 * cannot do it declares `canReadScreen: false`; it does not ship a method returning
 	 * an empty list, which is the silent degradation D11 exists to prevent.
+	 *
+	 * **A backend that reached the device and found no screen to read *yet* throws
+	 * `UnreadableScreenError`** (`src/core/errors.ts`), with its own words for how the device
+	 * said so. That is a narrow case and not a synonym for "the read failed": the device is
+	 * attached and answering, and what it has not got at this instant is a window to
+	 * describe — reading right after an application starts is how a caller meets it. It is
+	 * typed because the two kinds of caller read it in opposite ways: the waits poll through
+	 * it (`src/verbs/wait-for.ts`), and a caller that reads once fails with it by name.
+	 *
+	 * **It never answers `[]` for that case.** An empty list is the claim that nothing is
+	 * displayed, which a caller would act on — and `wait_until_gone` would read it as the
+	 * element having left, ending a wait with an answer that is simply false.
+	 *
+	 * **And it does not retry.** A retry loop is a wait, and waits belong to the wait
+	 * vocabulary (D12(b), ai/RULES.md §2); a primitive that read twice would hide from its
+	 * caller that the first read found nothing.
 	 */
 	readScreen?(serial: DeviceSerial): Promise<ScreenElement[]>;
 
