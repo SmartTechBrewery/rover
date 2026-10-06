@@ -39,6 +39,7 @@ import {
 	NoRecordingRunningError,
 	RecordingAlreadyRunningError,
 	UnfinishedRecordingError,
+	UnreadableScreenError,
 	UnsupportedKeyError,
 	UnsupportedTextError,
 	WaitTimeoutError,
@@ -128,6 +129,35 @@ export const VerbFailureSchema = z.discriminatedUnion('kind', [
 			widthDp: z.number(),
 			heightDp: z.number(),
 			reason: z.enum(['clipped', 'off-screen']),
+			message: z.string().min(1),
+		})
+		.strict(),
+	/**
+	 * The device was reached and had no screen to read **yet**.
+	 *
+	 * The answer a verb that reads the screen **once** gives — a `tap` resolving its element,
+	 * say — when the device is up and the window it would describe is not. The ordinary way
+	 * to meet it is a read issued immediately after an application starts.
+	 *
+	 * **Its own kind because `internal_error` is the alternative, and it is a lie.** Without
+	 * this branch `UnreadableScreenError` falls out of {@link toVerbFailure} as unknown and
+	 * the host reports that it broke, for a device that is merely still drawing its first
+	 * frame — and an agent told the host broke stops, where one told the screen was not ready
+	 * yet reads again or waits.
+	 *
+	 * **A wait does not answer with this**, and that is the point of the pair: `wait_for` and
+	 * `wait_until_gone` read the same error as "not yet" and poll on, so the only way one of
+	 * them surfaces this is something other than its screen read raising it.
+	 *
+	 * `reason` is the backend's own account of what it asked and what it was told, beside
+	 * `message` rather than only inside it, because it is the part a client would otherwise
+	 * have to cut back out of the sentence.
+	 */
+	z
+		.object({
+			kind: z.literal('unreadable-screen'),
+			serial: DeviceSerialSchema,
+			reason: z.string().min(1),
 			message: z.string().min(1),
 		})
 		.strict(),
@@ -473,11 +503,12 @@ export type VerbFailure = z.infer<typeof VerbFailureSchema>;
  * class's own test seeing an internal error instead of an answer, which is the loud version
  * of this drifting.
  *
- * Three groups are delegated to helpers below — one list this long is harder to read than
- * four, and each group genuinely belongs together: the four failures about a **host tool**
- * rather than a device ({@link hostToolFailure}), the two about whether a device has a
- * recording open ({@link openRecordingFailure}), and the three where the device can do the
- * thing and not with *this argument* ({@link unsupportedArgumentFailure}).
+ * Four groups are delegated to helpers below — one list this long is harder to read than
+ * five, and each group genuinely belongs together: the five failures between a caller's
+ * address and a point on the screen to act on ({@link screenAddressFailure}), the four about
+ * a **host tool** rather than a device ({@link hostToolFailure}), the two about whether a
+ * device has a recording open ({@link openRecordingFailure}), and the three where the device
+ * can do the thing and not with *this argument* ({@link unsupportedArgumentFailure}).
  */
 export function toVerbFailure(error: unknown): VerbFailure | null {
 	if (error instanceof MissingCapabilityError) {
@@ -490,51 +521,8 @@ export function toVerbFailure(error: unknown): VerbFailure | null {
 			message: error.message,
 		};
 	}
-	if (error instanceof TargetNotFoundError) {
-		return {
-			kind: 'target-not-found',
-			serial: error.serial,
-			lookedFor: error.lookedFor,
-			found: error.found,
-			message: error.message,
-		};
-	}
-	if (error instanceof AmbiguousTargetError) {
-		return {
-			kind: 'ambiguous-target',
-			serial: error.serial,
-			lookedFor: error.lookedFor,
-			// Copied rather than handed over: the union's own type is a mutable array, and the
-			// error holds a `readonly` one it has already published to whoever caught it.
-			candidates: [...error.candidates],
-			remedy: error.remedy,
-			message: error.message,
-		};
-	}
-	if (error instanceof OffScreenPointError) {
-		return {
-			kind: 'off-screen-point',
-			serial: error.serial,
-			x: error.x,
-			y: error.y,
-			widthDp: error.widthDp,
-			heightDp: error.heightDp,
-			message: error.message,
-		};
-	}
-	if (error instanceof UnaddressableElementError) {
-		return {
-			kind: 'unaddressable-element',
-			serial: error.serial,
-			lookedFor: error.lookedFor,
-			element: error.element,
-			point: error.point,
-			widthDp: error.widthDp,
-			heightDp: error.heightDp,
-			reason: error.reason,
-			message: error.message,
-		};
-	}
+	const screenAddress = screenAddressFailure(error);
+	if (screenAddress !== null) return screenAddress;
 	const unsupportedArgument = unsupportedArgumentFailure(error);
 	if (unsupportedArgument !== null) return unsupportedArgument;
 	if (error instanceof ArtifactTooLargeError) {
@@ -604,6 +592,83 @@ export function toVerbFailure(error: unknown): VerbFailure | null {
 			found: error.found,
 			timeoutMs: error.timeoutMs,
 			polls: error.polls,
+			message: error.message,
+		};
+	}
+	return null;
+}
+
+/**
+ * The five failures that stand between a caller's address and a point on the screen to act
+ * on, split out of {@link toVerbFailure} for {@link hostToolFailure}'s reason.
+ *
+ * They belong together on their own terms: every one of them comes from a verb that was
+ * asked to turn *what you want touched* into *where on this device to touch*, and could
+ * not — nothing matched, several did, the point named is not on the device, the element is
+ * there and has no interior to aim at, or the screen could not be read at all. None of them
+ * is a broken host and none of them is a device that cannot do the thing, so none is an
+ * `internal_error` and none is a `missing-capability` (D11); what each says is which part
+ * of the address failed, which is the part a caller can change.
+ *
+ * `unreadable-screen` is the newest and the odd one at first glance (#299) — it is about the
+ * read rather than about the target. It is here because it is the first step of the same
+ * sequence failing: there is no screen yet to address anything on. Reading it as *not yet*
+ * rather than as a refusal is the waits' business and happens before this
+ * (`./wait-for.ts`); by the time a failure is being built, the caller was a one-shot read.
+ *
+ * Returns `null` for anything else, so the caller carries on down its own list.
+ */
+function screenAddressFailure(error: unknown): VerbFailure | null {
+	if (error instanceof TargetNotFoundError) {
+		return {
+			kind: 'target-not-found',
+			serial: error.serial,
+			lookedFor: error.lookedFor,
+			found: error.found,
+			message: error.message,
+		};
+	}
+	if (error instanceof AmbiguousTargetError) {
+		return {
+			kind: 'ambiguous-target',
+			serial: error.serial,
+			lookedFor: error.lookedFor,
+			// Copied rather than handed over: the union's own type is a mutable array, and the
+			// error holds a `readonly` one it has already published to whoever caught it.
+			candidates: [...error.candidates],
+			remedy: error.remedy,
+			message: error.message,
+		};
+	}
+	if (error instanceof OffScreenPointError) {
+		return {
+			kind: 'off-screen-point',
+			serial: error.serial,
+			x: error.x,
+			y: error.y,
+			widthDp: error.widthDp,
+			heightDp: error.heightDp,
+			message: error.message,
+		};
+	}
+	if (error instanceof UnaddressableElementError) {
+		return {
+			kind: 'unaddressable-element',
+			serial: error.serial,
+			lookedFor: error.lookedFor,
+			element: error.element,
+			point: error.point,
+			widthDp: error.widthDp,
+			heightDp: error.heightDp,
+			reason: error.reason,
+			message: error.message,
+		};
+	}
+	if (error instanceof UnreadableScreenError) {
+		return {
+			kind: 'unreadable-screen',
+			serial: error.serial,
+			reason: error.reason,
 			message: error.message,
 		};
 	}

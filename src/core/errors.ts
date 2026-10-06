@@ -3,13 +3,14 @@
  *
  * "This device cannot do that" and "this broke" call for opposite responses from an
  * agent, so a missing capability is its own type rather than a generic `Error`
- * (ai/CODING_STANDARDS.md "Error handling", D11). The same test admits the eight below:
+ * (ai/CODING_STANDARDS.md "Error handling", D11). The same test admits the nine below:
  * "the device went away", "the device is not attached to this host", "this device cannot
  * type that string", "this device has no equivalent for that key", "this device cannot apply
  * that log filter", "the recording came off the device unfinished", "this device is already
- * recording" and "this device is not recording at all" are each an answer a caller acts on
- * differently, and none of them is a bug. Everything else in this layer throws plain `Error` for a programmer or validation
- * bug, and returns `null` for not-found.
+ * recording", "this device is not recording at all" and "this device has no screen to read
+ * yet" are each an answer a caller acts on differently, and none of them is a bug.
+ * Everything else in this layer throws plain `Error` for a programmer or validation bug, and
+ * returns `null` for not-found.
  *
  * Imports from `./capabilities.js` are type-only on purpose: that module imports this
  * one for its value, so an erased edge is what keeps the pair free of a runtime cycle.
@@ -326,6 +327,56 @@ export class NoRecordingRunningError extends Error {
 		);
 		this.name = 'NoRecordingRunningError';
 		this.serial = serial;
+	}
+}
+
+/**
+ * Thrown when a backend reached the device and found no screen to read **yet**.
+ *
+ * The device is fine and it is answering; what it has not got, at this instant, is a window
+ * whose contents can be described. The ordinary way to meet it is to read immediately after
+ * starting an application — the process is up and the first frame is not, so the read lands
+ * in the gap (PROJECT.md §6 records the shape and the API level it was measured on).
+ *
+ * **It is its own type because two kinds of caller have to read it in opposite ways.** A
+ * wait is the thing that exists to absorb a screen that is not ready, so `src/verbs/wait-for.ts`
+ * reads it as "not yet" and polls on — ending a five-second wait on poll one because the
+ * app had not drawn yet is the wait failing at the one job it has. A caller that reads once
+ * has no such licence and fails with it by name, through the `unreadable-screen` branch in
+ * `src/verbs/failure.ts`. Neither reading is available if this arrives as a plain `Error`:
+ * the wait cannot tell it apart from a device that broke, and the one-shot read reports
+ * `internal_error` — "the host broke" — for a device that is merely still starting an app.
+ *
+ * **Never an empty element list instead.** An empty screen is a claim this is not entitled
+ * to make: a caller would read it as *nothing is displayed*, and `wait_until_gone` would
+ * read it as the element being gone and end the wait with an answer that is simply false.
+ * And never {@link DeviceVanishedError} — the device is attached, which is why the way out
+ * is to look again rather than to find another device.
+ *
+ * `reason` is the backend's own words for what it asked and what it was told, passed in
+ * rather than written here, for the reason {@link UnsupportedKeyError}'s is: how a device
+ * reports having no window is a fact about that device, and this layer names no device's
+ * particulars (ai/RULES.md §2). It travels on its own as well as inside `message` because a
+ * wait puts it in its timeout's "found" half, which is what makes a timeout here say the
+ * screen was never readable rather than that the element was not there.
+ *
+ * Every field is plain data, for the reason {@link WaitTimeoutError} states: `src/verbs/failure.ts`
+ * serializes it and a client on another machine reads it (D19).
+ */
+export class UnreadableScreenError extends Error {
+	readonly serial: DeviceSerial;
+	readonly reason: string;
+
+	constructor(serial: DeviceSerial, reason: string) {
+		super(
+			`Device '${serial}' had no screen to read: ${reason}. The device is attached and ` +
+				'answering — this is a screen that is not ready yet, which is what reading right ' +
+				'after starting an application looks like — so read again, or wait for what you ' +
+				'expect to see, which polls through this',
+		);
+		this.name = 'UnreadableScreenError';
+		this.serial = serial;
+		this.reason = reason;
 	}
 }
 

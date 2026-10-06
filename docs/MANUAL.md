@@ -770,6 +770,11 @@ attached, re-grown inside the verbs meant to remove it. `wait_for` waits until t
 *and* somewhere it can be acted on, so an element still clipped out of its scrolling container is
 *not yet* rather than a failure — a screen still moving is what a wait is for — while a target two
 elements match is refused outright, because more polling cannot specify an under-specified request.
+A screen the device could not read **yet** reads the same way: a device that is up and has not
+drawn a window, which is what reading right after a cold app launch meets, is *not yet* for both
+waits rather than the end of the wait — and a timeout that never got a readable screen says so, in
+place of claiming the element was not on it. Everything else still ends the wait on the spot, and a
+verb that reads the screen once fails on that same case by name instead of quietly reading again.
 `wait_until_gone` asks the mirror question, and asks it of matches rather than of a resolution: an
 element matched twice is still there twice — and for the same reason it will not take a text
 target's `index`, since an index names a slot in the match list rather than an element, and a slot

@@ -29,6 +29,7 @@ import {
 	NoRecordingRunningError,
 	RecordingAlreadyRunningError,
 	UnfinishedRecordingError,
+	UnreadableScreenError,
 	UnsupportedKeyError,
 	UnsupportedTextError,
 } from '@/core/errors.js';
@@ -2350,7 +2351,53 @@ describe('readScreen', () => {
 
 		await expect(failure).rejects.toThrow(/could not get idle state/);
 		await expect(failure).rejects.toThrow(/emulator-5554/);
+		// Not the typed "no screen yet": a screen that will not *settle* is a different fact
+		// from one that is not there, and the waits poll through only the second. This is the
+		// proof the typed case did not become a catch-all over every dump that confirmed
+		// nothing (#299).
+		await expect(failure).rejects.not.toBeInstanceOf(UnreadableScreenError);
 		expect(argvOf()).not.toContainEqual(CAT_ARGV);
+	});
+
+	/**
+	 * The transient screen #299 is about: the process is up and the window it would describe
+	 * is not, which is what reading in the instant after a cold `launch_app` looks like. The
+	 * dump prints its complaint and exits 0, so the confirmation line is simply absent — and
+	 * without the typed error that arrives at the verb layer as an anonymous `Error`, which
+	 * ends a wait on its first poll.
+	 */
+	const NULL_ROOT = 'ERROR: null root node returned by UiTestAutomationBridge.\n';
+
+	it.each([
+		['stderr', { stdout: '', stderr: NULL_ROOT }],
+		// Which stream adb puts real output on is not stable (PROJECT.md §6), so the backend
+		// reads both rather than trusting the one the platform writes to.
+		['stdout', { stdout: NULL_ROOT, stderr: '' }],
+	])('names a dump with no window of its own, on %s', async (_stream, dumped) => {
+		reads({ [DUMP_ARGV.join(' ')]: dumped });
+
+		const thrown = await backend.readScreen(SERIAL).catch((error: unknown) => error);
+
+		expect(thrown).toBeInstanceOf(UnreadableScreenError);
+		const unreadable = thrown as UnreadableScreenError;
+		expect(unreadable.serial).toBe(SERIAL);
+		// The device's own words travel, because a wait puts them in its timeout's "found".
+		expect(unreadable.reason).toContain('null root node returned by UiTestAutomationBridge');
+		expect(unreadable.message).toContain(SERIAL);
+		// The stale-file guard still holds on this path: a dump that confirmed nothing is
+		// never followed by a `cat`, and the file it may have left is still removed.
+		expect(argvOf()).not.toContainEqual(CAT_ARGV);
+		expect(argvOf()).toContainEqual(RM_ARGV);
+	});
+
+	// No retry inside the primitive: a retry loop is a wait, and waits belong to the wait
+	// vocabulary (D12(b)). A second read here would hide the first one's answer.
+	it('asks the device exactly once when it had no window to dump', async () => {
+		reads({ [DUMP_ARGV.join(' ')]: { stdout: '', stderr: NULL_ROOT } });
+
+		await expect(backend.readScreen(SERIAL)).rejects.toBeInstanceOf(UnreadableScreenError);
+
+		expect(argvOf().filter((argv) => argv.includes('uiautomator'))).toHaveLength(1);
 	});
 
 	// Still removes the file it may have left behind: a stale document deleted now is one

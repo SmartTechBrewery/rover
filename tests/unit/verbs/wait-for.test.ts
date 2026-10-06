@@ -12,8 +12,13 @@
 
 import { describe, expect, it, vi } from 'vitest';
 import type { DeviceBackend, ScreenElement } from '@/core/device.js';
-import { MissingCapabilityError, WaitTimeoutError } from '@/core/errors.js';
-import { parseElementId } from '@/core/ids.js';
+import {
+	DeviceVanishedError,
+	MissingCapabilityError,
+	UnreadableScreenError,
+	WaitTimeoutError,
+} from '@/core/errors.js';
+import { parseDeviceSerial, parseElementId } from '@/core/ids.js';
 import { DEFAULT_POLL_INTERVAL_MS } from '@/core/wait.js';
 import type { VerbContext } from '@/verbs/context.js';
 import { AmbiguousTargetError } from '@/verbs/errors.js';
@@ -54,15 +59,33 @@ function fakeClock(startMs = 1_000) {
 /**
  * A context whose screen read answers each of `screens` in turn, then repeats the last —
  * the scripted device these tests are about.
+ *
+ * A step may be an `Error` instead of a screen, and the read then throws it. That is how a
+ * device that has no window to describe yet is scripted: the read failing is the whole
+ * shape of that poll, and nothing it could return would stand in for it.
  */
-function contextShowing(...screens: ScreenElement[][]): VerbContext {
+function contextShowing(...screens: (ScreenElement[] | Error)[]): VerbContext {
 	let call = 0;
 	const readScreen = vi.fn<NonNullable<DeviceBackend['readScreen']>>(async () => {
 		const screen = screens[Math.min(call, screens.length - 1)] ?? [];
 		call += 1;
+		if (screen instanceof Error) throw screen;
 		return screen;
 	});
 	return createMockVerbContext({ backend: createMockDeviceBackend({ readScreen }) });
+}
+
+/**
+ * The transient read #299 is about — a device that is up and has not drawn a window yet,
+ * which is what reading right after an application starts looks like.
+ *
+ * A fresh instance per step, because each poll meets its own read failing.
+ */
+function unreadable(): UnreadableScreenError {
+	return new UnreadableScreenError(
+		parseDeviceSerial('test-serial-1'),
+		'the screen reader had no window to dump',
+	);
 }
 
 /** How many times the device was asked what is on its screen. */
@@ -179,6 +202,45 @@ describe('waitFor', () => {
 		expect((thrown as WaitTimeoutError).found).toContain('clipped out of view');
 	});
 
+	/**
+	 * The bug in #299: a read that found no window to describe is the screen not being ready
+	 * yet, which is the one thing a wait exists to absorb — and it used to end the wait on
+	 * poll one, so an agent had to retry a `wait_for` by hand after a cold app launch.
+	 */
+	it('keeps polling a screen the device could not read yet', async () => {
+		const context = contextShowing(unreadable(), unreadable(), [save]);
+		const clock = fakeClock();
+
+		const result = await waitFor(context, { by: 'text', text: 'Save' }, clock);
+
+		// Three polls plus the state after, and two gaps — the wait ran to the read that
+		// worked instead of stopping at the first that did not.
+		expect(reads(context)).toBe(4);
+		expect(clock.asked).toEqual([DEFAULT_POLL_INTERVAL_MS, DEFAULT_POLL_INTERVAL_MS]);
+		expect(result.target?.element).toEqual(save);
+	});
+
+	it('says the screen was never readable when it never becomes readable', async () => {
+		const context = contextShowing(unreadable());
+
+		const thrown = await waitFor(
+			context,
+			{ by: 'text', text: 'Save' },
+			{ ...fakeClock(), timeoutMs: 1_000 },
+		).catch((error: unknown) => error);
+
+		expect(thrown).toBeInstanceOf(WaitTimeoutError);
+		const timeout = thrown as WaitTimeoutError;
+		// Nothing is swallowed: the deadline still arrives, and the message says the screen
+		// could not be read rather than that the element was not on it — which is the
+		// difference between "the app never came up" and "look for a different label".
+		expect(timeout.found).toContain('could not be read');
+		expect(timeout.found).toContain('had no window to dump');
+		expect(timeout.found).not.toContain('an empty screen');
+		expect(timeout.message).toContain("text containing 'Save'");
+		expect(timeout.polls).toBe(5);
+	});
+
 	it('refuses an ambiguous target rather than polling until it times out', async () => {
 		const context = contextShowing([save, createMockScreenElement({ id: 'save-2', text: 'Save' })]);
 
@@ -202,6 +264,17 @@ describe('waitFor', () => {
 		await expect(waitFor(context, { by: 'text', text: 'Save' }, fakeClock())).rejects.toThrow(
 			'device offline',
 		);
+	});
+
+	// The other half of that: the one read error the loop absorbs did not make it a
+	// catch-all. A device that left the host is not a screen that is not ready yet.
+	it('propagates a device that vanished rather than polling for it to come back', async () => {
+		const context = contextShowing(new DeviceVanishedError(parseDeviceSerial('test-serial-1')));
+
+		await expect(
+			waitFor(context, { by: 'text', text: 'Save' }, fakeClock()),
+		).rejects.toBeInstanceOf(DeviceVanishedError);
+		expect(reads(context)).toBe(1);
 	});
 
 	it('fails by name on a backend that cannot read the screen, without polling it once', async () => {
@@ -292,6 +365,40 @@ describe('waitUntilGone', () => {
 
 		expect(result.target).toBeNull();
 		expect(result.after).toEqual({ kind: 'screen', elements: [save] });
+	});
+
+	/**
+	 * The false-gone bug this translation has to avoid: an unreadable screen is "cannot tell
+	 * yet", never "the element has left". Reading it as absence would answer that a spinner
+	 * had gone from a screen nobody could see.
+	 */
+	it('does not read a screen it could not read as the element being gone', async () => {
+		const context = contextShowing(unreadable(), [spinner], [save]);
+		const clock = fakeClock();
+
+		const result = await waitUntilGone(context, { by: 'text', text: 'Loading…' }, clock);
+
+		// Three polls plus the state after. Ending on the first read would have resolved
+		// before the spinner was ever observed, let alone gone.
+		expect(reads(context)).toBe(4);
+		expect(clock.asked).toEqual([DEFAULT_POLL_INTERVAL_MS, DEFAULT_POLL_INTERVAL_MS]);
+		expect(result.after).toEqual({ kind: 'screen', elements: [save] });
+	});
+
+	it('times out saying the screen was never readable, not that the element went', async () => {
+		const context = contextShowing(unreadable());
+
+		const thrown = await waitUntilGone(
+			context,
+			{ by: 'text', text: 'Loading…' },
+			{ ...fakeClock(), timeoutMs: 1_000 },
+		).catch((error: unknown) => error);
+
+		expect(thrown).toBeInstanceOf(WaitTimeoutError);
+		const timeout = thrown as WaitTimeoutError;
+		expect(timeout.waitedFor).toBe("text containing 'Loading…' to go away");
+		expect(timeout.found).toContain('could not be read');
+		expect(timeout.found).not.toContain('still on a screen of');
 	});
 
 	it('fails by name on a backend that cannot read the screen, without polling it once', async () => {
