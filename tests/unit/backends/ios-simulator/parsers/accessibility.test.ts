@@ -3,6 +3,8 @@ import { describe, expect, it } from 'vitest';
 import {
 	ACCESSIBILITY_FORMAT,
 	AccessibilityElementSchema,
+	KEYBOARD_CANDIDATE_TRAIT,
+	KEYBOARD_KEY_TRAIT,
 	parseAccessibilityRead,
 } from '@/backends/ios-simulator/parsers/accessibility.js';
 
@@ -42,6 +44,8 @@ const COMPOSE = responseOf('compose');
 const TOGGLES = responseOf('uikit-toggles');
 /** Safari's start page: an address field whose label and value are different strings. */
 const TEXTFIELD = responseOf('uikit-textfield');
+/** Settings' search field with the system keyboard up: 34 key nodes and a 3-cell strip (#298). */
+const KEYBOARD = responseOf('uikit-keyboard');
 
 /** Every node of every capture, which is what the "all 50" claims below are counted over. */
 const ALL_NODES = [COMPOSE, TOGGLES, TEXTFIELD].flatMap((response) =>
@@ -127,6 +131,29 @@ describe('parseAccessibilityRead, against the three real captures', () => {
 	});
 });
 
+describe('the keyboard traits, against the capture they were measured on', () => {
+	/**
+	 * The two constants are facts about this payload rather than spellings chosen here, so they are
+	 * asserted against the capture they were read off: 34 keys — every letter, `shift`, `usuń`,
+	 * `cyfry`, `Emoji`, the space bar, `szukaj`, `Następna klawiatura` and `Dyktuj` — and the three
+	 * cells of the strip above them. A typo in either would make `../screen.ts` report no keyboard
+	 * over a drawn one, which is a silence rather than a failure.
+	 */
+	it('counts the key nodes and the candidate cells the capture carries', () => {
+		const nodes = parseAccessibilityRead(KEYBOARD);
+
+		expect(nodes.filter((node) => node.traits?.includes(KEYBOARD_KEY_TRAIT))).toHaveLength(34);
+		expect(nodes.filter((node) => node.traits?.includes(KEYBOARD_CANDIDATE_TRAIT))).toHaveLength(3);
+	});
+
+	/** And neither appears on any capture taken with no keyboard drawn, which is the other half. */
+	it('finds neither trait on any read taken without a keyboard', () => {
+		for (const trait of [KEYBOARD_KEY_TRAIT, KEYBOARD_CANDIDATE_TRAIT]) {
+			expect(ALL_NODES.some((node) => node.traits?.includes(trait) === true)).toBe(false);
+		}
+	});
+});
+
 describe('the shape of the projection', () => {
 	/**
 	 * Non-`.strict()`, `SimctlDeviceSchema`'s stance: the key set is Meta's and a release adds
@@ -147,6 +174,7 @@ describe('the shape of the projection', () => {
 			frame: { x: 1, y: 2, width: 3, height: 4 },
 			AXLabel: 'a',
 			AXValue: null,
+			traits: ['Button'],
 		});
 	});
 
@@ -162,8 +190,45 @@ describe('the shape of the projection', () => {
 				frame: { x: 0, y: 0, width: 0, height: 0 },
 				AXLabel: '',
 				AXValue: '',
+				traits: ['None'],
 			}),
 		).toMatchObject({ AXLabel: '', AXValue: '' });
+	});
+
+	/**
+	 * `traits` is required for `frame`'s reason, one field down: it is the only place this payload
+	 * names the software keyboard (#298), so a release that stopped emitting it would make
+	 * `ScreenInfo.keyboard` quietly answer `{ shown: false }` over a drawn panel. A read failing by
+	 * the key's own name is how somebody finds that out instead.
+	 */
+	it('refuses a node with no traits, naming the key', () => {
+		expect(() =>
+			AccessibilityElementSchema.parse({
+				frame: { x: 0, y: 0, width: 1, height: 1 },
+				AXLabel: null,
+				AXValue: null,
+			}),
+		).toThrow(/traits/);
+	});
+
+	/**
+	 * **And the value really is `null` on a device**, which the case above does not cover and
+	 * which cost a device-suite run to find out (#298). The node that answers it is the one this
+	 * project already had a name for: the zero-framed `AXApplication` placeholder of a cold launch
+	 * that `../../backend.ts`'s `noScreenYet` refuses. Rejecting it here would have made the
+	 * commonest transient on this platform an unreadable payload — and done it to `readScreen`,
+	 * which reads no trait at all.
+	 */
+	it('admits the launching-app placeholder, whose traits are null', () => {
+		expect(
+			AccessibilityElementSchema.parse({
+				frame: { x: 0, y: 0, width: 0, height: 0 },
+				role_description: 'application',
+				AXLabel: null,
+				AXValue: null,
+				traits: null,
+			}),
+		).toMatchObject({ traits: null });
 	});
 
 	/**

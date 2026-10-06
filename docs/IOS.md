@@ -84,7 +84,7 @@ startup of ~60–90 ms that a Node backend talking gRPC directly would not pay.
 | `listDevices` | `simctl list -j devices`, keeping the booted ones | 0.10–0.76 s, 11 listed → **1 booted** | ✅ what can be borrowed now (#267, D41) |
 | `watchDevices` | `idb_companion --notify stdout` | full-set JSON per change, narrowed the same way | ✅ **a stream, not a poll** |
 | `describeDevice` | `simctl list -j devices`, filter udid | 0.10 s | ✅ not narrowed — one named device answers its state |
-| `deviceInfo` | `profile.plist` + `simctl getenv` | <1 ms | ✅ px, dpi and scale all exact |
+| `deviceInfo` | `profile.plist` + `simctl getenv`, **plus one `accessibility_info` for the keyboard** (#298) | <1 ms for the probe; through the backend 111–159 ms without the read and 239–270 ms with it, 706 ms on the call that starts a companion | ✅ px, dpi and scale all exact; `screen.keyboard` is `null` — never `{ shown: false }` — whenever the read could not be taken |
 | `installApp` | `simctl install <path.app>` | 0.3 s reinstall, 2.7–5.2 s first | ✅ |
 | `launchApp` | `simctl launch <bundle>` | 0.35 s, returns pid | ✅ |
 | `stopApp` | `simctl terminate <bundle>` | 0.12 s | ✅ |
@@ -96,12 +96,12 @@ startup of ~60–90 ms that a Node backend talking gRPC directly would not pay.
 
 | Capability | Gated methods | How | Measured | Verdict |
 |---|---|---|---|---|
-| `canReadScreen` | `readScreen` | `accessibility_info {format: LEGACY}` over gRPC — the RPC `idb ui describe-all` wraps | 34–47 ms warm on an established channel, 3.34 s for a companion's **first** read; labels + frames in **points** | ✅ **declared true** (#251) |
+| `canReadScreen` | `readScreen` | `accessibility_info {format: LEGACY}` over gRPC — the RPC `idb ui describe-all` wraps | 34–47 ms warm on an established channel, 3.34 s for a companion's **first** read; 122–143 ms warm on a 47-node screen with the keyboard up, 2026-10-06; labels + frames in **points** | ✅ **declared true** (#251); the same payload's `traits` is where the keyboard comes from (#298) |
 | `canInput` | `tap` `swipe` `typeText` `pressKey` `clearText` | one client-streaming `hid` call per injection, over the same channel as the read — the RPC `idb ui tap/swipe/text/button` all wrap | through this backend: tap 106–144 ms, `typeText` 102–154 ms for a word and 219–315 ms for all 95 printable ASCII, `pressKey('home')` 104–197 ms, a 250 ms swipe 452 ms | ✅ **declared true** (#252); `back` and `recents` refused **by name**, see §5; `delete`, `enter` and `tab` pressed as HID usages 42, 40 and 43 and `clearText` (#309) answered with Cmd+A then backspace in one stream — all four **measured** in #302, ~15 ms per warm stream, see §4 and §5 |
 | `canRecordVideo` | `recordVideo` | `simctl io <d> recordVideo --codec h264 --mask ignored <path>` | marker at 0.14–0.23 s; 100,782 bytes for ~2 s of an idle screen | ✅ **no `--time-limit` — the window is host-side** |
 | `canControlRecording` | `start`/`stop`/`discardRecording` | same + `SIGINT`, and the **host's** process table for "is this device recording" | exit 0 in 20–30 ms after the signal; `ps` stops naming the recorder in 39 ms | ✅ |
 | `canControlNetwork` | `setAirplaneMode` `setWifiEnabled` | — | — | ❌ **declare false** |
-| `canHideKeyboard` | `hideKeyboard` | — | not measured: this backend reports no keyboard state (`screen.keyboard` is `null`), and no dismissal has been tried | ❌ **declared false** (#307) until both are |
+| `canHideKeyboard` | `hideKeyboard` | — | **half measured** (#298): the keyboard *is* reported now — `screen.keyboard` is `{shown, bounds}` whenever a read was possible — and no dismissal has been verified against a device | ❌ **declared false** until the dismissal is (#307) |
 
 19 of 20 probes succeeded; the twentieth is `canControlNetwork`, which failed **on purpose** —
 see §5.
@@ -449,6 +449,51 @@ every other read                                15–16 nodes (Settings), 6–7 
 The other transient this platform has is in §8, trap 17, and it is deliberately **not** mapped onto
 the same type: the boot window looks like a "not yet" and must not be polled, because one read
 taken inside it wedges the device.
+
+### What #298 measured: the software keyboard, and where it is not
+
+The question was whether this platform can answer `ScreenInfo.keyboard` at all, and whether an
+occlusion the verb layer already knows how to refuse (#308) ever actually happens here. Both
+answers are yes, and the second comes with a caveat that is the honest part of the finding.
+
+A **fourth bench** — macOS 26.x, Xcode 26.4.1 (17E202), iOS 26.4.1 (23E254a), `idb_companion`
+1.5.2, a **throwaway** `iPhone 17` created for the run, 2026-10-06:
+
+**The accessibility tree names it, by name.** The payload's `traits` array — a key the parser
+dropped until #298 — carries `"KeyboardKey"` on **34** nodes with the Polish system keyboard up over
+Settings' search field and `"AutoCorrectCandidate"` on the **3** cells of the strip above them. The
+union of those 37 frames is the drawn panel:
+
+```text
+all 37      { x: 0,    y: 539, width: 402, height: 335.4341207349081 }   ← what is reported
+the 34 keys { x: 4.67, y: 590, width: 395, height: 284.4341207349081 }   ← 51 points short
+```
+
+in **points**, the space `widthDp`/`heightDp` and element bounds are already in, so nothing is
+divided. There is **no node that says "I am the keyboard"**: the only frame that nearly matches is
+an unlabelled `AXGenericElement` at `{0, 583, 402, 291}` with traits `["Scrollable", "Spacer"]`,
+which misses the strip by 44 points and is a coincidence rather than a name.
+
+**And in the configuration Rover runs in, it is never drawn.** Rover deliberately never launches
+`Simulator.app` (§8, trap 4), and without it a simulator behaves as though a hardware keyboard is
+attached: a tap focuses the field, a caret appears, the suggestion list opens, and the read is 9
+nodes with no keyboard trait among them. `ConnectHardwareKeyboard` defaults to on. Worse for the
+window's width, **Rover's own first keystroke dismisses the keyboard for the rest of the device's
+life** — one `typeText` sets `HardwareKeyboardLastSeen = true` inside the device, and neither
+clearing that key nor deleting it brings the keyboard back; only a newly created simulator does.
+`PROJECT.md` §6 carries the recipe, the exact preference writes and the refusal driven by hand.
+
+So the occlusion window is **real, reachable and narrow**: open from the tap that focuses a field
+until the first character Rover types, and absent entirely on a device nobody has attached
+`Simulator.app` to. That is a reason to report the fact, not a reason to skip it — until #298 a touch
+inside that rectangle landed on a key and answered `ok`.
+
+**What it costs.** `deviceInfo` takes one `accessibility_info` now, so it goes from 111–159 ms to
+239–270 ms warm (706 ms on the call that starts the companion), and the verb layer calls it up to
+twice per verb. The read itself is 122–143 ms warm over eight samples on this 47-node screen.
+Caching it between calls is `PROJECT.md` D12(a)'s remembered coordinate in another costume and is
+not done. It also opens **one new door into trap 17** — a bare `device_info` on a device booted
+seconds ago — which is named in §8 rather than worked around with a timer.
 
 ### It is genuinely headless
 
@@ -846,6 +891,27 @@ field with plain text, with the caret moved to the start, and with an inline com
 Contacts' Company field (a plain UIKit text field); an already-empty field (accepted, nothing
 changed). **Not checked**: a secure (password) field — none was reachable on the bench without a
 passcode or network — and a multi-line text view.
+
+**The software keyboard exists, is fully described, and is absent in the configuration Rover runs
+in** (#298). This is the entry this platform earns on its own rather than a gap in the vocabulary:
+`ScreenInfo.keyboard` is answered here, by the accessibility tree's own `traits` — `KeyboardKey` on
+every key, `AutoCorrectCandidate` on the strip above them, the union of their frames being the drawn
+panel in points. What does not line up is **when**:
+
+- **Rover never launches `Simulator.app`** (§8, trap 4), and a simulator without it behaves as
+  though a hardware keyboard were attached: the field focuses, the caret appears, and no panel is
+  drawn. `ConnectHardwareKeyboard` defaults to on, and turning it off needs the preference written
+  *before* the boot and `Simulator.app` attached *after* it.
+- **Rover's own first keystroke dismisses it for the rest of the device's life.** One `typeText`
+  persists `HardwareKeyboardLastSeen = true` inside the device, and neither clearing nor deleting
+  that key brings the keyboard back — only a newly created simulator does.
+
+So the occlusion window is open from the tap that focuses a field until the first character typed,
+and on a headless host it never opens at all. That is why the rectangle is pinned against a
+**capture** in the unit suite and the refusal was driven by hand (`PROJECT.md` §6) rather than
+automated: a test cannot set the state up without touching a device somebody may be looking at.
+`hide_keyboard` is still refused here by `canHideKeyboard`, now because no *dismissal* has been
+measured rather than because the keyboard could not be read.
 
 **`LogLevel` has no `warn` on iOS, and gains a value that is not a level.** The unified log's
 `messageType` is `Debug | Info | Default | Error | Fault` — nothing maps onto `warn` — and entries
@@ -1292,6 +1358,14 @@ full factory reset if state restoration ever needs one.
     read — a companion started in the same window and asked `describe` six times wedged nothing,
     and reads afterwards were fine.
 
+    **`device_info` is a second door into this, since #298.** Every verb already risks it through
+    `readScreen`, but a bare `device_info` on a device booted seconds ago now takes an
+    `accessibility_info` of its own for `ScreenInfo.keyboard` — a verb that declares no capability
+    and that an operator would reasonably run first on a device they have just booted. It is **not**
+    worked around with a timer or a probe: `simctl` calls the device booted ~0.7 s in, so no state
+    check covers the window, and a probe-then-read is two chances to wedge instead of one. The read
+    is wrapped instead, so what `device_info` reports is `keyboard: null` and every other field.
+
     **What follows is a design rule, and it is why #300 did *not* give this window a type.**
     `UnreadableScreenError` tells its caller to read again or to wait, which polls
     (`src/core/errors.ts`), and here polling is what breaks the device: the first poll takes the
@@ -1333,7 +1407,26 @@ full factory reset if state restoration ever needs one.
     than left behind with `-` in the PID column — so "not running" has two spellings here (absent,
     and `-`, which 198 of the 379 jobs in the committed capture carry) and both mean no process.
 
-20. **A crash report's `procPath` cannot tell two simulators apart, and the report can take tens of
+20. **The software keyboard is invisible to a headless simulator, so a `covered-by-keyboard`
+    refusal you cannot reproduce is the configuration and not the code.** Measured for #298
+    (2026-10-06, iPhone 17 / iOS 26.4.1, companion 1.5.2). Rover deliberately never launches
+    `Simulator.app` (trap 4), and a simulator without it behaves as though a hardware keyboard were
+    attached: tapping a text field focuses it, draws a caret and opens the suggestion list, and the
+    accessibility read comes back with **no keyboard node at all** — 9 nodes where the keyboard-up
+    read answers 47. `ScreenInfo.keyboard` honestly reports `{ shown: false }`, which reads exactly
+    like a mapping that does not work.
+
+    Two further things have to be true before one appears, and both are easy to get wrong.
+    `ConnectHardwareKeyboard` must be written into
+    `~/Library/Preferences/com.apple.iphonesimulator.plist` **before** the boot and `Simulator.app`
+    attached **after** it — it applies the setting when it attaches — and the device must be one
+    **nobody has typed on**. One `typeText` persists `HardwareKeyboardLastSeen = true` inside the
+    device and the keyboard never comes back; setting that key to `false`, deleting it outright, and
+    rebooting in between all failed on two devices. `xcrun simctl create` is the recipe that works,
+    and `PROJECT.md` §6 carries it in full. A fresh device also draws two keyboard onboarding tips
+    over the panel that have to be tapped away first.
+
+21. **A crash report's `procPath` cannot tell two simulators apart, and the report can take tens of
     seconds to appear.** Measured 2026-10-06 on macOS 26.6.2 / Xcode 27.0 / iOS 26.5 (PROJECT.md
     §6). #323's plan expected `procPath` under the device's own `dataPath` to attribute a report;
     the reporter writes `/Volumes/VOLUME/*/Preferences.app/Preferences` on every simulator, so it

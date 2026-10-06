@@ -1216,6 +1216,18 @@ describe('watchDevices', () => {
  * the capture says the simulator was created from — the join this method exists to make.
  */
 describe('deviceInfo', () => {
+	/** Settings' search field with the system keyboard up, and the same screen one keystroke later. */
+	const KEYBOARD_READ = readFileSync(
+		fixtureUrl('accessibility.uikit-keyboard.idbcompanion1.5.2-xcode26.4.1-ios26.4.1.json'),
+		'utf8',
+	);
+	const KEYBOARD_DISMISSED_READ = readFileSync(
+		fixtureUrl(
+			'accessibility.uikit-keyboard-dismissed.idbcompanion1.5.2-xcode26.4.1-ios26.4.1.json',
+		),
+		'utf8',
+	);
+
 	it('asks for the three listings it joins in one invocation', async () => {
 		answers(listing());
 
@@ -1321,6 +1333,115 @@ describe('deviceInfo', () => {
 
 		expect(info.model).toBe('the one on the left');
 		expect(info.screen.density).toBe(460);
+	});
+
+	/**
+	 * **The keyboard, through a companion that answers the capture taken over one** (#298). The
+	 * device has to be `Booted` for the read to be attempted at all, which is why this is the one
+	 * case in the suite that flips its state.
+	 *
+	 * The rectangle is the literal one `./screen.test.ts` pins against the same capture; asserting
+	 * it again here is what makes this a test of the *wiring* — that `deviceInfo` reads, parses and
+	 * maps rather than that the mapping is right.
+	 */
+	it('reports the keyboard an accessibility read found, on a booted device', async () => {
+		answers(onlyBooted(IPHONE_17_PRO));
+		companionCall.mockResolvedValue({ json: KEYBOARD_READ });
+
+		const info = await backend.deviceInfo(IPHONE_17_PRO);
+
+		expect(info.screen.keyboard).toEqual({
+			shown: true,
+			bounds: { x: 0, y: 539, width: 402, height: 335.4341207349081 },
+		});
+		expect(companionCall).toHaveBeenCalledWith(IPHONE_17_PRO, 'accessibility_info', {
+			format: 'LEGACY',
+		});
+	});
+
+	/**
+	 * `{ shown: false }` is a **measurement** here and not the default branch: the read answered,
+	 * and what it answered carried no key node. The capture is the same screen one keystroke after
+	 * the one above, which is what dismissed the keyboard on this platform.
+	 */
+	it('reports no keyboard when the read answered and carried none', async () => {
+		answers(onlyBooted(IPHONE_17_PRO));
+		companionCall.mockResolvedValue({ json: KEYBOARD_DISMISSED_READ });
+
+		expect((await backend.deviceInfo(IPHONE_17_PRO)).screen.keyboard).toEqual({
+			shown: false,
+			bounds: null,
+		});
+	});
+
+	/**
+	 * **The state gate, and the point of it is the process rather than the answer.** Reaching the
+	 * tool's own refusal would mean starting a companion for a device that cannot answer, and that
+	 * companion then stays running (`notReadable`'s argument). So a device the enumeration does not
+	 * call ready is answered `null` without a call being made at all.
+	 */
+	it('answers null and starts no companion for a device that is not booted', async () => {
+		answers(listing());
+
+		expect((await backend.deviceInfo(IPHONE_17_PRO)).screen.keyboard).toBeNull();
+		expect(companionCall).not.toHaveBeenCalled();
+	});
+
+	/**
+	 * **The regression that matters most: `device_info` must not acquire a new way to throw.** It
+	 * declares no capability (`PROJECT.md` §4) and has to keep working on a host with no
+	 * `idb_companion` at all, so every way the read can fail — a missing companion, a dead one, a
+	 * wedged bridge — is `ScreenInfo.keyboard`'s designated *this device did not say*, and nothing
+	 * else about the answer moves.
+	 */
+	it.each([
+		['no companion on this host', new IdbCompanionNotFoundError([])],
+		['a companion that died mid-call', new IdbCompanionInterruptedError('x', null, 'died')],
+		['a payload it cannot read', new Error('expected one flat JSON array')],
+	])('answers null and still answers at all when the read fails with %s', async (_why, cause) => {
+		answers(onlyBooted(IPHONE_17_PRO));
+		companionCall.mockRejectedValue(cause);
+
+		const info = await backend.deviceInfo(IPHONE_17_PRO);
+
+		expect(info.screen.keyboard).toBeNull();
+		expect(info.screen.widthDp).toBe(402);
+		expect(info.model).toBe('iPhone 17 Pro');
+	});
+
+	/**
+	 * `noScreenYet` is deliberately not applied to this read: an application that has been told to
+	 * start and has not drawn has no keyboard up, and that is a true thing to say about it. The
+	 * shape is refused in `readScreen` because a one-element `ScreenElement[]` is ambiguous; no
+	 * such ambiguity exists for a keyboard, where the absence of the trait is the measurement.
+	 */
+	it('reports no keyboard rather than null across a launch that has not drawn', async () => {
+		answers(onlyBooted(IPHONE_17_PRO));
+		companionCall.mockResolvedValue({
+			json: JSON.stringify([
+				{
+					frame: { x: 0, y: 0, width: 0, height: 0 },
+					AXLabel: null,
+					AXValue: null,
+					traits: ['None'],
+				},
+			]),
+		});
+
+		expect((await backend.deviceInfo(IPHONE_17_PRO)).screen.keyboard).toEqual({
+			shown: false,
+			bounds: null,
+		});
+	});
+
+	// One read, not two: a retry loop is a wait, and waits live in the wait vocabulary (D12(b)).
+	it('takes one accessibility read per call and does not retry a failed one', async () => {
+		answers(onlyBooted(IPHONE_17_PRO));
+		companionCall.mockRejectedValue(new Error('wedged'));
+
+		await backend.deviceInfo(IPHONE_17_PRO);
+
+		expect(companionCall).toHaveBeenCalledTimes(1);
 	});
 
 	// The contract's own distinction from `describeDevice`: `null` there is a lookup miss, and
@@ -2085,6 +2206,7 @@ describe('readScreen', () => {
 			frame: { x: 0, y: 0, width: 0, height: 0 },
 			AXLabel: null,
 			AXValue: null,
+			traits: ['None'],
 		},
 	]);
 
@@ -2117,7 +2239,12 @@ describe('readScreen', () => {
 	it('answers a single node that has a rectangle as one element', async () => {
 		companionCall.mockResolvedValue({
 			json: JSON.stringify([
-				{ frame: { x: 0, y: 0, width: 402, height: 874 }, AXLabel: 'Ustawienia', AXValue: null },
+				{
+					frame: { x: 0, y: 0, width: 402, height: 874 },
+					AXLabel: 'Ustawienia',
+					AXValue: null,
+					traits: ['None'],
+				},
 			]),
 		});
 

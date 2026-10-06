@@ -69,6 +69,7 @@ import {
 	type LogBuffer,
 	type LogEntry,
 	type LogRead,
+	type OnScreenKeyboard,
 	type Point,
 	type PullFileOptions,
 	type ReadLogsOptions,
@@ -148,7 +149,12 @@ import {
 	type SimctlRuntimeList,
 } from './parsers/simctl-list.js';
 import { parseUnifiedLog } from './parsers/unified-log.js';
-import { deviceTypeProfilePath, toScreenElements, toScreenInfo } from './screen.js';
+import {
+	deviceTypeProfilePath,
+	toOnScreenKeyboard,
+	toScreenElements,
+	toScreenInfo,
+} from './screen.js';
 import {
 	describeBytes,
 	INSTALL_SIMCTL_TIMEOUT_MS,
@@ -1457,6 +1463,27 @@ export class IosSimulatorDeviceBackend implements DeviceBackend {
 	 * Orientation is not a fact `simctl` reports and this backend has no verb that rotates
 	 * anything, so a simulator somebody turned by hand is described by the screen its hardware
 	 * has rather than by the one it is currently drawing.
+	 *
+	 * **It is no longer only that invocation, and the second half is {@link IosSimulatorDeviceBackend.#keyboardOf}** (#298).
+	 * `ScreenInfo.keyboard` is a fact about what is drawn *now*, so no plist can carry it and the
+	 * profile above answers `null` on its own; the accessibility tree names the software keyboard,
+	 * so one read answers it. The costs are real and are stated rather than hidden:
+	 *
+	 * - **A round trip.** The verb layer calls this method up to twice per verb
+	 *   (`src/verbs/target.ts`, `src/verbs/result.ts`), so a `tap` that took two accessibility
+	 *   reads takes four — 34–47 ms each on a warm companion, against this method's own 0.24 s of
+	 *   `simctl` (`docs/IOS.md` §2). Caching one between calls is D12(a)'s remembered coordinate
+	 *   in another costume and is not done.
+	 * - **One new way into trap 17.** A read taken between `simctl` reporting `Booted` and
+	 *   SpringBoard coming up wedges that simulator's accessibility bridge for the rest of the
+	 *   boot ({@link IosSimulatorDeviceBackend.readScreen}, `docs/IOS.md` §8). Every verb already
+	 *   risks it; what is new is a bare `device_info` on a device booted seconds ago. It is not
+	 *   worked around with a timer — `simctl` calls the device booted about 0.7 s in, so no state
+	 *   check covers that window and a probe-then-read is two chances to wedge instead of one.
+	 *
+	 * **What it does not acquire is a new way to throw**, which is the property that matters most
+	 * here: `device_info` declares no capability (`PROJECT.md` §4) and must keep working on a host
+	 * with no `idb_companion` at all. Everything the read can do wrong is answered `null`.
 	 */
 	async deviceInfo(serial: DeviceSerial): Promise<DeviceInfo> {
 		const result = await runSimctl([...DEVICE_FACTS_ARGV]);
@@ -1472,12 +1499,51 @@ export class IosSimulatorDeviceBackend implements DeviceBackend {
 			serial: unwrap(serial),
 			platform: IOS_SIMULATOR_PLATFORM_ID,
 			model: device.model,
-			screen: toScreenInfo(profile),
+			screen: toScreenInfo(profile, await this.#keyboardOf(serial, device.state)),
 			osVersion: device.osVersion,
 			// Read off the enumeration rather than written as `null` here, so the two shapes cannot
 			// come to disagree about a platform that has no API level (`./devices.js`).
 			osApiLevel: device.osApiLevel,
 		});
+	}
+
+	/**
+	 * One accessibility read, for the keyboard alone — and `null` for every way it could not be
+	 * taken.
+	 *
+	 * **`null` is `ScreenInfo.keyboard`'s designated *this device did not say*** and is the whole
+	 * reason this helper can swallow what it swallows. A host with no companion, a companion that
+	 * died, a bridge wedged by trap 17, an app that has not drawn, a proto that has come apart —
+	 * each of them leaves `device_info` answering exactly what it answered before this method
+	 * existed, which is what keeps a verb that declares no capability from acquiring one in
+	 * practice. `requireUncovered` refuses nothing on `null` (`src/verbs/target.ts`), so nothing
+	 * downstream changes either.
+	 *
+	 * **The state check comes first and is not an error here.** It is {@link notReadable}'s check
+	 * without its refusal, and it is what stops a companion being started for a device that cannot
+	 * answer — the *process* cost that argument is really about. The enumeration `deviceInfo`
+	 * already has in hand is where the state comes from, so this costs nothing.
+	 *
+	 * **A read that answered is a device that said, including the launching-app placeholder.**
+	 * {@link noScreenYet} is deliberately **not** applied: an application that has been told to
+	 * start and has not drawn has no keyboard up, and `{ shown: false }` is the true statement
+	 * about it. That shape is refused in `readScreen` because a one-element `ScreenElement[]` is
+	 * indistinguishable from a screen holding one nameless thing; no such ambiguity exists for a
+	 * keyboard, where the absence of `KeyboardKey` is the measurement.
+	 *
+	 * **No retry and no second attempt**, for `readScreen`'s reason: a retry loop is a wait, waits
+	 * live in the wait vocabulary (D12(b)), and a `device_info` that quietly read twice would hide
+	 * from its caller that the first read found nothing.
+	 */
+	async #keyboardOf(serial: DeviceSerial, state: DeviceState): Promise<OnScreenKeyboard | null> {
+		if (state !== 'ready') return null;
+
+		try {
+			const answer = await this.companions.call(serial, READ_SCREEN_RPC, READ_SCREEN_REQUEST);
+			return toOnScreenKeyboard(parseAccessibilityRead(answer));
+		} catch {
+			return null;
+		}
 	}
 
 	/**

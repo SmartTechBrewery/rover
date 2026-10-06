@@ -21,13 +21,32 @@
  *   both shapes anyway. Nothing in this backend needs the provenance, and reading two shapes to
  *   get one list is a cost with nothing on the other side of it.
  *
- * **Three keys are projected out of sixteen, and the frame is the numeric one.** Each node in the
+ * **Four keys are projected out of sixteen, and the frame is the numeric one.** Each node in the
  * capture carries `frame` (four numbers) *and* `AXFrame` (the same rectangle as
  * `{{x, y}, {w, h}}`, printed at full double precision); the numbers are taken, because parsing
- * Apple's rectangle spelling back into numbers is work the tool has already done. `role`,
- * `traits`, `pid`, `subrole`, `enabled` and the rest are real and are deliberately unread —
- * `ScreenElement` has no field for any of them (`src/core/device.ts`), and projecting a value
- * nothing consumes is a claim about a key this backend does not check.
+ * Apple's rectangle spelling back into numbers is work the tool has already done. `role`, `pid`,
+ * `subrole`, `enabled` and the rest are real and are deliberately unread — `ScreenElement` has no
+ * field for any of them (`src/core/device.ts`), and projecting a value nothing consumes is a
+ * claim about a key this backend does not check.
+ *
+ * **`traits` was one of those five and is the one that moved** (#298; this paragraph is edited in
+ * place with its reasoning rewritten rather than deleted, `ai/RULES.md` §1). It is read now
+ * because it is the only place in this payload where the device **names the software keyboard**:
+ * every key node carries {@link KEYBOARD_KEY_TRAIT} and each cell of the strip above the keys
+ * carries {@link KEYBOARD_CANDIDATE_TRAIT}, so the union of their frames is the drawn panel. That
+ * is what makes it the exception to the rule above rather than a hole in it — the other four
+ * still feed nothing, and `traits` feeds `ScreenInfo.keyboard` (`../screen.js`'s
+ * `toOnScreenKeyboard`) rather than `ScreenElement`, which has no field for it either.
+ *
+ * **It is required but nullable, and the nullability was measured the hard way.** The key is on
+ * all 50 nodes across the three captures that predate #298 and on all 52 across the pair that
+ * capture carried in, so it stays required — a release that stopped emitting it is a re-capture,
+ * and a read failing by the key's own name is a better way to find that out than a keyboard that
+ * silently stops being reported. Its *value*, though, is `null` on one node this project already
+ * had a name for: the zero-framed `AXApplication` placeholder a cold launch reads back before the
+ * process has drawn (`../backend.ts`'s `noScreenYet`, #300). That is a real read of a real device
+ * and the commonest transient on this platform, so rejecting it would have made `readScreen`
+ * unreadable for a field `readScreen` does not even use — see {@link AccessibilityElementSchema}.
  *
  * **Non-`.strict()`, deliberately**, for `SimctlDeviceSchema`'s stated reason and idb's own: the
  * key set is Meta's, a release adds fields, and strictness would turn an idb upgrade into a
@@ -67,6 +86,31 @@ export const ACCESSIBILITY_FORMAT = 'LEGACY';
 const PAYLOAD_EXCERPT_LENGTH = 200;
 
 /**
+ * The trait every key of the software keyboard carries, and the one that means *a keyboard is up*.
+ *
+ * Measured on this bench — a throwaway iPhone 17, companion v1.5.2, Xcode 26.4.1 / iOS 26.4.1,
+ * 2026-10-06, captured as `accessibility.uikit-keyboard.*.json`: **34** nodes carry it with the
+ * Polish system keyboard up on Settings' search field — every letter, `shift`, `usuń`, `cyfry`,
+ * `Emoji`, the space bar, `szukaj`, `Następna klawiatura` and `Dyktuj` — and **none** carries it on
+ * any of the four captures taken with no keyboard drawn.
+ *
+ * Named here beside the format rather than in `../screen.js`, because it is a fact about what this
+ * payload says rather than about how `ScreenInfo` is shaped.
+ */
+export const KEYBOARD_KEY_TRAIT = 'KeyboardKey';
+
+/**
+ * The trait the three cells of the autocorrect strip above the keys carry.
+ *
+ * It is part of the **drawn panel** and not part of the keys: in the same capture the strip sits at
+ * `y: 539` over a full 402-point width while the topmost key row starts at `y: 590`, so a rectangle
+ * built from {@link KEYBOARD_KEY_TRAIT} alone is 51 points short at the top and misses a band a
+ * touch would land in. It does **not** by itself mean a keyboard is up (`../screen.js`): the keys
+ * are what that fact is about, and the strip is what the rectangle has to cover.
+ */
+export const KEYBOARD_CANDIDATE_TRAIT = 'AutoCorrectCandidate';
+
+/**
  * One node's rectangle, in **points**.
  *
  * The same space `ScreenInfo.widthDp`/`heightDp` are in, which is why `../screen.js` converts
@@ -101,6 +145,9 @@ export type AccessibilityFrame = z.infer<typeof AccessibilityFrameSchema>;
  * `AXLabel: null`. The key is required rather than optional, because all 50 nodes across the
  * three captures carry both keys — a release that stopped emitting one is a re-capture, and a
  * failed read naming the key is a better way to find that out than a screen full of `null`s.
+ *
+ * **`traits` is the fourth, and it is the keyboard's** — see the module header for why it is the
+ * one of the five unprojected keys that moved, and {@link KEYBOARD_KEY_TRAIT} for what is in it.
  */
 export const AccessibilityElementSchema = z.object({
 	frame: AccessibilityFrameSchema,
@@ -108,6 +155,28 @@ export const AccessibilityElementSchema = z.object({
 	AXLabel: z.string().nullable(),
 	/** What is *in* it — `'Szukaj lub podaj witrynę'` on that same field, `'0'`/`'1'` on a toggle. */
 	AXValue: z.string().nullable(),
+	/**
+	 * What the system says this node *is* — `["KeyboardKey", "PlaysSound", "Scrollable"]` on a key,
+	 * `["None"]` on the application node.
+	 *
+	 * **Nullable, and that is measured rather than defensive.** It arrives as an array on all 52
+	 * nodes of the keyboard pair and all 50 of the three captures that predate #298, which is what
+	 * this comment originally claimed was the whole story — it said *not nullable and not
+	 * optional*, and the device suite disproved it within the hour, so this is rewritten in place
+	 * with its reasoning rather than quietly widened (`ai/RULES.md` §1). The node that answers
+	 * `null` is the **launching-app placeholder**: the single zero-framed `AXApplication` node a
+	 * cold launch reads back before the process has drawn, the one {@link AccessibilityReadSchema}
+	 * describes and `../backend.ts`'s `noScreenYet` refuses. It is a real read of a real device, so
+	 * a schema that rejected it would turn the most ordinary transient on this platform into an
+	 * unreadable payload — and it would do it to `readScreen`, which had nothing to do with #298.
+	 *
+	 * `null` and `[]` both mean *this node claims no trait*, and `../screen.ts` reads them the same
+	 * way; neither can be a keyboard key, because a keyboard key is a node that said so. Nothing
+	 * here checks the membership, because an unknown trait is a trait this backend does not read
+	 * rather than a payload it cannot understand — the same argument that keeps the schema
+	 * non-`.strict()`.
+	 */
+	traits: z.array(z.string()).nullable(),
 });
 export type AccessibilityElement = z.infer<typeof AccessibilityElementSchema>;
 
