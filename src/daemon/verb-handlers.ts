@@ -100,6 +100,7 @@ import type {
 	AppVerbParams,
 	DeviceInfoParams,
 	EnvironmentVerbParams,
+	HideKeyboardParams,
 	InstallAppParams,
 	IpcHandlers,
 	LongPressParams,
@@ -131,6 +132,7 @@ import { toVerbFailure } from '../verbs/failure.js';
 import { installApp, installProjectApp, pullFile, pushFile } from '../verbs/files.js';
 import {
 	type GestureOptions,
+	hideKeyboard,
 	longPress,
 	pressKey,
 	type ScrollOptions,
@@ -167,6 +169,7 @@ export type VerbHandlers = Pick<
 	| 'scroll'
 	| 'type_text'
 	| 'press_key'
+	| 'hide_keyboard'
 	| 'read_screen'
 	| 'device_info'
 	| 'screenshot'
@@ -420,7 +423,15 @@ export function createVerbHandlers(
 		},
 
 		press_key(params: PressKeyParams): Promise<VerbCallResult> {
-			return runVerb(params.leaseId, (context) => pressKey(context, params.key));
+			return runVerb(params.leaseId, (context) =>
+				pressKey(context, params.key, params.times === undefined ? {} : { times: params.times }),
+			);
+		},
+
+		// The lease id alone: whether there is a keyboard to dismiss, and how, is the backend's to
+		// decide (`canHideKeyboard`), so the caller has nothing to say about either.
+		hide_keyboard(params: HideKeyboardParams): Promise<VerbCallResult> {
+			return runVerb(params.leaseId, (context) => hideKeyboard(context));
 		},
 
 		// The three read rows. All take the lease id and nothing else — `screenshot` no more

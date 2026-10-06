@@ -84,10 +84,13 @@ backend from a check that stopped checking. The iOS backend is the first to decl
 the only truthful `set_wifi` would change the networking of the machine lending devices to other
 people, and the cosmetic status-bar override `simctl` will happily draw is precisely the
 plausible-looking answer this project refuses. `canReadScreen` (#251) and `canInput` (#252) both
-started `false` and have since flipped to `true`.
+started `false` and have since flipped to `true`. `canHideKeyboard` (#307) is the second `false`,
+and not a permanent one: the simulator reports no keyboard state yet and no dismissal has been
+measured on it, so it says so by name until both are.
 
 **Refusals get finer than a flag.** `press_key` on a simulator answers `home` and `wake` and
-refuses `back` and `recents` as `unsupported-key`, naming the key — a device that takes input
+refuses `back` and `recents` as `unsupported-key`, naming the key — and refuses the editing keys
+`delete`, `enter` and `tab` the same way until #302 has watched them land — a device that takes input
 saying so about *one key* rather than claiming it takes none. That is a different answer from
 `missing-capability` on purpose: one says try another key, the other says try another device.
 
@@ -164,7 +167,7 @@ will ever retry.
 
 ---
 
-## 4. The verb set — twenty-five tools over one method table
+## 4. The verb set — twenty-six tools over one method table
 
 **The hook.** Everything an agent needs to drive a device: touch, text, keys, waits, screen reads,
 screenshots, video, logs, app control, file transfer and the radios — one vocabulary, on both
@@ -177,9 +180,9 @@ credential.
 
 | Family | Verbs | Notes |
 | --- | --- | --- |
-| Input | `tap`, `long_press`, `swipe`, `scroll`, `type_text`, `press_key` | six uses of one spine; `src/verbs/input.ts` |
+| Input | `tap`, `long_press`, `swipe`, `scroll`, `type_text`, `press_key`, `hide_keyboard` | seven uses of one spine; `src/verbs/input.ts` |
 | Waits | `wait_for`, `wait_until_gone` | the vocabulary that replaces `sleep`; `wait-for.ts` |
-| Reads | `read_screen`, `device_info`, `screenshot` | `read.ts`; `screenshot`'s answer is bytes |
+| Reads | `read_screen`, `device_info`, `screenshot` | `read.ts`; `screenshot`'s answer is bytes, and both reads report the on-screen keyboard |
 | Apps | `launch_app`, `stop_app`, `clear_app_data` | address a package, resolve no target; `app.ts` |
 | Logs | `read_logs` | bounded, never follows; `logs.ts` |
 | Recording | `record_video`, `start_recording`, `stop_recording` | `record.ts`, `recording-session.ts` |
@@ -196,17 +199,78 @@ have — so `scroll 'down'` drags upwards; it scrolls the element it was pointed
 when pointed at nothing, and it refuses a bare coordinate, because a point has no extent and cannot
 say how far a scroll may travel.
 
-**`type_text` and `press_key` address no element**, so their result's `target` is `null` — a fact
+**`hide_keyboard` is the deliberate exception, and the reason is in the gesture** (#307). The
+obvious composition — `press_key back` from the verb layer — is the one thing it must not be: on
+Android back closes a keyboard that is up and **leaves the screen** when none is, and both exit
+cleanly (`PROJECT.md` §6), so an agent clearing a covered target would lose its place whenever the
+keyboard had already gone. Deciding *whether* to press needs the device's own reading of its keyboard
+taken at the moment it acts, and *what* to press is that platform's knowledge; both belong in the
+backend, and composing it above would mean the verb layer assuming a back key exists. So it is one
+backend method, `hideKeyboard`, documented as *dismiss the keyboard if one is up and do nothing
+otherwise*, behind its own capability `canHideKeyboard` — `true` on Android, `false` on the iOS
+simulator until a recipe is measured there, where the call is `missing-capability` by name rather
+than an `ok` for a keyboard still on the glass. When no keyboard is up it is a no-op answer: the same
+result shape, nothing pressed.
+
+**`type_text`, `press_key` and `hide_keyboard` address no element**, so their result's `target` is `null` — a fact
 about the verb, not a resolution that failed. There is deliberately no target option on
 `type_text`: an agent that wants text in a field taps it and then types. `type_text` hands the
 string to the backend **byte for byte** — a string this layer had helpfully escaped would arrive on
 screen with the escaping in it — and what a device cannot type at all comes back as
 `unsupported-text` naming the characters as escapes.
 
+**`press_key` edits text as well as navigating** (#301). Beside `back`, `home`, `recents` and
+`wake` it takes `delete` — backspace, the character before the caret, never forward delete —
+`enter`, whose effect belongs to the focused control (a submit, a newline, the field's editor
+action), and `tab`, which moves focus to the next focusable control. Names, not keycodes, because
+the vocabulary is shared across platforms (D10). An optional `times` (1 to 20, default 1) repeats
+the press in one call, so fixing a typo is one call rather than ten, and the answer reads the
+screen once after the last press. **The repeat is composed in the verb, not handed to a backend**:
+a backend keeps one primitive per key, and a key whose button toggles stays safe because the
+backend checks before every press, which a backend-level count would have to re-solve on every
+platform. Zero is refused at the wire rather than accepted as a no-op, because pressing nothing
+would answer a success, and the upper bound keeps a full run well inside a client's default
+request deadline (measured, `PROJECT.md` §6). A Tab goes to the next *focusable* control, which on
+a web form can be a field's clear button rather than the next field — a screen read carries no
+focus flag, so read back after typing rather than counting Tabs.
+
 **`read_screen` is a first-class verb and not a fallback.** It survives an app blocking screen
 capture, which is the case where pixels are gone and nothing is logged about it (§16).
 
-**Where it lives.** `src/verbs/`, `src/ipc/` for the method table, `PROJECT.md` §4.
+**The screen a verb reports now includes what the system drew on *top* of it** (#297). This
+paragraph is new rather than a rewrite, because the gap it closes was never described: the element
+list says where an application laid its controls out, and an on-screen keyboard covering the bottom
+third of the glass changes none of those rectangles. A button under the keyboard is still in the
+read, still carries bounds, and is still perfectly tappable as far as every answer Rover gave — so
+the tap lands on a key and the agent is told it tapped the button. **So the device now says whether
+its on-screen keyboard is shown and what rectangle it occupies**, and it says it on the
+**`DeviceInfo`** half of the answer rather than as another element.
+
+That placement is the whole of why it costs no verb a line. `DeviceInfo` is what D14 already puts on
+**every** result, and the after-state re-reads it *after* the action — so `tap`, `press_key`,
+`wait_for` and `read_screen` all report a keyboard that opened or closed while they ran, without any
+of them knowing the field exists. Two further consequences fall out of the same choice: it crosses
+IPC and reaches the archive's `device_info.json` beside every run through schemas that already carry
+the screen whole, and the rectangle is in hand at the one place a later refusal would need it.
+
+**The rectangle is in dp, where the system-bar insets beside it are in pixels** — each in the unit
+its own consumer uses. The insets are compared against a screenshot's own coordinates (§14); this is
+compared against a **touch point**, and the verb layer may not multiply by a scale, because a hidden
+scale conversion there is the exact error that turns every coordinate in the system into a plausible
+wrong one. And `null` (*this device did not say*) stays distinct from `{ shown: false }` (*this
+device says no keyboard is up*), the same distinction the insets draw: a backend with no route to
+the fact must not read as one promising a clear screen.
+
+**Nothing refuses anything yet.** This is the device reporting a fact; what a verb does about an
+element the keyboard covers is separate work. **Dismissing it is no longer**: `hide_keyboard` (#307,
+above) is the way out, and it reads this same fact to decide whether there is anything to dismiss —
+which is also why the API 33 spelling of the source (`ITYPE_IME`, no `id=`) had to be read, since a
+parser that missed it answered *no keyboard* with one covering half the screen (`PROJECT.md` §6).
+
+**Where it lives.** `src/verbs/`, `src/ipc/` for the method table, `src/core/device.ts` for the
+keyboard's shape and `hideKeyboard`'s contract, `src/core/capabilities.ts` for `canHideKeyboard`,
+`src/backends/android/parsers/insets.ts` for the read and `src/backends/android/backend.ts` for the
+read-then-press; `PROJECT.md` §4 and §6, D11, D14.
 
 ---
 
@@ -244,7 +308,12 @@ before it acts and for a wait the resolution *is* the work. **Every poll reads t
 a wait over one cached read is the stale-coordinate failure with a timer attached. `wait_for` waits
 until the target is there *and* actionable, so an element still clipped out of its scrolling
 container is *not yet* rather than a failure, while an ambiguous target is refused outright,
-because more polling cannot specify an under-specified request. `wait_until_gone` asks the mirror
+because more polling cannot specify an under-specified request. A screen the device could not
+read **yet** — an application still starting, so there is no window to describe — is the second
+*not yet*, and both waits poll through it; if it lasts to the deadline the timeout says the
+screen was never readable rather than that the element was not found. A verb that reads once
+instead fails on it by name (`unreadable-screen`), because polling is a wait's job and not a
+primitive's. `wait_until_gone` asks the mirror
 question of *matches* rather than of a resolution, and will not take a text target's `index`, since
 an index names a slot in the match list and a slot empties the moment any sibling leaves.
 
@@ -354,7 +423,8 @@ condition and a stream over IPC.
 
 ```
 ~/.rover/artifacts/<project>/<test_name>/<runId>/<device-serial>/
-    device_info.json          # size, density, dp scale, OS version, system bar insets
+    device_info.json          # size, density, dp scale, OS version, system bar insets,
+                              #   and the on-screen keyboard
     test_description.json     # what the lease said this run was about, if anything
     group_id.json             # which investigation this run belongs to, if any
     screenshots/001_screenshot.png
@@ -499,12 +569,12 @@ than `internal_error`: `project-not-registered`, `install-hook-undeclared`, and
 
 ## 11. The MCP server — and the twelve methods that deliberately have no tool
 
-**The hook.** One `rover init` and an agent has twenty-five tools; a screenshot comes back **inline**
+**The hook.** One `rover init` and an agent has twenty-six tools; a screenshot comes back **inline**
 as an image the model looks at directly, and a recording comes back as frames plus an mp4 on the
 agent's own machine.
 
-**What it is.** One process per agent session, MCP over stdio, declaring **25 tools** under the
-`IPC_METHODS` names exactly: the four device and lease rows, the eighteen verbs whose answer is
+**What it is.** One process per agent session, MCP over stdio, declaring **26 tools** under the
+`IPC_METHODS` names exactly: the four device and lease rows, the nineteen verbs whose answer is
 plain data, and the three whose answer is bytes.
 
 - **Tool names are `snake_case`, arguments are `camelCase`** (D26) — `launch_app` takes `leaseId`
@@ -1055,7 +1125,7 @@ holding a subset of what its lease wrote.
 - **The two platforms are not equally capable, and Rover says which is which.** A simulator answers
   every required call, records video, reads the screen and takes input, and refuses the network
   toggles **by name**; `press_key` answers `home` and `wake` and refuses `back` and `recents` by
-  name. **Physical iPhones are not supported at all.**
+  name, and `delete`, `enter` and `tab` by name until they are measured (#302). **Physical iPhones are not supported at all.**
 - **Pixels are gone whenever an app blocks screen capture** — the system hands back a valid, all
   black image and logs nothing. The check that tells a blocked capture from a broken device is a
   screenshot of the system home screen. `read_screen` survives the block and answers in full.

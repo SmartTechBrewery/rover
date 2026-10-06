@@ -1,5 +1,5 @@
 /**
- * The six input verbs, over a backend that records what it was asked to do.
+ * The seven input verbs, over a backend that records what it was asked to do.
  *
  * Two things are asserted here that a correct-looking result cannot show. The first is
  * **order** — the screen read before the gesture, the state after it *after* it — which is
@@ -25,13 +25,15 @@ import {
 } from '@/core/device.js';
 import {
 	MissingCapabilityError,
+	UnreadableScreenError,
 	UnsupportedKeyError,
 	UnsupportedTextError,
 } from '@/core/errors.js';
-import { parseElementId } from '@/core/ids.js';
+import { parseDeviceSerial, parseElementId } from '@/core/ids.js';
 import type { VerbContext } from '@/verbs/context.js';
 import { TargetNotFoundError } from '@/verbs/errors.js';
 import {
+	hideKeyboard,
 	LONG_PRESS_DURATION_MS,
 	longPress,
 	pressKey,
@@ -125,6 +127,9 @@ function recording(
 		pressKey: vi.fn<NonNullable<DeviceBackend['pressKey']>>(async (_serial, key) => {
 			calls.push('pressKey');
 			keys.push(key);
+		}),
+		hideKeyboard: vi.fn<NonNullable<DeviceBackend['hideKeyboard']>>(async () => {
+			calls.push('hideKeyboard');
 		}),
 	});
 
@@ -221,6 +226,26 @@ describe('tap', () => {
 		expect(result.target?.source).toBe('caller-point');
 		// No screen read before the tap: a point is the one address with no screen behind it.
 		expect(calls).toEqual(['deviceInfo', 'tap', 'readScreen', 'deviceInfo']);
+	});
+
+	/**
+	 * A verb that reads the screen **once** has no licence to poll (#299): it fails with the
+	 * error's own name, which reaches the agent as the `unreadable-screen` failure, rather
+	 * than quietly reading again. Polling is `wait_for`'s job and its alone (D12(b)).
+	 */
+	it('fails by name on a screen the device had not got yet, without reading twice', async () => {
+		const readScreen = vi.fn<NonNullable<DeviceBackend['readScreen']>>(async () => {
+			throw new UnreadableScreenError(
+				parseDeviceSerial('test-serial-1'),
+				'the screen reader had no window to dump',
+			);
+		});
+		const context = createMockVerbContext({ backend: createMockDeviceBackend({ readScreen }) });
+
+		await expect(tap(context, { by: 'text', text: 'Save' })).rejects.toBeInstanceOf(
+			UnreadableScreenError,
+		);
+		expect(readScreen).toHaveBeenCalledTimes(1);
 	});
 
 	it('never taps when nothing on the screen matches', async () => {
@@ -588,5 +613,97 @@ describe('press_key', () => {
 		// is the false green the whole tool exists to avoid — and `performAction` having no
 		// `catch` is what makes this pass with no change to `src/verbs/input.ts`.
 		await expect(pressKey(context, 'recents')).rejects.toThrow(UnsupportedKeyError);
+	});
+
+	/**
+	 * `times` is composed here rather than handed to the backend (#301), so the backend is asked
+	 * for the same one-key primitive each time — and the screen is read once, after the last
+	 * press, because the state between presses is not something the caller asked about.
+	 */
+	it('presses the key times times, and reads the screen once after the last', async () => {
+		const { calls, keys, context } = recording();
+
+		await pressKey(context, 'delete', { times: 3 });
+
+		expect(keys).toEqual(['delete', 'delete', 'delete']);
+		expect(calls).toEqual(['pressKey', 'pressKey', 'pressKey', 'readScreen', 'deviceInfo']);
+	});
+
+	it('presses once when times is absent', async () => {
+		const { keys, context } = recording();
+
+		await pressKey(context, 'enter', {});
+
+		expect(keys).toEqual(['enter']);
+	});
+
+	// The wire bounds `times` already; this is an in-process caller's programming error, and
+	// pressing nothing would answer a success for a key that never went down.
+	it.each([0, -1, 1.5, Number.NaN])('refuses a times of %s, pressing nothing', async (times) => {
+		const { calls, context } = recording();
+
+		await expect(pressKey(context, 'delete', { times })).rejects.toThrow(/positive integer/);
+
+		expect(calls).toEqual([]);
+	});
+
+	it('stops at the first refusal, rather than pressing on', async () => {
+		const { context } = recording();
+		const press = vi.mocked(context.backend.pressKey as NonNullable<DeviceBackend['pressKey']>);
+		press.mockRejectedValue(new UnsupportedKeyError(context.serial, 'tab', 'no tab key here'));
+
+		await expect(pressKey(context, 'tab', { times: 5 })).rejects.toThrow(UnsupportedKeyError);
+
+		expect(press).toHaveBeenCalledTimes(1);
+	});
+});
+
+describe('hide_keyboard', () => {
+	it('asks the backend to hide the keyboard, and reads the state after it', async () => {
+		const { calls, context } = recording();
+
+		const result = await hideKeyboard(context);
+
+		// No screen read before it — there is nothing to resolve — and no key pressed from here:
+		// whether to press anything is the backend's decision (#307).
+		expect(calls).toEqual(['hideKeyboard', 'readScreen', 'deviceInfo']);
+		expect(result.verb).toBe('hide_keyboard');
+	});
+
+	it('is never a back press from the verb layer', async () => {
+		const { calls, keys, context } = recording();
+
+		await hideKeyboard(context);
+
+		expect(calls).not.toContain('pressKey');
+		expect(keys).toEqual([]);
+	});
+
+	it('addresses no element, so its target is null', async () => {
+		const { context } = recording();
+
+		const result = await hideKeyboard(context);
+
+		expect(result.target).toBeNull();
+	});
+
+	it('is refused by name on a device without canHideKeyboard, before the device is touched', async () => {
+		const { calls, context } = recording({
+			capabilities: createMockCapabilities({ canHideKeyboard: false }),
+		});
+
+		await expect(hideKeyboard(context)).rejects.toThrow(MissingCapabilityError);
+		await expect(hideKeyboard(context)).rejects.toThrow(/canHideKeyboard/);
+		expect(calls).toEqual([]);
+	});
+
+	it('needs canHideKeyboard and not canInput', async () => {
+		const { calls, context } = recording({
+			capabilities: createMockCapabilities({ canInput: false }),
+		});
+
+		await hideKeyboard(context);
+
+		expect(calls[0]).toBe('hideKeyboard');
 	});
 });

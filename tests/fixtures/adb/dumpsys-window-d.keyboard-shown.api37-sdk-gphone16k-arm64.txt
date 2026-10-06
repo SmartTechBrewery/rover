@@ -1,0 +1,284 @@
+WINDOW MANAGER DISPLAY CONTENTS (dumpsys window displays)
+  Display: mDisplayId=0 (organized)
+    init=1280x2856 480dpi mMinSizeOfResizeableTaskDp=220 cur=1280x2856 app=1280x2856 rng=1280x1280-2856x2856
+    deferred=false mLayoutNeeded=false
+  mLastOrientationSource=WindowedMagnification:0:31@227034271
+  deepestLastOrientationSource=ActivityRecord{120375094 u0 com.google.android.settings.intelligence/.modules.search.SearchActivity t13}
+  overrideConfig={1.0 310mcc260mnc [en_US] ldltr sw427dp w427dp h952dp 480dpi nrml long compactNeeded port finger qwerty/v/v dpad/v winConfig={ mBounds=Rect(0, 0 - 1280, 2856) mAppBounds=Rect(0, 0 - 1280, 2856) mMaxBounds=Rect(0, 0 - 1280, 2856) mDisplayRotation=ROTATION_0 mWindowingMode=fullscreen mActivityType=undefined mAlwaysOnTop=undefined mRotation=ROTATION_0} as.3 s.51 fontWeightAdjustment=0}
+  mHasSetIgnoreOrientationRequest=false ignoreOrientationRequest=false
+  mSleeping=false mAllSleepTokens=[]
+  mLayoutSeq=118
+  mImeWindow=Window{36a8381 u0 InputMethod}
+  mImeLayeringTarget=Window{f69ba03 u0 com.google.android.settings.intelligence/com.google.android.settings.intelligence.modules.search.SearchActivity}
+  mImeInputTarget=Window{f69ba03 u0 com.google.android.settings.intelligence/com.google.android.settings.intelligence.modules.search.SearchActivity}
+  mImeControlTarget=Window{f69ba03 u0 com.google.android.settings.intelligence/com.google.android.settings.intelligence.modules.search.SearchActivity}
+  ImeContainer
+    mNeedsLayer=false
+    mImeWindowToken=null
+  mImeParent=ActivityRecord{120375094 u0 com.google.android.settings.intelligence/.modules.search.SearchActivity t13}
+  mRemoteInsetsControlTarget=RemoteInsetsControlTarget{baf79cb displayId=0 requestedVisibleTypes=503 animatingTypes=0}
+  mCurrentFocus=Window{f69ba03 u0 com.google.android.settings.intelligence/com.google.android.settings.intelligence.modules.search.SearchActivity}
+  mFocusedApp=ActivityRecord{120375094 u0 com.google.android.settings.intelligence/.modules.search.SearchActivity t13}
+  mFixedRotationLaunchingApp=null
+
+  mHoldScreenWindow=null
+  mObscuringWindow=Window{f69ba03 u0 com.google.android.settings.intelligence/com.google.android.settings.intelligence.modules.search.SearchActivity}
+  mLastWakeLockHoldingWindow=null
+  mLastWakeLockObscuringWindow=null
+
+  mIsHardwareRendererOutputDisabled=false
+  mAreClientRenderingLimitationsEnabled=false
+
+  displayId=0
+  mWallpaperTarget=null
+  mLastWallpaperZoomOut=0.0
+  token WallpaperWindowToken{12104aa showWhenLocked=true}:
+    mWallpaperX=0.0
+    mWallpaperY=0.5
+    mWallpaperXStep=0.33333334
+    mWallpaperYStep=1.0
+    mWallpaperDisplayOffsetX=NA
+    mWallpaperDisplayOffsetY=NA
+
+  mSystemGestureExclusion=SkRegion((0,1848,90,2856)(1190,1848,1280,2856))
+
+  unrestrictedKeepClearAreas={Rect(0, 1848 - 1280, 2856)}
+
+  Display areas in top down Z order:
+    * Leaf:36:36
+    * OneHanded:34:35
+      * Leaf:34:35
+    * Leaf:33:33
+    * OneHanded:32:32
+      * Leaf:32:32
+    * WindowedMagnification:0:31 (organized)
+      * OneHanded:26:31
+        * Leaf:26:31
+      * Leaf:24:25
+      * OneHanded:0:23
+        * Leaf:23:23
+        * AppZoomOut:20:22 (organized)
+          * Leaf:20:22
+        * Leaf:17:19
+        * AppZoomOut:16:16 (organized)
+          * Leaf:16:16
+        * Leaf:15:15
+        * AppZoomOut:2:14 (organized)
+          * ImePlaceholder:13:14
+            * ImeContainer
+          * Leaf:3:12
+          * DefaultTaskDisplayArea (organized)
+        * Leaf:1:1
+        * AppZoomOut:0:0 (organized)
+          * Leaf:0:0
+
+  Task display areas in top down Z order:
+    TaskDisplayArea DefaultTaskDisplayArea
+      overrideConfig={0.0 ?mcc0mnc ?localeList ?layoutDir ?swdp ?wdp ?hdp ?density ?lsize ?long ?round ?ldr ?wideColorGamut ?orien ?uimode ?night ?touch ?keyb/?/? ?nav/? winConfig={ mBounds=Rect(0, 0 - 0, 0) mAppBounds=null mMaxBounds=Rect(0, 0 - 0, 0) mDisplayRotation=undefined mWindowingMode=fullscreen mActivityType=undefined mAlwaysOnTop=undefined mRotation=undefined} ?fontWeightAdjustment}
+      mPreferredTopFocusableRootTask=Task{876d5b #13 type=standard A=1000:com.android.settings.root}
+      mLastFocusedRootTask=Task{876d5b #13 type=standard A=1000:com.android.settings.root}
+      Application tokens in top down Z order:
+      * Task{876d5b #13 type=standard A=1000:com.android.settings.root U=0 visible=true visibleRequested=true mode=fullscreen translucent=false sz=2}
+        bounds=[0,0][1280,2856]
+        * ActivityRecord{120375094 u0 com.google.android.settings.intelligence/.modules.search.SearchActivity t13}
+        * ActivityRecord{198200383 u0 com.android.settings/.homepage.SettingsHomepageActivity t13}
+      * Task{cdf91a2 #1 type=home U=0 visible=false visibleRequested=false mode=fullscreen translucent=true sz=1}
+        bounds=[0,0][1280,2856]
+        * Task{56dd16d #2 type=home I=com.google.android.apps.nexuslauncher/.NexusLauncherActivity U=0 rootTaskId=1 visible=false visibleRequested=false mode=fullscreen translucent=true sz=2}
+          bounds=[0,0][1280,2856]
+          * ActivityRecord{231691652 u0 com.google.android.apps.nexuslauncher/.NexusLauncherActivity t2}
+          * TaskFragment{12c04 mode=multi-window organizerUid=10195 organizerProc=com.google.android.apps.nexuslauncher}
+            bounds=[0,0][1280,2856]
+      * Task{15b44b8 #3 name=Bubbles type=undefined U=0 visible=false visibleRequested=false mode=multi-window translucent=true sz=1}
+        bounds=[0,0][1280,2856]
+        * Task{74e416d #0 name=Bubbles-visibility-barrier type=undefined U=0 rootTaskId=3 visible=false visibleRequested=false mode=multi-window translucent=true sz=0}
+          bounds=[0,0][1280,2856]
+      * Task{11c8291 #4 name=SplitRoot type=undefined U=0 visible=false visibleRequested=false mode=fullscreen translucent=true sz=2}
+        bounds=[0,0][1280,2856]
+        * Task{daddf7 #6 name=side type=undefined U=0 rootTaskId=4 visible=false visibleRequested=false mode=multi-window translucent=true sz=0}
+          bounds=[0,2856][1280,4284]
+        * Task{611f5f6 #5 name=main type=undefined U=0 rootTaskId=4 visible=false visibleRequested=false mode=multi-window translucent=true sz=0}
+          bounds=[0,0][1280,2856]
+
+  rootHomeTask=Task=1
+
+  PinnedTaskController
+    mIsImeShowing=true
+    mImeHeight=936
+    mMinAspectRatio=0.41841003
+    mMaxAspectRatio=2.39
+
+  DisplayFrames w=1280 h=2856 r=0
+
+  DisplayPolicy
+    mCarDockEnablesAccelerometer=true mDeskDockEnablesAccelerometer=true
+    mDockMode=EXTRA_DOCK_STATE_UNDOCKED mLidState=LID_OPEN
+    mAwake=true mScreenOnEarly=true mScreenOnFully=true
+    mKeyguardDrawComplete=true mWindowManagerDrawComplete=true
+    mHdmiPlugged=false
+    mLastAppearance=LIGHT_STATUS_BARS LIGHT_NAVIGATION_BARS
+    mLastBehavior=DEFAULT
+    mShowingDream=false mDreamingLockscreen=false
+    mStatusBar=Window{3079786 u0 StatusBar}
+    mExpandedPanel=Window{57c951d u0 NotificationShade}
+    isKeyguardShowing=false
+    mNavigationBar=Window{3420d6c u0 Taskbar}
+    mNavBarOpacityMode=2
+    mNavigationBarCanMove=false
+    mHasBottomNavigationBar=true
+    mLeftGestureHost=Window{3420d6c u0 Taskbar}
+    mTopGestureHost=Window{3079786 u0 StatusBar}
+    mRightGestureHost=Window{3420d6c u0 Taskbar}
+    mBottomGestureHost=Window{3420d6c u0 Taskbar}
+    mFocusedWindow=Window{f69ba03 u0 com.google.android.settings.intelligence/com.google.android.settings.intelligence.modules.search.SearchActivity}
+    mTopFullscreenOpaqueWindowState=Window{f69ba03 u0 com.google.android.settings.intelligence/com.google.android.settings.intelligence.modules.search.SearchActivity}
+    mSystemUiControllingWindow=Window{f69ba03 u0 com.google.android.settings.intelligence/com.google.android.settings.intelligence.modules.search.SearchActivity}
+    mSystemBarColorApps={ActivityRecord{120375094 u0 com.google.android.settings.intelligence/.modules.search.SearchActivity t13}}
+    mNavBarColorWindowCandidate=Window{f69ba03 u0 com.google.android.settings.intelligence/com.google.android.settings.intelligence.modules.search.SearchActivity}
+    mNavBarBackgroundWindowCandidate=Window{f69ba03 u0 com.google.android.settings.intelligence/com.google.android.settings.intelligence.modules.search.SearchActivity}
+    mLastStatusBarAppearanceRegions=
+      AppearanceRegion{LIGHT_STATUS_BARS bounds=[0,0][1280,2856]}
+    mLastLetterboxDetails=
+    mStatusBarBackgroundWindows=
+      Window{f69ba03 u0 com.google.android.settings.intelligence/com.google.android.settings.intelligence.modules.search.SearchActivity}
+    mImeInsetsConsumed=false
+    mForceShowNavigationBarEnabled=false mAllowLockscreenWhenOn=false
+    mAllowsSystemBarRemoteInsetsController=false
+    mDecorInsetsInfo:
+      ROTATION_0={overrideNonDecorInsets=[0,156][0,72], overrideConfigInsets=[0,156][0,72], overrideNonDecorFrame=[0,156][1280,2784], overrideConfigFrame=[0,156][1280,2784]}
+      ROTATION_90={overrideNonDecorInsets=[156,0][0,72], overrideConfigInsets=[156,0][0,72], overrideNonDecorFrame=[156,0][2856,1208], overrideConfigFrame=[156,0][2856,1208]}
+      ROTATION_180={overrideNonDecorInsets=[0,0][0,156], overrideConfigInsets=[0,156][0,156], overrideNonDecorFrame=[0,0][1280,2700], overrideConfigFrame=[0,156][1280,2700]}
+      ROTATION_270={overrideNonDecorInsets=[0,0][156,72], overrideConfigInsets=[0,156][156,72], overrideNonDecorFrame=[0,0][2700,1208], overrideConfigFrame=[0,156][2700,1208]}
+    SystemGestures:
+      mDisplayCutoutTouchableRegionSize=36
+      mSwipeStartThreshold=Rect(72, 192 - 72, 72)
+      mSwipeDistanceThreshold=72
+
+  DisplayRotation
+    mCurrentAppOrientation=SCREEN_ORIENTATION_UNSPECIFIED
+    mLastOrientation=-1
+    mRotation=0 mDeferredRotationPauseCount=0
+    mLandscapeRotation=ROTATION_90 mSeascapeRotation=ROTATION_270
+    mPortraitRotation=ROTATION_0 mUpsideDownRotation=ROTATION_180
+    mSupportAutoRotation=true
+    WindowOrientationListener
+      mEnabled=true
+      mCurrentRotation=ROTATION_0
+      mSensorType=null
+      mSensor={Sensor name="Goldfish 3-axis Accelerometer", vendor="The Android Open Source Project", version=1, type=1, maxRange=39.300102, resolution=2.480159E-4, power=3.0, minDelay=10000}
+      mRate=2
+      AccelSensorJudge
+        mProposedRotation=0
+        mPredictedRotation=0
+        mLastFilteredX=0.0
+        mLastFilteredY=9.776321
+        mLastFilteredZ=0.812345
+        mLastFilteredTimestampNanos=17212280751 (2.099214ms ago)
+        mTiltHistory={last: 5.0}
+        mFlat=false
+        mSwinging=false
+        mAccelerating=false
+        mOverhead=false
+        mTouched=false
+        mTiltToleranceConfig=[[-25, 70], [-25, 65], [-25, 60], [-25, 65]]
+
+    mCarDockRotation=-1 mDeskDockRotation=-1
+    mUserRotationMode=USER_ROTATION_FREE mUserRotation=ROTATION_0 mCameraRotationMode=0 mAllowAllRotations=unknown
+    mDemoHdmiRotation=ROTATION_90 mDemoHdmiRotationLock=false mUndockedHdmiRotation=-1
+    mLidOpenRotation=-1
+    mFixedToUserRotation=false
+
+  InputConsumers:
+    name=recents_animation_input_consumer pid=1055 user=UserHandle{0}
+
+  WindowInsetsStateController
+    InsetsState
+      mDisplayFrame=Rect(0, 0 - 1280, 2856)
+      mDisplayCutout=DisplayCutout{insets=Rect(0, 156 - 0, 0) waterfall=Insets{left=0, top=0, right=0, bottom=0} boundingRect={Bounds=[Rect(0, 0 - 0, 0), Rect(586, 0 - 695, 156), Rect(0, 0 - 0, 0), Rect(0, 0 - 0, 0)]} cutoutPathParserInfo={CutoutPathParserInfo{displayWidth=1280 displayHeight=2856 physicalDisplayWidth=1280 physicalDisplayHeight=2856 density={3.0} cutoutSpec={m 689,102 a 49,49 0 0 0 -98,0 49,49 0 0 0 98,0 z @left} rotation={0} scale={1.0} physicalPixelDisplaySizeRatio={1.0}}} sideOverrides={}}
+      mRoundedCorners=RoundedCorners{[RoundedCorner{position=TopLeft, radius=157, center=Point(157, 157)}, RoundedCorner{position=TopRight, radius=157, center=Point(1123, 157)}, RoundedCorner{position=BottomRight, radius=157, center=Point(1123, 2699)}, RoundedCorner{position=BottomLeft, radius=157, center=Point(157, 2699)}]}
+      mRoundedCornerFrame=Rect(0, 0 - 0, 0)
+      mPrivacyIndicatorBounds=PrivacyIndicatorBounds {static bounds=Rect(992, 0 - 1238, 156) rotation=0}
+      mDisplayShape=DisplayShape{type=2, displayWidth=1280, displayHeight=2856, physicalPixelDisplaySizeRatio=1.0, rotation=0, offsetX=0, offsetY=0, scale=1.0}
+        InsetsSource id=b7120001 type=navigationBars frame=[0,2784][1280,2856] visible=true flags=SUPPRESS_SCRIM|ANIMATE_RESIZING sideHint=BOTTOM
+        InsetsSource id=b7120004 type=systemGestures frame=[0,0][90,2856] visible=true flags= sideHint=LEFT
+        InsetsSource id=b7120005 type=mandatorySystemGestures frame=[0,2760][1280,2856] visible=true flags= sideHint=BOTTOM
+        InsetsSource id=b7120006 type=tappableElement frame=[0,0][0,0] visible=true flags= sideHint=NONE
+        InsetsSource id=b7120024 type=systemGestures frame=[1190,0][1280,2856] visible=true flags= sideHint=RIGHT
+        InsetsSource id=df2a0000 type=statusBars frame=[0,0][1280,156] visible=true flags= sideHint=TOP
+        InsetsSource id=df2a0005 type=mandatorySystemGestures frame=[0,0][1280,192] visible=true flags= sideHint=TOP
+        InsetsSource id=df2a0006 type=tappableElement frame=[0,0][1280,156] visible=true flags= sideHint=TOP
+        InsetsSource id=3 type=ime frame=[0,1848][1280,2856] visibleFrame=[0,1848][1280,2856] visible=true flags= sideHint=BOTTOM
+        InsetsSource id=27 type=displayCutout frame=[0,0][1280,156] visible=true flags= sideHint=TOP
+    Control map:
+      Window{f69ba03 u0 com.google.android.settings.intelligence/com.google.android.settings.intelligence.modules.search.SearchActivity}:
+        InsetsSourceControl: {3 mType=ime mSurfacePosition=Point(0, 156) mInsetsHint=Insets{left=0, top=0, right=0, bottom=1008} mLeash=Surface(name=Surface(name=36a8381 InputMethod#86)/@0xfe2de14 - animation-leash of insets_animation#126)/@0x2120059}
+        InsetsSourceControl: {df2a0000 mType=statusBars initiallyVisible mSurfacePosition=Point(0, 0) mInsetsHint=Insets{left=0, top=156, right=0, bottom=0} mLeash=Surface(name=Surface(name=3079786 StatusBar#71)/@0x1ebd874 - animation-leash of insets_animation#122)/@0xb9b741e}
+      ShowingPermanentControlTarget:
+        InsetsSourceControl: {b7120001 mType=navigationBars initiallyVisible mSurfacePosition=Point(0, 2784) mInsetsHint=Insets{left=0, top=0, right=0, bottom=72} mLeash=Surface(name=Surface(name=3420d6c Taskbar#50)/@0x9a9c53 - animation-leash of insets_animation#128)/@0xbc5c4ff}
+    InsetsSourceProviders:
+      ImeInsetsSourceProvider
+        mSource=InsetsSource id=3 type=ime frame=[0,1848][1280,2856] visibleFrame=[0,1848][1280,2856] visible=true flags= sideHint=BOTTOM
+        mSourceFrame=Rect(0, 1848 - 1280, 2856)
+        mControl=InsetsSourceControl mId=3 mType=ime mLeash=Surface(name=Surface(name=36a8381 InputMethod#86)/@0xfe2de14 - animation-leash of insets_animation#126)/@0x2120059 mInitiallyVisible=false mSurfacePosition=Point(0, 156) mInsetsHint=Insets{left=0, top=0, right=0, bottom=1008} mSkipAnimationOnce=false mImeStatsToken=android.view.inputmethod.ImeTracker$Token@174c2cc(tag: system_server:90b795e3)
+        mInsetsHint=Insets{left=0, top=0, right=0, bottom=1008}
+        mIsLeashInitialized=true mHasPendingPosition=false
+        mWin=Window{36a8381 u0 InputMethod}
+        mAdapter=ControlAdapter mCapturedLeash=Surface(name=Surface(name=36a8381 InputMethod#86)/@0xfe2de14 - animation-leash of insets_animation#126)/@0x2120059
+        mControlTarget=Window{f69ba03 u0 com.google.android.settings.intelligence/com.google.android.settings.intelligence.modules.search.SearchActivity}
+        mImeShowing=true mLastDrawn=true
+      InsetsSourceProvider
+        mSource=InsetsSource id=df2a0006 type=tappableElement frame=[0,0][1280,156] visible=true flags= sideHint=TOP
+        mSourceFrame=Rect(0, 0 - 1280, 156)
+        mIsLeashInitialized=false mHasPendingPosition=false
+        mWin=Window{3079786 u0 StatusBar}
+      InsetsSourceProvider
+        mSource=InsetsSource id=df2a0005 type=mandatorySystemGestures frame=[0,0][1280,192] visible=true flags= sideHint=TOP
+        mSourceFrame=Rect(0, 0 - 1280, 192)
+        mIsLeashInitialized=false mHasPendingPosition=false
+        mWin=Window{3079786 u0 StatusBar}
+      InsetsSourceProvider
+        mSource=InsetsSource id=df2a0000 type=statusBars frame=[0,0][1280,156] visible=true flags= sideHint=TOP
+        mSourceFrame=Rect(0, 0 - 1280, 156)
+        mControl=InsetsSourceControl mId=df2a0000 mType=statusBars mLeash=Surface(name=Surface(name=3079786 StatusBar#71)/@0x1ebd874 - animation-leash of insets_animation#122)/@0xb9b741e mInitiallyVisible=true mSurfacePosition=Point(0, 0) mInsetsHint=Insets{left=0, top=156, right=0, bottom=0} mSkipAnimationOnce=false mImeStatsToken=null
+        mInsetsHint=Insets{left=0, top=156, right=0, bottom=0}
+        mIsLeashInitialized=true mHasPendingPosition=false
+        mWin=Window{3079786 u0 StatusBar}
+        mAdapter=ControlAdapter mCapturedLeash=Surface(name=Surface(name=3079786 StatusBar#71)/@0x1ebd874 - animation-leash of insets_animation#122)/@0xb9b741e
+        mControlTarget=Window{f69ba03 u0 com.google.android.settings.intelligence/com.google.android.settings.intelligence.modules.search.SearchActivity}
+      InsetsSourceProvider
+        mSource=InsetsSource id=b7120024 type=systemGestures frame=[1190,0][1280,2856] visible=true flags= sideHint=RIGHT
+        mSourceFrame=Rect(1190, 0 - 1280, 2856)
+        mIsLeashInitialized=false mHasPendingPosition=false
+        mWin=Window{3420d6c u0 Taskbar}
+      InsetsSourceProvider
+        mSource=InsetsSource id=b7120006 type=tappableElement frame=[0,0][0,0] visible=true flags= sideHint=NONE
+        mSourceFrame=Rect(0, 0 - 0, 0)
+        mOverrideFrames={2031=Rect(0, 0 - 0, 0)}
+        mIsLeashInitialized=false mHasPendingPosition=false
+        mWin=Window{3420d6c u0 Taskbar}
+      InsetsSourceProvider
+        mSource=InsetsSource id=b7120005 type=mandatorySystemGestures frame=[0,2760][1280,2856] visible=true flags= sideHint=BOTTOM
+        mSourceFrame=Rect(0, 2760 - 1280, 2856)
+        mIsLeashInitialized=false mHasPendingPosition=false
+        mWin=Window{3420d6c u0 Taskbar}
+      InsetsSourceProvider
+        mSource=InsetsSource id=b7120004 type=systemGestures frame=[0,0][90,2856] visible=true flags= sideHint=LEFT
+        mSourceFrame=Rect(0, 0 - 90, 2856)
+        mIsLeashInitialized=false mHasPendingPosition=false
+        mWin=Window{3420d6c u0 Taskbar}
+      InsetsSourceProvider
+        mSource=InsetsSource id=b7120001 type=navigationBars frame=[0,2784][1280,2856] visible=true flags=SUPPRESS_SCRIM|ANIMATE_RESIZING sideHint=BOTTOM
+        mSourceFrame=Rect(0, 2784 - 1280, 2856)
+        mControl=InsetsSourceControl mId=b7120001 mType=navigationBars mLeash=Surface(name=Surface(name=3420d6c Taskbar#50)/@0x9a9c53 - animation-leash of insets_animation#128)/@0xbc5c4ff mInitiallyVisible=true mSurfacePosition=Point(0, 2784) mInsetsHint=Insets{left=0, top=0, right=0, bottom=72} mSkipAnimationOnce=false mImeStatsToken=null
+        mInsetsHint=Insets{left=0, top=0, right=0, bottom=72}
+        mIsLeashInitialized=true mHasPendingPosition=false
+        mWin=Window{3420d6c u0 Taskbar}
+        mAdapter=ControlAdapter mCapturedLeash=Surface(name=Surface(name=3420d6c Taskbar#50)/@0x9a9c53 - animation-leash of insets_animation#128)/@0xbc5c4ff
+        mControlTarget=ShowingPermanentControlTarget
+  InsetsPolicy
+    status: WINDOW_STATE_SHOWING
+    nav: WINDOW_STATE_SHOWING
+
+  DisplayWindowSettingsProvider
+    SettingsEntry{mWindowingMode=0, mUserRotationMode=null, mUserRotation=null, mForcedWidth=0, mForcedHeight=0, mForcedDensity=0, mForcedDensityRatio=0.0, mForcedScalingMode=null, mRemoveContentMode=0, mShouldShowWithInsecureKeyguard=null, mShouldShowSystemDecors=null, mIsHomeSupported=null, mShouldShowIme=null, mFixedToUserRotation=null, mIgnoreOrientationRequest=null, mIgnoreDisplayCutout=null, mDontMoveToTop=null, mForceAppsUniversalResizable=null, mCanStealTopFocus=null}
+

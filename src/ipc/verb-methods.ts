@@ -218,6 +218,19 @@ export const TypeTextParamsSchema = VerbCallBaseSchema.extend({
 export type TypeTextParams = z.infer<typeof TypeTextParamsSchema>;
 
 /**
+ * The most presses one `press_key` call may ask for (#301).
+ *
+ * Each press is its own device round trip, composed in the verb (`src/verbs/input.ts`), and
+ * `press_key` stays on the client's **default** request deadline rather than earning a long one
+ * of its own. So the bound is sized against that deadline: one press measured 100–140 ms on a
+ * physical API 33 device, and twenty of them plus the after-read came back in ~5 s (PROJECT.md
+ * §6) — a sixth of the 30 s budget, with room for a device several times slower.
+ *
+ * It is for a few characters — the ten backspaces that fix a typo — not for emptying a field.
+ */
+export const MAX_KEY_PRESSES = 20;
+
+/**
  * `DeviceKeySchema` rather than a string, so the verb, the backend and the wire share one
  * vocabulary: a key nobody implements is `invalid_params` at the boundary instead of a press
  * that reports success and does nothing.
@@ -226,11 +239,25 @@ export type TypeTextParams = z.infer<typeof TypeTextParamsSchema>;
  * device has one. That question has a different answer on every device, only the backend
  * knows it, and the answer arrives as an `unsupported-key` failure naming the key
  * (`src/verbs/failure.ts`).
+ *
+ * `times` absent means once. Zero is refused rather than accepted as a no-op, because pressing
+ * nothing would report a success for a key that was never pressed. See {@link MAX_KEY_PRESSES}.
  */
 export const PressKeyParamsSchema = VerbCallBaseSchema.extend({
 	key: DeviceKeySchema,
+	times: z.number().int().min(1).max(MAX_KEY_PRESSES).optional(),
 }).strict();
 export type PressKeyParams = z.infer<typeof PressKeyParamsSchema>;
+
+/**
+ * What a `hide_keyboard` call carries: the lease id, and nothing else.
+ *
+ * No target — the verb addresses nothing on the screen — and no key: *how* this device puts its
+ * keyboard away is the backend's knowledge, so a caller has nothing to choose (#307). `.strict()`
+ * turns a stray `target` or `key` into `invalid_params` rather than a field the host ignores.
+ */
+export const HideKeyboardParamsSchema = VerbCallBaseSchema.strict();
+export type HideKeyboardParams = z.infer<typeof HideKeyboardParamsSchema>;
 
 /**
  * What all three app-lifecycle rows carry — `launch_app`, `stop_app` and `clear_app_data`.

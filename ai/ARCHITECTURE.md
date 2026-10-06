@@ -201,6 +201,12 @@ Backends are genuinely asymmetric and flattening that is the design mistake to a
   untouched, because it names exactly one method and must keep meaning exactly that. The two land
   together rather than one at a time, the split point `canInput`'s four primitives already sit on:
   `CAPABILITY_METHODS` naming a method a backend does not answer fails the conformance suite.
+- **Dismissing the on-screen keyboard is a third** (#307), and the flag is `canHideKeyboard` naming
+  one method, `hideKeyboard`. Not a corner of `canInput` and not a `back` composed in the verb layer:
+  the gesture that closes a keyboard is the same one that navigates when none is open (Android,
+  `PROJECT.md` §6), so the method's contract is *dismiss it if one is up, do nothing otherwise*, and
+  the read that decides lives in the backend that knows its own gesture. A backend that cannot tell
+  whether its keyboard is up declares `false` and the verb fails by name.
 - **A system log is not one of those asymmetries**, which is why `readLogs` is a *required* method and not a capability: every platform here keeps one, and a flag that is always `true` is noise (`src/core/capabilities.ts`). What differs is the wording inside an entry — that is what the neutral `LogEntry` shape and a backend's own parser absorb.
 - **Moving a file is not one either**, so `pushFile` and `pullFile` are required too. The asymmetry that matters there is the *direction* rather than the platform: a push takes a path on the host, because the host is where the daemon runs, and a pull answers with **bytes**, because the answer is read on the agent's machine (D19).
 - **A missing *host* program is not one either, and it must not be modelled as a capability.**
@@ -231,7 +237,7 @@ That last parenthesis is about `simctl`, not about the platform — corrected 20
 
 This paragraph used to predict that an iOS backend "will need at least two external programs where Android needs one", and that is what the requirement above was argued from — **corrected 2026-09-08, because the prediction is what the first iOS backend disproved while the requirement it justified survives it.** `src/backends/ios-simulator/` registered on **one** Xcode program, `simctl`, with no third-party dependency at all (`docs/IOS.md` §10 step 1, `PROJECT.md` R45): the recorder is a host process this backend spawns and signals, and everything else is a query. The second external program is idb, and it has arrived with §10 step 2 — **corrected 2026-09-09, because that program is now running rather than approaching, and again 2026-09-09 because step 2 has since finished.** `canReadScreen` and `canInput` are both `true` and both answered through it (`src/backends/ios-simulator/capabilities.ts`, `#251` and `#252`): the read is `accessibility_info` over a supervised `idb_companion` per target and the four input primitives are one client-streaming `hid` call over the same one, which is why the backend's own header opens with "**Two external programs reach a device from here, not one**". `canControlNetwork` is now the only `false` left on that manifest, and it is a permanent opt-out that was never idb's to flip. So the count was wrong and the rule was right: a backend needing two tools is a shape this interface must not exclude, and it is now a shape one registered backend has **met** — with no edit to the interface to admit it, which is the whole of what the requirement was claiming.
 
-**`docs/IOS.md` is the evidence document for this seam** — every required method and gated capability probed against a real simulator, with the timings, the vocabulary mismatches (`DeviceKey`'s `back` and `recents`, `LogLevel`'s absent `warn`), the traps, and why a *physical* iPhone cannot answer `screenshot` at all and so is a different backend rather than the same one.
+**`docs/IOS.md` is the evidence document for this seam** — every required method and gated capability probed against a real simulator, with the timings, the vocabulary mismatches (`DeviceKey`'s `back` and `recents`, and the unmeasured `delete`, `enter` and `tab`, `LogLevel`'s absent `warn`), the traps, and why a *physical* iPhone cannot answer `screenshot` at all and so is a different backend rather than the same one.
 
 ---
 
@@ -343,7 +349,13 @@ Verbs live above the backends and below the adapters, and this is where determin
   method's arguments, and a backend that declares `canInput` and lacks one key is a narrower
   backend rather than one that takes no input. Declaring `canInput: false` to say it would refuse
   `tap`, `swipe` and `type_text` as well, which is the wrong answer to three questions in order to
-  answer a fourth. `typeText` hands the caller's string to the
+  answer a fourth. The vocabulary is `back`, `home`, `recents`, `wake` and, since #301, the editing
+  keys `delete` (backspace), `enter` and `tab`. **`press_key`'s `times` is composed here, not in the
+  backend**: the verb loops over `DeviceBackend.pressKey(serial, key)` — one press per call, the
+  signature unchanged — and the spine captures one after-state after the last press. A backend
+  therefore never learns a count, and a toggle guarded per press (iOS's `wake`) stays idempotent
+  without each backend re-solving it; the wire bounds the count (`MAX_KEY_PRESSES`) against the
+  client's default deadline. `typeText` hands the caller's string to the
   backend **byte for byte and inspects none of it**: what a device's own text entry reads rather
   than types is that backend's knowledge, and any escaping rule applied here would be one platform's
   rule applied to every platform. A device that cannot type a string at all answers

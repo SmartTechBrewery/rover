@@ -199,6 +199,8 @@ let drags: Array<{ from: Point; to: Point; durationMs: number }>;
 /** Every string and every key the daemon's backend was handed, in order and unaltered. */
 let typed: string[];
 let keys: string[];
+/** The serials `hide_keyboard` reached the backend with. */
+let hidden: string[];
 
 /**
  * The app-lifecycle calls the daemon's backend received, in order and with the serial each
@@ -262,6 +264,7 @@ async function serve(options: HostOptions = {}): Promise<void> {
 	drags = [];
 	typed = [];
 	keys = [];
+	hidden = [];
 	appCalls = [];
 	logReads = [];
 	transfers = [];
@@ -305,6 +308,9 @@ async function serve(options: HostOptions = {}): Promise<void> {
 					typed.push(text);
 				}),
 			pressKey: pressKeyOf(options),
+			hideKeyboard: async (serial) => {
+				hidden.push(serial);
+			},
 			setAirplaneMode: recordRadio('setAirplaneMode'),
 			setWifiEnabled: recordRadio('setWifiEnabled'),
 			launchApp: options.launchApp ?? recordApp('launchApp'),
@@ -707,6 +713,18 @@ describe('the input rows dispatch like the waits', () => {
 		expect(drags).toEqual([]);
 	});
 
+	// The count reaches the verb, which presses once per count — the backend never learns it.
+	it('presses a key as many times as the call asked, in one answer', async () => {
+		await serve();
+		const client = await connect();
+		const leaseId = await acquire(client);
+
+		const answer = await client.request('press_key', { leaseId, key: 'delete', times: 4 });
+
+		expect(answer).toMatchObject({ outcome: 'ok', result: { verb: 'press_key', target: null } });
+		expect(keys).toEqual(['delete', 'delete', 'delete', 'delete']);
+	});
+
 	it('answers a key this device has no equivalent for as a failure about that key', async () => {
 		await serve({
 			pressKey: async (serial, key) => {
@@ -726,6 +744,47 @@ describe('the input rows dispatch like the waits', () => {
 			outcome: 'failed',
 			failure: { kind: 'unsupported-key', serial: SERIAL, key: 'recents' },
 		});
+	});
+
+	it('hides the keyboard on the device the lease names, pressing no key from the host', async () => {
+		await serve();
+		const client = await connect();
+		const leaseId = await acquire(client);
+
+		const answer = await client.request('hide_keyboard', { leaseId });
+
+		expect(answer).toMatchObject({
+			outcome: 'ok',
+			result: { verb: 'hide_keyboard', target: null, device: { serial: SERIAL } },
+		});
+		expect(hidden).toEqual([SERIAL]);
+		expect(keys).toEqual([]);
+		expect(taps).toEqual([]);
+	});
+
+	it('answers a device without canHideKeyboard with a failure naming the capability', async () => {
+		await serve({ capabilities: { canHideKeyboard: false } });
+		const client = await connect();
+		const leaseId = await acquire(client);
+
+		const answer = await client.request('hide_keyboard', { leaseId });
+
+		expect(answer).toMatchObject({
+			outcome: 'failed',
+			failure: { kind: 'missing-capability', capability: 'canHideKeyboard', serial: SERIAL },
+		});
+		expect(hidden).toEqual([]);
+	});
+
+	it('refuses a hide_keyboard call carrying a target at the boundary', async () => {
+		await serve();
+		const client = await connect();
+		const leaseId = await acquire(client);
+
+		await expect(
+			client.request('hide_keyboard', { leaseId, target: { by: 'text', text: 'Save' } } as never),
+		).rejects.toBeInstanceOf(IpcRequestError);
+		expect(hidden).toEqual([]);
 	});
 
 	it('refuses a key nobody implements at the boundary, before any handler runs', async () => {

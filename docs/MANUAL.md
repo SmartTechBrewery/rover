@@ -351,7 +351,7 @@ printf '%s\n' \
 ```
 
 The first answer is the handshake (`"protocolVersion":"2025-06-18"`, `"serverInfo":{"name":"rover"`
-…) and the second lists **25 tools**: the four device and lease rows, the eighteen verbs whose
+…) and the second lists **26 tools**: the four device and lease rows, the nineteen verbs whose
 answer is plain data, and the three whose answer is bytes. Swap the last frame for a call to watch
 one run against the device:
 
@@ -499,7 +499,8 @@ short form:
   screen** and **takes input**, and refuses the network toggles **by name**, naming the capability
   and the device. Input is where that honesty gets finer-grained than a flag: `press_key` answers
   `home` and `wake` and refuses `back` and `recents` **by name**, naming the key rather than
-  sending some other navigation that happens to be reachable. Physical iPhones are not supported at
+  sending some other navigation that happens to be reachable — and refuses `delete`, `enter` and
+  `tab` the same way until they have been measured on a simulator (#302). Physical iPhones are not supported at
   all — hardware cannot answer `screenshot`, which is why the backend is named `ios-simulator` and
   not `ios`.
 - **Pixels are gone whenever an app blocks screen capture** — the system hands back a valid, all
@@ -727,7 +728,7 @@ test behind it rather than only a convention: `tests/unit/no-sleep.test.ts` scan
 are exempt from the scan. It is a floor, not a proof — a determined re-implementation gets
 through, and reading the wait vocabulary is still how you learn what a wait here looks like.
 
-**The verb layer has a spine, twenty-one verbs on it and the two waits standing beside it.**
+**The verb layer has a spine, twenty-two verbs on it and the two waits standing beside it.**
 `src/verbs/` is the layer above the backends where determinism stops being a rule and becomes a
 signature (D12): `resolveTarget()` takes
 a target and *nothing else* — no screen, no element list, no state read a turn ago — so a target can
@@ -747,7 +748,7 @@ that leaves the agent guessing whether it landed. Every argument and every
 result is a Zod schema of plain data, because the host runs the verb and the agent reads the answer
 somewhere else (D19).
 
-**The six input verbs are that spine used six times** (`src/verbs/input.ts`),
+**The seven input verbs are that spine used seven times** (`src/verbs/input.ts`),
 and each of them is one `performAction()` call: not one reads a screen of its own, so a verb author
 has nothing to remember and nothing to get wrong. `long_press` is a drag from a point to that same
 point, held past the device's own long-press timeout — never the long-press flag on a key event,
@@ -771,6 +772,11 @@ attached, re-grown inside the verbs meant to remove it. `wait_for` waits until t
 *and* somewhere it can be acted on, so an element still clipped out of its scrolling container is
 *not yet* rather than a failure — a screen still moving is what a wait is for — while a target two
 elements match is refused outright, because more polling cannot specify an under-specified request.
+A screen the device could not read **yet** reads the same way: a device that is up and has not
+drawn a window, which is what reading right after a cold app launch meets, is *not yet* for both
+waits rather than the end of the wait — and a timeout that never got a readable screen says so, in
+place of claiming the element was not on it. Everything else still ends the wait on the spot, and a
+verb that reads the screen once fails on that same case by name instead of quietly reading again.
 `wait_until_gone` asks the mirror question, and asks it of matches rather than of a resolution: an
 element matched twice is still there twice — and for the same reason it will not take a text
 target's `index`, since an index names a slot in the match list rather than an element, and a slot
@@ -787,9 +793,17 @@ element.** A key press aims at nothing and neither does text going to whatever h
 go through the spine with **no target at all** and their result's `target` is `null` — a fact about
 the verb rather than a resolution that failed. There is no target *option* on `type_text` either: an
 agent that wants text in a particular field taps it and then types, rather than having a second copy
-of `tap`'s resolution live here. `press_key` speaks the four keys of `DeviceKey` — back, home,
-recents, wake — shared with the backend and the wire so a key nobody implements is refused at the
-boundary instead of pressed into silence. A vocabulary is not a promise that every platform has all
+of `tap`'s resolution live here. `press_key` speaks the seven keys of `DeviceKey` — back, home,
+recents, wake, and the editing keys delete, enter and tab (#301) — shared with the backend and the
+wire so a key nobody implements is refused at the boundary instead of pressed into silence.
+`delete` is backspace (the character before the caret, never forward delete), `enter` does whatever
+the focused control does with Enter, and `tab` moves focus to the next focusable control — which on
+a web form can be a field's clear button rather than the next field, so read back after typing
+rather than counting Tabs. An optional `times` (1 to 20, default 1) repeats the press in one call
+and the answer reads the screen once, after the last press; the repeat is composed in the verb, so
+a backend still presses one key at a time, and zero is refused rather than answered as a success for
+nothing pressed. A press that fails part-way through is a failure that does not say how many
+landed — the next read does. A vocabulary is not a promise that every platform has all
 of it, so the other half of that is the backend's: a key that *is* in the vocabulary and that this
 device has no equivalent for comes back as an `unsupported-key` failure naming the key, which is how
 a device that takes input says so about one key without claiming it takes none — and it is a
@@ -825,6 +839,36 @@ every backend must answer it, and reports size, density, the computed width in d
 version — the same `DeviceInfo` every result already carries (D14), now askable on its own without
 moving the device first. Neither addresses anything on the screen, so both answer `target: null`,
 and both carry the lease id and nothing else on the wire.
+
+**That `DeviceInfo` also says whether the on-screen keyboard is up, and where.** `screen.keyboard`
+carries `shown` and, when one is shown, `bounds` — and because it rides on the half D14 puts on
+*every* result, so does every other verb's answer: a `tap` that opened a keyboard reports the
+keyboard it opened, because the after-state is re-read once the action has run. It is on the device
+half rather than in the element list on purpose. An element under the keyboard is still laid out
+where the application put it and still comes back from `read_screen` with those bounds; the thing
+covering it is not an element, so the honest place to say it is beside the screen's other facts.
+
+**`bounds` is in dp**, the same space the element rectangles are in — not the physical pixels
+`screen.systemBars` beside it uses — because what you would compare it against is a touch point
+rather than a screenshot's coordinates. And the two "no" answers are different answers:
+**`null` means this device did not say**, while **`{ shown: false }` means the device says no
+keyboard is up**. The iOS-simulator backend answers `null`, since its screen facts come from a
+static device-type profile that describes nothing about what is drawn on the glass. Reading `null`
+as *no keyboard* would turn a backend that cannot look into one promising a clear screen. Nothing
+in Rover refuses a tap over a keyboard today — this is the device reporting a fact.
+
+**`hide_keyboard` puts that keyboard away, and presses nothing when there is none** (#307). Reach
+for it instead of `press_key back`: on Android, back closes a keyboard that is up and *leaves the
+screen* when none is — both exit cleanly, so nothing downstream can tell which happened
+(`PROJECT.md` §6). The verb therefore decides nothing itself. It calls the backend's `hideKeyboard`,
+which reads the keyboard's state from the same dump `screen.keyboard` comes from and presses back
+only when that read says a keyboard is up; a dump that says nothing about the keyboard is refused
+rather than guessed at. It takes the lease id alone — no target, and no key, because *how* a device
+puts its keyboard away is that device's knowledge — and its answer is the usual one, whose
+`screen.keyboard` says whether the keyboard is still there. It is gated on its own capability,
+`canHideKeyboard`: `true` on Android, `false` on the iOS simulator for now, where the call answers
+`missing-capability` naming the flag and the device instead of answering `ok` for a keyboard still on
+the glass.
 
 **`screenshot` is the third read, and the one whose answer is a payload** rather than a state the
 result already carries. It sits on the same spine and needs no capability either, and what it adds
@@ -1078,7 +1122,7 @@ ends, so there is one recipe per toggle rather than two that can drift, and the 
 the reason the restoration records: airplane mode first, wifi last.
 
 **The daemon loads the core and runs the verbs**, and a client only asks (D19). The two waits, the
-six input verbs, the three app verbs, the three read verbs, the log read, screen recording, the two
+seven input verbs, the three app verbs, the three read verbs, the log read, screen recording, the two
 environment verbs and the three file transfers are callable over the same connection as
 `acquire_device` — the same envelope, the same framing, one method table — and a verb call carries
 the lease id rather than a serial, because the lease id is the credential and the host derives the
@@ -1117,7 +1161,8 @@ and it is filed as its own issue.
 *keys* by name.** What has been driven **over a lease** on a booted simulator is `device_info`,
 `start_recording` — including the refusal of a second one and the release teardown that stops an
 abandoned recorder — the two `missing-capability` refusals, and `press_key`: `home` and `wake`
-answered, `back` and `recents` refused as `unsupported-key` carrying the key, which are this
+answered, `back` and `recents` refused as `unsupported-key` carrying the key (and `delete`, `enter`
+and `tab` refused the same way, before any round trip, until #302 measures them), which are this
 repository's first per-key refusals from a device rather than from a synthetic backend;
 `record_video` and
 `stop_recording` over a lease are gated on a host that has `ffmpeg`, since the verb answers with
@@ -1189,10 +1234,10 @@ outside it, because `--import tsx/esm` resolves against the caller's directory r
 the script. What that entry looks like in an MCP client's own configuration, and how to prove it
 handshakes, is [Wire up the MCP server](#wire-up-the-mcp-server) above. What exists today is the
 server, speaking stdio, declaring
-twenty-five tools under the `IPC_METHODS` names exactly: the four device and lease rows (`status`, `list_devices`,
-`acquire_device`, `release_device`), the eighteen verbs whose answer is plain data
+twenty-six tools under the `IPC_METHODS` names exactly: the four device and lease rows (`status`, `list_devices`,
+`acquire_device`, `release_device`), the nineteen verbs whose answer is plain data
 (`wait_for`, `wait_until_gone`, `tap`, `long_press`, `swipe`, `scroll`, `type_text`,
-`press_key`, `read_screen`, `device_info`, `launch_app`, `stop_app`, `clear_app_data`,
+`press_key`, `hide_keyboard`, `read_screen`, `device_info`, `launch_app`, `stop_app`, `clear_app_data`,
 `read_logs`, `install_app`, `start_recording`, `set_airplane_mode`, `set_wifi`), and the three
 whose answer is bytes.
 Every one of them takes **camelCase** arguments under a `snake_case` name (D26), and says so in
@@ -1769,7 +1814,8 @@ runs of the same named check, taken at two different points in time, sit next to
     <test_name>/
       20260830T170501Z-issue-112-9f1c2ab4/   # one lease: when it started, who held it
         <device-serial>/
-          device_info.json                   # size, density, dp scale, OS version
+          device_info.json                   # size, density, dp scale, OS version,
+                                             #   system bars, on-screen keyboard
           test_description.json              # what the lease said the run was about, if anything
           group_id.json                      # which investigation this run is part of, if any
           screenshots/001_screenshot.png

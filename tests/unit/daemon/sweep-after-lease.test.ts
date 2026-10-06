@@ -108,6 +108,7 @@ function registerBackend(capture = new Uint8Array([1, 2, 3])): void {
 				canControlNetwork: true,
 				canRecordVideo: true,
 				canControlRecording: true,
+				canHideKeyboard: false,
 			},
 		},
 		backend: createMockDeviceBackend(overrides),

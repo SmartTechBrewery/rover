@@ -25,7 +25,7 @@
  * - `shellText` for `typeText`'s argument, the only value here that is screen *content*:
  *   an apostrophe in it is ordinary, so it is escaped rather than refused.
  * - **Neither, only for a literal this file owns** — the environment pair's two words, the
- *   four keycodes of `./input.js`'s `KEY_CODES`, {@link DUMP_PATH}, {@link RECORDING_PATH},
+ *   keycodes of `./input.js`'s `KEY_CODES`, {@link DUMP_PATH}, {@link RECORDING_PATH},
  *   and the numbers `tap`, `swipe` and `recordVideo` compute. No caller's string reaches any
  *   of them, which is the property `shellArg` exists to restore when one does. A new argument
  *   outside that list takes a quoter.
@@ -64,6 +64,7 @@ import {
 	NoRecordingRunningError,
 	RecordingAlreadyRunningError,
 	UnfinishedRecordingError,
+	UnreadableScreenError,
 	UnsupportedTextError,
 } from '../../core/errors.js';
 import {
@@ -124,14 +125,14 @@ import {
 } from './parsers/getprop.js';
 import { parseUiHierarchy, type UiHierarchy } from './parsers/hierarchy.js';
 import { acceptedInput } from './parsers/input.js';
-import { parseSystemBarInsets } from './parsers/insets.js';
+import { parseKeyboard, parseSystemBarInsets } from './parsers/insets.js';
 import { parseLogcat } from './parsers/logcat.js';
 import { acceptedNetworkChange } from './parsers/network.js';
 import { isPng } from './parsers/screencap.js';
 import { isFinishedRecording, isRecorderRunning, recorderPids } from './parsers/screenrecord.js';
 import { type DeviceStat, parseDeviceStat } from './parsers/stat.js';
 import { TrackFrameDecoder } from './parsers/track.js';
-import { dumpedPath } from './parsers/uiautomator.js';
+import { dumpedPath, nullRootReport } from './parsers/uiautomator.js';
 import { parseWmDensity, parseWmSize } from './parsers/wm.js';
 import { toScreenElements } from './screen.js';
 
@@ -1025,6 +1026,12 @@ export class AndroidDeviceBackend implements DeviceBackend {
 	 * and the insets are a screen fact of exactly that kind. The parser answers `null` for a dump
 	 * with no insets state, so an Android that does not report them costs the rest of this answer
 	 * nothing (`./parsers/insets.js`).
+	 *
+	 * **That one dump now answers two screen facts** — the system bars and the on-screen keyboard
+	 * — out of the same `InsetsState` block, which is why reporting the keyboard adds no device
+	 * query here. Each is read with the unit its consumer uses: the insets against the effective
+	 * pixels the frames are stated in, the keyboard divided by the density scale into the dp space
+	 * a touch point lives in (`core/device.ts`).
 	 */
 	async deviceInfo(serial: DeviceSerial): Promise<DeviceInfo> {
 		const [size, density, properties, displays] = await Promise.all([
@@ -1052,6 +1059,7 @@ export class AndroidDeviceBackend implements DeviceBackend {
 				// Against the **effective** dimensions, because that is what the device renders at
 				// and therefore what the window manager states these frames against.
 				systemBars: parseSystemBarInsets(displays.stdout, screen.effective),
+				keyboard: parseKeyboard(displays.stdout, dpi.scale),
 			},
 			osVersion: props.androidRelease,
 			osApiLevel: props.apiLevel,
@@ -1468,6 +1476,21 @@ export class AndroidDeviceBackend implements DeviceBackend {
 	 * The default ten-second timeout: a dump is a query on the order of a `wm size`, not a
 	 * capture of the framebuffer.
 	 *
+	 * **One non-confirmation is typed, and only one.** A dump that reported no root node had
+	 * no window to walk — the device is attached and answering, and what it has not got yet
+	 * is a screen, which is what reading in the instant after an application starts looks
+	 * like (PROJECT.md §6). That is {@link UnreadableScreenError}, so the two waits poll
+	 * through it and a one-shot read fails with it by name instead of reporting that the
+	 * host broke. Every other non-confirmation is still `refused(...)` as a plain `Error`,
+	 * `ERROR: could not get idle state` included: a screen that will not settle is a
+	 * different fact from a screen that is not there yet, and widening the typed case to
+	 * cover it would turn the waits' "not yet" into a catch-all.
+	 *
+	 * **There is no retry here**, and the typed error is what makes that affordable: a retry
+	 * loop is a wait, waits live in the wait vocabulary (D12(b), ai/RULES.md §2), and a
+	 * primitive that quietly read twice would hide from its caller that the first read found
+	 * nothing.
+	 *
 	 * `DUMP_PATH` takes no `shellArg` — it is a literal this file owns, the case this file's
 	 * header names. If it ever becomes a caller's value it takes a quoter.
 	 */
@@ -1482,6 +1505,16 @@ export class AndroidDeviceBackend implements DeviceBackend {
 				const dumped = await runAdbOnDevice(serial, ['shell', 'uiautomator', 'dump', DUMP_PATH]);
 
 				if (dumpedPath(dumped.stdout) !== DUMP_PATH) {
+					// Both streams, because which one adb puts real output on is not stable
+					// (`refused`'s own header, PROJECT.md §6) — the platform writes this one to
+					// stderr, and that is a fact about the platform rather than about adb.
+					const noRoot = nullRootReport(dumped.stderr) ?? nullRootReport(dumped.stdout);
+					if (noRoot !== null) {
+						throw new UnreadableScreenError(
+							serial,
+							`uiautomator had no window to dump — it said '${noRoot}'`,
+						);
+					}
 					throw refused(`uiautomator dump ${DUMP_PATH}`, serial, dumped);
 				}
 
@@ -1680,6 +1713,49 @@ export class AndroidDeviceBackend implements DeviceBackend {
 	 */
 	async pressKey(serial: DeviceSerial, key: DeviceKey): Promise<void> {
 		const keycode = KEY_CODES[key];
+		const result = await runAdbOnDevice(serial, ['shell', 'input', 'keyevent', keycode]);
+
+		if (!acceptedInput(result)) throw refused(`input keyevent ${keycode}`, serial, result);
+	}
+
+	/**
+	 * `dumpsys window d` first, and `input keyevent KEYCODE_BACK` **only if it says a keyboard is
+	 * up** (#307).
+	 *
+	 * **The read is the whole method.** Back is how this platform closes an open keyboard, and it
+	 * is also how it leaves the screen when none is open — verified on API 33 / Android 13
+	 * (PROJECT.md §6): with the search field's keyboard up, one press closed the keyboard and left
+	 * the field focused on the same screen; with none up, the same press closed the search
+	 * activity and landed on the launcher. So a back pressed blind turns "get the keyboard out of
+	 * the way" into "lose my place", with `input` exiting 0 both times. `cmd input_method` has no
+	 * hide subcommand on that build, so there is no keyboard-only gesture to reach for instead.
+	 *
+	 * The read is the dump {@link deviceInfo} already parses, through the same
+	 * {@link parseKeyboard}, so the fact this decides on and the fact the after-state reports are
+	 * one reading of one source. Only `shown` is used, so the scale is 1 and no `wm density` round
+	 * trip is spent on a rectangle nobody reads.
+	 *
+	 * **A dump with no insets state is refused, not guessed at.** `null` is *this device did not
+	 * say*, and both guesses are wrong in a way the caller cannot see: pressing may navigate, and
+	 * not pressing answers `ok` for a keyboard that may still be covering the target.
+	 *
+	 * There is a window between the read and the press — a keyboard the application closes itself
+	 * in that instant turns the press into a navigation. It is the same window every read-then-act
+	 * verb has, and it is not closed here by waiting: the after-state is what reports where the
+	 * device ended up (D12(c)).
+	 */
+	async hideKeyboard(serial: DeviceSerial): Promise<void> {
+		const displays = await runAdbOnDevice(serial, ['shell', 'dumpsys', 'window', 'd']);
+		const keyboard = parseKeyboard(displays.stdout, 1);
+		if (keyboard === null) {
+			throw new Error(
+				`Cannot tell whether the on-screen keyboard is up on device '${unwrap(serial)}': ` +
+					"'dumpsys window d' printed no InsetsState, so nothing was pressed",
+			);
+		}
+		if (!keyboard.shown) return;
+
+		const keycode = KEY_CODES.back;
 		const result = await runAdbOnDevice(serial, ['shell', 'input', 'keyevent', keycode]);
 
 		if (!acceptedInput(result)) throw refused(`input keyevent ${keycode}`, serial, result);

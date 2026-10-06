@@ -26,7 +26,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { Capabilities } from '@/core/capabilities.js';
 import type { DeviceBackend, ScreenElement } from '@/core/device.js';
-import { MissingCapabilityError } from '@/core/errors.js';
+import { MissingCapabilityError, UnreadableScreenError } from '@/core/errors.js';
+import { parseDeviceSerial } from '@/core/ids.js';
 import { MAX_FRAME_BYTES } from '@/ipc/framing.js';
 import type { VerbContext } from '@/verbs/context.js';
 import { ArtifactTooLargeError } from '@/verbs/errors.js';
@@ -183,6 +184,32 @@ describe('read_screen', () => {
 
 		expect(context.backend.readScreen).toHaveBeenCalledTimes(2);
 		expect(first.after).toEqual(second.after);
+	});
+
+	/**
+	 * The one-shot half of #299: this verb reads once and does not poll, so a screen the
+	 * device had not got yet is reported rather than retried. It arrives as the spine's
+	 * `failed` after-state carrying the error's own message, because `captureAfterState` is
+	 * where this verb's only read happens and that function never throws — the agent still
+	 * reads the words "no screen to read" rather than being told the read found nothing.
+	 */
+	it('reports a screen the device had not got yet instead of silently reading again', async () => {
+		const readScreenMock = vi.fn<NonNullable<DeviceBackend['readScreen']>>(async () => {
+			throw new UnreadableScreenError(
+				parseDeviceSerial('test-serial-1'),
+				'the screen reader had no window to dump',
+			);
+		});
+		const context = createMockVerbContext({
+			backend: createMockDeviceBackend({ readScreen: readScreenMock }),
+		});
+
+		const result = await readScreen(context);
+
+		expect(result.after).toMatchObject({ kind: 'failed', capability: 'canReadScreen' });
+		expect(result.after).toHaveProperty('message', expect.stringContaining('no screen to read'));
+		// Once, not twice: a retry here would be a wait, and waits are `wait_for`'s (D12(b)).
+		expect(readScreenMock).toHaveBeenCalledTimes(1);
 	});
 
 	it('fails loudly on a backend that does not declare canReadScreen (D11)', async () => {

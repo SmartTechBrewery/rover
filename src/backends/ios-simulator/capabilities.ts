@@ -43,19 +43,20 @@
  * that call answers an empty message and answers it just as happily for a keycode that does not
  * exist (`src/backends/ios-simulator/input.ts`).
  *
- * **`pressKey` is where declaring this capability stops being a boolean.** `DeviceKey` has four
- * members and this platform has two of them: `home` and `wake` are pressed, and `back` and
- * `recents` are refused **by name** with `UnsupportedKeyError` (#215), which reaches the agent as
- * an `unsupported-key` failure carrying the serial and the key. That is not a hole in this
- * manifest — it is what the per-key refusal exists for, and the alternative shapes are both worse:
- * a flag per key would put four booleans behind one method and make `canInput` mean nothing (D11),
+ * **`pressKey` is where declaring this capability stops being a boolean.** `DeviceKey` has seven
+ * members and this platform presses two of them: `home` and `wake` are pressed, `back` and
+ * `recents` are refused **by name** with `UnsupportedKeyError` (#215), and so are `delete`,
+ * `enter` and `tab` until #302 measures them — each reaching the agent as an `unsupported-key`
+ * failure carrying the serial and the key. That is not a hole in this manifest — it is what the
+ * per-key refusal exists for, and the alternative shapes are both worse: a flag per key would put
+ * seven booleans behind one method and make `canInput` mean nothing (D11),
  * while declaring `canInput: false` to dodge two keys would refuse tapping, swiping and typing,
  * which work. `wake` is a *conditional* press for the same honesty: the button behind it toggles,
  * so it is pressed only when the screen is off.
  *
  * **The label moves with it**, to `iOS Simulator (simctl + idb)` — see {@link IOS_SIMULATOR_LABEL}.
  *
- * **The one remaining `false` flag is honest, and it is `false` for good.**
+ * **Two flags are `false`, and both are honest** — one for good, one until it is measured.
  *
  * - **`canControlNetwork`** is the one that is `false` *for good* (`docs/IOS.md` §5, §10 step 1).
  *   A simulator has no airplane mode and no wifi toggle: it uses the **host's** network stack, so
@@ -66,6 +67,13 @@
  *   cannot do that*" `ai/RULES.md` §2 forbids. `MissingCapabilityError` is what a caller gets,
  *   naming this capability and the device, and there is **no** `setAirplaneMode` and **no**
  *   `setWifiEnabled` method beside the flag.
+ * - **`canHideKeyboard`** is `false` *for now* (#307). Dismissing a keyboard is only safe behind a
+ *   read of whether one is up, and this backend reports no keyboard at all yet — `ScreenInfo.keyboard`
+ *   is `null` here (`./screen.ts`), so there is nothing to decide on — and no gesture that closes
+ *   a simulator keyboard has been measured either. Declaring it before both are verified would be
+ *   the "an agent is told a device can do something it cannot" failure;
+ *   so `hide_keyboard` answers `missing-capability` naming this flag and the device, and there is
+ *   **no** `hideKeyboard` method beside it. Its own issue flips it, with the recipe.
  *
  * That is the difference between this manifest and `../android/capabilities.ts`, where every flag
  * is `true`: a declared opt-out is not an unfinished backend, and a capability declared before its
@@ -101,5 +109,6 @@ export const iosSimulatorCapabilityManifest: CapabilityManifestInput = {
 		canControlNetwork: false,
 		canRecordVideo: true,
 		canControlRecording: true,
+		canHideKeyboard: false,
 	},
 };

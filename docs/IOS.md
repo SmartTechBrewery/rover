@@ -97,10 +97,11 @@ startup of ~60–90 ms that a Node backend talking gRPC directly would not pay.
 | Capability | Gated methods | How | Measured | Verdict |
 |---|---|---|---|---|
 | `canReadScreen` | `readScreen` | `accessibility_info {format: LEGACY}` over gRPC — the RPC `idb ui describe-all` wraps | 34–47 ms warm on an established channel, 3.34 s for a companion's **first** read; labels + frames in **points** | ✅ **declared true** (#251) |
-| `canInput` | `tap` `swipe` `typeText` `pressKey` | one client-streaming `hid` call per injection, over the same channel as the read — the RPC `idb ui tap/swipe/text/button` all wrap | through this backend: tap 106–144 ms, `typeText` 102–154 ms for a word and 219–315 ms for all 95 printable ASCII, `pressKey('home')` 104–197 ms, a 250 ms swipe 452 ms | ✅ **declared true** (#252); `back` and `recents` refused **by name**, see §5 |
+| `canInput` | `tap` `swipe` `typeText` `pressKey` | one client-streaming `hid` call per injection, over the same channel as the read — the RPC `idb ui tap/swipe/text/button` all wrap | through this backend: tap 106–144 ms, `typeText` 102–154 ms for a word and 219–315 ms for all 95 printable ASCII, `pressKey('home')` 104–197 ms, a 250 ms swipe 452 ms | ✅ **declared true** (#252); `back` and `recents` refused **by name**, and `delete`, `enter` and `tab` until #302 measures them, see §5 |
 | `canRecordVideo` | `recordVideo` | `simctl io <d> recordVideo --codec h264 --mask ignored <path>` | marker at 0.14–0.23 s; 100,782 bytes for ~2 s of an idle screen | ✅ **no `--time-limit` — the window is host-side** |
 | `canControlRecording` | `start`/`stop`/`discardRecording` | same + `SIGINT`, and the **host's** process table for "is this device recording" | exit 0 in 20–30 ms after the signal; `ps` stops naming the recorder in 39 ms | ✅ |
 | `canControlNetwork` | `setAirplaneMode` `setWifiEnabled` | — | — | ❌ **declare false** |
+| `canHideKeyboard` | `hideKeyboard` | — | not measured: this backend reports no keyboard state (`screen.keyboard` is `null`), and no dismissal has been tried | ❌ **declared false** (#307) until both are |
 
 19 of 20 probes succeeded; the twentieth is `canControlNetwork`, which failed **on purpose** —
 see §5.
@@ -595,6 +596,7 @@ the dependency is **alive**, which is the part worth updating:
   pressKey('home')                        104–197 ms (n=5, mean 164)
   pressKey('wake') on a woken device      424–557 ms (n=5) and it sends nothing — the guard read
   pressKey('back') / ('recents')          refused in under 1 ms, with no round trip at all
+                                          (and 'delete' / 'enter' / 'tab' since #301, the same way)
   swipe 250 ms asked for                  452 ms wall through the backend
   ```
 
@@ -679,10 +681,12 @@ construction. It is also the repository's first registered manifest with a capab
 `missing-capability` refusals in this project that come from a device rather than from a synthetic
 backend — asserted as such in `tests/device/ios-simulator/verb-dispatch.test.ts`.
 
-**`DeviceKey` has four members and iOS answers two of them.** The row that said "two and a half"
-is **corrected in place with its reason rewritten** (2026-09-09, #252, `ai/RULES.md` §1): `wake`
-turned out to be a whole answer rather than half of one, and `back` turned out not to be one at
-all.
+**`DeviceKey` has seven members and iOS answers two of them.** The row that said "two and a
+half" is **corrected in place with its reason rewritten** (2026-09-09, #252, `ai/RULES.md` §1):
+`wake` turned out to be a whole answer rather than half of one, and `back` turned out not to be one
+at all. The three editing keys #301 added are refused for a different reason from `back` and
+`recents` — nobody has measured them here yet, not that the platform lacks them — and #302 is where
+they are measured.
 
 | `DeviceKey` | iOS | Notes |
 |---|---|---|
@@ -690,9 +694,12 @@ all.
 | `wake` | ✅ `HIDButtonType.LOCK`, guarded by a read | LOCK **toggles**, where Android's `KEYCODE_WAKEUP` does not — so the press is conditional on `com.apple.springboard.hasBlankedScreen`, read with `simctl spawn <udid> notifyutil -g <name>` in ~360 ms. **That read exists, which is what decides this row**: from a woken device the first press took the flag to `1` and every press after it toggled `1, 0, 1, 0`, following the press in 1,861 ms going dark and 347 ms coming back, and three guarded `wake`s in a row left it at `0` |
 | `back` | ❌ | **Reversed in place.** This row read "⚠️ left-edge swipe, verified working" on the strength of one drill into Settings → General. Driven through idb on 2026-09-09 the same `2,450 → 300,450` swipe **paged the home screen** on Springboard and did **nothing** on a Settings sheet, both at exit 0 — silent in one direction and wrong in the other, which is the substitute `pressKey` must not make. Refused by name; on iOS back is a control in the app's own UI, which `read_screen` + `tap` reaches by label |
 | `recents` | ❌ | No button, and the app-switcher gesture needs the Indigo *edge bits* (`Indigo.h`: the guest recognises system edge gestures "from these bits, not from the contact coordinates"). idb's swipe does not set them; a slow 1.2 s bottom-edge swipe did nothing. Unreachable without patching idb or sending our own HID messages |
+| `delete` | ❌ refused by name, **unmeasured** — #302 | Added to the vocabulary by #301 as backspace. The candidate is HID keyboard usage 42 (Backspace) over the same `hid` call `typeText` already uses, but `hid` answers success for a usage that does nothing, so it is refused until it has been watched landing. *Unmeasured*, not *no equivalent* |
+| `enter` | ❌ refused by name, **unmeasured** — #302 | Added by #301. Candidate: HID usage 40 (Return). Refused for `delete`'s reason until #302 measures it |
+| `tab` | ❌ refused by name, **unmeasured** — #302 | Added by #301. Candidate: HID usage 43 (Tab). Refused for `delete`'s reason until #302 measures it |
 
 `pressKey` is one method behind one capability, so a backend that declares `canInput` would
-otherwise claim all four keys. **`pressKey` grew the per-key failure** (#215): a key the device has
+otherwise claim every key. **`pressKey` grew the per-key failure** (#215): a key the device has
 no equivalent for is `UnsupportedKeyError`, which reaches the agent as an `unsupported-key` verb
 failure carrying the serial and *the key* — `unsupported-text`'s model one argument down, and
 deliberately distinct from `missing-capability`, because a backend that takes input and lacks one

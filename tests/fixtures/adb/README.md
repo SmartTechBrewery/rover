@@ -17,8 +17,9 @@ one: a parser has to keep working on the API levels already in use.
 
 ## Captures
 
-All from an Android Emulator AVD `Pixel_10_Pro` (`sdk_gphone16k_arm64`, API 37 / Android 17) on
-macOS. `SERIAL` is `emulator-5554`. Everything above the `input` rows was captured
+All but one from an Android Emulator AVD `Pixel_10_Pro` (`sdk_gphone16k_arm64`, API 37 /
+Android 17) on macOS; the exception is the 2026-10-06 `null-root` row, whose own paragraph below
+names the device and host it came from. `SERIAL` is `emulator-5554`. Everything above the `input` rows was captured
 **2026-08-29**: the enumeration, `wm` and `uiautomator` rows with `adb` 37.0.0-14910828, and the
 app-control rows below them (`install-success` onwards) with `adb` 37.0.1-15733141, the version
 that host had by then. Every row dated **2026-08-30** except the four `screenrecord` ones — the
@@ -58,6 +59,7 @@ reports itself as **v1.4**. The two `getprop-version` rows are **2026-08-31**, o
 | `input-text.non-ascii.api37-sdk-gphone16k-arm64.txt` | `adb -s $SERIAL shell input text 'zażółć' > f 2>&1` | sdk_gphone16k_arm64 | 37 | 2026-08-30 |
 | `uiautomator-dump.api37-sdk-gphone16k-arm64.txt` | `adb -s $SERIAL shell uiautomator dump /sdcard/window_dump.xml > f 2>&1` | sdk_gphone16k_arm64 | 37 | 2026-08-30 |
 | `uiautomator-dump.unwritable-path.api37-sdk-gphone16k-arm64.txt` | `adb -s $SERIAL shell uiautomator dump /data/nope/window_dump.xml > f 2>&1` | sdk_gphone16k_arm64 | 37 | 2026-08-30 |
+| `uiautomator-dump.null-root.api36-sdk-gphone64-arm64.txt` | `adb -s $SERIAL shell input keyevent 26` (screen off), then `adb -s $SERIAL shell uiautomator dump /sdcard/window_dump.xml > f 2>&1` | sdk_gphone64_arm64 | 36 | 2026-10-06 |
 | `logcat-threadtime.api37-sdk-gphone16k-arm64.txt` | `adb -s $SERIAL logcat -d -v threadtime -t 60 -b main -b crash` (stdout) | sdk_gphone16k_arm64 | 37 | 2026-08-30 |
 | `logcat-threadtime.crash.api37-sdk-gphone16k-arm64.txt` | the same narrowed to `-t 2 -b crash`, after `adb -s $SERIAL shell am crash com.android.settings` | sdk_gphone16k_arm64 | 37 | 2026-08-30 |
 | `logcat-threadtime.levels.api37-sdk-gphone16k-arm64.txt` | `adb -s $SERIAL shell 'log -p v/d/i/w/e/f -t RoverFixture "<level> line"'` (six commands), then the recipe at `-t 20` | sdk_gphone16k_arm64 | 37 | 2026-08-30 |
@@ -70,6 +72,10 @@ reports itself as **v1.4**. The two `getprop-version` rows are **2026-08-31**, o
 | `screenrecord-pidof.running.api37-sdk-gphone16k-arm64.txt` | `adb -s $SERIAL shell 'sleep 3; pidof screenrecord' > f 2>&1`, run beside a `screenrecord --time-limit 8` | sdk_gphone16k_arm64 | 37 | 2026-08-30 |
 | `screenrecord.finished.api37-sdk-gphone16k-arm64.mp4` | `adb -s $SERIAL shell screenrecord --bit-rate 2000000 --time-limit 3 /sdcard/rover-recording.mp4`, then `adb -s $SERIAL exec-out cat /sdcard/rover-recording.mp4` | sdk_gphone16k_arm64 | 37 | 2026-08-30 |
 | `screenrecord.unfinished.api37-sdk-gphone16k-arm64.mp4` | the same `exec-out cat`, run **three seconds into** a `screenrecord --time-limit 8` | sdk_gphone16k_arm64 | 37 | 2026-08-30 |
+| `dumpsys-window-d.api37-sdk-gphone16k-arm64.txt` | `adb -s $SERIAL shell dumpsys window d`, nothing focused | sdk_gphone16k_arm64 | 37 | 2026-09-10 |
+| `dumpsys-window-d.keyboard-shown.api37-sdk-gphone16k-arm64.txt` | the same, with the Settings search field focused and the on-screen keyboard up | sdk_gphone16k_arm64 | 37 | 2026-10-06 |
+| `dumpsys-window-d.keyboard-shown.api33-tc58.txt` | the same, on a physical device, with the launcher's search field focused and Gboard up | TC58 | 33 | 2026-10-06 |
+| `dumpsys-window-d.keyboard-dismissed.api33-tc58.txt` | the same device after `input keyevent KEYCODE_BACK` closed that keyboard, once its animation ended | TC58 | 33 | 2026-10-06 |
 
 Both `wm` overrides were reset with `wm size reset` / `wm density reset` immediately after the
 capture. The `track-devices` capture leaves the host as it found it the same way: the second entry
@@ -84,10 +90,10 @@ The two network captures come from a session that toggled the emulator's radios 
 ended the way it found them: `settings get global airplane_mode_on` → `0`, `settings get global
 wifi_on` → `1`, `cmd wifi status` → `Wifi is enabled`.
 
-The two `uiautomator-dump.…` captures are the dump command's **own** output, not the document —
+The three `uiautomator-dump.…` captures are the dump command's **own** output, not the document —
 `../../../src/backends/android/parsers/uiautomator.ts` reads them, and the XML above is what
-`parsers/hierarchy.ts` reads. Both were taken with `> f 2>&1` because which stream adb uses is the
-thing being recorded: the confirmation `UI hierchary dumped to: <path>` (adb's typo, not ours)
+`parsers/hierarchy.ts` reads. All three were taken with `> f 2>&1` because which stream adb uses is
+the thing being recorded: the confirmation `UI hierchary dumped to: <path>` (adb's typo, not ours)
 lands on **stdout**, and stderr was empty.
 
 The `unwritable-path` capture is there because of what it proves: `uiautomator dump` printed the
@@ -96,11 +102,25 @@ same confirmation for `/data/nope/window_dump.xml`, exited 0, and wrote nothing 
 about a path, not proof of a file, which is why the backend compares the path rather than treating
 the line's presence as success.
 
-**A dump that failed outright could not be reproduced on this emulator**, and no fixture is
-invented for one. The `ERROR: could not get idle state` shape is widely reported for a screen that
-is animating; three attempts to force it — a dump racing a fling, and five concurrent flings under
-one dump — each returned the ordinary confirmation on 2026-08-30. Capture one beside these if a
-device ever produces it.
+The `null-root` capture is the third, and it is the **one non-confirmation that means *not
+yet*** (#299): with the screen off the automation bridge hands the dump no root node, so it
+prints `ERROR: null root node returned by UiTestAutomationBridge.` and returns normally — the
+line on **stderr**, stdout empty, **exit 0**, no confirmation at all. It is the only fixture here
+from a different host and a different device: an AVD `Medium_Phone_API_36.1`
+(`sdk_gphone64_arm64`, API 36 / Android 16) with `adb` 1.0.41, 2026-10-06, because no API 37
+emulator was attached to the machine that needed it. Issue #299 reported the identical wording
+from a physical **Android 13 / API 33** device on a `read_screen` issued right after a cold
+`launch_app`, which is the same bridge in the same state for a different reason — the screen off
+is simply a way to hold it there on demand. `readScreen` answers it with `UnreadableScreenError`
+rather than the generic refusal, which is what lets the waits poll through it.
+
+**A dump that failed for any *other* reason could not be reproduced on this emulator**, and no
+fixture is invented for one. The `ERROR: could not get idle state` shape is widely reported for a
+screen that is animating; three attempts to force it — a dump racing a fling, and five concurrent
+flings under one dump — each returned the ordinary confirmation on 2026-08-30. It is deliberately
+**not** covered by the `null-root` capture above: a screen that will not settle is a different
+fact from a screen that is not there yet, and only the second is one a wait should poll through.
+Capture one beside these if a device ever produces it.
 
 The hierarchy dump is **Settings → Display & touch**, unscrolled, reached with `adb shell am start
 -a android.settings.DISPLAY_SETTINGS`. It was chosen over the Settings home page because it is the
@@ -195,6 +215,26 @@ a device that is not usable is listed with a null version without any process be
   and are not any more. It is also the attachment case in miniature (D18): two entries, one
   physical emulator, distinguishable only by the serial — which is why the classification reads
   the serial at all.
+
+- **The two `dumpsys window d` captures are a pair, and only the pair is evidence.** The same
+  `InsetsSource id=3 type=ime` line is in both, and what differs is the whole finding: open it reads
+  `frame=[0,1848][1280,2856] visibleFrame=[0,1848][1280,2856] visible=true flags=`, closed it reads
+  `frame=[0,0][0,0] visibleFrame=[0,2712][1280,2856] visible=false flags=INVALID`. So `frame` is the
+  field that means the keyboard and `visibleFrame` keeps a band that is not one — a parser pinned on
+  the closed capture alone could have taken either and looked right. The keyboard-open capture was
+  taken on the AVD `Pixel_9_Pro` (the same `sdk_gphone16k_arm64` system image as the rest of this
+  directory) and needed `settings put secure show_ime_with_hard_keyboard 1` first, because
+  `hw.keyboard=yes` otherwise suppresses the IME entirely; the setting was put back to `0`
+  afterwards. The recipe and the rest of the finding are in `PROJECT.md` §6.
+
+- **The two API 33 captures spell the source differently, and that is why they are here** (#307).
+  Every `InsetsSource` line in them has no `id=` and an `ITYPE_*` type —
+  `InsetsSource type=ITYPE_IME frame=[0,1251][1080,2160] visibleFrame=[0,1251][1080,2160] visible=true`
+  open, `frame=[0,0][0,0] visibleFrame=[0,2016][1080,2160] visible=false` closed — so a parser pinned
+  on the API 37 pair alone read *no keyboard* off the open one. They are from a physical Zebra TC58,
+  not the emulator the rest of this directory comes from; nothing in them needed redacting (no
+  serial, no account), confirmed before committing. The recipe and the back-key finding beside them
+  are in `PROJECT.md` §6.
 
 - **The hierarchy XML has no trailing newline**, and every one of its 75 nodes carries all 19
   attributes — `index`, `text`, `resource-id`, `class`, `package`, `content-desc`, the ten booleans,

@@ -1227,6 +1227,7 @@ describe('deviceInfo', () => {
 				widthDp: 402,
 				heightDp: 874,
 				systemBars: null,
+				keyboard: null,
 			},
 			osVersion: '26.4.1',
 			osApiLevel: null,
@@ -1250,6 +1251,7 @@ describe('deviceInfo', () => {
 			widthDp: 1032,
 			heightDp: 1376,
 			systemBars: null,
+			keyboard: null,
 		});
 	});
 
@@ -2207,14 +2209,18 @@ describe('the input primitives', () => {
 	});
 
 	/**
-	 * **The two refusals, by name, and before any round trip.** `back` and `recents` have no answer
-	 * on this platform in any device state, so asking the enumeration first would spend a call to
-	 * reach the same sentence — and `UnsupportedKeyError` rather than `MissingCapabilityError`,
-	 * because this device does take input and the other three verbs work (#215).
+	 * **The refusals, by name, and before any round trip.** `back` and `recents` have no answer on
+	 * this platform in any device state, and `delete`, `enter` and `tab` have no measured one yet
+	 * (#302), so asking the enumeration first would spend a call to reach the same sentence — and
+	 * `UnsupportedKeyError` rather than `MissingCapabilityError`, because this device does take
+	 * input and the other three verbs work (#215).
 	 */
 	it.each([
 		'back',
 		'recents',
+		'delete',
+		'enter',
+		'tab',
 	] as const)('refuses the %s key by name, without asking the device anything', async (key) => {
 		const thrown = await backend.pressKey(BOOTED, key).catch((error: unknown) => error);
 

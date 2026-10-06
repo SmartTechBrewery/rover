@@ -28,6 +28,7 @@ import {
 	NoRecordingRunningError,
 	RecordingAlreadyRunningError,
 	UnfinishedRecordingError,
+	UnreadableScreenError,
 	UnsupportedKeyError,
 	UnsupportedTextError,
 } from '@/core/errors.js';
@@ -78,6 +79,11 @@ const DENSITY = fixture('wm-density.api37-sdk-gphone16k-arm64.txt');
 const DENSITY_OVERRIDE = fixture('wm-density.override.api37-sdk-gphone16k-arm64.txt');
 const GETPROP = fixture('getprop.api37-sdk-gphone16k-arm64.txt');
 const DISPLAYS = fixture('dumpsys-window-d.api37-sdk-gphone16k-arm64.txt');
+const DISPLAYS_KEYBOARD_SHOWN = fixture(
+	'dumpsys-window-d.keyboard-shown.api37-sdk-gphone16k-arm64.txt',
+);
+const API33_KEYBOARD_SHOWN = fixture('dumpsys-window-d.keyboard-shown.api33-tc58.txt');
+const API33_KEYBOARD_DISMISSED = fixture('dumpsys-window-d.keyboard-dismissed.api33-tc58.txt');
 const OS_VERSION = fixture('getprop-version.api37-sdk-gphone16k-arm64.txt');
 const OS_VERSION_ABSENT = fixture('getprop-version.absent.api37-sdk-gphone16k-arm64.txt');
 const STAT_FILE = fixture('stat.file.api37-sdk-gphone16k-arm64.txt');
@@ -856,6 +862,10 @@ describe('deviceInfo', () => {
 			// The device's own bars, off the same dump — 156 px is 52 dp at this scale, which is
 			// the measurement that stopped this being a constant (PROJECT.md §6).
 			systemBars: { top: 156, bottom: 72, left: 0, right: 0 },
+			// Off the same dump again: this capture was taken with no text field focused, so its
+			// `type=ime` source is there and `visible=false`. A device that answered and has no
+			// keyboard up, which is not the `null` of a device that did not say.
+			keyboard: { shown: false, bounds: null },
 		});
 		// Unrounded on purpose: 1280 ÷ 3 is not a whole number of dp, and rounding it here
 		// would leave no way to ask what the device actually said.
@@ -883,6 +893,30 @@ describe('deviceInfo', () => {
 			widthDp: 360,
 			heightDp: 800,
 			systemBars: { top: 0, bottom: 0, left: 0, right: 0 },
+			// The keyboard is unaffected by the override, and that is the point of asserting it
+			// here: it is read in dp off the density this call measured, not against the
+			// dimensions the insets are measured against.
+			keyboard: { shown: false, bounds: null },
+		});
+	});
+
+	/**
+	 * The other half of the same dump, off the capture taken **with the keyboard open** — the one
+	 * case the committed fixture above cannot show.
+	 *
+	 * The assertion is the **unit**, because that is what the one line in `deviceInfo()` can get
+	 * wrong while every other expectation in this file still passes: the frame is
+	 * `[0,1848][1280,2856]` in the device's own pixels, and at `densityScale` 3 that is
+	 * `y = 616`, `height = 336` dp. A backend that handed the parser the effective dimensions
+	 * instead of the scale — the argument its neighbour takes — would report pixels and a verb
+	 * comparing a touch point against them would be off by a factor of three.
+	 */
+	it('reports the keyboard rectangle in dp when the device says one is up', async () => {
+		answers({ ...FACTS, 'shell dumpsys window d': DISPLAYS_KEYBOARD_SHOWN });
+
+		expect((await backend.deviceInfo(SERIAL)).screen.keyboard).toEqual({
+			shown: true,
+			bounds: { x: 0, y: 616, width: 1280 / 3, height: 336 },
 		});
 	});
 
@@ -2209,7 +2243,53 @@ describe('readScreen', () => {
 
 		await expect(failure).rejects.toThrow(/could not get idle state/);
 		await expect(failure).rejects.toThrow(/emulator-5554/);
+		// Not the typed "no screen yet": a screen that will not *settle* is a different fact
+		// from one that is not there, and the waits poll through only the second. This is the
+		// proof the typed case did not become a catch-all over every dump that confirmed
+		// nothing (#299).
+		await expect(failure).rejects.not.toBeInstanceOf(UnreadableScreenError);
 		expect(argvOf()).not.toContainEqual(CAT_ARGV);
+	});
+
+	/**
+	 * The transient screen #299 is about: the process is up and the window it would describe
+	 * is not, which is what reading in the instant after a cold `launch_app` looks like. The
+	 * dump prints its complaint and exits 0, so the confirmation line is simply absent — and
+	 * without the typed error that arrives at the verb layer as an anonymous `Error`, which
+	 * ends a wait on its first poll.
+	 */
+	const NULL_ROOT = 'ERROR: null root node returned by UiTestAutomationBridge.\n';
+
+	it.each([
+		['stderr', { stdout: '', stderr: NULL_ROOT }],
+		// Which stream adb puts real output on is not stable (PROJECT.md §6), so the backend
+		// reads both rather than trusting the one the platform writes to.
+		['stdout', { stdout: NULL_ROOT, stderr: '' }],
+	])('names a dump with no window of its own, on %s', async (_stream, dumped) => {
+		reads({ [DUMP_ARGV.join(' ')]: dumped });
+
+		const thrown = await backend.readScreen(SERIAL).catch((error: unknown) => error);
+
+		expect(thrown).toBeInstanceOf(UnreadableScreenError);
+		const unreadable = thrown as UnreadableScreenError;
+		expect(unreadable.serial).toBe(SERIAL);
+		// The device's own words travel, because a wait puts them in its timeout's "found".
+		expect(unreadable.reason).toContain('null root node returned by UiTestAutomationBridge');
+		expect(unreadable.message).toContain(SERIAL);
+		// The stale-file guard still holds on this path: a dump that confirmed nothing is
+		// never followed by a `cat`, and the file it may have left is still removed.
+		expect(argvOf()).not.toContainEqual(CAT_ARGV);
+		expect(argvOf()).toContainEqual(RM_ARGV);
+	});
+
+	// No retry inside the primitive: a retry loop is a wait, and waits belong to the wait
+	// vocabulary (D12(b)). A second read here would hide the first one's answer.
+	it('asks the device exactly once when it had no window to dump', async () => {
+		reads({ [DUMP_ARGV.join(' ')]: { stdout: '', stderr: NULL_ROOT } });
+
+		await expect(backend.readScreen(SERIAL)).rejects.toBeInstanceOf(UnreadableScreenError);
+
+		expect(argvOf().filter((argv) => argv.includes('uiautomator'))).toHaveLength(1);
 	});
 
 	// Still removes the file it may have left behind: a stale document deleted now is one
@@ -2779,7 +2859,7 @@ describe('typeText', () => {
 
 describe('pressKey', () => {
 	/**
-	 * All four keycodes pinned, for the reason the environment pair's four literals are: no
+	 * Every keycode pinned, for the reason the environment pair's four literals are: no
 	 * type can catch a wrong one, and neither can the device — `input keyevent NOT_A_KEY`
 	 * exits 0 with zero bytes on both streams, so a typo here is a key that reports success
 	 * and does nothing at all.
@@ -2789,6 +2869,9 @@ describe('pressKey', () => {
 		['home', 'KEYCODE_HOME'],
 		['recents', 'KEYCODE_APP_SWITCH'],
 		['wake', 'KEYCODE_WAKEUP'],
+		['delete', 'KEYCODE_DEL'],
+		['enter', 'KEYCODE_ENTER'],
+		['tab', 'KEYCODE_TAB'],
 	] as const)('presses %s as %s', async (key, keycode) => {
 		answers({ [`shell input keyevent ${keycode}`]: '' });
 
@@ -2819,7 +2902,7 @@ describe('pressKey', () => {
 	 * the per-key refusal `unsupported-key` carries (#215) — pinned rather than left to
 	 * inspection, because "nothing changed" is the one claim a reader cannot check.
 	 *
-	 * Read off `DeviceKeySchema` rather than listed again: a fifth key added to the vocabulary
+	 * Read off `DeviceKeySchema` rather than listed again: a key added to the vocabulary
 	 * with no mapping here goes red on this loop, instead of quietly acquiring a refusal path
 	 * this backend was never meant to have.
 	 */
@@ -2829,6 +2912,9 @@ describe('pressKey', () => {
 			'shell input keyevent KEYCODE_HOME': '',
 			'shell input keyevent KEYCODE_APP_SWITCH': '',
 			'shell input keyevent KEYCODE_WAKEUP': '',
+			'shell input keyevent KEYCODE_DEL': '',
+			'shell input keyevent KEYCODE_ENTER': '',
+			'shell input keyevent KEYCODE_TAB': '',
 		});
 
 		let thrown: unknown = null;
@@ -2843,6 +2929,58 @@ describe('pressKey', () => {
 		expect(thrown).toBeNull();
 		expect(thrown).not.toBeInstanceOf(UnsupportedKeyError);
 		expect(runAdbOnDevice).toHaveBeenCalledTimes(1);
+	});
+});
+
+/**
+ * **Never an unconditional back** (#307). `KEYCODE_BACK` closes an open keyboard and, with none
+ * open, leaves the screen — measured on API 33 (PROJECT.md §6) — so these pin that the press is
+ * issued only behind a read that says a keyboard is up, and exactly once when it is.
+ */
+describe('hideKeyboard', () => {
+	const READ = 'shell dumpsys window d';
+	const BACK = 'shell input keyevent KEYCODE_BACK';
+
+	function issued(): string[] {
+		return runAdbOnDevice.mock.calls.map(([, args]) => args.join(' '));
+	}
+
+	it.each([
+		['API 37, nothing focused', DISPLAYS],
+		['API 33, after the keyboard was dismissed', API33_KEYBOARD_DISMISSED],
+	])('issues no input command when the device says no keyboard is up (%s)', async (_name, dump) => {
+		answers({ [READ]: dump, [BACK]: '' });
+
+		await backend.hideKeyboard(SERIAL);
+
+		expect(issued()).toEqual([READ]);
+	});
+
+	it.each([
+		['API 37', DISPLAYS_KEYBOARD_SHOWN],
+		['API 33', API33_KEYBOARD_SHOWN],
+	])('presses back exactly once when the device says a keyboard is up (%s)', async (_name, dump) => {
+		answers({ [READ]: dump, [BACK]: '' });
+
+		await backend.hideKeyboard(SERIAL);
+
+		expect(issued()).toEqual([READ, BACK]);
+		expect(runAdbOnDevice.mock.calls.every(([serial]) => serial === SERIAL)).toBe(true);
+	});
+
+	// `null` is *this device did not say*: pressing might navigate, and not pressing would answer
+	// `ok` for a keyboard that may still be covering the target.
+	it('refuses a dump with no insets state rather than guessing either way', async () => {
+		answers({ [READ]: 'WINDOW MANAGER DISPLAY CONTENTS\n  Display: mDisplayId=0\n', [BACK]: '' });
+
+		await expect(backend.hideKeyboard(SERIAL)).rejects.toThrow(/no InsetsState/);
+		expect(issued()).toEqual([READ]);
+	});
+
+	it('throws when the press is answered with anything', async () => {
+		answers({ [READ]: DISPLAYS_KEYBOARD_SHOWN, [BACK]: INPUT_REFUSAL });
+
+		await expect(backend.hideKeyboard(SERIAL)).rejects.toThrow(/input keyevent KEYCODE_BACK/);
 	});
 });
 

@@ -50,6 +50,12 @@
  * dispatches is the conformance failure, and the flag itself did not move, because stopping a
  * recording you are holding open and stopping one somebody abandoned are the same ability.
  *
+ * `canHideKeyboard` flips here (#307), on `canRecordVideo`'s seam: it names exactly one method,
+ * `hideKeyboard`, and this backend now answers it — `dumpsys window d` read for the keyboard's
+ * state, and `input keyevent KEYCODE_BACK` pressed **only when that read says one is up**, because
+ * the same key navigates back when none is (verified on API 33, `PROJECT.md` §6). The
+ * `hide_keyboard` verb over it landed in the same change and is not what moves the flag.
+ *
  * **Every flag in this manifest is now `true`, so nothing here is a declared opt-out.**
  * That is a statement about this backend, not about the model: a capability declared
  * before its methods exist is exactly the "an agent is told a device can do something it
@@ -71,5 +77,6 @@ export const androidCapabilityManifest: CapabilityManifestInput = {
 		canControlNetwork: true,
 		canRecordVideo: true,
 		canControlRecording: true,
+		canHideKeyboard: true,
 	},
 };
