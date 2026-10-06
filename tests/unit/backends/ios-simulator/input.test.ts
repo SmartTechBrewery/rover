@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
 	buttonEvents,
+	CLEAR_TEXT_EVENTS,
 	DEVICE_KEYS,
 	isScreenBlanked,
+	keyEvents,
 	READ_SCREEN_BLANKED_ARGV,
 	SCREEN_BLANKED_NOTIFICATION,
 	swipeEvents,
@@ -36,19 +38,13 @@ describe('DEVICE_KEYS', () => {
 		expect(DEVICE_KEYS.recents).toHaveProperty('noEquivalent');
 	});
 
-	// Refused until #302 watches them land, because `hid` answers success for a usage that does
-	// nothing — and the reason says so, naming the candidate usage rather than claiming the
-	// platform has no such key.
-	it.each([
-		['delete', 42],
-		['enter', 40],
-		['tab', 43],
-	] as const)('refuses the unmeasured %s key, naming HID usage %i and #302', (key, usage) => {
-		const answer = DEVICE_KEYS[key];
-
-		expect(answer).toHaveProperty('noEquivalent');
-		expect('noEquivalent' in answer && answer.noEquivalent).toContain(`HID usage ${usage}`);
-		expect('noEquivalent' in answer && answer.noEquivalent).toContain('#302');
+	// The keyboard keys, pinned literally for the reason above: each usage was watched landing
+	// (#302) — backspace deleted, Return opened Spotlight's top hit, Tab moved focus to the next
+	// field — and a transposed digit here would press a different key in silence.
+	it('presses delete, enter and tab as HID usages 42, 40 and 43', () => {
+		expect(DEVICE_KEYS.delete).toEqual({ keycode: 42 });
+		expect(DEVICE_KEYS.enter).toEqual({ keycode: 40 });
+		expect(DEVICE_KEYS.tab).toEqual({ keycode: 43 });
 	});
 
 	// The compile-time exhaustiveness is `satisfies Record<DeviceKey, KeyAnswer>`; this is the
@@ -64,7 +60,7 @@ describe('DEVICE_KEYS', () => {
 	 * sentence rather than a flag is that it is what the agent is told (`UnsupportedKeyError`).
 	 */
 	it('gives each refused key a reason a caller can act on', () => {
-		for (const key of ['back', 'recents', 'delete', 'enter', 'tab'] as const) {
+		for (const key of ['back', 'recents'] as const) {
 			const answer = DEVICE_KEYS[key];
 			expect('noEquivalent' in answer && answer.noEquivalent.length).toBeGreaterThan(40);
 		}
@@ -217,6 +213,52 @@ describe('buttonEvents', () => {
 		expect(
 			buttonEvents('LOCK').map((event) => ('press' in event ? event.press.direction : null)),
 		).toEqual(['DOWN', 'UP']);
+	});
+});
+
+describe('keyEvents', () => {
+	it('presses and releases the key, in that order', () => {
+		expect(keyEvents(42)).toEqual([
+			{ press: { action: { key: { keycode: 42 } }, direction: 'DOWN' } },
+			{ press: { action: { key: { keycode: 42 } }, direction: 'UP' } },
+		]);
+	});
+
+	// The same pair typing sends for an unshifted character, so a key pressed and a key typed are
+	// one shape on the wire.
+	it('builds what typeTextEvents builds for an unshifted key', () => {
+		expect(keyEvents(4)).toEqual(typeTextEvents('a'));
+	});
+});
+
+describe('CLEAR_TEXT_EVENTS', () => {
+	const pressed = (): [number, string][] =>
+		CLEAR_TEXT_EVENTS.map((event) => {
+			if (!('press' in event) || !('key' in event.press.action)) {
+				throw new Error('a clear is key presses only');
+			}
+			return [event.press.action.key.keycode, event.press.direction];
+		});
+
+	/**
+	 * Pinned literally, for {@link DEVICE_KEYS}' reason — and the order is the recipe: Command held
+	 * over `a`, released, **then** backspace, so the backspace is a plain one rather than
+	 * Cmd+Backspace. Watched emptying a field in one stream (#302).
+	 */
+	it('is Cmd+A, released, then backspace', () => {
+		expect(pressed()).toEqual([
+			[227, 'DOWN'],
+			[4, 'DOWN'],
+			[4, 'UP'],
+			[227, 'UP'],
+			[42, 'DOWN'],
+			[42, 'UP'],
+		]);
+	});
+
+	it('selects with the same usage typing sends for a, and deletes with the delete key', () => {
+		expect(CLEAR_TEXT_EVENTS.slice(1, 3)).toEqual(typeTextEvents('a'));
+		expect(CLEAR_TEXT_EVENTS.slice(4)).toEqual(keyEvents(DEVICE_KEYS.delete.keycode));
 	});
 });
 

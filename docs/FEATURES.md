@@ -88,13 +88,14 @@ started `false` and have since flipped to `true`. `canHideKeyboard` (#307) is th
 and not a permanent one: the simulator reports no keyboard state yet and no dismissal has been
 measured on it, so it says so by name until both are.
 
-**Refusals get finer than a flag.** `press_key` on a simulator answers `home` and `wake` and
-refuses `back` and `recents` as `unsupported-key`, naming the key — and refuses the editing keys
-`delete`, `enter` and `tab` the same way until #302 has watched them land — a device that takes input
-saying so about *one key* rather than claiming it takes none. That is a different answer from
-`missing-capability` on purpose: one says try another key, the other says try another device.
-`type_text`'s `clear` is refused there the same way, as `unsupported-clear`, and for the same
-reason (#309, #302).
+**Refusals get finer than a flag.** `press_key` on a simulator answers `home`, `wake` and the
+editing keys `delete`, `enter` and `tab`, and refuses `back` and `recents` as `unsupported-key`,
+naming the key — a device that takes input saying so about *one key* rather than claiming it takes
+none. That is a different answer from `missing-capability` on purpose: one says try another key,
+the other says try another device. The editing keys and `type_text`'s `clear` were refused there
+the same way until #302 watched each of them land through `hid`, which answers success even for a
+key that does nothing; they are HID usages 42, 40 and 43, and the clear is Cmd+A then backspace in
+one stream (`docs/IOS.md` §5).
 
 **Where it lives.** `src/core/device.ts`, `src/core/capabilities.ts`, `src/backends/`,
 `docs/IOS.md` (every iOS claim measured, with the traps), `PROJECT.md` D10, §5.
@@ -1213,8 +1214,9 @@ holding a subset of what its lease wrote.
   depends on the agent's attention, not on the tool.
 - **The two platforms are not equally capable, and Rover says which is which.** A simulator answers
   every required call, records video, reads the screen and takes input, and refuses the network
-  toggles **by name**; `press_key` answers `home` and `wake` and refuses `back` and `recents` by
-  name, and `delete`, `enter` and `tab` by name until they are measured (#302). **Physical iPhones are not supported at all.**
+  toggles **by name**; `press_key` answers `home`, `wake`, `delete`, `enter` and `tab` (the last
+  three measured in #302) and refuses `back` and `recents` by name, and `type_text`'s `clear`
+  works there too. **Physical iPhones are not supported at all.**
 - **Pixels are gone whenever an app blocks screen capture** — the system hands back a valid, all
   black image and logs nothing. The check that tells a blocked capture from a broken device is a
   screenshot of the system home screen. `read_screen` survives the block and answers in full.

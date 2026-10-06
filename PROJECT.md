@@ -150,7 +150,7 @@ Working names. All of them take a device handle, and over the wire that handle i
 | `tap` | By text or element id; coordinates are the fallback. **A point under the on-screen keyboard is refused** (#308) as a `covered-by-keyboard` verb failure carrying the serial, what was looked for, the element (or `null` for a coordinate), the point and the keyboard's rectangle, and naming `hide_keyboard` as the way out — never tapped onto a key and answered `ok`, never silently re-aimed at something visible (§6). Only the point is checked, so an element half under the keyboard whose centre is clear is tapped; a device that says a keyboard is up without a rectangle refuses nothing. **The keyboard's own surface is accepted as unreachable**: with no caller-facing opt-out, `press_key` and `type_text` are the whole vocabulary for it while one is up, so an IME key with no `press_key` equivalent cannot be touched |
 | `long_press` | Implemented as a drag in place with a duration. Refused under the keyboard exactly as `tap` is |
 | `swipe` / `scroll` | **Only where the drag starts** is refused under the keyboard: `swipe`'s `from`, and `scroll`'s own start, which is computed a quarter into the region rather than resolved and so is checked by the verb itself — `scroll` resolves its region with that check off, since the region's centre is a point the gesture never touches and a list laid out whole behind the keyboard would otherwise be refused for a drag starting clear of it. Where a drag ends is not checked — it does not decide who reads the drag |
-| `type_text` | Hides the device shell's quoting, so a space, an apostrophe and a shell metacharacter all arrive verbatim. **Non-ASCII it cannot hide — `input text` cannot type it at all** (§6), so the honest answer is a refusal naming the character rather than a silent drop. That refusal is an `unsupported-text` verb failure carrying the serial, the string and the offending characters as escapes, **not** an `internal_error`: the string is the caller's and it is the caller who can fix it (#61). **No target** — an agent taps the field first. **`clear: true` empties the focused field first** (#309), so the text replaces the old value; with `text: ''` it only clears. That is a fifth `canInput` primitive, `clearText` — select all, then backspace, never a guessed count, because nothing says how long a field's text is and a password field reads back masked (§6) — and the verb calls it before typing inside one action, so a device that cannot clear refuses **before anything is typed**, as an `unsupported-clear` verb failure carrying the serial and the backend's reason: never a silent no-op, never `missing-capability`, never `internal_error`. The iOS simulator refuses it until #302 measures a recipe |
+| `type_text` | Hides the device shell's quoting, so a space, an apostrophe and a shell metacharacter all arrive verbatim. **Non-ASCII it cannot hide — `input text` cannot type it at all** (§6), so the honest answer is a refusal naming the character rather than a silent drop. That refusal is an `unsupported-text` verb failure carrying the serial, the string and the offending characters as escapes, **not** an `internal_error`: the string is the caller's and it is the caller who can fix it (#61). **No target** — an agent taps the field first. **`clear: true` empties the focused field first** (#309), so the text replaces the old value; with `text: ''` it only clears. That is a fifth `canInput` primitive, `clearText` — select all, then backspace, never a guessed count, because nothing says how long a field's text is and a password field reads back masked (§6) — and the verb calls it before typing inside one action, so a device that cannot clear refuses **before anything is typed**, as an `unsupported-clear` verb failure carrying the serial and the backend's reason: never a silent no-op, never `missing-capability`, never `internal_error`. The iOS simulator refused it until a recipe was measured; #302 measured Cmd+A then backspace in one HID stream, and it clears there too (§6) |
 | `press_key` | Back, home, recents, wake — and, since #301, the editing keys `delete` (backspace, never forward delete), `enter` (whatever the focused control does with it) and `tab` (focus to the next control). An optional `times` (1 to `MAX_KEY_PRESSES`, 20; default 1) repeats the press in one call, **composed in the verb rather than the backend**, with one after-state after the last press; zero is `invalid_params`, because pressing nothing would report a success. **No target**, so it needs no screen read to aim, which makes it the one input verb provable end to end on hardware before `read_screen` (R13). The keys are **one vocabulary, not a promise every platform has all of them**: a backend with no equivalent for one of them refuses **that key by name** — an `unsupported-key` verb failure carrying the serial and the key — deliberately not `missing-capability` and not `internal_error`, because a backend that takes input and lacks one key is a narrower backend rather than a broken one (#215) |
 | `hide_keyboard` | Puts the on-screen keyboard away **if one is up, and presses nothing if none is** (#307). **Never an unconditional `back`**: on Android back closes an open keyboard and, with none open, leaves the screen (§6), so the backend reads the keyboard's state from the same dump `screen.keyboard` comes from and presses only when it says one is up. The decision and the gesture are the backend's; the verb layer neither branches on the platform nor assumes a back key exists. Its own capability, `canHideKeyboard` — `true` on Android, `false` on the iOS simulator until a recipe is measured there, where the call answers `missing-capability` naming the flag and the device. **No target**; the after-state's `screen.keyboard` is the evidence it worked |
 
@@ -1967,6 +1967,51 @@ through a daemon built from this change (`tap`, `type_text`, `type_text { clear:
   true }` read `right`, and focus stayed in the field.
 - **Not checked: a multi-line field.** The device has no SIM, so Messages offers no compose box,
   and no other multi-line field was at hand without creating content on the device.
+
+### `delete`, `enter`, `tab` and clearing a field on the iOS simulator (2026-10-06, #302)
+
+Checked on a booted **iPhone 17** simulator on **iOS 26.5**, Xcode 27.0 (27A266a), macOS 26.6.2,
+an `idb_companion` built 2026-09-01, the simulator set to Polish. Driven first through this
+checkout's own backend (`pressKey`, `clearText`, `typeText`, `readScreen`), with the keys sent as
+raw HID usages before the table pressed them, and then end to end over a lease through a daemon
+built from the change. Every step's evidence is a screen read, because `hid` answers an empty
+success for any usage, including one that does nothing (`docs/IOS.md` §4).
+
+- **`delete` is HID keyboard usage 42 (Backspace).** Spotlight's field: `zzqqxx` → one press →
+  `zzqqx`; over the wire `press_key { key: 'delete', times: 3 }` → `zzq`. On an empty field it did
+  nothing visible and failed nothing. **The trap: Spotlight's inline completion.** With one showing
+  (the field reads `giotto, Sugestia giotto`), the first backspace dismisses the completion and
+  deletes nothing, so `rover` typed into an empty field needed six presses to empty. That is the
+  field's behaviour, and a hardware keyboard does the same.
+- **`enter` is HID usage 40 (Return), and what it does belongs to the focused control.** In
+  Spotlight, `safari` then `enter` opened Safari, its top hit; a query with no hit left Spotlight as
+  it was; in the last field of Contacts' new-contact form it moved focus back to the first field.
+  **Over the wire, the after-state of an `enter` that launches an app came back `failed`**, as a
+  read of a screen that had not drawn yet. That is the post-state being honest about a screen in
+  transition, and the next read showed Safari.
+- **`tab` is HID usage 43 (Tab), and it moves focus to the next field.** In Contacts' new-contact
+  form (`com.apple.MobileAddressBook`, *Add*): tap the first field, `type_text 'alpha'`, `press_key
+  tab`, `type_text 'beta'`, `press_key tab`, `type_text 'gamma'` → First, Last and Company each held
+  one word (auto-capitalised). So it is pressed, not refused. As on Android a read carries no focus
+  flag, and the typed text landing is the only evidence of where focus went. It inserts no
+  character, which is why `type_text` still refuses `\t`. **There is no device case for it**: the
+  form is reached through a button found by its label, and `tests/device/ios-simulator/input.test.ts`
+  matches on nothing a locale translates.
+- **`clearText` is Left GUI (227) held over `a` (4), released, then Backspace (42), in one `hid`
+  stream** (`CLEAR_TEXT_EVENTS`, `src/backends/ios-simulator/input.ts`). The select-all is honoured
+  before the backspace in the same stream, so the two-stream fallback the plan carried was not
+  needed and was not shipped. Spotlight: `giottozzqqxx` → the placeholder; caret moved to the start
+  of `Zabcdefghijkl` → the placeholder (the whole value, not just what lay before the caret); a
+  field showing an inline completion → the placeholder; an empty field → accepted, unchanged.
+  Contacts' Company field → its placeholder. Over the wire, `type_text { text: 'zzqqxx', clear:
+  true }` replaced a leftover query, `{ text: '', clear: true }` left the placeholder, and two
+  `clear: true` calls in a row in Contacts left `Delta` where `Gamma` had been. **An emptied field
+  reads back as its placeholder** (`Szukaj`, `Firma`), the same as an Android hint.
+- **Latency.** One warm `hid` stream of any of these took 15–18 ms for the first call on a
+  companion and 1–2 ms after that. A call that has to start the companion is ~0.4 s. Through the
+  verb, including its after-read: `press_key` 0.6–0.9 s, `type_text` with `clear` 0.7–0.9 s.
+- **Not checked: a secure (password) field**, since none was reachable on the bench without a
+  passcode or network, and **a multi-line text view**.
 
 ---
 

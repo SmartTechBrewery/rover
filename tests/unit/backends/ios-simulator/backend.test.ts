@@ -32,7 +32,6 @@ import {
 	RecordingAlreadyRunningError,
 	UnfinishedRecordingError,
 	UnreadableScreenError,
-	UnsupportedClearError,
 	UnsupportedKeyError,
 	UnsupportedTextError,
 } from '@/core/errors.js';
@@ -2218,6 +2217,8 @@ describe('the input primitives', () => {
 		['swipe', () => backend.swipe(IPHONE_17_PRO, { x: 1, y: 1 }, { x: 2, y: 2 }, 100)],
 		['typeText', () => backend.typeText(IPHONE_17_PRO, 'a')],
 		['pressKey', () => backend.pressKey(IPHONE_17_PRO, 'home')],
+		['pressKey delete', () => backend.pressKey(IPHONE_17_PRO, 'delete')],
+		['clearText', () => backend.clearText(IPHONE_17_PRO)],
 	])('refuses %s on a device that is not booted, without reaching for a companion', async (_what, inject) => {
 		await expect(inject()).rejects.toThrow(/'offline' rather than ready/);
 
@@ -2281,18 +2282,33 @@ describe('the input primitives', () => {
 	});
 
 	/**
+	 * The keyboard keys are one HID usage each, pressed unconditionally — a keyboard key does not
+	 * toggle, so nothing is read before it the way `wake` reads the blanked flag (#302).
+	 */
+	it.each([
+		['delete', 42],
+		['enter', 40],
+		['tab', 43],
+	] as const)('presses %s as HID usage %i, without reading any state first', async (key, usage) => {
+		await backend.pressKey(BOOTED, key);
+
+		expect(companionStream).toHaveBeenCalledTimes(1);
+		expect(companionStream).toHaveBeenCalledWith(BOOTED, 'hid', [
+			{ press: { action: { key: { keycode: usage } }, direction: 'DOWN' } },
+			{ press: { action: { key: { keycode: usage } }, direction: 'UP' } },
+		]);
+		expect(runSimctlOnDevice).not.toHaveBeenCalled();
+	});
+
+	/**
 	 * **The refusals, by name, and before any round trip.** `back` and `recents` have no answer on
-	 * this platform in any device state, and `delete`, `enter` and `tab` have no measured one yet
-	 * (#302), so asking the enumeration first would spend a call to reach the same sentence — and
-	 * `UnsupportedKeyError` rather than `MissingCapabilityError`, because this device does take
-	 * input and the other three verbs work (#215).
+	 * this platform in any device state, so asking the enumeration first would spend a call to
+	 * reach the same sentence — and `UnsupportedKeyError` rather than `MissingCapabilityError`,
+	 * because this device does take input and the other three verbs work (#215).
 	 */
 	it.each([
 		'back',
 		'recents',
-		'delete',
-		'enter',
-		'tab',
 	] as const)('refuses the %s key by name, without asking the device anything', async (key) => {
 		const thrown = await backend.pressKey(BOOTED, key).catch((error: unknown) => error);
 
@@ -2304,20 +2320,22 @@ describe('the input primitives', () => {
 	});
 
 	/**
-	 * `clearText` is refused the way `delete` is, for its reason: its candidate (Cmd+A, then
-	 * backspace) has not been watched landing through `hid`, which answers success for usages
-	 * that do nothing (#302). `UnsupportedClearError`, never `MissingCapabilityError`, and before
-	 * any round trip.
+	 * `clearText` is Cmd+A then backspace in **one** stream — one was enough on every field it was
+	 * watched clearing (#302) — and it reads nothing first, because a select-all needs no length.
 	 */
-	it('refuses clearText by name, without asking the device anything', async () => {
-		const thrown = await backend.clearText(BOOTED).catch((error: unknown) => error);
+	it('clears with select-all then backspace in one stream', async () => {
+		await backend.clearText(BOOTED);
 
-		expect(thrown).toBeInstanceOf(UnsupportedClearError);
-		expect((thrown as UnsupportedClearError).serial).toBe(BOOTED);
-		expect((thrown as UnsupportedClearError).message).toContain('#302');
-		expect(runSimctl).not.toHaveBeenCalled();
+		expect(companionStream).toHaveBeenCalledTimes(1);
+		expect(companionStream).toHaveBeenCalledWith(BOOTED, 'hid', [
+			{ press: { action: { key: { keycode: 227 } }, direction: 'DOWN' } },
+			{ press: { action: { key: { keycode: 4 } }, direction: 'DOWN' } },
+			{ press: { action: { key: { keycode: 4 } }, direction: 'UP' } },
+			{ press: { action: { key: { keycode: 227 } }, direction: 'UP' } },
+			{ press: { action: { key: { keycode: 42 } }, direction: 'DOWN' } },
+			{ press: { action: { key: { keycode: 42 } }, direction: 'UP' } },
+		]);
 		expect(runSimctlOnDevice).not.toHaveBeenCalled();
-		expect(companionStream).not.toHaveBeenCalled();
 	});
 
 	/** A companion that died is an interruption and reaches the caller as itself, never a device fault. */
@@ -3273,8 +3291,7 @@ describe('the capabilities this backend does not declare', () => {
 	 * change that flipped a flag and forgot a method would otherwise have left this file agreeing
 	 * with the old shape. **`canInput` cannot move by halves** —
 	 * `CAPABILITY_METHODS.canInput` names all five, so a manifest declaring it with four of them
-	 * implemented fails the conformance gate. `clearText` is present and refuses by name (#309),
-	 * which is an answer; absent would not be.
+	 * implemented fails the conformance gate.
 	 */
 	it('ships every method the manifest declares a capability for', () => {
 		expect(contract().readScreen).toBeTypeOf('function');

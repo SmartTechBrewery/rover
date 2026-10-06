@@ -38,19 +38,19 @@
  * **`canInput` is the fourth and last, and it flips here** (#252, `PROJECT.md` R46/R47 phase 5).
  * It named four methods then — `tap`, `swipe`, `typeText` **and** `pressKey` — so it could not move
  * for three of them, which is what kept it `false` while the transport was already in place; it
- * names five now (`clearText`, below). All four that act go through one client-streaming `hid` call on the same companion `readScreen` uses, and each is
+ * names five now (`clearText`, below). All five go through one client-streaming `hid` call on the same companion `readScreen` uses, and each is
  * verified against a device by **reading the screen back** rather than by a return code, because
  * that call answers an empty message and answers it just as happily for a keycode that does not
  * exist (`src/backends/ios-simulator/input.ts`).
  *
  * **`pressKey` is where declaring this capability stops being a boolean.** `DeviceKey` has seven
- * members and this platform presses two of them: `home` and `wake` are pressed, `back` and
- * `recents` are refused **by name** with `UnsupportedKeyError` (#215), and so are `delete`,
- * `enter` and `tab` until #302 measures them — each reaching the agent as an `unsupported-key`
- * failure carrying the serial and the key. **`clearText` (#309) is the fifth method behind the
- * flag and is refused the same way**, with `UnsupportedClearError` naming the serial, for
- * `delete`'s reason: its candidate has not been watched landing (#302). That is not a hole in this
- * manifest — it is what the per-argument refusals exist for, and the alternative shapes are both
+ * members and this platform presses five of them: `home` and `wake` are buttons, `delete`,
+ * `enter` and `tab` are keyboard keys watched landing before they were pressed (#302), and `back`
+ * and `recents` are refused **by name** with `UnsupportedKeyError` (#215) — each reaching the
+ * agent as an `unsupported-key` failure carrying the serial and the key. **`clearText` (#309) is
+ * the fifth method behind the flag**, and it is answered with Cmd+A then backspace, measured the
+ * same way (#302). The two refusals are not a hole in this
+ * manifest — they are what the per-argument refusals exist for, and the alternative shapes are both
  * worse: a flag per key would put seven booleans behind one method and make `canInput` mean
  * nothing (D11), while declaring `canInput: false` to dodge two keys would refuse tapping, swiping and typing,
  * which work. `wake` is a *conditional* press for the same honesty: the button behind it toggles,
