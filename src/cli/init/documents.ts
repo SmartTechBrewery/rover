@@ -461,6 +461,12 @@ function theVerbs(): string[] {
  * into its environment, and an install task run without that pin lands on **every** attached
  * device (`docs/MANUAL.md`, "A Gradle install, and why it names the device"). On a shared host
  * the other ones are other agents' leases, which is exactly how #312 happened.
+ *
+ * **The simulator route is named beside it** (#306). `xcodebuild` and `simctl install booted` are
+ * the same bypass on the other platform: `booted` is whichever booted simulator the tool picks,
+ * and on a shared host that can be a neighbour's lease. The hook `rover init` proposes for an
+ * Xcode project pins both steps to the leased simulator's UDID instead (`docs/MANUAL.md`, "An
+ * Xcode install, and why it names the simulator").
  */
 function theRules(): string[] {
 	return [
@@ -495,11 +501,13 @@ function theRules(): string[] {
 		'  the screen when none is open.',
 		'- **A missing capability fails loudly, by name** — the capability, the serial, the platform.',
 		'  That is an honest "this device cannot do that". Do not route around it with `adb`.',
-		"- **Never run a build tool's install task yourself.** `./gradlew install<Variant>` and its",
-		'  equivalents install onto **every** device attached to the host unless they are pinned to',
-		'  one, and the others are leased to other agents. Installing is `install_app`: it runs the',
-		'  install this project declares, pinned to the device you hold. If it answers',
-		'  `install-hook-undeclared`, the fix is to get the hook declared, not to work around it.',
+		"- **Never run a build tool's install task yourself.** `./gradlew install<Variant>`, `xcodebuild`",
+		'  followed by `xcrun simctl install booted …`, and their equivalents install onto a device',
+		'  your lease did not give you — **every** device attached to the host, or whichever booted',
+		'  simulator the tool picks — and the others are leased to other agents. Installing is',
+		'  `install_app`: it runs the install this project declares, pinned to the device you hold.',
+		'  If it answers `install-hook-undeclared`, the fix is to get the hook declared, not to work',
+		'  around it.',
 		'- **A refusal is not a pass.** `held`, `gone`, `not-attached`, `not-ready` and',
 		'  `service-failed` are five different next moves, and none of them is "carry on as though',
 		'  the check ran". If you could not get a device, report that the manual test did not happen.',

@@ -1,6 +1,6 @@
 /**
- * The HID events behind four of the five `canInput` primitives — the pure half of this platform's
- * input vocabulary. The fifth, `clearText`, sends nothing yet: {@link CLEAR_TEXT_REFUSAL}.
+ * The HID events behind all five `canInput` primitives — the pure half of this platform's input
+ * vocabulary.
  *
  * `../android/input.ts`'s sibling and deliberately its shape: arithmetic and vocabulary, no
  * process. `./idb-client.js` owns the channel, `./backend.ts` is the join, and everything here is
@@ -36,8 +36,8 @@ import type { DeviceKey, Point } from '../../core/device.js';
 export type IdbButton = 'HOME' | 'LOCK';
 
 /**
- * What this platform answers for one key of the neutral vocabulary: a button to press, or no
- * equivalent at all and the reason there is none.
+ * What this platform answers for one key of the neutral vocabulary: a button to press, a keyboard
+ * key to press, or no equivalent at all and the reason there is none.
  */
 export type KeyAnswer =
 	| {
@@ -49,25 +49,27 @@ export type KeyAnswer =
 			 */
 			readonly onlyWhenBlanked: boolean;
 	  }
+	/**
+	 * A key of the hardware keyboard: one USB HID usage, pressed down then up. Never conditional —
+	 * a keyboard key does one thing, which is what makes `onlyWhenBlanked` a button's concern only.
+	 */
+	| { readonly keycode: number }
 	| { readonly noEquivalent: string };
 
-/**
- * The refusal for a keyboard key this backend has not yet been watched pressing (#302).
- *
- * One sentence built three times rather than three hand-written copies, because what they say is
- * the same and only the key and its candidate HID usage differ.
- */
-function unmeasuredKey(name: string, usage: number): string {
-	return (
-		`${name} has not been measured through this backend yet — its candidate is HID usage ` +
-		`${usage}, but hid answers success for any usage including one that does nothing, so the ` +
-		'key is refused rather than pressed on faith until it has been watched landing (#302)'
-	);
-}
+/** HID usage 42, Keyboard DELETE (Backspace) — `delete`, and the second half of a clear. */
+const BACKSPACE_KEYCODE = 42;
+/** HID usage 40, Keyboard Return (ENTER) — `enter`. */
+const RETURN_KEYCODE = 40;
+/** HID usage 43, Keyboard Tab — `tab`. */
+const TAB_KEYCODE = 43;
+/** HID usage 227, Keyboard Left GUI — the Command key a select-all is held under. */
+const COMMAND_KEYCODE = 227;
+/** HID usage 4, Keyboard a — the same usage {@link KEY_CODES} types `a` with. */
+const A_KEYCODE = 4;
 
 /**
- * The button each key of the neutral vocabulary presses on this platform, and the reason the two
- * that press nothing press nothing.
+ * The button or key each key of the neutral vocabulary presses on this platform, and the reason
+ * the two that press nothing press nothing.
  *
  * `Record<DeviceKey, KeyAnswer>` rather than a lookup with a fallback, for
  * `../android/input.ts`'s reason and a sharper version of it: a key added to `DeviceKeySchema` is
@@ -94,12 +96,20 @@ function unmeasuredKey(name: string, usage: number): string {
  * - **`recents` has no equivalent and is refused by name.** Accepted 2026-09-08: the app-switcher
  *   gesture needs Indigo's edge bits, which idb's swipe does not set, so there is nothing behind
  *   it that is the app switcher (`docs/IOS.md` §3, §5).
- * - **`delete`, `enter` and `tab` are refused by name because nobody has watched them land.**
- *   They are keyboard keys rather than buttons, and the candidates are HID usages 42
- *   (backspace), 40 (Return) and 43 (Tab) — but `hid` answers success for any usage, including
- *   one that does nothing, so a key pressed on faith would be indistinguishable from one that
- *   worked. Refused until #302 measures them through this backend; that is a statement about
- *   the evidence, not a claim the platform lacks the keys (`docs/IOS.md` §5).
+ * - **`delete`, `enter` and `tab` are keyboard keys — HID usages 42, 40 and 43 — and each was
+ *   watched landing before it was pressed here (#302).** They were refused by name until then,
+ *   because `hid` answers success for any usage including one that does nothing, so a key pressed
+ *   on faith would have been indistinguishable from one that worked. Driven through this backend
+ *   on 2026-10-06 and read back (`docs/IOS.md` §5, `PROJECT.md` §6): backspace took `zzqqxx` in
+ *   Spotlight's field to `zzqqx`, three in one stream took three characters, and on an empty field
+ *   it did nothing visible at exit 0; Return opened Spotlight's top hit (`safari` launched
+ *   Safari); Tab, in Contacts' new-contact form, moved focus from the first field to the next —
+ *   `alpha`, Tab, `beta`, Tab, `gamma` left the three fields holding one word each. So Tab is
+ *   pressed rather than refused: on this platform it means what it means on Android, "focus to
+ *   the next focusable control", and nothing more is promised about where that is.
+ *   **One trap is the field's, not the key's**: when Spotlight has appended an inline completion
+ *   (`giotto, Sugestia giotto`), the first backspace dismisses the completion and leaves every
+ *   typed character in place — which is what a physical keyboard does there too.
  *
  * Every reason is this platform's own words, passed to `UnsupportedKeyError` by `./backend.ts` —
  * that class names no device's particulars, and the serial it also needs is the caller's rather
@@ -121,25 +131,10 @@ export const DEVICE_KEYS = {
 			'switcher recognises a system edge gesture from the injected edge bits, which idb does ' +
 			'not set, so a bottom-edge swipe of any duration does nothing',
 	},
-	delete: { noEquivalent: unmeasuredKey('backspace', 42) },
-	enter: { noEquivalent: unmeasuredKey('Return', 40) },
-	tab: { noEquivalent: unmeasuredKey('Tab', 43) },
+	delete: { keycode: BACKSPACE_KEYCODE },
+	enter: { keycode: RETURN_KEYCODE },
+	tab: { keycode: TAB_KEYCODE },
 } as const satisfies Record<DeviceKey, KeyAnswer>;
-
-/**
- * Why this backend refuses `clearText`, in the words `./backend.ts` hands `UnsupportedClearError`
- * (#309).
- *
- * The same refusal `delete` gets in {@link DEVICE_KEYS} and for the same reason: the candidate is
- * Cmd+A then backspace (HID usages 227 + 4, then 42), and `hid` answers success for any usage,
- * including one that does nothing — so a clear sent on faith would report an empty field that
- * was never emptied. Refused until #302 watches it land.
- */
-export const CLEAR_TEXT_REFUSAL =
-	'select-all then backspace has not been measured through this backend yet — its candidate is ' +
-	'Cmd+A then HID usage 42, but hid answers success for any usage including one that does ' +
-	'nothing, so the clear is refused rather than sent on faith until it has been watched ' +
-	'emptying a field (#302)';
 
 /**
  * The Darwin notification whose state says whether this device's screen is off.
@@ -298,6 +293,11 @@ export function buttonEvents(button: IdbButton): HidEvent[] {
 	return press({ button: { button } });
 }
 
+/** A keyboard key press — the same DOWN/UP pair {@link typeTextEvents} builds for a character. */
+export function keyEvents(keycode: number): HidEvent[] {
+	return press({ key: { keycode } });
+}
+
 /**
  * The whole of `text` as key presses, in order — usually two events per character, four for one
  * that needs the shift.
@@ -351,12 +351,13 @@ export function typeTextEvents(text: string): HidEvent[] {
  *   call that reports success and types nothing.
  * - **A tab is dropped in silence** — keycode 43 is a real key, and pressing it left a field
  *   reading `abc` exactly as it had before, at exit 0 with an empty response. Android's `input
- *   text` drops one the same way, and this is the same refusal for the same reason.
+ *   text` drops one the same way, and this is the same refusal for the same reason. What the key
+ *   *does* is move focus, and that is `press_key`'s `tab` (#302) rather than a character.
  * - **A newline is not a character on this platform, it is Return.** Keycode 40 is in idb's map
  *   and it *submits*: typing `abc\n` into Safari's address bar navigated. Inserting nothing and
  *   navigating are both "not typing the text that was asked for", so it is refused with the rest
  *   — which also keeps this backend's typable set identical to the other one's, so a caller's
- *   string does not become platform-dependent.
+ *   string does not become platform-dependent. Submitting is `press_key`'s `enter` (#302).
  *
  * Answers rather than throws, and `./backend.ts` turns a non-empty answer into an
  * `UnsupportedTextError` — the error needs the serial, which is the caller's. Deduplicated and in
@@ -377,6 +378,35 @@ export const TYPEABLE_TEXT = 'this device has keys for printable ASCII only';
 /** Left Shift, the one modifier this map needs, as its own action so both events name one object. */
 const SHIFT_KEYCODE = 225;
 const SHIFT_ACTION: HidPressAction = { key: { keycode: SHIFT_KEYCODE } };
+
+/** Left GUI (Command), held over `a` by {@link CLEAR_TEXT_EVENTS} and by nothing else. */
+const COMMAND_ACTION: HidPressAction = { key: { keycode: COMMAND_KEYCODE } };
+
+/**
+ * `clearText`: Cmd+A, then backspace — HID usages 227 held over 4, released, then 42 — in **one**
+ * stream.
+ *
+ * A select-all rather than a count of backspaces, because it needs no length: the field's value
+ * is not something this backend reads before it clears (`src/core/device.ts` `clearText`), and
+ * the accessibility value of an empty field is its placeholder, so a count derived from it would
+ * be wrong on exactly the field that most needs one. Command is released before the backspace so
+ * the backspace is a plain one and not Cmd+Backspace.
+ *
+ * **Measured (#302, 2026-10-06), each read back through the screen** because `hid` cannot report
+ * a no-op: Spotlight's field went from `giottozzqqxx` to its placeholder; with the caret moved to
+ * the start of `Zabcdefghijkl` the whole of it went, not just what lay before the caret; a field
+ * carrying an inline completion emptied in the same one call; Contacts' Company field emptied the
+ * same way; and on an already-empty field the call was accepted and nothing visible changed. One
+ * stream sufficed every time — the select-all is honoured before the backspace that follows it
+ * in the same stream, so splitting it into two calls would buy nothing. A secure field was not
+ * checked (`docs/IOS.md` §5).
+ */
+export const CLEAR_TEXT_EVENTS: readonly HidEvent[] = [
+	{ press: { action: COMMAND_ACTION, direction: 'DOWN' } },
+	...keyEvents(A_KEYCODE),
+	{ press: { action: COMMAND_ACTION, direction: 'UP' } },
+	...keyEvents(BACKSPACE_KEYCODE),
+];
 
 /** One character's key: the USB HID usage id, and whether the shift is held over it. */
 interface TypedKey {

@@ -1,6 +1,6 @@
 /**
  * The device backend for this platform: every required method of `DeviceBackend`, the recorder,
- * the screen read and the five input primitives (one of which, `clearText`, refuses by name).
+ * the screen read and the five input primitives.
  *
  * **This is the backend that registers** (`./index.ts`, `./capabilities.ts`, and one import line
  * in `../index.ts`), which is why the four recording methods land in the same change as the
@@ -66,7 +66,8 @@ import {
 	type DeviceWatch,
 	type DeviceWatcher,
 	type InterruptionCause,
-	LogFilterSchema,
+	type LogBuffer,
+	type LogEntry,
 	type LogRead,
 	type OnScreenKeyboard,
 	type Point,
@@ -84,11 +85,11 @@ import {
 	RecordingAlreadyRunningError,
 	UnfinishedRecordingError,
 	UnreadableScreenError,
-	UnsupportedClearError,
 	UnsupportedKeyError,
 	UnsupportedTextError,
 } from '../../core/errors.js';
 import { type AppId, type DeviceSerial, unwrap } from '../../core/ids.js';
+import { type LogEntrySelection, selectsLogEntry } from '../../core/log-filter.js';
 import { waitForCondition } from '../../core/wait.js';
 import { hostPathOf } from './containers.js';
 import { SIMCTL_MISSING, SimctlNotFoundError } from './developer-dir.js';
@@ -107,9 +108,10 @@ import {
 import { IDB_COMPANION_MISSING, IdbCompanionNotFoundError } from './idb-companion-path.js';
 import {
 	buttonEvents,
-	CLEAR_TEXT_REFUSAL,
+	CLEAR_TEXT_EVENTS,
 	DEVICE_KEYS,
 	isScreenBlanked,
+	keyEvents,
 	READ_SCREEN_BLANKED_ARGV,
 	swipeEvents,
 	TYPEABLE_TEXT,
@@ -118,6 +120,14 @@ import {
 	untypeableCharacters,
 } from './input.js';
 import {
+	isAtOrAfter,
+	isUnifiedLogTimestamp,
+	levelFlags,
+	logPredicate,
+	readLogsArgv,
+	startOf,
+} from './log-query.js';
+import {
 	ACCESSIBILITY_FORMAT,
 	type AccessibilityRead,
 	parseAccessibilityRead,
@@ -125,6 +135,7 @@ import {
 import { saysNothingToTerminate } from './parsers/app-control.js';
 import { type DeviceTypeProfile, readDeviceTypeProfile } from './parsers/device-type-profile.js';
 import { IdbNotifyFrameDecoder, type IdbTargetList } from './parsers/idb-notify.js';
+import { parseAppPids } from './parsers/launchctl-list.js';
 import { isPng } from './parsers/png.js';
 import { isFinishedRecording, recorderPids, saysRecordingStarted } from './parsers/recording.js';
 import {
@@ -287,8 +298,12 @@ const HID_RPC: IdbStreamRpc = 'hid';
  * it named as the pushdown was `--predicate 'process == "…"'` — and when this was written
  * `ReadLogsOptions` carried `maxEntries` and nothing else (`src/core/device.js`), so there was no
  * process to filter *by*. #303 widened the contract with selections (an app, a process, a level,
- * a tag, `since`, buffers); this backend refuses each by name until #304 maps them, so the
- * predicate pushdown is that issue's to take up.
+ * a tag, `since`, buffers) and **#304 pushed them down**: `./log-query.ts` builds the predicate
+ * and the level flags, and a selected read is both narrower and cheaper — one process over 30 s
+ * came back as 1,151 entries / 1.4 MB against 4,316 / 5.4 MB unfiltered on the 2026-10-06 bench.
+ * The widths below are what still bounds a read that selected *nothing*, and they are also what
+ * a selected read widens through, because a predicate narrows a window's contents rather than
+ * replacing the window.
  *
  * So the pushdown is the other bound `log show` offers — its window — and **half of it is
  * already the device**. `simctl spawn` runs the query *inside* the simulator: a 20-second read
@@ -357,7 +372,12 @@ const HID_RPC: IdbStreamRpc = 'hid';
  * That is the same claim the Android side makes when the ring buffer holds less than the cap:
  * nothing was dropped *for the cap's sake*. What neither platform can offer is an unbounded
  * lookback, and a caller has no way to ask for one — `ReadLogsOptions`' selections (#303) narrow a
- * read rather than reach past its horizon, and this backend refuses them until #304 maps them.
+ * read rather than reach past its horizon. **`since` is the one that reaches past it**, and it
+ * does so by leaving these widths behind entirely: it becomes `--start`, which runs from the
+ * anchor to now in a single read ({@link IosSimulatorDeviceBackend.readLogs}). That is a bound
+ * the caller chose, so the horizon it buys is the caller's to pay for — and a far anchor is
+ * expensive enough to fail rather than answer short (87.3 MB five minutes back on the 2026-10-06
+ * bench, against a 64 MB buffer; 739.9 MB and 14.9 s thirty minutes back).
  *
  * **The unit is spelled out because the tool's default is not what its help says.** `log show
  * --help` lists `--last <num>[m|h|d]` and no `s`, yet `s` is honoured — `--last 60s` and `--last
@@ -373,23 +393,14 @@ const HID_RPC: IdbStreamRpc = 'hid';
 export const LOG_WINDOWS = ['30s', '2m', '5m'] as const;
 
 /**
- * The log read's argv for one width, every flag load-bearing and every one measured — this is
- * the *guest* program's argv, handed to `simctl spawn` after the udid (this file's header).
+ * The one stream this backend's log read answers from, in the neutral vocabulary (#303).
  *
- * - **`log show`**, never `log stream`. A tail that stays open is a wait with no condition
- *   (ai/RULES.md §2) and a stream over IPC (D19); this is a bounded read that returns.
- * - **`--style ndjson`** is the shape `./parsers/unified-log.js` is pinned against: one entry per
- *   line, plus a trailer describing the output that the parser drops.
- * - **`--info --debug` are not optional.** Without them the tool answers neither level — the
- *   levels capture comes back carrying only `Default`, `Error`, `Fault` and absent — so a log
- *   read that left them off would silently omit two of the five levels this platform has
- *   (measured, `tests/fixtures/ios-simulator/README.md`).
- * - **`--last`** is one of {@link LOG_WINDOWS}, which carries the whole argument for a window
- *   and for why one width is not enough.
+ * **The unified log *is* `main`** — ordinary chatter and the system's own arrive in the same
+ * store on this platform, and it is what every read here has always answered from, so naming it
+ * changes nothing about an unselected read. The other three are refused by name
+ * ({@link IosSimulatorDeviceBackend.readLogs}) rather than quietly mapped onto this one.
  */
-function readLogsArgv(window: string): string[] {
-	return ['log', 'show', '--style', 'ndjson', '--info', '--debug', '--last', window];
-}
+const LOG_BUFFERS: readonly LogBuffer[] = ['main'];
 
 /**
  * The gap between two polls of the device set.
@@ -694,6 +705,63 @@ function reinstallFailed(serial: DeviceSerial, appId: AppId, cause: unknown): Er
 			'host lending the device and has been removed with the scratch directory, so there is ' +
 			'nothing here to retry from — install it again from wherever it came.',
 		{ cause },
+	);
+}
+
+/**
+ * What one `read_logs` call turned into — the three things every read of it needs, carried
+ * together so the pushdown and the host filter cannot be assembled from different selections.
+ *
+ * That pairing is the whole correctness argument of this backend's log read
+ * ({@link IosSimulatorDeviceBackend.readLogs}): `flags` and `predicate` narrow what the device
+ * serialises, `matches` decides what the answer holds, and the second must be the stricter of
+ * the two. Passing them as one value is what keeps a later caller from narrowing the query
+ * without narrowing the filter.
+ */
+interface LogQuery {
+	/** The level flags this read leaves on (`./log-query.js`, `levelFlags`). */
+	readonly flags: readonly string[];
+	/** The `--predicate`, or `undefined` when nothing in the selection maps to one. */
+	readonly predicate: string | undefined;
+	/** Whether one parsed entry is one the caller asked for — the shared filter plus `since`. */
+	readonly matches: (entry: LogEntry) => boolean;
+}
+
+/**
+ * The cap applied to entries that already match: the newest `maxEntries` of them, and
+ * `truncated` saying whether anything older was dropped for the cap's sake.
+ *
+ * The newest are the ones kept because a log read is asked *after* something happened.
+ */
+function capped(matching: readonly LogEntry[], maxEntries: number): LogRead {
+	const truncated = matching.length > maxEntries;
+	return { entries: truncated ? matching.slice(-maxEntries) : [...matching], truncated };
+}
+
+/**
+ * A log read asking for a stream this platform does not keep — or, for `crash`, one it keeps
+ * somewhere `log show` does not look.
+ *
+ * All of them are named at once rather than one at a time, because a caller that asked for two
+ * unreadable streams has two things to change and a refusal naming one of them sends it round
+ * again. `LogFilterRefusedError`'s own wording already says nothing was read.
+ *
+ * **`crash` is the one that is a gap rather than a mismatch**, and it says so: a simulator's
+ * crashes are `.ips` reports written to this *host*, outside the unified log entirely, so
+ * answering `crash` from `log show` would hand back ordinary chatter under the one name a caller
+ * reaches for after something died. Reading those reports is the second half of #304.
+ */
+function unreadableBuffers(serial: DeviceSerial, buffers: readonly LogBuffer[]): Error {
+	const asked = buffers.map((buffer) => `'${buffer}'`).join(', ');
+	const crash = buffers.includes('crash')
+		? " — 'crash' is this device's crash reports, which are files on the host lending it rather " +
+			'than part of its log stream, and this backend does not read them yet'
+		: '';
+
+	return new LogFilterRefusedError(
+		serial,
+		'buffers',
+		`this device keeps one log stream, 'main', and has nothing to answer ${asked} from${crash}`,
 	);
 }
 
@@ -1631,14 +1699,15 @@ export class IosSimulatorDeviceBackend implements DeviceBackend {
 	}
 
 	/**
-	 * `simctl spawn <device> log show --style ndjson --info --debug --last <window>` — the
-	 * device's own log, bounded, at the narrowest width that fills the caller's cap.
+	 * `simctl spawn <device> log show --style ndjson [--info --debug] [--predicate P]
+	 * (--last <window> | --start <since>)` — the device's own log, bounded, narrowed to what was
+	 * asked for.
 	 *
 	 * **The bound is pushed down into the query**, which is the whole difference between this and
 	 * a read that filters afterwards: {@link LOG_WINDOWS} carries the measurements and the argument
-	 * for a window, and {@link readLogsArgv} carries what each flag is load-bearing for. The
-	 * two things worth reading here rather than there are that `spawn` is *itself* half the
-	 * pushdown — the query runs inside the simulator, so the answer is the device's log and not
+	 * for a window, and `./log-query.ts`'s `readLogsArgv` carries what each flag is load-bearing
+	 * for. The two things worth reading here rather than there are that `spawn` is *itself* half
+	 * the pushdown — the query runs inside the simulator, so the answer is the device's log and not
 	 * this Mac's — and that the read carries {@link READ_LOGS_SIMCTL_MAX_BUFFER_BYTES}, because a
 	 * window bounds a duration and not a size.
 	 *
@@ -1650,7 +1719,9 @@ export class IosSimulatorDeviceBackend implements DeviceBackend {
 	 * cap, the next width is tried, so a read that comes back full is full because the *cap* cut
 	 * it and not because the lookback ran out. A single `30s` window could not do that at the
 	 * contract's own ceiling of 5,000 entries, which is the measurement {@link LOG_WINDOWS}
-	 * carries.
+	 * carries. **What the widening counts is *matching* entries**, after the host filter — the
+	 * cap is on what the caller asked about (`ReadLogsOptions.maxEntries`), so a width holding
+	 * thousands of lines and three matching ones is a width that has not filled the cap.
 	 *
 	 * **`maxEntries` is applied on this side, and the newest are the ones kept**, because a log
 	 * read is asked *after* something happened.
@@ -1666,14 +1737,51 @@ export class IosSimulatorDeviceBackend implements DeviceBackend {
 	 * **What the widest window did not fetch, it does not report.** A `truncated: false` off the
 	 * last width means the device said this much in the last of {@link LOG_WINDOWS}, not that its
 	 * store holds nothing older — which is the same thing the Android side says when the ring
-	 * buffer holds less than the cap. Reaching past that horizon is a bound the caller has no way
-	 * to ask for, and giving it one is a contract change (`ReadLogsOptions`, `src/core/device.js`)
-	 * rather than something to improvise here.
+	 * buffer holds less than the cap. `since` is the one way a caller reaches past that horizon,
+	 * and it pays for what it asks for (below).
 	 *
-	 * **Every selection #303 added is refused by name, before anything runs** — an app, a
-	 * process, a level, a tag, `since` and buffers. This backend does not map them yet (#304), and
-	 * an unfiltered answer to a filtered question would look exactly like a right one
-	 * (ai/RULES.md §2). The first one present is the one named, in `LogFilterSchema`'s order.
+	 * **Every selection #303 added is applied here (#304), and applied twice.** Each is pushed
+	 * into `log show` so the device serialises candidates rather than its whole log, and each is
+	 * **re-applied on this host** with the shared `selectsLogEntry` — which is what makes the
+	 * answer to one `read_logs` call mean the same thing here and on Android (D10). The invariant
+	 * that keeps the pair honest: a pushdown must select a *superset* of what the host filter
+	 * keeps, since the host filter can drop what a generous query let through but cannot restore
+	 * what a strict one left out. `./log-query.ts` holds each mapping with its measurement.
+	 *
+	 * - **`appId`** is resolved to the pids launchd has for it at the time of the read
+	 *   ({@link appPids}), and those become an `OR` of `processIdentifier` clauses. No running
+	 *   process is refused by name rather than answered empty (ai/RULES.md §2) — an empty answer
+	 *   would read as an app that said nothing.
+	 * - **`pid`** is one such clause. It reaches a process that has already exited, as on Android.
+	 * - **`minLevel`** drops level flags and adds a `messageType` clause. iOS has no `warn`
+	 *   (`docs/IOS.md` §5), so `warn` and `error` select the same entries.
+	 * - **`tag` is the *subsystem***, which is the field `./parsers/unified-log.js` fills
+	 *   `LogEntry.tag` from. A tag copied out of an entry therefore selects the entries carrying
+	 *   it; `category` is never read, so selecting on it would filter by a field the answer does
+	 *   not show.
+	 * - **`since`** must be in the shape an entry carries, `YYYY-MM-DD HH:MM:SS.ffffff±HHMM`, and
+	 *   is checked before anything runs. It becomes `--start` **instead of** `--last`, floored to
+	 *   the second because the tool rejects a fraction outright, and that single read runs from
+	 *   the anchor to now — so there is no widening and `truncated` is exact, the caller's own
+	 *   anchor being the lower bound. Two timestamps are compared on the host as *instants*
+	 *   rather than as strings, because the offset can differ across a DST change. **A far anchor
+	 *   is expensive**: measured on the 2026-10-06 bench, five minutes back was 69,465 entries /
+	 *   87.3 MB and thirty minutes back 577,068 / 739.9 MB in 14.9 s — past the 64 MB buffer and
+	 *   past the ten-second budget, so such a read fails loudly rather than answering short. With
+	 *   a predicate beside it the same two anchors cost 6.6 MB / 1.2 s and 14.8 MB / 1.6 s.
+	 * - **`buffers`** accepts `main`, which *is* the unified log on this platform
+	 *   ({@link LOG_BUFFERS}) and so changes nothing about the read. `system` and `events` are
+	 *   refused by name: there is no second stream here to point them at, and answering them from
+	 *   the unified log would be the plausible-looking wrong answer. **`crash` is refused too**,
+	 *   and that one is a real gap rather than a missing counterpart — a simulator's crash reports
+	 *   are `.ips` files on *this host*, outside the log store `log show` reads, and reading them
+	 *   is #304's second phase. Refusing it by name is what keeps a crash read from coming back
+	 *   as ordinary chatter in the meantime.
+	 *
+	 * The refusals that need no device come first and in `LogFilterSchema`'s order — `since`'s
+	 * shape, then the buffers — so the one a caller is told about does not depend on timing.
+	 * `appId`'s refusal needs a listing off the device, so it comes after them and still before
+	 * any log is read.
 	 *
 	 * **No state check, unlike {@link screenshot}, and that is measured too**: `log show` on a
 	 * device that is not booted fails in **0.15 s** at exit 149 with *"Process spawn via launchd
@@ -1690,24 +1798,64 @@ export class IosSimulatorDeviceBackend implements DeviceBackend {
 	 * log from the wrong device is worse than no log, since nothing about it looks wrong.
 	 */
 	async readLogs(serial: DeviceSerial, options: ReadLogsOptions): Promise<LogRead> {
-		const unapplied = LogFilterSchema.options.find((filter) => options[filter] !== undefined);
-		if (unapplied !== undefined) {
+		const { since, maxEntries } = options;
+		if (since !== undefined && !isUnifiedLogTimestamp(since)) {
 			throw new LogFilterRefusedError(
 				serial,
-				unapplied,
-				'this backend does not apply it to its log read yet',
+				'since',
+				`'${since}' is not in the form this device's log entries carry, ` +
+					"YYYY-MM-DD HH:MM:SS.ffffff±HHMM — take it from an entry's timestamp",
 			);
 		}
 
+		const unreadable = [...new Set(options.buffers ?? LOG_BUFFERS)].filter(
+			(buffer) => !LOG_BUFFERS.includes(buffer),
+		);
+		if (unreadable.length > 0) throw unreadableBuffers(serial, unreadable);
+
+		const selection: LogEntrySelection = {
+			...(options.appId === undefined ? {} : { pids: await this.appPids(serial, options.appId) }),
+			...(options.pid === undefined ? {} : { pid: options.pid }),
+			...(options.minLevel === undefined ? {} : { minLevel: options.minLevel }),
+			...(options.tag === undefined ? {} : { tag: options.tag }),
+		};
+		const query: LogQuery = {
+			flags: levelFlags(options.minLevel),
+			predicate: logPredicate(selection),
+			matches: (entry) => selectsLogEntry(entry, selection) && isAtOrAfter(entry, since),
+		};
+
+		// `--start` already reaches from the caller's own anchor to now, so there is no lookback
+		// left to widen: one read, and more matching entries than the cap is exactly `truncated`.
+		if (since !== undefined) {
+			const result = await this.runLogShow(serial, { start: startOf(since) }, query);
+			return capped(parseUnifiedLog(result.stdout).filter(query.matches), maxEntries);
+		}
+
+		return this.widenedRead(serial, query, maxEntries);
+	}
+
+	/**
+	 * {@link readLogs}' read when nothing anchored it: every width of {@link LOG_WINDOWS} in turn,
+	 * stopping at the first that said more than the cap.
+	 *
+	 * **What it counts is *matching* entries**, after the host filter, because the cap is on what
+	 * the caller asked about (`ReadLogsOptions.maxEntries`): a width holding thousands of lines
+	 * and three matching ones has not filled a cap of two hundred, and stopping there would
+	 * answer three entries with `truncated: true`.
+	 */
+	private async widenedRead(
+		serial: DeviceSerial,
+		query: LogQuery,
+		maxEntries: number,
+	): Promise<LogRead> {
 		let entries: LogRead['entries'] = [];
 		let answered = false;
 
 		for (const window of LOG_WINDOWS) {
 			let result: SimctlResult;
 			try {
-				result = await runSimctlOnDevice(serial, 'spawn', readLogsArgv(window), {
-					maxBufferBytes: READ_LOGS_SIMCTL_MAX_BUFFER_BYTES,
-				});
+				result = await this.runLogShow(serial, { last: window }, query);
 			} catch (cause) {
 				// A width that outgrew the buffer says the device had far more to say than the cap,
 				// which is the one thing the widening was asking. So it ends the escalation instead
@@ -1716,17 +1864,63 @@ export class IosSimulatorDeviceBackend implements DeviceBackend {
 				if (!answered || !(cause instanceof SimctlCommandError) || !cause.overflowedBuffer) {
 					throw cause;
 				}
-				return { entries: entries.slice(-options.maxEntries), truncated: true };
+				return { entries: entries.slice(-maxEntries), truncated: true };
 			}
 
-			entries = parseUnifiedLog(result.stdout);
+			entries = parseUnifiedLog(result.stdout).filter(query.matches);
 			answered = true;
-			if (entries.length > options.maxEntries) {
-				return { entries: entries.slice(-options.maxEntries), truncated: true };
-			}
+			if (entries.length > maxEntries) return capped(entries, maxEntries);
 		}
 
 		return { entries, truncated: false };
+	}
+
+	/**
+	 * One `log show` inside the device — {@link readLogs}' two shapes of read, sharing the one
+	 * runner call so the buffer bound and the pinning cannot come to differ between them.
+	 */
+	private async runLogShow(
+		serial: DeviceSerial,
+		bound: { readonly last: string } | { readonly start: string },
+		query: LogQuery,
+	): Promise<SimctlResult> {
+		return runSimctlOnDevice(serial, 'spawn', readLogsArgv(bound, query.flags, query.predicate), {
+			maxBufferBytes: READ_LOGS_SIMCTL_MAX_BUFFER_BYTES,
+		});
+	}
+
+	/**
+	 * The pids `appId` is running under, for a log read that selects by app — refused by name
+	 * when there are none, before the log is read.
+	 *
+	 * `launchctl list` **inside the device** (`runSimctlOnDevice`, never `runSimctl`), because a
+	 * simulator's runtime has no `pidof` and this host's own process table is a different
+	 * question: a simulator's app processes do appear in it, but attributing one to a device
+	 * there means reading an argv rather than asking launchd. `./parsers/launchctl-list.ts`
+	 * carries the label shape and the exact-match rule, measured.
+	 *
+	 * **The pid launchd reports is the one the log prints.** Measured on the 2026-10-06 bench:
+	 * `simctl launch` answered `com.apple.Preferences: 49847`, `launchctl list` carried 49847
+	 * against its `UIKitApplication:` label, and every one of the 1,151 entries a
+	 * `processIdentifier == 49847` read came back with carried that `processID`.
+	 *
+	 * The refusal deliberately does **not** point at the crash buffer the way
+	 * `../android/backend.ts`'s does: this backend refuses that buffer by name for now
+	 * ({@link readLogs}), and naming it as a way out would be sending the caller somewhere that
+	 * also says no.
+	 */
+	private async appPids(serial: DeviceSerial, appId: AppId): Promise<number[]> {
+		const result = await runSimctlOnDevice(serial, 'spawn', ['launchctl', 'list']);
+		const pids = parseAppPids(result.stdout, unwrap(appId));
+		if (pids.length === 0) {
+			throw new LogFilterRefusedError(
+				serial,
+				'appId',
+				`'${unwrap(appId)}' has no running process on this device, so there is no pid to ` +
+					'select by — a process that has exited is reachable by its pid',
+			);
+		}
+		return pids;
 	}
 
 	/**
@@ -1999,13 +2193,12 @@ export class IosSimulatorDeviceBackend implements DeviceBackend {
 	}
 
 	/**
-	 * Press one of the keys of the neutral vocabulary — or refuse it by name, which five of them
+	 * Press one of the keys of the neutral vocabulary — or refuse it by name, which two of them
 	 * are.
 	 *
 	 * **The refusal comes first, before any round trip**, and that ordering is deliberate: `back`
-	 * and `recents` have no answer on this platform in *any* device state, and `delete`, `enter`
-	 * and `tab` have no measured one yet (#302), so asking the enumeration about the device first
-	 * would spend a call to reach the same sentence. What the caller is told is which key and why
+	 * and `recents` have no answer on this platform in *any* device state, so asking the
+	 * enumeration about the device first would spend a call to reach the same sentence. What the caller is told is which key and why
 	 * (`./input.js`'s `DEVICE_KEYS`), through
 	 * `UnsupportedKeyError` — never `MissingCapabilityError`, because this device does take input
 	 * and tapping, swiping and typing all work (`src/core/device.ts`).
@@ -2016,7 +2209,8 @@ export class IosSimulatorDeviceBackend implements DeviceBackend {
 	 * the press is conditional on {@link screenIsBlanked}, and a `wake` on a device that is
 	 * already awake sends nothing at all — measured three times in a row on the bench, leaving the
 	 * flag at `0` each time (`PROJECT.md` R46). `home` presses unconditionally, because `HOME` is
-	 * not a toggle.
+	 * not a toggle, and so do the keyboard keys `delete`, `enter` and `tab` — one HID usage each,
+	 * which never reads the blanked flag (#302).
 	 *
 	 * The state check on the device is *after* the key lookup and *before* either of those, so a
 	 * key that will be pressed is pressed on a device that can take it.
@@ -2027,19 +2221,28 @@ export class IosSimulatorDeviceBackend implements DeviceBackend {
 			throw new UnsupportedKeyError(serial, key, answer.noEquivalent);
 		}
 		await this.refuseUnlessInputtable(serial);
+		if ('keycode' in answer) {
+			await this.companions.stream(serial, HID_RPC, keyEvents(answer.keycode));
+			return;
+		}
 		if (answer.onlyWhenBlanked && !(await this.screenIsBlanked(serial))) return;
 
 		await this.companions.stream(serial, HID_RPC, buttonEvents(answer.button));
 	}
 
 	/**
-	 * Refused by name, before any round trip: `./input.js`'s `CLEAR_TEXT_REFUSAL` says why — the
-	 * candidate is unmeasured through `hid`, which answers success for usages that do nothing
-	 * (#302). `UnsupportedClearError` rather than `MissingCapabilityError` for {@link pressKey}'s
-	 * reason: this device does take input.
+	 * Empty the focused field: Cmd+A then backspace, in one stream (`./input.js`'s
+	 * `CLEAR_TEXT_EVENTS`, which carries the measurements — #302).
+	 *
+	 * One stream because one was enough on every field it was watched clearing, and because the
+	 * select-all needs no length, so nothing is read from the device first. `hid` cannot report a
+	 * no-op, so what says this landed is `tests/device/ios-simulator/input.test.ts` reading the
+	 * field back — a call that resolves here has sent the keys, not proved the field is empty.
 	 */
 	async clearText(serial: DeviceSerial): Promise<void> {
-		throw new UnsupportedClearError(serial, CLEAR_TEXT_REFUSAL);
+		await this.refuseUnlessInputtable(serial);
+
+		await this.companions.stream(serial, HID_RPC, CLEAR_TEXT_EVENTS);
 	}
 
 	/**

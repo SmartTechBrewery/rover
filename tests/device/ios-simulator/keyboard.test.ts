@@ -14,7 +14,7 @@ import { shutDownSimulator } from '../../helpers/simulators.js';
  *
  * **Nothing here sets a keyboard up, and that is a statement rather than an omission.** Drawing one
  * needs a freshly created simulator with `ConnectHardwareKeyboard` written off before its first
- * boot and `Simulator.app` attached after it (`PROJECT.md` §6, `docs/IOS.md` §8 trap 18), and
+ * boot and `Simulator.app` attached after it (`PROJECT.md` §6, `docs/IOS.md` §8 trap 20), and
  * `docs/IOS.md` §8 trap 4 says never to do that to a device somebody may be looking at — quitting
  * or re-attaching `Simulator.app` shuts down every device it owns. So the rectangle itself is
  * pinned against the **capture** in `tests/unit/backends/ios-simulator/screen.test.ts` and the
@@ -110,7 +110,7 @@ describe.skipIf(!process.env.ROVER_TEST_SIMULATOR || !process.env.ROVER_TEST_IDB
 			if (screen.keyboard?.shown !== true) {
 				console.warn(
 					'skipped: no software keyboard is up on this simulator, which is the ordinary ' +
-						'state in the configuration Rover drives (docs/IOS.md §8, trap 18)',
+						'state in the configuration Rover drives (docs/IOS.md §8, trap 20)',
 				);
 				return;
 			}

@@ -37,9 +37,8 @@ import {
  *   example of, and there are now two kinds. `set_wifi` and `set_airplane_mode` come back as
  *   `missing-capability` naming `canControlNetwork` — *not* as a cosmetic status bar, which
  *   `simctl status_bar override --wifiMode failed` would happily draw (`ai/RULES.md` §2,
- *   `src/backends/ios-simulator/capabilities.ts`). `press_key` with `back` or `recents` — and,
- *   until #302 measures them, `delete`, `enter` or `tab` — comes back as **`unsupported-key`**
- *   naming the key, from a backend whose `canInput` is `true` and whose
+ *   `src/backends/ios-simulator/capabilities.ts`). `press_key` with `back` or `recents` comes
+ *   back as **`unsupported-key`** naming the key, from a backend whose `canInput` is `true` and whose
  *   other three input verbs work. Every earlier assertion of either shape in this repository was
  *   made against a synthetic backend; these are against a device.
  *
@@ -239,9 +238,6 @@ describe.skipIf(!process.env.ROVER_TEST_SIMULATOR)(
 		it.each([
 			'back',
 			'recents',
-			'delete',
-			'enter',
-			'tab',
 		] as const)('refuses the %s key by name rather than sending something that is not it', async (key) => {
 			const client = await startHost();
 			const device = await freeSimulator(client);
@@ -256,25 +252,10 @@ describe.skipIf(!process.env.ROVER_TEST_SIMULATOR)(
 		});
 
 		/**
-		 * `clear` is refused the same way, for `delete`'s reason (#302): its candidate has not been
-		 * watched landing, so the answer is `unsupported-clear` — and nothing is typed.
-		 */
-		it('refuses type_text with clear by name rather than typing over the field', async () => {
-			const client = await startHost();
-			const device = await freeSimulator(client);
-			const leaseId = await lease(client, device.serial);
-
-			const refused = await client.request('type_text', { leaseId, text: 'x', clear: true });
-
-			expect(refused).toMatchObject({
-				outcome: 'failed',
-				failure: { kind: 'unsupported-clear', serial: device.serial },
-			});
-		});
-
-		/**
-		 * And the two keys this platform *does* answer, over the same wire — because a suite that
-		 * only asserted the refusals would be green on a backend that refused all four.
+		 * And the two buttons this platform *does* answer, over the same wire — because a suite that
+		 * only asserted the refusals would be green on a backend that refused every key. The
+		 * keyboard keys (`delete`, `enter`, `tab`) and `clear` are `./input.test.ts`'s, where each
+		 * is read back out of a field (#302); here they would land on whatever has focus.
 		 *
 		 * `home` is asserted through the verb's own post-state rather than by a second read of our
 		 * own: `press_key` answers with the screen after itself (D12(c)), which on this backend is a

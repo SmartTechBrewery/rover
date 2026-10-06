@@ -8,12 +8,12 @@ import {
 } from '@/backends/ios-simulator/input.js';
 import { runSimctlOnDevice } from '@/backends/ios-simulator/simctl.js';
 import type { Device, Rect, ScreenElement } from '@/core/device.js';
-import { WaitTimeoutError } from '@/core/errors.js';
-import type { DeviceSerial } from '@/core/ids.js';
+import { UnreadableScreenError, WaitTimeoutError } from '@/core/errors.js';
+import { type DeviceSerial, parseAppId } from '@/core/ids.js';
 import { type Observation, waitForCondition } from '@/core/wait.js';
 
 /**
- * The four input primitives against a real booted simulator, **each one verified by reading the
+ * The five input primitives against a real booted simulator, **each one verified by reading the
  * screen back** rather than by the call returning.
  *
  * That is the whole point of this suite and it is not a preference. `hid` answers an empty
@@ -40,6 +40,12 @@ import { type Observation, waitForCondition } from '@/core/wait.js';
  * miss it by the width of the screen, so this case is what would catch a `toDevicePixels` analogue
  * being added to `src/backends/ios-simulator/input.ts` by somebody matching the Android side
  * (`docs/IOS.md` §2).
+ *
+ * **`tab` has no case here, and that is stated rather than implied.** It was measured on the bench
+ * in Contacts' new-contact form, where it moved focus from one field to the next (#302,
+ * `docs/IOS.md` §5, `PROJECT.md` §6) — but reaching that form means tapping a button found by its
+ * label, and this suite matches on nothing a locale translates. Spotlight has one field, so there
+ * is nothing there for focus to move to.
  *
  * It takes no lease, for `./read-screen.test.ts`' reason: the refusals **over** a lease are
  * `./verb-dispatch.test.ts`'s, and what is here is the primitives underneath them. What it does
@@ -69,6 +75,17 @@ const WORDS = ['rover', 'giotto', 'zzqqxx'] as const;
 
 /** What the priming round types, which only has to be something rather than anything in particular. */
 const PRIMER = 'rover';
+
+/**
+ * A query Spotlight offers no inline completion for — which matters to `delete` alone: with one
+ * showing (`giotto, Sugestia giotto`), the first backspace dismisses the completion and leaves every
+ * typed character in place (measured, #302), exactly as a hardware keyboard does there.
+ */
+const NO_COMPLETION = 'zzqqxx';
+
+/** An app Spotlight's top hit opens, named the same in every locale, so the Return case can read it. */
+const SAFARI = 'Safari';
+const SAFARI_ID = parseAppId('com.apple.mobilesafari');
 
 afterAll(async () => {
 	await backend.stopIdbCompanions();
@@ -173,6 +190,10 @@ function heldQuery(field: ScreenElement | undefined): string | null {
  * A condition with a deadline rather than a duration (D12(b), ai/RULES.md §2): what every case
  * here is waiting for is the screen showing something, which is a condition, and the same read
  * that ends the wait is the assertion.
+ *
+ * An `UnreadableScreenError` is a poll that saw nothing yet rather than a failure: it is what a
+ * read right after an application starts answers (the `enter` case opens one), and the error's
+ * own advice is to read again.
  */
 async function screenShowing(
 	serial: DeviceSerial,
@@ -184,7 +205,13 @@ async function screenShowing(
 		timeoutMs: SETTLE_TIMEOUT_MS,
 		pollIntervalMs: SETTLE_POLL_MS,
 		probe: async (): Promise<Observation<ScreenElement[]>> => {
-			const elements = await backend.readScreen(serial);
+			let elements: ScreenElement[];
+			try {
+				elements = await backend.readScreen(serial);
+			} catch (error) {
+				if (!(error instanceof UnreadableScreenError)) throw error;
+				return { met: false, found: 'a screen that has not drawn yet' };
+			}
 			return want(elements)
 				? { met: true, value: elements }
 				: {
@@ -416,6 +443,114 @@ describe.skipIf(!process.env.ROVER_TEST_SIMULATOR || !process.env.ROVER_TEST_IDB
 					{ x: screen.widthDp / 2, y: screen.heightDp * 0.35 },
 					300,
 				);
+				await restore(device.serial);
+			}
+		});
+
+		/**
+		 * **`delete` is backspace, read back character by character** — one press takes one
+		 * character off the end, and pressing it on an emptied field does nothing and fails nothing.
+		 *
+		 * Primed and cleared first, {@link clear}'s reason: that is what learns what an empty field
+		 * reads as here, so the last assertion is an equality against the placeholder rather than a
+		 * guess at it.
+		 */
+		it('deletes one character per press and reads the field back', async () => {
+			const device = await bootedDevice();
+			await openSpotlight(device.serial);
+
+			try {
+				const primed = await type(device.serial, PRIMER, (text) => text.endsWith(PRIMER));
+				const empty = (await clear(device.serial, primed)) ?? '';
+				await type(device.serial, NO_COMPLETION, (text) => text === NO_COMPLETION);
+
+				for (let length = NO_COMPLETION.length - 1; length > 0; length--) {
+					const want = NO_COMPLETION.slice(0, length);
+					await backend.pressKey(device.serial, 'delete');
+					await screenShowing(
+						device.serial,
+						`the search field to hold '${want}'`,
+						(elements) => heldQuery(searchField(elements)) === want,
+					);
+				}
+				await backend.pressKey(device.serial, 'delete');
+				await screenShowing(
+					device.serial,
+					'the search field to be empty',
+					(elements) => heldQuery(searchField(elements)) === empty,
+				);
+
+				await backend.pressKey(device.serial, 'delete');
+				const after = await screenShowing(
+					device.serial,
+					'the search field',
+					(elements) => searchField(elements) !== undefined,
+				);
+				expect(heldQuery(searchField(after))).toBe(empty);
+			} finally {
+				await restore(device.serial);
+			}
+		});
+
+		/**
+		 * **`clearText` empties the field to exactly what the clear button empties it to** — the
+		 * placeholder {@link clear} learned, compared for equality. The word typed carries an inline
+		 * completion on purpose, the harder of the two field states, and a second clear on the
+		 * emptied field is accepted and changes nothing.
+		 */
+		it('clears the field to what its own clear button leaves', async () => {
+			const device = await bootedDevice();
+			await openSpotlight(device.serial);
+
+			try {
+				const primed = await type(device.serial, PRIMER, (text) => text.endsWith(PRIMER));
+				const empty = (await clear(device.serial, primed)) ?? '';
+				await type(device.serial, WORDS[1], (text) => text === WORDS[1]);
+
+				await backend.clearText(device.serial);
+				await screenShowing(
+					device.serial,
+					'the search field to be empty',
+					(elements) => heldQuery(searchField(elements)) === empty,
+				);
+
+				await backend.clearText(device.serial);
+				const after = await screenShowing(
+					device.serial,
+					'the search field',
+					(elements) => searchField(elements) !== undefined,
+				);
+				expect(heldQuery(searchField(after))).toBe(empty);
+			} finally {
+				await restore(device.serial);
+			}
+		});
+
+		/**
+		 * **`enter` is Return, and Return submits**: Spotlight opens its top hit, so the screen read
+		 * after it is Safari's — the application root is labelled with the app's name — and no longer
+		 * Spotlight's. Safari is stopped again in `finally`, so the device is left as it was found.
+		 */
+		it('submits with the enter key and reads the opened app back', async () => {
+			const device = await bootedDevice();
+			await openSpotlight(device.serial);
+
+			try {
+				const primed = await type(device.serial, PRIMER, (text) => text.endsWith(PRIMER));
+				await clear(device.serial, primed);
+				const query = SAFARI.toLowerCase();
+				await type(device.serial, query, (text) => text === query);
+
+				await backend.pressKey(device.serial, 'enter');
+
+				const opened = await screenShowing(
+					device.serial,
+					`${SAFARI} to open`,
+					(elements) => elements[0]?.label === SAFARI,
+				);
+				expect(heldQuery(searchField(opened))).not.toBe(query);
+			} finally {
+				await backend.stopApp(device.serial, SAFARI_ID);
 				await restore(device.serial);
 			}
 		});

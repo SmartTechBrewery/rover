@@ -150,7 +150,7 @@ Working names. All of them take a device handle, and over the wire that handle i
 | `tap` | By text or element id; coordinates are the fallback. **A point under the on-screen keyboard is refused** (#308) as a `covered-by-keyboard` verb failure carrying the serial, what was looked for, the element (or `null` for a coordinate), the point and the keyboard's rectangle, and naming `hide_keyboard` as the way out — never tapped onto a key and answered `ok`, never silently re-aimed at something visible (§6). Only the point is checked, so an element half under the keyboard whose centre is clear is tapped; a device that says a keyboard is up without a rectangle refuses nothing. **The keyboard's own surface is accepted as unreachable**: with no caller-facing opt-out, `press_key` and `type_text` are the whole vocabulary for it while one is up, so an IME key with no `press_key` equivalent cannot be touched |
 | `long_press` | Implemented as a drag in place with a duration. Refused under the keyboard exactly as `tap` is |
 | `swipe` / `scroll` | **Only where the drag starts** is refused under the keyboard: `swipe`'s `from`, and `scroll`'s own start, which is computed a quarter into the region rather than resolved and so is checked by the verb itself — `scroll` resolves its region with that check off, since the region's centre is a point the gesture never touches and a list laid out whole behind the keyboard would otherwise be refused for a drag starting clear of it. Where a drag ends is not checked — it does not decide who reads the drag |
-| `type_text` | Hides the device shell's quoting, so a space, an apostrophe and a shell metacharacter all arrive verbatim. **Non-ASCII it cannot hide — `input text` cannot type it at all** (§6), so the honest answer is a refusal naming the character rather than a silent drop. That refusal is an `unsupported-text` verb failure carrying the serial, the string and the offending characters as escapes, **not** an `internal_error`: the string is the caller's and it is the caller who can fix it (#61). **No target** — an agent taps the field first. **`clear: true` empties the focused field first** (#309), so the text replaces the old value; with `text: ''` it only clears. That is a fifth `canInput` primitive, `clearText` — select all, then backspace, never a guessed count, because nothing says how long a field's text is and a password field reads back masked (§6) — and the verb calls it before typing inside one action, so a device that cannot clear refuses **before anything is typed**, as an `unsupported-clear` verb failure carrying the serial and the backend's reason: never a silent no-op, never `missing-capability`, never `internal_error`. The iOS simulator refuses it until #302 measures a recipe |
+| `type_text` | Hides the device shell's quoting, so a space, an apostrophe and a shell metacharacter all arrive verbatim. **Non-ASCII it cannot hide — `input text` cannot type it at all** (§6), so the honest answer is a refusal naming the character rather than a silent drop. That refusal is an `unsupported-text` verb failure carrying the serial, the string and the offending characters as escapes, **not** an `internal_error`: the string is the caller's and it is the caller who can fix it (#61). **No target** — an agent taps the field first. **`clear: true` empties the focused field first** (#309), so the text replaces the old value; with `text: ''` it only clears. That is a fifth `canInput` primitive, `clearText` — select all, then backspace, never a guessed count, because nothing says how long a field's text is and a password field reads back masked (§6) — and the verb calls it before typing inside one action, so a device that cannot clear refuses **before anything is typed**, as an `unsupported-clear` verb failure carrying the serial and the backend's reason: never a silent no-op, never `missing-capability`, never `internal_error`. The iOS simulator refused it until a recipe was measured; #302 measured Cmd+A then backspace in one HID stream, and it clears there too (§6) |
 | `press_key` | Back, home, recents, wake — and, since #301, the editing keys `delete` (backspace, never forward delete), `enter` (whatever the focused control does with it) and `tab` (focus to the next control). An optional `times` (1 to `MAX_KEY_PRESSES`, 20; default 1) repeats the press in one call, **composed in the verb rather than the backend**, with one after-state after the last press; zero is `invalid_params`, because pressing nothing would report a success. **No target**, so it needs no screen read to aim, which makes it the one input verb provable end to end on hardware before `read_screen` (R13). The keys are **one vocabulary, not a promise every platform has all of them**: a backend with no equivalent for one of them refuses **that key by name** — an `unsupported-key` verb failure carrying the serial and the key — deliberately not `missing-capability` and not `internal_error`, because a backend that takes input and lacks one key is a narrower backend rather than a broken one (#215) |
 | `hide_keyboard` | Puts the on-screen keyboard away **if one is up, and presses nothing if none is** (#307). **Never an unconditional `back`**: on Android back closes an open keyboard and, with none open, leaves the screen (§6), so the backend reads the keyboard's state from the same dump `screen.keyboard` comes from and presses only when it says one is up. The decision and the gesture are the backend's; the verb layer neither branches on the platform nor assumes a back key exists. Its own capability, `canHideKeyboard` — `true` on Android, `false` on the iOS simulator, where the call answers `missing-capability` naming the flag and the device. **The reporting half of that recipe is measured there now and the dismissal is what the flag still waits on** (#298, §6): the simulator's accessibility tree names the keyboard on every key node, so the read a safe dismissal needs exists, and no gesture that closes a simulator keyboard has been verified against a device. **No target**; the after-state's `screen.keyboard` is the evidence it worked |
 
@@ -175,7 +175,7 @@ Working names. All of them take a device handle, and over the wire that handle i
 | Verb | Notes |
 |---|---|
 | `install_app` / `launch_app` / `stop_app` / `clear_app_data` | The last three address a **package**, so they resolve no target and need no capability — the backend methods behind them are required ones. `stop_app` cannot tell a stopped app from a package that was never installed (§6); the state after the action is what answers that. `install_app` is the one that crosses the machine boundary: the caller sends the package **as bytes from its own machine**, never a path, and the host writes it to a file of its own, installs it pinned to the leased device, and deletes the file. It carries no app id — the core knows no application's name (D13) — and a package over the named cap is refused by name rather than truncated (R24). **It also has a second shape, and it is the one that still knows no application's name** (R17 phase 3): a call with no `packageBase64` runs the `install` command declared by *the lease's project*, on the host, with `ROVER_DEVICE_SERIAL` set to the leased device — a verb the caller asks for, never something that happens at grant time, bounded at five minutes (a build, not a teardown; a quarter of the lease TTL; past the client's 30 s default, which such a caller has to raise) and **cancelled with the lease**: a build is the one thing a verb awaits that revoking a backend cannot stop, so the verb call carries an abort signal beside its guard and a release or an expiry kills the child — otherwise those five minutes would be not this caller's wait but the *device's*, since a restoration waits for the ending lease's verb calls and every `acquire_device` waits on the restoration. That wait is bounded anyway, the way the teardown's already was. No project registered, no `install` declared and a non-zero exit are three **named** failures carrying the exit code, the signal and a stderr tail, never `internal_error`; a lease that ended underneath one is the ordinary `no-lease` refusal instead, because a build stopped by its caller going away is not a build that failed. **The client sends the package** (R24 phase 2): `rover install <lease-id> <local-path>` reads it on the machine running the CLI and refuses a source that is missing, cannot be read, is not a regular file, or is over `MAX_TRANSFER_BYTES` **before connecting** — exit 2 with the command's usage, naming the file, its real size off `stat` and the limit, so the host is never asked and nothing partial is ever sent. **Verified on hardware with R24 phase 2** (§6, 2026-08-30): a real 29 487-byte APK installed through `rover install` and confirmed by `pm path` moving to `/data/app`. One *small* package — the cap that refuses a 45 MB one is unchanged |
-| `read_logs` | Catches a failure a screenshot will not show. A **bounded** read — the most recent *n* entries, including the buffer the platform records crashes in, with a `truncated` flag so a short read is not read as a quiet device. **Selectable** (#303): optional `appId` (the pids of its running process, resolved on the host), `pid`, `minLevel`, `tag`, `since` (a `timestamp` an entry of this device carried, never a client clock — D17) and `buffers` (`main`, `system`, `crash`, `events`), combined by narrowing and applied on the host **before** the count and byte bounds, so `truncated` speaks about matching entries. One a device cannot apply is a `log-filter-refused` failure naming it. No following: a tail that stays open is a wait with no condition and a stream over IPC |
+| `read_logs` | Catches a failure a screenshot will not show. A **bounded** read — the most recent *n* entries, including the buffer the platform records crashes in, with a `truncated` flag so a short read is not read as a quiet device. **Selectable** (#303): optional `appId` (the pids of its running process, resolved on the host), `pid`, `minLevel`, `tag`, `since` (a `timestamp` an entry of this device carried, never a client clock — D17) and `buffers` (`main`, `system`, `crash`, `events`), combined by narrowing and applied on the host **before** the count and byte bounds, so `truncated` speaks about matching entries. One a device cannot apply is a `log-filter-refused` failure naming it. **The iOS simulator pushes every selection into `log show` itself (#304)** — `--predicate` for the processes, the level and the subsystem, `--start` for `since` — and then re-applies all of them on the host, so the answer means what the Android one means; of the buffers it accepts `main`, which *is* its unified log, and refuses `system`, `events` and `crash` by name, crash reports there being host files outside the log store. No following: a tail that stays open is a wait with no condition and a stream over IPC |
 | `set_airplane_mode` / `set_wifi` | See §6 — recipes that need no root |
 | `pull_file` / `push_file` | The file crosses the boundary **as bytes in both directions**, and no path in either call or answer is a path on the host (D19). `push_file` takes the caller's bytes and a device path; `pull_file` takes a device path and answers with the bytes on `ActionResult.artifact`, exactly where `screenshot` puts a capture — so its result carries no path at all and the client writes the file wherever it likes. The device path is checked as a shape at the boundary (absolute, non-empty, bounded) rather than escaped, because it reaches the transfer as an argument and never as part of a command line a shell reads. One payload, one message: over the named cap is a refusal naming it, never a file cut to fit (R24). No recursive directory transfer. **Both directions are driven from the client** (R24 phase 2): `rover pull <lease-id> <device-path> --out <path>` writes the bytes on the machine running the CLI through the same `src/cli/_shared/artifact.ts` `screenshot` uses — so a refusal leaves no file at `--out` at all — and `rover push <lease-id> <local-path> <device-path>` reads its source through `src/cli/_shared/upload.ts`, which refuses a missing, unreadable, non-regular or over-sized source before any connection exists — the kind first, since only a regular file's size predicts the transfer (§6). The device path goes on the wire exactly as typed and is checked by `DevicePathSchema` at the host, not second-guessed by the client |
 
@@ -1980,6 +1980,69 @@ Every line below was run before it was written down.
   fixed-width and zero-padded, so a string comparison is a time comparison — until New Year,
   when an anchor taken on `12-31` sorts after every entry of `01-01`. A known limit rather than a
   trap that has bitten; it is stated in the backend's comment.
+### Selecting a log read on the iOS simulator (2026-10-06, #304)
+
+Run on a booted **iPhone** simulator, **iOS 26.4.1** (23E254a), **Xcode 26.4.1** (17E202), macOS
+**27.0.1** (26A434), through `xcrun simctl spawn <udid>` so every command below is the *guest*
+program's, which is what `src/backends/ios-simulator/backend.ts` sends. Every line was run before
+it was written down.
+
+- **A predicate is worth having, on a quiet bench too.** `log show --style ndjson --info --debug
+  --last 30s` answered **4,316 entries / 5.45 MB / 1.06 s**; the same window with `--predicate
+  'processIdentifier == 49847'` answered **1,151 / 1.39 MB / 1.25 s**, every entry carrying that
+  `processID`. Two pids as `(processIdentifier == 49847 OR processIdentifier == 26209)` answered
+  1,151 and 3 entries respectively and nothing else. `docs/IOS.md` §5's 92,204-against-268 figure
+  is a busier bench; the shape is the same.
+- **`messageType` takes the keyword lowercase and unquoted.** `--predicate '(messageType == error
+  OR messageType == fault)'` answered **218 lines — 184 `Error` and 33 `Fault`** and nothing else.
+  Neither quotes nor the numeric code that circulates for it were needed.
+- **The level flags are a lookback over levels, and `--info` alone is the right stop for `info`.**
+  One process over the same window: with `--info --debug`, `Info` 176 / `Default` 788 / `Error` 74
+  / `Fault` 1 / **no `messageType`** 122. With `--info` alone the same five shapes appear and
+  `Debug` does not. With neither flag, `Info` is gone as well. That matters because an entry
+  carrying no `messageType` maps to `info` (`parsers/unified-log.ts`), so `minLevel: 'info'` may
+  drop `--debug` and must not drop `--info`.
+- **`subsystem ==` selects exactly, and an absent match is the host being quiet rather than a
+  broken clause.** `subsystem == "com.apple.locationd.Core"` answered 281 lines — the 280 entries
+  a plain read of the same window attributed to it, plus the trailer. Two earlier attempts
+  (`com.apple.UIKit`, `com.apple.runningboard`) answered nothing at all, and the reason was that
+  those subsystems were silent in *that* window, not the predicate: the subsystem was taken from a
+  capture of a different window. **Take the tag out of a read of the window you are about to
+  select in.**
+- **An escaped tag is accepted and a malformed predicate fails loudly.** `subsystem == "a\"b\\c"`
+  exited 0 and matched nothing (one line, the trailer). `--predicate 'subsystem == '` exited **64**
+  with `log: Bad predicate (Unable to parse the format string "subsystem == "): subsystem ==`.
+- **`--start` will not take the timestamp its own entries print.** An entry carries `2026-10-06
+  14:54:08.135887+0200`; `--start` with that value fails — `log: Failed conversion of '…' using
+  format '%Y-%m-%d %H:%M:%S%z'` — while `--start "2026-10-06 14:54:08+0200"` is accepted. **So a
+  `since` must be floored to the second**, and that is a requirement rather than an optimisation.
+  The floor is safe: it moves the device-side bound earlier, and the host comparison makes the
+  boundary exact. The same read's first entry was `…:08.124559`, *earlier* than the `…:08.135887`
+  entry the anchor came from, and its last was the moment of the call — **`--start` with no
+  `--last` runs to now**, so the two bounds must never be sent together.
+- **A far anchor is expensive, and the cost is why a bare `since` can fail rather than answer.**
+  No predicate: five minutes back **69,465 entries / 87.3 MB / 2.6 s**; thirty minutes back
+  **577,068 / 739.9 MB / 14.9 s** — the first past the 64 MB buffer, the second past it and past
+  the ten-second budget as well. With `--predicate 'subsystem == "com.apple.locationd.Core"'`
+  beside it: 4,786 / 6.6 MB / 1.19 s and 10,301 / 14.8 MB / 1.64 s. An old anchor wants a
+  selection beside it.
+- **`launchctl list` inside the device is how an app becomes pids, and the pid it reports is the
+  one the log prints.** `simctl spawn <udid> launchctl list` answered in ~0.4 s with a
+  `PID\tStatus\tLabel` header and **379 jobs**, four of them `UIKitApplication:` labels. An app's
+  row reads `50111\t0\tUIKitApplication:com.apple.Preferences[e4bc][rb-legacy]`: the bundle id sits
+  between the colon and the **first** `[`, and a looser match takes
+  `com.apple.chrono.WidgetRenderer-Default`'s process for `com.apple.chrono`'s. Agreement with the
+  log: `simctl launch` reported `com.apple.Preferences: 49847`, `launchctl list` carried 49847, and
+  every entry of the `processIdentifier == 49847` read carried that `processID`.
+- **A terminated app's job leaves the listing rather than going to `-`.** After `simctl terminate
+  com.apple.Preferences` the label was gone from a fresh listing — four `UIKitApplication:` rows
+  became three. `-` is still the PID column's spelling for a registered, idle job (198 of the 379
+  rows carry it), so "not running" has two shapes and both mean no process. The capture is
+  `tests/fixtures/ios-simulator/launchctl-list.xcode26.4.1-ios26.4.1.txt`.
+- **`getpwuid_r did not find a match for uid 501` is on stderr of every one of these runs**, at
+  exit 0. It is noise from the guest's own passwd lookup, not a failure, and the backend reads
+  stdout.
+
 ### A Gradle install names a variant, and installs onto every attached device unless pinned (2026-10-06, #305)
 
 Two facts behind what `rover init` proposes as a project's `install` hook, and **one of them is
@@ -2089,6 +2152,51 @@ through a daemon built from this change (`tap`, `type_text`, `type_text { clear:
   true }` read `right`, and focus stayed in the field.
 - **Not checked: a multi-line field.** The device has no SIM, so Messages offers no compose box,
   and no other multi-line field was at hand without creating content on the device.
+
+### `delete`, `enter`, `tab` and clearing a field on the iOS simulator (2026-10-06, #302)
+
+Checked on a booted **iPhone 17** simulator on **iOS 26.5**, Xcode 27.0 (27A266a), macOS 26.6.2,
+an `idb_companion` built 2026-09-01, the simulator set to Polish. Driven first through this
+checkout's own backend (`pressKey`, `clearText`, `typeText`, `readScreen`), with the keys sent as
+raw HID usages before the table pressed them, and then end to end over a lease through a daemon
+built from the change. Every step's evidence is a screen read, because `hid` answers an empty
+success for any usage, including one that does nothing (`docs/IOS.md` §4).
+
+- **`delete` is HID keyboard usage 42 (Backspace).** Spotlight's field: `zzqqxx` → one press →
+  `zzqqx`; over the wire `press_key { key: 'delete', times: 3 }` → `zzq`. On an empty field it did
+  nothing visible and failed nothing. **The trap: Spotlight's inline completion.** With one showing
+  (the field reads `giotto, Sugestia giotto`), the first backspace dismisses the completion and
+  deletes nothing, so `rover` typed into an empty field needed six presses to empty. That is the
+  field's behaviour, and a hardware keyboard does the same.
+- **`enter` is HID usage 40 (Return), and what it does belongs to the focused control.** In
+  Spotlight, `safari` then `enter` opened Safari, its top hit; a query with no hit left Spotlight as
+  it was; in the last field of Contacts' new-contact form it moved focus back to the first field.
+  **Over the wire, the after-state of an `enter` that launches an app came back `failed`**, as a
+  read of a screen that had not drawn yet. That is the post-state being honest about a screen in
+  transition, and the next read showed Safari.
+- **`tab` is HID usage 43 (Tab), and it moves focus to the next field.** In Contacts' new-contact
+  form (`com.apple.MobileAddressBook`, *Add*): tap the first field, `type_text 'alpha'`, `press_key
+  tab`, `type_text 'beta'`, `press_key tab`, `type_text 'gamma'` → First, Last and Company each held
+  one word (auto-capitalised). So it is pressed, not refused. As on Android a read carries no focus
+  flag, and the typed text landing is the only evidence of where focus went. It inserts no
+  character, which is why `type_text` still refuses `\t`. **There is no device case for it**: the
+  form is reached through a button found by its label, and `tests/device/ios-simulator/input.test.ts`
+  matches on nothing a locale translates.
+- **`clearText` is Left GUI (227) held over `a` (4), released, then Backspace (42), in one `hid`
+  stream** (`CLEAR_TEXT_EVENTS`, `src/backends/ios-simulator/input.ts`). The select-all is honoured
+  before the backspace in the same stream, so the two-stream fallback the plan carried was not
+  needed and was not shipped. Spotlight: `giottozzqqxx` → the placeholder; caret moved to the start
+  of `Zabcdefghijkl` → the placeholder (the whole value, not just what lay before the caret); a
+  field showing an inline completion → the placeholder; an empty field → accepted, unchanged.
+  Contacts' Company field → its placeholder. Over the wire, `type_text { text: 'zzqqxx', clear:
+  true }` replaced a leftover query, `{ text: '', clear: true }` left the placeholder, and two
+  `clear: true` calls in a row in Contacts left `Delta` where `Gamma` had been. **An emptied field
+  reads back as its placeholder** (`Szukaj`, `Firma`), the same as an Android hint.
+- **Latency.** One warm `hid` stream of any of these took 15–18 ms for the first call on a
+  companion and 1–2 ms after that. A call that has to start the companion is ~0.4 s. Through the
+  verb, including its after-read: `press_key` 0.6–0.9 s, `type_text` with `clear` 0.7–0.9 s.
+- **Not checked: a secure (password) field**, since none was reachable on the bench without a
+  passcode or network, and **a multi-line text view**.
 
 ---
 

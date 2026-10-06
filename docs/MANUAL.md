@@ -25,6 +25,7 @@ repository. `ai/RULES.md` is where an agent starts.
   - [Where Rover looks for `idb_companion`](#where-rover-looks-for-idb_companion)
   - [Project hooks](#project-hooks)
     - [A Gradle install, and why it names the device](#a-gradle-install-and-why-it-names-the-device)
+    - [An Xcode install, and why it names the simulator](#an-xcode-install-and-why-it-names-the-simulator)
     - [Every lease gets a slot, and its own ports](#every-lease-gets-a-slot-and-its-own-ports)
   - [The artifact archive](#the-artifact-archive)
     - [Sweeping the archive](#sweeping-the-archive)
@@ -68,7 +69,7 @@ yours wins over anything Rover installed — see [where Rover looks for
 
 | Where | What |
 | --- | --- |
-| `~/.rover/projects/my-app.json` | the project's hook file — what the host installs and stops for a lease on it (D13), detected from a Gradle wrapper where there is one, and from the app's own build file where that declares product flavors |
+| `~/.rover/projects/my-app.json` | the project's hook file — what the host installs and stops for a lease on it (D13), detected from a Gradle wrapper where there is one, and from the app's own build file where that declares product flavors — or from an Xcode project or workspace's shared scheme, built for the leased simulator |
 | `my-app/.mcp.json` | the `rover` MCP server, merged into whatever was already there |
 | `my-app/ROVER.md` | the page an agent reads before its first call. Generated — re-run `init` rather than editing it, and move it wherever it belongs |
 | `CLAUDE.md`, `AGENTS.md`, `GEMINI.md` | a short block saying that a manual test means Rover. `--write` inserts it; without the flag it is printed |
@@ -498,10 +499,10 @@ short form:
   than papering over it. A simulator answers every required call, records video, **reads the
   screen** and **takes input**, and refuses the network toggles **by name**, naming the capability
   and the device. Input is where that honesty gets finer-grained than a flag: `press_key` answers
-  `home` and `wake` and refuses `back` and `recents` **by name**, naming the key rather than
-  sending some other navigation that happens to be reachable — and refuses `delete`, `enter` and
-  `tab` the same way until they have been measured on a simulator (#302), as it does `type_text`'s
-  `clear`, as `unsupported-clear` (#309). Physical iPhones are not supported at
+  `home`, `wake` and the editing keys `delete`, `enter` and `tab`, and refuses `back` and
+  `recents` **by name**, naming the key rather than sending some other navigation that happens to
+  be reachable. The editing keys and `type_text`'s `clear` were each watched landing on a simulator
+  before they were answered (#302). Physical iPhones are not supported at
   all — hardware cannot answer `screenshot`, which is why the backend is named `ios-simulator` and
   not `ios`.
 - **Pixels are gone whenever an app blocks screen capture** — the system hands back a valid, all
@@ -841,9 +842,9 @@ read shows the field's new value. Clearing selects everything and deletes it —
 input primitive, `clearText` — so it needs no length and works on a password field, whose screen
 read is bullets with only the last character visible. A device that cannot clear answers an
 `unsupported-clear` failure naming the serial and its reason, **before anything is typed**; the
-fallback is `press_key` `delete` with `times`, when you know how long the text is. The simulator
-refuses it until #302 has watched a recipe land; Android clears (`PROJECT.md` §6). On Android an
-emptied field reads back as its hint text, when it has one.
+fallback is `press_key` `delete` with `times`, when you know how long the text is. Both platforms
+clear (`PROJECT.md` §6): Android with Ctrl+A then delete, the iOS simulator with Cmd+A then
+backspace (#302). An emptied field reads back as its hint or placeholder text, when it has one.
 
 **`launch_app`, `stop_app` and `clear_app_data` are that same spine used three more times**
 (`src/verbs/app.ts`), and they are what a verb looks like when it addresses **a package rather than
@@ -1074,6 +1075,20 @@ read_logs { buffers: ["crash"], since: T }           → whether anything crashe
 After a crash the app's process is gone, so `appId` has nothing to select by and is refused; the
 crash buffer, or the dead process's `pid` taken from the crash entry, is how to read it.
 
+**Three of those selections mean something platform-specific, and the shapes differ** (#304):
+
+- **`since` is an entry's own `timestamp` string, and that string is not the same shape on both
+  platforms** — `MM-DD HH:MM:SS.mmm` on Android, `YYYY-MM-DD HH:MM:SS.ffffff±HHMM` on the iOS
+  simulator. Take it from a read of the device you are about to read again, and an anchor from the
+  wrong platform comes back refused by name rather than quietly matching nothing. On the simulator
+  an anchor far in the past is also an expensive read and may fail outright rather than answer
+  short — pair an old anchor with another selection.
+- **`tag` is the *subsystem* on the iOS simulator**, which is the field its entries' own `tag` is
+  filled from. Copy one out of a read rather than guessing a name.
+- **The simulator answers `main` only**, that being its unified log; `system`, `events` and
+  **`crash`** are refused by name there. So the crash recipe above is Android's: on a simulator,
+  read a dead process by the `pid` you noted while it was alive.
+
 **`install_app`, `push_file` and `pull_file` are the family whose whole subject is *which machine a
 file is on*** (`src/verbs/files.ts`). The agent is somewhere else, the device is here, and the host
 is in between — so a package to install and a file to push arrive **as bytes from the caller's
@@ -1100,7 +1115,8 @@ that project), `install-hook-undeclared` (it has one and it declares no `install
 command's own stderr. **`install-hook-undeclared` tells the agent not to install around the hook**,
 because a build tool's install task that names no device installs onto every device attached to the
 host — see ["A Gradle install, and why it names the
-device"](#a-gradle-install-and-why-it-names-the-device) for what declaring one looks like. A call
+device"](#a-gradle-install-and-why-it-names-the-device) and ["An Xcode install, and why it names the
+simulator"](#an-xcode-install-and-why-it-names-the-simulator) for what declaring one looks like. A call
 that *does* carry bytes is unchanged in every respect. **Both clients
 reach this shape.** `rover install <lease-id>` with no path is it — the CLI raises its own request
 timeout past the host's five minutes so a build that is merely compiling is never reported here as
@@ -1218,10 +1234,10 @@ and it is filed as its own issue.
 *keys* by name.** What has been driven **over a lease** on a booted simulator is `device_info`,
 `start_recording` — including the refusal of a second one and the release teardown that stops an
 abandoned recorder — the two `missing-capability` refusals, and `press_key`: `home` and `wake`
-answered, `back` and `recents` refused as `unsupported-key` carrying the key (and `delete`, `enter`
-and `tab` refused the same way, before any round trip, until #302 measures them — and `type_text`'s
-`clear` with them, as `unsupported-clear`), which are this
-repository's first per-key refusals from a device rather than from a synthetic backend;
+answered, `back` and `recents` refused as `unsupported-key` carrying the key, which are this
+repository's first per-key refusals from a device rather than from a synthetic backend — and
+`delete` with `times`, `enter`, `tab` and `type_text` with `clear`, each answered and read back
+(#302);
 `record_video` and
 `stop_recording` over a lease are gated on a host that has `ffmpeg`, since the verb answers with
 the normalised recording and its frames or with neither, and they do not run where it is absent.
@@ -1577,7 +1593,7 @@ after it, under `ROVER_PROJECTS_PATH`:
 by reading the directory and reporting the file each detection came from — see [Quick
 installation](../README.md#quick-installation). Everything below is what one looks like written by hand, and
 what init cannot guess for you: `services`, `teardown`, any install more involved than a
-build command, and which variant a project with several product flavors should install.
+build command, and which variant or scheme a project with several of them should install.
 
 ```jsonc
 {
@@ -1729,6 +1745,79 @@ declared in that file as a literal `flavorDimensions` (a convention plugin, an a
 `flavorDimensions += dims`) — get the same treatment and a report saying why. In both
 cases the fix is one re-run: `rover init --install '<the line you want>' --force`, or the line
 written into the hook file by hand.
+
+#### An Xcode install, and why it names the simulator
+
+The same job for a simulator: build the app for the device the lease holds and install it there,
+and nowhere else. A workspace `ios/Runner.xcworkspace` whose shared scheme `Runner` runs
+`Runner.app` in `Debug`:
+
+```jsonc
+{
+  "project": "checkout-ios",
+  "install": {
+    "command": "bash",
+    "args": [
+      "-lc",
+      "d=\"$HOME/Library/Developer/Xcode/DerivedData/rover-$ROVER_PROJECT-$ROVER_SLOT\" && xcodebuild -workspace ios/Runner.xcworkspace -scheme Runner -configuration Debug -destination \"id=$ROVER_DEVICE_SERIAL\" -derivedDataPath \"$d\" -quiet build >&2 && xcrun simctl install \"$ROVER_DEVICE_SERIAL\" \"$d/Build/Products/Debug-iphonesimulator/Runner.app\""
+    ],
+    "cwd": "/srv/checkout-ios"
+  }
+}
+```
+
+**`$ROVER_DEVICE_SERIAL` names the simulator in both halves, and `booted` never does.** On the
+simulator backend a device's serial is its UDID, so `-destination "id=…"` builds for exactly that
+simulator and `simctl install "…"` installs onto exactly that one. `booted` in its place means
+whichever booted simulator the tool picks — on a shared host, quite possibly a neighbour's lease —
+and a hard-coded UDID is the hard-coded serial of the Gradle section in another form: right until
+the first lease that got a different simulator.
+
+**Derived data is per project and per slot, outside the checkout.** Two leases on one project can
+install at once, and two builds sharing one derived-data directory contend for its build database.
+A slot is never held by two live leases and is reused, so `rover-$ROVER_PROJECT-$ROVER_SLOT` gives
+each concurrent install its own directory while an incremental build still survives from one lease
+to the next — the same namespacing contract the helper services keep below. It sits under Xcode's
+own `DerivedData`, which leaves the project's tree unwritten and is a place Xcode users already
+treat as a disposable cache.
+
+**`-configuration` is the scheme's own**, so the products directory is the one the second half
+names: `<configuration>-iphonesimulator/<App>.app` under `Build/Products`. A target that moves its
+products elsewhere (`CONFIGURATION_BUILD_DIR`, `SYMROOT`) breaks that loudly — `simctl install`
+cannot find the bundle — and the line wants that path edited. **`-quiet build >&2`** is because a
+hook's stdout is drained and dropped and only the tail of its stderr reaches `install-hook-failed`:
+`-quiet` keeps the build to warnings and errors, and `>&2` sends them where the agent will read
+them. `-workspace` builds through the workspace a dependency manager wired its projects into;
+a project with no workspace is built with `-project App.xcodeproj` instead.
+
+Two host facts the hook cannot fix for itself, and both fail as `install-hook-failed` naming the
+problem in the stderr tail. **The developer directory**: a hook inherits the daemon's environment,
+not the backend's own resolution of Xcode, so on a host whose `xcode-select -p` points at the
+Command Line Tools `xcodebuild` and `xcrun simctl` both refuse — fix it with `sudo xcode-select -s
+/Applications/Xcode.app/Contents/Developer`, or with `"env": { "DEVELOPER_DIR":
+"/Applications/Xcode.app/Contents/Developer" }` on the hook. **The licence**: an Xcode whose licence
+has not been accepted refuses the same way until `sudo xcodebuild -license accept` is run once. And
+the five-minute bound applies: a cold build of a large app can outrun it, after which the next
+install is incremental.
+
+**This line has not been run end to end yet.** It was written on a host whose Xcode licence had not
+been accepted, so neither half has been executed against a booted simulator; until that run is
+recorded in `PROJECT.md` §6, treat it as a reasoned proposal and check the first install by hand.
+
+**What `rover init` does with all this.** It looks for a `.xcworkspace` or `.xcodeproj` in the
+project's root and its immediate subdirectories (`ios/`, `iosApp/`), and reads **shared schemes
+only** — the ones under `xcshareddata/`, which a checkout carries; a scheme that lives in
+somebody's `xcuserdata/`, or one Xcode would create from the targets on the fly, is a build that
+works on one machine or on none. A project a workspace names is built through the workspace and not
+offered again on its own. A scheme counts when its Run action launches a `.app`, so frameworks,
+app extensions, test-only schemes and a dependency manager's own schemes fall out. **Exactly one
+app scheme: it proposes this line**, naming the scheme file. **Several: it registers none** and
+lists each as a ready-to-paste `--install` line, for the reason several Gradle variants get none.
+**None shared**: it says so — tick *Shared* for the scheme in Xcode's *Manage Schemes…*, or pass
+`--install`; `xcodebuild -list` lists what there is. **A Gradle wrapper with an `app` module and an
+Xcode container in one project** gets no install and every candidate from both listed, because one
+install hook serves one build system. A Swift package on its own gets nothing: it cannot produce an
+application bundle for the simulator.
 
 The **helper services** are the one hook the host runs *without being asked*, at both ends of a
 lease. A grant starts them in the order they are declared, after the device has been re-verified
