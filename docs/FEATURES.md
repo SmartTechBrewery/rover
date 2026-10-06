@@ -331,7 +331,10 @@ read **yet** — an application still starting, so there is no window to describ
 *not yet*, and both waits poll through it; if it lasts to the deadline the timeout says the
 screen was never readable rather than that the element was not found. A verb that reads once
 instead fails on it by name (`unreadable-screen`), because polling is a wait's job and not a
-primitive's. `wait_until_gone` asks the mirror
+primitive's. **Both backends report it, and each recognises its own platform's version** — on
+Android the screen reader saying it had no root node to walk, on the iOS simulator an
+accessibility read that lists the starting application and nothing in it with a rectangle. Neither
+is an empty screen, and neither is reported as one. `wait_until_gone` asks the mirror
 question of *matches* rather than of a resolution, and will not take a text target's `index`, since
 an index names a slot in the match list and a slot empties the moment any sibling leaves.
 
@@ -996,6 +999,19 @@ working on — and there is nothing to start by hand afterwards.
   agent reads before its first call (generated — re-run `init` rather than editing it); and a short
   block in `CLAUDE.md` / `AGENTS.md` / `GEMINI.md` saying that a manual test means Rover (`--write`
   inserts it, without the flag it is printed).
+- **The install it proposes is read, not assumed.** A Gradle project that declares **product
+  flavors** has one install task per variant and no `:app:installDebug` at all, so init reads
+  `app/build.gradle(.kts)`: no flavors keeps the plain task, exactly one variant gets that
+  variant's own task with the file it was read from named, and **several variants get none
+  registered** — each is listed as a ready-to-paste `--install` line instead. Flavors that only
+  Gradle could resolve, built in a loop or through `all { }`, or spread over several dimensions
+  whose order is declared outside that file, likewise get none, and the report
+  says that is why. The reasoning is the one every detection here follows: a hook that installs
+  the wrong variant is an install that "worked" and left the device unchanged, which is strictly
+  worse than the named `install-hook-undeclared` an undeclared install answers with. Every
+  proposed line pins the build to the lease's own device with
+  `ANDROID_SERIAL="$ROVER_DEVICE_SERIAL"`, because an unpinned install task lands on **every**
+  attached device — on a shared host, the neighbours' leases.
 - **`rover doctor`** reports the programs the host needs and where it found them. **`rover doctor
   --fix --actor <who>`** downloads a pinned `idb_companion` release **on the host**, checks it
   against the published checksum and unpacks it under that host's `~/.rover`, where the search looks

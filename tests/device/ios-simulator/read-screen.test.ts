@@ -1,7 +1,9 @@
 import { afterAll, describe, expect, it } from 'vitest';
 import { IosSimulatorDeviceBackend } from '@/backends/ios-simulator/backend.js';
 import type { Device } from '@/core/device.js';
-import { parseDeviceSerial } from '@/core/ids.js';
+import { UnreadableScreenError } from '@/core/errors.js';
+import { parseAppId, parseDeviceSerial } from '@/core/ids.js';
+import { waitForCondition } from '@/core/wait.js';
 import { shutDownSimulator } from '../../helpers/simulators.js';
 
 /**
@@ -17,10 +19,16 @@ import { shutDownSimulator } from '../../helpers/simulators.js';
  * `deviceInfo().screen.widthDp`/`heightDp` are in, so that a backend applying no scale conversion
  * is right rather than merely consistent with its own fixtures.
  *
- * **Read-only**: it reads the screen as it finds it, boots nothing, launches nothing, taps nothing
- * and changes no setting, so it is safe against a device somebody else is looking at
- * (`docs/IOS.md` §8, trap 4). Nothing below hardcodes a size, a model or an app — every assertion
- * is a property of whatever this host has booted and whatever is on its screen.
+ * **Almost read-only, and the exception is named rather than left to be discovered.** Every case
+ * but the last reads the screen as it finds it, boots nothing, launches nothing, taps nothing and
+ * changes no setting, so it is safe against a device somebody else is looking at (`docs/IOS.md`
+ * §8, trap 4). The last one cannot be: the state it pins only exists while an application is
+ * coming up, so it **launches Settings and reads across that launch**, then puts the device back
+ * where it found it with `stopApp` and a `HOME` press — the same honesty `app-control.test.ts`
+ * applies to driving Settings, and the same app, chosen because it is on every runtime and opening
+ * and closing it changes nothing a person would miss. It boots nothing and shuts nothing down.
+ * Nothing below hardcodes a size, a model or an app other than that one — every other assertion is
+ * a property of whatever this host has booted and whatever is on its screen.
  *
  * It takes no lease, for `./backend.test.ts`' reason: every call here is a read against a device
  * nobody is holding. What it does have to clean up is a **process** — the companion this read
@@ -147,6 +155,90 @@ describe.skipIf(!process.env.ROVER_TEST_SIMULATOR || !process.env.ROVER_TEST_IDB
 			);
 
 			await expect(rejection).rejects.toThrow(/no longer attached to this host/);
+		});
+
+		/**
+		 * **The invariant #300 established, against the one window where it can be observed.**
+		 *
+		 * Reading as fast as the companion answers across a cold launch, every sample is either a
+		 * screen — a non-empty list, with something on it that has a rectangle — or the typed
+		 * {@link UnreadableScreenError}. What it must **never** be is the third thing this method
+		 * used to be able to answer: a short list of nodes with no extent, which is the launching
+		 * application before it has drawn and which a caller cannot tell from a real screen
+		 * holding one nameless thing (`src/backends/ios-simulator/backend.ts`'s `noScreenYet`).
+		 *
+		 * **The reads run *beside* the launch rather than after it**, which is both what an agent
+		 * does and the only way this window is reliably inside the sampling: the placeholder lives
+		 * for a few hundred milliseconds from the moment the process is told to start, and a loop
+		 * that waits for `launchApp` to return has already spent some of it.
+		 *
+		 * It does not assert that the placeholder *was* met. Whether a given run catches it is a
+		 * race against how fast Settings comes up — 40 of 2623 reads across thirty launches on this
+		 * bench — and a case that insisted on seeing it would be a flake rather than a check. What
+		 * holds on every sample is the invariant, and the count is reported instead.
+		 *
+		 * **No sleeps**: the read loop is a deadline read off `Date.now()`, and the one place this
+		 * case has to wait for the platform is a `waitForCondition` — the wait vocabulary, not a
+		 * delay (`tests/unit/no-sleep.test.ts`, D12(b)). That wait is around the **launch**, and it
+		 * is measured rather than defensive: `simctl launch` issued straight after a `terminate` of
+		 * the same app fails with *"did not return a process handle nor launch error. No such
+		 * process"* (seen on this bench, 2026-10-06, iOS 26.4.1), because the process it is being
+		 * asked to replace has not finished going away. Retrying the launch is what the condition
+		 * is; nothing about the read is retried.
+		 *
+		 * The companion is warmed by the cases above, so the 3.34 s first read is not inside the
+		 * window.
+		 */
+		it('answers a screen or the typed “not ready yet”, never a tree with nothing in it', async () => {
+			const device = await bootedDevice();
+			const settings = parseAppId('com.apple.Preferences');
+
+			await backend.stopApp(device.serial, settings);
+			await backend.pressKey(device.serial, 'home');
+			await backend.readScreen(device.serial);
+
+			let notReadyYet = 0;
+			let samples = 0;
+			try {
+				const launched = waitForCondition({
+					what: `a cold launch of ${String(settings)} to be accepted`,
+					timeoutMs: 15_000,
+					probe: async () => {
+						const refusal = await backend
+							.launchApp(device.serial, settings)
+							.then(() => null)
+							.catch((error: unknown) => (error as Error).message);
+
+						return refusal === null
+							? { met: true as const, value: undefined }
+							: { met: false as const, found: refusal };
+					},
+				});
+
+				const deadline = Date.now() + 5_000;
+				while (Date.now() < deadline) {
+					const elements = await backend.readScreen(device.serial).catch((error: unknown) => {
+						if (!(error instanceof UnreadableScreenError)) throw error;
+						notReadyYet += 1;
+						return null;
+					});
+					samples += 1;
+					if (elements === null) continue;
+
+					expect(elements.length).toBeGreaterThan(0);
+					expect(elements.some(({ bounds }) => bounds.width > 0 && bounds.height > 0)).toBe(true);
+				}
+
+				await launched;
+			} finally {
+				await backend.stopApp(device.serial, settings);
+				await backend.pressKey(device.serial, 'home');
+			}
+
+			expect(samples).toBeGreaterThan(0);
+			console.info(
+				`read across a cold launch: ${notReadyYet} of ${samples} sample(s) were "not ready yet"`,
+			);
 		});
 	},
 );

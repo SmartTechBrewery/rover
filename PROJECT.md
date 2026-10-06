@@ -730,6 +730,27 @@ correct; what follows is what building on it measured.
   run separately on the same device — ten `stop_app` / `launch_app` / `wait_for` rounds, ten
   answers of `ok` — but that device never produced the null-root line from a launch, so the
   *API 33 physical* half of the report is still only reproduced by proxy.
+  **The iOS simulator has the same state and wears a different face, measured 2026-10-06 (#300)**
+  — this bullet is extended rather than duplicated, because "what does a screen that is not
+  readable yet look like" is now answered for both platforms in one place. On an iPhone 17 under
+  iOS 26.4.1 and iOS 26.1 (`idb_companion` 1.5.2, Xcode 26.4.1), **2623 `accessibility_info`
+  reads across 30 cold launches of two apps**: every read succeeded, **none** came back as the
+  empty array, and **40** came back as a *single* node — an `AXApplication` carrying the
+  launching process's pid, no label, no value, and the frame `{0, 0, 0, 0}` — from the instant
+  `launchApp` returned to ~250 ms after it. So the "not yet" here is a **non-empty read with
+  nothing on it that has a rectangle**, where Android's is a line on stderr. `readScreen` throws
+  the same `UnreadableScreenError` for it, the same two waits poll through it, and nothing in the
+  verb layer needed changing. The empty read is deliberately left alone: `[]` was never observed,
+  settled or transient, while **every** settled screen carried a node covering the whole panel
+  (402×874 points), which is what makes "no node has any area" safe to refuse on.
+  **And the boot window on that platform is the counter-example that keeps the typed case
+  narrow.** Between `simctl` reporting `Booted` (0.7–2.4 s) and `bootstatus -b` returning (~9 s),
+  a read fails with *"SpringBoard is not running on the simulator…"* — and **one such read wedges
+  that simulator's accessibility bridge for the rest of the boot**, every later read answering
+  *"No translation object returned for simulator…"* over a fully drawn screen, through a fresh
+  companion, until a shutdown and re-boot (`docs/IOS.md` §8, trap 17). A type whose contract is
+  *poll through this* would therefore break the device, so that window stays an untyped refusal —
+  the same line the idle-state bullet draws, reached from the opposite direction.
 - **Two `uiautomator dump`s at once on one device get one of them killed — exit 137, both
   streams empty.** Two `adb -s … shell uiautomator dump /sdcard/window_dump.xml` started
   together: one printed the ordinary confirmation at exit 0 and the other exited **137** having
@@ -1742,6 +1763,47 @@ legitimately **empty** needs `|| true` as a matter of course, and the machine wh
 nothing to find is the machine the guard exists for. Probe a guard with the condition absent for
 real, not with the lookup stubbed.
 
+### A Gradle install names a variant, and installs onto every attached device unless pinned (2026-10-06, #305)
+
+Two facts behind what `rover init` proposes as a project's `install` hook, and **one of them is
+recorded here without having been run on this machine** — said plainly, per `ai/RULES.md` §6,
+rather than left to read as checked.
+
+**1. A project with product flavors has no `installDebug` task.** The build plugin names every
+variant after its flavors — in `flavorDimensions` order, the first as declared and each later one
+capitalised — followed by the build type, and the install task is `install` plus that variant name
+capitalised. Dimensions `env, tier` with flavors `dev`/`prod` and `free`/`paid` therefore give four
+variants and four tasks, `:app:installDevFreeDebug` through `:app:installProdPaidDebug`, and
+`:app:installDebug` is not among them. This is why the constant init proposed until #305 — always
+`:app:installDebug` — was a hook that could not work in any flavored project, failing at the
+agent's first `install_app` rather than at init time.
+
+*What was checked here:* the rule was applied to the two real flavored projects that happen to be
+on this machine, both read statically and neither built — they are unrelated work and are not named
+here, for the reason §7's rule exists. One is Groovy, declaring `flavorDimensions "environment"`
+and four flavors through `create("…")`, and resolves to four debug variants; the other is the
+Kotlin DSL, declaring `flavorDimensions += "environment"` and two flavors, and resolves to two.
+**`./gradlew :app:tasks` was not run in either**: both are somebody else's working checkout, and a
+configuration run there writes build caches for a fact with no Rover-specific content in it. The
+parser is `gradleDebugVariants` in `src/cli/init/detect.ts`, with its cases in
+`tests/unit/cli/init-detect.test.ts`.
+
+**2. An install task with no device named installs onto every attached device.** Not onto a device
+the build picks — onto all of them. That is what makes
+`ANDROID_SERIAL="$ROVER_DEVICE_SERIAL"` mandatory in the hook rather than tidy: on a host lending
+devices to several agents at once (D17), an unpinned install lands in the middle of every other
+lease as a change its holder never made and has no way to see. The host already sets
+`ROVER_DEVICE_SERIAL` on every hook child, so the variable is the whole fix.
+
+**This one was not verified on this machine.** `adb devices` lists none here — there is no device
+attached at all, let alone the two the check needs — so the before/after `pm list packages` on a
+second device was not run and nothing below should be read as if it had been. What *is* settled is
+the direction of the risk: the pinned form is correct whether or not the unpinned form is as
+indiscriminate as documented, so the hook init proposes does not depend on the unrun check.
+
+*The reading to take away:* a build-tool task name is a fact about somebody else's repository, and
+the only honest ways to get one are to read their build file or to ask their build tool. Inventing
+it from the common case is how a hook that "worked" installs nothing anybody is looking at.
 
 ### `delete`, `enter` and `tab` on a physical device (2026-10-06, #301)
 

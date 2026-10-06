@@ -24,6 +24,7 @@ repository. `ai/RULES.md` is where an agent starts.
   - [Where Rover looks for `adb`](#where-rover-looks-for-adb)
   - [Where Rover looks for `idb_companion`](#where-rover-looks-for-idb_companion)
   - [Project hooks](#project-hooks)
+    - [A Gradle install, and why it names the device](#a-gradle-install-and-why-it-names-the-device)
     - [Every lease gets a slot, and its own ports](#every-lease-gets-a-slot-and-its-own-ports)
   - [The artifact archive](#the-artifact-archive)
     - [Sweeping the archive](#sweeping-the-archive)
@@ -67,7 +68,7 @@ yours wins over anything Rover installed — see [where Rover looks for
 
 | Where | What |
 | --- | --- |
-| `~/.rover/projects/my-app.json` | the project's hook file — what the host installs and stops for a lease on it (D13), detected from a Gradle wrapper where there is one |
+| `~/.rover/projects/my-app.json` | the project's hook file — what the host installs and stops for a lease on it (D13), detected from a Gradle wrapper where there is one, and from the app's own build file where that declares product flavors |
 | `my-app/.mcp.json` | the `rover` MCP server, merged into whatever was already there |
 | `my-app/ROVER.md` | the page an agent reads before its first call. Generated — re-run `init` rather than editing it, and move it wherever it belongs |
 | `CLAUDE.md`, `AGENTS.md`, `GEMINI.md` | a short block saying that a manual test means Rover. `--write` inserts it; without the flag it is printed |
@@ -1529,8 +1530,8 @@ after it, under `ROVER_PROJECTS_PATH`:
 `rover init` writes one of these for a project it is pointed at, filling in what it can work out
 by reading the directory and reporting the file each detection came from — see [Quick
 installation](../README.md#quick-installation). Everything below is what one looks like written by hand, and
-what init cannot guess for you: `services`, `teardown`, and any install more involved than a
-build command.
+what init cannot guess for you: `services`, `teardown`, any install more involved than a
+build command, and which variant a project with several product flavors should install.
 
 ```jsonc
 {
@@ -1598,6 +1599,90 @@ for a project install has to raise that itself, or it will report a hang on its 
 the build is still running on the host. A command that is missing, declares no `install`, or exits
 non-zero is a **named** answer to that call (`project-not-registered`, `install-hook-undeclared`,
 `install-hook-failed` with the exit code and a stderr tail), never a broken host.
+
+#### A Gradle install, and why it names the device
+
+The common case, written out in full. A Gradle project with no product flavors:
+
+```jsonc
+{
+  "project": "checkout-web",
+  "install": {
+    "command": "bash",
+    "args": ["-lc", "ANDROID_SERIAL=\"$ROVER_DEVICE_SERIAL\" ./gradlew :app:installDebug -q"],
+    "cwd": "/srv/checkout-web"
+  }
+}
+```
+
+Three parts of that line are load-bearing, and the first one is the one that costs somebody else
+their lease if it is left out.
+
+**`ANDROID_SERIAL="$ROVER_DEVICE_SERIAL"` is mandatory.** A Gradle install task with no device
+named installs onto **every** attached device — not onto a device the build picks, onto all of
+them. On a shared host the other ones are other agents' leases, and an install that lands in the
+middle of somebody's run is a change they never made and cannot see. The host sets
+`ROVER_DEVICE_SERIAL` on every hook child to the device *this* lease holds, so the variable is
+what pins the install to it. **Never hard-code a serial in its place**: a lease gets whichever
+device was free, so a hard-coded one is right until the first day it is not, and then it is
+installing onto a neighbour with no error anywhere.
+
+`bash` is the program because the line needs a shell to expand that variable at all. A hook is
+spawned with no shell and is never word-split (above), so an operator who wants one makes the
+shell the program — which is also why the whole line is a single `args` entry after `-lc`. And
+`-q` keeps the build log off the host's stdout: nobody reads it unless the install failed, and a
+failure comes back as `install-hook-failed` with its own stderr tail.
+
+**With product flavors, there is no `installDebug` task at all.** The build plugin names a variant
+after its flavors — in `flavorDimensions` order, first as declared and every later one capitalised
+— followed by the build type, and the install task is `install` plus that name capitalised. So
+this:
+
+```kotlin
+android {
+  flavorDimensions += listOf("env", "tier")
+  productFlavors {
+    create("dev") { dimension = "env" }
+    create("prod") { dimension = "env" }
+    create("free") { dimension = "tier" }
+    create("paid") { dimension = "tier" }
+  }
+}
+```
+
+has four debug variants — `devFreeDebug`, `devPaidDebug`, `prodFreeDebug`, `prodPaidDebug` — and
+four install tasks, one per variant, and `:app:installDebug` is not one of them. The hook names the
+variant agents are meant to get:
+
+```jsonc
+{
+  "project": "checkout-web",
+  "install": {
+    "command": "bash",
+    "args": [
+      "-lc",
+      "ANDROID_SERIAL=\"$ROVER_DEVICE_SERIAL\" ./gradlew :app:installDevFreeDebug -q"
+    ],
+    "cwd": "/srv/checkout-web"
+  }
+}
+```
+
+`./gradlew :app:tasks` lists the real ones under **Install tasks** — run it in the project rather
+than assembling a name by hand, because a task name that is one capital letter out fails at the
+agent's first `install_app` and nowhere earlier.
+
+**What `rover init` does with all this.** No flavors: it proposes `:app:installDebug` as it always
+has. Exactly one variant: it proposes that variant's own task, naming `app/build.gradle(.kts)` as
+where it read it. **Several variants: it registers none**, and lists each one as a ready-to-paste
+`--install` line, because a hook that installs the wrong variant is an install that "worked" and
+changed nothing the agent is looking at — strictly worse than the `install-hook-undeclared` an
+undeclared install answers with. Flavors it cannot read statically — built in a loop, configured
+through `all { }`, named from a variable, or spread over several dimensions whose order is not
+declared in that file as a literal `flavorDimensions` (a convention plugin, an applied script, a
+`flavorDimensions += dims`) — get the same treatment and a report saying why. In both
+cases the fix is one re-run: `rover init --install '<the line you want>' --force`, or the line
+written into the hook file by hand.
 
 The **helper services** are the one hook the host runs *without being asked*, at both ends of a
 lease. A grant starts them in the order they are declared, after the device has been re-verified
