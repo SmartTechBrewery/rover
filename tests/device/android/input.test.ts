@@ -128,6 +128,17 @@ describe.skipIf(!process.env.ROVER_TEST_DEVICE)('input against a real device', (
 	});
 
 	/**
+	 * `CLEAR_TEXT_STEPS`, sent at whatever has focus — nothing, here. Like the keys above this
+	 * proves the device accepts both calls, `keycombination` included; what they do to a plain and
+	 * a password field was watched by hand and is recorded in PROJECT.md §6 (#309).
+	 */
+	it('clears whatever has focus', async () => {
+		const device = await firstDevice();
+
+		await expect(backend.clearText(device.serial)).resolves.toBeUndefined();
+	});
+
+	/**
 	 * The text cases §6 records, typed at whatever has focus. The apostrophe is the one
 	 * `shellArg` refuses and `shellText` splices; the metacharacters are the injection that
 	 * quoting exists to stop; the `%s` is the string that costs two calls.

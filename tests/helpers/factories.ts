@@ -346,6 +346,7 @@ export function createMockDeviceBackend(overrides: Partial<DeviceBackend> = {}):
 		swipe: vi.fn<NonNullable<DeviceBackend['swipe']>>(async () => {}),
 		typeText: vi.fn<NonNullable<DeviceBackend['typeText']>>(async () => {}),
 		pressKey: vi.fn<NonNullable<DeviceBackend['pressKey']>>(async () => {}),
+		clearText: vi.fn<NonNullable<DeviceBackend['clearText']>>(async () => {}),
 		setAirplaneMode: vi.fn<NonNullable<DeviceBackend['setAirplaneMode']>>(async () => {}),
 		setWifiEnabled: vi.fn<NonNullable<DeviceBackend['setWifiEnabled']>>(async () => {}),
 		recordVideo: vi.fn<NonNullable<DeviceBackend['recordVideo']>>(async () =>
@@ -456,6 +457,9 @@ export function createConformingDeviceBackend(
 		},
 		async pressKey(serial, key) {
 			performed.push(`pressKey ${serial} ${key}`);
+		},
+		async clearText(serial) {
+			performed.push(`clearText ${serial}`);
 		},
 		async setAirplaneMode(serial, enabled) {
 			performed.push(`setAirplaneMode ${serial} ${enabled}`);

@@ -199,7 +199,7 @@ Backends are genuinely asymmetric and flattening that is the design mistake to a
   way to signal it — answers `canRecordVideo` perfectly well and cannot do the other at all. So
   `startRecording` and `stopRecording` sit behind `canControlRecording` and `canRecordVideo` is
   untouched, because it names exactly one method and must keep meaning exactly that. The two land
-  together rather than one at a time, the split point `canInput`'s four primitives already sit on:
+  together rather than one at a time, the split point `canInput`'s primitives already sit on:
   `CAPABILITY_METHODS` naming a method a backend does not answer fails the conformance suite.
 - **A system log is not one of those asymmetries**, which is why `readLogs` is a *required* method and not a capability: every platform here keeps one, and a flag that is always `true` is noise (`src/core/capabilities.ts`). What differs is the wording inside an entry — that is what the neutral `LogEntry` shape and a backend's own parser absorb.
 - **Moving a file is not one either**, so `pushFile` and `pullFile` are required too. The asymmetry that matters there is the *direction* rather than the platform: a push takes a path on the host, because the host is where the daemon runs, and a pull answers with **bytes**, because the answer is read on the agent's machine (D19).
@@ -357,6 +357,17 @@ Verbs live above the backends and below the adapters, and this is where determin
   `unsupported-text` failure naming the offending characters as escapes, because the string is the
   caller's and the caller is who can change it. A plain `Error` there would arrive as
   `internal_error`, telling an agent the host broke over a string the agent chose.
+  **`typeText`'s `clear` option (#309) is a backend primitive, not a composition**: with `clear`,
+  the verb calls `DeviceBackend.clearText(serial)` and then `typeText`, inside one action, so one
+  after-state shows the field's new value and a refused clear stops **before anything is typed**.
+  Nothing up here could compose it — the key vocabulary has no select-all, and a screen read says
+  neither which element has focus nor how long its text is (a password field reads back masked) —
+  so a count of `delete` presses would be a guess. It is a fifth method named under `canInput`
+  rather than an option on `typeText` because the conformance gate then forces every backend that
+  declares `canInput` to answer it; an option could be silently ignored. A backend that cannot
+  clear answers `UnsupportedClearError`, mapped to an `unsupported-clear` failure carrying the
+  serial — the third per-argument refusal beside `unsupported-text` and `unsupported-key`, for
+  their reason.
 - **`launchApp()`, `stopApp()` and `clearAppData()`** (`src/verbs/app.ts`) are the same spine with
   two things left out, and both omissions are the family's whole content. **`requires: []` is the
   honest answer for a verb built only on required interface methods**: these three are declared on

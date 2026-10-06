@@ -44,6 +44,7 @@ import {
 	NoRecordingRunningError,
 	RecordingAlreadyRunningError,
 	UnfinishedRecordingError,
+	UnsupportedClearError,
 	UnsupportedKeyError,
 	UnsupportedTextError,
 } from '@/core/errors.js';
@@ -147,6 +148,7 @@ interface HostOptions {
 	readonly deviceInfo?: DeviceBackend['deviceInfo'];
 	readonly typeText?: DeviceBackend['typeText'];
 	readonly pressKey?: DeviceBackend['pressKey'];
+	readonly clearText?: DeviceBackend['clearText'];
 	readonly capture?: Uint8Array;
 	readonly recording?: Uint8Array;
 	readonly recordVideo?: DeviceBackend['recordVideo'];
@@ -305,6 +307,7 @@ async function serve(options: HostOptions = {}): Promise<void> {
 					typed.push(text);
 				}),
 			pressKey: pressKeyOf(options),
+			clearText: clearTextOf(options),
 			setAirplaneMode: recordRadio('setAirplaneMode'),
 			setWifiEnabled: recordRadio('setWifiEnabled'),
 			launchApp: options.launchApp ?? recordApp('launchApp'),
@@ -390,6 +393,11 @@ function pressKeyOf(options: HostOptions): NonNullable<DeviceBackend['pressKey']
 			keys.push(key);
 		})
 	);
+}
+
+/** `clearText`'s backend method, split out for {@link pressKeyOf}'s reason: accepted, or a test's. */
+function clearTextOf(options: HostOptions): NonNullable<DeviceBackend['clearText']> {
+	return options.clearText ?? (async () => {});
 }
 
 /** One backend app method that records the call the daemon made rather than doing anything. */
@@ -689,6 +697,45 @@ describe('the input rows dispatch like the waits', () => {
 				unsupported: ['U+00E9 ("é")'],
 			},
 		});
+	});
+
+	it('clears the focused field and then types, when the call says clear (#309)', async () => {
+		const order: string[] = [];
+		await serve({
+			clearText: async (serial) => {
+				order.push(`clear ${serial}`);
+			},
+			typeText: async (serial, text) => {
+				order.push(`type ${serial} ${text}`);
+			},
+		});
+		const client = await connect();
+		const leaseId = await acquire(client);
+
+		const answer = await client.request('type_text', { leaseId, text: 'right', clear: true });
+
+		expect(answer).toMatchObject({ outcome: 'ok', result: { verb: 'type_text', target: null } });
+		expect(order).toEqual([`clear ${SERIAL}`, `type ${SERIAL} right`]);
+	});
+
+	it('answers a clear the device cannot do as unsupported-clear, typing nothing', async () => {
+		await serve({
+			clearText: async (serial) => {
+				throw new UnsupportedClearError(serial, 'no measured recipe yet');
+			},
+		});
+		const client = await connect();
+		const leaseId = await acquire(client);
+
+		const answer = await client.request('type_text', { leaseId, text: 'right', clear: true });
+
+		// A verb answer about the device, not `internal_error` and not `missing-capability`: this
+		// backend takes input, and only the clear is refused.
+		expect(answer).toMatchObject({
+			outcome: 'failed',
+			failure: { kind: 'unsupported-clear', serial: SERIAL },
+		});
+		expect(typed).toEqual([]);
 	});
 
 	it('presses a key on the device the lease names, addressing no element', async () => {

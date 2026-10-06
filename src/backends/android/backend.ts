@@ -6,7 +6,7 @@
  * transfers — with no stub, which is what lets it declare `implements DeviceBackend` and what
  * lets `./index.ts` register it (ai/TESTING.md, "A backend under construction registers
  * nothing"), plus **every** capability-gated method: the environment pair behind
- * `canControlNetwork`, the four input primitives behind `canInput`, `readScreen` behind
+ * `canControlNetwork`, the five input primitives behind `canInput`, `readScreen` behind
  * `canReadScreen` (#13) and `recordVideo` behind `canRecordVideo` (#14). No flag in
  * `./capabilities.ts` is a declared opt-out any more.
  *
@@ -25,8 +25,8 @@
  * - `shellText` for `typeText`'s argument, the only value here that is screen *content*:
  *   an apostrophe in it is ordinary, so it is escaped rather than refused.
  * - **Neither, only for a literal this file owns** — the environment pair's two words, the
- *   keycodes of `./input.js`'s `KEY_CODES`, {@link DUMP_PATH}, {@link RECORDING_PATH},
- *   and the numbers `tap`, `swipe` and `recordVideo` compute. No caller's string reaches any
+ *   keycodes of `./input.js`'s `KEY_CODES` and `CLEAR_TEXT_STEPS`, {@link DUMP_PATH},
+ *   {@link RECORDING_PATH}, and the numbers `tap`, `swipe` and `recordVideo` compute. No caller's string reaches any
  *   of them, which is the property `shellArg` exists to restore when one does. A new argument
  *   outside that list takes a quoter.
  *
@@ -99,6 +99,7 @@ import {
 import { attachmentOfSerial } from './attachment.js';
 import { ANDROID_PLATFORM_ID } from './capabilities.js';
 import {
+	CLEAR_TEXT_STEPS,
 	KEY_CODES,
 	toDevicePixels,
 	toSwipeDuration,
@@ -1709,6 +1710,23 @@ export class AndroidDeviceBackend implements DeviceBackend {
 		const result = await runAdbOnDevice(serial, ['shell', 'input', 'keyevent', keycode]);
 
 		if (!acceptedInput(result)) throw refused(`input keyevent ${keycode}`, serial, result);
+	}
+
+	/**
+	 * Empty the focused text field: `./input.js`'s `CLEAR_TEXT_STEPS`, select all and then
+	 * backspace, one `input` call each.
+	 *
+	 * Every step is a literal that module owns, so none takes a quoter. Each is checked the way
+	 * {@link pressKey} is, and a refusal names the step and stops there — a select-all that
+	 * landed with no delete after it leaves the text selected rather than gone, and the caller is
+	 * told which half did not happen rather than handed a success.
+	 */
+	async clearText(serial: DeviceSerial): Promise<void> {
+		for (const step of CLEAR_TEXT_STEPS) {
+			const result = await runAdbOnDevice(serial, ['shell', ...step]);
+
+			if (!acceptedInput(result)) throw refused(step.join(' '), serial, result);
+		}
 	}
 
 	/**

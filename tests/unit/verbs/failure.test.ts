@@ -16,6 +16,7 @@ import {
 	RecordingAlreadyRunningError,
 	UnfinishedRecordingError,
 	UnreadableScreenError,
+	UnsupportedClearError,
 	UnsupportedKeyError,
 	UnsupportedTextError,
 	WaitTimeoutError,
@@ -200,6 +201,20 @@ describe('a verb-layer error becomes a failure a client can branch on', () => {
 			message: error.message,
 		});
 		expect(error.message).toContain('recents');
+	});
+
+	it('maps a clear the device refuses, never as missing-capability (#309)', () => {
+		const error = new UnsupportedClearError(SERIAL, 'select-all has not been measured here');
+
+		// The device takes input and types; only the clear is refused, so the answer names the
+		// clear and points at a route that still works rather than taking the device away.
+		expect(failureOf(error)).toEqual({
+			kind: 'unsupported-clear',
+			serial: SERIAL,
+			message: error.message,
+		});
+		expect(error.message).toContain('select-all has not been measured here');
+		expect(error.message).toContain("press_key 'delete' with 'times'");
 	});
 
 	it('carries the offending characters as escapes, so an invisible one is still actionable', () => {
@@ -513,6 +528,7 @@ describe('a failure survives the trip to the agent', () => {
 			),
 		],
 		['unsupported-key', new UnsupportedKeyError(SERIAL, 'recents', 'no key and no gesture')],
+		['unsupported-clear', new UnsupportedClearError(SERIAL, 'no measured recipe')],
 		['artifact-too-large', new ArtifactTooLargeError(SERIAL, 9_000_000, 4_194_304)],
 		['unfinished-recording', new UnfinishedRecordingError(SERIAL, 3_232)],
 		['recording-already-running', new RecordingAlreadyRunningError(SERIAL, ['29633'])],

@@ -25,7 +25,7 @@
  * **No new backend method.** `long_press` and `scroll` are both a `swipe` with different
  * arguments, and the backend's input methods are primitives on purpose (`src/core/device.ts`,
  * "The methods are **primitives**"): composing them here keeps a backend author's obligation
- * at four methods rather than six, and keeps the composition somewhere it is written once for
+ * at its input primitives rather than two more, and keeps the composition somewhere it is written once for
  * every platform.
  *
  * **`type_text` and `press_key` pass no target at all.** A key press addresses nothing on the
@@ -249,16 +249,38 @@ export async function scroll(
  * Focus itself is not this verb's to guarantee and cannot be: nothing this layer can ask says
  * where the caret is until a screen read is available (#13). What the result does report is
  * the state after the typing, which is where an agent looks to see whether it landed.
+ *
+ * **`options.clear` empties the focused field first** (#309), so `text` replaces what was there
+ * rather than landing beside it; with `''` it only clears. Clearing is the backend's
+ * `clearText` rather than a composition here, because nothing this layer has could compose it:
+ * the key vocabulary has no select-all, and a screen read says neither which field has focus
+ * nor how long its text is — a password field reads back masked. Both calls are inside one
+ * `act`, clear first, so a device that refuses the clear (`UnsupportedClearError`, reaching the
+ * agent as `unsupported-clear`) refuses it **before anything is typed**, and the field is left
+ * as it was.
  */
-export async function typeText(context: VerbContext, text: string): Promise<ActionResult> {
+export async function typeText(
+	context: VerbContext,
+	text: string,
+	options: TypeTextOptions = {},
+): Promise<ActionResult> {
 	return performAction(context, {
 		verb: 'type_text',
 		requires: ['canInput'],
 		act: async () => {
+			if (options.clear === true) {
+				const clear = capabilityMethod(context, 'canInput', 'clearText');
+				await clear(context.serial);
+			}
 			const type = capabilityMethod(context, 'canInput', 'typeText');
 			await type(context.serial, text);
 		},
 	});
+}
+
+/** What {@link typeText} does besides typing. Absent `clear` means type into what is there. */
+export interface TypeTextOptions {
+	readonly clear?: boolean;
 }
 
 /**

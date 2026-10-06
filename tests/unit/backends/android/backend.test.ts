@@ -2900,7 +2900,44 @@ describe('pressKey', () => {
 });
 
 /**
- * The counterpart of "no app verb swallows a failure" for the four primitives an agent
+ * `clearText` (#309): `CLEAR_TEXT_STEPS`, one `input` call each, every one checked — a select-all
+ * with no delete after it leaves the text selected rather than gone, so a refused step names
+ * itself and nothing after it is sent.
+ */
+describe('clearText', () => {
+	const SELECT_ALL = 'shell input keycombination KEYCODE_CTRL_LEFT KEYCODE_A';
+	const BACKSPACE = 'shell input keyevent KEYCODE_DEL';
+
+	it('selects all and then backspaces, on the pinned runner, in that order', async () => {
+		answers({ [SELECT_ALL]: '', [BACKSPACE]: '' });
+
+		await backend.clearText(SERIAL);
+
+		expect(runAdb).not.toHaveBeenCalled();
+		expect(runAdbOnDevice.mock.calls.map(([serial, args]) => [serial, args.join(' ')])).toEqual([
+			[SERIAL, SELECT_ALL],
+			[SERIAL, BACKSPACE],
+		]);
+	});
+
+	it('throws naming the step the device answered, and sends nothing after it', async () => {
+		answers({ [SELECT_ALL]: INPUT_REFUSAL, [BACKSPACE]: '' });
+
+		await expect(backend.clearText(SERIAL)).rejects.toThrow(
+			/input keycombination KEYCODE_CTRL_LEFT KEYCODE_A/,
+		);
+		expect(runAdbOnDevice).toHaveBeenCalledTimes(1);
+	});
+
+	it('throws naming the delete when that is the step refused', async () => {
+		answers({ [SELECT_ALL]: '', [BACKSPACE]: INPUT_REFUSAL });
+
+		await expect(backend.clearText(SERIAL)).rejects.toThrow(/input keyevent KEYCODE_DEL/);
+	});
+});
+
+/**
+ * The counterpart of "no app verb swallows a failure" for the five primitives an agent
  * drives the screen with. An injection that reported success without landing is the false
  * green this whole tool exists to avoid, so both halves are asserted: a refusal adb exited 0
  * on, and the failure the runner itself raises.
@@ -2911,6 +2948,7 @@ describe('no input verb swallows a failure', () => {
 		['swipe', () => backend.swipe(SERIAL, { x: 1, y: 1 }, { x: 2, y: 2 }, 100)],
 		['typeText', () => backend.typeText(SERIAL, 'hello')],
 		['pressKey', () => backend.pressKey(SERIAL, 'back')],
+		['clearText', () => backend.clearText(SERIAL)],
 	];
 
 	it.each(CALLS)('%s rejects rather than resolving', async (_name, call) => {

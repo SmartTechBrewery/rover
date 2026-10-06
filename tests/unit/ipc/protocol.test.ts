@@ -281,6 +281,18 @@ describe('keyboard verb params schemas', () => {
 		expect(parsed.text).toBe(text);
 	});
 
+	it.each([true, false])('takes clear: %s (#309)', (clear) => {
+		expect(TypeTextParamsSchema.parse({ leaseId: 'lease-1', text: 'right', clear }).clear).toBe(
+			clear,
+		);
+	});
+
+	it.each(['yes', 1, null])('refuses clear: %j, which is not a boolean', (clear) => {
+		expect(
+			TypeTextParamsSchema.safeParse({ leaseId: 'lease-1', text: 'right', clear }).success,
+		).toBe(false);
+	});
+
 	it('bounds the string as allocation hygiene rather than as validation', () => {
 		const call = { leaseId: 'lease-1' };
 

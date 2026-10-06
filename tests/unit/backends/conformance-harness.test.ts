@@ -325,7 +325,7 @@ describe('checkNoStubbedMethods', () => {
 	it('reports every method of a fully mocked backend', () => {
 		const entry = registeredBackend(createMockDeviceBackend());
 
-		expect(checkNoStubbedMethods(entry)).toHaveLength(23);
+		expect(checkNoStubbedMethods(entry)).toHaveLength(24);
 	});
 });
 

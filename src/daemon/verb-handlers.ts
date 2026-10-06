@@ -416,7 +416,9 @@ export function createVerbHandlers(
 		// The caller's string, handed on untouched. Nothing between the wire and the backend
 		// inspects or rewrites it, which is what makes `type_text` mean what it says.
 		type_text(params: TypeTextParams): Promise<VerbCallResult> {
-			return runVerb(params.leaseId, (context) => typeText(context, params.text));
+			return runVerb(params.leaseId, (context) =>
+				typeText(context, params.text, params.clear === undefined ? {} : { clear: params.clear }),
+			);
 		},
 
 		press_key(params: PressKeyParams): Promise<VerbCallResult> {

@@ -26,6 +26,7 @@ import {
 import {
 	MissingCapabilityError,
 	UnreadableScreenError,
+	UnsupportedClearError,
 	UnsupportedKeyError,
 	UnsupportedTextError,
 } from '@/core/errors.js';
@@ -126,6 +127,9 @@ function recording(
 		pressKey: vi.fn<NonNullable<DeviceBackend['pressKey']>>(async (_serial, key) => {
 			calls.push('pressKey');
 			keys.push(key);
+		}),
+		clearText: vi.fn<NonNullable<DeviceBackend['clearText']>>(async () => {
+			calls.push('clearText');
 		}),
 	});
 
@@ -525,6 +529,52 @@ describe('type_text', () => {
 		// (`tests/unit/verbs/failure.test.ts`); what matters here is that the verb does not
 		// swallow it and report a successful action.
 		await expect(typeText(context, 'café')).rejects.toThrow(UnsupportedTextError);
+	});
+});
+
+/**
+ * `clear` (#309): the backend's `clearText` and then the typing, in one action, so the one
+ * after-state shows the field's new value — and a refused clear stops before anything is typed.
+ */
+describe('type_text with clear', () => {
+	it('clears the focused field, then types, then reads the state after', async () => {
+		const { calls, typed, context } = recording();
+
+		await typeText(context, 'right', { clear: true });
+
+		expect(calls).toEqual(['clearText', 'typeText', 'readScreen', 'deviceInfo']);
+		expect(typed).toEqual(['right']);
+	});
+
+	it.each([{}, { clear: false }])('never clears when asked %j', async (options) => {
+		const { calls, context } = recording();
+
+		await typeText(context, 'more', options);
+
+		expect(calls).not.toContain('clearText');
+	});
+
+	it("with '' still clears, and types the empty string after it", async () => {
+		const { calls, typed, context } = recording();
+
+		await typeText(context, '', { clear: true });
+
+		expect(calls).toEqual(['clearText', 'typeText', 'readScreen', 'deviceInfo']);
+		expect(typed).toEqual(['']);
+	});
+
+	it('lets a refused clear out before anything is typed', async () => {
+		const { calls, context } = recording();
+		vi.mocked(
+			context.backend.clearText as NonNullable<DeviceBackend['clearText']>,
+		).mockRejectedValue(new UnsupportedClearError(context.serial, 'no measured recipe yet'));
+
+		await expect(typeText(context, 'right', { clear: true })).rejects.toThrow(
+			UnsupportedClearError,
+		);
+		// Typing over a field that was never emptied would append to the old value and report it
+		// as the new one; the refusal has to come first.
+		expect(calls).not.toContain('typeText');
 	});
 });
 

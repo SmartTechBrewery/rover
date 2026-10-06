@@ -19,7 +19,8 @@
  * `CAPABILITY_METHODS.canInput` names every one of them, so a manifest declaring the
  * capability with three of the four implemented fails
  * `tests/helpers/backend-conformance.ts` — the split point is forced by the repository
- * rather than chosen.
+ * rather than chosen. The fifth, `clearText` (#309), joined the list later under the same rule:
+ * naming it there is what forced every backend declaring `canInput` to answer it.
  *
  * `canReadScreen` flips here (#13), on that same seam and for that same reason:
  * `CAPABILITY_METHODS.canReadScreen` names exactly one method, `readScreen`, and this

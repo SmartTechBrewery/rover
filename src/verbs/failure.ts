@@ -34,6 +34,7 @@ import {
 	RecordingAlreadyRunningError,
 	UnfinishedRecordingError,
 	UnreadableScreenError,
+	UnsupportedClearError,
 	UnsupportedKeyError,
 	UnsupportedTextError,
 	WaitTimeoutError,
@@ -195,6 +196,22 @@ export const VerbFailureSchema = z.discriminatedUnion('kind', [
 			kind: z.literal('unsupported-key'),
 			serial: DeviceSerialSchema,
 			key: DeviceKeySchema,
+			message: z.string().min(1),
+		})
+		.strict(),
+	/**
+	 * The device takes input, and cannot empty the focused text field (#309).
+	 *
+	 * `unsupported-key`'s sibling, kept apart from `missing-capability` for that branch's reason:
+	 * typing and the keys still work, so the move is a different route to an empty field — the
+	 * message names `delete` presses with a count — not a different device. No argument travels
+	 * because `clear` is a flag: the serial and the backend's reason, inside `message`, are all
+	 * there is to say.
+	 */
+	z
+		.object({
+			kind: z.literal('unsupported-clear'),
+			serial: DeviceSerialSchema,
 			message: z.string().min(1),
 		})
 		.strict(),
@@ -486,7 +503,7 @@ export type VerbFailure = z.infer<typeof VerbFailureSchema>;
  * five, and each group genuinely belongs together: the five failures between a caller's
  * address and a point on the screen to act on ({@link screenAddressFailure}), the four about
  * a **host tool** rather than a device ({@link hostToolFailure}), the two about whether a
- * device has a recording open ({@link openRecordingFailure}), and the two where the device
+ * device has a recording open ({@link openRecordingFailure}), and the three where the device
  * can do the thing and not with *this argument* ({@link unsupportedArgumentFailure}).
  */
 export function toVerbFailure(error: unknown): VerbFailure | null {
@@ -655,14 +672,16 @@ function screenAddressFailure(error: unknown): VerbFailure | null {
 }
 
 /**
- * The two failures where the device *can* do the thing and not with **this argument**, split
+ * The three failures where the device *can* do the thing and not with **this argument**, split
  * out of {@link toVerbFailure} for {@link hostToolFailure}'s reason.
  *
- * They belong together on their own terms: both come from a backend that declares `canInput`
- * and does take input, so neither is a `missing-capability` (D11) — one says send a different
- * string, the other says ask for a different key, and both name the offending argument because
- * that is the only thing a caller can act on. The pair is the reason the second one was cheap
- * to add: `unsupported-key` is `unsupported-text` one argument down (#215).
+ * They belong together on their own terms: all three come from a backend that declares
+ * `canInput` and does take input, so none is a `missing-capability` (D11) — one says send a
+ * different string, one says ask for a different key, and one says empty the field another way,
+ * and each names what was refused because that is the only thing a caller can act on. Each was
+ * cheap to add because of the one before it: `unsupported-key` is `unsupported-text` one
+ * argument down (#215), and `unsupported-clear` is the same refusal for `type_text`'s `clear`
+ * flag (#309).
  *
  * Returns `null` for anything else, so the caller carries on down its own list.
  */
@@ -686,6 +705,9 @@ function unsupportedArgumentFailure(error: unknown): VerbFailure | null {
 			key: error.key,
 			message: error.message,
 		};
+	}
+	if (error instanceof UnsupportedClearError) {
+		return { kind: 'unsupported-clear', serial: error.serial, message: error.message };
 	}
 	return null;
 }

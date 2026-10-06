@@ -776,6 +776,30 @@ export interface DeviceBackend {
 	pressKey?(serial: DeviceSerial, key: DeviceKey): Promise<void>;
 
 	/**
+	 * Empty the text field that holds focus. Gated by `canInput` (#309).
+	 *
+	 * **Select everything, then delete it — never a guessed count of backspaces.** Nothing a
+	 * caller can read says how long the field's text is: a screen read does not say which element
+	 * has focus or where the caret is, and a password field reads back masked. So the only clear
+	 * that is right for every field is the one that does not need its length.
+	 *
+	 * A primitive rather than a composition because it cannot be composed from the four above:
+	 * the neutral key vocabulary has no select-all. And a method of its own rather than an option
+	 * on {@link typeText}, because naming it in `CAPABILITY_METHODS.canInput` is what makes the
+	 * conformance gate force every backend declaring `canInput` to answer it — an option a
+	 * backend could silently ignore is the degradation ai/RULES.md §2 forbids.
+	 *
+	 * A backend that cannot clear refuses with `UnsupportedClearError` (`src/core/errors.ts`),
+	 * which reaches the agent as an `unsupported-clear` failure — never `MissingCapabilityError`,
+	 * for {@link pressKey}'s reason: this device does take input.
+	 *
+	 * **On a field that is already empty the delete is a backspace with nothing selected.** A
+	 * plain field ignores it; a custom view that moves focus backwards on backspace — a row of
+	 * one-digit code boxes, for instance — may act on it. That is stated, not defended against.
+	 */
+	clearText?(serial: DeviceSerial): Promise<void>;
+
+	/**
 	 * Gated by `canControlNetwork`. Together with {@link setWifiEnabled} this is the
 	 * "environment" half of the device abstraction, and what the daemon restores on
 	 * release and on expiry (D9).

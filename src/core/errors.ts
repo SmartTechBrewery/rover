@@ -185,6 +185,35 @@ export class UnsupportedKeyError extends Error {
 }
 
 /**
+ * Thrown when a backend can take input and cannot **empty the focused text field** (#309).
+ *
+ * {@link UnsupportedKeyError}'s sibling and here for its reasons: the device declares `canInput`
+ * and types and presses keys, so neither {@link MissingCapabilityError} ("try another device")
+ * nor a plain `Error` ("the host broke") is the honest answer. `src/verbs/failure.ts` maps it to
+ * `unsupported-clear`, and the way out it names is a different route to the same field state —
+ * `delete` presses with a count, when the caller knows how much text there is.
+ *
+ * Thrown **before anything is typed**: `type_text` clears first, so a refused clear leaves the
+ * field exactly as it was rather than holding the new text appended to the old.
+ *
+ * `reason` is the backend's own words, passed in rather than written here, because why a device
+ * cannot clear is a fact about that device (ai/RULES.md §2).
+ */
+export class UnsupportedClearError extends Error {
+	readonly serial: DeviceSerial;
+
+	constructor(serial: DeviceSerial, reason: string) {
+		super(
+			`Device '${serial}' cannot clear a text field: ${reason}. It does take input — typing ` +
+				`and the keys still work — so clear was refused by name rather than typed over. To ` +
+				`empty a field whose length you know, press_key 'delete' with 'times'`,
+		);
+		this.name = 'UnsupportedClearError';
+		this.serial = serial;
+	}
+}
+
+/**
  * Thrown when a recording was pulled off a device without the container index that makes
  * it playable — i.e. it was still being written.
  *
