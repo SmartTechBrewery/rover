@@ -79,6 +79,9 @@ const DENSITY = fixture('wm-density.api37-sdk-gphone16k-arm64.txt');
 const DENSITY_OVERRIDE = fixture('wm-density.override.api37-sdk-gphone16k-arm64.txt');
 const GETPROP = fixture('getprop.api37-sdk-gphone16k-arm64.txt');
 const DISPLAYS = fixture('dumpsys-window-d.api37-sdk-gphone16k-arm64.txt');
+const DISPLAYS_KEYBOARD_SHOWN = fixture(
+	'dumpsys-window-d.keyboard-shown.api37-sdk-gphone16k-arm64.txt',
+);
 const OS_VERSION = fixture('getprop-version.api37-sdk-gphone16k-arm64.txt');
 const OS_VERSION_ABSENT = fixture('getprop-version.absent.api37-sdk-gphone16k-arm64.txt');
 const STAT_FILE = fixture('stat.file.api37-sdk-gphone16k-arm64.txt');
@@ -857,6 +860,10 @@ describe('deviceInfo', () => {
 			// The device's own bars, off the same dump — 156 px is 52 dp at this scale, which is
 			// the measurement that stopped this being a constant (PROJECT.md §6).
 			systemBars: { top: 156, bottom: 72, left: 0, right: 0 },
+			// Off the same dump again: this capture was taken with no text field focused, so its
+			// `type=ime` source is there and `visible=false`. A device that answered and has no
+			// keyboard up, which is not the `null` of a device that did not say.
+			keyboard: { shown: false, bounds: null },
 		});
 		// Unrounded on purpose: 1280 ÷ 3 is not a whole number of dp, and rounding it here
 		// would leave no way to ask what the device actually said.
@@ -884,6 +891,30 @@ describe('deviceInfo', () => {
 			widthDp: 360,
 			heightDp: 800,
 			systemBars: { top: 0, bottom: 0, left: 0, right: 0 },
+			// The keyboard is unaffected by the override, and that is the point of asserting it
+			// here: it is read in dp off the density this call measured, not against the
+			// dimensions the insets are measured against.
+			keyboard: { shown: false, bounds: null },
+		});
+	});
+
+	/**
+	 * The other half of the same dump, off the capture taken **with the keyboard open** — the one
+	 * case the committed fixture above cannot show.
+	 *
+	 * The assertion is the **unit**, because that is what the one line in `deviceInfo()` can get
+	 * wrong while every other expectation in this file still passes: the frame is
+	 * `[0,1848][1280,2856]` in the device's own pixels, and at `densityScale` 3 that is
+	 * `y = 616`, `height = 336` dp. A backend that handed the parser the effective dimensions
+	 * instead of the scale — the argument its neighbour takes — would report pixels and a verb
+	 * comparing a touch point against them would be off by a factor of three.
+	 */
+	it('reports the keyboard rectangle in dp when the device says one is up', async () => {
+		answers({ ...FACTS, 'shell dumpsys window d': DISPLAYS_KEYBOARD_SHOWN });
+
+		expect((await backend.deviceInfo(SERIAL)).screen.keyboard).toEqual({
+			shown: true,
+			bounds: { x: 0, y: 616, width: 1280 / 3, height: 336 },
 		});
 	});
 

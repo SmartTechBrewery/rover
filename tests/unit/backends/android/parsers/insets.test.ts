@@ -1,14 +1,18 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { parseSystemBarInsets } from '@/backends/android/parsers/insets.js';
+import { parseKeyboard, parseSystemBarInsets } from '@/backends/android/parsers/insets.js';
 
 const fixture = (name: string): string =>
 	readFileSync(new URL(`../../../../fixtures/adb/${name}`, import.meta.url), 'utf8');
 
 const DISPLAYS = fixture('dumpsys-window-d.api37-sdk-gphone16k-arm64.txt');
+const KEYBOARD_SHOWN = fixture('dumpsys-window-d.keyboard-shown.api37-sdk-gphone16k-arm64.txt');
 
 /** The device the fixture was captured on, `wm size`'s effective dimensions. */
 const SCREEN = { width: 1280, height: 2856 };
+
+/** `wm density`'s scale on that same device: 480 dpi, so three pixels to the dp. */
+const SCALE = 3;
 
 describe('parseSystemBarInsets', () => {
 	/**
@@ -125,5 +129,111 @@ describe('parseSystemBarInsets', () => {
 		].join('\n');
 
 		expect(parseSystemBarInsets(stacked, SCREEN)?.top).toBe(192);
+	});
+});
+
+describe('parseKeyboard', () => {
+	/**
+	 * **Both captures are of the same device on the same build**, taken minutes apart with and
+	 * without a text field focused (API 37 / Android 17, `PROJECT.md` §6) — which is what makes
+	 * the pair evidence rather than a guess about a format.
+	 *
+	 * The open frame is `[0,1848][1280,2856]` in the device's own pixels. Over a `densityScale`
+	 * of 3 that is `x = 0`, `y = 616`, `width = 1280/3`, `height = 336` dp — the same space
+	 * `ScreenElement.bounds` is stated in, because what this rectangle gets compared against is a
+	 * touch point. The width is deliberately left as the exact quotient: 1280 over 3 is not a
+	 * whole number of dp, and rounding it here would leave no way to ask what the device said.
+	 */
+	it('reads the keyboard rectangle in dp off a dump captured with it open', () => {
+		expect(parseKeyboard(KEYBOARD_SHOWN, SCALE)).toEqual({
+			shown: true,
+			bounds: { x: 0, y: 616, width: 1280 / 3, height: 336 },
+		});
+	});
+
+	/**
+	 * The companion capture, with nothing focused: the `type=ime` source is still printed, with
+	 * `frame=[0,0][0,0]` and `visible=false`.
+	 *
+	 * **Its `visibleFrame` is `[0,2712][1280,2856]` and is deliberately not read.** That is a
+	 * 144 px band at the bottom of a screen with no keyboard on it, so a parser that preferred
+	 * `visibleFrame` would report a rectangle for a keyboard that is down — which is exactly the
+	 * false fact phase 3 would then refuse a legitimate tap against.
+	 */
+	it('answers shown false with no rectangle when the device says the keyboard is down', () => {
+		expect(parseKeyboard(DISPLAYS, SCALE)).toEqual({ shown: false, bounds: null });
+	});
+
+	/**
+	 * **`null` is *this device did not say*, and `{ shown: false }` is *no keyboard is up*.** They
+	 * must not fold together, for `parseSystemBarInsets`' reason one describe above: the first
+	 * leaves a consumer knowing nothing about what covers the screen, the second is the device
+	 * stating that nothing does.
+	 */
+	it('answers null for a dump with no insets state at all', () => {
+		expect(
+			parseKeyboard('WINDOW MANAGER DISPLAY CONTENTS\n  Display: mDisplayId=0\n', SCALE),
+		).toBeNull();
+	});
+
+	/**
+	 * Observed on the capture device right after an application restart: the block is printed and
+	 * carries no `ime` source at all. A device that answered, with no keyboard up.
+	 */
+	it('answers shown false for an insets state that names no ime source', () => {
+		const barsOnly = [
+			'  InsetsState',
+			'    InsetsSource id=1 type=statusBars frame=[0,0][1280,156] visible=true flags= sideHint=TOP',
+		].join('\n');
+
+		expect(parseKeyboard(barsOnly, SCALE)).toEqual({ shown: false, bounds: null });
+	});
+
+	/**
+	 * The `mSource=` repeats under `InsetsSourceProviders` carry the identical line, and only the
+	 * `InsetsState` form may match — the same anchoring `parseSystemBarInsets` relies on. Stripped
+	 * of the first form, the shown capture must stop reading as a keyboard that is up.
+	 */
+	it('reads the InsetsState block and not the providers that repeat it', () => {
+		const providersOnly = KEYBOARD_SHOWN.replace(
+			/^([ \t]*)InsetsSource id=/gm,
+			'$1mSource=InsetsSource id=',
+		);
+
+		expect(parseKeyboard(providersOnly, SCALE)).toEqual({ shown: false, bounds: null });
+	});
+
+	it('tolerates the CRLF that `adb shell` sometimes returns', () => {
+		expect(parseKeyboard(KEYBOARD_SHOWN.replace(/\n/g, '\r\n'), SCALE)).toEqual({
+			shown: true,
+			bounds: { x: 0, y: 616, width: 1280 / 3, height: 336 },
+		});
+	});
+
+	/**
+	 * **`shown: true` with no rectangle is a real answer and the hardest one to get right.** The
+	 * device said the keyboard is up and gave the empty frame it uses for an absent source, so
+	 * something is covering the screen and this device did not say where. Reporting `shown: false`
+	 * would turn that into *nothing is covered*; inventing a rectangle would be worse still.
+	 */
+	it('answers shown with no rectangle for a visible source whose frame is degenerate', () => {
+		const degenerate = [
+			'  InsetsState',
+			'    InsetsSource id=3 type=ime frame=[0,0][0,0] visibleFrame=[0,1848][1280,2856] visible=true flags= sideHint=BOTTOM',
+		].join('\n');
+
+		expect(parseKeyboard(degenerate, SCALE)).toEqual({ shown: true, bounds: null });
+	});
+
+	/** The scale divides every number here, so a `NaN` one would silently poison the rectangle. */
+	it.each([
+		0,
+		-1,
+		Number.NaN,
+		Number.POSITIVE_INFINITY,
+	])('refuses a density scale of %s by name', (scale) => {
+		expect(() => parseKeyboard(KEYBOARD_SHOWN, scale)).toThrow(
+			`Cannot read the on-screen keyboard at density scale ${scale}`,
+		);
 	});
 });

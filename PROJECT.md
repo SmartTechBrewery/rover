@@ -158,10 +158,10 @@ Working names. All of them take a device handle, and over the wire that handle i
 | Verb | Notes |
 |---|---|
 | `screenshot` | The captured image, **as bytes on the result rather than as a path** (D19) — base64, its media type and its byte length, so any file written is the client's own. Needs no capability; a capture over the named size bound is refused by name rather than returned cut short. **The client writes the file** (R24 phase 1): `rover screenshot <lease-id> --out <path>` decodes the bytes, checks what decoded against the byte length the host encoded, writes them on the machine running the CLI and reports `path.resolve` of `--out` — never a host-local path. A refused capture, or one that did not survive the trip, exits 1 and leaves no file at `--out` at all. **A black image is a true answer, not a failed capture** (§6): the check that separates a blocked capture from a broken device is a screenshot of the system home screen, and `read_screen` is the read that survives the block |
-| `read_screen` | Texts and element rectangles. **Works even when the app blocks screenshots**. Declares `canReadScreen` as a requirement, so a backend without it fails by name before anything is dispatched rather than answering with an empty screen (D11) |
+| `read_screen` | Texts and element rectangles. **Works even when the app blocks screenshots**. Declares `canReadScreen` as a requirement, so a backend without it fails by name before anything is dispatched rather than answering with an empty screen (D11). **The answer also says whether the on-screen keyboard is up and what rectangle it occupies**, on the `DeviceInfo` half rather than in the element list — an element under the keyboard is still laid out and still has bounds, so it is still an element, and the thing covering it is not one. The rectangle is in the **dp** space element bounds are in, because what it gets compared against is a touch point (#297) |
 | `record_video` | A recording of the screen, **as bytes on the result rather than as a path** (D19) — base64, `video/mp4` and its byte length, exactly where `screenshot`'s capture rides. **The recording is provably finished before it is pulled**: the backend waits on a condition for the recorder to be gone, then pulls, then checks the container index on the bytes that actually arrived. A recording without that index was still being written when it was copied and is not a shorter video but a file no player will open, so it is refused as `unfinished-recording` naming the device and the byte length — never handed over, and never an `internal_error` (§6). Declares `canRecordVideo` as a requirement, so a backend without it fails by name before anything is dispatched rather than answering with a null artifact (D11). Duration is bounded by what **one answer** can carry (15 s; the default is 5 s), and going over the artifact bound is the same `artifact-too-large` refusal `screenshot` gives rather than a file cut short — a longer recording is R24's chunked transfer. **The client writes the file** (R24 phase 1): `rover record <lease-id> --out <path> [--duration-ms <n>]` writes the video on the machine running the CLI, on the same two modules `screenshot` uses, and raises its own request timeout past the recording so a long one cannot surface as a hang. An `unfinished-recording` refusal leaves no file at `--out`. **The answer also carries frames sliced from the finished recording** (`result.frames`): PNGs in recording order, scaled down and extracted on the **host** after the pull — never sampled during capture and never a second pass over the device. Extraction uses `ffmpeg` from `PATH`; a host without it refuses as `frame-extraction-unavailable` rather than returning an empty list, and no path in the extractor ever answers with an empty one — a decoder that exited cleanly having written nothing is `frame-extraction-failed` too. Frame count, frame width and total frame bytes are bounded; going over the byte budget is `frames-too-large` carrying both numbers, and the count bound — one above the longest recording at the densest sampling, since sampling rounds up — is enforced as a refusal too, because a capture of a still screen declares a longer timeline than it was asked for and can reach it (§6). The CLI exposes both knobs: `rover record <lease-id> --out <path> [--duration-ms <n>] [--frames-per-second <n>]`, each bounded before the call, and the command answers with both the video and the frames or with neither. **The answer also says what the recording contains** (#183): `result.container` carries the encoded sample count and the duration the **container** declares — read out of the pulled bytes on the host with no decoder, never assumed from the `durationMs` that was asked for, since §6 measures those as different numbers. A capture of a screen that never changed comes back as one sample of zero declared duration, and that case is **named** on the answer (`still-screen`) with the reason in words, because every other check in this verb passes for it and an agent that only sees one frame concludes the tool is broken. It stays `ok` with its one frame — recording an idle screen is legitimate — and bytes whose container this host cannot parse answer `unreadable` rather than throwing or claiming zero. **What frames are honest about is §8**: they sample motion. |
 | `start_recording` / `stop_recording` | The same recording asked for as **two calls**, so the device can be driven inside it (#190, R43 phase 2). The start returns while the recorder is still running — the input verbs and `read_screen` work on that device under the same lease and end up in the recording — and the stop signals the recorder, waits on a condition for it to be gone, pulls the file and answers with **exactly what `record_video` answers with**: the same schema, the same normalised video on `result.artifact`, the same frames, the same `container` and the same `normalisation`. `record_video` is untouched; this is a second way to record. Both declare **`canControlRecording`**, which is deliberately not `canRecordVideo` (§5). The start takes no duration — the length is decided by when the stop is called — but the recorder is still given `MAX_RECORDING_MS` as its own kill switch, for the case nothing on the host can cover: since #191 the lease's end stops a recorder the caller walked away from (D9), and the limit is what bounds one whose *host* went away with it. A device holds **one** recording at a time: a second `start_recording`, or a `record_video` during an open session, is `recording-already-running` naming the device and the pids, never queued. Stopping with nothing recording and nothing left behind is `no-recording-running`; a recorder that reached its own limit first is **not** a failure, because the file it left is complete. Nothing on the host remembers that a recording is open — the device is asked (D6) — and because no window was ever named, the stop holds nothing across one: the file follows the recorder's own timeline, and a screen nobody drove is the same `still-screen` `record_video` reports, with nothing to stretch it across. |
-| `device_info` | Size, density, computed width in dp, OS version. Needs no capability and addresses nothing on the screen — it answers with the `DeviceInfo` every result already carries (D14), asked for on its own |
+| `device_info` | Size, density, computed width in dp, OS version, the system bar insets, and whether the on-screen keyboard is shown and where. Needs no capability and addresses nothing on the screen — it answers with the `DeviceInfo` every result already carries (D14), asked for on its own. **The keyboard rides here and not on a verb's after-state**, which is what makes it true of *every* verb's answer without a verb changing: `resultAfterAction()` re-reads `device_info` after the action, so a keyboard that opened during a tap is reported by the tap. It is in **dp** where the insets beside it are in pixels, each in the unit its consumer uses — a touch point for one, a screenshot's own coordinates for the other (#297) |
 
 ### Waiting
 
@@ -1569,6 +1569,64 @@ absent source is the common case of that.
 
 Fixture: `tests/fixtures/adb/dumpsys-window-d.api37-sdk-gphone16k-arm64.txt`, captured unedited.
 Parser and its reasoning: `src/backends/android/parsers/insets.ts`.
+
+---
+
+### The same dump says whether the on-screen keyboard is up, and `frame` is the only field that means it (2026-10-06, #297)
+
+The keyboard is an `InsetsSource` like the bars, in the **same `InsetsState` block of the same
+`dumpsys window d`** the insets already come out of — so reporting it is a read of text the backend
+already has in hand and **not a second device query**. Verified on `sdk_gphone16k_arm64`, **API 37**
+/ Android 17, `densityScale` 3, on 2026-10-06.
+
+The recipe, both halves of it:
+
+```bash
+adb shell getprop ro.build.version.sdk                    # 37
+adb shell settings put secure show_ime_with_hard_keyboard 1   # see the trap below
+adb shell am start -a android.settings.SETTINGS
+adb shell input tap 640 288                               # the Settings search field
+adb shell dumpsys input_method | grep mInputShown         # mInputShown=true
+adb shell dumpsys window d | grep 'type=ime'
+#   open:   InsetsSource id=3 type=ime frame=[0,1848][1280,2856] visibleFrame=[0,1848][1280,2856] visible=true  flags=         sideHint=BOTTOM
+adb shell input keyevent 4
+adb shell dumpsys window d | grep 'type=ime'
+#   closed: InsetsSource id=3 type=ime frame=[0,0][0,0]       visibleFrame=[0,2712][1280,2856] visible=false flags=INVALID sideHint=NONE
+adb shell settings put secure show_ime_with_hard_keyboard 0   # put the device back
+```
+
+Four things it settled, each of which would have been a plausible guess the other way:
+
+- **`frame` carries the rectangle, and `visibleFrame` must not be read.** Open, the two agree. Closed,
+  `frame` collapses to the `[0,0][0,0]` this dump uses for an absent source while `visibleFrame`
+  keeps `[0,2712][1280,2856]` — a 144 px band at the bottom of a screen with no keyboard on it. A
+  parser that preferred `visibleFrame` would report a rectangle for a keyboard that is down, which
+  is exactly the false fact a later phase would refuse a legitimate tap against.
+- **`visible` flips**, so the boolean does not have to be inferred from the frame. `flags` moves
+  from empty to `INVALID` and `sideHint` from `BOTTOM` to `NONE` alongside it; neither is read,
+  for the same reason the bars' side comes from the geometry rather than from `sideHint`.
+- **The `ime` source can be absent from the block entirely**, observed on this device right after an
+  application restart. That is *no keyboard is up*, not *this device did not say* — the same
+  distinction the insets draw, and the reason `null` and `{ shown: false }` are different answers.
+- **An emulator with `hw.keyboard=yes` will not show the IME at all** until
+  `settings put secure show_ime_with_hard_keyboard` is `1`. Without it the tap focuses the field,
+  `mInputShown` stays `false`, and the dump honestly reports no keyboard — which reads exactly like
+  a parser that does not work. Put the setting back afterwards.
+
+**The rectangle is filed in dp, where the insets beside it are in pixels.** The insets are compared
+against a screenshot's own pixels; this is compared against a **touch point**, and `src/verbs/target.ts`
+may not do scale arithmetic — a conversion in the verb layer is the hidden scale error this section
+warns about elsewhere. So the backend divides by `densityScale` once: `[0,1848][1280,2856]` over 3 is
+`{ x: 0, y: 616, width: 426.67, height: 336 }`, and that is what the daemon wrote into
+`device_info.json` for a real `screenshot` taken with the keyboard up.
+
+**`dumpsys input_method`'s `mInputShown` is used above as a cross-check and deliberately not by the
+parser.** It is a second query for a fact the dump already carries, and a second source is a second
+thing that can disagree with the first.
+
+Fixtures: `tests/fixtures/adb/dumpsys-window-d.keyboard-shown.api37-sdk-gphone16k-arm64.txt`
+(keyboard open) beside the original (keyboard closed), both captured unedited.
+Parser and its reasoning: `parseKeyboard` in `src/backends/android/parsers/insets.ts`.
 
 ---
 

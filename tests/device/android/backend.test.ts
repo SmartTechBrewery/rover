@@ -16,6 +16,16 @@ import { type DeviceSerial, parseDeviceSerial } from '@/core/ids.js';
  * assertions below is that it did. That matters more than usual right now, because of the
  * next paragraph.
  *
+ * **What this deliberately does not cover, so silence is not read as "checked":**
+ *
+ * - **No assertion here puts a keyboard up.** `deviceInfo` is asserted to *answer* the
+ *   on-screen keyboard field below, because a backend that never read it would answer `null`
+ *   on a device that says perfectly well whether one is shown. It is not asserted to come back
+ *   `shown: true`: opening a keyboard needs a text field, which means an application this
+ *   read-only suite must not assume is installed and must not launch. The `shown: true` path is
+ *   proved instead by the captured dump in `tests/unit/backends/android/parsers/insets.test.ts`,
+ *   taken with the keyboard open, and the recipe for re-taking it is in `PROJECT.md` §6.
+ *
  * ai/TESTING.md says a device test takes a lease like any other client, and this one does
  * not: leases exist since R8/#8, but the daemon registers no backend, so there is none to
  * take (ai/TESTING.md, "The exemption"). Until that is wired it drives the backend class
@@ -132,6 +142,30 @@ describe.skipIf(!process.env.ROVER_TEST_DEVICE)('the backend against a real devi
 		expect(info.screen.widthDp).toBeCloseTo(info.screen.widthPx / info.screen.densityScale, 10);
 		expect(info.screen.heightDp).toBeCloseTo(info.screen.heightPx / info.screen.densityScale, 10);
 		expect(info.osVersion).toBeTruthy();
+	});
+
+	/**
+	 * **The assertion is that the device *said*, not what it said.** A real Android prints a
+	 * `type=ime` source in the dump `deviceInfo` already runs, so `null` here means the fact was
+	 * never read — which is the one failure a mocked adb cannot catch, since a mock answers
+	 * whatever fixture it was handed.
+	 *
+	 * Whether a keyboard happens to be up is a property of whatever is in front of this device
+	 * and is deliberately not asserted (see the note at the top of this file). What *is* asserted
+	 * beyond the boolean is the unit: a rectangle, when there is one, is in the dp space
+	 * `deviceInfo().screen` describes rather than in the pixels the window manager printed.
+	 */
+	it('says whether its on-screen keyboard is up', async () => {
+		const device = await firstUsableDevice();
+
+		const { screen } = await backend.deviceInfo(device.serial);
+
+		expect(screen.keyboard).not.toBeNull();
+		expect(typeof screen.keyboard?.shown).toBe('boolean');
+		if (screen.keyboard?.bounds) {
+			expect(screen.keyboard.bounds.width).toBeLessThanOrEqual(screen.widthDp);
+			expect(screen.keyboard.bounds.height).toBeLessThanOrEqual(screen.heightDp);
+		}
 	});
 });
 

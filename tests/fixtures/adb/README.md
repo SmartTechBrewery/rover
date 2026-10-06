@@ -72,6 +72,8 @@ reports itself as **v1.4**. The two `getprop-version` rows are **2026-08-31**, o
 | `screenrecord-pidof.running.api37-sdk-gphone16k-arm64.txt` | `adb -s $SERIAL shell 'sleep 3; pidof screenrecord' > f 2>&1`, run beside a `screenrecord --time-limit 8` | sdk_gphone16k_arm64 | 37 | 2026-08-30 |
 | `screenrecord.finished.api37-sdk-gphone16k-arm64.mp4` | `adb -s $SERIAL shell screenrecord --bit-rate 2000000 --time-limit 3 /sdcard/rover-recording.mp4`, then `adb -s $SERIAL exec-out cat /sdcard/rover-recording.mp4` | sdk_gphone16k_arm64 | 37 | 2026-08-30 |
 | `screenrecord.unfinished.api37-sdk-gphone16k-arm64.mp4` | the same `exec-out cat`, run **three seconds into** a `screenrecord --time-limit 8` | sdk_gphone16k_arm64 | 37 | 2026-08-30 |
+| `dumpsys-window-d.api37-sdk-gphone16k-arm64.txt` | `adb -s $SERIAL shell dumpsys window d`, nothing focused | sdk_gphone16k_arm64 | 37 | 2026-09-10 |
+| `dumpsys-window-d.keyboard-shown.api37-sdk-gphone16k-arm64.txt` | the same, with the Settings search field focused and the on-screen keyboard up | sdk_gphone16k_arm64 | 37 | 2026-10-06 |
 
 Both `wm` overrides were reset with `wm size reset` / `wm density reset` immediately after the
 capture. The `track-devices` capture leaves the host as it found it the same way: the second entry
@@ -211,6 +213,17 @@ a device that is not usable is listed with a null version without any process be
   and are not any more. It is also the attachment case in miniature (D18): two entries, one
   physical emulator, distinguishable only by the serial — which is why the classification reads
   the serial at all.
+
+- **The two `dumpsys window d` captures are a pair, and only the pair is evidence.** The same
+  `InsetsSource id=3 type=ime` line is in both, and what differs is the whole finding: open it reads
+  `frame=[0,1848][1280,2856] visibleFrame=[0,1848][1280,2856] visible=true flags=`, closed it reads
+  `frame=[0,0][0,0] visibleFrame=[0,2712][1280,2856] visible=false flags=INVALID`. So `frame` is the
+  field that means the keyboard and `visibleFrame` keeps a band that is not one — a parser pinned on
+  the closed capture alone could have taken either and looked right. The keyboard-open capture was
+  taken on the AVD `Pixel_9_Pro` (the same `sdk_gphone16k_arm64` system image as the rest of this
+  directory) and needed `settings put secure show_ime_with_hard_keyboard 1` first, because
+  `hw.keyboard=yes` otherwise suppresses the IME entirely; the setting was put back to `0`
+  afterwards. The recipe and the rest of the finding are in `PROJECT.md` §6.
 
 - **The hierarchy XML has no trailing newline**, and every one of its 75 nodes carries all 19
   attributes — `index`, `text`, `resource-id`, `class`, `package`, `content-desc`, the ten booleans,

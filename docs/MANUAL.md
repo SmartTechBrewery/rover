@@ -839,6 +839,24 @@ version — the same `DeviceInfo` every result already carries (D14), now askabl
 moving the device first. Neither addresses anything on the screen, so both answer `target: null`,
 and both carry the lease id and nothing else on the wire.
 
+**That `DeviceInfo` also says whether the on-screen keyboard is up, and where.** `screen.keyboard`
+carries `shown` and, when one is shown, `bounds` — and because it rides on the half D14 puts on
+*every* result, so does every other verb's answer: a `tap` that opened a keyboard reports the
+keyboard it opened, because the after-state is re-read once the action has run. It is on the device
+half rather than in the element list on purpose. An element under the keyboard is still laid out
+where the application put it and still comes back from `read_screen` with those bounds; the thing
+covering it is not an element, so the honest place to say it is beside the screen's other facts.
+
+**`bounds` is in dp**, the same space the element rectangles are in — not the physical pixels
+`screen.systemBars` beside it uses — because what you would compare it against is a touch point
+rather than a screenshot's coordinates. And the two "no" answers are different answers:
+**`null` means this device did not say**, while **`{ shown: false }` means the device says no
+keyboard is up**. The iOS-simulator backend answers `null`, since its screen facts come from a
+static device-type profile that describes nothing about what is drawn on the glass. Reading `null`
+as *no keyboard* would turn a backend that cannot look into one promising a clear screen. Nothing
+in Rover refuses a tap over a keyboard today — this is the device reporting a fact, and what a verb
+does about it is separate work.
+
 **`screenshot` is the third read, and the one whose answer is a payload** rather than a state the
 result already carries. It sits on the same spine and needs no capability either, and what it adds
 is one field: `result.artifact`, carrying the image **as bytes** — base64, its media type and the
@@ -1699,7 +1717,8 @@ runs of the same named check, taken at two different points in time, sit next to
     <test_name>/
       20260830T170501Z-issue-112-9f1c2ab4/   # one lease: when it started, who held it
         <device-serial>/
-          device_info.json                   # size, density, dp scale, OS version
+          device_info.json                   # size, density, dp scale, OS version,
+                                             #   system bars, on-screen keyboard
           test_description.json              # what the lease said the run was about, if anything
           group_id.json                      # which investigation this run is part of, if any
           screenshots/001_screenshot.png

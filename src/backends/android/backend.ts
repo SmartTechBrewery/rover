@@ -125,7 +125,7 @@ import {
 } from './parsers/getprop.js';
 import { parseUiHierarchy, type UiHierarchy } from './parsers/hierarchy.js';
 import { acceptedInput } from './parsers/input.js';
-import { parseSystemBarInsets } from './parsers/insets.js';
+import { parseKeyboard, parseSystemBarInsets } from './parsers/insets.js';
 import { parseLogcat } from './parsers/logcat.js';
 import { acceptedNetworkChange } from './parsers/network.js';
 import { isPng } from './parsers/screencap.js';
@@ -1026,6 +1026,12 @@ export class AndroidDeviceBackend implements DeviceBackend {
 	 * and the insets are a screen fact of exactly that kind. The parser answers `null` for a dump
 	 * with no insets state, so an Android that does not report them costs the rest of this answer
 	 * nothing (`./parsers/insets.js`).
+	 *
+	 * **That one dump now answers two screen facts** — the system bars and the on-screen keyboard
+	 * — out of the same `InsetsState` block, which is why reporting the keyboard adds no device
+	 * query here. Each is read with the unit its consumer uses: the insets against the effective
+	 * pixels the frames are stated in, the keyboard divided by the density scale into the dp space
+	 * a touch point lives in (`core/device.ts`).
 	 */
 	async deviceInfo(serial: DeviceSerial): Promise<DeviceInfo> {
 		const [size, density, properties, displays] = await Promise.all([
@@ -1053,6 +1059,7 @@ export class AndroidDeviceBackend implements DeviceBackend {
 				// Against the **effective** dimensions, because that is what the device renders at
 				// and therefore what the window manager states these frames against.
 				systemBars: parseSystemBarInsets(displays.stdout, screen.effective),
+				keyboard: parseKeyboard(displays.stdout, dpi.scale),
 			},
 			osVersion: props.androidRelease,
 			osApiLevel: props.apiLevel,
