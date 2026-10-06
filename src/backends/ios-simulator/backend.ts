@@ -82,6 +82,7 @@ import {
 	NoRecordingRunningError,
 	RecordingAlreadyRunningError,
 	UnfinishedRecordingError,
+	UnreadableScreenError,
 	UnsupportedKeyError,
 	UnsupportedTextError,
 } from '../../core/errors.js';
@@ -113,7 +114,11 @@ import {
 	typeTextEvents,
 	untypeableCharacters,
 } from './input.js';
-import { ACCESSIBILITY_FORMAT, parseAccessibilityRead } from './parsers/accessibility.js';
+import {
+	ACCESSIBILITY_FORMAT,
+	type AccessibilityRead,
+	parseAccessibilityRead,
+} from './parsers/accessibility.js';
 import { saysNothingToTerminate } from './parsers/app-control.js';
 import { type DeviceTypeProfile, readDeviceTypeProfile } from './parsers/device-type-profile.js';
 import { IdbNotifyFrameDecoder, type IdbTargetList } from './parsers/idb-notify.js';
@@ -871,6 +876,36 @@ function notReadable(serial: DeviceSerial, state: DeviceState): Error {
 			'system: the tool refuses one against a device that is not booted, and this host ' +
 			'refuses first so that no companion process is started for a device that cannot answer.',
 	);
+}
+
+/**
+ * Whether an accessibility read is the **launching-app placeholder** rather than a screen.
+ *
+ * This is the one shape on this platform that means *there is no screen to read yet*, and it is a
+ * measurement rather than a guess — #300, on an iPhone 17 under both installed runtimes (companion
+ * v1.5.2, Xcode 26.4.1 / iOS 26.4.1 and iOS 26.1, 2026-10-06; `docs/IOS.md` §2). Across **2623**
+ * reads taken as fast as the companion would answer them in the first seconds of thirty cold
+ * launches of two applications, every read parsed and **40** of them came back as a single
+ * `AXApplication` node carrying the launching process's pid, `AXLabel: null`, `AXValue: null` and
+ * the frame `{x: 0, y: 0, width: 0, height: 0}`. The app had been told to start and had not drawn,
+ * so what idb could describe was the application object and nothing in it.
+ *
+ * **The test is "nothing on this screen has any area", not "exactly one node".** One node is what
+ * was measured on both applications, but the number is a property of those two and the *rectangle*
+ * is the property of the state: a node with no extent is nothing a caller can read, target or tap,
+ * so a read made entirely of them carries no screen however many of them there are. The other half
+ * of the same measurement is what makes the test safe — **every settled screen carries an
+ * `AXApplication` node covering the whole panel**, 402×874 points on this device across 40 settled
+ * reads of SpringBoard and of Settings, so no settled screen can satisfy this.
+ *
+ * **`[]` is deliberately not this case.** It was never observed, in any of those 2623 reads or in
+ * any of the three committed captures, so mapping it here would be handling a state nobody has
+ * seen — and `./parsers/accessibility.js` is right that an empty read is a real answer a caller
+ * tells apart by its own length. The guard is on a **non-empty** read for that reason and no
+ * other.
+ */
+function noScreenYet(read: AccessibilityRead): boolean {
+	return read.length > 0 && read.every(({ frame }) => frame.width === 0 || frame.height === 0);
 }
 
 /**
@@ -1738,6 +1773,33 @@ export class IosSimulatorDeviceBackend implements DeviceBackend {
 	 *   the launch has not finished coming to the front, which is D12(c)'s "every action returns
 	 *   the state after itself" being unavailable on this platform for launches, and is why the
 	 *   verb layer's waits are on conditions rather than on a call having returned.
+	 * - **It does not retry**, and the typed refusal below is what makes that affordable: a retry
+	 *   loop is a wait, waits live in the wait vocabulary (D12(b), ai/RULES.md §2), and a primitive
+	 *   that quietly read twice would hide from its caller that the first read found nothing.
+	 *
+	 * **One shape is typed, and the measurement that justifies it is {@link noScreenYet}'s.** In
+	 * the first fraction of a second of a cold launch this read answers a single `AXApplication`
+	 * node with a zero-sized frame and no label — the launching process, before it has drawn —
+	 * which is this platform's version of "the device is answering and has no screen yet"
+	 * (`src/core/device.ts`'s contract on this method, `UnreadableScreenError`). It is thrown
+	 * rather than mapped to a one-element `ScreenElement[]` because that list is the plausible
+	 * empty answer ai/RULES.md §2 forbids: a caller cannot tell it from a screen that really holds
+	 * one nameless thing, and `wait_until_gone` would read it as the element having left. Typed, it
+	 * is a "not yet" the two waits poll through and a one-shot `read_screen` fails by name with
+	 * (`src/verbs/wait-for.ts`, `src/verbs/failure.ts`).
+	 *
+	 * **The other transient this platform has is deliberately *not* typed, and that is measured
+	 * too.** Between `simctl boot` reporting `Booted` and SpringBoard coming up — several seconds,
+	 * and the state check above does not cover it, because `simctl` calls the device booted about
+	 * 0.7 s in — `accessibility_info` fails at gRPC `INTERNAL` with *"SpringBoard is not running on
+	 * the simulator…"*. That reads like a "not yet" and must not be given a type that invites
+	 * polling, because **one such read wedges the device's accessibility bridge for the rest of
+	 * that boot**: every later read answers `INTERNAL` *"No translation object returned for
+	 * simulator…"* over a fully drawn home screen, through a fresh companion, until the simulator
+	 * is shut down and booted again (`docs/IOS.md` §8, trap 17 — measured 2026-10-06, and a
+	 * companion started and asked `describe` in the same window wedges nothing). So it stays the
+	 * plain failure it is today: a caller sees it once rather than polling a device into a state it
+	 * cannot leave.
 	 * - **It filters nothing and sorts nothing.** Every node the tool listed, in its order,
 	 *   including the ones carrying neither a label nor a value.
 	 * - **It takes no lock.** Nothing about a read is exclusive: two overlapping reads of one
@@ -1789,7 +1851,17 @@ export class IosSimulatorDeviceBackend implements DeviceBackend {
 
 		const answer = await this.companions.call(serial, READ_SCREEN_RPC, READ_SCREEN_REQUEST);
 
-		return toScreenElements(parseAccessibilityRead(answer));
+		const read = parseAccessibilityRead(answer);
+		if (noScreenYet(read)) {
+			throw new UnreadableScreenError(
+				serial,
+				'the accessibility read listed only nodes with no rectangle at all, which is the ' +
+					'application object of something that has been told to start and has not drawn — ' +
+					'every settled screen on this platform carries a node covering the whole panel',
+			);
+		}
+
+		return toScreenElements(read);
 	}
 
 	/**

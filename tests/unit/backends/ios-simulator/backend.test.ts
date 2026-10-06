@@ -31,6 +31,7 @@ import {
 	NoRecordingRunningError,
 	RecordingAlreadyRunningError,
 	UnfinishedRecordingError,
+	UnreadableScreenError,
 	UnsupportedKeyError,
 	UnsupportedTextError,
 } from '@/core/errors.js';
@@ -2053,6 +2054,75 @@ describe('readScreen', () => {
 		companionCall.mockResolvedValue({ json: '{"elements":[]}' });
 
 		await expect(backend.readScreen(BOOTED)).rejects.toThrow(/expected one flat JSON array/);
+	});
+
+	/**
+	 * The launching-app placeholder, **quoted from the measurement rather than invented**: this is
+	 * one of the 40 payloads #300 recorded in the first fraction of a second of a cold launch, with
+	 * only the keys this projection reads kept (`backend.ts`'s `noScreenYet` carries the counts and
+	 * the bench). It is inline rather than a committed fixture because `ai/TESTING.md` wants a
+	 * parser fixture to be a whole captured document, and the thing being pinned here is a
+	 * **decision in the backend** about a shape, not the parsing of one.
+	 */
+	const LAUNCHING_PLACEHOLDER = JSON.stringify([
+		{
+			frame: { x: 0, y: 0, width: 0, height: 0 },
+			AXLabel: null,
+			AXValue: null,
+		},
+	]);
+
+	/**
+	 * **The typed "not yet", and the whole point of #300.** A read made only of nodes with no
+	 * rectangle is an application that has been told to start and has not drawn — the device is
+	 * attached and answering, and what it has not got is a screen. Typed, the two waits poll
+	 * through it and a one-shot `read_screen` fails by name
+	 * (`src/verbs/wait-for.ts`, `src/verbs/failure.ts`); as a one-element list it would be
+	 * indistinguishable from a screen holding one nameless thing.
+	 */
+	it('refuses the launching-app placeholder as a screen that is not ready yet', async () => {
+		companionCall.mockResolvedValue({ json: LAUNCHING_PLACEHOLDER });
+
+		const thrown = await backend.readScreen(BOOTED).catch((error: unknown) => error);
+
+		expect(thrown).toBeInstanceOf(UnreadableScreenError);
+		expect((thrown as UnreadableScreenError).serial).toBe(BOOTED);
+		expect((thrown as UnreadableScreenError).reason).toMatch(/no rectangle at all/);
+		expect((thrown as Error).message).toContain(unwrap(BOOTED));
+	});
+
+	/**
+	 * **The boundary, and it is the assertion that keeps the refusal from widening.** One node is
+	 * what the placeholder happened to carry on both applications measured, so a check written
+	 * against the *count* would refuse this — a real screen with a single element on it. What was
+	 * measured as the property of the state is the missing rectangle, and this case is where that
+	 * distinction is enforced rather than merely explained.
+	 */
+	it('answers a single node that has a rectangle as one element', async () => {
+		companionCall.mockResolvedValue({
+			json: JSON.stringify([
+				{ frame: { x: 0, y: 0, width: 402, height: 874 }, AXLabel: 'Ustawienia', AXValue: null },
+			]),
+		});
+
+		const elements = await backend.readScreen(BOOTED);
+
+		expect(elements).toEqual([
+			{ id: '0', label: 'Ustawienia', text: null, bounds: { x: 0, y: 0, width: 402, height: 874 } },
+		]);
+	});
+
+	/**
+	 * **An empty read is not this case, and that is the issue's fourth acceptance criterion.** `[]`
+	 * was never observed in any of the 2623 reads #300 took, settled or transient, so treating it
+	 * as "not ready" would be handling a state nobody has seen — and it would make the refusal fire
+	 * on the one answer `parsers/accessibility.ts` documents as real. It stays an empty list, which
+	 * the caller tells apart by its own length.
+	 */
+	it('answers an empty read as an empty list rather than as a screen that is not ready', async () => {
+		companionCall.mockResolvedValue({ json: '[]' });
+
+		await expect(backend.readScreen(BOOTED)).resolves.toEqual([]);
 	});
 
 	/** The one lifecycle method this backend has of its own, and the suites are what call it. */
