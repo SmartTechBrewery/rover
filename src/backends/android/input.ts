@@ -33,13 +33,22 @@ import type { DeviceKey, Point } from '../../core/device.js';
  *
  * **`KEYCODE_WAKEUP`, not `KEYCODE_POWER`.** Power *toggles*, so a `wake` built on it puts
  * an already-woken device to sleep — the silent inversion this vocabulary exists to avoid.
- * All four were pressed on API 37 before this table was written.
+ *
+ * **`KEYCODE_DEL`, not `KEYCODE_FORWARD_DEL`.** Android's names are the trap: `DEL` (67) is
+ * the backspace key and `FORWARD_DEL` (112) is the one that eats the character *after* the
+ * caret. `delete` is backspace (`DeviceKeySchema`), so it is `DEL`.
+ *
+ * The first four were pressed on API 37 before this table was written; `delete`, `enter` and
+ * `tab` were pressed in text fields on a physical API 33 device (#301, PROJECT.md §6).
  */
 export const KEY_CODES = {
 	back: 'KEYCODE_BACK',
 	home: 'KEYCODE_HOME',
 	recents: 'KEYCODE_APP_SWITCH',
 	wake: 'KEYCODE_WAKEUP',
+	delete: 'KEYCODE_DEL',
+	enter: 'KEYCODE_ENTER',
+	tab: 'KEYCODE_TAB',
 } as const satisfies Record<DeviceKey, string>;
 
 /**

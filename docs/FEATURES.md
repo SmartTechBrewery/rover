@@ -87,7 +87,8 @@ plausible-looking answer this project refuses. `canReadScreen` (#251) and `canIn
 started `false` and have since flipped to `true`.
 
 **Refusals get finer than a flag.** `press_key` on a simulator answers `home` and `wake` and
-refuses `back` and `recents` as `unsupported-key`, naming the key — a device that takes input
+refuses `back` and `recents` as `unsupported-key`, naming the key — and refuses the editing keys
+`delete`, `enter` and `tab` the same way until #302 has watched them land — a device that takes input
 saying so about *one key* rather than claiming it takes none. That is a different answer from
 `missing-capability` on purpose: one says try another key, the other says try another device.
 
@@ -202,6 +203,21 @@ about the verb, not a resolution that failed. There is deliberately no target op
 string to the backend **byte for byte** — a string this layer had helpfully escaped would arrive on
 screen with the escaping in it — and what a device cannot type at all comes back as
 `unsupported-text` naming the characters as escapes.
+
+**`press_key` edits text as well as navigating** (#301). Beside `back`, `home`, `recents` and
+`wake` it takes `delete` — backspace, the character before the caret, never forward delete —
+`enter`, whose effect belongs to the focused control (a submit, a newline, the field's editor
+action), and `tab`, which moves focus to the next focusable control. Names, not keycodes, because
+the vocabulary is shared across platforms (D10). An optional `times` (1 to 20, default 1) repeats
+the press in one call, so fixing a typo is one call rather than ten, and the answer reads the
+screen once after the last press. **The repeat is composed in the verb, not handed to a backend**:
+a backend keeps one primitive per key, and a key whose button toggles stays safe because the
+backend checks before every press, which a backend-level count would have to re-solve on every
+platform. Zero is refused at the wire rather than accepted as a no-op, because pressing nothing
+would answer a success, and the upper bound keeps a full run well inside a client's default
+request deadline (measured, `PROJECT.md` §6). A Tab goes to the next *focusable* control, which on
+a web form can be a field's clear button rather than the next field — a screen read carries no
+focus flag, so read back after typing rather than counting Tabs.
 
 **`read_screen` is a first-class verb and not a fallback.** It survives an app blocking screen
 capture, which is the case where pixels are gone and nothing is logged about it (§16).
@@ -1047,7 +1063,7 @@ holding a subset of what its lease wrote.
 - **The two platforms are not equally capable, and Rover says which is which.** A simulator answers
   every required call, records video, reads the screen and takes input, and refuses the network
   toggles **by name**; `press_key` answers `home` and `wake` and refuses `back` and `recents` by
-  name. **Physical iPhones are not supported at all.**
+  name, and `delete`, `enter` and `tab` by name until they are measured (#302). **Physical iPhones are not supported at all.**
 - **Pixels are gone whenever an app blocks screen capture** — the system hands back a valid, all
   black image and logs nothing. The check that tells a blocked capture from a broken device is a
   screenshot of the system home screen. `read_screen` survives the block and answers in full.

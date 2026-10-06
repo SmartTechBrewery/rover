@@ -37,8 +37,9 @@ import {
  *   example of, and there are now two kinds. `set_wifi` and `set_airplane_mode` come back as
  *   `missing-capability` naming `canControlNetwork` — *not* as a cosmetic status bar, which
  *   `simctl status_bar override --wifiMode failed` would happily draw (`ai/RULES.md` §2,
- *   `src/backends/ios-simulator/capabilities.ts`). `press_key` with `back` or `recents` comes back
- *   as **`unsupported-key`** naming the key, from a backend whose `canInput` is `true` and whose
+ *   `src/backends/ios-simulator/capabilities.ts`). `press_key` with `back` or `recents` — and,
+ *   until #302 measures them, `delete`, `enter` or `tab` — comes back as **`unsupported-key`**
+ *   naming the key, from a backend whose `canInput` is `true` and whose
  *   other three input verbs work. Every earlier assertion of either shape in this repository was
  *   made against a synthetic backend; these are against a device.
  *
@@ -52,7 +53,7 @@ import {
  * - `ROVER_TEST_IDB` on the keys this platform answers: a press goes out over a supervised
  *   `idb_companion` and the post-state comes back over the same one, so a host with Xcode but
  *   without idb's release tarball has nothing to send it through. The **refusals** are
- *   deliberately not gated on it — `back` and `recents` come back before any round trip, and
+ *   deliberately not gated on it — every refused key comes back before any round trip, and
  *   they are worth asserting exactly on the host that cannot make one.
  *
  * Either way the run says so loudly rather than passing in silence.
@@ -238,7 +239,10 @@ describe.skipIf(!process.env.ROVER_TEST_SIMULATOR)(
 		it.each([
 			'back',
 			'recents',
-		] as const)('refuses the %s key by name rather than sending a gesture that is not it', async (key) => {
+			'delete',
+			'enter',
+			'tab',
+		] as const)('refuses the %s key by name rather than sending something that is not it', async (key) => {
 			const client = await startHost();
 			const device = await freeSimulator(client);
 			const leaseId = await lease(client, device.serial);

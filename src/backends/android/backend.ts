@@ -25,7 +25,7 @@
  * - `shellText` for `typeText`'s argument, the only value here that is screen *content*:
  *   an apostrophe in it is ordinary, so it is escaped rather than refused.
  * - **Neither, only for a literal this file owns** — the environment pair's two words, the
- *   four keycodes of `./input.js`'s `KEY_CODES`, {@link DUMP_PATH}, {@link RECORDING_PATH},
+ *   keycodes of `./input.js`'s `KEY_CODES`, {@link DUMP_PATH}, {@link RECORDING_PATH},
  *   and the numbers `tap`, `swipe` and `recordVideo` compute. No caller's string reaches any
  *   of them, which is the property `shellArg` exists to restore when one does. A new argument
  *   outside that list takes a quoter.

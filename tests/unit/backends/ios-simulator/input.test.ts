@@ -36,6 +36,21 @@ describe('DEVICE_KEYS', () => {
 		expect(DEVICE_KEYS.recents).toHaveProperty('noEquivalent');
 	});
 
+	// Refused until #302 watches them land, because `hid` answers success for a usage that does
+	// nothing — and the reason says so, naming the candidate usage rather than claiming the
+	// platform has no such key.
+	it.each([
+		['delete', 42],
+		['enter', 40],
+		['tab', 43],
+	] as const)('refuses the unmeasured %s key, naming HID usage %i and #302', (key, usage) => {
+		const answer = DEVICE_KEYS[key];
+
+		expect(answer).toHaveProperty('noEquivalent');
+		expect('noEquivalent' in answer && answer.noEquivalent).toContain(`HID usage ${usage}`);
+		expect('noEquivalent' in answer && answer.noEquivalent).toContain('#302');
+	});
+
 	// The compile-time exhaustiveness is `satisfies Record<DeviceKey, KeyAnswer>`; this is the
 	// runtime half, so a key added to the enum without an entry here is red rather than
 	// `undefined` reaching a lookup.
@@ -44,12 +59,12 @@ describe('DEVICE_KEYS', () => {
 	});
 
 	/**
-	 * **The two refusals are present rather than absent**, which is the difference between a
+	 * **The refusals are present rather than absent**, which is the difference between a
 	 * backend that has decided about a key and one that forgot it — and the reason each is a
 	 * sentence rather than a flag is that it is what the agent is told (`UnsupportedKeyError`).
 	 */
 	it('gives each refused key a reason a caller can act on', () => {
-		for (const key of ['back', 'recents'] as const) {
+		for (const key of ['back', 'recents', 'delete', 'enter', 'tab'] as const) {
 			const answer = DEVICE_KEYS[key];
 			expect('noEquivalent' in answer && answer.noEquivalent.length).toBeGreaterThan(40);
 		}

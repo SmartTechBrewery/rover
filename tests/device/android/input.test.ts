@@ -36,7 +36,7 @@ import type { Device, DeviceKey } from '@/core/device.js';
  * - **That a long press produces a long press, and that the measured text lands in a
  *   field, are observed by hand** in the session behind PROJECT.md §6 and recorded there —
  *   including the 400 ms threshold, which is a device setting rather than a constant.
- * - **Nothing here proves the keycode table is right**, only that all four keycodes are
+ * - **Nothing here proves the keycode table is right**, only that every keycode is
  *   accepted. A wrong one is accepted too. The table is pinned in
  *   `tests/unit/backends/android/input.test.ts` and exhaustive over `DeviceKey` at compile
  *   time; those are the only two things that can catch it.
@@ -117,7 +117,7 @@ describe.skipIf(!process.env.ROVER_TEST_DEVICE)('input against a real device', (
 	});
 
 	/**
-	 * Every key of the vocabulary, pressed. This proves the four keycodes are shapes `input
+	 * Every key of the vocabulary, pressed. This proves the keycodes are shapes `input
 	 * keyevent` accepts and nothing more — an unknown one is accepted identically, which is
 	 * the finding that made the unit pin the load-bearing check.
 	 */

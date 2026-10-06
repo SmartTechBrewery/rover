@@ -262,7 +262,19 @@ export async function typeText(context: VerbContext, text: string): Promise<Acti
 }
 
 /**
- * Press one of the device's own keys — `back`, `home`, `recents` or `wake`.
+ * How many times {@link pressKey} presses, when the caller says more than once.
+ *
+ * Absent means once. The upper bound is the wire's (`MAX_KEY_PRESSES`, `src/ipc/verb-methods.ts`)
+ * rather than this layer's, because it is sized against a client's request deadline, which is a
+ * fact about the wire and not about the verb.
+ */
+export interface PressKeyOptions {
+	readonly times?: number;
+}
+
+/**
+ * Press one of the device's own keys — `back`, `home`, `recents`, `wake`, `delete`, `enter` or
+ * `tab` — once, or `options.times` times in a row.
  *
  * `DeviceKey` is the whole vocabulary and it is `src/core/device.ts`'s, shared with the
  * backend and with the wire rather than restated here: a key this layer accepted and a
@@ -274,20 +286,44 @@ export async function typeText(context: VerbContext, text: string): Promise<Acti
  * because a device that takes input and lacks one key is a narrower device rather than one
  * that takes none. Nothing here inspects the key or substitutes for it: which keys a device
  * has is the backend's knowledge, and this verb neither second-guesses it nor swallows the
- * refusal.
+ * refusal. A refusal on the first press is the whole answer, so nothing further is pressed.
+ *
+ * **`times` is composed here, not handed to the backend** (#301), so ten backspaces are one call
+ * without a backend learning a count. The backend keeps one primitive per key, and a toggle stays
+ * safe by construction: a backend whose `wake` sits on a toggling button reads the screen state
+ * before *every* press, so `wake` three times is still idempotent, where a backend-level count
+ * would make every backend re-solve that. The after-state is captured **once, after the last
+ * press** (D12(c)). A press that fails partway through throws and does not say how many landed
+ * before it — a run that got half way reports a failure rather than a success, and the
+ * after-state of a retry shows where it stands.
  *
  * **The post-state is the interesting half.** `home` and `recents` change what is on screen
- * without anything on screen having been touched, so the `ActionResult`'s `after` is the only
- * evidence of what the press did — and on a backend that cannot read its screen it says so
- * (`unavailable`) rather than implying nothing changed.
+ * without anything on screen having been touched, and `enter` does whatever the focused control
+ * does with it, so the `ActionResult`'s `after` is the only evidence of what the press did — and
+ * on a backend that cannot read its screen it says so (`unavailable`) rather than implying
+ * nothing changed.
  */
-export async function pressKey(context: VerbContext, key: DeviceKey): Promise<ActionResult> {
+export async function pressKey(
+	context: VerbContext,
+	key: DeviceKey,
+	options: PressKeyOptions = {},
+): Promise<ActionResult> {
+	const times = options.times ?? 1;
+	if (!Number.isInteger(times) || times < 1) {
+		throw new Error(
+			`press_key was asked to press ${String(times)} times — a count is a positive integer, ` +
+				'and pressing nothing would report a success for a key that was never pressed',
+		);
+	}
+
 	return performAction(context, {
 		verb: 'press_key',
 		requires: ['canInput'],
 		act: async () => {
 			const press = capabilityMethod(context, 'canInput', 'pressKey');
-			await press(context.serial, key);
+			for (let pressed = 0; pressed < times; pressed++) {
+				await press(context.serial, key);
+			}
 		},
 	});
 }
