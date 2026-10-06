@@ -1227,6 +1227,7 @@ describe('deviceInfo', () => {
 				widthDp: 402,
 				heightDp: 874,
 				systemBars: null,
+				keyboard: null,
 			},
 			osVersion: '26.4.1',
 			osApiLevel: null,
@@ -1250,6 +1251,7 @@ describe('deviceInfo', () => {
 			widthDp: 1032,
 			heightDp: 1376,
 			systemBars: null,
+			keyboard: null,
 		});
 	});
 

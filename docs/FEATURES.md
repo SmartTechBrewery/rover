@@ -179,7 +179,7 @@ credential.
 | --- | --- | --- |
 | Input | `tap`, `long_press`, `swipe`, `scroll`, `type_text`, `press_key` | six uses of one spine; `src/verbs/input.ts` |
 | Waits | `wait_for`, `wait_until_gone` | the vocabulary that replaces `sleep`; `wait-for.ts` |
-| Reads | `read_screen`, `device_info`, `screenshot` | `read.ts`; `screenshot`'s answer is bytes |
+| Reads | `read_screen`, `device_info`, `screenshot` | `read.ts`; `screenshot`'s answer is bytes, and both reads report the on-screen keyboard |
 | Apps | `launch_app`, `stop_app`, `clear_app_data` | address a package, resolve no target; `app.ts` |
 | Logs | `read_logs` | bounded, never follows; `logs.ts` |
 | Recording | `record_video`, `start_recording`, `stop_recording` | `record.ts`, `recording-session.ts` |
@@ -206,7 +206,35 @@ screen with the escaping in it — and what a device cannot type at all comes ba
 **`read_screen` is a first-class verb and not a fallback.** It survives an app blocking screen
 capture, which is the case where pixels are gone and nothing is logged about it (§16).
 
-**Where it lives.** `src/verbs/`, `src/ipc/` for the method table, `PROJECT.md` §4.
+**The screen a verb reports now includes what the system drew on *top* of it** (#297). This
+paragraph is new rather than a rewrite, because the gap it closes was never described: the element
+list says where an application laid its controls out, and an on-screen keyboard covering the bottom
+third of the glass changes none of those rectangles. A button under the keyboard is still in the
+read, still carries bounds, and is still perfectly tappable as far as every answer Rover gave — so
+the tap lands on a key and the agent is told it tapped the button. **So the device now says whether
+its on-screen keyboard is shown and what rectangle it occupies**, and it says it on the
+**`DeviceInfo`** half of the answer rather than as another element.
+
+That placement is the whole of why it costs no verb a line. `DeviceInfo` is what D14 already puts on
+**every** result, and the after-state re-reads it *after* the action — so `tap`, `press_key`,
+`wait_for` and `read_screen` all report a keyboard that opened or closed while they ran, without any
+of them knowing the field exists. Two further consequences fall out of the same choice: it crosses
+IPC and reaches the archive's `device_info.json` beside every run through schemas that already carry
+the screen whole, and the rectangle is in hand at the one place a later refusal would need it.
+
+**The rectangle is in dp, where the system-bar insets beside it are in pixels** — each in the unit
+its own consumer uses. The insets are compared against a screenshot's own coordinates (§14); this is
+compared against a **touch point**, and the verb layer may not multiply by a scale, because a hidden
+scale conversion there is the exact error that turns every coordinate in the system into a plausible
+wrong one. And `null` (*this device did not say*) stays distinct from `{ shown: false }` (*this
+device says no keyboard is up*), the same distinction the insets draw: a backend with no route to
+the fact must not read as one promising a clear screen.
+
+**Nothing refuses anything yet.** This is the device reporting a fact; what a verb does about an
+element the keyboard covers, and a verb that dismisses it, are separate work.
+
+**Where it lives.** `src/verbs/`, `src/ipc/` for the method table, `src/core/device.ts` for the
+keyboard's shape, `src/backends/android/parsers/insets.ts` for the read; `PROJECT.md` §4 and §6, D14.
 
 ---
 
@@ -354,7 +382,8 @@ condition and a stream over IPC.
 
 ```
 ~/.rover/artifacts/<project>/<test_name>/<runId>/<device-serial>/
-    device_info.json          # size, density, dp scale, OS version, system bar insets
+    device_info.json          # size, density, dp scale, OS version, system bar insets,
+                              #   and the on-screen keyboard
     test_description.json     # what the lease said this run was about, if anything
     group_id.json             # which investigation this run belongs to, if any
     screenshots/001_screenshot.png

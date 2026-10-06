@@ -16,6 +16,15 @@
           "bottom": 72,
           "left": 0,
           "right": 0
+        },
+        "keyboard": {
+          "shown": true,
+          "bounds": {
+            "x": 0,
+            "y": 616,
+            "width": 426.6666666666667,
+            "height": 336
+          }
         }
       },
       "osVersion": "17",
@@ -32,7 +41,8 @@
         "densityScale": 3,
         "widthDp": 426.6666666666667,
         "heightDp": 952,
-        "systemBars": null
+        "systemBars": null,
+        "keyboard": null
       },
       "osVersion": null,
       "osApiLevel": null

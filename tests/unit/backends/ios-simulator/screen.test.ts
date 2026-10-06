@@ -98,6 +98,7 @@ describe('toScreenInfo, against the real captures', () => {
 			widthDp: 402,
 			heightDp: 874,
 			systemBars: null,
+			keyboard: null,
 		});
 	});
 
@@ -134,6 +135,7 @@ describe('toScreenInfo, against the real captures', () => {
 			widthDp: 1032,
 			heightDp: 1376,
 			systemBars: null,
+			keyboard: null,
 		});
 	});
 });

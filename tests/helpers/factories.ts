@@ -254,6 +254,13 @@ export function createMockDeviceInfo(overrides: Partial<DeviceInfo> = {}): Devic
 			 * Rover carries a default for them.
 			 */
 			systemBars: { top: 72, bottom: 144, left: 0, right: 0 },
+			/*
+			 * **A device that answered and has no keyboard up** — not `null`, which would be a
+			 * device that did not say. Every test that does not care about the keyboard is then
+			 * describing a plain screen rather than an unanswered one, and a test that does care
+			 * overrides it with the rectangle it wants.
+			 */
+			keyboard: { shown: false, bounds: null },
 		},
 		osVersion: '1.0',
 		osApiLevel: 1,
