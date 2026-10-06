@@ -1101,6 +1101,107 @@ describe.skipIf(!process.env.ROVER_TEST_DEVICE)('a daemon runs verbs on its own 
 	});
 
 	/**
+	 * **The acceptance criterion of #303, against real hardware: one call reads exactly the lines
+	 * that matter to one step — including a real crash, out of the crash buffer.**
+	 *
+	 * The anchor is the newest entry's own `timestamp`, read off the device before acting: a
+	 * point in the device's time that came from Rover, never this machine's clock (D17). Then
+	 * the app is selected by its running pid, the app is crashed, and the crash is read from the
+	 * crash buffer since the anchor — with a bound far below what the unfiltered read needed
+	 * above ({@link CRASH_LOG_ENTRIES}), because filtering happens before the bound. Last, the
+	 * dead process is still reachable by its pid, which is what an agent does after a crash.
+	 */
+	it('selects an app, then reads its crash from the crash buffer since an anchor', async () => {
+		const client = await startHost();
+		const device = await freeDevice(client);
+		const leaseId = await lease(client, device.serial);
+
+		const launched = await client.request('launch_app', { leaseId, appId: SETTINGS });
+		expect(launched).toMatchObject({ outcome: 'ok' });
+
+		const anchorRead = await client.request('read_logs', { leaseId, maxEntries: 1 });
+		if (anchorRead.outcome !== 'ok') throw new Error(`anchor read: ${anchorRead.outcome}`);
+		const anchor = anchorRead.result.logs.entries.at(-1)?.timestamp ?? '';
+		expect(anchor).toMatch(/^\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3}$/);
+
+		// Only the app's own process: the pid `pidof` names, and nothing else.
+		const pidof = await runAdbOnDevice(device.serial, ['shell', 'pidof', unwrap(SETTINGS)]);
+		const appPid = Number(pidof.stdout.trim());
+		const own = await client.request('read_logs', { leaseId, appId: SETTINGS, maxEntries: 500 });
+		if (own.outcome !== 'ok') throw new Error(`app read: ${JSON.stringify(own)}`);
+		expect(own.result.logs.entries.every((entry) => entry.pid === appPid)).toBe(true);
+
+		await runAdbOnDevice(device.serial, ['shell', 'am', 'crash', unwrap(SETTINGS)]);
+
+		const crashed = await waitForCondition<ReadLogsCallResult>({
+			what: `the crash buffer to report '${SETTINGS}' crashing since ${anchor}`,
+			timeoutMs: CRASH_TIMEOUT_MS,
+			pollIntervalMs: CRASH_POLL_MS,
+			probe: async (): Promise<Observation<ReadLogsCallResult>> => {
+				const answer = await client.request('read_logs', {
+					leaseId,
+					buffers: ['crash'],
+					since: anchor,
+					maxEntries: 50,
+				});
+				if (answer.outcome !== 'ok') {
+					return { met: false, found: `the host answered '${answer.outcome}'` };
+				}
+				const named = answer.result.logs.entries.some(namesTheCrash);
+				return named
+					? { met: true, value: answer }
+					: { met: false, found: `${answer.result.logs.entries.length} entries, none naming it` };
+			},
+		});
+		if (crashed.outcome !== 'ok') throw new Error('the wait should have caught this');
+
+		const { entries } = crashed.result.logs;
+		expect(entries.every((entry) => entry.timestamp >= anchor)).toBe(true);
+		expect(entries.map((entry) => entry.message)).toContainEqual(
+			expect.stringContaining('FATAL EXCEPTION'),
+		);
+		expect(entries.map((entry) => entry.message)).toContainEqual(
+			expect.stringContaining(CRASH_EXCEPTION),
+		);
+
+		// The process is gone, and its pid still selects what it said on the way out.
+		const crashPid = entries.find(namesTheCrash)?.pid ?? null;
+		expect(crashPid).toBe(appPid);
+		const byPid = await client.request('read_logs', {
+			leaseId,
+			pid: appPid,
+			minLevel: 'error',
+			tag: 'AndroidRuntime',
+			buffers: ['crash'],
+			maxEntries: 5,
+		});
+		if (byPid.outcome !== 'ok') throw new Error(`pid read: ${byPid.outcome}`);
+		expect(byPid.result.logs.entries.length).toBeGreaterThan(0);
+		expect(
+			byPid.result.logs.entries.every(
+				(entry) => entry.pid === appPid && entry.tag === 'AndroidRuntime',
+			),
+		).toBe(true);
+
+		// Dismiss whatever the crash raised, for the reason the crash test above gives.
+		await runAdbOnDevice(device.serial, ['shell', 'input', 'keyevent', 'KEYCODE_BACK']);
+	});
+
+	// An app with no running process has no pid to select by: refused by name, never empty.
+	it('refuses to select an app that is not running, naming the filter', async () => {
+		const client = await startHost();
+		const device = await freeDevice(client);
+		const leaseId = await lease(client, device.serial);
+
+		const answer = await client.request('read_logs', { leaseId, appId: ABSENT_PACKAGE });
+
+		expect(answer).toMatchObject({
+			outcome: 'failed',
+			failure: { kind: 'log-filter-refused', filter: 'appId', serial: device.serial },
+		});
+	});
+
+	/**
 	 * **The acceptance criterion of #70, against real hardware: a file crosses the machine
 	 * boundary in both directions and arrives unchanged.**
 	 *

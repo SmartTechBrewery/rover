@@ -17,8 +17,8 @@ one: a parser has to keep working on the API levels already in use.
 
 ## Captures
 
-All from an Android Emulator AVD `Pixel_10_Pro` (`sdk_gphone16k_arm64`, API 37 / Android 17) on
-macOS. `SERIAL` is `emulator-5554`. Everything above the `input` rows was captured
+All but one from an Android Emulator AVD `Pixel_10_Pro` (`sdk_gphone16k_arm64`, API 37 / Android 17) on
+macOS; the `logcat` events capture is from a physical TC58 and its row says so. `SERIAL` is `emulator-5554`. Everything above the `input` rows was captured
 **2026-08-29**: the enumeration, `wm` and `uiautomator` rows with `adb` 37.0.0-14910828, and the
 app-control rows below them (`install-success` onwards) with `adb` 37.0.1-15733141, the version
 that host had by then. Every row dated **2026-08-30** except the four `screenrecord` ones — the
@@ -61,6 +61,7 @@ reports itself as **v1.4**. The two `getprop-version` rows are **2026-08-31**, o
 | `logcat-threadtime.api37-sdk-gphone16k-arm64.txt` | `adb -s $SERIAL logcat -d -v threadtime -t 60 -b main -b crash` (stdout) | sdk_gphone16k_arm64 | 37 | 2026-08-30 |
 | `logcat-threadtime.crash.api37-sdk-gphone16k-arm64.txt` | the same narrowed to `-t 2 -b crash`, after `adb -s $SERIAL shell am crash com.android.settings` | sdk_gphone16k_arm64 | 37 | 2026-08-30 |
 | `logcat-threadtime.levels.api37-sdk-gphone16k-arm64.txt` | `adb -s $SERIAL shell 'log -p v/d/i/w/e/f -t RoverFixture "<level> line"'` (six commands), then the recipe at `-t 20` | sdk_gphone16k_arm64 | 37 | 2026-08-30 |
+| `logcat-threadtime.events.api33-tc58.txt` | `adb -s $SERIAL logcat -d -v threadtime -t 20 -b events` (stdout) | TC58 (physical, USB) | 33 | 2026-10-06 |
 | `stat.file.api37-sdk-gphone16k-arm64.txt` | `adb -s $SERIAL shell stat -L -c '%s %F' '/data/local/tmp/rover-f1-file.bin' > f 2>&1` | sdk_gphone16k_arm64 | 37 | 2026-08-30 |
 | `stat.empty-file.api37-sdk-gphone16k-arm64.txt` | the same for a path created with `touch` | sdk_gphone16k_arm64 | 37 | 2026-08-30 |
 | `stat.directory.api37-sdk-gphone16k-arm64.txt` | the same for a path created with `mkdir` | sdk_gphone16k_arm64 | 37 | 2026-08-30 |
@@ -236,7 +237,7 @@ a device that is not usable is listed with a null version without any process be
   build, and what was typed was read back out of `uiautomator dump` — the exit code alone cannot
   tell a character that was typed from one that was dropped.
 
-- **The three `logcat` captures are what `parsers/logcat.ts` reads**, and each is there for
+- **The four `logcat` captures are what `parsers/logcat.ts` reads**, and each is there for
   something the others cannot show.
   - The **ordinary** one is the recipe as the backend runs it: 61 lines for `-t 60`, because
     logcat prints its own `--------- beginning of main` above the sixty entries. It carries the
@@ -251,6 +252,13 @@ a device that is not usable is listed with a null version without any process be
     get an `F` line without root: `kill -6 <pid>` on an app process is `Operation not permitted`
     for the shell user, and the other producer of `F` is a native abort's `F libc` / `F DEBUG`
     tombstone.
+  - The **events** one (#303) is the only capture here not from the emulator: a physical Zebra
+    TC58 at API 33, `adb` 37.0.1-15733141. It exists because `read_logs` can now select the events
+    buffer by name, and that buffer is binary on the device — logcat renders it as
+    `I <tag>: [values]` with the full `threadtime` prefix, which this pins as parseable. Checked for
+    an address, a key or an account before committing: SELinux denials, memory samples and network
+    counters of system packages, nothing else. `-b system` printed the same shape as `main`, so it
+    has no capture of its own.
 - **`-t <n>` counts logcat *entries*, and an entry is not a line.** One Java crash is a single
   entry whose message is fourteen lines, each carrying the full `threadtime` prefix, so
   `-t 2 -b crash` returned 29 lines. That is why the crash fixture is small and why the backend

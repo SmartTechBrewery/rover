@@ -27,6 +27,7 @@ import type { Device, DeviceBackend, DeviceWatch, DeviceWatcher } from '@/core/d
 import {
 	DeviceVanishedError,
 	FileTooLargeError,
+	LogFilterRefusedError,
 	NoRecordingRunningError,
 	RecordingAlreadyRunningError,
 	UnfinishedRecordingError,
@@ -2451,6 +2452,26 @@ describe('readLogs', () => {
 
 		await expect(backend.readLogs(BOOTED, { maxEntries: 200 })).rejects.toThrow('exited 149');
 		expect(runSimctlOnDevice).toHaveBeenCalledTimes(2);
+	});
+
+	/**
+	 * #303's selections are not mapped on this backend yet (#304), and an unfiltered answer to a
+	 * filtered question would look exactly like a right one — so each is refused by name, before
+	 * `simctl` runs at all.
+	 */
+	it.each([
+		['appId', { appId: parseAppId('com.apple.Preferences') }],
+		['pid', { pid: 1 }],
+		['minLevel', { minLevel: 'error' }],
+		['tag', { tag: 'SpringBoard' }],
+		['since', { since: '2026-10-06 10:40:11.516' }],
+		['buffers', { buffers: ['main'] }],
+	] as const)('refuses %s by name, without reading anything', async (filter, selection) => {
+		const failure = backend.readLogs(BOOTED, { maxEntries: 200, ...selection });
+
+		await expect(failure).rejects.toBeInstanceOf(LogFilterRefusedError);
+		await expect(failure).rejects.toMatchObject({ filter, serial: BOOTED });
+		expect(runSimctlOnDevice).not.toHaveBeenCalled();
 	});
 
 	it('answers a device that said nothing as empty rather than as a failure', async () => {

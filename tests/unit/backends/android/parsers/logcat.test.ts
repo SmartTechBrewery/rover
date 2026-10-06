@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { parseLogcat } from '@/backends/android/parsers/logcat.js';
+import { isLogcatTimestamp, parseLogcat } from '@/backends/android/parsers/logcat.js';
 
 /**
  * Pinned against output **captured from a real device** — an API 37 emulator
@@ -20,6 +20,7 @@ const fixture = (name: string): string =>
 const ORDINARY = fixture('logcat-threadtime.api37-sdk-gphone16k-arm64.txt');
 const CRASH = fixture('logcat-threadtime.crash.api37-sdk-gphone16k-arm64.txt');
 const LEVELS = fixture('logcat-threadtime.levels.api37-sdk-gphone16k-arm64.txt');
+const EVENTS = fixture('logcat-threadtime.events.api33-tc58.txt');
 
 describe('parseLogcat, against the ordinary capture', () => {
 	/**
@@ -145,6 +146,47 @@ describe('parseLogcat, against the levels capture', () => {
 			['error', 'error line'],
 			['fatal', 'fatal line'],
 		]);
+	});
+});
+
+describe('parseLogcat, against the events capture', () => {
+	/**
+	 * The events buffer is binary on the device and logcat renders it, so its shape could have
+	 * been anything — a `-b events` read selectable by name (#303) is only honest if every line
+	 * it prints is an entry rather than an unparseable `info` line. Captured on a physical TC58 at
+	 * API 33: the `threadtime` prefix on every line, and values rendered as `tag: [a,b,…]`.
+	 */
+	it('reads every line as an entry with a timestamp, a pid and a tag', () => {
+		const entries = parseLogcat(EVENTS);
+
+		expect(entries).toHaveLength(20);
+		expect(entries.every((entry) => entry.timestamp !== '' && entry.pid !== null)).toBe(true);
+		expect(entries).toContainEqual({
+			timestamp: '10-06 10:40:11.516',
+			level: 'info',
+			tag: 'commit_sys_config_file',
+			pid: 1972,
+			message: '[batterystats,26]',
+		});
+	});
+});
+
+describe('isLogcatTimestamp', () => {
+	// What a `since` must be: exactly the shape an entry carries, so it is taken from one.
+	it('accepts the timestamp an entry carries', () => {
+		const [entry] = parseLogcat(EVENTS);
+
+		expect(entry && isLogcatTimestamp(entry.timestamp)).toBe(true);
+	});
+
+	it.each([
+		['an empty string', ''],
+		['a wall-clock instant', '2026-10-06T10:40:11.516Z'],
+		['a timestamp without milliseconds', '10-06 10:40:11'],
+		['a timestamp with a year', '2026-10-06 10:40:11.516'],
+		['a timestamp with something after it', '10-06 10:40:11.516 '],
+	])('refuses %s', (_label, value) => {
+		expect(isLogcatTimestamp(value)).toBe(false);
 	});
 });
 

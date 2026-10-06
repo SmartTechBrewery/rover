@@ -275,8 +275,20 @@ const VERB_TOOLS: readonly VerbToolRow[] = [
 			'Read the most recent device log entries, including the buffer the platform records ' +
 			'crashes in — the failure a screenshot will not show. A bounded read: `maxEntries` caps ' +
 			'it and is omitted for the host’s own default, and `logs.truncated` is what tells a read ' +
-			'that was cut short from a genuinely quiet device. There is deliberately no following ' +
-			'and no filter — a tail that stays open is a wait with no condition. `label` is optional ' +
+			'that was cut short from a genuinely quiet device. Optional selections narrow it, and ' +
+			'combine: `appId` keeps entries from that app’s processes running now, `pid` from one ' +
+			'process (also one that has exited), `minLevel` at or above a level, `tag` with exactly ' +
+			'that tag, `since` at or after a point in time, and `buffers` picks which of `main`, ' +
+			'`system`, `crash` and `events` to read. They are applied on the host before ' +
+			'`maxEntries` and the size bound, so a filtered read is never cut short by lines it ' +
+			'discarded, and `truncated` then speaks about matching entries. `since` takes an entry’s ' +
+			'`timestamp` from an earlier read of this device — read once before you act, with ' +
+			'`maxEntries: 1`, and pass the newest timestamp — never a clock of yours, which is not ' +
+			'the device’s. After a crash the process is gone, so read `buffers: ["crash"]` or pass ' +
+			'its `pid` rather than `appId`. A selection this device cannot apply, or an `appId` with ' +
+			'no running process, is a `log-filter-refused` failure naming it — never a silently ' +
+			'unfiltered answer. There is deliberately no following — a tail that stays open is a ' +
+			'wait with no condition. `label` is optional ' +
 			'and names the host’s archived copy of this read, so the same log read taken in two runs ' +
 			'of one group is filed as one thing at two moments — one label per thing being compared, ' +
 			'short and identifier-shaped, because it becomes part of a file name. It requires the ' +

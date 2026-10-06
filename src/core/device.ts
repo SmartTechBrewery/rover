@@ -248,6 +248,19 @@ export const LogLevelSchema = z.enum(['verbose', 'debug', 'info', 'warn', 'error
 export type LogLevel = z.infer<typeof LogLevelSchema>;
 
 /**
+ * The named log streams a read may select, in neutral vocabulary (#303).
+ *
+ * A platform may keep its log in several streams — ordinary chatter, the system's own, the
+ * one crashes land in, structured events — and this is the shared set of names for them. A
+ * backend that has no equivalent for one **refuses it by name** (`LogFilterRefusedError`
+ * in `./errors.ts`) rather than mapping it onto something else: a read of "the crash stream"
+ * that quietly answered with ordinary chatter would be the plausible-looking wrong answer
+ * ai/RULES.md §2 forbids.
+ */
+export const LogBufferSchema = z.enum(['main', 'system', 'crash', 'events']);
+export type LogBuffer = z.infer<typeof LogBufferSchema>;
+
+/**
  * One line of the device's own system log.
  *
  * `timestamp` stays the **string the device printed**, not an instant. The client shares
@@ -299,9 +312,49 @@ export type LogRead = z.infer<typeof LogReadSchema>;
  * what a caller sends is `ReadLogsParamsSchema` in `src/ipc/verb-methods.ts`.
  */
 export interface ReadLogsOptions {
-	/** The most entries to answer with. The device's own newest are the ones kept. */
+	/** The most **matching** entries to answer with. The device's own newest are the ones kept. */
 	readonly maxEntries: number;
+	/**
+	 * Only entries from this app's processes **running at the time of the read**. An app with no
+	 * running process is refused by name rather than answered empty — a process that has exited
+	 * is reachable by its `pid`, or through the stream crashes land in.
+	 */
+	readonly appId?: AppId;
+	/** Only entries this process printed. The way to read a process that has already exited. */
+	readonly pid?: number;
+	/** Only entries at or above this level, in {@link LogLevelSchema}'s declared order. */
+	readonly minLevel?: LogLevel;
+	/** Only entries whose tag is exactly this, case-sensitive. */
+	readonly tag?: string;
+	/**
+	 * Only entries at or after this point — a `timestamp` this device's own log entries carry,
+	 * so it comes from the device and never from a client's clock (D17). Its shape is the
+	 * backend's to check, since how a timestamp is printed and ordered is a fact about a platform.
+	 */
+	readonly since?: string;
+	/**
+	 * Which of the device's log streams to read. Absent means the backend's own default, which
+	 * must include the stream crashes land in.
+	 */
+	readonly buffers?: readonly LogBuffer[];
 }
+
+/**
+ * The name of every {@link ReadLogsOptions} key that selects rather than bounds — what a
+ * refusal to apply one names (`LogFilterRefusedError` in `./errors.ts`).
+ *
+ * Pinned to the interface in both directions by the line below it, so a selection added to one
+ * without the other is a compile error rather than a key nobody can be told was refused.
+ */
+export const LogFilterSchema = z.enum(['appId', 'pid', 'minLevel', 'tag', 'since', 'buffers']);
+export type LogFilter = z.infer<typeof LogFilterSchema>;
+
+type LogFilterKey = Exclude<keyof ReadLogsOptions, 'maxEntries'>;
+true satisfies [LogFilterKey] extends [LogFilter]
+	? [LogFilter] extends [LogFilterKey]
+		? true
+		: never
+	: never;
 
 /**
  * What bounds one {@link DeviceBackend.pullFile} call.
@@ -597,8 +650,15 @@ export interface DeviceBackend {
 	 * (ai/RULES.md §2) and a stream over IPC (D19); this answers with what the device has
 	 * said so far and returns. Whether more was there is {@link LogRead.truncated}.
 	 *
-	 * Includes whatever buffer the platform records crashes in — a log read that shows
-	 * ordinary chatter and silently omits the fatal exception is worse than no log at all.
+	 * When `buffers` is absent, includes whatever buffer the platform records crashes in — a log
+	 * read that shows ordinary chatter and silently omits the fatal exception is worse than no
+	 * log at all.
+	 *
+	 * **Every selection in {@link ReadLogsOptions} is applied before the count bound** (#303), so
+	 * `maxEntries` and `truncated` speak about matching entries: a filtered read is never cut
+	 * short by entries it would have discarded. Selections combine — each one narrows. One a
+	 * backend cannot apply is refused by name with `LogFilterRefusedError` (`./errors.ts`),
+	 * never ignored: an unfiltered answer to a filtered question looks exactly like a right one.
 	 */
 	readLogs(serial: DeviceSerial, options: ReadLogsOptions): Promise<LogRead>;
 

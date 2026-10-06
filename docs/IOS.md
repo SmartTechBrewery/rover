@@ -761,9 +761,13 @@ window with `--predicate 'process == "Giotto"'` returned 268. A read that filter
 spends seconds serializing noise before `maxEntries` throws it away, and that rule is untouched.
 
 What this section concluded from it — that `readLogs` pushes the **process** filter down — is
-**reversed in place with its reason rewritten** (#229, `ai/RULES.md` §1). It cannot:
-`ReadLogsOptions` carries `maxEntries` and nothing else (`src/core/device.ts`), so there is no
-process to filter *by*, and inventing one would answer a narrower question than the caller asked.
+**reversed in place with its reason rewritten** (#229, `ai/RULES.md` §1). It could not: when this
+was written `ReadLogsOptions` carried `maxEntries` and nothing else (`src/core/device.ts`), so there
+was no process to filter *by*, and inventing one would have answered a narrower question than the
+caller asked. **#303 has since given the contract its selections** — `appId`, `pid`, `minLevel`,
+`tag`, `since` and `buffers` — and this backend refuses each by name (`log-filter-refused`) until
+#304 maps them, so whether the process filter becomes a `--predicate` pushdown is that issue's
+question again.
 What is pushed down instead is the **device** and a **window**, which are the other two bounds this
 command has:
 

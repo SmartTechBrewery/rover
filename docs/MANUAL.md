@@ -976,6 +976,28 @@ kept, and `truncated` says when there were more, because a short read that reads
 is worse than no read. Following a log would be a wait with no condition and a stream over IPC, and
 is deliberately not here.
 
+**A read can be narrowed to the lines that matter to one step** (#303). Every selection is optional
+and they combine, each one narrowing: `appId` keeps the entries of that app's process running at the
+time of the read, `pid` those of one process — including one that has already died — `minLevel`
+those at or above a level, `tag` those with exactly that tag, `since` those at or after a point in
+time, and `buffers` chooses which of `main`, `system`, `crash` and `events` to read (by default the
+ones ordinary output and crashes land in). They are applied on the host **before** `maxEntries` and
+the size bound, so a filtered read is never cut short by lines it would have discarded, and
+`truncated` then says whether more *matching* entries were there. `since` is a `timestamp` from an
+entry this device already answered with, never your own clock — the agent may be on another machine
+and its clock is not the device's. A selection the device cannot apply, or an app with no running
+process, is a `log-filter-refused` failure that names it. One step, read precisely:
+
+```
+read_logs { maxEntries: 1 }                          → note the newest entry's timestamp, T
+… act: tap, type, launch …
+read_logs { appId: "com.example.app", since: T }     → what the app said since
+read_logs { buffers: ["crash"], since: T }           → whether anything crashed since, and how
+```
+
+After a crash the app's process is gone, so `appId` has nothing to select by and is refused; the
+crash buffer, or the dead process's `pid` taken from the crash entry, is how to read it.
+
 **`install_app`, `push_file` and `pull_file` are the family whose whole subject is *which machine a
 file is on*** (`src/verbs/files.ts`). The agent is somewhere else, the device is here, and the host
 is in between — so a package to install and a file to push arrive **as bytes from the caller's

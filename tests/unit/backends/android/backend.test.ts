@@ -25,6 +25,7 @@ import {
 import { type Device, DeviceKeySchema, type DeviceWatcher } from '@/core/device.js';
 import {
 	FileTooLargeError,
+	LogFilterRefusedError,
 	NoRecordingRunningError,
 	RecordingAlreadyRunningError,
 	UnfinishedRecordingError,
@@ -1925,6 +1926,146 @@ describe('readLogs', () => {
 		await expect(backend.readLogs(SERIAL, { maxEntries: 200 })).rejects.toThrow(
 			"device 'emulator-5554' not found",
 		);
+	});
+
+	describe('selections (#303)', () => {
+		/** A selected read: the default buffers, whole — no `-t`, for the reason below. */
+		const SELECTED = 'logcat -d -v threadtime -b main -b crash';
+		const PIDOF_SETTINGS = "shell pidof 'com.android.settings' || true";
+
+		// `buffers` alone is logcat's own selection, so the count bound still belongs on the
+		// device — and a repeated name is asked for once.
+		it('reads the named buffers instead of the default, de-duplicated, still bounded', async () => {
+			answers({ 'logcat -d -v threadtime -t 11 -b system -b events': LOGCAT });
+
+			await backend.readLogs(SERIAL, { maxEntries: 10, buffers: ['system', 'events', 'system'] });
+
+			expect(runAdbOnDevice.mock.calls[0][1]).toEqual([
+				'logcat',
+				'-d',
+				'-v',
+				'threadtime',
+				'-t',
+				'11',
+				'-b',
+				'system',
+				'-b',
+				'events',
+			]);
+		});
+
+		/**
+		 * The acceptance criterion as a test. `wpa_supplicant` speaks twice, both times among the
+		 * oldest of sixty entries — so `-t 11` would have read neither, and a filter applied after
+		 * it would have answered a quiet app. Dropping `-t` is what reaches them.
+		 */
+		it('is not truncated by entries it would have discarded', async () => {
+			answers({ [SELECTED]: LOGCAT });
+
+			const read = await backend.readLogs(SERIAL, { maxEntries: 10, tag: 'wpa_supplicant' });
+
+			expect(runAdbOnDevice.mock.calls[0][1]).not.toContain('-t');
+			expect(read.truncated).toBe(false);
+			expect(read.entries.map((entry) => entry.timestamp)).toEqual([
+				'08-30 10:54:11.849',
+				'08-30 10:54:19.785',
+			]);
+		});
+
+		// `truncated` keeps its meaning, now over matching entries: the newest are kept.
+		it('bounds the matching entries, newest kept, and says it truncated', async () => {
+			answers({ [SELECTED]: LOGCAT });
+
+			const read = await backend.readLogs(SERIAL, { maxEntries: 1, tag: 'wpa_supplicant' });
+
+			expect(read).toEqual({
+				entries: [expect.objectContaining({ timestamp: '08-30 10:54:19.785' })],
+				truncated: true,
+			});
+		});
+
+		it('keeps entries at or above the level asked for', async () => {
+			answers({ [SELECTED]: LOGCAT });
+
+			const read = await backend.readLogs(SERIAL, { maxEntries: 200, minLevel: 'warn' });
+
+			expect(read.entries.length).toBeGreaterThan(0);
+			expect(read.entries.every((entry) => entry.level === 'warn')).toBe(true);
+		});
+
+		it('selects an app by the pids its running process has, through the quoted id', async () => {
+			answers({ [PIDOF_SETTINGS]: '14878\n', [SELECTED]: LOGCAT });
+
+			const read = await backend.readLogs(SERIAL, { maxEntries: 200, appId: SETTINGS });
+
+			expect(runAdbOnDevice.mock.calls[0][1]).toEqual(['shell', PIDOF_SETTINGS.slice(6)]);
+			expect(read.entries).toHaveLength(2);
+			expect(read.entries.every((entry) => entry.pid === 14878)).toBe(true);
+		});
+
+		// An app and a pid both narrow: the pid, and only because it is one of the app's.
+		it('intersects an app with a pid', async () => {
+			answers({ [PIDOF_SETTINGS]: '14878 476\n', [SELECTED]: LOGCAT });
+
+			const read = await backend.readLogs(SERIAL, { maxEntries: 200, appId: SETTINGS, pid: 476 });
+
+			expect(read.entries.map((entry) => entry.tag)).toEqual(['adbd', 'adbd']);
+		});
+
+		/**
+		 * An app with no running process has no pid to select by, and an empty answer would read
+		 * as an app that said nothing — so it is refused by name, and the log is never read.
+		 * `pidof` printed nothing and exited 1 on the device; `|| true` makes that empty stdout.
+		 */
+		it('refuses an app that is not running, by name, before reading the log', async () => {
+			answers({ [PIDOF_SETTINGS]: '', [SELECTED]: LOGCAT });
+
+			const failure = backend.readLogs(SERIAL, { maxEntries: 200, appId: SETTINGS });
+
+			await expect(failure).rejects.toBeInstanceOf(LogFilterRefusedError);
+			await expect(failure).rejects.toMatchObject({ filter: 'appId', serial: SERIAL });
+			expect(runAdbOnDevice).toHaveBeenCalledTimes(1);
+		});
+
+		// The anchor's own entry is included — "at or after", so an agent passing the newest
+		// timestamp it saw gets that line back rather than losing it.
+		it('keeps entries at or after since, the anchor included', async () => {
+			answers({ [SELECTED]: LOGCAT });
+
+			const read = await backend.readLogs(SERIAL, {
+				maxEntries: 200,
+				since: '08-30 10:54:19.785',
+			});
+
+			expect(read.entries[0]?.timestamp).toBe('08-30 10:54:19.785');
+			expect(read.entries.every((entry) => entry.timestamp >= '08-30 10:54:19.785')).toBe(true);
+			expect(read.entries.length).toBeLessThan(60);
+		});
+
+		// A line with no timestamp is at no point in time, so `since` cannot keep it.
+		it('drops an unparseable line under since', async () => {
+			answers({
+				[SELECTED]:
+					'not a logcat line\n08-30 10:54:20.463   476   476 I adbd    : adbd service requested\n',
+			});
+
+			const read = await backend.readLogs(SERIAL, { maxEntries: 200, since: '08-30 00:00:00.000' });
+
+			expect(read.entries.map((entry) => entry.tag)).toEqual(['adbd']);
+		});
+
+		it.each([
+			['a wall-clock instant', '2026-08-30T10:54:19Z'],
+			['a timestamp without milliseconds', '08-30 10:54:19'],
+			['something else entirely', 'yesterday'],
+		])('refuses %s as since, with no adb call', async (_label, since) => {
+			answers({ [SELECTED]: LOGCAT });
+
+			const failure = backend.readLogs(SERIAL, { maxEntries: 200, since });
+
+			await expect(failure).rejects.toMatchObject({ filter: 'since' });
+			expect(runAdbOnDevice).not.toHaveBeenCalled();
+		});
 	});
 });
 
