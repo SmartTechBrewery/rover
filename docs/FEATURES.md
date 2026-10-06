@@ -84,7 +84,9 @@ backend from a check that stopped checking. The iOS backend is the first to decl
 the only truthful `set_wifi` would change the networking of the machine lending devices to other
 people, and the cosmetic status-bar override `simctl` will happily draw is precisely the
 plausible-looking answer this project refuses. `canReadScreen` (#251) and `canInput` (#252) both
-started `false` and have since flipped to `true`.
+started `false` and have since flipped to `true`. `canHideKeyboard` (#307) is the second `false`,
+and not a permanent one: the simulator reports no keyboard state yet and no dismissal has been
+measured on it, so it says so by name until both are.
 
 **Refusals get finer than a flag.** `press_key` on a simulator answers `home` and `wake` and
 refuses `back` and `recents` as `unsupported-key`, naming the key — and refuses the editing keys
@@ -165,7 +167,7 @@ will ever retry.
 
 ---
 
-## 4. The verb set — twenty-five tools over one method table
+## 4. The verb set — twenty-six tools over one method table
 
 **The hook.** Everything an agent needs to drive a device: touch, text, keys, waits, screen reads,
 screenshots, video, logs, app control, file transfer and the radios — one vocabulary, on both
@@ -178,7 +180,7 @@ credential.
 
 | Family | Verbs | Notes |
 | --- | --- | --- |
-| Input | `tap`, `long_press`, `swipe`, `scroll`, `type_text`, `press_key` | six uses of one spine; `src/verbs/input.ts` |
+| Input | `tap`, `long_press`, `swipe`, `scroll`, `type_text`, `press_key`, `hide_keyboard` | seven uses of one spine; `src/verbs/input.ts` |
 | Waits | `wait_for`, `wait_until_gone` | the vocabulary that replaces `sleep`; `wait-for.ts` |
 | Reads | `read_screen`, `device_info`, `screenshot` | `read.ts`; `screenshot`'s answer is bytes, and both reads report the on-screen keyboard |
 | Apps | `launch_app`, `stop_app`, `clear_app_data` | address a package, resolve no target; `app.ts` |
@@ -197,7 +199,20 @@ have — so `scroll 'down'` drags upwards; it scrolls the element it was pointed
 when pointed at nothing, and it refuses a bare coordinate, because a point has no extent and cannot
 say how far a scroll may travel.
 
-**`type_text` and `press_key` address no element**, so their result's `target` is `null` — a fact
+**`hide_keyboard` is the deliberate exception, and the reason is in the gesture** (#307). The
+obvious composition — `press_key back` from the verb layer — is the one thing it must not be: on
+Android back closes a keyboard that is up and **leaves the screen** when none is, and both exit
+cleanly (`PROJECT.md` §6), so an agent clearing a covered target would lose its place whenever the
+keyboard had already gone. Deciding *whether* to press needs the device's own reading of its keyboard
+taken at the moment it acts, and *what* to press is that platform's knowledge; both belong in the
+backend, and composing it above would mean the verb layer assuming a back key exists. So it is one
+backend method, `hideKeyboard`, documented as *dismiss the keyboard if one is up and do nothing
+otherwise*, behind its own capability `canHideKeyboard` — `true` on Android, `false` on the iOS
+simulator until a recipe is measured there, where the call is `missing-capability` by name rather
+than an `ok` for a keyboard still on the glass. When no keyboard is up it is a no-op answer: the same
+result shape, nothing pressed.
+
+**`type_text`, `press_key` and `hide_keyboard` address no element**, so their result's `target` is `null` — a fact
 about the verb, not a resolution that failed. There is deliberately no target option on
 `type_text`: an agent that wants text in a field taps it and then types. `type_text` hands the
 string to the backend **byte for byte** — a string this layer had helpfully escaped would arrive on
@@ -247,10 +262,15 @@ device says no keyboard is up*), the same distinction the insets draw: a backend
 the fact must not read as one promising a clear screen.
 
 **Nothing refuses anything yet.** This is the device reporting a fact; what a verb does about an
-element the keyboard covers, and a verb that dismisses it, are separate work.
+element the keyboard covers is separate work. **Dismissing it is no longer**: `hide_keyboard` (#307,
+above) is the way out, and it reads this same fact to decide whether there is anything to dismiss —
+which is also why the API 33 spelling of the source (`ITYPE_IME`, no `id=`) had to be read, since a
+parser that missed it answered *no keyboard* with one covering half the screen (`PROJECT.md` §6).
 
 **Where it lives.** `src/verbs/`, `src/ipc/` for the method table, `src/core/device.ts` for the
-keyboard's shape, `src/backends/android/parsers/insets.ts` for the read; `PROJECT.md` §4 and §6, D14.
+keyboard's shape and `hideKeyboard`'s contract, `src/core/capabilities.ts` for `canHideKeyboard`,
+`src/backends/android/parsers/insets.ts` for the read and `src/backends/android/backend.ts` for the
+read-then-press; `PROJECT.md` §4 and §6, D11, D14.
 
 ---
 
@@ -549,12 +569,12 @@ than `internal_error`: `project-not-registered`, `install-hook-undeclared`, and
 
 ## 11. The MCP server — and the twelve methods that deliberately have no tool
 
-**The hook.** One `rover init` and an agent has twenty-five tools; a screenshot comes back **inline**
+**The hook.** One `rover init` and an agent has twenty-six tools; a screenshot comes back **inline**
 as an image the model looks at directly, and a recording comes back as frames plus an mp4 on the
 agent's own machine.
 
-**What it is.** One process per agent session, MCP over stdio, declaring **25 tools** under the
-`IPC_METHODS` names exactly: the four device and lease rows, the eighteen verbs whose answer is
+**What it is.** One process per agent session, MCP over stdio, declaring **26 tools** under the
+`IPC_METHODS` names exactly: the four device and lease rows, the nineteen verbs whose answer is
 plain data, and the three whose answer is bytes.
 
 - **Tool names are `snake_case`, arguments are `camelCase`** (D26) — `launch_app` takes `leaseId`

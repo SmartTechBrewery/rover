@@ -113,6 +113,7 @@ function registerFakeBackend(overrides: Partial<DeviceBackend> = {}): FakeBacken
 				canControlNetwork: true,
 				canRecordVideo: true,
 				canControlRecording: true,
+				canHideKeyboard: false,
 			},
 		},
 		backend: createMockDeviceBackend({

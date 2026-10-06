@@ -266,6 +266,7 @@ function createHarness(options: HarnessOptions = {}): Harness {
 				canControlNetwork: true,
 				canRecordVideo: true,
 				canControlRecording: true,
+				canHideKeyboard: false,
 			},
 		},
 		backend: createBackend(options.beforeDescribe),

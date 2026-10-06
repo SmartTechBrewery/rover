@@ -64,6 +64,7 @@ function registerFakeBackend(
 				canControlNetwork: true,
 				canRecordVideo: true,
 				canControlRecording: true,
+				canHideKeyboard: false,
 			},
 		},
 		backend: createMockDeviceBackend({

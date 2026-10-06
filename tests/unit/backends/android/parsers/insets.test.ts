@@ -7,6 +7,8 @@ const fixture = (name: string): string =>
 
 const DISPLAYS = fixture('dumpsys-window-d.api37-sdk-gphone16k-arm64.txt');
 const KEYBOARD_SHOWN = fixture('dumpsys-window-d.keyboard-shown.api37-sdk-gphone16k-arm64.txt');
+const API33_KEYBOARD_SHOWN = fixture('dumpsys-window-d.keyboard-shown.api33-tc58.txt');
+const API33_KEYBOARD_DISMISSED = fixture('dumpsys-window-d.keyboard-dismissed.api33-tc58.txt');
 
 /** The device the fixture was captured on, `wm size`'s effective dimensions. */
 const SCREEN = { width: 1280, height: 2856 };
@@ -223,6 +225,25 @@ describe('parseKeyboard', () => {
 		].join('\n');
 
 		expect(parseKeyboard(degenerate, SCALE)).toEqual({ shown: true, bounds: null });
+	});
+
+	/**
+	 * **API 33 prints the line without an `id=` and names the type `ITYPE_IME`**
+	 * (`InsetsSource type=ITYPE_IME frame=[0,1251][1080,2160] … visible=true`, a Zebra TC58 at
+	 * 480 dpi, `PROJECT.md` §6). A parser that knew only the API 37 line answered `shown: false`
+	 * here with the keyboard covering the bottom 909 px — so `hide_keyboard` would have pressed
+	 * nothing and said `ok`. Over a scale of 3 the frame is `y = 417`, `width = 360`, `height = 303`.
+	 */
+	it('reads the keyboard off an API 33 dump, which names the source ITYPE_IME and gives it no id', () => {
+		expect(parseKeyboard(API33_KEYBOARD_SHOWN, SCALE)).toEqual({
+			shown: true,
+			bounds: { x: 0, y: 417, width: 360, height: 303 },
+		});
+	});
+
+	/** The same device after `input keyevent KEYCODE_BACK` closed it, once the animation ended. */
+	it('answers shown false off the API 33 dump taken after the keyboard was dismissed', () => {
+		expect(parseKeyboard(API33_KEYBOARD_DISMISSED, SCALE)).toEqual({ shown: false, bounds: null });
 	});
 
 	/** The scale divides every number here, so a `NaN` one would silently poison the rectangle. */
