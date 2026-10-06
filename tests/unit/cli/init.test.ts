@@ -576,6 +576,16 @@ describe('the generated ROVER.md', () => {
 		invocation: 'rover',
 	});
 
+	/** The same page for a project that declares no install — the other arm of `thisProject`. */
+	const BARE_PAGE = roverDocument({
+		project: 'demo',
+		apps: [],
+		install: undefined,
+		projectDefaulted: false,
+		remote: true,
+		invocation: 'rover',
+	});
+
 	it('names every verb an agent can call', () => {
 		const missing = Object.keys(IPC_METHODS).filter(
 			(method) => !NOT_AN_AGENT_S.has(method) && !page.includes(`\`${method}\``),
@@ -697,16 +707,31 @@ describe('the generated ROVER.md', () => {
 	});
 
 	it('says what a project without an install will actually be told', () => {
-		const bare = roverDocument({
-			project: 'demo',
-			apps: [],
-			install: undefined,
-			projectDefaulted: false,
-			remote: true,
-			invocation: 'rover',
-		});
-		expect(bare).toContain('install-hook-undeclared');
-		expect(bare).toContain('another machine');
+		expect(BARE_PAGE).toContain('install-hook-undeclared');
+		expect(BARE_PAGE).toContain('another machine');
+	});
+
+	/**
+	 * #312: the incident this page is meant to prevent. An agent that met
+	 * `install-hook-undeclared` fell back to the build tool's own install task and installed onto
+	 * every device attached to the host, including ones other agents had leased.
+	 *
+	 * Asserted on **both** pages, because the rule holds whatever the project declares — a project
+	 * *with* an install hook is the case where running the build directly looks most like doing
+	 * the same thing one step sooner.
+	 */
+	it("tells an agent never to run a build tool's install task itself", () => {
+		for (const text of [page, BARE_PAGE]) {
+			expect(text).toContain('Never run a build tool');
+			expect(text).toContain('`install_app`');
+		}
+	});
+
+	// The sentence that invited the bypass is gone, and the remedy that replaced it names where a
+	// hook comes from rather than leaving the agent to invent one.
+	it('points a project with no install at declaring one, not at improvising', () => {
+		expect(BARE_PAGE).not.toContain('some other way');
+		expect(BARE_PAGE).toContain('init` proposes one');
 	});
 });
 
