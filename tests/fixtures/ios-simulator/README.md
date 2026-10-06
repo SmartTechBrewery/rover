@@ -481,6 +481,36 @@ xcrun simctl spawn $udid launchctl list \
 - **It names no path and no home directory**, unlike the listings below: a job label is a bundle id
   and a service name. Committed verbatim all the same, like everything here.
 
+## The crash-report captures (#323)
+
+**A fourth bench**: macOS 26.6.2 (25G83), **Xcode 27.0** (27A266a), **iOS 26.5** (23F77), two
+simulators booted — `iPhone 17` `88D8476E-F4A4-4A18-A89B-0C47E077CC8B` and `iPhone 17 Pro`
+`D85C3449-4D0C-4E93-B8EC-77FD0E5A8F3F` — 2026-10-06. Settings was crashed on each from the host; the
+pid `kill` takes is the one `simctl launch` and `launchctl list` report (`PROJECT.md` §6):
+
+```bash
+pid=$(xcrun simctl launch $udid com.apple.Preferences | awk '{print $2}')
+kill -SEGV $pid        # -ABRT on the second simulator
+ls -t ~/Library/Logs/DiagnosticReports/Preferences-*.ips | head -1   # appeared 23 s / <1 s later
+sed -E 's/("crashReporterKey" : ")[0-9A-F-]+"/\100000000-0000-0000-0000-000000000000"/' \
+  ~/Library/Logs/DiagnosticReports/Preferences-2026-10-06-152809.ips \
+  > tests/fixtures/ios-simulator/crash-report.sigsegv.xcode27.0-ios26.5.ips
+```
+
+| Fixture | Bytes | Device (`coalitionName`) | What it pins |
+|---|---|---|---|
+| `crash-report.sigsegv.xcode27.0-ios26.5.ips` | 109,128 | `…SimDevice.88D8476E-…` | The two-document shape, the field mapping, the `captureTime` re-spelling, the bounded message; the attribution positive case |
+| `crash-report.sigabrt-other-device.xcode27.0-ios26.5.ips` | 10,480 | `…SimDevice.D85C3449-…` | A second shape (a crash during launch, a thread with no queue); the **other-simulator** negative case |
+
+- **One field is redacted, and it is not the user name.** #323's plan asked for the host user name
+  to be redacted from paths; neither report contains it — every path is the reporter's own
+  `/Volumes/VOLUME/*/…` redaction, and the reports name no home directory. What *is* a stable
+  identifier of the capturing Mac is `crashReporterKey`, so it is zeroed in both, by the `sed`
+  above, and nothing else is changed: everything but that one line is byte-identical to what the
+  reporter wrote.
+- **`procPath` is that same redacted string on both devices**, which is why the parser does not
+  attribute by it and the suite's negative case is the second device's `coalitionName`.
+
 ## Two things about the contents
 
 - **They are committed verbatim, and they contain the capturing operator's home directory** inside

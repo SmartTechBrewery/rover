@@ -972,7 +972,7 @@ The mapping, each form run on that bench before it was written down (PROJECT.md 
 | `minLevel` `fatal` | drop both flags, add `messageType == fault` | `Fault → fatal` (above) |
 | `tag` | `subsystem == "<escaped>"` | `subsystem == "com.apple.locationd.Core"` answered 280 entries, all carrying it |
 | `since` | `--start <floored to the second>`, **instead of** `--last` | see trap 18 |
-| `buffers` | nothing | `main` *is* the unified log; the rest are refused by name (below) |
+| `buffers` | nothing | `main` *is* the unified log; `crash` is the host's crash reports, read without `log show`; the other two are refused by name (below) |
 
 **`tag` is the *subsystem*, and that is a documented choice rather than a default.**
 `parsers/unified-log.ts` fills `LogEntry.tag` from `subsystem` and deliberately never reads
@@ -980,16 +980,47 @@ The mapping, each form run on that bench before it was written down (PROJECT.md 
 `category` instead would filter by a field the answer does not show — the plausible-looking wrong
 answer `ai/RULES.md` §2 forbids.
 
-**Of the four buffers, this backend accepts one and refuses three by name.** `main` is the unified
+**Of the four buffers, this backend accepts two and refuses two by name.** `main` is the unified
 log, which is what every read here has always answered from, so naming it changes nothing.
 `system` and `events` have no counterpart: there is no second stream to point them at, and
-answering them out of the unified log would be the same plausible-looking wrong answer. **`crash`
-is refused too, and it is a real gap rather than a missing counterpart** — a simulator's crashes
-are `.ips` reports written to the *host*, outside the log store `log show` reads at all, and
-reading them is #304's second phase. Refusing it by name is what keeps a crash read from coming
-back as ordinary chatter in the meantime. The refusal also means the `appId` refusal here does not
-send a caller to the crash buffer the way the Android one does; it names the pid as the way to
-reach a process that has exited.
+answering them out of the unified log would be the same plausible-looking wrong answer.
+
+**`crash` is the host's crash reports (#323)**, and this paragraph is rewritten in place: it said
+`crash` *"is refused too, and it is a real gap rather than a missing counterpart"*, to be read in
+#304's second phase. That phase is this. A simulator's crashes are `.ips` reports the **Mac**
+writes into the operator's `~/Library/Logs/DiagnosticReports` — outside the log store `log show`
+reads at all — so they are read from there (`src/backends/ios-simulator/crash-reports.ts`) and
+never from the unified log. The one question that decided whether this could be answered at all was
+**attribution**: every simulator of the host, and every crash of the Mac's own apps, writes into
+that one directory. Measured (PROJECT.md §6): a report's `coalitionName` is
+`com.apple.CoreSimulator.SimDevice.<udid>`, and two crashes of the same app on two simulators
+carried their own udids, so a report is attributed by that field, matched whole. `procPath` —
+the field reached for first — is redacted by the reporter to the same `/Volumes/VOLUME/…` string on
+every device and cannot do it. A report with no `coalitionName`, or one that does not parse, is
+attributed to nobody and **not answered**; a report of another kind (`bug_type` other than `309`)
+is not a crash and is not answered either.
+
+It is scoped **to the lease** too, because the directory outlives leases: only a report whose
+`captureTime` is at or after the current lease's grant is answered. The daemon passes the grant
+as `ReadLogsOptions.recordsSinceMs` — a bound, not a selection, and not on the wire — so a previous
+holder's crash on the same simulator is never this holder's. With **no** bound (an in-process
+read) no report is read at all: the default read is the unified log alone, and an explicit `crash`
+is refused by name. A file whose `mtime` is before the bound is skipped on a `stat`, since a report
+is written after its crash; a file over 2 MiB (eighteen times the larger capture) is skipped
+unread, which is a stated hole rather than a silent one. Nothing is ever deleted or moved: the
+reports are the operator's.
+
+Each report is **one `fatal` entry**: the report's `pid`, no `tag` (a report names no subsystem,
+and `tag` is the subsystem here), its `captureTime` re-spelled in the unified log's shape
+(`2026-10-06 15:27:47.1123 +0200` → `…47.112300+0200`, the same host instant), and a message
+summarising the process and bundle, the exception, the termination and the first eight frames of
+the faulting thread, unsymbolicated. With a bound, the default read and `['main', 'crash']` merge
+these into the unified log by instant **before** the selections and the cap, so `pid`, `minLevel`,
+`since` and `maxEntries` mean the same for both; `crash` alone runs no `log show`. `appId` selects a
+crash only while one of the app's processes still runs, exactly as on Android, so the `appId`
+refusal now points at the crash buffer as Android's does — and a dead process is read by the pid in
+its crash entry. Only the top of `DiagnosticReports` is read; whether the reporter later moves a
+report into `Retired/` was not observed and is not followed.
 
 **A tag is the only caller-chosen text in the predicate**, and it goes in as an NSPredicate string
 literal with `\` and `"` escaped. The predicate is one argv entry through `execFile`, so no shell
@@ -1394,6 +1425,15 @@ full factory reset if state restoration ever needs one.
     rebooting in between all failed on two devices. `xcrun simctl create` is the recipe that works,
     and `PROJECT.md` §6 carries it in full. A fresh device also draws two keyboard onboarding tips
     over the panel that have to be tapped away first.
+
+21. **A crash report's `procPath` cannot tell two simulators apart, and the report can take tens of
+    seconds to appear.** Measured 2026-10-06 on macOS 26.6.2 / Xcode 27.0 / iOS 26.5 (PROJECT.md
+    §6). #323's plan expected `procPath` under the device's own `dataPath` to attribute a report;
+    the reporter writes `/Volumes/VOLUME/*/Preferences.app/Preferences` on every simulator, so it
+    attributes nothing, and `coalitionName` (`com.apple.CoreSimulator.SimDevice.<udid>`) is what
+    does. And a SIGSEGV of Settings was **23 s** from the kill to the file, against under a second
+    for a crash during launch — so a read straight after a crash may not see it yet. Wait on the
+    report with a condition, as the device suite does; never assume it is already there.
 
 ---
 

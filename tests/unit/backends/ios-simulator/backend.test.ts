@@ -23,7 +23,7 @@ import {
 	SCREENSHOT_SIMCTL_TIMEOUT_MS,
 	SimctlCommandError,
 } from '@/backends/ios-simulator/simctl.js';
-import type { Device, DeviceBackend, DeviceWatch, DeviceWatcher } from '@/core/device.js';
+import type { Device, DeviceBackend, DeviceWatch, DeviceWatcher, LogEntry } from '@/core/device.js';
 import {
 	DeviceVanishedError,
 	FileTooLargeError,
@@ -90,6 +90,22 @@ vi.mock('@/backends/ios-simulator/simctl.js', async (importOriginal) => ({
 	runSimctl,
 	runSimctlOnDevice,
 	streamSimctlOnDevice,
+}));
+
+/**
+ * The crash-report reader, replaced so a log read touches no home directory. The merge beside it
+ * stays real, because the order of the merged answer is what these cases assert;
+ * `./crash-reports.test.ts` is where the reader runs against real files.
+ */
+type CrashReports = typeof import('@/backends/ios-simulator/crash-reports.js');
+
+const { readCrashReports } = vi.hoisted(() => ({
+	readCrashReports: vi.fn<CrashReports['readCrashReports']>(),
+}));
+
+vi.mock('@/backends/ios-simulator/crash-reports.js', async (importOriginal) => ({
+	...(await importOriginal<CrashReports>()),
+	readCrashReports,
 }));
 
 /**
@@ -2544,8 +2560,22 @@ describe('readLogs', () => {
 		runSimctlOnDevice.mockResolvedValue({ stdout, stderr: NOISE });
 	}
 
+	/** When the lease was granted, as the daemon passes it — before every entry of the capture. */
+	const GRANTED_MS = Date.parse('2026-09-08T08:00:00Z');
+
+	/** A crash entry as `./crash-reports.ts` answers one, at `timestamp`, for `pid`. */
+	function crashAt(timestamp: string, pid = 4337): LogEntry {
+		return { timestamp, level: 'fatal', tag: '', pid, message: `crashed at ${timestamp}` };
+	}
+
+	/** Two crashes inside the capture's minute: one before its 26th entry, one after its last. */
+	const EARLY_CRASH = crashAt('2026-09-08 10:11:36.902850+0200');
+	const LATE_CRASH = crashAt('2026-09-08 10:12:00.000000+0200', 999);
+
 	beforeEach(() => {
 		reads(CAPTURED_LOG);
+		readCrashReports.mockReset();
+		readCrashReports.mockResolvedValue([EARLY_CRASH, LATE_CRASH]);
 	});
 
 	/**
@@ -2723,29 +2753,133 @@ describe('readLogs', () => {
 
 	/**
 	 * The buffers this device has nothing to answer from, refused by name before `simctl` runs at
-	 * all — the unified log is one stream, and answering any of these out of it would be the
-	 * plausible-looking wrong answer (ai/RULES.md §2). `crash` is refused for a sharper reason
-	 * than the other two: a simulator's crash reports are `.ips` files on the *host*, outside the
-	 * log store entirely, and reading them is #304's second phase.
+	 * all — the unified log is one stream and the crash reports another, and answering either of
+	 * these out of them would be the plausible-looking wrong answer (ai/RULES.md §2).
+	 */
+	it.each([
+		['system', ['system']],
+		['events', ['events']],
+		['system alongside crash', ['crash', 'system']],
+	] as const)('refuses the %s buffer by name, without reading anything', async (_name, buffers) => {
+		const failure = backend.readLogs(BOOTED, {
+			maxEntries: 200,
+			buffers,
+			recordsSinceMs: GRANTED_MS,
+		});
+
+		await expect(failure).rejects.toBeInstanceOf(LogFilterRefusedError);
+		await expect(failure).rejects.toMatchObject({ filter: 'buffers', serial: BOOTED });
+		await expect(failure).rejects.toThrow(/'system'|'events'/);
+		expect(runSimctlOnDevice).not.toHaveBeenCalled();
+		expect(readCrashReports).not.toHaveBeenCalled();
+	});
+
+	/**
+	 * #323: with no bound saying which of this host's reports are the caller's, an explicit
+	 * `crash` is refused by name rather than answering every crash the device ever had here — a
+	 * previous holder's among them.
 	 */
 	it.each([
 		['crash', ['crash']],
-		['system', ['system']],
-		['events', ['events']],
 		['main alongside crash', ['main', 'crash']],
-	] as const)('refuses the %s buffer by name, without reading anything', async (_name, buffers) => {
+	] as const)('refuses %s with no lease bound, without reading anything', async (_name, buffers) => {
 		const failure = backend.readLogs(BOOTED, { maxEntries: 200, buffers });
 
 		await expect(failure).rejects.toBeInstanceOf(LogFilterRefusedError);
 		await expect(failure).rejects.toMatchObject({ filter: 'buffers', serial: BOOTED });
+		await expect(failure).rejects.toThrow(/no lease bound to scope crash reports to/);
+		expect(runSimctlOnDevice).not.toHaveBeenCalled();
+		expect(readCrashReports).not.toHaveBeenCalled();
+	});
+
+	/** And the default read with no bound is the unified log alone, exactly as before #323. */
+	it('reads no crash reports on a default read with no bound', async () => {
+		const read = await backend.readLogs(BOOTED, { maxEntries: 200 });
+
+		expect(readCrashReports).not.toHaveBeenCalled();
+		expect(read.entries).toHaveLength(CAPTURED_ENTRIES);
+	});
+
+	/** `crash` alone is the reports and nothing else — no `log show` at all. */
+	it('answers crash from this device’s reports since the bound, and reads no log', async () => {
+		const read = await backend.readLogs(BOOTED, {
+			maxEntries: 200,
+			buffers: ['crash'],
+			recordsSinceMs: GRANTED_MS,
+		});
+
+		expect(read).toEqual({ entries: [EARLY_CRASH, LATE_CRASH], truncated: false });
+		expect(readCrashReports).toHaveBeenCalledWith(BOOTED, GRANTED_MS);
 		expect(runSimctlOnDevice).not.toHaveBeenCalled();
 	});
 
-	/** The `crash` refusal says where crashes actually are, since it is a gap rather than a mismatch. */
-	it('says why the crash buffer is refused rather than only that it is', async () => {
-		const failure = backend.readLogs(BOOTED, { maxEntries: 200, buffers: ['crash'] });
+	it('caps a crash read at the newest, and says so', async () => {
+		const read = await backend.readLogs(BOOTED, {
+			maxEntries: 1,
+			buffers: ['crash'],
+			recordsSinceMs: GRANTED_MS,
+		});
 
-		await expect(failure).rejects.toThrow(/crash reports/);
+		expect(read).toEqual({ entries: [LATE_CRASH], truncated: true });
+	});
+
+	/**
+	 * With a bound, the default read includes the crash stream (`DeviceBackend.readLogs`), merged
+	 * into the unified log by instant — the early crash lands between the capture's 26th and 27th
+	 * entries, the late one after the last.
+	 */
+	it.each([
+		['a default read', undefined],
+		['main alongside crash', ['main', 'crash'] as const],
+	])('merges crashes into the log by time on %s', async (_name, buffers) => {
+		const log = (await backend.readLogs(BOOTED, { maxEntries: 200 })).entries;
+
+		const read = await backend.readLogs(BOOTED, {
+			maxEntries: 200,
+			recordsSinceMs: GRANTED_MS,
+			...(buffers === undefined ? {} : { buffers }),
+		});
+
+		expect(read.entries).toEqual([...log.slice(0, 26), EARLY_CRASH, ...log.slice(26), LATE_CRASH]);
+		expect(read.truncated).toBe(false);
+	});
+
+	/** The cap counts the merged answer, so the newest crash takes a slot a log entry would have. */
+	it('applies the cap to the merged entries', async () => {
+		const log = (await backend.readLogs(BOOTED, { maxEntries: 200 })).entries;
+
+		const read = await backend.readLogs(BOOTED, { maxEntries: 5, recordsSinceMs: GRANTED_MS });
+
+		expect(read).toEqual({ entries: [...log.slice(-4), LATE_CRASH], truncated: true });
+	});
+
+	/** Selections apply to crash entries under the same shared rules as to the log's. */
+	it('applies since, pid and minLevel to crash entries too', async () => {
+		const scoped = { buffers: ['crash'] as const, recordsSinceMs: GRANTED_MS, maxEntries: 200 };
+
+		expect((await backend.readLogs(BOOTED, { ...scoped, pid: 999 })).entries).toEqual([LATE_CRASH]);
+		expect(
+			(await backend.readLogs(BOOTED, { ...scoped, since: '2026-09-08 10:11:59.000000+0200' }))
+				.entries,
+		).toEqual([LATE_CRASH]);
+		expect((await backend.readLogs(BOOTED, { ...scoped, minLevel: 'fatal' })).entries).toEqual([
+			EARLY_CRASH,
+			LATE_CRASH,
+		]);
+		expect((await backend.readLogs(BOOTED, { ...scoped, tag: 'com.apple.x' })).entries).toEqual([]);
+	});
+
+	/** A since read is one `--start` read, and the crashes join it the same way. */
+	it('merges crashes into a since read', async () => {
+		const read = await backend.readLogs(BOOTED, {
+			maxEntries: 200,
+			since: OLDEST,
+			recordsSinceMs: GRANTED_MS,
+		});
+
+		expect(runSimctlOnDevice).toHaveBeenCalledTimes(1);
+		expect(read.entries).toHaveLength(CAPTURED_ENTRIES + 2);
+		expect(read.entries.at(-1)).toEqual(LATE_CRASH);
 	});
 
 	/**
@@ -2856,8 +2990,8 @@ describe('readLogs', () => {
 	/**
 	 * No running process is refused by name rather than answered empty: an empty answer would read
 	 * as an app that said nothing, which is the one thing a log read must never fake
-	 * (ai/RULES.md §2). The refusal does not send the caller to the crash buffer the way the
-	 * Android side's does, because this backend refuses that buffer too.
+	 * (ai/RULES.md §2). The refusal sends the caller to the crash buffer, as the Android side's
+	 * does, since that is where a process that died is answered (#323).
 	 */
 	it('refuses an app with no running process by name, and reads no log', async () => {
 		runSimctlOnDevice.mockResolvedValueOnce({ stdout: LAUNCHCTL_LISTING, stderr: '' });
@@ -2869,7 +3003,7 @@ describe('readLogs', () => {
 
 		expect(refusal).toBeInstanceOf(LogFilterRefusedError);
 		expect(refusal).toMatchObject({ filter: 'appId', serial: BOOTED });
-		expect(String(refusal)).not.toContain('crash');
+		expect(String(refusal)).toContain('crash buffer');
 		expect(runSimctlOnDevice).toHaveBeenCalledTimes(1);
 	});
 

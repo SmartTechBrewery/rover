@@ -1085,9 +1085,12 @@ crash buffer, or the dead process's `pid` taken from the crash entry, is how to 
   short — pair an old anchor with another selection.
 - **`tag` is the *subsystem* on the iOS simulator**, which is the field its entries' own `tag` is
   filled from. Copy one out of a read rather than guessing a name.
-- **The simulator answers `main` only**, that being its unified log; `system`, `events` and
-  **`crash`** are refused by name there. So the crash recipe above is Android's: on a simulator,
-  read a dead process by the `pid` you noted while it was alive.
+- **On the simulator, `crash` is the host's crash reports** (#323), so the crash recipe above
+  works there too. Each report is one `fatal` entry carrying the dead process's `pid`, answered
+  only if the report names this simulator and records a crash after your lease was granted — a
+  neighbour's crash or the previous holder's never appears. The report can take tens of seconds
+  to be written after a crash, so read `read_logs { buffers: ["crash"], since: T }` again rather
+  than once. `main` is the unified log, and `system` and `events` are refused by name.
 
 **`install_app`, `push_file` and `pull_file` are the family whose whole subject is *which machine a
 file is on*** (`src/verbs/files.ts`). The agent is somewhere else, the device is here, and the host
