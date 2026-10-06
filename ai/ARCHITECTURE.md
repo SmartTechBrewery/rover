@@ -302,15 +302,25 @@ Verbs live above the backends and below the adapters, and this is where determin
   however it was arrived at: an element the screen read reported is not evidence that it is
   reachable, since a node clipped out of its scrolling container comes back with inverted bounds
   (`PROJECT.md` §6) whose midpoint is arithmetic rather than a place. That is
-  `UnaddressableElementError`, distinct from "not found" because the element *was* found.
+  `UnaddressableElementError`, distinct from "not found" because the element *was* found. The same
+  check refuses a second thing since #308: a point a touch would **start** at that lies inside the
+  on-screen keyboard's rectangle is `CoveredByKeyboardError`. It is a separate error rather than a
+  third reason on the first because the two describe different things — that one is an element with
+  no point on it at all, this one a well-formed point on the screen with something drawn over it —
+  and because it has to work with **no element** behind it, which `tap { by: 'point' }` and
+  `scroll`'s computed start both have. Order inside the check is deliberate: degenerate and
+  off-screen are reported first, since a clipped node's midpoint can land under a keyboard and
+  naming the keyboard for it would send the caller to dismiss something that was never in the way.
 - **`waitFor()` and `waitUntilGone()`** are the wait vocabulary as verbs, and the reason they are
   not built on `performAction()` is that their work *is* the resolution: a spine that resolves the
   target before running the action would resolve it before the wait had happened. Every poll is a
   new screen read — a wait over one cached read is the stale-coordinate failure with a timer on it —
   and the capability check comes before the first poll, so a backend that cannot read its screen is
   told so by name rather than after a whole timeout. `wait_for` waits until the target is there
-  **and can be acted on**, reading a clipped element as *not yet* rather than as a failure, since a
-  screen still moving is what a wait is for; an ambiguous target is not, and propagates. Presence
+  **and can be acted on**, reading a clipped element — and, since #308, one under the on-screen
+  keyboard — as *not yet* rather than as a failure, since a screen still moving is what a wait is
+  for and a keyboard animating closed is exactly that; the timeout then says which of the two kept
+  the condition false. An ambiguous target is not a *not yet*, and propagates. Presence
   for `wait_until_gone` is a match rather than a resolution: an element matched twice is still there
   twice, not an under-specified request; its timeout reports those matches rather than the screen
   they sit in, because they are what kept the condition false. Both take a `ScreenTarget` — a
@@ -332,7 +342,15 @@ Verbs live above the backends and below the adapters, and this is where determin
   a `by: 'point'` target at all — a coordinate has no extent, so it cannot say how far a scroll
   may travel. `swipe` is the one verb with two targets: `from` goes through the spine and is what
   the result reports, `to` is resolved inside the action from its own read, because widening the
-  spine to carry a second target would generalise it for one caller.
+  spine to carry a second target would generalise it for one caller. **Only where a drag starts is
+  checked against the on-screen keyboard**, and that asymmetry is architectural rather than an
+  implementation detail: the keyboard reads a touch that *begins* on it as its own, while where a
+  drag lets go decides nothing, so `swipe`'s `to` is resolved with the check off. `scroll`'s region
+  is resolved with it off too, for the opposite reason — the point it touches is computed a quarter
+  into the region, so the region's centre is a coordinate no touch ever lands on, and `scroll`
+  checks the computed start itself. `PerformActionOptions.resolve` is how a verb says that; it
+  forwards `ResolveOptions` and nothing else, so a verb can only turn off a check that does not
+  apply to it, never add one the spine does not make.
 - **`typeText()` and `pressKey()`** (`src/verbs/input.ts`) complete that family and are the two
   that pass **no target at all**. `PerformActionOptions.target` is optional for exactly this: a key
   press addresses no element, and neither does text going to whatever holds focus, so the

@@ -12,7 +12,11 @@ import { describe, expect, it, vi } from 'vitest';
 import type { DeviceBackend } from '@/core/device.js';
 import { MissingCapabilityError } from '@/core/errors.js';
 import { capabilityMethod, type VerbContext } from '@/verbs/context.js';
-import { TargetNotFoundError, UnaddressableElementError } from '@/verbs/errors.js';
+import {
+	CoveredByKeyboardError,
+	TargetNotFoundError,
+	UnaddressableElementError,
+} from '@/verbs/errors.js';
 import { performAction } from '@/verbs/perform.js';
 import type { ResolvedTarget } from '@/verbs/result.js';
 import {
@@ -49,6 +53,39 @@ function recordingContext(
 		backend,
 		manifest: createMockCapabilityManifest({ capabilities }),
 	});
+}
+
+/**
+ * The same, with an on-screen keyboard over the lower half of the 360×800 mock screen and
+ * `Save` laid out inside it — the geometry the resolution's keyboard check is about.
+ */
+function coveredContext(calls: string[]): VerbContext {
+	const covered = createMockScreenElement({
+		id: 'save',
+		text: 'Save',
+		bounds: { x: 60, y: 580, width: 80, height: 40 },
+	});
+	const backend = createMockDeviceBackend({
+		readScreen: vi.fn<NonNullable<DeviceBackend['readScreen']>>(async () => {
+			calls.push('readScreen');
+			return [covered];
+		}),
+		tap: vi.fn<NonNullable<DeviceBackend['tap']>>(async () => {
+			calls.push('tap');
+		}),
+		deviceInfo: vi.fn<DeviceBackend['deviceInfo']>(async () => {
+			calls.push('deviceInfo');
+			const info = createMockDeviceInfo();
+			return {
+				...info,
+				screen: {
+					...info.screen,
+					keyboard: { shown: true, bounds: { x: 0, y: 400, width: 360, height: 400 } },
+				},
+			};
+		}),
+	});
+	return createMockVerbContext({ backend, manifest: createMockCapabilityManifest() });
 }
 
 /** What a verb author writes: fetch the gated method, act on the point resolved for it. */
@@ -229,6 +266,43 @@ describe('performAction', () => {
 			message: expect.stringContaining('device offline'),
 		});
 		expect(result.target?.element?.id).toBe('save');
+	});
+
+	/**
+	 * `resolve` exists for `scroll`, whose spine target is a region rather than the point it
+	 * touches (#318 review). It is opt-in, so the pair below pins both halves: the default
+	 * still refuses a covered target, and a verb that asks for the exemption gets it — which is
+	 * what keeps `tap` and `long_press` from inheriting `scroll`'s.
+	 */
+	it('refuses a target whose resolved point is under the keyboard, by default', async () => {
+		const calls: string[] = [];
+		const context = coveredContext(calls);
+
+		const thrown = await performAction(context, {
+			verb: 'fake_tap',
+			requires: ['canInput'],
+			target: { by: 'text', text: 'Save' },
+			act: tapAction(context),
+		}).catch((error: unknown) => error);
+
+		expect(thrown).toBeInstanceOf(CoveredByKeyboardError);
+		expect(calls).toEqual(['readScreen', 'deviceInfo']);
+	});
+
+	it('resolves that same target without the keyboard check when a verb asks', async () => {
+		const calls: string[] = [];
+		const context = coveredContext(calls);
+
+		const result = await performAction(context, {
+			verb: 'fake_scroll',
+			requires: ['canInput'],
+			target: { by: 'text', text: 'Save' },
+			resolve: { touchStartsHere: false },
+			act: tapAction(context),
+		});
+
+		expect(result.target?.element?.id).toBe('save');
+		expect(calls).toEqual(['readScreen', 'deviceInfo', 'tap', 'readScreen', 'deviceInfo']);
 	});
 
 	it('runs a verb that addresses no element, and says so with a null target', async () => {

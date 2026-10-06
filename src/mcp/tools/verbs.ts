@@ -147,7 +147,8 @@ const VERB_TOOLS: readonly VerbToolRow[] = [
 			'polls a screen read taken inside the call until the target resolves or `timeoutMs` runs ' +
 			'out. Omit `timeoutMs` and the host applies the verb’s own default. A wait that runs out ' +
 			'is a `wait-timeout` failure naming what it waited for and what was on the screen ' +
-			'instead, not a hang. Requires `canReadScreen`.',
+			'instead, not a hang. A target under the on-screen keyboard is not one that can be acted ' +
+			'on yet, so the wait keeps polling and its timeout says so. Requires `canReadScreen`.',
 		requestTimeoutMs: (params) => waitedOut(params.timeoutMs, DEFAULT_WAIT_TIMEOUT_MS),
 	},
 	{
@@ -171,7 +172,11 @@ const VERB_TOOLS: readonly VerbToolRow[] = [
 			'answer says which of the two it was, plus the state after the tap. A target nothing ' +
 			'matches is a `target-not-found` failure describing what was on the screen; two matches ' +
 			'are `ambiguous-target` carrying the candidates, and `index` on a text target is how you ' +
-			'choose between them.',
+			'choose between them. A point that lies **under the on-screen keyboard** is refused as ' +
+			'`covered-by-keyboard`, naming the target, the point and the keyboard, rather than ' +
+			'tapped onto a key and reported as done — call `hide_keyboard` and tap again. Only the ' +
+			'point itself is checked: an element half under the keyboard whose centre is clear is ' +
+			'tapped.',
 	},
 	{
 		method: 'long_press',
@@ -180,7 +185,9 @@ const VERB_TOOLS: readonly VerbToolRow[] = [
 			'Press and hold one target — the same three ways of addressing one that `tap` takes. ' +
 			'`durationMs` is how long the **device** holds; omit it for the verb’s own default. Raise ' +
 			'it on a device configured with a slower long-press threshold: too short a hold is an ' +
-			'ordinary tap with a successful-looking result behind it.',
+			'ordinary tap with a successful-looking result behind it. A target under the on-screen ' +
+			'keyboard is refused as `covered-by-keyboard`, as for `tap`; `hide_keyboard` is the ' +
+			'way out.',
 		requestTimeoutMs: (params) => waitedOut(params.durationMs, LONG_PRESS_DURATION_MS),
 	},
 	{
@@ -190,7 +197,9 @@ const VERB_TOOLS: readonly VerbToolRow[] = [
 			'Drag from one target to another — two of them, because a drag has two ends, each by ' +
 			'text, element id or coordinate. `durationMs` is how long the device takes over it, and ' +
 			'zero is a flick; omit it for the verb’s own default. `from` is the target the answer ' +
-			'reports.',
+			'reports. A `from` under the on-screen keyboard is refused as `covered-by-keyboard` — ' +
+			'the keyboard would read the drag — and `hide_keyboard` is the way out; `to` may lie ' +
+			'over the keyboard, since where a drag ends does not decide who reads it.',
 		requestTimeoutMs: (params) => waitedOut(params.durationMs, SWIPE_DURATION_MS),
 	},
 	{
@@ -201,7 +210,10 @@ const VERB_TOOLS: readonly VerbToolRow[] = [
 			'not where the finger goes**: `down` reveals what is further down the list, the sense a ' +
 			'scrollbar and a wheel already have. `target` names the region to scroll within and is ' +
 			'omitted for the screen as a whole. `durationMs` defaults slower than a flick on ' +
-			'purpose, so the state the answer reports is a screen that has stopped moving.',
+			'purpose, so the state the answer reports is a screen that has stopped moving. A drag ' +
+			'that would **start** under the on-screen keyboard — it starts a quarter into the region ' +
+			'— is refused as `covered-by-keyboard` rather than handed to the keyboard, which types ' +
+			'instead of scrolling; call `hide_keyboard` first.',
 		requestTimeoutMs: (params) => waitedOut(params.durationMs, SCROLL_DURATION_MS),
 	},
 	{

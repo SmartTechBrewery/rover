@@ -27,7 +27,7 @@
 
 import { z } from 'zod';
 import { CapabilityIdSchema } from '../core/capabilities.js';
-import { DeviceKeySchema, PointSchema, ScreenElementSchema } from '../core/device.js';
+import { DeviceKeySchema, PointSchema, RectSchema, ScreenElementSchema } from '../core/device.js';
 import {
 	MissingCapabilityError,
 	NoRecordingRunningError,
@@ -43,6 +43,7 @@ import { DeviceSerialSchema, PlatformIdSchema } from '../core/ids.js';
 import {
 	AmbiguousTargetError,
 	ArtifactTooLargeError,
+	CoveredByKeyboardError,
 	FrameExtractionFailedError,
 	FrameExtractionUnavailableError,
 	FramesTooLargeError,
@@ -124,6 +125,30 @@ export const VerbFailureSchema = z.discriminatedUnion('kind', [
 			widthDp: z.number(),
 			heightDp: z.number(),
 			reason: z.enum(['clipped', 'off-screen']),
+			message: z.string().min(1),
+		})
+		.strict(),
+	/**
+	 * The point a touch would start at is on the screen and under the on-screen keyboard (#308).
+	 *
+	 * Its own kind rather than a third `unaddressable-element` reason, because that branch's
+	 * `element` is required and this one's is not: a caller-supplied point and `scroll`'s
+	 * computed start have no element behind them, and `lookedFor` says what the point was
+	 * instead. `keyboard` is the rectangle as the device reported it, in the same dp space as
+	 * `point`, so a caller can see how far under it the point was. The way out is
+	 * `hide_keyboard`, and the message says so.
+	 *
+	 * Without the branch it would arrive as `internal_error` — *the host broke* — for a device
+	 * that is merely showing a keyboard.
+	 */
+	z
+		.object({
+			kind: z.literal('covered-by-keyboard'),
+			serial: DeviceSerialSchema,
+			lookedFor: z.string().min(1),
+			element: ScreenElementSchema.nullable(),
+			point: PointSchema,
+			keyboard: RectSchema,
 			message: z.string().min(1),
 		})
 		.strict(),
@@ -500,7 +525,7 @@ export type VerbFailure = z.infer<typeof VerbFailureSchema>;
  * of this drifting.
  *
  * Four groups are delegated to helpers below — one list this long is harder to read than
- * five, and each group genuinely belongs together: the five failures between a caller's
+ * five, and each group genuinely belongs together: the six failures between a caller's
  * address and a point on the screen to act on ({@link screenAddressFailure}), the four about
  * a **host tool** rather than a device ({@link hostToolFailure}), the two about whether a
  * device has a recording open ({@link openRecordingFailure}), and the three where the device
@@ -595,13 +620,14 @@ export function toVerbFailure(error: unknown): VerbFailure | null {
 }
 
 /**
- * The five failures that stand between a caller's address and a point on the screen to act
+ * The six failures that stand between a caller's address and a point on the screen to act
  * on, split out of {@link toVerbFailure} for {@link hostToolFailure}'s reason.
  *
  * They belong together on their own terms: every one of them comes from a verb that was
  * asked to turn *what you want touched* into *where on this device to touch*, and could
  * not — nothing matched, several did, the point named is not on the device, the element is
- * there and has no interior to aim at, or the screen could not be read at all. None of them
+ * there and has no interior to aim at, the point is under the on-screen keyboard, or the
+ * screen could not be read at all. None of them
  * is a broken host and none of them is a device that cannot do the thing, so none is an
  * `internal_error` and none is a `missing-capability` (D11); what each says is which part
  * of the address failed, which is the part a caller can change.
@@ -657,6 +683,17 @@ function screenAddressFailure(error: unknown): VerbFailure | null {
 			widthDp: error.widthDp,
 			heightDp: error.heightDp,
 			reason: error.reason,
+			message: error.message,
+		};
+	}
+	if (error instanceof CoveredByKeyboardError) {
+		return {
+			kind: 'covered-by-keyboard',
+			serial: error.serial,
+			lookedFor: error.lookedFor,
+			element: error.element,
+			point: error.point,
+			keyboard: error.keyboard,
 			message: error.message,
 		};
 	}

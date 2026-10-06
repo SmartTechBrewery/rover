@@ -739,7 +739,18 @@ matching names what was on screen instead; and a coordinate stays available as t
 fallback, marked in the result as not having come from a screen. Every resolved point is
 range-checked against the device, whichever way it was arrived at — an element scrolled out of its
 container comes back with a rectangle whose corners are inverted, and the midpoint of that is
-arithmetic rather than a place to tap, so it is refused by name instead.
+arithmetic rather than a place to tap, so it is refused by name instead. Every point a touch
+**starts** at is also checked against the on-screen keyboard (#308): a point under the keyboard's
+rectangle is refused as `covered-by-keyboard`, naming the target, the point and the rectangle, and
+pointing at `hide_keyboard` — because the keyboard is drawn over the application, an element under
+it still resolves, and a tap there lands on a key that the device accepts and the verb used to
+answer `ok` for. Only the point itself is checked, so an element half under the keyboard whose centre
+is clear is tapped; and a device that says a keyboard is up without saying where refuses nothing,
+since there is nothing to test a point against. The keyboard's own surface is the price: while one
+is up, nothing reaches it but `press_key` and `type_text`, so an IME key with no `press_key`
+equivalent — the language switch, the emoji key, voice input, a suggestion-strip entry — cannot be
+touched at all. That is deliberate, because a verb that could tap a key could also tap one by
+accident.
 `performAction()` is where the three rules meet: it consults the capability manifest **before** it
 touches the device, resolves fresh, acts, and then reads the state after the action — and a device
 that cannot read its screen answers an explicit "unavailable, and here is the capability that would
@@ -760,7 +771,14 @@ sense a scrollbar and a wheel already have, so `scroll 'down'` drags *upwards*; 
 element it was pointed at, or the screen when it was pointed at nothing, and it will not take a
 coordinate, because a point has no extent and so cannot say how far a scroll may travel. `swipe` is
 the only verb here with two ends: the one it starts from goes through the spine and is what the
-result names, and the other is resolved inside the action from its own read. A gesture's duration is
+result names, and the other is resolved inside the action from its own read. Only the start is
+refused under the on-screen keyboard: `tap`, `long_press` and `swipe`'s `from` through the spine,
+and `scroll` itself, because its start is computed a quarter into the region rather than resolved —
+a screen-wide `scroll 'down'` over an open keyboard is refused rather than handed to the keyboard,
+which reads the drag as typing. `scroll`'s region therefore goes through the spine with that check
+turned off: a list laid out whole behind the keyboard has its centre under it while `scroll 'up'`
+starts well clear, and refusing that would name the keyboard for a point no touch lands on.
+`swipe`'s `to` may lie over the keyboard; where a drag lets go does not decide who reads it. A gesture's duration is
 spent by the *device* — it is an argument to the drag, never a wait on this side — which is why
 none of these verbs is an exception to the no-sleep rule.
 
@@ -771,7 +789,8 @@ acts, and for a wait the resolution **is** the work. Both poll to a timeout, and
 reads the screen again**: a wait over one cached read is the stale-coordinate failure with a timer
 attached, re-grown inside the verbs meant to remove it. `wait_for` waits until the target is there
 *and* somewhere it can be acted on, so an element still clipped out of its scrolling container is
-*not yet* rather than a failure — a screen still moving is what a wait is for — while a target two
+*not yet* rather than a failure — a screen still moving is what a wait is for — and so is one under
+the on-screen keyboard, since a keyboard animating closed is a screen still moving too, while a target two
 elements match is refused outright, because more polling cannot specify an under-specified request.
 A screen the device could not read **yet** reads the same way: a device that is up and has not
 drawn a window, which is what reading right after a cold app launch meets, is *not yet* for both
@@ -865,8 +884,9 @@ rather than a screenshot's coordinates. And the two "no" answers are different a
 **`null` means this device did not say**, while **`{ shown: false }` means the device says no
 keyboard is up**. The iOS-simulator backend answers `null`, since its screen facts come from a
 static device-type profile that describes nothing about what is drawn on the glass. Reading `null`
-as *no keyboard* would turn a backend that cannot look into one promising a clear screen. Nothing
-in Rover refuses a tap over a keyboard today — this is the device reporting a fact.
+as *no keyboard* would turn a backend that cannot look into one promising a clear screen. **A touch
+that would start under the rectangle is refused** (#308) as `covered-by-keyboard` — the verb layer
+reads this fact for that, above — which this paragraph used to say nothing in Rover did yet.
 
 **`hide_keyboard` puts that keyboard away, and presses nothing when there is none** (#307). Reach
 for it instead of `press_key back`: on Android, back closes a keyboard that is up and *leaves the
