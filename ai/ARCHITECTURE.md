@@ -201,6 +201,12 @@ Backends are genuinely asymmetric and flattening that is the design mistake to a
   untouched, because it names exactly one method and must keep meaning exactly that. The two land
   together rather than one at a time, the split point `canInput`'s four primitives already sit on:
   `CAPABILITY_METHODS` naming a method a backend does not answer fails the conformance suite.
+- **Dismissing the on-screen keyboard is a third** (#307), and the flag is `canHideKeyboard` naming
+  one method, `hideKeyboard`. Not a corner of `canInput` and not a `back` composed in the verb layer:
+  the gesture that closes a keyboard is the same one that navigates when none is open (Android,
+  `PROJECT.md` §6), so the method's contract is *dismiss it if one is up, do nothing otherwise*, and
+  the read that decides lives in the backend that knows its own gesture. A backend that cannot tell
+  whether its keyboard is up declares `false` and the verb fails by name.
 - **A system log is not one of those asymmetries**, which is why `readLogs` is a *required* method and not a capability: every platform here keeps one, and a flag that is always `true` is noise (`src/core/capabilities.ts`). What differs is the wording inside an entry — that is what the neutral `LogEntry` shape and a backend's own parser absorb.
 - **Moving a file is not one either**, so `pushFile` and `pullFile` are required too. The asymmetry that matters there is the *direction* rather than the platform: a push takes a path on the host, because the host is where the daemon runs, and a pull answers with **bytes**, because the answer is read on the agent's machine (D19).
 - **A missing *host* program is not one either, and it must not be modelled as a capability.**

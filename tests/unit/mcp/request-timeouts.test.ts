@@ -252,6 +252,7 @@ const DEFAULT_DEADLINE_ROWS = [
 	{ tool: 'tap', args: { target: TARGET } },
 	{ tool: 'type_text', args: { text: 'hello' } },
 	{ tool: 'press_key', args: { key: 'back' } },
+	{ tool: 'hide_keyboard', args: {} },
 	{ tool: 'read_screen', args: {} },
 	{ tool: 'device_info', args: {} },
 	{ tool: 'read_logs', args: {} },

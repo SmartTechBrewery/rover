@@ -56,7 +56,7 @@
  *
  * **The label moves with it**, to `iOS Simulator (simctl + idb)` — see {@link IOS_SIMULATOR_LABEL}.
  *
- * **The one remaining `false` flag is honest, and it is `false` for good.**
+ * **Two flags are `false`, and both are honest** — one for good, one until it is measured.
  *
  * - **`canControlNetwork`** is the one that is `false` *for good* (`docs/IOS.md` §5, §10 step 1).
  *   A simulator has no airplane mode and no wifi toggle: it uses the **host's** network stack, so
@@ -67,6 +67,13 @@
  *   cannot do that*" `ai/RULES.md` §2 forbids. `MissingCapabilityError` is what a caller gets,
  *   naming this capability and the device, and there is **no** `setAirplaneMode` and **no**
  *   `setWifiEnabled` method beside the flag.
+ * - **`canHideKeyboard`** is `false` *for now* (#307). Dismissing a keyboard is only safe behind a
+ *   read of whether one is up, and this backend reports no keyboard at all yet — `ScreenInfo.keyboard`
+ *   is `null` here (`./screen.ts`), so there is nothing to decide on — and no gesture that closes
+ *   a simulator keyboard has been measured either. Declaring it before both are verified would be
+ *   the "an agent is told a device can do something it cannot" failure;
+ *   so `hide_keyboard` answers `missing-capability` naming this flag and the device, and there is
+ *   **no** `hideKeyboard` method beside it. Its own issue flips it, with the recipe.
  *
  * That is the difference between this manifest and `../android/capabilities.ts`, where every flag
  * is `true`: a declared opt-out is not an unfinished backend, and a capability declared before its
@@ -102,5 +109,6 @@ export const iosSimulatorCapabilityManifest: CapabilityManifestInput = {
 		canControlNetwork: false,
 		canRecordVideo: true,
 		canControlRecording: true,
+		canHideKeyboard: false,
 	},
 };

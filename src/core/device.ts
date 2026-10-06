@@ -830,6 +830,28 @@ export interface DeviceBackend {
 	pressKey?(serial: DeviceSerial, key: DeviceKey): Promise<void>;
 
 	/**
+	 * Dismiss the on-screen keyboard **if one is up, and do nothing otherwise**. Gated by
+	 * `canHideKeyboard`.
+	 *
+	 * **The condition is the contract, not an implementation detail.** The gesture that closes a
+	 * keyboard is, on at least one platform, the same one that navigates back when no keyboard is
+	 * open (PROJECT.md §6) — so a backend that pressed it unconditionally would leave the screen
+	 * the caller was on, report success, and turn "get the keyboard out of the way" into "lose my
+	 * place". The backend reads the keyboard's state from the device first, at the moment it acts
+	 * (D6), and resolves without touching the device when nothing is up.
+	 *
+	 * **Which gesture, and when it is safe, is this backend's knowledge** and nobody else's: the
+	 * verb layer calls this without a branch on the platform and without assuming a back key
+	 * exists (ai/RULES.md §2). A backend that cannot tell whether its keyboard is up has no safe
+	 * way to answer this and declares `canHideKeyboard: false` rather than guessing.
+	 *
+	 * It does not wait for the keyboard to finish leaving and does not confirm it left: the
+	 * after-state every verb returns re-reads `ScreenInfo.keyboard`, which is where a caller sees
+	 * whether it worked (D12(c)).
+	 */
+	hideKeyboard?(serial: DeviceSerial): Promise<void>;
+
+	/**
 	 * Gated by `canControlNetwork`. Together with {@link setWifiEnabled} this is the
 	 * "environment" half of the device abstraction, and what the daemon restores on
 	 * release and on expiry (D9).

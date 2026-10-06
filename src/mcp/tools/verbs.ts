@@ -232,6 +232,19 @@ const VERB_TOOLS: readonly VerbToolRow[] = [
 			'`read_screen` and `tap`.',
 	},
 	{
+		method: 'hide_keyboard',
+		title: 'Hide the on-screen keyboard',
+		description:
+			'Put the on-screen keyboard away so the elements under it can be reached. The device ' +
+			'checks first: when no keyboard is up this presses **nothing** and answers with the ' +
+			'state as it was. It is **not** a `back` press — reach for this instead of ' +
+			'`press_key back`, which closes a keyboard that is up but leaves the screen when none ' +
+			"is. Addresses nothing on the screen; the answer's `screen.keyboard` shows whether the " +
+			'keyboard is still up. **Requires `canHideKeyboard`** — a device whose backend does ' +
+			'not declare it answers with a `missing-capability` failure naming the capability and ' +
+			'the device, never with a silent no-op.',
+	},
+	{
 		method: 'read_screen',
 		title: 'Read the screen',
 		description:

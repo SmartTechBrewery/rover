@@ -41,18 +41,33 @@ import { type Dimensions, DimensionsSchema } from './wm.js';
 /** The two source types a reader means by *the system bars*. */
 const BAR_TYPES = new Set(['statusBars', 'navigationBars']);
 
-/** The source type the window manager gives the on-screen keyboard. */
-const IME_TYPE = 'ime';
+/**
+ * The source types the window manager gives the on-screen keyboard — `ime` from the API level that
+ * gave every source an `id=`, `ITYPE_IME` before it.
+ *
+ * **Both, because the older spelling is not a guess.** On API 33 / Android 13 (a Zebra TC58,
+ * 2026-10-06, `PROJECT.md` §6) the line reads `InsetsSource type=ITYPE_IME frame=[0,1251][1080,2160]
+ * visibleFrame=… visible=true` — no `id=`, and the old constant's name for the type. A parser that
+ * knew only the newer line found no keyboard source in that block and answered *no keyboard is up*
+ * while one covered half the screen, which is the one wrong answer `hide_keyboard` cannot survive:
+ * it would never dismiss anything on that device, and say `ok` every time.
+ *
+ * The bar sources have the same older names (`ITYPE_STATUS_BAR`, `ITYPE_NAVIGATION_BAR`) and are
+ * deliberately not added to {@link BAR_TYPES} here: that changes what `systemBars` reports, which is
+ * a different fact with a different consumer, and it belongs to the change that measures it.
+ */
+const IME_TYPES = new Set(['ime', 'ITYPE_IME']);
 
 /**
  * One `InsetsSource` line of the `InsetsState` block.
  *
  * Anchored at a line start followed by whitespace and `InsetsSource`, so the `mSource=` repeats
- * under `InsetsSourceProviders` do not match. `flags` and `sideHint` are deliberately not captured
+ * under `InsetsSourceProviders` do not match. The `id=` is optional because API 33 prints none
+ * ({@link IME_TYPES}). `flags` and `sideHint` are deliberately not captured
  * — see {@link sideOf} for why the geometry decides the side rather than the hint.
  */
 const SOURCE_LINE =
-	/^[ \t]*InsetsSource id=\S+ type=(\w+) frame=\[(\d+),(\d+)\]\[(\d+),(\d+)\][^\n]*?visible=(true|false)/gm;
+	/^[ \t]*InsetsSource (?:id=\S+ )?type=(\w+) frame=\[(\d+),(\d+)\]\[(\d+),(\d+)\][^\n]*?visible=(true|false)/gm;
 
 /** The marker for the block whose sources are the display's own. */
 const INSETS_STATE = /^[ \t]*InsetsState\b/m;
@@ -161,7 +176,7 @@ export function parseKeyboard(stdout: string, scale: number): OnScreenKeyboard |
 	SOURCE_LINE.lastIndex = 0;
 	for (const source of text.matchAll(SOURCE_LINE)) {
 		const [, type, left, top, right, bottom, visible] = source;
-		if (type !== IME_TYPE) {
+		if (!IME_TYPES.has(type)) {
 			continue;
 		}
 		if (visible !== 'true') {

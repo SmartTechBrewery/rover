@@ -350,7 +350,7 @@ printf '%s\n' \
 ```
 
 The first answer is the handshake (`"protocolVersion":"2025-06-18"`, `"serverInfo":{"name":"rover"`
-…) and the second lists **25 tools**: the four device and lease rows, the eighteen verbs whose
+…) and the second lists **26 tools**: the four device and lease rows, the nineteen verbs whose
 answer is plain data, and the three whose answer is bytes. Swap the last frame for a call to watch
 one run against the device:
 
@@ -727,7 +727,7 @@ test behind it rather than only a convention: `tests/unit/no-sleep.test.ts` scan
 are exempt from the scan. It is a floor, not a proof — a determined re-implementation gets
 through, and reading the wait vocabulary is still how you learn what a wait here looks like.
 
-**The verb layer has a spine, twenty-one verbs on it and the two waits standing beside it.**
+**The verb layer has a spine, twenty-two verbs on it and the two waits standing beside it.**
 `src/verbs/` is the layer above the backends where determinism stops being a rule and becomes a
 signature (D12): `resolveTarget()` takes
 a target and *nothing else* — no screen, no element list, no state read a turn ago — so a target can
@@ -747,7 +747,7 @@ that leaves the agent guessing whether it landed. Every argument and every
 result is a Zod schema of plain data, because the host runs the verb and the agent reads the answer
 somewhere else (D19).
 
-**The six input verbs are that spine used six times** (`src/verbs/input.ts`),
+**The seven input verbs are that spine used seven times** (`src/verbs/input.ts`),
 and each of them is one `performAction()` call: not one reads a screen of its own, so a verb author
 has nothing to remember and nothing to get wrong. `long_press` is a drag from a point to that same
 point, held past the device's own long-press timeout — never the long-press flag on a key event,
@@ -854,8 +854,20 @@ rather than a screenshot's coordinates. And the two "no" answers are different a
 keyboard is up**. The iOS-simulator backend answers `null`, since its screen facts come from a
 static device-type profile that describes nothing about what is drawn on the glass. Reading `null`
 as *no keyboard* would turn a backend that cannot look into one promising a clear screen. Nothing
-in Rover refuses a tap over a keyboard today — this is the device reporting a fact, and what a verb
-does about it is separate work.
+in Rover refuses a tap over a keyboard today — this is the device reporting a fact.
+
+**`hide_keyboard` puts that keyboard away, and presses nothing when there is none** (#307). Reach
+for it instead of `press_key back`: on Android, back closes a keyboard that is up and *leaves the
+screen* when none is — both exit cleanly, so nothing downstream can tell which happened
+(`PROJECT.md` §6). The verb therefore decides nothing itself. It calls the backend's `hideKeyboard`,
+which reads the keyboard's state from the same dump `screen.keyboard` comes from and presses back
+only when that read says a keyboard is up; a dump that says nothing about the keyboard is refused
+rather than guessed at. It takes the lease id alone — no target, and no key, because *how* a device
+puts its keyboard away is that device's knowledge — and its answer is the usual one, whose
+`screen.keyboard` says whether the keyboard is still there. It is gated on its own capability,
+`canHideKeyboard`: `true` on Android, `false` on the iOS simulator for now, where the call answers
+`missing-capability` naming the flag and the device instead of answering `ok` for a keyboard still on
+the glass.
 
 **`screenshot` is the third read, and the one whose answer is a payload** rather than a state the
 result already carries. It sits on the same spine and needs no capability either, and what it adds
@@ -1109,7 +1121,7 @@ ends, so there is one recipe per toggle rather than two that can drift, and the 
 the reason the restoration records: airplane mode first, wifi last.
 
 **The daemon loads the core and runs the verbs**, and a client only asks (D19). The two waits, the
-six input verbs, the three app verbs, the three read verbs, the log read, screen recording, the two
+seven input verbs, the three app verbs, the three read verbs, the log read, screen recording, the two
 environment verbs and the three file transfers are callable over the same connection as
 `acquire_device` — the same envelope, the same framing, one method table — and a verb call carries
 the lease id rather than a serial, because the lease id is the credential and the host derives the
@@ -1221,10 +1233,10 @@ outside it, because `--import tsx/esm` resolves against the caller's directory r
 the script. What that entry looks like in an MCP client's own configuration, and how to prove it
 handshakes, is [Wire up the MCP server](#wire-up-the-mcp-server) above. What exists today is the
 server, speaking stdio, declaring
-twenty-five tools under the `IPC_METHODS` names exactly: the four device and lease rows (`status`, `list_devices`,
-`acquire_device`, `release_device`), the eighteen verbs whose answer is plain data
+twenty-six tools under the `IPC_METHODS` names exactly: the four device and lease rows (`status`, `list_devices`,
+`acquire_device`, `release_device`), the nineteen verbs whose answer is plain data
 (`wait_for`, `wait_until_gone`, `tap`, `long_press`, `swipe`, `scroll`, `type_text`,
-`press_key`, `read_screen`, `device_info`, `launch_app`, `stop_app`, `clear_app_data`,
+`press_key`, `hide_keyboard`, `read_screen`, `device_info`, `launch_app`, `stop_app`, `clear_app_data`,
 `read_logs`, `install_app`, `start_recording`, `set_airplane_mode`, `set_wifi`), and the three
 whose answer is bytes.
 Every one of them takes **camelCase** arguments under a `snake_case` name (D26), and says so in

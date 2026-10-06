@@ -82,6 +82,8 @@ const DISPLAYS = fixture('dumpsys-window-d.api37-sdk-gphone16k-arm64.txt');
 const DISPLAYS_KEYBOARD_SHOWN = fixture(
 	'dumpsys-window-d.keyboard-shown.api37-sdk-gphone16k-arm64.txt',
 );
+const API33_KEYBOARD_SHOWN = fixture('dumpsys-window-d.keyboard-shown.api33-tc58.txt');
+const API33_KEYBOARD_DISMISSED = fixture('dumpsys-window-d.keyboard-dismissed.api33-tc58.txt');
 const OS_VERSION = fixture('getprop-version.api37-sdk-gphone16k-arm64.txt');
 const OS_VERSION_ABSENT = fixture('getprop-version.absent.api37-sdk-gphone16k-arm64.txt');
 const STAT_FILE = fixture('stat.file.api37-sdk-gphone16k-arm64.txt');
@@ -2927,6 +2929,58 @@ describe('pressKey', () => {
 		expect(thrown).toBeNull();
 		expect(thrown).not.toBeInstanceOf(UnsupportedKeyError);
 		expect(runAdbOnDevice).toHaveBeenCalledTimes(1);
+	});
+});
+
+/**
+ * **Never an unconditional back** (#307). `KEYCODE_BACK` closes an open keyboard and, with none
+ * open, leaves the screen — measured on API 33 (PROJECT.md §6) — so these pin that the press is
+ * issued only behind a read that says a keyboard is up, and exactly once when it is.
+ */
+describe('hideKeyboard', () => {
+	const READ = 'shell dumpsys window d';
+	const BACK = 'shell input keyevent KEYCODE_BACK';
+
+	function issued(): string[] {
+		return runAdbOnDevice.mock.calls.map(([, args]) => args.join(' '));
+	}
+
+	it.each([
+		['API 37, nothing focused', DISPLAYS],
+		['API 33, after the keyboard was dismissed', API33_KEYBOARD_DISMISSED],
+	])('issues no input command when the device says no keyboard is up (%s)', async (_name, dump) => {
+		answers({ [READ]: dump, [BACK]: '' });
+
+		await backend.hideKeyboard(SERIAL);
+
+		expect(issued()).toEqual([READ]);
+	});
+
+	it.each([
+		['API 37', DISPLAYS_KEYBOARD_SHOWN],
+		['API 33', API33_KEYBOARD_SHOWN],
+	])('presses back exactly once when the device says a keyboard is up (%s)', async (_name, dump) => {
+		answers({ [READ]: dump, [BACK]: '' });
+
+		await backend.hideKeyboard(SERIAL);
+
+		expect(issued()).toEqual([READ, BACK]);
+		expect(runAdbOnDevice.mock.calls.every(([serial]) => serial === SERIAL)).toBe(true);
+	});
+
+	// `null` is *this device did not say*: pressing might navigate, and not pressing would answer
+	// `ok` for a keyboard that may still be covering the target.
+	it('refuses a dump with no insets state rather than guessing either way', async () => {
+		answers({ [READ]: 'WINDOW MANAGER DISPLAY CONTENTS\n  Display: mDisplayId=0\n', [BACK]: '' });
+
+		await expect(backend.hideKeyboard(SERIAL)).rejects.toThrow(/no InsetsState/);
+		expect(issued()).toEqual([READ]);
+	});
+
+	it('throws when the press is answered with anything', async () => {
+		answers({ [READ]: DISPLAYS_KEYBOARD_SHOWN, [BACK]: INPUT_REFUSAL });
+
+		await expect(backend.hideKeyboard(SERIAL)).rejects.toThrow(/input keyevent KEYCODE_BACK/);
 	});
 });
 
