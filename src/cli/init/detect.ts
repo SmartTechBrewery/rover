@@ -10,11 +10,19 @@
  * a **proposal, reported with the file it came from**, and a project that looks like nothing in
  * particular is registered with no install at all.
  *
- * The detections recognise **Gradle** and nothing else so far, and that is not a platform
- * branch of the kind `ai/RULES.md` §2 forbids — nothing here is a device backend, a verb, or a
- * capability. It is one command recognising a build system in somebody else's repository, and
- * the next build system it learns is another entry beside this one rather than a branch inside
- * a verb. `tests/unit/no-platform-names.test.ts` carries the one name it cannot avoid and why.
+ * The detections recognise **Gradle** and **Xcode**, and that is not a platform branch of the
+ * kind `ai/RULES.md` §2 forbids — nothing here is a device backend, a verb, or a capability. It
+ * is one command recognising a build system in somebody else's repository, and each build system
+ * it learns is another entry beside the others rather than a branch inside a verb. The lines it
+ * proposes are `./install-lines.ts`'s, which is where the names this gate keeps out of here live
+ * (`tests/unit/no-platform-names.test.ts` says why that file may carry them). The Xcode read is
+ * `./xcode.ts`, and it reads **shared schemes only**, because a scheme that is not shared is not
+ * in the checkout and proposing it would be proposing a build that works on one machine.
+ *
+ * **One install hook serves one build system.** A project where both are found — a Gradle wrapper
+ * with an `app` module, and an Xcode container — gets no install registered and every line either
+ * side would have proposed listed, because registering one of them silently would hand agents on
+ * the other platform an install that cannot work for them.
  *
  * **Product flavors are where that rule earns its keep.** A project that declares any makes the
  * build plugin name every variant after its flavors, and the install task after the variant —
@@ -32,6 +40,8 @@ import { basename, join } from 'node:path';
 import { AppIdSchema } from '../../core/ids.js';
 import { type HookCommand, ProjectIdentifierSchema } from '../../daemon/project-hooks.js';
 import { UsageError } from '../_shared/flags.js';
+import { gradleInstall, upperFirst, xcodeInstall } from './install-lines.js';
+import { findXcodeAppSchemes } from './xcode.js';
 
 /** Something init worked out for itself, and the file it read to work it out. */
 export interface Detected<Value> {
@@ -58,27 +68,6 @@ const GRADLE_FILES = [...APP_BUILD_FILES, 'build.gradle.kts', 'build.gradle'];
  */
 const APPLICATION_ID = /^\s*applicationId\s*=?\s*["']([^"']+)["']/m;
 const NAMESPACE = /^\s*namespace\s*=?\s*["']([^"']+)["']/m;
-
-/**
- * The install a Gradle project gets proposed, for one build variant.
- *
- * Three things in the line are load-bearing. `bash` is the program because the line needs a shell
- * to expand a variable and hooks are never word-split (`src/daemon/project-hooks.ts`) — an
- * operator who wants a shell makes the shell the program. The environment variable is what
- * carries the lease's device into the build's own install step, out of the `ROVER_DEVICE_SERIAL`
- * the host sets on every hook child: **without it the install task installs onto every attached
- * device**, which on a shared host is every neighbour's lease as well as this one's. And `-q`,
- * because the hook's stdout is a build log nobody reads unless it failed, and a failure reports
- * its own stderr tail.
- *
- * The task's own name is the variant's, capitalised. A variant is its flavors in declared
- * dimension order followed by the build type — `dev` and `free` under dimensions `env, tier`
- * give `devFreeDebug`, whose task is `:app:installDevFreeDebug`. A project with no flavors has
- * the plain `debug` variant and so the `:app:installDebug` this used to be a constant for.
- */
-function gradleInstall(variant: string): string {
-	return `ANDROID_SERIAL="$ROVER_DEVICE_SERIAL" ./gradlew :app:install${upperFirst(variant)} -q`;
-}
 
 /** The build type every proposal names: the one a project is guaranteed to have. */
 const DEBUG = 'debug';
@@ -428,10 +417,6 @@ function withoutComments(text: string): string {
 	return text.replaceAll(/\/\*[\s\S]*?\*\//g, ' ').replaceAll(/(^|\s)\/\/[^\n]*/gm, '$1');
 }
 
-function upperFirst(value: string): string {
-	return value.charAt(0).toUpperCase() + value.slice(1);
-}
-
 /**
  * The project identifier for a directory: what was asked for, or the directory's own name.
  *
@@ -484,14 +469,65 @@ export async function detectApps(
  * `undecided` is not a failure. It is the module's rule — a wrong install is worse than none —
  * applied to the one case where the right answer exists and there is more than one of it. The
  * `choices` are the shell lines `--install` takes, ready to paste, and an **empty** `choices` is
- * the other undecided case: flavors that are declared and cannot be read statically at all.
+ * the other undecided case: a project whose candidates init could not read at all. `reason`
+ * finishes the sentence `source` starts, and `listWith` are the commands that list the real
+ * candidates — both written by the detection, so the report never has to know which build system
+ * it is describing.
  */
 export type InstallDetection =
 	| { readonly kind: 'proposed'; readonly value: HookCommand; readonly source: string }
-	| { readonly kind: 'undecided'; readonly choices: readonly string[]; readonly source: string };
+	| ({ readonly kind: 'undecided' } & Undecided);
+
+/** A choice init will not make, in words the report can print for any build system. */
+export interface Undecided {
+	readonly choices: readonly string[];
+	readonly source: string;
+	readonly reason: string;
+	/** The commands that list the real candidates, to be run in the project. */
+	readonly listWith: readonly string[];
+}
+
+/** One build system's answer, with the proposal still a shell line so it can become a choice. */
+type Found =
+	| { readonly kind: 'proposed'; readonly line: string; readonly source: string }
+	| ({ readonly kind: 'undecided' } & Undecided);
+
+const GRADLE_TASKS = './gradlew :app:tasks';
+const XCODE_LIST = 'xcodebuild -list';
 
 /**
  * What installing this project means, or `undefined` when init has no idea.
+ *
+ * Each build system is read on its own ({@link detectGradleInstall}, {@link detectXcodeInstall});
+ * when both are here, nothing is registered and every line either would have proposed is listed.
+ */
+export async function detectInstall(directory: string): Promise<InstallDetection | undefined> {
+	const gradle = await detectGradleInstall(directory);
+	const xcode = await detectXcodeInstall(directory);
+	if (gradle !== undefined && xcode !== undefined) {
+		return {
+			kind: 'undecided',
+			choices: [...linesOf(gradle), ...linesOf(xcode)],
+			source: `gradlew and ${xcode.container}`,
+			reason: 'are both here, and one install hook serves one of them',
+			listWith: [GRADLE_TASKS, XCODE_LIST],
+		};
+	}
+	const found = gradle ?? xcode;
+	if (found === undefined) {
+		return undefined;
+	}
+	return found.kind === 'proposed'
+		? { kind: 'proposed', value: shellInstall(found.line, directory), source: found.source }
+		: found;
+}
+
+function linesOf(found: Found): readonly string[] {
+	return found.kind === 'proposed' ? [found.line] : found.choices;
+}
+
+/**
+ * The Gradle install, or `undefined` when this is not a Gradle project init can name a task in.
  *
  * Both files have to be there: `gradlew` says how the build is run and `app/` says there is an
  * `:app` module whose install task to name. A wrapper with no `app` module is a project whose
@@ -502,17 +538,12 @@ export type InstallDetection =
  * {@link gradleDebugVariants}. A file that declares no flavors, and a project that has no app
  * build file to read, both keep the `:app:installDebug` this command has always proposed.
  */
-export async function detectInstall(directory: string): Promise<InstallDetection | undefined> {
+async function detectGradleInstall(directory: string): Promise<Found | undefined> {
 	const hasWrapper = await exists(join(directory, 'gradlew'));
 	const hasAppModule = await exists(join(directory, 'app'));
 	if (!hasWrapper || !hasAppModule) {
 		return undefined;
 	}
-	const proposed = (line: string, source: string): InstallDetection => ({
-		kind: 'proposed',
-		value: shellInstall(line, directory),
-		source,
-	});
 	for (const relative of APP_BUILD_FILES) {
 		const contents = await readIfPresent(join(directory, relative));
 		if (contents === undefined) {
@@ -520,15 +551,67 @@ export async function detectInstall(directory: string): Promise<InstallDetection
 		}
 		const variants = gradleDebugVariants(contents);
 		if (variants === undefined) {
-			return proposed(gradleInstall(DEBUG), 'gradlew');
+			return { kind: 'proposed', line: gradleInstall(DEBUG), source: 'gradlew' };
 		}
 		const only = variants.length === 1 ? variants[0] : undefined;
 		if (only !== undefined) {
-			return proposed(gradleInstall(only), relative);
+			return { kind: 'proposed', line: gradleInstall(only), source: relative };
 		}
-		return { kind: 'undecided', choices: variants.map(gradleInstall), source: relative };
+		return {
+			kind: 'undecided',
+			choices: variants.map(gradleInstall),
+			source: relative,
+			reason:
+				variants.length === 0
+					? 'declares product flavors init could not read'
+					: 'declares product flavors, one install per variant',
+			listWith: [GRADLE_TASKS],
+		};
 	}
-	return proposed(gradleInstall(DEBUG), 'gradlew');
+	return { kind: 'proposed', line: gradleInstall(DEBUG), source: 'gradlew' };
+}
+
+/**
+ * The Xcode install, or `undefined` when there is no Xcode project or workspace here.
+ *
+ * One shared scheme that builds an application is proposed, named by its scheme file; several are
+ * listed and none registered, for the reason several Gradle variants are; and a container that
+ * shares no such scheme is said so, with how to share one, rather than proposing a scheme that
+ * only exists on somebody's own machine. A Swift package on its own is not a container here: it
+ * cannot produce an application bundle for the simulator, so it gets no proposal.
+ */
+async function detectXcodeInstall(
+	directory: string,
+): Promise<(Found & { readonly container: string }) | undefined> {
+	const findings = await findXcodeAppSchemes(directory);
+	if (findings === undefined) {
+		return undefined;
+	}
+	const container = findings.containers[0] ?? '';
+	const [only, ...others] = findings.schemes;
+	if (only === undefined) {
+		return {
+			kind: 'undecided',
+			choices: [],
+			source: container,
+			reason:
+				'shares no scheme that builds an application — init reads shared schemes only, so ' +
+				"tick 'Shared' for one in Xcode's Manage Schemes",
+			listWith: [XCODE_LIST],
+			container,
+		};
+	}
+	if (others.length === 0) {
+		return { kind: 'proposed', line: xcodeInstall(only), source: only.source, container };
+	}
+	return {
+		kind: 'undecided',
+		choices: findings.schemes.map(xcodeInstall),
+		source: container,
+		reason: 'shares several schemes that build an application, one install per scheme',
+		listWith: [XCODE_LIST],
+		container,
+	};
 }
 
 /** One shell line as a hook command, which is the shape `--install` is given in too. */
