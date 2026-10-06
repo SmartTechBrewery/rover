@@ -472,11 +472,13 @@ export function createVerbHandlers(
 
 		// The one row whose answer carries a payload of its own, and it goes through exactly the
 		// same preamble as the rest — `runVerb` is generic in the `ActionResult` subtype the verb
-		// returns, so what it answers when no verb ran is word for word a gesture's.
+		// returns, so what it answers when no verb ran is word for word a gesture's. The lease's
+		// grant time rides along as the bound on what this host keeps about the device (#323): it
+		// comes off the lease, never off the call, so a caller cannot widen it to a predecessor's.
 		read_logs(params: ReadLogsParams): Promise<ReadLogsCallResult> {
 			return runVerb(
 				params.leaseId,
-				(context) => readLogs(context, logOptions(params)),
+				(context, lease) => readLogs(context, logOptions(params, lease.createdAtMs)),
 				params.label,
 			);
 		},
@@ -630,9 +632,13 @@ function gestureOptions(params: { readonly durationMs?: number }): GestureOption
  * theirs: the verb's own default is what a caller who said nothing asked for, and the host must
  * not be the second place that number is decided. A selection that is absent stays absent, so
  * a backend never has to tell "not asked" from "asked for nothing".
+ *
+ * Plus the one knob that is not a caller's at all: `recordsSinceMs`, the lease's grant time
+ * (#323), which keeps a previous holder's records on this host out of this holder's answer.
  */
-function logOptions(params: ReadLogsParams): ReadLogsVerbOptions {
+function logOptions(params: ReadLogsParams, grantedAtMs: number): ReadLogsVerbOptions {
 	return {
+		recordsSinceMs: grantedAtMs,
 		...(params.maxEntries === undefined ? {} : { maxEntries: params.maxEntries }),
 		...(params.appId === undefined ? {} : { appId: params.appId }),
 		...(params.pid === undefined ? {} : { pid: params.pid }),

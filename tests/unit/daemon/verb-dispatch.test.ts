@@ -1220,6 +1220,8 @@ describe('the log row carries a payload back over the same surface', () => {
 		const client = await connect();
 		const leaseId = await acquire(client);
 
+		const recordsSinceMs = Date.parse((await holderOn(client)).grantedAt);
+
 		const answer = await client.request('read_logs', { leaseId });
 
 		expect(answer).toMatchObject({
@@ -1233,7 +1235,11 @@ describe('the log row carries a payload back over the same surface', () => {
 			},
 		});
 		// The serial came off the lease on the host; the client sent a lease id and nothing else.
-		expect(logReads).toEqual([{ serial: SERIAL, maxEntries: DEFAULT_MAX_LOG_ENTRIES }]);
+		// So did the bound on what this host keeps about the device: the lease's own grant time
+		// (#323), which no caller can send and which a predecessor's records are older than.
+		expect(logReads).toEqual([
+			{ serial: SERIAL, maxEntries: DEFAULT_MAX_LOG_ENTRIES, recordsSinceMs },
+		]);
 		// And the screen read in the result is the after-state, not a read on the way in.
 		expect(reads).toBe(1);
 	});
@@ -1243,9 +1249,11 @@ describe('the log row carries a payload back over the same surface', () => {
 		const client = await connect();
 		const leaseId = await acquire(client);
 
+		const recordsSinceMs = Date.parse((await holderOn(client)).grantedAt);
+
 		await client.request('read_logs', { leaseId, maxEntries: 5 });
 
-		expect(logReads).toEqual([{ serial: SERIAL, maxEntries: 5 }]);
+		expect(logReads).toEqual([{ serial: SERIAL, maxEntries: 5, recordsSinceMs }]);
 	});
 
 	// #303: every selection reaches the backend as sent, and none that was not sent appears.
@@ -1253,6 +1261,8 @@ describe('the log row carries a payload back over the same surface', () => {
 		await serve();
 		const client = await connect();
 		const leaseId = await acquire(client);
+
+		const recordsSinceMs = Date.parse((await holderOn(client)).grantedAt);
 
 		await client.request('read_logs', {
 			leaseId,
@@ -1275,8 +1285,14 @@ describe('the log row carries a payload back over the same surface', () => {
 				tag: 'AndroidRuntime',
 				since: '10-06 10:05:54.264',
 				buffers: ['crash'],
+				recordsSinceMs,
 			},
-			{ serial: SERIAL, maxEntries: DEFAULT_MAX_LOG_ENTRIES, tag: 'AndroidRuntime' },
+			{
+				serial: SERIAL,
+				maxEntries: DEFAULT_MAX_LOG_ENTRIES,
+				tag: 'AndroidRuntime',
+				recordsSinceMs,
+			},
 		]);
 	});
 

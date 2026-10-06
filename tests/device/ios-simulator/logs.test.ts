@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { IosSimulatorDeviceBackend, LOG_WINDOWS } from '@/backends/ios-simulator/backend.js';
-import { SimctlCommandError } from '@/backends/ios-simulator/simctl.js';
-import { type Device, LogLevelSchema } from '@/core/device.js';
+import { parseAppPids } from '@/backends/ios-simulator/parsers/launchctl-list.js';
+import { runSimctlOnDevice, SimctlCommandError } from '@/backends/ios-simulator/simctl.js';
+import { type Device, type LogEntry, LogLevelSchema } from '@/core/device.js';
 import { LogFilterRefusedError } from '@/core/errors.js';
-import { type AppId, parseAppId } from '@/core/ids.js';
+import { type AppId, type DeviceSerial, parseAppId, unwrap } from '@/core/ids.js';
+import { waitForCondition } from '@/core/wait.js';
 import { shutDownSimulator } from '../../helpers/simulators.js';
 
 /**
@@ -244,10 +246,11 @@ describe.skipIf(!process.env.ROVER_TEST_SIMULATOR)('the log read against a real 
 
 	/**
 	 * The buffers, both ways round. `main` *is* the unified log here, so naming it changes
-	 * nothing; the other three have nothing on this device to answer from and are refused by
-	 * name — **quickly**, because every one of those refusals is decided before `simctl` runs.
+	 * nothing; `system` and `events` have nothing on this device to answer from, and `crash` with
+	 * no lease bound has nothing to scope it by (#323), so all three are refused by name —
+	 * **quickly**, because every one of those refusals is decided before `simctl` runs.
 	 */
-	it('reads the one buffer this device has, and refuses the three it does not', async () => {
+	it('reads the log buffer, and refuses the two it lacks and an unscoped crash', async () => {
 		const device = await bootedDevice();
 
 		const read = await backend.readLogs(device.serial, { maxEntries: 10, buffers: ['main'] });
@@ -326,4 +329,96 @@ describe.skipIf(!process.env.ROVER_TEST_SIMULATOR)('the log read against a real 
 		await expect(failure).rejects.toBeInstanceOf(LogFilterRefusedError);
 		await expect(failure).rejects.toMatchObject({ filter: 'since' });
 	});
+
+	/**
+	 * #323, end to end: a crash of a process on this simulator is answered from the report the Mac
+	 * writes for it, scoped by the report's own device field and by the bound.
+	 *
+	 * **This case crashes Settings**, from the host: a simulator's process is a process of this Mac,
+	 * and the pid launchd reports inside the device is the one `kill` takes (measured, `PROJECT.md`
+	 * §6). The report took 23 s to be written on the bench, so the wait is on the condition with a
+	 * generous timeout, never a sleep.
+	 */
+	it('answers a crash on this simulator from its report, within the bound only', async () => {
+		const device = await bootedDevice();
+		const bound = Date.now();
+
+		const pid = await crashSettings(device.serial);
+		const crash = await crashNamed(device.serial, pid, bound);
+
+		expect(crash).toMatchObject({ pid, level: 'fatal', tag: '' });
+		expect(crash.message).toContain('SIGSEGV');
+
+		// A bound after the crash is a later lease's, and the earlier holder's crash is not its.
+		const later = await backend.readLogs(device.serial, {
+			maxEntries: 200,
+			buffers: ['crash'],
+			recordsSinceMs: Date.now(),
+		});
+		expect(later.entries.map((entry) => entry.pid)).not.toContain(pid);
+
+		// And a default read with the bound merges it in with the unified log.
+		const merged = await backend.readLogs(device.serial, {
+			maxEntries: 5_000,
+			since: crash.timestamp,
+			recordsSinceMs: bound,
+		});
+		expect(merged.entries).toContainEqual(crash);
+	}, 120_000);
+
+	/**
+	 * The attribution negative case: the same app crashed on **another** booted simulator of this
+	 * host lands in the same directory, and is never answered for this one. Skipped out loud on a
+	 * host with only one booted simulator (ai/RULES.md §6).
+	 */
+	it('never answers another simulator’s crash', async () => {
+		const ready = (await backend.listDevices()).filter((device) => device.state === 'ready');
+		const [device, other] = ready;
+		if (device === undefined || other === undefined) {
+			console.warn('only one booted simulator: the other-simulator crash case was NOT exercised');
+			return;
+		}
+		const bound = Date.now();
+
+		const pid = await crashSettings(other.serial);
+		await crashNamed(other.serial, pid, bound);
+
+		const read = await backend.readLogs(device.serial, {
+			maxEntries: 200,
+			buffers: ['crash'],
+			recordsSinceMs: bound,
+		});
+		expect(read.entries.map((entry) => entry.pid)).not.toContain(pid);
+	}, 120_000);
 });
+
+/** Launch Settings on `serial`, and crash it from the host with `SIGSEGV`; answers its pid. */
+async function crashSettings(serial: DeviceSerial): Promise<number> {
+	await backend.launchApp(serial, SETTINGS);
+	const listing = await runSimctlOnDevice(serial, 'spawn', ['launchctl', 'list']);
+	const [pid] = parseAppPids(listing.stdout, unwrap(SETTINGS));
+	expect(pid).toBeDefined();
+
+	process.kill(pid as number, 'SIGSEGV');
+	return pid as number;
+}
+
+/** The crash entry for `pid` on `serial` since `bound`, once its report has been written. */
+function crashNamed(serial: DeviceSerial, pid: number, bound: number): Promise<LogEntry> {
+	return waitForCondition({
+		what: `a crash report for pid ${pid}`,
+		timeoutMs: 90_000,
+		pollIntervalMs: 1_000,
+		probe: async () => {
+			const read = await backend.readLogs(serial, {
+				maxEntries: 200,
+				buffers: ['crash'],
+				recordsSinceMs: bound,
+			});
+			const entry = read.entries.find((candidate) => candidate.pid === pid);
+			return entry === undefined
+				? { met: false as const, found: `${read.entries.length} other crash entries` }
+				: { met: true as const, value: entry };
+		},
+	});
+}

@@ -279,15 +279,22 @@ become a `--predicate`, `since` becomes `--start`, and the device therefore seri
 rather than its whole log — a 30-second window went from 4,316 entries to 1,151 when scoped to one
 process, measured. The host filter still decides, which is what keeps one `read_logs` call meaning
 the same thing on both platforms. Two specifics a caller needs: **`tag` is the *subsystem*** there,
-because that is the field an entry's own `tag` is filled from; and of the buffers only **`main`** is
-answered — it *is* the unified log — while `system`, `events` and **`crash`** are refused by name.
-The crash refusal is the one real gap rather than a missing counterpart: a simulator's crashes are
-`.ips` reports on the host, outside the log store entirely, so a dead process is reached there by
-its `pid` until that half lands.
+because that is the field an entry's own `tag` is filled from; and of the buffers **`main`** is
+the unified log, `system` and `events` are refused by name, and **`crash` is the host's crash
+reports** (#323; this replaces *"only `main` is answered … `crash` [is] refused by name … until
+that half lands"*). A simulator's crash is an `.ips` file the Mac writes outside the device's log,
+so it is answered as one `fatal` entry per report — the pid, the exception, the termination and
+the head of the faulting thread — and only when **the report itself names this simulator**
+(`coalitionName`, measured to carry the udid) **and was captured after the current lease was
+granted**. That second bound is the lease's grant time, which the daemon passes down and no
+caller can send, so another simulator's crash on the same host and a previous holder's crash on
+the same simulator are never in the answer. The default read merges crashes into the log by time
+before the cap, exactly as Android's default includes its crash buffer.
 
 **Where it lives.** `src/verbs/`, `src/ipc/` for the method table, `PROJECT.md` §4; the log
 selections in `src/core/log-filter.ts` and each backend's `readLogs`, with the iOS pushdown in
-`src/backends/ios-simulator/log-query.ts`.
+`src/backends/ios-simulator/log-query.ts` and its crash reports in
+`src/backends/ios-simulator/crash-reports.ts` (`docs/IOS.md` §5, `PROJECT.md` §6).
 **The screen a verb reports now includes what the system drew on *top* of it** (#297). This
 paragraph is new rather than a rewrite, because the gap it closes was never described: the element
 list says where an application laid its controls out, and an on-screen keyboard covering the bottom
