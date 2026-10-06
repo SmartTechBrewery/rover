@@ -14,14 +14,29 @@
  * second corner precedes its first (PROJECT.md §6), and the midpoint of that rectangle is
  * arithmetic rather than a place. Checking only the caller's coordinate would make the
  * screen-resolved path the less safe of the two, which is backwards.
+ *
+ * **And every one is checked against the on-screen keyboard** (#308), from the same
+ * `ScreenInfo` the screen check already reads, so it costs no extra device query. The keyboard
+ * is drawn over the application, so an element under it is still in the read with its laid-out
+ * bounds and a centre on the device — a tap there lands on a key and the device reports it as
+ * done. Only the point a touch *starts* at is checked, and only that point: an element half
+ * under the keyboard whose centre is clear is not refused, because the centre is where the
+ * touch goes.
  */
 
 import { z } from 'zod';
-import { type Point, PointSchema, type ScreenElement, type ScreenInfo } from '../core/device.js';
+import {
+	type Point,
+	PointSchema,
+	type Rect,
+	type ScreenElement,
+	type ScreenInfo,
+} from '../core/device.js';
 import { ElementIdSchema } from '../core/ids.js';
 import { capabilityMethod, type VerbContext } from './context.js';
 import {
 	AmbiguousTargetError,
+	CoveredByKeyboardError,
 	describeScreen,
 	OffScreenPointError,
 	TargetNotFoundError,
@@ -151,6 +166,53 @@ export function centreOf(element: ScreenElement): Point {
 	};
 }
 
+/**
+ * Whether `at` lies inside `rect` — half-open on the far edges, the convention
+ * {@link isOnScreen} uses, so a point on the keyboard's right or bottom edge is outside it.
+ */
+export function isInside(at: Point, rect: Rect): boolean {
+	return (
+		at.x >= rect.x && at.y >= rect.y && at.x < rect.x + rect.width && at.y < rect.y + rect.height
+	);
+}
+
+/**
+ * The on-screen keyboard's rectangle when it covers `at`, or `null` when nothing is known to.
+ *
+ * Three states answer `null`, and only one of them is *the point is clear*. `keyboard: null`
+ * is a device that did not say, and `{ shown: false }` is a device saying none is up — both
+ * refuse nothing, the first because refusing every touch on a device that cannot answer would
+ * take input away from it altogether. **`{ shown: true, bounds: null }`** is a keyboard that is
+ * up somewhere the device did not say, and it refuses nothing either: there is no rectangle to
+ * test a point against, and refusing every touch on the screen would be a guess at its extent
+ * wearing the clothes of a refusal. What is under the keyboard on such a device is not caught
+ * here, and the after-state's `screen.keyboard` is where a caller sees that one is up.
+ */
+export function keyboardCovering(at: Point, screen: ScreenInfo): Rect | null {
+	const bounds = screen.keyboard?.shown === true ? screen.keyboard.bounds : null;
+	return bounds !== null && isInside(at, bounds) ? bounds : null;
+}
+
+/**
+ * Refuse a touch starting at `at` when the on-screen keyboard covers it.
+ *
+ * Exported for `scroll` (`./input.ts`), whose start point is computed rather than resolved, so
+ * the one verb that does not come through {@link requireAddressable} or {@link resolvePoint}
+ * still refuses the same thing in the same words.
+ */
+export function requireUncovered(
+	context: VerbContext,
+	lookedFor: string,
+	element: ScreenElement | null,
+	at: Point,
+	screen: ScreenInfo,
+): void {
+	const keyboard = keyboardCovering(at, screen);
+	if (keyboard !== null) {
+		throw new CoveredByKeyboardError(context.serial, lookedFor, element, at, keyboard);
+	}
+}
+
 /** Whether a point is somewhere on the device, in the one space bounds and points share. */
 function isOnScreen(at: Point, screen: ScreenInfo): boolean {
 	return (
@@ -192,8 +254,12 @@ export async function resolveTarget(
  * both halves of that message: re-reading the screen to describe it would describe a
  * different screen from the one the target missed.
  */
-export async function requireTarget(context: VerbContext, target: Target): Promise<ResolvedTarget> {
-	const resolution = await resolveOnFreshScreen(context, target);
+export async function requireTarget(
+	context: VerbContext,
+	target: Target,
+	options: ResolveOptions = {},
+): Promise<ResolvedTarget> {
+	const resolution = await resolveOnFreshScreen(context, target, options);
 	if (resolution.resolved === null) {
 		throw new TargetNotFoundError(
 			context.serial,
@@ -202,6 +268,24 @@ export async function requireTarget(context: VerbContext, target: Target): Promi
 		);
 	}
 	return resolution.resolved;
+}
+
+/**
+ * What a resolution checks beyond the point being on the device.
+ *
+ * One option, and it exists for the two callers whose resolved point is **not** where a touch
+ * lands (`./input.ts`). Every other point this module hands back is where a touch **starts**,
+ * and a touch that starts under the on-screen keyboard is read by the keyboard — so that is
+ * refused by default, and a verb can only ever turn the check off, never move it.
+ *
+ * The two exemptions are `swipe`'s `to`, because where a drag *lets go* does not decide who
+ * reads it and a drag may legitimately end over the keyboard; and `scroll`'s region, whose
+ * centre is a coordinate the gesture never touches — the drag starts a quarter into the region
+ * and `scroll` checks that computed point itself (#318 review).
+ */
+export interface ResolveOptions {
+	/** `false` for a point a drag ends at rather than starts at. Absent means it starts there. */
+	readonly touchStartsHere?: boolean;
 }
 
 /**
@@ -265,6 +349,7 @@ type Resolution = ScreenResolution | { readonly resolved: ResolvedTarget; readon
 export async function resolveOnScreen(
 	context: VerbContext,
 	target: ScreenTarget,
+	options: ResolveOptions = {},
 ): Promise<ScreenResolution> {
 	const { matches, screen } = await findOnScreen(context, target);
 	const chosen = choose(context, target, matches);
@@ -277,16 +362,20 @@ export async function resolveOnScreen(
 	// backend — would be paying for a check with nothing to check.
 	const point = centreOf(chosen);
 	const { screen: dimensions } = await context.backend.deviceInfo(context.serial);
-	requireAddressable(context, target, chosen, point, dimensions);
+	requireAddressable(context, target, chosen, point, dimensions, options);
 
 	return { resolved: { source: 'screen', point, element: chosen }, screen };
 }
 
-async function resolveOnFreshScreen(context: VerbContext, target: Target): Promise<Resolution> {
+async function resolveOnFreshScreen(
+	context: VerbContext,
+	target: Target,
+	options: ResolveOptions = {},
+): Promise<Resolution> {
 	if (target.by === 'point') {
-		return { resolved: await resolvePoint(context, target.at), screen: null };
+		return { resolved: await resolvePoint(context, target.at, options), screen: null };
 	}
-	return resolveOnScreen(context, target);
+	return resolveOnScreen(context, target, options);
 }
 
 /**
@@ -296,7 +385,9 @@ async function resolveOnFreshScreen(context: VerbContext, target: Target): Promi
  * off-screen, because a clipped node's midpoint can easily land back on the screen — the
  * captured `[96,2798][399,2784]` in PROJECT.md §6 centres on a perfectly plausible-looking
  * coordinate — and "it is outside your screen" would then be a false explanation of a real
- * failure.
+ * failure. The keyboard comes last for the same reason: that same midpoint can land under a
+ * keyboard as easily as anywhere else, and naming the keyboard for a node that has no interior
+ * would send the caller to dismiss something that was never in the way.
  */
 function requireAddressable(
 	context: VerbContext,
@@ -304,6 +395,7 @@ function requireAddressable(
 	element: ScreenElement,
 	point: Point,
 	screen: ScreenInfo,
+	options: ResolveOptions,
 ): void {
 	const reason =
 		element.bounds.width <= 0 || element.bounds.height <= 0
@@ -322,6 +414,9 @@ function requireAddressable(
 			reason,
 		);
 	}
+	if (options.touchStartsHere !== false) {
+		requireUncovered(context, describeTarget(target), element, point, screen);
+	}
 }
 
 /**
@@ -333,10 +428,17 @@ function requireAddressable(
  * declared coordinate space and putting arithmetic in this layer is precisely the hidden
  * scale error PROJECT.md §6 warns about.
  */
-async function resolvePoint(context: VerbContext, at: Point): Promise<ResolvedTarget> {
+async function resolvePoint(
+	context: VerbContext,
+	at: Point,
+	options: ResolveOptions,
+): Promise<ResolvedTarget> {
 	const { screen } = await context.backend.deviceInfo(context.serial);
 	if (!isOnScreen(at, screen)) {
 		throw new OffScreenPointError(context.serial, at.x, at.y, screen.widthDp, screen.heightDp);
+	}
+	if (options.touchStartsHere !== false) {
+		requireUncovered(context, describeTarget({ by: 'point', at }), null, at, screen);
 	}
 	return { source: 'caller-point', point: at, element: null };
 }
