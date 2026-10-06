@@ -20,7 +20,7 @@
  */
 
 import { z } from 'zod';
-import { DeviceKeySchema } from '../core/device.js';
+import { DeviceKeySchema, LogBufferSchema, LogLevelSchema } from '../core/device.js';
 import { AppIdSchema, LeaseIdSchema } from '../core/ids.js';
 import { VerbFailureSchema } from '../verbs/failure.js';
 import { ScrollDirectionSchema } from '../verbs/input.js';
@@ -318,7 +318,19 @@ export type AppVerbParams = z.infer<typeof AppVerbParamsSchema>;
 export const MAX_LOG_ENTRIES = 5_000;
 
 /**
- * The lease id and, optionally, how much of the log to read.
+ * The longest `tag` a `read_logs` call may select by. Allocation hygiene in the style of
+ * `ATTRIBUTION_MAX_LENGTH` — a tag is a short subsystem name, and this is far past any.
+ */
+const LOG_TAG_MAX_LENGTH = 256;
+
+/**
+ * The longest `since` a `read_logs` call may carry. Allocation hygiene for the same reason: a
+ * device timestamp is a couple of dozen characters, and the backend checks the actual shape.
+ */
+const LOG_SINCE_MAX_LENGTH = 64;
+
+/**
+ * The lease id and, optionally, how much of the log to read and which of it.
  *
  * `maxEntries` is **absent rather than defaulted** here, so the verb's own default
  * (`src/verbs/logs.ts`) applies to a caller who said nothing and there is no second
@@ -326,9 +338,17 @@ export const MAX_LOG_ENTRIES = 5_000;
  * {@link AppVerbParamsSchema} records: the lease id is the credential and the host derives
  * the device from it (D20).
  *
- * There is deliberately no `follow`, no `since` and no tag filter. A follow is a wait with
- * no condition and a stream over IPC; the other two are real requests and would each be a
- * row's worth of design rather than a flag smuggled in beside a bound.
+ * There is deliberately no `follow`: a follow is a wait with no condition and a stream over
+ * IPC. `since` and the tag filter were left out alongside it as real requests that would each
+ * be a row's worth of design — and #303 was that row. `appId`, `pid`, `minLevel`, `tag`,
+ * `since` and `buffers` are **selections**, applied on the host before `maxEntries` and the
+ * byte bound, so a filtered read is not cut short by entries it would have discarded. Every
+ * one is optional, and they combine by narrowing, which is why there is no cross-field rule.
+ * `since` is a `timestamp` taken from an entry this device already answered with — the
+ * device's clock, never a client's (D17) — and its shape is the backend's to check, not this
+ * schema's: how a log prints time is a fact about a platform. `buffers` refuses an empty list,
+ * which would read nothing, and one longer than its vocabulary, which can only be repeating
+ * itself.
  *
  * `label` is the second optional key and is one of the four the archive files
  * ({@link ArtifactLabelSchema}): reading the same log at two moments of one investigation is
@@ -338,6 +358,12 @@ export const MAX_LOG_ENTRIES = 5_000;
 export const ReadLogsParamsSchema = VerbCallBaseSchema.extend({
 	maxEntries: z.number().int().positive().max(MAX_LOG_ENTRIES).optional(),
 	label: ArtifactLabelSchema.optional(),
+	appId: AppIdSchema.optional(),
+	pid: z.number().int().nonnegative().optional(),
+	minLevel: LogLevelSchema.optional(),
+	tag: z.string().min(1).max(LOG_TAG_MAX_LENGTH).optional(),
+	since: z.string().min(1).max(LOG_SINCE_MAX_LENGTH).optional(),
+	buffers: z.array(LogBufferSchema).min(1).max(LogBufferSchema.options.length).optional(),
 }).strict();
 export type ReadLogsParams = z.infer<typeof ReadLogsParamsSchema>;
 

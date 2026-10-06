@@ -39,8 +39,16 @@ import {
 	registerDeviceBackend,
 } from '@/backends/registry.js';
 import type { Capabilities } from '@/core/capabilities.js';
-import type { Device, DeviceBackend, DeviceWatch, DeviceWatcher, Point } from '@/core/device.js';
+import type {
+	Device,
+	DeviceBackend,
+	DeviceWatch,
+	DeviceWatcher,
+	Point,
+	ReadLogsOptions,
+} from '@/core/device.js';
 import {
+	LogFilterRefusedError,
 	NoRecordingRunningError,
 	RecordingAlreadyRunningError,
 	UnfinishedRecordingError,
@@ -214,7 +222,7 @@ let appCalls: Array<{ method: string; serial: string; appId: string }>;
  * The log reads the daemon's backend received — the serial off the lease, and the bound the
  * verb decided on, which is the one number a client can leave entirely unsaid.
  */
-let logReads: Array<{ serial: string; maxEntries: number }>;
+let logReads: Array<{ serial: string } & ReadLogsOptions>;
 
 /**
  * The transfers the daemon's backend received, and — for the two directions that carry a
@@ -321,8 +329,8 @@ async function serve(options: HostOptions = {}): Promise<void> {
 			clearAppData: recordApp('clearAppData'),
 			readLogs:
 				options.readLogs ??
-				(async (serial, { maxEntries }) => {
-					logReads.push({ serial, maxEntries });
+				(async (serial, logOptions) => {
+					logReads.push({ serial, ...logOptions });
 					return createMockLogRead({ entries: [crashed] });
 				}),
 			installApp:
@@ -1238,6 +1246,59 @@ describe('the log row carries a payload back over the same surface', () => {
 		await client.request('read_logs', { leaseId, maxEntries: 5 });
 
 		expect(logReads).toEqual([{ serial: SERIAL, maxEntries: 5 }]);
+	});
+
+	// #303: every selection reaches the backend as sent, and none that was not sent appears.
+	it('passes the selections the caller sent, and only those', async () => {
+		await serve();
+		const client = await connect();
+		const leaseId = await acquire(client);
+
+		await client.request('read_logs', {
+			leaseId,
+			appId: parseAppId('com.android.settings'),
+			pid: 42,
+			minLevel: 'error',
+			tag: 'AndroidRuntime',
+			since: '10-06 10:05:54.264',
+			buffers: ['crash'],
+		});
+		await client.request('read_logs', { leaseId, tag: 'AndroidRuntime' });
+
+		expect(logReads).toEqual([
+			{
+				serial: SERIAL,
+				maxEntries: DEFAULT_MAX_LOG_ENTRIES,
+				appId: parseAppId('com.android.settings'),
+				pid: 42,
+				minLevel: 'error',
+				tag: 'AndroidRuntime',
+				since: '10-06 10:05:54.264',
+				buffers: ['crash'],
+			},
+			{ serial: SERIAL, maxEntries: DEFAULT_MAX_LOG_ENTRIES, tag: 'AndroidRuntime' },
+		]);
+	});
+
+	// A filter the device cannot apply is an answer about the device, not a host failure.
+	it('answers a refused filter as a log-filter-refused failure naming it', async () => {
+		await serve({
+			readLogs: async (serial) => {
+				throw new LogFilterRefusedError(serial, 'appId', 'no running process');
+			},
+		});
+		const client = await connect();
+		const leaseId = await acquire(client);
+
+		const answer = await client.request('read_logs', {
+			leaseId,
+			appId: parseAppId('com.android.settings'),
+		});
+
+		expect(answer).toMatchObject({
+			outcome: 'failed',
+			failure: { kind: 'log-filter-refused', serial: SERIAL, filter: 'appId' },
+		});
 	});
 
 	it('says so when the device had more than the bound', async () => {

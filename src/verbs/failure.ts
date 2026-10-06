@@ -27,8 +27,15 @@
 
 import { z } from 'zod';
 import { CapabilityIdSchema } from '../core/capabilities.js';
-import { DeviceKeySchema, PointSchema, RectSchema, ScreenElementSchema } from '../core/device.js';
 import {
+	DeviceKeySchema,
+	LogFilterSchema,
+	PointSchema,
+	RectSchema,
+	ScreenElementSchema,
+} from '../core/device.js';
+import {
+	LogFilterRefusedError,
 	MissingCapabilityError,
 	NoRecordingRunningError,
 	RecordingAlreadyRunningError,
@@ -237,6 +244,21 @@ export const VerbFailureSchema = z.discriminatedUnion('kind', [
 		.object({
 			kind: z.literal('unsupported-clear'),
 			serial: DeviceSerialSchema,
+			message: z.string().min(1),
+		})
+		.strict(),
+	/**
+	 * The device reads its log, and cannot apply this selection to the read (#303).
+	 *
+	 * `unsupported-key` for `read_logs`, and kept apart from `missing-capability` for that
+	 * branch's reason: every device reads its log, so the way out is the same read without this
+	 * filter or with a value the device can apply — never another device. `filter` names which.
+	 */
+	z
+		.object({
+			kind: z.literal('log-filter-refused'),
+			serial: DeviceSerialSchema,
+			filter: LogFilterSchema,
 			message: z.string().min(1),
 		})
 		.strict(),
@@ -712,13 +734,11 @@ function screenAddressFailure(error: unknown): VerbFailure | null {
  * The three failures where the device *can* do the thing and not with **this argument**, split
  * out of {@link toVerbFailure} for {@link hostToolFailure}'s reason.
  *
- * They belong together on their own terms: all three come from a backend that declares
- * `canInput` and does take input, so none is a `missing-capability` (D11) — one says send a
- * different string, one says ask for a different key, and one says empty the field another way,
- * and each names what was refused because that is the only thing a caller can act on. Each was
- * cheap to add because of the one before it: `unsupported-key` is `unsupported-text` one
- * argument down (#215), and `unsupported-clear` is the same refusal for `type_text`'s `clear`
- * flag (#309).
+ * They belong together on their own terms: none is a `missing-capability` (D11). The first
+ * three come from a backend that declares `canInput` and does take input; the last comes from
+ * one that reads its log like every backend does. They say, respectively, send a different
+ * string, ask for a different key, clear the field another way, or read without that filter.
+ * Each names the offending argument because that is the only thing a caller can act on.
  *
  * Returns `null` for anything else, so the caller carries on down its own list.
  */
@@ -745,6 +765,14 @@ function unsupportedArgumentFailure(error: unknown): VerbFailure | null {
 	}
 	if (error instanceof UnsupportedClearError) {
 		return { kind: 'unsupported-clear', serial: error.serial, message: error.message };
+	}
+	if (error instanceof LogFilterRefusedError) {
+		return {
+			kind: 'log-filter-refused',
+			serial: error.serial,
+			filter: error.filter,
+			message: error.message,
+		};
 	}
 	return null;
 }

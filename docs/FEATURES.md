@@ -186,7 +186,7 @@ credential.
 | Waits | `wait_for`, `wait_until_gone` | the vocabulary that replaces `sleep`; `wait-for.ts` |
 | Reads | `read_screen`, `device_info`, `screenshot` | `read.ts`; `screenshot`'s answer is bytes, and both reads report the on-screen keyboard |
 | Apps | `launch_app`, `stop_app`, `clear_app_data` | address a package, resolve no target; `app.ts` |
-| Logs | `read_logs` | bounded, never follows; `logs.ts` |
+| Logs | `read_logs` | bounded, selectable on the host, never follows; `logs.ts` |
 | Recording | `record_video`, `start_recording`, `stop_recording` | `record.ts`, `recording-session.ts` |
 | Files | `install_app`, `push_file`, `pull_file` | `files.ts`; §11 covers which are MCP tools |
 | Environment | `set_airplane_mode`, `set_wifi` | `environment.ts`; declares `canControlNetwork` |
@@ -255,6 +255,24 @@ focus flag, so read back after typing rather than counting Tabs.
 **`read_screen` is a first-class verb and not a fallback.** It survives an app blocking screen
 capture, which is the case where pixels are gone and nothing is logged about it (§16).
 
+**`read_logs` answers *what did my app log just now, and did it crash* in one call** (#303). It
+takes optional **selections** that combine by narrowing — an app (`appId`, resolved on the host to
+the pids of its process running at the time of the read), a process (`pid`, which also reaches one
+that has already exited), a minimum level, an exact tag, `since`, and which of the `main`,
+`system`, `crash` and `events` buffers to read. They are applied **on the host, before the count
+and byte bounds**, so a filtered read is never truncated by entries it would have thrown away and
+`truncated` keeps its meaning for what matched. The reason is the failure that asked for it: a crash
+older than the newest few hundred lines fell out of an unfiltered window, and reading everything to
+filter elsewhere was well over 100k characters. `since` is a `timestamp` taken from an entry the
+device already answered with — read once with `maxEntries: 1` before acting — because the agent's
+own clock may be on another machine and is not the device's (D17). Filters only select; nothing is
+ranked or judged (§1 of `ai/RULES.md`). A selection a device cannot apply, or an app with no running
+process, is a `log-filter-refused` failure naming it, never a silently unfiltered answer — which is
+what the iOS simulator answers for every selection until #304 maps them. Clearing a buffer before a
+step was considered and left out: `since` answers the same question without destroying anything.
+
+**Where it lives.** `src/verbs/`, `src/ipc/` for the method table, `PROJECT.md` §4; the log
+selections in `src/core/log-filter.ts` and each backend's `readLogs`.
 **The screen a verb reports now includes what the system drew on *top* of it** (#297). This
 paragraph is new rather than a rewrite, because the gap it closes was never described: the element
 list says where an application laid its controls out, and an on-screen keyboard covering the bottom
@@ -469,8 +487,9 @@ location would name a file that is not there — or worse, one that is. Where th
 client's own decision and the client's own disk. `read_logs` carries its own payload: the device's
 log parsed into neutral entries (timestamp as the device printed it, level, tag, pid, line),
 bounded, newest kept, with `truncated` saying when there were more — because a short read that
-reads as a quiet device is worse than no read. It never follows: following would be a wait with no
-condition and a stream over IPC.
+reads as a quiet device is worse than no read. Selections (§4) are applied on the host before that
+bound and before the answer is sized, so the bytes measured are only ever matching entries. It
+never follows: following would be a wait with no condition and a stream over IPC.
 
 **The archive** (D24, R36). A four-level tree under `ROVER_ARTIFACTS_PATH`:
 

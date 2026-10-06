@@ -3,14 +3,14 @@
  *
  * "This device cannot do that" and "this broke" call for opposite responses from an
  * agent, so a missing capability is its own type rather than a generic `Error`
- * (ai/CODING_STANDARDS.md "Error handling", D11). The same test admits the eight below:
+ * (ai/CODING_STANDARDS.md "Error handling", D11). The same test admits the nine below:
  * "the device went away", "the device is not attached to this host", "this device cannot
- * type that string", "this device has no equivalent for that key", "the recording came off
- * the device unfinished", "this device is already recording", "this device is not
- * recording at all" and "this device has no screen to read yet" are each an answer a
- * caller acts on differently, and none of them is a bug. Everything else in this layer
- * throws plain `Error` for a programmer or validation bug, and returns `null` for
- * not-found.
+ * type that string", "this device has no equivalent for that key", "this device cannot apply
+ * that log filter", "the recording came off the device unfinished", "this device is already
+ * recording", "this device is not recording at all" and "this device has no screen to read
+ * yet" are each an answer a caller acts on differently, and none of them is a bug.
+ * Everything else in this layer throws plain `Error` for a programmer or validation bug, and
+ * returns `null` for not-found.
  *
  * Imports from `./capabilities.js` are type-only on purpose: that module imports this
  * one for its value, so an erased edge is what keeps the pair free of a runtime cycle.
@@ -19,7 +19,7 @@
  */
 
 import type { CapabilityId } from './capabilities.js';
-import type { DeviceKey } from './device.js';
+import type { DeviceKey, LogFilter } from './device.js';
 import type { DeviceSerial, PlatformId } from './ids.js';
 
 /**
@@ -210,6 +210,37 @@ export class UnsupportedClearError extends Error {
 		);
 		this.name = 'UnsupportedClearError';
 		this.serial = serial;
+	}
+}
+
+/**
+ * Thrown when a backend can read its log and cannot apply one of the **selections** a read
+ * asked for (#303) — or when the value it was given cannot select anything on this device.
+ *
+ * {@link UnsupportedKeyError} for the log read, and here for that error's reasons. Not
+ * {@link MissingCapabilityError}: every backend reads its log (`readLogs` is a required method),
+ * so "try another device" is the wrong advice — the way out is the same read without that
+ * filter, or with a value this device can apply. And never a quiet fallback: a backend that
+ * ignored a filter it could not apply would answer a filtered question with an unfiltered
+ * log, which looks exactly like a right answer (ai/RULES.md §2).
+ *
+ * `filter` is the whole of what makes it actionable, and it is the `LogFilter` type rather
+ * than a string so the options, the wire and the refusal share one vocabulary. `reason` is
+ * the backend's own words, for {@link UnsupportedKeyError}'s reason: what a device's log can
+ * be asked for is a fact about that device.
+ */
+export class LogFilterRefusedError extends Error {
+	readonly serial: DeviceSerial;
+	readonly filter: LogFilter;
+
+	constructor(serial: DeviceSerial, filter: LogFilter, reason: string) {
+		super(
+			`Device '${serial}' cannot apply '${filter}' to its log read: ${reason} — nothing was ` +
+				'read; ask again without it, or with a value this device can apply',
+		);
+		this.name = 'LogFilterRefusedError';
+		this.serial = serial;
+		this.filter = filter;
 	}
 }
 

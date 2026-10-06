@@ -175,7 +175,7 @@ Working names. All of them take a device handle, and over the wire that handle i
 | Verb | Notes |
 |---|---|
 | `install_app` / `launch_app` / `stop_app` / `clear_app_data` | The last three address a **package**, so they resolve no target and need no capability — the backend methods behind them are required ones. `stop_app` cannot tell a stopped app from a package that was never installed (§6); the state after the action is what answers that. `install_app` is the one that crosses the machine boundary: the caller sends the package **as bytes from its own machine**, never a path, and the host writes it to a file of its own, installs it pinned to the leased device, and deletes the file. It carries no app id — the core knows no application's name (D13) — and a package over the named cap is refused by name rather than truncated (R24). **It also has a second shape, and it is the one that still knows no application's name** (R17 phase 3): a call with no `packageBase64` runs the `install` command declared by *the lease's project*, on the host, with `ROVER_DEVICE_SERIAL` set to the leased device — a verb the caller asks for, never something that happens at grant time, bounded at five minutes (a build, not a teardown; a quarter of the lease TTL; past the client's 30 s default, which such a caller has to raise) and **cancelled with the lease**: a build is the one thing a verb awaits that revoking a backend cannot stop, so the verb call carries an abort signal beside its guard and a release or an expiry kills the child — otherwise those five minutes would be not this caller's wait but the *device's*, since a restoration waits for the ending lease's verb calls and every `acquire_device` waits on the restoration. That wait is bounded anyway, the way the teardown's already was. No project registered, no `install` declared and a non-zero exit are three **named** failures carrying the exit code, the signal and a stderr tail, never `internal_error`; a lease that ended underneath one is the ordinary `no-lease` refusal instead, because a build stopped by its caller going away is not a build that failed. **The client sends the package** (R24 phase 2): `rover install <lease-id> <local-path>` reads it on the machine running the CLI and refuses a source that is missing, cannot be read, is not a regular file, or is over `MAX_TRANSFER_BYTES` **before connecting** — exit 2 with the command's usage, naming the file, its real size off `stat` and the limit, so the host is never asked and nothing partial is ever sent. **Verified on hardware with R24 phase 2** (§6, 2026-08-30): a real 29 487-byte APK installed through `rover install` and confirmed by `pm path` moving to `/data/app`. One *small* package — the cap that refuses a 45 MB one is unchanged |
-| `read_logs` | Catches a failure a screenshot will not show. A **bounded** read — the most recent *n* entries, including the buffer the platform records crashes in, with a `truncated` flag so a short read is not read as a quiet device. No following: a tail that stays open is a wait with no condition and a stream over IPC |
+| `read_logs` | Catches a failure a screenshot will not show. A **bounded** read — the most recent *n* entries, including the buffer the platform records crashes in, with a `truncated` flag so a short read is not read as a quiet device. **Selectable** (#303): optional `appId` (the pids of its running process, resolved on the host), `pid`, `minLevel`, `tag`, `since` (a `timestamp` an entry of this device carried, never a client clock — D17) and `buffers` (`main`, `system`, `crash`, `events`), combined by narrowing and applied on the host **before** the count and byte bounds, so `truncated` speaks about matching entries. One a device cannot apply is a `log-filter-refused` failure naming it. No following: a tail that stays open is a wait with no condition and a stream over IPC |
 | `set_airplane_mode` / `set_wifi` | See §6 — recipes that need no root |
 | `pull_file` / `push_file` | The file crosses the boundary **as bytes in both directions**, and no path in either call or answer is a path on the host (D19). `push_file` takes the caller's bytes and a device path; `pull_file` takes a device path and answers with the bytes on `ActionResult.artifact`, exactly where `screenshot` puts a capture — so its result carries no path at all and the client writes the file wherever it likes. The device path is checked as a shape at the boundary (absolute, non-empty, bounded) rather than escaped, because it reaches the transfer as an argument and never as part of a command line a shell reads. One payload, one message: over the named cap is a refusal naming it, never a file cut to fit (R24). No recursive directory transfer. **Both directions are driven from the client** (R24 phase 2): `rover pull <lease-id> <device-path> --out <path>` writes the bytes on the machine running the CLI through the same `src/cli/_shared/artifact.ts` `screenshot` uses — so a refusal leaves no file at `--out` at all — and `rover push <lease-id> <local-path> <device-path>` reads its source through `src/cli/_shared/upload.ts`, which refuses a missing, unreadable, non-regular or over-sized source before any connection exists — the kind first, since only a regular file's size predicts the transfer (§6). The device path goes on the wire exactly as typed and is checked by `DevicePathSchema` at the host, not second-guessed by the client |
 
@@ -1815,6 +1815,49 @@ legitimately **empty** needs `|| true` as a matter of course, and the machine wh
 nothing to find is the machine the guard exists for. Probe a guard with the condition absent for
 real, not with the lookup stubbed.
 
+### Selecting a log read on the host (2026-10-06, #303)
+
+Run on a **physical Zebra TC58** (`ro.product.model` `TC58`), **Android 13 / API 33**, over USB,
+with `adb` 1.0.41 / 37.0.1-15733141, on **2026-10-06**, while giving `read_logs` its selections.
+Every line below was run before it was written down.
+
+- **The four buffers, and how big a whole dump is.** `logcat -g` reported a **256 KiB** ring for
+  `main`, `system`, `crash` and `kernel`, each "1 MiB readable" — the ring is compressed, so the
+  readable text is about four times its size. Whole dumps with `-d -v threadtime -b <buffer>`:
+  `main` **1,469,581** bytes in 0.15 s, `system` 1,315,795 in 0.32 s, `events` 1,039,817 in
+  0.22 s, `crash` 1,470. All four in one call: **3,579,176 bytes, 27,952 lines, 0.64 s**. That is
+  what a selected read costs, because it drops `-t` (`src/backends/android/backend.ts`): inside
+  `ADB_MAX_BUFFER_BYTES` (8 MiB) with room, but a device whose rings were raised to several MiB
+  each in developer options would overflow it, and that fails loudly through the runner rather
+  than answering short. Not pushed into logcat to avoid it: a pushdown is a separate change with
+  its own semantics to verify.
+- **`-b events` and `-b system` print the same `threadtime` shape as `main`.** The events buffer
+  renders its binary records as `I <tag>: [values]` (`I am_pss  : [26363,10049,…]`,
+  `I commit_sys_config_file: [batterystats,26]`) with the full prefix on every line, so the
+  existing parser reads them with no unparseable lines —
+  `tests/fixtures/adb/logcat-threadtime.events.api33-tc58.txt`.
+- **Several `-b` flags are merged in time, but not strictly.** A `-b main -b crash` dump
+  interleaved the two buffers by time, yet 17 of 9,698 lines were a few milliseconds *older* than
+  the line before them — logcat orders by arrival, the timestamp is the writer's. So `since` is
+  applied **per entry**, never as a cut point where the first matching line starts the answer.
+- **`pidof <package>`** prints one pid and a newline for a running app (`16705\n` for
+  `com.android.settings`), and **nothing, exit 1**, for a package with no process — hence
+  `|| true`, exactly as for `screenrecord`. **It matches the process name whole**: with
+  `net.pulsesecure.pulsesecure` (pid 7432) and `net.pulsesecure.pulsesecure:remote` (pid 12207)
+  both running, `pidof net.pulsesecure.pulsesecure` answered `7432` alone. An app's secondary
+  processes are therefore not selected by `appId`; they are reachable by `pid`.
+- **A real crash, read from the crash buffer since an anchor** (`tests/device/android/
+  verb-dispatch.test.ts`): launch `com.android.settings`, read `maxEntries: 1` and keep the newest
+  entry's `timestamp` as the anchor, `am crash com.android.settings`, then read
+  `{ buffers: ['crash'], since: <anchor>, maxEntries: 50 }` — it answered the
+  `E AndroidRuntime: FATAL EXCEPTION: main` entry and its `CrashedByAdbException` stack, and
+  nothing older. The crashed process's pid then still selected its `AndroidRuntime` lines with
+  `{ pid, minLevel: 'error', tag: 'AndroidRuntime', buffers: ['crash'] }`, after `pidof` had
+  stopped naming it.
+- **logcat prints no year, so `since` orders within one year only.** `MM-DD HH:MM:SS.mmm` is
+  fixed-width and zero-padded, so a string comparison is a time comparison — until New Year,
+  when an anchor taken on `12-31` sorts after every entry of `01-01`. A known limit rather than a
+  trap that has bitten; it is stated in the backend's comment.
 ### A Gradle install names a variant, and installs onto every attached device unless pinned (2026-10-06, #305)
 
 Two facts behind what `rover init` proposes as a project's `install` hook, and **one of them is

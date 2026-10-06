@@ -51,6 +51,8 @@ import {
 	type DeviceWatch,
 	type DeviceWatcher,
 	type InterruptionCause,
+	type LogBuffer,
+	type LogEntry,
 	type LogRead,
 	type Point,
 	type PullFileOptions,
@@ -61,6 +63,7 @@ import {
 } from '../../core/device.js';
 import {
 	FileTooLargeError,
+	LogFilterRefusedError,
 	NoRecordingRunningError,
 	RecordingAlreadyRunningError,
 	UnfinishedRecordingError,
@@ -74,6 +77,7 @@ import {
 	parseDeviceSerial,
 	unwrap,
 } from '../../core/ids.js';
+import { type LogEntrySelection, selectsAnything, selectsLogEntry } from '../../core/log-filter.js';
 import { waitForCondition } from '../../core/wait.js';
 import {
 	type AdbBinaryResult,
@@ -108,6 +112,7 @@ import {
 } from './input.js';
 import {
 	isSilent,
+	parsePids,
 	parseResolvedActivity,
 	saysSuccess,
 	startedActivity,
@@ -127,7 +132,7 @@ import {
 import { parseUiHierarchy, type UiHierarchy } from './parsers/hierarchy.js';
 import { acceptedInput } from './parsers/input.js';
 import { parseKeyboard, parseSystemBarInsets } from './parsers/insets.js';
-import { parseLogcat } from './parsers/logcat.js';
+import { isLogcatTimestamp, parseLogcat } from './parsers/logcat.js';
 import { acceptedNetworkChange } from './parsers/network.js';
 import { isPng } from './parsers/screencap.js';
 import { isFinishedRecording, isRecorderRunning, recorderPids } from './parsers/screenrecord.js';
@@ -201,6 +206,13 @@ const RECORDING_TIME_LIMIT_UNIT_MS = 1_000;
  * "already recording" means.
  */
 const RECORDER_PIDS_COMMAND = 'pidof screenrecord || true';
+
+/**
+ * The logcat buffers a read takes when the caller named none: `main`, where apps and most of
+ * the system talk, and `crash`, where a fatal exception lands. Unchanged by #303 — a caller who
+ * says nothing gets exactly the read it got before selections existed.
+ */
+const DEFAULT_LOG_BUFFERS: readonly LogBuffer[] = ['main', 'crash'];
 
 /**
  * What stops a recording that is being held open: an interrupt to whatever `pidof` names.
@@ -484,6 +496,17 @@ function unparseable(command: string, result: AdbResult, cause: unknown): Error 
 	return new Error(`${command}: ${reason}${stderr.length === 0 ? '' : `\nstderr: ${stderr}`}`, {
 		cause,
 	});
+}
+
+/**
+ * Whether `entry` is at or after `since` — or `since` was not asked for.
+ *
+ * A string comparison, which logcat's fixed-width, zero-padded `MM-DD HH:MM:SS.mmm` makes an
+ * ordering within one year ({@link AndroidDeviceBackend.readLogs} says what it cannot order). An
+ * entry with no timestamp is an unparseable line, and it is at no point in time.
+ */
+function isAtOrAfter(entry: LogEntry, since: string | undefined): boolean {
+	return since === undefined || (entry.timestamp !== '' && entry.timestamp >= since);
 }
 
 /**
@@ -1194,7 +1217,7 @@ export class AndroidDeviceBackend implements DeviceBackend {
 
 	/**
 	 * `logcat -d -v threadtime -t <n> -b main -b crash` — the device's log, bounded, over
-	 * in one call.
+	 * in one call, when nothing is selected.
 	 *
 	 * Every flag is load-bearing, and all of them were run against API 37 / adb 37.0.0
 	 * before being written down (PROJECT.md §6):
@@ -1227,25 +1250,92 @@ export class AndroidDeviceBackend implements DeviceBackend {
 	 *
 	 * The default ten-second timeout: this is a query. Two thousand entries came back in
 	 * 36 ms on an emulator (PROJECT.md §6).
+	 *
+	 * **Selections (#303) are applied here, on the host, and before the bound.**
+	 *
+	 * - **`buffers`** replaces `main` + `crash` with the streams asked for, de-duplicated in the
+	 *   order given. It is a device-side selection — logcat reads only those — so it alone keeps
+	 *   `-t`.
+	 * - **Every other selection drops `-t`** and reads the named buffers whole. `-t` counts
+	 *   entries *before* anything is selected, so a filtered read bounded by it is truncated by
+	 *   entries it would have discarded — a crash older than the newest few hundred lines falls
+	 *   out of the window, which is the failure #303 was filed for. The whole of `main` + `crash`
+	 *   was 1.5 MB in 0.15 s, and all four buffers about 3.8 MB, on a TC58 at API 33 with
+	 *   256 KiB rings (PROJECT.md §6) — inside `ADB_MAX_BUFFER_BYTES`; a device whose rings were
+	 *   raised far past that overflows it and fails loudly through the runner rather than
+	 *   answering short.
+	 * - **None of it is pushed into logcat** (`--pid`, `-T`, `<tag>:<level>` specs). `--pid` takes
+	 *   one pid where an app may have several, `-T` replaces the count bound rather than joining
+	 *   it, and each pushdown would bring its own boundary semantics to verify. The host filter is
+	 *   exact, and is the one predicate every backend shares (`src/core/log-filter.ts`).
+	 * - **`since`** must be in the shape an entry carries, `MM-DD HH:MM:SS.mmm`, and is checked
+	 *   before anything runs. It compares as a string, which the fixed width makes correct within
+	 *   one year — logcat prints no year, so an anchor from before New Year does not order
+	 *   against entries after it (PROJECT.md §6). An entry with no timestamp (an unparseable
+	 *   line) is not at or after anything, so it is not kept.
+	 * - **`appId`** is resolved with `pidof` at the time of the read. No running process is
+	 *   refused by name rather than answered empty (ai/RULES.md §2) — an empty answer would read
+	 *   as an app that said nothing. `pidof` matches the process named exactly the app id, so an
+	 *   app's `:remote`-style processes are not included (measured on API 33).
 	 */
 	async readLogs(serial: DeviceSerial, options: ReadLogsOptions): Promise<LogRead> {
+		const { since, maxEntries } = options;
+		if (since !== undefined && !isLogcatTimestamp(since)) {
+			throw new LogFilterRefusedError(
+				serial,
+				'since',
+				`'${since}' is not in the form this device's log entries carry, MM-DD HH:MM:SS.mmm ` +
+					"— take it from an entry's timestamp",
+			);
+		}
+
+		const selection: LogEntrySelection = {
+			...(options.appId === undefined ? {} : { pids: await this.appPids(serial, options.appId) }),
+			...(options.pid === undefined ? {} : { pid: options.pid }),
+			...(options.minLevel === undefined ? {} : { minLevel: options.minLevel }),
+			...(options.tag === undefined ? {} : { tag: options.tag }),
+		};
+		const selecting = selectsAnything(selection) || since !== undefined;
+		const buffers = [...new Set(options.buffers ?? DEFAULT_LOG_BUFFERS)];
+
 		const result = await runAdbOnDevice(serial, [
 			'logcat',
 			'-d',
 			'-v',
 			'threadtime',
-			'-t',
-			String(options.maxEntries + 1),
-			'-b',
-			'main',
-			'-b',
-			'crash',
+			...(selecting ? [] : ['-t', String(maxEntries + 1)]),
+			...buffers.flatMap((buffer) => ['-b', buffer]),
 		]);
 
-		const entries = parseLogcat(result.stdout);
-		const truncated = entries.length > options.maxEntries;
+		const entries = parseLogcat(result.stdout).filter(
+			(entry) => selectsLogEntry(entry, selection) && isAtOrAfter(entry, since),
+		);
+		const truncated = entries.length > maxEntries;
 
-		return { entries: truncated ? entries.slice(-options.maxEntries) : entries, truncated };
+		return { entries: truncated ? entries.slice(-maxEntries) : entries, truncated };
+	}
+
+	/**
+	 * The pids of `appId`'s running process, for a log read that selects by app — refused by
+	 * name when there are none, before the log is read.
+	 *
+	 * `|| true` for {@link RECORDER_PIDS_COMMAND}'s reason: `pidof` exits 1 when nothing
+	 * matches, and that is the answer this is asking for rather than a broken device. The app id
+	 * reaches the device's shell only through {@link appArg}.
+	 */
+	private async appPids(serial: DeviceSerial, appId: AppId): Promise<number[]> {
+		const result = await runAdbOnDevice(serial, ['shell', `pidof ${appArg(appId)} || true`]);
+		const pids = parsePids(result.stdout);
+		if (pids.length === 0) {
+			throw new LogFilterRefusedError(
+				serial,
+				'appId',
+				`'${unwrap(appId)}' has no running process on this device, so there is no pid to ` +
+					'select by — a process that has exited is reachable by its pid, or through the ' +
+					'crash buffer',
+			);
+		}
+		return pids;
 	}
 
 	/**

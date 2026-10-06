@@ -11,6 +11,7 @@
 import { describe, expect, it } from 'vitest';
 import {
 	DeviceVanishedError,
+	LogFilterRefusedError,
 	MissingCapabilityError,
 	NoRecordingRunningError,
 	RecordingAlreadyRunningError,
@@ -252,6 +253,24 @@ describe('a verb-layer error becomes a failure a client can branch on', () => {
 		});
 		expect(error.message).toContain('select-all has not been measured here');
 		expect(error.message).toContain("press_key 'delete' with 'times'");
+	});
+
+	it('maps a log filter the device cannot apply, naming the filter', () => {
+		const error = new LogFilterRefusedError(
+			SERIAL,
+			'since',
+			'not in the form this device prints its timestamps in',
+		);
+
+		// Not `missing-capability`: every device reads its log, so the way out is the same read
+		// without this filter — and `filter` is what says which one.
+		expect(failureOf(error)).toEqual({
+			kind: 'log-filter-refused',
+			serial: SERIAL,
+			filter: 'since',
+			message: error.message,
+		});
+		expect(error.message).toContain("'since'");
 	});
 
 	it('carries the offending characters as escapes, so an invisible one is still actionable', () => {
@@ -608,6 +627,7 @@ describe('a failure survives the trip to the agent', () => {
 		],
 		['unsupported-key', new UnsupportedKeyError(SERIAL, 'recents', 'no key and no gesture')],
 		['unsupported-clear', new UnsupportedClearError(SERIAL, 'no measured recipe')],
+		['log-filter-refused', new LogFilterRefusedError(SERIAL, 'appId', 'no running process')],
 		['artifact-too-large', new ArtifactTooLargeError(SERIAL, 9_000_000, 4_194_304)],
 		['unfinished-recording', new UnfinishedRecordingError(SERIAL, 3_232)],
 		['recording-already-running', new RecordingAlreadyRunningError(SERIAL, ['29633'])],

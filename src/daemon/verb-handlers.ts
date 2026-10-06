@@ -625,13 +625,22 @@ function gestureOptions(params: { readonly durationMs?: number }): GestureOption
 }
 
 /**
- * The one log knob a call may carry, omitted rather than passed as `undefined` for the
- * reason {@link waitOptions} and {@link gestureOptions} omit theirs: the verb's own default
- * is what a caller who said nothing asked for, and the host must not be the second place
- * that number is decided.
+ * The log knobs a call may carry — the bound and the selections (#303) — each omitted rather
+ * than passed as `undefined` for the reason {@link waitOptions} and {@link gestureOptions} omit
+ * theirs: the verb's own default is what a caller who said nothing asked for, and the host must
+ * not be the second place that number is decided. A selection that is absent stays absent, so
+ * a backend never has to tell "not asked" from "asked for nothing".
  */
-function logOptions(params: { readonly maxEntries?: number }): ReadLogsVerbOptions {
-	return params.maxEntries === undefined ? {} : { maxEntries: params.maxEntries };
+function logOptions(params: ReadLogsParams): ReadLogsVerbOptions {
+	return {
+		...(params.maxEntries === undefined ? {} : { maxEntries: params.maxEntries }),
+		...(params.appId === undefined ? {} : { appId: params.appId }),
+		...(params.pid === undefined ? {} : { pid: params.pid }),
+		...(params.minLevel === undefined ? {} : { minLevel: params.minLevel }),
+		...(params.tag === undefined ? {} : { tag: params.tag }),
+		...(params.since === undefined ? {} : { since: params.since }),
+		...(params.buffers === undefined ? {} : { buffers: params.buffers }),
+	};
 }
 
 /**
