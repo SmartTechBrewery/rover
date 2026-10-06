@@ -498,7 +498,8 @@ short form:
   screen** and **takes input**, and refuses the network toggles **by name**, naming the capability
   and the device. Input is where that honesty gets finer-grained than a flag: `press_key` answers
   `home` and `wake` and refuses `back` and `recents` **by name**, naming the key rather than
-  sending some other navigation that happens to be reachable. Physical iPhones are not supported at
+  sending some other navigation that happens to be reachable — and refuses `delete`, `enter` and
+  `tab` the same way until they have been measured on a simulator (#302). Physical iPhones are not supported at
   all — hardware cannot answer `screenshot`, which is why the backend is named `ios-simulator` and
   not `ios`.
 - **Pixels are gone whenever an app blocks screen capture** — the system hands back a valid, all
@@ -786,9 +787,17 @@ element.** A key press aims at nothing and neither does text going to whatever h
 go through the spine with **no target at all** and their result's `target` is `null` — a fact about
 the verb rather than a resolution that failed. There is no target *option* on `type_text` either: an
 agent that wants text in a particular field taps it and then types, rather than having a second copy
-of `tap`'s resolution live here. `press_key` speaks the four keys of `DeviceKey` — back, home,
-recents, wake — shared with the backend and the wire so a key nobody implements is refused at the
-boundary instead of pressed into silence. A vocabulary is not a promise that every platform has all
+of `tap`'s resolution live here. `press_key` speaks the seven keys of `DeviceKey` — back, home,
+recents, wake, and the editing keys delete, enter and tab (#301) — shared with the backend and the
+wire so a key nobody implements is refused at the boundary instead of pressed into silence.
+`delete` is backspace (the character before the caret, never forward delete), `enter` does whatever
+the focused control does with Enter, and `tab` moves focus to the next focusable control — which on
+a web form can be a field's clear button rather than the next field, so read back after typing
+rather than counting Tabs. An optional `times` (1 to 20, default 1) repeats the press in one call
+and the answer reads the screen once, after the last press; the repeat is composed in the verb, so
+a backend still presses one key at a time, and zero is refused rather than answered as a success for
+nothing pressed. A press that fails part-way through is a failure that does not say how many
+landed — the next read does. A vocabulary is not a promise that every platform has all
 of it, so the other half of that is the backend's: a key that *is* in the vocabulary and that this
 device has no equivalent for comes back as an `unsupported-key` failure naming the key, which is how
 a device that takes input says so about one key without claiming it takes none — and it is a
@@ -1116,7 +1125,8 @@ and it is filed as its own issue.
 *keys* by name.** What has been driven **over a lease** on a booted simulator is `device_info`,
 `start_recording` — including the refusal of a second one and the release teardown that stops an
 abandoned recorder — the two `missing-capability` refusals, and `press_key`: `home` and `wake`
-answered, `back` and `recents` refused as `unsupported-key` carrying the key, which are this
+answered, `back` and `recents` refused as `unsupported-key` carrying the key (and `delete`, `enter`
+and `tab` refused the same way, before any round trip, until #302 measures them), which are this
 repository's first per-key refusals from a device rather than from a synthetic backend;
 `record_video` and
 `stop_recording` over a lease are gated on a host that has `ffmpeg`, since the verb answers with

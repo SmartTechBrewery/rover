@@ -2779,7 +2779,7 @@ describe('typeText', () => {
 
 describe('pressKey', () => {
 	/**
-	 * All four keycodes pinned, for the reason the environment pair's four literals are: no
+	 * Every keycode pinned, for the reason the environment pair's four literals are: no
 	 * type can catch a wrong one, and neither can the device — `input keyevent NOT_A_KEY`
 	 * exits 0 with zero bytes on both streams, so a typo here is a key that reports success
 	 * and does nothing at all.
@@ -2789,6 +2789,9 @@ describe('pressKey', () => {
 		['home', 'KEYCODE_HOME'],
 		['recents', 'KEYCODE_APP_SWITCH'],
 		['wake', 'KEYCODE_WAKEUP'],
+		['delete', 'KEYCODE_DEL'],
+		['enter', 'KEYCODE_ENTER'],
+		['tab', 'KEYCODE_TAB'],
 	] as const)('presses %s as %s', async (key, keycode) => {
 		answers({ [`shell input keyevent ${keycode}`]: '' });
 
@@ -2819,7 +2822,7 @@ describe('pressKey', () => {
 	 * the per-key refusal `unsupported-key` carries (#215) — pinned rather than left to
 	 * inspection, because "nothing changed" is the one claim a reader cannot check.
 	 *
-	 * Read off `DeviceKeySchema` rather than listed again: a fifth key added to the vocabulary
+	 * Read off `DeviceKeySchema` rather than listed again: a key added to the vocabulary
 	 * with no mapping here goes red on this loop, instead of quietly acquiring a refusal path
 	 * this backend was never meant to have.
 	 */
@@ -2829,6 +2832,9 @@ describe('pressKey', () => {
 			'shell input keyevent KEYCODE_HOME': '',
 			'shell input keyevent KEYCODE_APP_SWITCH': '',
 			'shell input keyevent KEYCODE_WAKEUP': '',
+			'shell input keyevent KEYCODE_DEL': '',
+			'shell input keyevent KEYCODE_ENTER': '',
+			'shell input keyevent KEYCODE_TAB': '',
 		});
 
 		let thrown: unknown = null;

@@ -32,7 +32,18 @@ describe('KEY_CODES', () => {
 			home: 'KEYCODE_HOME',
 			recents: 'KEYCODE_APP_SWITCH',
 			wake: 'KEYCODE_WAKEUP',
+			delete: 'KEYCODE_DEL',
+			enter: 'KEYCODE_ENTER',
+			tab: 'KEYCODE_TAB',
 		});
+	});
+
+	// Android's names are the trap: `KEYCODE_DEL` is backspace and `KEYCODE_FORWARD_DEL` eats
+	// the character after the caret. `delete` is backspace, so a table that reached for the
+	// one whose name says "delete" would erase the wrong side of the caret.
+	it('maps delete to backspace, never forward delete', () => {
+		expect(KEY_CODES.delete).toBe('KEYCODE_DEL');
+		expect(Object.values(KEY_CODES)).not.toContain('KEYCODE_FORWARD_DEL');
 	});
 
 	// The compile-time exhaustiveness is `satisfies Record<DeviceKey, string>`; this is the

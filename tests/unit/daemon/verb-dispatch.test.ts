@@ -707,6 +707,18 @@ describe('the input rows dispatch like the waits', () => {
 		expect(drags).toEqual([]);
 	});
 
+	// The count reaches the verb, which presses once per count — the backend never learns it.
+	it('presses a key as many times as the call asked, in one answer', async () => {
+		await serve();
+		const client = await connect();
+		const leaseId = await acquire(client);
+
+		const answer = await client.request('press_key', { leaseId, key: 'delete', times: 4 });
+
+		expect(answer).toMatchObject({ outcome: 'ok', result: { verb: 'press_key', target: null } });
+		expect(keys).toEqual(['delete', 'delete', 'delete', 'delete']);
+	});
+
 	it('answers a key this device has no equivalent for as a failure about that key', async () => {
 		await serve({
 			pressKey: async (serial, key) => {

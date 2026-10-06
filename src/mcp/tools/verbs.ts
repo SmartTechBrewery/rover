@@ -52,6 +52,7 @@ import {
 	type IpcMethodName,
 	type IpcParams,
 	type IpcResult,
+	MAX_KEY_PRESSES,
 	type VerbCallResultOf,
 } from '../../ipc/methods.js';
 import { INSTALL_HOOK_TIMEOUT_MS } from '../../verbs/files.js';
@@ -217,12 +218,18 @@ const VERB_TOOLS: readonly VerbToolRow[] = [
 		method: 'press_key',
 		title: 'Press a device key',
 		description:
-			'Press one hardware or system key: `back`, `home`, `recents` or `wake`. Addresses ' +
-			'nothing on the screen, so it needs no screen read to aim and works on a device that ' +
-			'cannot read its screen at all. A key **this** device has no equivalent for comes back ' +
-			'as an `unsupported-key` failure naming that key — never as a silent no-op, and never ' +
-			'as `missing-capability`, which would say the device takes no input at all. Ask for a ' +
-			'different key, or reach the same thing through `read_screen` and `tap`.',
+			'Press one hardware, system or editing key: `back`, `home`, `recents`, `wake`, ' +
+			'`delete`, `enter` or `tab`. `delete` is backspace — it removes the character before ' +
+			'the caret, or the selection — `enter` does whatever the focused control does with ' +
+			'Enter (submit, newline or its editor action), and `tab` moves focus to the next ' +
+			'control. `times` repeats the press in one call (default 1, at most ' +
+			`${MAX_KEY_PRESSES}), so a few backspaces need no loop; the answer shows the screen ` +
+			'after the last press. Addresses nothing on the screen, so it needs no screen read to ' +
+			'aim and works on a device that cannot read its screen at all. A key **this** device ' +
+			'has no equivalent for comes back as an `unsupported-key` failure naming that key — ' +
+			'never as a silent no-op, and never as `missing-capability`, which would say the device ' +
+			'takes no input at all. Ask for a different key, or reach the same thing through ' +
+			'`read_screen` and `tap`.',
 	},
 	{
 		method: 'read_screen',

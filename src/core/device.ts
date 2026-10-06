@@ -232,8 +232,31 @@ export const ScreenElementSchema = z.object({
 });
 export type ScreenElement = z.infer<typeof ScreenElementSchema>;
 
-/** The hardware/system keys the verb set names (PROJECT.md §4, "Input"). */
-export const DeviceKeySchema = z.enum(['back', 'home', 'recents', 'wake']);
+/**
+ * The hardware/system keys the verb set names (PROJECT.md §4, "Input").
+ *
+ * The three editing keys (#301) are named for what they do, never for one platform's keycode:
+ *
+ * - **`delete` is backspace** — it removes the character before the caret, or the selection.
+ *   It is never forward delete, which is why the name is pinned here rather than left to
+ *   whichever keyboard a reader has in mind.
+ * - **`enter` is the Enter/Return key.** What it does belongs to the focused control — a
+ *   submit, a newline or the field's editor action — so the verb promises the press and the
+ *   after-state shows what it did.
+ * - **`tab` is the Tab key**, which in most UIs moves focus to the next focusable control.
+ *
+ * Still one shared vocabulary rather than a promise every device has every key: a device
+ * without one refuses it by name ({@link DeviceBackend.pressKey}).
+ */
+export const DeviceKeySchema = z.enum([
+	'back',
+	'home',
+	'recents',
+	'wake',
+	'delete',
+	'enter',
+	'tab',
+]);
 export type DeviceKey = z.infer<typeof DeviceKeySchema>;
 
 /**

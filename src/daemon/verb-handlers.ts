@@ -420,7 +420,9 @@ export function createVerbHandlers(
 		},
 
 		press_key(params: PressKeyParams): Promise<VerbCallResult> {
-			return runVerb(params.leaseId, (context) => pressKey(context, params.key));
+			return runVerb(params.leaseId, (context) =>
+				pressKey(context, params.key, params.times === undefined ? {} : { times: params.times }),
+			);
 		},
 
 		// The three read rows. All take the lease id and nothing else — `screenshot` no more
