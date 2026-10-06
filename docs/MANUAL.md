@@ -1055,7 +1055,11 @@ timeout, which a caller asking for one has to raise. The three ways it can go wr
 answers rather than `internal_error`: `project-not-registered` (this host has no hook file for
 that project), `install-hook-undeclared` (it has one and it declares no `install`), and
 `install-hook-failed`, carrying the exit code, the signal if there was one and the tail of the
-command's own stderr. A call that *does* carry bytes is unchanged in every respect. **Both clients
+command's own stderr. **`install-hook-undeclared` tells the agent not to install around the hook**,
+because a build tool's install task that names no device installs onto every device attached to the
+host — see ["A Gradle install, and why it names the
+device"](#a-gradle-install-and-why-it-names-the-device) for what declaring one looks like. A call
+that *does* carry bytes is unchanged in every respect. **Both clients
 reach this shape.** `rover install <lease-id>` with no path is it — the CLI raises its own request
 timeout past the host's five minutes so a build that is merely compiling is never reported here as
 a hang — and `install_app` is an MCP tool in exactly this shape and no other: the declaration

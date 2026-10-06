@@ -583,8 +583,25 @@ a caller asking for one has to raise (`rover install` raises its own). Three nam
 than `internal_error`: `project-not-registered`, `install-hook-undeclared`, and
 `install-hook-failed` carrying the exit code, the signal and the tail of stderr.
 
+**An agent never runs the build's install task itself, and every surface an agent reads says so.**
+A build tool's install task that is not pinned to one device installs onto **every** device
+attached to the machine it runs on, and on a host that lends devices the other ones are other
+agents' leases — so an agent that falls back to `./gradlew install<Variant>` when `install_app` says
+no puts a build it was not asked for in the middle of somebody else's run, with nothing failing
+anywhere to show it. That happened, which is why the steer is stated three times rather than
+implied once: the generated `ROVER.md` carries it as a rule in its own right (it holds whatever the
+project declares), the "this project declares no install" bullet names the remedy instead of
+telling the agent to get the application on some other way, and the `install-hook-undeclared`
+message repeats it in core-neutral words, since that message is the only place an agent meets the
+refusal. The remedy is always the same and is never the agent's to improvise: have the host
+operator declare an `install` in the project's hook file — `rover init` proposes one, and
+`docs/MANUAL.md` ("A Gradle install, and why it names the device") writes out what it looks
+like — then call `install_app`, which runs that command with the leased device pinned into its
+environment.
+
 **Where it lives.** `src/verbs/files.ts`, `src/daemon/project-install.ts`,
-`src/cli/_shared/upload.ts`; `PROJECT.md` D13, R24.
+`src/cli/_shared/upload.ts`, `src/verbs/errors.ts`, `src/cli/init/documents.ts`; `PROJECT.md` D13,
+R24.
 
 ---
 

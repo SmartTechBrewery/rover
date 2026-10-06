@@ -217,6 +217,19 @@ function heading(facts: DocumentFacts): string[] {
 	];
 }
 
+/**
+ * What this project in particular declares, and the one bullet here that is a prohibition.
+ *
+ * **The undeclared arm used to end with "get the application onto the device some other way",
+ * and that sentence is what the incident behind #312 turned on.** An agent that met
+ * `install-hook-undeclared` read it as permission to improvise, fell back to the build tool's
+ * own install task — `./gradlew install<Variant>` — and installed onto every device attached to
+ * the host, including ones other agents were holding a lease on at that moment. Nothing failed
+ * anywhere: the neighbours simply got a build they never asked for, in the middle of their own
+ * runs, with no error to read. So the arm now names the remedy that is actually available to the
+ * agent (ask for the hook, which `init` proposes) and points at the rule in {@link theRules} that
+ * forbids the fallback outright, rather than inviting it in the same breath as refusing.
+ */
 function thisProject(facts: DocumentFacts): string[] {
 	const apps =
 		facts.apps.length === 0
@@ -235,8 +248,11 @@ function thisProject(facts: DocumentFacts): string[] {
 		facts.install === undefined
 			? [
 					'- **Install**: this project declares none, so `install_app` answers',
-					'  `install-hook-undeclared` by name rather than doing something plausible. Get the',
-					'  application onto the device some other way, or add an `install` to the hook file.',
+					'  `install-hook-undeclared` by name rather than doing something plausible. **Do not',
+					'  install the application yourself** (see the rules below). Ask whoever runs the host',
+					"  to declare an `install` in this project's hook file " +
+						`(\`${facts.invocation} init\` proposes one),`,
+					'  then call `install_app`.',
 				]
 			: [
 					'- **Install**: `install_app` runs, on the host, with the leased device in its',
@@ -434,6 +450,18 @@ function theVerbs(): string[] {
 	];
 }
 
+/**
+ * The rules that keep a run honest, including the one that keeps it off somebody else's device.
+ *
+ * **"Never run a build tool's install task yourself" is here rather than only in the install
+ * bullet above, because it holds whatever this project declares** (#312). A project *with* an
+ * install hook is the case where an agent is most likely to reach for the build directly — it can
+ * see the command in {@link thisProject}, so running it looks like doing the same thing one step
+ * sooner. It is not: `install_app` runs that command on the host with the leased device pinned
+ * into its environment, and an install task run without that pin lands on **every** attached
+ * device (`docs/MANUAL.md`, "A Gradle install, and why it names the device"). On a shared host
+ * the other ones are other agents' leases, which is exactly how #312 happened.
+ */
 function theRules(): string[] {
 	return [
 		'## The rules',
@@ -459,6 +487,11 @@ function theRules(): string[] {
 		'  the screen when none is open.',
 		'- **A missing capability fails loudly, by name** — the capability, the serial, the platform.',
 		'  That is an honest "this device cannot do that". Do not route around it with `adb`.',
+		"- **Never run a build tool's install task yourself.** `./gradlew install<Variant>` and its",
+		'  equivalents install onto **every** device attached to the host unless they are pinned to',
+		'  one, and the others are leased to other agents. Installing is `install_app`: it runs the',
+		'  install this project declares, pinned to the device you hold. If it answers',
+		'  `install-hook-undeclared`, the fix is to get the hook declared, not to work around it.',
 		'- **A refusal is not a pass.** `held`, `gone`, `not-attached`, `not-ready` and',
 		'  `service-failed` are five different next moves, and none of them is "carry on as though',
 		'  the check ran". If you could not get a device, report that the manual test did not happen.',

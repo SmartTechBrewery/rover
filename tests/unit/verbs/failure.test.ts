@@ -414,6 +414,18 @@ describe('a verb-layer error becomes a failure a client can branch on', () => {
 		});
 	});
 
+	/**
+	 * #312: this message is the only place an agent meets this failure, so it carries the steer
+	 * off the bypass — running the build's own install task, which unpinned lands on every device
+	 * attached to the host — and names the remedy that is actually available.
+	 */
+	it('tells the agent not to install around the hook, and where a hook comes from', () => {
+		const error = new InstallHookUndeclaredError(SERIAL, 'checkout-web');
+
+		expect(error.message).toMatch(/every device attached/);
+		expect(error.message).toContain('rover init');
+	});
+
 	// The exit code and the stderr tail travel together, because a non-zero exit is data and
 	// neither half says on its own why a build refused.
 	it('maps an install command that ran and failed, carrying its exit code and stderr', () => {

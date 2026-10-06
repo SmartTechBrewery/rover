@@ -449,6 +449,14 @@ export class ProjectNotRegisteredError extends Error {
  * the failure ai/RULES.md §2 forbids: an `ok` naming the device would report an install that
  * never happened, and a default command would be this tree guessing at an application's name
  * (D13).
+ *
+ * **This message is where an agent meets the failure, so it carries the steer and not only the
+ * refusal** (#312). A refusal that names no remedy is read as permission to improvise, and the
+ * improvisation available here is running the build's own install task directly — which, unless
+ * it is pinned to one device, installs onto every device attached to the host, including the ones
+ * other agents are holding leases on. That happened, and nothing failed anywhere: the neighbours
+ * got a build they never asked for in the middle of their own runs. So the message says what not
+ * to do next, in the same breath as saying what did not happen.
  */
 export class InstallHookUndeclaredError extends Error {
 	readonly serial: DeviceSerial;
@@ -457,9 +465,13 @@ export class InstallHookUndeclaredError extends Error {
 	constructor(serial: DeviceSerial, project: string) {
 		super(
 			`Project '${project}' is registered on this host but its hook file declares no ` +
-				`'install' command, so nothing was installed onto device '${serial}'. Add one to ` +
-				'that file, or send the package as bytes with the call — there is no command Rover ' +
-				"could guess, because the core knows no application's name",
+				`'install' command, so nothing was installed onto device '${serial}'. Do not run ` +
+				"the build's own install task against this host's devices instead: unless it is " +
+				'pinned to one device it installs onto every device attached here, including ones ' +
+				"other agents hold. Have the host operator add an 'install' to that file " +
+				'(`rover init` proposes one) and call this again, or send the package as bytes ' +
+				'with the call — there is no command Rover could guess, because the core knows no ' +
+				"application's name",
 		);
 		this.name = 'InstallHookUndeclaredError';
 		this.serial = serial;
