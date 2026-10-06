@@ -299,16 +299,24 @@ agent gets a false green are closed in the tool rather than left to the agent's 
   that the device accepts and the verb used to report as done — measured on a TC58, where it typed
   a letter into the search field instead of opening the suggestion it named (`PROJECT.md` §6).
   `tap`, `long_press`, the start of `swipe` and the start of `scroll` — computed a quarter into the
-  region rather than resolved, so `scroll` checks it itself — fail as **`covered-by-keyboard`**,
-  naming the target, the point and the keyboard's rectangle, and pointing at `hide_keyboard`. It is
+  region rather than resolved, so `scroll` checks it itself and the region it was given is resolved
+  with that check off, its centre being a coordinate no touch ever lands on — fail as
+  **`covered-by-keyboard`**, naming the target, the point and the keyboard's rectangle, and
+  pointing at `hide_keyboard`. It is
   its own failure kind rather than a third reason on the clipped-element one, because a caller's
   point and a scroll's computed start have no element behind them. **Never a silent re-target** to
   something visible and **never an automatic dismissal** — both are the same lie told differently.
-  Three limits are deliberate and stated: only the **point** is checked, so an element half under
+  Four limits are deliberate and stated: only the **point** is checked, so an element half under
   the keyboard whose centre is clear is tapped; the **end** of a drag is not checked, because where
-  a drag lets go does not decide who reads it; and a device that says a keyboard is up **without a
+  a drag lets go does not decide who reads it; a device that says a keyboard is up **without a
   rectangle** refuses nothing, because there is no rectangle to test a point against and refusing
-  every touch would be a guess at its extent. Degenerate and off-screen are still reported first —
+  every touch would be a guess at its extent; and **the keyboard's own surface is now unaddressable
+  by every touch verb**, including `tap { by: 'point' }`, with no opt-out a caller can reach — so
+  `press_key` and `type_text` are the whole remaining vocabulary for interacting with it, and an
+  IME key with no `press_key` equivalent (the language switch, the emoji key, voice input, a
+  suggestion-strip entry) has no verb left that can reach it. That last one is the price of the
+  refusal rather than a gap in it: a verb that could tap a key could also tap one by accident,
+  which is the false green this closes. Degenerate and off-screen are still reported first —
   a clipped node's midpoint can land under a keyboard, and naming the keyboard for it would be a
   false explanation.
 - **No `sleep`, anywhere.** `src/core/wait.ts` is the only module allowed to construct a delay:

@@ -224,6 +224,19 @@ export class UnaddressableElementError extends Error {
  * The way out is part of the message for {@link AmbiguousTargetError}'s reason, and it is
  * `hide_keyboard` rather than generic advice: that verb presses nothing when no keyboard is up,
  * so it is safe to send without reading the screen first, where a `back` press is not.
+ *
+ * **The keyboard's own surface is the price, and it is a decision rather than an oversight**
+ * (#318 review). There is no opt-out a caller can reach — `ResolveOptions.touchStartsHere` is
+ * internal, and the two verbs that set it are exempting a point no touch lands on, not
+ * exempting a touch — so while a keyboard is up the rectangle it occupies is unaddressable by
+ * `tap`, `long_press` and the start of every drag, including `tap { by: 'point' }`, the
+ * documented coordinate fallback. `press_key` (`enter`, `delete`, `tab`) and `type_text` are
+ * then the **whole** remaining vocabulary for interacting with a keyboard, so an IME key with
+ * no `DeviceKey` equivalent — the language switch, the emoji key, voice input, a suggestion
+ * strip entry — has no verb that can reach it. That is accepted: a verb that could tap a key
+ * could also tap one by accident, which is the false green this error exists to close, and the
+ * refusal is loud rather than silent so nobody gets a wrong result from it. Anyone who later
+ * needs an IME key is reopening this choice, not fixing a bug.
  */
 export class CoveredByKeyboardError extends Error {
 	readonly serial: DeviceSerial;

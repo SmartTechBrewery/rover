@@ -804,4 +804,41 @@ describe('a touch under the on-screen keyboard', () => {
 
 		expect(drags).toHaveLength(1);
 	});
+
+	/**
+	 * The ordinary search-results shape: a list laid out whole behind the keyboard, so its own
+	 * centre is under the rectangle while the quarter point the drag starts from is clear of it.
+	 * Only the computed start decides, because the centre is a point no touch ever lands on.
+	 */
+	const list = createMockScreenElement({
+		id: 'list',
+		text: 'Results',
+		bounds: { x: 0, y: 150, width: 360, height: 600 },
+	});
+
+	it('scrolls a region whose centre is under the keyboard when the computed start is clear', async () => {
+		const { drags, context } = recording({ screen: [list], keyboard: lowerHalf });
+
+		await scroll(context, 'up', { target: { by: 'element', id: parseElementId('list') } });
+
+		// Centre (180, 450) is under the keyboard; the drag starts a quarter in, at (180, 300).
+		expect(drags).toEqual([
+			{ from: { x: 180, y: 300 }, to: { x: 180, y: 600 }, durationMs: SCROLL_DURATION_MS },
+		]);
+	});
+
+	it('still refuses that same region when the computed start is the covered end', async () => {
+		const { drags, context } = recording({ screen: [list], keyboard: lowerHalf });
+
+		const thrown = await scroll(context, 'down', {
+			target: { by: 'element', id: parseElementId('list') },
+		}).catch((error: unknown) => error);
+
+		expect(thrown).toBeInstanceOf(CoveredByKeyboardError);
+		const error = thrown as CoveredByKeyboardError;
+		expect(error.point).toEqual({ x: 180, y: 600 });
+		expect(error.element).toBeNull();
+		expect(error.lookedFor).toContain('start of a scroll down');
+		expect(drags).toEqual([]);
+	});
 });

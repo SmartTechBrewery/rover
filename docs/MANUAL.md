@@ -744,7 +744,11 @@ pointing at `hide_keyboard` — because the keyboard is drawn over the applicati
 it still resolves, and a tap there lands on a key that the device accepts and the verb used to
 answer `ok` for. Only the point itself is checked, so an element half under the keyboard whose centre
 is clear is tapped; and a device that says a keyboard is up without saying where refuses nothing,
-since there is nothing to test a point against.
+since there is nothing to test a point against. The keyboard's own surface is the price: while one
+is up, nothing reaches it but `press_key` and `type_text`, so an IME key with no `press_key`
+equivalent — the language switch, the emoji key, voice input, a suggestion-strip entry — cannot be
+touched at all. That is deliberate, because a verb that could tap a key could also tap one by
+accident.
 `performAction()` is where the three rules meet: it consults the capability manifest **before** it
 touches the device, resolves fresh, acts, and then reads the state after the action — and a device
 that cannot read its screen answers an explicit "unavailable, and here is the capability that would
@@ -769,8 +773,10 @@ result names, and the other is resolved inside the action from its own read. Onl
 refused under the on-screen keyboard: `tap`, `long_press` and `swipe`'s `from` through the spine,
 and `scroll` itself, because its start is computed a quarter into the region rather than resolved —
 a screen-wide `scroll 'down'` over an open keyboard is refused rather than handed to the keyboard,
-which reads the drag as typing. `swipe`'s `to` may lie over the keyboard; where a drag lets go does
-not decide who reads it. A gesture's duration is
+which reads the drag as typing. `scroll`'s region therefore goes through the spine with that check
+turned off: a list laid out whole behind the keyboard has its centre under it while `scroll 'up'`
+starts well clear, and refusing that would name the keyboard for a point no touch lands on.
+`swipe`'s `to` may lie over the keyboard; where a drag lets go does not decide who reads it. A gesture's duration is
 spent by the *device* — it is an argument to the drag, never a wait on this side — which is why
 none of these verbs is an exception to the no-sleep rule.
 

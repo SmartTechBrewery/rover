@@ -273,11 +273,15 @@ export async function requireTarget(
 /**
  * What a resolution checks beyond the point being on the device.
  *
- * One option, and it exists for one caller: `swipe`'s `to` (`./input.ts`). Every other point
- * this module hands back is where a touch **starts**, and a touch that starts under the
- * on-screen keyboard is read by the keyboard — so that is refused by default. Where a drag
- * *lets go* does not decide who reads it, and a drag may legitimately end over the keyboard,
- * so the end of one is the single point exempt from that check.
+ * One option, and it exists for the two callers whose resolved point is **not** where a touch
+ * lands (`./input.ts`). Every other point this module hands back is where a touch **starts**,
+ * and a touch that starts under the on-screen keyboard is read by the keyboard — so that is
+ * refused by default, and a verb can only ever turn the check off, never move it.
+ *
+ * The two exemptions are `swipe`'s `to`, because where a drag *lets go* does not decide who
+ * reads it and a drag may legitimately end over the keyboard; and `scroll`'s region, whose
+ * centre is a coordinate the gesture never touches — the drag starts a quarter into the region
+ * and `scroll` checks that computed point itself (#318 review).
  */
 export interface ResolveOptions {
 	/** `false` for a point a drag ends at rather than starts at. Absent means it starts there. */

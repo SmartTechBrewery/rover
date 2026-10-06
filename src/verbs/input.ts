@@ -217,11 +217,17 @@ export async function swipe(
  * anything is dispatched. The keyboard reads such a drag as its own — PROJECT.md §6 records one
  * that typed a word into a search field instead of scrolling anything, and answered `ok` — so
  * this used to be recorded here as a trap and is now a `CoveredByKeyboardError` (`./errors.ts`)
- * naming the start point and the keyboard. The start is checked here rather than by the spine
- * because it is **computed**, a quarter into the region, not resolved: the spine only ever saw
- * the region's centre, which it checks too. The end is deliberately not checked — where a drag
- * lets go does not decide who reads it. One `deviceInfo` answers both this check and, when no
- * region was named, the screen's box.
+ * naming the start point and the keyboard. The check belongs **here and only here**, which is
+ * why the region goes through the spine with `touchStartsHere: false`: the point this verb
+ * touches is **computed**, a quarter into the region, and the region's own centre — the only
+ * point the spine ever sees — is a coordinate no touch lands on. A list laid out whole behind
+ * the keyboard, the ordinary search-results shape §6 measured, has its centre under the
+ * keyboard while `scroll 'up'` starts well clear of it; refusing that by the keyboard's name
+ * would be a false explanation of a gesture the keyboard was never in the way of, and would
+ * send the agent to `hide_keyboard` — dropping focus and a half-typed query — for nothing
+ * (#318 review). The end is deliberately not checked either: where a drag lets go does not
+ * decide who reads it. One `deviceInfo` answers both this check and, when no region was named,
+ * the screen's box.
  *
  * The region is also taken as it was reported. A container whose rectangle extends past the
  * panel is dragged across its own middle, so an end of the gesture can land off the screen,
@@ -241,6 +247,7 @@ export async function scroll(
 		verb: 'scroll',
 		requires: ['canInput'],
 		target: options.target,
+		resolve: { touchStartsHere: false },
 		act: async (resolved) => {
 			const { screen } = await context.backend.deviceInfo(context.serial);
 			const box = resolved?.element?.bounds ?? {
