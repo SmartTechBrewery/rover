@@ -46,6 +46,7 @@ export function createMockCapabilities(overrides: Partial<Capabilities> = {}): C
 		canControlNetwork: true,
 		canRecordVideo: true,
 		canControlRecording: true,
+		canHideKeyboard: true,
 		...overrides,
 	};
 }
@@ -254,6 +255,13 @@ export function createMockDeviceInfo(overrides: Partial<DeviceInfo> = {}): Devic
 			 * Rover carries a default for them.
 			 */
 			systemBars: { top: 72, bottom: 144, left: 0, right: 0 },
+			/*
+			 * **A device that answered and has no keyboard up** — not `null`, which would be a
+			 * device that did not say. Every test that does not care about the keyboard is then
+			 * describing a plain screen rather than an unanswered one, and a test that does care
+			 * overrides it with the rectangle it wants.
+			 */
+			keyboard: { shown: false, bounds: null },
 		},
 		osVersion: '1.0',
 		osApiLevel: 1,
@@ -346,6 +354,7 @@ export function createMockDeviceBackend(overrides: Partial<DeviceBackend> = {}):
 		swipe: vi.fn<NonNullable<DeviceBackend['swipe']>>(async () => {}),
 		typeText: vi.fn<NonNullable<DeviceBackend['typeText']>>(async () => {}),
 		pressKey: vi.fn<NonNullable<DeviceBackend['pressKey']>>(async () => {}),
+		hideKeyboard: vi.fn<NonNullable<DeviceBackend['hideKeyboard']>>(async () => {}),
 		setAirplaneMode: vi.fn<NonNullable<DeviceBackend['setAirplaneMode']>>(async () => {}),
 		setWifiEnabled: vi.fn<NonNullable<DeviceBackend['setWifiEnabled']>>(async () => {}),
 		recordVideo: vi.fn<NonNullable<DeviceBackend['recordVideo']>>(async () =>
@@ -456,6 +465,9 @@ export function createConformingDeviceBackend(
 		},
 		async pressKey(serial, key) {
 			performed.push(`pressKey ${serial} ${key}`);
+		},
+		async hideKeyboard(serial) {
+			performed.push(`hideKeyboard ${serial}`);
 		},
 		async setAirplaneMode(serial, enabled) {
 			performed.push(`setAirplaneMode ${serial} ${enabled}`);

@@ -21,28 +21,36 @@ import fixture from '../../fixtures/panel/device-info.json' with { type: 'json' 
  * that schema rather than a method's result schema is what parses it here. `.strict()` on the
  * host's side is what makes the parse below a real gate: an invented field fails it.
  *
- * **The first entry is captured and unedited**, and it was **re-captured on 2026-09-10** when
- * `screen.systemBars` joined the shape: it is the bytes of
- * `rover/system-bar-insets/20260910T114229Z-insets-fixture-capture-ff94ee9a/emulator-5554/device_info.json`
- * written by the daemon of that change for a real `screenshot` on an attached emulator, into an
- * artifacts root of its own so the operator's archive was not part of the capture. Adding the new
- * field to the *previous* capture by hand was the alternative, and it would have cost this file the
- * one property that makes it a gate: a hand-written value proves nothing about what the host
- * writes. Its `systemBars` — 156 px over a `densityScale` of 3, so **52 dp** — is the number that
- * settled the whole feature, since the documented status bar for that platform is 24 dp
- * (`PROJECT.md` §6).
+ * **The first entry is captured and unedited**, and it is re-captured whenever a field joins the
+ * shape rather than hand-extended — adding the new key to the previous capture would cost this
+ * file the one property that makes it a gate, since a hand-written value proves nothing about what
+ * the host writes. Each round is recorded here in place:
+ *
+ * - **2026-09-10**, when `screen.systemBars` joined:
+ *   `rover/system-bar-insets/20260910T114229Z-insets-fixture-capture-ff94ee9a/emulator-5554/device_info.json`.
+ *   Its `systemBars` — 156 px over a `densityScale` of 3, so **52 dp** — is the number that settled
+ *   that feature, since the documented status bar for that platform is 24 dp (`PROJECT.md` §6).
+ * - **2026-10-06**, when `screen.keyboard` joined:
+ *   `rover/keyboard-fixture-capture/20261006T082153Z-issue-297-a575ac4f/emulator-5554/device_info.json`,
+ *   taken **with a text field focused and the keyboard up**, which is the state the previous
+ *   capture could not show. Its `systemBars` came back identical, so the two rounds agree on
+ *   everything the first one measured.
+ *
+ * Both were written by the daemon of their own change for a real `screenshot` on an attached
+ * emulator, into an artifacts root of its own so the operator's archive was not part of the
+ * capture.
  *
  * **The second is constructed, and that is the file's one bend** — the `list-devices.json`
  * precedent, stated where it can be seen. A device whose `model`, `osVersion` and `osApiLevel` are
  * all `null` is one that could not be asked — sitting on its authorization prompt is the common
  * case — and reaching that state needs a physical phone plugged into the host for the first time,
- * which the emulator that produced the first entry is not. **Its `systemBars: null` is doing a
- * second job on top of that**, and a more important one: it is the answer of a backend with **no
- * route to the fact at all** (`src/core/device.ts`), which is a state no device this host can reach
- * would produce and is exactly the state the comparison card has to draw a sentence for. The bend
- * is narrow: it is the captured entry with those four fields set to the combinations
- * `src/core/device.ts` documents, and this half parsing it with the host's own `.strict()` schema is
- * what keeps it a file the daemon could really have written.
+ * which the emulator that produced the first entry is not. **Its `systemBars: null` and its
+ * `keyboard: null` are doing a second job on top of that**, and a more important one: they are the
+ * answer of a backend with **no route to the fact at all** (`src/core/device.ts`), which is a state
+ * no device this host can reach would produce and is exactly the state a consumer has to draw a
+ * sentence for. The bend is narrow: it is the captured entry with those five fields set to the
+ * combinations `src/core/device.ts` documents, and this half parsing it with the host's own
+ * `.strict()` schema is what keeps it a file the daemon could really have written.
  */
 
 const files = fixture.files;
@@ -72,6 +80,18 @@ describe("the panel's device_info.json fixture", () => {
 			// The bars this device draws, in the same pixels as the screenshot beside this file —
 			// which is what lets the comparison card set them aside without multiplying by anything.
 			systemBars: { top: 156, bottom: 72, left: 0, right: 0 },
+			/*
+			 * **In dp, where the bars above are in pixels**, and the capture is what proves the
+			 * host really writes it that way: the window manager stated this frame as
+			 * `[0,1848][1280,2856]` and the daemon filed `y: 616` and `height: 336`, the same
+			 * quotients over `densityScale` 3 that `widthDp` is. The field is compared against a
+			 * touch point rather than against the screenshot beside this file, which is why the
+			 * two units sit side by side here (`src/core/device.ts`).
+			 */
+			keyboard: {
+				shown: true,
+				bounds: { x: 0, y: 616, width: 426.6666666666667, height: 336 },
+			},
 		});
 	});
 
@@ -93,6 +113,13 @@ describe("the panel's device_info.json fixture", () => {
 		 * answer, where `null` has it say it cannot set anything aside (`docs/DESIGN.md` §9).
 		 */
 		expect(unanswered.screen.systemBars).toBeNull();
+		/*
+		 * The same distinction one field over, and the one that matters most to read correctly:
+		 * `{ shown: false }` is *this device says no keyboard is up*, and `null` is *this device
+		 * did not say*. Folding them together would have a backend with no route to the fact
+		 * quietly promising a clear screen.
+		 */
+		expect(unanswered.screen.keyboard).toBeNull();
 	});
 
 	// The dp values are exact quotients on the host on purpose — rounding is the panel's decision,

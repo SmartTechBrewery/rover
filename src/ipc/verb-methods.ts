@@ -250,6 +250,16 @@ export const PressKeyParamsSchema = VerbCallBaseSchema.extend({
 export type PressKeyParams = z.infer<typeof PressKeyParamsSchema>;
 
 /**
+ * What a `hide_keyboard` call carries: the lease id, and nothing else.
+ *
+ * No target — the verb addresses nothing on the screen — and no key: *how* this device puts its
+ * keyboard away is the backend's knowledge, so a caller has nothing to choose (#307). `.strict()`
+ * turns a stray `target` or `key` into `invalid_params` rather than a field the host ignores.
+ */
+export const HideKeyboardParamsSchema = VerbCallBaseSchema.strict();
+export type HideKeyboardParams = z.infer<typeof HideKeyboardParamsSchema>;
+
+/**
  * What all three app-lifecycle rows carry — `launch_app`, `stop_app` and `clear_app_data`.
  *
  * **One schema for three rows**, because the three verbs take exactly the same call and a

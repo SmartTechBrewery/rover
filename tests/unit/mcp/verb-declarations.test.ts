@@ -18,7 +18,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { InstallAppParamsSchema, IPC_METHODS, type IpcMethodName } from '@/ipc/methods.js';
 import { connectMcpAgent } from '../../helpers/mcp-agent.js';
 
-/** The twenty-one verb rows exposed as tools, in `IPC_METHODS` order. */
+/** The twenty-two verb rows exposed as tools, in `IPC_METHODS` order. */
 const VERB_METHODS = [
 	'wait_for',
 	'wait_until_gone',
@@ -28,6 +28,7 @@ const VERB_METHODS = [
 	'scroll',
 	'type_text',
 	'press_key',
+	'hide_keyboard',
 	'read_screen',
 	'device_info',
 	'screenshot',
@@ -240,7 +241,7 @@ afterEach(async () => {
 });
 
 describe('what tools/list advertises for the verbs', () => {
-	it('names the nineteen verb rows, spelled exactly as IPC_METHODS spells them', async () => {
+	it('names the twenty-two verb rows, spelled exactly as IPC_METHODS spells them', async () => {
 		const tools = await advertisedTools();
 
 		const device: readonly string[] = DEVICE_METHODS;

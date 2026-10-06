@@ -9,7 +9,7 @@ eyes on a real Android phone or iOS simulator.**
 
 It taps, swipes, types, waits for something to appear, screenshots it, reads the view hierarchy,
 records video, reads the logs, installs and launches the build, and toggles wifi and airplane
-mode — as twenty-five MCP tools, or from the CLI when you would rather drive it yourself.
+mode — as twenty-six MCP tools, or from the CLI when you would rather drive it yourself.
 
 A daemon on the machine holding the devices lends them out one lease at a time, so two agents —
 here or on another machine — never end up driving the same phone.

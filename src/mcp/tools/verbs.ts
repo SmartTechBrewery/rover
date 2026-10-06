@@ -232,12 +232,30 @@ const VERB_TOOLS: readonly VerbToolRow[] = [
 			'`read_screen` and `tap`.',
 	},
 	{
+		method: 'hide_keyboard',
+		title: 'Hide the on-screen keyboard',
+		description:
+			'Put the on-screen keyboard away so the elements under it can be reached. The device ' +
+			'checks first: when no keyboard is up this presses **nothing** and answers with the ' +
+			'state as it was. It is **not** a `back` press — reach for this instead of ' +
+			'`press_key back`, which closes a keyboard that is up but leaves the screen when none ' +
+			"is. Addresses nothing on the screen; the answer's `screen.keyboard` shows whether the " +
+			'keyboard is still up. **Requires `canHideKeyboard`** — a device whose backend does ' +
+			'not declare it answers with a `missing-capability` failure naming the capability and ' +
+			'the device, never with a silent no-op.',
+	},
+	{
 		method: 'read_screen',
 		title: 'Read the screen',
 		description:
 			'Read what is on the screen: the texts, the element rectangles and the element ids the ' +
 			'target-taking verbs address. It survives an application that blocks screen capture, ' +
-			'which is why it is the read to reach for when a capture comes back blank. **Requires ' +
+			'which is why it is the read to reach for when a capture comes back blank. The answer ' +
+			'also reports the **on-screen keyboard** on its device half — `screen.keyboard`, with ' +
+			'`shown` and the rectangle it occupies in the same dp space the element bounds are in. ' +
+			'An element under that rectangle is still in the list and still has bounds, so it is on ' +
+			'the screen and not reachable. A device that does not report the keyboard answers ' +
+			'`null`, which means *not answered* and not *no keyboard*. **Requires ' +
 			'`canReadScreen`** — a device whose backend does not declare it answers with a ' +
 			'`missing-capability` failure naming the capability and the device, never with an empty ' +
 			'screen.',
@@ -247,9 +265,12 @@ const VERB_TOOLS: readonly VerbToolRow[] = [
 		title: 'Describe the device',
 		description:
 			'What the leased device is: screen size in pixels, density, the computed width and ' +
-			'height in dp, model and OS version. Needs no capability and addresses nothing on the ' +
-			'screen — it asks on its own for the device half that every other answer already ' +
-			'carries.',
+			'height in dp, model, OS version, the system bar insets, and whether the **on-screen ' +
+			'keyboard** is shown together with the rectangle it occupies (`screen.keyboard`, in dp, ' +
+			'where the insets beside it are in pixels). A device that does not report the keyboard ' +
+			'answers `null`, which means *not answered* and not *no keyboard*. Needs no capability ' +
+			'and addresses nothing on the screen — it asks on its own for the device half that ' +
+			'every other answer already carries, so every verb reports the keyboard too.',
 	},
 	{
 		method: 'launch_app',

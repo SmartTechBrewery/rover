@@ -87,6 +87,7 @@ function statusHandlers(overrides: Partial<IpcHandlers> = {}): IpcHandlers {
 		scroll: () => refusedWithoutAHost(),
 		type_text: () => refusedWithoutAHost(),
 		press_key: () => refusedWithoutAHost(),
+		hide_keyboard: () => refusedWithoutAHost(),
 		read_screen: () => refusedWithoutAHost(),
 		device_info: () => refusedWithoutAHost(),
 		screenshot: () => refusedWithoutAHost(),

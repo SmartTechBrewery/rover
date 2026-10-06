@@ -24,6 +24,7 @@ repository. `ai/RULES.md` is where an agent starts.
   - [Where Rover looks for `adb`](#where-rover-looks-for-adb)
   - [Where Rover looks for `idb_companion`](#where-rover-looks-for-idb_companion)
   - [Project hooks](#project-hooks)
+    - [A Gradle install, and why it names the device](#a-gradle-install-and-why-it-names-the-device)
     - [Every lease gets a slot, and its own ports](#every-lease-gets-a-slot-and-its-own-ports)
   - [The artifact archive](#the-artifact-archive)
     - [Sweeping the archive](#sweeping-the-archive)
@@ -67,7 +68,7 @@ yours wins over anything Rover installed — see [where Rover looks for
 
 | Where | What |
 | --- | --- |
-| `~/.rover/projects/my-app.json` | the project's hook file — what the host installs and stops for a lease on it (D13), detected from a Gradle wrapper where there is one |
+| `~/.rover/projects/my-app.json` | the project's hook file — what the host installs and stops for a lease on it (D13), detected from a Gradle wrapper where there is one, and from the app's own build file where that declares product flavors |
 | `my-app/.mcp.json` | the `rover` MCP server, merged into whatever was already there |
 | `my-app/ROVER.md` | the page an agent reads before its first call. Generated — re-run `init` rather than editing it, and move it wherever it belongs |
 | `CLAUDE.md`, `AGENTS.md`, `GEMINI.md` | a short block saying that a manual test means Rover. `--write` inserts it; without the flag it is printed |
@@ -350,7 +351,7 @@ printf '%s\n' \
 ```
 
 The first answer is the handshake (`"protocolVersion":"2025-06-18"`, `"serverInfo":{"name":"rover"`
-…) and the second lists **25 tools**: the four device and lease rows, the eighteen verbs whose
+…) and the second lists **26 tools**: the four device and lease rows, the nineteen verbs whose
 answer is plain data, and the three whose answer is bytes. Swap the last frame for a call to watch
 one run against the device:
 
@@ -727,7 +728,7 @@ test behind it rather than only a convention: `tests/unit/no-sleep.test.ts` scan
 are exempt from the scan. It is a floor, not a proof — a determined re-implementation gets
 through, and reading the wait vocabulary is still how you learn what a wait here looks like.
 
-**The verb layer has a spine, twenty-one verbs on it and the two waits standing beside it.**
+**The verb layer has a spine, twenty-two verbs on it and the two waits standing beside it.**
 `src/verbs/` is the layer above the backends where determinism stops being a rule and becomes a
 signature (D12): `resolveTarget()` takes
 a target and *nothing else* — no screen, no element list, no state read a turn ago — so a target can
@@ -747,7 +748,7 @@ that leaves the agent guessing whether it landed. Every argument and every
 result is a Zod schema of plain data, because the host runs the verb and the agent reads the answer
 somewhere else (D19).
 
-**The six input verbs are that spine used six times** (`src/verbs/input.ts`),
+**The seven input verbs are that spine used seven times** (`src/verbs/input.ts`),
 and each of them is one `performAction()` call: not one reads a screen of its own, so a verb author
 has nothing to remember and nothing to get wrong. `long_press` is a drag from a point to that same
 point, held past the device's own long-press timeout — never the long-press flag on a key event,
@@ -838,6 +839,36 @@ every backend must answer it, and reports size, density, the computed width in d
 version — the same `DeviceInfo` every result already carries (D14), now askable on its own without
 moving the device first. Neither addresses anything on the screen, so both answer `target: null`,
 and both carry the lease id and nothing else on the wire.
+
+**That `DeviceInfo` also says whether the on-screen keyboard is up, and where.** `screen.keyboard`
+carries `shown` and, when one is shown, `bounds` — and because it rides on the half D14 puts on
+*every* result, so does every other verb's answer: a `tap` that opened a keyboard reports the
+keyboard it opened, because the after-state is re-read once the action has run. It is on the device
+half rather than in the element list on purpose. An element under the keyboard is still laid out
+where the application put it and still comes back from `read_screen` with those bounds; the thing
+covering it is not an element, so the honest place to say it is beside the screen's other facts.
+
+**`bounds` is in dp**, the same space the element rectangles are in — not the physical pixels
+`screen.systemBars` beside it uses — because what you would compare it against is a touch point
+rather than a screenshot's coordinates. And the two "no" answers are different answers:
+**`null` means this device did not say**, while **`{ shown: false }` means the device says no
+keyboard is up**. The iOS-simulator backend answers `null`, since its screen facts come from a
+static device-type profile that describes nothing about what is drawn on the glass. Reading `null`
+as *no keyboard* would turn a backend that cannot look into one promising a clear screen. Nothing
+in Rover refuses a tap over a keyboard today — this is the device reporting a fact.
+
+**`hide_keyboard` puts that keyboard away, and presses nothing when there is none** (#307). Reach
+for it instead of `press_key back`: on Android, back closes a keyboard that is up and *leaves the
+screen* when none is — both exit cleanly, so nothing downstream can tell which happened
+(`PROJECT.md` §6). The verb therefore decides nothing itself. It calls the backend's `hideKeyboard`,
+which reads the keyboard's state from the same dump `screen.keyboard` comes from and presses back
+only when that read says a keyboard is up; a dump that says nothing about the keyboard is refused
+rather than guessed at. It takes the lease id alone — no target, and no key, because *how* a device
+puts its keyboard away is that device's knowledge — and its answer is the usual one, whose
+`screen.keyboard` says whether the keyboard is still there. It is gated on its own capability,
+`canHideKeyboard`: `true` on Android, `false` on the iOS simulator for now, where the call answers
+`missing-capability` naming the flag and the device instead of answering `ok` for a keyboard still on
+the glass.
 
 **`screenshot` is the third read, and the one whose answer is a payload** rather than a state the
 result already carries. It sits on the same spine and needs no capability either, and what it adds
@@ -1113,7 +1144,7 @@ ends, so there is one recipe per toggle rather than two that can drift, and the 
 the reason the restoration records: airplane mode first, wifi last.
 
 **The daemon loads the core and runs the verbs**, and a client only asks (D19). The two waits, the
-six input verbs, the three app verbs, the three read verbs, the log read, screen recording, the two
+seven input verbs, the three app verbs, the three read verbs, the log read, screen recording, the two
 environment verbs and the three file transfers are callable over the same connection as
 `acquire_device` — the same envelope, the same framing, one method table — and a verb call carries
 the lease id rather than a serial, because the lease id is the credential and the host derives the
@@ -1225,10 +1256,10 @@ outside it, because `--import tsx/esm` resolves against the caller's directory r
 the script. What that entry looks like in an MCP client's own configuration, and how to prove it
 handshakes, is [Wire up the MCP server](#wire-up-the-mcp-server) above. What exists today is the
 server, speaking stdio, declaring
-twenty-five tools under the `IPC_METHODS` names exactly: the four device and lease rows (`status`, `list_devices`,
-`acquire_device`, `release_device`), the eighteen verbs whose answer is plain data
+twenty-six tools under the `IPC_METHODS` names exactly: the four device and lease rows (`status`, `list_devices`,
+`acquire_device`, `release_device`), the nineteen verbs whose answer is plain data
 (`wait_for`, `wait_until_gone`, `tap`, `long_press`, `swipe`, `scroll`, `type_text`,
-`press_key`, `read_screen`, `device_info`, `launch_app`, `stop_app`, `clear_app_data`,
+`press_key`, `hide_keyboard`, `read_screen`, `device_info`, `launch_app`, `stop_app`, `clear_app_data`,
 `read_logs`, `install_app`, `start_recording`, `set_airplane_mode`, `set_wifi`), and the three
 whose answer is bytes.
 Every one of them takes **camelCase** arguments under a `snake_case` name (D26), and says so in
@@ -1509,8 +1540,8 @@ after it, under `ROVER_PROJECTS_PATH`:
 `rover init` writes one of these for a project it is pointed at, filling in what it can work out
 by reading the directory and reporting the file each detection came from — see [Quick
 installation](../README.md#quick-installation). Everything below is what one looks like written by hand, and
-what init cannot guess for you: `services`, `teardown`, and any install more involved than a
-build command.
+what init cannot guess for you: `services`, `teardown`, any install more involved than a
+build command, and which variant a project with several product flavors should install.
 
 ```jsonc
 {
@@ -1578,6 +1609,90 @@ for a project install has to raise that itself, or it will report a hang on its 
 the build is still running on the host. A command that is missing, declares no `install`, or exits
 non-zero is a **named** answer to that call (`project-not-registered`, `install-hook-undeclared`,
 `install-hook-failed` with the exit code and a stderr tail), never a broken host.
+
+#### A Gradle install, and why it names the device
+
+The common case, written out in full. A Gradle project with no product flavors:
+
+```jsonc
+{
+  "project": "checkout-web",
+  "install": {
+    "command": "bash",
+    "args": ["-lc", "ANDROID_SERIAL=\"$ROVER_DEVICE_SERIAL\" ./gradlew :app:installDebug -q"],
+    "cwd": "/srv/checkout-web"
+  }
+}
+```
+
+Three parts of that line are load-bearing, and the first one is the one that costs somebody else
+their lease if it is left out.
+
+**`ANDROID_SERIAL="$ROVER_DEVICE_SERIAL"` is mandatory.** A Gradle install task with no device
+named installs onto **every** attached device — not onto a device the build picks, onto all of
+them. On a shared host the other ones are other agents' leases, and an install that lands in the
+middle of somebody's run is a change they never made and cannot see. The host sets
+`ROVER_DEVICE_SERIAL` on every hook child to the device *this* lease holds, so the variable is
+what pins the install to it. **Never hard-code a serial in its place**: a lease gets whichever
+device was free, so a hard-coded one is right until the first day it is not, and then it is
+installing onto a neighbour with no error anywhere.
+
+`bash` is the program because the line needs a shell to expand that variable at all. A hook is
+spawned with no shell and is never word-split (above), so an operator who wants one makes the
+shell the program — which is also why the whole line is a single `args` entry after `-lc`. And
+`-q` keeps the build log off the host's stdout: nobody reads it unless the install failed, and a
+failure comes back as `install-hook-failed` with its own stderr tail.
+
+**With product flavors, there is no `installDebug` task at all.** The build plugin names a variant
+after its flavors — in `flavorDimensions` order, first as declared and every later one capitalised
+— followed by the build type, and the install task is `install` plus that name capitalised. So
+this:
+
+```kotlin
+android {
+  flavorDimensions += listOf("env", "tier")
+  productFlavors {
+    create("dev") { dimension = "env" }
+    create("prod") { dimension = "env" }
+    create("free") { dimension = "tier" }
+    create("paid") { dimension = "tier" }
+  }
+}
+```
+
+has four debug variants — `devFreeDebug`, `devPaidDebug`, `prodFreeDebug`, `prodPaidDebug` — and
+four install tasks, one per variant, and `:app:installDebug` is not one of them. The hook names the
+variant agents are meant to get:
+
+```jsonc
+{
+  "project": "checkout-web",
+  "install": {
+    "command": "bash",
+    "args": [
+      "-lc",
+      "ANDROID_SERIAL=\"$ROVER_DEVICE_SERIAL\" ./gradlew :app:installDevFreeDebug -q"
+    ],
+    "cwd": "/srv/checkout-web"
+  }
+}
+```
+
+`./gradlew :app:tasks` lists the real ones under **Install tasks** — run it in the project rather
+than assembling a name by hand, because a task name that is one capital letter out fails at the
+agent's first `install_app` and nowhere earlier.
+
+**What `rover init` does with all this.** No flavors: it proposes `:app:installDebug` as it always
+has. Exactly one variant: it proposes that variant's own task, naming `app/build.gradle(.kts)` as
+where it read it. **Several variants: it registers none**, and lists each one as a ready-to-paste
+`--install` line, because a hook that installs the wrong variant is an install that "worked" and
+changed nothing the agent is looking at — strictly worse than the `install-hook-undeclared` an
+undeclared install answers with. Flavors it cannot read statically — built in a loop, configured
+through `all { }`, named from a variable, or spread over several dimensions whose order is not
+declared in that file as a literal `flavorDimensions` (a convention plugin, an applied script, a
+`flavorDimensions += dims`) — get the same treatment and a report saying why. In both
+cases the fix is one re-run: `rover init --install '<the line you want>' --force`, or the line
+written into the hook file by hand.
 
 The **helper services** are the one hook the host runs *without being asked*, at both ends of a
 lease. A grant starts them in the order they are declared, after the device has been re-verified
@@ -1721,7 +1836,8 @@ runs of the same named check, taken at two different points in time, sit next to
     <test_name>/
       20260830T170501Z-issue-112-9f1c2ab4/   # one lease: when it started, who held it
         <device-serial>/
-          device_info.json                   # size, density, dp scale, OS version
+          device_info.json                   # size, density, dp scale, OS version,
+                                             #   system bars, on-screen keyboard
           test_description.json              # what the lease said the run was about, if anything
           group_id.json                      # which investigation this run is part of, if any
           screenshots/001_screenshot.png

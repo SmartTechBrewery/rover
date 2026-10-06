@@ -106,6 +106,18 @@ export function toScreenInfo(profile: DeviceTypeProfile): ScreenInfo {
 		 * own safe area; until somebody runs one, this stays `null`.
 		 */
 		systemBars: null,
+		/*
+		 * **`null` for the same reason, and it is the honest answer.** This profile describes a
+		 * device *type*; it says nothing about what is drawn on the screen right now, and whether
+		 * a keyboard is up is the most *now* fact there is. Answering `{ shown: false }` would be
+		 * this backend promising a clear screen it has not looked at — the silent degradation
+		 * `ai/RULES.md` §2 forbids — so it says *not answered* instead and nothing branches on the
+		 * platform to find that out.
+		 *
+		 * What would change this is a verified route to a booted simulator's own IME state. Until
+		 * somebody runs one against a device, this stays `null`.
+		 */
+		keyboard: null,
 	});
 }
 

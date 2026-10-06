@@ -84,7 +84,9 @@ backend from a check that stopped checking. The iOS backend is the first to decl
 the only truthful `set_wifi` would change the networking of the machine lending devices to other
 people, and the cosmetic status-bar override `simctl` will happily draw is precisely the
 plausible-looking answer this project refuses. `canReadScreen` (#251) and `canInput` (#252) both
-started `false` and have since flipped to `true`.
+started `false` and have since flipped to `true`. `canHideKeyboard` (#307) is the second `false`,
+and not a permanent one: the simulator reports no keyboard state yet and no dismissal has been
+measured on it, so it says so by name until both are.
 
 **Refusals get finer than a flag.** `press_key` on a simulator answers `home` and `wake` and
 refuses `back` and `recents` as `unsupported-key`, naming the key — and refuses the editing keys
@@ -165,7 +167,7 @@ will ever retry.
 
 ---
 
-## 4. The verb set — twenty-five tools over one method table
+## 4. The verb set — twenty-six tools over one method table
 
 **The hook.** Everything an agent needs to drive a device: touch, text, keys, waits, screen reads,
 screenshots, video, logs, app control, file transfer and the radios — one vocabulary, on both
@@ -178,9 +180,9 @@ credential.
 
 | Family | Verbs | Notes |
 | --- | --- | --- |
-| Input | `tap`, `long_press`, `swipe`, `scroll`, `type_text`, `press_key` | six uses of one spine; `src/verbs/input.ts` |
+| Input | `tap`, `long_press`, `swipe`, `scroll`, `type_text`, `press_key`, `hide_keyboard` | seven uses of one spine; `src/verbs/input.ts` |
 | Waits | `wait_for`, `wait_until_gone` | the vocabulary that replaces `sleep`; `wait-for.ts` |
-| Reads | `read_screen`, `device_info`, `screenshot` | `read.ts`; `screenshot`'s answer is bytes |
+| Reads | `read_screen`, `device_info`, `screenshot` | `read.ts`; `screenshot`'s answer is bytes, and both reads report the on-screen keyboard |
 | Apps | `launch_app`, `stop_app`, `clear_app_data` | address a package, resolve no target; `app.ts` |
 | Logs | `read_logs` | bounded, selectable on the host, never follows; `logs.ts` |
 | Recording | `record_video`, `start_recording`, `stop_recording` | `record.ts`, `recording-session.ts` |
@@ -197,7 +199,20 @@ have — so `scroll 'down'` drags upwards; it scrolls the element it was pointed
 when pointed at nothing, and it refuses a bare coordinate, because a point has no extent and cannot
 say how far a scroll may travel.
 
-**`type_text` and `press_key` address no element**, so their result's `target` is `null` — a fact
+**`hide_keyboard` is the deliberate exception, and the reason is in the gesture** (#307). The
+obvious composition — `press_key back` from the verb layer — is the one thing it must not be: on
+Android back closes a keyboard that is up and **leaves the screen** when none is, and both exit
+cleanly (`PROJECT.md` §6), so an agent clearing a covered target would lose its place whenever the
+keyboard had already gone. Deciding *whether* to press needs the device's own reading of its keyboard
+taken at the moment it acts, and *what* to press is that platform's knowledge; both belong in the
+backend, and composing it above would mean the verb layer assuming a back key exists. So it is one
+backend method, `hideKeyboard`, documented as *dismiss the keyboard if one is up and do nothing
+otherwise*, behind its own capability `canHideKeyboard` — `true` on Android, `false` on the iOS
+simulator until a recipe is measured there, where the call is `missing-capability` by name rather
+than an `ok` for a keyboard still on the glass. When no keyboard is up it is a no-op answer: the same
+result shape, nothing pressed.
+
+**`type_text`, `press_key` and `hide_keyboard` address no element**, so their result's `target` is `null` — a fact
 about the verb, not a resolution that failed. There is deliberately no target option on
 `type_text`: an agent that wants text in a field taps it and then types. `type_text` hands the
 string to the backend **byte for byte** — a string this layer had helpfully escaped would arrive on
@@ -240,6 +255,40 @@ step was considered and left out: `since` answers the same question without dest
 
 **Where it lives.** `src/verbs/`, `src/ipc/` for the method table, `PROJECT.md` §4; the log
 selections in `src/core/log-filter.ts` and each backend's `readLogs`.
+**The screen a verb reports now includes what the system drew on *top* of it** (#297). This
+paragraph is new rather than a rewrite, because the gap it closes was never described: the element
+list says where an application laid its controls out, and an on-screen keyboard covering the bottom
+third of the glass changes none of those rectangles. A button under the keyboard is still in the
+read, still carries bounds, and is still perfectly tappable as far as every answer Rover gave — so
+the tap lands on a key and the agent is told it tapped the button. **So the device now says whether
+its on-screen keyboard is shown and what rectangle it occupies**, and it says it on the
+**`DeviceInfo`** half of the answer rather than as another element.
+
+That placement is the whole of why it costs no verb a line. `DeviceInfo` is what D14 already puts on
+**every** result, and the after-state re-reads it *after* the action — so `tap`, `press_key`,
+`wait_for` and `read_screen` all report a keyboard that opened or closed while they ran, without any
+of them knowing the field exists. Two further consequences fall out of the same choice: it crosses
+IPC and reaches the archive's `device_info.json` beside every run through schemas that already carry
+the screen whole, and the rectangle is in hand at the one place a later refusal would need it.
+
+**The rectangle is in dp, where the system-bar insets beside it are in pixels** — each in the unit
+its own consumer uses. The insets are compared against a screenshot's own coordinates (§14); this is
+compared against a **touch point**, and the verb layer may not multiply by a scale, because a hidden
+scale conversion there is the exact error that turns every coordinate in the system into a plausible
+wrong one. And `null` (*this device did not say*) stays distinct from `{ shown: false }` (*this
+device says no keyboard is up*), the same distinction the insets draw: a backend with no route to
+the fact must not read as one promising a clear screen.
+
+**Nothing refuses anything yet.** This is the device reporting a fact; what a verb does about an
+element the keyboard covers is separate work. **Dismissing it is no longer**: `hide_keyboard` (#307,
+above) is the way out, and it reads this same fact to decide whether there is anything to dismiss —
+which is also why the API 33 spelling of the source (`ITYPE_IME`, no `id=`) had to be read, since a
+parser that missed it answered *no keyboard* with one covering half the screen (`PROJECT.md` §6).
+
+**Where it lives.** `src/verbs/`, `src/ipc/` for the method table, `src/core/device.ts` for the
+keyboard's shape and `hideKeyboard`'s contract, `src/core/capabilities.ts` for `canHideKeyboard`,
+`src/backends/android/parsers/insets.ts` for the read and `src/backends/android/backend.ts` for the
+read-then-press; `PROJECT.md` §4 and §6, D11, D14.
 
 ---
 
@@ -393,7 +442,8 @@ never follows: following would be a wait with no condition and a stream over IPC
 
 ```
 ~/.rover/artifacts/<project>/<test_name>/<runId>/<device-serial>/
-    device_info.json          # size, density, dp scale, OS version, system bar insets
+    device_info.json          # size, density, dp scale, OS version, system bar insets,
+                              #   and the on-screen keyboard
     test_description.json     # what the lease said this run was about, if anything
     group_id.json             # which investigation this run belongs to, if any
     screenshots/001_screenshot.png
@@ -538,12 +588,12 @@ than `internal_error`: `project-not-registered`, `install-hook-undeclared`, and
 
 ## 11. The MCP server — and the twelve methods that deliberately have no tool
 
-**The hook.** One `rover init` and an agent has twenty-five tools; a screenshot comes back **inline**
+**The hook.** One `rover init` and an agent has twenty-six tools; a screenshot comes back **inline**
 as an image the model looks at directly, and a recording comes back as frames plus an mp4 on the
 agent's own machine.
 
-**What it is.** One process per agent session, MCP over stdio, declaring **25 tools** under the
-`IPC_METHODS` names exactly: the four device and lease rows, the eighteen verbs whose answer is
+**What it is.** One process per agent session, MCP over stdio, declaring **26 tools** under the
+`IPC_METHODS` names exactly: the four device and lease rows, the nineteen verbs whose answer is
 plain data, and the three whose answer is bytes.
 
 - **Tool names are `snake_case`, arguments are `camelCase`** (D26) — `launch_app` takes `leaseId`
@@ -947,6 +997,19 @@ working on — and there is nothing to start by hand afterwards.
   agent reads before its first call (generated — re-run `init` rather than editing it); and a short
   block in `CLAUDE.md` / `AGENTS.md` / `GEMINI.md` saying that a manual test means Rover (`--write`
   inserts it, without the flag it is printed).
+- **The install it proposes is read, not assumed.** A Gradle project that declares **product
+  flavors** has one install task per variant and no `:app:installDebug` at all, so init reads
+  `app/build.gradle(.kts)`: no flavors keeps the plain task, exactly one variant gets that
+  variant's own task with the file it was read from named, and **several variants get none
+  registered** — each is listed as a ready-to-paste `--install` line instead. Flavors that only
+  Gradle could resolve, built in a loop or through `all { }`, or spread over several dimensions
+  whose order is declared outside that file, likewise get none, and the report
+  says that is why. The reasoning is the one every detection here follows: a hook that installs
+  the wrong variant is an install that "worked" and left the device unchanged, which is strictly
+  worse than the named `install-hook-undeclared` an undeclared install answers with. Every
+  proposed line pins the build to the lease's own device with
+  `ANDROID_SERIAL="$ROVER_DEVICE_SERIAL"`, because an unpinned install task lands on **every**
+  attached device — on a shared host, the neighbours' leases.
 - **`rover doctor`** reports the programs the host needs and where it found them. **`rover doctor
   --fix --actor <who>`** downloads a pinned `idb_companion` release **on the host**, checks it
   against the published checksum and unpacks it under that host's `~/.rover`, where the search looks
