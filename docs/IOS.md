@@ -97,7 +97,7 @@ startup of ~60–90 ms that a Node backend talking gRPC directly would not pay.
 | Capability | Gated methods | How | Measured | Verdict |
 |---|---|---|---|---|
 | `canReadScreen` | `readScreen` | `accessibility_info {format: LEGACY}` over gRPC — the RPC `idb ui describe-all` wraps | 34–47 ms warm on an established channel, 3.34 s for a companion's **first** read; labels + frames in **points** | ✅ **declared true** (#251) |
-| `canInput` | `tap` `swipe` `typeText` `pressKey` `clearText` | one client-streaming `hid` call per injection, over the same channel as the read — the RPC `idb ui tap/swipe/text/button` all wrap | through this backend: tap 106–144 ms, `typeText` 102–154 ms for a word and 219–315 ms for all 95 printable ASCII, `pressKey('home')` 104–197 ms, a 250 ms swipe 452 ms | ✅ **declared true** (#252); `back` and `recents` refused **by name**, and `delete`, `enter` and `tab` until #302 measures them, see §5; `clearText` (#309) refused by name as `unsupported-clear` for `delete`'s reason |
+| `canInput` | `tap` `swipe` `typeText` `pressKey` `clearText` | one client-streaming `hid` call per injection, over the same channel as the read — the RPC `idb ui tap/swipe/text/button` all wrap | through this backend: tap 106–144 ms, `typeText` 102–154 ms for a word and 219–315 ms for all 95 printable ASCII, `pressKey('home')` 104–197 ms, a 250 ms swipe 452 ms | ✅ **declared true** (#252); `back` and `recents` refused **by name**, see §5; `delete`, `enter` and `tab` pressed as HID usages 42, 40 and 43 and `clearText` (#309) answered with Cmd+A then backspace in one stream — all four **measured** in #302, ~15 ms per warm stream, see §4 and §5 |
 | `canRecordVideo` | `recordVideo` | `simctl io <d> recordVideo --codec h264 --mask ignored <path>` | marker at 0.14–0.23 s; 100,782 bytes for ~2 s of an idle screen | ✅ **no `--time-limit` — the window is host-side** |
 | `canControlRecording` | `start`/`stop`/`discardRecording` | same + `SIGINT`, and the **host's** process table for "is this device recording" | exit 0 in 20–30 ms after the signal; `ps` stops naming the recorder in 39 ms | ✅ |
 | `canControlNetwork` | `setAirplaneMode` `setWifiEnabled` | — | — | ❌ **declare false** |
@@ -667,9 +667,35 @@ the dependency is **alive**, which is the part worth updating:
   pressKey('home')                        104–197 ms (n=5, mean 164)
   pressKey('wake') on a woken device      424–557 ms (n=5) and it sends nothing — the guard read
   pressKey('back') / ('recents')          refused in under 1 ms, with no round trip at all
-                                          (and 'delete' / 'enter' / 'tab' since #301, the same way)
   swipe 250 ms asked for                  452 ms wall through the backend
   ```
+
+  **The keyboard keys and the clear followed in #302**, measured the same way — inject, read the
+  field back — on a different bench: the booted `iPhone 17` `88D8476E-…` on **iOS 26.5**, Xcode
+  27.0 (27A266a), macOS 26.6.2, an `idb_companion` built 2026-09-01, a simulator set to Polish,
+  2026-10-06. Through this repository's own code, and then again over a lease through a daemon
+  built from the change (`press_key`, `type_text { clear: true }`):
+
+  ```
+  pressKey('delete')  HID 42   'zzqqxx' → 'zzqqx' in Spotlight; times: 3 over the wire → 'zzq';
+                               on an empty field nothing visible, at exit 0
+  pressKey('enter')   HID 40   'safari' in Spotlight → Safari opened (its top hit); a query
+                               with no hit left Spotlight up with the query in the field
+  pressKey('tab')     HID 43   Contacts' new-contact form: 'alpha', tab, 'beta', tab, 'gamma'
+                               → First / Last / Company held one word each — focus moved
+  clearText           227+4, then 42, one stream
+                               Spotlight 'giottozzqqxx' → placeholder; caret moved to the start
+                               of 'Zabcdefghijkl' → placeholder (the whole value, not what lay
+                               before the caret); a field with an inline completion → placeholder;
+                               Contacts' Company field → placeholder; empty field → unchanged
+  one warm hid stream of any of them   15–18 ms the first, 1–2 ms after on the same companion;
+                               ~0.4 s for a call that has to start the companion first
+  ```
+
+  **One trap is Spotlight's, not the key's**: with an inline completion showing (the field reads
+  `giotto, Sugestia giotto`), the first backspace dismisses the completion and deletes nothing —
+  the same as a hardware keyboard there. `tests/device/ios-simulator/input.test.ts` types
+  `zzqqxx`, which Spotlight completes to nothing, so every press is one character.
 
   **What the loop is is the point.** `hid` answers an empty `HIDResponse` and answers it just as
   happily for nonsense: a keycode of `9999`, a touch at `NaN`, a touch at `(99999, 99999)`, a
@@ -752,12 +778,12 @@ construction. It is also the repository's first registered manifest with a capab
 `missing-capability` refusals in this project that come from a device rather than from a synthetic
 backend — asserted as such in `tests/device/ios-simulator/verb-dispatch.test.ts`.
 
-**`DeviceKey` has seven members and iOS answers two of them.** The row that said "two and a
+**`DeviceKey` has seven members and iOS answers five of them.** The row that said "two and a
 half" is **corrected in place with its reason rewritten** (2026-09-09, #252, `ai/RULES.md` §1):
 `wake` turned out to be a whole answer rather than half of one, and `back` turned out not to be one
-at all. The three editing keys #301 added are refused for a different reason from `back` and
-`recents` — nobody has measured them here yet, not that the platform lacks them — and #302 is where
-they are measured.
+at all. It then said *two*, with the three editing keys #301 added refused for a different reason
+from `back` and `recents` — nobody had measured them here yet, not that the platform lacked them.
+**#302 measured them** (2026-10-06, the bench in §4) and all three landed, so they are pressed.
 
 | `DeviceKey` | iOS | Notes |
 |---|---|---|
@@ -765,9 +791,9 @@ they are measured.
 | `wake` | ✅ `HIDButtonType.LOCK`, guarded by a read | LOCK **toggles**, where Android's `KEYCODE_WAKEUP` does not — so the press is conditional on `com.apple.springboard.hasBlankedScreen`, read with `simctl spawn <udid> notifyutil -g <name>` in ~360 ms. **That read exists, which is what decides this row**: from a woken device the first press took the flag to `1` and every press after it toggled `1, 0, 1, 0`, following the press in 1,861 ms going dark and 347 ms coming back, and three guarded `wake`s in a row left it at `0` |
 | `back` | ❌ | **Reversed in place.** This row read "⚠️ left-edge swipe, verified working" on the strength of one drill into Settings → General. Driven through idb on 2026-09-09 the same `2,450 → 300,450` swipe **paged the home screen** on Springboard and did **nothing** on a Settings sheet, both at exit 0 — silent in one direction and wrong in the other, which is the substitute `pressKey` must not make. Refused by name; on iOS back is a control in the app's own UI, which `read_screen` + `tap` reaches by label |
 | `recents` | ❌ | No button, and the app-switcher gesture needs the Indigo *edge bits* (`Indigo.h`: the guest recognises system edge gestures "from these bits, not from the contact coordinates"). idb's swipe does not set them; a slow 1.2 s bottom-edge swipe did nothing. Unreachable without patching idb or sending our own HID messages |
-| `delete` | ❌ refused by name, **unmeasured** — #302 | Added to the vocabulary by #301 as backspace. The candidate is HID keyboard usage 42 (Backspace) over the same `hid` call `typeText` already uses, but `hid` answers success for a usage that does nothing, so it is refused until it has been watched landing. *Unmeasured*, not *no equivalent* |
-| `enter` | ❌ refused by name, **unmeasured** — #302 | Added by #301. Candidate: HID usage 40 (Return). Refused for `delete`'s reason until #302 measures it |
-| `tab` | ❌ refused by name, **unmeasured** — #302 | Added by #301. Candidate: HID usage 43 (Tab). Refused for `delete`'s reason until #302 measures it |
+| `delete` | ✅ HID keyboard usage 42 (Backspace) — **measured**, #302 | Was refused by name as *unmeasured* until it had been watched landing, because `hid` answers success for a usage that does nothing. Measured: one press took `zzqqxx` in Spotlight to `zzqqx`, `times: 3` took three, and on an empty field it did nothing visible at exit 0. With an inline completion showing, the first press dismisses the completion instead (§4) |
+| `enter` | ✅ HID usage 40 (Return) — **measured**, #302 | Whatever the focused control does with Return: in Spotlight it opened the top hit (`safari` → Safari); with no hit it left Spotlight as it was; in Contacts' last field it moved focus back to the first. The verb's post-state right after an app launch can be a `failed` read of a screen that has not drawn yet — read again |
+| `tab` | ✅ HID usage 43 (Tab) — **measured**, #302 | Focus to the next field, as on Android: in Contacts' new-contact form `alpha`, Tab, `beta`, Tab, `gamma` filled First, Last and Company. It inserts no character (§2's `typeText` measurement), which is why it is a key rather than text |
 
 `pressKey` is one method behind one capability, so a backend that declares `canInput` would
 otherwise claim every key. **`pressKey` grew the per-key failure** (#215): a key the device has
@@ -807,14 +833,19 @@ and refuses the ones it does not, without lying in either direction:
 D11 is untouched by any of it: capabilities still name *methods*, the keys are that method's
 arguments, and no per-key flag was added (`PROJECT.md` §5).
 
-**`clearText`, `canInput`'s fifth method (#309), is refused the way `delete` is.** It empties the
-focused field for `type_text`'s `clear: true`, and on Android it is select-all then backspace. The
-candidate here is the same shape — Cmd+A (HID usages 227 + 4), then Backspace (42) — over the
-same `hid` call, and it is unmeasured for `delete`'s reason: `hid` answers success for a usage that
-does nothing, so a clear sent on faith would report a field emptied that never was. So this backend
-answers it, before any round trip, with `UnsupportedClearError`, which reaches the agent as an
-`unsupported-clear` verb failure carrying the serial — never `missing-capability`, since typing
-works — and nothing is typed after it. #302 is where it is measured.
+**`clearText`, `canInput`'s fifth method (#309), is Cmd+A then backspace — measured in #302.** It
+empties the focused field for `type_text`'s `clear: true`, and on Android it is select-all then
+backspace. This paragraph said it was **refused** the way `delete` was, as `unsupported-clear`,
+because the candidate had not been watched landing and `hid` answers success for a usage that does
+nothing, so a clear sent on faith would report a field emptied that never was. That is **corrected
+in place**: the candidate — Left GUI (HID 227) held over `a` (4), released, then Backspace (42) — was
+driven on the §4 bench and read back, and it emptied every field it was tried on. **One stream is
+enough**: the select-all is honoured before the backspace that follows it in the same `hid` call,
+so there is no two-step variant. It needs no length, so nothing is read first. Checked: Spotlight's
+field with plain text, with the caret moved to the start, and with an inline completion showing;
+Contacts' Company field (a plain UIKit text field); an already-empty field (accepted, nothing
+changed). **Not checked**: a secure (password) field — none was reachable on the bench without a
+passcode or network — and a multi-line text view.
 
 **`LogLevel` has no `warn` on iOS, and gains a value that is not a level.** The unified log's
 `messageType` is `Debug | Info | Default | Error | Fault` — nothing maps onto `warn` — and entries

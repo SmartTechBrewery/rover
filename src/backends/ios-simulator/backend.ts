@@ -1,6 +1,6 @@
 /**
  * The device backend for this platform: every required method of `DeviceBackend`, the recorder,
- * the screen read and the five input primitives (one of which, `clearText`, refuses by name).
+ * the screen read and the five input primitives.
  *
  * **This is the backend that registers** (`./index.ts`, `./capabilities.ts`, and one import line
  * in `../index.ts`), which is why the four recording methods land in the same change as the
@@ -83,7 +83,6 @@ import {
 	RecordingAlreadyRunningError,
 	UnfinishedRecordingError,
 	UnreadableScreenError,
-	UnsupportedClearError,
 	UnsupportedKeyError,
 	UnsupportedTextError,
 } from '../../core/errors.js';
@@ -106,9 +105,10 @@ import {
 import { IDB_COMPANION_MISSING, IdbCompanionNotFoundError } from './idb-companion-path.js';
 import {
 	buttonEvents,
-	CLEAR_TEXT_REFUSAL,
+	CLEAR_TEXT_EVENTS,
 	DEVICE_KEYS,
 	isScreenBlanked,
+	keyEvents,
 	READ_SCREEN_BLANKED_ARGV,
 	swipeEvents,
 	TYPEABLE_TEXT,
@@ -1933,13 +1933,12 @@ export class IosSimulatorDeviceBackend implements DeviceBackend {
 	}
 
 	/**
-	 * Press one of the keys of the neutral vocabulary — or refuse it by name, which five of them
+	 * Press one of the keys of the neutral vocabulary — or refuse it by name, which two of them
 	 * are.
 	 *
 	 * **The refusal comes first, before any round trip**, and that ordering is deliberate: `back`
-	 * and `recents` have no answer on this platform in *any* device state, and `delete`, `enter`
-	 * and `tab` have no measured one yet (#302), so asking the enumeration about the device first
-	 * would spend a call to reach the same sentence. What the caller is told is which key and why
+	 * and `recents` have no answer on this platform in *any* device state, so asking the
+	 * enumeration about the device first would spend a call to reach the same sentence. What the caller is told is which key and why
 	 * (`./input.js`'s `DEVICE_KEYS`), through
 	 * `UnsupportedKeyError` — never `MissingCapabilityError`, because this device does take input
 	 * and tapping, swiping and typing all work (`src/core/device.ts`).
@@ -1950,7 +1949,8 @@ export class IosSimulatorDeviceBackend implements DeviceBackend {
 	 * the press is conditional on {@link screenIsBlanked}, and a `wake` on a device that is
 	 * already awake sends nothing at all — measured three times in a row on the bench, leaving the
 	 * flag at `0` each time (`PROJECT.md` R46). `home` presses unconditionally, because `HOME` is
-	 * not a toggle.
+	 * not a toggle, and so do the keyboard keys `delete`, `enter` and `tab` — one HID usage each,
+	 * which never reads the blanked flag (#302).
 	 *
 	 * The state check on the device is *after* the key lookup and *before* either of those, so a
 	 * key that will be pressed is pressed on a device that can take it.
@@ -1961,19 +1961,28 @@ export class IosSimulatorDeviceBackend implements DeviceBackend {
 			throw new UnsupportedKeyError(serial, key, answer.noEquivalent);
 		}
 		await this.refuseUnlessInputtable(serial);
+		if ('keycode' in answer) {
+			await this.companions.stream(serial, HID_RPC, keyEvents(answer.keycode));
+			return;
+		}
 		if (answer.onlyWhenBlanked && !(await this.screenIsBlanked(serial))) return;
 
 		await this.companions.stream(serial, HID_RPC, buttonEvents(answer.button));
 	}
 
 	/**
-	 * Refused by name, before any round trip: `./input.js`'s `CLEAR_TEXT_REFUSAL` says why — the
-	 * candidate is unmeasured through `hid`, which answers success for usages that do nothing
-	 * (#302). `UnsupportedClearError` rather than `MissingCapabilityError` for {@link pressKey}'s
-	 * reason: this device does take input.
+	 * Empty the focused field: Cmd+A then backspace, in one stream (`./input.js`'s
+	 * `CLEAR_TEXT_EVENTS`, which carries the measurements — #302).
+	 *
+	 * One stream because one was enough on every field it was watched clearing, and because the
+	 * select-all needs no length, so nothing is read from the device first. `hid` cannot report a
+	 * no-op, so what says this landed is `tests/device/ios-simulator/input.test.ts` reading the
+	 * field back — a call that resolves here has sent the keys, not proved the field is empty.
 	 */
 	async clearText(serial: DeviceSerial): Promise<void> {
-		throw new UnsupportedClearError(serial, CLEAR_TEXT_REFUSAL);
+		await this.refuseUnlessInputtable(serial);
+
+		await this.companions.stream(serial, HID_RPC, CLEAR_TEXT_EVENTS);
 	}
 
 	/**
