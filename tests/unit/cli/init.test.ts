@@ -199,6 +199,27 @@ describe('rover init', () => {
 		expect(errored.join('\n')).toContain('./gradlew :app:tasks');
 	});
 
+	it('registers no install for dimensions whose order is declared outside the build file', async () => {
+		const directory = await createProject({
+			gradlew: '#!/bin/sh\n',
+			'app/build.gradle.kts': `android {
+  productFlavors {
+    create("free") { dimension = "tier" }
+    create("dev") { dimension = "env" }
+  }
+}
+`,
+		});
+
+		expect(await run(['init', directory])).toBe(EXIT_OK);
+
+		// Composing in the order the flavors were written would register ':app:installFreeDevDebug',
+		// which does not exist — init writes no task name it could not order.
+		expect(await readJson(hookFile())).toEqual({ project });
+		expect(logged.join('\n')).not.toMatch(/:app:install[A-Z]/);
+		expect(errored.join('\n')).toContain('./gradlew :app:tasks');
+	});
+
 	it('carries the variants it would not pick between into --json', async () => {
 		const directory = await createProject({
 			gradlew: '#!/bin/sh\n',

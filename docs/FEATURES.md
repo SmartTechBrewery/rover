@@ -913,7 +913,8 @@ working on — and there is nothing to start by hand afterwards.
   `app/build.gradle(.kts)`: no flavors keeps the plain task, exactly one variant gets that
   variant's own task with the file it was read from named, and **several variants get none
   registered** — each is listed as a ready-to-paste `--install` line instead. Flavors that only
-  Gradle could resolve, built in a loop or through `all { }`, likewise get none, and the report
+  Gradle could resolve, built in a loop or through `all { }`, or spread over several dimensions
+  whose order is declared outside that file, likewise get none, and the report
   says that is why. The reasoning is the one every detection here follows: a hook that installs
   the wrong variant is an install that "worked" and left the device unchanged, which is strictly
   worse than the named `install-hook-undeclared` an undeclared install answers with. Every

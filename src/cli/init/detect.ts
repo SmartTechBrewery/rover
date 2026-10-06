@@ -22,8 +22,9 @@
  * install is read out of `app/build.gradle(.kts)` rather than assumed: one variant is proposed
  * like any other detection, **several are listed and none registered** because picking one for
  * somebody would be the guess this module exists to avoid, and a flavor block that only Gradle
- * itself could evaluate — a loop, an `all { }` — yields nothing and says so. The report is where
- * the choice is handed back, as a ready-to-paste `--install` line per variant.
+ * itself could evaluate — a loop, an `all { }`, or several dimensions whose order is declared
+ * somewhere other than this file — yields nothing and says so. The report is where the choice is
+ * handed back, as a ready-to-paste `--install` line per variant.
  */
 
 import { access, readFile } from 'node:fs/promises';
@@ -106,8 +107,15 @@ const NOT_A_FLAVOR = new Set([
 	'do',
 ]);
 
-/** `create("free")`, and the four other container calls that name a flavor in a string. */
-const CONTAINER_CALL = /^(?:create|register|maybeCreate|getByName|named)\s*\(\s*["']([^"']+)["']/;
+/** `create("free")`, and the two other container calls that declare a flavor by a string. */
+const CONTAINER_CALL = /^(?:create|register|maybeCreate)\s*\(\s*["']([^"']+)["']/;
+
+/**
+ * `getByName("free")` and `named("free")`: they configure a flavor declared somewhere else rather
+ * than declaring one, so they add no variant — and a lookup of a name this block never declared
+ * means the flavor set is not all in this file.
+ */
+const CONTAINER_LOOKUP = /^(?:getByName|named)\s*\(\s*["']([^"']+)["']/;
 
 /** A Groovy block head that is nothing but a name: `free {`. */
 const BARE_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
@@ -128,7 +136,8 @@ interface Flavor {
  * `undefined` means the file declares no `productFlavors` at all, so the project has the plain
  * `debug` variant and nothing had to be worked out. An **empty array** means flavors are declared
  * and this function could not resolve them: a loop, an `all { }`, names coming from a variable,
- * or dimensions the flavors and the `flavorDimensions` declaration disagree about. That is a
+ * flavors in several dimensions with no literal `flavorDimensions` in this file to order them, or
+ * dimensions the flavors and that declaration disagree about. That is a
  * deliberate third answer rather than a guess, because the one thing worse than listing no
  * variant is listing a variant that does not exist.
  *
@@ -151,28 +160,43 @@ export function gradleDebugVariants(buildFile: string): readonly string[] | unde
 }
 
 /**
- * The flavors a `productFlavors` body declares, or `undefined` when something in it is not a
- * flavor declaration at all.
+ * The flavors a `productFlavors` body declares, once each and in the order first declared, or
+ * `undefined` when something in it is not a flavor declaration at all.
+ *
+ * A name that comes back — `maybeCreate` twice, a Groovy block repeated, a `getByName` that
+ * configures one already declared — is the same flavor configured again, and its dimension merges
+ * into the one declared; two different dimensions for one flavor is a file this parse has not
+ * understood.
  */
 function flavorsIn(body: string): Flavor[] | undefined {
-	const flavors: Flavor[] = [];
+	const flavors = new Map<string, string | undefined>();
 	for (const statement of topLevelStatements(body)) {
 		const head = statement.head.trim();
 		if (head === '') {
 			continue;
 		}
-		const called = CONTAINER_CALL.exec(head)?.[1];
-		if (called !== undefined) {
-			flavors.push({ name: called, dimension: dimensionIn(statement.body) });
-			continue;
+		const declared = declaredFlavor(head, statement.body);
+		const name = declared ?? CONTAINER_LOOKUP.exec(head)?.[1];
+		if (name === undefined || (declared === undefined && !flavors.has(name))) {
+			return undefined;
 		}
-		if (statement.body !== undefined && BARE_NAME.test(head) && !NOT_A_FLAVOR.has(head)) {
-			flavors.push({ name: head, dimension: dimensionIn(statement.body) });
-			continue;
+		const dimension = dimensionIn(statement.body);
+		const known = flavors.get(name);
+		if (dimension !== undefined && known !== undefined && dimension !== known) {
+			return undefined;
 		}
-		return undefined;
+		flavors.set(name, dimension ?? known);
 	}
-	return flavors;
+	return [...flavors].map(([name, dimension]) => ({ name, dimension }));
+}
+
+/** The flavor a statement head declares — a container call or a bare Groovy block — if any. */
+function declaredFlavor(head: string, body: string | undefined): string | undefined {
+	const called = CONTAINER_CALL.exec(head)?.[1];
+	if (called !== undefined) {
+		return called;
+	}
+	return body !== undefined && BARE_NAME.test(head) && !NOT_A_FLAVOR.has(head) ? head : undefined;
 }
 
 function dimensionIn(body: string | undefined): string | undefined {
@@ -187,23 +211,29 @@ function dimensionIn(body: string | undefined): string | undefined {
  * rule that makes the order flavors happen to be written in irrelevant — and a flavor naming a
  * dimension nothing declared, or a dimension no flavor fills, means the file says something this
  * parse has not understood.
+ *
+ * So flavors spanning several dimensions with **no declaration in this file** resolve to nothing:
+ * the order is then in a convention plugin, an applied script or a variable, and composing the
+ * names in the order the flavors were written would invent tasks the project does not have.
  */
 function composeVariants(flavors: readonly Flavor[], declared: readonly string[]): string[] {
-	const dimensions =
-		declared.length > 0
-			? declared
-			: [...new Set(flavors.map((flavor) => flavor.dimension).filter(named))];
-	if (dimensions.length <= 1) {
-		return flavors.map((flavor) => `${flavor.name}${upperFirst(DEBUG)}`);
+	const perFlavor = flavors.map((flavor) => `${flavor.name}${upperFirst(DEBUG)}`);
+	if (declared.length === 0) {
+		const named = new Set(flavors.map((flavor) => flavor.dimension).filter(isNamed));
+		return named.size <= 1 ? perFlavor : [];
 	}
 	if (
-		flavors.some(
-			(flavor) => flavor.dimension === undefined || !dimensions.includes(flavor.dimension),
-		)
+		flavors.some((flavor) => flavor.dimension !== undefined && !declared.includes(flavor.dimension))
 	) {
 		return [];
 	}
-	const perDimension = dimensions.map((dimension) =>
+	if (declared.length === 1) {
+		return perFlavor;
+	}
+	if (flavors.some((flavor) => flavor.dimension === undefined)) {
+		return [];
+	}
+	const perDimension = declared.map((dimension) =>
 		flavors.filter((flavor) => flavor.dimension === dimension).map((flavor) => flavor.name),
 	);
 	if (perDimension.some((names) => names.length === 0)) {
@@ -218,7 +248,7 @@ function composeVariants(flavors: readonly Flavor[], declared: readonly string[]
 	return variants.map((variant) => `${variant}${upperFirst(DEBUG)}`);
 }
 
-function named(value: string | undefined): value is string {
+function isNamed(value: string | undefined): value is string {
 	return value !== undefined;
 }
 
@@ -244,25 +274,36 @@ function flavorDimensionsIn(text: string): string[] {
 	return dimensions;
 }
 
-/** One statement's text, from `start` to the end of its line or of its argument list. */
+/**
+ * One statement's text, from `start` to the end of its line or of its argument list.
+ *
+ * A line ending in a comma is not the end of the statement: Groovy lets a bracket-less argument
+ * list run on (`flavorDimensions "env",` then `"tier"`), and stopping at the first line would
+ * read one dimension where the file declares two.
+ */
 function statementAt(text: string, start: number): string {
-	let end = text.indexOf('\n', start);
-	end = end === -1 ? text.length : end;
+	let firstLine = text.indexOf('\n', start);
+	firstLine = firstLine === -1 ? text.length : firstLine;
 	let depth = 0;
 	for (let index = start; index < text.length; index += 1) {
 		const character = text[index] as string;
-		if (character === '(' || character === '[') {
-			depth += 1;
-		} else if (character === ')' || character === ']') {
-			depth -= 1;
-			if (depth === 0 && index >= end) {
-				return text.slice(start, index + 1);
-			}
-		} else if (character === '\n' && depth === 0 && index >= end) {
+		const delta = bracketDelta(character);
+		depth += delta;
+		if (delta < 0 && depth === 0 && index >= firstLine) {
+			return text.slice(start, index + 1);
+		}
+		if (character === '\n' && depth === 0 && !text.slice(start, index).trimEnd().endsWith(',')) {
 			return text.slice(start, index);
 		}
 	}
-	return text.slice(start, end);
+	return depth === 0 ? text.slice(start) : text.slice(start, firstLine);
+}
+
+function bracketDelta(character: string): number {
+	if (character === '(' || character === '[') {
+		return 1;
+	}
+	return character === ')' || character === ']' ? -1 : 0;
 }
 
 /** One top-level statement of a block: whatever preceded its body, and the body when it had one. */

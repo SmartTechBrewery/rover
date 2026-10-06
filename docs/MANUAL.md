@@ -1621,7 +1621,9 @@ where it read it. **Several variants: it registers none**, and lists each one as
 `--install` line, because a hook that installs the wrong variant is an install that "worked" and
 changed nothing the agent is looking at — strictly worse than the `install-hook-undeclared` an
 undeclared install answers with. Flavors it cannot read statically — built in a loop, configured
-through `all { }`, named from a variable — get the same treatment and a report saying why. In both
+through `all { }`, named from a variable, or spread over several dimensions whose order is not
+declared in that file as a literal `flavorDimensions` (a convention plugin, an applied script, a
+`flavorDimensions += dims`) — get the same treatment and a report saying why. In both
 cases the fix is one re-run: `rover init --install '<the line you want>' --force`, or the line
 written into the hook file by hand.
 

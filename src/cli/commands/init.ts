@@ -594,9 +594,10 @@ function reportCaveats(
  *
  * It is a warning and not a failure: the run wrote everything else, and exiting non-zero would
  * make every later re-run of a project with a tuned hook file fail over a field that run was
- * never going to touch. The fix named is the re-run, and it carries `--force` only when this run
- * wrote the hook file itself — a kept file is the operator's to edit, and the "kept" warning
- * below already explains the flag.
+ * never going to touch. The fix named is a re-run with `--force` either way, since without it a
+ * re-run keeps the file this one wrote or kept. A kept file is offered hand-editing first, though:
+ * it may carry services and a teardown that `--force` would replace, which the "kept" warning
+ * below spells out.
  */
 function installChoiceCaveat(undecided: Undecided, kept: boolean): string {
 	const why =
@@ -606,7 +607,8 @@ function installChoiceCaveat(undecided: Undecided, kept: boolean): string {
 	if (undecided.choices.length === 0) {
 		return (
 			`${why} Nor could it read the flavors out of that file — a block built in a loop or by ` +
-			`'all { }' is Gradle's to evaluate and nobody else's. Run './gradlew :app:tasks' for the ` +
+			`'all { }', or dimensions whose order is declared somewhere else, is Gradle's to ` +
+			`evaluate and nobody else's. Run './gradlew :app:tasks' for the ` +
 			`real install tasks, then ${registerWith(`--install '<the line you want>'`, kept)}`
 		);
 	}
