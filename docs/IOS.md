@@ -90,7 +90,7 @@ startup of ~60–90 ms that a Node backend talking gRPC directly would not pay.
 | `stopApp` | `simctl terminate <bundle>` | 0.12 s | ✅ |
 | `clearAppData` | `simctl uninstall` + `install` of a staged copy | 0.5–0.79 s | ⚠️ no `pm clear` equivalent |
 | `screenshot` | `simctl io <d> screenshot --type png --mask ignored <path>` | 0.14–0.29 s, 246 KB–2.8 MB PNG | ✅ to a **file**, never stdout |
-| `readLogs` | `simctl spawn <d> log show --style ndjson --info --debug --last <30s→2m→5m>` | 0.9–1.8 s per width, 2,053–34,819 entries; 113.6 MB in `30s` a minute past boot | ⚠️ must be scoped in the query; widens until the cap binds or a width outgrows the 64 MB buffer |
+| `readLogs` | `simctl spawn <d> log show --style ndjson [--info --debug] [--predicate P] (--last <30s→2m→5m> \| --start <since>)` | 0.9–1.8 s per width, 2,053–34,819 entries; 113.6 MB in `30s` a minute past boot; one process over 30 s 1,151 entries / 1.4 MB against 4,316 / 5.4 MB unfiltered | ⚠️ must be scoped in the query; selections are pushed into `--predicate` and re-applied on the host (#304); widens until the cap binds or a width outgrows the 64 MB buffer |
 | `pushFile` | the device's `dataPath` + a host copy | 0.10 s, 64 KB | ✅ storage **is** a host path |
 | `pullFile` | same | 0.11 s, byte-identical | ✅ |
 
@@ -878,16 +878,60 @@ not a predicate.** Unfiltered, `log show --last 20s` returned **92,204 entries**
 window with `--predicate 'process == "Giotto"'` returned 268. A read that filters after the fact
 spends seconds serializing noise before `maxEntries` throws it away, and that rule is untouched.
 
-What this section concluded from it — that `readLogs` pushes the **process** filter down — is
-**reversed in place with its reason rewritten** (#229, `ai/RULES.md` §1). It could not: when this
-was written `ReadLogsOptions` carried `maxEntries` and nothing else (`src/core/device.ts`), so there
-was no process to filter *by*, and inventing one would have answered a narrower question than the
-caller asked. **#303 has since given the contract its selections** — `appId`, `pid`, `minLevel`,
-`tag`, `since` and `buffers` — and this backend refuses each by name (`log-filter-refused`) until
-#304 maps them, so whether the process filter becomes a `--predicate` pushdown is that issue's
-question again.
-What is pushed down instead is the **device** and a **window**, which are the other two bounds this
-command has:
+What this section concluded from it — that `readLogs` pushes the **process** filter down — was
+reversed in #229 and is now **true again, edited in place with the whole history kept**
+(`ai/RULES.md` §1). It could not in #229: `ReadLogsOptions` carried `maxEntries` and nothing else
+(`src/core/device.ts`), so there was no process to filter *by*, and inventing one would have
+answered a narrower question than the caller asked. **#303 gave the contract its selections** —
+`appId`, `pid`, `minLevel`, `tag`, `since` and `buffers` — and **#304 pushed them down**
+(`src/backends/ios-simulator/log-query.ts`). Measured on the 2026-10-06 bench (macOS 27.0.1 /
+Xcode 26.4.1 / iOS 26.4.1): a 30-second window unfiltered was 4,316 entries / 5.4 MB, and the same
+window with `--predicate 'processIdentifier == 49847'` was 1,151 / 1.4 MB — the shape of the 92,204
+figure above, on a quieter bench.
+
+**The pushdown narrows; the host filter decides.** Every selection is applied twice — once in the
+query, so the device serialises candidates, and once on this host with `src/core/log-filter.ts`,
+which is what makes one `read_logs` call mean the same thing here and on Android (D10). The
+invariant: a pushdown must select a **superset** of what the host filter keeps, because the host
+filter can drop what a generous query let through and cannot restore what a strict one left out.
+The mapping, each form run on that bench before it was written down (PROJECT.md §6):
+
+| Selection | Pushed into `log show` | Measured |
+|---|---|---|
+| `pid` | `processIdentifier == <n>` | 1,151 entries, every one carrying that `processID` |
+| `appId` | `(processIdentifier == a OR …)` over `launchctl list`'s pids | two pids answered 1,151 and 3 entries and nothing else |
+| `minLevel` `verbose`/`debug` | nothing — both flags stay | every iOS level is at or above these |
+| `minLevel` `info` | drop `--debug` | `--info` alone still answers `Info`, `Default`, `Error`, `Fault` and the no-`messageType` entries |
+| `minLevel` `warn`/`error` | drop both flags, add `(messageType == error OR messageType == fault)` | 217 entries, exactly `Error` 184 and `Fault` 33; the unquoted keyword works |
+| `minLevel` `fatal` | drop both flags, add `messageType == fault` | `Fault → fatal` (above) |
+| `tag` | `subsystem == "<escaped>"` | `subsystem == "com.apple.locationd.Core"` answered 280 entries, all carrying it |
+| `since` | `--start <floored to the second>`, **instead of** `--last` | see trap 18 |
+| `buffers` | nothing | `main` *is* the unified log; the rest are refused by name (below) |
+
+**`tag` is the *subsystem*, and that is a documented choice rather than a default.**
+`parsers/unified-log.ts` fills `LogEntry.tag` from `subsystem` and deliberately never reads
+`category`, so a tag copied out of an entry selects the entries carrying it. Selecting on
+`category` instead would filter by a field the answer does not show — the plausible-looking wrong
+answer `ai/RULES.md` §2 forbids.
+
+**Of the four buffers, this backend accepts one and refuses three by name.** `main` is the unified
+log, which is what every read here has always answered from, so naming it changes nothing.
+`system` and `events` have no counterpart: there is no second stream to point them at, and
+answering them out of the unified log would be the same plausible-looking wrong answer. **`crash`
+is refused too, and it is a real gap rather than a missing counterpart** — a simulator's crashes
+are `.ips` reports written to the *host*, outside the log store `log show` reads at all, and
+reading them is #304's second phase. Refusing it by name is what keeps a crash read from coming
+back as ordinary chatter in the meantime. The refusal also means the `appId` refusal here does not
+send a caller to the crash buffer the way the Android one does; it names the pid as the way to
+reach a process that has exited.
+
+**A tag is the only caller-chosen text in the predicate**, and it goes in as an NSPredicate string
+literal with `\` and `"` escaped. The predicate is one argv entry through `execFile`, so no shell
+parses it. Measured: `subsystem == "a\"b\\c"` is accepted and matches nothing, while a malformed
+predicate fails loudly — exit **64**, `log: Bad predicate (Unable to parse the format string …)`.
+
+What is pushed down alongside all of that is the **device** and a **window**, which are the other
+two bounds this command has:
 
 - **`simctl spawn` is itself the device scope.** The query runs inside the simulator rather than
   against this Mac's log: on the second bench (macOS 26.6.2 / Xcode 26.4.1, 2026-09-08) a
@@ -1225,6 +1269,38 @@ full factory reset if state restoration ever needs one.
     been — seen once, not polled — while the launch-window placeholder §2 measures, which is
     harmless to re-read, is the one shape that is typed. The recovery is `simctl shutdown` then
     `simctl boot`; nothing short of that brings it back.
+
+18. **`log show --start` refuses the timestamp its own entries print, and `--last` beside it would
+    be a second lower bound.** Measured 2026-10-06 (macOS 27.0.1 / Xcode 26.4.1 / iOS 26.4.1). An
+    entry carries `2026-10-06 14:54:08.135887+0200`; handing that straight to `--start` fails with
+    *"Failed conversion of '2026-10-06 14:54:08.135887+0200' using format '%Y-%m-%d %H:%M:%S%z'"*.
+    The fraction is what it cannot read — `2026-10-06 14:54:08+0200` is accepted — so a `since`
+    taken from an entry **must be floored to the second**, which is a correctness requirement
+    rather than a tidying step. Flooring is safe in the one direction that matters: it moves the
+    device-side bound earlier, and the host comparison then makes the boundary exact. Measured on
+    the same read, an anchor of `…:08+0200` answered from `…:08.124559`, earlier than the
+    `…:08.135887` entry it came from.
+
+    Two more facts from the same bench. **`--start` with no `--last` runs to now** — an anchor 22 s
+    back answered up to the moment of the call — so there is no lookback left to widen and the two
+    bounds must not be sent together. And **a far anchor is expensive**: five minutes back was
+    69,465 entries / **87.3 MB** / 2.6 s and thirty minutes back 577,068 / **739.9 MB** / 14.9 s,
+    past the 64 MB buffer and past the ten-second budget, so such a read fails loudly rather than
+    answering short (trap 11's failure, reached by a different route). With a predicate beside it
+    the same two anchors cost 6.6 MB / 1.2 s and 14.8 MB / 1.6 s — which is the practical advice:
+    an old anchor wants a selection beside it.
+
+19. **A simulator has no `pidof`, and a terminated app's launchd job disappears rather than going
+    to `-`.** Measured 2026-10-06, same bench. `simctl spawn <udid> launchctl list` answers in
+    ~0.4 s with `PID\tStatus\tLabel` rows, and an app's row reads
+    `50111\t0\tUIKitApplication:com.apple.Preferences[e4bc][rb-legacy]` — the bundle id sits
+    between the colon and the **first** `[`, and matching anything looser takes
+    `com.apple.chrono.WidgetRenderer-Default`'s process for `com.apple.chrono`'s. The pid is the
+    one the log prints: `simctl launch` reported 49847 for Settings on an earlier run, `launchctl
+    list` carried 49847, and all 1,151 entries of a `processIdentifier == 49847` read carried that
+    `processID`. After `simctl terminate`, the label was **gone from the listing entirely** rather
+    than left behind with `-` in the PID column — so "not running" has two spellings here (absent,
+    and `-`, which 198 of the 379 jobs in the committed capture carry) and both mean no process.
 
 ---
 
