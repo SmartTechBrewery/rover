@@ -1228,6 +1228,22 @@ describe('deviceInfo', () => {
 		),
 		'utf8',
 	);
+	/**
+	 * Settings in front, the home screen after it was terminated, and the listing taken between
+	 * the two — one bench, one session, so the pids in the reads are the pids in the listing (#336).
+	 */
+	const PREFERENCES_READ = readFileSync(
+		fixtureUrl('accessibility.preferences.idbcompanion1.5.2-xcode27.0-ios26.5.json'),
+		'utf8',
+	);
+	const SPRINGBOARD_READ = readFileSync(
+		fixtureUrl('accessibility.springboard.idbcompanion1.5.2-xcode27.0-ios26.5.json'),
+		'utf8',
+	);
+	const LAUNCHCTL_LISTING = readFileSync(
+		fixtureUrl('launchctl-list.xcode27.0-ios26.5.txt'),
+		'utf8',
+	);
 
 	it('asks for the three listings it joins in one invocation', async () => {
 		answers(listing());
@@ -1260,7 +1276,8 @@ describe('deviceInfo', () => {
 				systemBars: null,
 				keyboard: null,
 			},
-			// *Not answered* until the route is measured (#331 phase 2), never *nothing in front*.
+			// Not booted, so nothing was read and nothing is named — *not answered*, never *nothing
+			// in front* (#336).
 			foregroundApp: null,
 			osVersion: '26.4.1',
 			osApiLevel: null,
@@ -1386,8 +1403,12 @@ describe('deviceInfo', () => {
 	it('answers null and starts no companion for a device that is not booted', async () => {
 		answers(listing());
 
-		expect((await backend.deviceInfo(IPHONE_17_PRO)).screen.keyboard).toBeNull();
+		const info = await backend.deviceInfo(IPHONE_17_PRO);
+
+		expect(info.screen.keyboard).toBeNull();
+		expect(info.foregroundApp).toBeNull();
 		expect(companionCall).not.toHaveBeenCalled();
+		expect(runSimctlOnDevice).not.toHaveBeenCalled();
 	});
 
 	/**
@@ -1408,8 +1429,11 @@ describe('deviceInfo', () => {
 		const info = await backend.deviceInfo(IPHONE_17_PRO);
 
 		expect(info.screen.keyboard).toBeNull();
+		expect(info.foregroundApp).toBeNull();
 		expect(info.screen.widthDp).toBe(402);
 		expect(info.model).toBe('iPhone 17 Pro');
+		// No pid, so nothing to look up — the listing is not spawned for a read that failed.
+		expect(runSimctlOnDevice).not.toHaveBeenCalled();
 	});
 
 	/**
@@ -1427,14 +1451,98 @@ describe('deviceInfo', () => {
 					AXLabel: null,
 					AXValue: null,
 					traits: ['None'],
+					pid: 85092,
 				},
 			]),
 		});
+		runSimctlOnDevice.mockResolvedValue({ stdout: LAUNCHCTL_LISTING, stderr: '' });
 
-		expect((await backend.deviceInfo(IPHONE_17_PRO)).screen.keyboard).toEqual({
-			shown: false,
-			bounds: null,
-		});
+		const info = await backend.deviceInfo(IPHONE_17_PRO);
+
+		expect(info.screen.keyboard).toEqual({ shown: false, bounds: null });
+		// The placeholder carries the launching app's pid — measured 3 of 3 on the #336 bench — so a
+		// launch that has not drawn yet is already named as the app being launched.
+		expect(info.foregroundApp).toBe('com.apple.Preferences');
+	});
+
+	/**
+	 * **The foreground app, through a read and a listing taken in the same moment** (#336). The
+	 * read's nodes all carry Settings' pid, and the listing runs a `UIKitApplication:` job under it.
+	 * `runSimctlOnDevice` and the argv are asserted because an unpinned `runSimctl` would be a
+	 * listing of somebody else's device.
+	 */
+	it('names the application the read’s pid runs under in the device’s listing', async () => {
+		answers(onlyBooted(IPHONE_17_PRO));
+		companionCall.mockResolvedValue({ json: PREFERENCES_READ });
+		runSimctlOnDevice.mockResolvedValue({ stdout: LAUNCHCTL_LISTING, stderr: '' });
+
+		const info = await backend.deviceInfo(IPHONE_17_PRO);
+
+		expect(info.foregroundApp).toBe('com.apple.Preferences');
+		expect(runSimctlOnDevice).toHaveBeenCalledTimes(1);
+		expect(runSimctlOnDevice).toHaveBeenCalledWith(IPHONE_17_PRO, 'spawn', ['launchctl', 'list']);
+	});
+
+	/**
+	 * **One accessibility read answers both fields.** Two reads would double the round trip every
+	 * verb pays twice over, and could describe two different moments of the screen.
+	 */
+	it('takes one accessibility read for the keyboard and the foreground app together', async () => {
+		answers(onlyBooted(IPHONE_17_PRO));
+		companionCall.mockResolvedValue({ json: PREFERENCES_READ });
+		runSimctlOnDevice.mockResolvedValue({ stdout: LAUNCHCTL_LISTING, stderr: '' });
+
+		const info = await backend.deviceInfo(IPHONE_17_PRO);
+
+		expect(info.screen.keyboard).toEqual({ shown: false, bounds: null });
+		expect(info.foregroundApp).toBe('com.apple.Preferences');
+		expect(companionCall).toHaveBeenCalledTimes(1);
+	});
+
+	/**
+	 * **The home screen answers `null`, and that is measured rather than a gap.** The read reports
+	 * SpringBoard's pid and the listing carries it as `com.apple.SpringBoard`, a daemon label rather
+	 * than an application's. A launchd label is not a bundle id, so it is not passed off as one.
+	 */
+	it('answers null on the home screen, whose process the listing names as no application', async () => {
+		answers(onlyBooted(IPHONE_17_PRO));
+		companionCall.mockResolvedValue({ json: SPRINGBOARD_READ });
+		runSimctlOnDevice.mockResolvedValue({ stdout: LAUNCHCTL_LISTING, stderr: '' });
+
+		expect(LAUNCHCTL_LISTING).toContain('77372\t0\tcom.apple.SpringBoard');
+		expect((await backend.deviceInfo(IPHONE_17_PRO)).foregroundApp).toBeNull();
+	});
+
+	/**
+	 * An app that died between the read and the listing has left the listing — its job goes rather
+	 * than turning to `-` (#304, #336) — so the stale pid names nothing rather than a wrong app.
+	 */
+	it('answers null for a pid the listing no longer carries', async () => {
+		answers(onlyBooted(IPHONE_17_PRO));
+		companionCall.mockResolvedValue({ json: PREFERENCES_READ });
+		const withoutSettings = LAUNCHCTL_LISTING.split('\n')
+			.filter((line) => !line.includes('com.apple.Preferences'))
+			.join('\n');
+		runSimctlOnDevice.mockResolvedValue({ stdout: withoutSettings, stderr: '' });
+
+		expect((await backend.deviceInfo(IPHONE_17_PRO)).foregroundApp).toBeNull();
+	});
+
+	/**
+	 * **The listing failing must not become a new way for `device_info` to fail**, for the same
+	 * reason the read failing must not: the verb declares no capability. Everything else about the
+	 * answer — the keyboard the read did produce included — is still there.
+	 */
+	it('answers null and still answers at all when the listing fails', async () => {
+		answers(onlyBooted(IPHONE_17_PRO));
+		companionCall.mockResolvedValue({ json: PREFERENCES_READ });
+		runSimctlOnDevice.mockRejectedValue(refusedWith(149, 'Process spawn via launchd failed'));
+
+		const info = await backend.deviceInfo(IPHONE_17_PRO);
+
+		expect(info.foregroundApp).toBeNull();
+		expect(info.screen.keyboard).toEqual({ shown: false, bounds: null });
+		expect(info.model).toBe('iPhone 17 Pro');
 	});
 
 	// One read, not two: a retry loop is a wait, and waits live in the wait vocabulary (D12(b)).
@@ -2210,6 +2318,7 @@ describe('readScreen', () => {
 			AXLabel: null,
 			AXValue: null,
 			traits: ['None'],
+			pid: 82023,
 		},
 	]);
 
@@ -2247,6 +2356,7 @@ describe('readScreen', () => {
 					AXLabel: 'Ustawienia',
 					AXValue: null,
 					traits: ['None'],
+					pid: 77965,
 				},
 			]),
 		});

@@ -332,7 +332,13 @@ describe('toScreenElements, on reads no capture here contains', () => {
 	it('turns an empty string into null', () => {
 		expect(
 			toScreenElements([
-				{ frame: { x: 0, y: 0, width: 1, height: 1 }, AXLabel: '', AXValue: '', traits: [] },
+				{
+					frame: { x: 0, y: 0, width: 1, height: 1 },
+					AXLabel: '',
+					AXValue: '',
+					traits: [],
+					pid: 1,
+				},
 			])[0],
 		).toEqual({ id: '0', label: null, text: null, bounds: { x: 0, y: 0, width: 1, height: 1 } });
 	});
@@ -423,6 +429,7 @@ describe('toOnScreenKeyboard, on reads no capture here contains', () => {
 		AXLabel: null,
 		AXValue: null,
 		traits,
+		pid: 99145,
 	});
 
 	/**
@@ -455,6 +462,7 @@ describe('toOnScreenKeyboard, on reads no capture here contains', () => {
 			frame: { x: 0, y: 0, width: 0, height: 0 },
 			AXLabel: null,
 			AXValue: null,
+			pid: 82023,
 		};
 
 		expect(toOnScreenKeyboard([{ ...placeholder, traits: null }])).toEqual({
@@ -473,7 +481,13 @@ describe('toOnScreenKeyboard, on reads no capture here contains', () => {
 	 */
 	it('unions the keyboard around a node whose traits are null', () => {
 		const withPlaceholder = [
-			{ frame: { x: 0, y: 0, width: 0, height: 0 }, AXLabel: null, AXValue: null, traits: null },
+			{
+				frame: { x: 0, y: 0, width: 0, height: 0 },
+				AXLabel: null,
+				AXValue: null,
+				traits: null,
+				pid: 99145,
+			},
 			...KEYBOARD,
 		];
 

@@ -21,10 +21,11 @@
  *   both shapes anyway. Nothing in this backend needs the provenance, and reading two shapes to
  *   get one list is a cost with nothing on the other side of it.
  *
- * **Four keys are projected out of sixteen, and the frame is the numeric one.** Each node in the
- * capture carries `frame` (four numbers) *and* `AXFrame` (the same rectangle as
+ * **Five keys are projected out of sixteen, and the frame is the numeric one.** It said *four*
+ * until #336, and the sentence is edited in place rather than left to be out-counted (the two
+ * paragraphs below say which keys moved and why). Each node in the capture carries `frame` (four numbers) *and* `AXFrame` (the same rectangle as
  * `{{x, y}, {w, h}}`, printed at full double precision); the numbers are taken, because parsing
- * Apple's rectangle spelling back into numbers is work the tool has already done. `role`, `pid`,
+ * Apple's rectangle spelling back into numbers is work the tool has already done. `role`,
  * `subrole`, `enabled` and the rest are real and are deliberately unread — `ScreenElement` has no
  * field for any of them (`src/core/device.ts`), and projecting a value nothing consumes is a
  * claim about a key this backend does not check.
@@ -34,11 +35,19 @@
  * because it is the only place in this payload where the device **names the software keyboard**:
  * every key node carries {@link KEYBOARD_KEY_TRAIT} and each cell of the strip above the keys
  * carries {@link KEYBOARD_CANDIDATE_TRAIT}, so the union of their frames is the drawn panel. That
- * is what makes it the exception to the rule above rather than a hole in it — the other four
- * still feed nothing, and `traits` feeds `ScreenInfo.keyboard` (`../screen.js`'s
+ * is what makes it the exception to the rule above rather than a hole in it — the other three
+ * still feed nothing (four, until `pid` moved below), and `traits` feeds `ScreenInfo.keyboard` (`../screen.js`'s
  * `toOnScreenKeyboard`) rather than `ScreenElement`, which has no field for it either.
  *
- * **It is required but nullable, and the nullability was measured the hard way.** The key is on
+ * **`pid` was another of those five, and it moved second** (#336; this paragraph sits beside the
+ * one above rather than replacing it, `ai/RULES.md` §1). It was unread for the same reason the
+ * rest still are, and the list above no longer names it. It is read now because it is the only
+ * place in this payload that says **which process drew the screen**: every node of one read carries the
+ * same pid — Settings 99145 and 16162, Safari 17263 and the Compose app 14900 across the five
+ * captures — and `launchctl list` inside the device names the application running under it. That
+ * feeds `DeviceInfo.foregroundApp` (`../backend.ts`'s `#foregroundAppOf`), not `ScreenElement`.
+ *
+ * **`traits` is required but nullable, and the nullability was measured the hard way.** It is on
  * all 50 nodes across the three captures that predate #298 and on all 52 across the pair that
  * capture carried in, so it stays required — a release that stopped emitting it is a re-capture,
  * and a read failing by the key's own name is a better way to find that out than a keyboard that
@@ -148,6 +157,7 @@ export type AccessibilityFrame = z.infer<typeof AccessibilityFrameSchema>;
  *
  * **`traits` is the fourth, and it is the keyboard's** — see the module header for why it is the
  * one of the five unprojected keys that moved, and {@link KEYBOARD_KEY_TRAIT} for what is in it.
+ * **`pid` is the fifth, and it is the foreground app's** (#336) — the header says why it moved too.
  */
 export const AccessibilityElementSchema = z.object({
 	frame: AccessibilityFrameSchema,
@@ -177,6 +187,23 @@ export const AccessibilityElementSchema = z.object({
 	 * non-`.strict()`.
 	 */
 	traits: z.array(z.string()).nullable(),
+	/**
+	 * The process that drew this node — the same on every node of one read, so the first node's is
+	 * the screen's (module header). On the home screen it is SpringBoard's.
+	 *
+	 * **Required**, because every node of the five committed captures and every read taken on the
+	 * #336 bench carried it — including the launching-app placeholder, whose single zero-framed node
+	 * already carries the **launching app's** pid (`traits: null` beside it), so a cold launch is
+	 * attributed to the app being launched rather than to nothing.
+	 *
+	 * **Nullable, and that is a choice about cost rather than a measurement**, stated as one so
+	 * nobody reads it as the second kind: no `null` pid has been seen. What decides it is who pays
+	 * when one arrives. A `null` here costs `foregroundApp` its answer — `null`, which is that
+	 * field's *not answered* already — while refusing it would cost `readScreen` a whole read for a
+	 * key `readScreen` does not use, the exact trade `traits` above was rewritten
+	 * for.
+	 */
+	pid: z.number().int().nullable(),
 });
 export type AccessibilityElement = z.infer<typeof AccessibilityElementSchema>;
 

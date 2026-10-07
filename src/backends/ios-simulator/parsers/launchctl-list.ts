@@ -72,6 +72,42 @@ export function parseAppPids(stdout: string, appId: string): number[] {
 }
 
 /**
+ * The bundle id of the application running under `pid`, or `null` when no application is.
+ *
+ * {@link parseAppPids} asked the other way round, and the guarantee is the same one: **the pid is
+ * matched whole**, as the PID column's whole cell, so `1234` is never answered with `12345`'s
+ * job. That matters for the same reason — a listing is scanned, so a loose match would name one
+ * app for another with nothing in the answer to say so.
+ *
+ * **`null` for every job that is not an application's**, and the one that motivates it is
+ * SpringBoard. On the home screen the accessibility read reports SpringBoard's pid, and launchd
+ * lists it as `com.apple.SpringBoard` — a daemon label, not a `UIKitApplication:` one (`PROJECT.md`
+ * §6, #336). A launchd label is not a bundle id, and answering it as one would be a guess about
+ * which string `launch_app` would accept; the honest answer is that this listing does not name an
+ * application for that process.
+ *
+ * `null` too for a pid with no job at all, which is what a terminated or crashed app's pid becomes
+ * — its job leaves the listing rather than turning to `-` (measured both ways, #304 and #336).
+ * The same lines {@link parseAppPids} skips are skipped here, for its reason.
+ */
+export function parseBundleIdOfPid(stdout: string, pid: number): string | null {
+	const wanted = String(pid);
+
+	for (const line of stdout.split('\n')) {
+		if (line.length === 0 || line === HEADER) continue;
+
+		const [column, , label] = line.split('\t');
+		if (column !== wanted || label === undefined) continue;
+
+		// `''` out of a bare `UIKitApplication:` is no id at all, and `DeviceInfo.foregroundApp`
+		// refuses an empty string — so it is `null` here rather than a new way to fail upstream.
+		return bundleIdOf(label) || null;
+	}
+
+	return null;
+}
+
+/**
  * The bundle id a `UIKitApplication:` label names, or `null` for every other job.
  *
  * `indexOf('[')` rather than a regular expression over the whole label, because what follows the

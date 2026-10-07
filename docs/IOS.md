@@ -84,7 +84,7 @@ startup of ~60–90 ms that a Node backend talking gRPC directly would not pay.
 | `listDevices` | `simctl list -j devices`, keeping the booted ones | 0.10–0.76 s, 11 listed → **1 booted** | ✅ what can be borrowed now (#267, D41) |
 | `watchDevices` | `idb_companion --notify stdout` | full-set JSON per change, narrowed the same way | ✅ **a stream, not a poll** |
 | `describeDevice` | `simctl list -j devices`, filter udid | 0.10 s | ✅ not narrowed — one named device answers its state |
-| `deviceInfo` | `profile.plist` + `simctl getenv`, **plus one `accessibility_info` for the keyboard** (#298) | <1 ms for the probe; through the backend 111–159 ms without the read and 239–270 ms with it, 706 ms on the call that starts a companion | ✅ px, dpi and scale all exact; `screen.keyboard` is `null` — never `{ shown: false }` — whenever the read could not be taken |
+| `deviceInfo` | `profile.plist` + `simctl getenv`, **plus one `accessibility_info` for the keyboard** (#298) **whose `pid` is looked up in `simctl spawn … launchctl list` for the foreground app** (#336) | <1 ms for the probe; through the backend 111–159 ms without the read and 239–270 ms with it, 706 ms on the call that starts a companion; **459–474 ms warm with the listing** (Xcode 27.0 / iOS 26.5, #336) | ✅ px, dpi and scale all exact; `screen.keyboard` is `null` — never `{ shown: false }` — whenever the read could not be taken; `foregroundApp` is the bundle id, and `null` on the home screen and whenever the read or the listing could not be taken |
 | `installApp` | `simctl install <path.app>` | 0.3 s reinstall, 2.7–5.2 s first | ✅ |
 | `launchApp` | `simctl launch <bundle>` | 0.35 s, returns pid | ✅ |
 | `stopApp` | `simctl terminate <bundle>` | 0.12 s | ✅ |
@@ -505,6 +505,35 @@ stays `false` with a measured reason rather than a pending one; §5 carries the 
 `PROJECT.md` §6 the reads. One Escape also burns the device the way one `typeText` does (§8,
 trap 20).
 
+### What #336 measured: the application in front, and why the home screen names none
+
+The question was whether this platform can answer `DeviceInfo.foregroundApp` (#331) without a
+second screen read. It can, from the read the keyboard already takes. A **fifth bench** — macOS
+26.6.2 (25G83), Xcode **27.0** (27A266a), iOS **26.5** (23F77), `idb_companion` 1.5.2, a
+**throwaway** `iPhone 17` booted headless for the run, 2026-10-07:
+
+- **Every node of a read carries the drawing process's `pid`**, the same on all of them — a key the
+  parser left unread until #336. With Settings in front it was the pid `simctl launch` answered,
+  and `launchctl list` inside the device carried it as
+  `UIKitApplication:com.apple.Preferences[78d7][rb-legacy]` — the label shape `read_logs` already
+  parses for its `appId` selection (#304). That is the whole route.
+- **The home screen is SpringBoard's pid, and launchd lists it as `com.apple.SpringBoard`** — a
+  daemon label, not an application's. So the home screen answers `null`, deliberately: a launchd
+  label is not a bundle id, and Android's launcher (an ordinary package, named) has no counterpart
+  here that a measured route names.
+- **After `simctl terminate` or a `SIGSEGV`, the next read is SpringBoard's** and the app's job has
+  gone from the listing. The crash had to come from the host's `kill`: `simctl spawn … kill` fails,
+  because the runtime ships no `kill` binary.
+- **The cold-launch placeholder (#300) carries the launching app's pid**, 3 of 3 launches, so it is
+  named as the app being launched rather than as nothing.
+
+**What it costs** is the second `simctl spawn` and nothing else: 0.26–0.30 s for the listing from a
+quiet shell (0.40–0.55 s while the device was busy) against 51–64 ms for the warm read, and
+`deviceInfo` went to **459–474 ms warm** with Settings in front. Every verb pays that up to twice
+(`PROJECT.md` D14), which §4 carries beside the companion's own costs. A device that is not ready or
+a read that failed spawns nothing, and nothing in the route can make `device_info` throw.
+`PROJECT.md` §6 carries the commands and the outputs.
+
 ### It is genuinely headless
 
 `Simulator.app` was quit for this, and everything above still works:
@@ -809,6 +838,14 @@ The lifecycle is the real cost, and it has teeth:
   bound and both accepted commands. There is no device locking anywhere in this stack — which is
   exactly the hole Rover's lease layer exists to fill, and it means the iOS backend inherits *all*
   of the two-agents-one-device risk rather than some of it.
+- **Every verb answer now pays for a `launchctl list` beside the read** (#336). The foreground app
+  is the read's `pid` looked up in that listing, and the listing is a `simctl spawn` — 0.26–0.55 s
+  on Xcode 27.0 / iOS 26.5, several times the warm read it rides on, and paid up to twice per verb
+  because the verb layer re-reads `deviceInfo` (§2). That is a `simctl` cost rather than a
+  companion one, and it is named here because it lands on the same path as the read: it is skipped
+  whenever the read produced no pid, so a host with no companion pays neither. Caching the listing
+  between calls would be naming an app that has since died, which is the field's whole point not
+  to do.
 
 ---
 
