@@ -14,9 +14,12 @@
  * 1. **the manifest is consulted before anything is dispatched** (D11) — an undeclared
  *    capability is a `MissingCapabilityError` naming capability, device and backend, and
  *    the backend is not touched at all, not even for the screen read;
- * 2. **the target is resolved from a screen captured inside this call** (D12(a)), a miss
+ * 2. **the application in front is checked, when the caller named one** (#332), from a
+ *    `deviceInfo` read taken inside this call (D12(a)) — a different application, or a device
+ *    that cannot say, is an `AppNotInForegroundError` and nothing is dispatched;
+ * 3. **the target is resolved from a screen captured inside this call** (D12(a)), a miss
  *    naming what was on screen instead and two matches naming every candidate;
- * 3. **the state after the action is captured, after it** (D12(c)), and the result names
+ * 4. **the state after the action is captured, after it** (D12(c)), and the result names
  *    the device and its density (D14).
  *
  * Skipping one of those is what a verb written against the backend directly does by
@@ -25,7 +28,9 @@
  */
 
 import { type CapabilityId, requireCapability } from '../core/capabilities.js';
+import type { AppId } from '../core/ids.js';
 import type { VerbContext } from './context.js';
+import { AppNotInForegroundError } from './errors.js';
 import type { ResolvedTarget } from './result.js';
 import { type ActionResult, resultAfterAction } from './result.js';
 import { type ResolveOptions, requireTarget, type Target } from './target.js';
@@ -64,6 +69,15 @@ export interface PerformActionOptions {
 	 * only turn off a check that does not apply to it, never add one the spine does not make.
 	 */
 	readonly resolve?: ResolveOptions;
+	/**
+	 * The application the caller expects in the foreground, if it named one (#332).
+	 *
+	 * Checked after the manifest and **before the target is resolved**: when the application
+	 * has gone, a target inside it would otherwise fail as `target-not-found` listing the
+	 * launcher's elements, which names the symptom rather than the cause. Absent means no check
+	 * and no extra device query — the verb acts on whatever is in front, as it always has.
+	 */
+	readonly expectApp?: AppId;
 	/** The action itself, handed the point that was resolved for it. */
 	readonly act: (target: ResolvedTarget | null) => Promise<void>;
 }
@@ -83,6 +97,10 @@ export async function performAction(
 		requireCapability(context.manifest, capability, context.serial);
 	}
 
+	if (options.expectApp !== undefined) {
+		await requireForegroundApp(context, options.verb, options.expectApp);
+	}
+
 	const target =
 		options.target === undefined
 			? null
@@ -91,4 +109,26 @@ export async function performAction(
 	await options.act(target);
 
 	return resultAfterAction(context, options.verb, target);
+}
+
+/**
+ * Refuse unless the device names `expectApp` as the application in front.
+ *
+ * A fresh `deviceInfo` read, never a value remembered from an earlier answer (D12(a)), and a
+ * required backend method, so this needs no capability and works on a device that cannot read
+ * its screen. `null` refuses too: it means the device did not answer, and an expectation that
+ * could not be checked is not one that held.
+ *
+ * One read moments before the gesture, so an application that dies between the two is not
+ * caught here — the after-state's `device.foregroundApp` reports where the gesture went.
+ */
+async function requireForegroundApp(
+	context: VerbContext,
+	verb: string,
+	expectApp: AppId,
+): Promise<void> {
+	const { foregroundApp } = await context.backend.deviceInfo(context.serial);
+	if (foregroundApp !== expectApp) {
+		throw new AppNotInForegroundError(context.serial, verb, expectApp, foregroundApp);
+	}
 }

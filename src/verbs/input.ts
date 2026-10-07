@@ -39,10 +39,18 @@
  * reads rather than types are the backend's, which is where the knowledge of a particular
  * device belongs (`src/core/device.ts`, ai/RULES.md §2). A string this layer had "helpfully"
  * escaped would arrive on screen with the escaping in it.
+ *
+ * **Every verb here but `hide_keyboard` takes `expectApp`** (#332, {@link ForegroundExpectation}).
+ * Each acts on whatever is in front, so an application that crashed or was left turns a `tap`
+ * into a touch on the launcher and a `type_text` into a search somebody else's application
+ * runs. Naming the application expected makes the spine refuse by name instead, before anything
+ * is dispatched. `hide_keyboard` does not take it: putting a keyboard away is the same act in
+ * any application.
  */
 
 import { z } from 'zod';
 import type { DeviceKey, Point, Rect } from '../core/device.js';
+import type { AppId } from '../core/ids.js';
 import { capabilityMethod, type VerbContext } from './context.js';
 import { performAction } from './perform.js';
 import type { ActionResult, ResolvedTarget } from './result.js';
@@ -97,13 +105,25 @@ export const ScrollDirectionSchema = z.enum(['up', 'down', 'left', 'right']);
 export type ScrollDirection = z.infer<typeof ScrollDirectionSchema>;
 
 /**
+ * The application an input verb expects to be acting on (#332).
+ *
+ * Optional and per call. When given and the device names another application in front, or
+ * cannot say, the verb performs nothing and answers `app-not-in-foreground` naming both
+ * (`./perform.ts`). A precondition the caller states, never a verdict Rover makes
+ * (ai/RULES.md §1).
+ */
+export interface ForegroundExpectation {
+	readonly expectApp?: AppId;
+}
+
+/**
  * How long the gesture takes **on the device**, in milliseconds.
  *
  * Plain data with a default per verb, so a caller that says nothing gets the constant above
  * and a caller with a slower device is not stuck with it. Zero is a legitimate value — it is a
  * flick — and it is the device that spends the time, never this process.
  */
-export interface GestureOptions {
+export interface GestureOptions extends ForegroundExpectation {
 	readonly durationMs?: number;
 }
 
@@ -128,10 +148,15 @@ export interface ScrollOptions extends GestureOptions {
  * fallback — and marked `source: 'caller-point'` in the result, so an agent can tell a tap
  * that hit a named element from one that hit a coordinate somebody worked out a turn ago.
  */
-export async function tap(context: VerbContext, target: Target): Promise<ActionResult> {
+export async function tap(
+	context: VerbContext,
+	target: Target,
+	options: ForegroundExpectation = {},
+): Promise<ActionResult> {
 	return performAction(context, {
 		verb: 'tap',
 		requires: ['canInput'],
+		...expectation(options),
 		target,
 		act: async (resolved) => {
 			const tapAt = capabilityMethod(context, 'canInput', 'tap');
@@ -156,6 +181,7 @@ export async function longPress(
 	return performAction(context, {
 		verb: 'long_press',
 		requires: ['canInput'],
+		...expectation(options),
 		target,
 		act: async (resolved) => {
 			const drag = capabilityMethod(context, 'canInput', 'swipe');
@@ -191,6 +217,7 @@ export async function swipe(
 	return performAction(context, {
 		verb: 'swipe',
 		requires: ['canInput'],
+		...expectation(options),
 		target: from,
 		act: async (resolved) => {
 			const destination = await requireTarget(context, to, { touchStartsHere: false });
@@ -246,6 +273,7 @@ export async function scroll(
 	return performAction(context, {
 		verb: 'scroll',
 		requires: ['canInput'],
+		...expectation(options),
 		target: options.target,
 		resolve: { touchStartsHere: false },
 		act: async (resolved) => {
@@ -289,7 +317,9 @@ export async function scroll(
  *
  * Focus itself is not this verb's to guarantee and cannot be: nothing this layer can ask says
  * where the caret is until a screen read is available (#13). What the result does report is
- * the state after the typing, which is where an agent looks to see whether it landed.
+ * the state after the typing, which is where an agent looks to see whether it landed. What a
+ * caller *can* guarantee is which application receives it: `options.expectApp` refuses the
+ * call, typing nothing, when another application is in front (#332).
  *
  * **`options.clear` empties the focused field first** (#309), so `text` replaces what was there
  * rather than landing beside it; with `''` it only clears. Clearing is the backend's
@@ -308,6 +338,7 @@ export async function typeText(
 	return performAction(context, {
 		verb: 'type_text',
 		requires: ['canInput'],
+		...expectation(options),
 		act: async () => {
 			if (options.clear === true) {
 				const clear = capabilityMethod(context, 'canInput', 'clearText');
@@ -320,7 +351,7 @@ export async function typeText(
 }
 
 /** What {@link typeText} does besides typing. Absent `clear` means type into what is there. */
-export interface TypeTextOptions {
+export interface TypeTextOptions extends ForegroundExpectation {
 	readonly clear?: boolean;
 }
 
@@ -331,7 +362,7 @@ export interface TypeTextOptions {
  * rather than this layer's, because it is sized against a client's request deadline, which is a
  * fact about the wire and not about the verb.
  */
-export interface PressKeyOptions {
+export interface PressKeyOptions extends ForegroundExpectation {
 	readonly times?: number;
 }
 
@@ -382,6 +413,7 @@ export async function pressKey(
 	return performAction(context, {
 		verb: 'press_key',
 		requires: ['canInput'],
+		...expectation(options),
 		act: async () => {
 			const press = capabilityMethod(context, 'canInput', 'pressKey');
 			for (let pressed = 0; pressed < times; pressed++) {
@@ -419,6 +451,14 @@ export async function hideKeyboard(context: VerbContext): Promise<ActionResult> 
 			await hide(context.serial);
 		},
 	});
+}
+
+/**
+ * The spine's `expectApp`, present only when the caller named one — so an absent expectation
+ * reaches {@link performAction} as no field rather than as `undefined`.
+ */
+function expectation(options: ForegroundExpectation): { expectApp?: AppId } {
+	return options.expectApp === undefined ? {} : { expectApp: options.expectApp };
 }
 
 /**

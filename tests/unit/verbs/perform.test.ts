@@ -9,10 +9,12 @@
  */
 
 import { describe, expect, it, vi } from 'vitest';
-import type { DeviceBackend } from '@/core/device.js';
+import type { DeviceBackend, DeviceInfo } from '@/core/device.js';
 import { MissingCapabilityError } from '@/core/errors.js';
+import { parseAppId } from '@/core/ids.js';
 import { capabilityMethod, type VerbContext } from '@/verbs/context.js';
 import {
+	AppNotInForegroundError,
 	CoveredByKeyboardError,
 	TargetNotFoundError,
 	UnaddressableElementError,
@@ -35,6 +37,7 @@ function recordingContext(
 	calls: string[],
 	screen = [save],
 	capabilities = createMockCapabilities(),
+	info: DeviceInfo = createMockDeviceInfo(),
 ): VerbContext {
 	const backend = createMockDeviceBackend({
 		readScreen: vi.fn<NonNullable<DeviceBackend['readScreen']>>(async () => {
@@ -46,7 +49,7 @@ function recordingContext(
 		}),
 		deviceInfo: vi.fn<DeviceBackend['deviceInfo']>(async () => {
 			calls.push('deviceInfo');
-			return createMockDeviceInfo();
+			return info;
 		}),
 	});
 	return createMockVerbContext({
@@ -326,5 +329,98 @@ describe('performAction', () => {
 		// One read, and it is the state after — nothing was resolved, so nothing needed
 		// checking against the screen's dimensions either.
 		expect(calls).toEqual(['readScreen', 'deviceInfo']);
+	});
+
+	describe('expectApp (#332)', () => {
+		const expected = parseAppId('com.example.app');
+		const elsewhere = createMockDeviceInfo({ foregroundApp: 'com.android.launcher3' });
+
+		it('performs nothing when another application is in front, naming both', async () => {
+			const calls: string[] = [];
+			const context = recordingContext(calls, [save], createMockCapabilities(), elsewhere);
+			const act = vi.fn(async () => {});
+
+			const refusal = performAction(context, {
+				verb: 'fake_tap',
+				requires: ['canInput'],
+				expectApp: expected,
+				target: { by: 'text', text: 'Save' },
+				act,
+			});
+
+			await expect(refusal).rejects.toThrow(AppNotInForegroundError);
+			await expect(refusal).rejects.toMatchObject({
+				serial: 'test-serial-1',
+				expectedApp: 'com.example.app',
+				foregroundApp: 'com.android.launcher3',
+			});
+			// One fresh read and nothing else: no screen read for the target, no tap.
+			expect(calls).toEqual(['deviceInfo']);
+			expect(act).not.toHaveBeenCalled();
+		});
+
+		it('refuses when the device cannot say what is in front, rather than acting', async () => {
+			const calls: string[] = [];
+			const unanswered = createMockDeviceInfo({ foregroundApp: null });
+			const context = recordingContext(calls, [save], createMockCapabilities(), unanswered);
+			const act = vi.fn(async () => {});
+
+			const refusal = performAction(context, {
+				verb: 'fake_key_press',
+				requires: ['canInput'],
+				expectApp: expected,
+				act,
+			});
+
+			await expect(refusal).rejects.toMatchObject({
+				name: 'AppNotInForegroundError',
+				foregroundApp: null,
+				message: expect.stringContaining('did not say'),
+			});
+			expect(act).not.toHaveBeenCalled();
+		});
+
+		it('acts when the expected application is in front, checking it before resolving', async () => {
+			const calls: string[] = [];
+			const context = recordingContext(calls);
+
+			await performAction(context, {
+				verb: 'fake_tap',
+				requires: ['canInput'],
+				expectApp: expected,
+				target: { by: 'text', text: 'Save' },
+				act: tapAction(context),
+			});
+
+			expect(calls).toEqual([
+				'deviceInfo',
+				'readScreen',
+				'deviceInfo',
+				'tap',
+				'readScreen',
+				'deviceInfo',
+			]);
+		});
+
+		it('consults the manifest before the foreground', async () => {
+			const calls: string[] = [];
+			const context = recordingContext(
+				calls,
+				[save],
+				createMockCapabilities({ canInput: false }),
+				elsewhere,
+			);
+
+			await expect(
+				performAction(context, {
+					verb: 'fake_tap',
+					requires: ['canInput'],
+					expectApp: expected,
+					target: { by: 'text', text: 'Save' },
+					act: vi.fn(async () => {}),
+				}),
+			).rejects.toThrow(MissingCapabilityError);
+			expect(calls).toEqual([]);
+		});
 	});
 });

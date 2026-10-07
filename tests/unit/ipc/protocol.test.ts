@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { encodeFrame, MAX_FRAME_BYTES } from '@/ipc/framing.js';
 import {
 	AppVerbParamsSchema,
+	HideKeyboardParamsSchema,
 	InstallAppParamsSchema,
 	LongPressParamsSchema,
 	MAX_DEVICE_PATH_LENGTH,
@@ -340,6 +341,41 @@ describe('keyboard verb params schemas', () => {
 	])('refuses %s on a key press', (_label, extra) => {
 		expect(
 			PressKeyParamsSchema.safeParse({ leaseId: 'lease-1', key: 'back', ...extra }).success,
+		).toBe(false);
+	});
+});
+
+/**
+ * #332: the six rows that act on whatever is in front take `expectApp`, by the id `launch_app`
+ * takes, and the one keyboard row that does not act on an application refuses it.
+ */
+describe('expectApp on the input rows', () => {
+	const call = { leaseId: 'lease-1' };
+	const ROWS = [
+		['tap', TapParamsSchema, { ...call, target: { by: 'text', text: 'Save' } }],
+		['long_press', LongPressParamsSchema, { ...call, target: { by: 'text', text: 'Save' } }],
+		[
+			'swipe',
+			SwipeParamsSchema,
+			{ ...call, from: { by: 'text', text: 'A' }, to: { by: 'text', text: 'B' } },
+		],
+		['scroll', ScrollParamsSchema, { ...call, direction: 'down' }],
+		['type_text', TypeTextParamsSchema, { ...call, text: 'hello' }],
+		['press_key', PressKeyParamsSchema, { ...call, key: 'home' }],
+	] as const;
+
+	it.each(ROWS)('%s carries an application id', (_name, schema, params) => {
+		const parsed = schema.parse({ ...params, expectApp: 'com.example.app' });
+		expect(parsed.expectApp).toBe('com.example.app');
+	});
+
+	it.each(ROWS)('%s refuses one that is not reverse-DNS', (_name, schema, params) => {
+		expect(schema.safeParse({ ...params, expectApp: 'settings' }).success).toBe(false);
+	});
+
+	it('hide_keyboard refuses it, rather than taking a check it never makes', () => {
+		expect(
+			HideKeyboardParamsSchema.safeParse({ ...call, expectApp: 'com.example.app' }).success,
 		).toBe(false);
 	});
 });

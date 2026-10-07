@@ -924,6 +924,18 @@ SpringBoard, which launchd lists as a system daemon rather than as an app — so
 or crashed back to the home screen is followed by `null`, not by its own id. It also answers `null` when the simulator
 cannot be read at all, such as on a host with no `idb_companion`, and the verb still answers `ok`.
 
+**An input verb can refuse to act outside the app you expect** (#332). `tap`, `long_press`,
+`swipe`, `scroll`, `type_text` and `press_key` take an optional `expectApp` — your app's id, as
+`launch_app` takes it. With it set, the verb reads the device fresh before doing anything, and when
+a different application is in front it **sends no input at all** and answers
+`app-not-in-foreground`, carrying the serial, `expectedApp` and `foregroundApp`; the message points
+at `read_logs` to see why the app left and `launch_app` to bring it back. A device that cannot say
+what is in front refuses the same way with `foregroundApp: null`, rather than acting on an
+expectation nobody could check. Without `expectApp` a verb behaves as it always has. It is set per
+call, not once per lease, so a step that legitimately passes through another app's screen just
+leaves it off. The check is one read just before the gesture, so an app that dies in between is not
+caught — the answer's `foregroundApp` then says where the gesture went.
+
 **`hide_keyboard` puts that keyboard away, and presses nothing when there is none** (#307). Reach
 for it instead of `press_key back`: on Android, back closes a keyboard that is up and *leaves the
 screen* when none is — both exit cleanly, so nothing downstream can tell which happened

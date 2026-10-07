@@ -1219,6 +1219,71 @@ describe.skipIf(!process.env.ROVER_TEST_DEVICE)('a daemon runs verbs on its own 
 	});
 
 	/**
+	 * **The acceptance criterion of #332, against real hardware: crash the app, then a
+	 * `type_text` with `expectApp` set is refused by name and types nothing.**
+	 *
+	 * The crash and the wait for focus to move are the test above's, for its reasons. What is
+	 * proved here is that the refusal names both applications and comes back as data, and that
+	 * the screen read after it carries none of the probe string. The unit suite is what proves no
+	 * input call was made at all (`tests/unit/verbs/input.test.ts`); this is the end-to-end
+	 * witness. `foregroundApp` is the launcher or `null` — both refuse.
+	 */
+	it('refuses a type_text expecting the app after it crashed, and types nothing (#332)', async () => {
+		const client = await startHost();
+		const device = await freeDevice(client);
+		const leaseId = await lease(client, device.serial);
+		const probe = 'rover-expectapp-probe';
+
+		const launched = await client.request('launch_app', { leaseId, appId: SETTINGS });
+		if (launched.outcome !== 'ok') throw new Error(`launch_app answered '${launched.outcome}'`);
+		expect(launched.result.device.foregroundApp).toBe(unwrap(SETTINGS));
+
+		await runAdbOnDevice(device.serial, ['shell', 'am', 'crash', unwrap(SETTINGS)]);
+		await waitForCondition<null>({
+			what: `the answer to stop naming '${SETTINGS}' in front`,
+			timeoutMs: CRASH_TIMEOUT_MS,
+			pollIntervalMs: CRASH_POLL_MS,
+			probe: async (): Promise<Observation<null>> => {
+				const answer = await client.request('device_info', { leaseId });
+				if (answer.outcome !== 'ok') {
+					return { met: false, found: `the host answered '${answer.outcome}'` };
+				}
+				const { foregroundApp } = answer.result.device;
+				return foregroundApp === unwrap(SETTINGS)
+					? { met: false, found: `'${foregroundApp}' still in front` }
+					: { met: true, value: null };
+			},
+		});
+
+		const refused = await client.request('type_text', {
+			leaseId,
+			text: probe,
+			expectApp: SETTINGS,
+		});
+
+		expect(refused).toMatchObject({
+			outcome: 'failed',
+			failure: { kind: 'app-not-in-foreground', serial: device.serial, expectedApp: SETTINGS },
+		});
+		if (refused.outcome !== 'failed')
+			throw new Error('the assertion above should have caught this');
+		if (refused.failure.kind !== 'app-not-in-foreground') throw new Error('wrong failure kind');
+		expect(refused.failure.foregroundApp).not.toBe(unwrap(SETTINGS));
+
+		const read = await client.request('read_screen', { leaseId });
+		if (read.outcome !== 'ok' || read.result.after.kind !== 'screen') {
+			throw new Error(`read_screen answered '${read.outcome}'`);
+		}
+		const onScreen = read.result.after.elements.flatMap((element) =>
+			[element.text, element.label].filter((value): value is string => value !== null),
+		);
+		expect(onScreen.filter((text) => text.includes(probe))).toEqual([]);
+
+		// For the crash test's reason: a dialog the crash raised must not outlive the suite.
+		await runAdbOnDevice(device.serial, ['shell', 'input', 'keyevent', 'KEYCODE_BACK']);
+	});
+
+	/**
 	 * The bound is the caller's, and a short read has to be distinguishable from a quiet
 	 * device — which is what `truncated` is for. A device that has been running long enough to
 	 * be worth reading has more than two entries in its log, so this asks for two and expects

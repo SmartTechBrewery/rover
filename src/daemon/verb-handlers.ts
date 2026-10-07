@@ -99,7 +99,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { requireDeviceBackend } from '../backends/registry.js';
 import type { Device } from '../core/device.js';
-import type { DeviceSerial, LeaseId } from '../core/ids.js';
+import type { AppId, DeviceSerial, LeaseId } from '../core/ids.js';
 import type {
 	AppVerbParams,
 	DeviceInfoParams,
@@ -135,6 +135,7 @@ import { setAirplaneMode, setWifi } from '../verbs/environment.js';
 import { toVerbFailure } from '../verbs/failure.js';
 import { installApp, installProjectApp, pullFile, pushFile } from '../verbs/files.js';
 import {
+	type ForegroundExpectation,
 	type GestureOptions,
 	hideKeyboard,
 	longPress,
@@ -413,18 +414,26 @@ export function createVerbHandlers(
 		},
 
 		tap(params: TapParams): Promise<VerbCallResult> {
-			return runVerb(params, (context) => tap(context, params.target));
+			return runVerb(params, (context) =>
+				tap(context, params.target, foregroundExpectation(params)),
+			);
 		},
 
 		long_press(params: LongPressParams): Promise<VerbCallResult> {
 			return runVerb(params, (context) =>
-				longPress(context, params.target, gestureOptions(params)),
+				longPress(context, params.target, {
+					...gestureOptions(params),
+					...foregroundExpectation(params),
+				}),
 			);
 		},
 
 		swipe(params: SwipeParams): Promise<VerbCallResult> {
 			return runVerb(params, (context) =>
-				swipe(context, params.from, params.to, gestureOptions(params)),
+				swipe(context, params.from, params.to, {
+					...gestureOptions(params),
+					...foregroundExpectation(params),
+				}),
 			);
 		},
 
@@ -432,6 +441,7 @@ export function createVerbHandlers(
 			return runVerb(params, (context) =>
 				scroll(context, params.direction, {
 					...gestureOptions(params),
+					...foregroundExpectation(params),
 					...(params.target === undefined ? {} : { target: params.target }),
 				} satisfies ScrollOptions),
 			);
@@ -441,13 +451,19 @@ export function createVerbHandlers(
 		// inspects or rewrites it, which is what makes `type_text` mean what it says.
 		type_text(params: TypeTextParams): Promise<VerbCallResult> {
 			return runVerb(params, (context) =>
-				typeText(context, params.text, params.clear === undefined ? {} : { clear: params.clear }),
+				typeText(context, params.text, {
+					...(params.clear === undefined ? {} : { clear: params.clear }),
+					...foregroundExpectation(params),
+				}),
 			);
 		},
 
 		press_key(params: PressKeyParams): Promise<VerbCallResult> {
 			return runVerb(params, (context) =>
-				pressKey(context, params.key, params.times === undefined ? {} : { times: params.times }),
+				pressKey(context, params.key, {
+					...(params.times === undefined ? {} : { times: params.times }),
+					...foregroundExpectation(params),
+				}),
 			);
 		},
 
@@ -645,6 +661,15 @@ function waitOptions(params: {
  */
 function gestureOptions(params: { readonly durationMs?: number }): GestureOptions {
 	return params.durationMs === undefined ? {} : { durationMs: params.durationMs };
+}
+
+/**
+ * The application an input call expects in front (#332), omitted rather than passed as
+ * `undefined` for {@link gestureOptions}' reason: absent means no check, and the verb must see
+ * a caller who said nothing as one who said nothing.
+ */
+function foregroundExpectation(params: { readonly expectApp?: AppId }): ForegroundExpectation {
+	return params.expectApp === undefined ? {} : { expectApp: params.expectApp };
 }
 
 /**
