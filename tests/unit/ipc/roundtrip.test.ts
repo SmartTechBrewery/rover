@@ -98,6 +98,7 @@ function statusHandlers(overrides: Partial<IpcHandlers> = {}): IpcHandlers {
 		install_app: () => refusedWithoutAHost(),
 		push_file: () => refusedWithoutAHost(),
 		pull_file: () => refusedWithoutAHost(),
+		pull_app_file: () => refusedWithoutAHost(),
 		record_video: () => refusedWithoutAHost(),
 		start_recording: () => refusedWithoutAHost(),
 		stop_recording: () => refusedWithoutAHost(),

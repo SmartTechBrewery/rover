@@ -58,9 +58,9 @@
  *
  * **The label moves with it**, to `iOS Simulator (simctl + idb)` — see {@link IOS_SIMULATOR_LABEL}.
  *
- * **Two flags are `false`, and both are now measured rather than pending** — one because the
- * platform has nothing behind it, one because the only gesture that dismisses this platform's
- * keyboard does more than dismiss it.
+ * **Three flags are `false`.** Two are measured rather than pending — one because the platform
+ * has nothing behind it, one because the only gesture that dismisses this platform's keyboard does
+ * more than dismiss it — and the third is a route that exists and is not built yet.
  *
  * - **`canControlNetwork`** is the one that is `false` *for good* (`docs/IOS.md` §5, §10 step 1).
  *   A simulator has no airplane mode and no wifi toggle: it uses the **host's** network stack, so
@@ -109,6 +109,15 @@
  *   presentation over it. Escape is not that, and a `canHideKeyboard` declared on Escape would be
  *   worse than the refusal it replaced.
  *
+ * - **`canPullAppFile`** is `false` *until it is built* (#334). The route exists and is cheaper
+ *   than Android's: a simulator's app container is a directory on **this host**, which
+ *   `simctl get_app_container <udid> <bundle> data` names (measured working, `docs/IOS.md` §2),
+ *   and `./containers.ts` already confines a path to such a root. What is missing is the
+ *   `pullAppFile` method over it, its own confinement check against symlinks out of the
+ *   container, and a run against a real app's database. Until then `pull_app_file` answers
+ *   `missing-capability` naming this flag and the device, and there is **no** `pullAppFile`
+ *   method beside it.
+ *
  * That is the difference between this manifest and `../android/capabilities.ts`, where every flag
  * is `true`: a declared opt-out is not an unfinished backend, and a capability declared before its
  * methods exist is exactly the "an agent is told a device can do something it cannot" failure D11
@@ -144,5 +153,6 @@ export const iosSimulatorCapabilityManifest: CapabilityManifestInput = {
 		canRecordVideo: true,
 		canControlRecording: true,
 		canHideKeyboard: false,
+		canPullAppFile: false,
 	},
 };

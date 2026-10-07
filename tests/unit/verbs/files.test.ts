@@ -11,7 +11,12 @@
 
 import { describe, expect, it, vi } from 'vitest';
 import type { DeviceBackend } from '@/core/device.js';
-import { FileTooLargeError } from '@/core/errors.js';
+import {
+	AppDataUnreachableError,
+	FileTooLargeError,
+	MissingCapabilityError,
+} from '@/core/errors.js';
+import { parseAppId } from '@/core/ids.js';
 import { HOOK_COMMAND_TIMEOUT_MS } from '@/daemon/hook-command.js';
 import { LEASE_TTL_MS } from '@/daemon/leases.js';
 import { SETTLE_TIMEOUT_MS } from '@/daemon/restore.js';
@@ -22,6 +27,7 @@ import {
 	INSTALL_HOOK_TIMEOUT_MS,
 	installApp,
 	installProjectApp,
+	pullAppFile,
 	pullFile,
 	pushFile,
 } from '@/verbs/files.js';
@@ -342,6 +348,85 @@ describe('pull_file', () => {
 		// An empty file is a file. `artifact: null` here would say the verb produced no bytes,
 		// which is a different statement about the device and the wrong one.
 		expect(result.artifact).toMatchObject({ base64: '', byteLength: 0 });
+	});
+});
+
+describe('pull_app_file', () => {
+	const APP_ID = parseAppId('com.example.debug');
+	const CONTAINER_PATH = 'databases/app.db';
+
+	/** A backend whose `pullAppFile` records what it was asked, on the same call log. */
+	function appRecording(
+		pullAppFile?: DeviceBackend['pullAppFile'],
+		capabilities = createMockCapabilities(),
+	) {
+		const asked: Array<{ appId: string; containerPath: string; maxBytes: number }> = [];
+		const base = recording({
+			pullAppFile:
+				pullAppFile ??
+				vi.fn<NonNullable<DeviceBackend['pullAppFile']>>(
+					async (_serial, appId, containerPath, options) => {
+						base.calls.push('pullAppFile');
+						asked.push({ appId, containerPath, maxBytes: options.maxBytes });
+						return CONTENT;
+					},
+				),
+		});
+		const context = { ...base.context, manifest: createMockCapabilityManifest({ capabilities }) };
+		return { ...base, asked, context };
+	}
+
+	it('answers with the bytes of the file in the app’s container, on the artifact', async () => {
+		const { context, asked, calls } = appRecording();
+
+		const result = await pullAppFile(context, APP_ID, CONTAINER_PATH);
+
+		expect(asked).toEqual([
+			{ appId: APP_ID, containerPath: CONTAINER_PATH, maxBytes: MAX_ARTIFACT_BYTES },
+		]);
+		expect(result).toMatchObject({
+			verb: 'pull_app_file',
+			target: null,
+			device: { serial: context.serial },
+			artifact: { base64: Buffer.from(CONTENT).toString('base64'), byteLength: CONTENT.length },
+		});
+		expect(JSON.stringify(result)).not.toContain(CONTAINER_PATH);
+		expect(calls).toEqual(['pullAppFile', 'readScreen', 'deviceInfo']);
+	});
+
+	it('is refused by name on a device without canPullAppFile, before the device is touched', async () => {
+		const { context, calls } = appRecording(
+			undefined,
+			createMockCapabilities({ canPullAppFile: false }),
+		);
+
+		const failure = await pullAppFile(context, APP_ID, CONTAINER_PATH).catch((e: unknown) => e);
+
+		expect(failure).toBeInstanceOf(MissingCapabilityError);
+		expect(failure).toMatchObject({ capability: 'canPullAppFile', serial: context.serial });
+		expect(calls).toEqual([]);
+	});
+
+	it('turns the backend’s size refusal into the same named artifact-too-large answer', async () => {
+		const { context } = appRecording(async (serial, _appId, containerPath, options) => {
+			throw new FileTooLargeError(serial, containerPath, options.maxBytes + 1, options.maxBytes);
+		});
+
+		const failure = await pullAppFile(context, APP_ID, CONTAINER_PATH).catch((e: unknown) => e);
+
+		expect(failure).toBeInstanceOf(ArtifactTooLargeError);
+		expect(failure).toMatchObject({ byteLength: MAX_ARTIFACT_BYTES + 1 });
+	});
+
+	it('passes an app the device cannot open through as that refusal, not as an empty file', async () => {
+		const { context } = appRecording(async (serial, appId) => {
+			throw new AppDataUnreachableError(serial, appId, 'it is not a debuggable build');
+		});
+
+		const failure = await pullAppFile(context, APP_ID, CONTAINER_PATH).catch((e: unknown) => e);
+
+		expect(failure).toBeInstanceOf(AppDataUnreachableError);
+		expect(failure).toMatchObject({ appId: APP_ID });
 	});
 });
 

@@ -24,6 +24,7 @@ import {
 } from '@/backends/android/backend.js';
 import { type Device, DeviceKeySchema, type DeviceWatcher } from '@/core/device.js';
 import {
+	AppDataUnreachableError,
 	FileTooLargeError,
 	LogFilterRefusedError,
 	NoRecordingRunningError,
@@ -1698,6 +1699,155 @@ describe('the file transfers', () => {
 			await expect(failure).rejects.toThrow(/adb: failed to install <the file you sent>: Failure/);
 			await expect(failure).rejects.not.toThrow(new RegExp(tmpdir().replaceAll('.', '\\.')));
 		});
+	});
+});
+
+describe('pullAppFile', () => {
+	const APP = parseAppId('com.rover.debugprobe');
+	const PATH = 'databases/app.db';
+	const ROOMY = { maxBytes: 1024 * 1024 };
+	/** 4096 bytes, as the captured probe says — what the read has to come back as. */
+	const STAT_IN_CONTAINER = fixture('run-as-stat.file.api37-sdk-gphone16k-arm64.txt');
+	const DATABASE = Buffer.alloc(4096, 0x0a);
+	const PROBE_ARGV = ['shell', 'run-as', `'${APP}'`, 'stat', '-L', '-c', "'%s %F'", `'${PATH}'`];
+
+	/** What `./adb.js` throws for a `shell run-as` that exited 1 with `stderr`. */
+	function runAsExit(stderr: string): AdbCommandError {
+		return new AdbCommandError(
+			PROBE_ARGV,
+			10_000,
+			Object.assign(new Error('adb'), { code: 1 }),
+			'',
+			stderr,
+		);
+	}
+
+	function probeAnswers(reply: string | AdbCommandError, read: Buffer = DATABASE): void {
+		runAdbOnDevice.mockImplementation(async (): Promise<AdbResult> => {
+			if (reply instanceof AdbCommandError) throw reply;
+			return { stdout: reply, stderr: '' };
+		});
+		runAdbBinaryOnDevice.mockResolvedValue({ stdout: read, stderr: '' });
+	}
+
+	it('probes with shell run-as, then reads with exec-out run-as cat, pinned to the device', async () => {
+		probeAnswers(STAT_IN_CONTAINER);
+
+		const bytes = await backend.pullAppFile(SERIAL, APP, PATH, ROOMY);
+
+		expect(Buffer.from(bytes).equals(DATABASE)).toBe(true);
+		expect(runAdbOnDevice.mock.calls[0]?.[0]).toBe(SERIAL);
+		expect(runAdbOnDevice.mock.calls[0]?.[1]).toEqual(PROBE_ARGV);
+		expect(runAdbBinaryOnDevice.mock.calls[0]?.[0]).toBe(SERIAL);
+		// One string after `exec-out`, because adb quotes every argument after the first itself.
+		expect(runAdbBinaryOnDevice.mock.calls[0]?.[1]).toEqual([
+			'exec-out',
+			`run-as '${APP}' cat '${PATH}'`,
+		]);
+		expect(runAdbBinaryOnDevice.mock.calls[0]?.[2]).toEqual({ timeoutMs: TRANSFER_ADB_TIMEOUT_MS });
+	});
+
+	it('escapes an apostrophe in the path rather than refusing it — it is the caller’s data', async () => {
+		probeAnswers(STAT_IN_CONTAINER);
+
+		await backend.pullAppFile(SERIAL, APP, "files/it's.db", ROOMY);
+
+		expect(runAdbOnDevice.mock.calls[0]?.[1].at(-1)).toBe("'files/it'\\''s.db'");
+		expect(runAdbBinaryOnDevice.mock.calls[0]?.[1].at(-1)).toBe(
+			`run-as '${APP}' cat 'files/it'\\''s.db'`,
+		);
+	});
+
+	it.each([
+		['run-as.not-debuggable.stderr.api37-sdk-gphone16k-arm64.txt', /not a debuggable build/],
+		['run-as.unknown-package.stderr.api37-sdk-gphone16k-arm64.txt', /no package by that name/],
+		['run-as.not-an-application.stderr.api37-sdk-gphone16k-arm64.txt', /system user/],
+	])('refuses %s by name, and reads nothing', async (name, reason) => {
+		probeAnswers(runAsExit(fixture(name)));
+
+		const failure = backend.pullAppFile(SERIAL, APP, PATH, ROOMY);
+
+		await expect(failure).rejects.toBeInstanceOf(AppDataUnreachableError);
+		await expect(failure).rejects.toThrow(reason);
+		await expect(failure).rejects.toMatchObject({ serial: SERIAL, appId: APP });
+		expect(runAdbBinaryOnDevice).not.toHaveBeenCalled();
+	});
+
+	/** A device whose `adb shell` lacks the v2 protocol merges the streams and exits 0. */
+	it('finds the refusal on stdout too, when the probe exited 0', async () => {
+		probeAnswers(fixture('run-as.not-debuggable.stderr.api37-sdk-gphone16k-arm64.txt'));
+
+		await expect(backend.pullAppFile(SERIAL, APP, PATH, ROOMY)).rejects.toBeInstanceOf(
+			AppDataUnreachableError,
+		);
+		expect(runAdbBinaryOnDevice).not.toHaveBeenCalled();
+	});
+
+	it('refuses a missing file with the device’s words, and reads nothing', async () => {
+		probeAnswers(runAsExit("stat: 'databases/missing': No such file or directory\n"));
+
+		const failure = backend.pullAppFile(SERIAL, APP, 'databases/missing', ROOMY);
+
+		await expect(failure).rejects.toThrow(/No such file or directory/);
+		await expect(failure).rejects.not.toBeInstanceOf(AppDataUnreachableError);
+		expect(runAdbBinaryOnDevice).not.toHaveBeenCalled();
+	});
+
+	it.each([
+		['a directory', fixture('stat.directory.api37-sdk-gphone16k-arm64.txt'), /directory/],
+		[
+			'a character device',
+			fixture('stat.character-device.api37-sdk-gphone16k-arm64.txt'),
+			/character device/,
+		],
+	])('refuses %s before reading it', async (_what, probe, word) => {
+		probeAnswers(probe);
+
+		await expect(backend.pullAppFile(SERIAL, APP, PATH, ROOMY)).rejects.toThrow(word);
+		expect(runAdbBinaryOnDevice).not.toHaveBeenCalled();
+	});
+
+	/** No later check exists to fall back on here, unlike `pullFile`'s staged copy. */
+	it('refuses a probe it cannot parse rather than reading blind', async () => {
+		probeAnswers('something this repository has no capture of\n');
+
+		await expect(backend.pullAppFile(SERIAL, APP, PATH, ROOMY)).rejects.toThrow(
+			/could not be read/,
+		);
+		expect(runAdbBinaryOnDevice).not.toHaveBeenCalled();
+	});
+
+	it('refuses a file the probe says is over the bound, without reading it', async () => {
+		probeAnswers(STAT_IN_CONTAINER);
+
+		const failure = backend.pullAppFile(SERIAL, APP, PATH, { maxBytes: 100 });
+
+		await expect(failure).rejects.toBeInstanceOf(FileTooLargeError);
+		await expect(failure).rejects.toThrow(/4096 bytes/);
+		expect(runAdbBinaryOnDevice).not.toHaveBeenCalled();
+	});
+
+	it('refuses a read that came back over the bound', async () => {
+		probeAnswers('10 regular file\n', Buffer.alloc(200));
+
+		await expect(backend.pullAppFile(SERIAL, APP, PATH, { maxBytes: 100 })).rejects.toBeInstanceOf(
+			FileTooLargeError,
+		);
+	});
+
+	/**
+	 * `exec-out` merges a failing `cat`'s words into stdout at exit 0 (API 37, PROJECT.md §6):
+	 * the captured line is what a file that vanished between the two calls reads back as.
+	 */
+	it('refuses a read whose length is not the probe’s, naming both numbers', async () => {
+		probeAnswers(
+			STAT_IN_CONTAINER,
+			Buffer.from(fixture('run-as-cat.missing.api37-sdk-gphone16k-arm64.txt')),
+		);
+
+		const failure = backend.pullAppFile(SERIAL, APP, PATH, ROOMY);
+
+		await expect(failure).rejects.toThrow(/4096 bytes when asked and 50 bytes when read/);
 	});
 });
 

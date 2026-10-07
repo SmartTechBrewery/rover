@@ -10,6 +10,7 @@
 
 import { describe, expect, it } from 'vitest';
 import {
+	AppDataUnreachableError,
 	DeviceVanishedError,
 	LogFilterRefusedError,
 	MissingCapabilityError,
@@ -22,7 +23,7 @@ import {
 	UnsupportedTextError,
 	WaitTimeoutError,
 } from '@/core/errors.js';
-import { parseDeviceSerial, parsePlatformId } from '@/core/ids.js';
+import { parseAppId, parseDeviceSerial, parsePlatformId } from '@/core/ids.js';
 import {
 	AmbiguousTargetError,
 	AppNotInForegroundError,
@@ -286,6 +287,20 @@ describe('a verb-layer error becomes a failure a client can branch on', () => {
 		});
 		expect(error.message).toContain('select-all has not been measured here');
 		expect(error.message).toContain("press_key 'delete' with 'times'");
+	});
+
+	it('maps an app whose data the device cannot open, naming the app — never missing-capability (#334)', () => {
+		const appId = parseAppId('com.example.release');
+		const error = new AppDataUnreachableError(SERIAL, appId, 'it is not a debuggable build');
+
+		expect(failureOf(error)).toEqual({
+			kind: 'app-data-unreachable',
+			serial: SERIAL,
+			appId,
+			message: error.message,
+		});
+		expect(error.message).toContain('it is not a debuggable build');
+		expect(error.message).toContain('Nothing was read');
 	});
 
 	it('maps a log filter the device cannot apply, naming the filter', () => {
@@ -673,6 +688,10 @@ describe('a failure survives the trip to the agent', () => {
 		],
 		['unsupported-key', new UnsupportedKeyError(SERIAL, 'recents', 'no key and no gesture')],
 		['unsupported-clear', new UnsupportedClearError(SERIAL, 'no measured recipe')],
+		[
+			'app-data-unreachable',
+			new AppDataUnreachableError(SERIAL, parseAppId('com.example.release'), 'not debuggable'),
+		],
 		['log-filter-refused', new LogFilterRefusedError(SERIAL, 'appId', 'no running process')],
 		['artifact-too-large', new ArtifactTooLargeError(SERIAL, 9_000_000, 4_194_304)],
 		['unfinished-recording', new UnfinishedRecordingError(SERIAL, 3_232)],

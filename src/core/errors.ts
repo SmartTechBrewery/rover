@@ -20,7 +20,7 @@
 
 import type { CapabilityId } from './capabilities.js';
 import type { DeviceKey, LogFilter } from './device.js';
-import type { DeviceSerial, PlatformId } from './ids.js';
+import type { AppId, DeviceSerial, PlatformId } from './ids.js';
 
 /**
  * Thrown when a verb needs a capability the device's backend does not declare.
@@ -210,6 +210,39 @@ export class UnsupportedClearError extends Error {
 		);
 		this.name = 'UnsupportedClearError';
 		this.serial = serial;
+	}
+}
+
+/**
+ * Thrown when a backend can read an application's data container and cannot reach **this**
+ * application's (#334).
+ *
+ * {@link UnsupportedClearError}'s sibling and here for its reasons: the device declares
+ * `canPullAppFile`, so {@link MissingCapabilityError} ("try another device") is the wrong advice,
+ * and a plain `Error` ("the host broke") is wrong too. The way out is about the app — install a
+ * build the platform will open, or name one that is installed. `src/verbs/failure.ts` maps it to
+ * `app-data-unreachable`.
+ *
+ * **Thrown before anything is read**, and that is the property it exists for: on the platform
+ * where the refusal and the bytes share one stream, an unchecked read hands the refusal's text
+ * back as the file's content.
+ *
+ * `reason` is the backend's own words, passed in rather than written here, because which builds
+ * a platform opens is a fact about that platform (ai/RULES.md §2).
+ */
+export class AppDataUnreachableError extends Error {
+	readonly serial: DeviceSerial;
+	readonly appId: AppId;
+
+	constructor(serial: DeviceSerial, appId: AppId, reason: string) {
+		super(
+			`Cannot read the data of '${appId}' on device '${serial}': ${reason}. Nothing was ` +
+				"read. The device can read an app's data — this is about that app, not a missing " +
+				'capability',
+		);
+		this.name = 'AppDataUnreachableError';
+		this.serial = serial;
+		this.appId = appId;
 	}
 }
 

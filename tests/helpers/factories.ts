@@ -47,6 +47,7 @@ export function createMockCapabilities(overrides: Partial<Capabilities> = {}): C
 		canRecordVideo: true,
 		canControlRecording: true,
 		canHideKeyboard: true,
+		canPullAppFile: true,
 		...overrides,
 	};
 }
@@ -368,6 +369,9 @@ export function createMockDeviceBackend(overrides: Partial<DeviceBackend> = {}):
 		pressKey: vi.fn<NonNullable<DeviceBackend['pressKey']>>(async () => {}),
 		clearText: vi.fn<NonNullable<DeviceBackend['clearText']>>(async () => {}),
 		hideKeyboard: vi.fn<NonNullable<DeviceBackend['hideKeyboard']>>(async () => {}),
+		pullAppFile: vi.fn<NonNullable<DeviceBackend['pullAppFile']>>(
+			async () => new Uint8Array([7, 8, 9]),
+		),
 		setAirplaneMode: vi.fn<NonNullable<DeviceBackend['setAirplaneMode']>>(async () => {}),
 		setWifiEnabled: vi.fn<NonNullable<DeviceBackend['setWifiEnabled']>>(async () => {}),
 		recordVideo: vi.fn<NonNullable<DeviceBackend['recordVideo']>>(async () =>
@@ -490,6 +494,10 @@ export function createConformingDeviceBackend(
 		},
 		async hideKeyboard(serial) {
 			performed.push(`hideKeyboard ${serial}`);
+		},
+		async pullAppFile(serial, appId, containerPath) {
+			performed.push(`pullAppFile ${serial} ${appId} ${containerPath}`);
+			return new Uint8Array([7, 8, 9]);
 		},
 		async setAirplaneMode(serial, enabled) {
 			performed.push(`setAirplaneMode ${serial} ${enabled}`);

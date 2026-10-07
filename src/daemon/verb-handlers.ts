@@ -109,6 +109,7 @@ import type {
 	IpcHandlers,
 	LongPressParams,
 	PressKeyParams,
+	PullAppFileParams,
 	PullFileParams,
 	PushFileParams,
 	ReadLogsCallResult,
@@ -133,7 +134,7 @@ import { clearAppData, launchApp, stopApp } from '../verbs/app.js';
 import type { VerbContext } from '../verbs/context.js';
 import { setAirplaneMode, setWifi } from '../verbs/environment.js';
 import { toVerbFailure } from '../verbs/failure.js';
-import { installApp, installProjectApp, pullFile, pushFile } from '../verbs/files.js';
+import { installApp, installProjectApp, pullAppFile, pullFile, pushFile } from '../verbs/files.js';
 import {
 	type ForegroundExpectation,
 	type GestureOptions,
@@ -186,6 +187,7 @@ export type VerbHandlers = Pick<
 	| 'install_app'
 	| 'push_file'
 	| 'pull_file'
+	| 'pull_app_file'
 	| 'record_video'
 	| 'start_recording'
 	| 'stop_recording'
@@ -551,6 +553,12 @@ export function createVerbHandlers(
 		// back on `ActionResult.artifact`, so this row carries no host path at either end.
 		pull_file(params: PullFileParams): Promise<VerbCallResult> {
 			return runVerb(params, (context) => pullFile(context, params.devicePath));
+		},
+
+		// The same direction, addressed inside an app's own data container (#334). Whether this
+		// device can reach one is `canPullAppFile`, asked by the verb before the backend is.
+		pull_app_file(params: PullAppFileParams): Promise<VerbCallResult> {
+			return runVerb(params, (context) => pullAppFile(context, params.appId, params.containerPath));
 		},
 
 		// The recording row — the second whose answer carries a payload of its own, and for the

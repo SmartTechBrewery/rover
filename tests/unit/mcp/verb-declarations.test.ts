@@ -83,8 +83,10 @@ const DEVICE_METHODS = ['status', 'list_devices', 'acquire_device', 'release_dev
  * from the agent's machine, capped at 4 MiB, which an agent would have to produce as several
  * megabytes of base64 in a tool argument; and `pull_file` is the same question in the other
  * direction, whose answer is a destination on the agent's disk that R19 phase 3 settled only
- * for the two artifact rows. Both wait for R24 phase 2, which is a mechanism underneath these
- * verbs rather than a decision one adapter can take in passing.
+ * for the two artifact rows. `pull_app_file` (#334) is `pull_file` addressed inside an app's
+ * data container, with the same answer and so the same question. All three wait for R24 phase
+ * 2, which is a mechanism underneath these verbs rather than a decision one adapter can take in
+ * passing.
  *
  * `list_archive` is here for a reason of the same kind as `force_release_device`'s: it is not
  * about a device at all. It reads the **host's** artifact archive (D24, R36), which is the
@@ -180,6 +182,7 @@ const DEVICE_METHODS = ['status', 'list_devices', 'acquire_device', 'release_dev
 const NOT_YET_EXPOSED = [
 	'push_file',
 	'pull_file',
+	'pull_app_file',
 	'force_release_device',
 	'list_archive',
 	'search_archive',

@@ -1,6 +1,6 @@
 /**
  * The eighteen verb tools — every `IPC_METHODS` verb row whose answer is plain data, minus
- * the two file transfers that have no shape a tool argument could carry.
+ * the three file transfers that have no shape a tool argument could carry.
  *
  * **The schemas from `src/ipc/methods.ts` *are* the tool declarations**, exactly as
  * `./devices.ts` says for the four device rows (ai/CODING_STANDARDS.md, boundary #1): each

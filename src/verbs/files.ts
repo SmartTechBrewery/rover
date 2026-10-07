@@ -1,6 +1,7 @@
 /**
- * The three verbs that move a file across the machine boundary — `install_app`, `push_file`
- * and `pull_file` (PROJECT.md §4, "App and environment"; backlog row R15, phase 3).
+ * The four verbs that move a file across the machine boundary — `install_app`, `push_file`,
+ * `pull_file` and `pull_app_file` (PROJECT.md §4, "App and environment"; backlog row R15,
+ * phase 3; #334).
  *
  * **This is the family whose whole subject is *which machine* a file is on.** The agent is
  * somewhere else (D17), the device is here, and the host is in between: so a package to
@@ -50,11 +51,20 @@
  * **A real application package is routinely larger than the cap**, and that is said out loud
  * here and in the refusal rather than discovered: `install_app` moves a small package today
  * and refuses a large one by name. Chunking, resumption and streaming are R24's row.
+ *
+ * **`pull_app_file` is `pull_file`'s sibling and answers exactly as it does** — the bytes on
+ * `artifact`, the same bound, the same `artifact-too-large` refusal — for a file inside an
+ * application's own data container, which a device path does not reach (#334). It is a verb
+ * of its own rather than a second shape of `pull_file` because everything but the answer
+ * differs: it is addressed by an app id and a path *relative* to that app's container, it is
+ * gated by a capability (`canPullAppFile`) where `pull_file` is a required method, and it can
+ * be refused per app (`app-data-unreachable`).
  */
 
+import type { PullFileOptions } from '../core/device.js';
 import { FileTooLargeError } from '../core/errors.js';
-import type { DeviceSerial } from '../core/ids.js';
-import type { VerbContext } from './context.js';
+import type { AppId, DeviceSerial } from '../core/ids.js';
+import { capabilityMethod, type VerbContext } from './context.js';
 import { ArtifactTooLargeError } from './errors.js';
 import { performAction } from './perform.js';
 import {
@@ -232,12 +242,50 @@ export async function pullFile(context: VerbContext, devicePath: string): Promis
 		verb: 'pull_file',
 		requires: [],
 		act: async () => {
-			pulled = artifactFrom(context.serial, await read(context, devicePath));
+			pulled = artifactFrom(
+				context.serial,
+				await read((options) => context.backend.pullFile(context.serial, devicePath, options)),
+			);
 		},
 	});
 
 	// Re-parsed rather than spread and returned, so the artifact is held to the same schema
 	// the spine's own answer was — `./read.ts`'s `screenshot` assembles its result the same way.
+	return ActionResultSchema.parse({ ...result, artifact: pulled });
+}
+
+/**
+ * Read a file out of **an application's own data container** and answer with its bytes —
+ * {@link pullFile}'s answer for a path no device path reaches (#334).
+ *
+ * `containerPath` is relative to that app's container and was checked as a shape at the
+ * boundary (`ContainerPathSchema`): no leading `/` and no `..` segment, so it names nothing
+ * outside the container. *How* a container is reached, and which builds the platform opens, is
+ * the backend's knowledge (`DeviceBackend.pullAppFile`); this layer only asks.
+ *
+ * Gated by `canPullAppFile` and checked before the backend is touched, so a device that cannot
+ * do this answers `missing-capability` naming the flag and the device (D11). A device that can,
+ * for an app it cannot open, answers `app-data-unreachable` — not an empty file.
+ */
+export async function pullAppFile(
+	context: VerbContext,
+	appId: AppId,
+	containerPath: string,
+): Promise<ActionResult> {
+	let pulled: Artifact | null = null;
+
+	const result = await performAction(context, {
+		verb: 'pull_app_file',
+		requires: ['canPullAppFile'],
+		act: async () => {
+			const pull = capabilityMethod(context, 'canPullAppFile', 'pullAppFile');
+			pulled = artifactFrom(
+				context.serial,
+				await read((options) => pull(context.serial, appId, containerPath, options)),
+			);
+		},
+	});
+
 	return ActionResultSchema.parse({ ...result, artifact: pulled });
 }
 
@@ -257,11 +305,9 @@ export async function pullFile(context: VerbContext, devicePath: string): Promis
  * `artifact-too-large` refusal `screenshot` raises, carrying both numbers. One wire shape
  * for one fact, whichever end of the transfer noticed it.
  */
-async function read(context: VerbContext, devicePath: string): Promise<Uint8Array> {
+async function read(fetch: (options: PullFileOptions) => Promise<Uint8Array>): Promise<Uint8Array> {
 	try {
-		return await context.backend.pullFile(context.serial, devicePath, {
-			maxBytes: MAX_ARTIFACT_BYTES,
-		});
+		return await fetch({ maxBytes: MAX_ARTIFACT_BYTES });
 	} catch (error) {
 		if (error instanceof FileTooLargeError) {
 			throw new ArtifactTooLargeError(error.serial, error.byteLength, error.maxBytes);
