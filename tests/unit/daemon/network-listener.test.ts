@@ -120,6 +120,7 @@ function registerFakeBackend(devices: Device[] = [attached, second]) {
 				canRecordVideo: true,
 				canControlRecording: true,
 				canHideKeyboard: false,
+				canPullAppFile: false,
 			},
 		},
 		backend: createMockDeviceBackend({

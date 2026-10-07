@@ -668,9 +668,10 @@ describe('the generated ROVER.md', () => {
 		// agent already knows its own group, having chosen it, and one call here would size every
 		// other agent's grouped work on the host.
 		'measure_archive_groups',
-		// Not MCP tools: neither has a form that carries no bytes (R19 phase 3, #104).
+		// Not MCP tools: none has a form that carries no bytes (R19 phase 3, #104, #334).
 		'push_file',
 		'pull_file',
+		'pull_app_file',
 		// Host-operator configuration rather than anything an agent calls: what this host is
 		// registered to run around a lease, on the panel's surface alone (R39, D31).
 		'list_projects',

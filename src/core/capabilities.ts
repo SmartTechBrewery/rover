@@ -15,7 +15,7 @@
  * fails at module load rather than at the first verb call.
  *
  * Only genuinely divergent abilities get a flag; a capability that is always `true`
- * would be noise. The six below are the divergences PROJECT.md §5 and
+ * would be noise. The seven below are the divergences PROJECT.md §5 and
  * ai/ARCHITECTURE.md actually name.
  */
 
@@ -83,6 +83,22 @@ export const CapabilitiesSchema = z
 		 * recipe for it; each backend's own manifest carries which case it is in.
 		 */
 		canHideKeyboard: z.boolean(),
+		/**
+		 * Reading a file out of **an application's own data container**, by app id and a path
+		 * relative to it (#334). Names exactly one method, `pullAppFile`, on `canRecordVideo`'s
+		 * precedent.
+		 *
+		 * **Its own flag rather than a corner of `pull_file`**, because the shell user that reads a
+		 * device path cannot reach an app's private data, and whether anything can is a fact about
+		 * the platform: one reaches it only through a tool that runs as the app, another has the
+		 * container on the host's own disk. A backend with no verified route answers
+		 * `missing-capability` by name rather than an empty file.
+		 *
+		 * **A per-app refusal is not this flag.** A device that can do this still cannot for an
+		 * app whose build forbids it, or one that is not installed — that is
+		 * `AppDataUnreachableError`, an answer about the argument, not about the device.
+		 */
+		canPullAppFile: z.boolean(),
 	})
 	.strict();
 export type Capabilities = z.infer<typeof CapabilitiesSchema>;
@@ -156,6 +172,7 @@ export const CAPABILITY_METHODS = {
 	canRecordVideo: ['recordVideo'],
 	canControlRecording: ['startRecording', 'stopRecording', 'discardRecording'],
 	canHideKeyboard: ['hideKeyboard'],
+	canPullAppFile: ['pullAppFile'],
 } as const satisfies Record<CapabilityId, readonly CapabilityGatedMethod[]>;
 
 /** Non-throwing query — what the verb layer asks before dispatching. */

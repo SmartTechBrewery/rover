@@ -124,6 +124,7 @@ function registerFakeBackend(): void {
 				canRecordVideo: true,
 				canControlRecording: true,
 				canHideKeyboard: false,
+				canPullAppFile: false,
 			},
 		},
 		backend: createMockDeviceBackend({

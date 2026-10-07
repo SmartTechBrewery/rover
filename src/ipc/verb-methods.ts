@@ -603,6 +603,58 @@ export const PullFileParamsSchema = VerbCallBaseSchema.extend({
 export type PullFileParams = z.infer<typeof PullFileParamsSchema>;
 
 /**
+ * A path **relative to an application's own data container** — what `pull_app_file` names
+ * (#334).
+ *
+ * The container is the root, so the shape is {@link DevicePathSchema}'s turned around: it
+ * **must not** start with `/`, because an absolute path names something wherever it likes and
+ * the container is the only place this verb reads. And **no `..` segment**, anywhere, because
+ * that is the one spelling that leaves a directory lexically — measured on API 37, a `..` chain
+ * from an app's data directory read `/system/build.prop` (PROJECT.md §6). Checked here, at the
+ * boundary, so a path that would escape is `invalid_params` before any host or device sees it.
+ *
+ * A symlink *inside* the container is followed, as every transfer here follows one, and is not
+ * refused: the read runs as the app itself, so a link the app made reaches only what the app
+ * could already read.
+ *
+ * The NUL and trailing-slash rules are {@link DevicePathSchema}'s, for its reasons: a NUL ends
+ * the path early underneath, and a trailing `/` names a directory, which this verb never reads.
+ */
+export const ContainerPathSchema = z
+	.string()
+	.min(1)
+	.max(MAX_DEVICE_PATH_LENGTH)
+	.refine(
+		(value) => !value.startsWith('/'),
+		"must be relative to the app's data container, not start with /",
+	)
+	.refine((value) => !value.includes('\0'), 'must not contain a NUL character')
+	.refine(
+		(value) => !value.split('/').includes('..'),
+		"must not contain a '..' segment — the path cannot leave the app's data container",
+	)
+	.refine(
+		(value) => !value.endsWith('/'),
+		'must name a file, not a directory — a trailing slash is a directory',
+	);
+
+/**
+ * `pull_app_file` — which application, and the file inside its own data container to read
+ * (#334).
+ *
+ * `appId` is {@link AppIdSchema} for {@link AppVerbParamsSchema}'s reason, and deliberately
+ * nowhere to put the bytes, for {@link PullFileParamsSchema}'s: they come back on
+ * `ActionResult.artifact` and the client writes them. `.strict()` turns a stray `devicePath`
+ * into `invalid_params` rather than a field the host ignores — the two pull rows address
+ * different things and neither reads the other's field.
+ */
+export const PullAppFileParamsSchema = VerbCallBaseSchema.extend({
+	appId: AppIdSchema,
+	containerPath: ContainerPathSchema,
+}).strict();
+export type PullAppFileParams = z.infer<typeof PullAppFileParamsSchema>;
+
+/**
  * What both environment rows carry — `set_airplane_mode` and `set_wifi`.
  *
  * **One schema for two rows**, for the reason {@link AppVerbParamsSchema} records for its
@@ -825,8 +877,18 @@ function verbCallResultOf<Ok extends z.ZodTypeAny>(ok: Ok) {
 	]);
 }
 
+/**
+ * {@link VerbCallResultSchema}'s type under a name, so declaration emit can refer to it rather
+ * than spell it out — `ScreenElementSchemaType`'s workaround (`src/core/device.ts`), on the
+ * schema `IPC_METHODS` repeats most: most verb rows answer with it, and each inlined copy carries
+ * the whole failure union. With `pull_app_file` (#334) the copies pushed `IPC_METHODS` past the
+ * size the compiler will serialize (TS7056). The type is exactly what the factory returns.
+ */
+export interface VerbCallResultSchemaType
+	extends ReturnType<typeof verbCallResultOf<typeof ActionResultSchema>> {}
+
 /** What every verb whose answer is exactly an `ActionResult` replies with. */
-export const VerbCallResultSchema = verbCallResultOf(ActionResultSchema);
+export const VerbCallResultSchema: VerbCallResultSchemaType = verbCallResultOf(ActionResultSchema);
 export type VerbCallResult = z.infer<typeof VerbCallResultSchema>;
 
 /**

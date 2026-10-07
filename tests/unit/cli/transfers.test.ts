@@ -31,8 +31,9 @@ import {
 import { UsageError } from '@/cli/_shared/flags.js';
 import { readPayload, resolveSource } from '@/cli/_shared/upload.js';
 import { EXIT_FAILED, EXIT_OK, EXIT_USAGE, run } from '@/cli/index.js';
+import type { Capabilities } from '@/core/capabilities.js';
 import type { DeviceBackend, DeviceWatch, DeviceWatcher } from '@/core/device.js';
-import { FileTooLargeError } from '@/core/errors.js';
+import { AppDataUnreachableError, FileTooLargeError } from '@/core/errors.js';
 import { parseDeviceSerial } from '@/core/ids.js';
 import { type RunningDaemon, startDaemon } from '@/daemon/listen.js';
 import { MAX_TRANSFER_BYTES } from '@/ipc/methods.js';
@@ -84,7 +85,10 @@ interface FakeBackend {
  * (`src/daemon/verb-handlers.ts`), so both inbound methods read that file *while they are
  * being called* — afterwards there is nothing left to read, which is the point of it.
  */
-function registerFakeBackend(overrides: Partial<DeviceBackend> = {}): FakeBackend {
+function registerFakeBackend(
+	overrides: Partial<DeviceBackend> = {},
+	capabilities: Partial<Capabilities> = {},
+): FakeBackend {
 	const watchDevices = vi.fn<DeviceBackend['watchDevices']>((watcher: DeviceWatcher) => {
 		watcher.onDevices([attached]);
 		return { stop: vi.fn<DeviceWatch['stop']>(async () => {}) };
@@ -114,6 +118,8 @@ function registerFakeBackend(overrides: Partial<DeviceBackend> = {}): FakeBacken
 				canRecordVideo: true,
 				canControlRecording: true,
 				canHideKeyboard: false,
+				canPullAppFile: false,
+				...capabilities,
 			},
 		},
 		backend: createMockDeviceBackend({
@@ -565,6 +571,69 @@ describe('rover pull, when the host says no', () => {
 
 		expect(existsSync(local('out.bin'))).toBe(false);
 		expect(errored.join('\n')).toContain('devicePath');
+	});
+});
+
+/** `rover pull --app` (#334): the same command and write, addressed inside an app's container. */
+describe('rover pull --app', () => {
+	const APP_ID = 'com.example.debug';
+	const CONTAINER_PATH = 'databases/app.db';
+	const DATABASE = Uint8Array.from([0x53, 0x51, 0x4c, 0x00, 0x0a, 0x0d, 0xff]);
+
+	it('sends pull_app_file with the app id and the path as typed, and writes the bytes', async () => {
+		const pullAppFile = vi.fn<NonNullable<DeviceBackend['pullAppFile']>>(async () => DATABASE);
+		const backend = registerFakeBackend({ pullAppFile }, { canPullAppFile: true });
+		await start();
+		const leaseId = await acquireLease();
+		const destination = local('app.db');
+
+		expect(
+			await run(['pull', leaseId, CONTAINER_PATH, '--app', APP_ID, '--out', destination]),
+		).toBe(EXIT_OK);
+
+		expect(new Uint8Array(await readFile(destination))).toEqual(DATABASE);
+		expect(pullAppFile).toHaveBeenCalledWith(
+			attached.serial,
+			APP_ID,
+			CONTAINER_PATH,
+			expect.objectContaining({ maxBytes: MAX_ARTIFACT_BYTES }),
+		);
+		expect(backend.pullFile).not.toHaveBeenCalled();
+	});
+
+	it('exits 1 and writes nothing when the device cannot open the app', async () => {
+		registerFakeBackend(
+			{
+				pullAppFile: vi.fn<NonNullable<DeviceBackend['pullAppFile']>>(async (serial, appId) => {
+					throw new AppDataUnreachableError(serial, appId, 'it is not a debuggable build');
+				}),
+			},
+			{ canPullAppFile: true },
+		);
+		await start();
+		const leaseId = await acquireLease();
+		const destination = local('release.db');
+
+		expect(
+			await run(['pull', leaseId, CONTAINER_PATH, '--app', APP_ID, '--out', destination]),
+		).toBe(EXIT_FAILED);
+
+		expect(existsSync(destination)).toBe(false);
+		expect(errored.join('\n')).toContain('app-data-unreachable');
+		expect(errored.join('\n')).toContain('debuggable');
+	});
+
+	it('exits 1 and writes nothing when the path would leave the container', async () => {
+		registerFakeBackend({}, { canPullAppFile: true });
+		await start();
+		const leaseId = await acquireLease();
+
+		expect(
+			await run(['pull', leaseId, '../other/x.db', '--app', APP_ID, '--out', local('x.db')]),
+		).toBe(EXIT_FAILED);
+
+		expect(existsSync(local('x.db'))).toBe(false);
+		expect(errored.join('\n')).toContain('containerPath');
 	});
 });
 

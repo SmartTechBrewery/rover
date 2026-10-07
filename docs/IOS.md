@@ -102,6 +102,7 @@ startup of ~60–90 ms that a Node backend talking gRPC directly would not pay.
 | `canControlRecording` | `start`/`stop`/`discardRecording` | same + `SIGINT`, and the **host's** process table for "is this device recording" | exit 0 in 20–30 ms after the signal; `ps` stops naming the recorder in 39 ms | ✅ |
 | `canControlNetwork` | `setAirplaneMode` `setWifiEnabled` | — | — | ❌ **declare false** |
 | `canHideKeyboard` | `hideKeyboard` | Escape, USB HID usage 41, down then up over the same `hid` stream | **fully measured** (#298, #321): the keyboard *is* reported — `screen.keyboard` is `{shown, bounds}` whenever a read was possible — and Escape *does* close one on a plain screen (47 nodes → 9), but it is iOS's generic **cancel**: over Contacts' new-contact sheet it dismissed the whole sheet, with a keyboard up **and with none** | ❌ **declared false for a measured reason**, see §5 |
+| `canPullAppFile` | `pullAppFile` | **not built** (#334) — the route is `simctl get_app_container <udid> <bundle> data`, already measured working (the `clearAppData` note below), giving a container directory on **this host** that `./containers.ts`-style confinement can hold a relative path to | — | ❌ **declared false until built**: `pull_app_file` answers `missing-capability` naming the flag and the device |
 
 19 of 20 probes succeeded; the twentieth is `canControlNetwork`, which failed **on purpose** —
 see §5. **`canHideKeyboard` is a twenty-first row that has since been probed and also fails on

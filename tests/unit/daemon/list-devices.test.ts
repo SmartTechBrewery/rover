@@ -67,6 +67,7 @@ function registerFakeBackend(devices: Device[] = [attached, elsewhere]) {
 				canRecordVideo: true,
 				canControlRecording: true,
 				canHideKeyboard: false,
+				canPullAppFile: false,
 			},
 		},
 		// The factory's own `describeDevice` answers about one fixed serial whatever it is

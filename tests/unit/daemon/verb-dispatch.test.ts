@@ -48,6 +48,7 @@ import type {
 	ReadLogsOptions,
 } from '@/core/device.js';
 import {
+	AppDataUnreachableError,
 	LogFilterRefusedError,
 	NoRecordingRunningError,
 	RecordingAlreadyRunningError,
@@ -152,6 +153,7 @@ interface HostOptions {
 	readonly readLogs?: DeviceBackend['readLogs'];
 	readonly installApp?: DeviceBackend['installApp'];
 	readonly pullFile?: DeviceBackend['pullFile'];
+	readonly pullAppFile?: DeviceBackend['pullAppFile'];
 	readonly readScreen?: DeviceBackend['readScreen'];
 	readonly deviceInfo?: DeviceBackend['deviceInfo'];
 	readonly typeText?: DeviceBackend['typeText'];
@@ -238,6 +240,8 @@ let transfers: Array<{
 	serial: string;
 	hostPath?: string;
 	devicePath?: string;
+	appId?: string;
+	containerPath?: string;
 	contents?: string;
 	maxBytes?: number;
 }>;
@@ -358,6 +362,7 @@ async function serve(options: HostOptions = {}): Promise<void> {
 					transfers.push({ method: 'pullFile', serial, devicePath, maxBytes });
 					return PULLED;
 				}),
+			pullAppFile: pullAppFileOf(options),
 			recordVideo:
 				options.recordVideo ??
 				(async (serial, { durationMs }) => {
@@ -405,6 +410,17 @@ function pressKeyOf(options: HostOptions): NonNullable<DeviceBackend['pressKey']
 		options.pressKey ??
 		(async (_serial, key) => {
 			keys.push(key);
+		})
+	);
+}
+
+/** `pullAppFile`'s backend method, split out for {@link pressKeyOf}'s reason: recorded, or a test's. */
+function pullAppFileOf(options: HostOptions): NonNullable<DeviceBackend['pullAppFile']> {
+	return (
+		options.pullAppFile ??
+		(async (serial, appId, containerPath, { maxBytes }) => {
+			transfers.push({ method: 'pullAppFile', serial, appId, containerPath, maxBytes });
+			return PULLED;
 		})
 	);
 }
@@ -1767,6 +1783,117 @@ describe('the transfer rows carry a file across the boundary', () => {
 
 		expect(thrown).toBeInstanceOf(IpcRequestError);
 		expect((thrown as IpcRequestError).code).toBe('invalid_params');
+	});
+});
+
+/** `pull_app_file` (#334): `pull_file`'s answer, addressed inside an app's own data container. */
+describe('pull_app_file', () => {
+	const APP_ID = 'com.example.debug';
+	const CONTAINER_PATH = 'databases/app.db';
+
+	it('answers with the bytes from the leased device’s app container, and no path at all', async () => {
+		await serve();
+		const client = await connect();
+		const leaseId = await acquire(client);
+
+		const answer = await client.request('pull_app_file', {
+			leaseId,
+			appId: parseAppId(APP_ID),
+			containerPath: CONTAINER_PATH,
+		});
+
+		expect(answer).toMatchObject({
+			outcome: 'ok',
+			result: {
+				verb: 'pull_app_file',
+				target: null,
+				device: { serial: SERIAL },
+				artifact: { base64: Buffer.from(PULLED).toString('base64'), byteLength: PULLED.length },
+			},
+		});
+		expect(JSON.stringify(answer)).not.toContain(CONTAINER_PATH);
+		expect(transfers).toEqual([
+			{
+				method: 'pullAppFile',
+				serial: SERIAL,
+				appId: APP_ID,
+				containerPath: CONTAINER_PATH,
+				maxBytes: MAX_ARTIFACT_BYTES,
+			},
+		]);
+	});
+
+	it('answers a device without canPullAppFile with a failure naming the capability', async () => {
+		await serve({ capabilities: { canPullAppFile: false } });
+		const client = await connect();
+		const leaseId = await acquire(client);
+
+		const answer = await client.request('pull_app_file', {
+			leaseId,
+			appId: parseAppId(APP_ID),
+			containerPath: CONTAINER_PATH,
+		});
+
+		expect(answer).toMatchObject({
+			outcome: 'failed',
+			failure: { kind: 'missing-capability', capability: 'canPullAppFile', serial: SERIAL },
+		});
+		expect(transfers).toEqual([]);
+	});
+
+	it('answers an app the device cannot open as app-data-unreachable, not internal_error', async () => {
+		await serve({
+			pullAppFile: async (serial, appId) => {
+				throw new AppDataUnreachableError(serial, appId, 'it is not a debuggable build');
+			},
+		});
+		const client = await connect();
+		const leaseId = await acquire(client);
+
+		const answer = await client.request('pull_app_file', {
+			leaseId,
+			appId: parseAppId(APP_ID),
+			containerPath: CONTAINER_PATH,
+		});
+
+		expect(answer).toMatchObject({
+			outcome: 'failed',
+			failure: { kind: 'app-data-unreachable', serial: SERIAL, appId: APP_ID },
+		});
+	});
+
+	it('refuses an unknown lease id', async () => {
+		await serve();
+		const client = await connect();
+
+		const answer = await client.request('pull_app_file', {
+			leaseId: parseLeaseId('never-granted'),
+			appId: parseAppId(APP_ID),
+			containerPath: CONTAINER_PATH,
+		});
+
+		expect(answer).toMatchObject({ outcome: 'refused', reason: 'no-lease' });
+		expect(transfers).toEqual([]);
+	});
+
+	/** The boundary's half of "cannot escape the container" — refused before any device is asked. */
+	it.each([
+		'/data/data/com.example.debug/databases/app.db',
+		'../com.other.app/databases/app.db',
+		'databases/../../com.other.app/x',
+		'databases/',
+	])('refuses the container path %s at the boundary', async (containerPath) => {
+		await serve();
+		const client = await connect();
+		const leaseId = await acquire(client);
+
+		const thrown = await client
+			.request('pull_app_file', { leaseId, appId: parseAppId(APP_ID), containerPath })
+			.catch((error: unknown) => error);
+
+		expect(thrown).toBeInstanceOf(IpcRequestError);
+		expect((thrown as IpcRequestError).code).toBe('invalid_params');
+		expect(transfers).toEqual([]);
 	});
 });
 

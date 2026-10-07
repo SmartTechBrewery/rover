@@ -30,6 +30,9 @@
  *   of them, which is the property `shellArg` exists to restore when one does. A new argument
  *   outside that list takes a quoter.
  *
+ * A path inside an app's data container (`pullAppFile`, #334) is the one *path* on the
+ * `shellText` side: `run-as` takes it through the device's shell, and it is the caller's data.
+ *
  * There is one more kind of value and it takes **no** quoter on purpose: a path handed to
  * `install`, `push` or `pull`. Those are adb subcommands taking argv entries, so nothing in
  * them reaches a shell on either machine — the quoting question does not arise, and the
@@ -62,6 +65,7 @@ import {
 	type StartRecordingOptions,
 } from '../../core/device.js';
 import {
+	AppDataUnreachableError,
 	FileTooLargeError,
 	LogFilterRefusedError,
 	NoRecordingRunningError,
@@ -134,6 +138,7 @@ import { acceptedInput } from './parsers/input.js';
 import { parseForegroundApp, parseKeyboard, parseSystemBarInsets } from './parsers/insets.js';
 import { isLogcatTimestamp, parseLogcat } from './parsers/logcat.js';
 import { acceptedNetworkChange } from './parsers/network.js';
+import { type RunAsRefusal, runAsRefusal } from './parsers/run-as.js';
 import { isPng } from './parsers/screencap.js';
 import { isFinishedRecording, isRecorderRunning, recorderPids } from './parsers/screenrecord.js';
 import { type DeviceStat, parseDeviceStat } from './parsers/stat.js';
@@ -710,6 +715,47 @@ function pulledNonRegularFile(
 			'with the bytes of one file — a path that is not a regular file has a size that says ' +
 			'nothing about how much it would transfer, so it is refused rather than bounded ' +
 			'afterwards. Name a regular file.',
+	);
+}
+
+/**
+ * What `run-as`'s refusal means for a caller, in this platform's words (#334).
+ *
+ * The reason `AppDataUnreachableError` carries — the device can read an app's data, and not
+ * this app's. Each says what to do instead, because that is the only part a caller acts on.
+ */
+const RUN_AS_REASONS: Readonly<Record<RunAsRefusal, string>> = {
+	'not-debuggable':
+		"it is not a debuggable build, and Android opens an application's data container to " +
+		'another user only for a debuggable one (`run-as` refused it). A release build is ' +
+		'refused here, not read as an empty file — install a debuggable build of the app',
+	'unknown-package': 'no package by that name is installed on this device',
+	'not-an-application':
+		'it runs as a system user rather than as an application, so it has no application ' +
+		'data container `run-as` can enter',
+};
+
+/**
+ * A read whose probe answered and whose bytes did not match it.
+ *
+ * `exec-out` puts whatever `cat` and `run-as` said on stdout and exits 0 — a missing file reads
+ * back as `cat: …: No such file or directory`, a refusal as its own line (measured on API 37,
+ * PROJECT.md §6) — so a stream of the wrong length is either a file that changed between the two
+ * calls (a database being written) or an error read back in place of the bytes. Either way it
+ * is not the file, and the caller is told rather than handed it.
+ */
+function appFileChanged(
+	serial: DeviceSerial,
+	appId: AppId,
+	containerPath: string,
+	expected: number,
+	actual: number,
+): Error {
+	return new Error(
+		`'${containerPath}' in the data of '${unwrap(appId)}' on device '${unwrap(serial)}' ` +
+			`was ${expected} bytes when asked and ${actual} bytes when read — it changed between ` +
+			'the two, or what came back was not the file, so it is refused rather than answered. ' +
+			'For a database the app is writing, stop the app first',
 	);
 }
 
@@ -1473,6 +1519,129 @@ export class AndroidDeviceBackend implements DeviceBackend {
 				throw pulledNothing(serial, devicePath, staged, result, cause);
 			});
 		});
+	}
+
+	/**
+	 * `shell run-as <app> stat -L -c '%s %F' <path>` first, then
+	 * `exec-out run-as <app> cat <path>` — a file out of an application's own data container
+	 * (#334), as bytes (D19).
+	 *
+	 * `run-as` is the only route from a shell user to an app's private files: it runs the command
+	 * as the app, in the app's data directory (`/data/user/0/<app>`, measured on API 37), which is
+	 * what makes `containerPath` resolve as a relative path. It opens only a **debuggable**
+	 * build, and its refusal is parsed (`./parsers/run-as.js`) into `AppDataUnreachableError` —
+	 * never an empty file.
+	 *
+	 * **The probe is authoritative here, unlike in {@link pullFile}.** Over `exec-out`, a failing
+	 * `cat` or `run-as` prints its error on stdout and exits **0** (measured on API 37,
+	 * PROJECT.md §6), so the read alone cannot tell a file from a complaint about one; and
+	 * nothing is staged on this host, so there is no second check before the bytes reach the
+	 * heap. So the probe goes over `shell`, whose exit code and stderr are real, and *every* way
+	 * it can fail to say "a regular file of this size" stops the call before the read: a refusal,
+	 * a missing file, a directory or special file, an over-bound size, or output nothing here
+	 * can parse. The read is then held to the probe's size, and a mismatch is refused
+	 * ({@link appFileChanged}).
+	 *
+	 * **`exec-out`, never `shell`, for the read**, for {@link screenshot}'s reason: a pty can turn
+	 * every `\n` in a database into `\r\n`. The field recipe was exactly this pair, and on API 37
+	 * a debuggable app's database and its `-wal` came back byte-identical to what was put there.
+	 *
+	 * `containerPath` was shape-checked at the boundary (`ContainerPathSchema`: relative, no
+	 * `..`), and is quoted with `shellText` because it reaches a shell and is the caller's data.
+	 * No device-side scratch file, so nothing to clean up and no lock to take.
+	 */
+	async pullAppFile(
+		serial: DeviceSerial,
+		appId: AppId,
+		containerPath: string,
+		options: PullFileOptions,
+	): Promise<Uint8Array> {
+		const onDevice = await this.statInAppContainer(serial, appId, containerPath);
+		if (onDevice.kind !== 'regular-file') {
+			throw pulledNonRegularFile(serial, containerPath, onDevice.description);
+		}
+		if (onDevice.byteLength > options.maxBytes) {
+			throw new FileTooLargeError(serial, containerPath, onDevice.byteLength, options.maxBytes);
+		}
+
+		// **One argv entry, not five.** `adb exec-out` quotes every argument after the first
+		// itself, so the quoted app id arrived as `'com.example'` — measured on adb 37.0.1 / API
+		// 37, `run-as: unknown package: 'com.example'` read back at exit 0 — while `adb shell`
+		// joins its arguments unquoted. As one string it reaches the device's `sh` exactly as
+		// the probe's argv does, with this file's quoting and nobody else's (PROJECT.md §6).
+		const result = await runAdbBinaryOnDevice(
+			serial,
+			['exec-out', `run-as ${appArg(appId)} cat ${shellText(containerPath)}`],
+			{ timeoutMs: TRANSFER_ADB_TIMEOUT_MS },
+		);
+		if (result.stdout.length > options.maxBytes) {
+			throw new FileTooLargeError(serial, containerPath, result.stdout.length, options.maxBytes);
+		}
+		if (result.stdout.length !== onDevice.byteLength) {
+			throw appFileChanged(serial, appId, containerPath, onDevice.byteLength, result.stdout.length);
+		}
+		return result.stdout;
+	}
+
+	/**
+	 * What `containerPath` is inside `appId`'s data container — and, unlike
+	 * {@link statOnDevice}, **never `null`**: {@link pullAppFile} has no later check to fall
+	 * back on, so a probe that cannot answer is a refusal rather than "nothing to add".
+	 *
+	 * A refusal of `run-as`'s own becomes `AppDataUnreachableError`, looked for on stderr where
+	 * `shell` puts it and on stdout too, because a device whose `adb shell` lacks the v2
+	 * protocol merges the streams and exits 0. Anything else — a missing file, a wording no
+	 * capture has — is a plain failure quoting what the device said. A timeout passes through
+	 * as itself.
+	 */
+	private async statInAppContainer(
+		serial: DeviceSerial,
+		appId: AppId,
+		containerPath: string,
+	): Promise<DeviceStat> {
+		let result: AdbResult;
+		try {
+			result = await runAdbOnDevice(serial, [
+				'shell',
+				'run-as',
+				appArg(appId),
+				'stat',
+				'-L',
+				'-c',
+				shellArg(STAT_FORMAT),
+				shellText(containerPath),
+			]);
+		} catch (error) {
+			if (error instanceof AdbCommandError && !error.timedOut) {
+				throw this.unreachableOr(serial, appId, containerPath, error);
+			}
+			throw error;
+		}
+
+		const parsed = parseDeviceStat(result.stdout);
+		if (parsed === null) throw this.unreachableOr(serial, appId, containerPath, result);
+		return parsed;
+	}
+
+	/** `AppDataUnreachableError` when `run-as` refused, otherwise the device's own words. */
+	private unreachableOr(
+		serial: DeviceSerial,
+		appId: AppId,
+		containerPath: string,
+		said: AdbResult,
+	): Error {
+		const refusal = runAsRefusal(said.stderr) ?? runAsRefusal(said.stdout);
+		if (refusal !== null) {
+			return new AppDataUnreachableError(serial, appId, RUN_AS_REASONS[refusal]);
+		}
+		return new Error(
+			[
+				`'${containerPath}' in the data of '${unwrap(appId)}' on device '${unwrap(serial)}' ` +
+					'could not be read — the device said',
+				`stdout: ${quoteStream(said.stdout)}`,
+				`stderr: ${quoteStream(said.stderr)}`,
+			].join('\n'),
+		);
 	}
 
 	/**

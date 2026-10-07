@@ -1597,6 +1597,33 @@ describe.skipIf(!process.env.ROVER_TEST_DEVICE)('a daemon runs verbs on its own 
 		expect((thrown as IpcRequestError).code).toBe('internal_error');
 	});
 
+	/**
+	 * `pull_app_file` (#334) against packages every device has, or never has. The success case
+	 * needs a **debuggable** app, and there is none on an arbitrary device and none in this
+	 * repository — the same gap `install_app` records above — so it was run by hand against one
+	 * and recorded in PROJECT.md §6. What a device proves here is the half no stub can: that
+	 * `run-as`'s real refusal arrives as the named failure, never as an empty file.
+	 */
+	it.each([
+		['a package that runs as a system user', SETTINGS],
+		['a package that is not installed', ABSENT_PACKAGE],
+	])('answers pull_app_file for %s as app-data-unreachable', async (_what, appId) => {
+		const client = await startHost();
+		const device = await freeDevice(client);
+		const leaseId = await lease(client, device.serial);
+
+		const answer = await client.request('pull_app_file', {
+			leaseId,
+			appId,
+			containerPath: 'databases/rover-probe.db',
+		});
+
+		expect(answer).toMatchObject({
+			outcome: 'failed',
+			failure: { kind: 'app-data-unreachable', serial: device.serial, appId },
+		});
+	});
+
 	it('refuses a verb call once the lease is over', async () => {
 		const client = await startHost();
 		const device = await freeDevice(client);

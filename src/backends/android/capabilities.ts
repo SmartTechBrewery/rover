@@ -57,6 +57,13 @@
  * the same key navigates back when none is (verified on API 33, `PROJECT.md` §6). The
  * `hide_keyboard` verb over it landed in the same change and is not what moves the flag.
  *
+ * `canPullAppFile` flips here (#334), on the same seam: it names exactly one method,
+ * `pullAppFile`, and this backend now answers it — `run-as <app> stat` as the probe and
+ * `exec-out run-as <app> cat` as the read, both run on API 37 against a debuggable app's
+ * database and its `-wal` before being written down (`PROJECT.md` §6). It is a device ability,
+ * and the per-app half — `run-as` opens only a debuggable build — is a named refusal
+ * (`AppDataUnreachableError`), not this flag.
+ *
  * **Every flag in this manifest is now `true`, so nothing here is a declared opt-out.**
  * That is a statement about this backend, not about the model: a capability declared
  * before its methods exist is exactly the "an agent is told a device can do something it
@@ -79,5 +86,6 @@ export const androidCapabilityManifest: CapabilityManifestInput = {
 		canRecordVideo: true,
 		canControlRecording: true,
 		canHideKeyboard: true,
+		canPullAppFile: true,
 	},
 };
