@@ -30,7 +30,7 @@ import {
 	MAX_RECORDING_MS,
 	RecordVideoResultSchema,
 } from '../verbs/record.js';
-import { type ActionResult, ActionResultSchema } from '../verbs/result.js';
+import { type ActionResult, ActionResultSchema, AfterDetailSchema } from '../verbs/result.js';
 import { AbsenceTargetSchema, ScreenTargetSchema, TargetSchema } from '../verbs/target.js';
 
 /**
@@ -49,7 +49,13 @@ import { AbsenceTargetSchema, ScreenTargetSchema, TargetSchema } from '../verbs/
 export const MAX_VERB_TIMEOUT_MS = 5 * 60_000;
 
 /**
- * What every verb call carries, and it is one field: the credential.
+ * What every verb call carries: the credential, and how much of the after-state to answer with.
+ *
+ * `after` is on the base because every row but `read_screen` answers a compact after-state by
+ * default (#330, `src/verbs/result.ts`), so every one of them advertises the way to ask for the
+ * whole read — and `read_screen`, which is always whole, omits it and turns one sent there into
+ * `invalid_params`. **Absent rather than defaulted**, for {@link ReadLogsParamsSchema}'s reason:
+ * `DEFAULT_AFTER_DETAIL` in the verb layer stays the only default.
  *
  * The two wait knobs used to live here and were moved down to {@link WaitCallBaseSchema},
  * because a base every row extends is a base every row *advertises*. A gesture verb that
@@ -63,6 +69,7 @@ export const MAX_VERB_TIMEOUT_MS = 5 * 60_000;
  */
 const VerbCallBaseSchema = z.object({
 	leaseId: LeaseIdSchema,
+	after: AfterDetailSchema.optional(),
 });
 
 /**
@@ -255,7 +262,7 @@ export const PressKeyParamsSchema = VerbCallBaseSchema.extend({
 export type PressKeyParams = z.infer<typeof PressKeyParamsSchema>;
 
 /**
- * What a `hide_keyboard` call carries: the lease id, and nothing else.
+ * What a `hide_keyboard` call carries: the lease id, and the base's optional `after`.
  *
  * No target — the verb addresses nothing on the screen — and no key: *how* this device puts its
  * keyboard away is the backend's knowledge, so a caller has nothing to choose (#307). `.strict()`
@@ -600,17 +607,22 @@ export const EnvironmentVerbParamsSchema = VerbCallBaseSchema.extend({
 }).strict();
 export type EnvironmentVerbParams = z.infer<typeof EnvironmentVerbParamsSchema>;
 
-/** What a `read_screen` call carries: the lease id, and nothing else. */
-export const ReadScreenParamsSchema = VerbCallBaseSchema.strict();
+/**
+ * What a `read_screen` call carries: the lease id, and nothing else.
+ *
+ * No `after`: this verb's after-state *is* its answer and is always the whole read (#330), so
+ * `.strict()` turns one sent here into `invalid_params` rather than an option silently ignored.
+ */
+export const ReadScreenParamsSchema = VerbCallBaseSchema.omit({ after: true }).strict();
 export type ReadScreenParams = z.infer<typeof ReadScreenParamsSchema>;
 
-/** What a `device_info` call carries — the same one field, for the same reasons. */
+/** What a `device_info` call carries — the base's fields, and nothing of its own. */
 export const DeviceInfoParamsSchema = VerbCallBaseSchema.strict();
 export type DeviceInfoParams = z.infer<typeof DeviceInfoParamsSchema>;
 
 /**
- * What a `screenshot` call carries — again the lease id alone, and again its own schema for
- * the reason {@link DeviceInfoParamsSchema} gives.
+ * What a `screenshot` call carries — again the base alone plus a label, and again its own
+ * schema for the reason {@link DeviceInfoParamsSchema} gives.
  *
  * **No destination and no format.** A path would be the one field D19 rules out: the capture
  * happens on the host and the answer is read on the caller's machine, so a path sent here
@@ -671,7 +683,7 @@ export const RecordVideoParamsSchema = VerbCallBaseSchema.extend({
 export type RecordVideoParams = z.infer<typeof RecordVideoParamsSchema>;
 
 /**
- * What a `start_recording` call carries: the lease id, and nothing else.
+ * What a `start_recording` call carries: the lease id, and the base's optional `after`.
  *
  * **No duration, deliberately.** The length of a recording held open is decided by *when the
  * caller stops it* (#190), which is the whole of what this pair is for; a duration here would

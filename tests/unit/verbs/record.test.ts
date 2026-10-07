@@ -195,7 +195,12 @@ describe('record_video', () => {
 			'readScreen',
 			'deviceInfo',
 		]);
-		expect(result.after).toEqual({ kind: 'screen', elements: [save] });
+		expect(result.after).toEqual({
+			kind: 'screen',
+			detail: 'compact',
+			elements: [save],
+			omitted: 0,
+		});
 		expect(result.device).toEqual(createMockDeviceInfo({ serial: context.serial }));
 	});
 

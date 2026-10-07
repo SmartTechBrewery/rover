@@ -20,12 +20,19 @@ import {
 } from '../core/capabilities.js';
 import type { DeviceBackend } from '../core/device.js';
 import type { DeviceSerial } from '../core/ids.js';
+import type { AfterDetail } from './result.js';
 
 /** The device a verb acts on, the backend that can act on it, and what that backend can do. */
 export interface VerbContext {
 	readonly serial: DeviceSerial;
 	readonly backend: DeviceBackend;
 	readonly manifest: CapabilityManifest;
+	/**
+	 * How much of the screen the after-state carries. Absent means `DEFAULT_AFTER_DETAIL`
+	 * (`./result.ts`), which is the only default. On the context rather than on any verb's
+	 * options, so every verb and every wait answers with it without a signature changing.
+	 */
+	readonly afterDetail?: AfterDetail;
 }
 
 /**

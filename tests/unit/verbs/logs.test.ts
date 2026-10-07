@@ -80,7 +80,8 @@ describe('read_logs', () => {
 			// nothing on it to report — `null` is a fact about the verb (D12(a)).
 			target: null,
 			device: { serial: context.serial },
-			after: { kind: 'screen' },
+			// The log is the answer; the screen beside it is the compact one (#330).
+			after: { kind: 'screen', detail: 'compact' },
 			logs: { entries: [crash], truncated: false },
 		});
 		expect(() => ReadLogsResultSchema.parse(result)).not.toThrow();

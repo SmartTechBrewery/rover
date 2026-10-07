@@ -149,7 +149,12 @@ describe('waitFor', () => {
 		expect(result.verb).toBe('wait_for');
 		expect(result.device.serial).toBe('test-serial-1');
 		expect(result.device.screen.density).toBe(480);
-		expect(result.after).toEqual({ kind: 'screen', elements: [save, spinner] });
+		expect(result.after).toEqual({
+			kind: 'screen',
+			detail: 'compact',
+			elements: [save, spinner],
+			omitted: 0,
+		});
 	});
 
 	it('times out naming what it waited for and what was on screen instead', async () => {
@@ -383,7 +388,12 @@ describe('waitUntilGone', () => {
 		expect(result.verb).toBe('wait_until_gone');
 		// Nothing left to name: what was waited for is an absence.
 		expect(result.target).toBeNull();
-		expect(result.after).toEqual({ kind: 'screen', elements: [save] });
+		expect(result.after).toEqual({
+			kind: 'screen',
+			detail: 'compact',
+			elements: [save],
+			omitted: 0,
+		});
 	});
 
 	it('names the elements that blocked it, not whatever the screen read happened to list first', async () => {
@@ -444,7 +454,12 @@ describe('waitUntilGone', () => {
 		);
 
 		expect(reads(context)).toBe(3);
-		expect(result.after).toEqual({ kind: 'screen', elements: [save] });
+		expect(result.after).toEqual({
+			kind: 'screen',
+			detail: 'compact',
+			elements: [save],
+			omitted: 0,
+		});
 	});
 
 	it('treats two matching elements as still there twice, not as an ambiguous request', async () => {
@@ -455,7 +470,12 @@ describe('waitUntilGone', () => {
 		const result = await waitUntilGone(context, { by: 'text', text: 'Loading…' }, fakeClock());
 
 		expect(result.target).toBeNull();
-		expect(result.after).toEqual({ kind: 'screen', elements: [save] });
+		expect(result.after).toEqual({
+			kind: 'screen',
+			detail: 'compact',
+			elements: [save],
+			omitted: 0,
+		});
 	});
 
 	/**
@@ -473,7 +493,12 @@ describe('waitUntilGone', () => {
 		// before the spinner was ever observed, let alone gone.
 		expect(reads(context)).toBe(4);
 		expect(clock.asked).toEqual([DEFAULT_POLL_INTERVAL_MS, DEFAULT_POLL_INTERVAL_MS]);
-		expect(result.after).toEqual({ kind: 'screen', elements: [save] });
+		expect(result.after).toEqual({
+			kind: 'screen',
+			detail: 'compact',
+			elements: [save],
+			omitted: 0,
+		});
 	});
 
 	it('times out saying the screen was never readable, not that the element went', async () => {

@@ -22,7 +22,7 @@ function anActionResult(verb: string): ActionResult {
 		verb,
 		device: createMockDeviceInfo({ serial: SERIAL }),
 		target: null,
-		after: { kind: 'screen', elements: [] },
+		after: { kind: 'screen', detail: 'compact', elements: [], omitted: 0 },
 		artifact: null,
 	});
 }

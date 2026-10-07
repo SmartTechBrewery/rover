@@ -202,7 +202,7 @@ describe('request/response over a duplex pair', () => {
 						verb: 'wait_for',
 						device: createMockDeviceInfo(),
 						target: { source: 'screen', point: { x: 60, y: 40 }, element: save },
-						after: { kind: 'screen', elements: [save] },
+						after: { kind: 'screen', detail: 'compact', elements: [save], omitted: 0 },
 						// `null` rather than absent: no bytes is a value a client reads, not a key it
 						// has to notice is missing.
 						artifact: null,

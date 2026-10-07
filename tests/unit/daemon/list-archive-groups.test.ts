@@ -184,7 +184,7 @@ function resultOf(verb: string, of: Lease, overrides: Partial<ArchivableResult> 
 		verb,
 		device: createMockDeviceInfo({ serial: of.serial }),
 		target: null,
-		after: { kind: 'screen' as const, elements: [] },
+		after: { kind: 'screen' as const, detail: 'compact' as const, elements: [], omitted: 0 },
 		artifact: null,
 		...overrides,
 	} as ArchivableResult;
