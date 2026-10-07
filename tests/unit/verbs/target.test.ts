@@ -193,6 +193,64 @@ describe('resolveTarget', () => {
 		expect(await resolveTarget(context, { by: 'element', id: parseElementId('save') })).toBeNull();
 	});
 
+	/**
+	 * The field report (#329): a checkbox with no text, no label — only the identifier its
+	 * developer gave it. An identifier target reaches it, from a read taken inside the call.
+	 */
+	it('resolves an identifier target to a textless element, on a fresh read every time', async () => {
+		const terms = createMockScreenElement({
+			id: 'terms',
+			text: null,
+			label: null,
+			identifier: 'com.example:id/terms',
+			checked: false,
+			bounds: { x: 10, y: 300, width: 40, height: 40 },
+		});
+		const context = contextShowing([save, terms], [save]);
+		const target = { by: 'identifier', identifier: 'com.example:id/terms' } as const;
+
+		const resolved = await resolveTarget(context, target);
+
+		expect(resolved?.element?.id).toBe('terms');
+		expect(resolved?.point).toEqual(centreOf(terms));
+		expect(await resolveTarget(context, target)).toBeNull();
+		expect(context.backend.readScreen).toHaveBeenCalledTimes(2);
+	});
+
+	it('matches an identifier exactly, never as a substring', async () => {
+		const terms = createMockScreenElement({ id: 'terms', identifier: 'com.example:id/terms' });
+		const context = contextShowing([terms]);
+
+		expect(await resolveTarget(context, { by: 'identifier', identifier: 'terms' })).toBeNull();
+	});
+
+	/**
+	 * Two elements sharing an identifier is ordinary — every row of a list — so it is the
+	 * ambiguous-target refusal, with a way out an identifier target can take: no index on it, and
+	 * no claim that the backend is broken.
+	 */
+	it('refuses an identifier two elements share, naming both and a way out', async () => {
+		const first = createMockScreenElement({ id: 'row-0', identifier: 'android:id/title' });
+		const second = createMockScreenElement({
+			id: 'row-1',
+			text: 'Other',
+			identifier: 'android:id/title',
+		});
+		const context = contextShowing([first, second]);
+
+		const thrown = await resolveTarget(context, {
+			by: 'identifier',
+			identifier: 'android:id/title',
+		}).catch((error: unknown) => error);
+
+		expect(thrown).toBeInstanceOf(AmbiguousTargetError);
+		const error = thrown as AmbiguousTargetError;
+		expect(error.candidates.map((candidate) => candidate.id)).toEqual(['row-0', 'row-1']);
+		expect(error.lookedFor).toBe("identifier 'android:id/title'");
+		expect(error.remedy).toContain('element id');
+		expect(error.remedy).not.toContain('backend bug');
+	});
+
 	it('refuses a text target on a backend that cannot read the screen', async () => {
 		const context = createMockVerbContext({
 			manifest: createMockCapabilityManifest({
@@ -342,6 +400,24 @@ describe('requireTarget', () => {
 		expect(error.found).toContain("'Cancel'");
 	});
 
+	/** A textless control is still recognisable in the excerpt, by the identifier it carries. */
+	it('names the identifiers on screen, so a textless control is not just "(no text)"', async () => {
+		const terms = createMockScreenElement({
+			id: 'terms',
+			text: null,
+			identifier: 'com.example:id/terms',
+		});
+		const context = contextShowing([terms]);
+
+		const thrown = await requireTarget(context, { by: 'text', text: 'Accept' }).catch(
+			(error: unknown) => error,
+		);
+
+		expect((thrown as TargetNotFoundError).found).toContain(
+			'(no text) #com.example:id/terms [terms]',
+		);
+	});
+
 	it('says the screen was empty rather than saying nothing', async () => {
 		const context = contextShowing([]);
 
@@ -411,6 +487,16 @@ describe('the narrowed target schemas', () => {
 	it('refuses a point target, which no screen read can confirm or deny', () => {
 		expect(() => ScreenTargetSchema.parse({ by: 'point', at: { x: 1, y: 2 } })).toThrow();
 		expect(() => AbsenceTargetSchema.parse({ by: 'point', at: { x: 1, y: 2 } })).toThrow();
+	});
+
+	it('accepts an identifier on both, and refuses an index or an empty one on it', () => {
+		const target = { by: 'identifier', identifier: 'com.example:id/terms' };
+
+		expect(ScreenTargetSchema.parse(target)).toEqual(target);
+		expect(AbsenceTargetSchema.parse(target)).toEqual(target);
+		expect(() => ScreenTargetSchema.parse({ ...target, index: 0 })).toThrow();
+		expect(() => AbsenceTargetSchema.parse({ ...target, index: 0 })).toThrow();
+		expect(() => ScreenTargetSchema.parse({ by: 'identifier', identifier: '' })).toThrow();
 	});
 
 	it('refuses an unknown field, exactly as the full target union does', () => {

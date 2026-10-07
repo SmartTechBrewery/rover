@@ -8,7 +8,7 @@
  * `tests/unit/backends/android/screen.test.ts` against the captured 28 KB hierarchy rather
  * than against a device.
  *
- * Four decisions, each load-bearing:
+ * Five decisions, each load-bearing:
  *
  * - **Every node, depth-first pre-order, unfiltered.** A container with no text is exactly
  *   what `scroll`'s `ScrollOptions.target` addresses (`src/verbs/input.ts`), and deciding
@@ -25,6 +25,14 @@
  *   "carries neither" is representable; an empty string reads as content that is not there,
  *   and would match a substring target for `''`.
  * - **Bounds are exact quotients, and a negative one survives.** See {@link toScreenElements}.
+ * - **The identifier and the state come straight off the same node** (#329). `resource-id`
+ *   becomes `identifier`, with `''` read as `null` exactly like `text`. `selected`, `enabled`,
+ *   `clickable` and `focused` pass through verbatim, `null` only where the dump omitted the
+ *   attribute. `checked` is **gated on `checkable`**: API 37 writes `checked="false"` on every
+ *   node, layouts included, and passing that through would claim every container on the screen
+ *   is an unticked box (`ScreenElementSchema`). The identifier is **not** the id —
+ *   `android:id/title` is on 13 nodes of the captured fixture, which is the reason the ordinal
+ *   path below stays.
  *
  * **The id is stable only for as long as the tree shape is**, and that limit is the honest
  * claim rather than a caveat. Insert a row above an element and every id below it moves. A
@@ -59,6 +67,12 @@ function walk(node: UiNode, id: string, scale: number, into: ScreenElement[]): v
 		id: parseElementId(id),
 		text: content(node.text),
 		label: content(node.contentDesc),
+		identifier: content(node.resourceId),
+		checked: node.checkable === true ? node.checked : null,
+		selected: node.selected,
+		enabled: node.enabled,
+		clickable: node.clickable,
+		focused: node.focused,
 		bounds: {
 			x: left / scale,
 			y: top / scale,

@@ -205,6 +205,26 @@ describe.skipIf(!process.env.ROVER_TEST_DEVICE)('reading the screen of a real de
 	});
 
 	/**
+	 * The identifier and the state come off the dump the read already takes (#329): every node of
+	 * a real dump writes every flag, so the four ungated ones are booleans on every element, and
+	 * `checked` is answered only where the node says it is checkable — never on a layout.
+	 */
+	it('answers the identifier and the interaction state off the same dump', async () => {
+		const { elements } = await readsScreen();
+
+		expect(elements.some((element) => element.identifier !== null)).toBe(true);
+		for (const element of elements) {
+			expect(typeof element.selected).toBe('boolean');
+			expect(typeof element.enabled).toBe('boolean');
+			expect(typeof element.clickable).toBe('boolean');
+			expect(typeof element.focused).toBe('boolean');
+		}
+		expect(elements.filter((element) => element.checked !== null).length).toBeLessThan(
+			elements.length,
+		);
+	});
+
+	/**
 	 * **The one assertion that catches a missing px→dp conversion**, which is otherwise
 	 * invisible: an unconverted hierarchy is a perfectly plausible list of rectangles that
 	 * happen to be three times too large, and every target resolved off it would be

@@ -6,6 +6,8 @@ import {
 	KEYBOARD_CANDIDATE_TRAIT,
 	KEYBOARD_KEY_TRAIT,
 	parseAccessibilityRead,
+	SELECTED_TRAIT,
+	TOGGLE_TRAIT,
 } from '@/backends/ios-simulator/parsers/accessibility.js';
 
 /**
@@ -154,6 +156,36 @@ describe('the keyboard traits, against the capture they were measured on', () =>
 	});
 });
 
+describe('the identifier and state keys, against the captures they were measured on', () => {
+	/** The Settings › Camera toggles carry their identifiers and the `Toggle` trait; nothing else does. */
+	it('finds the toggle trait on the four toggles and nowhere else', () => {
+		const toggles = ALL_NODES.filter((node) => node.traits?.includes(TOGGLE_TRAIT) === true);
+
+		expect(toggles.map((node) => node.AXUniqueId)).toEqual([
+			'CameraGridSwitch',
+			'CameraLevelSwitch',
+			'MIRROR',
+			'OVER_CAPTURE_VIEW_OUTSIDE_THE_FRAME_SWITCH',
+		]);
+	});
+
+	/** The selected tab of the Compose capture is the one node of the three reads claiming it. */
+	it('finds the selected trait on the selected tab only', () => {
+		const selected = ALL_NODES.filter((node) => node.traits?.includes(SELECTED_TRAIT) === true);
+
+		expect(selected.map((node) => node.AXLabel)).toEqual(['Assistant']);
+	});
+
+	/** `enabled` is a real boolean, and `false` really arrives — Safari's greyed-out back button. */
+	it('projects enabled as the boolean the tool wrote', () => {
+		expect(parseAccessibilityRead(TEXTFIELD)[14]).toMatchObject({
+			AXLabel: 'Wróć',
+			AXUniqueId: 'BackButton',
+			enabled: false,
+		});
+	});
+});
+
 describe('the pid, against the captures it was measured on', () => {
 	/**
 	 * **Every node of one read carries the same pid, and it is the application's** (#336). That is
@@ -187,6 +219,8 @@ describe('the shape of the projection', () => {
 			role: 'AXButton',
 			traits: ['Button'],
 			pid: 14900,
+			AXUniqueId: 'save',
+			enabled: true,
 			something_idb_1_6_added: { deeply: ['nested'] },
 		});
 
@@ -196,6 +230,8 @@ describe('the shape of the projection', () => {
 			AXValue: null,
 			traits: ['Button'],
 			pid: 14900,
+			AXUniqueId: 'save',
+			enabled: true,
 		});
 	});
 
@@ -213,8 +249,10 @@ describe('the shape of the projection', () => {
 				AXValue: '',
 				traits: ['None'],
 				pid: 1,
+				AXUniqueId: '',
+				enabled: true,
 			}),
-		).toMatchObject({ AXLabel: '', AXValue: '' });
+		).toMatchObject({ AXLabel: '', AXValue: '', AXUniqueId: '' });
 	});
 
 	/**
@@ -251,6 +289,8 @@ describe('the shape of the projection', () => {
 				AXValue: null,
 				traits: null,
 				pid: 82023,
+				AXUniqueId: null,
+				enabled: true,
 			}),
 		).toMatchObject({ traits: null, pid: 82023 });
 	});
@@ -267,10 +307,38 @@ describe('the shape of the projection', () => {
 			AXLabel: null,
 			AXValue: null,
 			traits: ['None'],
+			AXUniqueId: null,
+			enabled: true,
 		};
 
 		expect(() => AccessibilityElementSchema.parse(node)).toThrow(/pid/);
 		expect(AccessibilityElementSchema.parse({ ...node, pid: null })).toMatchObject({ pid: null });
+	});
+
+	/**
+	 * `AXUniqueId` and `enabled` are required on `pid`'s terms (#329): every node of every capture
+	 * carries both, so a release that dropped one fails by the key's name, while a `null` value is
+	 * admitted and costs only that field.
+	 */
+	it.each([
+		'AXUniqueId',
+		'enabled',
+	])('refuses a node with no %s, naming the key, and admits a null one', (key) => {
+		const node: Record<string, unknown> = {
+			frame: { x: 0, y: 0, width: 1, height: 1 },
+			AXLabel: null,
+			AXValue: null,
+			traits: ['None'],
+			pid: 1,
+			AXUniqueId: null,
+			enabled: true,
+		};
+		const { [key]: _dropped, ...without } = node;
+
+		expect(() => AccessibilityElementSchema.parse(without)).toThrow(new RegExp(key));
+		expect(AccessibilityElementSchema.parse({ ...node, [key]: null })).toMatchObject({
+			[key]: null,
+		});
 	});
 
 	/**

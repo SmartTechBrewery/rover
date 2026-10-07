@@ -148,7 +148,9 @@ const VERB_TOOLS: readonly VerbToolRow[] = [
 			'out. Omit `timeoutMs` and the host applies the verb’s own default. A wait that runs out ' +
 			'is a `wait-timeout` failure naming what it waited for and what was on the screen ' +
 			'instead, not a hang. A target under the on-screen keyboard is not one that can be acted ' +
-			'on yet, so the wait keeps polling and its timeout says so. Requires `canReadScreen`.',
+			'on yet, so the wait keeps polling and its timeout says so. A target may be text, an ' +
+			'element id, or `{ by: "identifier" }` for a control known only by the identifier its ' +
+			'developer gave it. Requires `canReadScreen`.',
 		requestTimeoutMs: (params) => waitedOut(params.timeoutMs, DEFAULT_WAIT_TIMEOUT_MS),
 	},
 	{
@@ -158,7 +160,8 @@ const VERB_TOOLS: readonly VerbToolRow[] = [
 			'Wait until nothing on the screen matches the target any more — a spinner, a toast, a ' +
 			'dialog — then answer with the state. Gone means absent from a read taken **now**, never ' +
 			'absent from a read you already had. A text target takes no `index` here, deliberately: ' +
-			'picking one of several matches is not something an absence can be asked about. Requires ' +
+			'picking one of several matches is not something an absence can be asked about. An ' +
+			'identifier target works here too, and is gone when no element carries it. Requires ' +
 			'`canReadScreen`.',
 		requestTimeoutMs: (params) => waitedOut(params.timeoutMs, DEFAULT_WAIT_TIMEOUT_MS),
 	},
@@ -166,13 +169,17 @@ const VERB_TOOLS: readonly VerbToolRow[] = [
 		method: 'tap',
 		title: 'Tap a target',
 		description:
-			'Tap one target: by visible text, by the element id `read_screen` reported, or at a ' +
-			'coordinate as the documented fallback. The point is resolved from a screen read taken ' +
+			'Tap one target: by visible text, by the element id `read_screen` reported, by the ' +
+			'`identifier` an element carries (`{ by: "identifier", identifier }`, exact match — the ' +
+			'way to reach a control with no text), or at a coordinate as the documented fallback. ' +
+			'The point is resolved from a screen read taken ' +
 			'**inside this call** — never pass a coordinate worked out on an earlier turn — and the ' +
 			'answer says which of the two it was, plus the state after the tap. A target nothing ' +
 			'matches is a `target-not-found` failure describing what was on the screen; two matches ' +
 			'are `ambiguous-target` carrying the candidates, and `index` on a text target is how you ' +
-			'choose between them. A point that lies **under the on-screen keyboard** is refused as ' +
+			'choose between them. An identifier is not unique — every row of a list may share one — ' +
+			'so two elements carrying it are `ambiguous-target` too, and the way out is the element ' +
+			'id or text. A point that lies **under the on-screen keyboard** is refused as ' +
 			'`covered-by-keyboard`, naming the target, the point and the keyboard, rather than ' +
 			'tapped onto a key and reported as done — call `hide_keyboard` and tap again. Only the ' +
 			'point itself is checked: an element half under the keyboard whose centre is clear is ' +
@@ -182,7 +189,7 @@ const VERB_TOOLS: readonly VerbToolRow[] = [
 		method: 'long_press',
 		title: 'Press and hold a target',
 		description:
-			'Press and hold one target — the same three ways of addressing one that `tap` takes. ' +
+			'Press and hold one target — the same four ways of addressing one that `tap` takes. ' +
 			'`durationMs` is how long the **device** holds; omit it for the verb’s own default. Raise ' +
 			'it on a device configured with a slower long-press threshold: too short a hold is an ' +
 			'ordinary tap with a successful-looking result behind it. A target under the on-screen ' +
@@ -195,7 +202,7 @@ const VERB_TOOLS: readonly VerbToolRow[] = [
 		title: 'Swipe between two targets',
 		description:
 			'Drag from one target to another — two of them, because a drag has two ends, each by ' +
-			'text, element id or coordinate. `durationMs` is how long the device takes over it, and ' +
+			'text, element id, identifier or coordinate. `durationMs` is how long the device takes over it, and ' +
 			'zero is a flick; omit it for the verb’s own default. `from` is the target the answer ' +
 			'reports. A `from` under the on-screen keyboard is refused as `covered-by-keyboard` — ' +
 			'the keyboard would read the drag — and `hide_keyboard` is the way out; `to` may lie ' +
@@ -208,8 +215,8 @@ const VERB_TOOLS: readonly VerbToolRow[] = [
 		description:
 			'Scroll the screen or one scrollable region. **`direction` is where the content goes, ' +
 			'not where the finger goes**: `down` reveals what is further down the list, the sense a ' +
-			'scrollbar and a wheel already have. `target` names the region to scroll within and is ' +
-			'omitted for the screen as a whole. `durationMs` defaults slower than a flick on ' +
+			'scrollbar and a wheel already have. `target` names the region to scroll within — by ' +
+			'text, element id or identifier — and is omitted for the screen as a whole. `durationMs` defaults slower than a flick on ' +
 			'purpose, so the state the answer reports is a screen that has stopped moving. A drag ' +
 			'that would **start** under the on-screen keyboard — it starts a quarter into the region ' +
 			'— is refused as `covered-by-keyboard` rather than handed to the keyboard, which types ' +
@@ -221,7 +228,8 @@ const VERB_TOOLS: readonly VerbToolRow[] = [
 		title: 'Type text',
 		description:
 			'Type text into whatever currently holds focus. **It addresses no element, so tap the ' +
-			'field first.** The device shell’s quoting is hidden — a space, an apostrophe and a ' +
+			'field first.** Where the device reports focus, the element with `focused: true` in the ' +
+			'answer’s after-state is the field that took the text. The device shell’s quoting is hidden — a space, an apostrophe and a ' +
 			'metacharacter all arrive verbatim — and text the device cannot type at all comes back ' +
 			'as an `unsupported-text` failure naming the offending characters as escapes, never as a ' +
 			'silent drop. Leading and trailing spaces are content and are kept. **`clear: true` ' +
@@ -268,7 +276,12 @@ const VERB_TOOLS: readonly VerbToolRow[] = [
 		title: 'Read the screen',
 		description:
 			'Read what is on the screen: the texts, the element rectangles and the element ids the ' +
-			'target-taking verbs address. It survives an application that blocks screen capture, ' +
+			'target-taking verbs address. Each element also carries its `identifier` — the name the ' +
+			'app’s developer gave the control, the way to find one with no text, and not unique — ' +
+			'and its state: `checked` (only on a control that can be checked or toggled), ' +
+			'`selected`, `enabled`, `clickable` and `focused`. **`null` in any of those means the ' +
+			'device did not say**, never `false`. Every action’s after-state carries the same ' +
+			'fields. It survives an application that blocks screen capture, ' +
 			'which is why it is the read to reach for when a capture comes back blank. The answer ' +
 			'also reports the **on-screen keyboard** on its device half — `screen.keyboard`, with ' +
 			'`shown` and the rectangle it occupies in the same dp space the element bounds are in. ' +

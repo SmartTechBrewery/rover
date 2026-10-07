@@ -103,6 +103,24 @@ describe.skipIf(!process.env.ROVER_TEST_SIMULATOR || !process.env.ROVER_TEST_IDB
 		 * (`src/verbs/errors.ts`). This is also the standing check on the decision *not* to take the
 		 * id from `AXUniqueId`, which repeats within a single read of Safari's start page.
 		 */
+		/**
+		 * The state this payload carries and the state it does not (#329): `enabled` is a boolean on
+		 * every element, and `clickable`/`focused` are `null` — *not answered* — because `LEGACY`
+		 * carries neither. Identifiers are not asserted present: the Compose app has none, which is
+		 * a true answer.
+		 */
+		it('answers enabled, and leaves clickable and focused not answered', async () => {
+			const device = await bootedDevice();
+
+			const elements = await backend.readScreen(device.serial);
+
+			for (const element of elements) {
+				expect(typeof element.enabled).toBe('boolean');
+				expect(element.clickable).toBeNull();
+				expect(element.focused).toBeNull();
+			}
+		});
+
 		it('gives every element on a real screen an id no other element has', async () => {
 			const device = await bootedDevice();
 

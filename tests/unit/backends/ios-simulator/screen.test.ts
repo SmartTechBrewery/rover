@@ -298,6 +298,12 @@ describe('toScreenElements, against the real reads', () => {
 			id: '15',
 			label: 'Adres',
 			text: 'Szukaj lub podaj witrynę',
+			identifier: 'TabBarItemTitle',
+			checked: null,
+			selected: false,
+			enabled: true,
+			clickable: null,
+			focused: null,
 			bounds: TEXTFIELD[15]?.frame,
 		});
 	});
@@ -314,6 +320,71 @@ describe('toScreenElements, against the real reads', () => {
 	/** A node carrying neither comes out carrying neither, rather than carrying empty strings. */
 	it('answers null for a node with no label and no value', () => {
 		expect(toScreenElements(TEXTFIELD)[1]).toMatchObject({ label: null, text: null });
+	});
+
+	/**
+	 * The developer-assigned identifier is carried as `identifier`, and it repeats where the device
+	 * repeats it — Safari's three favourites tiles — while their ids stay three distinct ordinals.
+	 * That is the whole reason it is a field of its own rather than the id (#329).
+	 */
+	it('carries AXUniqueId as the identifier, repeats and all', () => {
+		const tiles = toScreenElements(TEXTFIELD).filter(
+			(element) => element.identifier === 'favoritesItemIdentifierContent',
+		);
+
+		expect(tiles.map((element) => element.label)).toEqual(['Apple', 'Bing', 'Google']);
+		expect(new Set(tiles.map((element) => element.id)).size).toBe(3);
+		expect(toScreenElements(COMPOSE).every((element) => element.identifier === null)).toBe(true);
+	});
+
+	/** `enabled` is the node's own key: Safari's greyed-out back button answers `false`. */
+	it('answers enabled from the node', () => {
+		expect(toScreenElements(TEXTFIELD)[14]).toMatchObject({ label: 'Wróć', enabled: false });
+		expect(toScreenElements(TEXTFIELD)[16]?.enabled).toBe(true);
+	});
+
+	/**
+	 * `checked` is the toggle's value read as a state, and only on a node that claims the
+	 * `Toggle` trait — every other node of the capture answers `null`, never an unticked `false`.
+	 */
+	it('answers checked on the toggles and on nothing else', () => {
+		const elements = toScreenElements(TOGGLES);
+
+		expect(elements.slice(12, 16).map((element) => element.checked)).toEqual([
+			false,
+			false,
+			false,
+			true,
+		]);
+		expect(elements.slice(12, 16).map((element) => element.identifier)).toContain(
+			'CameraGridSwitch',
+		);
+		expect(
+			[...elements.slice(0, 12), ...elements.slice(16)].every(
+				(element) => element.checked === null,
+			),
+		).toBe(true);
+	});
+
+	/** `selected` is the `Selected` trait: the Compose capture's `Assistant` tab and no other. */
+	it('answers selected from the trait', () => {
+		const selected = toScreenElements(COMPOSE).filter((element) => element.selected === true);
+
+		expect(selected.map((element) => element.label)).toEqual(['Assistant']);
+		expect(toScreenElements(COMPOSE).every((element) => element.selected !== null)).toBe(true);
+	});
+
+	/**
+	 * `clickable` and `focused` are not in this payload, so they are `null` on every element of
+	 * every capture — *not answered*, never a guessed `false` (`ScreenElementSchema`).
+	 */
+	it('answers clickable and focused as not answered on every capture', () => {
+		for (const capture of [COMPOSE, TOGGLES, TEXTFIELD, KEYBOARD, KEYBOARD_DISMISSED]) {
+			for (const element of toScreenElements(capture)) {
+				expect(element.clickable).toBeNull();
+				expect(element.focused).toBeNull();
+			}
+		}
 	});
 
 	/** The Compose read has no value anywhere, which is what makes the case above worth making. */
@@ -338,9 +409,52 @@ describe('toScreenElements, on reads no capture here contains', () => {
 					AXValue: '',
 					traits: [],
 					pid: 1,
+					AXUniqueId: '',
+					enabled: true,
 				},
 			])[0],
-		).toEqual({ id: '0', label: null, text: null, bounds: { x: 0, y: 0, width: 1, height: 1 } });
+		).toEqual({
+			id: '0',
+			label: null,
+			text: null,
+			identifier: null,
+			checked: null,
+			selected: false,
+			enabled: true,
+			clickable: null,
+			focused: null,
+			bounds: { x: 0, y: 0, width: 1, height: 1 },
+		});
+	});
+
+	/**
+	 * A `null` traits list is *claims nothing* to the keyboard, but `selected` cannot read it as
+	 * `false` — the node did not say — and a toggle value nobody has measured is not answered.
+	 */
+	it('answers selected and checked as not answered where the node did not say', () => {
+		const [placeholder, toggle] = toScreenElements([
+			{
+				frame: { x: 0, y: 0, width: 1, height: 1 },
+				AXLabel: null,
+				AXValue: null,
+				traits: null,
+				pid: 1,
+				AXUniqueId: null,
+				enabled: null,
+			},
+			{
+				frame: { x: 0, y: 0, width: 1, height: 1 },
+				AXLabel: 'Mixed',
+				AXValue: '2',
+				traits: ['Toggle'],
+				pid: 1,
+				AXUniqueId: null,
+				enabled: true,
+			},
+		]);
+
+		expect(placeholder).toMatchObject({ selected: null, checked: null, enabled: null });
+		expect(toggle).toMatchObject({ checked: null, text: '2' });
 	});
 
 	/** An empty read is an empty list — a screen with nothing accessible on it, not a failure. */
@@ -430,6 +544,8 @@ describe('toOnScreenKeyboard, on reads no capture here contains', () => {
 		AXValue: null,
 		traits,
 		pid: 99145,
+		AXUniqueId: null,
+		enabled: true,
 	});
 
 	/**
@@ -463,6 +579,8 @@ describe('toOnScreenKeyboard, on reads no capture here contains', () => {
 			AXLabel: null,
 			AXValue: null,
 			pid: 82023,
+			AXUniqueId: null,
+			enabled: true,
 		};
 
 		expect(toOnScreenKeyboard([{ ...placeholder, traits: null }])).toEqual({
@@ -487,6 +605,8 @@ describe('toOnScreenKeyboard, on reads no capture here contains', () => {
 				AXValue: null,
 				traits: null,
 				pid: 99145,
+				AXUniqueId: null,
+				enabled: true,
 			},
 			...KEYBOARD,
 		];

@@ -77,6 +77,66 @@ describe('toScreenElements', () => {
 		expect(elements.some((element) => element.label === 'Navigate up')).toBe(true);
 	});
 
+	/**
+	 * The identifier and the state come off the same node (#329). The Dark-theme switch is the
+	 * field report's control in miniature: its `resource-id` is what names it to a developer, and
+	 * `checked` is answered because it says it is checkable.
+	 */
+	it('carries the resource id as the identifier and the switch state from its node', () => {
+		const elements = toScreenElements(hierarchy, SCALE);
+		const darkTheme = elements.find(
+			(element) => element.identifier === 'com.android.settings:id/switchWidget',
+		);
+
+		expect(darkTheme).toMatchObject({
+			text: null,
+			label: 'Dark theme',
+			checked: false,
+			selected: false,
+			enabled: true,
+			clickable: true,
+			focused: false,
+		});
+	});
+
+	/**
+	 * `checked` is gated on `checkable`: API 37 writes `checked="false"` on every node, and the
+	 * switch is the one checkable node of this dump — so it is the one element answering it.
+	 */
+	it('answers checked only for the node that says it is checkable', () => {
+		const answered = toScreenElements(hierarchy, SCALE).filter(
+			(element) => element.checked !== null,
+		);
+
+		expect(answered.map((element) => element.identifier)).toEqual([
+			'com.android.settings:id/switchWidget',
+		]);
+	});
+
+	/** Every node of this dump writes every flag, so none of the other four is ever `null` here. */
+	it('answers selected, enabled, clickable and focused on every element of a real dump', () => {
+		for (const element of toScreenElements(hierarchy, SCALE)) {
+			expect(typeof element.selected).toBe('boolean');
+			expect(typeof element.enabled).toBe('boolean');
+			expect(typeof element.clickable).toBe('boolean');
+			expect(typeof element.focused).toBe('boolean');
+		}
+	});
+
+	/**
+	 * The identifier is **not** the id: `android:id/title` is on 13 rows of this one read, which is
+	 * why the ordinal path stays the id — and `resource-id=""` reads as `null`, like `text`.
+	 */
+	it('repeats an identifier the dump repeats, with distinct ids, and nulls an empty one', () => {
+		const elements = toScreenElements(hierarchy, SCALE);
+		const titles = elements.filter((element) => element.identifier === 'android:id/title');
+
+		expect(titles).toHaveLength(13);
+		expect(new Set(titles.map((element) => element.id)).size).toBe(13);
+		expect(elements.filter((element) => element.identifier === null)).toHaveLength(42);
+		expect(elements.some((element) => element.identifier === '')).toBe(false);
+	});
+
 	// `ScreenElement`'s two fields are nullable so that "carries neither" is representable;
 	// an empty string would read as content that is not there, and would match a substring
 	// target for `''`.

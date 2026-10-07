@@ -45,7 +45,7 @@ import {
 import type { ResolvedTarget } from './result.js';
 
 /**
- * The three kinds of target, each named so the narrowed unions below compose from the same
+ * The four kinds of target, each named so the narrowed unions below compose from the same
  * members instead of restating them. A restated text target is a second place `exact` can
  * be misspelled and a second place an `index` bound can drift.
  *
@@ -69,12 +69,24 @@ const TextTargetSchema = z
 
 const ElementTargetSchema = z.object({ by: z.literal('element'), id: ElementIdSchema }).strict();
 
+/**
+ * The identifier the application's developer gave the control (`ScreenElement.identifier`, #329) —
+ * the one way to reach a control with no text and no label. **Exact match only**, and no `index`:
+ * an identifier is a name, not a phrase to search inside, and several elements carrying one is
+ * ordinary (list rows) — that is the ambiguous-target refusal, whose way out is the element id or
+ * text, never a position in a list that renumbers.
+ */
+const IdentifierTargetSchema = z
+	.object({ by: z.literal('identifier'), identifier: z.string().min(1) })
+	.strict();
+
 const PointTargetSchema = z.object({ by: z.literal('point'), at: PointSchema }).strict();
 
 /** What a verb is pointed at. */
 export const TargetSchema = z.discriminatedUnion('by', [
 	TextTargetSchema,
 	ElementTargetSchema,
+	IdentifierTargetSchema,
 	PointTargetSchema,
 ]);
 export type Target = z.infer<typeof TargetSchema>;
@@ -103,6 +115,7 @@ export type ScreenTarget = Exclude<Target, { by: 'point' }>;
 export const ScreenTargetSchema = z.discriminatedUnion('by', [
 	TextTargetSchema,
 	ElementTargetSchema,
+	IdentifierTargetSchema,
 ]);
 
 /**
@@ -120,6 +133,7 @@ export const ScreenTargetSchema = z.discriminatedUnion('by', [
  */
 export type AbsenceTarget =
 	| Extract<ScreenTarget, { by: 'element' }>
+	| Extract<ScreenTarget, { by: 'identifier' }>
 	| (Extract<ScreenTarget, { by: 'text' }> & { index?: never });
 
 /**
@@ -135,6 +149,7 @@ export type AbsenceTarget =
 export const AbsenceTargetSchema = z.discriminatedUnion('by', [
 	TextTargetSchema.omit({ index: true }).strict(),
 	ElementTargetSchema,
+	IdentifierTargetSchema,
 ]);
 
 /** The target in the words the error messages use. */
@@ -147,6 +162,8 @@ export function describeTarget(target: Target): string {
 		}
 		case 'element':
 			return `element '${target.id}'`;
+		case 'identifier':
+			return `identifier '${target.identifier}'`;
 		case 'point':
 			return `point (${target.at.x}, ${target.at.y})`;
 	}
@@ -314,11 +331,20 @@ export async function findOnScreen(
 ): Promise<ScreenMatches> {
 	const readScreen = capabilityMethod(context, 'canReadScreen', 'readScreen');
 	const elements = await readScreen(context.serial);
-	const matches =
-		target.by === 'text'
-			? elements.filter((element) => matchesText(element, target.text, target.exact === true))
-			: elements.filter((element) => element.id === target.id);
+	const matches = elements.filter((element) => isMatch(element, target));
 	return { matches, screen: elements };
+}
+
+/** Whether one element is what a screen target names — in the field that target kind reads. */
+function isMatch(element: ScreenElement, target: ScreenTarget): boolean {
+	switch (target.by) {
+		case 'text':
+			return matchesText(element, target.text, target.exact === true);
+		case 'element':
+			return element.id === target.id;
+		case 'identifier':
+			return element.identifier === target.identifier;
+	}
 }
 
 /**
@@ -478,14 +504,22 @@ function choose(
  * The way out of an ambiguity, in the words that target kind can act on.
  *
  * `index` only exists on a text target (`TargetSchema` above), so offering it for an
- * element target would name a field a strict parse rejects — advice the caller cannot
- * take. Two elements sharing one id is not an under-specified target at all; it is the
+ * element or identifier target would name a field a strict parse rejects — advice the caller
+ * cannot take. Two elements sharing one id is not an under-specified target at all; it is the
  * backend contradicting the uniqueness `ElementId` implies, and the honest advice is to
- * address the element some other way.
+ * address the element some other way. Two sharing an identifier is ordinary — a developer names
+ * every row of a list the same — so the way out is the id this read gave each of them, or text.
  */
 function remedyFor(target: Target): string {
-	return target.by === 'element'
-		? 'two elements sharing one id is a backend bug, not an ambiguous request — ' +
+	switch (target.by) {
+		case 'element':
+			return (
+				'two elements sharing one id is a backend bug, not an ambiguous request — ' +
 				're-target by text or by point until it is fixed'
-		: 'name one with an explicit index rather than letting the first win';
+			);
+		case 'identifier':
+			return 'address one of them by the element id this read gave it, or by text with an explicit index';
+		default:
+			return 'name one with an explicit index rather than letting the first win';
+	}
 }
