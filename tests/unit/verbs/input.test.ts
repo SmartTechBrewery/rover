@@ -31,9 +31,13 @@ import {
 	UnsupportedKeyError,
 	UnsupportedTextError,
 } from '@/core/errors.js';
-import { parseDeviceSerial, parseElementId } from '@/core/ids.js';
+import { type AppId, parseAppId, parseDeviceSerial, parseElementId } from '@/core/ids.js';
 import type { VerbContext } from '@/verbs/context.js';
-import { CoveredByKeyboardError, TargetNotFoundError } from '@/verbs/errors.js';
+import {
+	AppNotInForegroundError,
+	CoveredByKeyboardError,
+	TargetNotFoundError,
+} from '@/verbs/errors.js';
 import {
 	hideKeyboard,
 	LONG_PRESS_DURATION_MS,
@@ -101,6 +105,8 @@ function recording(
 		capabilities?: Capabilities;
 		/** What `deviceInfo` reports for the on-screen keyboard — none up, when absent. */
 		keyboard?: OnScreenKeyboard | null;
+		/** What `deviceInfo` names in front — the mock's own `com.example.app`, when absent. */
+		foregroundApp?: string | null;
 	} = {},
 ): Recording {
 	const calls: string[] = [];
@@ -117,7 +123,10 @@ function recording(
 		}),
 		deviceInfo: vi.fn<DeviceBackend['deviceInfo']>(async (serial) => {
 			calls.push('deviceInfo');
-			const info = createMockDeviceInfo({ serial });
+			const info = createMockDeviceInfo({
+				serial,
+				...(options.foregroundApp === undefined ? {} : { foregroundApp: options.foregroundApp }),
+			});
 			return options.keyboard === undefined
 				? info
 				: { ...info, screen: { ...info.screen, keyboard: options.keyboard } };
@@ -890,5 +899,78 @@ describe('a touch under the on-screen keyboard', () => {
 		expect(error.element).toBeNull();
 		expect(error.lookedFor).toContain('start of a scroll down');
 		expect(drags).toEqual([]);
+	});
+});
+
+describe('an expected application that is not in front (#332)', () => {
+	const expectApp = parseAppId('com.example.app');
+
+	/** One call of each verb that takes `expectApp`, with it set. */
+	const EXPECTING: ReadonlyArray<
+		[string, (context: VerbContext, expectApp: AppId) => Promise<ActionResult>]
+	> = [
+		['tap', (context, app) => tap(context, { by: 'text', text: 'Save' }, { expectApp: app })],
+		[
+			'long_press',
+			(context, app) => longPress(context, { by: 'text', text: 'Save' }, { expectApp: app }),
+		],
+		[
+			'swipe',
+			(context, app) =>
+				swipe(
+					context,
+					{ by: 'text', text: 'Save' },
+					{ by: 'text', text: 'Cancel' },
+					{ expectApp: app },
+				),
+		],
+		['scroll', (context, app) => scroll(context, 'down', { expectApp: app })],
+		['type_text', (context, app) => typeText(context, 'hello', { expectApp: app })],
+		['press_key', (context, app) => pressKey(context, 'home', { expectApp: app })],
+	];
+
+	it.each(EXPECTING)('%s sends no input at all, and names both applications', async (verb, run) => {
+		const { calls, context } = recording({
+			screen: [save, cancel],
+			foregroundApp: 'com.android.launcher3',
+		});
+
+		const thrown = await run(context, expectApp).catch((error: unknown) => error);
+
+		expect(thrown).toBeInstanceOf(AppNotInForegroundError);
+		expect(thrown).toMatchObject({
+			expectedApp: 'com.example.app',
+			foregroundApp: 'com.android.launcher3',
+			message: expect.stringContaining(verb),
+		});
+		// The one fresh read the check is, and nothing after it.
+		expect(calls).toEqual(['deviceInfo']);
+	});
+
+	it('clears nothing either, when a type_text that would clear first is refused', async () => {
+		const { calls, context } = recording({ foregroundApp: 'com.android.chrome' });
+
+		await expect(typeText(context, 'secret', { clear: true, expectApp })).rejects.toThrow(
+			AppNotInForegroundError,
+		);
+		expect(calls).toEqual(['deviceInfo']);
+	});
+
+	it('refuses when the device does not say what is in front', async () => {
+		const { calls, context } = recording({ foregroundApp: null });
+
+		await expect(typeText(context, 'hello', { expectApp })).rejects.toMatchObject({
+			name: 'AppNotInForegroundError',
+			foregroundApp: null,
+		});
+		expect(calls).toEqual(['deviceInfo']);
+	});
+
+	it('types as before when the expected application is the one in front', async () => {
+		const { typed, context } = recording();
+
+		await typeText(context, 'hello', { expectApp });
+
+		expect(typed).toEqual(['hello']);
 	});
 });

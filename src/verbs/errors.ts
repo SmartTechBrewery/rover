@@ -1,11 +1,12 @@
 /**
- * Verb-layer error types — the five ways a target fails to become one point to touch, the two
- * ways an answer is too big to give, and the ways this host cannot produce one at all.
+ * Verb-layer error types — the five ways a target fails to become one point to touch, an
+ * application the caller expected that is not in front, the two ways an answer is too big to
+ * give, and the ways this host cannot produce one at all.
  *
  * Device-layer errors (a missing capability, a device that vanished) stay in
  * `src/core/errors.ts`; these are about what the caller asked for, and every one of them
  * exists because the alternative is a **silent** answer: a first match among two, a tap
- * into nowhere or onto a keyboard, a truncated image, a frame list missing its middle, an
+ * into nowhere or onto a keyboard, text typed into an application nobody meant, a truncated image, a frame list missing its middle, an
  * install nobody ran, or an empty result where the honest answer is that the screen no longer
  * holds what was named (ai/RULES.md §2).
  *
@@ -268,6 +269,57 @@ export class CoveredByKeyboardError extends Error {
 		this.element = element;
 		this.point = point;
 		this.keyboard = keyboard;
+	}
+}
+
+/**
+ * Thrown when an input verb was told which application to expect in the foreground and the
+ * device names another one, or cannot name one at all (#332).
+ *
+ * **The false green this closes**: an input verb acts on whatever is on the screen. When the
+ * application under test has crashed or been left, a `type_text` types into the launcher's
+ * search or a browser and a `tap` hits whatever sits there, and both answered `ok` — a field
+ * session put text meant for the application into Google search and Chrome that way. Reporting
+ * the foreground application on every answer (#331) lets an agent notice afterwards; this
+ * stops the input from being sent in the first place.
+ *
+ * **A precondition the caller supplied, not a verdict** (ai/RULES.md §1). Rover compares the
+ * id it was handed with the id the device reported, and says which two it compared; whether
+ * that application *should* be in front is the agent's to know.
+ *
+ * **`foregroundApp` is `null` when the device did not say**, and that refuses too, with its own
+ * message. `DeviceInfo.foregroundApp` is `null` for *not answered*, never for *nothing in
+ * front* (`src/core/device.ts`), so acting on it would be acting on an expectation nobody
+ * checked — the same silent answer this class exists to replace.
+ *
+ * `verb` shapes the message and is not a field: the call that asked already names it.
+ */
+export class AppNotInForegroundError extends Error {
+	readonly serial: DeviceSerial;
+	readonly expectedApp: string;
+	readonly foregroundApp: string | null;
+
+	constructor(
+		serial: DeviceSerial,
+		verb: string,
+		expectedApp: string,
+		foregroundApp: string | null,
+	) {
+		super(
+			foregroundApp === null
+				? `${verb} was not performed on device '${serial}': it expected '${expectedApp}' in ` +
+						'the foreground and the device did not say which application is in front, so the ' +
+						'expectation could not be checked. No input was sent. Look again with device_info, ' +
+						'or call without expectApp to act on whatever is in front'
+				: `${verb} was not performed on device '${serial}': it expected '${expectedApp}' in ` +
+						`the foreground and '${foregroundApp}' is there instead. No input was sent. If the ` +
+						`app crashed, read_logs shows why, and launch_app '${expectedApp}' brings it back; ` +
+						'then call again',
+		);
+		this.name = 'AppNotInForegroundError';
+		this.serial = serial;
+		this.expectedApp = expectedApp;
+		this.foregroundApp = foregroundApp;
 	}
 }
 

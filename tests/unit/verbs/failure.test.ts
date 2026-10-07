@@ -25,6 +25,7 @@ import {
 import { parseDeviceSerial, parsePlatformId } from '@/core/ids.js';
 import {
 	AmbiguousTargetError,
+	AppNotInForegroundError,
 	ArtifactTooLargeError,
 	CoveredByKeyboardError,
 	FrameExtractionFailedError,
@@ -167,6 +168,38 @@ describe('a verb-layer error becomes a failure a client can branch on', () => {
 		expect(failureOf(onPoint)).toMatchObject({ kind: 'covered-by-keyboard', element: null });
 		expect(onPoint.message).toContain('start of a scroll down across the screen');
 		expect(onPoint.message).toContain('hide_keyboard');
+	});
+
+	/**
+	 * #332. Without this branch a device merely showing another application would answer as a
+	 * host that broke. Both shapes: another application named, and none the device could name.
+	 */
+	it('maps an expected application that is not in front, with and without one there', () => {
+		const other = new AppNotInForegroundError(
+			SERIAL,
+			'type_text',
+			'com.android.settings',
+			'com.android.launcher3',
+		);
+		const unanswered = new AppNotInForegroundError(SERIAL, 'tap', 'com.android.settings', null);
+
+		expect(failureOf(other)).toEqual({
+			kind: 'app-not-in-foreground',
+			serial: SERIAL,
+			expectedApp: 'com.android.settings',
+			foregroundApp: 'com.android.launcher3',
+			message: other.message,
+		});
+		expect(other.message).toContain('type_text');
+		expect(other.message).toContain(SERIAL);
+		expect(other.message).toContain('com.android.launcher3');
+		expect(other.message).toContain('launch_app');
+		expect(failureOf(unanswered)).toMatchObject({
+			kind: 'app-not-in-foreground',
+			foregroundApp: null,
+		});
+		expect(unanswered.message).toContain('did not say');
+		expect(unanswered.message).toContain('com.android.settings');
 	});
 
 	/**
@@ -613,6 +646,19 @@ describe('a failure survives the trip to the agent', () => {
 					height: 300,
 				},
 			),
+		],
+		[
+			'app-not-in-foreground',
+			new AppNotInForegroundError(
+				SERIAL,
+				'type_text',
+				'com.android.settings',
+				'com.android.launcher3',
+			),
+		],
+		[
+			'app-not-in-foreground with nothing named',
+			new AppNotInForegroundError(SERIAL, 'tap', 'com.android.settings', null),
 		],
 		['wait-timeout', new WaitTimeoutError("element 'save'", 'an empty screen', 5_000, 21)],
 		['unreadable-screen', new UnreadableScreenError(SERIAL, 'no window to dump')],

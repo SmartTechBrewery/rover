@@ -314,6 +314,12 @@ Verbs live above the backends and below the adapters, and this is where determin
   `scroll`'s computed start both have. Order inside the check is deliberate: degenerate and
   off-screen are reported first, since a clipped node's midpoint can land under a keyboard and
   naming the keyboard for it would send the caller to dismiss something that was never in the way.
+- **An expected application is checked before the target is resolved** (#332). When the caller
+  passes `expectApp` to one of the six input verbs, `performAction()` takes a fresh `deviceInfo`
+  after the capability assertions and refuses with `AppNotInForegroundError` — performing nothing —
+  when the device names another application in front or cannot name one. It comes before
+  resolution so a vanished app is named as such rather than reported as a `target-not-found`
+  listing the launcher; absent `expectApp`, the spine makes no extra query.
 - **`waitFor()` and `waitUntilGone()`** are the wait vocabulary as verbs, and the reason they are
   not built on `performAction()` is that their work *is* the resolution: a spine that resolves the
   target before running the action would resolve it before the wait had happened. Every poll is a

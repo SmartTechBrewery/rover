@@ -49,6 +49,7 @@ import {
 import { DeviceSerialSchema, PlatformIdSchema } from '../core/ids.js';
 import {
 	AmbiguousTargetError,
+	AppNotInForegroundError,
 	ArtifactTooLargeError,
 	CoveredByKeyboardError,
 	FrameExtractionFailedError,
@@ -81,6 +82,29 @@ export const VerbFailureSchema = z.discriminatedUnion('kind', [
 			serial: DeviceSerialSchema,
 			platform: PlatformIdSchema,
 			backendLabel: z.string().min(1),
+			message: z.string().min(1),
+		})
+		.strict(),
+	/**
+	 * The caller said which application it expected in front and the device named another, or
+	 * could not name one — so the input verb **performed nothing** (#332).
+	 *
+	 * A refusal before anything is dispatched, like `missing-capability`, and its own kind
+	 * because the caller's next move is different: bring the application back (`launch_app`)
+	 * or read why it left (`read_logs`). `foregroundApp` is `null` when the device did not say,
+	 * which refuses rather than acts. Both ids are plain strings rather than `AppId`s, for
+	 * `DeviceInfoSchema`'s reason that what a device reports in front may be a system component
+	 * whose id is not shaped like one.
+	 *
+	 * Without the branch it would arrive as `internal_error` for a device that is merely showing
+	 * another application.
+	 */
+	z
+		.object({
+			kind: z.literal('app-not-in-foreground'),
+			serial: DeviceSerialSchema,
+			expectedApp: z.string().min(1),
+			foregroundApp: z.string().min(1).nullable(),
 			message: z.string().min(1),
 		})
 		.strict(),
@@ -561,6 +585,15 @@ export function toVerbFailure(error: unknown): VerbFailure | null {
 			serial: error.serial,
 			platform: error.platform,
 			backendLabel: error.backendLabel,
+			message: error.message,
+		};
+	}
+	if (error instanceof AppNotInForegroundError) {
+		return {
+			kind: 'app-not-in-foreground',
+			serial: error.serial,
+			expectedApp: error.expectedApp,
+			foregroundApp: error.foregroundApp,
 			message: error.message,
 		};
 	}

@@ -154,23 +154,41 @@ export type WaitUntilGoneParams = z.infer<typeof WaitUntilGoneParamsSchema>;
 const GestureDurationSchema = z.number().int().nonnegative().max(MAX_VERB_TIMEOUT_MS).optional();
 
 /**
+ * The base for the six rows that act on whatever is in front — `tap`, `long_press`, `swipe`,
+ * `scroll`, `type_text` and `press_key` — and only those (#332).
+ *
+ * `expectApp` names the application the caller expects in the foreground; when the device names
+ * another, or cannot say, the verb performs nothing and answers `app-not-in-foreground`
+ * (`src/verbs/failure.ts`). `AppIdSchema`, the id `launch_app` takes, so a malformed one is
+ * `invalid_params` at the boundary rather than a comparison that can never match.
+ *
+ * Its own base for {@link WaitCallBaseSchema}'s reason: a base every row extends is a base every
+ * row advertises, and a read or an app verb that accepted `expectApp` would be offering a check
+ * it does not make. `hide_keyboard` stays on {@link VerbCallBaseSchema} on purpose — putting a
+ * keyboard away is the same act in any application — so `.strict()` refuses one sent to it.
+ */
+const InputCallBaseSchema = VerbCallBaseSchema.extend({
+	expectApp: AppIdSchema.optional(),
+});
+
+/**
  * `TargetSchema` rather than the narrowed `ScreenTargetSchema` the waits take: a coordinate is
  * PROJECT.md §4's documented fallback for exactly this verb, and the result says which of the
  * two it was.
  */
-export const TapParamsSchema = VerbCallBaseSchema.extend({
+export const TapParamsSchema = InputCallBaseSchema.extend({
 	target: TargetSchema,
 }).strict();
 export type TapParams = z.infer<typeof TapParamsSchema>;
 
-export const LongPressParamsSchema = VerbCallBaseSchema.extend({
+export const LongPressParamsSchema = InputCallBaseSchema.extend({
 	target: TargetSchema,
 	durationMs: GestureDurationSchema,
 }).strict();
 export type LongPressParams = z.infer<typeof LongPressParamsSchema>;
 
 /** Two targets, because a drag has two ends; `from` is the one the result reports. */
-export const SwipeParamsSchema = VerbCallBaseSchema.extend({
+export const SwipeParamsSchema = InputCallBaseSchema.extend({
 	from: TargetSchema,
 	to: TargetSchema,
 	durationMs: GestureDurationSchema,
@@ -182,7 +200,7 @@ export type SwipeParams = z.infer<typeof SwipeParamsSchema>;
  * the screen as a whole, and a caller-supplied point has no extent to scroll within
  * (`src/verbs/input.ts`, `ScrollOptions`).
  */
-export const ScrollParamsSchema = VerbCallBaseSchema.extend({
+export const ScrollParamsSchema = InputCallBaseSchema.extend({
 	direction: ScrollDirectionSchema,
 	target: ScreenTargetSchema.optional(),
 	durationMs: GestureDurationSchema,
@@ -216,7 +234,7 @@ export const TYPE_TEXT_MAX_LENGTH = 4_096;
  * there; with `text: ''` it only clears. Absent or `false` types into what is there, as before. A
  * device that cannot clear answers an `unsupported-clear` failure, before anything is typed.
  */
-export const TypeTextParamsSchema = VerbCallBaseSchema.extend({
+export const TypeTextParamsSchema = InputCallBaseSchema.extend({
 	text: z.string().max(TYPE_TEXT_MAX_LENGTH),
 	clear: z.boolean().optional(),
 }).strict();
@@ -248,7 +266,7 @@ export const MAX_KEY_PRESSES = 20;
  * `times` absent means once. Zero is refused rather than accepted as a no-op, because pressing
  * nothing would report a success for a key that was never pressed. See {@link MAX_KEY_PRESSES}.
  */
-export const PressKeyParamsSchema = VerbCallBaseSchema.extend({
+export const PressKeyParamsSchema = InputCallBaseSchema.extend({
 	key: DeviceKeySchema,
 	times: z.number().int().min(1).max(MAX_KEY_PRESSES).optional(),
 }).strict();

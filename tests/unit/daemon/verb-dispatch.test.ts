@@ -882,6 +882,86 @@ describe('the input rows dispatch like the waits', () => {
 });
 
 /**
+ * #332: every input row forwards `expectApp` to the verb, so an application other than the one
+ * expected refuses the call by name and no input reaches the device. A handler that dropped the
+ * field would answer `ok` here, which is the field report this closes.
+ */
+describe('the input rows refuse when the expected application is not in front', () => {
+	// The mock device names `com.example.app` in front.
+	const ELSEWHERE = parseAppId('com.android.settings');
+	const SAVE = { by: 'text', text: 'Save' } as const;
+
+	it.each([
+		[
+			'tap',
+			(client: IpcClient, leaseId: LeaseId) =>
+				client.request('tap', { leaseId, target: SAVE, expectApp: ELSEWHERE }),
+		],
+		[
+			'long_press',
+			(client: IpcClient, leaseId: LeaseId) =>
+				client.request('long_press', { leaseId, target: SAVE, expectApp: ELSEWHERE }),
+		],
+		[
+			'swipe',
+			(client: IpcClient, leaseId: LeaseId) =>
+				client.request('swipe', { leaseId, from: SAVE, to: SAVE, expectApp: ELSEWHERE }),
+		],
+		[
+			'scroll',
+			(client: IpcClient, leaseId: LeaseId) =>
+				client.request('scroll', { leaseId, direction: 'down', expectApp: ELSEWHERE }),
+		],
+		[
+			'type_text',
+			(client: IpcClient, leaseId: LeaseId) =>
+				client.request('type_text', { leaseId, text: 'secret', clear: true, expectApp: ELSEWHERE }),
+		],
+		[
+			'press_key',
+			(client: IpcClient, leaseId: LeaseId) =>
+				client.request('press_key', { leaseId, key: 'enter', expectApp: ELSEWHERE }),
+		],
+	] as const)('%s answers app-not-in-foreground and sends no input', async (_method, send) => {
+		await serve();
+		const client = await connect();
+		const leaseId = await acquire(client);
+
+		const answer = await send(client, leaseId);
+
+		expect(answer).toMatchObject({
+			outcome: 'failed',
+			failure: {
+				kind: 'app-not-in-foreground',
+				serial: SERIAL,
+				expectedApp: ELSEWHERE,
+				foregroundApp: 'com.example.app',
+			},
+		});
+		expect(taps).toEqual([]);
+		expect(drags).toEqual([]);
+		expect(typed).toEqual([]);
+		expect(keys).toEqual([]);
+		expect(reads).toBe(0);
+	});
+
+	it('types as before when the expected application is the one in front', async () => {
+		await serve();
+		const client = await connect();
+		const leaseId = await acquire(client);
+
+		const answer = await client.request('type_text', {
+			leaseId,
+			text: 'hello',
+			expectApp: parseAppId('com.example.app'),
+		});
+
+		expect(answer).toMatchObject({ outcome: 'ok', result: { verb: 'type_text' } });
+		expect(typed).toEqual(['hello']);
+	});
+});
+
+/**
  * The three app rows, which is the same claim the gestures make one more time: a verb family
  * is a row and a handler, and nothing about the envelope, the framing or the connection
  * changed to carry these (R6, D19). What is new is that they address a **package** rather

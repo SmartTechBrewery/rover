@@ -396,6 +396,37 @@ none of them makes `device_info` fail.
 `src/backends/ios-simulator/backend.ts` (`#screenFactsOf`, `#foregroundAppOf`) for the iOS route;
 `PROJECT.md` §4 and §6, `docs/IOS.md` §2 and §4, D14.
 
+**An input verb can be told which application it should be acting on, and then refuses to act on
+any other** (#332). Reporting the foreground application lets an agent notice *afterwards* that text
+went into the launcher's search; it does not stop the text going there. So `tap`, `long_press`,
+`swipe`, `scroll`, `type_text` and `press_key` take an optional `expectApp`, the id `launch_app`
+takes, and when the device names a different application in front the verb **performs nothing** and
+answers `app-not-in-foreground` — the serial, `expectedApp`, `foregroundApp` and a message that
+points at `read_logs` and `launch_app` — never `ok`. It is the `covered-by-keyboard` pattern one step
+earlier in the same spine.
+
+The check is a fresh `deviceInfo` taken inside the call (D12(a)), after the capability check and
+**before the target is resolved**: when the app has gone, a target inside it would otherwise fail as
+`target-not-found` listing the launcher's elements, which names the symptom rather than the cause.
+**A device that cannot say what is in front refuses too**, with `foregroundApp: null` and a message
+saying so, because `null` means *not answered* and an expectation that could not be checked is not
+one that held. Absent `expectApp`, the verb behaves exactly as before and makes no extra query.
+`hide_keyboard` does not take it — putting a keyboard away is the same act in any application.
+
+**Per call, not per lease, deliberately.** A default set at `acquire_device` would make a call's
+meaning depend on an earlier one, a flow that legitimately passes through another application's
+screen (a share sheet, a browser sign-in) would need a second per-call opt-out, and it would add a
+field to acquire, to lease state and to the listing for a few saved characters. The one window it
+does not close is stated rather than defended: the check is one read moments before the gesture, so
+an app that dies between the two is not caught, and the answer's `device.foregroundApp` says where
+the gesture went. **It is a precondition the caller states, not a verdict** (`ai/RULES.md` §1):
+Rover compares the id it was handed with the id the device reported and says which two it compared.
+
+**Where it lives.** `src/verbs/perform.ts` (`requireForegroundApp`) for the check and its position,
+`src/verbs/errors.ts` (`AppNotInForegroundError`) and `src/verbs/failure.ts` for the refusal,
+`src/verbs/input.ts` (`ForegroundExpectation`) for the six verbs, `src/ipc/verb-methods.ts`
+(`InputCallBaseSchema`) for the wire; `PROJECT.md` §4, D12.
+
 ---
 
 ## 5. Determinism by construction

@@ -131,6 +131,16 @@ function waitedOut(askedMs: number | undefined, verbDefaultMs: number): number {
 }
 
 /**
+ * The sentence every input row but `hide_keyboard` ends on (#332) — one constant, because six
+ * copies of a precondition's wording are six chances for one of them to describe it wrongly.
+ */
+const EXPECT_APP =
+	' Pass `expectApp` — the application id `launch_app` takes — to say which application you ' +
+	'expect to be acting on: when the device names a different one in front, or cannot say, the ' +
+	'call performs **nothing** and is refused as `app-not-in-foreground`, naming the expected ' +
+	'application and the one in front.';
+
+/**
  * The table. One row per verb, in `IPC_METHODS` order.
  *
  * The descriptions are the tools' whole documentation, so each says what the verb does, what it
@@ -176,7 +186,7 @@ const VERB_TOOLS: readonly VerbToolRow[] = [
 			'`covered-by-keyboard`, naming the target, the point and the keyboard, rather than ' +
 			'tapped onto a key and reported as done — call `hide_keyboard` and tap again. Only the ' +
 			'point itself is checked: an element half under the keyboard whose centre is clear is ' +
-			'tapped.',
+			`tapped.${EXPECT_APP}`,
 	},
 	{
 		method: 'long_press',
@@ -187,7 +197,7 @@ const VERB_TOOLS: readonly VerbToolRow[] = [
 			'it on a device configured with a slower long-press threshold: too short a hold is an ' +
 			'ordinary tap with a successful-looking result behind it. A target under the on-screen ' +
 			'keyboard is refused as `covered-by-keyboard`, as for `tap`; `hide_keyboard` is the ' +
-			'way out.',
+			`way out.${EXPECT_APP}`,
 		requestTimeoutMs: (params) => waitedOut(params.durationMs, LONG_PRESS_DURATION_MS),
 	},
 	{
@@ -199,7 +209,7 @@ const VERB_TOOLS: readonly VerbToolRow[] = [
 			'zero is a flick; omit it for the verb’s own default. `from` is the target the answer ' +
 			'reports. A `from` under the on-screen keyboard is refused as `covered-by-keyboard` — ' +
 			'the keyboard would read the drag — and `hide_keyboard` is the way out; `to` may lie ' +
-			'over the keyboard, since where a drag ends does not decide who reads it.',
+			`over the keyboard, since where a drag ends does not decide who reads it.${EXPECT_APP}`,
 		requestTimeoutMs: (params) => waitedOut(params.durationMs, SWIPE_DURATION_MS),
 	},
 	{
@@ -213,7 +223,7 @@ const VERB_TOOLS: readonly VerbToolRow[] = [
 			'purpose, so the state the answer reports is a screen that has stopped moving. A drag ' +
 			'that would **start** under the on-screen keyboard — it starts a quarter into the region ' +
 			'— is refused as `covered-by-keyboard` rather than handed to the keyboard, which types ' +
-			'instead of scrolling; call `hide_keyboard` first.',
+			`instead of scrolling; call \`hide_keyboard\` first.${EXPECT_APP}`,
 		requestTimeoutMs: (params) => waitedOut(params.durationMs, SCROLL_DURATION_MS),
 	},
 	{
@@ -230,8 +240,8 @@ const VERB_TOOLS: readonly VerbToolRow[] = [
 			'clears too. A device that cannot clear answers an `unsupported-clear` failure ' +
 			'before anything is typed; then `press_key` `delete` with `times` empties a field whose ' +
 			'length you know. The text goes wherever focus is, which may be another application ' +
-			"than yours: the answer's `device.foregroundApp` names the application that was in " +
-			'front.',
+			"than yours — the answer's `device.foregroundApp` names the one that was in front, " +
+			`and \`expectApp\` keeps the text out of the wrong one.${EXPECT_APP}`,
 	},
 	{
 		method: 'press_key',
@@ -248,7 +258,7 @@ const VERB_TOOLS: readonly VerbToolRow[] = [
 			'has no equivalent for comes back as an `unsupported-key` failure naming that key — ' +
 			'never as a silent no-op, and never as `missing-capability`, which would say the device ' +
 			'takes no input at all. Ask for a different key, or reach the same thing through ' +
-			'`read_screen` and `tap`.',
+			`\`read_screen\` and \`tap\`.${EXPECT_APP}`,
 	},
 	{
 		method: 'hide_keyboard',

@@ -350,6 +350,27 @@ describe('what tools/list advertises for the verbs', () => {
 	});
 
 	/**
+	 * #332: the six rows that act on whatever is in front offer `expectApp`, say what it refuses
+	 * as, and no other row offers it — a read or an app verb that accepted it would be advertising
+	 * a check it never makes.
+	 */
+	it('offers expectApp on exactly the six input rows, and says what it refuses as', async () => {
+		const tools = await advertisedTools();
+		const INPUT_ROWS = ['tap', 'long_press', 'swipe', 'scroll', 'type_text', 'press_key'];
+
+		for (const method of VERB_METHODS) {
+			const tool = toolNamed(tools, method);
+			const properties = Object.keys(tool.inputSchema.properties as object);
+			if (INPUT_ROWS.includes(method)) {
+				expect(properties).toContain('expectApp');
+				expect(tool.description).toContain('app-not-in-foreground');
+			} else {
+				expect(properties).not.toContain('expectApp');
+			}
+		}
+	});
+
+	/**
 	 * The same legibility-before-the-call argument, applied to the one answer that is easy to
 	 * mistake for a broken tool (#183). An agent that reads the declaration knows a recording of
 	 * a still screen exists as a case *before* it records one, rather than working it out from a
