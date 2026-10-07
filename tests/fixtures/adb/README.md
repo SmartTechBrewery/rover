@@ -78,6 +78,10 @@ reports itself as **v1.4**. The two `getprop-version` rows are **2026-08-31**, o
 | `dumpsys-window-d.keyboard-shown.api37-sdk-gphone16k-arm64.txt` | the same, with the Settings search field focused and the on-screen keyboard up | sdk_gphone16k_arm64 | 37 | 2026-10-06 |
 | `dumpsys-window-d.keyboard-shown.api33-tc58.txt` | the same, on a physical device, with the launcher's search field focused and Gboard up | TC58 | 33 | 2026-10-06 |
 | `dumpsys-window-d.keyboard-dismissed.api33-tc58.txt` | the same device after `input keyevent KEYCODE_BACK` closed that keyboard, once its animation ended | TC58 | 33 | 2026-10-06 |
+| `dumpsys-window-d.notification-shade.api33-tc58.txt` | the same, with Settings in front and the shade pulled down by `cmd statusbar expand-notifications`: `mCurrentFocus` names `NotificationShade`, `mFocusedApp` still names Settings | TC58 | 33 | 2026-10-07 |
+| `dumpsys-window-d.after-crash.api33-tc58.txt` | the same, ~100 ms after `am crash com.android.settings` returned with Settings in front: `mFocusedApp` already names the launcher and `mCurrentFocus` reads `null` | TC58 | 33 | 2026-10-07 |
+| `dumpsys-window-d.crash-dialog.api33-tc58.txt` | the same after Settings was launched and crashed twice more, with the *keeps stopping* dialog up: `mCurrentFocus` names `Application Error: com.android.settings`, `mFocusedApp` names Settings, which the activity manager also reports resumed | TC58 | 33 | 2026-10-07 |
+| `dumpsys-window-d.focused-app-null.api33-tc58.txt` | the same after `input keyevent KEYCODE_BACK` dismissed that dialog: the launcher is resumed and focused, and `mFocusedApp` reads `null` until something else is launched | TC58 | 33 | 2026-10-07 |
 
 Both `wm` overrides were reset with `wm size reset` / `wm density reset` immediately after the
 capture. The `track-devices` capture leaves the host as it found it the same way: the second entry

@@ -27,6 +27,7 @@
           }
         }
       },
+      "foregroundApp": "com.google.android.settings.intelligence",
       "osVersion": "17",
       "osApiLevel": 37
     },
@@ -44,6 +45,7 @@
         "systemBars": null,
         "keyboard": null
       },
+      "foregroundApp": null,
       "osVersion": null,
       "osApiLevel": null
     }

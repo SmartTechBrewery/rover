@@ -229,7 +229,9 @@ const VERB_TOOLS: readonly VerbToolRow[] = [
 			'it only clears). It does not need to know how long the text is, so a password field ' +
 			'clears too. A device that cannot clear answers an `unsupported-clear` failure ' +
 			'before anything is typed; then `press_key` `delete` with `times` empties a field whose ' +
-			'length you know.',
+			'length you know. The text goes wherever focus is, which may be another application ' +
+			"than yours: the answer's `device.foregroundApp` names the application that was in " +
+			'front.',
 	},
 	{
 		method: 'press_key',
@@ -285,9 +287,12 @@ const VERB_TOOLS: readonly VerbToolRow[] = [
 			'height in dp, model, OS version, the system bar insets, and whether the **on-screen ' +
 			'keyboard** is shown together with the rectangle it occupies (`screen.keyboard`, in dp, ' +
 			'where the insets beside it are in pixels). A device that does not report the keyboard ' +
-			'answers `null`, which means *not answered* and not *no keyboard*. Needs no capability ' +
-			'and addresses nothing on the screen — it asks on its own for the device half that ' +
-			'every other answer already carries, so every verb reports the keyboard too.',
+			'answers `null`, which means *not answered* and not *no keyboard*. It also names the ' +
+			'**application in the foreground** (`foregroundApp`, its id — the string `launch_app` ' +
+			'takes); `null` there means *not answered*, never *nothing in front*. Needs no ' +
+			'capability and addresses nothing on the screen — it asks on its own for the device ' +
+			'half that every other answer already carries, so every verb reports the keyboard and ' +
+			'the foreground application too.',
 	},
 	{
 		method: 'launch_app',
@@ -296,7 +301,8 @@ const VERB_TOOLS: readonly VerbToolRow[] = [
 			'Start an application on the leased device by its package id (reverse-DNS, checked at ' +
 			'the boundary). Addresses a package rather than anything on the screen, so it resolves ' +
 			'no target and needs no capability. The state after the action is what says whether the ' +
-			'application actually came up.',
+			"application actually came up — the answer's `device.foregroundApp` names the " +
+			'application in front.',
 	},
 	{
 		method: 'stop_app',

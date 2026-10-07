@@ -1,11 +1,12 @@
 /**
- * The parser for `dumpsys window d` — **the screen facts only the window manager has**.
+ * The parser for `dumpsys window d` — **the facts only the window manager has**.
  *
- * Two of them now: where this device draws its own system bars, and whether its on-screen
- * keyboard is up. Both come out of the one `InsetsState` block, off the one line shape
- * {@link SOURCE_LINE} matches, so this module is about *that dump* rather than about the bars
- * alone — a second file with a copy of the same regex would be a second thing to keep in sync
- * with a format neither of them owns.
+ * Three of them now: where this device draws its own system bars, whether its on-screen
+ * keyboard is up, and which application is in the foreground. The first two come out of the one
+ * `InsetsState` block, off the one line shape {@link SOURCE_LINE} matches, and the third off the
+ * display section's `mFocusedApp` line, so this module is about *that dump* rather than about the
+ * bars alone — a second file over the same dump would be a second thing to keep in sync with a
+ * format neither of them owns.
  *
  * Pure, like `./wm.js` and `./devices.js`: the runner (R5) owns the process, this owns the text.
  *
@@ -245,4 +246,48 @@ function sideOf(
 		return { side: 'right', depth: display.width - frame.left };
 	}
 	return null;
+}
+
+/**
+ * The display section's `mFocusedApp` line, capturing the package out of
+ * `ActivityRecord{<hash> u<user> <package>/<activity> t<task>}` — which API 33 prints with a stray
+ * second `}` and API 37 without, so nothing after the `/` is matched.
+ */
+const FOCUSED_APP_LINE = /^[ \t]*mFocusedApp=ActivityRecord\{\S+ u\d+ ([^\s/]+)\//m;
+
+/** What a package name looks like — one segment allowed, because a system component may be one. */
+const PACKAGE_NAME = /^[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]*)*$/;
+
+/**
+ * The package of the application in the foreground, or `null` when this dump does not name one.
+ *
+ * **No second device query**, for {@link parseKeyboard}'s reason: the line is in the dump
+ * `deviceInfo()` already runs.
+ *
+ * **`mFocusedApp` and never `mCurrentFocus`.** `mCurrentFocus` is the *window* with input focus,
+ * and on a TC58 on API 33 (2026-10-07, `PROJECT.md` §6) it named `NotificationShade` with the
+ * shade down over Settings, `Application Error: com.android.settings` with a crash dialog up, and
+ * `null` in the first read after `am crash` — while `mFocusedApp` named Settings, Settings and the
+ * launcher, agreeing each time with the activity the activity manager reports resumed. The root
+ * of a `uiautomator` dump is a window's package too (`com.android.systemui` under the shade), so it
+ * has `mCurrentFocus`'s problem and would make this depend on a screen read besides.
+ *
+ * **The first such line wins**, the rule {@link parseKeyboard} applies to the first `ime` source it
+ * meets: the default display is listed first, and a second display's focus is not what is in
+ * front of the user.
+ *
+ * **`null` is *this device did not say*, and this never throws.** It answers `null` for a dump
+ * with no such line, for `mFocusedApp=null` — which that same device printed for as long as the
+ * launcher sat in front after a crash dialog was dismissed, so it is a state a responsive device
+ * really reports — and for a line whose shape is not the one above. `deviceInfo` throwing would
+ * take every verb's answer with it, so a line this cannot read costs this one fact and nothing
+ * else.
+ */
+export function parseForegroundApp(stdout: string): string | null {
+	const match = FOCUSED_APP_LINE.exec(normalise(stdout));
+	if (match === null) {
+		return null;
+	}
+	const [, name] = match;
+	return PACKAGE_NAME.test(name) ? name : null;
 }

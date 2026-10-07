@@ -1,0 +1,270 @@
+WINDOW MANAGER DISPLAY CONTENTS (dumpsys window displays)
+  Display: mDisplayId=0 (organized)
+    init=1080x2160 480dpi mMinSizeOfResizeableTaskDp=220 cur=1080x2160 app=1080x2016 rng=1080x1080-2016x2016
+    deferred=false mLayoutNeeded=false mTouchExcludeRegion=SkRegion((0,0,1080,72)(0,2016,1080,2160))
+
+  mLastOrientationSource=WindowedMagnification:0:31@245156002
+  deepestLastOrientationSource=ActivityRecord{e15b077 u0 com.android.launcher3/.uioverrides.QuickstepLauncher} t246}
+  overrideConfig={1.0 ?mcc?mnc [pl_PL] ldltr sw360dp w360dp h672dp 480dpi nrml long hdr port night finger -keyb/v/h -nav/h winConfig={ mBounds=Rect(0, 0 - 1080, 2160) mAppBounds=Rect(0, 0 - 1080, 2016) mMaxBounds=Rect(0, 0 - 1080, 2160) mDisplayRotation=ROTATION_0 mWindowingMode=fullscreen mDisplayWindowingMode=fullscreen mActivityType=undefined mAlwaysOnTop=undefined mRotation=ROTATION_0} s.956 fontWeightAdjustment=0}
+  mLayoutSeq=1696
+  mCurrentFocus=Window{d04df17 u0 com.android.launcher3/com.android.launcher3.uioverrides.QuickstepLauncher}
+  mFocusedApp=null
+
+  mHoldScreenWindow=null
+  mObscuringWindow=Window{853a3c u0 com.android.systemui.wallpapers.ImageWallpaper}
+  mLastWakeLockHoldingWindow=null
+  mLastWakeLockObscuringWindow=Window{9b9af6b u0 net.pulsesecure.pulsesecure/net.pulsesecure.PulseReactRootActivity}
+
+  displayId=0
+  mWallpaperTarget=Window{d04df17 u0 com.android.launcher3/com.android.launcher3.uioverrides.QuickstepLauncher}
+  mLastWallpaperX=0.0 mLastWallpaperY=0.5
+
+  Display areas in top down Z order:
+    * Leaf:36:36
+    * HideDisplayCutout:32:35
+      * OneHanded:34:35
+        * FullscreenMagnification:34:35
+          * Leaf:34:35
+      * FullscreenMagnification:33:33
+        * Leaf:33:33
+      * OneHanded:32:32
+        * Leaf:32:32
+    * WindowedMagnification:0:31
+      * HideDisplayCutout:26:31
+        * OneHanded:26:31
+          * FullscreenMagnification:29:31
+            * Leaf:29:31
+          * Leaf:28:28
+          * FullscreenMagnification:26:27
+            * Leaf:26:27
+      * Leaf:24:25
+      * HideDisplayCutout:18:23
+        * OneHanded:18:23
+          * FullscreenMagnification:18:23
+            * Leaf:18:23
+      * OneHanded:17:17
+        * FullscreenMagnification:17:17
+          * Leaf:17:17
+      * HideDisplayCutout:16:16
+        * OneHanded:16:16
+          * FullscreenMagnification:16:16
+            * Leaf:16:16
+      * OneHanded:15:15
+        * FullscreenMagnification:15:15
+          * Leaf:15:15
+      * HideDisplayCutout:0:14
+        * OneHanded:0:14
+          * ImePlaceholder:13:14
+            * ImeContainer
+          * FullscreenMagnification:0:12
+            * Leaf:3:12
+            * DefaultTaskDisplayArea (organized)
+            * Leaf:0:1
+
+  Task display areas in top down Z order:
+    TaskDisplayArea DefaultTaskDisplayArea
+      overrideConfig={0.0 ?mcc?mnc ?localeList ?layoutDir ?swdp ?wdp ?hdp ?density ?lsize ?long ?ldr ?wideColorGamut ?orien ?uimode ?night ?touch ?keyb/?/? ?nav/? winConfig={ mBounds=Rect(0, 0 - 0, 0) mAppBounds=null mMaxBounds=Rect(0, 0 - 0, 0) mDisplayRotation=undefined mWindowingMode=fullscreen mDisplayWindowingMode=fullscreen mActivityType=undefined mAlwaysOnTop=undefined mRotation=undefined} ?fontWeightAdjustment}
+      mLastFocusedRootTask=Task{57b2831 #271 type=standard A=1000:com.android.settings.root}
+      Application tokens in top down Z order:
+      * Task{555f58f #1 type=home U=0 visible=true visibleRequested=true mode=fullscreen translucent=false sz=1}
+        bounds=[0,0][1080,2160]
+        * Task{208dd38 #246 type=home I=com.android.launcher3/.uioverrides.QuickstepLauncher U=0 rootTaskId=1 visible=true visibleRequested=true mode=fullscreen translucent=false sz=1}
+          bounds=[0,0][1080,2160]
+          * ActivityRecord{e15b077 u0 com.android.launcher3/.uioverrides.QuickstepLauncher} t246}
+      * Task{57c1f2e #250 type=standard A=10249:pl.com.dpd.mobile.handheld.dev U=0 visible=false visibleRequested=false mode=fullscreen translucent=true sz=2}
+        bounds=[0,0][1080,2160]
+        * ActivityRecord{31ef984 u0 com.google.android.permissioncontroller/com.android.permissioncontroller.permission.ui.GrantPermissionsActivity} t250}
+        * ActivityRecord{5a28c5c u0 pl.com.dpd.mobile.handheld.dev/pl.com.dpd.mobile.handheld.activities.StatusBarActivity} t250}
+      * Task{877c3d1 #2 type=undefined U=0 visible=false visibleRequested=false mode=fullscreen translucent=true sz=2}
+        bounds=[0,0][1080,2160]
+        * Task{b34a3a6 #4 type=undefined U=0 rootTaskId=2 visible=false visibleRequested=false mode=multi-window translucent=true sz=0}
+          bounds=[0,0][1080,2160]
+        * Task{5e8e6be #3 type=undefined U=0 rootTaskId=2 visible=false visibleRequested=false mode=multi-window translucent=true sz=0}
+          bounds=[0,0][1080,2160]
+
+  no ScreenRotationAnimation 
+
+  rootHomeTask=Task=1
+
+  PinnedTaskController
+    mIsImeShowing=false
+    mImeHeight=0
+    mMinAspectRatio=0.41841003
+    mMaxAspectRatio=2.39
+
+  DisplayFrames w=1080 h=2160 r=0
+
+  DisplayPolicy
+    mCarDockEnablesAccelerometer=true mDeskDockEnablesAccelerometer=false
+    mDockMode=EXTRA_DOCK_STATE_UNDOCKED mLidState=LID_ABSENT
+    mAwake=true mScreenOnEarly=true mScreenOnFully=true
+    mKeyguardDrawComplete=true mWindowManagerDrawComplete=true
+    mHdmiPlugged=false
+    mLastBehavior=DEFAULT
+    mShowingDream=false mDreamingLockscreen=false
+    mStatusBar=Window{34b9ca6 u0 StatusBar}
+    mExpandedPanel=Window{5928a34 u0 NotificationShade}
+    isKeyguardShowing=false
+    mNavigationBar=Window{c75b909 u0 NavigationBar0}
+    mNavBarOpacityMode=0
+    mNavigationBarCanMove=true
+    mNavigationBarPosition=4
+    mFocusedWindow=Window{d04df17 u0 com.android.launcher3/com.android.launcher3.uioverrides.QuickstepLauncher}
+    mTopFullscreenOpaqueWindowState=Window{d04df17 u0 com.android.launcher3/com.android.launcher3.uioverrides.QuickstepLauncher}
+    mSystemBarColorApps={ActivityRecord{e15b077 u0 com.android.launcher3/.uioverrides.QuickstepLauncher} t246}}
+    mNavBarColorWindowCandidate=Window{d04df17 u0 com.android.launcher3/com.android.launcher3.uioverrides.QuickstepLauncher}
+    mNavBarBackgroundWindow=Window{d04df17 u0 com.android.launcher3/com.android.launcher3.uioverrides.QuickstepLauncher}
+    mLastStatusBarAppearanceRegions=
+      AppearanceRegion{ bounds=[0,0][1080,2160]}
+    mLastLetterboxDetails=
+    mStatusBarBackgroundWindows=
+      Window{d04df17 u0 com.android.launcher3/com.android.launcher3.uioverrides.QuickstepLauncher}
+    mTopIsFullscreen=false
+    mForceShowNavigationBarEnabled=false mAllowLockscreenWhenOn=false
+    mRemoteInsetsControllerControlsSystemBars=false
+    mDecorInsetsInfo:
+      ROTATION_0={nonDecorInsets=Rect(0, 0 - 0, 144), configInsets=Rect(0, 0 - 0, 144), nonDecorFrame=Rect(0, 0 - 1080, 2016), configFrame=Rect(0, 0 - 1080, 2016)}
+      ROTATION_90={nonDecorInsets=Rect(0, 0 - 144, 0), configInsets=Rect(0, 0 - 144, 0), nonDecorFrame=Rect(0, 0 - 2016, 1080), configFrame=Rect(0, 0 - 2016, 1080)}
+      ROTATION_180={nonDecorInsets=Rect(0, 0 - 0, 144), configInsets=Rect(0, 0 - 0, 144), nonDecorFrame=Rect(0, 0 - 1080, 2016), configFrame=Rect(0, 0 - 1080, 2016)}
+      ROTATION_270={nonDecorInsets=Rect(144, 0 - 0, 0), configInsets=Rect(144, 0 - 0, 0), nonDecorFrame=Rect(144, 0 - 2160, 1080), configFrame=Rect(144, 0 - 2160, 1080)}
+    SystemGestures:
+      mDisplayCutoutTouchableRegionSize=0
+      mSwipeStartThreshold=Rect(72, 72 - 72, 72)
+      mSwipeDistanceThreshold=72
+    Looper state:
+      Looper (android.ui, tid 20) {f9a2ea0}
+        (Total messages: 0, polling=true, quitting=false)
+
+  DisplayRotation
+    mCurrentAppOrientation=SCREEN_ORIENTATION_NOSENSOR
+    mLastOrientation=5
+    mRotation=0 mDeferredRotationPauseCount=0
+    mLandscapeRotation=ROTATION_90 mSeascapeRotation=ROTATION_270
+    mPortraitRotation=ROTATION_0 mUpsideDownRotation=ROTATION_180
+    mSupportAutoRotation=true
+    WindowOrientationListener
+      mEnabled=true
+      mCurrentRotation=ROTATION_0
+      mSensorType=null
+      mSensor={Sensor name="Device Orientation  Wakeup", vendor="qualcomm", version=1, type=27, maxRange=1.0, resolution=1.0, power=0.025, minDelay=0}
+      mRate=2
+      OrientationSensorJudge
+        mDesiredRotation=-1
+        mProposedRotation=-1
+        mTouching=false
+        mTouchEndedTimestampNanos=13707561067062
+        mLastRotationResolution=-1
+
+    mCarDockRotation=-1 mDeskDockRotation=ROTATION_270
+    mUserRotationMode=USER_ROTATION_FREE mUserRotation=ROTATION_0 mCameraRotationMode=0 mAllowAllRotations=unknown
+    mDemoHdmiRotation=ROTATION_90 mDemoHdmiRotationLock=false mUndockedHdmiRotation=-1
+    mLidOpenRotation=-1
+    mFixedToUserRotation=false
+
+    RotationHistory
+      10-07 11:48:20.449 ROTATION_0 to ROTATION_90
+        source=ActivityRecord{bcaa7c9 u0 pl.com.dpd.mobile.handheld.devUat/pl.com.dpd.mobile.handheld.activities.SignatureActivity} t255} SCREEN_ORIENTATION_LANDSCAPE
+        mode=USER_ROTATION_FREE user=ROTATION_0 sensor=-1
+      10-07 11:48:35.988 ROTATION_90 to ROTATION_0
+        source=ActivityRecord{1967b74 u0 pl.com.dpd.mobile.handheld.devUat/pl.com.dpd.mobile.handheld.activities.StatusBarActivity} t255} SCREEN_ORIENTATION_PORTRAIT
+        mode=USER_ROTATION_FREE user=ROTATION_0 sensor=-1
+      10-07 13:05:59.190 ROTATION_0 to ROTATION_90
+        source=ActivityRecord{8240e44 u0 pl.com.dpd.mobile.handheld.devUat/pl.com.dpd.mobile.handheld.activities.SignatureActivity} t260} SCREEN_ORIENTATION_LANDSCAPE
+        mode=USER_ROTATION_FREE user=ROTATION_0 sensor=-1
+      10-07 13:06:05.578 ROTATION_90 to ROTATION_0
+        source=ActivityRecord{b4bcf02 u0 pl.com.dpd.mobile.handheld.devUat/pl.com.dpd.mobile.handheld.activities.StatusBarActivity} t260} SCREEN_ORIENTATION_PORTRAIT
+        mode=USER_ROTATION_FREE user=ROTATION_0 sensor=-1
+      10-07 13:22:47.515 ROTATION_0 to ROTATION_90
+        source=ActivityRecord{43598d2 u0 pl.com.dpd.mobile.handheld.devUat/pl.com.dpd.mobile.handheld.activities.SignatureActivity} t267} SCREEN_ORIENTATION_LANDSCAPE
+        mode=USER_ROTATION_FREE user=ROTATION_0 sensor=-1
+      10-07 13:23:01.126 ROTATION_90 to ROTATION_0
+        source=ActivityRecord{889a2ee u0 pl.com.dpd.mobile.handheld.devUat/pl.com.dpd.mobile.handheld.activities.StatusBarActivity} t267} SCREEN_ORIENTATION_PORTRAIT
+        mode=USER_ROTATION_FREE user=ROTATION_0 sensor=-1
+      10-07 13:27:15.087 ROTATION_0 to ROTATION_90
+        source=ActivityRecord{45ae5eb u0 pl.com.dpd.mobile.handheld.devUat/pl.com.dpd.mobile.handheld.activities.SignatureActivity} t268} SCREEN_ORIENTATION_LANDSCAPE
+        mode=USER_ROTATION_FREE user=ROTATION_0 sensor=-1
+      10-07 13:27:29.208 ROTATION_90 to ROTATION_0
+        source=ActivityRecord{58be12e u0 pl.com.dpd.mobile.handheld.devUat/pl.com.dpd.mobile.handheld.activities.StatusBarActivity} t268} SCREEN_ORIENTATION_PORTRAIT
+        mode=USER_ROTATION_FREE user=ROTATION_0 sensor=-1
+
+  InputConsumers:
+    name=recents_animation_input_consumer pid=3266 user=UserHandle{0}
+
+  WindowInsetsStateController
+    InsetsState
+      mDisplayFrame=Rect(0, 0 - 1080, 2160)
+      mDisplayCutout=DisplayCutout{insets=Rect(0, 0 - 0, 0) waterfall=Insets{left=0, top=0, right=0, bottom=0} boundingRect={Bounds=[Rect(0, 0 - 0, 0), Rect(0, 0 - 0, 0), Rect(0, 0 - 0, 0), Rect(0, 0 - 0, 0)]} cutoutPathParserInfo={CutoutPathParserInfo{displayWidth=0 displayHeight=0 physicalDisplayWidth=0 physicalDisplayHeight=0 density={0.0} cutoutSpec={} rotation={0} scale={0.0} physicalPixelDisplaySizeRatio={0.0}}}}
+      mRoundedCorners=RoundedCorners{[RoundedCorner{position=TopLeft, radius=0, center=Point(0, 0)}, RoundedCorner{position=TopRight, radius=0, center=Point(0, 0)}, RoundedCorner{position=BottomRight, radius=0, center=Point(0, 0)}, RoundedCorner{position=BottomLeft, radius=0, center=Point(0, 0)}]}
+      mRoundedCornerFrame=Rect(0, 0 - 0, 0)
+      mPrivacyIndicatorBounds=PrivacyIndicatorBounds {static bounds=Rect(792, 0 - 1038, 72) rotation=0}
+        InsetsSource type=ITYPE_STATUS_BAR frame=[0,0][1080,72] visible=true insetsRoundedCornerFrame=false
+        InsetsSource type=ITYPE_NAVIGATION_BAR frame=[0,2016][1080,2160] visible=true insetsRoundedCornerFrame=false
+        InsetsSource type=ITYPE_LEFT_GESTURES frame=[0,0][0,2160] visible=true insetsRoundedCornerFrame=false
+        InsetsSource type=ITYPE_RIGHT_GESTURES frame=[1080,0][1080,2160] visible=true insetsRoundedCornerFrame=false
+        InsetsSource type=ITYPE_TOP_MANDATORY_GESTURES frame=[0,0][1080,72] visible=true insetsRoundedCornerFrame=false
+        InsetsSource type=ITYPE_BOTTOM_MANDATORY_GESTURES frame=[0,2016][1080,2160] visible=true insetsRoundedCornerFrame=false
+        InsetsSource type=ITYPE_TOP_TAPPABLE_ELEMENT frame=[0,0][1080,72] visible=true insetsRoundedCornerFrame=false
+        InsetsSource type=ITYPE_BOTTOM_TAPPABLE_ELEMENT frame=[0,2016][1080,2160] visible=true insetsRoundedCornerFrame=false
+        InsetsSource type=ITYPE_IME frame=[0,0][0,0] visible=false insetsRoundedCornerFrame=false
+    Control map:
+      ITYPE_IME -> Window{d04df17 u0 com.android.launcher3/com.android.launcher3.uioverrides.QuickstepLauncher}
+      ITYPE_NAVIGATION_BAR -> Window{d04df17 u0 com.android.launcher3/com.android.launcher3.uioverrides.QuickstepLauncher}
+      ITYPE_STATUS_BAR -> Window{d04df17 u0 com.android.launcher3/com.android.launcher3.uioverrides.QuickstepLauncher}
+    InsetsSourceProviders:
+      ImeInsetsSourceProvider
+        mSource=InsetsSource type=ITYPE_IME frame=[0,0][0,0] visible=false insetsRoundedCornerFrame=false
+        mSourceFrame=Rect(0, 2160 - 1080, 2160)
+        mControl=InsetsSourceControl type=ITYPE_IME mLeash=Surface(name=Surface(name=c604b9b InputMethod)/@0x2ec5711 - animation-leash of insets_animation)/@0x91239ce mInitiallyVisible=false mSurfacePosition=Point(0, 72) mInsetsHint=Insets{left=0, top=0, right=0, bottom=996} mSkipAnimationOnce=false
+        mIsLeashReadyForDispatching=true
+        mWindowContainer=Window{c604b9b u0 InputMethod}
+        mAdapter=ControlAdapter mCapturedLeash=Surface(name=Surface(name=c604b9b InputMethod)/@0x2ec5711 - animation-leash of insets_animation)/@0x91239ce
+        mControlTarget=Window{d04df17 u0 com.android.launcher3/com.android.launcher3.uioverrides.QuickstepLauncher}
+        mImeShowing=false
+      WindowContainerInsetsSourceProvider
+        mSource=InsetsSource type=ITYPE_BOTTOM_TAPPABLE_ELEMENT frame=[0,2016][1080,2160] visible=true insetsRoundedCornerFrame=false
+        mSourceFrame=Rect(0, 2016 - 1080, 2160)
+        mIsLeashReadyForDispatching=true
+        mWindowContainer=Window{c75b909 u0 NavigationBar0}
+      WindowContainerInsetsSourceProvider
+        mSource=InsetsSource type=ITYPE_TOP_TAPPABLE_ELEMENT frame=[0,0][1080,72] visible=true insetsRoundedCornerFrame=false
+        mSourceFrame=Rect(0, 0 - 1080, 72)
+        mIsLeashReadyForDispatching=true
+        mWindowContainer=Window{34b9ca6 u0 StatusBar}
+      WindowContainerInsetsSourceProvider
+        mSource=InsetsSource type=ITYPE_BOTTOM_MANDATORY_GESTURES frame=[0,2016][1080,2160] visible=true insetsRoundedCornerFrame=false
+        mSourceFrame=Rect(0, 2016 - 1080, 2160)
+        mIsLeashReadyForDispatching=true
+        mWindowContainer=Window{c75b909 u0 NavigationBar0}
+      WindowContainerInsetsSourceProvider
+        mSource=InsetsSource type=ITYPE_TOP_MANDATORY_GESTURES frame=[0,0][1080,72] visible=true insetsRoundedCornerFrame=false
+        mSourceFrame=Rect(0, 0 - 1080, 72)
+        mIsLeashReadyForDispatching=true
+        mWindowContainer=Window{34b9ca6 u0 StatusBar}
+      WindowContainerInsetsSourceProvider
+        mSource=InsetsSource type=ITYPE_RIGHT_GESTURES frame=[1080,0][1080,2160] visible=true insetsRoundedCornerFrame=false
+        mSourceFrame=Rect(1080, 0 - 1080, 2160)
+        mIsLeashReadyForDispatching=true
+        mWindowContainer=Window{c75b909 u0 NavigationBar0}
+      WindowContainerInsetsSourceProvider
+        mSource=InsetsSource type=ITYPE_LEFT_GESTURES frame=[0,0][0,2160] visible=true insetsRoundedCornerFrame=false
+        mSourceFrame=Rect(0, 0 - 0, 2160)
+        mIsLeashReadyForDispatching=true
+        mWindowContainer=Window{c75b909 u0 NavigationBar0}
+      WindowContainerInsetsSourceProvider
+        mSource=InsetsSource type=ITYPE_NAVIGATION_BAR frame=[0,2016][1080,2160] visible=true insetsRoundedCornerFrame=false
+        mSourceFrame=Rect(0, 2016 - 1080, 2160)
+        mOverrideFrames={2011=Rect(0, 2016 - 1080, 2160)}
+        mControl=InsetsSourceControl type=ITYPE_NAVIGATION_BAR mLeash=Surface(name=Surface(name=c75b909 NavigationBar0)/@0x5015d8f - animation-leash of insets_animation)/@0xdb390ef mInitiallyVisible=true mSurfacePosition=Point(0, 2016) mInsetsHint=Insets{left=0, top=0, right=0, bottom=144} mSkipAnimationOnce=false
+        mIsLeashReadyForDispatching=true
+        mWindowContainer=Window{c75b909 u0 NavigationBar0}
+        mAdapter=ControlAdapter mCapturedLeash=Surface(name=Surface(name=c75b909 NavigationBar0)/@0x5015d8f - animation-leash of insets_animation)/@0xdb390ef
+        mControlTarget=Window{d04df17 u0 com.android.launcher3/com.android.launcher3.uioverrides.QuickstepLauncher}
+      WindowContainerInsetsSourceProvider
+        mSource=InsetsSource type=ITYPE_STATUS_BAR frame=[0,0][1080,72] visible=true insetsRoundedCornerFrame=false
+        mSourceFrame=Rect(0, 0 - 1080, 72)
+        mControl=InsetsSourceControl type=ITYPE_STATUS_BAR mLeash=Surface(name=Surface(name=34b9ca6 StatusBar)/@0x53ad4ee - animation-leash of insets_animation)/@0x377b7fc mInitiallyVisible=true mSurfacePosition=Point(0, 0) mInsetsHint=Insets{left=0, top=72, right=0, bottom=0} mSkipAnimationOnce=false
+        mIsLeashReadyForDispatching=true
+        mWindowContainer=Window{34b9ca6 u0 StatusBar}
+        mAdapter=ControlAdapter mCapturedLeash=Surface(name=Surface(name=34b9ca6 StatusBar)/@0x53ad4ee - animation-leash of insets_animation)/@0x377b7fc
+        mControlTarget=Window{d04df17 u0 com.android.launcher3/com.android.launcher3.uioverrides.QuickstepLauncher}
+

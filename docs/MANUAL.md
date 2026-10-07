@@ -889,6 +889,16 @@ as *no keyboard* would turn a backend that cannot look into one promising a clea
 that would start under the rectangle is refused** (#308) as `covered-by-keyboard` — the verb layer
 reads this fact for that, above — which this paragraph used to say nothing in Rover did yet.
 
+**It also names the application in the foreground** (#331). `foregroundApp` carries that
+application's id — the same string `launch_app` takes — on every answer, for the keyboard's reason:
+it is re-read after the action. So when the app you launched crashes, or a tap takes you out of it,
+the next answer names something else (after a crash on Android, the launcher) — check it before you
+`type_text`, which types into whatever holds focus. Android reads it from the window manager's
+*focused application*, not from the focused window, so a notification shade or a crash dialog drawn
+over the app does not hide which app is underneath. **`null` means this device did not say, never
+*nothing is in front***: Android itself reports no focused application for a while after a crash
+dialog is dismissed, and the iOS simulator answers `null` for now, until its route is measured.
+
 **`hide_keyboard` puts that keyboard away, and presses nothing when there is none** (#307). Reach
 for it instead of `press_key back`: on Android, back closes a keyboard that is up and *leaves the
 screen* when none is — both exit cleanly, so nothing downstream can tell which happened

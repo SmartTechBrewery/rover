@@ -1260,6 +1260,8 @@ describe('deviceInfo', () => {
 				systemBars: null,
 				keyboard: null,
 			},
+			// *Not answered* until the route is measured (#331 phase 2), never *nothing in front*.
+			foregroundApp: null,
 			osVersion: '26.4.1',
 			osApiLevel: null,
 		});
