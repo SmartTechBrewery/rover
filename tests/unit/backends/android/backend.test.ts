@@ -921,6 +921,33 @@ describe('deviceInfo', () => {
 		});
 	});
 
+	/*
+	 * Off the same dump once more, which is why the query pin below still counts four: the
+	 * application in front is `mFocusedApp`'s package (`parsers/insets.ts`), the launcher on the
+	 * capture in `FACTS`.
+	 */
+	it('names the application in the foreground off the dump it already takes', async () => {
+		answers(FACTS);
+
+		expect((await backend.deviceInfo(SERIAL)).foregroundApp).toBe(
+			'com.google.android.apps.nexuslauncher',
+		);
+	});
+
+	// A device that prints no focused application costs this answer that one field, never the
+	// rest of it — and `null` is *not answered*, not *nothing is in front*.
+	it('answers the rest with foregroundApp null when the dump names no focused application', async () => {
+		answers({
+			...FACTS,
+			'shell dumpsys window d': DISPLAYS.replace(/^([ \t]*mFocusedApp=).*$/m, '$1null'),
+		});
+
+		const info = await backend.deviceInfo(SERIAL);
+
+		expect(info.foregroundApp).toBeNull();
+		expect(info.screen.systemBars).toEqual({ top: 156, bottom: 72, left: 0, right: 0 });
+	});
+
 	it('pins every one of its queries to the device it was asked about', async () => {
 		answers(FACTS);
 		await backend.deviceInfo(SERIAL);

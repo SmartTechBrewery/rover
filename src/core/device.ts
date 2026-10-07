@@ -246,7 +246,8 @@ export type ScreenInfo = z.infer<typeof ScreenInfoSchema>;
  *
  * Separate from {@link DeviceSchema} because the screen it carries is measured *now*:
  * size and density move while a device is attached, so they are read per call and never
- * remembered. It repeats `serial`, `platform` and `model` rather than pointing at a
+ * remembered — and so is the application in the foreground, which moves on every launch, tap
+ * and crash. It repeats `serial`, `platform` and `model` rather than pointing at a
  * `Device`: D14 makes "names the device and its density" a property of the *result*, and
  * a measurement that travels without the device it was taken on is the contradiction D14
  * exists to prevent.
@@ -263,6 +264,28 @@ export const DeviceInfoSchema = z
 		platform: PlatformIdSchema,
 		model: z.string().nullable(),
 		screen: ScreenInfoSchema,
+		/**
+		 * The application in the foreground, by the platform's application id — the same string
+		 * `launch_app` takes as `appId` — or `null` for a device that did not say.
+		 *
+		 * **`null` is *not answered*, never *nothing is in the foreground*.** There is no value
+		 * for "none": a backend that cannot name what is in front says so rather than inventing
+		 * an answer, and reading `null` as "the app is gone" would turn a backend with no route to
+		 * the fact — or a device whose own record of the focused application is momentarily
+		 * empty (`PROJECT.md` §6) — into a report that something crashed.
+		 *
+		 * **Here and not on {@link ScreenInfoSchema}**, because this is not a fact about the
+		 * screen's geometry, and **here and not on a verb's after-state**, for the keyboard's
+		 * reason: `DeviceInfo` is on every `ActionResult` (D14) and is re-read after the action,
+		 * so an application that crashed or a tap that left it is reported by whichever verb ran
+		 * next, with no verb knowing this field exists.
+		 *
+		 * **A plain non-empty string, not `AppIdSchema`.** That schema guards an id a *caller*
+		 * supplies before a backend relays it into a command on the device; this one is reported
+		 * and relayed nowhere, and a system component's id can be a shape it would refuse — which
+		 * would make this whole answer throw, and every verb's answer with it.
+		 */
+		foregroundApp: z.string().min(1).nullable(),
 		/** The user-facing OS version string. */
 		osVersion: z.string().nullable(),
 		/** The OS API level, where the platform has one. */
@@ -691,7 +714,8 @@ export interface DeviceBackend {
 	describeDevice(serial: DeviceSerial): Promise<Device | null>;
 
 	/**
-	 * The screen and OS facts of one device — what `device_info` answers.
+	 * The screen and OS facts of one device, and the application in its foreground — what
+	 * `device_info` answers.
 	 *
 	 * Required rather than capability-gated: D14 makes naming the device and its density a
 	 * property of *every* result, so a backend that cannot answer this cannot satisfy D14

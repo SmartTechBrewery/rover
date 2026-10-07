@@ -263,6 +263,12 @@ export function createMockDeviceInfo(overrides: Partial<DeviceInfo> = {}): Devic
 			 */
 			keyboard: { shown: false, bounds: null },
 		},
+		/*
+		 * **A device that answered**, for the keyboard's reason — `null` would be a device that did
+		 * not say, and a test that does not care about the foreground app should be describing a
+		 * device with one in front rather than an unanswered one.
+		 */
+		foregroundApp: 'com.example.app',
 		osVersion: '1.0',
 		osApiLevel: 1,
 		...overrides,

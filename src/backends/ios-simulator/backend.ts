@@ -1500,6 +1500,11 @@ export class IosSimulatorDeviceBackend implements DeviceBackend {
 			platform: IOS_SIMULATOR_PLATFORM_ID,
 			model: device.model,
 			screen: toScreenInfo(profile, await this.#keyboardOf(serial, device.state)),
+			// *Not answered*, never a guess and never *nothing is in front* (`core/device.ts`). The
+			// route exists — the accessibility read `#keyboardOf` already takes carries the
+			// application's `pid`, unread today (`./parsers/accessibility.ts`), and `./parsers/launchctl-list.ts` maps processes to bundle ids —
+			// but nobody has measured it yet, and that is phase 2 of #331's to wire.
+			foregroundApp: null,
 			osVersion: device.osVersion,
 			// Read off the enumeration rather than written as `null` here, so the two shapes cannot
 			// come to disagree about a platform that has no API level (`./devices.js`).

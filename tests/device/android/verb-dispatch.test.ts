@@ -1103,6 +1103,70 @@ describe.skipIf(!process.env.ROVER_TEST_DEVICE)('a daemon runs verbs on its own 
 	});
 
 	/**
+	 * **The acceptance criterion of #331, against real hardware: after the app crashes, the next
+	 * answer names the launcher rather than the app.**
+	 *
+	 * The test above shows that a *screen* says nothing about which app died; this is the one
+	 * field that says the app is no longer in front at all, carried on every answer
+	 * (`DeviceInfo.foregroundApp`). The crash is injected with `adb` and pinned to the leased
+	 * serial for that test's reason.
+	 *
+	 * **The focus moves asynchronously**, like the crash's log entry: on the TC58 (API 33) it had
+	 * moved by the first dump ~100 ms after `am crash` returned, on the API 37 emulator by the
+	 * fifth back-to-back one (PROJECT.md §6). So the read is a condition with a deadline, never
+	 * one read and never a sleep.
+	 *
+	 * **The launcher is asked of the device, not written here** — `nexuslauncher` on one build
+	 * and `launcher3` on another — through the home intent's resolution, which answered on both.
+	 */
+	it('names the launcher, not the app, in the answer after the app crashes', async () => {
+		const client = await startHost();
+		const device = await freeDevice(client);
+		const leaseId = await lease(client, device.serial);
+
+		const launched = await client.request('launch_app', { leaseId, appId: SETTINGS });
+		if (launched.outcome !== 'ok') throw new Error(`launch_app answered '${launched.outcome}'`);
+		expect(launched.result.device.foregroundApp).toBe(unwrap(SETTINGS));
+
+		const home = await runAdbOnDevice(device.serial, [
+			'shell',
+			'cmd',
+			'package',
+			'resolve-activity',
+			'--brief',
+			'-a',
+			'android.intent.action.MAIN',
+			'-c',
+			'android.intent.category.HOME',
+		]);
+		const component = home.stdout.trim().split('\n').at(-1)?.trim() ?? '';
+		const launcher = component.split('/')[0];
+		expect(component).toContain('/');
+
+		await runAdbOnDevice(device.serial, ['shell', 'am', 'crash', unwrap(SETTINGS)]);
+
+		const after = await waitForCondition<string | null>({
+			what: `the answer to stop naming '${SETTINGS}' in front`,
+			timeoutMs: CRASH_TIMEOUT_MS,
+			pollIntervalMs: CRASH_POLL_MS,
+			probe: async (): Promise<Observation<string | null>> => {
+				const answer = await client.request('device_info', { leaseId });
+				if (answer.outcome !== 'ok') {
+					return { met: false, found: `the host answered '${answer.outcome}'` };
+				}
+				const { foregroundApp } = answer.result.device;
+				return foregroundApp === unwrap(SETTINGS)
+					? { met: false, found: `'${foregroundApp}' still in front` }
+					: { met: true, value: foregroundApp };
+			},
+		});
+		expect(after).toBe(launcher);
+
+		// For the crash test's reason: a dialog the crash raised must not outlive the suite.
+		await runAdbOnDevice(device.serial, ['shell', 'input', 'keyevent', 'KEYCODE_BACK']);
+	});
+
+	/**
 	 * The bound is the caller's, and a short read has to be distinguishable from a quiet
 	 * device — which is what `truncated` is for. A device that has been running long enough to
 	 * be worth reading has more than two entries in its log, so this asks for two and expects

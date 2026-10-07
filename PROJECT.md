@@ -162,7 +162,7 @@ Working names. All of them take a device handle, and over the wire that handle i
 | `read_screen` | Texts and element rectangles. **Works even when the app blocks screenshots**. Declares `canReadScreen` as a requirement, so a backend without it fails by name before anything is dispatched rather than answering with an empty screen (D11). **The answer also says whether the on-screen keyboard is up and what rectangle it occupies**, on the `DeviceInfo` half rather than in the element list — an element under the keyboard is still laid out and still has bounds, so it is still an element, and the thing covering it is not one. The rectangle is in the **dp** space element bounds are in, because what it gets compared against is a touch point (#297). **Both backends answer it, by different routes** (#298): Android parses the `ime` `InsetsSource` out of a dump it already has, while the iOS simulator unions the frames of the accessibility nodes marked `KeyboardKey` and `AutoCorrectCandidate` |
 | `record_video` | A recording of the screen, **as bytes on the result rather than as a path** (D19) — base64, `video/mp4` and its byte length, exactly where `screenshot`'s capture rides. **The recording is provably finished before it is pulled**: the backend waits on a condition for the recorder to be gone, then pulls, then checks the container index on the bytes that actually arrived. A recording without that index was still being written when it was copied and is not a shorter video but a file no player will open, so it is refused as `unfinished-recording` naming the device and the byte length — never handed over, and never an `internal_error` (§6). Declares `canRecordVideo` as a requirement, so a backend without it fails by name before anything is dispatched rather than answering with a null artifact (D11). Duration is bounded by what **one answer** can carry (15 s; the default is 5 s), and going over the artifact bound is the same `artifact-too-large` refusal `screenshot` gives rather than a file cut short — a longer recording is R24's chunked transfer. **The client writes the file** (R24 phase 1): `rover record <lease-id> --out <path> [--duration-ms <n>]` writes the video on the machine running the CLI, on the same two modules `screenshot` uses, and raises its own request timeout past the recording so a long one cannot surface as a hang. An `unfinished-recording` refusal leaves no file at `--out`. **The answer also carries frames sliced from the finished recording** (`result.frames`): PNGs in recording order, scaled down and extracted on the **host** after the pull — never sampled during capture and never a second pass over the device. Extraction uses `ffmpeg` from `PATH`; a host without it refuses as `frame-extraction-unavailable` rather than returning an empty list, and no path in the extractor ever answers with an empty one — a decoder that exited cleanly having written nothing is `frame-extraction-failed` too. Frame count, frame width and total frame bytes are bounded; going over the byte budget is `frames-too-large` carrying both numbers, and the count bound — one above the longest recording at the densest sampling, since sampling rounds up — is enforced as a refusal too, because a capture of a still screen declares a longer timeline than it was asked for and can reach it (§6). The CLI exposes both knobs: `rover record <lease-id> --out <path> [--duration-ms <n>] [--frames-per-second <n>]`, each bounded before the call, and the command answers with both the video and the frames or with neither. **The answer also says what the recording contains** (#183): `result.container` carries the encoded sample count and the duration the **container** declares — read out of the pulled bytes on the host with no decoder, never assumed from the `durationMs` that was asked for, since §6 measures those as different numbers. A capture of a screen that never changed comes back as one sample of zero declared duration, and that case is **named** on the answer (`still-screen`) with the reason in words, because every other check in this verb passes for it and an agent that only sees one frame concludes the tool is broken. It stays `ok` with its one frame — recording an idle screen is legitimate — and bytes whose container this host cannot parse answer `unreadable` rather than throwing or claiming zero. **What frames are honest about is §8**: they sample motion. |
 | `start_recording` / `stop_recording` | The same recording asked for as **two calls**, so the device can be driven inside it (#190, R43 phase 2). The start returns while the recorder is still running — the input verbs and `read_screen` work on that device under the same lease and end up in the recording — and the stop signals the recorder, waits on a condition for it to be gone, pulls the file and answers with **exactly what `record_video` answers with**: the same schema, the same normalised video on `result.artifact`, the same frames, the same `container` and the same `normalisation`. `record_video` is untouched; this is a second way to record. Both declare **`canControlRecording`**, which is deliberately not `canRecordVideo` (§5). The start takes no duration — the length is decided by when the stop is called — but the recorder is still given `MAX_RECORDING_MS` as its own kill switch, for the case nothing on the host can cover: since #191 the lease's end stops a recorder the caller walked away from (D9), and the limit is what bounds one whose *host* went away with it. A device holds **one** recording at a time: a second `start_recording`, or a `record_video` during an open session, is `recording-already-running` naming the device and the pids, never queued. Stopping with nothing recording and nothing left behind is `no-recording-running`; a recorder that reached its own limit first is **not** a failure, because the file it left is complete. Nothing on the host remembers that a recording is open — the device is asked (D6) — and because no window was ever named, the stop holds nothing across one: the file follows the recorder's own timeline, and a screen nobody drove is the same `still-screen` `record_video` reports, with nothing to stretch it across. |
-| `device_info` | Size, density, computed width in dp, OS version, the system bar insets, and whether the on-screen keyboard is shown and where. Needs no capability and addresses nothing on the screen — it answers with the `DeviceInfo` every result already carries (D14), asked for on its own. **The keyboard rides here and not on a verb's after-state**, which is what makes it true of *every* verb's answer without a verb changing: `resultAfterAction()` re-reads `device_info` after the action, so a keyboard that opened during a tap is reported by the tap. It is in **dp** where the insets beside it are in pixels, each in the unit its consumer uses — a touch point for one, a screenshot's own coordinates for the other (#297). **On the iOS simulator this is the one field `device_info` reaches the device for**, so it costs one accessibility read and answers `null` — never a plausible `{ shown: false }` — whenever that read could not be taken, which keeps the verb working on a host with no `idb_companion` and with no new way to throw (#298, §6) |
+| `device_info` | Size, density, computed width in dp, OS version, the system bar insets, and whether the on-screen keyboard is shown and where. Needs no capability and addresses nothing on the screen — it answers with the `DeviceInfo` every result already carries (D14), asked for on its own. **The keyboard rides here and not on a verb's after-state**, which is what makes it true of *every* verb's answer without a verb changing: `resultAfterAction()` re-reads `device_info` after the action, so a keyboard that opened during a tap is reported by the tap. It is in **dp** where the insets beside it are in pixels, each in the unit its consumer uses — a touch point for one, a screenshot's own coordinates for the other (#297). **On the iOS simulator this is the one field `device_info` reaches the device for**, so it costs one accessibility read and answers `null` — never a plausible `{ shown: false }` — whenever that read could not be taken, which keeps the verb working on a host with no `idb_companion` and with no new way to throw (#298, §6). **It also names the application in the foreground** (`foregroundApp`, the id `launch_app` takes), on `DeviceInfo` beside `screen` for the keyboard's reason — re-read after every action, so an app that crashed or a tap that left it is reported by whichever verb ran next. Android reads it off `mFocusedApp` in the `dumpsys window d` this answer already runs, so it costs no query; the iOS simulator answers `null` until its route is measured (#331 phase 2). `null` is *not answered*, never *nothing in front* — Android itself prints `mFocusedApp=null` with the launcher in front after a crash dialog is dismissed (#331, §6) |
 
 ### Waiting
 
@@ -877,7 +877,8 @@ Checked on the same API 37 emulator (`sdk_gphone16k_arm64`) with `adb` 37.0.0 wh
   entry at any level the shell asks for — the same six letters logcat prints.
 - **What a crash leaves on the screen is not one thing, and it is not stable.** Both of these
   followed `am crash` on the foreground app on the same device within minutes: the **launcher**,
-  with nothing on it about the crash at all (`mCurrentFocus=…NexusLauncherActivity`), and a
+  with nothing on it about the crash at all (`mCurrentFocus=…NexusLauncherActivity`; what the
+  *focused application* says through that, and through the dialog, is §6's #331 entry), and a
   **transient dialog** reading `Settings keeps stopping` / `App info` / `Close app`, which shows
   up after repeated crashes of the same package and clears itself again a few seconds later.
   Two consequences, and the first cost a test run:
@@ -2335,6 +2336,69 @@ success for any usage, including one that does nothing (`docs/IOS.md` §4).
   verb, including its after-read: `press_key` 0.6–0.9 s, `type_text` with `clear` 0.7–0.9 s.
 - **Not checked: a secure (password) field**, since none was reachable on the bench without a
   passcode or network, and **a multi-line text view**.
+
+### The window dump names the focused application, and after `am crash` it names the launcher (2026-10-07, #331)
+
+Run with `adb` 37.0.1 on a **Zebra TC58** (API 33, Android 13), and repeated where noted on the
+**`sdk_gphone16k_arm64` emulator** (API 37, Android 17). The question was which line of the
+`dumpsys window d` that `deviceInfo` already takes says *which application is in front*, checked
+against the activity manager's own answer:
+
+```bash
+adb -s "$S" shell am start -W -n com.android.settings/.Settings
+adb -s "$S" shell dumpsys window d | grep -E 'mCurrentFocus|mFocusedApp'
+adb -s "$S" shell dumpsys activity activities | grep -E 'ResumedActivity'
+adb -s "$S" shell cmd statusbar expand-notifications          # then the two greps, then `collapse`
+adb -s "$S" shell am crash com.android.settings               # then the greps, polled by hand
+adb -s "$S" shell cmd package resolve-activity --brief \
+    -a android.intent.action.MAIN -c android.intent.category.HOME   # the launcher, last line
+```
+
+- **The line is `mFocusedApp=ActivityRecord{<hash> u<user> <package>/<activity> t<task>}`**, in
+  the display section, and in every case below it named the same activity as the activity
+  manager's `ResumedActivity`. API 33 closes it with a stray second `}` (`… t269}`) and API 37
+  does not, so the parser matches nothing after the package.
+- **`mCurrentFocus` is the focused *window*, and it is the wrong line.** With the notification
+  shade down over Settings (TC58) it read `Window{… NotificationShade}`, and the root of a
+  `uiautomator` dump read `package="com.android.systemui"`, while `mFocusedApp` and the resumed
+  activity both still named Settings. The same dump is committed as
+  `dumpsys-window-d.notification-shade.api33-tc58.txt`. On the emulator,
+  `expand-notifications` did not move the focused window at all in six reads, so the shade case
+  is the TC58's alone.
+- **After `am crash`, `mFocusedApp` names the launcher, and it moves asynchronously.** On the TC58
+  the first dump, taken ~100 ms after the command returned, already read
+  `mFocusedApp=…com.android.launcher3/.uioverrides.QuickstepLauncher` — with **`mCurrentFocus=null`**
+  in that same dump (`dumpsys-window-d.after-crash.api33-tc58.txt`). On the emulator it named
+  `com.google.android.apps.nexuslauncher` by the fifth back-to-back dump. In both cases it agreed
+  with the home intent's resolution above, which is how the device test finds the launcher rather
+  than writing one in (`cmd shortcut get-default-launcher` answered on the TC58 too).
+- **The *keeps stopping* dialog does not change it to the launcher.** Settings launched and crashed
+  twice more on the TC58 raised `Aplikacja Ustawienia wciąż przestaje działać`: `mCurrentFocus`
+  read `Window{… Application Error: com.android.settings}`, a `uiautomator` root read
+  `package="android"`, and `mFocusedApp` named **Settings** — which the activity manager reported
+  resumed, with a live `com.android.settings` process behind the dialog
+  (`dumpsys-window-d.crash-dialog.api33-tc58.txt`). So after repeated crashes the system brings
+  the app back, and the field reports the app because it is in front.
+- **`mFocusedApp=null` on a responsive device.** `input keyevent KEYCODE_BACK` dismissed that
+  dialog, and in every one of the eight reads that followed the launcher was resumed and held the focused
+  window while `mFocusedApp` read **`null`** (`dumpsys-window-d.focused-app-null.api33-tc58.txt`).
+  `KEYCODE_HOME` restored it to the launcher. This is why `foregroundApp: null` means *the device
+  did not say* and never *nothing is in front*. Falling back to `mCurrentFocus`'s package would
+  have answered here, and was not taken: it would answer the shade and the dialog cases wrongly
+  whenever `mFocusedApp` was also empty.
+- **The keyguard does not displace it.** `KEYCODE_SLEEP` then `KEYCODE_WAKEUP` on the TC58 left
+  `mFocusedApp` on the launcher behind `mCurrentFocus=NotificationShade`, and `am start` of
+  Settings behind the PIN bouncer moved `mFocusedApp` to Settings. **The trap: that device has a
+  PIN, so sleeping it locked it**, and neither `wm dismiss-keyguard`, `KEYCODE_MENU` nor a swipe
+  dismisses a secure keyguard. Do not sleep a physical device whose PIN you do not have.
+- **A keyboard does not displace it either.** The committed keyboard-shown captures, API 33 and
+  API 37, name the application that owns the focused field.
+
+So `foregroundApp` is read off the first `mFocusedApp` line of the dump `deviceInfo` already takes
+(`parseForegroundApp`, `src/backends/android/parsers/insets.ts`), at no extra query. It answers
+`null`, and never throws, for no line, `mFocusedApp=null`, or a line of another shape. The device
+case is `tests/device/android/verb-dispatch.test.ts`'s *names the launcher, not the app*, which
+passed against the TC58.
 
 ---
 

@@ -35,8 +35,13 @@ import fixture from '../../fixtures/panel/device-info.json' with { type: 'json' 
  *   taken **with a text field focused and the keyboard up**, which is the state the previous
  *   capture could not show. Its `systemBars` came back identical, so the two rounds agree on
  *   everything the first one measured.
+ * - **2026-10-07**, when `foregroundApp` joined:
+ *   `rover/foreground-app-fixture-capture/20261007T131641Z-issue-331-ce7bf0f2/emulator-5554/device_info.json`,
+ *   in the same state as the round before — the Settings search activity in front, its field
+ *   focused and the keyboard up — so every field the earlier rounds carried came back identical
+ *   and the one that joined names an application a reader can check against the screenshot.
  *
- * Both were written by the daemon of their own change for a real `screenshot` on an attached
+ * All three were written by the daemon of their own change for a real `screenshot` on an attached
  * emulator, into an artifacts root of its own so the operator's archive was not part of the
  * capture.
  *
@@ -44,11 +49,11 @@ import fixture from '../../fixtures/panel/device-info.json' with { type: 'json' 
  * precedent, stated where it can be seen. A device whose `model`, `osVersion` and `osApiLevel` are
  * all `null` is one that could not be asked — sitting on its authorization prompt is the common
  * case — and reaching that state needs a physical phone plugged into the host for the first time,
- * which the emulator that produced the first entry is not. **Its `systemBars: null` and its
- * `keyboard: null` are doing a second job on top of that**, and a more important one: they are the
+ * which the emulator that produced the first entry is not. **Its `systemBars: null`, its
+ * `keyboard: null` and its `foregroundApp: null` are doing a second job on top of that**, and a more important one: they are the
  * answer of a backend with **no route to the fact at all** (`src/core/device.ts`), which is a state
  * no device this host can reach would produce and is exactly the state a consumer has to draw a
- * sentence for. The bend is narrow: it is the captured entry with those five fields set to the
+ * sentence for. The bend is narrow: it is the captured entry with those six fields set to the
  * combinations `src/core/device.ts` documents, and this half parsing it with the host's own
  * `.strict()` schema is what keeps it a file the daemon could really have written.
  */
@@ -71,6 +76,9 @@ describe("the panel's device_info.json fixture", () => {
 		expect(captured.model).toBe('sdk_gphone16k_arm64');
 		expect(captured.osVersion).toBe('17');
 		expect(captured.osApiLevel).toBe(37);
+		// The application in front when the screenshot beside this file was taken: the search
+		// activity, whose field is focused under the keyboard below.
+		expect(captured.foregroundApp).toBe('com.google.android.settings.intelligence');
 		expect(captured.screen).toMatchObject({
 			widthPx: 1280,
 			heightPx: 2856,
@@ -120,6 +128,9 @@ describe("the panel's device_info.json fixture", () => {
 		 * quietly promising a clear screen.
 		 */
 		expect(unanswered.screen.keyboard).toBeNull();
+		// *Not answered*, never *nothing is in front* — the backend with no route to the fact, as
+		// one simulator platform is until it is measured (`src/core/device.ts`).
+		expect(unanswered.foregroundApp).toBeNull();
 	});
 
 	// The dp values are exact quotients on the host on purpose — rounding is the panel's decision,

@@ -1,6 +1,10 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { parseKeyboard, parseSystemBarInsets } from '@/backends/android/parsers/insets.js';
+import {
+	parseForegroundApp,
+	parseKeyboard,
+	parseSystemBarInsets,
+} from '@/backends/android/parsers/insets.js';
 
 const fixture = (name: string): string =>
 	readFileSync(new URL(`../../../../fixtures/adb/${name}`, import.meta.url), 'utf8');
@@ -9,6 +13,10 @@ const DISPLAYS = fixture('dumpsys-window-d.api37-sdk-gphone16k-arm64.txt');
 const KEYBOARD_SHOWN = fixture('dumpsys-window-d.keyboard-shown.api37-sdk-gphone16k-arm64.txt');
 const API33_KEYBOARD_SHOWN = fixture('dumpsys-window-d.keyboard-shown.api33-tc58.txt');
 const API33_KEYBOARD_DISMISSED = fixture('dumpsys-window-d.keyboard-dismissed.api33-tc58.txt');
+const API33_NOTIFICATION_SHADE = fixture('dumpsys-window-d.notification-shade.api33-tc58.txt');
+const API33_AFTER_CRASH = fixture('dumpsys-window-d.after-crash.api33-tc58.txt');
+const API33_CRASH_DIALOG = fixture('dumpsys-window-d.crash-dialog.api33-tc58.txt');
+const API33_FOCUSED_APP_NULL = fixture('dumpsys-window-d.focused-app-null.api33-tc58.txt');
 
 /** The device the fixture was captured on, `wm size`'s effective dimensions. */
 const SCREEN = { width: 1280, height: 2856 };
@@ -255,6 +263,80 @@ describe('parseKeyboard', () => {
 	])('refuses a density scale of %s by name', (scale) => {
 		expect(() => parseKeyboard(KEYBOARD_SHOWN, scale)).toThrow(
 			`Cannot read the on-screen keyboard at density scale ${scale}`,
+		);
+	});
+});
+
+describe('parseForegroundApp', () => {
+	it('names the launcher off a dump taken with nothing else in front', () => {
+		expect(parseForegroundApp(DISPLAYS)).toBe('com.google.android.apps.nexuslauncher');
+	});
+
+	// A keyboard that is up is a window of its own, and it does not displace the application.
+	it('names the application under a keyboard that is up', () => {
+		expect(parseForegroundApp(KEYBOARD_SHOWN)).toBe('com.google.android.settings.intelligence');
+		expect(parseForegroundApp(API33_KEYBOARD_SHOWN)).toBe(
+			'com.google.android.googlequicksearchbox',
+		);
+	});
+
+	// API 33 closes the record with a stray second `}` (`… t224}`), which is why nothing after the
+	// package is matched.
+	it('reads the older line shape', () => {
+		expect(parseForegroundApp(API33_KEYBOARD_DISMISSED)).toBe(
+			'com.google.android.googlequicksearchbox',
+		);
+	});
+
+	/**
+	 * **The case that decides `mFocusedApp` over `mCurrentFocus`.** With the shade down over
+	 * Settings the focused *window* is `NotificationShade` and a screen read's root is
+	 * `com.android.systemui`, while the application in front is still Settings.
+	 */
+	it('names the application, not the notification shade drawn over it', () => {
+		expect(API33_NOTIFICATION_SHADE).toMatch(/mCurrentFocus=Window\{\S+ u0 NotificationShade\}/);
+		expect(parseForegroundApp(API33_NOTIFICATION_SHADE)).toBe('com.android.settings');
+	});
+
+	// The read the issue's acceptance criterion is about: the first dump after `am crash`, in which
+	// the focused window is already `null` and the focused application is the launcher.
+	it('names the launcher in the first dump after the application crashed', () => {
+		expect(API33_AFTER_CRASH).toMatch(/mCurrentFocus=null/);
+		expect(parseForegroundApp(API33_AFTER_CRASH)).toBe('com.android.launcher3');
+	});
+
+	// The *keeps stopping* dialog is a window titled after the app, and the activity manager reports
+	// that app's activity resumed behind it — so that is what is in front, and what is answered.
+	it('names the application a crash dialog is drawn over, not the dialog', () => {
+		expect(API33_CRASH_DIALOG).toMatch(/mCurrentFocus=Window\{\S+ u0 Application Error: /);
+		expect(parseForegroundApp(API33_CRASH_DIALOG)).toBe('com.android.settings');
+	});
+
+	/**
+	 * **A responsive device really prints `mFocusedApp=null`**: this capture is the launcher in
+	 * front, focused and resumed, after that dialog was dismissed with `back`. `null` is the
+	 * device not saying, which is what the field's `null` means.
+	 */
+	it('answers null for a device that prints no focused application', () => {
+		expect(API33_FOCUSED_APP_NULL).toMatch(/^[ \t]*mFocusedApp=null$/m);
+		expect(parseForegroundApp(API33_FOCUSED_APP_NULL)).toBeNull();
+	});
+
+	it('answers null for a dump with no such line at all', () => {
+		expect(parseForegroundApp('')).toBeNull();
+		expect(parseForegroundApp(DISPLAYS.replace(/^[ \t]*mFocusedApp=.*$/m, ''))).toBeNull();
+	});
+
+	// A line this does not recognise costs this one fact, never the whole of `device_info`.
+	it('answers null rather than throwing for a line of another shape', () => {
+		const odd = DISPLAYS.replace(/^([ \t]*mFocusedApp=ActivityRecord\{\S+ u0 )\S+/m, '$1/x');
+		expect(odd).toMatch(/mFocusedApp=ActivityRecord\{\S+ u0 \/x/);
+		expect(parseForegroundApp(odd)).toBeNull();
+	});
+
+	it('reads CRLF output the same way', () => {
+		expect(parseForegroundApp(API33_AFTER_CRASH.replace(/\n/g, '\r\n'))).toBe(
+			'com.android.launcher3',
 		);
 	});
 });

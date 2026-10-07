@@ -190,7 +190,7 @@ credential.
 | --- | --- | --- |
 | Input | `tap`, `long_press`, `swipe`, `scroll`, `type_text`, `press_key`, `hide_keyboard` | seven uses of one spine; `src/verbs/input.ts` |
 | Waits | `wait_for`, `wait_until_gone` | the vocabulary that replaces `sleep`; `wait-for.ts` |
-| Reads | `read_screen`, `device_info`, `screenshot` | `read.ts`; `screenshot`'s answer is bytes, and both reads report the on-screen keyboard |
+| Reads | `read_screen`, `device_info`, `screenshot` | `read.ts`; `screenshot`'s answer is bytes, and both reads report the on-screen keyboard and the application in the foreground |
 | Apps | `launch_app`, `stop_app`, `clear_app_data` | address a package, resolve no target; `app.ts` |
 | Logs | `read_logs` | bounded, selectable on the host, never follows; `logs.ts` |
 | Recording | `record_video`, `start_recording`, `stop_recording` | `record.ts`, `recording-session.ts` |
@@ -361,6 +361,30 @@ read-then-press; `src/backends/ios-simulator/parsers/accessibility.ts` for the t
 `src/backends/ios-simulator/screen.ts` for `toOnScreenKeyboard` and
 `src/backends/ios-simulator/capabilities.ts` for why that backend declares `canHideKeyboard` `false`
 with a dismissal in hand; `PROJECT.md` §4 and §6, `docs/IOS.md` §2, §5 and §8, D11, D14.
+
+**Every answer names the application in the foreground** (#331), so an app that crashed, or a tap
+that left it, is one field to read rather than a screen to recognise. A crash on Android leaves the
+launcher with nothing on it about the crash at all (`PROJECT.md` §6), and a `type_text` sent after
+that goes to whatever now holds focus — so an agent that only reads elements can type a password
+into the launcher's search and be told `ok`. `DeviceInfo.foregroundApp` carries the application's
+id, the same string `launch_app` takes.
+
+It sits on **`DeviceInfo`**, beside the keyboard and for the keyboard's reason: D14 puts that half
+on every result and the after-state re-reads it after the action, so every verb reports it without
+any verb knowing it exists. Android reads it off the **`mFocusedApp`** line of the
+`dumpsys window d` it already takes for the insets, at no extra query. It deliberately does not read
+the focused *window* (`mCurrentFocus`) or the package at the root of a screen read: with the
+notification shade down both name the system UI, and with a crash dialog up both name the dialog,
+while the application in front is still the one underneath (`PROJECT.md` §6). **`null` is *not
+answered*, never *nothing in front***, and that is not hypothetical: Android itself prints
+`mFocusedApp=null` with the launcher in front after a crash dialog is dismissed. The iOS simulator
+answers `null` for now; its route — the application `pid` its accessibility read already carries,
+mapped through `launchctl list` — is the second phase of #331.
+
+**Where it lives.** `src/core/device.ts` for the field and what its `null` means,
+`src/backends/android/parsers/insets.ts` (`parseForegroundApp`) for the read and
+`src/backends/android/backend.ts` for where it joins `deviceInfo`;
+`src/backends/ios-simulator/backend.ts` for the `null`; `PROJECT.md` §4 and §6, D14.
 
 ---
 

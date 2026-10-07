@@ -131,7 +131,7 @@ import {
 } from './parsers/getprop.js';
 import { parseUiHierarchy, type UiHierarchy } from './parsers/hierarchy.js';
 import { acceptedInput } from './parsers/input.js';
-import { parseKeyboard, parseSystemBarInsets } from './parsers/insets.js';
+import { parseForegroundApp, parseKeyboard, parseSystemBarInsets } from './parsers/insets.js';
 import { isLogcatTimestamp, parseLogcat } from './parsers/logcat.js';
 import { acceptedNetworkChange } from './parsers/network.js';
 import { isPng } from './parsers/screencap.js';
@@ -1051,11 +1051,12 @@ export class AndroidDeviceBackend implements DeviceBackend {
 	 * with no insets state, so an Android that does not report them costs the rest of this answer
 	 * nothing (`./parsers/insets.js`).
 	 *
-	 * **That one dump now answers two screen facts** — the system bars and the on-screen keyboard
-	 * — out of the same `InsetsState` block, which is why reporting the keyboard adds no device
-	 * query here. Each is read with the unit its consumer uses: the insets against the effective
-	 * pixels the frames are stated in, the keyboard divided by the density scale into the dp space
-	 * a touch point lives in (`core/device.ts`).
+	 * **That one dump now answers three facts** — the system bars and the on-screen keyboard out
+	 * of the same `InsetsState` block, and the application in the foreground off its
+	 * `mFocusedApp` line — which is why reporting the keyboard and the foreground app adds no
+	 * device query here. The two screen facts are each read with the unit their consumer uses:
+	 * the insets against the effective pixels the frames are stated in, the keyboard divided by
+	 * the density scale into the dp space a touch point lives in (`core/device.ts`).
 	 */
 	async deviceInfo(serial: DeviceSerial): Promise<DeviceInfo> {
 		const [size, density, properties, displays] = await Promise.all([
@@ -1085,6 +1086,7 @@ export class AndroidDeviceBackend implements DeviceBackend {
 				systemBars: parseSystemBarInsets(displays.stdout, screen.effective),
 				keyboard: parseKeyboard(displays.stdout, dpi.scale),
 			},
+			foregroundApp: parseForegroundApp(displays.stdout),
 			osVersion: props.androidRelease,
 			osApiLevel: props.apiLevel,
 		});
