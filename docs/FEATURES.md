@@ -258,11 +258,32 @@ backend checks before every press, which a backend-level count would have to re-
 platform. Zero is refused at the wire rather than accepted as a no-op, because pressing nothing
 would answer a success, and the upper bound keeps a full run well inside a client's default
 request deadline (measured, `PROJECT.md` §6). A Tab goes to the next *focusable* control, which on
-a web form can be a field's clear button rather than the next field — a screen read carries no
-focus flag, so read back after typing rather than counting Tabs.
+a web form can be a field's clear button rather than the next field — read back after typing rather
+than counting Tabs. The after-state's `focused` flag (#329, below) names the control that took
+focus where the device reports it; this sentence said *a screen read carries no focus flag* until
+then.
 
 **`read_screen` is a first-class verb and not a fallback.** It survives an app blocking screen
 capture, which is the case where pixels are gone and nothing is logged about it (§16).
+
+**Every screen element says what it is called by its developer and what state it is in** (#329). An
+element carries an **`identifier`** — Android's `resource-id`, the iOS accessibility identifier —
+beside its text and label, and five state fields: **`checked`, `selected`, `enabled`, `clickable`
+and `focused`**. The reason is a field session: a **textless checkbox**, known only by its resource
+id, had to be ticked before further buttons appeared; with no text, label or identifier in the
+answer the agent could not tell it existed, concluded the buttons were missing, and left Rover for
+raw `uiautomator dump | grep`. It also could not tell whether a box was ticked, or which field had
+taken the text it just typed — `focused` is that answer, which is why `type_text` still takes no
+target. **Every new field is nullable and `null` means *not answered***, never a guessed `false`:
+`checked` is answered only for an element the device says can be checked or toggled (Android writes
+`checked="false"` on every node, layouts included), Android answers all six from the dump it already
+takes, and the iOS simulator answers `identifier`, `enabled`, `selected` and a toggle's `checked`
+from its accessibility read and `null` for `clickable` and `focused`, which that read does not
+carry. The identifier is **not unique and not the element id** — 13 rows of one Settings screen
+share `android:id/title` — so it is an addressable field (`{ by: 'identifier' }`, §5) rather than
+the id. The same fields ride on every action's after-state, because that is the same element shape.
+Where it lives: `src/core/device.ts` (`ScreenElementSchema`), `src/backends/android/screen.ts`,
+`src/backends/ios-simulator/screen.ts`; `PROJECT.md` §4 (`read_screen`, `tap`, `type_text`).
 
 **`read_logs` answers *what did my app log just now, and did it crash* in one call** (#303). It
 takes optional **selections** that combine by narrowing — an app (`appId`, resolved on the host to
@@ -411,7 +432,11 @@ agent gets a false green are closed in the tool rather than left to the agent's 
   false green in this class of tool, and here there is nowhere to pass one. Two elements matching
   one text target is a **loud error naming every candidate** rather than a first match that is
   right half the time; nothing matching names what was on screen instead; a coordinate remains the
-  documented fallback and is marked in the result as not having come from a screen. Every resolved
+  documented fallback and is marked in the result as not having come from a screen. **An
+  `identifier` target** (#329) resolves from the same fresh read, matching the element's
+  developer-assigned identifier **exactly**; it takes no `index`, and two elements sharing an
+  identifier — ordinary, every row of a list — are the same loud ambiguous refusal, whose way out
+  is the element id or text. Every resolved
   point is range-checked against the device — an element scrolled out of its container comes back
   with an inverted rectangle, and the midpoint of that is arithmetic rather than a place to tap, so
   it is refused by name. **And every point a touch starts at is checked against the on-screen
@@ -472,7 +497,7 @@ question of *matches* rather than of a resolution, and will not take a text targ
 an index names a slot in the match list and a slot empties the moment any sibling leaves.
 
 **Where it lives.** `src/verbs/perform.ts`, `target.ts` (the keyboard check is `keyboardCovering`
-and `requireUncovered`), `input.ts` (`scroll`'s own start check), `wait-for.ts`, `errors.ts`
+and `requireUncovered`; the four target kinds and `findOnScreen`'s matching), `input.ts` (`scroll`'s own start check), `wait-for.ts`, `errors.ts`
 (`CoveredByKeyboardError`), `failure.ts`, `src/core/wait.ts`, `tests/unit/no-sleep.test.ts`;
 `PROJECT.md` D12 and §6.
 

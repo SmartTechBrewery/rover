@@ -1452,6 +1452,8 @@ describe('deviceInfo', () => {
 					AXValue: null,
 					traits: ['None'],
 					pid: 85092,
+					AXUniqueId: null,
+					enabled: true,
 				},
 			]),
 		});
@@ -2245,6 +2247,12 @@ describe('readScreen', () => {
 			id: '15',
 			label: 'Adres',
 			text: 'Szukaj lub podaj witrynę',
+			identifier: 'TabBarItemTitle',
+			checked: null,
+			selected: false,
+			enabled: true,
+			clickable: null,
+			focused: null,
 			bounds: {
 				x: 136.66666666666666,
 				y: 806,
@@ -2319,6 +2327,8 @@ describe('readScreen', () => {
 			AXValue: null,
 			traits: ['None'],
 			pid: 82023,
+			AXUniqueId: null,
+			enabled: true,
 		},
 	]);
 
@@ -2357,6 +2367,8 @@ describe('readScreen', () => {
 					AXValue: null,
 					traits: ['None'],
 					pid: 77965,
+					AXUniqueId: null,
+					enabled: true,
 				},
 			]),
 		});
@@ -2364,7 +2376,18 @@ describe('readScreen', () => {
 		const elements = await backend.readScreen(BOOTED);
 
 		expect(elements).toEqual([
-			{ id: '0', label: 'Ustawienia', text: null, bounds: { x: 0, y: 0, width: 402, height: 874 } },
+			{
+				id: '0',
+				label: 'Ustawienia',
+				text: null,
+				identifier: null,
+				checked: null,
+				selected: false,
+				enabled: true,
+				clickable: null,
+				focused: null,
+				bounds: { x: 0, y: 0, width: 402, height: 874 },
+			},
 		]);
 	});
 

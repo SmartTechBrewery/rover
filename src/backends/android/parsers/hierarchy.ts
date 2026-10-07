@@ -74,6 +74,11 @@ export type Rect = z.infer<typeof RectSchema>;
  * annotation below is what makes the recursion type-check, and this interface is what the
  * annotation needs. Keep the two in step by hand — there is no way around it until zod 4.
  *
+ * Every flag is `boolean | null`, and `null` is **the device did not write the attribute** —
+ * not answered, never a guessed `false` (#329, `ai/RULES.md` §2). Every node of the committed
+ * API 37 dump carries every flag, so this is not observed on a real read; it is what keeps an
+ * older API's thinner dump from reporting a control as disabled because it did not say.
+ *
  * Attributes outside this list (`hint`, `drawing-order`, and whatever a newer API adds) are
  * **dropped, not preserved**. They become visible when a fixture from a newer API level is
  * captured, which is the mechanism `ai/TESTING.md` already prescribes.
@@ -89,17 +94,17 @@ export interface UiNode {
 	packageName: string;
 	/** `content-desc` */
 	contentDesc: string;
-	checkable: boolean;
-	checked: boolean;
-	clickable: boolean;
-	enabled: boolean;
-	focusable: boolean;
-	focused: boolean;
-	scrollable: boolean;
+	checkable: boolean | null;
+	checked: boolean | null;
+	clickable: boolean | null;
+	enabled: boolean | null;
+	focusable: boolean | null;
+	focused: boolean | null;
+	scrollable: boolean | null;
 	/** `long-clickable` */
-	longClickable: boolean;
-	password: boolean;
-	selected: boolean;
+	longClickable: boolean | null;
+	password: boolean | null;
+	selected: boolean | null;
 	bounds: Rect;
 	children: UiNode[];
 }
@@ -113,16 +118,16 @@ export const UiNodeSchema: z.ZodType<UiNode> = z.lazy(() =>
 			className: z.string(),
 			packageName: z.string(),
 			contentDesc: z.string(),
-			checkable: z.boolean(),
-			checked: z.boolean(),
-			clickable: z.boolean(),
-			enabled: z.boolean(),
-			focusable: z.boolean(),
-			focused: z.boolean(),
-			scrollable: z.boolean(),
-			longClickable: z.boolean(),
-			password: z.boolean(),
-			selected: z.boolean(),
+			checkable: z.boolean().nullable(),
+			checked: z.boolean().nullable(),
+			clickable: z.boolean().nullable(),
+			enabled: z.boolean().nullable(),
+			focusable: z.boolean().nullable(),
+			focused: z.boolean().nullable(),
+			scrollable: z.boolean().nullable(),
+			longClickable: z.boolean().nullable(),
+			password: z.boolean().nullable(),
+			selected: z.boolean().nullable(),
 			bounds: RectSchema,
 			children: z.array(UiNodeSchema),
 		})
@@ -153,13 +158,20 @@ function attribute(node: RawNode, name: string): string | undefined {
 	return typeof value === 'string' ? value : undefined;
 }
 
-/** Absent attributes default rather than throwing — an older API simply has fewer of them. */
+/**
+ * Absent attributes default rather than throwing — an older API simply has fewer of them. A text
+ * attribute defaults to `''`, which already means *carries none*; a flag defaults to `null`
+ * ({@link flag}), because `false` would be an answer the device never gave. It read
+ * `=== 'true'` until #329, which turned every absent flag into a confident `false`.
+ */
 function text(node: RawNode, name: string): string {
 	return attribute(node, name) ?? '';
 }
 
-function flag(node: RawNode, name: string): boolean {
-	return attribute(node, name) === 'true';
+/** `null` when the device did not write the attribute — not answered, never a guessed `false`. */
+function flag(node: RawNode, name: string): boolean | null {
+	const value = attribute(node, name);
+	return value === undefined ? null : value === 'true';
 }
 
 /**

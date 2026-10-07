@@ -21,14 +21,14 @@
  *   both shapes anyway. Nothing in this backend needs the provenance, and reading two shapes to
  *   get one list is a cost with nothing on the other side of it.
  *
- * **Five keys are projected out of sixteen, and the frame is the numeric one.** It said *four*
- * until #336, and the sentence is edited in place rather than left to be out-counted (the two
- * paragraphs below say which keys moved and why). Each node in the capture carries `frame` (four numbers) *and* `AXFrame` (the same rectangle as
+ * **Seven keys are projected out of sixteen, and the frame is the numeric one.** It said *four*
+ * until #336 and *five* until #329, and the sentence is edited in place rather than left to be
+ * out-counted (the three paragraphs below say which keys moved and why). Each node in the capture carries `frame` (four numbers) *and* `AXFrame` (the same rectangle as
  * `{{x, y}, {w, h}}`, printed at full double precision); the numbers are taken, because parsing
  * Apple's rectangle spelling back into numbers is work the tool has already done. `role`,
- * `subrole`, `enabled` and the rest are real and are deliberately unread — `ScreenElement` has no
- * field for any of them (`src/core/device.ts`), and projecting a value nothing consumes is a
- * claim about a key this backend does not check.
+ * `subrole` and the rest are real and are deliberately unread — `ScreenElement` has no field for
+ * any of them (`src/core/device.ts`), and projecting a value nothing consumes is a claim about a
+ * key this backend does not check.
  *
  * **`traits` was one of those five and is the one that moved** (#298; this paragraph is edited in
  * place with its reasoning rewritten rather than deleted, `ai/RULES.md` §1). It is read now
@@ -46,6 +46,13 @@
  * same pid — Settings 99145 and 16162, Safari 17263 and the Compose app 14900 across the five
  * captures — and `launchctl list` inside the device names the application running under it. That
  * feeds `DeviceInfo.foregroundApp` (`../backend.ts`'s `#foregroundAppOf`), not `ScreenElement`.
+ *
+ * **`AXUniqueId` and `enabled` moved third** (#329; beside the two above, not replacing them).
+ * `ScreenElement` gained a field for each — the developer-assigned `identifier` and the
+ * `enabled` state — so they stopped being values nothing consumes. `AXUniqueId` still is **not**
+ * the element id, for the reason `../screen.ts`' `toScreenElements` gives (it repeats within one
+ * read). `traits` gains two more readers in the same change: {@link SELECTED_TRAIT} and
+ * {@link TOGGLE_TRAIT} answer `ScreenElement.selected` and `checked`.
  *
  * **`traits` is required but nullable, and the nullability was measured the hard way.** It is on
  * all 50 nodes across the three captures that predate #298 and on all 52 across the pair that
@@ -120,6 +127,23 @@ export const KEYBOARD_KEY_TRAIT = 'KeyboardKey';
 export const KEYBOARD_CANDIDATE_TRAIT = 'AutoCorrectCandidate';
 
 /**
+ * The trait a selected tab, segment or key carries — `ScreenElement.selected`.
+ *
+ * Measured on the committed captures: the selected `Assistant` tab of the Compose capture carries
+ * it and its eight sibling tabs do not; `shift` carries it in the keyboard capture.
+ */
+export const SELECTED_TRAIT = 'Selected';
+
+/**
+ * The trait a switch or checkbox carries — the one node kind whose `AXValue` is its checked state.
+ *
+ * Measured on the Settings > Camera capture: its four `AXCheckBox` rows carry it, with `AXValue`
+ * `'0'`/`'0'`/`'0'`/`'1'`, and no other node of any capture does. `../screen.ts` answers
+ * `ScreenElement.checked` only for a node that claims it, for the rule that field states.
+ */
+export const TOGGLE_TRAIT = 'Toggle';
+
+/**
  * One node's rectangle, in **points**.
  *
  * The same space `ScreenInfo.widthDp`/`heightDp` are in, which is why `../screen.js` converts
@@ -158,6 +182,10 @@ export type AccessibilityFrame = z.infer<typeof AccessibilityFrameSchema>;
  * **`traits` is the fourth, and it is the keyboard's** — see the module header for why it is the
  * one of the five unprojected keys that moved, and {@link KEYBOARD_KEY_TRAIT} for what is in it.
  * **`pid` is the fifth, and it is the foreground app's** (#336) — the header says why it moved too.
+ * **`AXUniqueId` and `enabled` are the sixth and seventh** (#329), and both are required and
+ * nullable on `pid`'s terms: all 132 nodes across the seven committed captures carry both keys, so
+ * a release that dropped one is a re-capture that should fail by the key's name, while a `null`
+ * value costs only that field, never the read.
  */
 export const AccessibilityElementSchema = z.object({
 	frame: AccessibilityFrameSchema,
@@ -204,6 +232,14 @@ export const AccessibilityElementSchema = z.object({
 	 * for.
 	 */
 	pid: z.number().int().nullable(),
+	/**
+	 * The identifier the application's developer assigned — `'TabBarItemTitle'` on Safari's address
+	 * field, `null` on every node of the Compose capture. Repeats within one read (Safari's three
+	 * favourites tiles share `favoritesItemIdentifierContent`), which is why it is never the id.
+	 */
+	AXUniqueId: z.string().nullable(),
+	/** `false` on Safari's greyed-out `Wróć` button and on the keyboard capture's `szukaj` key. */
+	enabled: z.boolean().nullable(),
 });
 export type AccessibilityElement = z.infer<typeof AccessibilityElementSchema>;
 

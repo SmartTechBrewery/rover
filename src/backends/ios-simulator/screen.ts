@@ -48,6 +48,8 @@ import {
 	type AccessibilityRead,
 	KEYBOARD_CANDIDATE_TRAIT,
 	KEYBOARD_KEY_TRAIT,
+	SELECTED_TRAIT,
+	TOGGLE_TRAIT,
 } from './parsers/accessibility.js';
 import type { DeviceTypeProfile } from './parsers/device-type-profile.js';
 
@@ -196,6 +198,10 @@ function content(value: string | null): string | null {
  *   contradicting itself (`src/verbs/errors.ts`), so an id taken from that field would make
  *   Safari's start page unaddressable.
  *
+ * That conclusion stands, and it is exactly why the field is carried as **`identifier`** and not
+ * as `id` (#329): a caller can still address an element by it, and an identifier target that
+ * matches all three tiles is the ordinary ambiguous-target refusal rather than a backend bug.
+ *
  * A **flat** ordinal rather than `../android/screen.ts`' child-ordinal path, because this read
  * answers a flat list where uiautomator answers a tree. It carries that module's caveat
  * unchanged and the caveat is the honest claim rather than a footnote: **the id is stable only
@@ -210,6 +216,15 @@ function content(value: string | null): string | null {
  * because `ScreenElement`'s two fields are nullable precisely so "carries neither" is
  * representable, and `''` would match a substring target for `''`.
  *
+ * **The state is what `LEGACY` carries and `null` for what it does not** (#329). `enabled` is the
+ * node's own key. `selected` is whether it claims {@link SELECTED_TRAIT}, and `null` where
+ * `traits` itself is `null` — {@link claims} reads that as *claims nothing*, which is right for
+ * the keyboard and would be a guessed `false` here. `checked` is answered only for a node that
+ * claims {@link TOGGLE_TRAIT}, from its `AXValue` (`'1'`/`'0'`), and is `null` on anything else;
+ * the raw value still reaches `text` unchanged. **`clickable` and `focused` are `null` on every
+ * element because this payload carries neither**: the `Button` trait names a role rather than
+ * whether the node takes a touch, so reading it as clickable would be a guess.
+ *
  * **Every node, in the order the tool listed them, unfiltered.** Deciding which nodes are
  * interesting is a policy the verb layer already applies by matching on text, and a container
  * with no text of its own is exactly what `ScrollOptions.target` addresses — the argument is
@@ -223,9 +238,25 @@ export function toScreenElements(read: AccessibilityRead): ScreenElement[] {
 			id: parseElementId(String(ordinal)),
 			text: content(element.AXValue),
 			label: content(element.AXLabel),
+			identifier: content(element.AXUniqueId),
+			checked: claims(element.traits, TOGGLE_TRAIT) ? toggleState(element.AXValue) : null,
+			selected: element.traits === null ? null : claims(element.traits, SELECTED_TRAIT),
+			enabled: element.enabled,
+			clickable: null,
+			focused: null,
 			bounds: { x, y, width, height },
 		};
 	});
+}
+
+/**
+ * A toggle's `AXValue` as its checked state — `'1'` on, `'0'` off, and `null` for anything else,
+ * because a value this backend has not measured is not answered rather than guessed.
+ */
+function toggleState(value: string | null): boolean | null {
+	if (value === '1') return true;
+	if (value === '0') return false;
+	return null;
 }
 
 /**

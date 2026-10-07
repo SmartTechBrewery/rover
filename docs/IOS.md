@@ -379,7 +379,9 @@ contradicting itself (`src/verbs/errors.ts`), so using it would make Safari's st
 unaddressable. The conclusion is unchanged and the reason for it is now stronger: the synthesised
 flat ordinal is the only truthful id available. Both reads are committed —
 `tests/fixtures/ios-simulator/accessibility.compose…json` and `…accessibility.uikit-textfield…json`
-— so this is checkable rather than remembered.
+— so this is checkable rather than remembered. Since #329 the field is carried as
+`ScreenElement.identifier` — still not as the id, and that conclusion stands — so an agent can aim
+at a control by it, and three favourites tiles sharing one is the ordinary ambiguous-target refusal.
 
 ### What #300 measured: the screen read in the first moments of a cold launch
 

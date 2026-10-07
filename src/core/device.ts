@@ -300,13 +300,59 @@ export type DeviceInfo = z.infer<typeof DeviceInfoSchema>;
  * `text` and `label` are separate because the string a user sees and the string an
  * accessibility tree exposes are frequently different, and a verb that conflates them
  * taps the wrong thing. Both are nullable: plenty of elements carry neither.
+ *
+ * **`identifier` is what the application's developer named the control** — a resource id on
+ * one platform, an accessibility identifier on another (`PROJECT.md` §4, #329). It is the way to
+ * find a control that carries no text at all: a textless checkbox that had to be ticked before
+ * further buttons appeared was invisible to an agent until this field existed. It is **not
+ * unique and not the element `id`**: one read carries the same identifier on many rows (a list's
+ * title views, three favourites tiles), which is why the `id` stays the backend's ordinal and why
+ * an identifier target that matches two elements is refused as ambiguous rather than picked.
+ * `null` means the device named none for this element.
+ *
+ * **The five state fields — `checked`, `selected`, `enabled`, `clickable`, `focused` — are
+ * `null` when *not answered*, never a guessed `false`**, the same rule `ScreenInfo.keyboard` and
+ * `DeviceInfo.foregroundApp` keep (`ai/RULES.md` §2, D11). A backend that cannot read one of
+ * them for its device answers `null` for it, and no consumer branches on the platform to find
+ * out which fields a device answers. Required rather than optional, for the reason
+ * `ActionResult.artifact` gives: `undefined` does not survive JSON.
+ *
+ * - **`checked` is answered only for an element the device says can be checked or toggled**,
+ *   and is `null` on everything else. That rule is the backend's, stated here so every backend
+ *   keeps it: one platform writes `checked="false"` on every node, layouts included, and passing
+ *   that through would claim every container on the screen is an unticked box.
+ * - **`focused` is how a caller learns which field took a `type_text`**, which is why that verb
+ *   still takes no target.
  */
-export const ScreenElementSchema = z.object({
+const screenElementShape = {
 	id: ElementIdSchema,
 	text: z.string().nullable(),
 	label: z.string().nullable(),
+	/** The developer-assigned identifier — not unique, not the `id`; `null` when none was named. */
+	identifier: z.string().nullable(),
+	/** Ticked or toggled on; `null` on anything that cannot be, or where the device did not say. */
+	checked: z.boolean().nullable(),
+	/** The selected tab, row or segment; `null` where the device did not say. */
+	selected: z.boolean().nullable(),
+	/** Whether the control accepts input; `null` where the device did not say. */
+	enabled: z.boolean().nullable(),
+	/** Whether the device says it reacts to a tap; `null` where the device did not say. */
+	clickable: z.boolean().nullable(),
+	/** Whether it holds input focus — the field a `type_text` lands in; `null` where unsaid. */
+	focused: z.boolean().nullable(),
 	bounds: RectSchema,
-});
+};
+
+/**
+ * The schema's type under a name, so declaration emit can refer to it rather than spell it out.
+ *
+ * Every verb result, failure branch and IPC row embeds this schema, and with the element's ten
+ * fields (#329) the inlined copies pushed `IPC_METHODS` past the size the compiler will serialize
+ * (TS7056). An interface is printed by name; the type is exactly what `z.object` returns.
+ */
+export interface ScreenElementSchemaType extends z.ZodObject<typeof screenElementShape> {}
+
+export const ScreenElementSchema: ScreenElementSchemaType = z.object(screenElementShape);
 export type ScreenElement = z.infer<typeof ScreenElementSchema>;
 
 /**
