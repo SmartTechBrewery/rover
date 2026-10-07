@@ -1,6 +1,6 @@
 /**
- * What every tool declaration on this server says about itself beyond its own subject — today,
- * one sentence about how its arguments are spelled.
+ * What every tool declaration on this server says about itself beyond its own subject — one
+ * sentence about how its arguments are spelled, and two more on the rows they apply to.
  *
  * **The tool names are `snake_case` and the arguments are `camelCase`, and that stays** (D26).
  * The `IPC_METHODS` params schema *is* the declaration (ai/CODING_STANDARDS.md, boundary #1):
@@ -19,8 +19,10 @@
  * sees the spelling in the properties either way.
  *
  * The same function carries a second note, on the tools that take `after` only — what the
- * compact after-state leaves out and how to ask for the rest — for the same reason: it is said
- * where the declaration is built, so no row can forget it.
+ * compact after-state leaves out and how to ask for the rest — and a third, on the tools that
+ * take `leaseId` only — that any call renews the lease and every verb answer says how long it has
+ * left (#335). Both for the same reason: they are said where the declaration is built, so no row
+ * can forget them.
  *
  * {@link declaring} is what makes "every tool" structural rather than remembered — the three
  * registrars hand their declaration through it, so a tool added later cannot land without the
@@ -60,9 +62,30 @@ export const COMPACT_AFTER_NOTE =
 	'mid-transition — and `null` when this verb did not wait for the screen to stop, which is ' +
 	'not a claim that it was moving. `scroll` and `swipe` are the two that wait.';
 
+/**
+ * The sentence appended to every tool whose input schema declares `leaseId` — every verb tool,
+ * plus `release_device` (#335).
+ *
+ * Keyed on the schema rather than on a list of tool names, for {@link COMPACT_AFTER_NOTE}'s
+ * reason: it cannot drift from the wire. It says what is true of every *verb* answer, which is
+ * why it is also harmless on `release_device` — the one other row that carries a lease id, and
+ * the row whose reader most needs to know that nothing else was keeping the lease alive for them.
+ */
+export const LEASE_EXPIRY_NOTE =
+	'Any call you make on a lease renews it — there is no heartbeat to send and no renew tool to ' +
+	'call — and every verb answer carries `expiresInMs`: how long the lease has left once this ' +
+	'call has renewed it, measured on the host. Read it rather than assuming: an expiry you can ' +
+	'see coming is one call away from being pushed out, while one you walk into is a `no-lease` ' +
+	'refusal on a device the host has already restored and may have handed on.';
+
 /** Whether a declared input schema carries the `after` option. */
 function declaresAfter(schema: unknown): boolean {
 	return schema instanceof ZodObject && 'after' in schema.shape;
+}
+
+/** Whether a declared input schema carries the lease id. */
+function declaresLeaseId(schema: unknown): boolean {
+	return schema instanceof ZodObject && 'leaseId' in schema.shape;
 }
 
 /** A tool declaration, whatever schema type it carries. Generic so the SDK still infers it. */
@@ -74,14 +97,17 @@ interface ToolDeclaration<Schema> {
 
 /**
  * One declaration, with {@link ARGUMENT_CASING_NOTE} on the end of its description — and,
- * before it, {@link COMPACT_AFTER_NOTE} when the schema takes `after`.
+ * before it, {@link COMPACT_AFTER_NOTE} when the schema takes `after` and
+ * {@link LEASE_EXPIRY_NOTE} when it takes `leaseId`, in that order.
  *
  * Generic in the schema and nothing else, so `registerTool` infers the handler's argument type
  * from `inputSchema` exactly as it does when the object is written inline.
  */
 export function declaring<Schema>(declaration: ToolDeclaration<Schema>): ToolDeclaration<Schema> {
-	const notes = declaresAfter(declaration.inputSchema)
-		? `${COMPACT_AFTER_NOTE} ${ARGUMENT_CASING_NOTE}`
-		: ARGUMENT_CASING_NOTE;
-	return { ...declaration, description: `${declaration.description} ${notes}` };
+	const notes = [
+		...(declaresAfter(declaration.inputSchema) ? [COMPACT_AFTER_NOTE] : []),
+		...(declaresLeaseId(declaration.inputSchema) ? [LEASE_EXPIRY_NOTE] : []),
+		ARGUMENT_CASING_NOTE,
+	];
+	return { ...declaration, description: `${declaration.description} ${notes.join(' ')}` };
 }

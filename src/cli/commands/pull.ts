@@ -15,9 +15,15 @@
  * A file too large for one answer, or one that did not survive the trip, exits 1 and leaves
  * no file at `--out` at all: the write is the last thing `deliverArtifact` does and only on
  * the `ok` branch.
+ *
+ * **`--app` turns the positional into a path inside that application's own data container**
+ * and the request into `pull_app_file` (#334) — the same answer, the same write, a different
+ * address. The app id is parsed here the way the lease id is; the path goes on the wire as
+ * typed and `ContainerPathSchema` checks it on the host, as `DevicePathSchema` does without
+ * `--app`.
  */
 
-import { parseLeaseId } from '../../core/ids.js';
+import { parseAppId, parseLeaseId } from '../../core/ids.js';
 import { deliverArtifact, resolveDestination } from '../_shared/artifact.js';
 import {
 	expectPositionals,
@@ -31,9 +37,16 @@ import * as out from '../_shared/output.js';
 export const USAGE = `rover pull — read a file off the device onto this machine
 
 Usage: rover pull <lease-id> <device-path> --out <path> [--host <name>] [--json]
+       rover pull <lease-id> <container-path> --app <app-id> --out <path> [--host <name>] [--json]
 
   <device-path>  The file to read, on the device. Absolute, and naming a file rather than
                  a directory — a pull is one whole file, never a recursive copy.
+  --app          Read from this application's own data container instead — its databases,
+                 shared preferences and files, which a device path does not reach. The
+                 positional is then relative to that container (databases/app.db): no
+                 leading /, no '..'. A device opens only the builds its platform allows
+                 (a debuggable build, where that is the rule); any other is refused by
+                 name, never read as an empty file.
   --out          Where to write those bytes, on the machine running this command.
                  Required, for the reason \`screenshot --out\` is: the read happens on the
                  host and the file comes back as bytes, so the destination is this
@@ -48,11 +61,16 @@ A pull answers with the bytes of one regular file. A directory, a character devi
 other special file on the device is refused before the transfer starts rather than bounded
 afterwards: asking how big a directory is answers for the directory itself, whatever the tree
 under it holds, and a character device answers zero and then reads without end — so the size
-bound would not hold on either.`;
+bound would not hold on either.
+
+A SQLite database in WAL mode is consistent only together with its -wal file, and each pull
+is one file at its own moment. Stop the app first, then pull the database and its -wal
+(and -shm) to the same directory.`;
 
 const OPTIONS = {
 	...GLOBAL_OPTIONS,
 	out: { type: 'string' },
+	app: { type: 'string' },
 } as const;
 
 export async function run(argv: string[]): Promise<number> {
@@ -61,9 +79,9 @@ export async function run(argv: string[]): Promise<number> {
 		out.info(USAGE);
 		return 0;
 	}
-	const [leaseId, devicePath] = expectPositionals('pull', positionals, [
+	const [leaseId, path] = expectPositionals('pull', positionals, [
 		'<lease-id>',
-		'<device-path>',
+		values.app === undefined ? '<device-path>' : '<container-path>',
 	]);
 	// Resolved before the connection, so a typo'd destination costs nothing — the same
 	// ordering `screenshot` keeps, and here the transfer it would waste is the device's file.
@@ -76,17 +94,24 @@ export async function run(argv: string[]): Promise<number> {
 			'the file is written on this machine and there is no default name for it',
 		),
 	);
+	// Parsed before the connection too, so a malformed id is refused without reaching a host.
+	const appId = values.app === undefined ? undefined : parseAppId(values.app);
 	const host = resolveHost(values.host);
 
 	const client = await connectToHost(host);
 	try {
-		const answer = await client.request('pull_file', {
-			leaseId: parseLeaseId(leaseId ?? ''),
-			devicePath: devicePath ?? '',
-		});
+		const lease = parseLeaseId(leaseId ?? '');
+		const answer =
+			appId === undefined
+				? await client.request('pull_file', { leaseId: lease, devicePath: path ?? '' })
+				: await client.request('pull_app_file', {
+						leaseId: lease,
+						appId,
+						containerPath: path ?? '',
+					});
 		return await deliverArtifact({
 			host,
-			verb: 'pull_file',
+			verb: appId === undefined ? 'pull_file' : 'pull_app_file',
 			answer,
 			destination,
 			json: values.json === true,

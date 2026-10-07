@@ -1021,6 +1021,32 @@ export interface DeviceBackend {
 	hideKeyboard?(serial: DeviceSerial): Promise<void>;
 
 	/**
+	 * Read one file out of **an application's own data container** and answer with its bytes.
+	 * Gated by `canPullAppFile` (#334).
+	 *
+	 * {@link pullFile}'s contract in every respect but the address: bytes and never a path on
+	 * this host (D19), one *regular file* only, `options.maxBytes` enforced before the bytes are
+	 * buffered (`FileTooLargeError`), and a throw — never an empty array — for a file that is not
+	 * there.
+	 *
+	 * `containerPath` is **relative** to that app's data container and was checked as a shape at
+	 * the boundary (`ContainerPathSchema`, `src/ipc/verb-methods.ts`): no leading `/`, no `..`
+	 * segment, so it cannot name anything outside the container lexically. It is still the
+	 * caller's data, so a backend that hands it to a shell quotes it as text.
+	 *
+	 * **"This app's data cannot be reached" is `AppDataUnreachableError`**, carrying the
+	 * backend's own words for why — a build the platform will not open, a package that is not
+	 * installed. It is not `MissingCapabilityError`: the device can do this, just not for this
+	 * app, and the way out is a different build rather than a different device.
+	 */
+	pullAppFile?(
+		serial: DeviceSerial,
+		appId: AppId,
+		containerPath: string,
+		options: PullFileOptions,
+	): Promise<Uint8Array>;
+
+	/**
 	 * Gated by `canControlNetwork`. Together with {@link setWifiEnabled} this is the
 	 * "environment" half of the device abstraction, and what the daemon restores on
 	 * release and on expiry (D9).

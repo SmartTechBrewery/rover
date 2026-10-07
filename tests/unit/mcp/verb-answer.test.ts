@@ -37,7 +37,11 @@ function textOf(result: { content: Array<{ type: string; text?: string }> }): st
 
 describe('an answer that carries a result', () => {
 	it('travels whole, as the host wrote it, in both halves of the tool result', () => {
-		const answer = { outcome: 'ok', result: anActionResult('tap') } as const;
+		const answer = {
+			outcome: 'ok',
+			result: anActionResult('tap'),
+			expiresInMs: 1_200_000,
+		} as const;
 
 		const mapped = verbToolResult(answer);
 
@@ -49,6 +53,8 @@ describe('an answer that carries a result', () => {
 		expect(JSON.parse(textOf(mapped))).toMatchObject({
 			outcome: 'ok',
 			result: { verb: 'tap', device: { serial: SERIAL } },
+			// How long the lease has left reaches the agent untouched (#335).
+			expiresInMs: 1_200_000,
 		});
 	});
 
@@ -57,6 +63,7 @@ describe('an answer that carries a result', () => {
 		const answer = {
 			outcome: 'ok',
 			result: ReadLogsResultSchema.parse({ ...anActionResult('read_logs'), logs }),
+			expiresInMs: 1_200_000,
 		} as const;
 
 		const mapped = verbToolResult(answer);
@@ -78,7 +85,7 @@ describe('an answer that carries no result', () => {
 			message: "Device 'attached-1' cannot do 'canReadScreen'",
 		} as const;
 
-		const mapped = verbToolResult({ outcome: 'failed', failure });
+		const mapped = verbToolResult({ outcome: 'failed', failure, expiresInMs: 1_200_000 });
 
 		expect(mapped.isError).toBe(true);
 		// The message first, so the reason is the first thing read; the structured failure

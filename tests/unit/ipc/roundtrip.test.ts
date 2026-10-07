@@ -98,6 +98,7 @@ function statusHandlers(overrides: Partial<IpcHandlers> = {}): IpcHandlers {
 		install_app: () => refusedWithoutAHost(),
 		push_file: () => refusedWithoutAHost(),
 		pull_file: () => refusedWithoutAHost(),
+		pull_app_file: () => refusedWithoutAHost(),
 		record_video: () => refusedWithoutAHost(),
 		start_recording: () => refusedWithoutAHost(),
 		stop_recording: () => refusedWithoutAHost(),
@@ -213,6 +214,7 @@ describe('request/response over a duplex pair', () => {
 						// has to notice is missing.
 						artifact: null,
 					},
+					expiresInMs: 1_200_000,
 				}),
 			}),
 		);
@@ -227,6 +229,7 @@ describe('request/response over a duplex pair', () => {
 		).resolves.toMatchObject({
 			outcome: 'ok',
 			result: { verb: 'wait_for', after: { kind: 'screen' } },
+			expiresInMs: 1_200_000,
 		});
 	});
 
@@ -243,6 +246,7 @@ describe('request/response over a duplex pair', () => {
 						polls: 21,
 						message: 'Timed out after 5000ms',
 					},
+					expiresInMs: 1_200_000,
 				}),
 			}),
 		);

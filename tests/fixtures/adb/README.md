@@ -70,6 +70,11 @@ reports itself as **v1.4**. The two `getprop-version` rows are **2026-08-31**, o
 | `stat.directory.api37-sdk-gphone16k-arm64.txt` | the same for a path created with `mkdir` | sdk_gphone16k_arm64 | 37 | 2026-08-30 |
 | `stat.missing.api37-sdk-gphone16k-arm64.txt` | the same for a path no device has | sdk_gphone16k_arm64 | 37 | 2026-08-30 |
 | `stat.character-device.api37-sdk-gphone16k-arm64.txt` | the same for `/dev/urandom` | sdk_gphone16k_arm64 | 37 | 2026-08-30 |
+| `run-as-stat.file.api37-sdk-gphone16k-arm64.txt` | `adb -s $SERIAL shell run-as com.rover.debugprobe stat -L -c "'%s %F'" databases/app.db` (stdout) | sdk_gphone16k_arm64 | 37 | 2026-10-07 |
+| `run-as.not-debuggable.stderr.api37-sdk-gphone16k-arm64.txt` | `adb -s $SERIAL shell run-as com.rover.releaseprobe stat -L -c "'%s %F'" x 2> f`, exit 1 | sdk_gphone16k_arm64 | 37 | 2026-10-07 |
+| `run-as.unknown-package.stderr.api37-sdk-gphone16k-arm64.txt` | the same for `com.rover.no.such.pkg`, exit 1 | sdk_gphone16k_arm64 | 37 | 2026-10-07 |
+| `run-as.not-an-application.stderr.api37-sdk-gphone16k-arm64.txt` | the same for `com.android.settings`, exit 1 | sdk_gphone16k_arm64 | 37 | 2026-10-07 |
+| `run-as-cat.missing.api37-sdk-gphone16k-arm64.txt` | `adb -s $SERIAL exec-out run-as com.rover.debugprobe cat databases/missing > f`, exit **0** | sdk_gphone16k_arm64 | 37 | 2026-10-07 |
 | `screenrecord.unwritable-path.api37-sdk-gphone16k-arm64.txt` | `adb -s $SERIAL shell screenrecord --bit-rate 2000000 --time-limit 1 /data/nope/rover-recording.mp4 > f 2>&1` | sdk_gphone16k_arm64 | 37 | 2026-08-30 |
 | `screenrecord-pidof.running.api37-sdk-gphone16k-arm64.txt` | `adb -s $SERIAL shell 'sleep 3; pidof screenrecord' > f 2>&1`, run beside a `screenrecord --time-limit 8` | sdk_gphone16k_arm64 | 37 | 2026-08-30 |
 | `screenrecord.finished.api37-sdk-gphone16k-arm64.mp4` | `adb -s $SERIAL shell screenrecord --bit-rate 2000000 --time-limit 3 /sdcard/rover-recording.mp4`, then `adb -s $SERIAL exec-out cat /sdcard/rover-recording.mp4` | sdk_gphone16k_arm64 | 37 | 2026-08-30 |
@@ -337,6 +342,16 @@ a device that is not usable is listed with a null version without any process be
     `33 symbolic link`. `push` and `pull` both follow the link, so the probe must too.
   - The four parsed captures are stdout with an empty stderr; all five were taken with `> f 2>&1`
     for the app-control fixtures' reason, and the merge is only visible in the missing one.
+- **The five `run-as` captures are what `pull_app_file` asks before it reads an app's data**
+  (#334), taken on `adb` 37.0.1-15733141 against the same Android 17 emulator, a `user` build. The
+  two `com.rover.*probe` packages were built for the run — an APK with no code, one
+  `android:debuggable="true"` and one `false` — and uninstalled afterwards; `com.rover.no.such.pkg`
+  was never installed. **The three refusals are stderr over `shell`, at exit 1**, which is the
+  probe's whole reason to go over `shell`: the `exec-out` capture is the same kind of failure
+  arriving on **stdout at exit 0**, as the bytes of the file it could not read. Settings is
+  `package not an application` rather than `not debuggable` on this image, because it runs as a
+  system user — so it is no stand-in for a release build. `run-as-stat.file` is the existing
+  `stat` shape read inside the container, captured to pin that `run-as` adds nothing to stdout.
 - **`adb push` has no fixture, and could not usefully have one.** Its success line names the
   **host** path it read (`/tmp/probe/payload: 1 file pushed, 0 skipped…`), never the remote path it
   resolved — including when the remote path was a directory and the file landed *inside* it. So

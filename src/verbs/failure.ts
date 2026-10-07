@@ -35,6 +35,7 @@ import {
 	ScreenElementSchema,
 } from '../core/device.js';
 import {
+	AppDataUnreachableError,
 	LogFilterRefusedError,
 	MissingCapabilityError,
 	NoRecordingRunningError,
@@ -46,7 +47,7 @@ import {
 	UnsupportedTextError,
 	WaitTimeoutError,
 } from '../core/errors.js';
-import { DeviceSerialSchema, PlatformIdSchema } from '../core/ids.js';
+import { AppIdSchema, DeviceSerialSchema, PlatformIdSchema } from '../core/ids.js';
 import {
 	AmbiguousTargetError,
 	AppNotInForegroundError,
@@ -268,6 +269,24 @@ export const VerbFailureSchema = z.discriminatedUnion('kind', [
 		.object({
 			kind: z.literal('unsupported-clear'),
 			serial: DeviceSerialSchema,
+			message: z.string().min(1),
+		})
+		.strict(),
+	/**
+	 * The device can read an application's data container, and cannot reach **this** app's
+	 * (#334) — a build the platform will not open for reading, or a package that is not
+	 * installed.
+	 *
+	 * Kept apart from `missing-capability` for `unsupported-key`'s reason: the device declares
+	 * `canPullAppFile`, so the way out is a different build of the app (a debuggable one, on the
+	 * platform where that is the rule), never a different device. `appId` names which app, and the
+	 * backend's own reason is inside `message`. Nothing was read, so no bytes and no path travel.
+	 */
+	z
+		.object({
+			kind: z.literal('app-data-unreachable'),
+			serial: DeviceSerialSchema,
+			appId: AppIdSchema,
 			message: z.string().min(1),
 		})
 		.strict(),
@@ -764,14 +783,16 @@ function screenAddressFailure(error: unknown): VerbFailure | null {
 }
 
 /**
- * The three failures where the device *can* do the thing and not with **this argument**, split
- * out of {@link toVerbFailure} for {@link hostToolFailure}'s reason.
+ * The failures where the device *can* do the thing and not with **this argument**, split out of
+ * {@link toVerbFailure} for {@link hostToolFailure}'s reason.
  *
  * They belong together on their own terms: none is a `missing-capability` (D11). The first
- * three come from a backend that declares `canInput` and does take input; the last comes from
- * one that reads its log like every backend does. They say, respectively, send a different
- * string, ask for a different key, clear the field another way, or read without that filter.
- * Each names the offending argument because that is the only thing a caller can act on.
+ * three come from a backend that declares `canInput` and does take input; the fourth comes from
+ * one that reads its log like every backend does; the last from one that declares
+ * `canPullAppFile` and cannot open this app's data. They say, respectively, send a different
+ * string, ask for a different key, clear the field another way, read without that filter, or
+ * install a build the platform will open. Each names the offending argument because that is the
+ * only thing a caller can act on.
  *
  * Returns `null` for anything else, so the caller carries on down its own list.
  */
@@ -804,6 +825,14 @@ function unsupportedArgumentFailure(error: unknown): VerbFailure | null {
 			kind: 'log-filter-refused',
 			serial: error.serial,
 			filter: error.filter,
+			message: error.message,
+		};
+	}
+	if (error instanceof AppDataUnreachableError) {
+		return {
+			kind: 'app-data-unreachable',
+			serial: error.serial,
+			appId: error.appId,
 			message: error.message,
 		};
 	}

@@ -109,6 +109,7 @@ import type {
 	IpcHandlers,
 	LongPressParams,
 	PressKeyParams,
+	PullAppFileParams,
 	PullFileParams,
 	PushFileParams,
 	ReadLogsCallResult,
@@ -133,7 +134,7 @@ import { clearAppData, launchApp, stopApp } from '../verbs/app.js';
 import type { VerbContext } from '../verbs/context.js';
 import { setAirplaneMode, setWifi } from '../verbs/environment.js';
 import { toVerbFailure } from '../verbs/failure.js';
-import { installApp, installProjectApp, pullFile, pushFile } from '../verbs/files.js';
+import { installApp, installProjectApp, pullAppFile, pullFile, pushFile } from '../verbs/files.js';
 import {
 	type ForegroundExpectation,
 	type GestureOptions,
@@ -186,6 +187,7 @@ export type VerbHandlers = Pick<
 	| 'install_app'
 	| 'push_file'
 	| 'pull_file'
+	| 'pull_app_file'
 	| 'record_video'
 	| 'start_recording'
 	| 'stop_recording'
@@ -234,12 +236,24 @@ async function withPayloadOnDisk<Result>(
 }
 
 /**
+ * An answer before the lease's remaining time is put on it — what everything inside
+ * {@link createVerbHandlers}' `runVerb` builds, so that `runVerb` is the one place the field is
+ * set and no branch can carry a number taken anywhere else (#335).
+ *
+ * Distributive, so each branch of the union loses the key on its own and `outcome` still
+ * narrows.
+ */
+type Unmeasured<Answer> = Answer extends unknown ? Omit<Answer, 'expiresInMs'> : never;
+
+/**
  * What the preamble reached: a verb that can run, or the answer the call already has.
  *
  * Two shapes rather than a nullable context, so a refusal cannot be mistaken for "nothing
  * went wrong" by whoever reads it next.
  */
-type Prepared = { readonly context: VerbContext } | { readonly refusal: VerbCallRefusal };
+type Prepared =
+	| { readonly context: VerbContext }
+	| { readonly refusal: Unmeasured<VerbCallRefusal> };
 
 /** What {@link createVerbHandlers}' preamble reads off every call: the credential and `after`. */
 interface VerbCallParams {
@@ -289,17 +303,22 @@ export function createVerbHandlers(
 		// answer it: it is knowable from the lease already resolved above, and refusing it early
 		// costs the caller nothing beyond the round trip they had already spent.
 		if (label !== undefined && lease.groupId === undefined) {
-			return Promise.resolve({
-				outcome: 'refused',
-				reason: 'label-without-group',
-				message:
-					`This call carries a 'label' but its lease has no 'groupId', and a label only means ` +
-					`something inside a group: it says this artifact and one from another run are the ` +
-					`same thing at two moments, and there is no other run here to compare it against. ` +
-					`Acquire the device with a 'groupId': the host mints the id it files and answers ` +
-					`with it, and every further run of the comparison passes that exact id back. Or ` +
-					`leave the 'label' off this call. Nothing was recorded.`,
-			});
+			return Promise.resolve(
+				withLeaseRemaining<Result>(
+					{
+						outcome: 'refused',
+						reason: 'label-without-group',
+						message:
+							`This call carries a 'label' but its lease has no 'groupId', and a label only means ` +
+							`something inside a group: it says this artifact and one from another run are the ` +
+							`same thing at two moments, and there is no other run here to compare it against. ` +
+							`Acquire the device with a 'groupId': the host mints the id it files and answers ` +
+							`with it, and every further run of the comparison passes that exact id back. Or ` +
+							`leave the 'label' off this call. Nothing was recorded.`,
+					},
+					lease,
+				),
+			);
 		}
 
 		// Registered before the re-verification, because that is an await like any other: a call
@@ -308,7 +327,7 @@ export function createVerbHandlers(
 		return traffic.run<VerbCallResultOf<Result>>(lease, async (call) => {
 			const prepared = await prepare(lease, call, params.after);
 			if ('refusal' in prepared) {
-				return prepared.refusal;
+				return withLeaseRemaining(prepared.refusal, lease);
 			}
 			const answered = await answer(prepared.context, lease, call, run);
 			if (answered.outcome === 'ok') {
@@ -320,8 +339,32 @@ export function createVerbHandlers(
 				// was never told exists (D19).
 				await archive.record(lease, answered.result, label);
 			}
-			return answered;
+			return withLeaseRemaining(answered, lease);
 		});
+	}
+
+	/**
+	 * The lease's remaining time put on the answer about to leave (#335) — the one place a verb
+	 * answer learns it, so no row and no refusal branch can forget.
+	 *
+	 * Measured here rather than next to `leases.use()` above, and the difference is the whole
+	 * value of the field: the renewal sets the expiry to `now + TTL`, so a number taken there is
+	 * the TTL on every answer, while an `install_app` that spent five of its twenty minutes says
+	 * so from here. Called after the archive write, which is part of the call's work.
+	 *
+	 * **A `no-lease` refusal gets no field at all.** `answer()` below turns `./verb-traffic.ts`'s
+	 * `LeaseEndedError` into one when the lease ended *while the verb ran*, and `lease` is this
+	 * call's own snapshot: reporting its remaining time would be a duration for a lease the host
+	 * has already restored the device for.
+	 */
+	function withLeaseRemaining<Result extends ArchivableResult>(
+		answered: Unmeasured<VerbCallResultOf<Result>>,
+		lease: Lease,
+	): VerbCallResultOf<Result> {
+		if (answered.outcome === 'refused' && answered.reason === 'no-lease') {
+			return answered;
+		}
+		return { ...answered, expiresInMs: leases.remainingMs(lease) };
 	}
 
 	/**
@@ -553,6 +596,12 @@ export function createVerbHandlers(
 			return runVerb(params, (context) => pullFile(context, params.devicePath));
 		},
 
+		// The same direction, addressed inside an app's own data container (#334). Whether this
+		// device can reach one is `canPullAppFile`, asked by the verb before the backend is.
+		pull_app_file(params: PullAppFileParams): Promise<VerbCallResult> {
+			return runVerb(params, (context) => pullAppFile(context, params.appId, params.containerPath));
+		},
+
 		// The recording row — the second whose answer carries a payload of its own, and for the
 		// same reason it goes through the same preamble: `runVerb` is generic in the
 		// `ActionResult` subtype. The recording still rides on `ActionResult.artifact` the way
@@ -611,7 +660,7 @@ async function answer<Result extends ArchivableResult>(
 	lease: Lease,
 	call: VerbCall,
 	run: (context: VerbContext, lease: Lease, call: VerbCall) => Promise<Result>,
-): Promise<VerbCallResultOf<Result>> {
+): Promise<Unmeasured<VerbCallResultOf<Result>>> {
 	try {
 		return { outcome: 'ok', result: await run(context, lease, call) };
 	} catch (error) {

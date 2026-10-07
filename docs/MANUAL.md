@@ -239,7 +239,10 @@ npm run -s rover -- list --json
 
 Hand the device back when you are done. A lease also ends on its own 20 minutes after the last
 call, and either way it is the **host** that restores the device (D9) — a caller is never asked to
-and cannot opt out:
+and cannot opt out. Any call on the lease renews it — there is no heartbeat and no renew command —
+and every verb answer's `--json` document carries `expiresInMs`, how long the lease has left once
+that call has renewed it, so an expiry is something you can see coming rather than a `no-lease`
+refusal on your next call (#335):
 
 ```bash
 npm run -s rover -- release <lease-id>
@@ -525,8 +528,8 @@ And the gaps this quick start runs into today, rather than in principle:
   a small package and refuses a real APK by name. Chunked transfer is its own issue — and the way
   a real APK reaches the device today is `install` with **no** path, which runs the project's own
   install on the host instead of sending anything.
-- **`push_file` and `pull_file` are not MCP tools**, so an agent cannot push or pull a file —
-  only the CLI can. Neither has a form that carries no bytes, which is what `install_app` has and
+- **`push_file`, `pull_file` and `pull_app_file` are not MCP tools**, so an agent cannot push or
+  pull a file — only the CLI can. None has a form that carries no bytes, which is what `install_app` has and
   what got it a tool; a whole file as a tool argument waits for `PROJECT.md` R24 phase 2.
 - **`install_app` as a tool can outlast an MCP client's own request timeout.** The host gives a
   project's install five minutes, and some clients wait less than that for a tool call. The build
@@ -597,7 +600,10 @@ group. Nothing is looked up to do it — uniqueness comes from the minted bytes,
 holds no index and reads nothing out of the archive (D6) — and it never reads what the name says.
 The lease runs on a 20-minute
 TTL **renewed by activity rather than by a heartbeat**, so an agent that pauses to think keeps its
-device and one that died lets go on its own. A busy device is a refusal that names who holds it and
+device and one that died lets go on its own. Every verb answer carries `expiresInMs` — the lease's
+remaining time after that call renewed it, a duration measured on the host because the caller may
+not share its clock — and a `no-lease` refusal, which has no lease to measure, carries none (#335).
+Nothing renews a lease but using it: there is no `renew_lease` and nothing to ping. A busy device is a refusal that names who holds it and
 for how much longer, never an error, and never the holder's lease id; `release_device` hands it
 back. Five clients asking at once get exactly one winner. `list_devices` names each device's holder
 the same way — the owner, project and test name, the description if the lease gave one, and how
@@ -968,6 +974,11 @@ dismisses a simulator keyboard is Escape, which is the platform's generic *cance
 presented sheet away just as readily, so there is no press that means only *put the keyboard away*
 (`docs/IOS.md` §5).
 
+`canPullAppFile` is the flag behind `pull_app_file` (below): `true` on Android, `false` on the iOS
+simulator, where the call answers `missing-capability` naming the flag and the device. The simulator
+has a route — its app container is a directory on the host — and nobody has built the method over it
+yet.
+
 **`screenshot` is the third read, and the one whose answer is a payload** rather than a state the
 result already carries. It sits on the same spine and needs no capability either, and what it adds
 is one field: `result.artifact`, carrying the image **as bytes** — base64, its media type and the
@@ -1215,6 +1226,23 @@ names the device path, the device and what the device said — never the tempora
 wrote the caller's bytes into, which names nothing on the machine reading the message and has been
 deleted by the time anyone reads it.
 
+**`pull_app_file` reads a file out of an application's own data container** — its SQLite databases,
+shared preferences and files, which `pull_file` cannot reach because it reads as the device's shell
+user. It takes the lease id, an **app id**, and a path **relative to that app's container**
+(`databases/app.db`, `shared_prefs/settings.xml`), and answers exactly as `pull_file` does: the
+bytes on `result.artifact`, the same bound, the same `artifact-too-large` refusal, a regular file
+only. The path is checked as a shape at the boundary — no leading `/`, no trailing `/`, and no `..`
+segment anywhere — so it cannot leave the container; on Android the read runs as the app itself, and
+a `..` chain from its data directory reached `/system/build.prop` (PROJECT.md §6). **On Android it
+works only for a debuggable build.** A release build, a package that is not installed, or one that
+runs as a system user answers `app-data-unreachable`, naming the app and the reason — never an empty
+file, and never `missing-capability`, because the device can do this and the way out is a debuggable
+build of the app. The backend asks the device what the path is before it reads anything, and then
+holds the read to the size it was told; a file that changed in between — a database the app is
+writing — is refused rather than answered torn. **A SQLite database in WAL mode is consistent only
+together with its `-wal` file**, and each pull is one file at its own moment: `stop_app` first, then
+pull `databases/<db>`, `databases/<db>-wal` and `databases/<db>-shm` into the same directory.
+
 **One call carries one whole file, and the limit says so out loud.** A payload over
 `MAX_TRANSFER_BYTES` (4 MiB, derived from the 8 MiB frame cap with base64's inflation accounted
 for) is refused at the boundary with a message naming both its size and the limit — never a file cut
@@ -1233,7 +1261,9 @@ the device says the path *is* rather than bounded on what it says the path weigh
 **Three commands drive that family from the client, and each one names the machine each path is
 on**: `rover pull <lease-id> <device-path> --out <path>` writes the device's file **here**, on the
 same two modules `screenshot` uses and with the same guarantee — a refusal or a transfer that did
-not survive the trip exits 1 and leaves no file at `--out` at all. `rover push <lease-id>
+not survive the trip exits 1 and leaves no file at `--out` at all. `rover pull <lease-id>
+<container-path> --app <app-id> --out <path>` is the same command asking `pull_app_file`: the
+positional is then relative to that app's data container, and the host checks it. `rover push <lease-id>
 <local-path> <device-path>` and `rover install <lease-id> <local-path>` read a file from **this**
 machine and send its bytes; `src/cli/_shared/upload.ts` is the one place that happens. `rover
 install`'s path is **optional**, and leaving it off is the project form above: nothing is read
@@ -1281,7 +1311,7 @@ the hardware, `screenshot` brings back a real PNG of the panel the device report
 brings back a recording that is provably finished before it leaves the device together with the
 frames sliced out of it on the host, `read_logs` brings
 back the device's own log, `push_file` and `pull_file` move a binary file to the device and back
-byte for byte, and `set_airplane_mode` and `set_wifi` move the device's real radios
+byte for byte, `pull_app_file` answers an app it cannot open as `app-data-unreachable`, and `set_airplane_mode` and `set_wifi` move the device's real radios
 over a lease and without root — and, since the Android backend learned to read its own screen —
 a target addressed by text resolves against a hierarchy read inside the verb, both waits poll a
 real screen, and every action comes back carrying the elements that were on it afterwards. Two gaps

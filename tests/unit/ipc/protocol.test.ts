@@ -11,6 +11,7 @@ import {
 	MAX_TRANSFER_BYTES,
 	MAX_VERB_TIMEOUT_MS,
 	PressKeyParamsSchema,
+	PullAppFileParamsSchema,
 	PullFileParamsSchema,
 	PushFileParamsSchema,
 	ReadLogsParamsSchema,
@@ -744,6 +745,64 @@ describe('file transfer params schemas', () => {
 
 	it('needs the lease id, which is the credential', () => {
 		expect(PullFileParamsSchema.safeParse({ devicePath: DEVICE_PATH }).success).toBe(false);
+	});
+});
+
+/** `pull_app_file`'s boundary (#334): the half of "cannot escape the container" checked as a shape. */
+describe('PullAppFileParamsSchema', () => {
+	const APP_ID = 'com.example.debug';
+
+	it.each([
+		'databases/app.db',
+		'databases/app.db-wal',
+		'shared_prefs/settings.xml',
+		"files/a b's.txt",
+		'files/..hidden',
+	])('takes %s, relative to the app’s container', (containerPath) => {
+		expect(
+			PullAppFileParamsSchema.parse({ leaseId: 'lease-1', appId: APP_ID, containerPath }),
+		).toMatchObject({ appId: APP_ID, containerPath });
+	});
+
+	it.each([
+		['an empty path', ''],
+		['an absolute path, which names something outside the container', '/data/data/x/databases/a'],
+		['a leading ..', '../com.other.app/databases/a.db'],
+		['a .. in the middle', 'databases/../../com.other.app/a.db'],
+		['a trailing ..', 'databases/..'],
+		['a lone ..', '..'],
+		['a trailing slash, which names a directory', 'databases/'],
+		['a NUL', 'databases/a\u0000b'],
+		['a path longer than any filesystem takes', 'a'.repeat(MAX_DEVICE_PATH_LENGTH + 1)],
+	])('refuses %s', (_label, containerPath) => {
+		expect(
+			PullAppFileParamsSchema.safeParse({ leaseId: 'lease-1', appId: APP_ID, containerPath })
+				.success,
+		).toBe(false);
+	});
+
+	it.each([
+		['a malformed app id', { appId: 'not an id', containerPath: 'databases/a.db' }],
+		[
+			'a device path beside the container path',
+			{
+				appId: APP_ID,
+				containerPath: 'databases/a.db',
+				devicePath: '/sdcard/a.db',
+			},
+		],
+		[
+			'a serial beside the lease id',
+			{
+				appId: APP_ID,
+				containerPath: 'databases/a.db',
+				serial: 'emulator-5554',
+			},
+		],
+	])('rejects %s', (_label, params) => {
+		expect(PullAppFileParamsSchema.safeParse({ leaseId: 'lease-1', ...params }).success).toBe(
+			false,
+		);
 	});
 });
 

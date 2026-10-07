@@ -30,6 +30,7 @@ import {
 	InstallAppParamsSchema,
 	LongPressParamsSchema,
 	PressKeyParamsSchema,
+	PullAppFileParamsSchema,
 	PullFileParamsSchema,
 	PushFileParamsSchema,
 	ReadLogsCallResultSchema,
@@ -56,6 +57,7 @@ export {
 	ARTIFACT_LABEL_MAX_LENGTH,
 	ArtifactLabelSchema,
 	Base64PayloadSchema,
+	ContainerPathSchema,
 	type DeviceInfoParams,
 	DeviceInfoParamsSchema,
 	DevicePathSchema,
@@ -74,6 +76,8 @@ export {
 	MAX_VERB_TIMEOUT_MS,
 	type PressKeyParams,
 	PressKeyParamsSchema,
+	type PullAppFileParams,
+	PullAppFileParamsSchema,
 	type PullFileParams,
 	PullFileParamsSchema,
 	type PushFileParams,
@@ -2092,11 +2096,12 @@ export type SweepArchiveResult = z.infer<typeof SweepArchiveResultSchema>;
  *
  * The verb rows are the two waits, the seven input verbs, the three read verbs, the three
  * app-lifecycle verbs, the log read, the three recording rows, the two environment verbs and
- * the three file transfers; each further verb family is one more row beside them and one more
+ * the four file transfers; each further verb family is one more row beside them and one more
  * entry in `src/daemon/verb-handlers.ts`. All but two answer with `VerbCallResultSchema`,
  * because "what happened on the device" is one shape whatever was asked of it. `read_screen`
  * and `device_info` answer with the state every other verb already reports, while
- * `screenshot`, `record_video` and `pull_file` carry their bytes on `ActionResult.artifact` —
+ * `screenshot`, `record_video`, `pull_file` and `pull_app_file` carry their bytes on
+ * `ActionResult.artifact` —
  * which is why no path of any kind is in a transfer's result. The verbs that address no
  * element — those two reads, `type_text`, `press_key`, `hide_keyboard`, and both environment
  * rows because a radio is not something on the screen — answer with a null `target`. The three app rows
@@ -2179,6 +2184,7 @@ export const IPC_METHODS = {
 	install_app: { params: InstallAppParamsSchema, result: VerbCallResultSchema },
 	push_file: { params: PushFileParamsSchema, result: VerbCallResultSchema },
 	pull_file: { params: PullFileParamsSchema, result: VerbCallResultSchema },
+	pull_app_file: { params: PullAppFileParamsSchema, result: VerbCallResultSchema },
 	record_video: { params: RecordVideoParamsSchema, result: RecordVideoCallResultSchema },
 	start_recording: { params: StartRecordingParamsSchema, result: VerbCallResultSchema },
 	stop_recording: { params: StopRecordingParamsSchema, result: StopRecordingCallResultSchema },

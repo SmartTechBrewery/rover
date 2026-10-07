@@ -91,7 +91,10 @@ keyboard it can read; and **the other half expired with #321**, which measured t
 the flag `false` anyway. The one dismissal this transport can send is Escape, and Escape is iOS's
 generic *cancel* — it closes a keyboard when there is nothing else to close and dismisses the
 presented sheet when there is, which a verb meaning *dismiss the keyboard and nothing else* cannot
-be built on (`docs/IOS.md` §5, `PROJECT.md` §6).
+be built on (`docs/IOS.md` §5, `PROJECT.md` §6). `canPullAppFile` (#334) is the third `false` there,
+and the one with a route in hand: a simulator's app container is a directory on the host, and the
+method over it is simply not built yet — so `pull_app_file` answers `missing-capability` there until
+it is, rather than an empty file.
 
 **Refusals get finer than a flag.** `press_key` on a simulator answers `home`, `wake` and the
 editing keys `delete`, `enter` and `tab`, and refuses `back` and `recents` as `unsupported-key`,
@@ -118,8 +121,15 @@ and `group_id`. None is ever derived from who you are or from what authenticated
 authenticates, the owner string attributes* (D16, D20, D22). Five clients asking at once produce
 exactly one winner.
 
-- **The TTL is 20 minutes, renewed by activity rather than by a heartbeat.** An agent that pauses
-  to think keeps its device; one that died lets go without anyone reaping it by hand.
+- **The TTL is 20 minutes, renewed by activity rather than by a heartbeat — and every verb answer
+  says how much is left.** An agent that pauses to think keeps its device; one that died lets go
+  without anyone reaping it by hand. Any call on the lease renews it, so there is no `renew_lease`
+  and nothing to ping (D8). What an agent used to lack was being *told*: an expiry arrived as a
+  `no-lease` refusal on its next call — in one field session after a dozen minutes outside Rover,
+  ending in `release_device` answering `released: false`. Now every verb answer carries
+  `expiresInMs`, the remaining time after that call's renewal, measured on the host and sent as a
+  duration because the caller shares no clock with it (D17, #335). It is the same number a listing
+  shows, from the same function, so an approaching expiry is visible instead of met as a refusal.
 - **A held device is a refusal, not an error** — it names the holder, the project, the test name
   and the remaining time, and **never the holder's lease id**. The lease id is the credential every
   verb call carries; it is printed once, to whoever was granted it.
@@ -142,7 +152,9 @@ string, derived from nothing — records who did it. `not-held`, `gone` and `not
 different next moves rather than one error.
 
 **Where it lives.** `src/daemon/leases.ts`, `lease-handlers.ts`, `lease-holder.ts`,
-`group-id.ts`, `slots.ts`; `PROJECT.md` D6, D9, D16, D20, D22, D28.
+`group-id.ts`, `slots.ts`; a verb answer's `expiresInMs` is set in `verb-handlers.ts`'s `runVerb`
+and declared on `verbCallResultOf` (`src/ipc/verb-methods.ts`); `PROJECT.md` D6, D8, D9, D16, D20,
+D22, D28 and §4.
 
 ---
 
@@ -184,7 +196,9 @@ platforms.
 **What it is.** `src/verbs/` is the layer above the backends. Every verb takes and returns Zod
 schemas of plain data, because the host runs the verb and the agent reads the answer somewhere else
 (D19). A verb call carries the **lease id**, never a serial — the host derives the device from the
-credential.
+credential. Every answer also carries `expiresInMs`, how long that lease has left after this call
+renewed it (§2) — on `ok`, on `failed` and on every refusal but `no-lease`, which has no lease to
+measure and so carries no key at all.
 
 | Family | Verbs | Notes |
 | --- | --- | --- |
@@ -194,7 +208,7 @@ credential.
 | Apps | `launch_app`, `stop_app`, `clear_app_data` | address a package, resolve no target; `app.ts` |
 | Logs | `read_logs` | bounded, selectable on the host, never follows; `logs.ts` |
 | Recording | `record_video`, `start_recording`, `stop_recording` | `record.ts`, `recording-session.ts` |
-| Files | `install_app`, `push_file`, `pull_file` | `files.ts`; §11 covers which are MCP tools |
+| Files | `install_app`, `push_file`, `pull_file`, `pull_app_file` | `files.ts`; §11 covers which are MCP tools |
 | Environment | `set_airplane_mode`, `set_wifi` | `environment.ts`; declares `canControlNetwork` |
 | Device & lease | `status`, `list_devices`, `acquire_device`, `release_device` | the four non-verb rows |
 
@@ -806,6 +820,30 @@ hardware to the next agent. **No host path reaches the agent, in an answer or in
   send. The consequence worth stating: when a source is refused, **the host is not asked at all**,
   so nothing partial can have been sent.
 
+**`pull_app_file` reads what a device path cannot reach: an application's own data** (#334). Its
+SQLite databases, shared preferences and files sit in a container only the app itself can read, so
+`pull_file` — which reads as the device's shell user — cannot get at them, and an agent debugging an
+app whose bug lives in a database row used to leave Rover for `adb exec-out run-as … cat`. Now it
+names the **app id** and a path **relative to that app's container** (`databases/app.db`) and gets
+the bytes back exactly as `pull_file` answers: on the artifact, under the same 4 MiB bound, refused
+whole rather than cut. Three things make it safe to hand an agent:
+
+- **The path cannot leave the container.** It is checked as a shape at the boundary — relative, no
+  `..` segment, no trailing slash — because on Android the read runs as the app and a `..` chain
+  reached `/system/build.prop` (measured, `PROJECT.md` §6).
+- **A build the platform will not open is a named refusal, never an empty file.** On Android only a
+  **debuggable** build's data can be read; a release build, a package that is not installed, or one
+  running as a system user answers `app-data-unreachable` naming the app and the reason. That is
+  not `missing-capability`: the device can do this, and the way out is a different build.
+- **It is a declared capability, `canPullAppFile`.** Android declares it; the iOS simulator declares
+  it `false` until its host-side container route is built, and says so by name.
+
+**A WAL-mode database is consistent only with its `-wal` file**, and each pull is one file at its
+own moment — so stop the app, then pull the database, its `-wal` and `-shm` side by side. The read
+is also held to the size the device reported a moment earlier, so a database being written between
+the two is refused rather than handed back torn. CLI-only, like `pull_file`:
+`rover pull <lease-id> databases/app.db --app <app-id> --out app.db`.
+
 **`install_app` has a second shape, and it is the one that matters day to day: send no bytes.**
 The host then runs the `install` command declared in the hook file of *the project this lease was
 taken with* — a Gradle build, a deploy script, whatever the project already has — with
@@ -836,12 +874,13 @@ it names the simulator") writes out what it looks like — then call `install_ap
 environment.
 
 **Where it lives.** `src/verbs/files.ts`, `src/daemon/project-install.ts`,
-`src/cli/_shared/upload.ts`, `src/verbs/errors.ts`, `src/cli/init/documents.ts`; `PROJECT.md` D13,
-R24.
+`src/cli/_shared/upload.ts`, `src/verbs/errors.ts`, `src/cli/init/documents.ts`; for `pull_app_file`,
+`src/backends/android/parsers/run-as.ts`, `AndroidDeviceBackend.pullAppFile` and
+`ContainerPathSchema` (`src/ipc/verb-methods.ts`); `PROJECT.md` D13, R24, §4 and §6 (#334).
 
 ---
 
-## 11. The MCP server — and the twelve methods that deliberately have no tool
+## 11. The MCP server — and the eighteen methods that deliberately have no tool
 
 **The hook.** One `rover init` and an agent has twenty-six tools; a screenshot comes back **inline**
 as an image the model looks at directly, and a recording comes back as frames plus an mp4 on the
@@ -863,6 +902,10 @@ plain data, and the three whose answer is bytes.
 - **An action's answer travels whole, already compact.** The host narrows the after-state
   (§5), so the server passes the `ok` answer through untouched; every tool that takes `after` says
   in its description what the compact form leaves out and that `after: "full"` returns the rest.
+- **The lease's remaining time travels with every verb answer.** The server passes the host's
+  `expiresInMs` through untouched — never recomputed against the agent's clock (D17) — and every
+  tool that takes a `leaseId` says in its description that any call renews the lease, that there
+  is no heartbeat or renew tool, and that the answer says how long is left (#335).
 - **Which host an agent talks to is the `env` block's business and never a tool argument** (D17).
   An agent cannot see or change the machine that answered.
 - **The launcher is `bin/rover-mcp.mjs`, named by absolute path.** `node --import tsx/esm .../src/mcp/index.ts`
@@ -874,9 +917,9 @@ plain data, and the three whose answer is bytes.
 - **Mis-wiring fails at startup, on stderr, before one tool is advertised** — a partial remote
   configuration and a missing `ROVER_PROJECT_FILE` both exit 1 with the reason.
 
-**The method table holds 41 rows and 25 of them are tools. The other sixteen have no tool
+**The method table holds 44 rows and 26 of them are tools. The other eighteen have no tool
 deliberately**, each recorded as a decision in `tests/unit/mcp/verb-declarations.test.ts` so no row
-can quietly land without one. Four reasons cover all sixteen:
+can quietly land without one. Four reasons cover all eighteen:
 
 - **Authority over the shared pool is the operator's, not an agent's.** `force_release_device` (an
   agent must not end another agent's lease), `set_kept_tests` (what the operator keeps is not an
@@ -897,9 +940,9 @@ can quietly land without one. Four reasons cover all sixteen:
   is an operator's decision with an actor attached. An agent that meets an unbacked capability
   already gets what it needs: a `missing-capability` failure naming the program, the device and the
   backend, which is a sentence to relay to a person rather than an install to attempt.
-- **Two rows wait on capability rather than on policy.** `push_file` and `pull_file` have no form
-  that carries no bytes, and a whole file as a tool argument means an agent producing several
-  megabytes of base64 (R24 phase 2).
+- **Three rows wait on capability rather than on policy.** `push_file`, `pull_file` and
+  `pull_app_file` have no form that carries no bytes, and a whole file as a tool argument means an
+  agent producing several megabytes of base64 (R24 phase 2).
 
 **Where it lives.** `src/mcp/`, `bin/rover-mcp.mjs`; `PROJECT.md` D26, D27, D28, D33, R24, R36,
 R38, R39, R41, R49.
@@ -1435,7 +1478,7 @@ holding a subset of what its lease wrote.
   device** — a result from one emulator is not a result for every phone (D14).
 - **One call carries one whole file, capped at 4 MiB**, so the byte-carrying `install_app` refuses a
   real APK by name. The way a real APK reaches a device today is `install` with **no** path (§10).
-- **`push_file` and `pull_file` are not MCP tools**, so only the CLI can move a file.
+- **`push_file`, `pull_file` and `pull_app_file` are not MCP tools**, so only the CLI can move a file.
 - **`install_app` as a tool can outlast an MCP client's own request timeout** — the host allows five
   minutes and some clients wait less. The build keeps running on the host; the answer is lost.
   `rover install` from a terminal has no such limit.

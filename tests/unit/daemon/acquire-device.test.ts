@@ -85,6 +85,7 @@ function registerFakeBackend(
 				canRecordVideo: true,
 				canControlRecording: true,
 				canHideKeyboard: false,
+				canPullAppFile: false,
 			},
 		},
 		backend: createMockDeviceBackend({ watchDevices, describeDevice }),
@@ -228,6 +229,7 @@ describe('what a granted lease carries', () => {
 			canRecordVideo: true,
 			canControlRecording: true,
 			canHideKeyboard: false,
+			canPullAppFile: false,
 		});
 	});
 

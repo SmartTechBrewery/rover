@@ -210,6 +210,13 @@ Backends are genuinely asymmetric and flattening that is the design mistake to a
   only gesture does more than dismiss**, which is where the iOS simulator landed: it reads its
   keyboard (#298) and its one candidate key, Escape, is that platform's generic cancel, so it
   declares `false` with the measurement rather than a method (#321, `docs/IOS.md` §5).
+- **Reading an application's own data container is a fourth** (#334), and the flag is
+  `canPullAppFile` naming one method, `pullAppFile`. Not a second shape of `pull_file`: the shell
+  user that reads a device path cannot reach an app's private files, and what can is the
+  platform's — `run-as` on Android, which opens only a debuggable build; a directory on the host
+  for the iOS simulator, which declares `false` until a method is built over it. The per-app half
+  is not the flag: a build the device will not open is `AppDataUnreachableError`
+  (`app-data-unreachable`), an answer about the argument rather than the device.
 - **A system log is not one of those asymmetries**, which is why `readLogs` is a *required* method and not a capability: every platform here keeps one, and a flag that is always `true` is noise (`src/core/capabilities.ts`). What differs is the wording inside an entry — that is what the neutral `LogEntry` shape and a backend's own parser absorb.
 - **Moving a file is not one either**, so `pushFile` and `pullFile` are required too. The asymmetry that matters there is the *direction* rather than the platform: a push takes a path on the host, because the host is where the daemon runs, and a pull answers with **bytes**, because the answer is read on the agent's machine (D19).
 - **A missing *host* program is not one either, and it must not be modelled as a capability.**

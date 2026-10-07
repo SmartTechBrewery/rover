@@ -20,6 +20,7 @@ import {
 	InstallAppParamsSchema,
 	LongPressParamsSchema,
 	PressKeyParamsSchema,
+	PullAppFileParamsSchema,
 	PullFileParamsSchema,
 	PushFileParamsSchema,
 	ReadLogsCallResultSchema,
@@ -480,7 +481,11 @@ describe('the verb layer speaks only in plain data', () => {
  */
 describe('a verb call answers in plain data too', () => {
 	it('round-trips the ok branch and re-parses it equal', async () => {
-		const answer = { outcome: 'ok', result: await fakeTapResult(contextShowingSave()) } as const;
+		const answer = {
+			outcome: 'ok',
+			result: await fakeTapResult(contextShowingSave()),
+			expiresInMs: 1_200_000,
+		} as const;
 
 		expect(VerbCallResultSchema.parse(roundTrip(answer))).toEqual(answer);
 		expect(unserializableParts(answer)).toEqual([]);
@@ -490,7 +495,7 @@ describe('a verb call answers in plain data too', () => {
 		const failure = toVerbFailure(
 			new WaitTimeoutError("text containing 'Save'", 'an empty screen', 5_000, 21),
 		);
-		const answer = { outcome: 'failed', failure } as const;
+		const answer = { outcome: 'failed', failure, expiresInMs: 1_200_000 } as const;
 
 		expect(VerbCallResultSchema.parse(roundTrip(answer))).toEqual(answer);
 		expect(unserializableParts(answer)).toEqual([]);
@@ -505,7 +510,7 @@ describe('a verb call answers in plain data too', () => {
 				'only ASCII',
 			),
 		);
-		const answer = { outcome: 'failed', failure } as const;
+		const answer = { outcome: 'failed', failure, expiresInMs: 1_200_000 } as const;
 
 		// The text and the escapes both survive the trip: an agent reading this on another
 		// machine has to be able to see which character to strip.
@@ -528,6 +533,7 @@ describe('a verb call answers in plain data too', () => {
 		const answer = {
 			outcome: 'ok',
 			result: await readLogs(contextShowingSave()),
+			expiresInMs: 1_200_000,
 		} as const;
 
 		expect(ReadLogsCallResultSchema.parse(roundTrip(answer))).toEqual(answer);
@@ -554,7 +560,9 @@ describe('a verb call answers in plain data too', () => {
 	it('rejects a read_logs answer that lost its payload', async () => {
 		const result = await fakeTapResult(contextShowingSave());
 
-		expect(() => ReadLogsCallResultSchema.parse({ outcome: 'ok', result })).toThrow();
+		expect(() =>
+			ReadLogsCallResultSchema.parse({ outcome: 'ok', result, expiresInMs: 1_200_000 }),
+		).toThrow();
 	});
 
 	it('rejects an answer whose outcome nobody produces', () => {
@@ -608,6 +616,12 @@ describe('a verb call answers in plain data too', () => {
 		['read_screen', ReadScreenParamsSchema, { leaseId: 'lease-1' }],
 		['device_info', DeviceInfoParamsSchema, { leaseId: 'lease-1' }],
 		['screenshot', ScreenshotParamsSchema, { leaseId: 'lease-1' }],
+		// Relative to the app's container, so nothing in it reads as a place on any machine.
+		[
+			'pull_app_file',
+			PullAppFileParamsSchema,
+			{ leaseId: 'lease-1', appId: 'com.example.debug', containerPath: 'databases/app.db' },
+		],
 	])('round-trips what a %s call carries', (_name, schema, params) => {
 		const parsed = schema.parse(params);
 
