@@ -377,14 +377,24 @@ the focused *window* (`mCurrentFocus`) or the package at the root of a screen re
 notification shade down both name the system UI, and with a crash dialog up both name the dialog,
 while the application in front is still the one underneath (`PROJECT.md` §6). **`null` is *not
 answered*, never *nothing in front***, and that is not hypothetical: Android itself prints
-`mFocusedApp=null` with the launcher in front after a crash dialog is dismissed. The iOS simulator
-answers `null` for now; its route — the application `pid` its accessibility read already carries,
-mapped through `launchctl list` — is the second phase of #331.
+`mFocusedApp=null` with the launcher in front after a crash dialog is dismissed. **The iOS
+simulator answers it too** (#336; this sentence said *`null` for now* until the route was measured,
+and is rewritten in place). Every node of the accessibility read it already takes for the keyboard
+carries the `pid` of the process that drew the screen, and `launchctl list` inside the device names
+the application launchd runs under that pid — so it costs one more `simctl spawn` (about a quarter
+to half a second) and no second read. **The home screen answers `null` there, and that is measured
+rather than missing**: the read then carries SpringBoard's pid, which launchd lists as a daemon and
+not as an application, and passing a launchd label off as an app id would be a guess. After a crash
+or a stop the app's job leaves the listing, so the next answer stops naming it. A device that is not
+booted, a host with no `idb_companion`, or a read or listing that failed all answer `null` too, and
+none of them makes `device_info` fail.
 
 **Where it lives.** `src/core/device.ts` for the field and what its `null` means,
 `src/backends/android/parsers/insets.ts` (`parseForegroundApp`) for the read and
 `src/backends/android/backend.ts` for where it joins `deviceInfo`;
-`src/backends/ios-simulator/backend.ts` for the `null`; `PROJECT.md` §4 and §6, D14.
+`src/backends/ios-simulator/parsers/launchctl-list.ts` (`parseBundleIdOfPid`) and
+`src/backends/ios-simulator/backend.ts` (`#screenFactsOf`, `#foregroundAppOf`) for the iOS route;
+`PROJECT.md` §4 and §6, `docs/IOS.md` §2 and §4, D14.
 
 ---
 

@@ -154,6 +154,25 @@ describe('the keyboard traits, against the capture they were measured on', () =>
 	});
 });
 
+describe('the pid, against the captures it was measured on', () => {
+	/**
+	 * **Every node of one read carries the same pid, and it is the application's** (#336). That is
+	 * what lets `deviceInfo` take the first node's and call it the screen's: no capture mixes two
+	 * processes, and the first node is the `AXApplication` one in all five.
+	 */
+	it.each([
+		['compose', COMPOSE, 14900],
+		['uikit-toggles', TOGGLES, 16162],
+		['uikit-textfield', TEXTFIELD, 17263],
+		['uikit-keyboard', KEYBOARD, 99145],
+		['uikit-keyboard-dismissed', responseOf('uikit-keyboard-dismissed'), 99145],
+	])('projects one pid for every node of the %s capture', (_name, response, pid) => {
+		const nodes = parseAccessibilityRead(response);
+
+		expect(new Set(nodes.map((node) => node.pid))).toEqual(new Set([pid]));
+	});
+});
+
 describe('the shape of the projection', () => {
 	/**
 	 * Non-`.strict()`, `SimctlDeviceSchema`'s stance: the key set is Meta's and a release adds
@@ -167,6 +186,7 @@ describe('the shape of the projection', () => {
 			AXValue: null,
 			role: 'AXButton',
 			traits: ['Button'],
+			pid: 14900,
 			something_idb_1_6_added: { deeply: ['nested'] },
 		});
 
@@ -175,6 +195,7 @@ describe('the shape of the projection', () => {
 			AXLabel: 'a',
 			AXValue: null,
 			traits: ['Button'],
+			pid: 14900,
 		});
 	});
 
@@ -191,6 +212,7 @@ describe('the shape of the projection', () => {
 				AXLabel: '',
 				AXValue: '',
 				traits: ['None'],
+				pid: 1,
 			}),
 		).toMatchObject({ AXLabel: '', AXValue: '' });
 	});
@@ -207,6 +229,7 @@ describe('the shape of the projection', () => {
 				frame: { x: 0, y: 0, width: 1, height: 1 },
 				AXLabel: null,
 				AXValue: null,
+				pid: 1,
 			}),
 		).toThrow(/traits/);
 	});
@@ -227,8 +250,27 @@ describe('the shape of the projection', () => {
 				AXLabel: null,
 				AXValue: null,
 				traits: null,
+				pid: 82023,
 			}),
-		).toMatchObject({ traits: null });
+		).toMatchObject({ traits: null, pid: 82023 });
+	});
+
+	/**
+	 * `pid` is required for the same reason `traits` is: it is the only place this payload says
+	 * which process drew the screen (#336), so a release that stopped emitting it would make
+	 * `foregroundApp` quietly answer `null` on every screen. Its value may be `null` — a choice
+	 * about who pays for one, explained on the schema — so that is admitted rather than refused.
+	 */
+	it('refuses a node with no pid, naming the key, and admits a null one', () => {
+		const node = {
+			frame: { x: 0, y: 0, width: 1, height: 1 },
+			AXLabel: null,
+			AXValue: null,
+			traits: ['None'],
+		};
+
+		expect(() => AccessibilityElementSchema.parse(node)).toThrow(/pid/);
+		expect(AccessibilityElementSchema.parse({ ...node, pid: null })).toMatchObject({ pid: null });
 	});
 
 	/**

@@ -136,7 +136,7 @@ import {
 import { saysNothingToTerminate } from './parsers/app-control.js';
 import { type DeviceTypeProfile, readDeviceTypeProfile } from './parsers/device-type-profile.js';
 import { IdbNotifyFrameDecoder, type IdbTargetList } from './parsers/idb-notify.js';
-import { parseAppPids } from './parsers/launchctl-list.js';
+import { parseAppPids, parseBundleIdOfPid } from './parsers/launchctl-list.js';
 import { isPng } from './parsers/png.js';
 import { isFinishedRecording, recorderPids, saysRecordingStarted } from './parsers/recording.js';
 import {
@@ -278,6 +278,25 @@ const SCREENSHOT_ARGV = ['screenshot', '--type', 'png', '--mask', 'ignored'] as 
  */
 const READ_SCREEN_RPC: IdbUnaryRpc = 'accessibility_info';
 const READ_SCREEN_REQUEST = { format: ACCESSIBILITY_FORMAT } as const;
+
+/**
+ * What one accessibility read says about the screen beyond its elements: the keyboard, and the pid
+ * of the process that drew it (`IosSimulatorDeviceBackend.#screenFactsOf`). `null` in both is
+ * *this device did not say*.
+ */
+interface ScreenFacts {
+	readonly keyboard: OnScreenKeyboard | null;
+	readonly pid: number | null;
+}
+
+const NO_SCREEN_FACTS: ScreenFacts = { keyboard: null, pid: null };
+
+/**
+ * `launchctl list`, run inside a device by `simctl spawn` — the one listing that maps a pid to an
+ * application and back on this platform (`./parsers/launchctl-list.ts`). Shared by a log read's
+ * `appId` selection and `deviceInfo`'s `foregroundApp`.
+ */
+const LAUNCHCTL_LIST_ARGV = ['launchctl', 'list'] as const;
 
 /**
  * The RPC every input primitive that sends anything goes through — the only client-streaming call
@@ -1464,7 +1483,7 @@ export class IosSimulatorDeviceBackend implements DeviceBackend {
 	 * anything, so a simulator somebody turned by hand is described by the screen its hardware
 	 * has rather than by the one it is currently drawing.
 	 *
-	 * **It is no longer only that invocation, and the second half is {@link IosSimulatorDeviceBackend.#keyboardOf}** (#298).
+	 * **It is no longer only that invocation, and the second half is {@link IosSimulatorDeviceBackend.#screenFactsOf}** (#298).
 	 * `ScreenInfo.keyboard` is a fact about what is drawn *now*, so no plist can carry it and the
 	 * profile above answers `null` on its own; the accessibility tree names the software keyboard,
 	 * so one read answers it. The costs are real and are stated rather than hidden:
@@ -1481,9 +1500,16 @@ export class IosSimulatorDeviceBackend implements DeviceBackend {
 	 *   worked around with a timer — `simctl` calls the device booted about 0.7 s in, so no state
 	 *   check covers that window and a probe-then-read is two chances to wedge instead of one.
 	 *
+	 * **`foregroundApp` rides on that same read** (#336). The read's nodes all carry the pid of the
+	 * process that drew them, and `launchctl list` inside the device names the application launchd
+	 * runs under that pid ({@link IosSimulatorDeviceBackend.#foregroundAppOf}). That costs one more
+	 * `simctl spawn` — 0.26–0.55 s on the #336 bench, several times the read (`docs/IOS.md` §4) —
+	 * and only when the read produced a pid to look up.
+	 *
 	 * **What it does not acquire is a new way to throw**, which is the property that matters most
 	 * here: `device_info` declares no capability (`PROJECT.md` §4) and must keep working on a host
-	 * with no `idb_companion` at all. Everything the read can do wrong is answered `null`.
+	 * with no `idb_companion` at all. Everything the read or the listing can do wrong is answered
+	 * `null`.
 	 */
 	async deviceInfo(serial: DeviceSerial): Promise<DeviceInfo> {
 		const result = await runSimctl([...DEVICE_FACTS_ARGV]);
@@ -1494,17 +1520,14 @@ export class IosSimulatorDeviceBackend implements DeviceBackend {
 		if (device === undefined || entry === null) throw new DeviceVanishedError(serial);
 
 		const profile = await readProfileOf(serial, entry, deviceTypes);
+		const facts = await this.#screenFactsOf(serial, device.state);
 
 		return DeviceInfoSchema.parse({
 			serial: unwrap(serial),
 			platform: IOS_SIMULATOR_PLATFORM_ID,
 			model: device.model,
-			screen: toScreenInfo(profile, await this.#keyboardOf(serial, device.state)),
-			// *Not answered*, never a guess and never *nothing is in front* (`core/device.ts`). The
-			// route exists — the accessibility read `#keyboardOf` already takes carries the
-			// application's `pid`, unread today (`./parsers/accessibility.ts`), and `./parsers/launchctl-list.ts` maps processes to bundle ids —
-			// but nobody has measured it yet, and that is phase 2 of #331's to wire.
-			foregroundApp: null,
+			screen: toScreenInfo(profile, facts.keyboard),
+			foregroundApp: await this.#foregroundAppOf(serial, facts.pid),
 			osVersion: device.osVersion,
 			// Read off the enumeration rather than written as `null` here, so the two shapes cannot
 			// come to disagree about a platform that has no API level (`./devices.js`).
@@ -1513,8 +1536,13 @@ export class IosSimulatorDeviceBackend implements DeviceBackend {
 	}
 
 	/**
-	 * One accessibility read, for the keyboard alone — and `null` for every way it could not be
-	 * taken.
+	 * One accessibility read, for what it says about the screen right now — the keyboard and the
+	 * pid of the process that drew it — and `null` for both on every way it could not be taken.
+	 *
+	 * **One read answers both, and that is the whole reason they share a method** (#336). Two
+	 * fields reading the screen separately would be two RPCs per `deviceInfo`, and the verb layer
+	 * calls `deviceInfo` up to twice per verb; the second read would also be of a slightly later
+	 * screen, so the keyboard and the application beside it could describe two different moments.
 	 *
 	 * **`null` is `ScreenInfo.keyboard`'s designated *this device did not say*** and is the whole
 	 * reason this helper can swallow what it swallows. A host with no companion, a companion that
@@ -1522,7 +1550,7 @@ export class IosSimulatorDeviceBackend implements DeviceBackend {
 	 * each of them leaves `device_info` answering exactly what it answered before this method
 	 * existed, which is what keeps a verb that declares no capability from acquiring one in
 	 * practice. `requireUncovered` refuses nothing on `null` (`src/verbs/target.ts`), so nothing
-	 * downstream changes either.
+	 * downstream changes either. A `null` pid is the same statement about `foregroundApp`.
 	 *
 	 * **The state check comes first and is not an error here.** It is {@link notReadable}'s check
 	 * without its refusal, and it is what stops a companion being started for a device that cannot
@@ -1534,18 +1562,58 @@ export class IosSimulatorDeviceBackend implements DeviceBackend {
 	 * start and has not drawn has no keyboard up, and `{ shown: false }` is the true statement
 	 * about it. That shape is refused in `readScreen` because a one-element `ScreenElement[]` is
 	 * indistinguishable from a screen holding one nameless thing; no such ambiguity exists for a
-	 * keyboard, where the absence of `KeyboardKey` is the measurement.
+	 * keyboard, where the absence of `KeyboardKey` is the measurement — nor for the pid, which the
+	 * placeholder carries like any other node (`./parsers/accessibility.ts`).
+	 *
+	 * **The pid is the first node's**, which is the `AXApplication` node in every capture, and every
+	 * node of one read carries the same one (`./parsers/accessibility.ts`). An empty read has none.
 	 *
 	 * **No retry and no second attempt**, for `readScreen`'s reason: a retry loop is a wait, waits
 	 * live in the wait vocabulary (D12(b)), and a `device_info` that quietly read twice would hide
 	 * from its caller that the first read found nothing.
 	 */
-	async #keyboardOf(serial: DeviceSerial, state: DeviceState): Promise<OnScreenKeyboard | null> {
-		if (state !== 'ready') return null;
+	async #screenFactsOf(serial: DeviceSerial, state: DeviceState): Promise<ScreenFacts> {
+		if (state !== 'ready') return NO_SCREEN_FACTS;
 
 		try {
 			const answer = await this.companions.call(serial, READ_SCREEN_RPC, READ_SCREEN_REQUEST);
-			return toOnScreenKeyboard(parseAccessibilityRead(answer));
+			const read = parseAccessibilityRead(answer);
+			return { keyboard: toOnScreenKeyboard(read), pid: read[0]?.pid ?? null };
+		} catch {
+			return NO_SCREEN_FACTS;
+		}
+	}
+
+	/**
+	 * The bundle id of the application running under `pid`, by `launchctl list` inside the device —
+	 * and `null` for every way that could not be said (#336).
+	 *
+	 * `runSimctlOnDevice`, never `runSimctl`, for {@link IosSimulatorDeviceBackend.appPids}' reason:
+	 * an unpinned spawn is somebody else's device. `./parsers/launchctl-list.ts` carries the label
+	 * shape and why only a `UIKitApplication:` job is answered.
+	 *
+	 * **Each `null` is honest, and none is *nothing is in front*** (`src/core/device.ts`):
+	 *
+	 * - **No pid** — the device is not ready, the read failed, or it was empty — means the screen
+	 *   was not read, so nothing is looked up and nothing is spawned.
+	 * - **No application under that pid** is the home screen: the read reports SpringBoard's pid,
+	 *   and launchd lists SpringBoard as a daemon (`com.apple.SpringBoard`) rather than as an
+	 *   application. A launchd label is not a bundle id, so it is not answered as one.
+	 * - **The listing failed** is the device not saying, the same as a read that failed.
+	 *
+	 * A pid can also go stale between the read and the listing — the app died in between. Its job
+	 * has left the listing by then (measured after `simctl terminate` and after a `SIGSEGV`, #336),
+	 * so that is the no-application case rather than a wrong name. A pid reused that quickly by
+	 * another application is the one way this could name the wrong app, and it was not observed.
+	 *
+	 * No retry, for {@link IosSimulatorDeviceBackend.#screenFactsOf}'s reason.
+	 */
+	async #foregroundAppOf(serial: DeviceSerial, pid: number | null): Promise<string | null> {
+		if (pid === null) return null;
+
+		try {
+			const { stdout } = await runSimctlOnDevice(serial, 'spawn', [...LAUNCHCTL_LIST_ARGV]);
+			return parseBundleIdOfPid(stdout, pid);
 		} catch {
 			return null;
 		}
@@ -1965,7 +2033,7 @@ export class IosSimulatorDeviceBackend implements DeviceBackend {
 	 * report is where an app that died is answered (#323), by its pid like any other entry.
 	 */
 	private async appPids(serial: DeviceSerial, appId: AppId): Promise<number[]> {
-		const result = await runSimctlOnDevice(serial, 'spawn', ['launchctl', 'list']);
+		const result = await runSimctlOnDevice(serial, 'spawn', [...LAUNCHCTL_LIST_ARGV]);
 		const pids = parseAppPids(result.stdout, unwrap(appId));
 		if (pids.length === 0) {
 			throw new LogFilterRefusedError(

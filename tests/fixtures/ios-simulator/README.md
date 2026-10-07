@@ -108,6 +108,9 @@ not from the binary.
 | `accessibility.uikit-toggles.idbcompanion1.5.2-xcode26.4.1-ios26.4.1.json` | `accessibility_info` (below) | 26.4.1 | 26.4.1 | 2026-09-08 |
 | `accessibility.uikit-textfield.idbcompanion1.5.2-xcode26.4.1-ios26.4.1.json` | `accessibility_info` (below) | 26.4.1 | 26.4.1 | 2026-09-08 |
 | `launchctl-list.xcode26.4.1-ios26.4.1.txt` | `simctl spawn … launchctl list` (below) | 26.4.1 | 26.4.1 | **2026-10-06** |
+| `accessibility.preferences.idbcompanion1.5.2-xcode27.0-ios26.5.json` | `accessibility_info` (below, #336) | **27.0** | **26.5** | **2026-10-07** |
+| `accessibility.springboard.idbcompanion1.5.2-xcode27.0-ios26.5.json` | `accessibility_info` (below, #336) | **27.0** | **26.5** | **2026-10-07** |
+| `launchctl-list.xcode27.0-ios26.5.txt` | `simctl spawn … launchctl list` (below, #336) | **27.0** | **26.5** | **2026-10-07** |
 
 The all-listings capture is the primary one — there are now two, on two Xcode releases, and the
 second one's reason is its own section below: `xcrun simctl list -j` with no type argument answers
@@ -510,6 +513,44 @@ sed -E 's/("crashReporterKey" : ")[0-9A-F-]+"/\100000000-0000-0000-0000-00000000
   reporter wrote.
 - **`procPath` is that same redacted string on both devices**, which is why the parser does not
   attribute by it and the suite's negative case is the second device's `coalitionName`.
+
+## The foreground-app captures (#336)
+
+Taken for #336, which names the application in front on every `device_info` answer: the pid the
+accessibility read carries, looked up in `launchctl list` inside the device. **Three captures of one
+moment and the one after it**, so the pid in a read and the pid in the listing can be checked against
+each other rather than against a number copied out of a different session.
+
+**The #323 bench**: macOS 26.6.2 (25G83), Xcode **27.0** (27A266a), iOS **26.5** (23F77),
+`idb_companion` built `Sep 1 2026` — the v1.5.2 asset, by the build date `--version` prints — and a
+**throwaway** `iPhone 17` created for the run, booted headless with `simctl boot` and deleted
+afterwards, 2026-10-07. Taken through this repository's own gRPC client, like the other reads:
+
+```bash
+xcrun simctl launch $udid com.apple.Preferences          # → com.apple.Preferences: 85092
+# accessibility_info, LEGACY, polled until the read is Settings' own (16 nodes, pid 85092)
+#   → accessibility.preferences.idbcompanion1.5.2-xcode27.0-ios26.5.json
+xcrun simctl spawn $udid launchctl list > launchctl-list.xcode27.0-ios26.5.txt
+xcrun simctl terminate $udid com.apple.Preferences
+# accessibility_info, polled until the pid moved (14 nodes, pid 77372)
+#   → accessibility.springboard.idbcompanion1.5.2-xcode27.0-ios26.5.json
+```
+
+| Fixture | Nodes / jobs | pid | What it pins |
+|---|---|---|---|
+| `accessibility.preferences.…json` | 16 nodes | 85092 on all | A read whose pid the listing names as `UIKitApplication:com.apple.Preferences[78d7][rb-legacy]` |
+| `accessibility.springboard.…json` | 14 nodes | 77372 on all | The home screen: SpringBoard's pid, which the listing carries as `com.apple.SpringBoard` — a daemon label, so no application is named |
+| `launchctl-list.xcode27.0-ios26.5.txt` | 380 jobs | — | Both pids above, from one listing taken while Settings was in front |
+
+- **The home-screen read is SpringBoard's**, and its first node is an `AXApplication` with
+  `AXLabel: ' '` — a single space, not a name. Nothing in it says *home screen*; the pid is the
+  only route to which process drew it, and the listing is what says that process is not an app.
+- **A listing taken after the terminate has no `Preferences` job at all**, the #304 bench's finding
+  again on a second Xcode, which is why it is not committed: the absent-pid case is a line that is
+  not there, and an inline case pins it.
+- **Both reads carry `pid` on every node** — which is also true of the five reads above, captured on
+  Xcode 26.4.1 a month earlier. The launching-app placeholder, which no fixture holds (`docs/IOS.md`
+  §2, #300), carried the launching app's pid in 3 of 3 cold launches on this bench.
 
 ## Two things about the contents
 

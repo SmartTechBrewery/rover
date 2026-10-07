@@ -1,6 +1,9 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { parseAppPids } from '@/backends/ios-simulator/parsers/launchctl-list.js';
+import {
+	parseAppPids,
+	parseBundleIdOfPid,
+} from '@/backends/ios-simulator/parsers/launchctl-list.js';
 
 /**
  * The app-to-pids lookup a log read selecting by `appId` runs on, over a **capture** of
@@ -86,5 +89,48 @@ describe('parseAppPids', () => {
 	it('answers nothing for output that is not a listing at all', () => {
 		expect(parseAppPids('', PREFERENCES)).toEqual([]);
 		expect(parseAppPids('PID\tStatus\tLabel\n', PREFERENCES)).toEqual([]);
+	});
+});
+
+/**
+ * The reverse lookup `deviceInfo` runs to name the application in front (#336): the pid comes off
+ * the accessibility read, and this says which application, if any, launchd runs under it.
+ */
+describe('parseBundleIdOfPid', () => {
+	it('names the application launchd runs under a pid', () => {
+		expect(parseBundleIdOfPid(LISTING, PREFERENCES_PID)).toBe(PREFERENCES);
+		expect(parseBundleIdOfPid(LISTING, 26209)).toBe('com.apple.Spotlight');
+	});
+
+	/**
+	 * SpringBoard is the case this exists for: on the home screen the read reports its pid, and its
+	 * job is a daemon label rather than an application's. A launchd label is not a bundle id, so the
+	 * answer is that this listing names no application — never the label passed off as one.
+	 */
+	it('answers null for a pid whose job is not an application’s', () => {
+		expect(LISTING).toContain('25800\t-9\tcom.apple.SpringBoard');
+		expect(parseBundleIdOfPid(LISTING, 25800)).toBeNull();
+		expect(parseBundleIdOfPid(LISTING, 25755)).toBeNull();
+	});
+
+	// A terminated or crashed app's job leaves the listing, so its old pid is simply not there.
+	it('answers null for a pid with no job in the listing', () => {
+		expect(parseBundleIdOfPid(LISTING, 99999)).toBeNull();
+	});
+
+	// A scan matched by prefix would hand `5011`'s question `50111`'s app.
+	it('matches the pid whole, never as a prefix of a longer one', () => {
+		expect(parseBundleIdOfPid(LISTING, 5011)).toBeNull();
+		expect(parseBundleIdOfPid(LISTING, 501110)).toBeNull();
+	});
+
+	// `DeviceInfo.foregroundApp` refuses `''`, so a label naming no bundle must not produce one.
+	it('answers null for an application label that names no bundle id', () => {
+		expect(parseBundleIdOfPid('PID\tStatus\tLabel\n7\t0\tUIKitApplication:[abcd]\n', 7)).toBeNull();
+	});
+
+	it('answers null for output that is not a listing at all', () => {
+		expect(parseBundleIdOfPid('', PREFERENCES_PID)).toBeNull();
+		expect(parseBundleIdOfPid('PID\tStatus\tLabel\n', PREFERENCES_PID)).toBeNull();
 	});
 });

@@ -897,7 +897,12 @@ the next answer names something else (after a crash on Android, the launcher) �
 *focused application*, not from the focused window, so a notification shade or a crash dialog drawn
 over the app does not hide which app is underneath. **`null` means this device did not say, never
 *nothing is in front***: Android itself reports no focused application for a while after a crash
-dialog is dismissed, and the iOS simulator answers `null` for now, until its route is measured.
+dialog is dismissed. The iOS simulator answers it as well — it used to answer `null` until its route
+was measured (#336) — by looking the pid of the process that drew the screen up in launchd's listing
+inside the device. **On its home screen it answers `null`**, because the process in front there is
+SpringBoard, which launchd lists as a system daemon rather than as an app — so an app that stopped
+or crashed back to the home screen is followed by `null`, not by its own id. It also answers `null` when the simulator
+cannot be read at all, such as on a host with no `idb_companion`, and the verb still answers `ok`.
 
 **`hide_keyboard` puts that keyboard away, and presses nothing when there is none** (#307). Reach
 for it instead of `press_key back`: on Android, back closes a keyboard that is up and *leaves the
