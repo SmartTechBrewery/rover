@@ -838,6 +838,25 @@ export const VerbRefusalReasonSchema = z.enum([
 export type VerbRefusalReason = z.infer<typeof VerbRefusalReasonSchema>;
 
 /**
+ * How long the lease this call ran under has left, **after this call renewed it** (D8, #335).
+ *
+ * A duration and never an instant, for the reason `GrantedLeaseSchema` and `LeaseHolderSchema`
+ * record: the caller may be on another machine and shares no clock with the host (D17). The
+ * host computes it exactly as `src/daemon/lease-holder.ts` does for a listing —
+ * `LeaseStore.remainingMs` — so a listing and a verb answer cannot disagree about one lease.
+ *
+ * It exists because a lease ends 20 minutes after the last call, and an agent used to learn
+ * that only from the `no-lease` refusal on its next one. Any call on the lease already renews
+ * it, so there is deliberately no heartbeat and no renew verb (D8): what was missing was never
+ * a way to extend the lease, only being told how long it had.
+ *
+ * Required on the two branches that mean a verb actually ran, and **optional on `refused` for
+ * one reason only**: `no-lease` has no lease to measure. Absent rather than `0`, because a zero
+ * would read as *it expired a moment ago* on an id that may never have been granted.
+ */
+const LeaseRemainingMsSchema = z.number().int().nonnegative();
+
+/**
  * What a verb call answers with — three branches, all data, mirroring
  * `AcquireDeviceResultSchema`.
  *
@@ -859,19 +878,31 @@ export type VerbRefusalReason = z.infer<typeof VerbRefusalReasonSchema>;
  *
  * `ActionResultSchema` is imported rather than restated, so the shape the verb layer
  * produces and the shape a client reads are one schema parsed twice.
+ *
+ * `expiresInMs` is the one field every branch of every verb shares (#335), which is why it is
+ * here on the factory rather than on a result — see {@link LeaseRemainingMsSchema}.
  */
 function verbCallResultOf<Ok extends z.ZodTypeAny>(ok: Ok) {
 	return z.discriminatedUnion('outcome', [
 		/** The verb ran and answered. */
-		z.object({ outcome: z.literal('ok'), result: ok }).strict(),
+		z
+			.object({ outcome: z.literal('ok'), result: ok, expiresInMs: LeaseRemainingMsSchema })
+			.strict(),
 		/** The verb ran and the answer is no. */
-		z.object({ outcome: z.literal('failed'), failure: VerbFailureSchema }).strict(),
+		z
+			.object({
+				outcome: z.literal('failed'),
+				failure: VerbFailureSchema,
+				expiresInMs: LeaseRemainingMsSchema,
+			})
+			.strict(),
 		/** No verb ran: the lease or the device was not in a state to run one. */
 		z
 			.object({
 				outcome: z.literal('refused'),
 				reason: VerbRefusalReasonSchema,
 				message: z.string().min(1),
+				expiresInMs: LeaseRemainingMsSchema.optional(),
 			})
 			.strict(),
 	]);
@@ -932,5 +963,5 @@ export type VerbCallRefusal = Exclude<VerbCallResult, { outcome: 'ok' }>;
  * a refusal is one vocabulary whatever was asked.
  */
 export type VerbCallResultOf<Result extends ActionResult> =
-	| { readonly outcome: 'ok'; readonly result: Result }
+	| { readonly outcome: 'ok'; readonly result: Result; readonly expiresInMs: number }
 	| VerbCallRefusal;

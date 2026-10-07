@@ -541,7 +541,7 @@ describe('a per-key refusal as the CLI renders it', () => {
 	);
 	const failure = toVerbFailure(refusal);
 	if (failure === null) throw new Error('the failure mapping should have caught this');
-	const answer = { outcome: 'failed', failure } as const;
+	const answer = { outcome: 'failed', failure, expiresInMs: 1_200_000 } as const;
 
 	it("prints the kind beside the message, so the discriminator is within a terminal's reach", () => {
 		const line = renderVerbAnswer(answer);

@@ -14,7 +14,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { afterEach, describe, expect, it } from 'vitest';
 import { IPC_METHODS } from '@/ipc/methods.js';
-import { ARGUMENT_CASING_NOTE } from '@/mcp/_shared/declaration.js';
+import { ARGUMENT_CASING_NOTE, LEASE_EXPIRY_NOTE } from '@/mcp/_shared/declaration.js';
 import { createRoverMcpServer, ROVER_MCP_NAME, ROVER_MCP_VERSION } from '@/mcp/server.js';
 
 /** The four device and lease rows. The verb rows have their own suite, `./verb-declarations`. */
@@ -216,6 +216,19 @@ describe('what tools/list advertises', () => {
 				(tools.find((tool) => tool.name === 'tap')?.inputSchema.properties ?? {}) as object,
 			),
 		).toContain('leaseId');
+	});
+
+	it('says the lease-expiry note on the rows that carry a lease id, and only those (#335)', async () => {
+		const tools = await advertisedTools();
+		const description = (name: string) =>
+			tools.find((tool) => tool.name === name)?.description ?? '';
+
+		// `release_device` carries a lease id, and its reader is the one who most needs to know
+		// nothing else was keeping the lease alive. The rows without one say nothing about it.
+		expect(description('release_device')).toContain(LEASE_EXPIRY_NOTE);
+		for (const name of ['status', 'list_devices', 'acquire_device']) {
+			expect(description(name)).not.toContain(LEASE_EXPIRY_NOTE);
+		}
 	});
 
 	it('takes no host parameter anywhere: where the hardware sits is configuration (D17)', async () => {
