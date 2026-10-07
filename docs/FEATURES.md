@@ -546,7 +546,12 @@ agent gets a false green are closed in the tool rather than left to the agent's 
   `true` for a screen that stopped, `false` for one that never did inside the bound — the elements
   are the last read and may be mid-transition, which is the honest half, since a screen that never
   settled is never reported as a settled one — and `null` for a verb that did not ask, which is
-  *not answered* and never a claim that it was moving. It is a **measurement, not a judgement**:
+  *not answered* and never a claim that it was moving. **Consecutive means consecutive**: a read
+  the device could not describe at all is a state the screen demonstrably went through, so the
+  comparison starts over after it rather than pairing the reads either side of it. And a read that
+  *failed* — as opposed to one that was not ready yet — is none of the three: it comes back as the
+  `failed` branch in the backend's own words, including when the backend raises the same timeout
+  class the capture's own bound raises. It is a **measurement, not a judgement**:
   two reads matched, which says nothing about whether what they carry is right. The comparison runs
   over the full backend read **before** the compact filter, because the textless containers that
   filter drops are exactly the nodes a fling moves. Nothing sleeps for it — the condition is

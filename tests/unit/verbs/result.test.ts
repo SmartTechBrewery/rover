@@ -21,7 +21,8 @@
 
 import { describe, expect, it, vi } from 'vitest';
 import type { DeviceBackend, ScreenElement } from '@/core/device.js';
-import { UnreadableScreenError } from '@/core/errors.js';
+import { ScreenElementSchema } from '@/core/device.js';
+import { UnreadableScreenError, WaitTimeoutError } from '@/core/errors.js';
 import { parseDeviceSerial } from '@/core/ids.js';
 import { DEFAULT_POLL_INTERVAL_MS } from '@/core/wait.js';
 import type { VerbContext } from '@/verbs/context.js';
@@ -241,11 +242,50 @@ describe('sameElements', () => {
 	] as const)('is false when %s differs', (_what, a, b) => {
 		expect(sameElements(a, b)).toBe(false);
 	});
+
+	it('compares every field the element schema declares, and says so from the schema', () => {
+		// The comparison is hand-written on purpose — key order must not be allowed to decide the
+		// answer — so nothing but this ties it to `ScreenElementSchema`. An eleventh field added to
+		// the element fails here rather than being quietly left out of every settle.
+		type Overrides = Partial<Omit<ScreenElement, 'id'>> & { readonly id?: string };
+		const differing: Record<string, readonly [Overrides, Overrides]> = {
+			id: [{ id: '0' }, { id: '1' }],
+			text: [{ text: 'Save' }, { text: 'Cancel' }],
+			label: [{ label: 'Save' }, { label: 'Cancel' }],
+			identifier: [{ identifier: 'com.example:id/save' }, { identifier: 'com.example:id/undo' }],
+			checked: [{ checked: false }, { checked: true }],
+			selected: [{ selected: false }, { selected: true }],
+			enabled: [{ enabled: false }, { enabled: true }],
+			clickable: [{ clickable: false }, { clickable: true }],
+			focused: [{ focused: false }, { focused: true }],
+			bounds: [
+				{ bounds: { x: 0, y: 0, width: 360, height: 48 } },
+				{ bounds: { x: 0, y: 1, width: 360, height: 48 } },
+			],
+		};
+
+		expect(Object.keys(differing).sort()).toEqual(Object.keys(ScreenElementSchema.shape).sort());
+
+		for (const [field, [a, b]] of Object.entries(differing)) {
+			expect(
+				sameElements([createMockScreenElement(a)], [createMockScreenElement(b)]),
+				`${field} is not one of the fields compared`,
+			).toBe(false);
+		}
+	});
 });
 
 describe('captureAfterState waits for a screen it can report (#333)', () => {
 	const serial = parseDeviceSerial('test-serial-1');
 	const notYet = () => new UnreadableScreenError(serial, 'null root node');
+	/** A backend read raising this module's own timeout class — the iOS companion that died. */
+	const companionTimedOut = () =>
+		new WaitTimeoutError(
+			'idb_companion for sim-udid-1 to report the socket it bound',
+			'a process that is still running',
+			60_000,
+			240,
+		);
 
 	it('polls through a read the device was not ready for, and answers the screen it then got', async () => {
 		// The #299 case, now closed for every verb and not only for the two waits.
@@ -368,5 +408,45 @@ describe('captureAfterState waits for a screen it can report (#333)', () => {
 		const after = await captureAfterState(context, settling());
 
 		expect(after).toEqual({ kind: 'screen', detail, elements, omitted, settled: true });
+	});
+
+	it('starts the comparison over when the screen went unreadable between two reads', async () => {
+		// Read 1 and read 3 are the same list, with an unreadable read between them. They are not
+		// consecutive — a screen the device could not describe is a state it demonstrably went
+		// through — so the pair that settles this is read 3 and read 4, and it takes four reads.
+		const { context, count } = contextSequence([listAt(0), notYet(), listAt(0), listAt(0)]);
+
+		const after = await captureAfterState(context, settling());
+
+		expect(after).toMatchObject({ kind: 'screen', settled: true });
+		expect(count()).toBe(4);
+	});
+
+	it('answers failed, in the backend’s own words, when a read throws this wait’s own error class', async () => {
+		// `WaitTimeoutError` is shared vocabulary and a backend read raises it too — the iOS
+		// companion that never reports the socket it bound. A read that threw one after a read
+		// that came back must never be reported as the screen from before it with `settled: false`:
+		// that is a device failure wearing a successful answer (ai/RULES.md §2).
+		const { context } = contextSequence([[title], companionTimedOut()]);
+
+		const after = await captureAfterState(context, settling());
+
+		expect(after).toMatchObject({ kind: 'failed', capability: 'canReadScreen' });
+		expect(after).toHaveProperty('message', expect.stringContaining('idb_companion'));
+		expect(after).not.toHaveProperty('settled');
+	});
+
+	it('does not dress a backend’s timeout up as this capture’s bound', async () => {
+		const { context, count } = contextSequence([companionTimedOut()]);
+
+		const after = await captureAfterState(context, fakeClock());
+
+		expect(after).toMatchObject({ kind: 'failed', capability: 'canReadScreen' });
+		const message = (after as { message: string }).message;
+		expect(message).toContain('idb_companion');
+		// One read, so the answer may not claim a poll count — the numbers in the backend's own
+		// error are its wait's, not this one's, and reporting them names a bound that never ran.
+		expect(count()).toBe(1);
+		expect(message).not.toContain('polling for');
 	});
 });

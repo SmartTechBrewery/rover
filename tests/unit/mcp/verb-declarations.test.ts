@@ -321,6 +321,13 @@ describe('what tools/list advertises for the verbs', () => {
 			if (method === 'read_screen') continue;
 			expect(toolNamed(tools, method).description).toContain('`after.settled`');
 		}
+
+		// `read_screen` takes no `after`, so the keyed-on-the-schema note deliberately skips it —
+		// but its answer carries `settled: null` all the same, and a reader of that one row would
+		// otherwise meet a field nothing in front of it defines. It says so in its own words.
+		const readScreen = toolNamed(tools, 'read_screen').description;
+		expect(readScreen).toContain('`after.settled` is `null`');
+		expect(readScreen).toContain('not a claim that it was moving');
 	});
 
 	it('tells every verb’s reader that the call renews the lease and the answer says how long is left', async () => {

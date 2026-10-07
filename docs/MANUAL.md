@@ -781,8 +781,11 @@ them. Both are bounded at two seconds. `after.settled` reports the outcome: `tru
 matched, `false` when they never did inside the bound — those elements are the last read and may be
 mid-transition, so a screen that never settled is never reported as a settled one — and `null` when
 the verb did not wait for the screen to stop, which means *nobody asked* and is never a claim that
-it was moving. Two matching reads is a measurement and not a verdict: it says the reads agreed, not
-that what they carry is right. Nothing sleeps for any of this — the condition lives in
+it was moving. A read the device could not describe at all restarts the comparison rather than
+letting the reads either side of it count as consecutive, and a read that genuinely *failed* is
+reported as a failed after-state in the backend's own words — never as the screen from before it
+with `settled: false`. Two matching reads is a measurement and not a verdict: it says the reads
+agreed, not that what they carry is right. Nothing sleeps for any of this — the condition lives in
 `src/core/wait.ts` — and a verb that does not settle pays nothing on a readable screen, since the
 wait probes before it delays (measured: `PROJECT.md` §6). Every argument and every
 result is a Zod schema of plain data, because the host runs the verb and the agent reads the answer

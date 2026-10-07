@@ -131,6 +131,13 @@ export interface SettleProbeOptions<T> {
  * A `sample()` that throws propagates unchanged, exactly as `waitForCondition`'s probe
  * contract says — which of its throws mean "not yet" is the caller's to decide, by wrapping
  * this probe the way `src/verbs/wait-for.ts` wraps its own.
+ *
+ * **"Not yet" belongs inside the sample, not around this probe**, and that is a rule rather
+ * than a style: a throw that escapes leaves the reading before it in `previous`, so the reading
+ * after it is compared against one taken two polls ago and the pair is called consecutive when
+ * it is not. A caller whose source can fail to produce a comparable reading models that failure
+ * as a reading `same` never matches — `src/verbs/result.ts`'s unreadable screen is the worked
+ * example — and the comparison then starts over, which is what the word above promises.
  */
 export function settles<T>(options: SettleProbeOptions<T>): () => Promise<Observation<T>> {
 	const { sample, same, describe } = options;
