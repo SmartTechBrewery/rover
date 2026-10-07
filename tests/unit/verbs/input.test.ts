@@ -51,7 +51,7 @@ import {
 	tap,
 	typeText,
 } from '@/verbs/input.js';
-import type { ActionResult } from '@/verbs/result.js';
+import type { ActionResult, AfterStateSeams } from '@/verbs/result.js';
 import {
 	createMockCapabilities,
 	createMockCapabilityManifest,
@@ -178,23 +178,53 @@ const AGAINST_THE_CONTENT: ReadonlyArray<[ScrollDirection, 'x' | 'y', 1 | -1]> =
 	['right', 'x', 1],
 ];
 
-/** One call of each verb, for the properties all six share. */
-const INPUT_VERBS: ReadonlyArray<[string, (context: VerbContext) => Promise<ActionResult>]> = [
-	['tap', (context) => tap(context, { by: 'text', text: 'Save' })],
-	['long_press', (context) => longPress(context, { by: 'text', text: 'Save' })],
+/**
+ * The settle wait's two seams, handed to every `scroll` and `swipe` call below.
+ *
+ * Those two verbs wait for two consecutive reads of the screen to agree before their
+ * after-state answers (#333), and **no test in this suite waits on a real duration** — the
+ * clock is a counter and the gap is recorded rather than taken (`tests/unit/core/wait.test.ts`
+ * keeps the same rule for the vocabulary itself).
+ */
+function seams(): AfterStateSeams & { readonly asked: number[] } {
+	const asked: number[] = [];
+	let current = 1_000;
+	return {
+		asked,
+		now: () => (current += 1),
+		delay: async (ms: number) => void asked.push(ms),
+	};
+}
+
+/**
+ * One call of each verb, for the properties all six share — and what each answers for
+ * `after.settled`.
+ *
+ * The third column is the one place the two drag verbs part from the other four (#333):
+ * `swipe` and `scroll` wait for two consecutive reads to agree and answer `true`, and every
+ * other verb reads once and answers `null`, which is *nobody asked* rather than *it was
+ * moving*.
+ */
+const INPUT_VERBS: ReadonlyArray<
+	[string, (context: VerbContext) => Promise<ActionResult>, boolean | null]
+> = [
+	['tap', (context) => tap(context, { by: 'text', text: 'Save' }), null],
+	['long_press', (context) => longPress(context, { by: 'text', text: 'Save' }), null],
 	[
 		'swipe',
-		(context) => swipe(context, { by: 'text', text: 'Save' }, { by: 'text', text: 'Cancel' }),
+		(context) =>
+			swipe(context, { by: 'text', text: 'Save' }, { by: 'text', text: 'Cancel' }, seams()),
+		true,
 	],
-	['scroll', (context) => scroll(context, 'down')],
-	['type_text', (context) => typeText(context, 'hello')],
-	['press_key', (context) => pressKey(context, 'home')],
+	['scroll', (context) => scroll(context, 'down', seams()), true],
+	['type_text', (context) => typeText(context, 'hello'), null],
+	['press_key', (context) => pressKey(context, 'home'), null],
 ];
 
 describe('every input verb is on the spine', () => {
 	it.each(
 		INPUT_VERBS,
-	)('%s reads the state after the action, after it (D12(c))', async (_name, run) => {
+	)('%s reads the state after the action, after it (D12(c))', async (_name, run, settled) => {
 		const { calls, context } = recording({ screen: [save, cancel] });
 
 		const result = await run(context);
@@ -207,6 +237,7 @@ describe('every input verb is on the spine', () => {
 			detail: 'compact',
 			elements: [save, cancel],
 			omitted: 0,
+			settled,
 		});
 	});
 
@@ -326,19 +357,22 @@ describe('swipe', () => {
 	it('drags between two targets, each resolved from its own read', async () => {
 		const { calls, drags, context } = recording({ screen: [save, cancel] });
 
-		await swipe(context, { by: 'text', text: 'Save' }, { by: 'text', text: 'Cancel' });
+		await swipe(context, { by: 'text', text: 'Save' }, { by: 'text', text: 'Cancel' }, seams());
 
 		expect(drags).toEqual([
 			{ from: { x: 60, y: 40 }, to: { x: 220, y: 310 }, durationMs: SWIPE_DURATION_MS },
 		]);
 		// Two reads before the gesture and neither after it until the post-state: the spine
-		// resolves `from`, the action resolves `to`, and nothing has happened in between.
+		// resolves `from`, the action resolves `to`, and nothing has happened in between. The
+		// post-state is **two** reads, because a drag settles (#333): the second is what says
+		// the screen the result describes had stopped moving.
 		expect(calls).toEqual([
 			'readScreen',
 			'deviceInfo',
 			'readScreen',
 			'deviceInfo',
 			'swipe',
+			'readScreen',
 			'readScreen',
 			'deviceInfo',
 		]);
@@ -389,7 +423,7 @@ describe('scroll', () => {
 	it('drags upwards for down, because the direction is where the content goes', async () => {
 		const { drags, context } = recording();
 
-		await scroll(context, 'down');
+		await scroll(context, 'down', seams());
 
 		const [drag] = drags;
 		// The sign is the whole assertion: the finger travels up the screen, so what is further
@@ -403,7 +437,7 @@ describe('scroll', () => {
 	)('drags against the content for %s', async (direction, axis, sign) => {
 		const { drags, context } = recording();
 
-		await scroll(context, direction);
+		await scroll(context, direction, seams());
 
 		const [drag] = drags;
 		const travelled = (drag?.from[axis] ?? 0) - (drag?.to[axis] ?? 0);
@@ -416,21 +450,22 @@ describe('scroll', () => {
 	it('crosses the screen the device reports when no region is named', async () => {
 		const { calls, drags, context } = recording();
 
-		await scroll(context, 'down');
+		await scroll(context, 'down', seams());
 
 		// The screen is 360×800dp (`createMockDeviceInfo`), so a quarter in from each edge is
 		// 200 and 600 with the drag down the middle at x = 180.
 		expect(drags).toEqual([
 			{ from: { x: 180, y: 600 }, to: { x: 180, y: 200 }, durationMs: SCROLL_DURATION_MS },
 		]);
-		// No screen read before the gesture: nothing was targeted, so nothing was resolved.
-		expect(calls).toEqual(['deviceInfo', 'swipe', 'readScreen', 'deviceInfo']);
+		// No screen read before the gesture: nothing was targeted, so nothing was resolved. The
+		// two reads after it are the settle (#333), not a resolution.
+		expect(calls).toEqual(['deviceInfo', 'swipe', 'readScreen', 'readScreen', 'deviceInfo']);
 	});
 
 	it('crosses the region it was given rather than the screen', async () => {
 		const { calls, drags, context } = recording();
 
-		await scroll(context, 'down', { target: { by: 'text', text: 'Save' } });
+		await scroll(context, 'down', { ...seams(), target: { by: 'text', text: 'Save' } });
 
 		// `save` is 10,20 100×40, so a quarter in from each edge is y 30 and 50, x 60.
 		expect(drags).toEqual([
@@ -438,12 +473,13 @@ describe('scroll', () => {
 		]);
 		// The region came from the element the spine already resolved. The `deviceInfo` calls are
 		// the range check that resolution does, the keyboard check on the computed start (#308),
-		// and the device the result names.
+		// and the device the result names. The two trailing reads are the settle (#333).
 		expect(calls).toEqual([
 			'readScreen',
 			'deviceInfo',
 			'deviceInfo',
 			'swipe',
+			'readScreen',
 			'readScreen',
 			'deviceInfo',
 		]);
@@ -452,8 +488,8 @@ describe('scroll', () => {
 	it('drags slowly enough not to fling, and takes an override', async () => {
 		const { drags, context } = recording();
 
-		await scroll(context, 'down');
-		await scroll(context, 'down', { durationMs: 50 });
+		await scroll(context, 'down', seams());
+		await scroll(context, 'down', { ...seams(), durationMs: 50 });
 
 		expect(drags[0]?.durationMs).toBe(SCROLL_DURATION_MS);
 		expect(drags[0]?.durationMs).toBeGreaterThan(SWIPE_DURATION_MS);
@@ -464,9 +500,10 @@ describe('scroll', () => {
 		const { context } = recording();
 
 		const inRegion = await scroll(context, 'down', {
+			...seams(),
 			target: { by: 'element', id: parseElementId('save') },
 		});
-		const wholeScreen = await scroll(context, 'down');
+		const wholeScreen = await scroll(context, 'down', seams());
 
 		expect(inRegion.verb).toBe('scroll');
 		expect(inRegion.target?.element?.id).toBe('save');
@@ -477,9 +514,10 @@ describe('scroll', () => {
 	it('never drags when the region it was pointed at is not on the screen', async () => {
 		const { calls, context } = recording({ screen: [cancel] });
 
-		const thrown = await scroll(context, 'down', { target: { by: 'text', text: 'Save' } }).catch(
-			(error: unknown) => error,
-		);
+		const thrown = await scroll(context, 'down', {
+			...seams(),
+			target: { by: 'text', text: 'Save' },
+		}).catch((error: unknown) => error);
 
 		expect(thrown).toBeInstanceOf(TargetNotFoundError);
 		expect(calls).not.toContain('swipe');
@@ -654,6 +692,7 @@ describe('press_key', () => {
 			detail: 'compact',
 			elements: [cancel],
 			omitted: 0,
+			settled: null,
 		});
 	});
 
@@ -817,7 +856,8 @@ describe('a touch under the on-screen keyboard', () => {
 		['long_press', (context) => longPress(context, { by: 'text', text: 'Send' })],
 		[
 			'swipe from it',
-			(context) => swipe(context, { by: 'text', text: 'Send' }, { by: 'text', text: 'Save' }),
+			(context) =>
+				swipe(context, { by: 'text', text: 'Send' }, { by: 'text', text: 'Save' }, seams()),
 		],
 	])('refuses %s, and touches nothing', async (_verb, run) => {
 		const { taps, drags, context } = recording({ screen: [save, send], keyboard: lowerHalf });
@@ -834,7 +874,7 @@ describe('a touch under the on-screen keyboard', () => {
 	it('lets a swipe end under the keyboard — only its start is checked', async () => {
 		const { drags, context } = recording({ screen: [save, send], keyboard: lowerHalf });
 
-		await swipe(context, { by: 'text', text: 'Save' }, { by: 'text', text: 'Send' });
+		await swipe(context, { by: 'text', text: 'Save' }, { by: 'text', text: 'Send' }, seams());
 
 		expect(drags).toEqual([
 			{ from: { x: 60, y: 40 }, to: { x: 100, y: 600 }, durationMs: SWIPE_DURATION_MS },
@@ -844,7 +884,7 @@ describe('a touch under the on-screen keyboard', () => {
 	it('refuses a scroll of the whole screen whose computed start is under the keyboard', async () => {
 		const { drags, context } = recording({ keyboard: lowerHalf });
 
-		const thrown = await scroll(context, 'down').catch((error: unknown) => error);
+		const thrown = await scroll(context, 'down', seams()).catch((error: unknown) => error);
 
 		expect(thrown).toBeInstanceOf(CoveredByKeyboardError);
 		const error = thrown as CoveredByKeyboardError;
@@ -859,7 +899,7 @@ describe('a touch under the on-screen keyboard', () => {
 	it('lets a scroll start clear of the keyboard and end over it', async () => {
 		const { drags, context } = recording({ keyboard: lowerHalf });
 
-		await scroll(context, 'up');
+		await scroll(context, 'up', seams());
 
 		expect(drags).toEqual([
 			{ from: { x: 180, y: 200 }, to: { x: 180, y: 600 }, durationMs: SCROLL_DURATION_MS },
@@ -869,7 +909,7 @@ describe('a touch under the on-screen keyboard', () => {
 	it('scrolls a named region clear of the keyboard', async () => {
 		const { drags, context } = recording({ screen: [save, send], keyboard: lowerHalf });
 
-		await scroll(context, 'down', { target: { by: 'text', text: 'Save' } });
+		await scroll(context, 'down', { ...seams(), target: { by: 'text', text: 'Save' } });
 
 		expect(drags).toHaveLength(1);
 	});
@@ -888,7 +928,10 @@ describe('a touch under the on-screen keyboard', () => {
 	it('scrolls a region whose centre is under the keyboard when the computed start is clear', async () => {
 		const { drags, context } = recording({ screen: [list], keyboard: lowerHalf });
 
-		await scroll(context, 'up', { target: { by: 'element', id: parseElementId('list') } });
+		await scroll(context, 'up', {
+			...seams(),
+			target: { by: 'element', id: parseElementId('list') },
+		});
 
 		// Centre (180, 450) is under the keyboard; the drag starts a quarter in, at (180, 300).
 		expect(drags).toEqual([
@@ -900,6 +943,7 @@ describe('a touch under the on-screen keyboard', () => {
 		const { drags, context } = recording({ screen: [list], keyboard: lowerHalf });
 
 		const thrown = await scroll(context, 'down', {
+			...seams(),
 			target: { by: 'element', id: parseElementId('list') },
 		}).catch((error: unknown) => error);
 
@@ -931,10 +975,10 @@ describe('an expected application that is not in front (#332)', () => {
 					context,
 					{ by: 'text', text: 'Save' },
 					{ by: 'text', text: 'Cancel' },
-					{ expectApp: app },
+					{ ...seams(), expectApp: app },
 				),
 		],
-		['scroll', (context, app) => scroll(context, 'down', { expectApp: app })],
+		['scroll', (context, app) => scroll(context, 'down', { ...seams(), expectApp: app })],
 		['type_text', (context, app) => typeText(context, 'hello', { expectApp: app })],
 		['press_key', (context, app) => pressKey(context, 'home', { expectApp: app })],
 	];

@@ -154,6 +154,7 @@ describe('waitFor', () => {
 			detail: 'compact',
 			elements: [save, spinner],
 			omitted: 0,
+			settled: null,
 		});
 	});
 
@@ -393,6 +394,7 @@ describe('waitUntilGone', () => {
 			detail: 'compact',
 			elements: [save],
 			omitted: 0,
+			settled: null,
 		});
 	});
 
@@ -459,6 +461,7 @@ describe('waitUntilGone', () => {
 			detail: 'compact',
 			elements: [save],
 			omitted: 0,
+			settled: null,
 		});
 	});
 
@@ -475,6 +478,7 @@ describe('waitUntilGone', () => {
 			detail: 'compact',
 			elements: [save],
 			omitted: 0,
+			settled: null,
 		});
 	});
 
@@ -498,6 +502,7 @@ describe('waitUntilGone', () => {
 			detail: 'compact',
 			elements: [save],
 			omitted: 0,
+			settled: null,
 		});
 	});
 

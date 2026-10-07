@@ -12,6 +12,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { DeviceBackend, DeviceInfo } from '@/core/device.js';
 import { MissingCapabilityError } from '@/core/errors.js';
 import { parseAppId } from '@/core/ids.js';
+import { DEFAULT_POLL_INTERVAL_MS } from '@/core/wait.js';
 import { capabilityMethod, type VerbContext } from '@/verbs/context.js';
 import {
 	AppNotInForegroundError,
@@ -137,7 +138,31 @@ describe('performAction', () => {
 			detail: 'compact',
 			elements: [save],
 			omitted: 0,
+			settled: null,
 		});
+	});
+
+	it('forwards the after-state options to the capture, so a verb can ask the screen to settle', async () => {
+		const asked: number[] = [];
+		let current = 1_000;
+		const context = recordingContext([]);
+
+		const result = await performAction(context, {
+			verb: 'fake_scroll',
+			requires: ['canInput'],
+			target: { by: 'text', text: 'Save' },
+			afterState: {
+				settle: true,
+				now: () => (current += 1),
+				delay: async (ms: number) => void asked.push(ms),
+			},
+			act: tapAction(context),
+		});
+
+		// The spine passes the options through rather than deciding anything about them: the
+		// settle is the verb's, and the seams are the test's (#333).
+		expect(result.after).toMatchObject({ kind: 'screen', settled: true });
+		expect(asked).toEqual([DEFAULT_POLL_INTERVAL_MS]);
 	});
 
 	it('hands the action the target it resolved', async () => {

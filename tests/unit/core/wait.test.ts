@@ -13,6 +13,7 @@ import {
 	DEFAULT_POLL_INTERVAL_MS,
 	type Observation,
 	pause,
+	settles,
 	waitForCondition,
 } from '@/core/wait.js';
 
@@ -185,6 +186,103 @@ describe('waitForCondition', () => {
 		});
 
 		expect(asked).toEqual([DEFAULT_POLL_INTERVAL_MS]);
+	});
+});
+
+describe('settles', () => {
+	/** A sampler over a scripted list of readings, counting how many were taken. */
+	function sampling(readings: readonly string[]) {
+		let at = 0;
+		return {
+			taken: () => at,
+			probe: settles<string>({
+				sample: async () => readings[Math.min(at++, readings.length - 1)] as string,
+				same: (previous, current) => previous === current,
+				describe: (current) => `a reading of ${current}`,
+			}),
+		};
+	}
+
+	it('is never met on the first sample — there is nothing before it to compare against', async () => {
+		const { probe } = sampling(['still']);
+
+		expect(await probe()).toEqual({
+			met: false,
+			found: 'a reading of still, with nothing before it to compare against',
+		});
+	});
+
+	it('is met on the second sample when the two match, and samples exactly once per probe', async () => {
+		const { probe, taken } = sampling(['still']);
+
+		expect(await probe()).toMatchObject({ met: false });
+		expect(await probe()).toEqual({ met: true, value: 'still' });
+		// Once per call, not twice: a settle over n polls costs n readings, not 2n.
+		expect(taken()).toBe(2);
+	});
+
+	it('says a reading differed from the one before it, rather than only that it is unmet', async () => {
+		const { probe } = sampling(['a', 'b']);
+
+		await probe();
+
+		expect(await probe()).toEqual({
+			met: false,
+			found: 'a reading of b, different from the reading before it',
+		});
+	});
+
+	it('never settles a reading that changes every time, and the timeout says what it last saw', async () => {
+		const { asked, delay } = recordingDelay();
+		let at = 0;
+		const probe = settles<number>({
+			sample: async () => at++,
+			same: (previous, current) => previous === current,
+			describe: (current) => `a reading of ${current}`,
+		});
+
+		const thrown = await waitForCondition({
+			what: 'the screen to stop moving',
+			timeoutMs: 1_000,
+			pollIntervalMs: 250,
+			probe,
+			now: tickingClock(250),
+			delay,
+		}).catch((error: unknown) => error);
+
+		expect(thrown).toBeInstanceOf(WaitTimeoutError);
+		expect((thrown as WaitTimeoutError).found).toContain('different from the reading before it');
+		expect(asked.length).toBeGreaterThan(0);
+	});
+
+	it('cannot settle at timeoutMs 0 — one check is one reading, and one reading is no comparison', async () => {
+		const { asked, delay } = recordingDelay();
+		const { probe, taken } = sampling(['still']);
+
+		const thrown = await waitForCondition({
+			what: 'the screen to stop moving',
+			timeoutMs: 0,
+			probe,
+			delay,
+		}).catch((error: unknown) => error);
+
+		expect(thrown).toBeInstanceOf(WaitTimeoutError);
+		expect((thrown as WaitTimeoutError).found).toContain('nothing before it to compare against');
+		expect(taken()).toBe(1);
+		expect(asked).toEqual([]);
+	});
+
+	it('propagates a sample that throws, exactly as the probe contract says', async () => {
+		const probe = settles<string>({
+			sample: async () => {
+				throw new Error('the device went away');
+			},
+			same: (previous, current) => previous === current,
+			describe: (current) => current,
+		});
+
+		// Which throws mean "not yet" is the caller's to decide, not this probe's.
+		await expect(probe()).rejects.toThrow('the device went away');
 	});
 });
 

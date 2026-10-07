@@ -25,7 +25,9 @@ import {
 	type ScreenElement,
 	ScreenElementSchema,
 } from '../core/device.js';
+import { UnreadableScreenError, WaitTimeoutError } from '../core/errors.js';
 import type { DeviceSerial } from '../core/ids.js';
+import { type Observation, settles, waitForCondition } from '../core/wait.js';
 import { capabilityMethod, type VerbContext } from './context.js';
 import { ArtifactTooLargeError } from './errors.js';
 
@@ -112,6 +114,21 @@ export function carriesSomething(element: ScreenElement): boolean {
  * a compact list that comes back **empty** (a canvas, a WebView, a screen of textless nodes)
  * must not read as a blank screen, and `omitted: 87` says it is not. A count is arithmetic,
  * not a verdict (ai/RULES.md §1).
+ *
+ * **And it says whether the screen had stopped moving when it was taken** (#333). A `scroll`
+ * that ends in a fling, and an application still drawing its first frame, both used to be
+ * reported as settled fact; `settled` is the field that stops them being. It is a
+ * **measurement** — two consecutive reads carried the same elements — and never a verdict
+ * (ai/RULES.md §1): it says the two reads matched, not that what they carry is right.
+ *
+ * - **`true`** — two consecutive reads matched, so the screen had stopped moving.
+ * - **`false`** — the bound passed and no two consecutive reads ever matched. `elements` is
+ *   the **last** read and may be mid-transition. This is the honest half: a screen that
+ *   never settled is never reported as a settled one.
+ * - **`null`** — this verb did not ask the screen to stop, so nobody looked. **Not a claim
+ *   that it was moving** — the rule `ScreenElement.checked`, `ScreenInfo.keyboard` and
+ *   `DeviceInfo.foregroundApp` already keep: `null` is *not answered*, never a guessed
+ *   `false`.
  */
 export const AfterStateSchema = z.discriminatedUnion('kind', [
 	z
@@ -120,6 +137,7 @@ export const AfterStateSchema = z.discriminatedUnion('kind', [
 			detail: AfterDetailSchema,
 			elements: z.array(ScreenElementSchema),
 			omitted: z.number().int().nonnegative(),
+			settled: z.boolean().nullable(),
 		})
 		.strict(),
 	z
@@ -296,12 +314,13 @@ export async function resultAfterAction(
 	context: VerbContext,
 	verb: string,
 	target: ResolvedTarget | null,
+	afterState: AfterStateOptions = {},
 ): Promise<ActionResult> {
 	// Past this line the action has happened, so the after-state is captured rather than
 	// risked: `captureAfterState` below answers a `failed` branch instead of throwing,
 	// because an exception here would take the whole result with it and leave the agent
 	// unable to tell whether the action landed — the one thing D12(c) exists to rule out.
-	const after = await captureAfterState(context);
+	const after = await captureAfterState(context, afterState);
 
 	// `deviceInfo` is read again, after the action, and is deliberately *not* the value
 	// target resolution used: an action can rotate the device, and a result pairing
@@ -314,6 +333,85 @@ export async function resultAfterAction(
 	return ActionResultSchema.parse({ verb, device, target, after, artifact: null });
 }
 
+/**
+ * The longest an after-state spends getting a screen that is readable and, when asked, still.
+ *
+ * One number for both ends, because a capture has one budget however the screen is failing to
+ * be ready. Sized against what was measured rather than picked: the longest unreadable window
+ * either backend has been measured holding open after a cold launch is a quarter of a second
+ * (PROJECT.md §6, #299/#300 — one of the two has no measured duration recorded at all, only the
+ * line and the state that holds it open), and a fling decelerates in a few hundred milliseconds.
+ * Several times either, with headroom — and it is paid **only** when the screen is not ready,
+ * because `waitForCondition` probes before it delays: a readable screen on a verb that does not
+ * settle costs one read and no wait.
+ *
+ * A named constant and not configuration (ai/RULES.md §7): no environment variable, no config
+ * file and no per-call override. A caller that wants to watch a screen settle has `wait_for`.
+ */
+export const AFTER_STATE_TIMEOUT_MS = 2_000;
+
+/**
+ * The after-state wait's two test seams, which a verb forwards from its own options.
+ *
+ * `now` and `delay` mirror `WaitVerbOptions`' pair exactly and for its reason: no test in this
+ * suite may wait on a real duration to prove something about waiting. They are not a
+ * configuration surface, and nothing on the wire will ever carry them —
+ * `src/ipc/verb-methods.ts` is `.strict()`, so one sent there is `invalid_params`.
+ */
+export interface AfterStateSeams {
+	/** Defaults to `Date.now`. Injected by tests, not a configuration surface. */
+	readonly now?: () => number;
+	/** Defaults to the wait vocabulary's own poll gap. Injected by tests. */
+	readonly delay?: (ms: number) => Promise<void>;
+}
+
+/** How the state after an action is captured — see {@link captureAfterState}. */
+export interface AfterStateOptions extends AfterStateSeams {
+	/**
+	 * Wait until two consecutive reads carry the same elements before answering.
+	 *
+	 * Absent means read once the screen is readable: the screen may still be moving, and
+	 * `settled` says `null` rather than guessing that it was not.
+	 */
+	readonly settle?: boolean;
+}
+
+/**
+ * Whether two reads describe the same screen — length first, then every field of every
+ * element in order, `bounds` included, because bounds are what a fling moves.
+ *
+ * **A measurement, not a judgement** (ai/RULES.md §1): it reports that two reads matched and
+ * says nothing about whether the screen is right.
+ *
+ * Hand-written rather than `JSON.stringify` on both sides, which would make the answer depend
+ * on key order — two reads of one unchanged screen could serialise differently and be called
+ * movement, and the bug would only ever appear on whichever backend built its objects in
+ * another order.
+ */
+export function sameElements(a: readonly ScreenElement[], b: readonly ScreenElement[]): boolean {
+	if (a.length !== b.length) return false;
+	return a.every((element, index) => sameElement(element, b[index] as ScreenElement));
+}
+
+/** Whether two elements of two reads are the same element, field by field. */
+function sameElement(a: ScreenElement, b: ScreenElement): boolean {
+	return (
+		a.id === b.id &&
+		a.text === b.text &&
+		a.label === b.label &&
+		a.identifier === b.identifier &&
+		a.checked === b.checked &&
+		a.selected === b.selected &&
+		a.enabled === b.enabled &&
+		a.clickable === b.clickable &&
+		a.focused === b.focused &&
+		a.bounds.x === b.bounds.x &&
+		a.bounds.y === b.bounds.y &&
+		a.bounds.width === b.bounds.width &&
+		a.bounds.height === b.bounds.height
+	);
+}
+
 /** Why a `failed` after-state happened — the action ran, the read did not. */
 function screenReadFailed(serial: DeviceSerial, error: unknown): string {
 	const reason = error instanceof Error ? error.message : String(error);
@@ -323,12 +421,75 @@ function screenReadFailed(serial: DeviceSerial, error: unknown): string {
 	);
 }
 
+/**
+ * Why a `failed` after-state happened when the whole bound went by without one readable read.
+ *
+ * Says how long it polled and how many reads it took, for `WaitTimeoutError`'s own reason:
+ * "checked once" and "checked eight times" are different diagnoses of the same elapsed time.
+ */
+function screenNeverReadable(serial: DeviceSerial, error: WaitTimeoutError): string {
+	return (
+		`The action ran on device '${serial}', but reading the screen afterwards failed after ` +
+		`polling for ${error.timeoutMs}ms (${error.polls} reads): ${error.found} — what is on ` +
+		'screen now is unknown, not unchanged'
+	);
+}
+
 /** Why an `unavailable` after-state happened, in the same words `MissingCapabilityError` uses. */
 function cannotReadScreen(serial: DeviceSerial, manifest: CapabilityManifest): string {
 	return (
 		`Device '${serial}' cannot report what is on screen after an action: the ` +
 		`${manifest.label} backend ('${manifest.platform}') does not declare 'canReadScreen'`
 	);
+}
+
+/**
+ * One reading the after-state wait took.
+ *
+ * Modelled as a value rather than as a throw because the settle probe compares *readings*, and
+ * a reading it never sees is one it cannot start over from: the screen the device could not
+ * describe yet has to be able to sit in `previous` and match nothing.
+ *
+ * A reading that failed carries an empty `elements`, which is never reported and never can be —
+ * {@link sameReading} refuses to match it, so it is never a met observation, and the only lists
+ * that reach an answer are a met reading's and the last read that came back.
+ */
+interface Reading {
+	readonly elements: readonly ScreenElement[];
+	/** `null` on a read that came back; the backend's own reason on one that did not. */
+	readonly unreadable: string | null;
+}
+
+/**
+ * Whether two readings are the same reading — two reads that came back and describe the same
+ * screen. A screen that went unreadable in between demonstrably changed state, so a reading
+ * that failed matches nothing on either side and the comparison starts over after it.
+ */
+function sameReading(previous: Reading, current: Reading): boolean {
+	if (previous.unreadable !== null || current.unreadable !== null) return false;
+	return sameElements(previous.elements, current.elements);
+}
+
+/** What one reading is, in a few words, for an unmet observation's required `found`. */
+function describeReading(reading: Reading): string {
+	return reading.unreadable === null
+		? `a read of ${reading.elements.length} elements`
+		: `a screen that could not be read — ${reading.unreadable}`;
+}
+
+/**
+ * A backend read that threw, carried out of the poll inside something only this module makes.
+ *
+ * `WaitTimeoutError` is shared vocabulary — a backend's own read raises it, waiting on a helper
+ * process of its own that never came up — so class identity alone cannot tell this capture's
+ * bound from a device that broke under it. Wrapping on the way out makes that distinction structural:
+ * a bare `WaitTimeoutError` reaching the catch is this function's own, by construction.
+ */
+class BackendReadFailed extends Error {
+	constructor(readonly cause: unknown) {
+		super('a backend read failed');
+		this.name = 'BackendReadFailed';
+	}
 }
 
 /**
@@ -356,8 +517,30 @@ function cannotReadScreen(serial: DeviceSerial, manifest: CapabilityManifest): s
  * same answer, and never in a backend. Target resolution never sees this list — a target is
  * resolved from a fresh backend read (D12(a)) — so a kept element's id is the same ordinal id
  * the full read carries, and resolves the same way.
+ *
+ * **The read is a wait now, on a condition with a bound** (#333, D12(b)). It was one attempt
+ * taken the instant the action returned, which made two field failures the next poll would
+ * have passed. An application still starting answers `UnreadableScreenError` — every backend has
+ * its own version of *no window to describe yet* (PROJECT.md §6, #299/#300) — and that became a
+ * `failed` after-state on attempt one, even though `wait_for` had already learned to poll
+ * through exactly it. And a `scroll` whose fling is still travelling answers bounds that
+ * are stale before the agent reads them. So every verb's after-state now polls until the
+ * screen is **readable**, and the two drag verbs additionally until two consecutive reads
+ * carry the same elements ({@link AfterStateOptions.settle}, {@link sameElements}). A screen
+ * that never settles inside {@link AFTER_STATE_TIMEOUT_MS} is answered with its last read and
+ * `settled: false` — never as a settled one — and a screen that is never readable inside it is
+ * the `failed` branch, saying how long it polled. The cost on a screen that is already
+ * readable, for a verb that does not settle, is unchanged: one read and no delay at all.
+ *
+ * The settle comparison is over the **full backend read, before the compact filter**. The
+ * textless containers the compact rule drops are exactly the nodes whose bounds a fling moves,
+ * so comparing the compact lists would call a moving screen still. The filter runs once, on
+ * the read that is finally answered with.
  */
-export async function captureAfterState(context: VerbContext): Promise<AfterState> {
+export async function captureAfterState(
+	context: VerbContext,
+	options: AfterStateOptions = {},
+): Promise<AfterState> {
 	if (!supportsCapability(context.manifest, 'canReadScreen')) {
 		return {
 			kind: 'unavailable',
@@ -366,20 +549,116 @@ export async function captureAfterState(context: VerbContext): Promise<AfterStat
 		};
 	}
 
+	const settle = options.settle === true;
+	// The last read that succeeded, so a screen that never settled still has something to be
+	// reported with. `null` means no read ever got through, which is the one case left with
+	// nothing to say about the screen.
+	let latest: readonly ScreenElement[] | null = null;
+
 	try {
 		const readScreen = capabilityMethod(context, 'canReadScreen', 'readScreen');
-		const elements = await readScreen(context.serial);
-		const detail = context.afterDetail ?? DEFAULT_AFTER_DETAIL;
-		if (detail === 'full') {
-			return { kind: 'screen', detail, elements, omitted: 0 };
-		}
-		const kept = elements.filter(carriesSomething);
-		return { kind: 'screen', detail, elements: kept, omitted: elements.length - kept.length };
+		// The same translation, in the same words, `src/verbs/wait-for.ts`'s `pollScreen` makes:
+		// a screen the device could not read *yet* is "not yet", so the two places that poll
+		// through this failure read it identically. It happens **inside** the sample rather than
+		// around the probe for two reasons, both of them bugs that shape removed:
+		//
+		// - An unreadable read is a reading the settle probe sees, so it becomes `previous` and
+		//   nothing matches it. A throw that escaped the probe left the reading before it in
+		//   place, and read N and read N+2 could then be called consecutive across it — a screen
+		//   that went unreadable in between demonstrably changed state, so the comparison starts
+		//   over instead.
+		// - Everything else a backend read throws is wrapped on its way out, so only this
+		//   function's own `waitForCondition` can produce a bare `WaitTimeoutError`. The class is
+		//   shared vocabulary and a backend's read raises it too — a helper process it supervises
+		//   that never reports the socket it bound — and without the wrapper that failure arrived
+		//   here wearing this capture's bound: reported as a settled-looking screen, or as a bound
+		//   it never had.
+		const sample = async (): Promise<Reading> => {
+			try {
+				const elements = await readScreen(context.serial);
+				latest = elements;
+				return { elements, unreadable: null };
+			} catch (error) {
+				if (error instanceof UnreadableScreenError) {
+					return { elements: [], unreadable: error.reason };
+				}
+				throw new BackendReadFailed(error);
+			}
+		};
+
+		const probe: () => Promise<Observation<Reading>> = settle
+			? settles<Reading>({ sample, same: sameReading, describe: describeReading })
+			: async () => {
+					const reading = await sample();
+					return reading.unreadable === null
+						? { met: true, value: reading }
+						: { met: false, found: describeReading(reading) };
+				};
+
+		const reading = await waitForCondition<Reading>({
+			what: settle
+				? 'a readable screen after the action that has stopped moving'
+				: 'a readable screen after the action',
+			timeoutMs: AFTER_STATE_TIMEOUT_MS,
+			now: options.now,
+			delay: options.delay,
+			probe,
+		});
+
+		return screenAfter(context, reading.elements, settle ? true : null);
 	} catch (error) {
+		// Unwrapped first, because a backend read that threw is not this capture's bound passing:
+		// it is a device that broke, and it reads as itself in the words it arrived in.
+		if (error instanceof BackendReadFailed) {
+			return {
+				kind: 'failed',
+				capability: 'canReadScreen',
+				message: screenReadFailed(context.serial, error.cause),
+			};
+		}
+		if (error instanceof WaitTimeoutError) {
+			// This capture's own bound, and only ever that one — every other throw from the poll
+			// came back wrapped. Reachable only while settling, because a capture that is not
+			// settling is met by its first readable read, which is what makes `settled: false`
+			// mean exactly one thing.
+			if (latest !== null) {
+				return screenAfter(context, latest, false);
+			}
+			return {
+				kind: 'failed',
+				capability: 'canReadScreen',
+				message: screenNeverReadable(context.serial, error),
+			};
+		}
 		return {
 			kind: 'failed',
 			capability: 'canReadScreen',
 			message: screenReadFailed(context.serial, error),
 		};
 	}
+}
+
+/**
+ * One read, narrowed by the caller's `detail` and stamped with what the wait established.
+ *
+ * Both exits of {@link captureAfterState}'s `screen` branch come through here, so the settled
+ * answer and the never-settled one cannot drift into applying different rules to their list.
+ */
+function screenAfter(
+	context: VerbContext,
+	elements: readonly ScreenElement[],
+	settled: boolean | null,
+): AfterState {
+	const detail = context.afterDetail ?? DEFAULT_AFTER_DETAIL;
+	if (detail === 'full') {
+		return { kind: 'screen', detail, elements: [...elements], omitted: 0, settled };
+	}
+	const kept = elements.filter(carriesSomething);
+	return {
+		kind: 'screen',
+		detail,
+		elements: kept,
+		omitted: elements.length - kept.length,
+		settled,
+	};
 }

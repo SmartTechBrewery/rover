@@ -225,7 +225,10 @@ every backend that takes input to answer it, where an option could be silently i
 `scroll`'s direction is where the **content** goes — the sense a scrollbar and a wheel already
 have — so `scroll 'down'` drags upwards; it scrolls the element it was pointed at, or the screen
 when pointed at nothing, and it refuses a bare coordinate, because a point has no extent and cannot
-say how far a scroll may travel.
+say how far a scroll may travel. **`scroll` and `swipe` are also the two verbs whose answer waits
+for the screen to stop moving** (#333, §5): a drag is the one gesture that keeps travelling after
+the finger leaves, so their after-state polls until two consecutive reads agree before it answers,
+and `after.settled` says whether it got there inside the bound.
 
 **`hide_keyboard` is the deliberate exception, and the reason is in the gesture** (#307). The
 obvious composition — `press_key back` from the verb layer — is the one thing it must not be: on
@@ -532,6 +535,30 @@ agent gets a false green are closed in the tool rather than left to the agent's 
   `after: 'full'` for every node; `read_screen` is always the whole tree, since `scroll` and
   element-id targets need the containers. There is deliberately no `after: 'none'`: a smaller
   answer is still the state after the action, and no answer would break the rule this bullet is.
+  **And that read is itself a wait now** (#333), because a state read mid-transition is the same
+  false green this bullet closes, told a frame later: the capture used to be one attempt taken the
+  instant the action returned, so an application still starting answered *the read failed* on the
+  transient `wait_for` already polls through, and a `scroll` that ended in a fling answered bounds
+  the list was still moving — a `tap` aimed at a row from them did not land, repeatedly, in a real
+  session. Every verb's after-state now polls until the screen is **readable**, to a 2 s bound, and
+  `swipe` and `scroll` — the two gestures that keep travelling after the finger leaves —
+  additionally until **two consecutive reads carry the same elements**. `after.settled` says which:
+  `true` for a screen that stopped, `false` for one that never did inside the bound — the elements
+  are the last read and may be mid-transition, which is the honest half, since a screen that never
+  settled is never reported as a settled one — and `null` for a verb that did not ask, which is
+  *not answered* and never a claim that it was moving. **Consecutive means consecutive**: a read
+  the device could not describe at all is a state the screen demonstrably went through, so the
+  comparison starts over after it rather than pairing the reads either side of it. And a read that
+  *failed* — as opposed to one that was not ready yet — is none of the three: it comes back as the
+  `failed` branch in the backend's own words, including when the backend raises the same timeout
+  class the capture's own bound raises. It is a **measurement, not a judgement**:
+  two reads matched, which says nothing about whether what they carry is right. The comparison runs
+  over the full backend read **before** the compact filter, because the textless containers that
+  filter drops are exactly the nodes a fling moves. Nothing sleeps for it — the condition is
+  `settles()` in `src/core/wait.ts` — and nothing is paid for it on a screen that is already
+  readable: measured on a booted iPhone 17 against the same commit it was cut from, the two
+  settling verbs cost +0.4 to +0.5 s (about one more read) and the verbs that do not settle are
+  unchanged inside the noise (`PROJECT.md` §6).
 
 **The two waits stand beside the spine rather than on it**, because `performAction()` resolves
 before it acts and for a wait the resolution *is* the work. **Every poll reads the screen again** —
@@ -543,18 +570,27 @@ keyboard* if it never clears — while an ambiguous target is refused outright,
 because more polling cannot specify an under-specified request. A screen the device could not
 read **yet** — an application still starting, so there is no window to describe — is the second
 *not yet*, and both waits poll through it; if it lasts to the deadline the timeout says the
-screen was never readable rather than that the element was not found. A verb that reads once
-instead fails on it by name (`unreadable-screen`), because polling is a wait's job and not a
-primitive's. **Both backends report it, and each recognises its own platform's version** — on
+screen was never readable rather than that the element was not found. **That *not yet* is no longer the two waits' alone** — this sentence is rewritten in place with
+its reasoning, per `ai/RULES.md` §1. It read *a verb that reads once instead fails on it by name
+(`unreadable-screen`), because polling is a wait's job and not a primitive's*, and the division it
+drew was between a **verb** and a **wait**. The real division is between a **primitive** and a
+**capture**: a backend's `readScreen` still reads once and still fails by name, because polling is
+not a primitive's job and never was. But an after-state is not a primitive — it is the verb layer
+reading a screen, which is what a wait does too — and leaving it on one attempt meant every
+action but the two waits gave up on a transient the next poll would have passed (#333). So since
+#333 every verb's after-state polls through it as well, to its own 2 s bound, and answers the
+`failed` branch only when the whole bound went by without one readable read, saying how long it
+polled and how many reads it took. **Both backends report it, and each recognises its own platform's version** — on
 Android the screen reader saying it had no root node to walk, on the iOS simulator an
 accessibility read that lists the starting application and nothing in it with a rectangle. Neither
 is an empty screen, and neither is reported as one. `wait_until_gone` asks the mirror
 question of *matches* rather than of a resolution, and will not take a text target's `index`, since
 an index names a slot in the match list and a slot empties the moment any sibling leaves.
 
-**Where it lives.** `src/verbs/perform.ts`, `result.ts` (`captureAfterState`, `carriesSomething`), `target.ts` (the keyboard check is `keyboardCovering`
-and `requireUncovered`; the four target kinds and `findOnScreen`'s matching), `input.ts` (`scroll`'s own start check), `wait-for.ts`, `errors.ts`
-(`CoveredByKeyboardError`), `failure.ts`, `src/core/wait.ts`, `tests/unit/no-sleep.test.ts`;
+**Where it lives.** `src/verbs/perform.ts`, `result.ts` (`captureAfterState`, `carriesSomething`,
+`sameElements`, `AFTER_STATE_TIMEOUT_MS`), `target.ts` (the keyboard check is `keyboardCovering`
+and `requireUncovered`; the four target kinds and `findOnScreen`'s matching), `input.ts` (`scroll`'s own start check, and the two verbs that settle), `wait-for.ts`, `errors.ts`
+(`CoveredByKeyboardError`), `failure.ts`, `src/core/wait.ts` (`waitForCondition` and `settles`), `tests/unit/no-sleep.test.ts`;
 `PROJECT.md` D12 and §6.
 
 ---

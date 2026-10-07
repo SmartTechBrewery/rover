@@ -296,7 +296,11 @@ const VERB_TOOLS: readonly VerbToolRow[] = [
 			'device did not say**, never `false`. This is **every** node, the textless containers ' +
 			'`scroll` and element-id targets need included; an action answers a compact after-state ' +
 			'of the same fields unless it is passed `after: "full"`. It survives an application that blocks screen capture, ' +
-			'which is why it is the read to reach for when a capture comes back blank. The answer ' +
+			'which is why it is the read to reach for when a capture comes back blank. The read is ' +
+			'**polled** to the same bound an action’s after-state is: a screen the device cannot ' +
+			'describe yet is waited for rather than failed on. `after.settled` is `null` here and ' +
+			'always will be — this verb moves nothing, so it never waits for the screen to stop, and ' +
+			'`null` is not a claim that it was moving. The answer ' +
 			'also reports the **on-screen keyboard** on its device half — `screen.keyboard`, with ' +
 			'`shown` and the rectangle it occupies in the same dp space the element bounds are in. ' +
 			'An element under that rectangle is still in the list and still has bounds, so it is on ' +

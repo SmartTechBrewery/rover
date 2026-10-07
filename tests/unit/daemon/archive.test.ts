@@ -86,7 +86,7 @@ function resultOf(verb: string, overrides: Partial<ArchivableResult> = {}): Arch
 		verb,
 		device: createMockDeviceInfo({ serial: lease.serial }),
 		target: null,
-		after: { kind: 'screen', detail: 'compact', elements: [], omitted: 0 },
+		after: { kind: 'screen', detail: 'compact', elements: [], omitted: 0, settled: null },
 		artifact: null,
 		...overrides,
 	};

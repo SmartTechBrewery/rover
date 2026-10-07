@@ -150,6 +150,7 @@ describe('start_recording', () => {
 			detail: 'compact',
 			elements: [save],
 			omitted: 0,
+			settled: null,
 		});
 		expect(result.device).toEqual(createMockDeviceInfo({ serial: context.serial }));
 	});

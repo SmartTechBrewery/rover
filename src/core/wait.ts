@@ -103,3 +103,64 @@ export function pause(ms: number): Promise<void> {
 		setTimeout(resolve, ms);
 	});
 }
+
+/** What {@link settles} needs to take a reading and to tell two of them apart. */
+export interface SettleProbeOptions<T> {
+	/** Takes one reading. Called **once** per poll, never twice. */
+	readonly sample: () => Promise<T>;
+	/** Whether two consecutive readings are the same reading. A measurement, never a judgement. */
+	readonly same: (previous: T, current: T) => boolean;
+	/** What one reading is, in a few words, for the unmet branch's required `found`. */
+	readonly describe: (current: T) => string;
+}
+
+/**
+ * A probe that is met when two **consecutive** samples are the same — *it has stopped
+ * changing*, as a condition rather than as a duration somebody guessed (D12(b)).
+ *
+ * This adds a condition to the vocabulary, not a second way to wait: {@link waitForCondition}
+ * runs it and owns the only delay, so the no-sleep rule (ai/RULES.md §2) is untouched.
+ *
+ * The first call can never be met — there is nothing before it to compare against — so a
+ * settle costs at least two samples and exactly one poll gap, and `timeoutMs: 0` therefore
+ * cannot settle: one check is one reading, and one reading says nothing about movement.
+ *
+ * **Two consecutive equal readings is a measurement** (ai/RULES.md §1). It reports that the
+ * two samples matched; it says nothing about whether what they carry is right.
+ *
+ * A `sample()` that throws propagates unchanged, exactly as `waitForCondition`'s probe
+ * contract says — which of its throws mean "not yet" is the caller's to decide, by wrapping
+ * this probe the way `src/verbs/wait-for.ts` wraps its own.
+ *
+ * **"Not yet" belongs inside the sample, not around this probe**, and that is a rule rather
+ * than a style: a throw that escapes leaves the reading before it in `previous`, so the reading
+ * after it is compared against one taken two polls ago and the pair is called consecutive when
+ * it is not. A caller whose source can fail to produce a comparable reading models that failure
+ * as a reading `same` never matches — `src/verbs/result.ts`'s unreadable screen is the worked
+ * example — and the comparison then starts over, which is what the word above promises.
+ */
+export function settles<T>(options: SettleProbeOptions<T>): () => Promise<Observation<T>> {
+	const { sample, same, describe } = options;
+	// Two variables rather than one, because `null` is a legitimate reading: a probe over a
+	// nullable sample would otherwise read its own "nothing yet" as a value that had matched.
+	let previous: T | undefined;
+	let hasPrevious = false;
+
+	return async () => {
+		const current = await sample();
+		const first = !hasPrevious;
+		const settled = hasPrevious && same(previous as T, current);
+		previous = current;
+		hasPrevious = true;
+
+		if (settled) {
+			return { met: true, value: current };
+		}
+		return {
+			met: false,
+			found: first
+				? `${describe(current)}, with nothing before it to compare against`
+				: `${describe(current)}, different from the reading before it`,
+		};
+	};
+}

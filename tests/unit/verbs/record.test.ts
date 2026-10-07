@@ -200,6 +200,7 @@ describe('record_video', () => {
 			detail: 'compact',
 			elements: [save],
 			omitted: 0,
+			settled: null,
 		});
 		expect(result.device).toEqual(createMockDeviceInfo({ serial: context.serial }));
 	});
