@@ -145,7 +145,12 @@ describe('start_recording', () => {
 
 		expect(result.verb).toBe('start_recording');
 		expect(calls).toEqual(['startRecording', 'readScreen', 'deviceInfo']);
-		expect(result.after).toEqual({ kind: 'screen', elements: [save] });
+		expect(result.after).toEqual({
+			kind: 'screen',
+			detail: 'compact',
+			elements: [save],
+			omitted: 0,
+		});
 		expect(result.device).toEqual(createMockDeviceInfo({ serial: context.serial }));
 	});
 

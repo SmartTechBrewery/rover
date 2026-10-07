@@ -18,10 +18,16 @@
  * agent that reads one tool's declaration has been told, and one that reads only the schema
  * sees the spelling in the properties either way.
  *
+ * The same function carries a second note, on the tools that take `after` only — what the
+ * compact after-state leaves out and how to ask for the rest — for the same reason: it is said
+ * where the declaration is built, so no row can forget it.
+ *
  * {@link declaring} is what makes "every tool" structural rather than remembered — the three
  * registrars hand their declaration through it, so a tool added later cannot land without the
  * note by forgetting a string.
  */
+
+import { ZodObject } from 'zod';
 
 /**
  * The one sentence appended to every tool's description.
@@ -35,6 +41,25 @@ export const ARGUMENT_CASING_NOTE =
 	'parses and what a refusal names. Copy the property names from the schema rather than from ' +
 	'the tool name.';
 
+/**
+ * The sentence appended to every tool whose input schema declares `after` — every action verb,
+ * which answers a compact after-state unless asked otherwise (#330, `src/verbs/result.ts`).
+ *
+ * Keyed on the schema rather than on a list of tool names, so it cannot drift from the wire:
+ * a row that takes `after` says what it does, and `read_screen`, which does not, says nothing.
+ */
+export const COMPACT_AFTER_NOTE =
+	'The answer’s after-state is compact: `after.elements` lists only the elements that carry ' +
+	'text, a label, an identifier, or a clickable, checkable or focused state, and ' +
+	'`after.omitted` counts the textless containers left out — an empty list with a non-zero ' +
+	'`omitted` is not a blank screen. Pass `after: "full"` for every node, or call ' +
+	'`read_screen`, which always answers the whole tree.';
+
+/** Whether a declared input schema carries the `after` option. */
+function declaresAfter(schema: unknown): boolean {
+	return schema instanceof ZodObject && 'after' in schema.shape;
+}
+
 /** A tool declaration, whatever schema type it carries. Generic so the SDK still infers it. */
 interface ToolDeclaration<Schema> {
 	readonly title: string;
@@ -43,11 +68,15 @@ interface ToolDeclaration<Schema> {
 }
 
 /**
- * One declaration, with {@link ARGUMENT_CASING_NOTE} on the end of its description.
+ * One declaration, with {@link ARGUMENT_CASING_NOTE} on the end of its description — and,
+ * before it, {@link COMPACT_AFTER_NOTE} when the schema takes `after`.
  *
  * Generic in the schema and nothing else, so `registerTool` infers the handler's argument type
  * from `inputSchema` exactly as it does when the object is written inline.
  */
 export function declaring<Schema>(declaration: ToolDeclaration<Schema>): ToolDeclaration<Schema> {
-	return { ...declaration, description: `${declaration.description} ${ARGUMENT_CASING_NOTE}` };
+	const notes = declaresAfter(declaration.inputSchema)
+		? `${COMPACT_AFTER_NOTE} ${ARGUMENT_CASING_NOTE}`
+		: ARGUMENT_CASING_NOTE;
+	return { ...declaration, description: `${declaration.description} ${notes}` };
 }

@@ -296,7 +296,12 @@ describe('the verb layer speaks only in plain data', () => {
 
 		expect(ActionResultSchema.parse(roundTrip(read))).toEqual(read);
 		expect(ActionResultSchema.parse(roundTrip(info))).toEqual(info);
-		expect(read.after).toMatchObject({ kind: 'screen', elements: [save] });
+		expect(read.after).toMatchObject({
+			kind: 'screen',
+			detail: 'full',
+			elements: [save],
+			omitted: 0,
+		});
 		expect(read.target).toBeNull();
 		expect(info.target).toBeNull();
 		expect(unserializableParts(read)).toEqual([]);
@@ -404,7 +409,12 @@ describe('the verb layer speaks only in plain data', () => {
 			point: { x: 60, y: 40 },
 			element: save,
 		});
-		const after = AfterStateSchema.parse({ kind: 'screen', elements: [save] });
+		const after = AfterStateSchema.parse({
+			kind: 'screen',
+			detail: 'compact',
+			elements: [save],
+			omitted: 0,
+		});
 
 		expect(ResolvedTargetSchema.parse(roundTrip(resolved))).toEqual(resolved);
 		expect(AfterStateSchema.parse(roundTrip(after))).toEqual(after);

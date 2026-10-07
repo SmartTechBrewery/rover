@@ -760,7 +760,13 @@ touches the device, resolves fresh, acts, and then reads the state after the act
 that cannot read its screen answers an explicit "unavailable, and here is the capability that would
 have answered" rather than an empty list that reads as a blank screen, while a read that was
 attempted and failed says *that*, because an exception after the action has run is the one answer
-that leaves the agent guessing whether it landed. Every argument and every
+that leaves the agent guessing whether it landed. **That after-state is compact by default**
+(#330): it keeps the elements that carry text, a label, an `identifier`, or a clickable, checkable
+or focused state, drops the textless containers between them and counts them in `after.omitted`,
+and says which form it is in `after.detail`. It is a selection by what an element carries, never a
+ranking, and it is made in the verb layer (`captureAfterState`), so the CLI, the MCP server and any
+other client get the same answer. An action passes `after: 'full'` for every node; there is no way
+to ask for no after-state at all. Every argument and every
 result is a Zod schema of plain data, because the host runs the verb and the agent reads the answer
 somewhere else (D19).
 
@@ -873,7 +879,10 @@ a control with no text, tells a ticked box from an unticked one and sees which f
 Every one of those fields is nullable and **`null` means *not answered***, never `false`: `checked` is
 answered only for a control that can be checked or toggled, Android answers all of them, and the iOS
 simulator answers `null` for `clickable` and `focused`, which its accessibility read does not carry.
-The same fields are on every action's after-state. `read_screen` **declares `canReadScreen` as a requirement**:
+The same fields are on every element an action's after-state keeps. **`read_screen` is always the
+whole tree** — every node, textless containers included, since `scroll` and element-id targets
+address those — and takes no `after`; an action answers the compact selection unless it asks for
+`after: 'full'` (#330). `read_screen` **declares `canReadScreen` as a requirement**:
 on a backend that does not have it the call fails by name — the capability, the device, the backend
 — before anything is dispatched, rather than answering with an empty screen, because for a read the
 state *is* the answer rather than context around an action. `device_info` requires nothing, since

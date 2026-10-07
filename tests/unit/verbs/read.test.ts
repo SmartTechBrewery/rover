@@ -173,7 +173,28 @@ describe('read_screen', () => {
 		expect(result.verb).toBe('read_screen');
 		// The texts and the rectangles, in the after-state every other verb already reports —
 		// so an agent reads one shape whatever it asked for.
-		expect(result.after).toEqual({ kind: 'screen', elements: [save, cancel] });
+		expect(result.after).toEqual({
+			kind: 'screen',
+			detail: 'full',
+			elements: [save, cancel],
+			omitted: 0,
+		});
+	});
+
+	it('answers every node even when the context asks for the compact after-state', async () => {
+		const container = createMockScreenElement({ id: 'container', text: null });
+		const { context } = recording({ screen: [container, save] });
+
+		// For this verb the after-state *is* the answer, and `scroll` and element-id targets
+		// address textless containers — so it is never compacted (#330).
+		const result = await readScreen({ ...context, afterDetail: 'compact' });
+
+		expect(result.after).toEqual({
+			kind: 'screen',
+			detail: 'full',
+			elements: [container, save],
+			omitted: 0,
+		});
 	});
 
 	it('reads the screen inside the call rather than answering off anything cached', async () => {

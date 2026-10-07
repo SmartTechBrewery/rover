@@ -4,6 +4,7 @@ import { parseUiHierarchy } from '@/backends/android/parsers/hierarchy.js';
 import { parseWmDensity, parseWmSize } from '@/backends/android/parsers/wm.js';
 import { toScreenElements } from '@/backends/android/screen.js';
 import { ScreenElementSchema } from '@/core/device.js';
+import { carriesSomething } from '@/verbs/result.js';
 
 /**
  * Driven off the same **captured** dump `parsers/hierarchy.test.ts` parses — an API 37
@@ -197,5 +198,29 @@ describe('toScreenElements', () => {
 		Number.POSITIVE_INFINITY,
 	])('refuses a scale of %p by name', (scale) => {
 		expect(() => toScreenElements(hierarchy, scale)).toThrow(/density scale/);
+	});
+});
+
+// The verb layer's compact after-state over this captured screen (#330). The narrowing is not
+// this backend's — `toScreenElements` stays every node — so this pins what the rule in
+// `src/verbs/result.ts` keeps of a real hierarchy: a deterministic before/after beside the
+// device measurement in PROJECT.md §6.
+describe('the compact after-state of this hierarchy', () => {
+	const full = toScreenElements(hierarchy, SCALE);
+	const compact = full.filter(carriesSomething);
+
+	it('keeps 43 of the 75 nodes, and drops only ones that carry nothing', () => {
+		expect(full).toHaveLength(75);
+		expect(compact).toHaveLength(43);
+		for (const element of full) {
+			if (!compact.includes(element)) expect(carriesSomething(element)).toBe(false);
+		}
+	});
+
+	it('keeps the backend’s own order and ids, so every kept id still names the same node', () => {
+		const fullIds = full.map((element) => element.id);
+		const keptIds = compact.map((element) => element.id);
+
+		expect(keptIds).toEqual(fullIds.filter((id) => keptIds.includes(id)));
 	});
 });

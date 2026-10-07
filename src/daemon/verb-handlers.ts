@@ -71,6 +71,10 @@
  * *filed copy*, and the device does not have one. That is the property R25 already had, kept: no
  * verb signature, verb option or result schema changes to carry it.
  *
+ * **The after-state's detail is read off the call here too, like the label** (#330): `after`
+ * goes onto the {@link VerbContext} as given, absent when the caller sent none, and the verb
+ * layer owns its default (`DEFAULT_AFTER_DETAIL`, `src/verbs/result.ts`).
+ *
  * **A `label` on a lease with no `groupId` is refused here, before anything touches a device.**
  * It is the one refusal in this file that is about the call rather than about the lease's
  * liveness or the hardware, and it is here because here is the only place both halves are
@@ -149,6 +153,7 @@ import {
 	startRecording,
 	stopRecording,
 } from '../verbs/recording-session.js';
+import type { AfterDetail } from '../verbs/result.js';
 import { type WaitVerbOptions, waitFor, waitUntilGone } from '../verbs/wait-for.js';
 import type { ArchivableResult, ArtifactArchive } from './archive.js';
 import { extractFrames } from './frames.js';
@@ -235,6 +240,12 @@ async function withPayloadOnDisk<Result>(
  */
 type Prepared = { readonly context: VerbContext } | { readonly refusal: VerbCallRefusal };
 
+/** What {@link createVerbHandlers}' preamble reads off every call: the credential and `after`. */
+interface VerbCallParams {
+	readonly leaseId: LeaseId;
+	readonly after?: AfterDetail;
+}
+
 export function createVerbHandlers(
 	inventory: DeviceInventory,
 	leases: LeaseStore,
@@ -256,12 +267,12 @@ export function createVerbHandlers(
 	 * (`./verb-traffic.ts`).
 	 */
 	function runVerb<Result extends ArchivableResult>(
-		leaseId: LeaseId,
+		params: VerbCallParams,
 		run: (context: VerbContext, lease: Lease, call: VerbCall) => Promise<Result>,
 		label?: string,
 	): Promise<VerbCallResultOf<Result>> {
 		// First, and before any await: this is the renewal (D8).
-		const lease = leases.use(leaseId);
+		const lease = leases.use(params.leaseId);
 		if (!lease) {
 			return Promise.resolve({
 				outcome: 'refused',
@@ -294,7 +305,7 @@ export function createVerbHandlers(
 		// registered after it would leave a window in which the lease ends, finds nothing to
 		// revoke, and the verb starts driving a device the host has already handed on.
 		return traffic.run<VerbCallResultOf<Result>>(lease, async (call) => {
-			const prepared = await prepare(lease, call);
+			const prepared = await prepare(lease, call, params.after);
 			if ('refusal' in prepared) {
 				return prepared.refusal;
 			}
@@ -316,7 +327,11 @@ export function createVerbHandlers(
 	 * Everything between a live lease and a running verb: the device as it is *now* (D6), the
 	 * backend that owns it, and the guard that ties the two to this call.
 	 */
-	async function prepare(lease: Lease, call: VerbCall): Promise<Prepared> {
+	async function prepare(
+		lease: Lease,
+		call: VerbCall,
+		after: AfterDetail | undefined,
+	): Promise<Prepared> {
 		let device: Device;
 		try {
 			device = await inventory.verifyForGrant(lease.serial);
@@ -346,7 +361,15 @@ export function createVerbHandlers(
 		const { manifest, backend } = requireDeviceBackend(device.platform);
 		// The one place the guard is applied. The verb receives a backend like any other, and it
 		// stops being able to reach the device the moment this lease ends.
-		return { context: { serial: device.serial, backend: call.guard(backend), manifest } };
+		// `after` is handed on absent when the caller said nothing: the verb layer owns its default.
+		return {
+			context: {
+				serial: device.serial,
+				backend: call.guard(backend),
+				manifest,
+				...(after === undefined ? {} : { afterDetail: after }),
+			},
+		};
 	}
 
 	/**
@@ -380,35 +403,33 @@ export function createVerbHandlers(
 
 	return {
 		wait_for(params: WaitForParams): Promise<VerbCallResult> {
-			return runVerb(params.leaseId, (context) =>
-				waitFor(context, params.target, waitOptions(params)),
-			);
+			return runVerb(params, (context) => waitFor(context, params.target, waitOptions(params)));
 		},
 
 		wait_until_gone(params: WaitUntilGoneParams): Promise<VerbCallResult> {
-			return runVerb(params.leaseId, (context) =>
+			return runVerb(params, (context) =>
 				waitUntilGone(context, params.target, waitOptions(params)),
 			);
 		},
 
 		tap(params: TapParams): Promise<VerbCallResult> {
-			return runVerb(params.leaseId, (context) => tap(context, params.target));
+			return runVerb(params, (context) => tap(context, params.target));
 		},
 
 		long_press(params: LongPressParams): Promise<VerbCallResult> {
-			return runVerb(params.leaseId, (context) =>
+			return runVerb(params, (context) =>
 				longPress(context, params.target, gestureOptions(params)),
 			);
 		},
 
 		swipe(params: SwipeParams): Promise<VerbCallResult> {
-			return runVerb(params.leaseId, (context) =>
+			return runVerb(params, (context) =>
 				swipe(context, params.from, params.to, gestureOptions(params)),
 			);
 		},
 
 		scroll(params: ScrollParams): Promise<VerbCallResult> {
-			return runVerb(params.leaseId, (context) =>
+			return runVerb(params, (context) =>
 				scroll(context, params.direction, {
 					...gestureOptions(params),
 					...(params.target === undefined ? {} : { target: params.target }),
@@ -419,13 +440,13 @@ export function createVerbHandlers(
 		// The caller's string, handed on untouched. Nothing between the wire and the backend
 		// inspects or rewrites it, which is what makes `type_text` mean what it says.
 		type_text(params: TypeTextParams): Promise<VerbCallResult> {
-			return runVerb(params.leaseId, (context) =>
+			return runVerb(params, (context) =>
 				typeText(context, params.text, params.clear === undefined ? {} : { clear: params.clear }),
 			);
 		},
 
 		press_key(params: PressKeyParams): Promise<VerbCallResult> {
-			return runVerb(params.leaseId, (context) =>
+			return runVerb(params, (context) =>
 				pressKey(context, params.key, params.times === undefined ? {} : { times: params.times }),
 			);
 		},
@@ -433,41 +454,41 @@ export function createVerbHandlers(
 		// The lease id alone: whether there is a keyboard to dismiss, and how, is the backend's to
 		// decide (`canHideKeyboard`), so the caller has nothing to say about either.
 		hide_keyboard(params: HideKeyboardParams): Promise<VerbCallResult> {
-			return runVerb(params.leaseId, (context) => hideKeyboard(context));
+			return runVerb(params, (context) => hideKeyboard(context));
 		},
 
-		// The three read rows. All take the lease id and nothing else — `screenshot` no more
-		// than the other two, because a destination path is the client's own business and
-		// never the host's (D19). `read_screen`'s `requires: ['canReadScreen']` is what makes
+		// The three read rows. None takes a destination — a path is the client's own business
+		// and never the host's (D19) — and `read_screen` takes no `after` either, because its
+		// answer is always the whole read (#330). `read_screen`'s `requires: ['canReadScreen']` is what makes
 		// a backend that cannot read one say so by name instead of answering with an empty
 		// screen (D11).
 		read_screen(params: ReadScreenParams): Promise<VerbCallResult> {
-			return runVerb(params.leaseId, (context) => readScreen(context));
+			return runVerb(params, (context) => readScreen(context));
 		},
 
 		device_info(params: DeviceInfoParams): Promise<VerbCallResult> {
-			return runVerb(params.leaseId, (context) => deviceInfo(context));
+			return runVerb(params, (context) => deviceInfo(context));
 		},
 
 		// The label is `runVerb`'s third argument rather than an option on the verb: it names the
 		// archived copy, and the capture itself is unchanged by it (D22, as amended #150).
 		screenshot(params: ScreenshotParams): Promise<VerbCallResult> {
-			return runVerb(params.leaseId, (context) => screenshot(context), params.label);
+			return runVerb(params, (context) => screenshot(context), params.label);
 		},
 
 		// The three app rows. They call the *verb* of that name and never `context.backend.*`,
 		// which reads identically and would skip the spine — no after-state, no device in the
 		// answer. The whole family is three lines each because the preamble above is shared.
 		launch_app(params: AppVerbParams): Promise<VerbCallResult> {
-			return runVerb(params.leaseId, (context) => launchApp(context, params.appId));
+			return runVerb(params, (context) => launchApp(context, params.appId));
 		},
 
 		stop_app(params: AppVerbParams): Promise<VerbCallResult> {
-			return runVerb(params.leaseId, (context) => stopApp(context, params.appId));
+			return runVerb(params, (context) => stopApp(context, params.appId));
 		},
 
 		clear_app_data(params: AppVerbParams): Promise<VerbCallResult> {
-			return runVerb(params.leaseId, (context) => clearAppData(context, params.appId));
+			return runVerb(params, (context) => clearAppData(context, params.appId));
 		},
 
 		// The one row whose answer carries a payload of its own, and it goes through exactly the
@@ -477,7 +498,7 @@ export function createVerbHandlers(
 		// comes off the lease, never off the call, so a caller cannot widen it to a predecessor's.
 		read_logs(params: ReadLogsParams): Promise<ReadLogsCallResult> {
 			return runVerb(
-				params.leaseId,
+				params,
 				(context, lease) => readLogs(context, logOptions(params, lease.createdAtMs)),
 				params.label,
 			);
@@ -495,7 +516,7 @@ export function createVerbHandlers(
 		// from the caller — which is what pins the install to the leased device and keeps it off
 		// a neighbour's.
 		install_app(params: InstallAppParams): Promise<VerbCallResult> {
-			return runVerb(params.leaseId, (context, lease, call) =>
+			return runVerb(params, (context, lease, call) =>
 				params.packageBase64 === undefined
 					? installProjectApp(context, (serial) => runProjectInstall(lease, call, serial))
 					: withPayloadOnDisk(params.packageBase64, (hostPath) => installApp(context, hostPath)),
@@ -503,7 +524,7 @@ export function createVerbHandlers(
 		},
 
 		push_file(params: PushFileParams): Promise<VerbCallResult> {
-			return runVerb(params.leaseId, (context) =>
+			return runVerb(params, (context) =>
 				withPayloadOnDisk(params.contentBase64, (hostPath) =>
 					pushFile(context, hostPath, params.devicePath),
 				),
@@ -513,7 +534,7 @@ export function createVerbHandlers(
 		// The one direction with nothing to write here: the bytes come off the device and go
 		// back on `ActionResult.artifact`, so this row carries no host path at either end.
 		pull_file(params: PullFileParams): Promise<VerbCallResult> {
-			return runVerb(params.leaseId, (context) => pullFile(context, params.devicePath));
+			return runVerb(params, (context) => pullFile(context, params.devicePath));
 		},
 
 		// The recording row — the second whose answer carries a payload of its own, and for the
@@ -524,7 +545,7 @@ export function createVerbHandlers(
 		// by name instead of answering with a null artifact that reads like a success (D11).
 		record_video(params: RecordVideoParams): Promise<RecordVideoCallResult> {
 			return runVerb(
-				params.leaseId,
+				params,
 				(context) => recordVideo(context, recordOptions(params)),
 				params.label,
 			);
@@ -536,7 +557,7 @@ export function createVerbHandlers(
 		// open, never this handler (D6): a map of open recordings here would be exactly the stale
 		// daemon state that decision exists to prevent.
 		start_recording(params: StartRecordingParams): Promise<VerbCallResult> {
-			return runVerb(params.leaseId, (context) => startRecording(context));
+			return runVerb(params, (context) => startRecording(context));
 		},
 
 		// The stop is the one that produces bytes, so it is the one that takes a `label` and hands
@@ -544,7 +565,7 @@ export function createVerbHandlers(
 		// `record_video`'s whole, which is why it needs no result type of its own.
 		stop_recording(params: StopRecordingParams): Promise<RecordVideoCallResult> {
 			return runVerb(
-				params.leaseId,
+				params,
 				(context) => stopRecording(context, stopRecordOptions(params)),
 				params.label,
 			);
@@ -556,11 +577,11 @@ export function createVerbHandlers(
 		// that cannot do this into a `TypeError` instead of a named failure (D11). No options
 		// helper: `enabled` is required, so there is no "omit rather than pass `undefined`" case.
 		set_airplane_mode(params: EnvironmentVerbParams): Promise<VerbCallResult> {
-			return runVerb(params.leaseId, (context) => setAirplaneMode(context, params.enabled));
+			return runVerb(params, (context) => setAirplaneMode(context, params.enabled));
 		},
 
 		set_wifi(params: EnvironmentVerbParams): Promise<VerbCallResult> {
-			return runVerb(params.leaseId, (context) => setWifi(context, params.enabled));
+			return runVerb(params, (context) => setWifi(context, params.enabled));
 		},
 	};
 }

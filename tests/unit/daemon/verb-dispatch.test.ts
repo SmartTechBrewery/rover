@@ -1035,9 +1035,55 @@ describe('the read rows dispatch like the app rows', () => {
 			result: { verb: 'read_screen', target: null, device: { serial: SERIAL } },
 		});
 		if (answer.outcome !== 'ok') throw new Error('the assertion above should have caught this');
-		expect(answer.result.after).toEqual({ kind: 'screen', elements: [save] });
+		expect(answer.result.after).toEqual({
+			kind: 'screen',
+			detail: 'full',
+			elements: [save],
+			omitted: 0,
+		});
 		// One read, which is the spine's own capture — the verb adds none of its own.
 		expect(reads).toBe(1);
+	});
+
+	it('answers an action with the compact after-state unless the call asks for the full one', async () => {
+		const container = createMockScreenElement({ id: 'container', text: null });
+		await serve({ readScreen: async () => [container, save] });
+		const client = await connect();
+		const leaseId = await acquire(client);
+
+		// `after` is read off the call by the host and handed to the verb layer, which owns the
+		// default (#330) — so a call that says nothing gets compact, and one that says `full`
+		// gets every node.
+		const compact = await client.request('device_info', { leaseId });
+		const full = await client.request('device_info', { leaseId, after: 'full' });
+
+		if (compact.outcome !== 'ok' || full.outcome !== 'ok') throw new Error('both should answer');
+		expect(compact.result.after).toEqual({
+			kind: 'screen',
+			detail: 'compact',
+			elements: [save],
+			omitted: 1,
+		});
+		expect(full.result.after).toEqual({
+			kind: 'screen',
+			detail: 'full',
+			elements: [container, save],
+			omitted: 0,
+		});
+	});
+
+	it('refuses an after option on read_screen, which is always the whole read', async () => {
+		await serve();
+		const client = await connect();
+		const leaseId = await acquire(client);
+
+		const thrown = await client
+			// @ts-expect-error — the point of the test is what a client that ignored the type gets.
+			.request('read_screen', { leaseId, after: 'compact' })
+			.catch((error: unknown) => error);
+
+		expect(thrown).toBeInstanceOf(IpcRequestError);
+		expect((thrown as IpcRequestError).code).toBe('invalid_params');
 	});
 
 	it('answers device_info with the device the lease names, and its density (D14)', async () => {

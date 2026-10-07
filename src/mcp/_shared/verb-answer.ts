@@ -33,7 +33,9 @@ import { toolAnswer, toolRefusal } from './answer.js';
  * The `ok` branch travels **whole** — `outcome`, the device, the resolved target and the
  * after-state all reach the agent where the host put them, because the after-state is how an
  * agent knows the action landed (D12(c)) and a client that summarised it would be dropping the
- * one field the verb exists to report.
+ * one field the verb exists to report. It is already compact unless the call asked for
+ * `after: "full"` (#330): the host narrowed it in the verb layer, so every client gets the same
+ * answer, and narrowing it again here would be this adapter deciding something the host decided.
  *
  * Both other branches lead with the host's own sentence and carry their document underneath
  * it, so an agent that wants to act rather than print can branch on `failure.kind` or on

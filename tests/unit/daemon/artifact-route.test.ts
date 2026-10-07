@@ -258,7 +258,7 @@ async function archiveA(
 		verb,
 		device: createMockDeviceInfo({ serial: lease.serial }),
 		target: null,
-		after: { kind: 'screen', elements: [] },
+		after: { kind: 'screen', detail: 'compact', elements: [], omitted: 0 },
 		artifact: null,
 		...overrides,
 	});

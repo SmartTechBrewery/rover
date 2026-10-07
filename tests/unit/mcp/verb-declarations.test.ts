@@ -16,6 +16,7 @@ import type { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { toJsonSchemaCompat } from '@modelcontextprotocol/sdk/server/zod-json-schema-compat.js';
 import { afterEach, describe, expect, it } from 'vitest';
 import { InstallAppParamsSchema, IPC_METHODS, type IpcMethodName } from '@/ipc/methods.js';
+import { COMPACT_AFTER_NOTE } from '@/mcp/_shared/declaration.js';
 import { connectMcpAgent } from '../../helpers/mcp-agent.js';
 
 /** The twenty-two verb rows exposed as tools, in `IPC_METHODS` order. */
@@ -283,7 +284,26 @@ describe('what tools/list advertises for the verbs', () => {
 		);
 		expect(Object.keys(toolNamed(tools, 'install_app').inputSchema.properties as object)).toEqual([
 			'leaseId',
+			'after',
 		]);
+	});
+
+	it('offers every verb but read_screen the full after-state, and says what the compact one is', async () => {
+		const tools = await advertisedTools();
+
+		// Every action answers a compact after-state unless asked otherwise (#330); `read_screen`
+		// is always the whole tree, so it neither takes `after` nor carries the note about it.
+		for (const method of VERB_METHODS) {
+			const tool = toolNamed(tools, method);
+			const properties = Object.keys(tool.inputSchema.properties as object);
+			if (method === 'read_screen') {
+				expect(properties).not.toContain('after');
+				expect(tool.description).not.toContain(COMPACT_AFTER_NOTE);
+			} else {
+				expect(properties).toContain('after');
+				expect(tool.description).toContain(COMPACT_AFTER_NOTE);
+			}
+		}
 	});
 
 	it('shares one declaration between the rows that share one params schema', async () => {

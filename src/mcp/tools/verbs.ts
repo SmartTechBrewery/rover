@@ -216,7 +216,9 @@ const VERB_TOOLS: readonly VerbToolRow[] = [
 			'Scroll the screen or one scrollable region. **`direction` is where the content goes, ' +
 			'not where the finger goes**: `down` reveals what is further down the list, the sense a ' +
 			'scrollbar and a wheel already have. `target` names the region to scroll within — by ' +
-			'text, element id or identifier — and is omitted for the screen as a whole. `durationMs` defaults slower than a flick on ' +
+			'text, element id or identifier — and is omitted for the screen as a whole. A textless ' +
+			'region’s id comes from `read_screen` or an action’s `after: "full"`, since the compact ' +
+			'after-state leaves textless containers out. `durationMs` defaults slower than a flick on ' +
 			'purpose, so the state the answer reports is a screen that has stopped moving. A drag ' +
 			'that would **start** under the on-screen keyboard — it starts a quarter into the region ' +
 			'— is refused as `covered-by-keyboard` rather than handed to the keyboard, which types ' +
@@ -229,7 +231,8 @@ const VERB_TOOLS: readonly VerbToolRow[] = [
 		description:
 			'Type text into whatever currently holds focus. **It addresses no element, so tap the ' +
 			'field first.** Where the device reports focus, the element with `focused: true` in the ' +
-			'answer’s after-state is the field that took the text. The device shell’s quoting is hidden — a space, an apostrophe and a ' +
+			'answer’s after-state is the field that took the text — a focused element is always ' +
+			'kept in the compact after-state. The device shell’s quoting is hidden — a space, an apostrophe and a ' +
 			'metacharacter all arrive verbatim — and text the device cannot type at all comes back ' +
 			'as an `unsupported-text` failure naming the offending characters as escapes, never as a ' +
 			'silent drop. Leading and trailing spaces are content and are kept. **`clear: true` ' +
@@ -280,8 +283,9 @@ const VERB_TOOLS: readonly VerbToolRow[] = [
 			'app’s developer gave the control, the way to find one with no text, and not unique — ' +
 			'and its state: `checked` (only on a control that can be checked or toggled), ' +
 			'`selected`, `enabled`, `clickable` and `focused`. **`null` in any of those means the ' +
-			'device did not say**, never `false`. Every action’s after-state carries the same ' +
-			'fields. It survives an application that blocks screen capture, ' +
+			'device did not say**, never `false`. This is **every** node, the textless containers ' +
+			'`scroll` and element-id targets need included; an action answers a compact after-state ' +
+			'of the same fields unless it is passed `after: "full"`. It survives an application that blocks screen capture, ' +
 			'which is why it is the read to reach for when a capture comes back blank. The answer ' +
 			'also reports the **on-screen keyboard** on its device half — `screen.keyboard`, with ' +
 			'`shown` and the rectangle it occupies in the same dp space the element bounds are in. ' +
@@ -352,7 +356,8 @@ const VERB_TOOLS: readonly VerbToolRow[] = [
 			'its `pid` rather than `appId`. A selection this device cannot apply, or an `appId` with ' +
 			'no running process, is a `log-filter-refused` failure naming it — never a silently ' +
 			'unfiltered answer. There is deliberately no following — a tail that stays open is a ' +
-			'wait with no condition. `label` is optional ' +
+			'wait with no condition. The log is the answer: its after-state is the compact one, and ' +
+			'`after: "full"` is there only if you need the whole screen beside it. `label` is optional ' +
 			'and names the host’s archived copy of this read, so the same log read taken in two runs ' +
 			'of one group is filed as one thing at two moments — one label per thing being compared, ' +
 			'short and identifier-shaped, because it becomes part of a file name. It requires the ' +

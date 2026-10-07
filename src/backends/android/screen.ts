@@ -15,7 +15,8 @@
  *   which nodes are "interesting" is a policy the verb layer already applies by matching on
  *   text — a backend that dropped them would be answering a question it was not asked.
  *   `describeScreen()` already bounds what reaches a message, so a long list costs nothing
- *   there.
+ *   there. An action's after-state is narrowed to the elements that carry something in the
+ *   verb layer (`src/verbs/result.ts`, #330), never here.
  * - **The id is the child-ordinal path** this walk computes (`0`, `0.1.3`), **not** the
  *   node's `index` attribute — which is the device's, repeats between differently parented
  *   nodes and may be absent. Uniqueness within one read is what `findOnScreen()` needs: it

@@ -645,7 +645,7 @@ describe('file transfer params schemas', () => {
 						osApiLevel: 37,
 					},
 					target: null,
-					after: { kind: 'screen', elements },
+					after: { kind: 'screen', detail: 'full', elements, omitted: 0 },
 					artifact: {
 						mediaType: 'application/octet-stream',
 						base64: payloadOf(MAX_ARTIFACT_BYTES),
