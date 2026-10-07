@@ -145,6 +145,9 @@ describe('the screenshot tool', () => {
 				// and a second copy would put several megabytes in front of the model twice.
 				artifact: { mediaType: 'image/png', byteLength: CAPTURED_IMAGE.byteLength },
 			},
+			// The one pass-through that reshapes the answer drops the bytes and nothing else: the
+			// lease's remaining time survives it (#335).
+			expiresInMs: expect.any(Number),
 		});
 		expect(JSON.stringify(result.structuredContent)).not.toContain('base64');
 		expect(textOf(result)).not.toContain('base64');

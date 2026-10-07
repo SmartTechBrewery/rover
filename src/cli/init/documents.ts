@@ -529,6 +529,10 @@ function theRules(): string[] {
 		'  the check ran". If you could not get a device, report that the manual test did not happen.',
 		'- **The lease id is a credential; the owner string is not.** Do not log the lease id into',
 		'  anything shared, and do not expect anyone else to be able to release your lease for you.',
+		'- **A lease ends 20 minutes after your last call on it, and every answer says how long is',
+		'  left.** Any call renews it; there is no heartbeat to send and no renew call. Every verb',
+		'  answer carries `expiresInMs`, the time left once that call renewed it — read it before you',
+		'  step away, because an expired lease is a `no-lease` refusal on a device already restored.',
 		'',
 	];
 }

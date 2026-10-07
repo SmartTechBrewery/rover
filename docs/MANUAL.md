@@ -239,7 +239,10 @@ npm run -s rover -- list --json
 
 Hand the device back when you are done. A lease also ends on its own 20 minutes after the last
 call, and either way it is the **host** that restores the device (D9) — a caller is never asked to
-and cannot opt out:
+and cannot opt out. Any call on the lease renews it — there is no heartbeat and no renew command —
+and every verb answer's `--json` document carries `expiresInMs`, how long the lease has left once
+that call has renewed it, so an expiry is something you can see coming rather than a `no-lease`
+refusal on your next call (#335):
 
 ```bash
 npm run -s rover -- release <lease-id>
@@ -597,7 +600,10 @@ group. Nothing is looked up to do it — uniqueness comes from the minted bytes,
 holds no index and reads nothing out of the archive (D6) — and it never reads what the name says.
 The lease runs on a 20-minute
 TTL **renewed by activity rather than by a heartbeat**, so an agent that pauses to think keeps its
-device and one that died lets go on its own. A busy device is a refusal that names who holds it and
+device and one that died lets go on its own. Every verb answer carries `expiresInMs` — the lease's
+remaining time after that call renewed it, a duration measured on the host because the caller may
+not share its clock — and a `no-lease` refusal, which has no lease to measure, carries none (#335).
+Nothing renews a lease but using it: there is no `renew_lease` and nothing to ping. A busy device is a refusal that names who holds it and
 for how much longer, never an error, and never the holder's lease id; `release_device` hands it
 back. Five clients asking at once get exactly one winner. `list_devices` names each device's holder
 the same way — the owner, project and test name, the description if the lease gave one, and how

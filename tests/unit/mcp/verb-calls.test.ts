@@ -148,8 +148,14 @@ describe('a verb call over a lease the agent took itself', () => {
 		expect(result.structuredContent).toMatchObject({
 			outcome: 'ok',
 			result: { verb: 'device_info', device: { serial: SERIAL }, target: null },
+			// How long the lease has left, as the host measured it (#335) — passed through, never
+			// recomputed against this machine's clock (D17).
+			expiresInMs: expect.any(Number),
 		});
-		expect(JSON.parse(textOf(result))).toMatchObject({ outcome: 'ok' });
+		expect(JSON.parse(textOf(result))).toMatchObject({
+			outcome: 'ok',
+			expiresInMs: expect.any(Number),
+		});
 	});
 
 	it('answers tap with the target the host resolved and the state after it', async () => {

@@ -16,7 +16,7 @@ import type { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { toJsonSchemaCompat } from '@modelcontextprotocol/sdk/server/zod-json-schema-compat.js';
 import { afterEach, describe, expect, it } from 'vitest';
 import { InstallAppParamsSchema, IPC_METHODS, type IpcMethodName } from '@/ipc/methods.js';
-import { COMPACT_AFTER_NOTE } from '@/mcp/_shared/declaration.js';
+import { COMPACT_AFTER_NOTE, LEASE_EXPIRY_NOTE } from '@/mcp/_shared/declaration.js';
 import { connectMcpAgent } from '../../helpers/mcp-agent.js';
 
 /** The twenty-two verb rows exposed as tools, in `IPC_METHODS` order. */
@@ -306,6 +306,16 @@ describe('what tools/list advertises for the verbs', () => {
 				expect(properties).toContain('after');
 				expect(tool.description).toContain(COMPACT_AFTER_NOTE);
 			}
+		}
+	});
+
+	it('tells every verb’s reader that the call renews the lease and the answer says how long is left', async () => {
+		const tools = await advertisedTools();
+
+		// Every verb answer carries `expiresInMs` (#335), and there is no heartbeat to send instead
+		// (D8). Keyed on `leaseId` in the schema, so a verb row added later carries it unasked.
+		for (const method of VERB_METHODS) {
+			expect(toolNamed(tools, method).description).toContain(LEASE_EXPIRY_NOTE);
 		}
 	});
 

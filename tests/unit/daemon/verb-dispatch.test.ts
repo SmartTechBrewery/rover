@@ -567,6 +567,109 @@ describe('the daemon runs the verb against its own device', () => {
 });
 
 /**
+ * Every answer to a call made under a lease says how long that lease has left (#335).
+ *
+ * A lease ends twenty minutes after the last call (D8), and an agent used to learn that only from
+ * the `no-lease` refusal on its next one. The field is measured where the answer is formed, after
+ * the call's own renewal and after its work — a number taken at the renewal would be the TTL on
+ * every answer and say nothing about a call that spent part of it.
+ */
+describe('a verb answer says how long the lease has left', () => {
+	it('carries the remaining time on an ok answer, after this call renewed it', async () => {
+		const ttlMs = 5_000;
+		await serve({ leaseTtlMs: ttlMs, readScreen: async () => [] });
+		const client = await connect();
+		const leaseId = await acquire(client);
+
+		const answer = await client.request('wait_until_gone', {
+			leaseId,
+			target: ABSENT,
+			timeoutMs: 0,
+		});
+
+		expect(answer).toMatchObject({ outcome: 'ok', expiresInMs: expect.any(Number) });
+		expect(answer.expiresInMs).toBeLessThanOrEqual(ttlMs);
+		expect(answer.expiresInMs).toBeGreaterThan(ttlMs - 200);
+	});
+
+	it('is measured after the call has run, and carried on a failure too', async () => {
+		const ttlMs = 5_000;
+		await serve({ leaseTtlMs: ttlMs, readScreen: async () => [] });
+		const client = await connect();
+		const leaseId = await acquire(client);
+
+		// A verb that polls to its own deadline and answers `wait-timeout`, so real time passes
+		// inside the call without anything sleeping — the window a number taken at arrival would
+		// not see. A failure is a verb that ran under a live lease, so it says so as well.
+		const answer = await client.request('wait_for', {
+			leaseId,
+			target: ABSENT,
+			timeoutMs: 300,
+			pollIntervalMs: 25,
+		});
+
+		expect(answer).toMatchObject({ outcome: 'failed', failure: { kind: 'wait-timeout' } });
+		expect(answer.expiresInMs).toBeLessThanOrEqual(ttlMs - 300);
+		expect(answer.expiresInMs).toBeGreaterThan(ttlMs - 1_000);
+	});
+
+	it('goes back up on the next call, and agrees with the listing', async () => {
+		const ttlMs = 5_000;
+		await serve({ leaseTtlMs: ttlMs, readScreen: async () => [] });
+		const client = await connect();
+		const leaseId = await acquire(client);
+
+		const first = await client.request('wait_for', {
+			leaseId,
+			target: ABSENT,
+			timeoutMs: 300,
+			pollIntervalMs: 25,
+		});
+		const second = await client.request('wait_until_gone', {
+			leaseId,
+			target: ABSENT,
+			timeoutMs: 0,
+		});
+
+		// The value after *this* call's renewal: any call renews the lease, so there is nothing
+		// else for an agent to send to push the expiry out (D8).
+		expect(second.expiresInMs).toBeGreaterThan(ttlMs - 200);
+		expect(second.expiresInMs).toBeGreaterThan(first.expiresInMs ?? Number.POSITIVE_INFINITY);
+		// `list_devices` does not renew, so the listing read afterwards can only show less — the
+		// same `LeaseStore.remainingMs` read a moment later, never a second clock.
+		const { expiresInMs: listed } = await holderOn(client);
+		expect(listed).toBeLessThanOrEqual(second.expiresInMs ?? 0);
+	});
+
+	it('carries no key at all on a no-lease refusal, because there is no lease to measure', async () => {
+		await serve();
+		const client = await connect();
+
+		const answer = await client.request('wait_for', {
+			leaseId: parseLeaseId('never-granted'),
+			target: { by: 'text', text: 'Save' },
+			timeoutMs: 0,
+		});
+
+		expect(answer).toMatchObject({ outcome: 'refused', reason: 'no-lease' });
+		// Absent rather than `0`: a zero would read as "it expired a moment ago" on an id that was
+		// never granted.
+		expect('expiresInMs' in answer).toBe(false);
+	});
+
+	it('carries it on a refusal that did have a lease', async () => {
+		await serve();
+		const client = await connect();
+		const leaseId = await acquire(client);
+
+		const answer = await client.request('screenshot', { leaseId, label: 'home-screen' });
+
+		expect(answer).toMatchObject({ outcome: 'refused', reason: 'label-without-group' });
+		expect(answer.expiresInMs).toBeGreaterThan(0);
+	});
+});
+
+/**
  * The six input rows over the same surface, which is the claim: a verb family is a row and
  * a handler, and nothing about the envelope, the framing or the connection changed to carry
  * these (R6, D19).
@@ -2945,6 +3048,9 @@ describe('a verb never outlives the lease that authorised it', () => {
 		expect(answer).toMatchObject({
 			message: expect.stringContaining('ended while this call was still running'),
 		});
+		// This call's snapshot of the lease is of one the host has already ended, so its remaining
+		// time is not reported (#335).
+		expect('expiresInMs' in answer).toBe(false);
 
 		// The point of the whole exercise: the reads stop. Everything scheduled has run, so a
 		// verb still polling would have polled again by now.

@@ -121,8 +121,15 @@ and `group_id`. None is ever derived from who you are or from what authenticated
 authenticates, the owner string attributes* (D16, D20, D22). Five clients asking at once produce
 exactly one winner.
 
-- **The TTL is 20 minutes, renewed by activity rather than by a heartbeat.** An agent that pauses
-  to think keeps its device; one that died lets go without anyone reaping it by hand.
+- **The TTL is 20 minutes, renewed by activity rather than by a heartbeat — and every verb answer
+  says how much is left.** An agent that pauses to think keeps its device; one that died lets go
+  without anyone reaping it by hand. Any call on the lease renews it, so there is no `renew_lease`
+  and nothing to ping (D8). What an agent used to lack was being *told*: an expiry arrived as a
+  `no-lease` refusal on its next call — in one field session after a dozen minutes outside Rover,
+  ending in `release_device` answering `released: false`. Now every verb answer carries
+  `expiresInMs`, the remaining time after that call's renewal, measured on the host and sent as a
+  duration because the caller shares no clock with it (D17, #335). It is the same number a listing
+  shows, from the same function, so an approaching expiry is visible instead of met as a refusal.
 - **A held device is a refusal, not an error** — it names the holder, the project, the test name
   and the remaining time, and **never the holder's lease id**. The lease id is the credential every
   verb call carries; it is printed once, to whoever was granted it.
@@ -145,7 +152,9 @@ string, derived from nothing — records who did it. `not-held`, `gone` and `not
 different next moves rather than one error.
 
 **Where it lives.** `src/daemon/leases.ts`, `lease-handlers.ts`, `lease-holder.ts`,
-`group-id.ts`, `slots.ts`; `PROJECT.md` D6, D9, D16, D20, D22, D28.
+`group-id.ts`, `slots.ts`; a verb answer's `expiresInMs` is set in `verb-handlers.ts`'s `runVerb`
+and declared on `verbCallResultOf` (`src/ipc/verb-methods.ts`); `PROJECT.md` D6, D8, D9, D16, D20,
+D22, D28 and §4.
 
 ---
 
@@ -187,7 +196,9 @@ platforms.
 **What it is.** `src/verbs/` is the layer above the backends. Every verb takes and returns Zod
 schemas of plain data, because the host runs the verb and the agent reads the answer somewhere else
 (D19). A verb call carries the **lease id**, never a serial — the host derives the device from the
-credential.
+credential. Every answer also carries `expiresInMs`, how long that lease has left after this call
+renewed it (§2) — on `ok`, on `failed` and on every refusal but `no-lease`, which has no lease to
+measure and so carries no key at all.
 
 | Family | Verbs | Notes |
 | --- | --- | --- |
@@ -860,6 +871,10 @@ plain data, and the three whose answer is bytes.
 - **An action's answer travels whole, already compact.** The host narrows the after-state
   (§5), so the server passes the `ok` answer through untouched; every tool that takes `after` says
   in its description what the compact form leaves out and that `after: "full"` returns the rest.
+- **The lease's remaining time travels with every verb answer.** The server passes the host's
+  `expiresInMs` through untouched — never recomputed against the agent's clock (D17) — and every
+  tool that takes a `leaseId` says in its description that any call renews the lease, that there
+  is no heartbeat or renew tool, and that the answer says how long is left (#335).
 - **Which host an agent talks to is the `env` block's business and never a tool argument** (D17).
   An agent cannot see or change the machine that answered.
 - **The launcher is `bin/rover-mcp.mjs`, named by absolute path.** `node --import tsx/esm .../src/mcp/index.ts`
