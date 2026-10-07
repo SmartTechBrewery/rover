@@ -132,7 +132,12 @@ describe('performAction', () => {
 		expect(result.device.screen.density).toBe(480);
 		expect(result.device.screen.densityScale).toBe(3);
 		expect(result.target).toEqual({ source: 'screen', point: { x: 60, y: 40 }, element: save });
-		expect(result.after).toEqual({ kind: 'screen', elements: [save] });
+		expect(result.after).toEqual({
+			kind: 'screen',
+			detail: 'compact',
+			elements: [save],
+			omitted: 0,
+		});
 	});
 
 	it('hands the action the target it resolved', async () => {

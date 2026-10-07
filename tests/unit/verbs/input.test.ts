@@ -202,7 +202,12 @@ describe('every input verb is on the spine', () => {
 		// The last two calls are the post-state and the device the result names — nothing this
 		// module does happens after them.
 		expect(calls.slice(-2)).toEqual(['readScreen', 'deviceInfo']);
-		expect(result.after).toEqual({ kind: 'screen', elements: [save, cancel] });
+		expect(result.after).toEqual({
+			kind: 'screen',
+			detail: 'compact',
+			elements: [save, cancel],
+			omitted: 0,
+		});
 	});
 
 	it.each(
@@ -644,7 +649,12 @@ describe('press_key', () => {
 
 		const result = await pressKey(context, 'home');
 
-		expect(result.after).toEqual({ kind: 'screen', elements: [cancel] });
+		expect(result.after).toEqual({
+			kind: 'screen',
+			detail: 'compact',
+			elements: [cancel],
+			omitted: 0,
+		});
 	});
 
 	it('says so honestly when the device cannot report what the press did', async () => {

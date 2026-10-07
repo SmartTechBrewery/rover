@@ -19,7 +19,12 @@ import {
 	type CapabilityManifest,
 	supportsCapability,
 } from '../core/capabilities.js';
-import { DeviceInfoSchema, PointSchema, ScreenElementSchema } from '../core/device.js';
+import {
+	DeviceInfoSchema,
+	PointSchema,
+	type ScreenElement,
+	ScreenElementSchema,
+} from '../core/device.js';
 import type { DeviceSerial } from '../core/ids.js';
 import { capabilityMethod, type VerbContext } from './context.js';
 import { ArtifactTooLargeError } from './errors.js';
@@ -51,6 +56,44 @@ export const ResolvedTargetSchema = z
 export type ResolvedTarget = z.infer<typeof ResolvedTargetSchema>;
 
 /**
+ * How much of the screen an after-state carries — see {@link captureAfterState}.
+ *
+ * `compact` keeps the elements that carry something ({@link carriesSomething}); `full` keeps
+ * every node the backend read, textless containers included. There is deliberately no third
+ * value that leaves the after-state out: D12(c) is that every action answers with the screen
+ * after itself, and a smaller answer is still that answer.
+ */
+export const AfterDetailSchema = z.enum(['compact', 'full']);
+export type AfterDetail = z.infer<typeof AfterDetailSchema>;
+
+/**
+ * What a caller who did not say gets. The default lives here and nowhere else — the wire
+ * leaves `after` absent rather than defaulted, for the reason `durationMs` is absent there.
+ */
+export const DEFAULT_AFTER_DETAIL: AfterDetail = 'compact';
+
+/**
+ * Whether an element carries anything — the compact after-state's whole rule.
+ *
+ * **A selection, not a judgement** (ai/RULES.md §1): an element is kept by what it carries —
+ * text, a label, an identifier, or an interaction state (checkable, clickable, focused) — and
+ * nothing is ranked, scored or reordered. `checked !== null` *is* "the device says this can be
+ * checked" (`ScreenElementSchema`), so no separate `checkable` field is needed. `selected` and
+ * `enabled` are not reasons on their own: every node has an `enabled`, and keeping on it would
+ * keep everything.
+ */
+export function carriesSomething(element: ScreenElement): boolean {
+	return (
+		element.text !== null ||
+		element.label !== null ||
+		element.identifier !== null ||
+		element.checked !== null ||
+		element.clickable === true ||
+		element.focused === true
+	);
+}
+
+/**
  * The screen after the action — or an honest statement of why it could not be read.
  *
  * The two non-`screen` branches are the whole point of the union, and they are kept apart
@@ -61,9 +104,24 @@ export type ResolvedTarget = z.infer<typeof ResolvedTargetSchema>;
  * names the capability that would have answered — this device will never answer, stop
  * asking. `failed` is the read that was declared, attempted and rejected: worth retrying,
  * and a different thing to be told.
+ *
+ * **The `screen` branch says how much of the screen it carries** (#330). `detail` echoes the
+ * rule applied ({@link AfterDetailSchema}), so an answer read later, or by a client that did
+ * not make the call (D16), says what it is. `omitted` counts the elements of the read the
+ * answer leaves out — always `0` for `full` — and it is the honesty half of the compact form:
+ * a compact list that comes back **empty** (a canvas, a WebView, a screen of textless nodes)
+ * must not read as a blank screen, and `omitted: 87` says it is not. A count is arithmetic,
+ * not a verdict (ai/RULES.md §1).
  */
 export const AfterStateSchema = z.discriminatedUnion('kind', [
-	z.object({ kind: z.literal('screen'), elements: z.array(ScreenElementSchema) }).strict(),
+	z
+		.object({
+			kind: z.literal('screen'),
+			detail: AfterDetailSchema,
+			elements: z.array(ScreenElementSchema),
+			omitted: z.number().int().nonnegative(),
+		})
+		.strict(),
 	z
 		.object({
 			kind: z.literal('unavailable'),
@@ -288,6 +346,16 @@ function cannotReadScreen(serial: DeviceSerial, manifest: CapabilityManifest): s
  * includes a manifest promising `canReadScreen` over a backend that has no `readScreen`:
  * it is a wiring bug and its message says so, but once the action has run there is nowhere
  * better to put it than the answer the caller is waiting for.
+ *
+ * **Compact unless the caller asked for the whole read** (`VerbContext.afterDetail`, #330).
+ * A backend reads every node, because `scroll` and element-id targets address textless
+ * containers; but an action's answer carrying all of them made a field session — 116 elements
+ * per action on a list screen, a dozen of them with any text — cost more context than the bug
+ * it was debugging, and the agent left Rover for hand-written shell scripts. So the narrowing
+ * happens here, in the verb layer, where the CLI, the MCP server and any other client get the
+ * same answer, and never in a backend. Target resolution never sees this list — a target is
+ * resolved from a fresh backend read (D12(a)) — so a kept element's id is the same ordinal id
+ * the full read carries, and resolves the same way.
  */
 export async function captureAfterState(context: VerbContext): Promise<AfterState> {
 	if (!supportsCapability(context.manifest, 'canReadScreen')) {
@@ -300,7 +368,13 @@ export async function captureAfterState(context: VerbContext): Promise<AfterStat
 
 	try {
 		const readScreen = capabilityMethod(context, 'canReadScreen', 'readScreen');
-		return { kind: 'screen', elements: await readScreen(context.serial) };
+		const elements = await readScreen(context.serial);
+		const detail = context.afterDetail ?? DEFAULT_AFTER_DETAIL;
+		if (detail === 'full') {
+			return { kind: 'screen', detail, elements, omitted: 0 };
+		}
+		const kept = elements.filter(carriesSomething);
+		return { kind: 'screen', detail, elements: kept, omitted: elements.length - kept.length };
 	} catch (error) {
 		return {
 			kind: 'failed',

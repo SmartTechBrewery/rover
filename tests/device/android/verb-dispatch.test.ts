@@ -13,6 +13,7 @@ import { type RunningDaemon, startDaemon } from '@/daemon/listen.js';
 import type { IpcClient } from '@/ipc/client.js';
 import type { ListedDevice, ReadLogsCallResult } from '@/ipc/methods.js';
 import { IpcRequestError } from '@/ipc/protocol.js';
+import { carriesSomething } from '@/verbs/result.js';
 import {
 	connectWithoutStarting,
 	createTempSocket,
@@ -370,7 +371,14 @@ describe.skipIf(!process.env.ROVER_TEST_DEVICE)('a daemon runs verbs on its own 
 		const device = await freeDevice(client);
 		const leaseId = await lease(client, device.serial);
 
-		const seen = await client.request('wait_until_gone', { leaseId, target: ABSENT, timeoutMs: 0 });
+		// `after: 'full'`: the element this picks is often a textless container, which the
+		// compact after-state leaves out (#330).
+		const seen = await client.request('wait_until_gone', {
+			leaseId,
+			target: ABSENT,
+			timeoutMs: 0,
+			after: 'full',
+		});
 		if (seen.outcome !== 'ok' || seen.result.after.kind !== 'screen') {
 			throw new Error(`the device could not report its screen: ${JSON.stringify(seen)}`);
 		}
@@ -414,7 +422,51 @@ describe.skipIf(!process.env.ROVER_TEST_DEVICE)('a daemon runs verbs on its own 
 		if (answer.outcome !== 'ok') throw new Error('the assertion above should have caught this');
 		expect(answer.result.after.kind).toBe('screen');
 		if (answer.result.after.kind !== 'screen') throw new Error('unreachable');
-		expect(answer.result.after.elements.length).toBeGreaterThan(0);
+		// Compact by default (#330), so the screen is the kept elements plus the count left out.
+		expect(answer.result.after.detail).toBe('compact');
+		expect(answer.result.after.elements.length + answer.result.after.omitted).toBeGreaterThan(0);
+	});
+
+	/**
+	 * The compact after-state against a real screen (#330): a selection of the full one, by what
+	 * each element carries, with the same ids. A static wait reads the screen and moves nothing,
+	 * so both answers describe the same screen unless the device moved it on its own.
+	 */
+	it('answers a compact after-state that is a selection of the full one', async () => {
+		const client = await startHost();
+		const device = await freeDevice(client);
+		const leaseId = await lease(client, device.serial);
+
+		const compact = await client.request('wait_until_gone', {
+			leaseId,
+			target: ABSENT,
+			timeoutMs: 0,
+		});
+		const full = await client.request('wait_until_gone', {
+			leaseId,
+			target: ABSENT,
+			timeoutMs: 0,
+			after: 'full',
+		});
+		if (
+			compact.outcome !== 'ok' ||
+			full.outcome !== 'ok' ||
+			compact.result.after.kind !== 'screen' ||
+			full.result.after.kind !== 'screen'
+		) {
+			throw new Error(`the device could not report its screen: ${JSON.stringify([compact, full])}`);
+		}
+
+		expect(compact.result.after.detail).toBe('compact');
+		expect(full.result.after).toMatchObject({ detail: 'full', omitted: 0 });
+		for (const element of compact.result.after.elements) {
+			expect(carriesSomething(element)).toBe(true);
+		}
+		const fullIds = new Set(full.result.after.elements.map(({ id }) => id));
+		for (const { id } of compact.result.after.elements) expect(fullIds.has(id)).toBe(true);
+		expect(full.result.after.elements.length).toBeGreaterThanOrEqual(
+			compact.result.after.elements.length,
+		);
 	});
 
 	/**

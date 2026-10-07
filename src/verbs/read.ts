@@ -53,16 +53,23 @@ import { type ActionResult, ActionResultSchema, type Artifact, artifactFrom } fr
  * Read what is on the screen — the texts and the rectangles, in dp.
  *
  * The elements come back in `result.after`, which is the same after-state every other verb
- * reports and therefore the same shape an agent already knows how to read. On a backend that
+ * reports and therefore the same shape an agent already knows how to read — but always with
+ * `detail: 'full'`: every node, textless containers included, where an action answers the
+ * compact selection unless asked otherwise (`./result.ts`). On a backend that
  * does not declare `canReadScreen` this throws `MissingCapabilityError` before touching the
  * device at all, rather than answering with an empty screen — see this module's header.
  */
 export async function readScreen(context: VerbContext): Promise<ActionResult> {
-	return performAction(context, {
-		verb: 'read_screen',
-		requires: ['canReadScreen'],
-		act: async () => {},
-	});
+	// Always the whole read: for this verb the after-state *is* the answer, and `scroll` and
+	// element-id targets address textless containers that the compact form leaves out (#330).
+	return performAction(
+		{ ...context, afterDetail: 'full' },
+		{
+			verb: 'read_screen',
+			requires: ['canReadScreen'],
+			act: async () => {},
+		},
+	);
 }
 
 /**

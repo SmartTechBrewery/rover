@@ -281,7 +281,8 @@ takes, and the iOS simulator answers `identifier`, `enabled`, `selected` and a t
 from its accessibility read and `null` for `clickable` and `focused`, which that read does not
 carry. The identifier is **not unique and not the element id** — 13 rows of one Settings screen
 share `android:id/title` — so it is an addressable field (`{ by: 'identifier' }`, §5) rather than
-the id. The same fields ride on every action's after-state, because that is the same element shape.
+the id. The same fields ride on every element an action's after-state keeps, because that is the
+same element shape.
 Where it lives: `src/core/device.ts` (`ScreenElementSchema`), `src/backends/android/screen.ts`,
 `src/backends/ios-simulator/screen.ts`; `PROJECT.md` §4 (`read_screen`, `tap`, `type_text`).
 
@@ -506,7 +507,17 @@ agent gets a false green are closed in the tool rather than left to the agent's 
   after. A device that cannot read its screen answers "unavailable, and here is the capability that
   would have answered" rather than an empty list that reads as a blank screen; a read that was
   attempted and failed says *that*, because an exception after the action has run is the one answer
-  that leaves an agent guessing whether it landed.
+  that leaves an agent guessing whether it landed. **The after-state is compact by default** (#330):
+  it keeps the elements that carry text, a label, an `identifier`, or a clickable, checkable or
+  focused state — each whole, with its bounds and its id — drops the textless containers between
+  them, and counts what it dropped in `after.omitted`, so an empty compact list never reads as a
+  blank screen. Why: a field session on a list screen got 116–117 elements per action, a dozen with
+  any text, and abandoned Rover for hand-written shell scripts that answered one line per screen.
+  It is a **selection, not a judgement** — kept or dropped by what an element carries, never ranked
+  — and it is made in the verb layer, so every client gets the same answer. An action passes
+  `after: 'full'` for every node; `read_screen` is always the whole tree, since `scroll` and
+  element-id targets need the containers. There is deliberately no `after: 'none'`: a smaller
+  answer is still the state after the action, and no answer would break the rule this bullet is.
 
 **The two waits stand beside the spine rather than on it**, because `performAction()` resolves
 before it acts and for a wait the resolution *is* the work. **Every poll reads the screen again** —
@@ -527,7 +538,7 @@ is an empty screen, and neither is reported as one. `wait_until_gone` asks the m
 question of *matches* rather than of a resolution, and will not take a text target's `index`, since
 an index names a slot in the match list and a slot empties the moment any sibling leaves.
 
-**Where it lives.** `src/verbs/perform.ts`, `target.ts` (the keyboard check is `keyboardCovering`
+**Where it lives.** `src/verbs/perform.ts`, `result.ts` (`captureAfterState`, `carriesSomething`), `target.ts` (the keyboard check is `keyboardCovering`
 and `requireUncovered`; the four target kinds and `findOnScreen`'s matching), `input.ts` (`scroll`'s own start check), `wait-for.ts`, `errors.ts`
 (`CoveredByKeyboardError`), `failure.ts`, `src/core/wait.ts`, `tests/unit/no-sleep.test.ts`;
 `PROJECT.md` D12 and §6.
@@ -818,6 +829,9 @@ plain data, and the three whose answer is bytes.
   the mp4 to the agent's own machine** (`ROVER_MCP_ARTIFACT_DIR`) and report the absolute local
   path, because an mp4 is not something a model can read; their frames come back inline. None of
   the three takes a destination or a format, for the same reason none takes a host.
+- **An action's answer travels whole, already compact.** The host narrows the after-state
+  (§5), so the server passes the `ok` answer through untouched; every tool that takes `after` says
+  in its description what the compact form leaves out and that `after: "full"` returns the rest.
 - **Which host an agent talks to is the `env` block's business and never a tool argument** (D17).
   An agent cannot see or change the machine that answered.
 - **The launcher is `bin/rover-mcp.mjs`, named by absolute path.** `node --import tsx/esm .../src/mcp/index.ts`
