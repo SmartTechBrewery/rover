@@ -736,7 +736,10 @@ signature (D12): `resolveTarget()` takes
 a target and *nothing else* — no screen, no element list, no state read a turn ago — so a target can
 only ever be resolved from a screen captured inside that call. Two elements matching one text target
 is a loud error naming every candidate rather than a first match that is right half the time; nothing
-matching names what was on screen instead; and a coordinate stays available as the documented
+matching names what was on screen instead; a target may also name the **identifier** an element
+carries (`{ by: 'identifier', identifier }`, #329), matched exactly against the same fresh read, and
+since an identifier is not unique — every row of a list may share one — two carriers are that same
+ambiguous refusal, whose way out is the element id or text rather than an `index`; and a coordinate stays available as the documented
 fallback, marked in the result as not having come from a screen. Every resolved point is
 range-checked against the device, whichever way it was arrived at — an element scrolled out of its
 container comes back with a rectangle whose corners are inverted, and the midpoint of that is
@@ -814,7 +817,9 @@ element.** A key press aims at nothing and neither does text going to whatever h
 go through the spine with **no target at all** and their result's `target` is `null` — a fact about
 the verb rather than a resolution that failed. There is no target *option* on `type_text` either: an
 agent that wants text in a particular field taps it and then types, rather than having a second copy
-of `tap`'s resolution live here. `press_key` speaks the seven keys of `DeviceKey` — back, home,
+of `tap`'s resolution live here. Which field took the text is answered by the after-state: the
+element with `focused: true` is the one that holds focus, where the device reports it (#329 — Android
+does, the iOS simulator answers `null`). `press_key` speaks the seven keys of `DeviceKey` — back, home,
 recents, wake, and the editing keys delete, enter and tab (#301) — shared with the backend and the
 wire so a key nobody implements is refused at the boundary instead of pressed into silence.
 `delete` is backspace (the character before the caret, never forward delete), `enter` does whatever
@@ -862,7 +867,13 @@ action is what answers that, and there is deliberately no probe pretending other
 two ask for that state and nothing else, so their action is empty and the answer is the capture the
 spine already performs for every verb there is — which is what keeps "every verb answers the same
 way" true rather than giving the reads a second answer shape of their own. `read_screen` hands back
-the texts and the element rectangles, in dp, and it **declares `canReadScreen` as a requirement**:
+the texts and the element rectangles, in dp, plus each element's developer-assigned `identifier` and
+its `checked`, `selected`, `enabled`, `clickable` and `focused` state (#329) — the way an agent finds
+a control with no text, tells a ticked box from an unticked one and sees which field took its typing.
+Every one of those fields is nullable and **`null` means *not answered***, never `false`: `checked` is
+answered only for a control that can be checked or toggled, Android answers all of them, and the iOS
+simulator answers `null` for `clickable` and `focused`, which its accessibility read does not carry.
+The same fields are on every action's after-state. `read_screen` **declares `canReadScreen` as a requirement**:
 on a backend that does not have it the call fails by name — the capability, the device, the backend
 — before anything is dispatched, rather than answering with an empty screen, because for a read the
 state *is* the answer rather than context around an action. `device_info` requires nothing, since

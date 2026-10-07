@@ -121,6 +121,27 @@ describe('parseUiHierarchy, on input it cannot trust', () => {
 		expect(() => parseUiHierarchy(corrupted)).toThrow(/\[1028,1510\]/);
 	});
 
+	/**
+	 * A flag the device did not write is **not answered**, never a guessed `false` (#329): a dump
+	 * from an API that omits one must not report every control as disabled or unticked.
+	 */
+	it('reads a flag the dump omits as null rather than false', () => {
+		const thinner = HIERARCHY.replace(
+			'checkable="true" checked="false" clickable="true" enabled="true" focusable="true" focused="false"',
+			'checkable="true" clickable="true" focusable="true"',
+		);
+
+		expect(thinner).not.toBe(HIERARCHY);
+		const switchNode = descend(parseUiHierarchy(thinner).root, DARK_THEME_SWITCH);
+		expect(switchNode).toMatchObject({
+			checkable: true,
+			checked: null,
+			clickable: true,
+			enabled: null,
+			focused: null,
+		});
+	});
+
 	it('throws rather than assuming portrait when the rotation is missing', () => {
 		const corrupted = HIERARCHY.replace('<hierarchy rotation="0">', '<hierarchy>');
 

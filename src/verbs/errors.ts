@@ -31,13 +31,15 @@ import type { DeviceSerial } from '../core/ids.js';
 /** How many elements an excerpt names before it says how many more there were. */
 const EXCERPT_LIMIT = 8;
 
-/** One element in the words an agent asked in — its text, its label, and where it is. */
+/** One element in the words an agent asked in — text, label, identifier, and where it is. */
 export function describeElement(element: ScreenElement): string {
 	const named = [element.text, element.label]
 		.filter((value): value is string => value !== null)
 		.map((value) => `'${value}'`);
+	// The identifier is what makes a textless control recognisable in a miss or an ambiguity (#329).
+	const identifier = element.identifier === null ? '' : ` #${element.identifier}`;
 	const { x, y, width, height } = element.bounds;
-	return `${named.length > 0 ? named.join(' / ') : '(no text)'} [${element.id}] at ${x},${y} ${width}×${height}`;
+	return `${named.length > 0 ? named.join(' / ') : '(no text)'}${identifier} [${element.id}] at ${x},${y} ${width}×${height}`;
 }
 
 /**
@@ -84,8 +86,9 @@ export class TargetNotFoundError extends Error {
  * told what is wrong without being told the way out is half an error, so the way out is
  * part of the message — and it is passed **in** rather than written here, because it is not
  * the same way out for every target. Only a text target has an `index` to disambiguate
- * with; two elements sharing one id is the backend contradicting itself, and advising an
- * `index` there would name a field `TargetSchema` rejects.
+ * with; two elements sharing one id is the backend contradicting itself, and two sharing an
+ * identifier is a developer naming every row alike (#329) — advising an `index` for either
+ * would name a field `TargetSchema` rejects.
  */
 export class AmbiguousTargetError extends Error {
 	readonly serial: DeviceSerial;

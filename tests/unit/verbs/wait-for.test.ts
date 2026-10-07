@@ -122,6 +122,25 @@ describe('waitFor', () => {
 		expect(result.target?.element).toEqual(save);
 	});
 
+	/** An identifier target polls like any other screen target (#329). */
+	it('waits for an element by the identifier it carries', async () => {
+		const terms = createMockScreenElement({
+			id: 'terms',
+			text: null,
+			identifier: 'com.example:id/terms',
+		});
+		const context = contextShowing([save], [save, terms]);
+
+		const result = await waitFor(
+			context,
+			{ by: 'identifier', identifier: 'com.example:id/terms' },
+			fakeClock(),
+		);
+
+		expect(reads(context)).toBe(3);
+		expect(result.target?.element).toEqual(terms);
+	});
+
 	it('answers with the same ActionResult every other action does (D12(c), D14)', async () => {
 		const context = contextShowing([save, spinner]);
 
@@ -412,6 +431,20 @@ describe('waitUntilGone', () => {
 		expect(thrown).toBeInstanceOf(WaitTimeoutError);
 		// Still waiting on the matches themselves, never on "is slot 2 empty".
 		expect((thrown as WaitTimeoutError).found).toContain('2 elements');
+	});
+
+	it('resolves when no element carries the identifier any more', async () => {
+		const banner = createMockScreenElement({ id: 'banner', identifier: 'com.example:id/banner' });
+		const context = contextShowing([banner, save], [save]);
+
+		const result = await waitUntilGone(
+			context,
+			{ by: 'identifier', identifier: 'com.example:id/banner' },
+			fakeClock(),
+		);
+
+		expect(reads(context)).toBe(3);
+		expect(result.after).toEqual({ kind: 'screen', elements: [save] });
 	});
 
 	it('treats two matching elements as still there twice, not as an ambiguous request', async () => {
