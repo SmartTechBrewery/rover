@@ -167,7 +167,13 @@ describe('a verb call over a lease the agent took itself', () => {
 				// Resolved from a screen the host read inside the call, never from a coordinate
 				// (D12(a)) — and the after-state is what tells the agent the tap landed (D12(c)).
 				target: { source: 'screen', element: { id: 'save' } },
-				after: { kind: 'screen', detail: 'compact', elements: [{ id: 'save' }], omitted: 0 },
+				after: {
+					kind: 'screen',
+					detail: 'compact',
+					elements: [{ id: 'save' }],
+					omitted: 0,
+					settled: null,
+				},
 			},
 		});
 	});

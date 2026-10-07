@@ -306,6 +306,20 @@ describe('what tools/list advertises for the verbs', () => {
 		}
 	});
 
+	it('tells an agent what after.settled means, on every row that carries an after-state', async () => {
+		const tools = await advertisedTools();
+
+		// The three values and the one thing `null` is not: a screen nobody asked about is not a
+		// screen reported as moving (#333).
+		expect(COMPACT_AFTER_NOTE).toContain('`after.settled`');
+		expect(COMPACT_AFTER_NOTE).toContain('not a claim that it was moving');
+		expect(COMPACT_AFTER_NOTE).toContain('`scroll` and `swipe` are the two that wait');
+		for (const method of VERB_METHODS) {
+			if (method === 'read_screen') continue;
+			expect(toolNamed(tools, method).description).toContain('`after.settled`');
+		}
+	});
+
 	it('shares one declaration between the rows that share one params schema', async () => {
 		const tools = await advertisedTools();
 

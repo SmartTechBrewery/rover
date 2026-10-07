@@ -19,8 +19,9 @@
  *    that cannot say, is an `AppNotInForegroundError` and nothing is dispatched;
  * 3. **the target is resolved from a screen captured inside this call** (D12(a)), a miss
  *    naming what was on screen instead and two matches naming every candidate;
- * 4. **the state after the action is captured, after it** (D12(c)), and the result names
- *    the device and its density (D14).
+ * 4. **the state after the action is captured, after it, once the screen is readable**
+ *    (D12(c), #333) — and for a verb that says so, once two consecutive reads of it agree —
+ *    and the result names the device and its density (D14).
  *
  * Skipping one of those is what a verb written against the backend directly does by
  * accident, which is why the backend's input methods are primitives and this is the layer
@@ -31,7 +32,7 @@ import { type CapabilityId, requireCapability } from '../core/capabilities.js';
 import type { AppId } from '../core/ids.js';
 import type { VerbContext } from './context.js';
 import { AppNotInForegroundError } from './errors.js';
-import type { ResolvedTarget } from './result.js';
+import type { AfterStateOptions, ResolvedTarget } from './result.js';
 import { type ActionResult, resultAfterAction } from './result.js';
 import { type ResolveOptions, requireTarget, type Target } from './target.js';
 
@@ -78,6 +79,15 @@ export interface PerformActionOptions {
 	 * and no extra device query — the verb acts on whatever is in front, as it always has.
 	 */
 	readonly expectApp?: AppId;
+	/**
+	 * How the state after this verb is captured (#333).
+	 *
+	 * Absent means the default: read once the screen is readable, and answer `settled: null`
+	 * because nobody asked whether it had stopped. `scroll` and `swipe` pass `{ settle: true }`,
+	 * because a drag that ends in a fling is still moving when the device returns — see
+	 * `./input.ts`.
+	 */
+	readonly afterState?: AfterStateOptions;
 	/** The action itself, handed the point that was resolved for it. */
 	readonly act: (target: ResolvedTarget | null) => Promise<void>;
 }
@@ -108,7 +118,7 @@ export async function performAction(
 
 	await options.act(target);
 
-	return resultAfterAction(context, options.verb, target);
+	return resultAfterAction(context, options.verb, target, options.afterState ?? {});
 }
 
 /**

@@ -32,7 +32,12 @@ import { MAX_FRAME_BYTES } from '@/ipc/framing.js';
 import type { VerbContext } from '@/verbs/context.js';
 import { ArtifactTooLargeError } from '@/verbs/errors.js';
 import { deviceInfo, readScreen, screenshot } from '@/verbs/read.js';
-import { type ActionResult, MAX_ARTIFACT_BYTES } from '@/verbs/result.js';
+import {
+	type ActionResult,
+	AFTER_STATE_TIMEOUT_MS,
+	type AfterStateSeams,
+	MAX_ARTIFACT_BYTES,
+} from '@/verbs/result.js';
 import {
 	createMockCapabilities,
 	createMockCapabilityManifest,
@@ -109,6 +114,19 @@ function recording(
 	return { calls, context };
 }
 
+/**
+ * The after-state wait's two seams, for the cases that make a read fail before it succeeds.
+ *
+ * No test in this suite waits on a real duration (#333, `tests/unit/core/wait.test.ts`): the
+ * clock is a counter and the gap is discarded instead of taken. It advances a quarter of the
+ * bound per reading, so a screen that never becomes readable reaches the deadline in a handful
+ * of reads rather than in {@link AFTER_STATE_TIMEOUT_MS} of them.
+ */
+function fakeClock(): AfterStateSeams {
+	let current = 1_000;
+	return { now: () => (current += AFTER_STATE_TIMEOUT_MS / 4), delay: async () => {} };
+}
+
 /** One call of each verb, for the properties all three share. */
 const READS: ReadonlyArray<[string, (context: VerbContext) => Promise<ActionResult>]> = [
 	['read_screen', readScreen],
@@ -178,6 +196,7 @@ describe('read_screen', () => {
 			detail: 'full',
 			elements: [save, cancel],
 			omitted: 0,
+			settled: null,
 		});
 	});
 
@@ -194,6 +213,7 @@ describe('read_screen', () => {
 			detail: 'full',
 			elements: [container, save],
 			omitted: 0,
+			settled: null,
 		});
 	});
 
@@ -208,13 +228,44 @@ describe('read_screen', () => {
 	});
 
 	/**
-	 * The one-shot half of #299: this verb reads once and does not poll, so a screen the
-	 * device had not got yet is reported rather than retried. It arrives as the spine's
-	 * `failed` after-state carrying the error's own message, because `captureAfterState` is
-	 * where this verb's only read happens and that function never throws — the agent still
-	 * reads the words "no screen to read" rather than being told the read found nothing.
+	 * **#299's other half, as it stands since #333** — and this block is edited in place with
+	 * its reasoning rewritten rather than deleted, per ai/RULES.md §1.
+	 *
+	 * It used to assert the opposite: this verb read **once**, so a screen the device had not
+	 * got yet came back as a `failed` after-state on attempt one, on the argument that a retry
+	 * here would be a wait and waits are `wait_for`'s. That argument was right about where a
+	 * wait belongs and wrong about where this one is: the after-state's poll *is* the wait
+	 * vocabulary's, on a condition with a bound (`src/core/wait.ts`), so the thing it ruled out
+	 * is exactly the thing that was missing. An application still drawing its first frame now
+	 * gets read again.
+	 *
+	 * What has not changed is the honest end: a screen that is unreadable for the whole bound
+	 * is still the `failed` branch carrying the backend's own words, because
+	 * `captureAfterState` never throws.
 	 */
-	it('reports a screen the device had not got yet instead of silently reading again', async () => {
+	it('polls through a screen the device had not got yet rather than failing on the first read', async () => {
+		let reads = 0;
+		const readScreenMock = vi.fn<NonNullable<DeviceBackend['readScreen']>>(async () => {
+			reads += 1;
+			if (reads === 1) {
+				throw new UnreadableScreenError(
+					parseDeviceSerial('test-serial-1'),
+					'the screen reader had no window to dump',
+				);
+			}
+			return [save];
+		});
+		const context = createMockVerbContext({
+			backend: createMockDeviceBackend({ readScreen: readScreenMock }),
+		});
+
+		const result = await readScreen(context, fakeClock());
+
+		expect(result.after).toMatchObject({ kind: 'screen', detail: 'full', settled: null });
+		expect(readScreenMock).toHaveBeenCalledTimes(2);
+	});
+
+	it('reports a screen that stayed unreadable for the whole bound, saying how long it looked', async () => {
 		const readScreenMock = vi.fn<NonNullable<DeviceBackend['readScreen']>>(async () => {
 			throw new UnreadableScreenError(
 				parseDeviceSerial('test-serial-1'),
@@ -225,12 +276,20 @@ describe('read_screen', () => {
 			backend: createMockDeviceBackend({ readScreen: readScreenMock }),
 		});
 
-		const result = await readScreen(context);
+		const result = await readScreen(context, fakeClock());
 
 		expect(result.after).toMatchObject({ kind: 'failed', capability: 'canReadScreen' });
-		expect(result.after).toHaveProperty('message', expect.stringContaining('no screen to read'));
-		// Once, not twice: a retry here would be a wait, and waits are `wait_for`'s (D12(b)).
-		expect(readScreenMock).toHaveBeenCalledTimes(1);
+		// The backend's own reason survives the poll, so the agent still reads what the device
+		// said rather than only that a bound went by.
+		expect(result.after).toHaveProperty(
+			'message',
+			expect.stringContaining('the screen reader had no window to dump'),
+		);
+		expect(result.after).toHaveProperty(
+			'message',
+			expect.stringContaining(`polling for ${AFTER_STATE_TIMEOUT_MS}ms`),
+		);
+		expect(readScreenMock.mock.calls.length).toBeGreaterThan(1);
 	});
 
 	it('fails loudly on a backend that does not declare canReadScreen (D11)', async () => {

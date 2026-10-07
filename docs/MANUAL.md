@@ -766,7 +766,19 @@ or focused state, drops the textless containers between them and counts them in 
 and says which form it is in `after.detail`. It is a selection by what an element carries, never a
 ranking, and it is made in the verb layer (`captureAfterState`), so the CLI, the MCP server and any
 other client get the same answer. An action passes `after: 'full'` for every node; there is no way
-to ask for no after-state at all. Every argument and every
+to ask for no after-state at all. **And that after-state waits for a screen worth reporting**
+(#333): it polls until the screen is **readable** — an application still starting has no window to
+describe, and used to be answered as a failed read on the one attempt the capture made — and, for
+`scroll` and `swipe`, until **two consecutive reads carry the same elements**, because a drag keeps
+travelling after the finger leaves and bounds captured mid-fling are stale before the agent reads
+them. Both are bounded at two seconds. `after.settled` reports the outcome: `true` when two reads
+matched, `false` when they never did inside the bound — those elements are the last read and may be
+mid-transition, so a screen that never settled is never reported as a settled one — and `null` when
+the verb did not wait for the screen to stop, which means *nobody asked* and is never a claim that
+it was moving. Two matching reads is a measurement and not a verdict: it says the reads agreed, not
+that what they carry is right. Nothing sleeps for any of this — the condition lives in
+`src/core/wait.ts` — and a verb that does not settle pays nothing on a readable screen, since the
+wait probes before it delays (measured: `PROJECT.md` §6). Every argument and every
 result is a Zod schema of plain data, because the host runs the verb and the agent reads the answer
 somewhere else (D19).
 
@@ -885,7 +897,11 @@ address those — and takes no `after`; an action answers the compact selection 
 `after: 'full'` (#330). `read_screen` **declares `canReadScreen` as a requirement**:
 on a backend that does not have it the call fails by name — the capability, the device, the backend
 — before anything is dispatched, rather than answering with an empty screen, because for a read the
-state *is* the answer rather than context around an action. `device_info` requires nothing, since
+state *is* the answer rather than context around an action. For that same reason it is one of the
+verbs whose read is **polled rather than attempted once** (#333): its answer *is* its after-state,
+so an application still starting is retried to the two-second bound instead of being reported as a
+failed read on the first try. It does not settle — this verb moves nothing, so there is nothing it
+set going to wait out — and its `after.settled` is `null` accordingly. `device_info` requires nothing, since
 every backend must answer it, and reports size, density, the computed width in dp and the OS
 version — the same `DeviceInfo` every result already carries (D14), now askable on its own without
 moving the device first. Neither addresses anything on the screen, so both answer `target: null`,

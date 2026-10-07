@@ -40,6 +40,14 @@
  * device belongs (`src/core/device.ts`, ai/RULES.md §2). A string this layer had "helpfully"
  * escaped would arrive on screen with the escaping in it.
  *
+ * **A drag is the one gesture that keeps moving after the finger leaves.** `swipe` and `scroll`
+ * — and only those two — ask their after-state to wait until two consecutive reads of the screen
+ * carry the same elements before it answers (`./result.ts`'s `AfterStateOptions`). A fling still travelling when the device returns gives bounds that are
+ * stale before the agent reads them, and a `tap` aimed at a list row from them does not land
+ * (#333). Nothing here sleeps for it: the wait is a condition in `src/core/wait.ts`, polled to a
+ * bound (D12(b), ai/RULES.md §2). Every other verb reads once the screen is readable and answers
+ * `after.settled: null` — not a claim it was moving, just that nobody asked.
+ *
  * **Every verb here but `hide_keyboard` takes `expectApp`** (#332, {@link ForegroundExpectation}).
  * Each acts on whatever is in front, so an application that crashed or was left turns a `tap`
  * into a touch on the launcher and a `type_text` into a search somebody else's application
@@ -53,7 +61,7 @@ import type { DeviceKey, Point, Rect } from '../core/device.js';
 import type { AppId } from '../core/ids.js';
 import { capabilityMethod, type VerbContext } from './context.js';
 import { performAction } from './perform.js';
-import type { ActionResult, ResolvedTarget } from './result.js';
+import type { ActionResult, AfterStateOptions, AfterStateSeams, ResolvedTarget } from './result.js';
 import {
 	describeTarget,
 	requireTarget,
@@ -90,6 +98,11 @@ export const SWIPE_DURATION_MS = 300;
  * fling keeps travelling an unpredictable distance after the finger leaves — so the state the
  * result reports would be a screen that is still moving, which is the one thing D12(c) exists
  * to rule out. A slower drag stops where it was put.
+ *
+ * **That is a reduction of the problem rather than the whole answer to it**, and since #333 it
+ * is no longer load-bearing on its own: the slower drag makes a fling less likely, and the
+ * after-state's settle wait is what establishes that the screen has actually stopped — including
+ * for the caller who passes `durationMs: 0` and gets a flick on purpose.
  */
 export const SCROLL_DURATION_MS = 600;
 
@@ -127,8 +140,11 @@ export interface GestureOptions extends ForegroundExpectation {
 	readonly durationMs?: number;
 }
 
-/** {@link GestureOptions} plus the region a scroll happens in. */
-export interface ScrollOptions extends GestureOptions {
+/** {@link GestureOptions} plus the after-state seams, for the drag that names two targets. */
+export interface SwipeOptions extends GestureOptions, AfterStateSeams {}
+
+/** {@link GestureOptions} plus the region a scroll happens in, and the after-state seams. */
+export interface ScrollOptions extends GestureOptions, AfterStateSeams {
 	/**
 	 * The scrollable region — a pane, a list — or absent for the screen as a whole.
 	 *
@@ -210,7 +226,7 @@ export async function swipe(
 	context: VerbContext,
 	from: Target,
 	to: Target,
-	options: GestureOptions = {},
+	options: SwipeOptions = {},
 ): Promise<ActionResult> {
 	const durationMs = options.durationMs ?? SWIPE_DURATION_MS;
 
@@ -218,6 +234,7 @@ export async function swipe(
 		verb: 'swipe',
 		requires: ['canInput'],
 		...expectation(options),
+		afterState: settling(options),
 		target: from,
 		act: async (resolved) => {
 			const destination = await requireTarget(context, to, { touchStartsHere: false });
@@ -274,6 +291,7 @@ export async function scroll(
 		verb: 'scroll',
 		requires: ['canInput'],
 		...expectation(options),
+		afterState: settling(options),
 		target: options.target,
 		resolve: { touchStartsHere: false },
 		act: async (resolved) => {
@@ -459,6 +477,22 @@ export async function hideKeyboard(context: VerbContext): Promise<ActionResult> 
  */
 function expectation(options: ForegroundExpectation): { expectApp?: AppId } {
 	return options.expectApp === undefined ? {} : { expectApp: options.expectApp };
+}
+
+/**
+ * The after-state options for a verb that waits for the screen to stop — `settle` always, and
+ * the two seams only when a test injected them.
+ *
+ * Omit-rather-than-pass-`undefined`, the convention `src/daemon/verb-handlers.ts`'s
+ * `waitOptions` and `gestureOptions` keep: an explicit `undefined` and an absent field read the
+ * same at the call site and differently through `exactOptionalPropertyTypes`.
+ */
+function settling(options: AfterStateSeams): AfterStateOptions {
+	return {
+		settle: true,
+		...(options.now === undefined ? {} : { now: options.now }),
+		...(options.delay === undefined ? {} : { delay: options.delay }),
+	};
 }
 
 /**

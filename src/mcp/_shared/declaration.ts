@@ -43,7 +43,8 @@ export const ARGUMENT_CASING_NOTE =
 
 /**
  * The sentence appended to every tool whose input schema declares `after` — every action verb,
- * which answers a compact after-state unless asked otherwise (#330, `src/verbs/result.ts`).
+ * which answers a compact after-state unless asked otherwise (#330, `src/verbs/result.ts`), and
+ * says whether the screen it describes had stopped moving (#333).
  *
  * Keyed on the schema rather than on a list of tool names, so it cannot drift from the wire:
  * a row that takes `after` says what it does, and `read_screen`, which does not, says nothing.
@@ -53,7 +54,11 @@ export const COMPACT_AFTER_NOTE =
 	'text, a label, an identifier, or a clickable, checkable or focused state, and ' +
 	'`after.omitted` counts the textless containers left out — an empty list with a non-zero ' +
 	'`omitted` is not a blank screen. Pass `after: "full"` for every node, or call ' +
-	'`read_screen`, which always answers the whole tree.';
+	'`read_screen`, which always answers the whole tree. `after.settled` says whether the ' +
+	'screen had stopped moving when it was read: `true` when two consecutive reads matched, ' +
+	'`false` when they never did inside the bound — the elements are the last read and may be ' +
+	'mid-transition — and `null` when this verb did not wait for the screen to stop, which is ' +
+	'not a claim that it was moving. `scroll` and `swipe` are the two that wait.';
 
 /** Whether a declared input schema carries the `after` option. */
 function declaresAfter(schema: unknown): boolean {

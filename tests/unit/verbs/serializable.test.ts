@@ -301,6 +301,7 @@ describe('the verb layer speaks only in plain data', () => {
 			detail: 'full',
 			elements: [save],
 			omitted: 0,
+			settled: null,
 		});
 		expect(read.target).toBeNull();
 		expect(info.target).toBeNull();
@@ -403,7 +404,11 @@ describe('the verb layer speaks only in plain data', () => {
 		).toThrow();
 	});
 
-	it('round-trips a resolved target and a screen after-state on their own', () => {
+	it.each([
+		true,
+		false,
+		null,
+	] as const)('round-trips a resolved target and a screen after-state settled %s on their own', (settled) => {
 		const resolved = ResolvedTargetSchema.parse({
 			source: 'screen',
 			point: { x: 60, y: 40 },
@@ -414,10 +419,20 @@ describe('the verb layer speaks only in plain data', () => {
 			detail: 'compact',
 			elements: [save],
 			omitted: 0,
+			settled,
 		});
 
 		expect(ResolvedTargetSchema.parse(roundTrip(resolved))).toEqual(resolved);
 		expect(AfterStateSchema.parse(roundTrip(after))).toEqual(after);
+	});
+
+	it('rejects a screen after-state with no settled at all', () => {
+		// Required-and-nullable, `ActionResult.artifact`'s rule: `undefined` does not survive
+		// JSON, so an optional field would make "nobody asked" a case every client special-cases
+		// instead of a value it can read (#333).
+		expect(() =>
+			AfterStateSchema.parse({ kind: 'screen', detail: 'compact', elements: [save], omitted: 0 }),
+		).toThrow();
 	});
 
 	it('round-trips the failed after-state, which is the branch a read that rejected answers', async () => {

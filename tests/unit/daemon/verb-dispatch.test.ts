@@ -1120,6 +1120,7 @@ describe('the read rows dispatch like the app rows', () => {
 			detail: 'full',
 			elements: [save],
 			omitted: 0,
+			settled: null,
 		});
 		// One read, which is the spine's own capture — the verb adds none of its own.
 		expect(reads).toBe(1);
@@ -1143,12 +1144,14 @@ describe('the read rows dispatch like the app rows', () => {
 			detail: 'compact',
 			elements: [save],
 			omitted: 1,
+			settled: null,
 		});
 		expect(full.result.after).toEqual({
 			kind: 'screen',
 			detail: 'full',
 			elements: [container, save],
 			omitted: 0,
+			settled: null,
 		});
 	});
 

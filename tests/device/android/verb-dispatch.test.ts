@@ -428,6 +428,67 @@ describe.skipIf(!process.env.ROVER_TEST_DEVICE)('a daemon runs verbs on its own 
 	});
 
 	/**
+	 * **#333 against real hardware: the two after-state paths are distinguishable on a device.**
+	 *
+	 * `scroll` is a drag, so its after-state waits for two consecutive reads of the screen to
+	 * agree and answers a **boolean** — `true` for a screen that stopped inside the bound,
+	 * `false` for one that never did. `tap` does not wait, so it answers `null`, which is
+	 * *nobody asked* and not *it was moving*.
+	 *
+	 * **No timing is asserted**, deliberately: a duration assertion on a device other machines
+	 * also run this suite against is the flake `tests/unit/no-sleep.test.ts`'s own header names.
+	 * Which of the two booleans a given screen produces is a fact about that screen, so the
+	 * assertion is on the *type* — the measurements behind the bound are in PROJECT.md §6.
+	 */
+	it('answers a boolean settled for a drag and null for a verb that does not wait', async () => {
+		const client = await startHost();
+		const device = await freeDevice(client);
+		const leaseId = await lease(client, device.serial);
+
+		const scrolled = await client.request('scroll', { leaseId, direction: 'down' });
+		const tapped = await client.request('tap', { leaseId, target: HARMLESS_POINT });
+
+		if (scrolled.outcome !== 'ok' || tapped.outcome !== 'ok') {
+			throw new Error('both verbs should have answered ok on an attached device');
+		}
+		expect(scrolled.result.after.kind).toBe('screen');
+		if (scrolled.result.after.kind !== 'screen') throw new Error('unreachable');
+		expect(typeof scrolled.result.after.settled).toBe('boolean');
+
+		expect(tapped.result.after.kind).toBe('screen');
+		if (tapped.result.after.kind !== 'screen') throw new Error('unreachable');
+		expect(tapped.result.after.settled).toBeNull();
+	});
+
+	/**
+	 * **#333's first acceptance criterion end to end: a cold launch answers a screen.**
+	 *
+	 * The application is force-stopped and launched again, so the read lands while it is still
+	 * starting — which is where `null root node returned by UiTestAutomationBridge` came from in
+	 * the field session, and the read that used to answer `after.kind: 'failed'` on attempt one.
+	 *
+	 * **This passes vacuously on a device that never produces that line**, exactly as #299's own
+	 * half did: nothing here can force the transient read, and a device fast enough to have a
+	 * window by the time the launch returns answers a screen either way. The evidence that the
+	 * poll is what makes the difference is the repeated run recorded in PROJECT.md §6, in the
+	 * shape #299's evidence was recorded in.
+	 */
+	it('answers a cold launch with a screen rather than a failed read', async () => {
+		const client = await startHost();
+		const device = await freeDevice(client);
+		const leaseId = await lease(client, device.serial);
+
+		await client.request('stop_app', { leaseId, appId: SETTINGS });
+		const launched = await client.request('launch_app', { leaseId, appId: SETTINGS });
+
+		if (launched.outcome !== 'ok') throw new Error('launch_app should have answered ok');
+		// Not `toBe('screen')`: `unavailable` would be an honest answer from a backend that
+		// cannot read a screen at all, and this assertion is about the branch that says the read
+		// was attempted and rejected.
+		expect(launched.result.after.kind).not.toBe('failed');
+	});
+
+	/**
 	 * The compact after-state against a real screen (#330): a selection of the full one, by what
 	 * each element carries, with the same ids. A static wait reads the screen and moves nothing,
 	 * so both answers describe the same screen unless the device moved it on its own.

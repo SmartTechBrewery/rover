@@ -116,7 +116,7 @@ async function archiveAScreenshot(of: Lease = lease): Promise<void> {
 		verb: 'screenshot',
 		device: createMockDeviceInfo({ serial: of.serial }),
 		target: null,
-		after: { kind: 'screen', detail: 'compact', elements: [], omitted: 0 },
+		after: { kind: 'screen', detail: 'compact', elements: [], omitted: 0, settled: null },
 		artifact: CAPTURE,
 	};
 	await createArtifactArchive({ root: temp.artifactsRoot, warn: () => {} }).record(of, result);

@@ -136,6 +136,15 @@ async function freeSimulator(client: IpcClient): Promise<ListedDevice> {
 	});
 }
 
+/**
+ * A coordinate in the top-left corner of the panel, where a tap does nothing on whatever screen
+ * the simulator happens to be showing — the Android suite's constant, for its reason.
+ *
+ * In dp, because that is the space `Point` is declared in; the conversion to what the device
+ * takes is the backend's.
+ */
+const HARMLESS_POINT = { x: 1, y: 1 } as const;
+
 /** A lease on that device, taken over the same connection the verbs then use. */
 async function lease(client: IpcClient, serial: DeviceSerial): Promise<LeaseId> {
 	const outcome = await client.request('acquire_device', {
@@ -323,6 +332,50 @@ describe.skipIf(!process.env.ROVER_TEST_SIMULATOR)(
 				// post-state carries the reason, and putting it in the assertion message is the
 				// difference between "the press did nothing" and "no companion".
 				expect(pressed.result.after.kind, JSON.stringify(pressed.result.after)).toBe('screen');
+			},
+		);
+
+		/**
+		 * **#333 on the second platform: the two after-state paths are distinguishable here too.**
+		 *
+		 * Nothing platform-specific is needed for it — this backend already throws
+		 * `UnreadableScreenError` for its own version of *no window yet* (#300), which is the
+		 * whole seam the poll is built on. `scroll` is a drag and waits for two consecutive reads
+		 * to agree, so it answers a **boolean**; `tap` does not wait, so it answers `null`, which
+		 * is *nobody asked* rather than *it was moving*.
+		 *
+		 * Gated on `ROVER_TEST_IDB` for the key rows' reason: both gestures go out over the
+		 * companion, and the post-state comes back over the same one.
+		 *
+		 * **No timing is asserted**, for `tests/unit/no-sleep.test.ts`'s reason — a duration
+		 * assertion on a shared machine is the flake. Which boolean a given screen produces is a
+		 * fact about that screen; the measurements behind the bound are in `PROJECT.md` §6.
+		 */
+		it.skipIf(!process.env.ROVER_TEST_IDB)(
+			'answers a boolean settled for a drag and null for a verb that does not wait',
+			async () => {
+				const client = await startHost();
+				const device = await freeSimulator(client);
+				const leaseId = await lease(client, device.serial);
+
+				const scrolled = await client.request('scroll', { leaseId, direction: 'down' });
+				const tapped = await client.request('tap', {
+					leaseId,
+					target: { by: 'point', at: HARMLESS_POINT },
+				});
+
+				if (scrolled.outcome !== 'ok' || tapped.outcome !== 'ok') {
+					throw new Error(
+						`both verbs should have answered ok: ${JSON.stringify({ scrolled, tapped })}`,
+					);
+				}
+				expect(scrolled.result.after.kind, JSON.stringify(scrolled.result.after)).toBe('screen');
+				if (scrolled.result.after.kind !== 'screen') throw new Error('unreachable');
+				expect(typeof scrolled.result.after.settled).toBe('boolean');
+
+				expect(tapped.result.after.kind, JSON.stringify(tapped.result.after)).toBe('screen');
+				if (tapped.result.after.kind !== 'screen') throw new Error('unreachable');
+				expect(tapped.result.after.settled).toBeNull();
 			},
 		);
 

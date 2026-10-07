@@ -47,7 +47,13 @@
 
 import type { VerbContext } from './context.js';
 import { performAction } from './perform.js';
-import { type ActionResult, ActionResultSchema, type Artifact, artifactFrom } from './result.js';
+import {
+	type ActionResult,
+	ActionResultSchema,
+	type AfterStateSeams,
+	type Artifact,
+	artifactFrom,
+} from './result.js';
 
 /**
  * Read what is on the screen — the texts and the rectangles, in dp.
@@ -58,8 +64,20 @@ import { type ActionResult, ActionResultSchema, type Artifact, artifactFrom } fr
  * compact selection unless asked otherwise (`./result.ts`). On a backend that
  * does not declare `canReadScreen` this throws `MissingCapabilityError` before touching the
  * device at all, rather than answering with an empty screen — see this module's header.
+ *
+ * **A screen the device has not got yet is polled through** (#333), like every other verb's
+ * after-state: the read is the spine's, so an application still starting is retried to the
+ * after-state's bound rather than reported as a `failed` read on attempt one. It does not
+ * *settle* — this verb moves nothing, so there is nothing it set in motion to wait out — and
+ * the answer's `after.settled` is `null` accordingly.
+ *
+ * `seams` is the pair of injection points that wait takes (`AfterStateSeams`); it is only ever
+ * passed by a test, and nothing on the wire carries it.
  */
-export async function readScreen(context: VerbContext): Promise<ActionResult> {
+export async function readScreen(
+	context: VerbContext,
+	seams: AfterStateSeams = {},
+): Promise<ActionResult> {
 	// Always the whole read: for this verb the after-state *is* the answer, and `scroll` and
 	// element-id targets address textless containers that the compact form leaves out (#330).
 	return performAction(
@@ -67,6 +85,7 @@ export async function readScreen(context: VerbContext): Promise<ActionResult> {
 		{
 			verb: 'read_screen',
 			requires: ['canReadScreen'],
+			afterState: seams,
 			act: async () => {},
 		},
 	);
