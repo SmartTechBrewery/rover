@@ -149,7 +149,14 @@ is keyed on the **serial**, which every listing already shows, precisely because
 else's lease has no credential of theirs to present. It runs the same restoration path a normal
 release does, the holder's next verb call is refused `no-lease`, and `actor` — a caller-supplied
 string, derived from nothing — records who did it. `not-held`, `gone` and `not-attached` are three
-different next moves rather than one error.
+different next moves rather than one error. **An agent can call it too, when its operator tells it
+to** (#345). It was deliberately kept off the MCP surface so an agent could not end a peer's lease,
+and the operator reversed that: an agent acting on the operator's word in that moment is the operator
+exercising this authority, and refusing the tool stopped no takeover — it routed one through a
+message to the other session, or a shell running `rover force-release`. The tool's description says
+it ends **somebody else's** lease and is for when the operator has asked, never a way around `held`;
+`owner` still authorizes nothing, so a lease carrying the agent's own owner string is not its to
+reclaim.
 
 **Where it lives.** `src/daemon/leases.ts`, `lease-handlers.ts`, `lease-holder.ts`,
 `group-id.ts`, `slots.ts`; a verb answer's `expiresInMs` is set in `verb-handlers.ts`'s `runVerb`
@@ -187,7 +194,7 @@ will ever retry.
 
 ---
 
-## 4. The verb set — twenty-six tools over one method table
+## 4. The verb set — twenty-seven tools over one method table
 
 **The hook.** Everything an agent needs to drive a device: touch, text, keys, waits, screen reads,
 screenshots, video, logs, app control, file transfer and the radios — one vocabulary, on both
@@ -210,7 +217,7 @@ measure and so carries no key at all.
 | Recording | `record_video`, `start_recording`, `stop_recording` | `record.ts`, `recording-session.ts` |
 | Files | `install_app`, `push_file`, `pull_file`, `pull_app_file` | `files.ts`; §11 covers which are MCP tools |
 | Environment | `set_airplane_mode`, `set_wifi` | `environment.ts`; declares `canControlNetwork` |
-| Device & lease | `status`, `list_devices`, `acquire_device`, `release_device` | the four non-verb rows |
+| Device & lease | `status`, `list_devices`, `acquire_device`, `release_device`, `force_release_device` | the five non-verb rows |
 
 **Composition happens once, above the backends.** `long_press` is a drag from a point to that same
 point held past the device's long-press timeout — never the long-press flag on a key event, which
@@ -885,14 +892,14 @@ environment.
 
 ---
 
-## 11. The MCP server — and the eighteen methods that deliberately have no tool
+## 11. The MCP server — and the seventeen methods that deliberately have no tool
 
-**The hook.** One `rover init` and an agent has twenty-six tools; a screenshot comes back **inline**
+**The hook.** One `rover init` and an agent has twenty-seven tools; a screenshot comes back **inline**
 as an image the model looks at directly, and a recording comes back as frames plus an mp4 on the
 agent's own machine.
 
-**What it is.** One process per agent session, MCP over stdio, declaring **26 tools** under the
-`IPC_METHODS` names exactly: the four device and lease rows, the nineteen verbs whose answer is
+**What it is.** One process per agent session, MCP over stdio, declaring **27 tools** under the
+`IPC_METHODS` names exactly: the five device and lease rows, the nineteen verbs whose answer is
 plain data, and the three whose answer is bytes.
 
 - **Tool names are `snake_case`, arguments are `camelCase`** (D26) — `launch_app` takes `leaseId`
@@ -921,17 +928,26 @@ plain data, and the three whose answer is bytes.
   above it, because that failure is a resolution question no assertion on a string can see.
 - **Mis-wiring fails at startup, on stderr, before one tool is advertised** — a partial remote
   configuration and a missing `ROVER_PROJECT_FILE` both exit 1 with the reason.
+- **`force_release_device` is a tool, for an agent its operator has told to take a device over**
+  (#345, §2). It takes the `serial` and an `actor` and answers what `rover force-release` answers —
+  `released` naming the former holder and never its lease id, or `not-held`, `gone` and
+  `not-attached` as named refusals — and its description says it ends somebody else's lease and is
+  not a way around a `held` refusal.
 
-**The method table holds 44 rows and 26 of them are tools. The other eighteen have no tool
+**The method table holds 44 rows and 27 of them are tools. The other seventeen have no tool
 deliberately**, each recorded as a decision in `tests/unit/mcp/verb-declarations.test.ts` so no row
-can quietly land without one. Four reasons cover all eighteen:
+can quietly land without one. Four reasons cover all seventeen:
 
-- **Authority over the shared pool is the operator's, not an agent's.** `force_release_device` (an
-  agent must not end another agent's lease), `set_kept_tests` (what the operator keeps is not an
-  agent's to decide — an agent that could untick a test would be clearing the exemption on somebody
-  else's run), `sweep_archive` (it deletes an operator's data, permanently, with no undo), and
-  `delete_project`, `delete_archived_test` and `delete_archived_group` in the same key — `test_name`
-  is deliberately not unique, so those runs are what *other* agents' leases wrote.
+- **What the host keeps of other agents' runs is the operator's to decide, not an agent's.**
+  `set_kept_tests` (an agent that could untick a test would be clearing the exemption on somebody
+  else's run, so the next sweep deletes it), `sweep_archive` (it deletes an operator's data,
+  permanently, with no undo), and `delete_project`, `delete_archived_test` and
+  `delete_archived_group` in the same key — `test_name` is deliberately not unique, so those runs
+  are what *other* agents' leases wrote. None of them is ever a step in an agent's own work, and
+  each decides the fate of runs that are not the caller's — most of them by deleting those runs for
+  good. `force_release_device` headed this list until #345 and is a tool now: it
+  hands the device back restored and loses nothing anybody filed, and it is the one operator action
+  an agent can need mid-task, on its operator's word.
 - **Reading the host's archive would hand one agent every other agent's runs.** `list_archive`,
   `search_archive`, `list_archive_groups`, `list_kept_tests`, `list_projects`, `measure_archive`
   and `measure_archive_groups`. An agent already receives its own artifacts as bytes and already
@@ -949,8 +965,8 @@ can quietly land without one. Four reasons cover all eighteen:
   `pull_app_file` have no form that carries no bytes, and a whole file as a tool argument means an
   agent producing several megabytes of base64 (R24 phase 2).
 
-**Where it lives.** `src/mcp/`, `bin/rover-mcp.mjs`; `PROJECT.md` D26, D27, D28, D33, R24, R36,
-R38, R39, R41, R49.
+**Where it lives.** `src/mcp/`, `bin/rover-mcp.mjs`; `PROJECT.md` D26, D27, D28, D33, R24, R31,
+R36, R38, R39, R41, R49.
 
 ---
 

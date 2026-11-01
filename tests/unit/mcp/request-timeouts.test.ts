@@ -298,11 +298,17 @@ describe('a verb that cannot outrun the default is left alone', () => {
  *
  * It reads `tools/list` off a real client rather than `IPC_METHODS`, so what it enumerates is
  * what an agent can actually call — a row with no tool is not this suite's problem, and a tool
- * with no row cannot exist. The four device and lease rows are excluded because they are not
+ * with no row cannot exist. The five device and lease rows are excluded because they are not
  * verbs and carry no device work to outrun.
  */
 describe('every tool an agent can call has a stated deadline', () => {
-	const NOT_A_VERB = ['status', 'list_devices', 'acquire_device', 'release_device'];
+	const NOT_A_VERB = [
+		'status',
+		'list_devices',
+		'acquire_device',
+		'release_device',
+		'force_release_device',
+	];
 
 	it('names each one in exactly one of this file’s two lists', async () => {
 		const agent = await connectAgent();

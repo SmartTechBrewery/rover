@@ -1973,10 +1973,9 @@ export type SweepArchiveResult = z.infer<typeof SweepArchiveResultSchema>;
  * D13's never-over-the-wire clause to the *write* and does not repeal it, because every command
  * in such a file is a program the host spawns as the daemon's user. No `env` value and no host
  * path is on any answer, and there is no field either would fit in (D19). It is on
- * `PANEL_METHODS` (D29) and deliberately **not** an MCP tool, the asymmetry `list_archive`,
- * `search_archive` and `force_release_device` already have: this surface serves the operator's
- * own browser, and what the host is configured to run is not something every agent on it needs
- * to enumerate.
+ * `PANEL_METHODS` (D29) and deliberately **not** an MCP tool, the asymmetry `list_archive` and
+ * `search_archive` already have: this surface serves the operator's own browser, and what the
+ * host is configured to run is not something every agent on it needs to enumerate.
  *
  * **`delete_project` is D31's write half, and the write is a *removal*** (D42, #271). It takes the
  * identifier `list_projects` answered with plus a caller-supplied `actor`, and removes in one
@@ -2089,10 +2088,11 @@ export type SweepArchiveResult = z.infer<typeof SweepArchiveResultSchema>;
  * data, with one line on the host's own log (D28). The answer carries three directory *names* per
  * run, the same components `list_archive` answers with, and there is no field a host path or a
  * budget would fit in (D19, {@link SweepArchiveResultSchema}). It is deliberately **not** on
- * `PANEL_METHODS` and deliberately **not** an MCP tool: `force_release_device`'s reasoning with
- * the stakes raised — it deletes an operator's data on a shared host, and no agent's step of work
- * is that. `actor` is caller-supplied attribution and never derived (D20, D28); one audit line
- * names it and whether the call was a dry run.
+ * `PANEL_METHODS` and deliberately **not** an MCP tool: it deletes an operator's data on a shared
+ * host, permanently, and no agent's step of work is that — where `force_release_device`, which is
+ * a tool (#345), ends a lease whose device goes back to the pool restored. `actor` is
+ * caller-supplied attribution and never derived (D20, D28); one audit line names it and whether
+ * the call was a dry run.
  *
  * The verb rows are the two waits, the seven input verbs, the three read verbs, the three
  * app-lifecycle verbs, the log read, the three recording rows, the two environment verbs and

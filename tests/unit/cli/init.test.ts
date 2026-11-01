@@ -646,9 +646,6 @@ describe('the generated ROVER.md', () => {
 	 * repository (`src/cli/init/documents.ts`).
 	 */
 	const NOT_AN_AGENT_S = new Set([
-		// Operator surface: keyed on the serial precisely because the lease id belongs to its
-		// holder, so this is never an agent's next move on its own lease (D20, D28).
-		'force_release_device',
 		// Deliberately not an MCP tool: it would hand every agent a listing of every other
 		// agent's runs on the host (R36).
 		'list_archive',
@@ -691,9 +688,9 @@ describe('the generated ROVER.md', () => {
 		// somebody else's run — and its read would enumerate what every other agent has kept.
 		'list_kept_tests',
 		'set_kept_tests',
-		// And the sweep of that archive (§9.4, #238) — `force_release_device`'s reason with the
-		// stakes raised: it deletes an operator's data on a shared host, which is an operator's
-		// press and never a step in one agent's work.
+		// And the sweep of that archive (§9.4, #238): it deletes an operator's data on a shared
+		// host, permanently and with no undo, which is an operator's press and never a step in one
+		// agent's work.
 		'sweep_archive',
 		// What the host machine has installed, and installing it — a question about somebody's
 		// laptop rather than about a device, answered in paths on that machine, and the install is
@@ -728,6 +725,13 @@ describe('the generated ROVER.md', () => {
 			(method) => !NOT_AN_AGENT_S.has(method) && !page.includes(`\`${method}\``),
 		);
 		expect(missing).toEqual([]);
+	});
+
+	// #345: the one tool on the page that ends somebody else's lease, so the page has to say when it
+	// is the move — on the operator's word — and that a `held` refusal is not that.
+	it('offers force_release_device on the operator’s instruction, never as the way past held', () => {
+		expect(page).toContain('`held` is not an invitation to take the device');
+		expect(page).toMatch(/only when your operator has told you/);
 	});
 
 	it('excludes only rows that really exist, so the list cannot rot', () => {

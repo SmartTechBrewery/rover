@@ -355,7 +355,7 @@ printf '%s\n' \
 ```
 
 The first answer is the handshake (`"protocolVersion":"2025-06-18"`, `"serverInfo":{"name":"rover"`
-…) and the second lists **26 tools**: the four device and lease rows, the nineteen verbs whose
+…) and the second lists **27 tools**: the five device and lease rows, the nineteen verbs whose
 answer is plain data, and the three whose answer is bytes. Swap the last frame for a call to watch
 one run against the device:
 
@@ -619,7 +619,13 @@ the holder's next verb call is refused `no-lease` rather than quietly driving a 
 since have handed on. A device nobody is holding is a named refusal and not an error, and the three
 reasons are three different next moves: `not-held`, `gone` and `not-attached`. Who did it is a
 caller-supplied `actor` string the host records and derives from nothing — never from whoever
-authenticated, and never a token (D20).
+authenticated, and never a token (D20). **An agent can make the same call over MCP when its operator
+tells it to** (#345, D28 as amended): `force_release_device` is a tool taking the same `serial` and
+`actor`, and it was deliberately not one until the operator reversed that — an agent acting on the
+operator's word is the operator taking the device, and refusing the tool only routed the takeover
+through another session. Its description says it ends **somebody else's** lease
+and is for when the operator has asked, not a way around a `held` refusal; `owner` still authorizes
+nothing, so a lease carrying the agent's own owner string is no exception.
 
 **And an operator can say *keep this test*, which the host remembers** (`list_kept_tests` /
 `set_kept_tests`, D33). The flag is per `<project>/<test_name>` — the two leading components a
@@ -1410,8 +1416,8 @@ outside it, because `--import tsx/esm` resolves against the caller's directory r
 the script. What that entry looks like in an MCP client's own configuration, and how to prove it
 handshakes, is [Wire up the MCP server](#wire-up-the-mcp-server) above. What exists today is the
 server, speaking stdio, declaring
-twenty-six tools under the `IPC_METHODS` names exactly: the four device and lease rows (`status`, `list_devices`,
-`acquire_device`, `release_device`), the nineteen verbs whose answer is plain data
+twenty-seven tools under the `IPC_METHODS` names exactly: the five device and lease rows (`status`, `list_devices`,
+`acquire_device`, `release_device`, `force_release_device`), the nineteen verbs whose answer is plain data
 (`wait_for`, `wait_until_gone`, `tap`, `long_press`, `swipe`, `scroll`, `type_text`,
 `press_key`, `hide_keyboard`, `read_screen`, `device_info`, `launch_app`, `stop_app`, `clear_app_data`,
 `read_logs`, `install_app`, `start_recording`, `set_airplane_mode`, `set_wifi`), and the three
@@ -1439,48 +1445,55 @@ package argument on it — the byte-carrying form stays the CLI's, because a who
 argument means an agent producing several megabytes of base64. That is what `push_file` and
 `pull_file` are still waiting for and why they are not tools: `PROJECT.md` R24 phase 2 owns how a
 client supplies and receives a file, and neither of those rows has a second form that carries
-none. `force_release_device` is the third of twelve rows with no tool, and its reason will not expire:
-**an agent must not be able to end another agent's lease.** It is authority over the shared pool
-rather than a step in one caller's work, which is what makes it an operator action (D27, D28)
-reached from the CLI and, later, the panel. `list_archive` is the fourth, and its reason is
-different in kind from all three: it is not about a device at all. It reads the **host's** artifact
+none. `force_release_device` used to be the third row with no tool, on the reasoning that an agent
+must not be able to end another agent's lease, and it is a tool since #345 (`PROJECT.md` R31 and
+D28, as amended) — the operator directs agents too, and an agent acting on the operator's word is
+how the operator exercises authority over the pool. It answers what `rover force-release` answers:
+`released` naming the former holder, never its lease id, or `not-held`, `gone` and `not-attached`
+as named refusals. `list_archive` is the third row with no tool, and its reason is different in kind
+from the two transfers': it is not about a device at all. It reads the **host's** artifact
 archive (D24, R36), which is the operator's and the panel's surface — while an agent already
 receives its own artifacts as bytes in the verb's own answer (D19), so there is nothing there it
 needs and could not already have, and advertising it would hand every agent a listing of every
-other agent's runs on the host. `search_archive` is the fifth, for that reason with more force
+other agent's runs on the host. `search_archive` is the fourth, for that reason with more force
 (R38): it reads the same archive, and where `list_archive` at least made an agent walk to another
 agent's runs one level at a time, one search hands over the run names of every other agent on the
 host in a single answer. It is on the panel's surface instead, which is the operator's own browser.
-`list_projects` is the sixth, and its reason is the same asymmetry in a different key (R39): it
+`list_projects` is the fifth, and its reason is the same asymmetry in a different key (R39): it
 answers what the **host operator** configured this machine to run around a lease, which is an
 operator's question rather than an agent's — an agent already gets everything its own lease implies
 without asking, and enumerating every other project registered on the host is not something it
-needs. It is on the panel's surface too. `list_archive_groups` is the seventh, on `search_archive`'s
+needs. It is on the panel's surface too. `list_archive_groups` is the sixth, on `search_archive`'s
 exact terms (R41): it answers which of the host's runs share a testing group and which of their
 artifacts share a label, and one call would hand an agent every other agent's run names without
 even a walk — while an agent already knows its own group and its own labels, having chosen them.
 The arrangement of a group is the operator's browser's question.
-`list_kept_tests` and `set_kept_tests` are the eighth and ninth, and the write is the sharpest of
-the nine: **what the operator keeps is not an agent's to decide at all** (D33). It is authority over
-a shared resource rather than a step in one caller's work, and an agent that could untick a test
-would be clearing the exemption on somebody else's run. The read is off the list on `list_archive`'s
-terms — an agent already knows its own project and test name, having supplied them, and enumerating
-what every other agent on the host has kept is an operator's question. Both are on the panel's
-surface and reachable from the CLI. `sweep_archive` is the tenth, and it is `force_release_device`'s
-reason with the stakes raised (§9.4): it **deletes an operator's data** on a shared host — whole run
-directories, permanently, with no undo and no trash directory. That is authority over the host's own
-disk rather than any agent's step of work, so it is reached from the CLI alone; it is deliberately
-not on the panel's surface either, while D27's role model is still deferred.
-`measure_archive` is the eleventh, on `list_archive`'s exact terms (R49): it answers how much disk
+`list_kept_tests` and `set_kept_tests` are the seventh and eighth, and the write is the sharpest of
+the eight: **what the operator keeps is not an agent's to decide at all** (D33). An agent that could
+untick a test would be clearing the exemption on runs *other* agents' leases filed, so the next sweep
+deletes them for good — and unlike a force-release, which hands the device back restored and is the
+one operator action an agent can need in the middle of its own work, no step of an agent's own work
+ever needs it. The read is off the list on `list_archive`'s terms — an agent already knows its own
+project and test name, having supplied them, and enumerating what every other agent on the host has
+kept is an operator's question. Both are on the panel's
+surface and reachable from the CLI. `sweep_archive` is the ninth (§9.4): it **deletes an operator's
+data** on a shared host — whole run directories, permanently, with no undo and no trash directory, so
+nothing comes back from it the way a force-released device comes back to the pool. That is authority
+over the host's own disk rather than any agent's step of work, so it is reached from the CLI alone;
+it is deliberately not on the panel's surface either, while D27's role model is still deferred.
+`measure_archive` is the tenth, on `list_archive`'s exact terms (R49): it answers how much disk
 one address of the **host's** archive takes, which is the operator's browser's question — an agent
 already receives its own artifacts as bytes, so there is no total there it needs, and one that could
 ask this could size every other agent's project on the host. It is on the panel's surface.
-`measure_archive_groups` is the twelfth, and it is that row's reason with `list_archive_groups`'
+`measure_archive_groups` is the eleventh, and it is that row's reason with `list_archive_groups`'
 force: it answers the same question over the *grouped* runs of everything, of one project or of one
 group, so one call would size every other agent's grouped work on the host — while an agent already
 knows its own group, having chosen it. It is on the panel's surface too, which is where the badge
 that draws it lives.
-`tests/unit/mcp/verb-declarations.test.ts` records all twelve as
+The other six are `pull_app_file`, on `pull_file`'s terms; `delete_project`, `delete_archived_test`
+and `delete_archived_group`, on `sweep_archive`'s with the deletion *named* — each destroys runs other
+agents' leases wrote; and `list_host_tooling` and `install_host_tool`, which are about the host
+machine rather than a device. `tests/unit/mcp/verb-declarations.test.ts` records all seventeen as
 decisions, so no row can quietly land with no tool. The `rover` command is published through `package.json`'s `bin` and reaches a `PATH`
 only through `npm link`, which `PROJECT.md` §9.4 records the reasoning for; `bin/rover-mcp.mjs`
 is a path an MCP config states absolutely and not that.
