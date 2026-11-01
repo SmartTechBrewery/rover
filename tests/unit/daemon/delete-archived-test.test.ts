@@ -41,6 +41,18 @@ import { createMockDevice, createMockDeviceBackend } from '../../helpers/factori
 
 const ATTACHED = createMockDevice({ serial: parseDeviceSerial('attached-1') });
 
+/**
+ * The day every run here is filed on: yesterday, as `archive-path.ts` spells a run's date.
+ *
+ * Relative rather than a fixed date because every daemon runs a full retention pass as it comes up
+ * (D38), and that pass is not awaited: a fixed date ages past `DEFAULT_ARTIFACTS_MAX_AGE_DAYS`
+ * sooner or later, and from then on the start pass sweeps the very runs a test is about to delete.
+ */
+const FILED_ON = new Date(Date.now() - 24 * 60 * 60 * 1000)
+	.toISOString()
+	.slice(0, 10)
+	.replace(/-/g, '');
+
 let temp: TempSocket;
 const running: RunningDaemon[] = [];
 const clients: IpcClient[] = [];
@@ -191,9 +203,9 @@ async function stillWritable(directory: string): Promise<boolean> {
 
 describe('a delete takes one test and everything filed under it', () => {
 	it('removes the test directory, every run in it and its kept entry in one call', async () => {
-		await fileARun('checkout-web', 'home-screen', '20260901T101010Z-issue-1-abcd1234', 2048);
-		await fileARun('checkout-web', 'home-screen', '20260901T101111Z-issue-1-abcd1235', 1024);
-		await fileARun('checkout-web', 'login-flow', '20260901T101212Z-issue-1-abcd1236', 512);
+		await fileARun('checkout-web', 'home-screen', `${FILED_ON}T101010Z-issue-1-abcd1234`, 2048);
+		await fileARun('checkout-web', 'home-screen', `${FILED_ON}T101111Z-issue-1-abcd1235`, 1024);
+		await fileARun('checkout-web', 'login-flow', `${FILED_ON}T101212Z-issue-1-abcd1236`, 512);
 		await writeKeptTests(temp.keptTestsPath, [kept('checkout-web', 'home-screen')]);
 
 		const result = await deleteTest('checkout-web', 'home-screen');
@@ -210,7 +222,12 @@ describe('a delete takes one test and everything filed under it', () => {
 		// The sibling test and the project it lives in both stand.
 		expect(
 			await exists(
-				join(temp.artifactsRoot, 'checkout-web', 'login-flow', '20260901T101212Z-issue-1-abcd1236'),
+				join(
+					temp.artifactsRoot,
+					'checkout-web',
+					'login-flow',
+					`${FILED_ON}T101212Z-issue-1-abcd1236`,
+				),
 			),
 		).toBe(true);
 		await expect(readKeptTests(temp.keptTestsPath)).resolves.toEqual([]);
@@ -223,8 +240,8 @@ describe('a delete takes one test and everything filed under it', () => {
 	 * whole reason the store's key is the `<project>/<test_name>` pair (D22, D33).
 	 */
 	it('takes a kept test, and leaves a namesake under another project kept', async () => {
-		await fileARun('checkout-web', 'home-screen', '20260901T101010Z-issue-1-abcd1234', 512);
-		await fileARun('storefront', 'home-screen', '20260901T101010Z-issue-2-abcd9999', 256);
+		await fileARun('checkout-web', 'home-screen', `${FILED_ON}T101010Z-issue-1-abcd1234`, 512);
+		await fileARun('storefront', 'home-screen', `${FILED_ON}T101010Z-issue-2-abcd9999`, 256);
 		await writeKeptTests(temp.keptTestsPath, [
 			kept('checkout-web', 'home-screen'),
 			kept('storefront', 'home-screen'),
@@ -244,8 +261,8 @@ describe('a delete takes one test and everything filed under it', () => {
 	 * to the one deletion that can newly empty a project. And the root is never a candidate.
 	 */
 	it('removes the project level its last test emptied, and never the archive root', async () => {
-		await fileARun('checkout-web', 'home-screen', '20260901T101010Z-issue-1-abcd1234', 512);
-		await fileARun('storefront', 'home-screen', '20260901T101010Z-issue-2-abcd9999', 256);
+		await fileARun('checkout-web', 'home-screen', `${FILED_ON}T101010Z-issue-1-abcd1234`, 512);
+		await fileARun('storefront', 'home-screen', `${FILED_ON}T101010Z-issue-2-abcd9999`, 256);
 
 		await expect(deleteTest('checkout-web', 'home-screen')).resolves.toMatchObject({
 			outcome: 'deleted',
@@ -265,7 +282,7 @@ describe('a delete takes one test and everything filed under it', () => {
 	it('removes a test whose filed component is over the segment bound', async () => {
 		const filed = pathSegment('the checkout web end to end regression check for storefront carts');
 		expect(filed.length).toBeGreaterThan(MAX_SEGMENT_LENGTH);
-		await fileARun('checkout-web', filed, '20260901T101010Z-issue-1-abcd1234', 1024);
+		await fileARun('checkout-web', filed, `${FILED_ON}T101010Z-issue-1-abcd1234`, 1024);
 		await writeKeptTests(temp.keptTestsPath, [kept('checkout-web', filed)]);
 
 		expect(await deleteTest('checkout-web', filed)).toEqual({
@@ -292,7 +309,7 @@ describe('the four outcomes never collapse into each other', () => {
 	});
 
 	it('answers not-found for a test of a project that exists but never filed it', async () => {
-		await fileARun('checkout-web', 'login-flow', '20260901T101010Z-issue-1-abcd1234', 512);
+		await fileARun('checkout-web', 'login-flow', `${FILED_ON}T101010Z-issue-1-abcd1234`, 512);
 
 		expect(await deleteTest('checkout-web', 'home-screen')).toEqual({ outcome: 'not-found' });
 
@@ -317,7 +334,7 @@ describe('the four outcomes never collapse into each other', () => {
 	});
 
 	it('answers partial when the directory will not go, and still reports the kept half', async () => {
-		await fileARun('checkout-web', 'home-screen', '20260901T101010Z-issue-1-abcd1234', 512);
+		await fileARun('checkout-web', 'home-screen', `${FILED_ON}T101010Z-issue-1-abcd1234`, 512);
 		await writeKeptTests(temp.keptTestsPath, [kept('checkout-web', 'home-screen')]);
 		await start();
 		// A directory is removed by writing to its *parent*, so the project level is what has to
@@ -342,7 +359,7 @@ describe('the four outcomes never collapse into each other', () => {
 	});
 
 	it('answers partial without overwriting a kept-tests store it cannot read', async () => {
-		await fileARun('checkout-web', 'home-screen', '20260901T101010Z-issue-1-abcd1234', 512);
+		await fileARun('checkout-web', 'home-screen', `${FILED_ON}T101010Z-issue-1-abcd1234`, 512);
 		await writeFile(temp.keptTestsPath, '{ not json', 'utf8');
 
 		const result = reportOf(await deleteTest('checkout-web', 'home-screen'));
@@ -363,7 +380,7 @@ describe('the four outcomes never collapse into each other', () => {
 describe('a live lease filing into this test is refused, and nothing is touched', () => {
 	it('refuses while the lease is live and leaves both halves alone', async () => {
 		registerFakeBackend();
-		await fileARun('checkout-web', 'home-screen', '20260901T101010Z-issue-1-abcd1234', 512);
+		await fileARun('checkout-web', 'home-screen', `${FILED_ON}T101010Z-issue-1-abcd1234`, 512);
 		await writeKeptTests(temp.keptTestsPath, [kept('checkout-web', 'home-screen')]);
 		await start();
 		await expect(
@@ -391,7 +408,7 @@ describe('a live lease filing into this test is refused, and nothing is touched'
 		const project = pathSegment('check out');
 		const testName = pathSegment('home screen');
 		expect(project).not.toBe('check out');
-		await fileARun(project, testName, '20260901T101010Z-issue-1-abcd1234', 512);
+		await fileARun(project, testName, `${FILED_ON}T101010Z-issue-1-abcd1234`, 512);
 		await start();
 		await expect(
 			(await connect()).request('acquire_device', {
@@ -411,7 +428,7 @@ describe('a live lease filing into this test is refused, and nothing is touched'
 
 	it('does not refuse for a live lease on a different test of the same project', async () => {
 		registerFakeBackend();
-		await fileARun('checkout-web', 'home-screen', '20260901T101010Z-issue-1-abcd1234', 512);
+		await fileARun('checkout-web', 'home-screen', `${FILED_ON}T101010Z-issue-1-abcd1234`, 512);
 		await start();
 		await expect(
 			(await connect()).request('acquire_device', {
@@ -428,7 +445,7 @@ describe('a live lease filing into this test is refused, and nothing is touched'
 
 describe('what leaves the host, and what stays on it', () => {
 	it('puts no host path and no errno on any answer', async () => {
-		await fileARun('checkout-web', 'home-screen', '20260901T101010Z-issue-1-abcd1234', 512);
+		await fileARun('checkout-web', 'home-screen', `${FILED_ON}T101010Z-issue-1-abcd1234`, 512);
 
 		const serialised = JSON.stringify(await deleteTest('checkout-web', 'home-screen'));
 
@@ -441,7 +458,7 @@ describe('what leaves the host, and what stays on it', () => {
 	});
 
 	it('says on its own log why a half did not go, naming the path there and only there', async () => {
-		await fileARun('checkout-web', 'home-screen', '20260901T101010Z-issue-1-abcd1234', 512);
+		await fileARun('checkout-web', 'home-screen', `${FILED_ON}T101010Z-issue-1-abcd1234`, 512);
 		await start();
 		await chmod(join(temp.artifactsRoot, 'checkout-web'), 0o555);
 		if (await stillWritable(join(temp.artifactsRoot, 'checkout-web'))) {
@@ -458,7 +475,7 @@ describe('what leaves the host, and what stays on it', () => {
 	});
 
 	it('writes one audit line naming the actor, both components and the counts', async () => {
-		await fileARun('checkout-web', 'home-screen', '20260901T101010Z-issue-1-abcd1234', 512);
+		await fileARun('checkout-web', 'home-screen', `${FILED_ON}T101010Z-issue-1-abcd1234`, 512);
 		await writeKeptTests(temp.keptTestsPath, [kept('checkout-web', 'home-screen')]);
 		await start();
 		logged.length = 0;
@@ -493,7 +510,7 @@ describe('what leaves the host, and what stays on it', () => {
 
 	it('says plainly that a refused delete deleted nothing', async () => {
 		registerFakeBackend();
-		await fileARun('checkout-web', 'home-screen', '20260901T101010Z-issue-1-abcd1234', 512);
+		await fileARun('checkout-web', 'home-screen', `${FILED_ON}T101010Z-issue-1-abcd1234`, 512);
 		await start();
 		await expect(
 			(await connect()).request('acquire_device', {
@@ -516,7 +533,7 @@ describe('what leaves the host, and what stays on it', () => {
 
 describe('an address that could escape the archive is refused before anything is removed', () => {
 	it('answers invalid_params for a component that is not one directory name', async () => {
-		await fileARun('checkout-web', 'home-screen', '20260901T101010Z-issue-1-abcd1234', 512);
+		await fileARun('checkout-web', 'home-screen', `${FILED_ON}T101010Z-issue-1-abcd1234`, 512);
 		await start();
 
 		for (const testName of ['..', '.', 'a/b', '']) {

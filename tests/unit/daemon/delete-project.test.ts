@@ -41,6 +41,18 @@ import { createMockDevice, createMockDeviceBackend } from '../../helpers/factori
 
 const ATTACHED = createMockDevice({ serial: parseDeviceSerial('attached-1') });
 
+/**
+ * The day every run here is filed on: yesterday, as `archive-path.ts` spells a run's date.
+ *
+ * Relative rather than a fixed date because every daemon runs a full retention pass as it comes up
+ * (D38), and that pass is not awaited: a fixed date ages past `DEFAULT_ARTIFACTS_MAX_AGE_DAYS`
+ * sooner or later, and from then on the start pass sweeps the very runs a test is about to delete.
+ */
+const FILED_ON = new Date(Date.now() - 24 * 60 * 60 * 1000)
+	.toISOString()
+	.slice(0, 10)
+	.replace(/-/g, '');
+
 let temp: TempSocket;
 const running: RunningDaemon[] = [];
 const clients: IpcClient[] = [];
@@ -193,8 +205,8 @@ async function stillWritable(directory: string): Promise<boolean> {
 describe('a delete takes the registration and everything filed under it', () => {
 	it('removes the hook file, the archive subtree and the kept entries in one call', async () => {
 		await register('checkout-web', { apps: ['com.example.checkout'] });
-		await fileARun('checkout-web', 'home-screen', '20260901T101010Z-issue-1-abcd1234', 2048);
-		await fileARun('checkout-web', 'login-flow', '20260901T101111Z-issue-1-abcd1235', 1024);
+		await fileARun('checkout-web', 'home-screen', `${FILED_ON}T101010Z-issue-1-abcd1234`, 2048);
+		await fileARun('checkout-web', 'login-flow', `${FILED_ON}T101111Z-issue-1-abcd1235`, 1024);
 		await writeKeptTests(temp.keptTestsPath, [
 			{
 				project: 'checkout-web',
@@ -231,7 +243,7 @@ describe('a delete takes the registration and everything filed under it', () => 
 		// naming one project is neither of them. The alternative — a `Keep` that survives a delete
 		// — would leave a half-deleted archive nothing ever finishes.
 		await register('checkout-web');
-		await fileARun('checkout-web', 'kept-test', '20260901T101010Z-issue-1-abcd1234', 512);
+		await fileARun('checkout-web', 'kept-test', `${FILED_ON}T101010Z-issue-1-abcd1234`, 512);
 		await writeKeptTests(temp.keptTestsPath, [
 			{
 				project: 'checkout-web',
@@ -251,8 +263,8 @@ describe('a delete takes the registration and everything filed under it', () => 
 	it('touches nothing outside that one project', async () => {
 		await register('checkout-web');
 		await register('storefront');
-		await fileARun('checkout-web', 'home-screen', '20260901T101010Z-issue-1-abcd1234', 512);
-		await fileARun('storefront', 'home-screen', '20260901T101010Z-issue-2-abcd9999', 512);
+		await fileARun('checkout-web', 'home-screen', `${FILED_ON}T101010Z-issue-1-abcd1234`, 512);
+		await fileARun('storefront', 'home-screen', `${FILED_ON}T101010Z-issue-2-abcd9999`, 512);
 		await writeKeptTests(temp.keptTestsPath, [
 			{
 				project: 'storefront',
@@ -271,7 +283,12 @@ describe('a delete takes the registration and everything filed under it', () => 
 		expect(await exists(join(temp.projectsRoot, 'storefront.json'))).toBe(true);
 		expect(
 			await exists(
-				join(temp.artifactsRoot, 'storefront', 'home-screen', '20260901T101010Z-issue-2-abcd9999'),
+				join(
+					temp.artifactsRoot,
+					'storefront',
+					'home-screen',
+					`${FILED_ON}T101010Z-issue-2-abcd9999`,
+				),
 			),
 		).toBe(true);
 		expect(await readFile(users, 'utf8')).toBe('{"users":[]}');
@@ -292,7 +309,7 @@ describe('a delete takes the registration and everything filed under it', () => 
 		const raw = 'checkout web end to end regression suite for storefront and cart';
 		const filed = pathSegment(raw);
 		expect(filed.length).toBeGreaterThan(MAX_SEGMENT_LENGTH);
-		await fileARun(filed, 'home-screen', '20260901T101010Z-issue-1-abcd1234', 1024);
+		await fileARun(filed, 'home-screen', `${FILED_ON}T101010Z-issue-1-abcd1234`, 1024);
 		await writeKeptTests(temp.keptTestsPath, [
 			{
 				project: filed,
@@ -356,7 +373,7 @@ describe('the four outcomes never collapse into each other', () => {
 	it('answers deleted with the registration absent for a subtree nobody registered', async () => {
 		// Ordinary rather than exotic: a lease may name any project string (D22), so an archive
 		// subtree with no hook file beside it is a real state — and taking it did something.
-		await fileARun('ad-hoc', 'home-screen', '20260901T101010Z-issue-1-abcd1234', 256);
+		await fileARun('ad-hoc', 'home-screen', `${FILED_ON}T101010Z-issue-1-abcd1234`, 256);
 
 		expect(await deleteProject('ad-hoc')).toEqual({
 			outcome: 'deleted',
@@ -377,8 +394,8 @@ describe('the four outcomes never collapse into each other', () => {
 	it('never answers an absent archive while a directory for that project is still there', async () => {
 		const filed = pathSegment('checkout web end to end regression suite for storefront and cart');
 		await register('checkout-web');
-		await fileARun(filed, 'home-screen', '20260901T101010Z-issue-1-abcd1234', 512);
-		await fileARun('ad-hoc', 'home-screen', '20260901T101010Z-issue-2-abcd9999', 256);
+		await fileARun(filed, 'home-screen', `${FILED_ON}T101010Z-issue-1-abcd1234`, 512);
+		await fileARun('ad-hoc', 'home-screen', `${FILED_ON}T101010Z-issue-2-abcd9999`, 256);
 
 		for (const project of ['checkout-web', filed, 'ad-hoc', 'never-anything']) {
 			const result = await deleteProject(project);
@@ -396,7 +413,7 @@ describe('the four outcomes never collapse into each other', () => {
 
 	it('answers partial with the registration still removed when the subtree will not go', async () => {
 		await register('checkout-web');
-		await fileARun('checkout-web', 'home-screen', '20260901T101010Z-issue-1-abcd1234', 512);
+		await fileARun('checkout-web', 'home-screen', `${FILED_ON}T101010Z-issue-1-abcd1234`, 512);
 		await start();
 		// A directory is removed by writing to its *parent*, so the archive root is what has to
 		// refuse. Restored in `afterEach`, or the temp directory could not be removed.
@@ -442,7 +459,7 @@ describe('a live lease on the project is refused, and nothing is touched', () =>
 	it('refuses while the lease is live and leaves all three halves alone', async () => {
 		registerFakeBackend();
 		await register('checkout-web');
-		await fileARun('checkout-web', 'home-screen', '20260901T101010Z-issue-1-abcd1234', 512);
+		await fileARun('checkout-web', 'home-screen', `${FILED_ON}T101010Z-issue-1-abcd1234`, 512);
 		await writeKeptTests(temp.keptTestsPath, [
 			{
 				project: 'checkout-web',
@@ -478,7 +495,7 @@ describe('a live lease on the project is refused, and nothing is touched', () =>
 		registerFakeBackend();
 		const filed = pathSegment('check out');
 		expect(filed).not.toBe('check out');
-		await fileARun(filed, 'home-screen', '20260901T101010Z-issue-1-abcd1234', 512);
+		await fileARun(filed, 'home-screen', `${FILED_ON}T101010Z-issue-1-abcd1234`, 512);
 		await start();
 		await expect(
 			(await connect()).request('acquire_device', {
@@ -497,7 +514,7 @@ describe('a live lease on the project is refused, and nothing is touched', () =>
 describe('what leaves the host, and what stays on it', () => {
 	it('puts no host path and no errno on any answer', async () => {
 		await register('checkout-web');
-		await fileARun('checkout-web', 'home-screen', '20260901T101010Z-issue-1-abcd1234', 512);
+		await fileARun('checkout-web', 'home-screen', `${FILED_ON}T101010Z-issue-1-abcd1234`, 512);
 
 		const serialised = JSON.stringify(await deleteProject('checkout-web'));
 
@@ -512,7 +529,7 @@ describe('what leaves the host, and what stays on it', () => {
 
 	it('says on its own log why a half did not go, naming the path there and only there', async () => {
 		await register('checkout-web');
-		await fileARun('checkout-web', 'home-screen', '20260901T101010Z-issue-1-abcd1234', 512);
+		await fileARun('checkout-web', 'home-screen', `${FILED_ON}T101010Z-issue-1-abcd1234`, 512);
 		await start();
 		await chmod(temp.artifactsRoot, 0o555);
 		if (await stillWritable(temp.artifactsRoot)) {
@@ -528,7 +545,7 @@ describe('what leaves the host, and what stays on it', () => {
 
 	it('writes one audit line naming the actor, the project and the counts', async () => {
 		await register('checkout-web');
-		await fileARun('checkout-web', 'home-screen', '20260901T101010Z-issue-1-abcd1234', 512);
+		await fileARun('checkout-web', 'home-screen', `${FILED_ON}T101010Z-issue-1-abcd1234`, 512);
 		await writeKeptTests(temp.keptTestsPath, [
 			{
 				project: 'checkout-web',

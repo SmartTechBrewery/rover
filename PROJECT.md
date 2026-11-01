@@ -2601,6 +2601,18 @@ so nothing below rests on it. Two probe packages were built for the run — an A
   probe and the read is refused by the length check rather than answered torn. Stop the app first
   (`stop_app`), then pull the database, its `-wal` and `-shm`.
 
+### A fixture dated in the calendar goes red by itself thirty days later (2026-11-01, #346)
+
+- **The daemon's start pass sweeps by age, and a hard-coded run date eventually falls outside the
+  window.** `tests/unit/daemon/delete-project.test.ts` and `delete-archived-test.test.ts` filed
+  every run as `20260901T…`, and both went red on CI around 2026-10-01 with nothing in them changed —
+  noticed on #346, whose diff touched neither. Every daemon runs a full retention pass as it comes
+  up (D38) with `DEFAULT_ARTIFACTS_MAX_AGE_DAYS` of 30, so once the fixed date was older than that,
+  the start pass took the runs and the delete under test answered `not-found` or `not-registered`.
+  Seeding after `startDaemon` is **not** enough on its own: the pass is not awaited, so it can still
+  walk a tree seeded a moment later. A fixture that must survive the start pass names its runs
+  relative to `Date.now()` — yesterday, in those two suites, as `sweep-at-start.test.ts` already did.
+
 ---
 
 ## 7. Scope
