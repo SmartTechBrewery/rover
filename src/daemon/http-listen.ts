@@ -246,10 +246,12 @@ import { findUserByToken, type UserRecord } from './user-store.js';
  * belongs while D27's role model is still deferred. It is reached from the CLI (D4).
  *
  * `search_archive` is here and deliberately **not** an MCP tool, which is the same asymmetry
- * `list_archive` and `force_release_device` already have: this transport serves the operator's own
- * browser, and a search that is safe there would hand every agent the run names of every other
- * agent on the host. `list_projects` is that asymmetry in a different key (D31): what the host
- * operator configured this machine to run is not something every agent on it needs to enumerate.
+ * `list_archive` already has: this transport serves the operator's own browser, and a search that
+ * is safe there would hand every agent the run names of every other agent on the host.
+ * `force_release_device` had that asymmetry too until #345 made it an MCP tool as well, for an
+ * agent acting on its operator's instruction. `list_projects` is that asymmetry in a different key
+ * (D31): what the host operator configured this machine to run is not something every agent on it
+ * needs to enumerate.
  * It is a **read** and the whole of D31's read side — no method on this list, or on the table,
  * writes a hook file or takes a path into the projects directory.
  *

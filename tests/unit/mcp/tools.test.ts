@@ -1,5 +1,5 @@
 /**
- * The four device tools, driven by a real MCP client against a real daemon on a real socket.
+ * The five device tools, driven by a real MCP client against a real daemon on a real socket.
  *
  * The daemon suite's real-socket exception applies (ai/TESTING.md) and extends here for the
  * same reason it covers the CLI: the whole job of this layer is to drive a host over that
@@ -44,11 +44,19 @@ let temp: TempSocket;
 const running: RunningDaemon[] = [];
 const clients: Client[] = [];
 
-function registerFakeBackend(): void {
+/**
+ * One fully capable backend with `attached-1` on it, handed back so a suite can read what the host
+ * asked of it. `describeDevice` is what re-verification answers — `null` being "this host cannot
+ * see it" (D6) — and by default every serial asked about is attached here.
+ */
+function registerFakeBackend(
+	describeDevice: DeviceBackend['describeDevice'] = async (serial) => createMockDevice({ serial }),
+): DeviceBackend {
 	const watchDevices = vi.fn<DeviceBackend['watchDevices']>((watcher: DeviceWatcher) => {
 		watcher.onDevices([attached]);
 		return { stop: vi.fn<DeviceWatch['stop']>(async () => {}) };
 	});
+	const backend = createMockDeviceBackend({ watchDevices, describeDevice });
 	registerDeviceBackend({
 		manifest: {
 			platform: 'test-platform',
@@ -63,11 +71,9 @@ function registerFakeBackend(): void {
 				canPullAppFile: false,
 			},
 		},
-		backend: createMockDeviceBackend({
-			watchDevices,
-			describeDevice: async (serial) => createMockDevice({ serial }),
-		}),
+		backend,
 	});
+	return backend;
 }
 
 async function startHost(): Promise<void> {
@@ -401,6 +407,104 @@ describe('the device tools over a live host', () => {
 		// answer and not an error — the agent reads `released: false` and moves on.
 		expect(result.isError).toBeFalsy();
 		expect(result.structuredContent).toEqual({ released: false });
+	});
+});
+
+/*
+ * #345: the operator's own action, reached by an agent the operator is directing. Two clients
+ * against one host, because that is the case the row exists for — the lease belongs to a different
+ * session, and the agent ending it was never handed its id (D20). What `rover force-release` does
+ * over the socket is the bar: the same release path, the same restoration (D9), and the holder
+ * finding out from its next call.
+ */
+describe('force_release_device over a live host', () => {
+	it('ends a lease the caller never took, restores the device, and refuses the holder next', async () => {
+		const backend = registerFakeBackend();
+		await startHost();
+		const holder = await connectAgent();
+		const directed = await connectAgent();
+		const granted = await callTool(holder, 'acquire_device', {
+			serial: 'attached-1',
+			owner: 'dev-session',
+			project: 'rover',
+			testName: 'checkout flow',
+		});
+		const leaseId = (granted.structuredContent as { lease: { leaseId: string } }).lease.leaseId;
+
+		// No lease id anywhere in the call: the device is what the directed agent names.
+		const released = await callTool(directed, 'force_release_device', {
+			serial: 'attached-1',
+			actor: 'karolina',
+		});
+
+		expect(released.isError).toBeFalsy();
+		expect(released.structuredContent).toMatchObject({
+			outcome: 'released',
+			heldBy: { owner: 'dev-session', project: 'rover', testName: 'checkout flow' },
+		});
+		// The holder through the public projection, and never its credential (D20) — ending a lease
+		// must not be a way to come by the id for the next one.
+		expect(textOf(released)).not.toContain(leaseId);
+		expect(JSON.stringify(released.structuredContent)).not.toContain('leaseId');
+
+		const next = await callTool(holder, 'device_info', { leaseId });
+		expect(next.isError).toBe(true);
+		expect(next.structuredContent).toMatchObject({ outcome: 'refused', reason: 'no-lease' });
+
+		// A grant waits out the previous lessee's restoration (D9), so once this one is granted the
+		// release path has run to the end — the radios put back exactly as a release puts them.
+		const taken = await callTool(directed, 'acquire_device', {
+			serial: 'attached-1',
+			owner: 'issue-345',
+			project: 'rover',
+			testName: 'checkout flow',
+		});
+		expect(taken.isError).toBeFalsy();
+		expect(backend.setAirplaneMode).toHaveBeenCalledWith('attached-1', false);
+		expect(backend.setWifiEnabled).toHaveBeenCalledWith('attached-1', true);
+	});
+
+	/*
+	 * Each refusal is the host's own answer, so it has to arrive as that answer: `isError`, so
+	 * "nothing to end" never reads as something ended, with the reason by name in the document —
+	 * never the `force_release_device failed: …` sentence a host that could not be reached gets.
+	 */
+	it.each([
+		{ reason: 'not-held', serial: 'attached-1' },
+		{ reason: 'gone', serial: 'vanished-1' },
+		{ reason: 'not-attached', serial: 'foreign-1' },
+	])('reaches the agent as the named refusal $reason', async ({ reason, serial }) => {
+		registerFakeBackend(async (asked) => {
+			if (asked === 'vanished-1') {
+				return null;
+			}
+			return createMockDevice({
+				serial: asked,
+				attachment: asked === 'foreign-1' ? 'another-host' : 'this-host',
+			});
+		});
+		await startHost();
+		const agent = await connectAgent();
+
+		const refused = await callTool(agent, 'force_release_device', { serial, actor: 'karolina' });
+
+		expect(refused.isError).toBe(true);
+		expect(refused.structuredContent).toMatchObject({ outcome: 'refused', reason });
+		expect(textOf(refused)).toContain(`"reason": "${reason}"`);
+		expect(textOf(refused)).not.toContain('force_release_device failed');
+	});
+
+	it('refuses a call that names no actor — nothing derives one', async () => {
+		registerFakeBackend();
+		await startHost();
+		const agent = await connectAgent();
+
+		const result = await callTool(agent, 'force_release_device', { serial: 'attached-1' });
+
+		// Refused by the SDK against the declaration, before anything reaches the host: who ended
+		// somebody else's lease is the caller's to say (D28), and the server has nothing to say it with.
+		expect(result.isError).toBe(true);
+		expect(textOf(result)).toContain('actor');
 	});
 });
 

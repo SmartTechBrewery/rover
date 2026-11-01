@@ -3,7 +3,7 @@
  * the three file transfers that have no shape a tool argument could carry.
  *
  * **The schemas from `src/ipc/methods.ts` *are* the tool declarations**, exactly as
- * `./devices.ts` says for the four device rows (ai/CODING_STANDARDS.md, boundary #1): each
+ * `./devices.ts` says for the five device rows (ai/CODING_STANDARDS.md, boundary #1): each
  * `inputSchema` is the `*ParamsSchema` the host parses the request with, taken off the
  * `IPC_METHODS` table by name rather than restated, so there is no second copy to drift and no
  * row can declare a shape the host would refuse. Three of these tools share one params schema

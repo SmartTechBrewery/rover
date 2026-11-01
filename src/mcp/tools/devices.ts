@@ -1,6 +1,6 @@
 /**
- * The four device and lease tools: `status`, `list_devices`, `acquire_device`,
- * `release_device`.
+ * The five device and lease tools: `status`, `list_devices`, `acquire_device`,
+ * `release_device` and `force_release_device`.
  *
  * **The schemas from `src/ipc/methods.ts` *are* the tool declarations** (ai/CODING_STANDARDS.md,
  * boundary #1). Each `inputSchema` below is the exact `*ParamsSchema` the daemon parses the
@@ -18,6 +18,16 @@
  * **The names are the `IPC_METHODS` keys**, unchanged and with no platform suffix (D10) — a
  * tool that renamed a row would be a second vocabulary for the same operation.
  *
+ * **`force_release_device` is a tool because the operator directs agents too** (R31 and D28, as
+ * amended by #345). It was deliberately left off this surface on the grounds that an agent must
+ * not end a peer's lease; the operator reversed that, because an agent acting on the operator's
+ * word in that moment *is* the operator exercising D27's authority, and refusing the tool stopped
+ * no takeover — it only routed one through another session or a shell running `rover
+ * force-release`. What did not move: the row is still keyed on the serial and discloses no lease
+ * id (D20), `actor` is still the caller's and never derived (D28), and `owner` still authorizes
+ * nothing. The description is what says when to reach for it — on instruction, never as a way
+ * around a `held` refusal.
+ *
  * **Zero verb logic.** Every handler is one {@link callHost} and one answer. Whether a device
  * is free, when a lease ends and what a refusal means are the host's to decide (D16); a second
  * opinion living in a client is how two answers start disagreeing. `status` and `list_devices`
@@ -31,6 +41,7 @@ import { PROJECT_FILE_ENV_VAR } from '../../daemon/project-hooks.js';
 import {
 	type AcquireDeviceParams,
 	AcquireDeviceParamsSchema,
+	ForceReleaseDeviceParamsSchema,
 	ListDevicesParamsSchema,
 	ReleaseDeviceParamsSchema,
 	StatusParamsSchema,
@@ -214,5 +225,38 @@ export function registerDeviceTools(
 			guarded('release_device', async () =>
 				toolAnswer(await callHost(host, 'release_device', params)),
 			),
+	);
+
+	server.registerTool(
+		'force_release_device',
+		declaring({
+			title: 'Force-release a device somebody else holds',
+			description:
+				'End the lease **somebody else** holds on a device, named by its `serial` — you were ' +
+				'never handed that lease’s id and the host will not hand it out, so the device is what ' +
+				'you name. **Call this only when the operator has told you to take that device over.** ' +
+				'It is not a way around a `held` refusal from `acquire_device`: the holder is another ' +
+				'agent, possibly mid-run, and it is not asked and not warned — its next call on the ' +
+				'lease is refused `no-lease`. `owner` authorizes nothing here either: a lease carrying ' +
+				'the same owner string as yours is still somebody else’s. `actor` is required and never ' +
+				'derived: it is the record of who ended somebody else’s lease, so a value guessed for ' +
+				'you would attribute the action to nobody — name who asked for it. The device is ' +
+				'restored exactly as on a normal release, through the same path. `released` names who ' +
+				'was holding it and how much longer they had, and never their lease id; the device is ' +
+				'then free, and `acquire_device` is how you take it. A device nobody holds is refused ' +
+				'by name, and each is a different next move: `not-held` means it is here and free, so ' +
+				'acquire it; `gone` that this host can no longer see it at all; `not-attached` that it ' +
+				'is visible but belongs to another machine and was never leasable.',
+			inputSchema: ForceReleaseDeviceParamsSchema,
+		}),
+		async (params) =>
+			guarded('force_release_device', async () => {
+				const result = await callHost(host, 'force_release_device', params);
+				// `acquire_device`'s rule: a refusal is data on the wire and an error to the agent, so
+				// "there was nothing to end" can never read as having ended something.
+				return result.outcome === 'refused'
+					? toolRefusal(result.message, result)
+					: toolAnswer(result);
+			}),
 	);
 }

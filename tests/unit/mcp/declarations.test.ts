@@ -13,12 +13,18 @@ import { fileURLToPath } from 'node:url';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { afterEach, describe, expect, it } from 'vitest';
-import { IPC_METHODS } from '@/ipc/methods.js';
+import { ForceReleaseRefusalReasonSchema, IPC_METHODS } from '@/ipc/methods.js';
 import { ARGUMENT_CASING_NOTE, LEASE_EXPIRY_NOTE } from '@/mcp/_shared/declaration.js';
 import { createRoverMcpServer, ROVER_MCP_NAME, ROVER_MCP_VERSION } from '@/mcp/server.js';
 
-/** The four device and lease rows. The verb rows have their own suite, `./verb-declarations`. */
-const DEVICE_METHODS = ['status', 'list_devices', 'acquire_device', 'release_device'] as const;
+/** The five device and lease rows. The verb rows have their own suite, `./verb-declarations`. */
+const DEVICE_METHODS = [
+	'status',
+	'list_devices',
+	'acquire_device',
+	'release_device',
+	'force_release_device',
+] as const;
 
 interface AdvertisedTool {
 	name: string;
@@ -61,7 +67,7 @@ afterEach(async () => {
 });
 
 describe('what tools/list advertises', () => {
-	it('names the four device and lease rows, spelled exactly as IPC_METHODS spells them', async () => {
+	it('names the five device and lease rows, spelled exactly as IPC_METHODS spells them', async () => {
 		const tools = await advertisedTools();
 
 		// The `IPC_METHODS` keys verbatim: a renamed tool would be a second vocabulary for the
@@ -181,6 +187,29 @@ describe('what tools/list advertises', () => {
 		}
 	});
 
+	/*
+	 * #345: the one row an agent reaches only on its operator's word, and the declaration is the
+	 * only place that can say so before the call. The generic test above already holds that the
+	 * properties and the required list are `ForceReleaseDeviceParamsSchema`'s own; what this adds is
+	 * that the row is keyed on the device rather than on a credential (D20), and that the prose says
+	 * whose lease it ends, when to use it, and the three refusals by the names the host answers with.
+	 */
+	it('declares force_release_device on the serial, and says whose lease it ends and when', async () => {
+		const tools = await advertisedTools();
+
+		const force = tools.find((tool) => tool.name === 'force_release_device');
+		expect(force?.inputSchema.required).toEqual(expect.arrayContaining(['serial', 'actor']));
+		expect(Object.keys(force?.inputSchema.properties ?? {})).not.toContain('leaseId');
+		expect(force?.description).toContain('**somebody else**');
+		expect(force?.description).toMatch(/only when the operator has told you/);
+		expect(force?.description).toMatch(/not a way around a `held` refusal/);
+		// `owner` is attribution, so a lease carrying your own owner string is still not yours.
+		expect(force?.description).toMatch(/`owner` authorizes nothing/);
+		for (const reason of ForceReleaseRefusalReasonSchema.options) {
+			expect(force?.description).toContain(`\`${reason}\``);
+		}
+	});
+
 	it('drops project from acquire_device’s required list when one is, and changes nothing else', async () => {
 		const tools = await advertisedTools('checkout-web');
 
@@ -226,7 +255,7 @@ describe('what tools/list advertises', () => {
 		// `release_device` carries a lease id, and its reader is the one who most needs to know
 		// nothing else was keeping the lease alive. The rows without one say nothing about it.
 		expect(description('release_device')).toContain(LEASE_EXPIRY_NOTE);
-		for (const name of ['status', 'list_devices', 'acquire_device']) {
+		for (const name of ['status', 'list_devices', 'acquire_device', 'force_release_device']) {
 			expect(description(name)).not.toContain(LEASE_EXPIRY_NOTE);
 		}
 	});

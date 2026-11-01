@@ -2,7 +2,7 @@
  * The three tools whose answer is bytes: `screenshot`, `record_video` and `stop_recording`.
  *
  * **The schemas from `src/ipc/methods.ts` *are* the tool declarations**, exactly as
- * `./devices.ts` and `./verbs.ts` say for the other twenty-two rows (ai/CODING_STANDARDS.md,
+ * `./devices.ts` and `./verbs.ts` say for the other twenty-four rows (ai/CODING_STANDARDS.md,
  * boundary #1). Which matters twice over here, because of a field none of those schemas has:
  * there is no destination and no format on any of them. The capture happens on the
  * host (D19), so a path sent to it would name nothing or name the wrong disk, and the format

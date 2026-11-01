@@ -437,6 +437,7 @@ function theVerbs(): string[] {
 		'| Application | `launch_app`, `stop_app`, `clear_app_data`, `install_app` |',
 		'| Environment | `set_airplane_mode`, `set_wifi` |',
 		'| Devices and leases | `list_devices`, `acquire_device`, `release_device`, `status` |',
+		"| Somebody else's lease | `force_release_device` — only when your operator tells you to (below) |",
 		'',
 		'**Two ways to record, and the second is usually the one you want.** `record_video` takes a',
 		'duration and hands back the whole file, so it captures a window fixed before anything',
@@ -467,6 +468,12 @@ function theVerbs(): string[] {
  * and on a shared host that can be a neighbour's lease. The hook `rover init` proposes for an
  * Xcode project pins both steps to the leased simulator's UDID instead (`docs/MANUAL.md`, "An
  * Xcode install, and why it names the simulator").
+ *
+ * **`force_release_device` is the other way onto somebody else's device, and it is named here for
+ * that reason** (#345). It is an MCP tool for an agent its operator has told to take a device over
+ * (`PROJECT.md` R31, D28 as amended), and an agent that met it first as an answer to `held` would
+ * read it as the way past that refusal — which is the misuse the tool's own description warns
+ * against, so the page says it too.
  */
 function theRules(): string[] {
 	return [
@@ -532,6 +539,10 @@ function theRules(): string[] {
 		'- **A refusal is not a pass.** `held`, `gone`, `not-attached`, `not-ready` and',
 		'  `service-failed` are five different next moves, and none of them is "carry on as though',
 		'  the check ran". If you could not get a device, report that the manual test did not happen.',
+		'- **`held` is not an invitation to take the device.** `force_release_device` ends **somebody',
+		"  else's** lease, named by its serial: call it only when your operator has told you to take",
+		'  that device over, with `actor` naming who asked. A lease carrying your own `owner` string is',
+		'  still not yours to reclaim. Otherwise wait, try another device, or say you could not get one.',
 		'- **The lease id is a credential; the owner string is not.** Do not log the lease id into',
 		'  anything shared, and do not expect anyone else to be able to release your lease for you.',
 		'- **A lease ends 20 minutes after your last call on it, and every answer says how long is',

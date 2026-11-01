@@ -34,7 +34,7 @@ import { ZodObject } from 'zod';
 /**
  * The one sentence appended to every tool's description.
  *
- * Short on purpose: it repeats on all twenty-six rows, so it names the rule, one example and
+ * Short on purpose: it repeats on all twenty-seven rows, so it names the rule, one example and
  * the reason, and leaves the argument for it to D26.
  */
 export const ARGUMENT_CASING_NOTE =

@@ -8,7 +8,7 @@
  * spelled the properties out again would be the second hand-written copy this design exists to
  * avoid, and it would go green on the day the two drifted together.
  *
- * `./declarations.test.ts` is the same suite for the four device and lease rows; the
+ * `./declarations.test.ts` is the same suite for the five device and lease rows; the
  * completeness gate at the bottom of this file is what covers the whole table at once.
  */
 
@@ -56,23 +56,30 @@ const VERB_METHODS = [
  */
 const NARROWED_METHODS = ['install_app'] as const satisfies readonly IpcMethodName[];
 
-/** The device and lease rows `./declarations.test.ts` owns. Not verbs, and not this suite's subject. */
-const DEVICE_METHODS = ['status', 'list_devices', 'acquire_device', 'release_device'] as const;
+/**
+ * The device and lease rows `./declarations.test.ts` owns. Not verbs, and not this suite's subject.
+ *
+ * `force_release_device` is one of them since #345. It sat in the list below, recorded as the
+ * operator action an agent must not be able to reach, and the operator reversed that half of R31
+ * (D28, as amended): an agent the operator is directing in that moment is how the operator
+ * exercises authority over the pool, and keeping the tool off this surface stopped no takeover —
+ * it only routed one through another session, or through a shell running `rover force-release`.
+ * Its description is what says to reach for it on instruction rather than around a `held` refusal.
+ */
+const DEVICE_METHODS = [
+	'status',
+	'list_devices',
+	'acquire_device',
+	'release_device',
+	'force_release_device',
+] as const;
 
 /**
- * The rows deliberately **not** exposed — the two file transfers and the operator action, for
- * two unrelated reasons.
+ * The rows deliberately **not** exposed. Each reason below stands on its own: none of them is
+ * `force_release_device`'s any more, which is a tool now (above).
  *
  * For the transfers the reason is that **a whole file as a tool argument is the thing that has
  * not been settled**, not that they carry bytes at all.
- *
- * `force_release_device` is here for a reason that will not expire: **an agent must not be able
- * to end another agent's lease.** The whole point of the row is authority over the shared pool
- * rather than a step in one caller's own work, which is what makes it an operator action (D27,
- * D28) reached from the CLI and, later, the panel. Exposing it as a tool would hand every agent
- * on every machine the power to take a device out from under a peer mid-run — and it would do
- * it by way of the surface whose refusals are supposed to *tell* an agent that a device is
- * busy. It is recorded here as a decision rather than left as a row that quietly has no tool.
  *
  * `screenshot`, `record_video` and `stop_recording` answer *with* bytes, and R19 phase 3 settled
  * what a tool does with those: an inline image, or a file this server writes on the agent's own
@@ -88,11 +95,11 @@ const DEVICE_METHODS = ['status', 'list_devices', 'acquire_device', 'release_dev
  * 2, which is a mechanism underneath these verbs rather than a decision one adapter can take in
  * passing.
  *
- * `list_archive` is here for a reason of the same kind as `force_release_device`'s: it is not
- * about a device at all. It reads the **host's** artifact archive (D24, R36), which is the
- * operator's and the panel's surface — while an agent already receives its own artifacts as bytes
- * in the verb's own answer (D19), so there is nothing here it needs and could not already have.
- * Advertising it would hand every agent a listing of every other agent's runs on the host.
+ * `list_archive` is here because it is not about a device at all. It reads the **host's** artifact
+ * archive (D24, R36), which is the operator's and the panel's surface — while an agent already
+ * receives its own artifacts as bytes in the verb's own answer (D19), so there is nothing here it
+ * needs and could not already have. Advertising it would hand every agent a listing of every other
+ * agent's runs on the host.
  *
  * `search_archive` is here for `list_archive`'s reason **with more force** (R38). It reads the same
  * host archive, so an agent already has everything of its own as bytes in the verb's own answer
@@ -123,23 +130,26 @@ const DEVICE_METHODS = ['status', 'list_devices', 'acquire_device', 'release_dev
  * own lease implies without asking, and enumerating every other project registered on the host is
  * an operator's question. It is on `PANEL_METHODS` instead (D27, D29).
  *
- * `list_kept_tests` and `set_kept_tests` are here for `force_release_device`'s reason rather than
- * for the archive's, and it is the sharper of the two (D33, #234). The archive reads are the
- * operator's because they are about the host's disk; **what the operator keeps is not an agent's to
- * decide at all** — it is authority over a shared resource, and an agent that could untick a test
- * would be clearing the exemption on somebody else's run. The read is not advertised either, on
- * `list_archive`'s terms: an agent already knows its own project and test name, having supplied
- * them, and enumerating what every other agent on the host has kept is an operator's question. Both
- * are on `PANEL_METHODS` instead, which is the operator's own browser (D27, D29).
+ * `set_kept_tests` is here because **what the operator keeps is not an agent's to decide at all**
+ * (D33, #234), and the reason is not the one `force_release_device` was let through on. That row
+ * ends a lease whose device is then restored and leasable again, with nothing anybody filed lost,
+ * and it is the one operator action an agent can need in the middle of its own work: the device its
+ * operator told it to use. Unticking a test is neither. It clears the exemption on runs *other*
+ * agents' leases filed, so the next sweep deletes them for good, and no step of an agent's own work
+ * needs it — its own artifacts came back as bytes in the verb's own answer (D19). Ticking one is the
+ * same authority the other way round, over runs that are not the caller's to keep. The read,
+ * `list_kept_tests`, is not advertised either, on `list_archive`'s terms: an agent already knows
+ * its own project and test name, having supplied them, and enumerating what every other agent on
+ * the host has kept is an operator's question. Both are on `PANEL_METHODS` instead, which is the
+ * operator's own browser (D27, D29).
  *
- * `sweep_archive` is here for `force_release_device`'s reason with the stakes raised (§9.4, #238).
- * That row ends somebody else's lease; this one **deletes an operator's data** on a shared host —
- * whole run directories, permanently, with no undo and no trash directory. It is authority over
- * the host's own disk rather than a step in any agent's work, so it is an operator's press reached
- * from the CLI, and it is not on `PANEL_METHODS` either: a browser is not where an irreversible
- * deletion of somebody else's runs belongs while D27's role model is still deferred. An agent
- * needs nothing here in any case — its own artifacts came back as bytes in the verb's own answer
- * (D19).
+ * `sweep_archive` is here because it **deletes an operator's data** on a shared host (§9.4, #238) —
+ * whole run directories, permanently, with no undo and no trash directory. Nothing comes back from
+ * it the way a force-released device comes back to the pool. It is authority over the host's own
+ * disk rather than a step in any agent's work, so it is an operator's press reached from the CLI,
+ * and it is not on `PANEL_METHODS` either: a browser is not where an irreversible deletion of
+ * somebody else's runs belongs while D27's role model is still deferred. An agent needs nothing
+ * here in any case — its own artifacts came back as bytes in the verb's own answer (D19).
  *
  * `delete_project` is here on `sweep_archive`'s terms in a sharper key (D42, #271). That row
  * deletes runs a *policy* selected; this one deletes a project and **everything the host holds for
@@ -183,7 +193,6 @@ const NOT_YET_EXPOSED = [
 	'push_file',
 	'pull_file',
 	'pull_app_file',
-	'force_release_device',
 	'list_archive',
 	'search_archive',
 	'list_archive_groups',
